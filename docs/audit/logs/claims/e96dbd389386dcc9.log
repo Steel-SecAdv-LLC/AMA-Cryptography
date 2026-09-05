@@ -1,4 +1,0 @@
-$ grep -nE "^MISS_THRESHOLD = |def test_the_miss_threshold_reserves_no_benign_band" tools/check_ghash_constant_time.py tests/test_ghash_constant_time_gate.py
-# exit=0 duration=0.005s
-tools/check_ghash_constant_time.py:1679:MISS_THRESHOLD = 0
-tests/test_ghash_constant_time_gate.py:322:    def test_the_miss_threshold_reserves_no_benign_band(self, tool: ModuleType) -> None:

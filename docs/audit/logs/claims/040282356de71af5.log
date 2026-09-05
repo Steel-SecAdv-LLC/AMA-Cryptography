@@ -1,5 +1,0 @@
-$ grep -c '^from tools.check_avx_scoping import' tests/test_avx_scoping_gate.py; grep -c '^import tools.check_avx_scoping as gate' tests/test_avx_scoping_gate.py; grep -cE 'gate\.(inventory|is_kernel_symbol)' tests/test_avx_scoping_gate.py
-# exit=0 duration=0.008s
-0
-1
-6

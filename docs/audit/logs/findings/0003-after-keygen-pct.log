@@ -1,5 +1,0 @@
-INVARIANT-41 violation: 2 keygen entry point(s) release a keypair without a pairwise consistency test:
-  ama_cryptography/pqc_backends.py:3298: keypair_generate()
-  ama_cryptography/pqc_backends.py:3426: _keypair_pairwise_test [conditional arm]()
-
-Call pairwise_test_signature / pairwise_test_kem / pairwise_test_agreement before the keypair is returned, or delegate to a helper that does. A conditional arm named above is a path that releases the keypair without the test its sibling arm runs: give it the family's test, or make it raise. If the function generates no key material, add it to EXEMPT in this file with the reason.

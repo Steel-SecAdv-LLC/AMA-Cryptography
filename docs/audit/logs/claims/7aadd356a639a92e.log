@@ -1,3 +1,0 @@
-$ grep -n 'AMA_POST_DIAGNOSTIC_IMPORT: "1"' .github/workflows/corpus-provenance.yml
-# exit=0 duration=0.004s
-142:          AMA_POST_DIAGNOSTIC_IMPORT: "1"

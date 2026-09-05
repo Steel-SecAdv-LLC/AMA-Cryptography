@@ -1,3 +1,0 @@
-$ grep -c "as_posix()" tests/test_docker_pins_gate.py
-# exit=0 duration=0.041s
-1

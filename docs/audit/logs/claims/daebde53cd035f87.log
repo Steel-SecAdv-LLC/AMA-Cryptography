@@ -1,3 +1,0 @@
-$ /opt/ama-venv/bin/python -c "from tools.check_suppression_hygiene import check_source;print('BARE_NOQA',check_source('a.py','import os  # noqa -- reason (AB-001)\n'))"
-# exit=0 duration=0.045s
-BARE_NOQA ["a.py:1: suppression 'noqa' missing rule id (expected '# noqa: S310 -- justification (TAG-NNN)'); written bare it suppresses every rule on the line"]

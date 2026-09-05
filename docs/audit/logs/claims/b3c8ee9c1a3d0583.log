@@ -1,3 +1,0 @@
-$ git show 242ccd6^:tools/check_compiler_warnings.py | grep -n '_WARNING_RE ='
-# exit=0 duration=0.007s
-100:_WARNING_RE = re.compile(r"\bwarning[ :]")

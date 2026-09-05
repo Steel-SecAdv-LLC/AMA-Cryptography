@@ -1,4 +1,0 @@
-$ awk '/^static void kyber_gennoise/,/^}/' src/c/ama_kyber.c | grep -c 'ama_secure_memzero(buf, sizeof(buf))\|ama_secure_memzero(bufs, sizeof(bufs))'; awk '/^static void kyber_cbd_poly/,/^}/' src/c/ama_kyber.c | grep -c 'ama_secure_memzero(buf, sizeof(buf))'
-# exit=0 duration=0.006s
-2
-1

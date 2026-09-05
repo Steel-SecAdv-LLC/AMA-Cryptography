@@ -1,3 +1,0 @@
-$ grep -n 'if body.endswith(continuation) and not is_comment:' tools/check_apt_retry.py
-# exit=0 duration=0.006s
-130:        if body.endswith(continuation) and not is_comment:

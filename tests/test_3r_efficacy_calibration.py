@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """The README's stated 3R detection efficacy is the measured one.
 
-PR #394's readiness audit measured ``ResonanceTimingMonitor`` against a
-trailing-window z-score on real ML-DSA-65 sign timings
-(docs/audit/sweeps/r3_efficacy.py -> docs/audit/PR394_3R_EFFICACY.tsv) and
-found the monitor below the trivial baseline on isolated outliers.  The
-README now states those numbers.  This test pins the README to the table so
-the numbers cannot drift apart: a re-measurement that changes the table
-must change the prose, and prose edited without a measurement fails here.
+``benchmarks/r3_efficacy_eval.py`` measures ``ResonanceTimingMonitor``
+against a trailing-window z-score on real ML-DSA-65 sign timings and writes
+``benchmarks/r3_efficacy.tsv``; the monitor came out below the trivial
+baseline on isolated outliers.  The README states those numbers.  This test
+pins the README to the table so the numbers cannot drift apart: a
+re-measurement that changes the table must change the prose, and prose
+edited without a measurement fails here.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TABLE = REPO_ROOT / "docs" / "audit" / "PR394_3R_EFFICACY.tsv"
+TABLE = REPO_ROOT / "benchmarks" / "r3_efficacy.tsv"
 README = REPO_ROOT / "README.md"
 
 

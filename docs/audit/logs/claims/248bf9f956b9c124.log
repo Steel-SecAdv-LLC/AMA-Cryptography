@@ -1,4 +1,0 @@
-$ grep -n 'cmd.append("--require-trust-anchor")\|for _child_only in ("AMA_FIPS_STRICT", "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"):' setup.py
-# exit=0 duration=0.007s
-797:            cmd.append("--require-trust-anchor")
-798:        for _child_only in ("AMA_FIPS_STRICT", "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"):

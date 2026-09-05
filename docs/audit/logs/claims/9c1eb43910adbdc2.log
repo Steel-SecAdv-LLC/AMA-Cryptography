@@ -1,3 +1,0 @@
-$ grep -n 'miss D1 delta' tools/check_ghash_constant_time.py; grep -n '_Alignas(64) uint8_t stage\[AMA_KYBER_1024_CIPHERTEXT_BYTES\]' tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-1195:    static _Alignas(64) uint8_t stage[AMA_KYBER_1024_CIPHERTEXT_BYTES];

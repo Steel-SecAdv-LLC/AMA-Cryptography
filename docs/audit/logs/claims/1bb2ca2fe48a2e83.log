@@ -1,3 +1,0 @@
-$ python -c 'print("keygen %.2f%% encaps %.2f%%"%((731145-736964)/736964*100,(801942-807730)/807730*100))'
-# exit=0 duration=0.031s
-keygen -0.79% encaps -0.72%

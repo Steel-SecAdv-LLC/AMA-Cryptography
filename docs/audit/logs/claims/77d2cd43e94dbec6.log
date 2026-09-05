@@ -1,3 +1,0 @@
-$ grep -n "char name\[BENCH_NAME_MAX\];" benchmarks/benchmark_c_raw.c | head -1
-# exit=0 duration=0.004s
-126:    char name[BENCH_NAME_MAX];

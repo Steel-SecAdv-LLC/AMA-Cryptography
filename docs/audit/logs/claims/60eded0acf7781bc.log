@@ -1,5 +1,0 @@
-$ grep -n 'def _process_is_the_integrity_signer' ama_cryptography/pqc_backends.py; sed -n 826,827p ama_cryptography/pqc_backends.py
-# exit=0 duration=0.007s
-514:def _process_is_the_integrity_signer() -> bool:
-                _SIGNING_LOAD_OVERRIDE or _process_is_the_integrity_signer()
-            ) and not _in_secure_execution_mode():

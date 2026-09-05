@@ -1,6 +1,0 @@
-$ grep -n 'trap "" TERM\|sleep 120\|assert elapsed < 60' tests/test_apt_retry_gate.py
-# exit=0 duration=0.004s
-382:        '  trap "" TERM\n'
-383:        "  sleep 120\n"
-414:    assert elapsed < 60, (
-465:    apt.write_text('#!/usr/bin/env bash\ntrap "" TERM\nsleep 600\n')

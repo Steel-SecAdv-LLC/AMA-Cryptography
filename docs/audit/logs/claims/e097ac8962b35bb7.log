@@ -1,3 +1,0 @@
-$ python -c "import inspect; from ama_cryptography.monitoring import VolumeSpikeDetector as V; p=inspect.signature(V.__init__).parameters['operations']; print(p.default, V().filtered_operations)"
-# exit=0 duration=0.556s
-None 0

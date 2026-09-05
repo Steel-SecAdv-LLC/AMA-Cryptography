@@ -1,3 +1,0 @@
-$ grep -c "def test_the_untampered_tree_imports\|def test_a_tampered_binding_is_refused" tests/test_artefact_cache_poisoning.py
-# exit=0 duration=0.004s
-2

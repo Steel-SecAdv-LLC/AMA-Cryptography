@@ -1,3 +1,0 @@
-$ grep -n -A8 'except UnicodeDecodeError as exc:' ama_cryptography/_artefact_source.py | grep 'raise ArtefactSourceError'
-# exit=0 duration=0.005s
-174-        raise ArtefactSourceError(f"{path}: is not UTF-8 text ({exc})") from exc

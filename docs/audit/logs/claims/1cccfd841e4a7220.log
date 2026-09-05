@@ -1,8 +1,0 @@
-$ sed -n 6,10p src/c/internal/ama_once.h; grep -n "^## INVARIANT-15" INVARIANTS.md
-# exit=0 duration=0.006s
- *
- * INVARIANT-15 requires that *all* one-time initialisation in this library go
- * through a platform once-primitive, and prohibits the lockless
- * flag-plus-plain-variable pattern outright: a `volatile int done` guarding a
- * non-atomic shared object is a data race on any weakly-ordered architecture
-749:## INVARIANT-15 — Thread-Safe CPU Dispatch via Platform Once-Primitive

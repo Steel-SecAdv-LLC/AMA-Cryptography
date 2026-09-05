@@ -1,6 +1,0 @@
-$ grep -nA3 "ama_aes256_gcm_encrypt(" wiki/C-API-Reference.md
-# exit=0 duration=0.004s
-416:ama_error_t ama_aes256_gcm_encrypt(
-417-    const uint8_t key[32],                  // 256-bit key
-418-    const uint8_t nonce[12],                // 96-bit nonce/IV
-419-    const uint8_t *plaintext, size_t pt_len,

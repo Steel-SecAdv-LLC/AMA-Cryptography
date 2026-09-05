@@ -1,7 +1,0 @@
-$ grep -n 'ama_consttime_copy(fail, shared_secret, ss_reject, 32)' src/c/ama_kyber.c; grep -n 'fail = ama_consttime_memcmp(ciphertext, ct_cmp' src/c/ama_kyber.c; grep -n 'volatile' src/c/ama_consttime.c | head -3
-# exit=0 duration=0.008s
-1238:            ama_consttime_copy(fail, shared_secret, ss_reject, 32);
-1217:        fail = ama_consttime_memcmp(ciphertext, ct_cmp, P->ct_bytes);
-33:    const volatile uint8_t* va = (const volatile uint8_t*)a;
-34:    const volatile uint8_t* vb = (const volatile uint8_t*)b;
-58: * Uses volatile pointer to prevent optimization.

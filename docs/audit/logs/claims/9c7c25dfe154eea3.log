@@ -1,4 +1,0 @@
-$ grep -c "def test_an_aliased_annotation_is_accepted\|def test_the_shipped_tree_is_clean" tests/test_suppression_hygiene_gate.py; /opt/ama-venv/bin/python -c "from pathlib import Path;from tools.check_suppression_hygiene import scan_optional_imports as s;print('SHIPPED',s(Path('.').resolve()))"
-# exit=0 duration=0.261s
-2
-SHIPPED []

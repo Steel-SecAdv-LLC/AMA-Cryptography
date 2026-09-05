@@ -1,3 +1,0 @@
-$ sed -n '/^class TestAllThreeDigestMirrorsAgree/,/^class TestThePackageDigestIsAnInjectiveCommitment/p' tests/test_native_integrity.py | grep -c 'oob\..*_self_test\.\|_self_test\..*oob\.\|_self_test\._absorb_entry'
-# exit=0 duration=0.005s
-2

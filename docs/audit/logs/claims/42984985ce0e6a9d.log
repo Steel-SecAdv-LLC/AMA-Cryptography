@@ -1,3 +1,0 @@
-$ awk 'NR>=3015 && NR<=3123' CHANGELOG.md | grep -c "^\*\*DOC-"
-# exit=0 duration=0.005s
-3

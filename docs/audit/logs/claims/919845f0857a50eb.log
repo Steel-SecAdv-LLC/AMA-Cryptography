@@ -1,4 +1,0 @@
-$ grep -n 'if (!nistp_lt(xs, c->p, nl) || !nistp_lt(ys, c->p, nl))' src/c/ama_nistp.c; python -m pytest tests/test_nistp_curves.py --collect-only -q -p no:cacheprovider | tail -1
-# exit=0 duration=1.066s
-1265:    if (!nistp_lt(xs, c->p, nl) || !nistp_lt(ys, c->p, nl))
-97 tests collected in 0.19s

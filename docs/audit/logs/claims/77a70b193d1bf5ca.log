@@ -1,3 +1,0 @@
-$ grep -cE "Last of six|5th of 8|Fourth of\s+five|Within 7% of Botan|1\.16x" benchmarks/generate_competitive.py
-# exit=1 duration=0.005s
-0

@@ -1,3 +1,0 @@
-$ ls schemas/__init__.py wycheproof_vectors/__init__.py 2>&1 | grep -c "No such file"
-# exit=2 duration=0.004s
-2

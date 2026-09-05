@@ -1,5 +1,0 @@
-$ grep -n 'Stated precisely, because "control flow identical on both outcomes"\|byte-position oracle\|with no early exit' src/c/neon/ama_aes_gcm_neon.c
-# exit=0 duration=0.006s
-441: * Stated precisely, because "control flow identical on both outcomes" —
-449: * `ama_consttime_memcmp` over all 16 bytes with no early exit.  The
-450: * byte-position oracle is the property the forgery-position lanes

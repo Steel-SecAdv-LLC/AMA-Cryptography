@@ -1,4 +1,0 @@
-$ grep -n -A1 "list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)" CMakeLists.txt
-# exit=0 duration=0.005s
-889:        list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)
-890-        list(APPEND AMA_SOURCES src/c/ed25519_donna_shim.c)

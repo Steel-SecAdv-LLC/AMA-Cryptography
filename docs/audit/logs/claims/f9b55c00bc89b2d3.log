@@ -1,4 +1,0 @@
-$ grep -n "def test_stdlib_openssl_accelerators_are_not_screened" tests/test_vendor_isolation_gate.py; grep -n "_hashlib" tools/check_vendor_isolation.py | head -2
-# exit=0 duration=0.007s
-1069:    def test_stdlib_openssl_accelerators_are_not_screened(self) -> None:
-157:        # `_hashlib` are CPython's own OpenSSL-backed stdlib accelerators and

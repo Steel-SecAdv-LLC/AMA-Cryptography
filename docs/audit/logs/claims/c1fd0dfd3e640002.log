@@ -1,4 +1,0 @@
-$ grep -n '"--require-populated-baseline"' benchmarks/benchmark_runner.py; grep -n 'def test_validate_baseline_contract_rejects_zero_when_required' tests/test_benchmark_baseline_infra.py
-# exit=0 duration=0.006s
-1563:        "--require-populated-baseline",
-66:def test_validate_baseline_contract_rejects_zero_when_required() -> None:

@@ -1,4 +1,0 @@
-$ grep -n '"consttime": _CONSTTIME_DRIVER\|"consttime-lookup": _CONSTTIME_LOOKUP_DRIVER' tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-1590:    "consttime": _CONSTTIME_DRIVER,
-1602:    "consttime-lookup": _CONSTTIME_LOOKUP_DRIVER,

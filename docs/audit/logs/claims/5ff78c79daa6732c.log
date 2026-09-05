@@ -1,4 +1,0 @@
-$ grep -cE '^\s*CL: "-DPyInt_FromLong=PyLong_FromLong"' .github/workflows/ci.yml .github/workflows/ci-build-test.yml
-# exit=0 duration=0.004s
-.github/workflows/ci.yml:1
-.github/workflows/ci-build-test.yml:1

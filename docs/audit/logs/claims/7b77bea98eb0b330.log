@@ -1,4 +1,0 @@
-$ S=/tmp/claude-0/-home-user-AMA-Cryptography/7da6a6a3-7996-5d8d-a052-37df782d45a9/scratchpad/cet; mkdir -p $S && echo 'int f(void){return 1;}' > $S/f.c && aarch64-linux-gnu-gcc -mbranch-protection=standard -shared -fPIC $S/f.c -o $S/f.so && readelf -nW $S/f.so | grep -c 'AArch64 feature'; aarch64-linux-gnu-objdump -d $S/f.so | grep -cE '\t(bti|paciasp|autiasp)'
-# exit=1 duration=0.389s
-0
-0

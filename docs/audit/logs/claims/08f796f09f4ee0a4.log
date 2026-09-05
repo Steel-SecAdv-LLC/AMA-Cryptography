@@ -1,3 +1,0 @@
-$ grep -nE "AES-GCM tag verify\s+6.27\s+\+0.199 ns|Ascon-AEAD128 encrypt\s+21.88\s+\+0.596 ns|agent binding check\s+41.72\s+-1.141 ns|secp256k1 scalar multiplication\s+1.44\s+-35.200 ns|X25519 scalarmult batch x4\s+2.03\s+-78.135 ns|SLH-DSA-SHA2-256f sign\s+2.14\s+\+53932.078 ns" tests/c/dudect/dudect_rounds.h | wc -l
-# exit=0 duration=0.009s
-6

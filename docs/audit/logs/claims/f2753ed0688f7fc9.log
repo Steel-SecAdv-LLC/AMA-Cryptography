@@ -1,4 +1,0 @@
-$ grep -n "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON" .github/workflows/ci.yml; git show e52281c^:.github/workflows/ci.yml | grep -n "cmake -S . -B build -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON"
-# exit=0 duration=0.008s
-1646:      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON
-1413:      run: cmake -S . -B build -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON

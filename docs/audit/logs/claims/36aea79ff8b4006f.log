@@ -1,3 +1,0 @@
-$ grep -c "= dudect_lane_finish(&ctx)" tests/c/test_dudect.c
-# exit=0 duration=0.004s
-27

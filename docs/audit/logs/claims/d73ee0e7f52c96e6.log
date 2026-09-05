@@ -1,3 +1,0 @@
-$ grep -cE "^def test_|^    def test_" tests/test_benchmark_chart_inputs.py
-# exit=0 duration=0.005s
-8

@@ -1,3 +1,0 @@
-$ git show -s --format=%B a769af9 | grep -nE '4\.09%|9\.9%-12\.9%'
-# exit=0 duration=0.007s
-21:diff does not touch -- at -4.09%, against a 9.9%-12.9% run-to-run

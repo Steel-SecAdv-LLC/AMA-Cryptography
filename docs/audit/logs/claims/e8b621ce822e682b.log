@@ -1,5 +1,0 @@
-$ grep -nE "def test_(none_states_the_unoptimized_intent_and_is_accepted|explicit_dash_o_in_c_flags_is_accepted|missing_build_type_is_reported)" tests/test_workflow_command_checks.py
-# exit=0 duration=0.006s
-696:    def test_missing_build_type_is_reported(self) -> None:
-707:    def test_none_states_the_unoptimized_intent_and_is_accepted(self) -> None:
-712:    def test_explicit_dash_o_in_c_flags_is_accepted(self) -> None:

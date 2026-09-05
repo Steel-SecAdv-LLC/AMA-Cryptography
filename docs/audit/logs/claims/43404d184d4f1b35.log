@@ -1,3 +1,0 @@
-$ grep -n '^\s*#\s*error' src/c/neon/*.c | wc -l
-# exit=1 duration=0.005s
-0

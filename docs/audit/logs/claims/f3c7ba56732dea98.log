@@ -1,3 +1,0 @@
-$ grep -n 'option(AMA_AES_CONSTTIME' CMakeLists.txt
-# exit=0 duration=0.005s
-27:option(AMA_AES_CONSTTIME "Use constant-time bitsliced AES S-box (eliminates cache-timing)" ON)

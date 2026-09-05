@@ -1,4 +1,0 @@
-$ grep -n 'APT_ATTEMPT_TIMEOUT was 300' .github/scripts/apt-install.sh; grep -n 'attempt ${attempt} failed or exceeded' .github/scripts/apt-install.sh
-# exit=0 duration=0.005s
-55:# killed by their 20-minute job caps.  APT_ATTEMPT_TIMEOUT was 300, so SIGTERM
-257:    echo "apt-install.sh: attempt ${attempt} failed or exceeded" \

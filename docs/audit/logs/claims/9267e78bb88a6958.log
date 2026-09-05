@@ -1,5 +1,0 @@
-$ grep -rhoE "AMA_DISPATCH_NO_[A-Z0-9_]+" src/c include ama_cryptography/*.py | sort -u
-# exit=0 duration=0.009s
-AMA_DISPATCH_NO_ARGON2_AVX2
-AMA_DISPATCH_NO_AUTOTUNE
-AMA_DISPATCH_NO_CHACHA_AVX2

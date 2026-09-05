@@ -1,4 +1,0 @@
-$ grep -cE '^\s*static char labels\[' benchmarks/benchmark_c_raw.c; grep -cE '^\s*strncpy\(' benchmarks/benchmark_c_raw.c
-# exit=1 duration=0.007s
-0
-0

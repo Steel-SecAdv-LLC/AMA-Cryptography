@@ -1,3 +1,0 @@
-$ grep -c "AMA_DISPATCH_NO_VAES" wiki/Performance-Benchmarks.md
-# exit=1 duration=0.005s
-0

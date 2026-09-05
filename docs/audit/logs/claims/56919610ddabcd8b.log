@@ -1,4 +1,0 @@
-$ grep -c '"path": "src/c/ed25519_donna_shim.c"\|"path": "src/c/ama_cpuid.c"' benchmarks/baseline.json benchmarks/arm-baseline.json
-# exit=0 duration=0.005s
-benchmarks/baseline.json:2
-benchmarks/arm-baseline.json:2

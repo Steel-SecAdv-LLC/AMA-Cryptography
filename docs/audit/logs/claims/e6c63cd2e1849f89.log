@@ -1,4 +1,0 @@
-$ ls src/c/neon/ama_neon_internal.h src/c/sve2/ama_sve2_internal.h
-# exit=0 duration=0.005s
-src/c/neon/ama_neon_internal.h
-src/c/sve2/ama_sve2_internal.h

@@ -1,3 +1,0 @@
-$ git show 27337e5^:.github/workflows/static-analysis.yml | grep -c "build-strict-release"
-# exit=1 duration=0.006s
-0

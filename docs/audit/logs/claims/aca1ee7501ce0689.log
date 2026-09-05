@@ -1,5 +1,0 @@
-$ sed -n '/^class TestAllThreeDigestMirrorsAgree/,/^class TestThePackageDigestIsAnInjectiveCommitment/p' tests/test_native_integrity.py | grep -n '_build_sign._compute_package_digest(pkg)\|oob.compute_package_digest(pkg)'
-# exit=0 duration=0.005s
-82:        signer = _build_sign._compute_package_digest(pkg)
-83:        assert oob.compute_package_digest(pkg) == signer, "out-of-band digest differs from signer"
-132:        assert oob.compute_package_digest(pkg).hex() == fields.INTEGRITY_DIGEST_HEX

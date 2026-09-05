@@ -1,4 +1,0 @@
-$ grep -n -A16 'def _pair_alarm_budget' ama_cryptography/monitoring.py | grep 'return min(budgets)'; grep -n 'self._ratio_threshold\[pair\] = (total, alarm_budget, threshold)' ama_cryptography/monitoring.py
-# exit=0 duration=0.007s
-1957-        return min(budgets)
-1939:        self._ratio_threshold[pair] = (total, alarm_budget, threshold)

@@ -1,4 +1,0 @@
-$ grep -c "INVARIANT-1 through INVARIANT-43" .github/copilot-instructions.md; grep -o "^## INVARIANT-[0-9]*" INVARIANTS.md | wc -l
-# exit=0 duration=0.007s
-1
-43

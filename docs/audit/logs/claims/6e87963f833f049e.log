@@ -1,4 +1,0 @@
-$ grep -n 'results = run_all_benchmarks\|# Coverage, before verdicts' benchmarks/benchmark_runner.py
-# exit=0 duration=0.005s
-1607:        results = run_all_benchmarks(baseline, verbose=args.verbose)
-1657:    # Coverage, before verdicts.

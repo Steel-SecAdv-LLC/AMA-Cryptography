@@ -1,2 +1,0 @@
-FAIL  stdlib-hash boundary (INVARIANT-1):
-  - monitoring.py: 1 guarded-module reference(s), but the file is not in the trust-bootstrap allowlist. Production hashing belongs on the native kernels (native_sha256/384/512, native_sha3_256/384/512, native_pbkdf2_hmac_sha256/512). If this file genuinely joined the bootstrap, add it to ALLOWLIST in tools/check_stdlib_hash_boundary.py with the exact count and the reason.

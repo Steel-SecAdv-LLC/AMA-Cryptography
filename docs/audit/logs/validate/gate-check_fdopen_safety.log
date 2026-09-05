@@ -1,1 +1,0 @@
-FD-ownership check clean: 3 os.fdopen call site(s), all leak-guarded.

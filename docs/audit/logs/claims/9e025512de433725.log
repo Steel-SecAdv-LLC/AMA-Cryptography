@@ -1,3 +1,0 @@
-$ grep -c '^    "kyber-ntt-neon",$\|^    "dilithium-ntt-neon",$\|^    "argon2-g-neon",$' src/c/dispatch/ama_dispatch.c
-# exit=0 duration=0.005s
-3

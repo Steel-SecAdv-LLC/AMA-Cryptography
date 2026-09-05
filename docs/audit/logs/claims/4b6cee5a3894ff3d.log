@@ -1,3 +1,0 @@
-$ grep -n 'default="origin/main"' benchmarks/check_baseline_justification.py
-# exit=0 duration=0.004s
-565:        default="origin/main",

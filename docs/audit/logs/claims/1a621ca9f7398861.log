@@ -1,3 +1,0 @@
-$ sed -n 85,100p .github/workflows/release.yml | grep -oE "(setup\.py|_build_sign\.py|resign_wheel\.py|wheel_smoke_test\.py|check_release_tag\.py)" | sort -u | wc -l
-# exit=0 duration=0.006s
-5

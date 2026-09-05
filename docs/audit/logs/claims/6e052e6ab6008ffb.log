@@ -1,3 +1,0 @@
-$ python -c "import ast,subprocess as s;fs=s.run(['git','ls-files','*.py'],capture_output=True,text=True).stdout.split();h=[(f,sorted({a.name for n in ast.walk(t) if isinstance(n,ast.Import) for a in n.names}&{n.module for n in ast.walk(t) if isinstance(n,ast.ImportFrom) and n.module and n.level==0})) for f in fs for t in [ast.parse(open(f,encoding='utf-8').read())]];h=[x for x in h if x[1]];print(len(fs),'files',len(h),'sites',h)"
-# exit=0 duration=1.991s
-334 files 1 sites [('verification/v5-audit/refleak_soak.py', ['ama_cryptography'])]

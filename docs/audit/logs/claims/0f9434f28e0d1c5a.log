@@ -1,5 +1,0 @@
-$ grep -n -A2 '"Kyber-1024 decaps",' tests/c/test_dudect.c
-# exit=0 duration=0.004s
-3024:        "Kyber-1024 decaps",
-3025-        test_kyber_decaps(iterations), 1);
-3026-    /* INFO, and — unlike every other info-only lane in this file — with no

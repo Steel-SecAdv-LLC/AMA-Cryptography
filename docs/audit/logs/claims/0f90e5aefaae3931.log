@@ -1,3 +1,0 @@
-$ git for-each-ref --format='%(refname:short) %(creatordate:iso)' refs/tags/v4.0.0
-# exit=0 duration=0.006s
-v4.0.0 2026-08-02 03:54:42 +0000

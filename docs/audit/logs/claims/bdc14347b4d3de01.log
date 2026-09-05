@@ -1,3 +1,0 @@
-$ grep -c "static inline const void \*dudect_stage_select\|mask" tests/c/dudect/dudect_stage.h
-# exit=0 duration=0.005s
-6

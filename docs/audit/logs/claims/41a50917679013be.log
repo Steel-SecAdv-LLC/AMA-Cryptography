@@ -1,4 +1,0 @@
-$ git cat-file -t d500783; git show d500783 -- src/c/dispatch/ama_dispatch.c | grep -cE "^\+.*-1"
-# exit=0 duration=0.011s
-commit
-7

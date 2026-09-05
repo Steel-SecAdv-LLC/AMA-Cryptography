@@ -1,3 +1,0 @@
-$ grep -cE '^\| \[`(multi_library_results\.json|pqc_results\.json|competitive\.html)`\]' benchmarks/README.md
-# exit=0 duration=0.004s
-3

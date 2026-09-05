@@ -1,3 +1,0 @@
-$ git show 2dcef5c:Makefile | grep -n 'mypy ama_cryptography/ --ignore-missing-imports'
-# exit=0 duration=0.006s
-122:	@mypy ama_cryptography/ --ignore-missing-imports

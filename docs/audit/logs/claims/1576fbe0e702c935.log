@@ -1,3 +1,0 @@
-$ python -c "import math; print(round(math.log(127)+0.5772156649,1))"
-# exit=0 duration=0.029s
-5.4

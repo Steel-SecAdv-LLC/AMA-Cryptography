@@ -1,3 +1,0 @@
-$ grep -n "payload = json.dumps(report, indent=2, allow_nan=False)" benchmarks/benchmark_runner.py
-# exit=0 duration=0.004s
-1637:        payload = json.dumps(report, indent=2, allow_nan=False)

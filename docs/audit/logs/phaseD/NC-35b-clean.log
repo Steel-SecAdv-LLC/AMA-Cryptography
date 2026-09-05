@@ -1,4 +1,0 @@
-OK    `v4.0.0` is an annotated tag object carrying a signature.
-      Signature NOT verified here (shape gate). To verify it:
-        git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v4.0.0
-      GitHub's verified/unverified badge is the account-level check.

@@ -1,4 +1,0 @@
-$ grep -nE 'i < 60; i\+\+|"kyber-decaps": _KYBER_DECAPS_DRIVER' tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-1217:    for (int i = 0; i < 60; i++) {
-1595:    "kyber-decaps": _KYBER_DECAPS_DRIVER,

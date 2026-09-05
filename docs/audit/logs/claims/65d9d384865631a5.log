@@ -1,5 +1,0 @@
-$ grep -o '1\.27[^"]\{0,120\}1\.4[23]' benchmarks/baseline.json | head -1; grep -c 'floor_drift_acknowledged' benchmarks/baseline.json benchmarks/arm-baseline.json
-# exit=0 duration=0.011s
-1.272 us before vs 1.417-1.43
-benchmarks/baseline.json:2
-benchmarks/arm-baseline.json:2

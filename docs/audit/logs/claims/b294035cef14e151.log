@@ -1,7 +1,0 @@
-$ grep -n "conclusive on one sighting" tests/c/test_dudect.c; grep -n "majority of rounds" tests/c/dudect/dudect_rounds.h | head -1
-# exit=0 duration=0.007s
-86: * failure onto DUDECT_FATAL_SENTINEL — conclusive on one sighting, exactly as
-2566:         * harness fault (conclusive on one sighting), never a verdict.      \
-2598: * faults.  Both outcomes fail the run — `fatal` is conclusive on one sighting
-3200:         * is conclusive on one sighting.  Stop here rather than resetting
-26: * the two readings: **a lane must exceed the threshold in a majority of rounds

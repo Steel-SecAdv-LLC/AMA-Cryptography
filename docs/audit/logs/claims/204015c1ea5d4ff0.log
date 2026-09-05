@@ -1,3 +1,0 @@
-$ LD_LIBRARY_PATH=build-release/lib build-release/bin/benchmark_c_raw --json | python -c "import json,sys; r=json.load(sys.stdin)['results']; print(len(r), len({x['operation'] for x in r}))"
-# exit=0 duration=118.531s
-58 58

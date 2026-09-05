@@ -1,7 +1,0 @@
-$ git show -s --format='%h %s' 6a22aa2; git show 6a22aa2 | grep -c DUDECT_NUMBER_PERCENTILES; grep -nE "deliberately NO per-lane verdict function|single authority on what a measurement means" tests/c/dudect/dudect.h; grep -rn "define DUDECT_NUMBER_PERCENTILES" tests tools src | wc -l
-# exit=1 duration=0.104s
-6a22aa2 Give the dudect harnesses a statistic that can see a leak
-3
-194:/* There is deliberately NO per-lane verdict function in this header.
-206: * single authority on what a measurement means.
-0

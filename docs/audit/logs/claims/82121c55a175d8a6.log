@@ -1,6 +1,0 @@
-$ grep -n 'class TestDocumentedBaseImagesMatchTheDockerfiles\|def test_the_dockerfile_corpus_is_not_empty\|def test_at_least_one_document_shows_a_base_image\|def test_every_documented_base_is_one_the_tree_uses' tests/test_docker_pins_gate.py
-# exit=0 duration=0.004s
-262:class TestDocumentedBaseImagesMatchTheDockerfiles:
-302:    def test_the_dockerfile_corpus_is_not_empty(self) -> None:
-307:    def test_at_least_one_document_shows_a_base_image(self) -> None:
-312:    def test_every_documented_base_is_one_the_tree_uses(self) -> None:

@@ -1,7 +1,0 @@
-$ grep -nE '"(I refs|D refs|D1 misses|LLd misses)": re.compile|"--cache-sim=yes"' tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-1638:    "I refs": re.compile(r"I\s+refs:\s+([\d,]+)"),
-1639:    "D refs": re.compile(r"D\s+refs:\s+([\d,]+)"),
-1640:    "D1 misses": re.compile(r"D1\s+misses:\s+([\d,]+)"),
-1641:    "LLd misses": re.compile(r"LLd\s+misses:\s+([\d,]+)"),
-1842:            "--cache-sim=yes",

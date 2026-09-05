@@ -1,4 +1,0 @@
-$ grep -n 'not sys.platform.startswith("linux") or shutil.which("bash") is None' tests/test_apt_retry_gate.py; grep -c 'subprocess.run(\["bash", str(HELPER_PATH)' tests/test_apt_retry_gate.py
-# exit=0 duration=0.008s
-198:    not sys.platform.startswith("linux") or shutil.which("bash") is None,
-2

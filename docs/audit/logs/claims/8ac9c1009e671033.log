@@ -1,3 +1,0 @@
-$ awk 'NR<=860 && /^  [a-z][a-z0-9-]*:$/ {job=$0} END{print job}' .github/workflows/ci.yml
-# exit=0 duration=0.004s
-  security-checks:

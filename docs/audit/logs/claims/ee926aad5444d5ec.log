@@ -1,3 +1,0 @@
-$ grep -n "name: dudect - Legacy Harnesses" .github/workflows/dudect.yml
-# exit=0 duration=0.005s
-243:    name: dudect - Legacy Harnesses (tools/constant_time)

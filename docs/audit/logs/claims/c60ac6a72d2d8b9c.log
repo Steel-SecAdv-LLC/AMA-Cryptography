@@ -1,3 +1,0 @@
-$ grep -oE "copy 65,782,267 / 65,818,191" CONSTANT_TIME_VERIFICATION.md
-# exit=0 duration=0.005s
-copy 65,782,267 / 65,818,191

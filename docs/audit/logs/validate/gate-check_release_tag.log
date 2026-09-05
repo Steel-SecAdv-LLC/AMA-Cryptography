@@ -1,6 +1,0 @@
-FAIL: release tag `v5.0.0` is not releasable:
-  - tag `v5.0.0` does not resolve to any object in .
-
-This gate checks the tag's SHAPE only. It does not verify the signature —
-for that, run:
-  git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v5.0.0

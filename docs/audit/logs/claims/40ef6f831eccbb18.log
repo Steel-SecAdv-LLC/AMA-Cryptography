@@ -1,5 +1,0 @@
-$ grep -n 'int crop_rc       = dudect_cropped_self_test();\|declared capacity). Refusing to report a verdict for it' tests/c/test_dudect.c; grep -n 'define DUDECT_T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD' tests/c/dudect/dudect.h
-# exit=0 duration=0.006s
-96:                "declared capacity). Refusing to report a verdict for it.\n",
-3112:            int crop_rc       = dudect_cropped_self_test();
-54:#define DUDECT_T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD

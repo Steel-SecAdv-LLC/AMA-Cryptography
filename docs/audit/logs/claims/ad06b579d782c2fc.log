@@ -1,3 +1,0 @@
-$ python tools/check_verification_claim_honesty.py | grep -c '^OK'
-# exit=0 duration=10.177s
-6

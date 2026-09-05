@@ -1,5 +1,0 @@
-$ sed -n '198,215p' benchmarks/check_baseline_justification.py | grep -n '_commit_parents(sha)\|for parent in\|all('
-# exit=0 duration=0.005s
-9:    parents = _commit_parents(sha)
-13:    befores = [_values_at(parent) for parent in parents]
-15:        key for key, value in after.items() if all(before.get(key) != value for before in befores)

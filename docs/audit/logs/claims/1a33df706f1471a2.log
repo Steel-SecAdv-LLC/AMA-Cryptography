@@ -1,3 +1,0 @@
-$ grep -n "_ARTEFACT\b" tests/test_integrity_repair_gate.py; echo rc=$?
-# exit=0 duration=0.005s
-rc=1

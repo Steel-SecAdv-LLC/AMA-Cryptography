@@ -1,3 +1,0 @@
-$ /opt/ama-venv/bin/python -c "exec('import ast,pathlib\ng={p.stem:p.read_text(encoding=\"utf-8\") for p in pathlib.Path(\"tools\").glob(\"check_*.py\")};h=[]\nfor f in sorted(pathlib.Path(\"tests\").glob(\"test_*.py\")):\n s=f.read_text(encoding=\"utf-8\")\n for n in ast.walk(ast.parse(s)):\n  if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr==\"compile\" and n.args and isinstance(n.args[0],ast.Constant) and isinstance(n.args[0].value,str) and len(n.args[0].value)>=12:\n   h+=[(f.name,k) for k,v in g.items() if n.args[0].value in v and k not in s]\nprint(\"RESPELLED_GATE_REGEXES\",len(h),h)')"
-# exit=0 duration=0.816s
-RESPELLED_GATE_REGEXES 0 []

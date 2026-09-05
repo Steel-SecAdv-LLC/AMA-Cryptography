@@ -1,3 +1,0 @@
-$ grep -oE -- '-m(aes|vaes|pclmul|vpclmulqdq|sha|bmi|bmi2|adx|ssse3|sse4\.1)\b' CMakeLists.txt | sort -u | tr '\n' ' '; grep -c set_source_files_properties CMakeLists.txt
-# exit=0 duration=0.006s
--madx -maes -mbmi -mbmi2 -mpclmul -msha -msse4.1 -mssse3 -mvaes -mvpclmulqdq 12

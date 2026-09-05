@@ -1,3 +1,0 @@
-$ grep -rn "secrets\.randbits(" ama_cryptography/ | grep -v "#" | wc -l
-# exit=1 duration=0.025s
-0

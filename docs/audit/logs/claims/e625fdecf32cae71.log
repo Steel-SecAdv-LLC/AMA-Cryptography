@@ -1,3 +1,0 @@
-$ grep -cE "def check_source_inventory_counts|measure_internal_sources\(repo\)" tools/check_documented_counts.py
-# exit=0 duration=0.007s
-2

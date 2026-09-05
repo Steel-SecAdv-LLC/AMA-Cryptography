@@ -1,4 +1,0 @@
-$ grep -nE "^\s*_ = " tools/monitoring/ama_cryptography_monitor_demo.py | sed -n 2,3p
-# exit=0 duration=0.005s
-76:    _ = np.random.rand(10000, 10000).sum()  # CPU-intensive operation
-78:    _ = create_crypto_package(test_codes, test_params, kms, "demo", monitor=monitor)

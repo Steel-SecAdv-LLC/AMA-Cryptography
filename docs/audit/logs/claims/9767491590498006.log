@@ -1,5 +1,0 @@
-$ grep -n '1.7135 (15)\|1.8629 (30)\|Both neighbouring ladders fall outside' tests/c/dudect/dudect_percentile.h; python -c "print(1.7135 < 1.73, 1.8629 > 1.84, 0.811 < 1.73)"
-# exit=0 duration=0.031s
-815:             * (10), 1.7135 (15), 1.7845 (20, shipped), 1.8629 (30), 1.9248
-816:             * (40).  Both neighbouring ladders fall outside. */
-True True True

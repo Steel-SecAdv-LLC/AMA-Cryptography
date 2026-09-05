@@ -1,4 +1,0 @@
-$ grep -n -B12 '^static int16_t barrett_reduce(' src/c/ama_kyber.c | grep -cE 'Domain is the whole .int16_t. range and the image is \[0, q\]'; grep -n -B12 '^static int16_t barrett_reduce(' src/c/ama_kyber.c | grep -c 'v = round(2\^26 / q)'
-# exit=0 duration=0.007s
-1
-1

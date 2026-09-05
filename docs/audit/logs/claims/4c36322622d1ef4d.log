@@ -1,3 +1,0 @@
-$ grep -cE "except \(KeyboardInterrupt, SystemExit, GeneratorExit\)|Cython (SHA3-256|HMAC-SHA3-256) panic" ama_cryptography/pqc_backends.py
-# exit=0 duration=0.005s
-4

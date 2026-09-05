@@ -1,7 +1,0 @@
-==================================================
-AES-256-GCM scalar reference KAT + scalar/SIMD
-equivalence (exercises table-free word-level GHASH)
-==================================================
-
-
-316 checks, 0 failures

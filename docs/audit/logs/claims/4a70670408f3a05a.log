@@ -1,3 +1,0 @@
-$ python -c "import inspect; from ama_cryptography.monitoring import VolumeSpikeDetector as V, RecursionPatternMonitor as R; print('V', 'max_operations' in inspect.signature(V.__init__).parameters, 'R', [p for p in inspect.signature(R.__init__).parameters if 'max' in p])"
-# exit=0 duration=0.560s
-V True R ['max_depth', 'max_history']

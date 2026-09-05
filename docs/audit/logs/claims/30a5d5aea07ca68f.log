@@ -1,5 +1,0 @@
-$ grep -n -A2 "if current_strength == self.UNRANKED_STRENGTH:" ama_cryptography/adaptive_posture.py
-# exit=0 duration=0.005s
-1454:        if current_strength == self.UNRANKED_STRENGTH:
-1455-            logger.critical(
-1456-                "Posture escalation refused: current_algorithm %r is not on the "

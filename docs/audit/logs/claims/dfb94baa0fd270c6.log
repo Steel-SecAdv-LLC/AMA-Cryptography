@@ -1,3 +1,0 @@
-$ git show d1fbdf2:tests/test_vendor_isolation_gate.py | grep -cE '^\s*def test_'
-# exit=0 duration=0.007s
-24

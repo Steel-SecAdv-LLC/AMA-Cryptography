@@ -1,3 +1,0 @@
-$ grep -n "_C_SUITE_PAREN_RE = re.compile" tools/check_documented_counts.py
-# exit=0 duration=0.005s
-621:_C_SUITE_PAREN_RE = re.compile(r"(\d[\d,]*) C test suites \((\d[\d,]*) translation units\)")

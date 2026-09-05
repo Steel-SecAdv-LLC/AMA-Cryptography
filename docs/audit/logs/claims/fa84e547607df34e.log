@@ -1,4 +1,0 @@
-$ sed -n '/^def test_the_mode_is_settled_before_the_rename/,/^def /p' tests/test_build_sign.py | grep -cE "os\.chmod\(artefact, 0o400\)|seen == \[0o400\]"; grep -c 0o640 tests/test_build_sign.py
-# exit=1 duration=0.007s
-2
-0

@@ -1,3 +1,0 @@
-$ grep -c "67 C test suites (70 translation units)" README.md
-# exit=0 duration=0.005s
-1

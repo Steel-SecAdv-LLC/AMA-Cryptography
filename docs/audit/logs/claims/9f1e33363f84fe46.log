@@ -1,7 +1,0 @@
-$ grep -nE 'check_linker_flag\(C "LINKER:-z,relro,-z,now"|check_c_compiler_flag\("-(fcf-protection=full|mbranch-protection=standard)"|set\(CMAKE_C_FLAGS "\$\{CMAKE_C_FLAGS\} -(fcf-protection=full|mbranch-protection=standard)"\)' CMakeLists.txt
-# exit=0 duration=0.005s
-210:        check_linker_flag(C "LINKER:-z,relro,-z,now" AMA_HAVE_RELRO_NOW)
-269:        check_c_compiler_flag("-mbranch-protection=standard" AMA_HAVE_BRANCH_PROTECTION)
-271:            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mbranch-protection=standard")
-277:        check_c_compiler_flag("-fcf-protection=full" AMA_HAVE_CF_PROTECTION)
-279:            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fcf-protection=full")

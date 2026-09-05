@@ -1,5 +1,0 @@
-$ grep -n "name: Corpus Provenance Gate" .github/workflows/corpus-provenance.yml; ls wycheproof_vectors/vectors | wc -l; python -c "import json;print(len(json.load(open('wycheproof_vectors/manifest.json'))['files']))"
-# exit=0 duration=0.035s
-146:    name: Corpus Provenance Gate
-15
-15

@@ -1,7 +1,0 @@
-SECRET SCAN FAILED — potential credential material detected:
-
-tools/nc_probe_secret.py:3: [aws-access-key-id] AWS access key id
-    AWS_ACCESS_KEY_ID = 'AKIAQZ7M3P9K2L5N8R4T'
-
-1 finding(s) across 1691 file(s).
-If a match is a published test vector or public key, add it to the allowlist in tools/check_secrets.py with a written justification — do not silence the scanner globally.

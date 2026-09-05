@@ -1,4 +1,0 @@
-$ grep -n 'tail_len = size - FUZZ_HEADER_BYTES\|MATCHED and land in `unresolved` (fail closed' tools/check_fuzz_input_reachability.py
-# exit=0 duration=0.004s
-106:#: length variable and gated on it — `tail_len = size - FUZZ_HEADER_BYTES;`
-112:#: MATCHED and land in `unresolved` (fail closed, a MANUAL_BOUNDS decision)

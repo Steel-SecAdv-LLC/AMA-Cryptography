@@ -1,4 +1,0 @@
-$ git show 45a2df5:tests/c/test_dudect.c | grep -c "dudect_stage_select("; git show 45a2df5:tools/constant_time/dudect_crypto.c | grep -c "dudect_stage_select("
-# exit=0 duration=0.010s
-24
-7

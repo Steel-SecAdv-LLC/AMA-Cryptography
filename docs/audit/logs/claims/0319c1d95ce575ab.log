@@ -1,3 +1,0 @@
-$ python -c "print(round(0.371/0.021,1))"
-# exit=0 duration=0.031s
-17.7

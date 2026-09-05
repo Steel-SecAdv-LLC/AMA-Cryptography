@@ -1,4 +1,0 @@
-$ grep -n "<2%" MONITORING.md README.md
-# exit=0 duration=0.005s
-MONITORING.md:413:**Total Impact**: <2% when all components enabled
-README.md:1495:- **Low performance impact**: ~15% overhead on HKDF derivation, <2% on end-to-end package operations

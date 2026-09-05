@@ -1,4 +1,0 @@
-$ sed -n '60,70p' CMakeLists.txt | grep -n 'set(_AMA_DONNA_DEFAULT ON)\|${_AMA_DONNA_DEFAULT}'
-# exit=0 duration=0.005s
-6:    set(_AMA_DONNA_DEFAULT ON)
-10:       ${_AMA_DONNA_DEFAULT})

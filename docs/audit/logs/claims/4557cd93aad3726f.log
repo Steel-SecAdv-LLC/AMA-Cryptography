@@ -1,3 +1,0 @@
-$ grep -c "4/8\|0/8" tests/c/dudect/dudect_stage.h
-# exit=0 duration=0.004s
-5

@@ -1,4 +1,0 @@
-$ grep -n 'def test_package_digest_format_tag_is_identical\|def test_entry_framing_is_identical(' tests/test_native_integrity.py
-# exit=0 duration=0.004s
-170:    def test_package_digest_format_tag_is_identical(self) -> None:
-175:    def test_entry_framing_is_identical(self) -> None:

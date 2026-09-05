@@ -312,9 +312,3 @@ verification/v5-audit/item18/nc_seeded_race_tsan
 verification/v5-audit/item18/nc_seeded_race_plain
 verification/v5-audit/item18/nc_seeded_race_small
 
-# PR #394 readiness-falsification audit (docs/audit/): retained raw logs are
-# the evidence behind every ledger row, so they are committed despite the
-# global `*.log` rule above. A reported exit code with no retained log is not
-# evidence.
-!docs/audit/logs/
-!docs/audit/logs/**

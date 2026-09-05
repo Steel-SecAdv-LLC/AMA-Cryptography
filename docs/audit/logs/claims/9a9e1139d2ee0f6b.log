@@ -1,3 +1,0 @@
-$ find src/c/avx2 src/c/avx512 src/c/neon src/c/sve2 -name '*.c' | wc -l
-# exit=0 duration=0.004s
-26

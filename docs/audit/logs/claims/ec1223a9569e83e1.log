@@ -1,5 +1,0 @@
-$ grep -c '_run_integrity_signer\|_build_sign' setup.py; grep -c '_build_sign' tools/resign_wheel.py; grep -c '"ama_cryptography._build_sign"' ama_cryptography/integrity.py
-# exit=0 duration=0.009s
-14
-5
-2

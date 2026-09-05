@@ -1,3 +1,0 @@
-$ /opt/ama-venv/bin/python -c "exec('import ast,subprocess\nfs=subprocess.check_output([\"git\",\"ls-files\",\"*.py\"]).decode().split();rep=[]\ndef sc(b,f):\n s={}\n for n in b:\n  if isinstance(n,(ast.Import,ast.ImportFrom)):\n   k=ast.dump(n)\n   rep.append((f,n.lineno)) if k in s else s.setdefault(k,n.lineno)\nfor f in fs:\n t=ast.parse(open(f,encoding=\"utf-8\").read());sc(t.body,f)\n for n in ast.walk(t):\n  if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)): sc(n.body,f)\nprint(\"REPEATED_SAME_SCOPE\",len(rep),rep[:5])')"
-# exit=0 duration=1.526s
-REPEATED_SAME_SCOPE 0 []

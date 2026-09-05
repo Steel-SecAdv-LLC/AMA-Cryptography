@@ -1,7 +1,0 @@
-$ grep -nE "as_posix\(\)|def test_the_internal_allowlist_is_spelled_with_forward_slashes" tests/test_documented_c_prototypes_match_headers.py
-# exit=0 duration=0.004s
-234:    # as_posix(), not str(): on Windows str() spells this "src\\c\\ama_platform_rand.h"
-237:    rel = header.relative_to(REPO_ROOT).as_posix()
-335:def test_the_internal_allowlist_is_spelled_with_forward_slashes() -> None:
-336:    """The comparison is against ``Path.as_posix()``; the allowlist must match.
-345:            f"slashes, which is what Path.as_posix() produces on every platform"

@@ -1,4 +1,0 @@
-$ grep -oE "gcc 113.8 -> 115.6 us/op, clang 123.6 -> 129.1 us/op|P-256 ECDSA sign gcc 130.8 -> 132.5 us/op, clang 133.4 -> 135.7 us/op" benchmarks/baseline.json
-# exit=0 duration=0.005s
-gcc 113.8 -> 115.6 us/op, clang 123.6 -> 129.1 us/op
-P-256 ECDSA sign gcc 130.8 -> 132.5 us/op, clang 133.4 -> 135.7 us/op

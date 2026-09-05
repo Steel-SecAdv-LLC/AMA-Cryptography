@@ -1,3 +1,0 @@
-$ ls -d verification/v5-audit/memos/
-# exit=2 duration=0.006s
-ls: cannot access 'verification/v5-audit/memos/': No such file or directory

@@ -1,3 +1,0 @@
-$ grep -nE "\"PYTHONCOERCECLOCALE\": \"0\"|\"PYTHONUTF8\": \"0\"|subprocess\.run\(" tests/test_benchmark_chart_inputs.py | wc -l
-# exit=0 duration=0.004s
-3

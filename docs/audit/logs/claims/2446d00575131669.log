@@ -1,3 +1,0 @@
-$ grep -n "Revision-history rows are skipped" tools/update_docs.py
-# exit=0 duration=0.003s
-870:    Revision-history rows are skipped, on the same rule the gate applies: a row

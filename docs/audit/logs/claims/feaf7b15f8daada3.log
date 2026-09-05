@@ -1,4 +1,0 @@
-$ grep -cE "^\s+except[^:]*:\s*$" tests/test_artefact_cache_poisoning.py; grep -nE "^\s+except[^:]*:\s*$" -A1 tests/test_artefact_cache_poisoning.py | grep -c "^[0-9]*-\s*pass$"
-# exit=1 duration=0.008s
-3
-0

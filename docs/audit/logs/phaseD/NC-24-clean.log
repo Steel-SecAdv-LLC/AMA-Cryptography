@@ -1,1 +1,0 @@
-OK    stdlib hashlib confined to the 5-file trust bootstrap (counts pinned; production hashing is native)

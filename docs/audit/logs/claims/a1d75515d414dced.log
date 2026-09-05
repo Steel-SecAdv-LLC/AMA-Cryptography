@@ -1,5 +1,0 @@
-$ grep -n -- '--target kyber-decaps' .github/workflows/dudect.yml; awk '/^  ghash-scalar-invariance:/,/^    steps:/' .github/workflows/dudect.yml | grep -c '^    if:'; grep -n '"kyber-decaps": 0,' tools/check_ghash_constant_time.py
-# exit=0 duration=0.008s
-845:            --lib build/lib/libama_cryptography_test.a --target kyber-decaps
-0
-359:    "kyber-decaps": 0,

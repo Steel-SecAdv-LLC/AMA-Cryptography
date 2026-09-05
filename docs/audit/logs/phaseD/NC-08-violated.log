@@ -1,7 +1,0 @@
-OK    vendored corpus provenance
-OK    reference-encoder independence
-OK    vector generators compute nothing
-
-FAIL: INVARIANT-36 — a third-party cryptographic implementation is in the validation path.
-  external cryptographic binaries in ama_cryptography/, tests/, tools/:
-    - tests/nc_probe_originality.py:7: invokes 'openssl'. AMA's correctness is not measured against another cryptographic implementation (INVARIANT-36); use a published specification vector or tests/ref_keyformat.py.

@@ -1,3 +1,0 @@
-$ grep -nE "^\s*/\* [0-9]+[a-z]?\. " tests/c/dudect/dudect_percentile.h | wc -l
-# exit=0 duration=0.005s
-11

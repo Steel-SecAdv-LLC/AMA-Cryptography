@@ -1,4 +1,0 @@
-$ git show 2dcef5c:setup.py | awk '/^    if USE_CYTHON:/{f=1} f&&/Extension\(/{n++} END{print n}'; git show 2dcef5c:setup.py | grep -c 'Extension('
-# exit=0 duration=0.009s
-6
-6

@@ -1,4 +1,0 @@
-$ grep -c "Hoisted out of the printf argument list" tests/c/test_ed25519_canonical_r.c tests/c/test_ed25519_scalarmult_contract.c
-# exit=0 duration=0.005s
-tests/c/test_ed25519_canonical_r.c:1
-tests/c/test_ed25519_scalarmult_contract.c:1

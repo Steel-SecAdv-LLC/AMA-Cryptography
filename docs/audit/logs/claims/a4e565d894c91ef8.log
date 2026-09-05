@@ -1,3 +1,0 @@
-$ awk '/^class TestCmakeBuildType/,/^class TestPytestPrerequisites/' tests/test_workflow_command_checks.py | grep -c "def test_"
-# exit=0 duration=0.005s
-10

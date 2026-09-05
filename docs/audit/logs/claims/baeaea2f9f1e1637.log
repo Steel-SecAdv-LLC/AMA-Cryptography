@@ -1,4 +1,0 @@
-$ grep -n "fifteen requests \`--verify\` issues" tools/refresh_wycheproof_corpus.py; grep -n "Connection reset by peer\` while the other twelve verified" tools/http_fetch.py
-# exit=0 duration=0.006s
-123:    fifteen requests `--verify` issues back to back — and then
-19:    `[Errno 104] Connection reset by peer` while the other twelve verified,

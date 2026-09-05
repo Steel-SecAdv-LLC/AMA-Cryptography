@@ -1,6 +1,0 @@
-$ grep -nE "src/c/ama_secp256k1.c|src/c/ama_nistp.c" tools/check_ghash_constant_time.py | head -4
-# exit=0 duration=0.004s
-239:#: signature, at the top of `ama_nistp_ecdsa_sign_raw` in src/c/ama_nistp.c,
-401:#: src/c/ama_secp256k1.c and include/ama_cryptography.h.  Nothing checked any
-409:        f"src/c/ama_secp256k1.c and include/ama_cryptography.h all say "
-418:        "The ladder in src/c/ama_secp256k1.c must select with\n"

@@ -1,4 +1,0 @@
-$ grep -n "option(AMA_ENABLE_LTO" CMakeLists.txt; grep -n "AMA_ENABLE_LTO" Makefile setup.py
-# exit=0 duration=0.008s
-25:option(AMA_ENABLE_LTO "Enable link-time optimization" ON)
-Makefile:282:		-DAMA_ENABLE_LTO=OFF \

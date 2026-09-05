@@ -1,4 +1,0 @@
-$ grep -c 'name: "Chocolatey retry policy: no bare choco install in a workflow"' .github/workflows/ci.yml; grep -c "A YAML \`name:\` is a label, not a command" tools/check_choco_retry.py
-# exit=0 duration=0.007s
-1
-1

@@ -1,5 +1,0 @@
-$ grep -n "dudect_rounds_self_test();\|dudect_cropped_self_test();\|return (rounds_rc != 0 || crop_rc != 0) ? 1 : 0;" tools/constant_time/dudect_harness.c
-# exit=0 duration=0.004s
-472:            int rounds_rc = dudect_rounds_self_test();
-473:            int crop_rc = dudect_cropped_self_test();
-474:            return (rounds_rc != 0 || crop_rc != 0) ? 1 : 0;

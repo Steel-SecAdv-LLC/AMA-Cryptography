@@ -1,4 +1,0 @@
-$ grep -rl "#include <openssl/" src/c | sort
-# exit=0 duration=0.007s
-src/c/vendor/ed25519-donna/ed25519-hash.h
-src/c/vendor/ed25519-donna/ed25519-randombytes.h

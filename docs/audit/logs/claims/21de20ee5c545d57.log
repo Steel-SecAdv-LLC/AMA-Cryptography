@@ -1,3 +1,0 @@
-$ grep -n 'static _Atomic int nistp_mulx_gate' src/c/ama_nistp.c
-# exit=0 duration=0.004s
-426:static _Atomic int nistp_mulx_gate = -1;

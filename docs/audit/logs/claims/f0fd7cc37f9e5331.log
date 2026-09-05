@@ -1,9 +1,0 @@
-$ grep -nA6 "^AMA_API ama_error_t ama_aes256_gcm_encrypt(" include/ama_cryptography.h
-# exit=0 duration=0.004s
-1574:AMA_API ama_error_t ama_aes256_gcm_encrypt(
-1575-    const uint8_t key[32],
-1576-    const uint8_t nonce[12],
-1577-    const uint8_t *plaintext,
-1578-    size_t pt_len,
-1579-    const uint8_t *aad,
-1580-    size_t aad_len,

@@ -1,4 +1,0 @@
-$ grep -nE '^\| (19|20) \| Behavioural \|' CHANGELOG.md | cut -c1-30
-# exit=0 duration=0.004s
-4981:| 19 | Behavioural | ever
-4982:| 20 | Behavioural | `ama

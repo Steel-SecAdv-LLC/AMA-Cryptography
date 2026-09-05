@@ -1,3 +1,0 @@
-$ grep -nE "differed by 9 instructions|spread over 27" tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-1813:    input differed by 9 instructions, and eight runs of identical inputs spread

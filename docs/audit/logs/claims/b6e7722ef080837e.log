@@ -1,4 +1,0 @@
-$ sed -n 410,440p tests/test_artefact_cache_poisoning.py | grep -c '^\s*b"'; grep -n 'def test_every_failure_mode_is_one_exception_type' tests/test_artefact_cache_poisoning.py
-# exit=0 duration=0.006s
-5
-410:    def test_every_failure_mode_is_one_exception_type(self, tmp_path: Path) -> None:

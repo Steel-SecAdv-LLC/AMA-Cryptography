@@ -1,3 +1,0 @@
-$ sed -n 550,562p src/c/ama_cpuid.c | grep -c "^#else"
-# exit=0 duration=0.005s
-1

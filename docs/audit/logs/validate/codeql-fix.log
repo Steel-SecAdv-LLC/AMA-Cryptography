@@ -1,6 +1,0 @@
-All checks passed!
-Success: no issues found in 8 source files
-=== NC-18 tools/check_line_endings.py
-    violated exit=1 clean exit=0 -> OK
-
-1 controls, 0 not OK

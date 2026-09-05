@@ -1,4 +1,0 @@
-$ grep -n 'ctx->finalized != (int)SHAKE256_RATE\|ctx->finalized != (int)SHAKE128_RATE' src/c/ama_sha3.c
-# exit=0 duration=0.005s
-963:    if (ctx->finalized != (int)SHAKE256_RATE) {
-1090:    if (ctx->finalized != (int)SHAKE128_RATE) {

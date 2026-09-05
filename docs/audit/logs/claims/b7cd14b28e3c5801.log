@@ -1,6 +1,0 @@
-$ grep -n '^np: Any' examples/python/complete_demo.py setup.py; grep -nE '^[a-z_]+: Any$' benchmarks/benchmark_suite.py; grep -rn 'np = None  # type: ignore' examples/ setup.py benchmarks/ | wc -l
-# exit=1 duration=0.013s
-examples/python/complete_demo.py:119:np: Any
-setup.py:282:np: Any
-37:psutil: Any
-0

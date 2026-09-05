@@ -1,9 +1,0 @@
-$ grep -n '#define OFFSETS 16\|== AMA_SUCCESS\|!= AMA_SUCCESS' tests/c/test_ed25519_unaligned_input.c
-# exit=0 duration=0.004s
-47:#define OFFSETS 16
-77:    if (ama_ed25519_keypair(pk, sk) != AMA_SUCCESS) {
-81:    if (ama_ed25519_sign(sig, (const uint8_t *)msg, msg_len, sk) != AMA_SUCCESS) {
-88:    check(ama_ed25519_verify(sig, (const uint8_t *)msg, msg_len, pk) == AMA_SUCCESS,
-99:        check(ama_ed25519_verify(usig, (const uint8_t *)msg, msg_len, upk) == AMA_SUCCESS,
-105:        check(ama_ed25519_verify(usig, (const uint8_t *)msg, msg_len, upk) != AMA_SUCCESS,
-111:        check(ama_ed25519_verify(usig, (const uint8_t *)msg, msg_len, upk) != AMA_SUCCESS,

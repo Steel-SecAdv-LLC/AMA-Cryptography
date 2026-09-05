@@ -1,4 +1,0 @@
-$ grep -nE -B1 'dil_polyveck_invntt\(&(t|w1), P->k\);' src/c/ama_dilithium.c | grep -c dil_polyveck_reduce; grep -nE -B6 'dil_poly_invntt\(&acc' src/c/ama_dilithium.c | grep -c 'dil_poly_reduce(&acc)'
-# exit=0 duration=0.006s
-2
-1

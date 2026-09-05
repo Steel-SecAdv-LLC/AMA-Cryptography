@@ -1,5 +1,0 @@
-$ sed -n '/^_CONFIGURATIONS = (/,/^)/p' tests/test_aesni_is_not_gated_on_avx2.py | grep -cE '^\s+\("(simd-on|avx2-off|simd-off)"'; grep -c 'avx2_only = {"ama_kyber_ntt_avx2", "ama_dilithium_ntt_avx2"}' tests/test_aesni_is_not_gated_on_avx2.py; nm -D --defined-only build-release/lib/libama_cryptography.so | grep -c ' T ama_aes256_gcm_encrypt_avx2$'
-# exit=0 duration=0.028s
-3
-1
-1

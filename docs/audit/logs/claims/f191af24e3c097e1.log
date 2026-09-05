@@ -1,3 +1,0 @@
-$ grep -c "TEST_C_ROOT" tools/check_c_secret_zeroization.py
-# exit=0 duration=0.005s
-3

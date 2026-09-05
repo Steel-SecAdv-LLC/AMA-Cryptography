@@ -1,4 +1,0 @@
-$ grep -n -A1 'Sanity-check that measured >> floor", which this' tools/update_docs.py
-# exit=0 duration=0.004s
-90:#     11 of 19 rows.  "Sanity-check that measured >> floor", which this
-91-#     comment used to say, is not a check the current scheme supports; the

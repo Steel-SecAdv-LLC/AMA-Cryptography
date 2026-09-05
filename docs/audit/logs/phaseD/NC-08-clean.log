@@ -1,6 +1,0 @@
-OK    external cryptographic binaries in ama_cryptography/, tests/, tools/
-OK    vendored corpus provenance
-OK    reference-encoder independence
-OK    vector generators compute nothing
-
-INVARIANT-36 holds: AMA is checked against specifications and its own reference encoder, not against another implementation.

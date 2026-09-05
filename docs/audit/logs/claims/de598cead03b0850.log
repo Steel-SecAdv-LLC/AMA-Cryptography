@@ -1,6 +1,0 @@
-$ grep -n "\.so\.<major> -> \.so\.<major>\.<minor>\.<patch>\|\.so\.5" setup.py
-# exit=0 duration=0.005s
-1022:        SONAME (`libama_cryptography.so.<major>`, `.so.5` at this release —
-1042:            libama_cryptography.so -> .so.<major> -> .so.<major>.<minor>.<patch>
-1043:        (`.so.5` -> `.so.5.0.0` at this release; CMake derives SOVERSION from
-1127:                        #  .so.<major>.<minor>.<patch>; `.so.5` at this

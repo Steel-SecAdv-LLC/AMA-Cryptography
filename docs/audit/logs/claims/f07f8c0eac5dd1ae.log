@@ -1,4 +1,0 @@
-$ grep -n '"import nacl.signing"\|from benchmarks import benchmark_runner' tests/test_vendor_isolation_gate.py
-# exit=0 duration=0.004s
-94:            ("import nacl.signing", "libsodium"),
-112:        pkg = write_package(tmp_path, "from benchmarks import benchmark_runner\n")

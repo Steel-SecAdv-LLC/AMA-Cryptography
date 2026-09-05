@@ -1,3 +1,0 @@
-$ /opt/ama-venv/bin/python -c "exec('import ast,subprocess\nfs=subprocess.check_output([\"git\",\"ls-files\",\"*.py\"]).decode().split()\ne=[(f,n.lineno) for f in fs for n in ast.walk(ast.parse(open(f,encoding=\"utf-8\").read())) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Constant) and n.value.value is Ellipsis]\nprint(\"FILES\",len(fs),\"BARE_ELLIPSIS\",len(e),e)')"
-# exit=0 duration=1.329s
-FILES 334 BARE_ELLIPSIS 0 []

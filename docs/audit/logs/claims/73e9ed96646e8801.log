@@ -1,4 +1,0 @@
-$ grep -n "def test_real_warning_fails\|def test_int128_outside_the_named_headers_is_not_exempt" tests/test_compiler_warning_gate.py
-# exit=0 duration=0.004s
-118:    def test_real_warning_fails(self, tmp_path: Path, line: str) -> None:
-125:    def test_int128_outside_the_named_headers_is_not_exempt(self, tmp_path: Path) -> None:

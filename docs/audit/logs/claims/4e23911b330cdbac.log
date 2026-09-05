@@ -1,7 +1,0 @@
-$ grep -n -A1 'INTERPROCEDURAL_OPTIMIZATION OFF' CMakeLists.txt
-# exit=0 duration=0.007s
-1146:            # `INTERPROCEDURAL_OPTIMIZATION OFF` this line used to set was a
-1147-            # no-op for Release, and the AppleClang arm two branches up
---
-1154:                INTERPROCEDURAL_OPTIMIZATION OFF
-1155-                INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)

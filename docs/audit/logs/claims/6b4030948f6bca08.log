@@ -1,3 +1,0 @@
-$ git diff --stat 45a2df5~1..4d0838c -- src/c include ama_cryptography | wc -l
-# exit=0 duration=0.006s
-0

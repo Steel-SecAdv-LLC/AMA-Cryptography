@@ -1,4 +1,0 @@
-$ /opt/ama-venv/bin/python -c "exec('import yaml\nfor wf,job in ((\".github/workflows/ci.yml\",\"test\"),(\".github/workflows/ci-build-test.yml\",\"python-package\")):\n j=yaml.safe_load(open(wf))[\"jobs\"][job]\n print(job,\"runs_mypy=\",any(\"mypy\" in str(s.get(\"run\") or \"\") for s in j[\"steps\"]),\"pins_mypy=\",any(\"mypy==\" in str(s.get(\"run\") or \"\") for s in j[\"steps\"]))')"
-# exit=0 duration=0.144s
-test runs_mypy= False pins_mypy= False
-python-package runs_mypy= False pins_mypy= False

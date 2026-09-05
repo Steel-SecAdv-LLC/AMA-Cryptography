@@ -1,3 +1,0 @@
-$ sed -n '440,460p' tests/test_agentic_abuse_detectors.py | grep -c '"tests/test_agent_binding.py",\|"tests/test_agentic_abuse_detectors.py",'
-# exit=0 duration=0.006s
-2

@@ -1,3 +1,0 @@
-$ grep -rlE 'ama_ascon_permutation_for_test\(' --include='*.c' src tests tools examples fuzz benchmarks 2>/dev/null | sort | tr '\n' ' '
-# exit=0 duration=0.010s
-src/c/ama_ascon.c tests/c/test_ascon.c 

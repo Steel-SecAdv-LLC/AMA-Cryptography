@@ -1,5 +1,0 @@
-$ grep -n 'signing_keypair mismatch: the Ed25519 public' ama_cryptography/crypto_api.py; sed -n 2618,2640p ama_cryptography/crypto_api.py | grep -c 'raise ValueError('
-# exit=0 duration=0.007s
-2627:                "signing_keypair mismatch: the Ed25519 public-key component does "
-2635:                "signing_keypair mismatch: the Ed25519 public key does not "
-2

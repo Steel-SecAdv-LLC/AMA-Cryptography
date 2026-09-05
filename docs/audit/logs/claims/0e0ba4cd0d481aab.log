@@ -1,6 +1,0 @@
-$ grep -n -A1 "g_samples\[i\] = now_ns() - t0;" benchmarks/benchmark_c_raw.c | head -4
-# exit=0 duration=0.005s
-257:        g_samples[i] = now_ns() - t0;
-258-        BENCH_CHECK(rc, "ama_x25519_keypair");
---
-274:        g_samples[i] = now_ns() - t0;

@@ -1,6 +1,0 @@
-$ sed -n '/^docs:/,/^$/p' Makefile | grep -v '^\s*@#' | grep -c 'cd build'; sed -n '/^docs:/,/^$/p' Makefile | grep -n 'doxygen docs/Doxyfile'; grep -n '^INPUT  *= include/ src/c/\|^OUTPUT_DIRECTORY  *= build/docs' docs/Doxyfile
-# exit=0 duration=0.010s
-0
-12:	@doxygen docs/Doxyfile
-12:OUTPUT_DIRECTORY       = build/docs
-23:INPUT                  = include/ src/c/

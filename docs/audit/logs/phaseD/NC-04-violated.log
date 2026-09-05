@@ -1,7 +1,0 @@
-Bandit findings by severity: Undefined=0, Low=0, Medium=0, High=1 over 10 lines of code
-Blocking policy: severity >= MEDIUM and confidence >= MEDIUM
-
-1 blocking finding(s):
-  x.py:1: [B602:?] severity=HIGH confidence=HIGH
-      nc probe
-::error::Bandit reports unjustified Medium+ findings — fix them, or justify each inline with a `# nosec` carrying a tracking ID per INVARIANT-13.

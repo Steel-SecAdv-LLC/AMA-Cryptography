@@ -1,4 +1,0 @@
-$ grep -cE "^def test_(each_family_pattern_matches_its_own_instruction|each_family_owns_its_required_kernels|a_leak_in_any_family_fails_the_gate)" tests/test_avx_scoping_gate.py; grep -c 'parametrize("family", gate.ISA_FAMILIES' tests/test_avx_scoping_gate.py
-# exit=0 duration=0.006s
-3
-4

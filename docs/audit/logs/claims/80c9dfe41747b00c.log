@@ -1,4 +1,0 @@
-$ grep -n "'CMakeLists.txt'" .github/workflows/integrity-anchor-check.yml; grep -c 'cmake -B build' .github/workflows/integrity-anchor-check.yml
-# exit=0 duration=0.007s
-63:      - 'CMakeLists.txt'
-1

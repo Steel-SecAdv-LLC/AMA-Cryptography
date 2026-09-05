@@ -1,5 +1,0 @@
-$ grep -n "refusing to re-measure" tools/update_docs.py; grep -n "raise SystemExit(1) from exc" tools/update_docs.py
-# exit=0 duration=0.007s
-730:            "refusing to re-measure: these files are not staged, so "
-965:            raise SystemExit(1) from exc
-994:            raise SystemExit(1) from exc

@@ -1,3 +1,0 @@
-$ python -c "from ama_cryptography.monitoring import ResonanceTimingMonitor as R; print(len(R().anomaly_profiles))"
-# exit=0 duration=0.546s
-14

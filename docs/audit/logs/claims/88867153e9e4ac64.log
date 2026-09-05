@@ -1,3 +1,0 @@
-$ grep -c "5,262 bytes of input\|49,921 and 49,857 bytes of input" tools/check_fuzz_input_reachability.py
-# exit=0 duration=0.005s
-2

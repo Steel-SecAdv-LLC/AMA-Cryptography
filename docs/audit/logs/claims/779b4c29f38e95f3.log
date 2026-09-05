@@ -1,4 +1,0 @@
-$ grep -nE "Say so when the excursions also disagreed on direction|below the floor, direction disagreement is SUB_FLOOR" tests/c/dudect/dudect_rounds.h
-# exit=0 duration=0.005s
-588:        /* Say so when the excursions also disagreed on direction, rather than
-813:    ok &= dudect_rounds_verdict_case("below the floor, direction disagreement is SUB_FLOOR",

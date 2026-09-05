@@ -1,3 +1,0 @@
-$ grep -n '^CFLAGS = -O3 -DNDEBUG -fomit-frame-pointer -funroll-loops' tools/constant_time/Makefile
-# exit=0 duration=0.004s
-40:CFLAGS = -O3 -DNDEBUG -fomit-frame-pointer -funroll-loops -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON -DAMA_USE_NATIVE_PQC

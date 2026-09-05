@@ -1,3 +1,0 @@
-$ git show 23bf389~1:tools/check_secret_division.py | grep -c 'which("objdump")'
-# exit=0 duration=0.006s
-1

@@ -1,4 +1,0 @@
-$ wc -c tests/kat/ascon/ascon_aead128.kat; python -c "import json;print(json.load(open('tests/kat/PROVENANCE.json'))['files']['tests/kat/ascon/ascon_aead128.kat'])"
-# exit=0 duration=0.033s
-260253 tests/kat/ascon/ascon_aead128.kat
-{'bytes': 260253, 'sha256': 'bbbc34692fe05e5fda0a3b025585622ab3e3747495e5e3655b29aae8c2a4bd33'}

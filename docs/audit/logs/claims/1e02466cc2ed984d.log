@@ -1,5 +1,0 @@
-$ grep -n "violations.extend(gate.check_source(\|def test_no_suppressions_in_forbidden_dirs\|def _scan_violations" tests/test_invariant_upgrades.py
-# exit=0 duration=0.005s
-374:    def _scan_violations(self, directory: str) -> list[str]:
-407:            violations.extend(gate.check_source(py_file.relative_to(repo_root).as_posix(), source))
-416:    def test_no_suppressions_in_forbidden_dirs(self) -> None:

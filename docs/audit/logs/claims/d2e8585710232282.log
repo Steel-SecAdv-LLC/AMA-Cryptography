@@ -1,5 +1,0 @@
-$ grep -n 'ama_ed25519_signature_r_is_canonical(signature)' src/c/ama_ed25519.c src/c/ed25519_donna_shim.c; grep -n 'AMA no longer uses it' src/c/ed25519_donna_shim.c
-# exit=0 duration=0.006s
-src/c/ama_ed25519.c:1542:    if (!ama_ed25519_signature_r_is_canonical(signature)) {
-src/c/ed25519_donna_shim.c:210:    if (!ama_ed25519_signature_r_is_canonical(signature)) {
-224: * (ed25519_sign_open_batch), but AMA no longer uses it: its randomized

@@ -1,3 +1,0 @@
-$ git show -s --format=%B a769af9 | grep -n 'over 64 deterministic'
-# exit=0 duration=0.005s
-44:The benchmarked operation itself is unchanged: over 64 deterministic

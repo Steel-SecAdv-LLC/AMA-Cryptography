@@ -1,4 +1,0 @@
-$ printf 'int f(void){int x; return x;}\n' | gcc -Wall -O2 -x c -c - -o /dev/null 2>&1 | grep -c 'warning generated'; printf 'int f(void){int x; return x;}\n' | clang -Wall -O2 -x c -c - -o /dev/null 2>&1 | grep -c 'warning generated'
-# exit=0 duration=0.068s
-0
-1

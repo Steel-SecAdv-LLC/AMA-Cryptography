@@ -1,3 +1,0 @@
-$ grep -n "434 violated" ama_cryptography/equations.py
-# exit=0 duration=0.004s
-647:        random states against a matrix with ``λ_max = 2.0``: 434 violated,

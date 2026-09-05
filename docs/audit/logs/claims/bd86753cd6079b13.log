@@ -1,3 +1,0 @@
-$ python -c "import benchmarks.benchmark_runner as br; print(len(br.BENCHMARK_FUNCTIONS)+len(br.PQC_BENCHMARK_FUNCTIONS))"
-# exit=0 duration=0.063s
-19

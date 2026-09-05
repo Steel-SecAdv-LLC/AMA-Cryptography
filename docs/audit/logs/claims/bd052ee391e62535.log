@@ -1,3 +1,0 @@
-$ grep -c "| Delta |" benchmarks/benchmark_runner.py
-# exit=1 duration=0.004s
-0

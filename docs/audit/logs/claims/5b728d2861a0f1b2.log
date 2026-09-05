@@ -1,5 +1,0 @@
-$ python -m pytest tests/test_wycheproof_fetch_retry.py --collect-only -q -p no:cacheprovider | tail -1; grep -nE "def test_(a_wrong_digest_still_fails_and_is_never_retried|the_https_guard_is_checked_before_any_attempt)" tests/test_wycheproof_fetch_retry.py
-# exit=0 duration=1.004s
-23 tests collected in 0.18s
-203:def test_the_https_guard_is_checked_before_any_attempt(
-214:def test_a_wrong_digest_still_fails_and_is_never_retried(

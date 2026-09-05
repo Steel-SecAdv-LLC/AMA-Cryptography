@@ -1,4 +1,0 @@
-$ grep -n "4,000-sample configuration CI runs\|measured at 1,000 / 2,000 / 4,000 / 8,000 samples" MONITORING.md
-# exit=0 duration=0.005s
-96:  4,000-sample configuration CI runs
-98:  the sample count — measured at 1,000 / 2,000 / 4,000 / 8,000 samples: delay 80 / 45 / 68 / 29 and coverage 0.73 / 0.85 / 0.77 / 0.90 — so they are quoted with it rather than as

@@ -1,3 +1,0 @@
-$ grep -nE "AMA_ERROR_INVALID_PARAM = -1" include/ama_cryptography.h
-# exit=0 duration=0.005s
-67:    AMA_ERROR_INVALID_PARAM = -1,

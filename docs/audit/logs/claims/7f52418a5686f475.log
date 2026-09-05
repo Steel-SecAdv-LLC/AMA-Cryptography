@@ -1,4 +1,0 @@
-$ grep -c "not recollection" benchmarks/generate_competitive.py benchmarks/competitive.html
-# exit=1 duration=0.004s
-benchmarks/generate_competitive.py:0
-benchmarks/competitive.html:0

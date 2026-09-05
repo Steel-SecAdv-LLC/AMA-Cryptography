@@ -1,5 +1,0 @@
-$ cat tools/constant_time/dudect_harness.c tools/constant_time/dudect_crypto.c | grep -c "return ttest_finish("; grep -n "return (dudect_measurement_t){.t = t, .delta_ns = delta};" tools/constant_time/dudect_harness.c tools/constant_time/dudect_crypto.c
-# exit=0 duration=0.007s
-14
-tools/constant_time/dudect_harness.c:134:    return (dudect_measurement_t){.t = t, .delta_ns = delta};
-tools/constant_time/dudect_crypto.c:167:    return (dudect_measurement_t){.t = t, .delta_ns = delta};

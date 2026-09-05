@@ -1,3 +1,0 @@
-$ grep -n 'assert reported, (' tests/test_suppression_hygiene_gate.py
-# exit=0 duration=0.004s
-422:        assert reported, (

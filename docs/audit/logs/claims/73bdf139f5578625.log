@@ -1,5 +1,0 @@
-$ git cat-file -t 93ee3d9; grep -c "SoftHSM2 resolved at" .github/workflows/ci.yml .github/workflows/ci-build-test.yml
-# exit=0 duration=0.008s
-commit
-.github/workflows/ci.yml:1
-.github/workflows/ci-build-test.yml:1

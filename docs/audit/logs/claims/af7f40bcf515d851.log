@@ -1,4 +1,0 @@
-$ grep -c "Refusing to report a verdict" tools/constant_time/dudect_harness.c tools/constant_time/dudect_crypto.c
-# exit=0 duration=0.003s
-tools/constant_time/dudect_harness.c:1
-tools/constant_time/dudect_crypto.c:1

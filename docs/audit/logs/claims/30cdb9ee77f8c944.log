@@ -1,3 +1,0 @@
-$ grep -n "name: Strict Compiler Warnings (AArch64 cross, NEON + SVE2)" .github/workflows/static-analysis.yml
-# exit=0 duration=0.005s
-397:    name: Strict Compiler Warnings (AArch64 cross, NEON + SVE2)

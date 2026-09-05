@@ -1,3 +1,0 @@
-$ python -m pytest tests/test_secure_wipe_byte_length.py --collect-only -q -p no:cacheprovider | tail -1
-# exit=0 duration=1.162s
-12 tests collected in 0.25s

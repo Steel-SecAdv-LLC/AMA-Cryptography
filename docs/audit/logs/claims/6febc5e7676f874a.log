@@ -1,3 +1,0 @@
-$ git show -s --format='%h %ad %s' --date=short e52281c
-# exit=0 duration=0.005s
-e52281c 2026-08-19 The constant-time gates were measuring an -O0 library, and a live clang ECDSA leak was behind that

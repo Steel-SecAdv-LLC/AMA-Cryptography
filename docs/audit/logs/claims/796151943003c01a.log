@@ -1,3 +1,0 @@
-$ sed -n '/def test_critical_threshold/,/def test_/p' tests/test_adaptive_posture.py | grep -c "round_index"
-# exit=0 duration=0.005s
-2

@@ -1,6 +1,0 @@
-$ grep -n "WORKFLOW_GLOBS = " tools/check_apt_retry.py; grep -nE 'glob\("\*\.yaml"\)' tools/check_action_pins.py tools/check_workflow_commands.py
-# exit=0 duration=0.006s
-57:WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
-tools/check_action_pins.py:88:    for path in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
-tools/check_action_pins.py:144:    return sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml"))
-tools/check_workflow_commands.py:1374:    paths = sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml"))

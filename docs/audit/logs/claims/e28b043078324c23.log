@@ -1,4 +1,0 @@
-$ grep -c 'pytest.fail(' tests/test_acvp_harness_library_discovery.py; grep -c 'pytest.skip(' tests/test_acvp_harness_library_discovery.py
-# exit=1 duration=0.007s
-2
-0

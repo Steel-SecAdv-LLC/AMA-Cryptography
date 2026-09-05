@@ -1,5 +1,0 @@
-$ grep -n 'types-setuptools==84.0.0.20260812' requirements-lock.txt .github/workflows/ci.yml .pre-commit-config.yaml
-# exit=0 duration=0.005s
-requirements-lock.txt:87:types-setuptools==84.0.0.20260812
-.github/workflows/ci.yml:582:                    "types-setuptools==84.0.0.20260812" \
-.pre-commit-config.yaml:136:          - types-setuptools==84.0.0.20260812

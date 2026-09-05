@@ -1,3 +1,0 @@
-$ grep -rn 'int.from_bytes(secure_token_bytes(8), "big")' ama_cryptography/rfc3161_timestamp.py ama_cryptography/legacy_compat.py | wc -l
-# exit=0 duration=0.005s
-2

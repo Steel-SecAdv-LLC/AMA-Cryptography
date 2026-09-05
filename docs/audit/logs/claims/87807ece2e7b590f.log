@@ -1,4 +1,0 @@
-$ /opt/ama-venv/bin/python -c "import yaml;d=yaml.safe_load(open('.github/workflows/arm-qemu.yml'));print('JOBS',list(d['jobs']));print('SVE2',d['jobs']['arm-qemu-sve2']['strategy']['matrix'])"
-# exit=0 duration=0.064s
-JOBS ['arm-qemu-ctest', 'arm-qemu-no-crypto-ext', 'arm-qemu-sve2', 'arm-qemu-ubsan', 'arm-qemu-gate']
-SVE2 {'include': [{'sve_vq': 1, 'vl_bits': 128}, {'sve_vq': 2, 'vl_bits': 256}]}

@@ -1,4 +1,0 @@
-$ grep -cE '^INTEGRITY_[A-Z_]+(: dict\[str, str\])? = ' ama_cryptography/_build_sign.py; grep -n "parses to no literal assignments" ama_cryptography/_artefact_source.py
-# exit=0 duration=0.005s
-5
-225:            f"{path}: parses to no literal assignments — the generated "

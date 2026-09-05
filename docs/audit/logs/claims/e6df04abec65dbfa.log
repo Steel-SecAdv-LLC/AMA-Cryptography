@@ -1,4 +1,0 @@
-$ grep -c 'sha3_256\b\|ama_sha3_256_fn' include/ama_dispatch.h; grep -n 'ama_keccak_f1600_fn       keccak_f1600;' include/ama_dispatch.h
-# exit=0 duration=0.009s
-0
-254:    ama_keccak_f1600_fn       keccak_f1600;        /**< Always non-NULL after init */

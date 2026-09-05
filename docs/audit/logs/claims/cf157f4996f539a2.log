@@ -1,4 +1,0 @@
-$ grep -n "apply_dispatch_only" src/c/dispatch/ama_dispatch.c | head -1; grep -n "Scalar AES-GCM instruction-count invariance" .github/workflows/dudect.yml
-# exit=0 duration=0.006s
-168: * Set to a string literal by apply_dispatch_only() when an AMA_DISPATCH_ONLY
-606:    name: Scalar AES-GCM instruction-count invariance

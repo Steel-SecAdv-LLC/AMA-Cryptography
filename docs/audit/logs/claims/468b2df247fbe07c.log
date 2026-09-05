@@ -1,4 +1,0 @@
-$ find build-arm/CMakeFiles/ama_cryptography_shared.dir -name '*.o' | wc -l; for o in $(find build-arm/CMakeFiles/ama_cryptography_shared.dir -name '*.o'); do readelf -nW "$o" | grep -q 'AArch64 feature: BTI, PAC' && echo marked; done | wc -l
-# exit=0 duration=0.409s
-37
-37

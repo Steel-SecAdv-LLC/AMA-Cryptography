@@ -1,5 +1,0 @@
-$ grep -c 'SMOKE' tests/c/test_ed25519_canonical_r.c; grep -c 'RANGE' tests/c/test_ed25519_canonical_r.c; grep -n '0cd6bb3' tests/c/CMakeLists.txt
-# exit=0 duration=0.011s
-8
-13
-179:# enforced the R rule there.  B1 (commit 0cd6bb3) deleted that path: both

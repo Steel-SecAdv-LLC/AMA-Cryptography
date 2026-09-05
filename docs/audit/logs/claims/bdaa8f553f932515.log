@@ -1,4 +1,0 @@
-$ sed -n '/^#ifdef AMA_HAVE_X86_AESNI_IMPL/,/^#endif/p' src/c/dispatch/ama_dispatch.c | grep -n "ama_has_aes_ni() && ama_has_pclmulqdq()\|>= AMA_IMPL_AVX2"
-# exit=0 duration=0.005s
-14:     * `dispatch_info.aes_gcm >= AMA_IMPL_AVX2`, which cost hardware AES-GCM on
-25:    if (ama_has_aes_ni() && ama_has_pclmulqdq()) {

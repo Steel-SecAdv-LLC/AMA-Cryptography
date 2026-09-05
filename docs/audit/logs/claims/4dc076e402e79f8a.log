@@ -1,4 +1,0 @@
-$ grep -n 'AES-256-GCM:        %-24s\|wired backend:    %-24s' src/c/dispatch/ama_dispatch.c
-# exit=0 duration=0.005s
-2685:    fprintf(stderr, "║  AES-256-GCM:        %-24s║\n", ama_impl_level_name(info->aes_gcm));
-2702:    fprintf(stderr, "║    wired backend:    %-24s║\n", aes_gcm_installed_backend());

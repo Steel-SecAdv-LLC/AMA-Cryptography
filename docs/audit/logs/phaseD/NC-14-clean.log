@@ -1,4 +1,0 @@
-INVARIANT-33: fuzz target registration
-  C harnesses in fuzz/: 15
-  Python harnesses in fuzz/python/: 1
-  PASS — every harness is registered in every lane that must run it.

@@ -1,3 +1,0 @@
-$ grep -rnE '(lgtm|codeql)\[py/import-and-import-from\]' --include='*.py' --include='*.yml' --include='*.yaml' . | grep -v '^./build' | wc -l
-# exit=1 duration=0.042s
-0

@@ -1,3 +1,0 @@
-$ grep -c "(uint8_t)(" src/c/ama_kyber.c
-# exit=0 duration=0.005s
-33

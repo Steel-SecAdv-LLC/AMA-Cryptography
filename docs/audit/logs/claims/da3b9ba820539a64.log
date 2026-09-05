@@ -1,3 +1,0 @@
-$ /opt/ama-venv/bin/python -c "exec('import ast\nt=ast.parse(open(\"tests/test_keygen_pct.py\",encoding=\"utf-8\").read())\nfor n in ast.walk(t):\n if isinstance(n,ast.FunctionDef) and n.name==\"test_all_pqc_backends_keygens_run_a_pct\": print(\"PB_CALLS\",len([c for c in ast.walk(n) if isinstance(c,ast.Call) and isinstance(c.func,ast.Attribute) and isinstance(c.func.value,ast.Name) and c.func.value.id==\"pb\"]))')"
-# exit=0 duration=0.039s
-PB_CALLS 13

@@ -1,6 +1,0 @@
-$ grep -nE "def test_cmake_as_a_package_or_requirement_is_not_a_configure|apt-install.sh cmake clang valgrind|'cmake>=4.4.0'" tests/test_workflow_command_checks.py
-# exit=0 duration=0.004s
-752:    def test_cmake_as_a_package_or_requirement_is_not_a_configure(self) -> None:
-753:        """`apt-install.sh cmake clang` and `pip install 'cmake>=4.4.0'` are not builds."""
-755:            ".github/scripts/apt-install.sh cmake clang valgrind",
-756:            "python -m pip install --upgrade pip 'cmake>=4.4.0' 'cython>=3.2.8'",

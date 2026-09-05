@@ -1,7 +1,0 @@
-$ grep -n -A4 "^HARNESS_FILES = (" tools/check_dudect_class_staging.py
-# exit=0 duration=0.004s
-129:HARNESS_FILES = (
-130-    "tests/c/test_dudect.c",
-131-    "tools/constant_time/dudect_crypto.c",
-132-    "tools/constant_time/dudect_harness.c",
-133-)

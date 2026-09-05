@@ -1,3 +1,0 @@
-$ grep -n 'static void (\*volatile dirty_stack)(uint8_t) = dirty_stack_impl;' tests/c/test_kyber_sample_ntt.c
-# exit=0 duration=0.005s
-279:static void (*volatile dirty_stack)(uint8_t) = dirty_stack_impl;

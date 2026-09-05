@@ -1,3 +1,0 @@
-$ grep -oE "\bama_[a-z0-9_]+_sve2\b" src/c/sve2/ama_sve2_internal.h | sort -u | wc -l
-# exit=0 duration=0.005s
-10

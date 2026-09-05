@@ -1,3 +1,0 @@
-$ sed -n '/^def _require_native/,/^    if not ASCON_AVAILABLE/p' ama_cryptography/ascon.py | grep -c "check_crypto_permitted()"
-# exit=0 duration=0.005s
-1

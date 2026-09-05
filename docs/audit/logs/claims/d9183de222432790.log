@@ -1,4 +1,0 @@
-$ grep -n 'define DUDECT_CROP_RUNGS 20\|= 21 statistics' tests/c/dudect/dudect_percentile.h
-# exit=0 duration=0.005s
-79:#define DUDECT_CROP_RUNGS 20
-88: * ``DUDECT_CROP_RUNGS + 1`` = 21 statistics computed from the same samples.

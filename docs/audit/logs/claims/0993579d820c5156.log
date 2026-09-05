@@ -1,4 +1,0 @@
-$ grep -lE "pthread_create" tests/c/*.c | sort
-# exit=0 duration=0.005s
-tests/c/test_concurrent_init.c
-tests/c/test_pq_parser_stack.c

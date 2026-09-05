@@ -1,3 +1,0 @@
-$ python -c "import sys; sys.path.insert(0,'tools'); from pathlib import Path; import check_documented_counts as m; print(m.measure_c_suite_counts(Path('.')))"
-# exit=0 duration=0.042s
-(67, 70)

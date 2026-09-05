@@ -1,3 +1,0 @@
-$ grep -o '](assets/[a-z_]*\.png)' README.md | sort -u | wc -l
-# exit=0 duration=0.005s
-5

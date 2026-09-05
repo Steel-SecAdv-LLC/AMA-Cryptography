@@ -1,3 +1,0 @@
-$ python -c "import math,random; from ama_cryptography.monitoring import ResonanceTimingMonitor as R; g=random.Random(1); run=lambda v:(lambda m:([m.record_timing('op',x) for x in v],m.detect_resonance('op'))[1])(R(window_size=len(v),max_history=len(v))); a=run([g.lognormvariate(math.log(10),0.3) for _ in range(100)])['resonance_ratio']; b=run([g.gauss(10,1) for _ in range(100)])['resonance_ratio']; print('old_3.0_bar_verdicts', a>3.0, b>3.0, 'new_verdicts', a>R._resonance_threshold(64), b>R._resonance_threshold(64))"
-# exit=0 duration=0.573s
-old_3.0_bar_verdicts True True new_verdicts False False

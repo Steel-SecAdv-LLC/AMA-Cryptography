@@ -1,3 +1,0 @@
-$ grep -n "def test_a_java_class_file_is_not_read_as_a_universal_binary" tests/test_vendor_isolation_gate.py
-# exit=0 duration=0.004s
-729:    def test_a_java_class_file_is_not_read_as_a_universal_binary(self, tmp_path: Path) -> None:

@@ -1,3 +1,0 @@
-$ python -c "import json;p=json.load(open('benchmarks/multi_library_results.json'))['provenance'];print(p['ama_version'],p['ama_commit'][:7])"
-# exit=0 duration=0.034s
-3.4.0 66d2073

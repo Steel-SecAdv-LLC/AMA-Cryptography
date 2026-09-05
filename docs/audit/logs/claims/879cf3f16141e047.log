@@ -1,3 +1,0 @@
-$ grep -cE '^\s+\("run: choco install cmake -y", True|^\s+\("name: choco install something", False|- name: "Chocolatey retry policy: no bare choco install in a workflow"' tests/test_choco_retry_gate.py
-# exit=0 duration=0.004s
-3

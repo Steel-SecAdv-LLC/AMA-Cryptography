@@ -1,4 +1,0 @@
-$ grep -n 'getenv("AMA_DISPATCH_NO_ARGON2_AVX2")' src/c/dispatch/ama_dispatch.c
-# exit=0 duration=0.006s
-1709:        const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
-1801:        const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");

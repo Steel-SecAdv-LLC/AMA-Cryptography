@@ -1,3 +1,0 @@
-$ grep -n "_PM1_ENC, True" tools/check_ed25519_backend_parity.py
-# exit=0 duration=0.005s
-634:    ("y=p-1 (the order-2 point, decodes)", _PM1_ENC, True),

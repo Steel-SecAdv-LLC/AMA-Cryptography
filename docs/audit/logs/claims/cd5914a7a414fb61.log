@@ -1,3 +1,0 @@
-$ python -c "import ama_cryptography.equations as e; from ama_cryptography._numeric import asmat; e._gershgorin_lower_bound = lambda m: 0.0; d = e._dominant_eigenvector(asmat([[-5.0,0.0],[0.0,1.0]])); print('no-shift', [round(float(x),3) for x in d])"
-# exit=0 duration=0.450s
-no-shift [1.0, 0.0]

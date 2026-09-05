@@ -1,3 +1,0 @@
-$ sed -n '1042,1050p' ama_cryptography/adaptive_posture.py | grep -n 'False when the cooldown suppressed the switch'
-# exit=0 duration=0.006s
-2:            # False when the cooldown suppressed the switch: confirm_action

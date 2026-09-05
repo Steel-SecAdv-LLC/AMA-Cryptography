@@ -1,3 +1,0 @@
-$ grep -n "has not been formally verified" ARCHITECTURE.md
-# exit=0 duration=0.004s
-268:- Mathematical correctness: primitives implemented from the published standards and pinned to their published test vectors, with sanitizer, fuzz and differential coverage of the C core — testing evidence, not proof. This library has not been formally verified; see [§Design Philosophy](#design-philosophy) and [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md)

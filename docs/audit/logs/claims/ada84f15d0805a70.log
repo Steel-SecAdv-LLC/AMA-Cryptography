@@ -1,4 +1,0 @@
-$ grep -n 'context: \.\.\|\.\./data' docker/docker-compose.yml | head -2
-# exit=0 duration=0.004s
-10:      context: ..
-24:      - ../data:/data

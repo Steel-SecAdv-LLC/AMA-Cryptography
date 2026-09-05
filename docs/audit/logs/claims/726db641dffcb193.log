@@ -1,5 +1,0 @@
-$ readelf -d build-release/lib/libama_cryptography.so | grep SONAME; grep -n 'SOVERSION ${PROJECT_VERSION_MAJOR}' CMakeLists.txt; grep -n '^    VERSION 5.0.0' CMakeLists.txt
-# exit=0 duration=0.011s
- 0x000000000000000e (SONAME)             Library soname: [libama_cryptography.so.5]
-1019:        SOVERSION ${PROJECT_VERSION_MAJOR}
-6:    VERSION 5.0.0

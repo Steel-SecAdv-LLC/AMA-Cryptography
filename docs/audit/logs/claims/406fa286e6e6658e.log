@@ -1,5 +1,0 @@
-$ sed -n '1250,1285p' include/ama_cryptography.h | grep -c 'exactly 64 readable bytes\|exactly 32 readable bytes'; sed -n '1250,1285p' include/ama_cryptography.h | grep -ci align; sed -n '1250,1285p' include/ama_cryptography.h | grep -n 'ama_ed25519_verify('
-# exit=0 duration=0.010s
-2
-0
-30:AMA_API ama_error_t ama_ed25519_verify(

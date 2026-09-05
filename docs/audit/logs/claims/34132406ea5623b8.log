@@ -1,3 +1,0 @@
-$ grep -n "counts.measure_static_test_counts(tree)" tools/update_docs.py
-# exit=0 duration=0.006s
-884:    functions, files = counts.measure_static_test_counts(tree)

@@ -1,3 +1,0 @@
-$ awk '/^dev = \[/,/^\]/' pyproject.toml | grep -c '"build>=\|"setuptools>=\|"wheel>='
-# exit=0 duration=0.006s
-3

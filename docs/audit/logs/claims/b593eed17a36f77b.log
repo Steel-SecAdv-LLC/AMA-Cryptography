@@ -1,4 +1,0 @@
-$ grep -n "allow_nan=False" benchmarks/benchmark_runner.py
-# exit=0 duration=0.005s
-1624:        # allow_nan=False: the default emits `Infinity` / `NaN`, which are not
-1637:        payload = json.dumps(report, indent=2, allow_nan=False)

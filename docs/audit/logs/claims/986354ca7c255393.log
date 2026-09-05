@@ -1,3 +1,0 @@
-$ grep -n "hashlib" nist_vectors/fetch_vectors.py | grep -vc "#"
-# exit=1 duration=0.004s
-0

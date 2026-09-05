@@ -1,7 +1,0 @@
-ERROR: 1 public entry point(s) reach the native library without an error-state guard.
-
-FIPS 140-3 §4.9.2 requires that a module whose power-on self-tests failed inhibit ALL cryptographic output. Each below would still produce output in the error state:
-
-  ama_cryptography/pqc_backends.py:3298: AmaContext.keypair_generate
-
-Fix: call one of ('check_crypto_permitted', 'check_operational') before the first native call. If the function genuinely emits no cryptographic output, add it to EXEMPT with the reason.

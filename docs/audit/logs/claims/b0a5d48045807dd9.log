@@ -1,3 +1,0 @@
-$ grep -n "def test_the_scope_gate_runs_on_the_report_mypy_writes\|def test_both_workflows_type_check_the_same_scope\|def test_the_ci_scope_reaches_every_tracked_file\|def test_the_mypy_config_narrows_nothing" tests/test_type_check_scope_gate.py | wc -l
-# exit=0 duration=0.005s
-4

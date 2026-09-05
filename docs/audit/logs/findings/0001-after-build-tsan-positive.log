@@ -1,7 +1,0 @@
-pre-release sentinel hits: 2 (resident bytes scanned: 18035104)
-post-ama_secure_free sentinel hits: 0 (resident bytes scanned: 20570624)
-PASS: no sentinel bytes anywhere in anonymous rw memory after ama_secure_free
-
-real	3m11.557s
-user	2m58.329s
-sys	0m12.578s

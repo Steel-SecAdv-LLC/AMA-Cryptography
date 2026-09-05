@@ -1,3 +1,0 @@
-$ sed -n '620,660p' src/c/dispatch/ama_dispatch.c | grep -c 'dispatch_table.kyber_invntt\|dispatch_table.kyber_pointwise\|dispatch_table.dilithium_invntt\|dispatch_table.dilithium_pointwise'
-# exit=0 duration=0.006s
-5

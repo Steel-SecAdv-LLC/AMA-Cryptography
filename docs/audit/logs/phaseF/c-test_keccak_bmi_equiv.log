@@ -1,7 +1,0 @@
-Keccak-f[1600] BMI-build vs portable-build equivalence
-=====================================================
-PASS: both builds match the all-zero-state vector
-PASS: 4096 pseudorandom states agree
-PASS: 4096 chained permutations agree
-=====================================================
-All Keccak BMI equivalence checks passed

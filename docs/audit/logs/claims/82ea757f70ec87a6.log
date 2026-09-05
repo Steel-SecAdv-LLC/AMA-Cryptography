@@ -1,4 +1,0 @@
-$ readelf -d build-release/lib/libama_cryptography.so | grep -c NEEDED; nm -D --undefined-only build-release/lib/libama_cryptography.so | wc -l
-# exit=0 duration=0.025s
-2
-43

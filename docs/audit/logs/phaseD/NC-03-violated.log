@@ -1,4 +1,0 @@
-FAIL: 1 raw apt call(s) bypassing the retry policy:
-  - .github/workflows/ci.yml:80: raw apt call outside .github/scripts/apt-install.sh: sudo apt-get install -y build-essential cmake
-
-Route them through .github/scripts/apt-install.sh, which bounds each attempt so a stalled mirror cannot consume the job budget and still fails the job if the package is genuinely unavailable.

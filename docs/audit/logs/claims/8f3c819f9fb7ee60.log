@@ -1,5 +1,0 @@
-$ grep -n 'ubuntu-24.04-arm' .github/workflows/release.yml
-# exit=0 duration=0.004s
-388:        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
-424:          # linux aarch64 runs all five in ci.yml's ubuntu-24.04-arm
-1044:          # (cp310-cp314) x 5 platform-arches (ubuntu-latest, ubuntu-24.04-arm,

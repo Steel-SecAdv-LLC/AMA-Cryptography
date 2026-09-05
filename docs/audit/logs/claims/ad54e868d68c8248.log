@@ -1,7 +1,0 @@
-$ grep -n '8m44s\|noble-security InRelease' .github/scripts/apt-install.sh | head -3; awk '/^  dudect-utility:/,/^    steps:/' .github/workflows/dudect.yml | grep timeout-minutes; awk '/^  clang-tidy:/,/^    steps:/' .github/workflows/static-analysis.yml | grep timeout-minutes
-# exit=0 duration=0.008s
-53:# stalled at `Get:5 https://archive.ubuntu.com/ubuntu noble-security InRelease`
-54:# within one second of each other, sat there for 8m44s with no output, and were
-210:# `Get:5 ... noble-security InRelease [126 kB]` — so the connection was made and
-    timeout-minutes: 20
-    timeout-minutes: 20

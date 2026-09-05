@@ -1,3 +1,0 @@
-$ grep -n '^          - types-setuptools==84.0.0.20260812' .pre-commit-config.yaml
-# exit=0 duration=0.004s
-136:          - types-setuptools==84.0.0.20260812

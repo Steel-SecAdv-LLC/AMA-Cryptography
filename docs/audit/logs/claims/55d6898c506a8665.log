@@ -1,4 +1,0 @@
-$ grep -nE "^#if defined\(_WIN32\)|Windows \(MSVC and MinGW\):\s+InitOnceExecuteOnce" src/c/internal/ama_once.h | wc -l; grep -cE "^#(if|elif).*_MSC_VER" src/c/internal/ama_once.h
-# exit=1 duration=0.007s
-2
-0

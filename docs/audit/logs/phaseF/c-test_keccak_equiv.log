@@ -1,6 +1,0 @@
-Keccak-f[1600] direct-SIMD-vs-scalar equivalence
-================================================
-PASS: AVX2 single-state (4096 trials)
-PASS: AVX2 4-way x4 (1024 trials)
-PASS: dispatched x4 vs x4_generic (256 trials)
-================================================

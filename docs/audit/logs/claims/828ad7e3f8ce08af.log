@@ -1,3 +1,0 @@
-$ grep -n "DEFAULT_CRITICAL_THRESHOLD = 0.80" ama_cryptography/adaptive_posture.py
-# exit=0 duration=0.004s
-150:    DEFAULT_CRITICAL_THRESHOLD = 0.80  # 7-sigma: active side-channel

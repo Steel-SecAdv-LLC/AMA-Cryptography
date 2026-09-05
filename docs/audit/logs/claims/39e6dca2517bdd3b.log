@@ -1,7 +1,0 @@
-$ python -c "q=3329; v=((1<<26)+q//2)//q; c16=lambda x: ((x&0xffff)-0x10000) if (x&0xffff)>=0x8000 else (x&0xffff); ts=set(); outs=[]; atq=[]
-for a in range(-32768,32768):
-    t=(v*a)>>26; ts.add(t); r=c16(a-t*q); outs.append(r)
-    if r==q: atq.append(a)
-print('v',v,'t',min(ts),max(ts),'image',min(outs),max(outs),'negs',sum(1 for r in outs if r<0),'atq',len(atq),atq)"
-# exit=0 duration=0.060s
-v 20159 t -10 9 image 0 3329 negs 0 atq 9 [-29961, -26632, -23303, -19974, -16645, -13316, -9987, -6658, -3329]

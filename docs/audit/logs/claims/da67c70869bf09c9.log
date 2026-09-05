@@ -1,3 +1,0 @@
-$ grep -c '^\s*BENCH_ROW(' benchmarks/benchmark_c_raw.c
-# exit=0 duration=0.006s
-58

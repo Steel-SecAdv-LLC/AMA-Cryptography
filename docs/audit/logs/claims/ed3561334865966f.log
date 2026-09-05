@@ -1,5 +1,0 @@
-$ grep -n 'functools.partial(' benchmarks/benchmark_suite.py benchmarks/keyformat_import.py
-# exit=0 duration=0.003s
-benchmarks/benchmark_suite.py:362:                functools.partial(create_crypto_package, codes, helix_params, kms, "benchmark"),
-benchmarks/keyformat_import.py:134:            checked = _time(functools.partial(kf.load_pkcs8, encoded), repeats)
-benchmarks/keyformat_import.py:136:                functools.partial(kf.load_pkcs8, encoded, verify_pq_consistency=False), repeats

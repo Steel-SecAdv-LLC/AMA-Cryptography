@@ -1,4 +1,0 @@
-$ grep -nE "der_lengths_seen >= 2|at least two lengths" tests/c/test_secp256k1.c
-# exit=0 duration=0.004s
-542:        TEST_ASSERT(der_lengths_seen >= 2,
-543:                    "the comparison saw DER signatures of at least two lengths");

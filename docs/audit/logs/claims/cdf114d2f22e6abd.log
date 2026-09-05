@@ -1,6 +1,0 @@
-$ sed -n '/^def _atomic_write_bytes/,/^def /p' ama_cryptography/key_management.py | grep -nE "except BaseException|os\.close\(fd\)|^\s+raise$"
-# exit=0 duration=0.005s
-23:    # file object owns the descriptor and closes it, and a later ``os.close(fd)``
-47:    except BaseException:
-52:            os.close(fd)
-58:        raise

@@ -1,4 +1,0 @@
-$ grep -c "switch (selector % 6)" fuzz/fuzz_kyber.c; sed -n '/case 3: {/,/case 4/p' fuzz/fuzz_kyber.c | grep -c "payload_len == AMA_KYBER_1024_CIPHERTEXT_BYTES"
-# exit=0 duration=0.006s
-1
-1

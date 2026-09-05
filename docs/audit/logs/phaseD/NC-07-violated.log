@@ -1,5 +1,0 @@
-Compiler warnings outside the frozen allowlist:
-  /tmp/nc-scratch-0z56igvm/build-warnings-bad.log:535: /home/user/AMA-Cryptography/src/c/ama_kyber.c:10:5: warning: unused variable 'nc' [-Wunused-variable]
-
-1 warning(s) outside the allowlist.
-Fix them at source.  Adding an entry to EXEMPTIONS in tools/check_compiler_warnings.py requires a reason that survives review.

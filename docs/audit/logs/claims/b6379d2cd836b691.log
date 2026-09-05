@@ -1,5 +1,0 @@
-$ ls fuzz/fuzz_*.c | wc -l; grep -lE '^int LLVMFuzzerTestOneInput|LLVMFuzzerTestOneInput\(const uint8_t' fuzz/fuzz_*.c | wc -l; grep -n 'fuzz_rng.c`` is a support translation unit' tools/check_documented_counts.py | cut -c1-40
-# exit=0 duration=0.009s
-16
-15
-597:# ``fuzz_rng.c`` is a support transl

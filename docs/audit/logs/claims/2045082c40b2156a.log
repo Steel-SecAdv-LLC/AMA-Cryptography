@@ -1,4 +1,0 @@
-$ grep -n '^      - id: mypy\|^        files: \\.py$\|^          - .--explicit-package-bases.' .pre-commit-config.yaml
-# exit=0 duration=0.005s
-76:      - id: mypy
-104:          - '--explicit-package-bases'

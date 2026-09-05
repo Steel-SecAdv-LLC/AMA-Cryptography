@@ -1,3 +1,0 @@
-$ grep -c "not that a difference was shown to be absent" docs/constant-time-testing.md
-# exit=0 duration=0.005s
-1

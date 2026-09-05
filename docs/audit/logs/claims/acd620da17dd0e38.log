@@ -1,5 +1,0 @@
-$ grep -c "ama_neon_internal.h" src/c/dispatch/ama_dispatch.c src/c/ama_sha256.c tests/c/test_sha256_neon_kat.c
-# exit=0 duration=0.004s
-src/c/dispatch/ama_dispatch.c:1
-src/c/ama_sha256.c:1
-tests/c/test_sha256_neon_kat.c:1

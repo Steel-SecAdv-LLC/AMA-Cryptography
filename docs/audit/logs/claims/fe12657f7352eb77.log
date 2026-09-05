@@ -1,5 +1,0 @@
-$ grep -nE '^import ama_cryptography$|^\s+import ama_cryptography\._self_test as _self_test' tools/wheel_smoke_test.py; grep -c '^\s*from ama_cryptography import _self_test' tools/wheel_smoke_test.py
-# exit=1 duration=0.008s
-68:import ama_cryptography
-227:    import ama_cryptography._self_test as _self_test
-0

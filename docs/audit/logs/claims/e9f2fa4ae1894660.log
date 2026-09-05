@@ -1,3 +1,0 @@
-$ git show aff4861~1:tests/test_adaptive_posture.py | grep -c "accumulate score past critical"
-# exit=0 duration=0.005s
-1

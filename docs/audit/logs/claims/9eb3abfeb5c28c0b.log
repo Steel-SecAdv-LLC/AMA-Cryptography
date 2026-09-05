@@ -1,4 +1,0 @@
-$ grep -n '300 / 600 / 900\|300/600/900' .github/workflows/dudect.yml .github/workflows/static-analysis.yml
-# exit=0 duration=0.004s
-.github/workflows/dudect.yml:182:          # (300 / 600 / 900) was the defect.  The harness also refuses to
-.github/workflows/static-analysis.yml:495:    # same way the three dudect jobs disagreeing (300/600/900 s) was.

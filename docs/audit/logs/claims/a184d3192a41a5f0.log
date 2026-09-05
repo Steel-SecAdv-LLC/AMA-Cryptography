@@ -1,3 +1,0 @@
-$ grep -o 'record_timing("[a-z_]*"' benchmarks/detector_baseline_eval.py | sort -u | wc -l
-# exit=0 duration=0.005s
-1

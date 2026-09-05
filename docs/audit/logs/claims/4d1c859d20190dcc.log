@@ -1,4 +1,0 @@
-$ grep -n "^def thin_macho(\|0xCAFEBABF if wide else 0xCAFEBABE" tests/test_vendor_isolation_gate.py
-# exit=0 duration=0.006s
-561:def thin_macho(
-622:    head = struct.pack(">II", 0xCAFEBABF if wide else 0xCAFEBABE, len(slices))

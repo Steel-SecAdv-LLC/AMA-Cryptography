@@ -1,3 +1,0 @@
-$ grep -n "def test_a_forged_native_digest_in_pycache_does_not_pass" tests/test_artefact_cache_poisoning.py
-# exit=0 duration=0.005s
-282:    def test_a_forged_native_digest_in_pycache_does_not_pass(

@@ -1,3 +1,0 @@
-$ python -c "import tempfile,pathlib;from ama_cryptography import _build_sign as b;d=pathlib.Path(tempfile.mkdtemp());(d/'a.py').write_bytes(b'X');(d/'b.py').write_bytes(b'Y');e=pathlib.Path(tempfile.mkdtemp());(e/'a.py').write_bytes(b'Xb.pyY');print('COLLIDE' if b._compute_package_digest(d)==b._compute_package_digest(e) else 'DISTINCT')"
-# exit=0 duration=0.460s
-DISTINCT

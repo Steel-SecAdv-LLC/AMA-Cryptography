@@ -1,3 +1,0 @@
-$ grep -nE "DUDECT_T_THRESHOLD \((4\.5|5\.0)\)" tests/c/test_dudect.c
-# exit=0 duration=0.004s
-1241: * timing distributions and Welch's t crosses DUDECT_T_THRESHOLD (5.0). This

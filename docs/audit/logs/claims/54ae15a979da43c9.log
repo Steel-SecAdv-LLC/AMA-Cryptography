@@ -1,5 +1,0 @@
-$ python -c "import ctypes; mv=memoryview(bytearray(16))[::2]; (ctypes.c_char*8).from_buffer(mv)"
-# exit=1 duration=0.034s
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-TypeError: underlying buffer is not C contiguous

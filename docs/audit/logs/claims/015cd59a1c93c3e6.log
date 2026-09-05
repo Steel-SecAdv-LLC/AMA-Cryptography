@@ -1,6 +1,0 @@
-$ grep -nE "^def test_(a_tree_it_could_not_read_fails_closed|a_missing_root_fails_closed|a_missing_manifest_fails_closed)" tests/test_vector_provenance_gate.py; grep -n "refusing to report a clean gate" tools/check_vector_provenance.py
-# exit=0 duration=0.007s
-281:def test_a_tree_it_could_not_read_fails_closed(
-294:def test_a_missing_root_fails_closed(
-303:def test_a_missing_manifest_fails_closed(
-245:        print(f"FATAL: {exc} is missing; refusing to report a clean gate.", file=sys.stderr)

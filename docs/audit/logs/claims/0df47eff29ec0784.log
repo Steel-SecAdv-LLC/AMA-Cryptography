@@ -1,5 +1,0 @@
-$ grep -n 'WHY THE FINAL ATTEMPT IS BOUNDED TOO' .github/scripts/apt-install.sh; grep -n 'def test_the_final_attempt_is_not_unbounded' tests/test_apt_retry_gate.py; grep -n 'TOTAL_BUDGET="${APT_TOTAL_BUDGET:-' .github/scripts/apt-install.sh
-# exit=0 duration=0.007s
-66:# WHY THE FINAL ATTEMPT IS BOUNDED TOO
-518:def test_the_final_attempt_is_not_unbounded(tmp_path: Path) -> None:
-125:TOTAL_BUDGET="${APT_TOTAL_BUDGET:-600}"

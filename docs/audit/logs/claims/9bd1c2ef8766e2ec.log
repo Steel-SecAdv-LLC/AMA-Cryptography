@@ -1,4 +1,0 @@
-$ git show 2dcef5c:src/c/ama_kyber.c | grep -n 'pos + 3 <= sizeof(stream)'; grep -c 'pos + 3 <= sizeof(stream)' src/c/ama_kyber.c
-# exit=1 duration=0.008s
-319:    while (ctr < KYBER_N && pos + 3 <= sizeof(stream)) {
-0

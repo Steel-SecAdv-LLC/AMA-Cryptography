@@ -1,4 +1,0 @@
-$ python -c "import sys; sys.path.insert(0,'tests'); import test_documented_source_paths_exist as m; print(len(m.NOT_IN_TREE), all(k in m.NOT_IN_TREE for k in ('.kdf_metadata.json','CRYPTO_PACKAGE.json','seed.txt','synchapi.h')))"; grep -n '\["git", "ls-files"\]' tests/test_documented_source_paths_exist.py
-# exit=0 duration=0.157s
-10 True
-219:        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True

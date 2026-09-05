@@ -1,3 +1,0 @@
-$ python -c "import ama_cryptography as p; print('_integrity_signature' in p._CRYPTO_API_EXPORTS, '_integrity_signature' in p._KEY_FORMAT_EXPORTS)"
-# exit=0 duration=0.471s
-False False

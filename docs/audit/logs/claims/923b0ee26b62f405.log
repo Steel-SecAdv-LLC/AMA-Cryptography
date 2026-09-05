@@ -1,6 +1,0 @@
-$ python -c "import math,random; from ama_cryptography.monitoring import ResonanceTimingMonitor as R; g=random.Random(1); run=lambda v:(lambda m:([m.record_timing('op',x) for x in v],m.detect_resonance('op'))[1])(R(window_size=len(v),max_history=len(v))); f=lambda r:(r['has_resonance'],round(r['resonance_ratio'],3),round(r['threshold_ratio'],3),r['scanned_bins'],r['false_alarm_rate']); print('constant',f(run([5.0]*100))); print('lognormal',f(run([g.lognormvariate(math.log(10),0.3) for _ in range(100)]))); print('gauss10',f(run([g.gauss(10,1) for _ in range(100)]))); n=256; print('sinusoid',f(run([10+0.6*math.sin(2*math.pi*8*i/n)+g.gauss(0,1.0) for i in range(n)])))"
-# exit=0 duration=0.607s
-constant (False, 0.0, 8.764, 64, 0.01)
-lognormal (False, 3.7, 8.764, 64, 0.01)
-gauss10 (False, 3.501, 8.764, 64, 0.01)
-sinusoid (True, 13.38, 9.457, 128, 0.01)

@@ -1,6 +1,0 @@
-$ grep -n '" " \* 200_000\|assert elapsed < 1.0' tests/test_c_secret_zeroization_gate.py | head -4
-# exit=0 duration=0.004s
-762:        pathological = "memset(" + " " * 200_000 + "x"
-766:        assert elapsed < 1.0, (
-786:            "memset((a" + " " * 200_000 + "X",
-791:            assert elapsed < 1.0, (

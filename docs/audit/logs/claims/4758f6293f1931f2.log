@@ -1,4 +1,0 @@
-$ grep -c "40 errors" Makefile; grep -n "An earlier revision of this entry put the difference at \"40 errors" CHANGELOG.md
-# exit=0 duration=0.007s
-0
-3362:(An earlier revision of this entry put the difference at "40 errors ...

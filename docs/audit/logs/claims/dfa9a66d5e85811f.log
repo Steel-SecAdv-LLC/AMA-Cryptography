@@ -1,3 +1,0 @@
-$ grep -n "raise CryptoModuleError" ama_cryptography/__init__.py | head -1
-# exit=0 duration=0.004s
-496:        raise CryptoModuleError(

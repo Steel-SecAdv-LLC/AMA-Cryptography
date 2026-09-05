@@ -1,2 +1,0 @@
-$ grep -rn -i 'relative to a verifier\|verifier holding\|holding the real\|cannot mint' ama_cryptography/agent_binding.py src/c/ama_agent_binding.c include/ama_cryptography.h INVARIANTS.md SECURITY.md
-# exit=1 duration=0.006s

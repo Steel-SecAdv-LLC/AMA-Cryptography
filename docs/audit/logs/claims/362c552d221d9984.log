@@ -1,6 +1,0 @@
-$ d=$(mktemp -d) && printf 'Language: C\n' > "$d/.clang-format" && cd "$d" && clang-format --dump-config 2>&1 | head -4
-# exit=1 duration=0.038s
-/tmp/tmp.in9ojaJWcg/.clang-format:1:11: error: unknown enumerated scalar
-Language: C
-          ^
-Error reading /tmp/tmp.in9ojaJWcg/.clang-format: Invalid argument

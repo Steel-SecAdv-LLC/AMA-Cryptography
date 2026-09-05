@@ -1,8 +1,0 @@
-$ grep -n '"openssl",\|"gpg",\|"create_subprocess_exec",' tools/check_corpus_originality.py
-# exit=0 duration=0.004s
-93:    "openssl",
-94:    "gpg",
-168:        "create_subprocess_exec",
-180:        CMD = ["openssl", "genpkey", ...]
-184:    removed generator actually used (``cmd_query = ["openssl", "ts", ...]``
-219:    Covers ``["openssl", "genpkey"]``, ``"openssl genpkey"``, the elements of a

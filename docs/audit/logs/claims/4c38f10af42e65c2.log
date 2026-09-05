@@ -1,8 +1,0 @@
-$ grep -n -A1 "python3 tools/check_compiler_warnings.py" .github/workflows/static-analysis.yml; grep -n "def test_every_produced_log_is_checked" tests/test_compiler_warning_gate.py
-# exit=0 duration=0.006s
-390:          python3 tools/check_compiler_warnings.py \
-391-            build-warnings.log build-warnings-release.log
---
-470:          python3 tools/check_compiler_warnings.py \
-471-            build-warnings-arm.log build-warnings-arm-sve2.log
-195:    def test_every_produced_log_is_checked(self) -> None:

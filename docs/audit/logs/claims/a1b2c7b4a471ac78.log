@@ -1,3 +1,0 @@
-$ ls ama_cryptography/*.so | grep -v libama_cryptography | wc -l
-# exit=0 duration=0.005s
-6

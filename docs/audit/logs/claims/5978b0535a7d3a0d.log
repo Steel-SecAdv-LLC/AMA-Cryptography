@@ -1,3 +1,0 @@
-$ grep -c '"AMA_ML_DSA_44": "ML-DSA-44"\|"AMA_ML_KEM_512": "ML-KEM-512"\|"AMA_SLHDSA_SHAKE_128S": "SLH-DSA-SHAKE-128s"\|"AMA_NIST_CURVE_P256": "P-256"\|"ama_hmac_sha384": "HMAC-SHA-384"' tools/check_algorithm_registry.py
-# exit=0 duration=0.004s
-5

@@ -1,3 +1,0 @@
-$ grep -cE "^def test_(a_rewrite_preserves_the_artefacts_existing_mode|a_fresh_artefact_gets_the_mode_a_normal_write_would|the_mode_is_settled_before_the_rename)" tests/test_build_sign.py
-# exit=0 duration=0.004s
-3

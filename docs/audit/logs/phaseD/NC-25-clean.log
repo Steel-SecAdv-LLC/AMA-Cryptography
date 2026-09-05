@@ -1,1 +1,0 @@
-INVARIANT-13: all suppressions are properly justified (334 Python files), and the 79 non-vendored C/H files under src/c and include carry none at all.

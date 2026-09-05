@@ -1,3 +1,0 @@
-$ python -c "import ctypes; l=ctypes.CDLL('build-release/lib/libama_cryptography.so'); l.ama_aes_gcm_active_backend.restype=ctypes.c_char_p; print(l.ama_aes_gcm_active_backend().decode())"
-# exit=0 duration=0.193s
-aes-ni-pclmul

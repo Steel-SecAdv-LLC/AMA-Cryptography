@@ -1,6 +1,0 @@
-==========================================
-SPHINCS+ / SLH-DSA SIMD parity
-==========================================
-  PASS: SLH-DSA-SHAKE-128s deterministic sign byte-identical under SIMD-Keccak vs forced-scalar Keccak; cross-verify OK
-  PASS: ama_sphincs_wots_chain_avx2 byte-identical to scalar SHA-256 reference (64 trials)
-==========================================

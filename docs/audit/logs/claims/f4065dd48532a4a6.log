@@ -1,4 +1,0 @@
-$ ls tests/test_constant_time.py tests/c/test_ed25519_canonical_y.c 2>&1
-# exit=2 duration=0.005s
-ls: cannot access 'tests/test_constant_time.py': No such file or directory
-ls: cannot access 'tests/c/test_ed25519_canonical_y.c': No such file or directory

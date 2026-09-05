@@ -1,4 +1,0 @@
-$ grep -n 'static inline double dudect_get_delta_ns' tests/c/dudect/dudect.h; grep -c 'delta_ns = dudect_get_delta_ns(ctx)' tests/c/test_dudect.c
-# exit=0 duration=0.007s
-217:static inline double dudect_get_delta_ns(dudect_ctx_t *ctx) {
-1

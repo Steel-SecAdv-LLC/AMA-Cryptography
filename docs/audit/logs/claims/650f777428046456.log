@@ -1,4 +1,0 @@
-$ grep -n "seven-module floor\|136 symbols against 177 header prototypes" INVARIANTS.md
-# exit=0 duration=0.004s
-2523:`REQUIRED_MODULES` as a seven-module floor beneath it (`pqc_backends`,
-2525:`_self_test`; 136 symbols against 177 header prototypes today) — and requires

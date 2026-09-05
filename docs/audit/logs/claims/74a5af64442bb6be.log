@@ -1,3 +1,0 @@
-$ python -c "import random; q=8380417; random.seed(1); ref=lambda a: a-((a+(1<<22))>>23)*q; old=lambda a: a-(a>>23)*q; N=400000; xs=[random.randrange(-5*q,5*q+1) for _ in range(N)]; rs=[old(a) for a in xs]; print('disagree %.3f geq %.4f max %.3fq'%(sum(1 for a,r in zip(xs,rs) if r!=ref(a))/N, sum(1 for r in rs if abs(r)>=q)/N, max(abs(r) for r in rs)/q))"
-# exit=0 duration=0.325s
-disagree 0.501 geq 0.0010 max 1.004q

@@ -1,4 +1,0 @@
-$ which aarch64-linux-gnu-gcc qemu-aarch64-static
-# exit=0 duration=0.004s
-/usr/bin/aarch64-linux-gnu-gcc
-/usr/bin/qemu-aarch64-static

@@ -1,3 +1,0 @@
-$ python -c "print(5*5, 5*5*3, 5, 5*3)"
-# exit=0 duration=0.030s
-25 75 5 15

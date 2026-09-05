@@ -1,4 +1,0 @@
-$ grep -n "Build with strict warnings (Release + LTO, the shipped configuration)\|-DAMA_ENABLE_LTO=ON" .github/workflows/static-analysis.yml
-# exit=0 duration=0.005s
-357:      - name: Build with strict warnings (Release + LTO, the shipped configuration)
-375:            -DAMA_ENABLE_LTO=ON

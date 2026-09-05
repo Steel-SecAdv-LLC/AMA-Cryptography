@@ -1,7 +1,0 @@
-$ grep -n "def registry_algorithm_cells\|PBKDF2 with HMAC-SHA-512 PRF" tools/check_algorithm_registry.py tests/test_algorithm_registry_gate.py
-# exit=0 duration=0.004s
-tools/check_algorithm_registry.py:56:permissive here: "PBKDF2 with HMAC-SHA-512 PRF" in the parameter-set cell of
-tools/check_algorithm_registry.py:216:def registry_algorithm_cells(rows: list[str]) -> list[str]:
-tools/check_algorithm_registry.py:220:    later cells describe the entry ("PBKDF2 with HMAC-SHA-512 PRF"), and
-tests/test_algorithm_registry_gate.py:286:        This is the PBKDF2 shape: "PBKDF2 with HMAC-SHA-512 PRF" sits in
-tests/test_algorithm_registry_gate.py:290:            "| withheld | filler |", "| PBKDF2 | PBKDF2 with HMAC-SHA-512 PRF |"

@@ -1,3 +1,0 @@
-$ grep -oE "build-warnings[a-z0-9-]*\.log" .github/workflows/static-analysis.yml | sort -u | wc -l
-# exit=0 duration=0.005s
-4

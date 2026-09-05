@@ -1,5 +1,0 @@
-$ grep -n "_QUOTE" tools/check_compiler_warnings.py | head -2; grep -n "def test_exempt_line_passes" tests/test_compiler_warning_gate.py
-# exit=0 duration=0.006s
-117:_QUOTE = r".{1,3}"
-153:            r"fe(51|64)\.h.*warning:.*ISO C does not support " rf"{_QUOTE}__int128{_QUOTE} types"
-93:    def test_exempt_line_passes(self, tmp_path: Path, line: str) -> None:

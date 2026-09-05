@@ -1,3 +1,0 @@
-$ sed -n '2447,2470p' src/c/ama_secp256k1.c | grep -n 'secp256k1_fe_bytes_canonical(compressed + 1)'
-# exit=0 duration=0.004s
-11:    if (!secp256k1_fe_bytes_canonical(compressed + 1))

@@ -1,3 +1,0 @@
-$ grep -n "len(samples) >= 30 and pair not in self._ratio_baselines" ama_cryptography/monitoring.py
-# exit=0 duration=0.005s
-2017:            if len(samples) >= 30 and pair not in self._ratio_baselines:

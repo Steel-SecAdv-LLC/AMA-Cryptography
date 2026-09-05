@@ -1,3 +1,0 @@
-$ python -c "exec(\"import ast,subprocess\nfs=subprocess.run(['git','ls-files','*.py'],capture_output=True,text=True).stdout.split()\nH=[]\nfor f in fs:\n try: t=ast.parse(open(f,encoding='utf-8').read())\n except Exception: continue\n for n in ast.walk(t):\n  if isinstance(n,ast.Call) and (getattr(n.func,'attr',None)=='chmod' or getattr(n.func,'id',None)=='chmod'):\n   for a in list(n.args)+[k.value for k in n.keywords]:\n    if isinstance(a,ast.Constant) and isinstance(a.value,int) and (a.value & 0o077): H.append((f,n.lineno,oct(a.value)))\nprint(len(H),H)\")"
-# exit=0 duration=1.525s
-0 []

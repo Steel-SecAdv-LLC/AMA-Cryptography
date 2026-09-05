@@ -1,9 +1,0 @@
-Checked 84 runner label(s), 9 inline python payload(s), 2 Windows command string(s), 1 release-publishing step(s), 6 CMake-gated binary invocation(s), 45 cmake configure(s), 291 expression(s) (`${{ }}` and bare `if:`), 5 pytest invocation(s), 52 gate-required job(s).
-
-WORKFLOW COMMAND CHECK FAILED — 1 problem(s):
-
-  ci.yml: job 'code-quality'
-      runner label 'ubuntu-lastest' is not a known GitHub-hosted image
-      -> fix the typo, or add the label to SUPPORTED_LABELS in tools/check_workflow_commands.py after verifying it against https://github.com/actions/runner-images#available-images
-
-Each of these fails only when the workflow runs.  For release.yml that means release day.

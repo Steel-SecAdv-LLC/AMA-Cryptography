@@ -1,3 +1,0 @@
-$ python tools/check_ghash_constant_time.py --help 2>&1 | tr -d '\n' | grep -oE '\{[a-z0-9,-]+\}' | head -1 | tr ',' '\n' | wc -l
-# exit=0 duration=0.055s
-18

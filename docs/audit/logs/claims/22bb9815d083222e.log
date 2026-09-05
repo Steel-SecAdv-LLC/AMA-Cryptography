@@ -1,3 +1,0 @@
-$ git ls-tree -r --name-only a80a2c5 src/c/vendor/ed25519-donna | grep -c "\.h$"
-# exit=0 duration=0.005s
-28

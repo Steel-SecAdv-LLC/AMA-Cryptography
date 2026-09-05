@@ -1,3 +1,0 @@
-$ grep -n 'The notifier can only CONFIRM success when the key-rotating' ama_cryptography/adaptive_posture.py
-# exit=0 duration=0.005s
-1346:                # The notifier can only CONFIRM success when the key-rotating

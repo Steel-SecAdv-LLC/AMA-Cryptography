@@ -1,3 +1,0 @@
-$ python -c "print(2**132 % (2**130-5))"
-# exit=0 duration=0.031s
-20

@@ -1,3 +1,0 @@
-$ grep -cE "\bama_random_bytes\b|\bama_kyber_enc\b|\bama_kyber_dec\b|ama_shake256_inc_ctx_release" wiki/C-API-Reference.md
-# exit=1 duration=0.007s
-0

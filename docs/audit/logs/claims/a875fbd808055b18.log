@@ -1,5 +1,0 @@
-$ grep -n "9,424" .github/workflows/dudect.yml tools/check_workflow_commands.py tests/test_workflow_command_checks.py
-# exit=0 duration=0.004s
-.github/workflows/dudect.yml:632:        # 9,424-instruction key-dependent spread in the secp256k1 scalar
-tools/check_workflow_commands.py:853:    ``--target ecdsa`` immediately measured a 9,424-instruction key-dependent
-tests/test_workflow_command_checks.py:685:    9,424-instruction key-dependent spread — a live Montgomery

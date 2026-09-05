@@ -1,4 +1,0 @@
-$ grep -c 'is preserved' tools/check_c_secret_zeroization.py; grep -n 'must also not reintroduce the ReDoS' tools/check_c_secret_zeroization.py
-# exit=0 duration=0.006s
-0
-125:# The cast group must also not reintroduce the ReDoS this file was hardened

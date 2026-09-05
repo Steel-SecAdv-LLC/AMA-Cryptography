@@ -1,3 +1,0 @@
-$ python -c "import sys; sys.path.insert(0,'tests'); import test_documented_source_paths_exist as t; print('DOCS', len(t.DOCS))"
-# exit=0 duration=0.169s
-DOCS 60

@@ -1,3 +1,0 @@
-$ awk '/name: Static Analysis Gate/,/runs-on/' .github/workflows/static-analysis.yml | grep -c "compiler-warnings-aarch64"
-# exit=0 duration=0.004s
-1

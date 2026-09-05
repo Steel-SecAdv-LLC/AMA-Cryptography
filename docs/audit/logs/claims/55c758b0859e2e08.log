@@ -1,3 +1,0 @@
-$ python -m ama_cryptography.integrity --verify
-# exit=0 duration=0.510s
-Module integrity: OK (signed integrity verified (Ed25519, build-time pubkey); native library verified; 6 binding extension(s) verified)

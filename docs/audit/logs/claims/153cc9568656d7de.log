@@ -1,3 +1,0 @@
-$ grep -cE 'name: .*instruction count' .github/workflows/dudect.yml
-# exit=0 duration=0.004s
-17

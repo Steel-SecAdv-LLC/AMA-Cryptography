@@ -951,7 +951,7 @@ def _iter_expression_bodies(node: Any, trail: str = "") -> list[tuple[str, str]]
     first version of this check — it looked only for ``${{`` — so an
     ``if: steps.x.outcome = 'failure'`` in a job passed the gate while it
     would have made every job in the file silently produce no check.  Found
-    by a negative control (docs/audit/PR394_NEGATIVE_CONTROLS.tsv, NC-29b).
+    by planting that exact ``if:`` in a workflow and re-running the gate.
     """
     found: list[tuple[str, str]] = []
     if isinstance(node, dict):

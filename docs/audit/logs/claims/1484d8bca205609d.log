@@ -1,5 +1,0 @@
-$ grep -c '@functools.cache' tests/test_nistp_curves.py; grep -n 'def _poly_gcd' tests/test_nistp_curves.py; python -c "import sys,time; sys.path.insert(0,'tests'); import test_nistp_curves as t; t0=time.perf_counter(); [(t._lowest_x_point(n), t._lowest_y_point(n)) for n in ('P-256','P-384','P-521')]; print('ms', round((time.perf_counter()-t0)*1000))"
-# exit=0 duration=0.612s
-2
-291:def _poly_gcd(a: list[int], b: list[int], p: int) -> list[int]:
-ms 41

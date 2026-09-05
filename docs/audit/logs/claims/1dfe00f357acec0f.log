@@ -1,3 +1,0 @@
-$ grep -nE "defined\(AMA_BUILDING_STATIC\)|define AMA_API __declspec\(dllimport\)" include/ama_cryptography.h | wc -l
-# exit=0 duration=0.005s
-2

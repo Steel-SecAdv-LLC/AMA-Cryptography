@@ -1,3 +1,0 @@
-$ grep -c "DT_NEEDED\|LC_LOAD_DYLIB\|LC_SYMTAB\|import directory" tools/check_vendor_isolation.py
-# exit=0 duration=0.004s
-7

@@ -1,3 +1,0 @@
-$ grep -n "^RUN := \$(PYTHON) -m" Makefile
-# exit=0 duration=0.005s
-139:RUN := $(PYTHON) -m

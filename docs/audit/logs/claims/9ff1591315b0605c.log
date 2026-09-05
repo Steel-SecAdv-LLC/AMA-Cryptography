@@ -1,4 +1,0 @@
-$ grep -c "ama_secp256k1_ecdsa_sign_raw(sig, msg, sk)" tools/check_ghash_constant_time.py; grep -c '^    "ecdsa": 0,' tools/check_ghash_constant_time.py
-# exit=0 duration=0.006s
-1
-1

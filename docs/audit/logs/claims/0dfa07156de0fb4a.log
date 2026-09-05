@@ -1,3 +1,0 @@
-$ grep -c "_ONE_SIGN_ENC, False\|_PM1_SIGN_ENC, False" tools/check_ed25519_backend_parity.py
-# exit=0 duration=0.004s
-2

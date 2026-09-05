@@ -1,4 +1,0 @@
-$ grep -n "SIGNED t of largest\|Rung 0: uncropped.  Never dropped" tests/c/dudect/dudect_percentile.h
-# exit=0 duration=0.005s
-44: * for another.  The reported value is therefore the SIGNED t of largest
-338:    /* Rung 0: uncropped.  Never dropped — see the header comment on

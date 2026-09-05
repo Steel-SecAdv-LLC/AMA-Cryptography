@@ -1,3 +1,0 @@
-$ grep -nE "keccak_f1600_x4.*AVX-512 kernel|no run of" tools/check_ghash_constant_time.py | head -3
-# exit=0 duration=0.005s
-1705:    ``keccak_f1600_x4`` to the AVX-512 kernel on capable silicon, and no run of

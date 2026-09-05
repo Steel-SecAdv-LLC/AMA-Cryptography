@@ -1,3 +1,0 @@
-$ grep -n '\["git", "ls-files"\]' tests/test_workflow_path_filters.py
-# exit=0 duration=0.005s
-72:        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True

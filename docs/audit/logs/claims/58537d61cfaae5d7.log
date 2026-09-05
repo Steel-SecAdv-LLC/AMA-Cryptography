@@ -1,3 +1,0 @@
-$ git show 17aae5a^:tools/check_avx_scoping.py | grep -c ISA_FAMILIES
-# exit=1 duration=0.006s
-0

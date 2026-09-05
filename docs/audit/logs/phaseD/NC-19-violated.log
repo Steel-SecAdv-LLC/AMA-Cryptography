@@ -1,6 +1,0 @@
-INVARIANT-43: log message encodability (cp1252)
-  files scanned: 29; emission sites: 192
-  FAIL — 1 finding(s):
-
-    ::error::ama_cryptography/monitoring.py:4213: logger.warning() text is not cp1252-encodable — '→' (U+2192) in 'nc probe → arrow'. A cp1252 FileHandler drops this record entirely. Use an ASCII equivalent (-> for U+2192, [OK] for U+2713).
-

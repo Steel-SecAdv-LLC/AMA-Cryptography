@@ -1,4 +1,0 @@
-$ grep -n "decay_rate: float = 0.95" ama_cryptography/adaptive_posture.py; python -c "print(round(1/(1-0.95)))"
-# exit=0 duration=0.032s
-157:        decay_rate: float = 0.95,
-20

@@ -1,4 +1,0 @@
-$ sed -n '/^def enforce_sigma_quadratic_threshold/,/Args:/p' ama_cryptography/equations.py | grep -c "rotate the state toward"; grep -c "scale state by" ama_cryptography/equations.py
-# exit=1 duration=0.007s
-1
-0

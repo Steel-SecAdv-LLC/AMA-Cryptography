@@ -1,5 +1,0 @@
-$ grep -n '2.9 MB/s\|2204.5 MB/s\|760x' src/c/dispatch/ama_dispatch.c; python -c 'print(round(2204.5/2.9))'
-# exit=0 duration=0.033s
-2693:     * while AES-256-GCM ran the portable bitsliced path at 2.9 MB/s, against
-2694:     * 2204.5 MB/s once the hardware kernel was installed — 760x, invisible
-760

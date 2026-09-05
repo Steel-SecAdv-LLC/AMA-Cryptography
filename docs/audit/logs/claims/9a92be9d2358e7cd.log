@@ -1,7 +1,0 @@
-$ grep -n '6,000,000 replicates\|E|t| = 1.618   sd = 1.717\|P(|t| >= 4.5) = 7.2e-5\|P(|t| >= 5.0) = 6.5e-6' tests/c/dudect/dudect_percentile.h
-# exit=0 duration=0.005s
-98: * this exact function, 6,000,000 replicates over four independent seeds:
-100: *     E|t| = 1.618   sd = 1.717        (a single Welch t gives 0.798 / 1.000)
-101: *     P(|t| >= 4.5) = 7.2e-5           (claimed: 1e-5)
-102: *     P(|t| >= 5.0) = 6.5e-6
-743:     *      gaussian / lognormal samples, 6,000,000 replicates

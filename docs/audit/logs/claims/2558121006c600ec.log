@@ -1,4 +1,0 @@
-$ git log -1 --format='%h %ad %s' --date=short 8d72b8c; git merge-base --is-ancestor 8d72b8c HEAD && echo ancestor
-# exit=0 duration=0.017s
-8d72b8c 2026-08-16 benchmarks: measure the 3R timing detector against trivial baselines
-ancestor

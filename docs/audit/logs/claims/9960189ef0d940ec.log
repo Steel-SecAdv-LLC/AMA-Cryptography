@@ -1,5 +1,0 @@
-$ grep -nE "^_[A-Z_]*MARKER\s*=\s*re\.compile" tools/check_avx_scoping.py
-# exit=0 duration=0.005s
-176:_AVX_MARKER = re.compile(r"_avx(?:2|512)(?:\.|$)")
-177:_SHANI_MARKER = re.compile(r"_shani(?:\.|$)")
-178:_GPR_ISA_MARKER = re.compile(r"_(?:bmi|mulx)(?:\.|$)")

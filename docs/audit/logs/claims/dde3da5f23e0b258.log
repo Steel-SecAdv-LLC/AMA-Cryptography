@@ -1,7 +1,0 @@
-$ grep -nA4 "id: trailing-whitespace" .pre-commit-config.yaml
-# exit=0 duration=0.004s
-37:      - id: trailing-whitespace
-38-        # Without this, two trailing spaces — a Markdown hard line break — are
-39-        # stripped and the rendered document changes.
-40-        args: ['--markdown-linebreak-ext=md']
-41-        exclude: &verbatim_bytes |

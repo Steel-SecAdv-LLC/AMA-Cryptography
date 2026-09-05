@@ -1,3 +1,0 @@
-$ python -m pytest tests/test_self_test_branches.py tests/test_fips140_self_test.py --collect-only -q -p no:cacheprovider | tail -1
-# exit=0 duration=1.080s
-60 tests collected in 0.20s

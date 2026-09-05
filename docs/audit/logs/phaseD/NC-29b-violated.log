@@ -1,9 +1,0 @@
-Checked 84 runner label(s), 9 inline python payload(s), 2 Windows command string(s), 1 release-publishing step(s), 6 CMake-gated binary invocation(s), 45 cmake configure(s), 291 expression(s) (`${{ }}` and bare `if:`), 5 pytest invocation(s), 52 gate-required job(s).
-
-WORKFLOW COMMAND CHECK FAILED — 1 problem(s):
-
-  ci.yml: jobs.test.steps[2].if
-      expression `${{steps.setup-python.outcome = 'failure'}}` uses a lone `=`. GitHub Actions expressions compare with `==` and `!=` only; this makes the WHOLE FILE fail to parse, so every job in it silently produces no check at all.
-      -> write `==` (or `!=`) for the comparison.
-
-Each of these fails only when the workflow runs.  For release.yml that means release day.

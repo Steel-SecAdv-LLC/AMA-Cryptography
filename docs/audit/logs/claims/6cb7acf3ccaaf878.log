@@ -1,3 +1,0 @@
-$ grep -cE '\.\*warning:\.\*' tools/check_compiler_warnings.py
-# exit=0 duration=0.004s
-2

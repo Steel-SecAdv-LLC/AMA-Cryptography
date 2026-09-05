@@ -1,5 +1,0 @@
-$ grep -nE "def test_the_constant_time_gate_builds_an_optimized_library|\(\"ghash-scalar-invariance\", \"aead-verify-invariance\"\)" tests/test_workflow_command_checks.py; grep -n "def test_every_ci_step_that_runs_a_target_builds_an_optimized_library" tests/test_ghash_constant_time_gate.py
-# exit=0 duration=0.008s
-1211:    def test_the_constant_time_gate_builds_an_optimized_library(self) -> None:
-1222:        for job_id in ("ghash-scalar-invariance", "aead-verify-invariance"):
-554:    def test_every_ci_step_that_runs_a_target_builds_an_optimized_library(

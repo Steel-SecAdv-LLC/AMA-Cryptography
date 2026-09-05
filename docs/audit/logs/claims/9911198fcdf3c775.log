@@ -1,6 +1,0 @@
-$ grep -nE "^#define THREADS 8|ama_nistp_point_decode\(AMA_NIST_CURVE_P256|ama_nistp_pubkey_validate\(AMA_NIST_CURVE_P256|Hardcoded on purpose" tests/c/test_concurrent_init.c
-# exit=0 duration=0.005s
-45:#define THREADS 8
-49: * Hardcoded on purpose: deriving a point with ama_nistp_keypair() first would
-114:            if (ama_nistp_point_decode(AMA_NIST_CURVE_P256, P256_GENERATOR,
-117:            } else if (ama_nistp_pubkey_validate(AMA_NIST_CURVE_P256, decoded)

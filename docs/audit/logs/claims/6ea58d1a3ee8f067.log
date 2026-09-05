@@ -1,5 +1,0 @@
-$ clang-format --dump-config | grep -E "^(Language|IndentWidth|ColumnLimit):"
-# exit=0 duration=0.026s
-Language:        Cpp
-ColumnLimit:     100
-IndentWidth:     4

@@ -1,4 +1,0 @@
-$ grep -nA1 "if (lane->is_info_only)" tests/c/dudect/dudect_rounds.h
-# exit=0 duration=0.006s
-388:    if (lane->is_info_only)
-389-        return DUDECT_LANE_NOISE;

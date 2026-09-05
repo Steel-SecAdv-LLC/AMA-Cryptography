@@ -1,4 +1,0 @@
-$ grep -n -A2 '"secp256k1 ECDSA sign (RFC 6979)",' tests/c/test_dudect.c | grep 'test_secp256k1_ecdsa_sign'; grep -n -- '--target ecdsa$' .github/workflows/dudect.yml
-# exit=0 duration=0.006s
-2956-        test_secp256k1_ecdsa_sign(iterations), 1);
-899:            --lib build/lib/libama_cryptography_test.a --target ecdsa

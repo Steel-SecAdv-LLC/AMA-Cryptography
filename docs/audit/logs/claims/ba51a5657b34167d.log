@@ -1,6 +1,0 @@
-$ grep -nE "timeout-minutes: 25|15m13s" .github/workflows/static-analysis.yml
-# exit=0 duration=0.004s
-498:    # 15m13s in, still actively running ctest inside `test_sphincs_simd_equiv`
-505:    timeout-minutes: 25
-518:        # 15m13s inside test_sphincs_simd_equiv.  This project sets no default
-561:    timeout-minutes: 25

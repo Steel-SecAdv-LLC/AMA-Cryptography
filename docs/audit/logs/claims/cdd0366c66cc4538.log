@@ -1,4 +1,0 @@
-$ grep -n '"secp256k1-scalarmult": 0,\|"secp256k1-scalarmult": _SECP256K1_SCALARMULT_DRIVER,' tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-374:    "secp256k1-scalarmult": 0,
-1601:    "secp256k1-scalarmult": _SECP256K1_SCALARMULT_DRIVER,

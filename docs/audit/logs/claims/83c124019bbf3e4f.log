@@ -1,4 +1,0 @@
-$ grep -nE "3/3 2\+/1- at \+0.607 ns \(Ascon lane, observed\) -> SUB_FLOOR|3/3 consistently signed at \+0.596 ns on one" tests/c/dudect/dudect_rounds.h
-# exit=0 duration=0.004s
-408:     * `Ascon-AEAD128 encrypt` read 3/3 consistently signed at +0.596 ns on one
-823:    ok &= dudect_rounds_verdict_case("3/3 2+/1- at +0.607 ns (Ascon lane, observed) -> SUB_FLOOR",

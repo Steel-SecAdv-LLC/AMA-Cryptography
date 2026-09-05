@@ -1,3 +1,0 @@
-$ git show 725f2f1:docs/METRICS_REPORT.md | grep -c "339,965"
-# exit=0 duration=0.005s
-3

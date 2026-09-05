@@ -1,3 +1,0 @@
-$ grep -n '"ED25519": 0' ama_cryptography/adaptive_posture.py
-# exit=0 duration=0.004s
-737:            "ED25519": 0,

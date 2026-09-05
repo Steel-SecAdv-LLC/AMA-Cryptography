@@ -1,3 +1,0 @@
-$ grep -n "name: Fuzz PQC Primitives (\${{ matrix.target }})" .github/workflows/fuzzing.yml
-# exit=0 duration=0.005s
-207:    name: Fuzz PQC Primitives (${{ matrix.target }})

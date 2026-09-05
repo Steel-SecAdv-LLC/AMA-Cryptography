@@ -1,3 +1,0 @@
-$ grep -c "maybe-uninitialized" src/c/ed25519_donna_shim.c
-# exit=1 duration=0.004s
-0

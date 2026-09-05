@@ -1,3 +1,0 @@
-$ awk '/^### Verification pass, ninth/{f=1;next} f&&/^### Verification pass/{exit} f' CHANGELOG.md | grep -oE "^\*\*DOC-[0-9]+" | sort -u | wc -l
-# exit=0 duration=0.006s
-9

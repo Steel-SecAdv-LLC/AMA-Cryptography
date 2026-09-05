@@ -1,3 +1,0 @@
-$ grep -rlP "[ \t]$" tests/kat nist_vectors ama_cryptography/_post_kats | wc -l
-# exit=0 duration=0.132s
-8

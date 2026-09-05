@@ -1,4 +1,0 @@
-$ grep -n "set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)\|add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)" CMakeLists.txt
-# exit=0 duration=0.005s
-744:        set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)
-745:        add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)

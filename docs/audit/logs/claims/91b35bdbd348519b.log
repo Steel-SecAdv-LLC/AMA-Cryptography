@@ -1,4 +1,0 @@
-$ grep -n '^_LINEARITY_ATTEMPTS = 3\|^_LINEARITY_CEILING = 2.8' tests/test_c_secret_zeroization_gate.py
-# exit=0 duration=0.005s
-740:_LINEARITY_ATTEMPTS = 3
-744:_LINEARITY_CEILING = 2.8

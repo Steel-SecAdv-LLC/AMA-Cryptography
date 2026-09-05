@@ -133,9 +133,9 @@ def native_alpha_keypair():
 class TestConditionalArms:
     """A family dispatch releases a keypair from every arm.
 
-    Found by a negative control (docs/audit/PR394_NEGATIVE_CONTROLS.tsv,
-    NC-17): with the signature arm of ``AmaContext._keypair_pairwise_test``
-    replaced by a no-op, the gate still exited 0, because the helper still
+    Found by planting the defect and re-running the gate: with the signature
+    arm of ``AmaContext._keypair_pairwise_test`` replaced by a no-op, the
+    gate still exited 0, because the helper still
     called ``pairwise_test_kem`` in its other arm and so still counted as
     "reaching a helper".  ``keypair_generate`` would have released untested
     ML-DSA, SLH-DSA and hybrid keypairs with the gate green.

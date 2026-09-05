@@ -1,4 +1,0 @@
-$ grep -c 'target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)' CMakeLists.txt; grep -cE 'ama_cryptography_(shared|static)[^)]*AMA_TESTING_MODE' CMakeLists.txt
-# exit=1 duration=0.006s
-1
-0

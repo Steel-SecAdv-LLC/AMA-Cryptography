@@ -1,4 +1,0 @@
-$ grep -n 'mypy --strict (type checking, 0 errors)' ARCHITECTURE.md; grep -c 'type hints throughout (validated via mypy)' ARCHITECTURE.md
-# exit=1 duration=0.005s
-865:   - mypy --strict (type checking, 0 errors) over EVERY tracked `.py`
-0

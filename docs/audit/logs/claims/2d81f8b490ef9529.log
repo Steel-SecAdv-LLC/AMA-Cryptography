@@ -1,3 +1,0 @@
-$ grep -n "§3.3" tests/c/dudect/dudect_percentile.h
-# exit=0 duration=0.005s
-35: * (eprint 2016/1123), §3.3: crop at a set of percentile thresholds and take

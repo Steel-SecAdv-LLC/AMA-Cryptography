@@ -1,3 +1,0 @@
-$ grep -c '^\s*- \(kyber-ntt-neon\|dilithium-ntt-neon\|argon2-g-neon\)$' .github/workflows/dudect.yml
-# exit=0 duration=0.005s
-3

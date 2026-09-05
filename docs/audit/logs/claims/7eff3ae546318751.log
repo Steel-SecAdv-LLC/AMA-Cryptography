@@ -1,3 +1,0 @@
-$ grep -l check_secret_division .github/workflows/*.yml | tr '\n' ' '; grep -c '"tools/check_secret_division.py"' .github/workflows/arm-qemu.yml
-# exit=0 duration=0.007s
-.github/workflows/arm-qemu.yml .github/workflows/dudect.yml 2

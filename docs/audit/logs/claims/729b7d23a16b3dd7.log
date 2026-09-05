@@ -1,3 +1,0 @@
-$ python -c "import json; m=json.load(open('wycheproof_vectors/manifest.json')); print(len(m['files']))"
-# exit=0 duration=0.033s
-15

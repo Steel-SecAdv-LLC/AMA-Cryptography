@@ -1,3 +1,0 @@
-$ grep -n -A1 "is mandated by this runner's base ISA" .github/workflows/dudect.yml | grep -c 'exit 1'
-# exit=0 duration=0.006s
-1

@@ -1,7 +1,0 @@
-$ grep -n '1,100,410' tests/c/test_dudect.c tools/check_ghash_constant_time.py CHANGELOG.md | head -5; python -c "print(round(96.1e-6/5.630e-9))"
-# exit=0 duration=0.033s
-tests/c/test_dudect.c:2988:     * A decapsulation retires 1,100,410 instructions and takes ~96 us, so the
-CHANGELOG.md:4348:unoptimized build (the shipped build retires 1,100,410 instructions per
-CHANGELOG.md:4598:120-call one: **1,100,410 retired instructions**, **96.1 µs** wall clock.)
-CHANGELOG.md:4608:retires 1,100,410 instructions per decapsulation and takes **96.1 µs** on the
-17069

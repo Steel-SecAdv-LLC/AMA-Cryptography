@@ -1,3 +1,0 @@
-$ python -m pytest tests/test_compiler_warning_gate.py --collect-only -q -p no:cacheprovider -k TestClangFormatConfigLoads | tail -1
-# exit=0 duration=1.120s
-2/28 tests collected (26 deselected) in 0.20s

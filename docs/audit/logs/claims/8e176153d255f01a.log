@@ -1,3 +1,0 @@
-$ nm -D --defined-only build-release/lib/libama_cryptography.so | grep -c ' [TDRB] '
-# exit=0 duration=0.029s
-240

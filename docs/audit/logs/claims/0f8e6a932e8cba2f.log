@@ -1,3 +1,0 @@
-$ python -m pytest tests/test_c_secret_zeroization_gate.py --collect-only -q -p no:cacheprovider | tail -1
-# exit=0 duration=1.259s
-137 tests collected in 0.20s

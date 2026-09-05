@@ -1,3 +1,0 @@
-$ git show b7d4c2e~1:tools/check_vendor_isolation.py | grep -c "src/c"
-# exit=1 duration=0.006s
-0

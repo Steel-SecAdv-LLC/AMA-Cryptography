@@ -1,3 +1,0 @@
-$ git show aff4861 -- tests/c/test_secp256k1.c tests/c/test_dudect.c | grep -c "^-.*memset("
-# exit=0 duration=0.008s
-2

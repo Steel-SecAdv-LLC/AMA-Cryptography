@@ -1,6 +1,0 @@
-$ python -c "q=3329;v=((1<<26)+q//2)//q;ts=set();os_=set()
-for a in range(-32768,32768):
-    t=(v*a)>>26;ts.add(t);os_.add(a-t*q)
-print('quotient',min(ts),max(ts),'output',min(os_),max(os_))"
-# exit=0 duration=0.047s
-quotient -10 9 output 0 3329

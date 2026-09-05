@@ -1,3 +1,0 @@
-$ grep -cE "\b(openat|unlinkat|renameat|O_CLOEXEC|F_GETFD|F_SETFD|FD_CLOEXEC)\b" src/c/dispatch/ama_dispatch.c
-# exit=0 duration=0.005s
-21

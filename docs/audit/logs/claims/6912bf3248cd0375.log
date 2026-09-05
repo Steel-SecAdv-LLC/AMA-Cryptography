@@ -1,3 +1,0 @@
-$ git show $(git log --format=%h --diff-filter=A --reverse -- CMakeLists.txt | head -1):CMakeLists.txt | grep -c 'guard:cf'
-# exit=0 duration=0.027s
-3

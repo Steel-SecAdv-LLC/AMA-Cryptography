@@ -1,3 +1,0 @@
-$ grep -c "Value barrier applied to the seven secret-derived selection masks\|applied inside nistp_mask64()" benchmarks/baseline.json
-# exit=0 duration=0.007s
-2

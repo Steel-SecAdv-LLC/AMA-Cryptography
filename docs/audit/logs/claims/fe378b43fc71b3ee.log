@@ -1,4 +1,0 @@
-$ grep -n "define BENCH_REQUIRE\|define BENCH_CHECK" benchmarks/benchmark_c_raw.c
-# exit=0 duration=0.004s
-89:#define BENCH_REQUIRE(call) bench_require((call), #call, __FILE__, __LINE__)
-90:#define BENCH_CHECK(rc, what) bench_require((rc), (what), __FILE__, __LINE__)

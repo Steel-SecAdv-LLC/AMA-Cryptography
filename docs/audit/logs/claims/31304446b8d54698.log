@@ -1,4 +1,0 @@
-$ grep -n '} apply_dispatch_only_result_t;\|AMA_DISPATCH_ONLY_UNRECOGNISED = 1,' src/c/dispatch/ama_dispatch.c
-# exit=0 duration=0.005s
-381:    AMA_DISPATCH_ONLY_UNRECOGNISED = 1,  /* slot name not in the inventory */
-384:} apply_dispatch_only_result_t;

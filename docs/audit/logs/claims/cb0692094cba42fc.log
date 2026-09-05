@@ -1,3 +1,0 @@
-$ grep -n 'Remaining after this: the two SVE2 cells and `sha3-avx512x4`' CONSTANT_TIME_VERIFICATION.md
-# exit=0 duration=0.004s
-143:  Remaining after this: the two SVE2 cells and `sha3-avx512x4` above, both of which are genuine hardware-availability limits rather than missing wiring.

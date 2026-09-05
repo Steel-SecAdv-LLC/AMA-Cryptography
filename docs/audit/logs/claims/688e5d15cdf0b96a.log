@@ -1,3 +1,0 @@
-$ readelf -s build-release/CMakeFiles/ama_cryptography_static.dir/src/c/ama_nistp.c.o | grep -c FUNC
-# exit=0 duration=0.006s
-46

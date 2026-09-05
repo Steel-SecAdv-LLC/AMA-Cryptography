@@ -1,4 +1,0 @@
-$ grep -n 'name: AddressSanitizer + UBSan\|UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1' .github/workflows/static-analysis.yml
-# exit=0 duration=0.004s
-489:    name: AddressSanitizer + UBSan
-537:          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

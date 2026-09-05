@@ -1,3 +1,0 @@
-$ grep -c 'set_source_files_properties' CMakeLists.txt
-# exit=0 duration=0.004s
-12

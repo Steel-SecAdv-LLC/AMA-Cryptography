@@ -1,3 +1,0 @@
-$ grep -c "_ZERO_SIGN_ENC, True\|_TWO_G_ENC, True\|_TWO_G_SIGN_ENC, True" tools/check_ed25519_backend_parity.py
-# exit=0 duration=0.005s
-3

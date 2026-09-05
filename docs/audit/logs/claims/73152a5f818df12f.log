@@ -1,3 +1,0 @@
-$ grep -c 'sets `--bind-extensions` unconditionally' ARCHITECTURE.md
-# exit=0 duration=0.004s
-1

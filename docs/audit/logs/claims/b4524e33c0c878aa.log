@@ -1,6 +1,0 @@
-$ grep -n 'assert result.returncode == 0\|Module integrity: OK' tests/test_integrity.py
-# exit=0 duration=0.005s
-140:        assert result.returncode == 0
-165:        assert result.returncode == 0, (
-169:        assert "Module integrity: OK" in result.stdout, result.stdout[-2000:]
-201:        assert "Module integrity: OK" not in result.stdout, combined[-2000:]

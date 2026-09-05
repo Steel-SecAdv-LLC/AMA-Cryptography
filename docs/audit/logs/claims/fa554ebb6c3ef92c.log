@@ -1,3 +1,0 @@
-$ sed -n '/^def _artefact_mode/,/^def _write_signature_module/p' ama_cryptography/_build_sign.py | grep -cE "stat\.S_IMODE\(out_path\.stat\(\)\.st_mode\)|except FileNotFoundError|mask = os\.umask\(0\)|os\.umask\(mask\)|return 0o666 & ~mask"
-# exit=0 duration=0.005s
-5

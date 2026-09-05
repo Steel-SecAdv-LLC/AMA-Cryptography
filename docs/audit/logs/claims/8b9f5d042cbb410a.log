@@ -1,4 +1,0 @@
-$ grep -n 'curve25519-donna-{64bit,32bit,sse2}.h\|ed25519-hash.h' src/c/PROVENANCE.md | cut -c1-80
-# exit=0 duration=0.004s
-239:| `vendor/ed25519-donna/curve25519-donna-{64bit,32bit,sse2}.h` | `curve25519
-240:| `vendor/ed25519-donna/ed25519-hash.h` | `ed25519_hash_update` early-return

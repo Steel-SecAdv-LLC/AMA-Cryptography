@@ -1,3 +1,0 @@
-$ python -c "import json; print([sum(len(json.load(open(f))[s]) for s in ('benchmarks','pqc_benchmarks')) for f in ('benchmarks/baseline.json','benchmarks/arm-baseline.json')])"
-# exit=0 duration=0.035s
-[19, 19]

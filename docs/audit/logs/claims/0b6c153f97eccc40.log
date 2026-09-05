@@ -1,3 +1,0 @@
-$ sed -n '818,880p' tests/test_nistp_curves.py | grep -c 'native_nistp_pubkey_validate\|native_nistp_point_decode\|native_nistp_ecdh'
-# exit=0 duration=0.005s
-6

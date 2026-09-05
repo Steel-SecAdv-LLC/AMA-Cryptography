@@ -1,4 +1,0 @@
-$ grep -n 'sys.argv = \["ama_cryptography._build_sign", "--bind-extensions"\]' ama_cryptography/integrity.py; grep -n 'INTEGRITY_BINDING_DIGESTS_HEX = {}' ama_cryptography/integrity.py
-# exit=0 duration=0.009s
-130:            sys.argv = ["ama_cryptography._build_sign", "--bind-extensions"]
-114:            # INTEGRITY_BINDING_DIGESTS_HEX = {}, so running the documented

@@ -1,4 +1,0 @@
-$ grep -c "INVARIANT-39 through INVARIANT-42" tools/check_version_consistency.py CHANGELOG.md
-# exit=0 duration=0.004s
-tools/check_version_consistency.py:1
-CHANGELOG.md:1

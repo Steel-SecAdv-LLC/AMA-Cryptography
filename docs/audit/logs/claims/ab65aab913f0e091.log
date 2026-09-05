@@ -1,3 +1,0 @@
-$ grep -n 'madvise((void \*)base, (size_t)(end - base), MADV_DONTDUMP)' src/c/ama_secure_memory.c
-# exit=0 duration=0.004s
-81:            if (madvise((void *)base, (size_t)(end - base), MADV_DONTDUMP) != 0) {

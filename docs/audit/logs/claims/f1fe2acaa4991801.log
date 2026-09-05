@@ -1,3 +1,0 @@
-$ grep -n "def monitor_crypto_operation" ama_cryptography/monitoring.py
-# exit=0 duration=0.006s
-3807:    def monitor_crypto_operation(

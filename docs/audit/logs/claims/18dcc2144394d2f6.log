@@ -1,3 +1,0 @@
-$ grep -E -c '^## \[5\.0\.0\] - Unreleased$' CHANGELOG.md
-# exit=0 duration=0.005s
-1

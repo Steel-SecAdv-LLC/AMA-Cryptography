@@ -1,4 +1,0 @@
-$ grep -n "Output buffer of exactly 64 octets\|#define AMA_SECP256K1_ECDSA_RAW_SIG_LEN 64" include/ama_cryptography.h
-# exit=0 duration=0.004s
-1689:#define AMA_SECP256K1_ECDSA_RAW_SIG_LEN 64
-1758: * @param signature   Output buffer of exactly 64 octets.

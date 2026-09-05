@@ -1,4 +1,0 @@
-$ grep -n '(?:\[A-Z_\]+=\\S\*\\s+)\*mypy --strict' tests/test_precommit_mypy_scope.py; grep -c 'this test has no subject' tests/test_precommit_mypy_scope.py
-# exit=0 duration=0.005s
-69:        r"^\s*(?:[A-Z_]+=\S*\s+)*mypy --strict (?P<args>(?:.|\n)*?)(?=\n\s*\n|\n\s*-\s)",
-3

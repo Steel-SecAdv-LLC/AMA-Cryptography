@@ -1,3 +1,0 @@
-$ S=/tmp/claude-0/-home-user-AMA-Cryptography/7da6a6a3-7996-5d8d-a052-37df782d45a9/scratchpad/oldreg; mkdir -p $S/include && git show fe8b8ab^:CSRC_STANDARDS.md > $S/CSRC_STANDARDS.md && cp include/ama_cryptography.h $S/include/ && python -c "import sys; sys.path.insert(0,'tools'); from pathlib import Path; import check_algorithm_registry as g; print(len(g.audit(Path('$S'))))"
-# exit=0 duration=0.045s
-18

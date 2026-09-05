@@ -1,3 +1,0 @@
-$ grep -n "if n < max(100, math.ceil(1.0 / alarm_budget))" ama_cryptography/monitoring.py
-# exit=0 duration=0.004s
-1803:        if n < max(100, math.ceil(1.0 / alarm_budget)):

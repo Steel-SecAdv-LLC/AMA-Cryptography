@@ -1,4 +1,0 @@
-$ gcc --version | head -1; gcc -Q --help=common | grep -- '-fcf-protection '
-# exit=0 duration=0.013s
-gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
-  -fcf-protection             		-fcf-protection=full

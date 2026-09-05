@@ -1,3 +1,0 @@
-$ git show -s --format='%h %ad %s' --date=short e46906c
-# exit=0 duration=0.005s
-e46906c 2026-08-19 The effect-size floor's own justification was not true, and the deterministic instrument's subject was chosen by a stopwatch

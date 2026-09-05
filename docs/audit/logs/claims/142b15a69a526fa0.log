@@ -1,4 +1,0 @@
-$ grep -n 'def _find_native_library() -> Optional\[ctypes.CDLL\]:\|proc_fd_path = f"/proc/self/fd/{fd}"' ama_cryptography/pqc_backends.py
-# exit=0 duration=0.005s
-846:            proc_fd_path = f"/proc/self/fd/{fd}"
-1051:def _find_native_library() -> Optional[ctypes.CDLL]:

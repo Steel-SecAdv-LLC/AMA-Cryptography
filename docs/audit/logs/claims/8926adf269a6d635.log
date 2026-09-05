@@ -1,3 +1,0 @@
-$ grep -nE '^#: kyber-decaps\s+0 / 0\s+0 / 0\s+0' tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-265:#: kyber-decaps          0 / 0               0 / 0                0

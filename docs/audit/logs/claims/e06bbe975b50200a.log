@@ -1,5 +1,0 @@
-$ grep -n "ama_secp256k1_ecdsa_sign_raw" tools/check_ghash_constant_time.py | head -3
-# exit=0 duration=0.004s
-80:the fixed-width `ama_secp256k1_ecdsa_sign_raw` entry point so the encoder is
-137:#: rationale: this target signs through `ama_secp256k1_ecdsa_sign_raw`, a
-301:#: `ama_secp256k1_ecdsa_sign_raw` emits a constant 64 octets from identical

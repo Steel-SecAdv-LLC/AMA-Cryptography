@@ -1,3 +1,0 @@
-$ grep -c "the claim is narrowed to what the code delivers\|What is not claimed" CONSTANT_TIME_VERIFICATION.md
-# exit=0 duration=0.005s
-2

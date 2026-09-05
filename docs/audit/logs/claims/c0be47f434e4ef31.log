@@ -1,3 +1,0 @@
-$ grep -c 'secp256k1_aff_from_bytes_checked(&' src/c/ama_secp256k1.c
-# exit=0 duration=0.005s
-2

@@ -1,5 +1,0 @@
-$ grep -nE 'DUDECT_LANE_SUB_FLOOR,|status = "SUB-FLOOR"|SUB-FLOOR means not adjudicable by this apparatus' tests/c/dudect/dudect_rounds.h
-# exit=0 duration=0.004s
-346:    DUDECT_LANE_SUB_FLOOR,   /**< tripped a majority, but under DUDECT_MIN_EFFECT_NS */
-532:            case DUDECT_LANE_SUB_FLOOR: status = "SUB-FLOOR"; break;
-584:               "    instrument. SUB-FLOOR means not adjudicable by this apparatus,\n"

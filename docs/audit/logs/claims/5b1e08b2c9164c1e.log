@@ -1,3 +1,0 @@
-$ python -c "import json;d=json.load(open('wycheproof_vectors/manifest.json'))['files'];print(len(d), all('sha256' in v for v in d.values()))"
-# exit=0 duration=0.032s
-15 True

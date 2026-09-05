@@ -1,4 +1,0 @@
-$ grep -c 'pthread_barrier_t' tests/c/test_concurrent_init.c; grep -c 'pthread_cond_t\|pthread_mutex_t' tests/c/test_concurrent_init.c
-# exit=0 duration=0.006s
-0
-3

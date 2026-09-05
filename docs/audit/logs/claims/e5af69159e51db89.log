@@ -1,3 +1,0 @@
-$ python -c "print(round(2204.5/2.9,1))"
-# exit=0 duration=0.031s
-760.2

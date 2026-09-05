@@ -1,5 +1,0 @@
-$ grep -nE '^_(MIN_SAMPLE_SECONDS|MAX_ITERATIONS) = |if elapsed >= _MIN_SAMPLE_SECONDS or batch >= _MAX_ITERATIONS:' benchmarks/benchmark_runner.py
-# exit=0 duration=0.004s
-187:_MIN_SAMPLE_SECONDS = 0.15
-311:_MAX_ITERATIONS = 500_000
-451:        if elapsed >= _MIN_SAMPLE_SECONDS or batch >= _MAX_ITERATIONS:

@@ -1,3 +1,0 @@
-$ ls fuzz/seed_corpus/fuzz_kyber/ | grep -vc '^[0-9a-f]\{40\}$'
-# exit=0 duration=0.005s
-26

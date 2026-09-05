@@ -1,4 +1,0 @@
-$ grep -n 'MODES = ("default", "never", "always")\|parametrize("mode", MODES)' tests/test_pyc_cache_liveness.py
-# exit=0 duration=0.005s
-54:MODES = ("default", "never", "always")
-119:@pytest.mark.parametrize("mode", MODES)

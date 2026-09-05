@@ -1,4 +1,0 @@
-$ grep -nE "silently missed \([0-9]+\)" tests/test_c_secret_zeroization_gate.py
-# exit=0 duration=0.004s
-403:      ZERO_SPELLINGS, silently missed (7):
-409:      DESTINATION_FORMS, silently missed (6):

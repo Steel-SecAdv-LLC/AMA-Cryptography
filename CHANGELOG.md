@@ -38,8 +38,48 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > and the current numbers live in the files the gates do read
 > (`docs/METRICS_REPORT.md`, `benchmarks/baseline.json`, the compliance
 > attestations). PR #394's readiness audit re-measured 1,815 such statements
-> at the release head and recorded, in `docs/audit/PR394_CLAIMS.yaml`, the
-> 139 whose figure no longer holds (FINDING-0007 there).
+> at the release head and found 139 whose figure no longer holds; its ledger
+> was removed from this branch in the eighteenth pass below and remains in the
+> branch's commit history.
+
+### Maintenance pass, eighteenth (2026-09-05) — the audit apparatus leaves the merge path
+
+The readiness audit's own working tree — `docs/audit/`, 2,641 files and 70,775
+lines — was 37 % of this branch's added lines and 68 % of its changed files, so
+every reviewer of a C or Python change paid for it first.  None of it shipped,
+none of it was imported by the package, and no workflow ran any of it: it was
+apparatus, and apparatus does not belong in the diff a reviewer reads.  It is
+removed here.  It remains in this branch's commit history, so any row, log or
+ledger entry cited by an earlier pass entry can still be recovered by commit.
+
+**No functional code, gate, test of shipped behaviour or fix was removed.**  Every
+`tools/check_*.py` rule, every negative-control-derived rule and every test of the
+library is untouched; the diff of this pass against the previous head contains no
+change to `ama_cryptography/`, `src/`, `include/`, or any gate's logic.
+
+- **Kept, relocated.** The 3R detection-efficacy measurement was the one piece of
+  the audit whose output a shipped document states, so it moved rather than went:
+  `docs/audit/sweeps/r3_efficacy.py` is now `benchmarks/r3_efficacy_eval.py` and its
+  table is `benchmarks/r3_efficacy.tsv`, beside the detector's other measurement
+  harness.  `tests/test_3r_efficacy_calibration.py` still pins the README's numbers
+  to that table, so the README's honest-limitation note keeps its backing and its
+  reproduction command.
+- **Removed with its subject.** `tests/test_claims_classifier.py` tested
+  `docs/audit/classify_claims.py`; the tool is gone, so the test went with it.  It
+  covered no shipped behaviour.
+- **Dead citations closed, substance kept.** Three comments cited a
+  negative-control table by path (`tools/check_keygen_pct.py`,
+  `tools/check_workflow_commands.py`, `tests/test_keygen_pct_gate.py`) and one
+  cited the fuzz-depth tables (`.github/workflows/fuzzing.yml`).  Each now states
+  the measurement that produced the rule without naming a file the reader does not
+  have.  `tools/check_reference_integrity.py` drops its fourth exemption — the
+  claims ledger — leaving the three its docstring always said it had, and
+  `tools/check_secrets.py` drops the allowlisted prefix for the removed logs, so
+  neither gate carries a hole for a tree that no longer exists.
+- **Scope follows.** Both CI `mypy --strict` invocations drop the removed path,
+  `pyproject.toml` moves the audit drivers' `ruff` exemptions to the one file that
+  still needs them, and `.gitignore` drops the un-ignore rules that kept the logs
+  committed.
 
 ### Maintenance pass, seventeenth (2026-09-03) — the audit audited: a headline that overstated its evidence, three gates with no control, and a FIPS gate that passed with its predicate inverted
 

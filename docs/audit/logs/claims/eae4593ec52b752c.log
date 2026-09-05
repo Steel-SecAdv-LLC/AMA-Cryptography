@@ -1,4 +1,0 @@
-$ sed -n '1860,1892p' include/ama_cryptography.h | grep -n -A1 'is rejected, never'
-# exit=0 duration=0.004s
-16: * field element in `[0, p)` (INVARIANT-29); a value `>= p` is rejected, never
-17- * reduced.

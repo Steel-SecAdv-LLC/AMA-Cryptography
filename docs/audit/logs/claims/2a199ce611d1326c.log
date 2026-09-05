@@ -1,4 +1,0 @@
-$ grep -n "unpinned = find_unpinned(workflows_dir)\|pins = find_pins(workflows_dir)" tools/check_action_pins.py
-# exit=0 duration=0.005s
-245:    unpinned = find_unpinned(workflows_dir)
-260:    pins = find_pins(workflows_dir)

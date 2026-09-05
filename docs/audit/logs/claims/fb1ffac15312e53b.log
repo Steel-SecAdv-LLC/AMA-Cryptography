@@ -1,4 +1,0 @@
-$ nm --plugin /nonexistent --defined-only build-release/lib/libama_cryptography_static.a 2>/dev/null | grep -c '\.gnu\.lto_'; nm --plugin /nonexistent --defined-only build-release/lib/libama_cryptography_static.a 2>/dev/null | grep -c 'ama_aes256_gcm_encrypt_avx2'
-# exit=0 duration=0.015s
-0
-1

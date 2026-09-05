@@ -1,7 +1,0 @@
-$ grep -nE "read \|t\| = 11.81 in 3 of 3 rounds|\+5.630 ns" tests/c/test_dudect.c; grep -n '"Kyber-1024 decaps (CT reject)"' tests/c/test_dudect.c
-# exit=0 duration=0.006s
-2963:     * on a shared CI runner it read |t| = 11.81 in 3 of 3 rounds, consistently
-2964:     * signed, at a per-class difference of +5.630 ns.  That is ABOVE the 2 ns
-3011:     * therefore available from the harness alone, and the +5.630 ns is not
-2090:    if (!dudect_ctx_init(&ctx, "Kyber-1024 decaps (CT reject)", (size_t)iterations)) {
-2094:                "Kyber-1024 decaps (CT reject)");

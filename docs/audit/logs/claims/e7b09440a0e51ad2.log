@@ -1,5 +1,0 @@
-$ /opt/ama-venv/bin/python -c "import tomllib;m=tomllib.load(open('pyproject.toml','rb'));print('MYPY_NARROWING',[k for k in ('exclude','files','packages','modules','follow_imports') if k in m['tool']['mypy']]);print('PY',m['tool']['mypy']['python_version']);print('DEV',[d for d in m['project']['optional-dependencies']['dev'] if d.split('>=')[0] in ('mypy','types-PyYAML','PyYAML','types-setuptools')])"
-# exit=0 duration=0.047s
-MYPY_NARROWING []
-PY 3.10
-DEV ['mypy>=2.3.0', 'types-setuptools>=84.0.0.20260812', 'PyYAML>=6.0.3', 'types-PyYAML>=6.0.12.20260724']

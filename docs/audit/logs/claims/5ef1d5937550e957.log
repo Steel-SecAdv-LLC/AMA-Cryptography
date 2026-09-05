@@ -1,3 +1,0 @@
-$ grep -nE "^#define AMA_ED25519_SECRET_KEY_BYTES " include/ama_cryptography.h
-# exit=0 duration=0.004s
-186:#define AMA_ED25519_SECRET_KEY_BYTES 64

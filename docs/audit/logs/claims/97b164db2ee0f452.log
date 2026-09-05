@@ -1,6 +1,0 @@
-$ ./build-release/bin/test_kyber_compress 2>&1 | grep -E 'pairs, |refuse|ALL PASSED'
-# exit=0 duration=0.005s
-TEST 5: the declared width domain is exact, and outside it the helper refuses
-  d in [1, 18] x [0, 3328]: 59922 pairs, OK
-  widths outside [1, 18] refuse  OK
-=== ALL PASSED ===

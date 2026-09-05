@@ -1,4 +1,0 @@
-$ grep -n "name: Security Checks\|python tools/check_vendor_isolation.py" .github/workflows/ci.yml
-# exit=0 duration=0.005s
-760:    name: Security Checks
-919:        python tools/check_vendor_isolation.py \

@@ -1,3 +1,0 @@
-$ grep -c "the artefact this repository commits) binds none" SECURITY.md
-# exit=1 duration=0.005s
-0

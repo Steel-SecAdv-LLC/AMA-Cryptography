@@ -1,5 +1,0 @@
-$ grep -n '^_YODA_COMPARE_TERNARY = \|^_SWITCH_ON_CLASS = \|^_POINTER_ASSIGN = ' tools/check_dudect_class_staging.py
-# exit=0 duration=0.006s
-185:_YODA_COMPARE_TERNARY = r"(?:==|!=|[<>]=?)\s*\(?\s*class_idx\b[^;?]*\?"
-187:_SWITCH_ON_CLASS = r"\bswitch\s*\([^;]*\bclass_idx\b"
-221:_POINTER_ASSIGN = re.compile(r"\*\s*(?:const\s+)?\w+\s*=[^=]")

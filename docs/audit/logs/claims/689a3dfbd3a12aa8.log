@@ -1,3 +1,0 @@
-$ python -c "import sys;sys.path.insert(0,'tools');import check_ghash_constant_time as m;print(len(m.KEY_CLASSES), len(m._METRICS))"
-# exit=0 duration=0.044s
-8 4

@@ -1,4 +1,0 @@
-$ grep -c "INVARIANT-15" src/c/internal/ama_once.h README.md
-# exit=0 duration=0.004s
-src/c/internal/ama_once.h:2
-README.md:1

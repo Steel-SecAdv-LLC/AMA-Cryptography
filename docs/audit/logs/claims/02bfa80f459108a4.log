@@ -1,5 +1,0 @@
-$ grep -n 'return "signed-bindings-unverified"\|_AMA_FIPS_STRICT_ENV = "AMA_FIPS_STRICT"\|def _handle_kat_skip' ama_cryptography/_self_test.py
-# exit=0 duration=0.005s
-122:_AMA_FIPS_STRICT_ENV = "AMA_FIPS_STRICT"
-1388:        return "signed-bindings-unverified"
-2874:def _handle_kat_skip(name: str, detail: str, strict_mode: bool) -> Optional[str]:

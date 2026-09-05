@@ -1,5 +1,0 @@
-$ grep -nB1 "ama_ct_value_barrier_u64" src/c/ama_nistp.c; grep -c "ama_ct_value_barrier_u64" src/c/ama_nistp.c
-# exit=0 duration=0.006s
-256-static inline uint64_t nistp_mask64(uint64_t c) {
-257:    return ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)((c | (~c + 1u)) >> 63));
-1

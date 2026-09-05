@@ -1,3 +1,0 @@
-$ python -c "import sys; sys.path.insert(0,'tests'); import test_nistp_curves as t; print([(n, t._lowest_x_point(n)[0], t._lowest_y_point(n)[1]) for n in ('P-256','P-384','P-521')])"
-# exit=0 duration=0.663s
-[('P-256', 5, 5), ('P-384', 2, 1), ('P-521', 1, 1)]

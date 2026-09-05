@@ -1,5 +1,0 @@
-$ grep -nE '^\s+"(tests/kat|nist_vectors|ama_cryptography/_post_kats)":' tools/check_vector_provenance.py
-# exit=0 duration=0.005s
-82:    "tests/kat": "NIST and Ascon known-answer vectors, as published",
-83:    "nist_vectors": "NIST reference vectors for the classical primitives",
-84:    "ama_cryptography/_post_kats": "FIPS 140-3 power-on self-test vectors",

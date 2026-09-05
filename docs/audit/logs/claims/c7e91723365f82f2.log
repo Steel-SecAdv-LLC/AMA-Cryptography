@@ -1,3 +1,0 @@
-$ grep -n '^_OTHER_LABEL = "Other"' tools/generate_visuals.py
-# exit=0 duration=0.004s
-228:_OTHER_LABEL = "Other"

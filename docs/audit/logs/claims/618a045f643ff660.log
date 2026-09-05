@@ -1,3 +1,0 @@
-$ grep -n "test_x25519_scalarmult_x4(iterations), 1);" tests/c/test_dudect.c
-# exit=0 duration=0.006s
-2917:        test_x25519_scalarmult_x4(iterations), 1);

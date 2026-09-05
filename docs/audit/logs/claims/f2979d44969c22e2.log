@@ -1,3 +1,0 @@
-$ grep -n "1,661 vs 1,660" CONSTANT_TIME_VERIFICATION.md
-# exit=0 duration=0.004s
-420:the miss columns split exactly along the odd/even classes at 1,661 vs 1,660

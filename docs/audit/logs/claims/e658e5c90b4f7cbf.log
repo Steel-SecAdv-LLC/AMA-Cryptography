@@ -1,3 +1,0 @@
-$ git show -s --format=%B a769af9 | grep -n 'of 47 symbols instruction-identical'
-# exit=0 duration=0.006s
-39:of 47 symbols instruction-identical after branch-target normalisation,

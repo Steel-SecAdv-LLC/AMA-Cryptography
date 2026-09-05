@@ -1,3 +1,0 @@
-$ grep -cE 'src/c/internal/` — 1 `\.c`.*8 `\.h`.*ama_ct_barrier\.h.*ama_testing_exports\.h.*ama_x25519_fe64_mulx\.h' README.md
-# exit=0 duration=0.004s
-1

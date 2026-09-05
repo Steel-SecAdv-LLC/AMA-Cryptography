@@ -1,3 +1,0 @@
-$ grep -n '90,000' tools/check_ghash_constant_time.py tests/c/test_dudect.c .github/workflows/dudect.yml
-# exit=0 duration=0.004s
-tools/check_ghash_constant_time.py:1166: * build and argued the 5.630 ns was "one part in 90,000" of a decapsulation —

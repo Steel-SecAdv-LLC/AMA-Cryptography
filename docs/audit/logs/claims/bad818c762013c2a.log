@@ -1,4 +1,0 @@
-$ dpkg -S /usr/aarch64-linux-gnu/lib/crti.o; readelf -nW /usr/aarch64-linux-gnu/lib/crti.o /usr/aarch64-linux-gnu/lib/crt1.o | grep -c 'AArch64 feature'
-# exit=1 duration=1.786s
-libc6-dev-arm64-cross: /usr/aarch64-linux-gnu/lib/crti.o
-0

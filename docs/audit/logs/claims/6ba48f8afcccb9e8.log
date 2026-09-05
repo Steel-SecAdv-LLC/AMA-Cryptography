@@ -1,4 +1,0 @@
-$ ls tools/check_vector_provenance.py tests/kat/PROVENANCE.json
-# exit=0 duration=0.005s
-tests/kat/PROVENANCE.json
-tools/check_vector_provenance.py

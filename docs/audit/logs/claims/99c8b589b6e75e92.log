@@ -1,3 +1,0 @@
-$ grep -n -B4 '^void ama_ascon_permutation_for_test' src/c/ama_ascon.c | grep -c '#ifdef AMA_TESTING_MODE'
-# exit=0 duration=0.004s
-1

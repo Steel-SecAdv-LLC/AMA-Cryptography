@@ -1,3 +1,0 @@
-$ grep -nE "simd=12,724,814 ns vs generic=1,063,456 ns|scalar \(BMI1/BMI2\)`` at 19,416|keccak_f1600 -> SIMD`` at 146,748" tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-1821:    (simd=12,724,814 ns vs generic=1,063,456 ns) and reverted the slot — so the

@@ -1,7 +1,0 @@
-$ grep -n '"--loc",\|"ls-files"\|git ls-files' tools/update_docs.py
-# exit=0 duration=0.005s
-668:    """New files exist that ``git ls-files`` cannot see yet."""
-674:    ``measure_loc_table`` enumerates with ``git ls-files``, which lists the
-697:        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"],
-731:            "`git ls-files` cannot see them and the figures written here "
-937:        "--loc",

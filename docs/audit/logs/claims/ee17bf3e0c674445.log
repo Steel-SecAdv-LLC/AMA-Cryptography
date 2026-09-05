@@ -1,4 +1,0 @@
-$ grep -n "matrix = _symmetric_part(matrix)\|shift = -_gershgorin_lower_bound(matrix)" ama_cryptography/equations.py
-# exit=0 duration=0.004s
-583:    matrix = _symmetric_part(matrix)
-585:    shift = -_gershgorin_lower_bound(matrix)

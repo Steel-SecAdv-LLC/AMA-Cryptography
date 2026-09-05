@@ -1,3 +1,0 @@
-$ python -m pytest tests/test_dudect_simd_sweep_gate.py --collect-only -q -p no:cacheprovider | tail -1
-# exit=0 duration=1.212s
-19 tests collected in 0.24s

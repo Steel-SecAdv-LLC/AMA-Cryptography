@@ -1,3 +1,0 @@
-$ grep -n 'That limit belongs to verify, not to the curve' tests/test_secp256k1_ecdsa_noncanonical_pubkey.py
-# exit=0 duration=0.004s
-25:That limit belongs to verify, not to the curve. ``ama_secp256k1_pubkey_

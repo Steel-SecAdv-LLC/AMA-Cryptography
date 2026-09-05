@@ -1,3 +1,0 @@
-$ python -c "import yaml;d=yaml.safe_load(open('.github/workflows/dudect.yml'));on=d.get('on') or d.get(True);print([all(p in on[e]['paths'] for p in ('CMakeLists.txt','tools/check_avx_scoping.py','tools/check_secret_division.py','tools/check_ghash_constant_time.py')) for e in ('push','pull_request')], on['push']['paths']==on['pull_request']['paths'], len(on['push']['paths']))"
-# exit=0 duration=0.082s
-[True, True] True 12

@@ -1,4 +1,0 @@
-$ grep -cE 'hashlib|sha256|sha3|digest\(' tools/http_fetch.py; grep -n 'def test_a_wrong_digest_still_fails_and_is_never_retried' tests/test_wycheproof_fetch_retry.py
-# exit=0 duration=0.006s
-0
-214:def test_a_wrong_digest_still_fails_and_is_never_retried(

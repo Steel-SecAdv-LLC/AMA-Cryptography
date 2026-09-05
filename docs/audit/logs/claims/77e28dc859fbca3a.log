@@ -1,3 +1,0 @@
-$ grep -rniE 'pstate\.dit|hwcap2_dit|msr[[:space:]]+dit' src/c include tests/c tools/constant_time | grep -vE ':[0-9]+:\s*(/?\*|//|")' | wc -l
-# exit=1 duration=0.018s
-0

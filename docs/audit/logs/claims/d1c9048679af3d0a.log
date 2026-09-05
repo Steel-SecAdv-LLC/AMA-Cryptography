@@ -1,3 +1,0 @@
-$ ( time cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=shiftTooManyBitsSigned --inline-suppr --std=c11 -Iinclude/ -DAMA_USE_NATIVE_PQC -DPATH_MAX=4096 --force src/c/ama_nistp.c src/c/ama_kyber.c src/c/ama_dilithium.c >/dev/null 2>&1 ) 2>&1 | grep real
-# exit=0 duration=15.882s
-real	0m15.879s

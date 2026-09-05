@@ -1,3 +1,0 @@
-$ grep -n "closing floor measurement" tools/check_ghash_constant_time.py
-# exit=0 duration=0.004s
-2051:                "closing floor measurement.",

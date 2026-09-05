@@ -1,3 +1,0 @@
-$ git show e52281c^:.github/workflows/dudect.yml | grep -c "cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF"
-# exit=0 duration=0.006s
-2

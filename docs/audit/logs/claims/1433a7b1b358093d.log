@@ -1,3 +1,0 @@
-$ grep -oE "swap 98,548,267 / 98,584,191" CONSTANT_TIME_VERIFICATION.md
-# exit=0 duration=0.005s
-swap 98,548,267 / 98,584,191

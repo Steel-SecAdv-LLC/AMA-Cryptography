@@ -1,3 +1,0 @@
-$ python -m pytest tests/test_avx_scoping_gate.py --collect-only -q -p no:cacheprovider | tail -1
-# exit=0 duration=0.934s
-53 tests collected in 0.16s

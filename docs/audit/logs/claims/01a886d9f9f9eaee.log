@@ -1,3 +1,0 @@
-$ grep -n "fabs(results\[i\].t_value) >= r->threshold" tests/c/dudect/dudect_rounds.h
-# exit=0 duration=0.004s
-293:        if (fabs(results[i].t_value) >= r->threshold) {

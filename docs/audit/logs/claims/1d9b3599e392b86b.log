@@ -1,6 +1,0 @@
-$ grep -n "Timing anomalies (45%)\|Pattern anomalies (25%)\|Resonance detection (15%)\|Lyapunov stability (15%)" ama_cryptography/adaptive_posture.py
-# exit=0 duration=0.006s
-121:    - Timing anomalies (45%) — severity-weighted scores
-122:    - Pattern anomalies (25%) — z-score magnitude
-123:    - Resonance detection (15%) — resonance ratio
-124:    - Lyapunov stability (15%) — double-helix engine divergence detection

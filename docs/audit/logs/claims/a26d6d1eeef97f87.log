@@ -1,3 +1,0 @@
-$ grep -n 'A BARE load of a module root counts too' tools/check_stdlib_hash_boundary.py
-# exit=0 duration=0.004s
-209:        # A BARE load of a module root counts too — `h = hashlib`,

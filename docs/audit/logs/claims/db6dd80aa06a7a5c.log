@@ -1,4 +1,0 @@
-$ grep -n "} fe51_neon;" src/c/neon/ama_neon_internal.h; grep -cE '^void ama_fe51_[a-z0-9_]+_neon\(' src/c/neon/ama_neon_internal.h
-# exit=0 duration=0.006s
-185:} fe51_neon;
-4

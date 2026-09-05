@@ -1,7 +1,0 @@
-$ grep -n '13.5 to 30.9\|10 of 10\|0 of 10' tools/constant_time/dudect_crypto.c | head -5
-# exit=0 duration=0.005s
-78: * lines while class 1's sits inside one produces |t| = 13.5 to 30.9, over
-79: * threshold in 10 of 10 runs, all positive.  Restoring symmetric placement
-94: * placement above — staged, the same lane reports 0 of 10 runs over the
-95: * threshold where the two-buffer form reports 10 of 10.  Sensitivity is
-468: * large this effect is (|t| = 13.5 to 30.9 from placement alone, on

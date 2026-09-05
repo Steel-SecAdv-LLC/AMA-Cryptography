@@ -1,5 +1,0 @@
-$ git log -1 --format='%h %ad' --date=short 7432e0d; git merge-base --is-ancestor 7432e0d HEAD && echo ancestor; git log -1 --format='%h %ad %s' --date=short f8873ae
-# exit=0 duration=0.013s
-7432e0d 2026-08-23
-ancestor
-f8873ae 2026-08-23 The four red lanes at 7432e0d, and the false claims standing behind green ones

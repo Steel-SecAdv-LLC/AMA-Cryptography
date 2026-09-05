@@ -1,3 +1,0 @@
-$ python -c "import sys; sys.path.insert(0,'tests'); import test_documented_c_prototypes_match_headers as t; print('DECLARATIONS', len(t.DECLARATIONS), 'PROTOTYPES', len(t.PROTOTYPES))"
-# exit=0 duration=0.211s
-DECLARATIONS 44 PROTOTYPES 275

@@ -1,3 +1,0 @@
-$ grep -c "def guard_delegating_helpers\|\"ama_cryptography/ascon.py\"," tools/check_error_state_gating.py
-# exit=0 duration=0.005s
-2

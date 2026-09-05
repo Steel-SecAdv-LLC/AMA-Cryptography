@@ -1,4 +1,0 @@
-$ python tools/check_ghash_constant_time.py --help | grep -oE "nistp-ecdsa|x25519\b" | sort -u
-# exit=0 duration=0.048s
-nistp-ecdsa
-x25519

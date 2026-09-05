@@ -1,3 +1,0 @@
-$ grep -nE "delta=51 ns / \|t\|=11\.48" ama_cryptography/_self_test.py
-# exit=0 duration=0.004s
-2433:      then falsified in the field: delta=51 ns / |t|=11.48 of pure jitter

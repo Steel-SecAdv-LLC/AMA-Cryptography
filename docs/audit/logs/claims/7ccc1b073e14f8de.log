@@ -1,7 +1,0 @@
-$ grep -rn 'dna_codes' examples/ | wc -l; grep -c 'create_crypto_package(' examples/python/flask_integration.py examples/python/fastapi_integration.py; grep -n -A1 '^def create_crypto_package' ama_cryptography/legacy_compat.py
-# exit=0 duration=0.008s
-0
-examples/python/flask_integration.py:2
-examples/python/fastapi_integration.py:2
-894:def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordinating all crypto/KMS/RFC3161 operations (LC-005)
-895-    codes: str,

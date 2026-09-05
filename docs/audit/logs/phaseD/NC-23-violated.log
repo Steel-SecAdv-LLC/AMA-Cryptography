@@ -1,3 +1,0 @@
-SEMGREP GATE FAILED — 1 finding(s) at or above ERROR severity:
-
-  ama_cryptography/x.py:1: [ama.nc-probe] nc probe

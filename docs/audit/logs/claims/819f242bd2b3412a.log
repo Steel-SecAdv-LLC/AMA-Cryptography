@@ -1,3 +1,0 @@
-$ grep -c "94 native entry points\|plus 10 Cython binding entry points" INVARIANTS.md
-# exit=0 duration=0.004s
-2

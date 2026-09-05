@@ -1,3 +1,0 @@
-$ grep -nE "^\s*absolute_floor_ns = " ama_cryptography/_self_test.py
-# exit=0 duration=0.005s
-2522:    absolute_floor_ns = 100.0

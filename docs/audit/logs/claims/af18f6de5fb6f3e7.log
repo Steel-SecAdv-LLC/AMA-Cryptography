@@ -1,6 +1,0 @@
-$ for t in ghash consttime ecdsa aead-verify; do python tools/check_ghash_constant_time.py --lib build-release/lib/libama_cryptography_test.a --target $t 2>&1 | tail -1; done
-# exit=0 duration=34.718s
-GHASH CONSTANT-TIME CHECK PASSED — instruction count, data references and cache misses are all key-independent.
-CONSTTIME CONSTANT-TIME CHECK PASSED — instruction count, data references and cache misses are all key-independent.
-ECDSA CONSTANT-TIME CHECK PASSED — instruction count, data references and cache misses are all key-independent.
-AEAD-VERIFY CONSTANT-TIME CHECK PASSED — instruction count, data references and cache misses are all key-independent.

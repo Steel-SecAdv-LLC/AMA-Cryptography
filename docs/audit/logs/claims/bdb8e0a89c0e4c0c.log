@@ -1,3 +1,0 @@
-$ grep -n "EXPECTED_VECTORS: '1215'" .github/workflows/acvp_validation.yml
-# exit=0 duration=0.004s
-54:  EXPECTED_VECTORS: '1215'

@@ -1,6 +1,0 @@
-$ grep -nE "AMA_TESTING_MODE|ama_build_optimization_probe|__OPTIMIZE__" src/c/ama_consttime.c
-# exit=0 duration=0.004s
-200:#ifdef AMA_TESTING_MODE
-210:int ama_build_optimization_probe(void) {
-213:#  if defined(__OPTIMIZE__)
-222:#endif /* AMA_TESTING_MODE */

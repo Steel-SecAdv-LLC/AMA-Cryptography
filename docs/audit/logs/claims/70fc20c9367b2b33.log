@@ -1,3 +1,0 @@
-$ curl -sS -o /dev/null -w '%{http_code}\n' https://pypi.org/pypi/ama-cryptography/json
-# exit=0 duration=0.189s
-404

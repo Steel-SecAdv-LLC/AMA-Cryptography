@@ -1,3 +1,0 @@
-$ echo "logs=$(git ls-files verification/v5-audit/logs | wc -l) nc=$(ls verification/v5-audit/logs | grep -c negative-control)"
-# exit=0 duration=0.011s
-logs=132 nc=10

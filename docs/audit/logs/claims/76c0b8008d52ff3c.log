@@ -1,5 +1,0 @@
-$ grep -n 'ATTEMPT_TIMEOUT="${APT_ATTEMPT_TIMEOUT:-' .github/scripts/apt-install.sh; grep -n 'BACKOFF_UNIT="${APT_RETRY_BACKOFF:-' .github/scripts/apt-install.sh; python -c "print((2*300+15+30)/60)"
-# exit=0 duration=0.032s
-111:ATTEMPT_TIMEOUT="${APT_ATTEMPT_TIMEOUT:-120}"
-119:BACKOFF_UNIT="${APT_RETRY_BACKOFF:-15}"
-10.75

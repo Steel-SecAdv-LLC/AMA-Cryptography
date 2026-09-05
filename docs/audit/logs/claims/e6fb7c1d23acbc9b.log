@@ -1,3 +1,0 @@
-$ grep -n "return {op: dict(stats) for op, stats in self.baseline_stats.items()}" ama_cryptography/monitoring.py
-# exit=0 duration=0.004s
-1838:            return {op: dict(stats) for op, stats in self.baseline_stats.items()}

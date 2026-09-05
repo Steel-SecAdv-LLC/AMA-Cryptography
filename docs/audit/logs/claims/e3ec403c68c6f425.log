@@ -1,5 +1,0 @@
-$ grep -nE "fail = ama_consttime_memcmp\(ciphertext, ct_cmp, P->ct_bytes\);|ama_consttime_copy\(fail, shared_secret, ss_reject, 32\);|Always compute the implicit rejection value" src/c/ama_kyber.c
-# exit=0 duration=0.005s
-1217:        fail = ama_consttime_memcmp(ciphertext, ct_cmp, P->ct_bytes);
-1223:            /* Always compute the implicit rejection value: H(z || ct).
-1238:            ama_consttime_copy(fail, shared_secret, ss_reject, 32);

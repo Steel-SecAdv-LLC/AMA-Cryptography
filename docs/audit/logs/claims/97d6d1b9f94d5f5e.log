@@ -1,7 +1,0 @@
-$ grep -n '_INTEGRITY_SIGNER_MODULES = \|_SIGNING_INTENT_FLAGS = \|def _module_confers_signing_scope\|spec = getattr(main_module, "__spec__", None)\|argv = list(getattr(sys, "orig_argv", \[\]) or \[\])' ama_cryptography/pqc_backends.py
-# exit=0 duration=0.007s
-587:    spec = getattr(main_module, "__spec__", None)
-595:_INTEGRITY_SIGNER_MODULES = ("ama_cryptography._build_sign", "ama_cryptography.integrity")
-613:_SIGNING_INTENT_FLAGS = ("--update",)
-639:def _module_confers_signing_scope(name: object) -> bool:
-672:    argv = list(getattr(sys, "orig_argv", []) or [])

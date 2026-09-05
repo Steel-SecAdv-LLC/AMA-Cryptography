@@ -1,3 +1,0 @@
-$ grep -n "25 instructions per signature" tools/check_ghash_constant_time.py | head -1
-# exit=0 duration=0.004s
-175:#: amplification made that 25 instructions per signature of real divergence

@@ -1,3 +1,0 @@
-$ git show --stat --format= 73321a5 -- src/c include | grep -c "|"
-# exit=0 duration=0.009s
-2

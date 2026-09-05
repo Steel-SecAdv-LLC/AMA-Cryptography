@@ -1,3 +1,0 @@
-$ awk '/^ama_error_t ama_sha3_final\(/{f=1} f&&/ctx->buffer_len = SHA3_CTX_CONSUMED;/{print NR": "$0; exit}' src/c/ama_sha3.c
-# exit=0 duration=0.004s
-733:     ctx->buffer_len = SHA3_CTX_CONSUMED;

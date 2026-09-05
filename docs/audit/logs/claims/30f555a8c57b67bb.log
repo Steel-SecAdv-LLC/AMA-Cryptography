@@ -1,6 +1,0 @@
-$ grep -c 'docker-compose up' README.md ENHANCED_FEATURES.md; grep -c 'docker compose -f docker/docker-compose.yml' README.md ENHANCED_FEATURES.md
-# exit=0 duration=0.006s
-README.md:0
-ENHANCED_FEATURES.md:0
-README.md:3
-ENHANCED_FEATURES.md:3

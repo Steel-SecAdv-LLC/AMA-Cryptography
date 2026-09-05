@@ -1,4 +1,0 @@
-$ grep -n '"secp256k1-scalarmult": 0,' tools/check_ghash_constant_time.py; grep -n '"secp256k1-scalarmult",' tests/test_ghash_constant_time_gate.py
-# exit=0 duration=0.006s
-374:    "secp256k1-scalarmult": 0,
-632:            "secp256k1-scalarmult",

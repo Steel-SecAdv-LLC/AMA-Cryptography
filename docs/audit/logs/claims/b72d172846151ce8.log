@@ -1,4 +1,0 @@
-$ grep -n "^from tests.conftest import native_library_path" tests/test_artefact_cache_poisoning.py; grep -nE '^\s*[^#]*sorted\(.*glob\(' tests/test_artefact_cache_poisoning.py; echo rc=$?
-# exit=0 duration=0.007s
-61:from tests.conftest import native_library_path
-rc=1

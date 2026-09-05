@@ -1,3 +1,0 @@
-$ awk '/compiler-warnings-aarch64:/,/version-consistency:/' .github/workflows/static-analysis.yml | grep -c "Werror=missing-prototypes"
-# exit=0 duration=0.005s
-2

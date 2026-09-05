@@ -1,4 +1,0 @@
-$ grep -n 'cythonized: list\[Extension\] = list(\|^cythonize: Any' setup.py
-# exit=0 duration=0.004s
-262:cythonize: Any
-505:        cythonized: list[Extension] = list(

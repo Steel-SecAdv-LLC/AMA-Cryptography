@@ -1,3 +1,0 @@
-$ grep -cE '^[a-zA-Z]+:src/c/[^:]+:[0-9]+$' .cppcheck-suppressions
-# exit=0 duration=0.004s
-5

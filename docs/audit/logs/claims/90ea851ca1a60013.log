@@ -1,5 +1,0 @@
-$ awk '/^  address-sanitizer:/,/^    steps:/' .github/workflows/static-analysis.yml | grep timeout-minutes; awk '/^  memory-sanitizer:/,/^    steps:/' .github/workflows/static-analysis.yml | grep timeout-minutes; grep -c 'ctest --output-on-failure' .github/workflows/static-analysis.yml
-# exit=0 duration=0.009s
-    timeout-minutes: 25
-    timeout-minutes: 25
-5

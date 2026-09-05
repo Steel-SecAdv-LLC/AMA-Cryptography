@@ -1,5 +1,0 @@
-$ git show 6a22aa2^:tools/constant_time/dudect_harness.c | grep -n "define MAX_ROUNDS"; grep -n "define MAX_ROUNDS" tools/constant_time/dudect_harness.c tools/constant_time/dudect_crypto.c
-# exit=0 duration=0.008s
-360:#define MAX_ROUNDS 3
-tools/constant_time/dudect_harness.c:457:#define MAX_ROUNDS 5
-tools/constant_time/dudect_crypto.c:98:#define MAX_ROUNDS 5

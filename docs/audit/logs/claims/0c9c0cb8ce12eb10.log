@@ -1,5 +1,0 @@
-$ grep -nE '^\s+- "benchmarks/' .github/workflows/baseline-guard.yml
-# exit=0 duration=0.004s
-28:      - "benchmarks/baseline.json"
-29:      - "benchmarks/arm-baseline.json"
-32:      - "benchmarks/check_baseline_justification.py"

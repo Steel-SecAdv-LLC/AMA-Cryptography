@@ -1,3 +1,0 @@
-$ grep -n 'define DUDECT_MIN_EFFECT_NS' tests/c/dudect/dudect_rounds.h
-# exit=0 duration=0.003s
-185:#define DUDECT_MIN_EFFECT_NS 2.0

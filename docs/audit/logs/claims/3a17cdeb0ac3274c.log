@@ -1,4 +1,0 @@
-$ clang-format --style=LLVM --dump-config | grep -E "^(IndentWidth|ColumnLimit):"
-# exit=0 duration=0.032s
-ColumnLimit:     80
-IndentWidth:     2

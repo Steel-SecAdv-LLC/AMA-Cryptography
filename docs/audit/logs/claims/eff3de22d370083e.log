@@ -1,5 +1,0 @@
-$ grep -n '"mypy>=2.3.0"' pyproject.toml; grep -n '"mypy==2.3.0"' .github/workflows/ci.yml .github/workflows/ci-build-test.yml
-# exit=0 duration=0.006s
-182:    "mypy>=2.3.0",
-.github/workflows/ci.yml:580:        pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
-.github/workflows/ci-build-test.yml:611:          pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \

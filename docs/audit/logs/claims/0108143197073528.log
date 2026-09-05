@@ -1,6 +1,0 @@
-$ git ls-files | grep -E 'generate_(dashboards|visuals|dashboard|competitive)\.py$'
-# exit=0 duration=0.005s
-benchmarks/generate_competitive.py
-benchmarks/generate_dashboard.py
-tools/generate_dashboards.py
-tools/generate_visuals.py

@@ -1,4 +1,0 @@
-$ grep -n 'run: pip install -e ".\[dev,hsm\]"' .github/workflows/ci-build-test.yml; grep -nE '^\s*"PyKCS11>=1\.5\.18' pyproject.toml | wc -l
-# exit=0 duration=0.007s
-501:        run: pip install -e ".[dev,hsm]"
-2

@@ -1,6 +1,0 @@
-$ grep -n 'PEP 552\|unchecked (..flags == 0b01..) cache\|unchecked cache IS validated' ama_cryptography/_self_test.py | head -5
-# exit=0 duration=0.005s
-953:    Mirrors CPython's ``_bootstrap_external`` validation (PEP 552).  ``header``
-978:      an unchecked (``flags == 0b01``) cache, so an ordinary stale one is
-1031:    whole question this stage asks.  PEP 552 gives a ``.pyc`` two validation
-1046:    unchecked cache IS validated.  Both are reproduced in

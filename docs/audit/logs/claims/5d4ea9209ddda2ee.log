@@ -1,6 +1,0 @@
-$ sed -n '/^class TestOptionalImportSuppressions/,/^class /p' tests/test_invariant_upgrades.py | grep '    def test_'
-# exit=0 duration=0.006s
-    def test_a_third_party_fallback_ignore_is_flagged(self) -> None:
-    def test_a_first_party_fallback_ignore_is_not_flagged(self) -> None:
-    def test_the_declared_form_is_accepted(self) -> None:
-    def test_the_shipped_tree_carries_none(self) -> None:

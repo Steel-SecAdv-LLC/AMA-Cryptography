@@ -1,4 +1,0 @@
-$ grep -n 'def test_the_fixture_errors_own_no_operating_system_resource\|assert isinstance(err.fp, io.BytesIO)' tests/test_wycheproof_fetch_retry.py
-# exit=0 duration=0.005s
-236:def test_the_fixture_errors_own_no_operating_system_resource(
-250:    assert isinstance(err.fp, io.BytesIO), (

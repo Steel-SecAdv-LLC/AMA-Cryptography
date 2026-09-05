@@ -1,3 +1,0 @@
-$ grep -c 'x25519-batch` is the thirteenth\|"x25519-batch": 0,' tools/check_ghash_constant_time.py
-# exit=0 duration=0.005s
-2

@@ -1,3 +1,0 @@
-$ grep -n -F '(?:\\\n|[^\n])*' tools/check_vendor_isolation.py
-# exit=0 duration=0.004s
-702:    r"\b(?:install|add)\b(?P<rest>(?:\\\n|[^\n])*)",

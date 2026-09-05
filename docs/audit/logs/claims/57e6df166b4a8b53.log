@@ -1,5 +1,0 @@
-$ grep -n "It never ran\|semgrep's C parser" tools/check_c_secret_zeroization.py; grep -n "id: bare-memset-zero-secret-named-buffer" .semgrep.yml
-# exit=0 duration=0.006s
-10:and the CI step name it as one of the blocking rules.  It never ran.  Every
-15:Adding ``src/c/`` to the scan target does not fix it either: semgrep's C parser
-303:  - id: bare-memset-zero-secret-named-buffer

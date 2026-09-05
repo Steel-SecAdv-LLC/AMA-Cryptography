@@ -1,4 +1,0 @@
-$ git log --format=%h -S'dna_codes' -- ama_cryptography/crypto_api.py ama_cryptography/legacy_compat.py | wc -l; git show 2dcef5c:examples/python/flask_integration.py | grep -c dna_codes
-# exit=0 duration=0.035s
-0
-2

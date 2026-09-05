@@ -1,3 +1,0 @@
-$ grep -nE '^\s*import benchmarks\.[a-z_]+ as [a-z]+' tests/test_benchmark_baseline_infra.py tests/test_timing_detector_calibration.py | wc -l
-# exit=0 duration=0.005s
-15

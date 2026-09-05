@@ -1,3 +1,0 @@
-$ python -c "import sys; sys.path.insert(0,'tests'); import test_documented_source_paths_exist as t; cited={m for d in t.DOCS for m in t._PATH_RE.findall(d.read_text(encoding='utf-8', errors='replace'))}; print('cited', len(cited))"
-# exit=0 duration=0.169s
-cited 220

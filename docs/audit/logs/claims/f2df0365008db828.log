@@ -1,3 +1,0 @@
-$ grep -cE 'a trip with no effect size is a fault, not a pass|an info-only lane may trip without an effect size|a quiet lane needs no effect size' tests/c/dudect/dudect_rounds.h
-# exit=0 duration=0.004s
-3

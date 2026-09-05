@@ -1,5 +1,0 @@
-$ git ls-tree 2dcef5c -- tests/test_benchmark_chart_inputs.py | wc -l; grep -c load_live_data tests/test_benchmark_chart_inputs.py; git log --oneline --diff-filter=A -- tests/test_benchmark_chart_inputs.py
-# exit=0 duration=0.031s
-0
-9
-4079bcd A swallowed exception charted hardcoded baselines as measurements

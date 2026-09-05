@@ -1,6 +1,0 @@
-Dilithium NTT merged-vs-scalar equivalence
-==========================================
-INFO: dispatcher leaves dilithium_ntt NULL on this build/CPU
-PASS: direct AVX2 lane, 256 trials
-INFO: forced-scalar parity lane skipped (no SIMD wired)
-==========================================

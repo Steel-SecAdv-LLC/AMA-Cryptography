@@ -1,7 +1,0 @@
-$ git show e52281c^:.github/workflows/static-analysis.yml | grep -nE 'fsanitize=address,undefined -fno-omit-frame-pointer -g"|fsanitize=memory[^"]*-O1"|fsanitize=thread[^"]*-O1"|"-g -O1 -fno-omit-frame-pointer"'
-# exit=0 duration=0.006s
-484:            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
-534:            -DCMAKE_C_FLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1" \
-581:            -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -O1" \
-619:            -DCMAKE_C_FLAGS="-g -O1 -fno-omit-frame-pointer" \
-1184:            -DCMAKE_C_FLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1" \

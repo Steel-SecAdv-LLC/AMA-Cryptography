@@ -1,3 +1,0 @@
-$ total=0; files=0; for f in src/c/*.c include/*.h; do n=$(clang-format "$f" 2>/dev/null | diff "$f" - | grep -c '^[<>]'); total=$((total+n)); [ "$n" -gt 0 ] && files=$((files+1)); done; echo "changed_lines=$total files_with_diff=$files of $(ls src/c/*.c include/*.h | wc -l)"
-# exit=0 duration=1.883s
-changed_lines=9712 files_with_diff=33 of 33

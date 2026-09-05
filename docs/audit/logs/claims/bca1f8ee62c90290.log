@@ -1,3 +1,0 @@
-$ grep -c '"dd"\|VmFlags:\|unaligned' tests/c/test_secure_memory_dontdump.c
-# exit=0 duration=0.004s
-7

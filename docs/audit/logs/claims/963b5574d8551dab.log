@@ -1,3 +1,0 @@
-$ grep -lE '5\.0, not|max-over-21-rungs' CONSTANT_TIME_VERIFICATION.md docs/constant-time-testing.md tests/c/dudect/README.md README.md ENHANCED_FEATURES.md | wc -l
-# exit=0 duration=0.005s
-5

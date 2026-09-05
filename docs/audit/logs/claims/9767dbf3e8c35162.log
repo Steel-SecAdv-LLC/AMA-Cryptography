@@ -1,3 +1,0 @@
-$ grep -n "self._accumulated_score = max(score, self._accumulated_score \* self.decay_rate)" ama_cryptography/adaptive_posture.py
-# exit=0 duration=0.005s
-301:        self._accumulated_score = max(score, self._accumulated_score * self.decay_rate)

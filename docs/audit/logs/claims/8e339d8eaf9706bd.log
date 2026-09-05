@@ -1,3 +1,0 @@
-$ grep -n "Discovery lost a module the gate is known to cover" tools/check_ctypes_abi.py
-# exit=0 duration=0.004s
-641:        # Discovery lost a module the gate is known to cover: that is a

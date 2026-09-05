@@ -1,4 +1,0 @@
-$ grep -n 'if len(flags) != len(ORDER):' benchmarks/generate_competitive.py; grep -c 'dict(zip(ORDER' benchmarks/generate_competitive.py
-# exit=1 duration=0.006s
-177:    if len(flags) != len(ORDER):
-0

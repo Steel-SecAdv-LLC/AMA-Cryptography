@@ -1,3 +1,0 @@
-$ grep -n "The header said" src/c/sve2/ama_sha3_sve2.c
-# exit=0 duration=0.005s
-99: * The header said "Uses SVE2 scalable vectors for theta column-parity XOR and

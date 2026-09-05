@@ -1,3 +1,0 @@
-$ grep -n 'changes.append((f"{name} tolerance_percent", b_tol, a_tol))' benchmarks/check_baseline_justification.py
-# exit=0 duration=0.004s
-149:            changes.append((f"{name} tolerance_percent", b_tol, a_tol))

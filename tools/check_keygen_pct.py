@@ -46,7 +46,7 @@ else: pairwise_test_signature(...)`` — releases a keypair from EVERY arm, so
 every arm of such a conditional must run a pairwise test or raise.  Name-set
 matching alone cannot see one arm going dark: the function still calls
 ``pairwise_test_kem`` somewhere, so it still "reaches a helper".  Measured
-before this rule existed (docs/audit/PR394_NEGATIVE_CONTROLS.tsv, NC-17):
+before this rule existed, by planting the defect and re-running the gate:
 replacing the signature arm's call in ``_keypair_pairwise_test`` with a no-op
 left this gate at exit 0 while ``AmaContext.keypair_generate`` released
 untested ML-DSA, SLH-DSA and hybrid keypairs.  Only explicit arms are judged

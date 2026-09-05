@@ -1,3 +1,0 @@
-$ grep -cE 'def _drift_is_acknowledged\(metadata: Dict\[str, object\], changed_path: str\)|metadata\.get\("floor_drift_acknowledged"\)' benchmarks/check_baseline_justification.py
-# exit=0 duration=0.004s
-2

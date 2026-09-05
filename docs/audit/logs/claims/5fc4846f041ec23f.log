@@ -1,4 +1,0 @@
-$ grep -n '^_DUDECT_THRESHOLD = 4.5\|^_TIMING_MIN_EFFECT_NS = ' ama_cryptography/_self_test.py
-# exit=0 duration=0.005s
-2379:_DUDECT_THRESHOLD = 4.5
-2543:_TIMING_MIN_EFFECT_NS = _compute_timing_min_effect_ns()

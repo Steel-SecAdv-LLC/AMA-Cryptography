@@ -1,3 +1,0 @@
-$ python -m pytest tests/test_vendor_isolation_gate.py --collect-only -q -p no:cacheprovider | tail -1
-# exit=0 duration=1.041s
-103 tests collected in 0.19s

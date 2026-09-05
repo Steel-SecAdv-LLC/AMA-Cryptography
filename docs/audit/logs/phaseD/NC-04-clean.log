@@ -1,4 +1,0 @@
-Bandit findings by severity: Undefined=0, Low=0, Medium=0, High=0 over 10 lines of code
-Blocking policy: severity >= MEDIUM and confidence >= MEDIUM
-
-No blocking findings.

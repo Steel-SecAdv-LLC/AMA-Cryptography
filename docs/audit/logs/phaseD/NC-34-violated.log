@@ -1,6 +1,0 @@
-VENDOR ISOLATION FAILED (INVARIANT-1):
-  [library] /tmp/nc-scratch-0z56igvm/nc-vendor.so [ELF]: links against 'libcrypto.so.3' — OpenSSL
-  [library] /tmp/nc-scratch-0z56igvm/nc-vendor.so [ELF]: imports undefined symbol 'EVP_MD_CTX_new' — OpenSSL
-  [library] /tmp/nc-scratch-0z56igvm/nc-vendor.so [ELF]: imports undefined symbol 'EVP_MD_CTX_free' — OpenSSL
-
-The listed implementations are authorised only as explicitly isolated benchmark comparators under benchmarks/.  They may not supply internal functionality, act as a fallback, or influence a non-benchmark execution path.

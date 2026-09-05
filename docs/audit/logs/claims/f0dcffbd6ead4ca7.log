@@ -1,5 +1,0 @@
-$ grep -n -A2 "^_C_SUPPRESSION_RE = re.compile(" tools/check_suppression_hygiene.py
-# exit=0 duration=0.003s
-282:_C_SUPPRESSION_RE = re.compile(
-283-    r"NOLINT(?:NEXTLINE|BEGIN|END)?\b|cppcheck-suppress|nosemgrep|coverity\s*\[|/\*\s*LINTED"
-284-)

@@ -165,8 +165,8 @@ jobs:
           # emitted flags.make of a Release fuzz configure).  What -O0 did cost
           # is depth: at 60 s per target, one seed corpus and the same -max_len,
           # -O2 -g reached 3.0x to 16.7x more executions per target than -O0
-          # (docs/audit/PR394_FUZZ_DEPTH.tsv vs PR394_FUZZ_DEPTH_O2G.tsv;
-          # fuzz_sphincs 20 -> 116, fuzz_frost 515 -> 5,627, fuzz_dilithium
+          # (measured per target at both optimisation levels: fuzz_sphincs
+          # 20 -> 116, fuzz_frost 515 -> 5,627, fuzz_dilithium
           # 1,748 -> 7,167).  NDEBUG is left OUT so assert() stays live exactly
           # as it was under Debug — the ONLY semantic difference between the two
           # configurations is the optimisation level.

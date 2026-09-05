@@ -1,4 +1,0 @@
-$ grep -n "./dudect_harness --self-test\|./dudect_crypto --self-test" .github/workflows/dudect.yml
-# exit=0 duration=0.006s
-277:          ./dudect_harness --self-test
-278:          ./dudect_crypto --self-test

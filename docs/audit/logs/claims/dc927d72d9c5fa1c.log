@@ -1,3 +1,0 @@
-$ grep -c "def test_gershgorin_is_a_bound_not_the_spectrum\|def test_the_symmetric_part_is_what_sigma_sees\|def test_the_direction_maximises_sigma_for_non_symmetric_input\|def test_a_purely_skew_matrix_has_no_maximiser\|def test_the_direction_maximises_sigma_over_the_whole_matrix" tests/test_equations.py
-# exit=0 duration=0.007s
-5

@@ -1,5 +1,0 @@
-$ grep -nE "^_LINEARITY_(CEILING|ROUNDS|ATTEMPTS) = " tests/test_c_secret_zeroization_gate.py
-# exit=0 duration=0.006s
-735:_LINEARITY_ROUNDS = 7
-740:_LINEARITY_ATTEMPTS = 3
-744:_LINEARITY_CEILING = 2.8

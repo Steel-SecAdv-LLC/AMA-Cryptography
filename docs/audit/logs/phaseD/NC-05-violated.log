@@ -1,8 +1,0 @@
-FAIL  bare memset() on secret-named buffers (1 finding(s)):
-
-src/c/nc_probe.c:3: bare memset() zeroing secret-named buffer 'secret_key'
-    void nc(unsigned char *secret_key){ memset(secret_key, 0, 32); }
-    Use ama_secure_memzero(secret_key, LEN) — a plain memset may be elided by the optimizer (INVARIANT-6, CWE-226).
-
-Replace each with ama_secure_memzero() from src/c/ama_consttime.c.
-INVARIANT-6: secret material must be scrubbed with a write the compiler is not free to remove.

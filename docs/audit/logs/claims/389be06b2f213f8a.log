@@ -1,3 +1,0 @@
-$ grep -n "10,316" .clang-format
-# exit=0 duration=0.004s
-14:# (10,316).  Nothing in CI runs clang-format, and nothing should start doing

@@ -1,3 +1,0 @@
-$ python -c "print(round((1371.7-1446.8)/1446.8*100,1))"
-# exit=0 duration=0.032s
--5.2

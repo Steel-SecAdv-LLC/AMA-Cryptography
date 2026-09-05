@@ -1,3 +1,0 @@
-$ grep -n '_C_VENDOR_MARKER = "vendor"' tools/check_suppression_hygiene.py
-# exit=0 duration=0.004s
-275:_C_VENDOR_MARKER = "vendor"

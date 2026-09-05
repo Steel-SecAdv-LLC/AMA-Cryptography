@@ -1,4 +1,0 @@
-FAIL: 1 raw Chocolatey call(s) bypassing the retry policy:
-  - .github/workflows/ci.yml:101: raw choco call outside .github/scripts/choco-install.ps1: choco install softhsm.install -y
-
-Route them through .github/scripts/choco-install.ps1, whose retries key on the OUTCOME rather than on Chocolatey's exit code — which is 0 even when the feed is down and nothing was installed.

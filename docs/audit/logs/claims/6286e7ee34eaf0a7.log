@@ -1,7 +1,0 @@
-$ sed -n 50,54p INVARIANTS.md
-# exit=0 duration=0.004s
-`native_pbkdf2_hmac_sha256/512`). `hashlib` is confined to the pre-execution
-**trust bootstrap** — the pre-load shared-object digest (which cannot be
-computed by the library not yet loaded), the pre-import binding-extension
-digest gate in `__init__.py` (which hashes each signed compiled extension
-before its module-init code may execute), the signed-integrity source

@@ -1,4 +1,0 @@
-2.6.1
-lrwxrwxrwx 1 root root 42 Apr  1  2024 /usr/lib/softhsm/libsofthsm2.so -> ../x86_64-linux-gnu/softhsm/libsofthsm2.so
-PyKCS11 ok
-pkcs11-tool: unrecognized option '--version'

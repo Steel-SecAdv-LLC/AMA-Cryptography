@@ -1,4 +1,0 @@
-$ grep -n 'if ct_len > MAX_MESSAGE_SIZE:\|Malformed ChannelMessage: {len(data) - offset} trailing bytes' ama_cryptography/secure_channel.py
-# exit=0 duration=0.005s
-232:        if ct_len > MAX_MESSAGE_SIZE:
-247:            raise ChannelError(f"Malformed ChannelMessage: {len(data) - offset} trailing bytes")

@@ -1,4 +1,0 @@
-ML-DSA-65 rejection sampler dispatched-vs-scalar equivalence
-============================================================
-PASS: 256 random trials + short-buflen + small-outlen edge cases
-============================================================

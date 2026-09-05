@@ -1,3 +1,0 @@
-$ grep -n "reported 36" .github/workflows/static-analysis.yml
-# exit=0 duration=0.005s
-402:    # When this job was first run against the branch it reported 36

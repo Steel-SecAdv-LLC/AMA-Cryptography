@@ -1,5 +1,0 @@
-$ grep -n 'guard._check_validity_window("origin/main", "HEAD")\|def test_the_working_tree_satisfies_it_too\|"diff", "--name-only", commit, "--", \*guard._FLOORED_CODE_PATHS' tests/test_benchmark_baseline_infra.py
-# exit=0 duration=0.004s
-819:            assert guard._check_validity_window("origin/main", "HEAD") == []
-823:    def test_the_working_tree_satisfies_it_too(self) -> None:
-855:                    "diff", "--name-only", commit, "--", *guard._FLOORED_CODE_PATHS

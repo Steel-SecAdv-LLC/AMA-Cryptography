@@ -1,3 +1,0 @@
-$ git show 2e78bbc~1:CONSTANT_TIME_VERIFICATION.md | grep -c "No secret-dependent branches or memory accesses"
-# exit=0 duration=0.006s
-2

@@ -1,3 +1,0 @@
-$ grep -c "deliberately ~65% of" tools/update_docs.py
-# exit=0 duration=0.003s
-1

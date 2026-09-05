@@ -1,4 +1,0 @@
-$ grep -n 'io.BytesIO(b"")\|err.close()' tests/test_wycheproof_fetch_retry.py
-# exit=0 duration=0.004s
-134:        err = urllib.error.HTTPError(URL, status, msg, Message(), io.BytesIO(b""))
-140:        err.close()

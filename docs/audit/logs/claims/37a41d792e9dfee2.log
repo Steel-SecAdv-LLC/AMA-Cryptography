@@ -1,4 +1,0 @@
-$ python tools/check_ghash_constant_time.py --lib build-release/lib/libama_cryptography_test.a --target consttime | grep -E "^\s+0x41|^\s+limit"
-# exit=0 duration=6.446s
-  0x41         37,113,591      16,448,514           1,723           1,505
-  limit                 0               0               0               0

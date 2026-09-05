@@ -1,6 +1,0 @@
-      Start  4: test_secure_free_scrub
- 4/75 Test  #4: test_secure_free_scrub ..................Subprocess terminated***Exception: 1256.58 sec
-99% tests passed, 1 tests failed out of 75
-Total Test time (real) = 1281.16 sec
-	  4 - test_secure_free_scrub (Subprocess terminated)
-(process killed by the auditor after 1256 s; VmSize 107374243756 kB at the time; ctest reports the exception below)

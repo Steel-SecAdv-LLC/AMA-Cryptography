@@ -1,3 +1,0 @@
-$ grep -n '^#error' src/c/neon/ama_neon_internal.h
-# exit=0 duration=0.004s
-76:#error "ama_neon_internal.h: the NEON kernel tier is little-endian only and has never been validated on big-endian AArch64; configure with -DAMA_ENABLE_NEON=OFF to build the portable paths instead"

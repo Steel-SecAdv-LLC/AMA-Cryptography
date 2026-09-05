@@ -1,3 +1,0 @@
-$ grep -cE "^\| Python package \| Python 3\.10-3\.14 on Linux, macOS and Windows" README.md
-# exit=0 duration=0.005s
-1

@@ -1,8 +1,0 @@
-INVARIANT-32: documented install extras
-  distinct extras documented: 9 across 19 site(s)
-  FAIL — 1 finding(s):
-
-    ::error::README.md:1678: install command names extra 'ncprobe', which pyproject.toml does not declare. pip accepts this and installs WITHOUT it, exiting 0 — the reader gets an incomplete install and no error.
-        pip install ama-cryptography[ncprobe]
-        declared extras: all, benchmark, dev, docs, hsm, legacy, math, monitoring
-

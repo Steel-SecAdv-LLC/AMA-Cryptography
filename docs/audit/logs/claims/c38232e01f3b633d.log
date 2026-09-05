@@ -1,3 +1,0 @@
-$ grep -c "_mm_\|_mm256_\|__m128i" src/c/ama_aes_gcm.c
-# exit=1 duration=0.005s
-0

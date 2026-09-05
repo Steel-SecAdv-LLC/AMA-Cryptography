@@ -1,3 +1,0 @@
-$ grep -n 'RUNNER_OS==Windows arm' tests/test_hsm_integration.py
-# exit=0 duration=0.005s
-1045:    # shape is pinned structurally: the RUNNER_OS==Windows arm carries the

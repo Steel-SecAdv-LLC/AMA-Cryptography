@@ -1,4 +1,0 @@
-$ /opt/ama-venv/bin/python -c "import tempfile,pathlib;from ama_cryptography._artefact_source import ArtefactSourceError,load_artefact_fields,ARTEFACT_NAME;d=pathlib.Path(tempfile.mkdtemp());(d/ARTEFACT_NAME).write_bytes(b'');e=d/'empty';e.mkdir();print('MISSING',load_artefact_fields(e));exec('try:\n print(\"RETURNED\",load_artefact_fields(d))\nexcept ArtefactSourceError as x: print(\"RAISED\",str(x)[:120])')"
-# exit=0 duration=0.449s
-MISSING None
-RAISED /tmp/tmpl2umjsc1/_integrity_signature.py: parses to no literal assignments — the generated artefact always defines INTEG

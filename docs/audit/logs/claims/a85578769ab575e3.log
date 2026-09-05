@@ -1,6 +1,0 @@
-$ grep -n 'kind: str = "point"  # .point., .shift., .cross_operation.\|two-sided sign CUSUM\|measured 12.5% false-alarm\|def record_timing' ama_cryptography/monitoring.py
-# exit=0 duration=0.005s
-806:    kind: str = "point"  # 'point', 'shift', 'cross_operation'
-1111:    * **Sustained shifts** are detected with a two-sided sign CUSUM against
-1122:      fixed Gaussian MAD threshold that produced a measured 12.5% false-alarm
-1446:    def record_timing(

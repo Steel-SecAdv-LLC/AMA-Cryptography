@@ -1,3 +1,0 @@
-$ grep -nE "^MIN_FILES = " tools/check_vector_provenance.py
-# exit=0 duration=0.004s
-131:MIN_FILES = 20

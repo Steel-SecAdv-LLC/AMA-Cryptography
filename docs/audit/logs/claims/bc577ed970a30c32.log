@@ -1,3 +1,0 @@
-$ python -c "import sys; sys.path.insert(0,'tools'); import check_ghash_constant_time as m; print(len(m._DRIVERS), m._DOCUMENTED_TARGET_COUNT)"
-# exit=0 duration=0.045s
-18 18

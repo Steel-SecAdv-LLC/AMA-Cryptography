@@ -1,2 +1,0 @@
-$ git grep -l "CPPFLAGS" -- '*.py'
-# exit=1 duration=0.009s

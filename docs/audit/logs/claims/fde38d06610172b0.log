@@ -1,4 +1,0 @@
-$ awk '/^#ifdef AMA_HAVE_X86_AESNI_IMPL/{f=1} f&&/AMA_HAVE_AVX2_IMPL/{print NR": "$0} f&&/ama_aes256_gcm_encrypt_vaes_avx2;/{print NR": "$0; exit}' src/c/dispatch/ama_dispatch.c
-# exit=0 duration=0.005s
-1659: #ifdef AMA_HAVE_AVX2_IMPL
-1673:             dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_vaes_avx2;

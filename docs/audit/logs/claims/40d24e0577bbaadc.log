@@ -1,3 +1,0 @@
-$ grep -c "dudect_percentile.h" tests/c/dudect/dudect.h
-# exit=0 duration=0.004s
-3

@@ -1,3 +1,0 @@
-$ python -c "import json; r=json.load(open('benchmarks/benchmark-results.json'))['results']; print(sum(1 for x in r if x['baseline_value'] > x['ops_per_second']), 'of', len(r))"
-# exit=0 duration=0.034s
-2 of 19

@@ -1,6 +1,0 @@
-$ for n in DARK_BG PANEL_BG GRID_COLOR TEXT_COLOR; do echo "$n $(($(grep -o "\b$n\b" tools/generate_dashboards.py | wc -l) - 1))"; done
-# exit=0 duration=0.014s
-DARK_BG 3
-PANEL_BG 4
-GRID_COLOR 5
-TEXT_COLOR 15

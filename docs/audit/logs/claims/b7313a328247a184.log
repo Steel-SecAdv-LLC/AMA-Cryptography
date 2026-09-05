@@ -1,4 +1,0 @@
-$ ls verification/v5-audit/logs/item4-tamper-drill.log ama_cryptography/libama_cryptography.so
-# exit=0 duration=0.004s
-ama_cryptography/libama_cryptography.so
-verification/v5-audit/logs/item4-tamper-drill.log

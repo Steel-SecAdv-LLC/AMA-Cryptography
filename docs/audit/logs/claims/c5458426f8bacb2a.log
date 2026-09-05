@@ -1,3 +1,0 @@
-$ aarch64-linux-gnu-nm build-arm/lib/libama_cryptography_static.a | grep -c ama_ascon_permutation_for_test
-# exit=1 duration=0.098s
-0

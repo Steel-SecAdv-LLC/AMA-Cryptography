@@ -1,3 +1,0 @@
-$ grep -n '"valgrind", "--tool=none"' tools/check_ghash_constant_time.py
-# exit=0 duration=0.004s
-1723:            ["valgrind", "--tool=none", str(driver), KEY_CLASSES[0]],

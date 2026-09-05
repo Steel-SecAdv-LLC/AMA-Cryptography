@@ -1,4 +1,0 @@
-$ grep -n "define AMA_KYBER_SVE2_SCRUB(buf) ama_secure_memzero" src/c/sve2/ama_kyber_sve2.c; grep -c "AMA_KYBER_SVE2_SCRUB(" src/c/sve2/ama_kyber_sve2.c
-# exit=0 duration=0.006s
-97:#define AMA_KYBER_SVE2_SCRUB(buf) ama_secure_memzero((buf), sizeof(buf))
-9

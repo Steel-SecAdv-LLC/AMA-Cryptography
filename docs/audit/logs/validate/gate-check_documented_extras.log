@@ -1,3 +1,0 @@
-INVARIANT-32: documented install extras
-  distinct extras documented: 8 across 18 site(s)
-  PASS — every documented extra is declared in pyproject.toml.

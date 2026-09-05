@@ -1,3 +1,0 @@
-$ python -c "p=2**255-19;print(sorted(y for y in range(-1,2) if (y*y)%p==1), (p-1)*(p-1)%p==1, bytes([0xEC]+[0xFF]*30+[0x7F])==(p-1).to_bytes(32,'little'))"
-# exit=0 duration=0.038s
-[-1, 1] True True

@@ -1,3 +1,0 @@
-$ cmake --version | head -1
-# exit=0 duration=0.106s
-cmake version 4.4.3

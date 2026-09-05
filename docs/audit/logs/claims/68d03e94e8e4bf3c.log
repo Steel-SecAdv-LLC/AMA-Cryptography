@@ -1,4 +1,0 @@
-$ git ls-tree 2dcef5c -- cmake/toolchains/x86_64-w64-mingw32.cmake | wc -l; git log --oneline --diff-filter=A -- cmake/toolchains/x86_64-w64-mingw32.cmake
-# exit=0 duration=0.029s
-0
-6a3f09e "Windows" and "MSVC" were the same macro, and one of them did not compile

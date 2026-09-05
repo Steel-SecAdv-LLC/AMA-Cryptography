@@ -1,5 +1,0 @@
-$ grep -n 'static int timeout_truncation_self_test\|"truncated-by-alarm"\|int truncation_rc = timeout_truncation_self_test();' tests/c/test_dudect.c
-# exit=0 duration=0.006s
-2674:static int timeout_truncation_self_test(void) {
-2689:    DUDECT_REGISTER_LANE(results, idx, "truncated-by-alarm",
-3113:            int truncation_rc = timeout_truncation_self_test();

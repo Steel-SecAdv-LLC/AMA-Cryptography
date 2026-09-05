@@ -1,3 +1,0 @@
-$ grep -n "The two argument-rejection returns write nothing" include/ama_cryptography.h
-# exit=0 duration=0.004s
-1360: * The two argument-rejection returns write nothing, because at that point

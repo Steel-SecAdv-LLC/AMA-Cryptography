@@ -1,5 +1,0 @@
-$ grep -n 'name="' tools/check_compiler_warnings.py
-# exit=0 duration=0.004s
-130:        name="vendored-source",
-138:        name="int128-extension",
-162:        name="overlength-asm-literal",

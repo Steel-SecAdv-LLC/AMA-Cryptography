@@ -1,3 +1,0 @@
-$ grep -n "rc = secp256k1_ecdsa_sign_scalars(r_bytes, s_bytes, message, private_key);" src/c/ama_secp256k1.c
-# exit=0 duration=0.004s
-2295:    rc = secp256k1_ecdsa_sign_scalars(r_bytes, s_bytes, message, private_key);

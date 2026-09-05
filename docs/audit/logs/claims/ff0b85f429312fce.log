@@ -1,3 +1,0 @@
-$ grep -nE "def test_(missing_library_is_a_failure|unparseable_file_is_a_failure|truncated_elf_raises_rather_than_reporting_clean|32_bit_elf_is_rejected_rather_than_misparsed|empty_directory_is_a_failure_not_a_clean_scan)" tests/test_vendor_isolation_gate.py | wc -l
-# exit=0 duration=0.006s
-5

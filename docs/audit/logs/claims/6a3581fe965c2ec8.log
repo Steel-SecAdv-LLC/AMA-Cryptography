@@ -1,5 +1,0 @@
-$ grep -n "bar = self._calibrated_ratio_threshold\|history.append(deviation)\|if bar is not None and deviation > bar" ama_cryptography/monitoring.py
-# exit=0 duration=0.005s
-2045:                    bar = self._calibrated_ratio_threshold(pair, self._pair_alarm_budget(pair))
-2046:                    history.append(deviation)
-2048:                    if bar is not None and deviation > bar:

@@ -1,5 +1,0 @@
-$ awk '/name: Cppcheck Static Analysis/,/timeout-minutes/' .github/workflows/static-analysis.yml | grep timeout; grep -n 'timeout-minutes' .github/workflows/fuzzing.yml | head -2
-# exit=0 duration=0.007s
-    timeout-minutes: 10
-33:    timeout-minutes: 20
-145:    timeout-minutes: 15

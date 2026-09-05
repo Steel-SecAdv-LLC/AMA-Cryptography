@@ -1,3 +1,0 @@
-$ python -c "from ama_cryptography.monitoring import ResonanceTimingMonitor as R; print(R._RATIO_ACTIVATION_FLOOR_MULTIPLE)"
-# exit=0 duration=0.581s
-4

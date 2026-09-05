@@ -1,3 +1,0 @@
-$ objdump -d build-release/lib/libama_cryptography.so | grep -cP '\tendbr64'
-# exit=0 duration=0.214s
-387

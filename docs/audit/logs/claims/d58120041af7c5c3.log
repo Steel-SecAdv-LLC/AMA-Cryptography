@@ -1,3 +1,0 @@
-$ git show -s --format='%h %ad %s' --date=short 80a05f2
-# exit=0 duration=0.005s
-80a05f2 2026-08-19 An above-floor ML-KEM excursion, settled deterministically; plus a 3.14 descriptor leak and an ASan budget

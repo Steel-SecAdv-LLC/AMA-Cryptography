@@ -1,3 +1,0 @@
-$ python -c "from ama_cryptography.monitoring import ResonanceTimingMonitor as R; t=R(); print(t.max_operations, t.max_ratio_operations, t.dropped_operations)"
-# exit=0 duration=0.531s
-256 16 0

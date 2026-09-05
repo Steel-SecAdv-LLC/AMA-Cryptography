@@ -1,4 +1,0 @@
-$ grep -c 'has always scrubbed its equivalents' src/c/ama_kyber.c; grep -n 'NEITHER arm was complete' src/c/ama_kyber.c
-# exit=0 duration=0.006s
-0
-705:         * commit carrying this comment NEITHER arm was complete: the batched

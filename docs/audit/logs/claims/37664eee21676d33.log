@@ -1,4 +1,0 @@
-$ grep -nE "^static void nistp_(mont_mul|jac_add)\(" src/c/ama_nistp.c
-# exit=0 duration=0.005s
-499:static void nistp_mont_mul(uint64_t *r, const uint64_t *a, const uint64_t *b,
-720:static void nistp_jac_add(nistp_jac *r, const nistp_jac *p, const nistp_jac *q,

@@ -1,4 +1,0 @@
-$ grep -c "nosec B324" wycheproof_vectors/run_wycheproof.py; sed -n '/digest = hashlib.new(/,/nosec B324/p' wycheproof_vectors/run_wycheproof.py | grep -c "usedforsecurity"
-# exit=1 duration=0.007s
-1
-0

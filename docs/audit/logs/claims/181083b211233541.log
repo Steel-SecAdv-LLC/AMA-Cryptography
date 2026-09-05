@@ -1,4 +1,0 @@
-$ grep -n '"ML-DSA-65", 6, 5,' src/c/ama_dilithium.c | wc -l; python -c "q=8380417; I=2**31-1; print(256*5*q, round(256*5*q/I, 3))"
-# exit=0 duration=0.032s
-1
-10726933760 4.995

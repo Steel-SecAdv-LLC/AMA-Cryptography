@@ -1,4 +1,0 @@
-$ python -c 'import numpy as np;A=np.array([[1,2],[2,5]],float);print("PD=%s gersh_lower=%g"%(all(np.linalg.eigvalsh(A)>0), min(A[i,i]-sum(abs(A[i,j]) for j in range(2) if j!=i) for i in range(2))))'; grep -n 'what the shift does NOT promise' ama_cryptography/equations.py
-# exit=0 duration=0.162s
-PD=True gersh_lower=-1
-563:    A note on what the shift does NOT promise.  Gershgorin gives a *bound*,

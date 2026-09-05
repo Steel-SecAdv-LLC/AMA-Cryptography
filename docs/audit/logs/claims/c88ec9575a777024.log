@@ -1,4 +1,0 @@
-$ grep -n "^import struct" tools/check_vendor_isolation.py; grep -cE '"(readelf|otool|dumpbin)"' tools/check_vendor_isolation.py
-# exit=1 duration=0.006s
-131:import struct
-0

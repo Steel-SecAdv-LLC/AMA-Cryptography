@@ -1,3 +1,0 @@
-$ git show a501051:tests/kat/PROVENANCE.json | python -c "import json,sys;print(len(json.load(sys.stdin)['files']))"
-# exit=0 duration=0.033s
-37

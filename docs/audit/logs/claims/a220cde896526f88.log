@@ -1,7 +1,0 @@
-$ grep -oE "src/c/avx2/[A-Za-z0-9_]+\.c" wiki/Performance-Benchmarks.md | sort -u | while read f; do [ -f "$f" ] && echo "ok $f" || echo "MISSING $f"; done
-# exit=0 duration=0.006s
-ok src/c/avx2/ama_aes_gcm_vaes_avx2.c
-ok src/c/avx2/ama_argon2_avx2.c
-ok src/c/avx2/ama_chacha20poly1305_avx2.c
-ok src/c/avx2/ama_sha3_avx2.c
-ok src/c/avx2/ama_x25519_avx2.c

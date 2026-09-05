@@ -1,6 +1,0 @@
-$ grep -n 'count >= 4' tests/c/test_ed25519_canonical_r.c | head -2; grep -n 'for (n = 1; n <= MAX_BATCH; n++)' tests/c/test_ed25519_canonical_r.c
-# exit=0 duration=0.007s
-47: * count >= 4 (measured pre-B1 as 30 passed / 19 failed) described the
-82: * genuinely discriminated at count >= 4 (30 passed / 19 failed under the
-246:    for (n = 1; n <= MAX_BATCH; n++) {
-274:    for (n = 1; n <= MAX_BATCH; n++) {

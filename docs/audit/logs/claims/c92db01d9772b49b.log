@@ -1,3 +1,0 @@
-$ python -c "import json; print([sorted(p for p in ('ama_cryptography/secure_memory.py','src/c/PROVENANCE.md') if any(e['path']==p for e in json.load(open(f))['metadata']['floor_drift_acknowledged'])) for f in ('benchmarks/baseline.json','benchmarks/arm-baseline.json')])"
-# exit=0 duration=0.032s
-[['ama_cryptography/secure_memory.py', 'src/c/PROVENANCE.md'], ['ama_cryptography/secure_memory.py', 'src/c/PROVENANCE.md']]

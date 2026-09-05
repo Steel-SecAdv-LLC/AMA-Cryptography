@@ -1,4 +1,0 @@
-$ grep -n "leading hash is omitted above deliberately" tools/check_suppression_hygiene.py; echo rc=$?; sed -n 1841p ama_cryptography/key_formats.py
-# exit=0 duration=0.006s
-rc=1
-    # key module graph (KFM-001)" — the leading hash is omitted deliberately,

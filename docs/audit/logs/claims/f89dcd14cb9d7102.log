@@ -1,3 +1,0 @@
-$ pwsh --version
-# exit=127 duration=0.002s
-bash: line 1: pwsh: command not found

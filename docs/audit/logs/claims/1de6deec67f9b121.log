@@ -1,4 +1,0 @@
-$ grep -n 'parametrize("status"' tests/test_wycheproof_fetch_retry.py
-# exit=0 duration=0.004s
-164:@pytest.mark.parametrize("status", [400, 401, 403, 404, 410])
-180:@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])

@@ -1,4 +1,0 @@
-$ grep -n -A1 '"ama_ml_dsa_test_matrix_row_equiv": (' tools/check_secret_division.py
-# exit=0 duration=0.005s
-113:    "ama_ml_dsa_test_matrix_row_equiv": (
-114-        14,  # EXACT: gcc-13 -O3 (this symbol exists only under AMA_TESTING_MODE)

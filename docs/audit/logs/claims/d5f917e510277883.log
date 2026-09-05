@@ -1,6 +1,0 @@
-$ grep -n -A3 'mode = getattr(_imp, "check_hash_based_pycs", "default")' ama_cryptography/_self_test.py
-# exit=0 duration=0.004s
-989:        mode = getattr(_imp, "check_hash_based_pycs", "default")
-990-        if mode == "never":
-991-            # No validation happens at all: the cache always executes, so it
-992-            # must always be judged.

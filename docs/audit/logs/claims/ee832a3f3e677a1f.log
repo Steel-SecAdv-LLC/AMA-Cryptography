@@ -1,4 +1,0 @@
-$ /opt/ama-venv/bin/python -c "exec('import yaml\nfor wf,dep in ((\".github/workflows/ci.yml\",\"test\"),(\".github/workflows/ci-build-test.yml\",\"python-package\")):\n for jn,j in yaml.safe_load(open(wf))[\"jobs\"].items():\n  n=j.get(\"needs\") or []\n  if dep in (n if isinstance(n,list) else [n]) and len(n if isinstance(n,list) else [n])>1: print(wf,jn,\"needs\",n)')"
-# exit=0 duration=0.145s
-.github/workflows/ci.yml ci-gate needs ['test', 'code-quality', 'docs-build', 'security-checks', 'benchmark-regression', 'constant-time-check', 'test-avx512', 'ed25519-backend-differential', 'c-consumer']
-.github/workflows/ci-build-test.yml ci-gate needs ['c-library', 'c-library-no-native-pqc', 'python-package', 'lint', 'security', 'benchmark-regression', 'docker']

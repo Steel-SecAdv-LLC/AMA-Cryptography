@@ -1,3 +1,0 @@
-$ git log --format='%h %s' -1 267c16c
-# exit=0 duration=0.005s
-267c16c Revert the percentile-cropping harness change: CI falsified the drop-in design

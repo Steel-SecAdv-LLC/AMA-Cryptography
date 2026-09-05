@@ -1,9 +1,0 @@
-$ grep -n 'def _try_load_library(lib_path: Path, verify_digest: bool = True)' ama_cryptography/pqc_backends.py; sed -n 1656,1661p ama_cryptography/_self_test.py
-# exit=0 duration=0.008s
-724:def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ctypes.CDLL]:
-    if override and actual_native != native_digest_raw:
-        return (
-            None,
-            (
-                "; native library UNVERIFIED — AMA_CRYPTO_LIB_PATH override in "
-                f"effect ({override}), loaded object is not the signed one"

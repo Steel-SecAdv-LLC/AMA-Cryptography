@@ -1,3 +1,0 @@
-$ grep -n 'if name.startswith("-"):' tools/check_vendor_isolation.py
-# exit=0 duration=0.004s
-757:                if name.startswith("-"):

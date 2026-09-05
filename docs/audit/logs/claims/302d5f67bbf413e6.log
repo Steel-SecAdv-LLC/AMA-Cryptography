@@ -1,3 +1,0 @@
-$ python -c "import sys, ama_cryptography as a, ama_cryptography.pqc_backends as p; print('STATUS', a.module_status(), 'native_lib', p._native_lib is not None, 'cy', [n for n in ('_cy_ed25519_sign_fn','_cy_dilithium_sign_fn','_cy_hkdf_fn','_cy_sha3_fn','_cy_hmac_fn') if getattr(p, n, None) is not None], 'mods', sorted(m for m in sys.modules if m.startswith('ama_cryptography.') and m.endswith('_binding')))"
-# exit=0 duration=0.468s
-STATUS OPERATIONAL native_lib True cy ['_cy_ed25519_sign_fn', '_cy_dilithium_sign_fn', '_cy_hkdf_fn', '_cy_sha3_fn', '_cy_hmac_fn'] mods ['ama_cryptography.dilithium_binding', 'ama_cryptography.ed25519_binding', 'ama_cryptography.hkdf_binding', 'ama_cryptography.hmac_binding', 'ama_cryptography.sha3_binding']

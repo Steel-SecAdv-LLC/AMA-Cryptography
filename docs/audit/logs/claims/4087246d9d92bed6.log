@@ -1,5 +1,0 @@
-$ grep -n '_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\\x00"' ama_cryptography/_self_test.py ama_cryptography/_build_sign.py tools/verify_install_oob.py
-# exit=0 duration=0.004s
-ama_cryptography/_self_test.py:708:_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\x00"
-ama_cryptography/_build_sign.py:101:_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\x00"
-tools/verify_install_oob.py:591:_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\x00"

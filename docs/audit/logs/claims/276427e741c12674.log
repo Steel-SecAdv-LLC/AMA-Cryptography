@@ -1,3 +1,0 @@
-$ grep -c -i 'dry.run' .github/workflows/release.yml
-# exit=0 duration=0.005s
-18

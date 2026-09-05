@@ -1,4 +1,0 @@
-$ aarch64-linux-gnu-objdump -d build-arm/lib/libama_cryptography.so | grep -cP '\tbti\b'; aarch64-linux-gnu-objdump -d build-arm/lib/libama_cryptography.so | grep -cP '\t(paciasp|autiasp)\b'
-# exit=0 duration=0.308s
-132
-614

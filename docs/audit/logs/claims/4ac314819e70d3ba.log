@@ -1,4 +1,0 @@
-$ grep -n 'def _binding_imports_permitted() -> bool:' ama_cryptography/pqc_backends.py; grep -c 'if not _binding_imports_permitted():' ama_cryptography/pqc_backends.py
-# exit=0 duration=0.008s
-4954:def _binding_imports_permitted() -> bool:
-5

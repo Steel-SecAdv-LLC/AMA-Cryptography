@@ -1,6 +1,0 @@
-Checked 84 runner label(s), 9 inline python payload(s), 2 Windows command string(s), 1 release-publishing step(s), 6 CMake-gated binary invocation(s), 45 cmake configure(s), 292 expression(s) (`${{ }}` and bare `if:`), 5 pytest invocation(s), 52 gate-required job(s).
-
-WORKFLOW COMMAND CHECK PASSED.
-........................................................................ [ 54%]
-.............................................................            [100%]
-133 passed in 4.88s

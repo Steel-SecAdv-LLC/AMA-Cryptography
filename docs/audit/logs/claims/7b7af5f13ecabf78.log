@@ -1,3 +1,0 @@
-$ grep -n 'class _HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler)' tools/http_fetch.py
-# exit=0 duration=0.005s
-75:class _HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):

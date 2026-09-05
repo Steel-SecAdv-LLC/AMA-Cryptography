@@ -1,7 +1,0 @@
-$ grep -nE "a 50 ns floor was|100 ns absolute floor|AMA_POST_TIMING_MIN_EFFECT_NS" ama_cryptography/_self_test.py | head -4; python -c "print(50/2)"
-# exit=0 duration=0.034s
-2397:#: ``AMA_POST_TIMING_MIN_EFFECT_NS=1e18`` made every real timing leak report
-2414:#: ``AMA_POST_TIMING_MIN_EFFECT_NS`` rather than from the host's clock
-2432:      on shared Ubuntu 3.11 GitHub-hosted runners, and a 50 ns floor was
-2438:      100 ns absolute floor is ~2x the worst observed artefact, the same
-25.0

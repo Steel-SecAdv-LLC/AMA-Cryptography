@@ -1,3 +1,0 @@
-$ grep -n 'return dil_pubkey_from_sk(P, secret_key' src/c/ama_dilithium.c | wc -l
-# exit=0 duration=0.005s
-2

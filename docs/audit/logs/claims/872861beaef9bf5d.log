@@ -1,3 +1,0 @@
-$ grep -n 'no pure-Python fallback' wiki/Security-Model.md
-# exit=0 duration=0.005s
-119:| HMAC / tag comparison | `ama_consttime_memcmp()` (C); Python `constant_time_compare()` calls it via ctypes and raises if the native backend is unavailable — no pure-Python fallback | ✓ Constant-time |

@@ -1,4 +1,0 @@
-$ awk '/compiler-warnings-aarch64:/,/version-consistency:/' .github/workflows/static-analysis.yml | grep -c ctest; ls .github/workflows/arm-qemu.yml
-# exit=0 duration=0.006s
-0
-.github/workflows/arm-qemu.yml

@@ -1,4 +1,0 @@
-$ grep -c '^## INVARIANT-[0-9]' INVARIANTS.md; grep -rhoE 'INVARIANT-[0-9]+' --include='*.md' --include='*.py' --include='*.c' --include='*.h' --include='*.yml' . | sort -u | awk -F- '$2>43' | wc -l
-# exit=0 duration=0.053s
-43
-0

@@ -1,5 +1,0 @@
-$ grep -n 'def _parse_pe(data: bytes) -> BinaryInfo:\|export_rva, _export_size = struct.unpack_from\|thunk_size = 8 if magic == 0x20B else 4' tools/check_vendor_isolation.py
-# exit=0 duration=0.006s
-1104:def _parse_pe(data: bytes) -> BinaryInfo:
-1114:    export_rva, _export_size = struct.unpack_from("<II", data, dd_off)
-1138:    thunk_size = 8 if magic == 0x20B else 4

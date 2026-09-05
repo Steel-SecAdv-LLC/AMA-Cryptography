@@ -1,6 +1,0 @@
-$ grep -nE '_load_fields\(\)|load_artefact_fields\(\)' ama_cryptography/__init__.py ama_cryptography/pqc_backends.py ama_cryptography/_self_test.py; grep -rnE '^\s*from ama_cryptography import _integrity_signature|^\s*import ama_cryptography\._integrity_signature|import_module\(.*_integrity_signature' ama_cryptography/*.py | wc -l
-# exit=1 duration=0.009s
-ama_cryptography/__init__.py:175:        _sig = _load_fields()
-ama_cryptography/pqc_backends.py:454:        sig_mod = load_artefact_fields()
-ama_cryptography/_self_test.py:1412:        fields = load_artefact_fields()
-0

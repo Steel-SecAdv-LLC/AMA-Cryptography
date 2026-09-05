@@ -1,3 +1,0 @@
-$ /opt/ama-venv/bin/python -c "import tests.test_c_secret_zeroization_gate as t;c=t.TestZeroValueAndDestinationSpellings;print('ZERO',len(c.ZERO_SPELLINGS),'NONZERO',len(c.NON_ZERO_SPELLINGS),'NEWLY_ZERO',len(c.NEWLY_CLOSED_ZERO_SPELLINGS),'NEWLY_DST',len(c.NEWLY_CLOSED_DESTINATION_FORMS),'CEILING',t._LINEARITY_CEILING)"
-# exit=0 duration=0.157s
-ZERO 16 NONZERO 7 NEWLY_ZERO 7 NEWLY_DST 6 CEILING 2.8

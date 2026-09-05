@@ -1,3 +1,0 @@
-$ awk '/#else/{e=1} e&&/has_arm_neon_cached = 1;/{print; exit}' src/c/ama_cpuid.c
-# exit=0 duration=0.005s
-    has_arm_neon_cached = 1;

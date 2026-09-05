@@ -1,5 +1,0 @@
-$ grep -n "_CACHE_GEOMETRY = " tools/check_ghash_constant_time.py; grep -nE "def test_(the_cache_geometry_is_pinned_on_the_command_line|a_missing_cache_metric_is_rejected_not_zeroed)" tests/test_ghash_constant_time_gate.py
-# exit=0 duration=0.008s
-1657:_CACHE_GEOMETRY = ("--I1=32768,8,64", "--D1=32768,8,64", "--LL=8388608,16,64")
-165:    def test_a_missing_cache_metric_is_rejected_not_zeroed(
-188:    def test_the_cache_geometry_is_pinned_on_the_command_line(

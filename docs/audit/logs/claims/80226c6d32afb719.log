@@ -1,6 +1,0 @@
-$ grep -n 'null E|t| matches the calibrated scale\|e_abs > 1.73 && e_abs < 1.84\|sd > 1.81 && sd < 1.92\|null replicates almost never reach the threshold' tests/c/dudect/dudect_percentile.h
-# exit=0 duration=0.006s
-817:            ok &= dudect_crop_case("null E|t| matches the calibrated scale",
-818:                                   e_abs > 1.73 && e_abs < 1.84);
-820:                                   sd > 1.81 && sd < 1.92);
-824:            ok &= dudect_crop_case("null replicates almost never reach the threshold",

@@ -1,4 +1,0 @@
-$ grep -nE 'CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install|MSVC: set CL=-DPyInt_FromLong=PyLong_FromLong' pyproject.toml
-# exit=0 duration=0.004s
-143:    #   CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install "PyKCS11>=1.5.18,!=1.5.19"
-144:    # (MSVC: set CL=-DPyInt_FromLong=PyLong_FromLong instead.)

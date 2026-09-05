@@ -1,3 +1,0 @@
-$ python -c "import ama_cryptography._integrity_signature as s; print(sorted(n for n in dir(s) if n.isupper()))"
-# exit=0 duration=0.473s
-['BUILD_PIPELINE_VERSION', 'INTEGRITY_BINDING_DIGESTS_HEX', 'INTEGRITY_DIGEST_HEX', 'INTEGRITY_NATIVE_DIGEST_HEX', 'INTEGRITY_PUBKEY_HEX', 'INTEGRITY_SIGNATURE_HEX']

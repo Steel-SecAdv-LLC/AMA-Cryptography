@@ -1,4 +1,0 @@
-$ /opt/ama-venv/bin/python -c "from tools.check_verification_claim_honesty import unqualified_formal_claims as u;print('QUOTED',u('The heading used to read \"Formal Verification Checklist\"; it is not a claim of formal verification.'));print('UNQUOTED',u('This is not a claim of formal verification; the AES core is formally verified.'))"
-# exit=0 duration=0.044s
-QUOTED []
-UNQUOTED ['formally verified']

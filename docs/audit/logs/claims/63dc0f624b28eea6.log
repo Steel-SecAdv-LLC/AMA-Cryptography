@@ -1,4 +1,0 @@
-$ grep -nE "^\s*- '?--(ignore-missing-imports|no-warn-unused-ignores)" .pre-commit-config.yaml | wc -l; git show 2dcef5c:.pre-commit-config.yaml | grep -n "args: \['--ignore-missing-imports', '--no-warn-unused-ignores'\]"
-# exit=0 duration=0.007s
-0
-36:        args: ['--ignore-missing-imports', '--no-warn-unused-ignores']

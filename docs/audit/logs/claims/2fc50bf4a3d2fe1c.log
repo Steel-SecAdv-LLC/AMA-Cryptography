@@ -1,4 +1,0 @@
-$ grep -n 'files = sorted({f for _id, f, _ln in pinned})' tests/test_suppression_hygiene_gate.py && grep -oE '^[a-zA-Z]+:src/c/[^:]+' .cppcheck-suppressions | cut -d: -f2 | sort -u | wc -l
-# exit=0 duration=0.009s
-374:        files = sorted({f for _id, f, _ln in pinned})
-3

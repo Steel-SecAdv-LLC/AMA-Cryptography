@@ -1,4 +1,0 @@
-$ grep -n "no mypy process" tests/test_type_check_scope_gate.py; grep -nE "subprocess\.run\(\s*\[\s*\"mypy" tests/test_type_check_scope_gate.py; echo rc=$?
-# exit=0 duration=0.014s
-217:    Every assertion here is a file read: no mypy process, no stub packages, no
-rc=1

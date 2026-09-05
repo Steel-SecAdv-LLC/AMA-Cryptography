@@ -1,4 +1,0 @@
-$ grep -n 'ctx->finalized = (int)SHA3_256_RATE;\|ctx->finalized = (int)SHA3_512_RATE;' src/c/ama_sha3.c
-# exit=0 duration=0.005s
-726:    ctx->finalized = (int)SHA3_256_RATE;
-843:    ctx->finalized = (int)SHA3_512_RATE;
