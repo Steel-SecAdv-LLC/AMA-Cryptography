@@ -373,7 +373,7 @@ class TestOverrideIgnoredUnderSecureExecution:
 
         attempted: list[Path] = []
 
-        def _record(path: Path) -> Optional[Any]:
+        def _record(path: Path, verify_digest: bool = True) -> Optional[Any]:
             attempted.append(path)
             return None
 
@@ -400,7 +400,9 @@ class TestOverrideIgnoredUnderSecureExecution:
         monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(planted))
         monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: False)
         monkeypatch.setattr(pqc_backends, "_get_search_dirs", list)
-        monkeypatch.setattr(pqc_backends, "_try_load_library", lambda path: sentinel)
+        monkeypatch.setattr(
+            pqc_backends, "_try_load_library", lambda path, verify_digest=True: sentinel
+        )
 
         with caplog.at_level(logging.WARNING):
             result = pqc_backends._find_native_library()

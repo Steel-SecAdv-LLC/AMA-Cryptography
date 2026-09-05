@@ -1,6 +1,6 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
-**Version:** 4.0.0
+**Version:** 3.5.0
 **Original audit:** 2026-05-16
 **Re-validated:** 2026-07-30 (see the Re-validation Addendum at the end of this document)
 **Organization:** Steel Security Advisors LLC
@@ -143,7 +143,7 @@ integration, expanded-key fast path) is in-house.
 | ML-DSA-65 KeyGen | FIPS 204 | ACVP-Server | 25 | 25 | 0 | 50 | ML-DSA-44/87 skipped |
 | ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 15 | 0 | 165 | External/pure TG 3; resolved via `ama_dilithium_verify_ctx` |
 | SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 14 | 0 | 490 | External/pure TG 5 only; resolved via FIPS 205 hash function alignment |
-| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,757 AFT-filtered + 1,032 non-AFT (LDT+VOT) |
+| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,667 AFT-filtered + 1,122 non-AFT (LDT+VOT+ML-KEM EncapDecap) |
 
 ### 2.2 Resolved: ML-DSA-65 SigVer (previously 3 failures, now 15/15 pass)
 
@@ -391,6 +391,19 @@ load:
 **POST Budget:** All self-tests complete in <300ms (measured ~260ms on
 4-core Linux), well within the 500ms budget.
 
+**POST coverage boundary.** The table above is the set of approved algorithms
+that carry a power-on KAT; it is a **subset** of the approved primitives the
+module exposes, not full per-algorithm coverage, and a "0 skipped" attestation
+means every one of *these* stages ran, not that every approved algorithm was
+exercised. `module_attestation()`'s `tests_run` / `tests_skipped` count these
+stages. FIPS 140-3 §4.9.1 expects a self-test per approved algorithm in the
+boundary; the following approved primitives the module exposes do **not** yet
+carry a POST KAT, and a validated module would add one for each: HKDF-SHA2,
+HMAC-SHA2 (256/384/512), ChaCha20-Poly1305, X25519, ECDSA over secp256k1 and the
+NIST P-curves, PBKDF2, Argon2id, and LMS. These are exercised by the functional
+test suite and, where a NIST suite exists, by ACVP self-attestation — but not by
+POST.
+
 ### 4.2 Module Integrity Verification
 
 At startup, SHA3-256 is computed over all `.py` files in the
@@ -439,13 +452,22 @@ the keypair. Covered algorithms:
 These helpers do **not** automatically intercept every key generation;
 they must be called explicitly by application code or wrapper functions.
 
-### 4.5 Continuous RNG Test
+### 4.5 Repeated-output check on the OS CSPRNG
 
 `secure_token_bytes(n)` wraps `secrets.token_bytes(n)` with a comparison
 to the previous output. If two consecutive calls return identical bytes,
-the module enters ERROR state immediately. This is aligned with the
-continuous random number generator testing described in FIPS 140-3
-Section 4.9.2.
+the module enters ERROR state immediately.
+
+This is a defence-in-depth sanity check on the operating system's CSPRNG,
+**not** a FIPS 140-3 RNG health test, and the earlier text here mis-cited it
+as one. The two-consecutive-identical-blocks continuous RNG test (CRNGT) was
+a **FIPS 140-2** requirement; the FIPS 140-3 transition removed it in favour
+of the SP 800-90B startup and continuous health tests (Repetition Count and
+Adaptive Proportion) applied to a noise source. `secrets.token_bytes` is the
+operating-system CSPRNG, not an approved SP 800-90A DRBG instantiated inside a
+defined cryptographic boundary, and POST carries no DRBG KAT. Approved
+SP 800-90A DRBG / SP 800-90B entropy-source instantiation is listed among the
+outstanding prerequisites in `CSRC_STANDARDS.md` Section 3.1(e).
 
 > **Note:** This is a design-aligned implementation, not a CMVP-validated module. See Section 3 of `CSRC_STANDARDS.md` for full compliance status.
 
@@ -555,6 +577,8 @@ are as stated, zero failures.
 | ML-DSA-44 / ML-DSA-87 | FIPS 204 | `src/c/ama_dilithium.c`, parameter-driven (`ama_ml_dsa_*` over `ama_ml_dsa_param_set_t`); ML-DSA-65 unchanged | 3.5.0 | NIST ACVP-Server ML-DSA-{keyGen,sigGen}-FIPS204 `internalProjection.json` (master @ 2026-07-27) vendored as `tests/kat/fips204/ml_dsa_{44,87}.kat`; `tests/test_pqc_param_sets.py` — **79 passed, 0 failed** |
 | secp256k1 ECDSA | RFC 6979 (deterministic nonces); SEC 1 / SEC 2 (curve) | `ama_secp256k1_ecdsa_sign` / `_verify` in `src/c/ama_secp256k1.c` (the file predates the audit; its ECDSA surface is post-audit) | 3.4.0 | 476-vector Wycheproof `ecdsa_secp256k1_sha256_test.json` — **0 failures** |
 | HMAC-SHA-384 | FIPS 198-1 / RFC 2104, over FIPS 180-4 SHA-384 | `src/c/ama_hmac_sha384.c` (SHA-384 core shared from `src/c/internal/ama_sha2.h`) | 3.3.0 | 174-vector Wycheproof `hmac_sha384_test.json` — **0 failures** |
+| PBKDF2-HMAC-SHA-256 / PBKDF2-HMAC-SHA-512 | NIST SP 800-132; RFC 8018 §5.2 | `src/c/ama_pbkdf2.c` (`ama_pbkdf2_hmac_sha256`, `ama_pbkdf2_hmac_sha512`), over the HMAC cores in `src/c/internal/ama_sha2.h` | 5.0.0 | RFC 7914 §11 PBKDF2-HMAC-SHA256 vectors 1 and 2 and the official BIP39 vector; `tests/test_sha2_pbkdf2_native.py` — **35 passed, 0 failed** (re-run at this commit) |
+| SHA-512 / SHA-384 one-shot | FIPS 180-4 | `src/c/ama_sha512.c` (`ama_sha512_oneshot`, `ama_sha384_oneshot`), over the same shared core | 5.0.0 | FIPS 180-4 canonical vectors in `tests/test_sha2_pbkdf2_native.py` — **35 passed, 0 failed** (same suite as the row above) |
 
 The Wycheproof results above come from a full run of the vendored corpus on
 2026-07-30 (`wycheproof_vectors/run_wycheproof.py`, upstream C2SP/wycheproof

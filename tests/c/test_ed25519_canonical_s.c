@@ -11,15 +11,40 @@
  * test_ed25519_verify_equiv.c case D.3 was never coverage for this defect.
  *
  * Each assertion below is marked PIN (fails against a build with the check
- * removed at the verify sites), SMOKE (does not), or RANGE (a direct unit
+ * removed at the site it names), SMOKE (does not), or RANGE (a direct unit
  * test of the §5.1.7 predicate `ama_ed25519_scalar_is_canonical`, pinning
  * the L-1 / L / L+1 boundary — including the accept side, S = L-1, that the
- * integration PINs cannot reach). Verified: with the check neutered at the
- * three verify sites, every PIN fails and no SMOKE does, on both backends;
- * the RANGE checks exercise the predicate itself and hold regardless.
+ * integration PINs cannot reach).
  *
- * Covers single verify and batch verify; the fix has a third site in the
- * donna batch wrapper, which calls its own ed25519_sign_open.
+ * This paragraph used to claim "with the check neutered at the three verify
+ * sites, every PIN fails and no SMOKE does, on both backends".  That was
+ * measured and it is false, in two places, so the labels now name their
+ * backend and their site:
+ *
+ *   - The S = s + 2L pair is a pin on fe51 only.  Neutering
+ *     ama_ed25519_signature_s_is_canonical in the donna shim fails the three
+ *     S = s + L checks and leaves the two S = s + 2L checks green, because
+ *     donna's legacy `RS[63] & 224` test catches bit 253.  Their labels have
+ *     always said "fe51 path"; only the header's blanket sentence was wrong.
+ *
+ *   - The canonical-y checks on the VERIFY path were vacuous outright.
+ *     Handing verify the encoding y = p together with a signature made under
+ *     a different key rejects for the wrong-key reason with or without
+ *     §5.1.3, so short-circuiting the y guard at ed25519_donna_shim.c:198 and
+ *     :385 — and nowhere else — left this file at "All 41 checks passed" and
+ *     the whole ctest suite green.  Two encodings and a forged signature fix
+ *     that, below: y = p + 1 and the identity's sign-bit-set encoding both
+ *     decode (once the rule is gone) to the IDENTITY, and a signature
+ *     (R = [S]B, S) verifies against the identity for every message, so a
+ *     build without the rule accepts a universal forgery and this file goes
+ *     red.  The old y = p assertions are kept and relabelled SMOKE, which is
+ *     what they always were.
+ *
+ * Covers single verify and batch verify.  As of B1 (5.0.0 pre-tag audit) both
+ * backends' batch verify is a per-entry loop over ama_ed25519_verify, so the
+ * canonical-S rule reaches the batch path through single verify rather than a
+ * separate batch site — a batch entry is rejected for exactly the reason the
+ * same bytes are rejected by single verify.
  */
 
 #include "../../include/ama_cryptography.h"
@@ -306,22 +331,192 @@ int main(void) {
                   "PIN   y = p rejected by scalarmult_public");
         }
 
-        /* Signature-path coverage.  These cannot be made non-vacuous the way
-         * the decode probes above are — no test can hold a private key whose
-         * public y is below 19 — so they are recorded as what they are: a
-         * check that the y predicate on the verify path does not reject
-         * honest keys, plus a smoke test that both APIs still agree. */
+        /* Signature-path coverage, part 1: the y = p encoding under a
+         * signature made with a different key.  These were labelled PIN and
+         * are not: y = p reduces to y = 0, a different curve point, so verify
+         * rejects for the wrong-key reason whether or not §5.1.3 is enforced.
+         * Measured — short-circuiting the y guard at the two verify sites and
+         * nowhere else left both of them green.  They are what they always
+         * were: a check that the verify path tolerates the encoding without
+         * misbehaving. */
         memset(y, 0xff, 32);
         y[0] = 0xed;
         y[31] = 0x7f; /* y = p */
         CHECK(ama_ed25519_verify(sig, msg, sizeof(msg), y) != AMA_SUCCESS,
-              "PIN   non-canonical public key y = p rejected (single)");
+              "SMOKE non-canonical public key y = p rejected (single)");
         CHECK(!batch_accepts(sig, msg, sizeof(msg), y),
-              "PIN   non-canonical public key y = p rejected (batch)");
+              "SMOKE non-canonical public key y = p rejected (batch)");
         CHECK(ama_ed25519_verify(sig, msg, sizeof(msg), pk) == AMA_SUCCESS,
               "SMOKE canonical public key still verifies after the y checks");
         CHECK(batch_accepts(sig, msg, sizeof(msg), pk),
               "SMOKE canonical public key still verifies in batch");
+
+        /* Signature-path coverage, part 2: the pins.
+         *
+         * The obstacle above is that no test can hold a private key whose
+         * public y is below 19, so no non-canonical encoding names the
+         * signer's key.  It does not have to.  Take the key the encoding
+         * decodes to once the rule is removed, and forge against THAT.
+         *
+         * y = p + 1 reduces mod p to y = 1, the identity; the identity's
+         * sign-bit-set encoding `01 00..00 | 0x80` decodes to the identity
+         * too, because x = 0 has a single root and the conditional negate is
+         * a no-op (this is the encoding RFC 8032 §5.1.3 step 3 exists to
+         * refuse).  Verify checks [S]B == R + [h]A, and with A = identity the
+         * [h]A term vanishes, so (R = [S]B, S) verifies for EVERY message
+         * under either encoding.  S = 5 is canonical, so the §5.1.7 range
+         * check does not intercept it, and R = [5]B is a canonical encoding,
+         * so the §5.1.3 R rule does not either — the only thing standing
+         * between this signature and AMA_SUCCESS is the public-key rule at
+         * the verify site.
+         *
+         * Measured: with the y/x-sign guard short-circuited at
+         * ed25519_donna_shim.c:198 and :385, all four of these report
+         * single_rc = 0 and batch res = 1111.  With the guard present, all
+         * four reject.  On the in-tree backend the same rule lives inside
+         * ge25519_frombytes (src/c/ama_ed25519.c:266); neutering it there
+         * makes the y = p + 1 pair accept, while the sign-bit pair still
+         * rejects because that decoder recomputes x and compares its sign —
+         * so the sign-bit pair is a pin on donna and a smoke on fe51, and is
+         * labelled for the site rather than the backend. */
+        {
+            uint8_t forge_s[32];
+            uint8_t forge_sig[64];
+            uint8_t id_signbit[32];
+            uint8_t y_p_plus_1[32];
+
+            memset(forge_s, 0, sizeof(forge_s));
+            forge_s[0] = 5;
+            CHECK(ama_ed25519_point_from_scalar(forge_sig, forge_s) == AMA_SUCCESS,
+                  "SMOKE R = [5]B derived for the identity forgery");
+            memcpy(forge_sig + 32, forge_s, 32);
+
+            memset(id_signbit, 0, sizeof(id_signbit));
+            id_signbit[0] = 0x01;
+            id_signbit[31] = 0x80;   /* y = 1, x-sign set — §5.1.3 step 3 */
+
+            memset(y_p_plus_1, 0xff, sizeof(y_p_plus_1));
+            y_p_plus_1[0] = 0xee;
+            y_p_plus_1[31] = 0x7f;   /* y = p + 1, reduces to y = 1 */
+
+            /* Non-vacuity control: the CANONICAL identity encoding accepts
+             * the forgery on every build.  That is the well-known property
+             * of an identity public key, not a defect — RFC 8032 does not
+             * require rejecting it — and it is what proves the two rejects
+             * below come from the encoding rule and not from the forgery
+             * being malformed. */
+            {
+                uint8_t id_plain[32];
+                memset(id_plain, 0, sizeof(id_plain));
+                id_plain[0] = 0x01;
+                CHECK(ama_ed25519_verify(forge_sig, msg, sizeof(msg), id_plain)
+                          == AMA_SUCCESS,
+                      "SMOKE the forgery verifies under the canonical identity key");
+            }
+
+            CHECK(ama_ed25519_verify(forge_sig, msg, sizeof(msg), y_p_plus_1)
+                      != AMA_SUCCESS,
+                  "PIN   universal forgery under y = p + 1 rejected (single verify site)");
+            CHECK(!batch_accepts(forge_sig, msg, sizeof(msg), y_p_plus_1),
+                  "PIN   universal forgery under y = p + 1 rejected (batch verify site)");
+            CHECK(ama_ed25519_verify(forge_sig, msg, sizeof(msg), id_signbit)
+                      != AMA_SUCCESS,
+                  "PIN   universal forgery under the x-sign-set identity rejected (single)");
+            CHECK(!batch_accepts(forge_sig, msg, sizeof(msg), id_signbit),
+                  "PIN   universal forgery under the x-sign-set identity rejected (batch)");
+        }
+    }
+
+    /* The batch output contract: `results` is zeroed before any entry is
+     * verified, so no path can leave a stale 1 from an earlier batch visible
+     * to a caller that reads the array before checking the return code.  A
+     * verifier's error paths must fail towards "invalid", and a caller reusing
+     * one buffer across batches is the ordinary way to use this API.
+     *
+     * These are SMOKE, not PIN: both backends now verify batches with the same
+     * per-entry loop over ama_ed25519_verify (B1, 5.0.0 pre-tag audit), which
+     * assigns every slot unconditionally, so the pre-zeroing is belt-and-braces
+     * with no observable effect here — deleting it leaves all four checks green.
+     * The one contract the pre-zeroing still owns on its own is the
+     * argument-rejection path, which writes nothing; that is the PIN below. */
+    {
+        ama_ed25519_batch_entry e[2];
+        int r[2] = { 1, 1 };
+        ama_error_t rc;
+
+        e[0].message = msg; e[0].message_len = sizeof(msg);
+        e[0].signature = sig; e[0].public_key = pk;
+        /* A second entry the batch must reject: the honest signature under a
+         * non-canonical public key. */
+        {
+            static uint8_t bad_pk[32];
+            memset(bad_pk, 0xff, sizeof(bad_pk));
+            bad_pk[0] = 0xed;
+            bad_pk[31] = 0x7f; /* y = p */
+            e[1].message = msg; e[1].message_len = sizeof(msg);
+            e[1].signature = sig; e[1].public_key = bad_pk;
+        }
+        rc = ama_ed25519_batch_verify(e, 2, r);
+        CHECK(rc == AMA_ERROR_VERIFY_FAILED,
+              "SMOKE a batch with one bad entry returns AMA_ERROR_VERIFY_FAILED");
+        CHECK(r[0] == 1 && r[1] == 0,
+              "SMOKE per-entry verdicts are written for well-formed entries");
+
+        /* An argument rejection writes nothing — there is nothing safe to
+         * write — so the caller's array is left exactly as it was.  Stated as
+         * a test because the header states it.  Also a SMOKE for the
+         * pre-zeroing: the NULL check precedes it, so this is decided before
+         * the loop ever runs. */
+        r[0] = 7; r[1] = 7;
+        rc = ama_ed25519_batch_verify(NULL, 2, r);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM,
+              "SMOKE a NULL entries array is AMA_ERROR_INVALID_PARAM");
+        CHECK(r[0] == 7 && r[1] == 7,
+              "PIN   an argument rejection leaves results untouched");
+    }
+
+    /* Per-entry pointer validation, and the two backends agreeing on it.
+     *
+     * ama_ed25519_verify rejects a NULL signature, a NULL public key, and a
+     * NULL message with message_len > 0.  Both batch backends are now a loop
+     * over that function (B1, 5.0.0 pre-tag audit), so both inherit the guard
+     * and turn a malformed entry into results[i] = 0 plus
+     * AMA_ERROR_VERIFY_FAILED.  Historically donna's batch path handed the raw
+     * pointers to ed25519_sign_open_batch, which dereferenced all three: a
+     * 6-entry batch with one field of entry 3 nulled had fe51 return
+     * AMA_ERROR_VERIFY_FAILED (results 111011) while donna took SIGSEGV (exit
+     * 139).  This block pins that batch verify stays NULL-safe on whichever
+     * backend CMake selected. */
+    {
+        ama_ed25519_batch_entry e[4];
+        int r[4];
+        ama_error_t rc;
+        size_t which;
+        static const char *const field_label[3] = {
+            "PIN   NULL message with message_len > 0 rejected, batch survives",
+            "PIN   NULL signature rejected, batch survives",
+            "PIN   NULL public key rejected, batch survives",
+        };
+
+        for (which = 0; which < 3; which++) {
+            size_t i;
+            int ok;
+            for (i = 0; i < 4; i++) {
+                e[i].message = msg;
+                e[i].message_len = sizeof(msg);
+                e[i].signature = sig;
+                e[i].public_key = pk;
+                r[i] = 9;
+            }
+            if (which == 0) { e[2].message = NULL; e[2].message_len = 5; }
+            if (which == 1) { e[2].signature = NULL; }
+            if (which == 2) { e[2].public_key = NULL; }
+
+            rc = ama_ed25519_batch_verify(e, 4, r);
+            ok = (rc == AMA_ERROR_VERIFY_FAILED) &&
+                 r[0] == 1 && r[1] == 1 && r[2] == 0 && r[3] == 1;
+            CHECK(ok, field_label[which]);
+        }
     }
 
     printf("\n");

@@ -31,6 +31,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_once.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -247,8 +248,14 @@ static void secp256k1_fe_normalize(secp256k1_fe *a) {
         borrow = (int64_t)s4 >> 63;
         s4 &= 0xFFFFFFFFFFFFULL;
 
-        /* mask = all-ones if borrow (a < p, keep original), 0 if no borrow (a >= p) */
-        mask = (uint64_t)borrow;
+        /* mask = all-ones if borrow (a < p, keep original), 0 if no borrow (a >= p).
+         *
+         * Laundered through the value barrier for the reason recorded in
+         * internal/ama_ct_barrier.h: a mask the optimizer can prove is 0 or ~0
+         * licenses it to replace the five selects below with a branch on
+         * `borrow`, which is a function of the field element being normalised —
+         * secret on every scalar-multiplication path. */
+        mask = ama_ct_value_barrier_u64((uint64_t)borrow);
 
         t0 = (t0 & mask) | (s0 & ~mask);
         t1 = (t1 & mask) | (s1 & ~mask);
@@ -1027,8 +1034,15 @@ static void secp256k1_jac_add(secp256k1_jac *r, const secp256k1_jac *p, const se
      * If h_is_zero && s_is_zero: use doubled
      * If h_is_zero && !s_is_zero: use infinity (P = -Q)
      * Otherwise: use out */
-    mask_h = (uint64_t)(0u - (uint64_t)h_is_zero);  /* all-ones if H==0; MSVC C4146-safe */
-    mask_s = (uint64_t)(0u - (uint64_t)s_is_zero);  /* all-ones if S==0; MSVC C4146-safe */
+    /* MSVC C4146-safe, and barriered: each of these masks selects between two
+     * whole point representations below, which is exactly the "block the
+     * optimizer can skip" shape internal/ama_ct_barrier.h describes.  Their
+     * predicates are the exceptional-case flags of the group law, reached from
+     * the comb digit — i.e. from the secret scalar.  Measured: without the
+     * barrier, clang 18 -O3 made this function's retired-instruction count
+     * key-dependent by 200 instructions over eight signatures. */
+    mask_h = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)h_is_zero));  /* all-ones if H==0 */
+    mask_s = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)s_is_zero));  /* all-ones if S==0 */
 
     /* When H==0 && S==0: select doubled; when H==0 && S!=0: select infinity */
     {
@@ -1057,8 +1071,9 @@ static void secp256k1_jac_add(secp256k1_jac *r, const secp256k1_jac *p, const se
 
     /* Handle infinity inputs: if P is infinity, result = Q; if Q is infinity, result = P */
     {
-        uint64_t mask_p = (uint64_t)(0u - (uint64_t)p_inf);  /* MSVC C4146-safe */
-        uint64_t mask_q = (uint64_t)(0u - (uint64_t)q_inf);  /* MSVC C4146-safe */
+        /* MSVC C4146-safe, barriered for the same reason as mask_h/mask_s. */
+        uint64_t mask_p = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)p_inf));
+        uint64_t mask_q = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)q_inf));
         int k;
         for (k = 0; k < SECP256K1_FE_LIMBS; k++) {
             out.X.v[k] = (q->X.v[k] & mask_p) | (out.X.v[k] & ~mask_p);
@@ -1348,7 +1363,10 @@ static void secp256k1_point_mul_generator(secp256k1_jac *result,
             uint64_t diff = (uint64_t)i ^ digit;
             /* is_zero == 1 iff diff == 0; same idiom as secp256k1_jac_is_infinity. */
             uint64_t is_zero = ((diff | (~diff + 1)) >> 63) ^ 1u;
-            uint64_t mask = (uint64_t)(0u - is_zero); /* MSVC C4146-safe */
+            /* MSVC C4146-safe, and barriered: the OR-accumulate below is a
+             * block the optimizer could skip when the mask is zero, and the
+             * predicate is the comb digit — four bits of the secret scalar. */
+            uint64_t mask = ama_ct_value_barrier_u64((uint64_t)(0u - is_zero));
             for (limb = 0; limb < SECP256K1_FE_LIMBS; limb++) {
                 sel.X.v[limb] |= SECP256K1_COMB_TABLE[i].X.v[limb] & mask;
                 sel.Y.v[limb] |= SECP256K1_COMB_TABLE[i].Y.v[limb] & mask;
@@ -1382,6 +1400,44 @@ static void secp256k1_point_mul_generator(secp256k1_jac *result,
  * @param out_y     Output: 32-byte big-endian Y coordinate of result
  * @return AMA_SUCCESS or error code
  */
+/* Canonical coordinate bytes, on the curve, and — cofactor 1 — therefore in
+ * the prime-order group.  Returns 1 and fills *P; 0 otherwise.  Shared by
+ * ama_secp256k1_point_mul and ECDSA verify, which take caller-supplied
+ * points: without the on-curve half, the a = 0 add/double formulas (which
+ * never reference b) run valid arithmetic on whatever curve
+ * y^2 = x^3 + (y^2 - x^3) the input lies on — the textbook invalid-curve
+ * attack the nistp ECDH comment in ama_nistp.c names and defends against in
+ * nistp_load_point; without the canonical half, a coordinate >= p is a
+ * second byte encoding of the reduced point, the INVARIANT-29 class this
+ * release closed in ECDSA verify, decompression, nistp and Ed25519.
+ * Variable time — point coordinates are public inputs on both call paths
+ * (a peer's share, a signer's public key); only the scalar is secret, and
+ * it is not consulted here. */
+static int secp256k1_aff_from_bytes_checked(secp256k1_aff *P,
+                                            const uint8_t x[32],
+                                            const uint8_t y[32]) {
+    secp256k1_fe lhs, rhs, t;
+    uint8_t a[32], b[32];
+
+    if (!secp256k1_fe_bytes_canonical(x) || !secp256k1_fe_bytes_canonical(y))
+        return 0;
+    secp256k1_fe_from_bytes(&P->x, x);
+    secp256k1_fe_from_bytes(&P->y, y);
+    secp256k1_fe_sqr(&lhs, &P->y);                /* y^2 */
+    secp256k1_fe_sqr(&t, &P->x);
+    secp256k1_fe_mul(&rhs, &t, &P->x);            /* x^3 */
+    {
+        secp256k1_fe seven = SECP256K1_FE_ZERO;
+        seven.v[0] = 7;
+        secp256k1_fe_add(&rhs, &rhs, &seven);     /* x^3 + 7 */
+    }
+    secp256k1_fe_normalize(&lhs);
+    secp256k1_fe_normalize(&rhs);
+    secp256k1_fe_to_bytes(a, &lhs);
+    secp256k1_fe_to_bytes(b, &rhs);
+    return memcmp(a, b, 32) == 0;
+}
+
 ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
                                      const uint8_t point_x[32],
                                      const uint8_t point_y[32],
@@ -1400,9 +1456,13 @@ ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Deserialize input point */
-    secp256k1_fe_from_bytes(&P.x, point_x);
-    secp256k1_fe_from_bytes(&P.y, point_y);
+    /* Deserialize AND validate the caller's point.  This entry point takes
+     * the one secret scalar in the file's public API, so an unvalidated
+     * point here was the invalid-curve surface: every other caller-supplied
+     * point in this file was already checked. */
+    if (!secp256k1_aff_from_bytes_checked(&P, point_x, point_y)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     /* Perform scalar multiplication using Montgomery ladder */
     secp256k1_point_mul_ladder(&R, scalar, &P);
@@ -1666,7 +1726,12 @@ static void sc_cond_sub_n(secp256k1_sc *r, const uint64_t a[SC_LIMBS]) {
         borrow = ((~a[i] & SC_N[i]) | ((~(a[i] ^ SC_N[i])) & d)) >> 63;
         t[i] = d;
     }
-    mask = 0ULL - borrow; /* all ones when a < n: keep a */
+    /* All ones when a < n: keep a.  Barriered — see internal/ama_ct_barrier.h.
+     * clang 18 at -O3 proved this mask is 0 or ~0, recognised the select as a
+     * choice between two register sets, and emitted `js` over the store of one
+     * of them; the two arms differ by one instruction, so the leak was visible
+     * as ~1 retired instruction per call. */
+    mask = ama_ct_value_barrier_u64(0ULL - borrow);
     for (i = 0; i < SC_LIMBS; i++)
         r->v[i] = (a[i] & mask) | (t[i] & ~mask);
 }
@@ -1774,8 +1839,11 @@ static void sc_mont_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_
      * sweep for the rest, not evidence that there are none. */
     {
         const uint64_t hi = t[SC_LIMBS];
-        /* All-ones exactly when hi != 0, computed without a comparison. */
-        const uint64_t fold = (uint64_t)0 - ((hi | ((~hi) + 1u)) >> 63);
+        /* All-ones exactly when hi != 0, computed without a comparison, and
+         * laundered through the value barrier so the optimizer cannot recover
+         * the "0 or ~0" fact and reintroduce the branch this form removes. */
+        const uint64_t fold =
+            ama_ct_value_barrier_u64((uint64_t)0 - ((hi | ((~hi) + 1u)) >> 63));
         uint64_t borrow = 0;
         for (i = 0; i < SC_LIMBS; i++) {
             const uint64_t sub = SC_N[i] & fold;
@@ -1837,7 +1905,7 @@ static void sc_add(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b
         /* All-ones exactly when carry != 0, computed without a comparison.
          * `carry` is already 0 or 1, but deriving the mask arithmetically
          * keeps the form identical to sc_mont_mul's and independent of that. */
-        const uint64_t fold = (uint64_t)0 - (carry & 1u);
+        const uint64_t fold = ama_ct_value_barrier_u64((uint64_t)0 - (carry & 1u));
         uint64_t borrow = 0;
         for (i = 0; i < SC_LIMBS; i++) {
             const uint64_t sub = SC_N[i] & fold;
@@ -1859,7 +1927,7 @@ static void sc_negate(secp256k1_sc *r, const secp256k1_sc *a) {
         borrow = ((~SC_N[i] & a->v[i]) | ((~(SC_N[i] ^ a->v[i])) & d)) >> 63;
         t[i] = d;
     }
-    mask = 0ULL - (uint64_t)(sc_is_zero(a) ? 1 : 0);
+    mask = ama_ct_value_barrier_u64(0ULL - (uint64_t)(sc_is_zero(a) ? 1 : 0));
     for (i = 0; i < SC_LIMBS; i++)
         r->v[i] = t[i] & ~mask;
 }
@@ -1892,7 +1960,7 @@ static int sc_is_high(const secp256k1_sc *a) {
  * selected with an arithmetic mask, so the caller's `if` disappears. */
 static void sc_cond_negate(secp256k1_sc *r, const secp256k1_sc *a, uint64_t flag) {
     secp256k1_sc neg;
-    const uint64_t mask = (uint64_t)0 - (flag & 1u);
+    const uint64_t mask = ama_ct_value_barrier_u64((uint64_t)0 - (flag & 1u));
     int i;
     sc_negate(&neg, a);
     for (i = 0; i < SC_LIMBS; i++)
@@ -2111,21 +2179,35 @@ static size_t der_encode_signature(uint8_t out[AMA_SECP256K1_ECDSA_MAX_SIG_LEN],
  * PUBLIC API
  * ============================================================================ */
 
-AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signature_len,
-                                             const uint8_t message[32],
-                                             const uint8_t private_key[32]) {
+/* The signing arithmetic, emitting the two fixed-width scalars.
+ *
+ * Split out of ama_secp256k1_ecdsa_sign so that the DER encoder is not the
+ * only way to reach it.  Everything here is fixed width: `r_bytes` and
+ * `s_bytes` are always 32 octets.  The variable-length step is
+ * `der_encode_signature`, and it is now the caller's, which is what lets
+ * `ama_secp256k1_ecdsa_sign_raw` be measured without it — see that function.
+ */
+static ama_error_t secp256k1_ecdsa_sign_scalars(uint8_t r_bytes[32], uint8_t s_bytes[32],
+                                                const uint8_t message[32],
+                                                const uint8_t private_key[32]) {
     secp256k1_sc d, k, kinv, z, r_sc, s_sc, tmp;
     secp256k1_jac R;
     secp256k1_aff Raff;
-    uint8_t k_bytes[32], r_bytes[32], s_bytes[32], x_bytes[32];
+    uint8_t k_bytes[32], x_bytes[32];
     ama_error_t rc = AMA_ERROR_INVALID_PARAM;
 
-    if (!signature || !signature_len || !message || !private_key)
-        return AMA_ERROR_INVALID_PARAM;
+    /* Every failure path goes through `done`, so the scrub below and the
+     * output zeroization always run.  Two of these used to return directly:
+     * the key-range rejection left `d` — which sc_from_bytes has ALREADY
+     * loaded with the private key — unscrubbed on the stack, and the raw
+     * entry point's documented promise that a failed call zeroizes its output
+     * was not kept on either. */
+    if (!message || !private_key)
+        goto done;
 
     /* d must be in [1, n-1]. */
     if (!sc_from_bytes(&d, private_key) || sc_is_zero(&d))
-        return AMA_ERROR_INVALID_PARAM;
+        goto done;
 
     /* z = the leftmost 256 bits of the digest, reduced mod n.  For
      * SHA-256 the digest is exactly 256 bits, so this is a reduction only. */
@@ -2161,7 +2243,6 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
 
     sc_to_bytes(r_bytes, &r_sc);
     sc_to_bytes(s_bytes, &s_sc);
-    *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
     rc = AMA_SUCCESS;
 
 done:
@@ -2172,8 +2253,79 @@ done:
     ama_secure_memzero(&s_sc, sizeof(s_sc));
     ama_secure_memzero(&tmp, sizeof(tmp));
     ama_secure_memzero(k_bytes, sizeof(k_bytes));
-    ama_secure_memzero(s_bytes, sizeof(s_bytes));
+    /* The nonce point and its serialization too: R.x is public as `r`, but
+     * the nistp twin scrubs its R (ama_nistp.c) and this label's comment
+     * promises complete cleanup — an intermediate exempted by an argument
+     * rather than wiped is the INVARIANT-6 shape this release closed
+     * elsewhere. */
+    ama_secure_memzero(&R, sizeof(R));
+    ama_secure_memzero(&Raff, sizeof(Raff));
+    ama_secure_memzero(x_bytes, sizeof(x_bytes));
+    if (rc != AMA_SUCCESS) {
+        /* Never hand back a half-written r/s on the failure path. */
+        ama_secure_memzero(r_bytes, 32);
+        ama_secure_memzero(s_bytes, 32);
+    }
     return rc;
+}
+
+/* Scrub the caller's scalar copies.
+ *
+ * r and s are the signature, so they are public and this leaks nothing
+ * either way.  It is restored because the split dropped an
+ * `ama_secure_memzero(s_bytes, ...)` the original ama_secp256k1_ecdsa_sign
+ * performed unconditionally, and this file's header states "proper cleanup of
+ * sensitive intermediates".  A cleanup claim that quietly stopped being true
+ * for one buffer is the kind of drift that makes the claim worthless for the
+ * buffers where it does matter. */
+static void secp256k1_scrub_scalars(uint8_t r_bytes[32], uint8_t s_bytes[32]) {
+    ama_secure_memzero(r_bytes, 32);
+    ama_secure_memzero(s_bytes, 32);
+}
+
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signature_len,
+                                             const uint8_t message[32],
+                                             const uint8_t private_key[32]) {
+    uint8_t r_bytes[32], s_bytes[32];
+    ama_error_t rc;
+
+    if (!signature || !signature_len)
+        return AMA_ERROR_INVALID_PARAM;
+
+    rc = secp256k1_ecdsa_sign_scalars(r_bytes, s_bytes, message, private_key);
+    if (rc == AMA_SUCCESS)
+        *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
+    secp256k1_scrub_scalars(r_bytes, s_bytes);
+    return rc;
+}
+
+/* Fixed-width `r || s`, 64 octets.
+ *
+ * Same arithmetic as ama_secp256k1_ecdsa_sign; only the encoding differs —
+ * the pairing ama_nistp_ecdsa_sign / ama_nistp_ecdsa_sign_raw already has.
+ *
+ * It also closes the last residual in the deterministic constant-time gate.
+ * DER strips the leading zero octets of r and s, so a DER signature is 8 to
+ * 71 octets and its length is a function of the key.  (Not 72: low-s
+ * normalisation caps s at (n-1)/2, so its INTEGER never needs a leading 0x00
+ * pad and the maximum is 2+2+33+2+32 = 71.  tests/c/test_secp256k1.c measures
+ * exactly that over 20,000 signatures — the length is 69, 70 or 71 and never
+ * 72.)  That term is a public value, but it is key-correlated, and it lands
+ * inside a retired-instruction count taken over the whole call: measured, 24
+ * instructions over 8 signatures under gcc 13 and 16 under clang 18.
+ * `check_ghash_constant_time` therefore had to hold `ecdsa` at a threshold of
+ * 64 while its other thirteen targets sat at 0 — a tolerance of 8
+ * instructions per signature inside which a real leak could hide.  Measured
+ * through this entry point the encoder is not in the count at all, so the
+ * target joins the other thirteen at 0.  This is the same remedy
+ * `nistp-ecdsa` used to reach 0.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(uint8_t signature[64],
+                                                 const uint8_t message[32],
+                                                 const uint8_t private_key[32]) {
+    if (!signature)
+        return AMA_ERROR_INVALID_PARAM;
+    return secp256k1_ecdsa_sign_scalars(signature, signature + 32, message, private_key);
 }
 
 AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size_t signature_len,
@@ -2187,7 +2339,6 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size
     secp256k1_aff Raff;
     uint8_t x_bytes[32];
     secp256k1_sc xr;
-    secp256k1_fe lhs, rhs, t;
 
     if (!signature || !message || !public_key)
         return AMA_ERROR_INVALID_PARAM;
@@ -2220,30 +2371,11 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size
      * secp256k1_fe_bytes_canonical).  Wycheproof ships no out-of-field-point
      * ECDSA vectors, so this path is covered by tests/test_secp256k1_ecdsa_
      * noncanonical_pubkey.py and tests/c/test_secp256k1_ecdsa.c instead. */
-    if (!secp256k1_fe_bytes_canonical(public_key) ||
-        !secp256k1_fe_bytes_canonical(public_key + 32))
+    /* Canonical-bytes + on-curve, via the same helper
+     * ama_secp256k1_point_mul uses (secp256k1_aff_from_bytes_checked) —
+     * one validation, two callers, so the two paths cannot drift. */
+    if (!secp256k1_aff_from_bytes_checked(&Q, public_key, public_key + 32))
         return AMA_ERROR_VERIFY_FAILED;
-
-    /* Public key must be a point on the curve, and not the identity. */
-    secp256k1_fe_from_bytes(&Q.x, public_key);
-    secp256k1_fe_from_bytes(&Q.y, public_key + 32);
-    secp256k1_fe_sqr(&lhs, &Q.y);                 /* y^2 */
-    secp256k1_fe_sqr(&t, &Q.x);
-    secp256k1_fe_mul(&rhs, &t, &Q.x);             /* x^3 */
-    {
-        secp256k1_fe seven = SECP256K1_FE_ZERO;
-        seven.v[0] = 7;
-        secp256k1_fe_add(&rhs, &rhs, &seven);     /* x^3 + 7 */
-    }
-    secp256k1_fe_normalize(&lhs);
-    secp256k1_fe_normalize(&rhs);
-    {
-        uint8_t a[32], b[32];
-        secp256k1_fe_to_bytes(a, &lhs);
-        secp256k1_fe_to_bytes(b, &rhs);
-        if (memcmp(a, b, 32) != 0)
-            return AMA_ERROR_VERIFY_FAILED;
-    }
 
     (void)sc_from_bytes(&z, message);
 

@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 4.0.0 |
-| Last Updated | 2026-08-01 |
+| Document Version | 5.0.0 |
+| Last Updated | 2026-08-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -77,7 +77,7 @@ Helix evolution step      3.4 ms      0.18 ms    18.9x
 
 ### C Constant-Time Primitives
 
-All cryptographic operations execute in constant time:
+Secret-dependent comparisons, scrubbing, and swaps route through dedicated constant-time primitives:
 
 1. **ama_consttime_memcmp()**: Timing-attack resistant comparison
    - Volatile pointer usage prevents optimization
@@ -105,7 +105,7 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 | SLH-DSA-SHA2-256f | `ama_sphincs_avx2.c` | 4-way parallel SHA-256 compression, vectorized WOTS+ chains, Merkle tree hashing |
 | SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
 | AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
-| Ed25519 | `ama_ed25519_avx2.c` | Vectorized radix-2^51 field arithmetic, 4-way parallel scalar multiplication |
+| X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomery ladder (RFC 7748), radix-2^25.5 field arithmetic packed as 10 x `__m256i`. Opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and additive: only full 4-lane chunks of `ama_x25519_scalarmult_batch` reach it — `ama_x25519_key_exchange` and short batches stay on the scalar fe64/fe51 path. Ed25519 has no AVX2 translation unit at all; its fast path is the fe51 comb table in `src/c/ama_ed25519.c`. |
 | ChaCha20-Poly1305 | `ama_chacha20poly1305_avx2.c` | 8-way parallel quarter-rounds, vectorized Poly1305 with lazy reduction |
 | Argon2 | `ama_argon2_avx2.c` | Vectorized Blake2b compression, vectorized G function, parallel lane processing |
 
@@ -154,7 +154,13 @@ Implementation notes for the wired SVE2 surface:
 Automatic best-implementation selection at initialization:
 - **x86-64**: CPUID leaf 7 detection → AVX-512 > AVX2 > generic
 - **AArch64**: `getauxval(AT_HWCAP2)` detection → SVE2 > NEON > generic
-- `ama_get_dispatch_info()` API for querying active implementations
+- `ama_get_dispatch_info()` API for querying the **detected** capability tier
+  per subsystem. It is not a report of the kernel that was wired — ISA-bundle
+  gates, the `AMA_DISPATCH_NO_*` opt-outs, `AMA_DISPATCH_ONLY` and the
+  auto-tune reverts can all leave a slot on the portable path while detection
+  still reads SIMD. To ask what is actually running, NULL-check the slot in
+  `ama_get_dispatch_table()`, or call `ama_aes_gcm_active_backend()` /
+  `ama_dispatch_active_slot()`. See `include/ama_dispatch.h`.
 - CPU feature detection via extended `ama_cpuid.c`
 - Set `AMA_DISPATCH_VERBOSE=1` to enable diagnostic output during init
 - Set `AMA_DISPATCH_NO_AUTOTUNE=1` to skip the Keccak-f[1600]
@@ -220,7 +226,7 @@ Automatic best-implementation selection at initialization:
 - IV/Nonce: 96 bits
 - Tag: 128 bits
 - Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
-- **Note:** Lookup-table S-box, not constant-time for cache-timing in shared-tenant environments
+- **Note:** Constant-time by default — `AMA_AES_CONSTTIME=ON` builds the bitsliced (masked full-scan) S-box, and AES-NI / VAES / ARMv8-Crypto hardware kernels dispatch where available; the cache-timing-unsafe table S-box is built only by explicit opt-out (`-DAMA_AES_CONSTTIME=OFF` plus the `-DAMA_AES_TABLE_INSECURE=ON` acknowledgement, INVARIANT-20)
 
 ### X25519 (Key Exchange)
 
@@ -241,7 +247,7 @@ Automatic best-implementation selection at initialization:
 - Tag: 128 bits
 - Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
 - **Constant-time by design** — no table lookups, no cache-timing concerns
-- Recommended alternative to AES-256-GCM in shared-tenant environments
+- Alternative AEAD to AES-256-GCM (whose default build is likewise constant-time via `AMA_AES_CONSTTIME=ON`)
 
 ### Argon2id (Password Hashing)
 
@@ -421,8 +427,8 @@ Tests:
 - `test_consttime.c`: Constant-time operation validation (structural correctness)
 - `test_dudect.c`: Empirical constant-time verification via dudect (Welch's t-test)
 - `test_core.c`: Context and lifecycle management
-- `test_kyber.c`: ML-KEM-1024 algorithm tests
-- `test_ml_dsa.c`: ML-DSA-65 signature tests
+- `test_kat.c`: ML-KEM / ML-DSA / SLH-DSA byte-exact KATs (FIPS 203/204/205 vectors)
+- `test_kyber_cpa.c`, `test_dilithium_*.c`: ML-KEM CPA-PKE and ML-DSA sampling-equivalence tests
 - `test_agent_binding.c`: Agent-instance binding (INVARIANT-30) — pins the canonical
   encoding as a byte KAT and covers structural refusals, foreign-key tags, single-bit
   tag flips and capability escalation
@@ -485,9 +491,12 @@ docker run --rm ama-cryptography
 Minimal production image:
 
 ```dockerfile
-FROM alpine:3.18
+FROM alpine:3.23
 # ~50MB final size
 ```
+
+`docker/Dockerfile.alpine` pins that base by `@sha256:` digest as well as by
+tag; see the file for the current digest.
 
 Build and run:
 ```bash
@@ -499,10 +508,14 @@ docker run --rm ama-cryptography:alpine
 
 Multi-service deployment:
 
+The compose file lives in `docker/`, and its `context: ..` and `../data`
+paths resolve relative to it, so pass it with `-f` from the repository root
+(or `cd docker` first):
+
 ```bash
-docker-compose up -d        # Start all services
-docker-compose down         # Stop all services
-docker-compose ps           # Check status
+docker compose -f docker/docker-compose.yml up -d     # Start all services
+docker compose -f docker/docker-compose.yml down      # Stop all services
+docker compose -f docker/docker-compose.yml ps        # Check status
 ```
 
 Services:
@@ -564,19 +577,34 @@ Tests:
 
 ### Security (`security.yml`)
 
+Jobs: Python Security Audit, SBOM Generation (CycloneDX), Secret Scanning, and
+the Security Gate that requires all three.
+
 Checks:
 - Dependency vulnerabilities (pip-audit)
 - Code security (bandit)
-- Static analysis
-- License compliance
+- Secret scanning
+- CycloneDX SBOM
 
-### Docker (`docker.yml`)
+Static analysis is a separate workflow, not part of this one:
+`static-analysis.yml` runs cppcheck, clang-tidy, the Clang Static Analyzer,
+CodeQL, the sanitizer lanes and the strict-warnings lanes. There is no
+license-compliance check in this repository — the only `License` string in
+`security.yml` is its own SPDX header.
 
-Builds:
-- Ubuntu-based images
-- Alpine-based images
-- Multi-architecture (amd64, arm64)
-- Security scanning
+### Docker (the `docker` job in `ci-build-test.yml`)
+
+There is no standalone Docker workflow file. The Docker build is a job inside
+`ci-build-test.yml`, and the Build and Test Gate requires it.
+
+Builds and smoke-tests two images on the runner's own architecture:
+- Ubuntu-based (`docker/Dockerfile`)
+- Alpine-based (`docker/Dockerfile.alpine`)
+
+It is **not** multi-architecture and runs **no** image scanner: the job sets
+no `platforms:`, installs no QEMU, and invokes no scanning action.
+`docker/Dockerfile.c-api` is not built in CI either — it is covered by the
+digest-pin, version-consistency, header and vendor-isolation gates instead.
 
 ## Performance Benchmarking
 
@@ -635,13 +663,16 @@ Note: C extensions may require additional setup on Windows.
 
 ### Constant-Time Operations
 
-All cryptographic comparisons and operations execute in constant time:
+Constant-time execution is guaranteed for — and scoped to — the surfaces verified in
+[CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md); operations whose
+inputs are public, such as Ed25519 signature verification, are variable-time by design:
 
 ✓ Memory comparisons (ama_consttime_memcmp)
 ✓ Conditional swaps (ama_consttime_swap)
 ✓ Array lookups (ama_consttime_lookup)
-✓ Signature verification
-✓ Key generation
+✓ Ed25519 signing (key-independent timing)
+✓ AES-GCM tag verification / HMAC-SHA256 verification comparison
+✓ ML-KEM-1024 decapsulation (constant-time implicit rejection)
 
 ### Memory Safety
 
@@ -662,7 +693,8 @@ All cryptographic comparisons and operations execute in constant time:
 ### Empirical Constant-Time Verification (dudect)
 
 All security-critical functions are empirically verified using the dudect methodology
-(Welch's t-test on execution times, |t| < 4.5 threshold):
+(Welch's t-test on execution times with percentile cropping, |t| < 5.0 threshold —
+calibrated for the max-over-21-rungs statistic; a single Welch t would use 4.5):
 
 ✓ `ama_consttime_memcmp` — memory comparison
 ✓ `ama_consttime_swap` — conditional swap
@@ -748,7 +780,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation, Phase 2 primitives, fuzzing harnesses, threat model, Mercury Agent integration |
 | 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, professional dashboard/chart overhaul |
 | 2.1.5 | 2026-04-17 | HSM support via PyKCS11, security audit fixes (length-prefixed HKDF encoding, constant-time ops), secure channel protocol v2, comprehensive test coverage expansion |
-| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end, constant-time scalar GHASH with an instruction-invariance gate, Ed25519 canonical-`y` (INVARIANT-38), KDF cost + algorithm floor, per-epoch AEAD nonce budget, no key material in serialization or reprs, RFC 8439 length limit. BREAKING ×4 — see CHANGELOG `[4.0.0]`. (This table skips 3.x; CHANGELOG.md is the complete record.) |
+| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end, constant-time scalar GHASH with an instruction-invariance gate, Ed25519 canonical-`y` (INVARIANT-38), KDF cost + algorithm floor, per-epoch AEAD nonce budget, no key material in serialization or reprs, RFC 8439 length limit. BREAKING ×6 — see CHANGELOG `[4.0.0]`. (This table skips 3.x; CHANGELOG.md is the complete record.) |
 
 ---
 

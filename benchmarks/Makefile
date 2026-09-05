@@ -31,7 +31,7 @@ endif
 
 # If the shared library exists, link against it; otherwise compile sources directly
 LIB_SO       := $(BUILD_DIR)/lib/libama_cryptography.so
-LIB_A        := $(BUILD_DIR)/lib/libama_cryptography.a
+LIB_A        := $(BUILD_DIR)/lib/libama_cryptography_static.a
 
 # C source files needed when linking statically
 C_SOURCES    := $(wildcard $(SRC_DIR)/ama_*.c) $(SRC_DIR)/ed25519_donna_shim.c

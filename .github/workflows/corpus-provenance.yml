@@ -28,6 +28,9 @@ on:
       - "tools/refresh_wycheproof_corpus.py"
       - "tests/kat/keyformats/**"
       - "tools/build_keyformat_corpus.py"
+      # The gate this workflow runs over those corpora.  Listed for the same
+      # reason its two builders are.
+      - "tools/check_vector_provenance.py"
       - ".github/workflows/corpus-provenance.yml"
   workflow_dispatch:
 
@@ -74,6 +77,71 @@ jobs:
         # from, verifies clean offline forever.
         run: python tools/build_keyformat_corpus.py --verify-upstream
 
+  vector-provenance:
+    name: Verify the published test vectors have not been rewritten
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        # The gate step below needs nothing but the standard library — that is
+        # the point of pinning by digest rather than by re-fetch.  The anchor
+        # test does need pytest, and the first revision of this job invoked it
+        # without installing it: `No module named pytest`, exit 1, on a job
+        # whose other two steps are plain scripts.  Pinned to the version
+        # ci.yml installs so the two agree.
+        run: pip install "pytest==9.1.1"
+
+      - name: Every NIST/Ascon/POST vector must match its recorded digest
+        # This repository's own pre-commit hooks rewrote these files.  The KAT
+        # format spells an empty field as a key followed by a trailing space,
+        # so `trailing-whitespace` turned `PT = ` into `PT =` across ML-KEM
+        # (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) and Ascon.  The
+        # hooks are scoped now; what made it worth a gate is that NOTHING
+        # detected it — on the rewritten tree the corpus generators' --check,
+        # check_corpus_originality.py, check_vendor_isolation.py and all 135
+        # KAT tests still passed.
+        #
+        # No network: these bytes are pinned by digest in
+        # tests/kat/PROVENANCE.json, the same shape wycheproof_vectors already
+        # uses.  The manifest alone is not the whole guard —
+        # tests/test_vector_provenance_gate.py pins four anchor digests in its
+        # own source, so regenerating the manifest over a corrupted file does
+        # not make it verify.
+        run: python tools/check_vector_provenance.py
+
+      - name: The manifest alone must not be sufficient (anchor digests)
+        # AMA_POST_DIAGNOSTIC_IMPORT=1 because `tests/conftest.py` imports
+        # `ama_cryptography` from `pytest_configure` (to name the
+        # `SecurityWarning` category for the ini `filterwarnings` entry), and
+        # since 5.0.0 a failed POST RAISES rather than logging.  This job
+        # builds no native library — it hashes 37 tracked files with stdlib
+        # `hashlib` and performs no cryptography at all — so without the flag
+        # the run dies with `INTERNALERROR ... CryptoModuleError` and exit 3
+        # before collecting a single test.  That is what happened at
+        # `725f2f1`: the preceding revision fixed `No module named pytest` and
+        # did not check that the job could then actually run the test.
+        #
+        # The flag completes the import for introspection only — the module
+        # stays in the ERROR state and every cryptographic operation is still
+        # refused — which is exactly the precedent ci.yml's documented-counts
+        # step sets for a pytest invocation that runs no cryptography.  The
+        # alternative, building and binding the library, would spend ~90 s of
+        # a 10-minute budget to satisfy a warning-filter import.
+        #
+        # `tools/check_workflow_commands.py::check_pytest_prerequisites` now
+        # fails the workflow sweep if any pytest-invoking step has neither a
+        # preceding library build nor this flag, so this class of red lane is
+        # caught before it is pushed rather than by CI.
+        env:
+          AMA_POST_DIAGNOSTIC_IMPORT: "1"
+        run: python -m pytest tests/test_vector_provenance_gate.py -q
+
   corpus-provenance-gate:
     name: Corpus Provenance Gate
     # if: always() so it resolves to a definitive red/green even when the worker
@@ -82,6 +150,7 @@ jobs:
     needs:
       - provenance
       - keyformat-provenance
+      - vector-provenance
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

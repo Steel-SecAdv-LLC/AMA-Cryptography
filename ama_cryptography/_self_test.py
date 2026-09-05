@@ -16,9 +16,10 @@ enters an ERROR state and all cryptographic operations are refused.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 4.0.0
+Version: 5.0.0
 """
 
+import _imp
 import ctypes
 import hashlib
 import importlib.machinery
@@ -34,7 +35,7 @@ import threading
 import time
 from pathlib import Path
 from types import CodeType
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol, Tuple
 
 # The FIPS state machine, the two output-inhibition guards, and the
 # health-tested CSPRNG draw live in ``_module_state`` — a leaf module every
@@ -160,9 +161,34 @@ def module_attestation() -> Dict[str, Any]:
         ``error_reason``     — root cause when ``state`` is ERROR, else None.
         ``fully_verified``   — True only when the module is OPERATIONAL *and*
                                no self-test was skipped.  This is the flag a
-                               release gate should assert.
+                               release gate should assert.  It does NOT imply
+                               ``anchored``: a developer build signed with a
+                               per-build ephemeral key reports ``fully_verified:
+                               True`` exactly as a release wheel does, so a gate
+                               that must distinguish a release artefact has to
+                               assert ``anchored`` as well (audit M2).
+        ``integrity_strength`` — how the source integrity was established:
+                               ``"signed"`` (Ed25519 signature and native
+                               library both verified), ``"signed-native-
+                               unverified"`` (signature verified, native object
+                               not), ``"digest-only"`` (unsigned plaintext
+                               digest matched — corruption-evident, not tamper-
+                               evident), or None if no check completed.
+        ``anchored``         — True when the verified signature was made under
+                               the compiled trust anchor (a release build),
+                               False for a per-build/developer signature or the
+                               digest-only fallback, None when no integrity
+                               check completed.  The distinction that
+                               ``fully_verified`` alone cannot express.
         ``strict_mode``      — whether ``AMA_FIPS_STRICT`` was in force.
-        ``tests_run`` / ``tests_passed`` / ``tests_skipped``.
+        ``tests_run`` / ``tests_passed`` / ``tests_skipped`` — counts of the POST
+                               STAGES that ran, not a per-approved-algorithm
+                               coverage fraction: the POST KAT set is a subset of
+                               the approved primitives the module exposes, so a
+                               "0 skipped" run means every stage executed, not
+                               that every approved algorithm was exercised. See
+                               ``CSRC_ALIGN_REPORT.md`` §4.1 for the coverage
+                               boundary (audit M8).
         ``skipped``          — ``[(name, detail), ...]`` for each skipped test,
                                so the log line names what was not covered.
         ``failed``           — ``[(name, detail), ...]``; at most one entry,
@@ -188,6 +214,8 @@ def module_attestation() -> Dict[str, Any]:
         "state": module_status(),
         "error_reason": module_error_reason(),
         "fully_verified": module_status() == "OPERATIONAL" and not skipped and not failed,
+        "integrity_strength": _INTEGRITY_STRENGTH,
+        "anchored": _INTEGRITY_ANCHORED,
         "strict_mode": _env_flag_enabled(_AMA_FIPS_STRICT_ENV),
         "tests_run": len(results),
         "tests_passed": n_pass,
@@ -263,8 +291,109 @@ _INTEGRITY_DIGEST_FILE = Path(__file__).resolve().parent / "_integrity_digest.tx
 #: file an attacker who edited the sources could rewrite in the same breath.  A
 #: gate cannot refuse a downgrade it cannot see.
 _INTEGRITY_STRENGTH: Optional[str] = None
+
+#: Whether the verified signature was made under the compiled trust anchor.
+#:
+#: ``_INTEGRITY_STRENGTH`` is a function of ``(native_ok, bindings_exact)`` only,
+#: so a release wheel signed under the long-lived anchor key and a developer
+#: build signed with a per-build ephemeral key BOTH report ``"signed"`` and
+#: ``fully_verified: True``.  The one distinction that separates a release
+#: artefact from a developer one — anchored vs unanchored — lived solely in the
+#: prose of the detail string ("trusted build pubkey" vs "build-time pubkey")
+#: and never left the verifier, so a programmatic consumer (a deployment health
+#: check, a release gate — see H3, where an unanchored release could be cut)
+#: could not read it.  This records it: ``True`` when the signing key matched the
+#: compiled anchor, ``False`` for a per-build/developer signature or the
+#: digest-only fallback, ``None`` when no integrity check completed (audit M2).
+_INTEGRITY_ANCHORED: Optional[bool] = None
 _INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+#: Why the last integrity check FAILED, in the one distinction the import-time
+#: repair escape in ``__init__`` is allowed to act on.
+#:
+#: ``"stale-binding"`` — the artefact itself is sound, but a local build output
+#: it binds no longer matches: a ``.py`` file or POST KAT vector changed, the
+#: native library was rebuilt, or a binding extension was rebuilt.  This is the
+#: state a re-signing run exists to clear, and it is what
+#: ``AMA_BUILD_PIPELINE=1`` may import through so the in-package repair tooling
+#: can run.
+#:
+#: ``"tampering"`` — the artefact is *wrong*, not stale: the Ed25519 signature
+#: did not verify, the trust anchor did not match, the fields are malformed or
+#: missing, or an anchored build could not verify at all.  Re-signing would
+#: launder these, so they hard-fail on every path, including inside a build
+#: container that carries ``AMA_BUILD_PIPELINE=1`` for its whole lifetime.
+#:
+#: The distinction is carried by this flag rather than by matching the detail
+#: string, for the same reason ``_verify_signed_integrity``'s tri-state is: a
+#: security decision that is a function of prose silently changes meaning when
+#: the prose is reworded.
+#:
+#: What this flag deliberately does NOT claim to separate is a rebuilt binary
+#: from a tampered one — identical local bytes changing under an intact
+#: signature is the same observation either way.  That ambiguity is inherent
+#: and pre-existing (``native_backend_refused_on_digest()`` already accepts it
+#: for the shared object); it is bounded by the module staying in the ERROR
+#: state with every cryptographic operation refused.
+_INTEGRITY_FAILURE_STALE_BINDING = "stale-binding"
+_INTEGRITY_FAILURE_TAMPERING = "tampering"
+_INTEGRITY_FAILURE_KIND: Optional[str] = None
+
+
+def _record_stale_binding_failure(reason: str) -> str:
+    """Classify the in-flight integrity failure as a stale local binding.
+
+    Returns ``reason`` unchanged so call sites read as a single ``return``.
+    """
+    global _INTEGRITY_FAILURE_KIND
+    _INTEGRITY_FAILURE_KIND = _INTEGRITY_FAILURE_STALE_BINDING
+    return reason
+
+
+def _finalise_integrity_failure(reason: str) -> str:
+    """Default an unclassified integrity failure to ``"tampering"``.
+
+    Every failure path that did not explicitly declare itself a stale binding
+    is tampering, so the classification is total and the safe verdict is the
+    one you get by omission.
+    """
+    global _INTEGRITY_FAILURE_KIND
+    if _INTEGRITY_FAILURE_KIND is None:
+        _INTEGRITY_FAILURE_KIND = _INTEGRITY_FAILURE_TAMPERING
+    return reason
+
+
+def integrity_failure_was_stale_binding() -> bool:
+    """True when the last integrity failure was a stale local binding.
+
+    Consumed by ``ama_cryptography.__init__`` to decide whether
+    ``AMA_BUILD_PIPELINE=1`` may complete the import so the in-package
+    re-signing tooling can run.  False for every tampering verdict, and False
+    when no integrity failure has been recorded.
+    """
+    return _INTEGRITY_FAILURE_KIND == _INTEGRITY_FAILURE_STALE_BINDING
+
+
+def _integrity_signer_process() -> bool:
+    """True when this process is the integrity signer and may hold a bare tree.
+
+    Wraps ``pqc_backends._process_is_the_integrity_signer`` (identity: the
+    process was *launched as* the signing module, plus ``AMA_BUILD_PIPELINE=1``)
+    and revokes it under secure-execution mode, mirroring the revocation every
+    other consumer of that identity applies.  Kept as a helper so the anchored
+    classification below reads as one predicate and the two conditions cannot
+    drift apart between call sites.
+    """
+    try:
+        from ama_cryptography.pqc_backends import (
+            _in_secure_execution_mode,
+            _process_is_the_integrity_signer,
+        )
+    except Exception:  # pragma: no cover - pqc_backends always imports in a built tree
+        return False
+    return _process_is_the_integrity_signer() and not _in_secure_execution_mode()
+
 
 # Domain-separation tag for the Ed25519 signature that binds the .py digest and
 # the native-library digest together.  A fixed, versioned constant so the signer
@@ -281,7 +410,7 @@ _INTEGRITY_SIG_DOMAIN = b"AMA-integrity-signature-v2\x00"
 def _compute_native_library_digest(path: Optional[str]) -> Optional[bytes]:
     """SHA3-256 over the raw bytes of the native library file at ``path``.
 
-    Follows symlinks — the SONAME chain (``.so`` -> ``.so.4`` -> ``.so.4.0.0``)
+    Follows symlinks — the SONAME chain (``.so`` -> ``.so.5`` -> ``.so.5.0.0``)
     resolves to one real object, and it is those bytes, the ones the loader
     actually mapped, that must match what was signed.  Returns ``None`` when the
     path is absent or unreadable; the caller treats that as "could not verify"
@@ -309,6 +438,219 @@ def _composite_integrity_message(py_digest_raw: bytes, native_digest_raw: bytes)
     Mirrored byte-for-byte in ``_build_sign._composite_integrity_message``.
     """
     return hashlib.sha3_256(_INTEGRITY_SIG_DOMAIN + py_digest_raw + native_digest_raw).digest()
+
+
+# v3 domain: the signed message additionally binds every compiled binding
+# extension (the Cython modules that contain compiled kernels and execute at
+# import, before this stage can examine them).  Distinct domain string so a
+# v3 signature can never verify against a v2-shaped message or vice versa.
+# Duplicated verbatim in _build_sign._INTEGRITY_SIG_DOMAIN_V3 and pinned equal
+# by tests/test_binding_integrity.py (the two modules must not import each
+# other — build-time vs runtime separation, INVARIANT-1).
+_INTEGRITY_SIG_DOMAIN_V3 = b"AMA-integrity-signature-v3\x00"
+
+# Extension-module enumeration criteria, mirrored from _build_sign (pinned
+# equal by tests/test_binding_integrity.py).  The verifier deliberately does
+# NOT filter by the signer's stem inventory: every extension-suffixed file
+# that is not the native library must appear in the signed map, so a rogue
+# module with an unknown stem fails verification instead of being skipped.
+_EXTENSION_SUFFIXES = (".so", ".pyd", ".dylib")
+_NATIVE_LIB_PREFIXES = ("libama_cryptography", "ama_cryptography.dll")
+
+
+def _iter_extension_files(pkg_dir: Path) -> List[Path]:
+    """Every compiled extension file in ``pkg_dir`` except the native library.
+
+    The native library is bound separately (``INTEGRITY_NATIVE_DIGEST_HEX``,
+    with pre-load verification in discovery); everything else with an
+    extension-module suffix is a binding the v3 artefact must cover.
+    """
+    out: List[Path] = []
+    for path in sorted(pkg_dir.iterdir()):
+        if not path.is_file() or path.suffix not in _EXTENSION_SUFFIXES:
+            continue
+        if path.name.startswith(_NATIVE_LIB_PREFIXES):
+            continue
+        out.append(path)
+    return out
+
+
+def _serialize_binding_digests(binding_digests: Dict[str, bytes]) -> bytes:
+    """Canonical serialization of the binding-digest map (see _build_sign).
+
+    Count- and length-prefixed, entries in sorted-name order, so the encoding
+    is UNCONDITIONALLY injective: no sequence of entries can be re-partitioned
+    into a different map with the same bytes, whatever a name or digest
+    contains.  This is the same framing :func:`_absorb_entry` uses for the
+    module digest; it replaces an earlier ``name || 0x00 || digest`` form whose
+    injectivity relied on the external invariant that a filename never contains
+    NUL.  Mirrored byte-for-byte in ``_build_sign._serialize_binding_digests``.
+    """
+    out = bytearray()
+    out += len(binding_digests).to_bytes(4, "big")
+    for name in sorted(binding_digests):
+        name_bytes = name.encode("utf-8")
+        digest = binding_digests[name]
+        out += len(name_bytes).to_bytes(4, "big")
+        out += name_bytes
+        out += len(digest).to_bytes(4, "big")
+        out += digest
+    return bytes(out)
+
+
+def _composite_integrity_message_v3(
+    py_digest_raw: bytes, native_digest_raw: bytes, binding_digests: Dict[str, bytes]
+) -> bytes:
+    """The exact bytes the v3 Ed25519 integrity signature covers.
+
+    Mirrored byte-for-byte in ``_build_sign._composite_integrity_message_v3``.
+    """
+    return hashlib.sha3_256(
+        _INTEGRITY_SIG_DOMAIN_V3
+        + py_digest_raw
+        + native_digest_raw
+        + _serialize_binding_digests(binding_digests)
+    ).digest()
+
+
+def _parse_embedded_binding_digests(
+    sig_mod: Any,
+) -> Tuple[Optional[Dict[str, bytes]], Optional[str]]:
+    """Return ``(binding_digests, error)`` from the artefact.
+
+    ``(None, None)`` for a pre-v3 artefact (field absent) — like the v1/v2
+    native-digest transition, absence is not a downgrade path: the field's
+    presence selects which message the signature must cover, so stripping it
+    from a v3 artefact (or grafting one onto a v2 artefact) changes the
+    message and fails the signature.  ``error`` is non-None for a field that
+    is present but malformed — always tampering, never a fallback.
+    """
+    field = getattr(sig_mod, "INTEGRITY_BINDING_DIGESTS_HEX", None)
+    if field is None:
+        return None, None
+    if not isinstance(field, dict):
+        return None, "signature module INTEGRITY_BINDING_DIGESTS_HEX is not a dict"
+    parsed: Dict[str, bytes] = {}
+    for name, digest_hex in field.items():
+        if not isinstance(name, str) or not isinstance(digest_hex, str):
+            return None, "signature module binding-digest entries must be str -> str"
+        try:
+            digest_raw = bytes.fromhex(digest_hex)
+        except ValueError as exc:
+            return None, f"signature module binding digest for {name!r} not hex: {exc}"
+        if len(digest_raw) != 32:
+            return None, (
+                f"signature module binding digest for {name!r} is "
+                f"{len(digest_raw)} bytes (expected 32)"
+            )
+        parsed[name] = digest_raw
+    return parsed, None
+
+
+def _check_binding_extensions(
+    binding_digests: Dict[str, bytes],
+    anchored: bool,
+    pkg_dir: Optional[Path] = None,
+) -> Tuple[bool, str, bool]:
+    """Verify every on-disk binding extension against the authenticated map.
+
+    Called only after the artefact's signature verified, so the map is
+    trusted.  Returns ``(ok, note, exact)``: ``ok`` False is a hard POST
+    failure; ``exact`` True means every binding matched the map with no
+    drift in either direction.
+
+    The severity split mirrors the native-library check exactly ("an
+    unreadable object fails closed on an anchored build but only warns on a
+    developer one; a digest mismatch is tampering and always fails"):
+
+    * **digest MISMATCH** — a file the artefact signs whose bytes differ —
+      is tampering and a hard failure on every build.  This cannot false-
+      positive on developer trees: the repair-flow artefact a source tree
+      carries binds only what was present at its own signing, so a mismatch
+      always means a signed file changed afterwards.
+    * **listed-but-missing** and **present-but-uncovered** are inventory
+      drift.  On an ANCHORED build (release wheels — where the artefact is
+      generated in the same pipeline that assembles the wheel, so drift is
+      impossible unless someone modified the installed tree) they are hard
+      failures.  On a developer build they are expected states of a source
+      tree — bindings not yet built, or built after the last re-sign — and
+      are reported: a warning is logged, the note names the drift, and an
+      uncovered (executing, unverified) extension additionally drops the
+      integrity strength below full.
+
+    Timing is stated honestly: binding extensions are ordinary imports and
+    execute before this stage runs, so this is post-load detection that moves
+    the module to the ERROR state — the same posture the native library had
+    before pre-load verification, and weaker than pre-load refusal.  Closing
+    that would need an import hook ahead of every binding import; recorded in
+    SECURITY.md rather than implied away.
+
+    ``pkg_dir`` defaults to this package's directory; tests pass a scratch
+    tree to drive each direction without touching the live install.
+    """
+    if pkg_dir is None:
+        pkg_dir = Path(__file__).resolve().parent
+    on_disk = {path.name: path for path in _iter_extension_files(pkg_dir)}
+    mismatches = []
+    missing = []
+    unreadable = []
+    for name in sorted(binding_digests):
+        path = on_disk.get(name)
+        if path is None:
+            missing.append(f"{name}: listed in the signed artefact but missing on disk")
+            continue
+        try:
+            actual = hashlib.sha3_256(path.read_bytes()).digest()
+        except OSError as exc:
+            unreadable.append(f"{name}: unreadable ({exc})")
+            continue
+        if actual != binding_digests[name]:
+            mismatches.append(f"{name}: digest MISMATCH — bytes differ from the signed build")
+    uncovered = [
+        f"{name}: present but not covered by the signed artefact"
+        for name in sorted(on_disk)
+        if name not in binding_digests
+    ]
+
+    # Two remedies, because two states need different ones and a hint that
+    # cannot be run as written is not a remedy.  Inventory drift (missing /
+    # uncovered / unreadable) leaves the pre-import binding gate satisfied,
+    # so the repair command imports the package and runs.  A digest MISMATCH
+    # does not: __init__._refuse_tampered_bindings_before_import refuses the
+    # import against those same digests before any CLI reaches main(), so the
+    # stale artefact has to go first.  That is the delete-then-sign order
+    # tools/resign_wheel.py and setup.py both use.
+    resign_hint = (
+        ". If you rebuilt the extensions, refresh the artefact with: "
+        "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+    )
+    resign_hint_after_mismatch = (
+        ". A digest mismatch also blocks the pre-import binding gate, so remove "
+        "the stale artefact first: rm <package-dir>/_integrity_signature.py && "
+        "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+    )
+    if mismatches or (anchored and (missing or uncovered or unreadable)):
+        problems = mismatches + unreadable + missing + uncovered
+        hint = resign_hint_after_mismatch if mismatches else resign_hint
+        # Same classification as the native library: a rebuilt extension and a
+        # modified one are indistinguishable from here, and the resign_hint
+        # this very message carries is the documented repair, so the import
+        # escape must be able to reach it.
+        return (
+            False,
+            _record_stale_binding_failure(
+                "binding-extension verification FAILED: " + "; ".join(problems) + hint
+            ),
+            False,
+        )
+    if missing or uncovered or unreadable:
+        drift = unreadable + missing + uncovered
+        note = (
+            "binding extensions PARTIALLY covered (developer build): " + "; ".join(drift)
+        ) + resign_hint
+        logging.getLogger(__name__).warning("%s", note)
+        return True, note, False
+    return True, f"{len(binding_digests)} binding extension(s) verified", True
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -356,6 +698,55 @@ def _load_integrity_trust_anchor() -> Tuple[Optional[str], Optional[str]]:
     return anchor_hex, None
 
 
+#: Format tag for the package digest.  Bumping it changes every digest, which
+#: is the domain separation for the framing change described in
+#: :func:`_compute_module_digest`: a digest computed under the old, unframed
+#: construction cannot equal one computed under this format, so no signature
+#: made over the old encoding verifies against a tree hashed under the new one.
+#: Duplicated verbatim in ``_build_sign._PACKAGE_DIGEST_FORMAT``; pinned equal
+#: by ``tests/test_native_integrity.py``.
+_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\x00"
+
+
+class _Absorbing(Protocol):
+    """The only thing :func:`_absorb_entry` needs from a hash object.
+
+    A structural type rather than ``hashlib._Hash``: that name is private to
+    the standard library, and naming it here would also add a reference to the
+    ``hashlib`` module inside a file the INVARIANT-1 stdlib-hash boundary
+    counts exactly — this helper takes a hasher, it does not construct one.
+    """
+
+    def update(self, data: bytes, /) -> None:  # pragma: no cover - protocol
+        """Absorb ``data``.  Never called: a Protocol body is a type, not code.
+
+        A docstring rather than ``...`` — the ellipsis is an expression
+        statement with no effect, which is exactly what CodeQL's
+        "Statement has no effect" rule reports, and a suppression comment
+        would hide the rule rather than answer it.
+        """
+
+
+def _absorb_entry(hasher: _Absorbing, section: bytes, name: str, content: bytes) -> None:
+    """Absorb one (section, name, content) entry with every field framed.
+
+    Length prefixes make the encoding injective: no sequence of entries can be
+    re-partitioned into a different sequence with the same bytes, which is the
+    property the unframed construction lacked.  Line endings are normalised
+    (CRLF -> LF) so the digest matches on Windows checkouts with
+    ``autocrlf=true``; the normalisation happens BEFORE the length is taken,
+    so the prefix describes the bytes that are actually absorbed.
+    """
+    name_bytes = name.encode("utf-8")
+    body = content.replace(b"\r\n", b"\n")
+    hasher.update(len(section).to_bytes(4, "big"))
+    hasher.update(section)
+    hasher.update(len(name_bytes).to_bytes(4, "big"))
+    hasher.update(name_bytes)
+    hasher.update(len(body).to_bytes(8, "big"))
+    hasher.update(body)
+
+
 def _compute_module_digest() -> str:
     """Compute SHA3-256 over the package's ``.py`` files and POST KAT vectors.
 
@@ -377,20 +768,67 @@ def _compute_module_digest() -> str:
 
     Mirrored byte-for-byte in ``_build_sign._compute_package_digest``; pinned
     equal by ``tests/test_native_integrity.py``.
+
+    FRAMING, and why it is not cosmetic.  Until 5.0.0 each entry contributed
+    ``name || content`` with no length prefix and no delimiter, and consecutive
+    entries were simply concatenated.  A hash of a concatenation commits to the
+    concatenation, not to the (filename -> content) MAPPING, so two different
+    package trees can produce one digest — and this digest is exactly what the
+    Ed25519 artefact signs.  Demonstrated against the shipped signer::
+
+        A/  a.py = b"X"          b.py = b"Y"
+        B/  a.py = b"Xb.pyY"     (b.py absent)
+
+        digest(A) == digest(B) == 98aaca986290313a24078bb7c79f8ee8...
+
+    One signature covered both trees.  ``_serialize_binding_digests`` in this
+    same module already got this right, and its premise is worth stating rather
+    than quoting past: "the NUL terminator makes the (name, digest) framing
+    unambiguous ... so no concatenation of entries collides with any other map"
+    holds *because* a NUL cannot occur inside a filename and each digest is a
+    fixed 32 bytes, so the boundaries are recoverable.  The same sentence about
+    a length-free encoding whose fields could contain the delimiter would be
+    false.  Meanwhile the ``b"_post_kats/"`` section marker here was itself an
+    unframed literal a crafted filename could reproduce.
+
+    Every field is now length-prefixed and every section tagged, and the whole
+    is prefixed with a format version, so the encoding is injective: distinct
+    (name, content) sequences map to distinct byte strings by construction.
+    The version prefix is also the domain separation for the change — a digest
+    computed the old way can never equal one computed the new way, so no
+    pre-5.0.0 signature verifies against a tree hashed this way.
     """
     pkg_dir = Path(__file__).resolve().parent
     hasher = hashlib.sha3_256()
-    for py_file in sorted(pkg_dir.glob("*.py")):
-        if py_file.name == "_integrity_signature.py":
-            continue
-        hasher.update(py_file.name.encode("utf-8"))
-        hasher.update(py_file.read_bytes().replace(b"\r\n", b"\n"))
+    hasher.update(_PACKAGE_DIGEST_FORMAT)
+
+    # RECURSIVE, and keyed by the package-relative POSIX path.  A
+    # non-recursive glob left any .py in a subpackage outside signature
+    # coverage entirely — silently unsigned rather than flagged as drift,
+    # on the day one is added.  For today's flat layout the relative path
+    # of every file IS its name, so this changes no byte of the digest and
+    # every existing signature still verifies; the path key is what keeps
+    # the encoding injective once `a/x.py` and `b/x.py` can both exist.
+    # The signer (_build_sign._compute_package_digest) mirrors this
+    # byte-for-byte.
+    py_files = [
+        p
+        for p in sorted(pkg_dir.rglob("*.py"))
+        if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
+    ]
+    hasher.update(len(py_files).to_bytes(4, "big"))
+    for py_file in py_files:
+        _absorb_entry(hasher, b"py", py_file.relative_to(pkg_dir).as_posix(), py_file.read_bytes())
+
     kat_dir = pkg_dir / "_post_kats"
-    if kat_dir.is_dir():
-        for kat_file in sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name):
-            hasher.update(b"_post_kats/")
-            hasher.update(kat_file.name.encode("utf-8"))
-            hasher.update(kat_file.read_bytes().replace(b"\r\n", b"\n"))
+    kat_files = (
+        sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name)
+        if kat_dir.is_dir()
+        else []
+    )
+    hasher.update(len(kat_files).to_bytes(4, "big"))
+    for kat_file in kat_files:
+        _absorb_entry(hasher, b"post_kats", kat_file.name, kat_file.read_bytes())
     return hasher.hexdigest()
 
 
@@ -438,7 +876,32 @@ def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
     single executed instruction.  Ignoring them is what lets this be a bytecode
     check rather than a path check; the executed-surface fields below are what
     a poisoned ``.pyc`` cannot alter without being caught.
+
+    ``co_exceptiontable`` is one of those fields, and was missing.  From
+    Python 3.11 exception handling is no longer encoded as instructions in
+    ``co_code`` (3.10's ``SETUP_FINALLY`` and friends): it is a side table
+    mapping instruction ranges to handlers.  So on 3.11+ a ``.pyc`` could
+    redirect or DELETE any ``try``/``except`` in the package while leaving
+    ``co_code`` byte-identical, and this function called the two
+    execution-equivalent.  Demonstrated on 3.11.15 with a handler whose table
+    was blanked: ``co_code`` identical, ``co_consts`` identical,
+    ``_code_matches`` True, and the function's behaviour changed from
+    returning ``"handled"`` to letting the ``ValueError`` escape.  Applied to
+    this package that removes the ``except Exception`` arms which turn a
+    failed KAT into a POST failure — the module would stay OPERATIONAL after a
+    failed FIPS 140-3 §4.9.2 conditional self-test, and ``check_crypto_permitted``
+    would keep releasing output.
+
+    It is read with ``getattr`` because the support floor is 3.10
+    (``pyproject.toml`` ``requires-python``), where the attribute does not
+    exist and the equivalent information already lives in ``co_code`` and so
+    is already covered.  The table is a pure function of the source and the
+    compiler version, exactly like ``co_code``, so comparing it cannot
+    reintroduce the relocated-wheel false positives this function is careful
+    to avoid.
     """
+    if getattr(fresh, "co_exceptiontable", b"") != getattr(cached, "co_exceptiontable", b""):
+        return False
     if (
         fresh.co_code != cached.co_code
         or fresh.co_names != cached.co_names
@@ -484,6 +947,71 @@ def _iter_covered_modules() -> Iterator[Tuple[str, Any]]:
             yield name, module
 
 
+def _cache_header_is_live(src_path: str, header: bytes) -> bool:
+    """True when the running interpreter would LOAD this ``.pyc`` header.
+
+    Mirrors CPython's ``_bootstrap_external`` validation (PEP 552).  ``header``
+    is the 12 bytes following the magic number: a 4-byte little-endian flags
+    field, then either the source mtime and size (timestamp caches) or an
+    8-byte source hash (hash-based caches).
+
+    A cache the interpreter would reject is not what executes, so the caller
+    treats it exactly like a wrong-magic cache: nothing to bind.  Anything this
+    function cannot resolve — an unreadable source, an unknown flag bit — is
+    reported as live, so an odd cache is judged rather than waved through.
+
+    THE INTERPRETER'S OWN SETTING IS PART OF THE RULE.  CPython's
+    ``SourceLoader.get_code`` validates a hash-based cache only when
+    ``_imp.check_hash_based_pycs != "never" and (check_source or
+    _imp.check_hash_based_pycs == "always")``.  Reading the flag bits alone
+    models that condition wrongly in both directions, and both are reachable:
+
+    * under ``--check-hash-based-pycs never`` the interpreter loads a
+      check-source cache WITHOUT validating its hash, so a cache whose hash
+      does not match its source executes — while a bit-only reading of the
+      header calls it not-live and the ``execution-integrity`` stage records
+      it as a file that had no cached bytecode to bind.  Reproduced: a
+      ``flags == 0b11`` cache with an all-zero source hash, compiled from a
+      body the source does not contain, ran its poisoned constant under that
+      flag while this function returned False.
+    * under ``--check-hash-based-pycs always`` the interpreter DOES validate
+      an unchecked (``flags == 0b01``) cache, so an ordinary stale one is
+      rejected and recompiled — while returning True unconditionally for that
+      case turns a stale cache into a hard POST failure.
+
+    Neither is the default, so neither is a defect under a stock invocation;
+    both are a wrong answer under a flag CPython documents and ships.
+    """
+    flags = int.from_bytes(header[:4], "little")
+    if flags & 0b1:
+        # Hash-based.  Ask the interpreter what it will do, rather than
+        # inferring it from the flag bits alone.
+        mode = getattr(_imp, "check_hash_based_pycs", "default")
+        if mode == "never":
+            # No validation happens at all: the cache always executes, so it
+            # must always be judged.
+            return True
+        if mode != "always" and not flags & 0b10:
+            # 'default' with the check_source bit clear: loaded blindly.
+            return True
+        try:
+            with open(src_path, "rb") as src_fh:
+                source_bytes = src_fh.read()
+        except OSError:
+            return True
+        return bool(importlib.util.source_hash(source_bytes) == header[4:12])
+    try:
+        stat = os.stat(src_path)
+    except OSError:
+        return True
+    recorded_mtime = int.from_bytes(header[4:8], "little")
+    recorded_size = int.from_bytes(header[8:12], "little")
+    return (
+        recorded_mtime == int(stat.st_mtime) & 0xFFFFFFFF
+        and recorded_size == stat.st_size & 0xFFFFFFFF
+    )
+
+
 def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[str]]:
     """Load the cached bytecode the running interpreter would use for ``src_path``.
 
@@ -493,10 +1021,41 @@ def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[s
       exists and its code object was read;
     * ``("skipped", None, None)`` — nothing on disk to bind: no cache written
       (the source is compiled directly, so what runs is already the signed
-      source), or a cache built by another interpreter version the running one
-      will not load;
+      source), a cache built by another interpreter version the running one
+      will not load, or a cache whose validation header the running interpreter
+      would reject (it recompiles from source instead);
     * ``("verified", None, error)`` — a cache exists but could not be read as a
       code object; that is a fault, not a pass.
+
+    The header is *validated*, not skipped, because "what executes" is the
+    whole question this stage asks.  PEP 552 gives a ``.pyc`` two validation
+    modes, and the running interpreter refuses a cache that fails either one,
+    recompiling from the source the integrity stage has already verified:
+
+    * timestamp caches (flag bit 0 clear) carry the source mtime and size, and
+      are rejected when either disagrees with the source on disk;
+    * hash-based caches carry a source hash, and whether the interpreter checks
+      it depends on ``_imp.check_hash_based_pycs`` as well as on the
+      ``check_source`` flag (bit 1) — see :func:`_cache_header_is_live`, which
+      is where that decision is made.
+
+    An earlier version of this list said the interpreter "only checks it when
+    the ``check_source`` flag is set", which is the flag-bits-only model, and
+    it is wrong in both directions: under ``--check-hash-based-pycs never`` a
+    check-source cache is loaded WITHOUT validation, and under ``always`` an
+    unchecked cache IS validated.  Both are reproduced in
+    :func:`_cache_header_is_live`'s docstring.  The rule lives there; this
+    docstring defers to it rather than restating a second, contradicting
+    version of it.
+
+    Judging a cache the interpreter would reject produced a false ``poisoned or
+    stale .pyc`` verdict for the most ordinary state there is: edit a lazily
+    imported module, re-sign, and the next import failed POST on bytecode that
+    never ran.  That failure is not in ``__init__``'s repairable set, so
+    ``AMA_BUILD_PIPELINE=1`` did not clear it and the error's own remediation
+    hint could not either — the tree stayed unimportable until ``__pycache__``
+    was removed by hand.  Under ``PYTHONDONTWRITEBYTECODE`` (common in CI)
+    eagerly imported modules hit it too, since no import rewrites the cache.
     """
     try:
         cache_path = importlib.util.cache_from_source(src_path)
@@ -512,7 +1071,11 @@ def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[s
                 # interpreter will not load it — it recompiles from source — so
                 # it is not what executes and is not ours to judge.
                 return "skipped", None, None
-            fh.read(12)  # bit field + (mtime,size) | source hash: header, not code
+            header = fh.read(12)  # flags + (mtime,size) | source hash
+            if len(header) != 12:
+                return "verified", None, f"cached bytecode {cache_path} has a truncated header"
+            if not _cache_header_is_live(src_path, header):
+                return "skipped", None, None
             cached_body = fh.read()
         # marshal.loads only *materialises* the code object so its instructions
         # can be compared to a fresh compile; the object is never exec()'d, so
@@ -619,7 +1182,11 @@ def _check_execution_integrity() -> Tuple[bool, int, int, List[str]]:
     skipped = 0
     problems: List[str] = []
 
-    for py_file in sorted(pkg_dir.glob("*.py")):
+    # Recursive, matching _compute_module_digest: a subpackage .py outside
+    # this walk would be outside the bytecode-poisoning check as well as the
+    # signature (and _detect_module_substitution accepts any module under
+    # pkg_dir, so nothing else would look at it).
+    for py_file in sorted(p for p in pkg_dir.rglob("*.py") if "__pycache__" not in p.parts):
         status, error = _verify_source_file_bytecode(py_file)
         if error is not None:
             problems.append(error)
@@ -684,6 +1251,172 @@ def _parse_embedded_native_digest(
     return native_digest_raw, _composite_integrity_message(digest_raw, native_digest_raw), None
 
 
+def _resolve_signed_message(
+    sig_mod: Any, digest_raw: bytes
+) -> Tuple[Optional[bytes], Optional[Dict[str, bytes]], bytes, Optional[str]]:
+    """Reconstruct the message the artefact's signature must cover.
+
+    Returns ``(native_digest_raw, binding_digests, signed_message, error)``.
+    The artefact's fields select the format — v1 (raw .py digest), v2
+    (native digest bound), v3 (binding-extension digests additionally
+    bound) — and each field's presence changes the message, so moving
+    fields between schemas is a signature failure, not a downgrade: the
+    v1 -> v2 argument in ``_parse_embedded_native_digest`` applies to the
+    v2 -> v3 transition identically.  ``error`` is non-None for a field
+    that is present but malformed, or the binding dict appearing without a
+    native digest (no signer emits that shape) — always tampering.
+    """
+    native_digest_raw, signed_message, error = _parse_embedded_native_digest(sig_mod, digest_raw)
+    if error is not None:
+        return None, None, signed_message, error
+    binding_digests, error = _parse_embedded_binding_digests(sig_mod)
+    if error is not None:
+        return native_digest_raw, None, signed_message, error
+    if binding_digests is not None:
+        if native_digest_raw is None:
+            return (
+                None,
+                None,
+                signed_message,
+                "signature module malformed: binding digests present without "
+                "a native digest (no signer emits this shape)",
+            )
+        signed_message = _composite_integrity_message_v3(
+            digest_raw, native_digest_raw, binding_digests
+        )
+    return native_digest_raw, binding_digests, signed_message, None
+
+
+def _load_artefact_fields(
+    sig_mod: Any, digest_hex: str
+) -> Tuple[Optional[Tuple[bytes, bytes, bytes, str]], Optional[str]]:
+    """Extract and validate the artefact's mandatory fields.
+
+    Returns ``((pubkey, signature, digest_raw, pubkey_hex), None)`` on
+    success, ``(None, reason)`` for a missing field, a stored digest that
+    does not match the computed one, non-hex fields, or wrong sizes — each
+    tampering, each a hard POST failure at the caller.  Pure field
+    validation, no cryptography; extracted verbatim from
+    ``_verify_signed_integrity`` so that function stays within the
+    complexity gate as schema versions accrete.
+    """
+    try:
+        embedded_digest_hex = sig_mod.INTEGRITY_DIGEST_HEX
+        pubkey_hex = sig_mod.INTEGRITY_PUBKEY_HEX
+        signature_hex = sig_mod.INTEGRITY_SIGNATURE_HEX
+    except AttributeError as exc:
+        return None, f"signature module malformed: missing field ({exc})"
+
+    if embedded_digest_hex != digest_hex:
+        # The signed source no longer matches the tree: exactly what editing a
+        # .py file (or a POST KAT vector) produces, and exactly what
+        # ``integrity --update --sign`` refreshes.
+        return None, _record_stale_binding_failure(
+            f"signed digest mismatch: stored={embedded_digest_hex[:16]}... "
+            f"computed={digest_hex[:16]}... — a .py file or a POST KAT vector "
+            "under _post_kats/ changed post-build"
+        )
+
+    try:
+        pubkey = bytes.fromhex(pubkey_hex)
+        signature = bytes.fromhex(signature_hex)
+        digest_raw = bytes.fromhex(digest_hex)
+    except ValueError as exc:
+        return None, f"signature module fields not hex: {exc}"
+
+    if len(pubkey) != 32 or len(signature) != 64:
+        return None, (
+            f"signature module sizes wrong: pubkey={len(pubkey)} "
+            f"signature={len(signature)} (expected 32, 64)"
+        )
+    return (pubkey, signature, digest_raw, pubkey_hex), None
+
+
+def _resolve_binding_coverage(
+    binding_digests: Optional[Dict[str, bytes]], anchored: bool
+) -> Tuple[bool, str, bool]:
+    """Bind the authenticated binding map to what is on disk.
+
+    Returns ``(ok, note_suffix, exact)``.  Extracted from
+    ``_verify_signed_integrity`` for the same reason ``_load_artefact_fields``
+    was: that function has to stay inside the complexity gate as schema
+    versions accrete, and this is the branch a v4 artefact would extend.
+    """
+    if binding_digests is not None:
+        ok, note, exact = _check_binding_extensions(binding_digests, anchored)
+        if not ok:
+            return False, note, False
+        return True, f"; {note}", exact
+
+    # A pre-v3 artefact carries no map at all, so every extension present on
+    # disk is executing unverified — the same uncovered state the v3 path
+    # reports as drift, reached by a different route.  A source tree with
+    # nothing built has nothing uncovered and stays full-strength.
+    uncovered = sorted(path.name for path in _iter_extension_files(Path(__file__).resolve().parent))
+    note = "; binding extensions NOT covered (pre-v3 artefact — re-sign to bind them)"
+    if uncovered:
+        note += f" — uncovered and executing: {', '.join(uncovered)}"
+    return True, note, not uncovered
+
+
+def _integrity_strength_for(native_ok: bool, bindings_exact: bool) -> str:
+    """The recorded strength of a verified signature.
+
+    Only a signed artefact whose native library AND binding extensions were
+    both verified against what is on disk is full strength.  Each weaker
+    outcome is named distinctly so the integrity stage can record it as a skip
+    rather than a pass — otherwise ``fully_verified`` again covers code that
+    executed and was never checked:
+
+    * ``signed-native-unverified`` — the shared object performing every
+      cryptographic operation went unchecked (an AMA_CRYPTO_LIB_PATH override,
+      an unreadable developer object, or a legacy v1 artefact).  It is the
+      broader gap, so it wins when both apply.
+    * ``signed-bindings-unverified`` — the library was verified, but at least
+      one binding extension imported and executed without being covered by the
+      artefact.  This is the downgrade ``_check_binding_extensions``' contract
+      promises for drift on a developer build; the ``exact`` flag it returns
+      used to be unpacked and discarded, so the promise was documented and not
+      delivered, and such a tree reported ``fully_verified: True``.
+
+    Both are named in the detail note either way; the strength is what a gate
+    reads.
+    """
+    if not native_ok:
+        return "signed-native-unverified"
+    if not bindings_exact:
+        return "signed-bindings-unverified"
+    return "signed"
+
+
+def _artefact_or_error() -> Tuple[Optional[Any], Optional[Tuple[Optional[bool], str]]]:
+    """The artefact's literals, or the verdict to return instead.
+
+    Parsed from SOURCE TEXT rather than imported.  The POST ``integrity`` stage
+    runs BEFORE ``execution-integrity``, so at this point nothing has bound the
+    artefact's ``__pycache__`` bytecode to its signed source — and an ordinary
+    import reads that bytecode.  On an unanchored build a poisoned ``.pyc``
+    carrying a self-consistent forged (digest, pubkey, signature) triple would
+    verify here; on an anchored build the trust anchor catches the substituted
+    key, but the pre-load checks in ``__init__`` and ``pqc_backends`` have no
+    anchor at all, which is why they read the source too.  See
+    ``_artefact_source`` for the measured reproduction.
+
+    Split out of :func:`_verify_signed_integrity` so that function keeps its
+    complexity budget: the reader adds a second failure mode (present but not
+    literals) that the ``except ImportError`` it replaces did not have.
+    """
+    from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+    try:
+        fields = load_artefact_fields()
+    except ArtefactSourceError as exc:
+        return None, (False, f"signature module malformed: {exc}")
+    if fields is None:
+        return None, (None, "no signed-integrity artefact (digest-only fallback)")
+    return fields, None
+
+
 def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     """Verify the build-time Ed25519 signature over the .py digest.
 
@@ -728,43 +1461,48 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
         embedded fields were edited post-build to match a tampered .py
         digest), or the native verify call itself reports a bad sig
     """
-    try:
-        # Lazy import so a missing artefact doesn't surface as a hard
-        # ImportError on every call site of verify_module_integrity().
-        from ama_cryptography import _integrity_signature as sig_mod
-    except ImportError:
-        return None, "no signed-integrity artefact (digest-only fallback)"
+    sig_mod, artefact_error = _artefact_or_error()
+    if artefact_error is not None:
+        return artefact_error
+    assert sig_mod is not None  # narrowed by _artefact_or_error
 
-    try:
-        embedded_digest_hex = sig_mod.INTEGRITY_DIGEST_HEX
-        pubkey_hex = sig_mod.INTEGRITY_PUBKEY_HEX
-        signature_hex = sig_mod.INTEGRITY_SIGNATURE_HEX
-    except AttributeError as exc:
-        return False, f"signature module malformed: missing field ({exc})"
-
-    if embedded_digest_hex != digest_hex:
-        return False, (
-            f"signed digest mismatch: stored={embedded_digest_hex[:16]}... "
-            f"computed={digest_hex[:16]}... — a .py file or a POST KAT vector "
-            "under _post_kats/ changed post-build"
-        )
-
-    try:
-        pubkey = bytes.fromhex(pubkey_hex)
-        signature = bytes.fromhex(signature_hex)
-        digest_raw = bytes.fromhex(digest_hex)
-    except ValueError as exc:
-        return False, f"signature module fields not hex: {exc}"
-
-    if len(pubkey) != 32 or len(signature) != 64:
-        return False, (
-            f"signature module sizes wrong: pubkey={len(pubkey)} "
-            f"signature={len(signature)} (expected 32, 64)"
-        )
+    fields, fields_error = _load_artefact_fields(sig_mod, digest_hex)
+    if fields is None:
+        return False, fields_error or "signature module malformed"
+    pubkey, signature, digest_raw, pubkey_hex = fields
 
     trust_anchor_hex, trust_anchor_error = _validate_trust_anchor(pubkey_hex)
+    signer_anchor_mismatch: Optional[str] = None
     if trust_anchor_error is not None:
-        return False, trust_anchor_error
+        # An artefact whose key does not match the compiled anchor is the
+        # DOCUMENTED starting state of every wheel build: the committed
+        # artefact is dev-signed with a per-build ephemeral key by design,
+        # and the build-time signer's whole job is to replace it with one
+        # minted from the release seed whose anchor-match the pipeline
+        # verifies separately.  The first exercised dry run at the previous
+        # head only survived this comparison by an accident of blindness —
+        # the pre-load digest refusal kept the anchored library unmapped, so
+        # the anchor was unreadable and this branch never ran at build time.
+        # Once the signer identity legitimately maps the library, the anchor
+        # becomes readable and this mismatch fired on every cibuildwheel
+        # platform, hard-failing the signer against the exact artefact it
+        # exists to discard.
+        #
+        # The carve-out is deliberately narrow: the process must BE the
+        # signer (launch-record identity + AMA_BUILD_PIPELINE, secure-exec
+        # revoked — see _integrity_signer_process), and the foreign artefact
+        # must STILL verify under its own embedded key below, proving it is
+        # a coherent artefact from another signing run and not corruption.
+        # Then the failure classifies as a repairable stale binding: the
+        # stage still FAILS, the module still lands in ERROR, and only the
+        # signer's import completes so it can mint the replacement.  For
+        # every other process an anchor mismatch remains what it always was
+        # — a re-signed tree, the attack the anchor exists to catch — and a
+        # signature that does not verify stays tampering for the signer too.
+        if _integrity_signer_process():
+            signer_anchor_mismatch = trust_anchor_error
+        else:
+            return False, trust_anchor_error
 
     try:
         from ama_cryptography.pqc_backends import (
@@ -803,11 +1541,11 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     # composite — stripping it from a real v2 artefact changes the message the
     # signature must cover and so is caught as a signature failure below, not as
     # a silent downgrade.
-    native_digest_raw, signed_message, native_digest_error = _parse_embedded_native_digest(
+    native_digest_raw, binding_digests, signed_message, schema_error = _resolve_signed_message(
         sig_mod, digest_raw
     )
-    if native_digest_error is not None:
-        return False, native_digest_error
+    if schema_error is not None:
+        return False, schema_error
 
     try:
         ok = native_ed25519_verify(signature, signed_message, pubkey)
@@ -816,9 +1554,27 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     if not ok:
         return False, "Ed25519 signature did NOT verify — module tampered"
 
+    # Signature authentic under its embedded key.  If the anchor comparison
+    # above was deferred for the signer process, the artefact is now proven
+    # coherent-but-foreign: fail the stage repairably so the signing run can
+    # replace it.  Everything the final artefact must satisfy — the anchor
+    # match included — is re-checked by the smoke test against the artefact
+    # the signer actually produces.
+    if signer_anchor_mismatch is not None:
+        return False, _record_stale_binding_failure(
+            "integrity artefact is signed by a key that does not match the "
+            "compiled trust anchor, in a process launched as the integrity "
+            "signer with AMA_BUILD_PIPELINE=1. This is the documented "
+            "pre-signing state of a wheel build (the committed artefact is "
+            "dev-signed by design); the stage fails, the import may complete "
+            "for the signer only, and the signing run replaces the artefact. "
+            f"Cause: {signer_anchor_mismatch}"
+        )
+
     # Signature authentic.  Now bind it to the shared object actually loaded.
-    global _INTEGRITY_STRENGTH
+    global _INTEGRITY_STRENGTH, _INTEGRITY_ANCHORED
     anchored = trust_anchor_hex is not None
+    _INTEGRITY_ANCHORED = anchored
     if native_digest_raw is None:
         verdict, native_note, native_ok = (
             None,
@@ -830,13 +1586,18 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
         if verdict is False:
             return False, native_note
 
-    # Only a signed artefact whose native library was verified against the
-    # loaded object is the full-strength state.  Signed-but-native-unverified
-    # (override, unreadable dev object, or a legacy v1 artefact) is recorded
-    # distinctly so the integrity stage can treat it as a skip rather than a
-    # pass — otherwise ``fully_verified`` would again cover a case where the
-    # code doing the cryptography was never checked.
-    _INTEGRITY_STRENGTH = "signed" if native_ok else "signed-native-unverified"
+    # Bind the authenticated binding-digest map to the files on disk.  Runs
+    # only after the signature verified (the map is trusted) and the native
+    # check passed.  Severity follows the anchored/developer split documented
+    # on _check_binding_extensions: a digest mismatch is always fatal; on
+    # anchored (release) builds any drift is fatal; on developer builds
+    # drift is a logged warning and a note, not an attestation downgrade.
+    binding_ok, binding_note, bindings_exact = _resolve_binding_coverage(binding_digests, anchored)
+    if not binding_ok:
+        return False, binding_note
+    native_note += binding_note
+
+    _INTEGRITY_STRENGTH = _integrity_strength_for(native_ok, bindings_exact)
 
     if anchored:
         return True, f"signed integrity verified (Ed25519, trusted build pubkey){native_note}"
@@ -860,14 +1621,39 @@ def _check_loaded_native_library(
     AMA_CRYPTO_LIB_PATH override is the operator's own substitution (proceed,
     unverified); an unreadable object fails closed on an anchored build but only
     warns on a developer one; a digest mismatch is tampering and always fails.
+
+    The digest compared is the one recorded by the PRE-LOAD verification ONLY
+    when the loader actually mapped the descriptor it hashed —
+    ``preload_digest_is_of_mapped_bytes``, which ``_try_load_library`` sets on
+    its ``/proc/self/fd`` branch and nowhere else.  There, no post-load file
+    swap can make this stage describe different bytes than the ones executing.
+
+    Everywhere else — Windows' ``CDLL(path, winmode=0)``, and the plain
+    ``CDLL(path)`` fallback used on macOS and on any Linux without procfs — the
+    loader performs a SECOND, independent path resolution, so the recorded
+    digest need not describe the mapped bytes and this stage re-reads the path
+    instead.  That re-read is the whole reason ``_try_load_library``'s
+    docstring can accept the hash-then-load window on those platforms: a file
+    swapped between the hash and the ``dlopen`` fails here.  Preferring the
+    recorded digest unconditionally removed that, and reported "native library
+    verified" for bytes nothing had verified.
+
+    Re-reading the path is also the fallback for loads that skipped pre-load
+    hashing (an override, or a missing artefact).  A match is reported as
+    verified even under an override: bytes identical to the signed bytes are
+    the signed library, wherever the operator loaded it from.
     """
     from ama_cryptography.pqc_backends import native_backend_diagnostics
 
     diag = native_backend_diagnostics()
     loaded_path = diag.get("path")
     override = diag.get("override")
-    actual_native = _compute_native_library_digest(loaded_path)
-    if override:
+    preload_hex = diag.get("preload_digest_hex")
+    preload_is_mapped = bool(diag.get("preload_digest_is_of_mapped_bytes"))
+    actual_native = bytes.fromhex(preload_hex) if (preload_hex and preload_is_mapped) else None
+    if actual_native is None:
+        actual_native = _compute_native_library_digest(loaded_path)
+    if override and actual_native != native_digest_raw:
         return (
             None,
             (
@@ -888,9 +1674,14 @@ def _check_loaded_native_library(
             )
         return None, f"; native library UNVERIFIED — could not read {loaded_path!r}", False
     if actual_native != native_digest_raw:
+        # A rebuilt shared object and a substituted one are the same
+        # observation here, so this is classified as a stale binding: the state
+        # a re-signing run legitimately clears.  The ambiguity is bounded — the
+        # module stays in ERROR and refuses every cryptographic operation — and
+        # is the same one native_backend_refused_on_digest() already accepts.
         return (
             False,
-            (
+            _record_stale_binding_failure(
                 "native library digest MISMATCH — libama_cryptography has been "
                 f"modified since signing (signed={native_digest_raw.hex()[:16]}..., "
                 f"loaded={actual_native.hex()[:16]}... at {loaded_path!r})"
@@ -925,8 +1716,10 @@ def verify_module_integrity() -> Tuple[bool, str]:
     runtime cost is a single hash + (optionally) a single Ed25519
     verify, both well under 1 ms.
     """
-    global _INTEGRITY_STRENGTH
+    global _INTEGRITY_STRENGTH, _INTEGRITY_FAILURE_KIND, _INTEGRITY_ANCHORED
     _INTEGRITY_STRENGTH = None
+    _INTEGRITY_FAILURE_KIND = None
+    _INTEGRITY_ANCHORED = None
     current = _compute_module_digest()
 
     signed_ok, signed_detail = _verify_signed_integrity(current)
@@ -956,7 +1749,7 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # value, and the message is free to say whatever is most useful.
     if signed_ok is False:
         logger.error("Signed integrity check failed: %s", signed_detail)
-        return False, signed_detail
+        return False, _finalise_integrity_failure(signed_detail)
 
     # An ANCHORED build has no legitimate unsigned mode, so the fallback is
     # closed off before anything else is considered.
@@ -992,9 +1785,44 @@ def verify_module_integrity() -> Tuple[bool, str]:
         # determine whether this build is anchored, we must not assume it is
         # not.
         logger.error("Trust-anchor lookup failed: %s", anchor_error)
-        return False, anchor_error
+        return False, _finalise_integrity_failure(anchor_error)
     if anchor_hex is not None:
-        return False, (
+        # One process legitimately holds an anchored tree with no artefact:
+        # the signing run that just deleted it in order to re-sign the tree.
+        # tools/resign_wheel.py removes the stale, pre-repair artefact before
+        # invoking `python -m ama_cryptography._build_sign` (if repair rewrote
+        # a binding, the pre-import gate would refuse the import against the
+        # stale digests), so the signer subprocess imports this package in
+        # exactly the state this branch calls tampering.  The first exercised
+        # release dry run proved it: both Linux cibuildwheel jobs failed here
+        # with "no signed-integrity artefact" while macOS and Windows — which
+        # do not chain the re-signer — passed.
+        #
+        # The stage still FAILS either way; what changes is the
+        # classification.  For the signer process the failure is recorded as
+        # a stale local binding, which lets `__init__`'s AMA_BUILD_PIPELINE
+        # escape complete the import in the ERROR state so the signer can run
+        # — the same treatment a stale native digest already receives.  For
+        # every other process, including the release container's smoke test
+        # of a wheel that lost its artefact, the verdict remains tampering
+        # and the import hard-fails.  Identity is the process's own launch
+        # record (see _process_is_the_integrity_signer), not an environment
+        # variable, and secure-execution mode revokes it regardless.
+        #
+        # A positively *invalid* artefact (signed_ok is False) never reaches
+        # this branch and stays tampering for the signer too — re-signing
+        # over a bad signature would launder it.
+        if _integrity_signer_process():
+            return False, _record_stale_binding_failure(
+                "signed integrity could not be verified on a build with a "
+                f"compiled trust anchor ({anchor_hex[:16]}...), in a process "
+                "launched as the integrity signer with AMA_BUILD_PIPELINE=1. "
+                "A signing run begins from the artefact it is about to replace "
+                "being absent, so this is recorded as a stale binding: the "
+                "stage fails, the import may complete for the signer only, and "
+                f"every cryptographic surface stays refused. Cause: {signed_detail}"
+            )
+        return False, _finalise_integrity_failure(
             "signed integrity could not be verified on a build with a compiled "
             f"trust anchor ({anchor_hex[:16]}...) — an anchored build is signed "
             "by construction and ships the verifier that checks it, so an "
@@ -1007,7 +1835,35 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # absent, fail there too rather than emitting an unsigned wheel.  This no
     # longer carries the runtime case — the anchor check above does.
     if _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
-        return False, (
+        # Same signer carve-out as the compiled-anchor branch at the top of this
+        # block.  That branch only fires when the native library reports an
+        # anchor; when the requirement arrives via the environment but the
+        # library is not (yet) anchored — the "anchor in the env, not in the
+        # compiled object" configuration — control reaches HERE instead, with
+        # anchor_hex None.  resign_wheel.py deletes _integrity_signature.py and
+        # then invokes `python -m ama_cryptography._build_sign` with the release
+        # env (AMA_BUILD_PIPELINE=1 and the inherited REQUIRE_TRUST_ANCHOR)
+        # inherited untouched, so without this carve-out the signer's own import
+        # of the tree it is about to sign is classified as tampering and hard
+        # fails — the signer can never mint the artefact, and post-repair
+        # re-signing deadlocks (audit M13).  For the signer only, record a stale
+        # binding so __init__'s AMA_BUILD_PIPELINE escape can complete the import
+        # in the ERROR state (every cryptographic surface stays refused); for
+        # every other process the verdict stays tampering.  Identity is the
+        # process's own launch record, not an environment variable, and
+        # secure-execution mode revokes it — identical to the compiled-anchor
+        # sibling above.
+        if _integrity_signer_process():
+            return False, _record_stale_binding_failure(
+                "signed integrity could not be verified and "
+                f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 forbids digest-only "
+                "fallback, in a process launched as the integrity signer with "
+                "AMA_BUILD_PIPELINE=1. A signing run begins from the artefact it "
+                "is about to replace being absent, so this is recorded as a stale "
+                "binding: the stage fails, the import may complete for the signer "
+                f"only, and every cryptographic surface stays refused. Cause: {signed_detail}"
+            )
+        return False, _finalise_integrity_failure(
             "signed integrity could not be verified and "
             f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 forbids digest-only "
             f"fallback — rebuild the wheel with AMA_BUILD_PIPELINE=1. "
@@ -1017,13 +1873,17 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # Digest-only fallback (editable install / source checkout).
     if not _INTEGRITY_DIGEST_FILE.exists():
         logger.error("Integrity digest file not found and no signature artefact")
-        return False, "Integrity digest file missing"
-    stored = _INTEGRITY_DIGEST_FILE.read_text().strip()
+        return False, _finalise_integrity_failure("Integrity digest file missing")
+    stored = _INTEGRITY_DIGEST_FILE.read_text(encoding="utf-8").strip()
     if not stored:
         logger.error("Integrity digest file is empty")
-        return False, "Integrity digest file empty"
+        return False, _finalise_integrity_failure("Integrity digest file empty")
     if stored != current:
-        reason = f"Module digest mismatch: stored={stored[:16]}... computed={current[:16]}..."
+        # Unsigned tree whose .py files moved on: the digest-only twin of the
+        # signed stale-source case, and repaired by the same command.
+        reason = _record_stale_binding_failure(
+            f"Module digest mismatch: stored={stored[:16]}... computed={current[:16]}..."
+        )
         logger.error(reason)
         return False, reason
     # Digest-only path is healthy; log why the stronger check did not run so
@@ -1041,6 +1901,9 @@ def verify_module_integrity() -> Tuple[bool, str]:
         signed_detail,
     )
     _INTEGRITY_STRENGTH = "digest-only"
+    # An unsigned tree carries no signature and therefore no anchor: digest-only
+    # is unanchored by construction, distinct from None (no check completed).
+    _INTEGRITY_ANCHORED = False
     return True, f"Module integrity verified (digest-only fallback: {signed_detail})"
 
 
@@ -1537,7 +2400,7 @@ _TIMING_BUFFER_SIZE = 256
 #: can silently switch off is not a control.
 #:
 #: The ceiling is set three orders of magnitude above any plausible legitimate
-#: floor (the auto-computed value is 50 ns on Linux/macOS and 400 ns on
+#: floor (the auto-computed value is 100 ns on Linux/macOS and 400 ns on
 #: Windows' 100 ns-resolution clock) rather than just above it.  The purpose
 #: here is to make the test impossible to *disable*, not to second-guess an
 #: operator tuning for a noisy host — a tighter bound would reject honest
@@ -1546,6 +2409,13 @@ _TIMING_BUFFER_SIZE = 256
 #: oracle's ``min-effect=`` detail, so the deviation is visible in
 #: ``module_attestation()`` rather than only in the process's own logs.
 _TIMING_MAX_MIN_EFFECT_NS = 100_000.0
+
+#: True when the min-effect floor in force came from
+#: ``AMA_POST_TIMING_MIN_EFFECT_NS`` rather than from the host's clock
+#: resolution.  Surfaced in the oracle's detail string so a release gate
+#: reading ``module_attestation()`` can tell a tuned floor from a computed one
+#: instead of having to recognise the two auto values by sight.
+_TIMING_MIN_EFFECT_OVERRIDDEN = False
 
 
 def _compute_timing_min_effect_ns() -> float:
@@ -1559,8 +2429,14 @@ def _compute_timing_min_effect_ns() -> float:
 
     * Linux / macOS:  resolution is typically 1 ns (CLOCK_MONOTONIC_RAW).
       Bias from runner jitter has been observed at delta=25 ns / |t|=8.34
-      on shared Ubuntu 3.11 GitHub-hosted runners.  A 50 ns absolute floor
-      catches this band.
+      on shared Ubuntu 3.11 GitHub-hosted runners, and a 50 ns floor was
+      then falsified in the field: delta=51 ns / |t|=11.48 of pure jitter
+      on a shared ubuntu-latest runner (job 97259726191, Python 3.13,
+      2026-08-23) failed a binary whose memcmp the deterministic callgrind
+      `consttime` target measures at zero cross-class instructions and
+      whose POST passed on every sibling lane at the same commit.  The
+      100 ns absolute floor is ~2x the worst observed artefact, the same
+      calibration rule the dudect floor uses.
     * Windows:  ``QueryPerformanceCounter`` reports a 100 ns resolution
       via ``time.get_clock_info('perf_counter').resolution`` even on
       modern hardware; quantization noise alone can produce mean deltas
@@ -1580,8 +2456,8 @@ def _compute_timing_min_effect_ns() -> float:
     leak over 256 bytes produces (the byte loop alone is ~256 ns even
     at 1 ns/byte memory throughput).
 
-    Linux/macOS:  ``max(50, 4*1) = 50 ns`` (absolute floor dominates)
-    Windows:      ``max(50, 4*100) = 400 ns`` (resolution floor dominates)
+    Linux/macOS:  ``max(100, 4*1) = 100 ns`` (absolute floor dominates)
+    Windows:      ``max(100, 4*100) = 400 ns`` (resolution floor dominates)
 
     The floor is computed once at module import.  Operators who need a
     different floor for a specific deployment can override via
@@ -1604,17 +2480,29 @@ def _compute_timing_min_effect_ns() -> float:
             # far enough disables the test: an unbounded override could be set
             # to 1e18 ns and every real timing leak would report "Constant-time
             # OK".  A control that an environment variable can silently switch
-            # off is not a control.  The ceiling is the smallest signal a real
-            # early-exit memcmp over 256 bytes produces (>500 ns, see the
-            # docstring); anything at or above it would mask a genuine leak,
-            # so it is refused rather than honoured.
+            # off is not a control.
+            #
+            # What the ceiling bounds is precisely that — DISABLING the test —
+            # and not masking in general.  It sits three orders of magnitude
+            # above the auto-computed floor (100 ns Linux/macOS, 400 ns
+            # Windows), which leaves an honoured override room to hide leaks
+            # smaller than itself, the >500 ns early-exit memcmp signal
+            # included.  That range is deliberately left to the operator: a
+            # tighter ceiling would reject honest tuning on a noisy host, and
+            # an attacker who can already set environment variables in the
+            # target process has better options than narrowing a self-test.
+            # An honoured override is logged at WARNING and marked in the
+            # oracle detail, so a gate reading module_attestation() sees that
+            # the floor was not the computed one.
             if override_ns >= _TIMING_MAX_MIN_EFFECT_NS:
                 logger.error(
                     "Refusing AMA_POST_TIMING_MIN_EFFECT_NS=%.0f ns: at or "
-                    "above %.0f ns the min-effect floor would exceed the "
-                    "signal a real early-exit memcmp produces, turning the "
-                    "timing-leak self-test into an unconditional pass. Using "
-                    "the auto-computed default instead.",
+                    "above %.0f ns (three orders of magnitude above the "
+                    "auto-computed floor) the min-effect threshold would "
+                    "swallow any effect a measurement of this length can "
+                    "resolve, turning the timing-leak self-test into an "
+                    "unconditional pass. Using the auto-computed default "
+                    "instead.",
                     override_ns,
                     _TIMING_MAX_MIN_EFFECT_NS,
                 )
@@ -1622,12 +2510,16 @@ def _compute_timing_min_effect_ns() -> float:
                 logger.warning(
                     "POST timing-leak min-effect floor overridden via "
                     "AMA_POST_TIMING_MIN_EFFECT_NS=%.0f ns (auto would have "
-                    "been computed from time.get_clock_info)",
+                    "been computed from time.get_clock_info). Effects below "
+                    "this are reported as measurement noise, so a real leak "
+                    "smaller than the override is not detected.",
                     override_ns,
                 )
+                global _TIMING_MIN_EFFECT_OVERRIDDEN
+                _TIMING_MIN_EFFECT_OVERRIDDEN = True
                 return override_ns
 
-    absolute_floor_ns = 50.0
+    absolute_floor_ns = 100.0
     safety_multiplier = 4.0
     try:
         resolution_s = time.get_clock_info("perf_counter").resolution
@@ -1707,13 +2599,14 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     t-statistic.  If |t| > ``_DUDECT_THRESHOLD`` (4.5), the comparison
     function may leak timing information through data-dependent early exit.
     POST also requires a small absolute effect-size floor before failing:
-    GitHub-hosted runners have produced |t| > 4.5 (with deltas in the 25-45 ns
-    band on Linux, and 100-200 ns on Windows where ``QueryPerformanceCounter``
-    has 100 ns granularity) from host jitter alone, while a real early-exit
+    GitHub-hosted runners have produced |t| > 4.5 (with deltas observed up to
+    51 ns on Linux — job 97259726191 — and 100-200 ns on Windows where
+    ``QueryPerformanceCounter`` has 100 ns granularity) from host jitter
+    alone, while a real early-exit
     memcmp over 256 bytes is orders of magnitude larger (>>500 ns).
     ``_TIMING_MIN_EFFECT_NS`` is computed at module import as
-    ``max(50, 4 × perf_counter_resolution_ns)`` so the floor scales with
-    the host clock — 50 ns on Linux/macOS (1 ns resolution), 400 ns on
+    ``max(100, 4 × perf_counter_resolution_ns)`` so the floor scales with
+    the host clock — 100 ns on Linux/macOS (1 ns resolution), 400 ns on
     Windows (100 ns resolution).  Both values stay well below any real-leak
     signal while keeping POST fail-closed for genuine leaks.  The
     deterministic single-pass design means the ``False`` outcome is
@@ -1785,7 +2678,8 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
         return (
             True,
             f"Constant-time OK: |t|={abs(t_stat):.2f}, delta={delta_ns:.0f}ns "
-            f"(threshold={_DUDECT_THRESHOLD}, min-effect={_TIMING_MIN_EFFECT_NS:.0f}ns) "
+            f"(threshold={_DUDECT_THRESHOLD}, min-effect={_TIMING_MIN_EFFECT_NS:.0f}ns"
+            f"{' OVERRIDDEN' if _TIMING_MIN_EFFECT_OVERRIDDEN else ''}) "
             f"(first-diff={mean1:.0f}ns, last-diff={mean2:.0f}ns, n={n1})",
         )
 
@@ -1907,7 +2801,15 @@ def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
     # and escalated to a hard failure under AMA_FIPS_STRICT.  Promoting either
     # to a pass is exactly the class of "fully verified over an unchecked
     # component" this whole change exists to close.
-    if _INTEGRITY_STRENGTH in ("digest-only", "signed-native-unverified"):
+    #   * "signed-bindings-unverified" — the signature and the shared object
+    #     verified, but a binding extension that has already imported and
+    #     executed is not covered by the artefact.  Uncovered executing code is
+    #     the same gap as an unverified library, one module smaller.
+    if _INTEGRITY_STRENGTH in (
+        "digest-only",
+        "signed-native-unverified",
+        "signed-bindings-unverified",
+    ):
         _SELF_TEST_RESULTS.append(("integrity", None, integrity_detail))
         # Read from the environment rather than taken as a parameter: every
         # other stage helper that needs strict mode is wrapped in a lambda by
@@ -2113,7 +3015,38 @@ def _run_rng_stage() -> Tuple[bool, Optional[str]]:
     if out1 == out2:
         _SELF_TEST_RESULTS.append(("RNG", False, "Identical consecutive outputs"))
         return False, "RNG health test failed at startup"
-    _rng_state["previous"] = out2
+    # Seed the continuous test with a DIGEST of the last draw, matching what
+    # secure_token_bytes stores and compares (it hashes its health sample so
+    # module state never retains live key material).  Storing the raw bytes
+    # here would make the very first post-POST comparison compare a digest
+    # against a raw sample — never equal, so the first draw after POST would
+    # escape the continuous check entirely.
+    # Same kernel as secure_token_bytes uses for the comparison side
+    # (pqc_backends.native_sha256): both halves of the continuous test must
+    # produce identical digests for the same draw, and both must come from
+    # this module's own SHA-256 rather than OpenSSL-backed hashlib
+    # (INVARIANT-1).  This runs during POST, where SELF_TEST-state crypto is
+    # permitted — the pairwise tests a few stages earlier already exercised
+    # exactly this path.
+    #
+    # When the native backend is absent the seed is skipped rather than
+    # computed by hashlib (INVARIANT-7: no fallback).  That is sound in every
+    # state that can follow: without the native backend the module never
+    # reaches OPERATIONAL, so under the docs-build override every crypto call
+    # refuses before the continuous test is consulted, and in a normal
+    # no-native import POST hard-fails — an unseeded continuous test is
+    # unreachable, an OpenSSL-seeded one would be a vendor in the RNG path.
+    from ama_cryptography.exceptions import (
+        NativeBackendUnavailableError,
+    )  # noqa: PLC0415  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
+    from ama_cryptography.pqc_backends import (
+        native_sha256,
+    )  # noqa: PLC0415  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
+
+    try:
+        _rng_state["previous"] = native_sha256(out2)
+    except NativeBackendUnavailableError:
+        _rng_state["previous"] = None
     _SELF_TEST_RESULTS.append(("RNG", True, "RNG health test passed"))
     return True, None
 

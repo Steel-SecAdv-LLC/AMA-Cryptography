@@ -389,6 +389,174 @@ def scan_c_constant_transcriptions(repo: Path, header: Path | None = None) -> tu
     return problems, checked
 
 
+# --------------------------------------------------------------------------
+# Invariant-register range claims.
+#
+# `INVARIANTS.md` is the canonical register, and five documents state its
+# extent as "INVARIANT-1 through INVARIANT-N".  N is a count in prose, so it
+# goes stale the way every other written-down count does — and this one did:
+# the branch that took the register from 38 to 42 corrected three of the four
+# files that named the old range, and `.github/copilot-instructions.md` was
+# still saying 42 after the register reached 43.
+#
+# A range anchored at INVARIANT-1 is a claim about the WHOLE register and is
+# checked.  Any other range — `INVARIANT-39 through INVARIANT-42` in
+# CHANGELOG.md, describing one release's scope — is a claim about a subset and
+# is deliberately left alone; forcing it to the register's maximum would make
+# release history wrong.
+#
+# The register itself is checked for contiguity, because "1 through N" is only
+# a true description of a set that has no gaps in it.
+# --------------------------------------------------------------------------
+
+#: `## INVARIANT-<n>` headings in the canonical register.
+_INVARIANT_HEADING_RE = re.compile(r"(?m)^## INVARIANT-(\d+)\b")
+
+#: A prose range whose lower bound is the first invariant.  Both dash forms and
+#: both English spellings are accepted; the bound is captured so the message
+#: can name what was written.  Bounded quantifiers only — no nested repetition
+#: — so this stays linear on adversarial input.
+_INVARIANT_RANGE_RE = re.compile(r"INVARIANT-1\s*(?:through|to|[-\u2013\u2014])\s*INVARIANT-(\d+)")
+
+
+def invariant_register_extent(path: Path) -> tuple[int, list[str]]:
+    """``(highest invariant, problems)`` for the canonical register.
+
+    Problems are gaps and duplicate headings: "INVARIANT-1 through
+    INVARIANT-N" describes a contiguous set, so a register with a hole in it
+    makes every document that states the range wrong in a way no count check
+    would catch.
+    """
+    text = _read(path)
+    numbers = [int(m.group(1)) for m in _INVARIANT_HEADING_RE.finditer(text)]
+    if not numbers:
+        return 0, [
+            f"  - {path.name} has no `## INVARIANT-<n>` headings; the register "
+            f"cannot be read, so no document's range claim can be checked"
+        ]
+    highest = max(numbers)
+    problems: list[str] = []
+    missing = sorted(set(range(1, highest + 1)) - set(numbers))
+    if missing:
+        problems.append(
+            f"  - {path.name}: the register is not contiguous — no heading for "
+            f"{', '.join(f'INVARIANT-{n}' for n in missing)}"
+        )
+    duplicates = sorted({n for n in numbers if numbers.count(n) > 1})
+    if duplicates:
+        problems.append(
+            f"  - {path.name}: duplicate heading(s) for "
+            f"{', '.join(f'INVARIANT-{n}' for n in duplicates)}"
+        )
+    return highest, problems
+
+
+def scan_invariant_range_claims(repo: Path, highest: int) -> tuple[list[str], int]:
+    """``(problems, claims checked)`` over every tracked Markdown file."""
+    problems: list[str] = []
+    checked = 0
+    for path in sorted(repo.rglob("*.md")):
+        if ".git" in path.parts or "node_modules" in path.parts:
+            continue
+        text = _read(path)
+        if not text:
+            continue
+        for match in _INVARIANT_RANGE_RE.finditer(text):
+            checked += 1
+            claimed = int(match.group(1))
+            if claimed == highest:
+                continue
+            line = text[: match.start()].count("\n") + 1
+            # Collapse the matched text: a claim that wrapped across a line
+            # would otherwise be reported with a literal newline in it.
+            quoted = " ".join(match.group(0).split())
+            problems.append(
+                f"  - {repo_relative(path, repo)}:{line}: claims "
+                f"{quoted!r}, but INVARIANTS.md defines "
+                f"INVARIANT-1 through INVARIANT-{highest}. If this is prose "
+                f"QUOTING a range that used to be wrong rather than stating "
+                f"the current one, write it as 'ending at INVARIANT-N' — this "
+                f"check reads prose and cannot tell a quotation from a claim, "
+                f"and that is the direction it should fail in."
+            )
+    return problems, checked
+
+
+#: A git-tag install pin on the AMA repository, e.g.
+#: ``git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v5.0.0``.
+#: Anchored to the repo name so a THIRD-PARTY action pin (INVARIANTS.md cites
+#: ``slsa-github-generator/...@v2.1.0``) is not read as a stale package pin.
+#: Case-insensitive: the URLs spell it ``AMA-Cryptography``.
+_TAG_PIN_RE = re.compile(r"AMA-Cryptography(?:\.git)?@v(\d+\.\d+\.\d+)", re.IGNORECASE)
+
+
+def scan_soname_literals(repo: Path, canonical: str) -> tuple[list[str], int]:
+    """SONAME literals in packaging prose vs. the canonical major.
+
+    Returns (problems, literals_checked).  The caller enforces the
+    non-vacuity floor on the count, exactly as with :func:`scan_tag_pins` —
+    extracted as a function for the same reason that one is: an inline sweep
+    whose problems list only ever grows cannot be unit-tested for the case
+    where it silently stops matching.
+    """
+    soname_major = canonical.split(".", 1)[0]
+    problems: list[str] = []
+    checked = 0
+    for rel in ("setup.py", "Makefile"):
+        text = _read(repo / rel)
+        if not text:
+            continue
+        for match in re.finditer(r"\.so\.(\d+)(?:\.\d+)*", text):
+            checked += 1
+            if match.group(1) == soname_major:
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            desc = f"{rel}:{line} SONAME literal {match.group(0)!r}"
+            problems.append(
+                f"  - {desc}: names major {match.group(1)}, but CMake derives "
+                f"SOVERSION from the project major, currently {soname_major}. "
+                f"The shipped chain is libama_cryptography.so -> .so."
+                f"{soname_major} -> .so.{canonical}."
+            )
+    return problems, checked
+
+
+def scan_tag_pins(repo: Path, canonical: str) -> tuple[list[str], int]:
+    """``(problems, pins checked)`` over the docs that carry an AMA git-tag pin.
+
+    Reads ``docs/**/*.rst`` AND every ``*.md`` except ``CHANGELOG.md`` and
+    ``docs/compliance/**`` — a historical changelog entry or a dated attestation
+    may legitimately pin an OLD tag, exactly as the document-header sweep
+    excludes them.  The predecessor read ``docs/**/*.rst`` only, so README's own
+    install commands (``pip install "git+...AMA-Cryptography.git@vX.Y.Z"`` and
+    the requirements-style ``ama-cryptography @ git+...@vX.Y.Z``) went
+    unchecked, though its comment claimed "the same contract as the README
+    install pins" — a ``.md`` was matched only by the document-HEADER pattern,
+    which does not see an install command (INVARIANT-32; audit M11).
+    """
+    docs = list((repo / "docs").rglob("*.rst"))
+    for md in repo.rglob("*.md"):
+        if any(part in {".git", "build", "node_modules"} for part in md.parts):
+            continue
+        if md.name == "CHANGELOG.md" or "compliance" in md.parts:
+            continue
+        docs.append(md)
+    problems: list[str] = []
+    checked = 0
+    for doc in sorted(docs):
+        text = _read(doc)
+        if not text:
+            continue
+        for m in _TAG_PIN_RE.finditer(text):
+            checked += 1
+            if m.group(1) != canonical:
+                problems.append(
+                    f"  - {repo_relative(doc, repo)} git-tag install pin: "
+                    f"@v{m.group(1)} != canonical {canonical!r}"
+                )
+    return problems, checked
+
+
 def extract(file: str, pattern: str) -> str | None:
     """Return the single capture group from `pattern`, or None if not found.
 
@@ -540,23 +708,62 @@ def main() -> int:
             print(f"OK    {desc:<60s} = {found}")
 
     # -------------------------------------------------------------------
-    # Git-tag install pins in Sphinx sources.
+    # SONAME literals in the packaging prose.
     #
-    # The *.md sweep below cannot see docs/**/*.rst, so the Sphinx landing
-    # page shipped a `pip install ...@v3.4.0` command into the 3.5.0
-    # release while this script printed "All declarations agree".  Any
-    # `@vX.Y.Z` git-tag pin in an .rst under docs/ must name the canonical
-    # version — same contract as the README install pins (INVARIANT-32).
-    for rst in sorted((REPO / "docs").rglob("*.rst")):
-        text = _read(rst)
-        if not text:
-            continue
-        for m in re.finditer(r"@v(\d+\.\d+\.\d+)", text):
-            desc = f"{repo_relative(rst, REPO)} git-tag pin"
-            if m.group(1) != canonical:
-                failures.append(f"  - {desc}: @v{m.group(1)} != canonical {canonical!r}")
-            else:
-                print(f"OK    {desc:<60s} = {m.group(1)}")
+    # CMake derives SOVERSION from the project major, so the shipped chain is
+    # ``libama_cryptography.so -> .so.<major> -> .so.<major>.<minor>.<patch>``.
+    # Two statements in setup.py's `_copy_native_library_into_package`
+    # docstring still named `.so.3` two majors after the project left it —
+    # including the sentence that describes what the function guarantees ("We
+    # preserve the SONAME chain ...") — while the same bump had updated the
+    # Makefile.  A literal major in packaging prose is a version anchor, and
+    # every other kind is checked here.
+    #
+    # Naming the current value concretely is GOOD documentation — the two
+    # correct paragraphs in that same docstring write ``.so.<major>`` and then
+    # say "``.so.5`` at this release".  What is checked is agreement: a literal
+    # whose major differs from the canonical one is stale, and at the next bump
+    # a now-correct literal becomes stale and this reports it, which is the
+    # whole point.  ``CMakeLists.txt project() VERSION`` is asserted equal to
+    # ``canonical`` above, so the project major is the canonical major.
+    soname_problems, sonames_checked = scan_soname_literals(REPO, canonical)
+    failures.extend(soname_problems)
+    # Non-vacuity, mirroring the pin sweep below: setup.py's
+    # `_copy_native_library_into_package` docstring and the Makefile each
+    # name the concrete `.so.<major>` at least once — the block above argues
+    # that naming the value is GOOD documentation.  A sweep that finds none
+    # has stopped matching (a reword to `.so.<major>` everywhere, a moved
+    # file), not legitimately run out of literals — and its disappearance
+    # would otherwise leave this check verifying nothing, silently.
+    if sonames_checked < 2:
+        failures.append(
+            f"  - SONAME literals: found only {sonames_checked}; setup.py and "
+            f"Makefile should yield at least 2. The sweep has stopped seeing "
+            f"them — check the pattern and the file set."
+        )
+    elif not soname_problems:
+        soname_major = canonical.split(".", 1)[0]
+        print(
+            f"OK    SONAME literals ({sonames_checked} checked)".ljust(65) + f"= .so.{soname_major}"
+        )
+
+    # -------------------------------------------------------------------
+    # Git-tag install pins in prose docs (.rst AND .md) — see scan_tag_pins.
+    # The predecessor read docs/**/*.rst only and missed README's own install
+    # commands, though its comment claimed to cover them (INVARIANT-32; M11).
+    pin_problems, pins_checked = scan_tag_pins(REPO, canonical)
+    failures.extend(pin_problems)
+    # Non-vacuity: the README and the Sphinx landing page both ship an install
+    # pin, so a sweep that finds none has stopped matching (a moved file, a
+    # broken pattern) rather than legitimately having nothing to check.
+    if pins_checked < 2:
+        failures.append(
+            f"  - git-tag install pins: found only {pins_checked}; the README and "
+            f"docs/index.rst install commands should yield at least 2. The pin "
+            f"sweep has stopped seeing them — check the pattern and the file set."
+        )
+    elif not pin_problems:
+        print(f"OK    git-tag install pins ({pins_checked} checked)".ljust(65) + f"= {canonical}")
 
     # -------------------------------------------------------------------
     # Documentation version headers.
@@ -609,7 +816,11 @@ def main() -> int:
         for pat in doc_header_pats:
             for m in pat.finditer(text):
                 doc_checked += 1
-                rel = md.relative_to(REPO)
+                # repo_relative, not relative_to: the message is a path a
+                # reviewer reads, and str(Path.relative_to(...)) spells it with
+                # backslashes on Windows while every other message here uses
+                # forward slashes.
+                rel = repo_relative(md, REPO)
                 if m.group(1) != canonical:
                     doc_stale.append(
                         f"{rel}: header version {m.group(1)!r} != canonical {canonical!r}"
@@ -640,6 +851,23 @@ def main() -> int:
         )
     else:
         print("OK    .github/INVARIANTS.md -> ../INVARIANTS.md pointer")
+
+    # Every document that states the register's extent must state the real one.
+    highest_invariant, register_problems = invariant_register_extent(root_inv_path)
+    failures.extend(register_problems)
+    if highest_invariant:
+        range_problems, ranges_checked = scan_invariant_range_claims(REPO, highest_invariant)
+        if range_problems:
+            failures.append(
+                f"  - invariant-range claims disagree with INVARIANTS.md "
+                f"({len(range_problems)} stale):"
+            )
+            failures.extend(f"    {row}" for row in range_problems)
+        else:
+            print(
+                f"OK    invariant-range claims ({ranges_checked} checked)"
+                f"      = INVARIANT-1 through INVARIANT-{highest_invariant}"
+            )
 
     # C-source embedded-version-literal scan. The canonical anchor for
     # the C side is include/ama_cryptography.h's

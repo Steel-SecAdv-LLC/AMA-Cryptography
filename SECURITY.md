@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 4.0.0 |
-| Last Updated | 2026-08-01 |
+| Document Version | 5.0.0 |
+| Last Updated | 2026-08-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -23,7 +23,8 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 4.0.x | Yes | Active development and security updates |
+| 5.0.x | Yes | Active development and security updates (5.0.0 is prepared but **not yet tagged or published** — see CHANGELOG `[5.0.0]`) |
+| 4.0.x | No | Superseded by v5.0 (ten breaking changes — see CHANGELOG `[5.0.0]`) |
 | 3.5.x | No | Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |
 | 3.3.x | No | Superseded by v3.4; no public API removals |
@@ -44,7 +45,7 @@ AMA Cryptography implements defense-in-depth with multiple independent security 
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
 3. **Ed25519 Digital Signatures** (RFC 8032, C11 atomics hardened)
 4. **ML-DSA-65 Quantum-Resistant Signatures** (NIST FIPS 204)
-5. **HKDF-SHA3-256 Key Derivation** (RFC 5869, NIST SP 800-108)
+5. **HKDF-SHA3-256 Key Derivation** (RFC 5869)
 6. **RFC 3161 Timestamp Binding** — *not an independent layer.* AMA verifies the §2.4.2 message-imprint binding only. It does not verify the TSA's CMS `SignerInfo` signature or validate its certificate chain, so an adversary who can supply a token satisfies this check unaided, with any `genTime` they choose, using no key. It contributes no adversarial resistance and must not be counted toward the security bound. See [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform) and [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).
 
 ### Additional Cryptographic Capabilities
@@ -401,6 +402,244 @@ Python interpreter loads them. Deploy AMA behind one of those where the
 `.pyc`/`.so` tampering threat is in scope; the in-process checks are
 defense in depth beneath it, not a substitute for it.
 
+**Why the boundary is not narrowed further in-band (2026-08
+reassessment).** The obvious next step — bootstrapping the checker by
+`exec`-ing its *source* so its own `.pyc` never runs — was evaluated and
+rejected: it moves the trusted base from the checker's module to the
+orchestration chain that would perform the exec (`__init__.py` and the
+modules it imports first), and every file in that chain lives in the same
+directory under the same permissions as the one it replaced. An attacker
+with the write access the attack requires can poison `__init__.pyc` as
+easily as the checker's `.pyc`, so the narrowing buys complexity, not
+security. What *does* help, and costs nothing at runtime, is deployment
+posture: install the package read-only (the norm for system site-packages),
+or run with `PYTHONDONTWRITEBYTECODE=1` / `sys.dont_write_bytecode` so no
+`.pyc` cache exists to poison — the execution-integrity stage reports the
+no-cache case honestly as "nothing to poison" — and let the OS-level
+signing above authenticate the tree.
+
+**Supported out-of-band procedure (`tools/verify_install_oob.py`).** The
+repository ships a standalone, stdlib-only verifier that performs the
+out-of-band check the boundary above defers to, runnable anywhere Python
+runs even where OS/package-manager code signing is not deployed. Invoked
+in a fresh interpreter against an installed package directory
+(`python3 tools/verify_install_oob.py <package-dir> --expected-pubkey <64
+hex> [--native-lib PATH]`),
+it imports nothing from the target tree: it parses
+`_integrity_signature.py` as text (never importing or executing it),
+recomputes the `.py`/`_post_kats/` digest and the v1/v2/v3 signed message
+exactly as the in-process verifier does, checks the build-time Ed25519
+signature, verifies the native-library and binding-extension digests, and
+compares every cached `__pycache__/*.pyc` for the invoking interpreter
+against a fresh compile of its on-disk source using the same
+executed-surface comparison as the execution-integrity POST stage — so a
+poisoned `.pyc` is caught by a checker whose own bytecode does not live in
+the tree being checked. Its SHA3-256, SHA-512 and Ed25519 verification are
+hand-written from FIPS 202 / FIPS 180-4 / RFC 8032 (no OpenSSL-backed
+`hashlib`, per INVARIANT-1) and must pass startup known-answer tests,
+including a negative control, before anything is verified; a failed
+self-test verifies nothing and exits nonzero. Its trust base is stated in
+the tool and is deliberately small: the operator's Python interpreter,
+that one file — which must itself be obtained out of band (a fresh clone
+or a checksum-verified release artifact, never the installation under
+test), because relocating the verifier outside the tree's trusted
+computing base is the entire point — and the **public key supplied as
+`--expected-pubkey`**.
+
+That key is part of the trust base for the same reason the tool is. The
+artefact carries the public key it was signed under, so checking the
+signature against *that* key shows only that whoever wrote the artefact
+also wrote a matching signature; the attacker this tool answers — one
+who can rewrite the installed tree — can rewrite the sources, mint a
+keypair, re-sign, and leave every digest and the signature agreeing. The
+key is therefore compared before the signature is checked, and a tree
+signed under any other key is refused however valid its own signature
+is. Without `--expected-pubkey` the tool exits 2 rather than reporting a
+verdict; `--allow-unanchored` is available for developer trees, whose
+artefacts are signed with a per-build ephemeral key no operator holds,
+and it labels the result `PASS (UNANCHORED)` and prints the full key, so
+what was established (internal consistency) is not confused with what
+was not (authenticity). For a release wheel the key to pass is the
+compiled trust anchor, read from a trusted copy of the release.
+
+The boundary statement above stands unchanged for the in-process checks:
+a self-check written in Python still cannot vouch for its own bytecode,
+and this tool is the supported way to check what those checks cannot.
+
+### Pre-load native-library verification — refusing before mapping
+
+Digest-checking the shared object *after* `dlopen` (the original
+INVARIANT-39 binding) detects tampering but cannot prevent it from
+running: a shared object executes its constructors the moment it is
+mapped. Discovery therefore hashes every candidate **before** loading it
+and refuses to map an object whose SHA3-256 does not match the signed
+`INTEGRITY_NATIVE_DIGEST_HEX` in the integrity artefact. A candidate
+whose bytes cannot be read is refused on the same grounds, on every
+platform: bytes that cannot be hashed cannot be verified. On Linux the
+mapping then goes through `/proc/self/fd` on the very descriptor that was
+hashed — the descriptor pins the inode, so the verified bytes and the
+mapped bytes cannot be split by swapping the path between the two steps —
+and the POST integrity stage compares the *recorded* digest of those
+mapped bytes rather than re-reading the file, closing the same race on
+the back end.
+
+Stated boundaries, not implied ones: at pre-load time the artefact's
+signature cannot yet be verified (the Ed25519 verifier is inside the
+library being loaded), so this check defeats the attacker who can replace
+the shared object but not re-sign the artefact; one who rewrites both is
+caught after load by the signature — or, having re-signed under their own
+key, by the trust-anchor comparison on anchored builds, with the
+constructor-execution residue that entails. That full-package attacker
+remains the OS-code-signing boundary above. An in-place overwrite of the
+pinned inode inside the hash-to-map window is not excluded (an attacker
+with that write access is caught whenever they write *before* the hash),
+and platforms without procfs fall back to hash-then-load with the POST
+stage re-verifying after load. Two deliberate carve-outs:
+`AMA_CRYPTO_LIB_PATH` (the operator's own substitution — honoured,
+digest-recorded, reported UNVERIFIED when the bytes differ) and
+`AMA_BUILD_PIPELINE=1` outside secure-execution mode (the artefact-repair
+tools live inside this package and must be able to import it after a
+rebuild). Pinned in both directions by
+`tests/test_preload_native_digest.py` and the tamper cases in
+`tests/test_native_integrity.py`.
+
+Because verification now binds the mapped **bytes**, an
+`AMA_CRYPTO_LIB_PATH` override whose bytes are identical to the signed
+library reports as verified — a byte-identical copy *is* the signed
+library, wherever it was loaded from — while the override's presence
+stays visible in `native_backend_diagnostics()`. A modified override
+remains UNVERIFIED, never blocked.
+
+**The Cython binding extensions are digest-bound (v3 artefact).** The
+composite signature covers the `.py` sources, the POST KAT vectors,
+`libama_cryptography`, **and** a per-file SHA3-256 map of the compiled
+extension modules (`ed25519_binding`, `hmac_binding`, `sha3_binding`,
+`dilithium_binding`, `hkdf_binding`, `math_engine`), serialized into the
+signed v3 composite under its own domain string. At import, POST verifies
+every extension-suffixed file in the package directory against the
+authenticated map, with the same anchored/developer severity split the
+native-library check uses: a file whose bytes differ from a signed digest
+is tampering and a hard failure on **every** build; a listed-but-missing
+or present-but-uncovered extension is a hard failure on **anchored**
+(release) builds — where the artefact is generated by the same pipeline
+that assembles the wheel, so drift cannot occur legitimately — and a
+logged warning on developer builds, where it is the ordinary state of a
+source tree whose extensions were built before or after its artefact.
+The artefact's schema selects the signed message, so stripping the
+binding map from a v3 artefact (or grafting one onto a v2 artefact) is a
+signature failure, not a downgrade. The signer refuses to sign a tree
+containing an extension module outside its inventory, so a new binding
+cannot ship uncovered by omission.
+
+**Both** signing callers bind. `tools/resign_wheel.py` passes
+`--bind-extensions`, and so does the repair flow — `integrity --update
+--sign` sets it unconditionally before delegating to `_build_sign`
+(`ama_cryptography/integrity.py`). Only `_build_sign` invoked directly
+without the flag writes an empty map.
+
+An earlier revision of this paragraph said the opposite: that the repair
+flow "binds none, since a committed map of one machine's extension
+digests would read as a tampering verdict against every other machine's
+legitimately rebuilt extensions", and concluded that a source tree's
+binding coverage "is not an attestation claim at all". That was true of
+the revision it was written for and was inverted when the repair flow
+started binding too. It was inverted for a reason: `integrity --update
+--sign` is the exact command `_self_test._check_binding_extensions`
+prints as the remedy for "present but not covered by the signed
+artefact", and without the flag it wrote an empty map, changed the
+artefact hash, printed "bindings = 0 extension(s) bound", and reproduced
+the identical warning on the next import. The one instruction the failure
+message gave could not clear the condition it was given for. The same
+stale claim was corrected in `setup.py`'s comment and is pinned there by
+`tests/test_setup_signer_contract.py`.
+
+Binding is the correct scope for a repair artefact. It is local by
+construction — re-signed with this machine's ephemeral key, replacing
+whatever release signature the tree carried — so the "would read as a
+tampering verdict on another machine" objection describes copying a
+repaired tree elsewhere, where a mismatch is the accurate verdict and
+carries this same repair hint. It matches how the native library is
+already treated: rebuild it without re-signing and import fails closed,
+because the artefact names bytes that are no longer there.
+
+The artefact this repository commits carries a populated binding map:
+six extensions, signed on the platform that built them, keyed by exact
+filename (ABI tag included). It is a local artefact in the sense above,
+and it stays valid only while the tree carries the bytes it names:
+rebuild an extension without re-signing and import fails closed on the
+digest mismatch — the same treatment the native library gets — while a
+checkout whose extensions are not built at all sees six
+listed-but-missing entries, a logged warning on developer builds per
+the severity split above. Both states are refreshed the same way:
+`AMA_BUILD_PIPELINE=1` with `integrity --update --sign` re-signs the
+tree as it stands and rewrites the map. The binding guarantee remains
+exact-or-fatal in a shipped wheel, where the artefact and the
+extensions are produced by one pipeline.
+
+An earlier revision of this section recorded the gap as blocked on a
+release-pipeline change, on the claim that repair tools rewrite the
+binding ELFs after signing. Measured, that claim was false for
+auditwheel on Linux — the bindings resolve `libama_cryptography`
+**inside the package** via `$ORIGIN`/`@loader_path` RUNPATHs, so there
+is nothing external to graft: the published v4.0.0 wheels ship every
+binding byte-identical to the build (no `.libs`/`.dylibs` directory,
+unmangled `DT_NEEDED`, verified on the release assets), and a local
+`auditwheel repair` of a freshly built wheel changes only
+`RECORD`/`WHEEL` metadata. It was **not** false for delocate on macOS:
+the 5.0.0 release dry run showed `delocate-wheel` rewriting every
+binding's Mach-O load commands *after* the signer ran, so all five
+bindings in the macOS wheels failed their signed digests at the wheels'
+own smoke test. The mitigation there is to disable macOS repair
+outright (`CIBW_REPAIR_WHEEL_COMMAND_MACOS: ""` in `release.yml`),
+which this project can afford because delocate has nothing to vendor;
+Windows repair is disabled for the same reason. The full chain is
+exercised end-to-end: a wheel built with the v3 signer, repaired,
+installed into a clean environment, passes POST with all six bindings
+verified, and refuses to import when any installed binding is modified.
+
+On Linux the pipeline no longer bets on auditwheel continuing to leave
+the bindings alone. The default `auditwheel repair` still runs — the
+manylinux retagging is worth keeping — and `tools/resign_wheel.py`
+(`CIBW_REPAIR_WHEEL_COMMAND_LINUX` in `release.yml`) then re-signs each
+repaired wheel over its **post-repair** bytes: the wheel is unpacked,
+the signer is run against the unpacked tree itself (with a hard
+verification that the native library it bound came from *inside* that
+tree), `RECORD` is regenerated, and the wheel is repacked in place. The
+artefact's digests therefore describe the bytes the wheel ships **by
+construction**, whatever a future auditwheel version rewrites — the
+failure mode delocate exhibited on macOS can no longer invalidate a
+shipped Linux signature. The wheel smoke test (`CIBW_TEST_COMMAND`)
+still verifies every re-signed wheel end to end before any artefact
+ships.
+
+A digest scheme covering only the regions repair tools do not rewrite
+(.text-only or section-selective hashing) was considered and rejected,
+and the rejection is recorded deliberately: the rewritten regions —
+`RUNPATH`/`DT_NEEDED` entries on Linux, Mach-O load commands on macOS —
+are precisely the highest-value tamper surface, because they decide
+*which shared object the loader binds*. Excluding them from the digest
+would trade tamper-evidence on the load path for a compatibility with
+post-signing rewrites that the resign-after-repair chain provides in
+full while keeping whole-file digests.
+
+Binding extensions are ordinary imports, and an extension's module-init
+function runs the moment it is imported — so verification cannot wait
+for POST alone. The pre-import gate
+(`__init__._refuse_tampered_bindings_before_import`) closes that
+asymmetry for the case that is unambiguous tampering: at the top of
+package initialisation, ahead of every binding import path, it
+recomputes each signed binding digest and **refuses to import** on a
+mismatch, before any binding executes. (An earlier revision of this
+paragraph said pre-load refusal "would require an import hook"; the
+gate achieves the same property without one, because no import path
+reaches a binding without initialising the package first.) POST covers
+what the gate deliberately leaves to it: inventory drift
+(listed-but-missing / present-but-uncovered, whose correct severity
+depends on the trust anchor, which lives in the native library the gate
+runs ahead of) and authentication of the artefact itself — an attacker
+who rewrites both a binding and the artefact is caught by the Ed25519
+signature check, not the gate.
+
 ### `--update` is build-pipeline-only
 
 `python -m ama_cryptography.integrity --update` is gated behind
@@ -468,11 +707,18 @@ is load-bearing for your deployment:
   `_integrity_digest.txt`, a plaintext file with no signature at all.
   This is inherent to any self-contained self-check — the anchor is what
   breaks the circularity.
-- **NOT covered at all:** the native shared library. The digest is
-  computed over the package's `.py` files only
-  (`_self_test._compute_module_digest`), so a substituted or patched
-  `libama_cryptography` is invisible to it. See the
-  `AMA_CRYPTO_LIB_PATH` note below.
+- **Also covered (v2/v3 artefacts):** the native shared library and the
+  compiled binding extensions. `_self_test._compute_module_digest`
+  hashes the `.py` files, but the signed composite additionally binds
+  the SHA3-256 of `libama_cryptography` — enforced before the object is
+  mapped (see "Pre-load native-library verification" above) — and the
+  per-file digest map of the binding extensions, so a substituted or
+  patched shared object is refused, not invisible. The same
+  write-capable-adversary caveat as the previous bullet applies: re-sign
+  the whole artefact and only a compiled trust anchor catches it. The
+  one deliberate exception is an operator's `AMA_CRYPTO_LIB_PATH`
+  override, reported UNVERIFIED when its bytes differ; see the note
+  below.
 
 A build is only tamper-evident against a write-capable adversary when
 `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` is compiled into the native
@@ -524,8 +770,11 @@ This environment variable overrides the search for the native library and
 loads the named shared object directly. It is a developer convenience for
 pointing at an out-of-tree build, and it is a code-execution boundary: a
 shared object runs its constructors the moment it is mapped, before the
-power-on self-test executes. Because the override is by definition not the
-signed, shipped object, the integrity check records the loaded library as
+power-on self-test executes. The loaded object's digest is recorded at load
+time and compared against the signed native digest: when the override's
+bytes are **identical** to the signed library's, it verifies in full (a
+byte-identical copy is the signed library, wherever it was loaded from);
+when they differ, the integrity check records the loaded library as
 **unverified** (the signature over the artefact still verifies, but the
 loaded bytes are not bound to it) — `module_attestation()["fully_verified"]`
 is `False` and a warning names the override. Treat the ability to set it as
@@ -591,7 +840,7 @@ the strict path rejects unanchored artefacts.
 
 ### `AMA_FIPS_STRICT` — escalate skipped KATs to POST failure
 
-Released wheels and FIPS-validated deployments should set
+Released wheels and deployments requiring FIPS-style strictness should set
 `AMA_FIPS_STRICT=1` so a missing backend cannot silently degrade the
 approved-algorithm self-test set:
 
@@ -602,7 +851,7 @@ approved-algorithm self-test set:
     `module_self_test_results()`, and continues.  Skip is NOT a pass —
     consumers filtering for "everything passed" must compare
     `passed is True`.
-  * **`=1` (release / FIPS-validated path):** a skipped KAT is
+  * **`=1` (release / FIPS-strict path):** a skipped KAT is
     escalated to a hard POST failure.  The module enters ERROR state
     and refuses every cryptographic operation until the missing
     backend is built and the process restarted.  This makes a
@@ -802,14 +1051,24 @@ AMA Cryptography is designed to comply with:
 - **NIST FIPS 204** - Module-Lattice-Based Digital Signature Standard (ML-DSA / Dilithium)
 - **NIST FIPS 205** - Stateless Hash-Based Digital Signature Standard (SLH-DSA / SPHINCS+)
 - **NIST SP 800-38D** - Recommendation for Block Cipher Modes: GCM (AES-256-GCM)
-- **NIST SP 800-108** - Recommendation for Key Derivation Using Pseudorandom Functions
 - **NIST SP 800-57** - Recommendation for Key Management
 - **RFC 2104** - HMAC: Keyed-Hashing for Message Authentication
 - **RFC 5869** - HMAC-based Extract-and-Expand Key Derivation Function (HKDF)
 - **RFC 8032** - Edwards-Curve Digital Signature Algorithm (EdDSA)
-- **RFC 3161** - Internet X.509 Public Key Infrastructure Time-Stamp Protocol
 
-Non-compliance with these standards should be reported as a high-severity security issue.
+**Partial, and deliberately so:**
+
+- **RFC 3161** - Time-Stamp Protocol. AMA verifies the §2.4.2 message-imprint
+  binding *only*. It does **not** verify the TSA's CMS `SignerInfo` signature,
+  does **not** validate the signing certificate chain, and therefore treats
+  `TSTInfo.genTime` as attacker-chosen data — see the explicit `tsa_signature`
+  / `tsa_certificate_chain` / `gen_time` `False` declarations in
+  `ama_cryptography/rfc3161_timestamp.py`, item 6 of the layer list above, and
+  [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform).
+  It contributes no adversarial resistance and must not be counted toward the
+  security bound.
+
+Non-compliance with the fully-implemented standards above should be reported as a high-severity security issue.
 
 ## Contact
 
@@ -826,7 +1085,7 @@ Non-compliance with these standards should be reported as a high-severity securi
 - [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) — Cryptographic algorithm overview
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — System architecture and invariants
 - [`CONSTANT_TIME_VERIFICATION.md`](CONSTANT_TIME_VERIFICATION.md) — Timing-side-channel validation
-- [`.github/INVARIANTS.md`](.github/INVARIANTS.md) — Library invariants (canonical)
+- [`INVARIANTS.md`](INVARIANTS.md) — Library invariants (canonical)
 
 ---
 
@@ -845,6 +1104,8 @@ Non-compliance with these standards should be reported as a high-severity securi
 | 3.3.0 | 2026-07-05 | Native one-shot SHA-256; documented public MAC/KDF surface (`quick_hmac` / `quick_hkdf`, native HMAC/HKDF SHA-2/3, `AmaCryptographyError` exception root); SLH-DSA-SHA2-256f signer consolidation; native-hashing purity in `crypto_api`; SLSA provenance permissions + CodeQL unused-static resolution |
 | 3.4.0 | 2026-07-25 | Support matrix rolled (3.4.x active); vendored Wycheproof gate; Ed25519 canonical-`S` enforcement (INVARIANT-26) and X25519 u-coordinate canonicalization (INVARIANT-27); agent-instance binding (INVARIANT-30) with 3R detectors; Ascon-AEAD128/Hash256 (SP 800-232) |
 | 3.5.0 | 2026-07-30 | Support matrix rolled (3.5.x active, 3.4.x superseded — no public API removals); INVARIANT-22 nonce-counter rollback residual risk documented; NIST P-256/384/521 ECDSA (FIPS 186-5, INVARIANT-34 low-`s` policy), ML-KEM/ML-DSA parameter sets, HSS/LMS verification enter the supported surface |
+| 4.0.0 | 2026-08-01 | Support matrix rolled (4.0.x active, 3.5.x superseded — six breaking changes); trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor on both cost and algorithm; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material; RFC 8439 length limit on ChaCha20-Poly1305 |
+| 5.0.0 | 2026-08-14 | Support matrix rolled (5.0.x active, 4.0.x superseded — ten breaking changes); fail-closed FIPS 140-3 POST import with output inhibition on every surface (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check and loaded-library major-version handshake (INVARIANT-42); pre-load native-library digest verification with the fail-closed unreadable-candidate rule; the six binding extensions digest-bound into the v3 integrity artefact (every build signs and binds, including the repair flow; anchored/developer severity split); Ed25519 `x = 0` twin-encoding rejection, extended to the signature's R half on every verify path in both backends so batch and single verify cannot disagree; `CryptoPostureController` fail-closed on an algorithm it cannot rank, with per-family strength ladders so an escalation cannot answer a KEM with a signature scheme; pre-load refusal of a binding extension whose digest does not match the signed artefact (previously verified only after it had executed); the `AMA_BUILD_PIPELINE` carve-out that let an environment variable buy a mapping of an unverified native library replaced with an in-process signing-only scope; ML-KEM `Compress_d` applies its own `mod 2^d` with an exhaustive 16,645-pair proof; SoftHSM2, the semgrep end-to-end assertion, `test_dispatch_cache_file` on SIMD-off builds and `test_pq_parser_stack` under Valgrind all made executable; the dudect verdict rule distinguishes a directional leak from an unusable measurement |
 
 ---
 

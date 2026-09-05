@@ -3,7 +3,7 @@
 /**
  * @file ama_cryptography.h
  * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
- * @version 4.0.0
+ * @version 5.0.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-04-25
  *
@@ -41,10 +41,10 @@ extern "C" {
  * VERSION INFORMATION
  * ============================================================================ */
 
-#define AMA_CRYPTOGRAPHY_VERSION_MAJOR 4
+#define AMA_CRYPTOGRAPHY_VERSION_MAJOR 5
 #define AMA_CRYPTOGRAPHY_VERSION_MINOR 0
 #define AMA_CRYPTOGRAPHY_VERSION_PATCH 0
-#define AMA_CRYPTOGRAPHY_VERSION_STRING "4.0.0"
+#define AMA_CRYPTOGRAPHY_VERSION_STRING "5.0.0"
 
 /* ============================================================================
  * ALGORITHM IDENTIFIERS
@@ -191,8 +191,6 @@ typedef enum {
  * ============================================================================ */
 
 typedef struct ama_context_t ama_context_t;
-typedef struct ama_keypair_t ama_keypair_t;
-typedef struct ama_signature_t ama_signature_t;
 
 /* ============================================================================
  * CONTEXT MANAGEMENT
@@ -471,6 +469,24 @@ AMA_API ama_error_t ama_sha3_512(
 );
 
 /**
+ * @brief SHA3-384 hash function (FIPS 202)
+ *
+ * One-shot SHA3-384 (capacity 768, rate 104).  Byte-identical to
+ * hashlib.sha3_384(input).digest().  Exported so the Python layer's
+ * RFC 3161 digest table is natively backed end to end (INVARIANT-1).
+ *
+ * @param input Input data (may be NULL iff input_len == 0)
+ * @param input_len Length of input
+ * @param output Output buffer (48 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sha3_384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
  * @brief SHAKE128 / SHAKE256 extendable-output functions (FIPS 202)
  *
  * One-shot XOF: absorb `input`, squeeze `output_len` bytes into `output`.
@@ -508,7 +524,11 @@ typedef struct {
     uint64_t state[25];     /**< Keccak state (1600 bits) */
     uint8_t buffer[168];    /**< Rate buffer (168 bytes max for SHAKE128; 136 for SHA3-256/SHAKE256) */
     size_t buffer_len;      /**< Current bytes in buffer */
-    int finalized;          /**< Set to 1 after final() called */
+    int finalized;          /**< 0 before final(); afterwards the finalizing
+                             *   family's rate in bytes (nonzero), so a
+                             *   squeeze through a different family's entry
+                             *   point is rejected rather than emitting
+                             *   another sponge's capacity bytes */
 } ama_sha3_ctx;
 
 /**
@@ -699,6 +719,92 @@ AMA_API ama_error_t ama_hmac_sha384(
 );
 
 /**
+ * @brief One-shot SHA-512 (FIPS 180-4 Section 6.4)
+ *
+ * Byte-identical to hashlib.sha512(input).digest().  Surfaces the in-tree
+ * SHA-512 core (internal/ama_sha2.h — the one Ed25519, SLH-DSA-SHA2,
+ * HKDF-SHA-512 and HMAC-SHA-384 already run on) to public callers, so the
+ * Python layer's FIPS 186-5 hash pairings and RFC 3161 digest table need
+ * no stdlib hashlib (INVARIANT-1).  Argument order follows the SHA-3
+ * family (input-first, rc-checked), not the older output-first ama_sha256.
+ *
+ * @param input     Input data (may be NULL iff input_len == 0)
+ * @param input_len Input length in bytes
+ * @param output    Output buffer (must be at least 64 bytes)
+ * @return          AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_sha512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
+ * @brief One-shot SHA-384 (FIPS 180-4 Section 6.5)
+ *
+ * Byte-identical to hashlib.sha384(input).digest().  Shares the SHA-512
+ * compression function; differs only in IV and 48-byte truncation.
+ *
+ * @param input     Input data (may be NULL iff input_len == 0)
+ * @param input_len Input length in bytes
+ * @param output    Output buffer (must be at least 48 bytes)
+ * @return          AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_sha384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
+ * @brief PBKDF2-HMAC-SHA256 (NIST SP 800-132 / RFC 8018 Section 5.2)
+ *
+ * Byte-identical to hashlib.pbkdf2_hmac("sha256", password, salt,
+ * iterations, out_len).  Backs the Python key-encryption-key derivation
+ * so no KDF is delegated to stdlib hashlib's OpenSSL PBKDF2 (INVARIANT-1).
+ * The HMAC key schedule is hoisted out of the iteration loop (two
+ * compression passes per iteration, not four).
+ *
+ * @param password      Password bytes (may be NULL iff password_len == 0)
+ * @param password_len  Password length in bytes
+ * @param salt          Salt bytes (may be NULL iff salt_len == 0)
+ * @param salt_len      Salt length in bytes
+ * @param iterations    Iteration count (must be >= 1)
+ * @param out           Output buffer for the derived key
+ * @param out_len       Derived key length (>= 1, <= (2^32 - 1) * 32)
+ * @return              AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
+);
+
+/**
+ * @brief PBKDF2-HMAC-SHA512 (NIST SP 800-132 / RFC 8018 Section 5.2)
+ *
+ * Byte-identical to hashlib.pbkdf2_hmac("sha512", password, salt,
+ * iterations, out_len).  This is the BIP39 seed-derivation KDF
+ * (2048 iterations, salt "mnemonic" || passphrase).
+ *
+ * @param password      Password bytes (may be NULL iff password_len == 0)
+ * @param password_len  Password length in bytes
+ * @param salt          Salt bytes (may be NULL iff salt_len == 0)
+ * @param salt_len      Salt length in bytes
+ * @param iterations    Iteration count (must be >= 1)
+ * @param out           Output buffer for the derived key
+ * @param out_len       Derived key length (>= 1, <= (2^32 - 1) * 64)
+ * @return              AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_pbkdf2_hmac_sha512(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
+);
+
+/**
  * @brief HKDF key derivation (RFC 5869)
  *
  * Derives key material using HKDF with HMAC-SHA3-256.
@@ -816,9 +922,24 @@ AMA_API ama_error_t ama_hkdf_sha512(
  *       constant time against an authority key K_auth supplied by the caller.
  *
  * K_auth is held by the human-controlled supervisor that issues bindings, not
- * by the agent.  An agent that has escaped its sandbox still cannot mint a
- * persistent binding: it has enc(b) but not K_auth, and the check is a MAC
- * verification, not a flag test.
+ * by the agent.  The check is a MAC verification, not a flag test: it recomputes
+ * HMAC-SHA3-256(K_auth, 0x01 || enc(b)) using the K_auth the VERIFIER supplies
+ * at check time and compares it to `authorization`.  The security property is
+ * therefore relative to the verifier's key: against a verifier that supplies
+ * the supervisor's real K_auth, an escaped agent cannot present a binding that
+ * verifies, because it has enc(b) but not K_auth and so cannot produce the
+ * matching tag.
+ *
+ * This is NOT a claim that the binding is self-proving.  An escaped agent that
+ * drives this API can `authorize()` a binding under ITS OWN key and `check()`
+ * it under that same key — a self-consistent but empty act: such a binding
+ * verifies only against the agent's key, is rejected by any verifier pinning
+ * K_auth, and confers nothing, since the derived key (ama_hkdf_agent_bound) and
+ * signing context (ama_agent_binding_context) are public functions of enc(b)
+ * that the agent could compute without this library and that do not
+ * incorporate `authorization`.  A caller MUST verify a binding under the
+ * supervisor's K_auth (never under a key the untrusted producer chose) for the
+ * check to mean "the supervisor authorized this".
  *
  * Everything here is fail-closed: a NULL argument, a malformed record, a
  * reserved byte that is not zero, an absent authority key, or a tag mismatch
@@ -1197,7 +1318,16 @@ typedef struct {
  * @param entries   Array of `count` batch entries. Each entry's
  *                  `signature` and `public_key` must satisfy the
  *                  fixed-length contract documented on the struct above;
- *                  none of it is checked here.
+ *                  the LENGTHS cannot be checked here, because the struct
+ *                  does not record them. The POINTERS are: an entry with a
+ *                  NULL `signature`, a NULL `public_key`, or a NULL
+ *                  `message` with a non-zero `message_len` is rejected as
+ *                  an invalid entry (`results[i] = 0`, and the call returns
+ *                  `AMA_ERROR_VERIFY_FAILED`), which is the same verdict
+ *                  `ama_ed25519_verify` gives those arguments. Until this
+ *                  was added the donna backend dereferenced them and took
+ *                  SIGSEGV while the in-tree backend rejected cleanly, so
+ *                  the same call crashed on x86-64 and returned on aarch64.
  * @param count     Number of entries in `entries`, and the minimum number
  *                  of `int` slots in `results`.
  * @param results   Output: caller MUST supply at least `count` writable
@@ -1205,13 +1335,51 @@ typedef struct {
  *                  0=invalid). There is no capacity parameter, so a
  *                  short array is undefined behaviour.
  * @return AMA_SUCCESS if all verified, AMA_ERROR_VERIFY_FAILED if any failed,
- *         AMA_ERROR_INVALID_PARAM if entries or results is NULL
+ *         AMA_ERROR_INVALID_PARAM if `entries` or `results` is NULL, or if
+ *         `count` is large enough that `count * sizeof(void *)` would overflow.
+ *
+ * Batch verification is a per-entry loop over `ama_ed25519_verify`, identical
+ * in both backends (the fe51 path always was; the donna path became one in
+ * 5.0.0 — see B1 in the pre-tag audit, which retired donna's randomized
+ * multi-scalar aggregate because its predicate accepted canonically encoded
+ * small-order residues that single verify rejects). The batch verdict for an
+ * entry is therefore exactly the single-verify verdict for the same 64 bytes:
+ * there is no separate aggregate predicate, no randomizer draw and no
+ * working-array allocation, and so no `AMA_ERROR_MEMORY` or `AMA_ERROR_CRYPTO`
+ * return. A caller MUST treat any non-`AMA_SUCCESS` return as "at least one
+ * entry in this batch did not verify" and read `results` per entry rather than
+ * switching only on `AMA_ERROR_VERIFY_FAILED`.
+ *
+ * Once the arguments are accepted, all `count` slots of `results` are written
+ * and none carries a 1 unless that entry verified — the array is zeroed up
+ * front so no path can leave a stale 1 from an earlier batch visible to a
+ * caller that reads `results` before the return code.
+ *
+ * The two argument-rejection returns write nothing, because at that point
+ * there is nothing safe to write: `AMA_ERROR_INVALID_PARAM` for a NULL
+ * `entries` or `results`, and for a `count` so large that `count *
+ * sizeof(void *)` would overflow — a `count` that by definition does not
+ * describe a real array, so touching `results[0..count)` would be the wild
+ * write the check exists to prevent. Both are caller errors detected before
+ * any work; on either, `results` holds whatever it held before the call.
  */
 AMA_API ama_error_t ama_ed25519_batch_verify(
     const ama_ed25519_batch_entry *entries,
     size_t count,
     int *results
 );
+
+/**
+ * @brief Name the Ed25519 backend this build selected.
+ * @return A static string, "donna" (x86-64 assembly shim) or "fe51" (portable
+ *         in-tree path).  The two are compile-time mutually exclusive.
+ *
+ * Build introspection, not a cryptographic operation.  The backend differential
+ * (tools/check_ed25519_backend_parity.py) uses it to refuse to run unless the
+ * two libraries it compares report different backends — a differential handed
+ * one library twice passes vacuously (audit M14).
+ */
+AMA_API const char *ama_ed25519_active_backend(void);
 
 /* ----------------------------------------------------------------------------
  * Ed25519 Group Primitives (for FROST / Threshold Signatures)
@@ -1250,6 +1418,17 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
  *
  * Renamed from ama_ed25519_scalar_mult (audit finding C7) to make the
  * public-only constraint impossible to miss.
+ *
+ * SCALAR RANGE: any 32-byte little-endian value in [0, 2^256) is accepted,
+ * and the result depends on it only through `public_scalar mod l`, where l
+ * is the Ed25519 group order.  That is the same canonicalisation
+ * ama_ed25519_point_from_scalar has always applied, it is what the donna
+ * backend has always done (its scalar expansion reduces), and it is now
+ * enforced in the in-tree backend as well, so the two backends return
+ * byte-identical results for every input.  Callers holding an unreduced
+ * scalar do not need to reduce it first; callers relying on a distinction
+ * between s and s mod l (which differ on points outside the prime-order
+ * subgroup) will not find one here.
  */
 AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
     const uint8_t public_scalar[32], const uint8_t point[32]);
@@ -1268,6 +1447,9 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
  *
  * Exposed as a regression / equivalence-test surface and a
  * micro-benchmark target for tuning the wNAF window default.
+ *
+ * SCALAR RANGE: as for ama_ed25519_scalarmult_public — both scalars are
+ * taken modulo l, and both backends agree byte-for-byte on every input.
  */
 AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     uint8_t result[32],
@@ -1437,6 +1619,16 @@ AMA_API ama_error_t ama_aes256_gcm_decrypt(
  *
  * Computes out = scalar * (point_x, point_y) using a constant-time Montgomery ladder.
  *
+ * The input point is validated before any secret-dependent arithmetic runs:
+ * a coordinate >= p (a non-canonical encoding of the reduced value) or a
+ * point not on y^2 = x^3 + 7 is rejected with AMA_ERROR_INVALID_PARAM,
+ * never reduced or multiplied.  The a = 0 formulas never reference b, so an
+ * off-curve input would otherwise run valid arithmetic on a different curve
+ * chosen by whoever supplied the point — the invalid-curve attack — under
+ * the one secret scalar this file's public API takes.  secp256k1's cofactor
+ * is 1, so on-curve is also in-group.  A zero scalar is rejected the same
+ * way.
+ *
  * @param scalar    32-byte big-endian scalar
  * @param point_x   32-byte big-endian X coordinate of input point
  * @param point_y   32-byte big-endian Y coordinate of input point
@@ -1472,10 +1664,27 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
  *
  * 2 (SEQUENCE tag + length) + 2 * (2 (INTEGER tag + length) + 33 (a
  * 32-byte value plus a leading zero when its top bit is set)) = 72.
+ * That is the structural bound and it is what a caller must allocate.
+ *
+ * The value actually written is at most 71, because this implementation
+ * normalises to low `s`: s <= (n-1)/2 has its top bit clear, so its INTEGER
+ * never needs the leading 0x00 and the maximum is 2 + 2+33 + 2+32 = 71.
+ * `tests/c/test_secp256k1.c` measures 69, 70 or 71 over 20,000 signatures and
+ * never 72.  The constant stays 72 so the buffer contract does not depend on
+ * the low-s policy; it is a capacity, not a prediction.
+ *
  * The encoding is variable length: `ama_secp256k1_ecdsa_sign` writes
- * between 8 and 72 bytes and reports the exact count.
+ * between 8 and 71 bytes and reports the exact count.
  */
 #define AMA_SECP256K1_ECDSA_MAX_SIG_LEN 72
+
+/**
+ * Length of a fixed-width secp256k1 ECDSA signature, in bytes.
+ *
+ * `r || s`, 32 octets each, leading zeros preserved. Unlike the DER
+ * form this length is constant and carries no information about the key.
+ */
+#define AMA_SECP256K1_ECDSA_RAW_SIG_LEN 64
 
 /**
  * @brief Sign a 32-byte message digest with ECDSA over secp256k1
@@ -1509,8 +1718,10 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
  *                       caller MUST provide that much space; the
  *                       function does not know the buffer's size and
  *                       cannot check it.
- * @param signature_len  Output: number of bytes actually written
- *                       (8..AMA_SECP256K1_ECDSA_MAX_SIG_LEN).
+ * @param signature_len  Output: number of bytes actually written (8..71 —
+ *                       see AMA_SECP256K1_ECDSA_MAX_SIG_LEN, which is the
+ *                       72-byte structural capacity a caller must allocate,
+ *                       not the maximum this function emits).
  * @param message        Exactly 32 bytes: the message *digest*, not the
  *                       message. This function does not hash its input.
  * @param private_key    Exactly 32 bytes, big-endian, in [1, n-1].
@@ -1523,6 +1734,35 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
     const uint8_t message[32],
     const uint8_t private_key[32]
 );
+
+/**
+ * @brief Fixed-width secp256k1 ECDSA signature, `r || s`.
+ *
+ * Identical arithmetic to `ama_secp256k1_ecdsa_sign` — deterministic RFC 6979
+ * nonce, low-`s` normalisation — differing only in the encoding: exactly
+ * `AMA_SECP256K1_ECDSA_RAW_SIG_LEN` octets, `r` then `s`, each a 32-octet
+ * big-endian scalar with leading zeros preserved. This is the compact wire
+ * form; `ama_secp256k1_ecdsa_verify` consumes DER, so a signature produced
+ * here must be re-encoded before it is verified through that entry point.
+ *
+ * It is also what makes the deterministic constant-time gate exact for this
+ * curve. DER omits the leading zero octets of `r` and `s`, so a DER signature
+ * has a key-dependent length; that term is public, but it lands inside a
+ * retired-instruction count taken over the whole call and forced
+ * `check_ghash_constant_time.py` to hold the `ecdsa` target at a non-zero
+ * threshold. Measured through this entry point the encoder is outside the
+ * measurement and the target sits at 0, like the other seventeen.
+ *
+ * @param signature   Output buffer of exactly 64 octets.
+ * @param message     32-octet digest. This function does NOT hash.
+ * @param private_key 32-octet scalar in [1, n-1].
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM. On any non-success the
+ *         output buffer is zeroized rather than left partly written.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(
+    uint8_t signature[64],
+    const uint8_t message[32],
+    const uint8_t private_key[32]);
 
 /**
  * @brief Verify a DER-encoded ECDSA signature over secp256k1
@@ -2496,19 +2736,6 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
     uint8_t *plaintext
 );
 
-/**
- * @brief Apply Ascon-p[rounds] to a raw state — test support only
- *
- * Exposed so the known-answer tests can check the permutation directly
- * against the precomputed initialization state published in SP 800-232
- * Appendix A.3 and the S-box lookup table in Table 6.  A permutation verified
- * only through the modes would let a fault in one cancel a fault in the
- * other.  Not part of the supported API surface.
- *
- * @param state  In/out: five 64-bit state words
- * @param rounds Round count, 1..16; the call is a no-op outside that range
- */
-AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 
 /* ============================================================================
  * HSS / LMS — RFC 8554 hash-based signature VERIFICATION

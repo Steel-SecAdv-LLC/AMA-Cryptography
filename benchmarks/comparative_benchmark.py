@@ -43,7 +43,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -70,7 +71,9 @@ class ComparativeBenchmark:
         self.iterations = iterations
         self.results: List[BenchmarkResult] = []
 
-    def benchmark_operation(self, name: str, operation: str, func, *args) -> BenchmarkResult:
+    def benchmark_operation(
+        self, name: str, operation: str, func: Callable[..., object], *args: Any
+    ) -> BenchmarkResult:
         """Benchmark a single operation"""
         print(f"  Benchmarking {name} - {operation}...")
 
@@ -134,7 +137,7 @@ class ComparativeBenchmark:
             available=True,
         )
 
-    def benchmark_ama_raw_c(self):
+    def benchmark_ama_raw_c(self) -> None:
         """Run the raw-C harness (`benchmarks/benchmark_c_raw`) and record
         its ops/sec numbers as a separate implementation column.
 
@@ -221,12 +224,19 @@ class ComparativeBenchmark:
 
         print(f"  Using: {binary}")
         try:
-            # Harness is fast (~8s total); 60s is a generous ceiling.
+            # The ceiling follows the harness's own cost model, not the "~8s
+            # total" an earlier comment asserted: SLH-DSA keygen alone is
+            # ITERS_SLOW (200) x ~164 ms ≈ 33 s, and the full run measures
+            # 109 s on a 4-core x86-64 sandbox (2026-08-30, Release build).
+            # The old timeout=60 therefore expired on every run since the
+            # SLH-DSA rows landed, silently degrading the entire raw-C
+            # column to "harness error: TimeoutExpired".  600 s is ~5.5x the
+            # measured total, headroom for slower shared runners.
             completed = subprocess.run(
                 [str(binary), "--json"],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=600,
                 check=True,
             )
             data = json.loads(completed.stdout)
@@ -286,7 +296,7 @@ class ComparativeBenchmark:
                 f"({float(row.get('ops_per_sec', 0)):,.0f} ops/sec)"
             )
 
-    def benchmark_ama_cryptography(self):
+    def benchmark_ama_cryptography(self) -> None:
         """Benchmark AMA Cryptography hybrid implementation"""
         print("\n" + "=" * 70)
         print("AMA CRYPTOGRAPHY HYBRID IMPLEMENTATION")
@@ -357,11 +367,11 @@ class ComparativeBenchmark:
                     )
 
                     # Hybrid operation (both signatures)
-                    def hybrid_sign():
+                    def hybrid_sign() -> None:
                         ed25519_sign(test_data, ed_keypair.private_key)
                         dilithium_sign(test_data, dil_keypair.secret_key)
 
-                    def hybrid_verify():
+                    def hybrid_verify() -> None:
                         ed25519_verify(test_data, ed_sig, ed_keypair.public_key)
                         dilithium_verify(test_data, dil_sig, dil_keypair.public_key)
 
@@ -406,7 +416,7 @@ class ComparativeBenchmark:
         except Exception as e:
             print(f"  ❌ Error benchmarking AMA Cryptography: {e}")
 
-    def benchmark_libsodium_ed25519(self):
+    def benchmark_libsodium_ed25519(self) -> None:
         """Benchmark libsodium Ed25519 via PyNaCl.
 
         PyNaCl wraps libsodium 1.0.x and its hand-tuned AVX2 ref10
@@ -429,7 +439,7 @@ class ComparativeBenchmark:
             if check.returncode != 0:
                 raise ImportError("PyNaCl not importable")
 
-            from nacl.signing import SigningKey, VerifyKey  # noqa: F401
+            from nacl.signing import SigningKey, VerifyKey  # fmt: skip  # noqa: F401 -- imported only to probe PyNaCl availability for the comparison benchmark (CB-001)
 
             test_data = b"Test message for benchmarking performance" * 10
 
@@ -479,7 +489,7 @@ class ComparativeBenchmark:
                     )
                 )
 
-    def benchmark_cryptography_ed25519(self):
+    def benchmark_cryptography_ed25519(self) -> None:
         """Benchmark cryptography library (OpenSSL backend) Ed25519"""
         print("\n" + "=" * 70)
         print("CRYPTOGRAPHY LIBRARY (OpenSSL Backend)")
@@ -543,7 +553,7 @@ class ComparativeBenchmark:
                 )
             )
 
-    def benchmark_aes_gcm_comparison(self):
+    def benchmark_aes_gcm_comparison(self) -> None:
         """Benchmark AES-256-GCM at 1 / 4 / 16 / 64 KB.
 
         PR A (2026-04) — adds the 4 KB / 16 KB / 64 KB rows requested in
@@ -671,7 +681,7 @@ class ComparativeBenchmark:
                 )
             )
 
-    def calculate_comparative_metrics(self) -> Dict:
+    def calculate_comparative_metrics(self) -> Dict[str, Any]:
         """Calculate comparative metrics between implementations"""
         print("\n" + "=" * 70)
         print("COMPARATIVE ANALYSIS")
@@ -680,7 +690,7 @@ class ComparativeBenchmark:
         comparisons = {}
 
         # Group by operation
-        by_operation = {}
+        by_operation: Dict[str, List[BenchmarkResult]] = {}
         for result in self.results:
             if result.available:
                 if result.operation not in by_operation:
@@ -753,7 +763,7 @@ class ComparativeBenchmark:
 
         return comparisons
 
-    def save_results(self, filename: str = "comparative_benchmark_results.json"):
+    def save_results(self, filename: str = "comparative_benchmark_results.json") -> Dict[str, Any]:
         """Save results to JSON"""
         data = {
             "timestamp": datetime.now().isoformat(),
@@ -773,6 +783,13 @@ class ComparativeBenchmark:
             ],
             "comparisons": self.calculate_comparative_metrics(),
         }
+        # The provenance block generate_competitive.py hard-requires.  Its
+        # error message has always said "re-run the harness (which records
+        # it)" — until this line, the harness recorded no such thing and the
+        # committed block existed only because someone once added it by
+        # hand, so the very next regeneration would have detached the page
+        # from any honest version stamp.
+        data["provenance"] = _measurement_provenance()
 
         output_path = Path(__file__).parent / filename
         with open(output_path, "w") as f:
@@ -782,7 +799,33 @@ class ComparativeBenchmark:
         return data
 
 
-def main():
+def _measurement_provenance() -> "dict[str, str]":
+    """The block generate_competitive.py refuses to render without.
+
+    Version from the imported package (the build actually measured, not the
+    working tree's source text), commit from git at measurement time.
+    """
+    import subprocess
+    from datetime import datetime, timezone
+
+    import ama_cryptography
+
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).parent,
+    ).stdout.strip()
+    return {
+        "ama_version": ama_cryptography.__version__,
+        "ama_commit": commit,
+        "measured_at": datetime.now(timezone.utc).isoformat(),
+        "note": "written by the harness at measurement time",
+    }
+
+
+def main() -> None:
     """Run comparative benchmarks"""
     print("=" * 70)
     print("AMA CRYPTOGRAPHY - COMPARATIVE PERFORMANCE BENCHMARK")

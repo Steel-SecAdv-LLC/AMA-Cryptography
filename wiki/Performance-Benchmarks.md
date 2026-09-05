@@ -226,11 +226,11 @@ runtime so an operator can pin to scalar without rebuilding.
 | Primitive | Engineered path | Build / runtime gate | Speedup vs scalar | Reference |
 |-----------|-----------------|----------------------|------------------:|-----------|
 | Keccak-f[1600] (SHA3, SHAKE) | AVX-512 4-way (`vprolq` + `vpternlogq`, EVEX-encoded YMM, no ZMM in the hot path) | Build: `-DAMA_ENABLE_AVX512=ON` (default OFF). Runtime: `ama_cpuid_has_avx512_keccak()` (AVX-512F + VL + BW + DQ + XCR0 5+6+7) | ~1.6× over AVX2 4-way on Sapphire Rapids; falls back cleanly to AVX2 4-way otherwise | `docs/AVX512_KECCAK_ADR.md`, `src/c/avx512/ama_sha3_x4_avx512.c`, `tests/c/test_sha3_avx512_kat.c` |
-| Keccak-f[1600] (SHA3, SHAKE) | AVX2 4-way (Keccak-f[1600] across 4 SIMD lanes) | Build: default ON. Runtime: `ama_cpuid_has_avx2()` | ~3-4× over scalar Keccak | `src/c/avx2/ama_sha3_x4_avx2.c` |
-| AES-256-GCM | VAES + VPCLMULQDQ on YMM (4 blocks per AES round, 4-way GHASH reduction) | Build: default ON. Runtime: `ama_cpuid_has_vaes_aesgcm()` (VAES + VPCLMULQDQ + AVX2 + XCR0). Opt-out: `AMA_DISPATCH_NO_VAES=1` | ~1.5-2× at ≥4 KB messages on Ice Lake+ / Zen 4 | `src/c/avx2/ama_aes_gcm_vaes.c`, `tests/c/test_aes_gcm_vaes_equiv.c` |
+| Keccak-f[1600] (SHA3, SHAKE) | AVX2 4-way (Keccak-f[1600] across 4 SIMD lanes) | Build: default ON. Runtime: `ama_cpuid_has_avx2()` | ~3-4× over scalar Keccak | `src/c/avx2/ama_sha3_avx2.c` |
+| AES-256-GCM | VAES + VPCLMULQDQ on YMM (4 blocks per AES round, 4-way GHASH reduction) | Build: default ON. Runtime: `ama_cpuid_has_vaes_aesgcm()` (VAES + VPCLMULQDQ + AVX2 + XCR0). No env opt-out (unlike the ChaCha20 and Argon2 rows below); pin a different slot with `AMA_DISPATCH_ONLY` to A/B it | ~1.5-2× at ≥4 KB messages on Ice Lake+ / Zen 4 | `src/c/avx2/ama_aes_gcm_vaes_avx2.c`, `tests/c/test_aes_gcm_vaes_equiv.c` |
 | AES-256-GCM (S-box) | Bitsliced (tower field GF((2^4)^2)) — constant-time **default** | Build: `-DAMA_AES_CONSTTIME=ON` (default ON). Hardware fallback also available where AES-NI is present | n/a (correctness — eliminates cache-timing channel) | `src/c/ama_aes_bitsliced.c` |
-| ChaCha20-Poly1305 | 8-way AVX2 ChaCha20 block function (512 B keystream per kernel invocation) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_CHACHA_AVX2=1` | 2.11× at 1 KB, 2.24× at 4 KB, 2.29× at 64 KB; messages < 512 B stay on scalar | `src/c/avx2/ama_chacha20_x8_avx2.c`, `tests/c/test_chacha20poly1305.c` |
-| Argon2id | 4-way BlaMka G AVX2 (`_mm256_mul_epu32` for the multiplication-hardened add; `_mm256_permute4x64_epi64` for the diagonal pass) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_ARGON2_AVX2=1` | 1.31× at m=64 KiB, 1.34× at m=1 MiB | `src/c/avx2/ama_argon2_g_avx2.c`, `tests/c/test_argon2id.c` |
+| ChaCha20-Poly1305 | 8-way AVX2 ChaCha20 block function (512 B keystream per kernel invocation) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_CHACHA_AVX2=1` | 2.11× at 1 KB, 2.24× at 4 KB, 2.29× at 64 KB; messages < 512 B stay on scalar | `src/c/avx2/ama_chacha20poly1305_avx2.c`, `tests/c/test_chacha20poly1305.c` |
+| Argon2id | 4-way BlaMka G AVX2 (`_mm256_mul_epu32` for the multiplication-hardened add; `_mm256_permute4x64_epi64` for the diagonal pass) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_ARGON2_AVX2=1` | 1.31× at m=64 KiB, 1.34× at m=1 MiB | `src/c/avx2/ama_argon2_avx2.c`, `tests/c/test_argon2id.c` |
 | Ed25519 sign | Base-point comb table (radix-2^51 fe51 field arithmetic) | Default ON for x86-64 GCC/Clang (`fe51.h`) | Sign ~5× faster vs the previous scalar path on this host class | `src/c/ama_ed25519.c` (PR #261) |
 | Ed25519 verify | Width-5 wNAF + Shamir's trick (double-scalar-mult variable-time on public-only inputs) | Default ON for x86-64 GCC/Clang | Verify ~2× faster on this host class | `src/c/ama_ed25519.c` (PR #265) |
 | X25519 scalar-mult | fe64 schoolbook + MULX/ADCX/ADOX in-house inline assembly (4-limb radix-2^64 with dual-carry-chain interleave) | Build: per-file `-mbmi2 -madx`. Runtime: `ama_cpuid_has_x25519_mulx()` (BMI2 + ADX). Pure-C `fe64.h` is the fallback | ~21% over pure-C fe64 on the local sandbox; literature 1.8-2.2× on uncontended Skylake+ / Zen+ | `src/c/internal/ama_x25519_fe64_mulx.c`, `tests/c/test_x25519_fe64_mulx_equiv.c` |
@@ -268,7 +268,7 @@ python3 benchmarks/benchmark_suite.py
 python3 benchmarks/benchmark_runner.py -v
 ```
 
-Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/regression_results.json`.
+`benchmark_suite.py` writes `benchmark_results.json` and `BENCHMARKS.md` in the working directory — the defaults of its `--json` and `--markdown` flags. `benchmark_runner.py` writes only what it is asked for: its `--output` (JSON) and `--markdown` flags have no defaults, so a plain `-v` run prints a summary and writes nothing.
 
 ---
 
@@ -312,35 +312,30 @@ python3 tools/update_docs.py        # regenerates the table below
 ```
 
 <!-- AUTO-BENCHMARK-TABLE-START -->
-<!-- Throughput numbers below are the canonical-host measurements written by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` (the same command CI runs) on 2026-04-27.  The regression-floor column is the value enforced by `benchmarks/baseline.json` (CI fails when measured drops more than `tolerance_percent` below floor).  Regenerate via `python tools/update_docs.py`. -->
-_Headline source: `benchmarks/benchmark-results.json` (run 2026-04-27). Regression floor: `benchmarks/baseline.json`.  CI fails on (measured - tolerance%) < floor — both columns shown so reviewers can sanity-check the headroom._
+<!-- Throughput numbers below were written by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` (the same command CI runs) on 2026-08-30, on the host that record names (Linux-6.18.44-fc-v22-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)).  They describe THAT host: compare rows within the table, not against a different machine.  The regression-floor column is the value enforced by `benchmarks/baseline.json` (CI fails when measured drops more than `tolerance_percent` below floor).  Regenerate via `python tools/update_docs.py`. -->
+_Headline source: `benchmarks/benchmark-results.json` (run 2026-08-30 on Linux-6.18.44-fc-v22-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)). Regression floor: `benchmarks/baseline.json`, measured on the CI runner class named there — a floor and a throughput figure are different machines on purpose, so the gap between the columns is not headroom unless both were measured on the same host.  CI fails when measured falls more than `tolerance_percent` below floor._
 
 | Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |
 |-----------|---------------------:|---------------------------:|----------:|------|
-| Ama Sha3 256 Hash | 230,244 | 140,000 | ±35% | microbenchmark |
-| Hmac Sha3 256 | 148,565 | 96,000 | ±40% | microbenchmark |
-| Ed25519 Keygen | 48,134 | 31,000 | ±35% | microbenchmark |
-| Ed25519 Sign | 51,046 | 33,000 | ±35% | microbenchmark |
-| Ed25519 Verify | 21,097 | 13,000 | ±35% | microbenchmark |
-| Hkdf Derive | 95,433 | 62,000 | ±35% | microbenchmark |
-| Full Package Create | 3,813.1 | 2,400 | ±70% | complex_operation |
-| Full Package Verify | 4,055.4 | 2,600 | ±50% | complex_operation |
-| Dilithium Keygen *(optional)* | 3,331.0 | 2,100 | ±40% | microbenchmark |
-| Dilithium Sign *(optional)* | 1,103.7 | 710 | ±50% | microbenchmark |
-| Dilithium Verify *(optional)* | 7,215.7 | 4,600 | ±40% | microbenchmark |
-| Kyber Keygen *(optional)* | 5,346.1 | 3,400 | ±40% | microbenchmark |
-| Kyber Encapsulate *(optional)* | 11,688 | 7,500 | ±40% | microbenchmark |
-| Aes 256 Gcm Encrypt *(optional)* | 276,778 | 150,000 | ±40% | microbenchmark |
-| Chacha20Poly1305 Encrypt *(optional)* | 215,256 | 130,000 | ±40% | microbenchmark |
-| X25519 Scalarmult *(optional)* | 17,560 | 13,000 | ±40% | microbenchmark |
-| X25519 Scalarmult Batch4 *(optional)* | 4,112.2 | 2,600 | ±40% | microbenchmark |
-
-_Floors below were added to `benchmarks/baseline.json` after the 2026-04-27 results-JSON run; their measured values are in [`benchmark-report.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/benchmark-report.md) until the next dual-output canonical-host run is committed._
-
-| Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |
-|-----------|---------------------:|---------------------------:|----------:|------|
-| Secp256K1 Ecdsa Sign | see report | 1,900 | ±40% | microbenchmark |
-| Secp256K1 Ecdsa Verify | see report | 2,600 | ±40% | microbenchmark |
+| Ama Sha3 256 Hash | 372,509 | 327,222 | ±45% | microbenchmark |
+| Hmac Sha3 256 | 243,639 | 215,299 | ±45% | microbenchmark |
+| Ed25519 Keygen | 12,182 | 10,822 | ±45% | microbenchmark |
+| Ed25519 Sign | 59,554 | 53,885 | ±45% | microbenchmark |
+| Ed25519 Verify | 22,462 | 19,181 | ±45% | microbenchmark |
+| Hkdf Derive | 147,244 | 131,341 | ±45% | microbenchmark |
+| Full Package Create | 1,960.9 | 1,983 | ±45% | complex_operation |
+| Full Package Verify | 2,776.3 | 3,442 | ±45% | complex_operation |
+| Secp256K1 Ecdsa Sign | 9,208.6 | 8,068 | ±45% | microbenchmark |
+| Secp256K1 Ecdsa Verify | 3,815.4 | 3,302 | ±45% | microbenchmark |
+| Dilithium Keygen | 1,406.2 | 1,312 | ±45% | microbenchmark |
+| Dilithium Sign | 2,718.7 | 2,636 | ±45% | microbenchmark |
+| Dilithium Verify | 8,960.7 | 8,897 | ±45% | microbenchmark |
+| Kyber Keygen | 2,989.1 | 2,726 | ±45% | microbenchmark |
+| Kyber Encapsulate | 13,284 | 11,994 | ±45% | microbenchmark |
+| Aes 256 Gcm Encrypt | 261,141 | 224,406 | ±45% | microbenchmark |
+| Chacha20Poly1305 Encrypt | 257,200 | 227,521 | ±45% | microbenchmark |
+| X25519 Scalarmult | 19,587 | 16,876 | ±45% | microbenchmark |
+| X25519 Scalarmult Batch4 | 4,676.0 | 4,074 | ±45% | microbenchmark |
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*

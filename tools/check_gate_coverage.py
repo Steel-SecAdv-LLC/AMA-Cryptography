@@ -72,6 +72,7 @@ Exits 0 when every workflow satisfies the invariant, 1 otherwise.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,16 @@ import yaml
 GATE_SUFFIX = "-gate"
 
 WORKFLOW_DIR = Path(".github/workflows")
+
+#: Non-vacuity floors (H7).  Current tree: 14 workflow files, 72 jobs.  These are
+#: pinned so deleting workflows or jobs cannot silently shrink what the
+#: aggregating-gate audit inspects down to nothing -- the two ways this
+#: meta-gate was proven vacuous (an empty .github/workflows left `examined` 0 and
+#: the run PASS; a planted always-failing lane bound into env: passed too).
+#: Matching the MIN_* floors the rest of the gates carry: a real reduction must
+#: lower these under review rather than pass silently.
+MIN_WORKFLOWS = 14
+MIN_JOBS_INSPECTED = 40
 
 
 def _load(path: Path) -> dict[Any, Any]:
@@ -121,6 +132,155 @@ def _needs(job: dict[str, Any]) -> set[str]:
     return {entry for entry in raw if isinstance(entry, str)}
 
 
+#: A gate step that consults ``needs.*.result`` evaluates EVERY dependency by
+#: construction — adding a job to ``needs:`` extends the check with no further
+#: edit.  Seven of this repository's NINE aggregating gates are written that
+#: way — counted rather than recalled: acvp-gate, arm-qemu-gate, ci-gate in
+#: both ci.yml and ci-build-test.yml, corpus-provenance-gate, dudect-gate,
+#: fuzzing-gate, security-gate and static-analysis-gate, of which seven use
+#: the `needs.*.result` wildcard form.
+_WILDCARD_NEEDS_RE = re.compile(r"needs\.\*\.(?:result|outputs|conclusion)")
+
+
+def _run_text(job: dict[str, Any]) -> str:
+    """The shell bodies of a gate job's steps — where ``rc`` is computed.
+
+    This is the EVALUATION surface for the hand-enumerated gates: they bind each
+    dependency into an ``env:`` alias and decide the exit code in a ``run:``
+    script.  The binding is not the evaluation (H7): a job can be bound into
+    ``env:`` and its alias never consulted, so ``rc`` never sees its failure.
+    Only what a ``run:`` script actually references counts.
+    """
+    parts: list[str] = []
+    steps = job.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict):
+                run = step.get("run")
+                if isinstance(run, str):
+                    parts.append(run)
+    return "\n".join(parts)
+
+
+#: ``needs.<dep>.result`` / ``.outcome`` inside a value, dotted or bracketed.
+_NEEDS_IN_VALUE_RE = re.compile(
+    r"needs\s*(?:\.\s*([A-Za-z0-9_-]+)|\[\s*['\"]([^'\"]+)['\"]\s*\])\s*\.\s*(?:result|outcome)"
+)
+
+
+def _env_alias_map(job: dict[str, Any]) -> dict[str, set[str]]:
+    """Map each dependency to the ``env:`` alias key(s) bound to its result.
+
+    Scans the job-level ``env:`` and every step's ``env:`` for values that
+    reference ``needs.<dep>.result`` and records the KEY they are bound to (the
+    shell variable name).  A dependency is only evaluated through such an alias
+    when a ``run:`` script dereferences that variable; the binding alone is not
+    evaluation, which is the vacuity H7 names.
+    """
+    alias_map: dict[str, set[str]] = {}
+
+    def _scan(env: Any) -> None:
+        if not isinstance(env, dict):
+            return
+        for key, value in env.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                continue
+            for match in _NEEDS_IN_VALUE_RE.finditer(value):
+                dep = match.group(1) or match.group(2)
+                if dep:
+                    alias_map.setdefault(dep, set()).add(key)
+
+    _scan(job.get("env"))
+    steps = job.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict):
+                _scan(step.get("env"))
+    return alias_map
+
+
+def _gate_condition_text(job: dict[str, Any]) -> str:
+    """Only the `if:` expressions of a gate job and of its steps.
+
+    A dependency's outcome is EVALUATED in a condition; everything else in the
+    job — `run`, `env`, `with` — can mention it without acting on it.  The
+    wildcard exemption is about evaluation, so it reads only the conditions.
+    """
+    conditions: list[str] = []
+    condition = job.get("if")
+    if condition is not None:
+        conditions.append(str(condition))
+    steps = job.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict) and step.get("if") is not None:
+                conditions.append(str(step["if"]))
+    return "\n".join(conditions)
+
+
+def _result_reference(need: str) -> str:
+    """Pattern matching a real read of ``need``'s outcome.
+
+    ``needs.<name>.result`` and ``needs.<name>.outcome`` are the two spellings
+    GitHub offers, in both the dotted and the bracketed context form.  Anything
+    else -- the job's name in a comment, in an echo, or as a substring of a
+    different job's name -- is a mention, not an evaluation.
+
+    The optional backslash before the bracket quotes is not decoration: the
+    body this is searched against is JSON-serialised, so a double-quoted
+    ``needs["job"].outcome`` arrives as ``needs[\\"job\\"].outcome`` and a
+    pattern expecting a bare quote misses it.  Measured -- that one spelling of
+    four was reported unevaluated until the escape was allowed for.
+    """
+    name = re.escape(need)
+    return (
+        r"needs\s*\.\s*" + name + r"\s*\.\s*(?:result|outcome)"
+        r"|needs\s*\[\s*(?:\\)?['\"]" + name + r"(?:\\)?['\"]\s*\]\s*\.\s*(?:result|outcome)"
+    )
+
+
+def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
+    """Dependencies the gate lists but never looks at.
+
+    ``needs:`` membership alone does not make a job blocking.  It makes the
+    gate WAIT for the job; whether the gate goes red when that job fails is
+    decided by the gate's own step, and two of this repository's gates —
+    ``dudect-gate`` and ``static-analysis-gate`` — hand-enumerate each
+    dependency into an ``env:`` block and call a shell ``check`` function once
+    per job.  A job added to ``needs:`` but not to that hand-written list
+    satisfies INVARIANT-31's coverage rule and is still never evaluated: the
+    gate carries ``if: always()``, so it runs anyway, ``rc`` stays 0, and the
+    final step prints that every job reached the state the trigger requires.
+    """
+    # The wildcard exemption applies only where the wildcard is EVALUATED: the
+    # gate job's own `if:`, or one of its steps' `if:`.
+    if _WILDCARD_NEEDS_RE.search(_gate_condition_text(job)):
+        return []
+
+    # Read the EVALUATION, not the binding (H7).  A dependency's env: alias
+    # binding -- `R_X: ${{ needs.x.result }}` -- used to satisfy the old
+    # whole-body substring test even when the run: script that sets `rc` never
+    # consulted `$R_X`.  So look only at what actually decides the exit code:
+    #   (a) a direct read of `needs.<dep>.result` in an if: or a run:, OR
+    #   (b) an env: alias bound to the dep AND dereferenced ($X / ${X}) in run:.
+    evaluation_text = _gate_condition_text(job) + "\n" + _run_text(job)
+    run_text = _run_text(job)
+    alias_map = _env_alias_map(job)
+
+    unevaluated: list[str] = []
+    for need in _needs(job):
+        if re.search(_result_reference(need), evaluation_text):
+            continue
+        aliases = alias_map.get(need, set())
+        if any(
+            re.search(r"\$\{?" + re.escape(alias) + r"(?![A-Za-z0-9_])", run_text)
+            for alias in aliases
+        ):
+            continue
+        unevaluated.append(need)
+    return sorted(unevaluated)
+
+
 def _is_always(job: dict[str, Any]) -> bool:
     """True when the job carries a job-level condition equivalent to always()."""
     condition = job.get("if")
@@ -135,16 +295,11 @@ def _is_always(job: dict[str, Any]) -> bool:
     return normalised.strip() == "always()"
 
 
-def check_workflow(path: Path) -> list[str]:
-    """Return a list of human-readable failures for one workflow file."""
-    return check_parsed(path.name, _load(path))
-
-
 def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
     """Check an already-parsed workflow document.
 
-    Split out from :func:`check_workflow` so the rules can be exercised
-    against synthetic documents without writing files.
+    Takes the parsed document so the rules can be exercised against
+    synthetic documents without writing files.
     """
     jobs: dict[str, Any] = workflow.get("jobs") or {}
     if not jobs:
@@ -184,6 +339,21 @@ def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
                 f"request waits for a status that never arrives instead of going "
                 f"red."
             )
+        unevaluated = _unevaluated_needs(gate)
+        if unevaluated:
+            failures.append(
+                f"{name}: gate job '{gate_id}' lists {len(unevaluated)} "
+                f"dependenc(y/ies) it never evaluates — {', '.join(unevaluated)}. "
+                f"`needs:` only makes the gate WAIT for a job; whether the gate "
+                f"goes red when it fails is decided by the gate's own step. This "
+                f"gate hand-enumerates its dependencies, so a job added to "
+                f"`needs:` and not to that list runs, fails, and leaves the gate "
+                f"green — with `if: always()` the gate runs regardless and its "
+                f"exit status never sees the failure. Reference each dependency "
+                f"in the gate's steps, or switch the gate to the "
+                f"`contains(needs.*.result, 'failure')` form, which cannot go "
+                f"stale."
+            )
 
     missing = sorted(other_ids - covered)
     if missing:
@@ -213,8 +383,28 @@ def audit(workflow_dir: Path = WORKFLOW_DIR) -> tuple[list[str], int]:
     """Check every workflow. Returns (failures, number of files examined)."""
     paths = sorted(list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml")))
     failures: list[str] = []
+    total_jobs = 0
     for path in paths:
-        failures.extend(check_workflow(path))
+        workflow = _load(path)
+        total_jobs += len(workflow.get("jobs") or {})
+        failures.extend(check_parsed(path.name, workflow))
+
+    # Non-vacuity floors (H7).  Proven two ways: `rm .github/workflows/*.yml`
+    # left `examined` 0 and the run PASS, and a partial deletion would shrink the
+    # job set with no complaint.  Pin both so a real reduction lowers the floor
+    # under review rather than passing silently.
+    if len(paths) < MIN_WORKFLOWS:
+        failures.append(
+            f"only {len(paths)} workflow file(s) examined (floor {MIN_WORKFLOWS}) — the "
+            f"aggregating-gate audit has nothing, or almost nothing, to check. If a "
+            f"workflow was intentionally removed, lower MIN_WORKFLOWS under review."
+        )
+    if total_jobs < MIN_JOBS_INSPECTED:
+        failures.append(
+            f"only {total_jobs} job(s) inspected across {len(paths)} workflow(s) (floor "
+            f"{MIN_JOBS_INSPECTED}) — too few for the coverage audit to mean anything. If "
+            f"jobs were intentionally removed, lower MIN_JOBS_INSPECTED under review."
+        )
     return failures, len(paths)
 
 

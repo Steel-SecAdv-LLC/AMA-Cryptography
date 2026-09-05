@@ -45,11 +45,22 @@ name: Integrity anchor check
 on:
   workflow_dispatch:
   workflow_call:
+    # This reusable workflow reads exactly one secret.  Declaring it lets the
+    # caller forward only that secret instead of `secrets: inherit` (which would
+    # hand this job the entire secret set — audit Low).  Optional: the job below
+    # validates presence and fails closed with a clear message when it is unset,
+    # and fork PRs have no secrets to forward.
+    secrets:
+      AMA_INTEGRITY_SIGNING_SEED_HEX:
+        required: false
   pull_request:
     paths:
       - '.github/workflows/integrity-anchor-check.yml'
       - '.github/workflows/release.yml'
       - 'ama_cryptography/_build_sign.py'
+      # This workflow configures and builds through CMake to produce the object
+      # whose anchor it checks, so a CMake change can change what it verifies.
+      - 'CMakeLists.txt'
 
 permissions:
   contents: read
@@ -79,7 +90,11 @@ jobs:
 
       - name: Build the native library
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          # Release: this job signs and verifies an integrity artefact against a
+          # native library, so the library it builds should be the shape the
+          # wheel ships (setup.py compiles at -O3), not an unoptimized one.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_shared
 
       - name: Re-sign the integrity artefact for this build's native library

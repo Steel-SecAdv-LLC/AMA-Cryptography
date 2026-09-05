@@ -21,7 +21,8 @@ maintainer to "fix" a repository that was already correct.
 
 from __future__ import annotations
 
-from pathlib import Path
+import shutil
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -116,6 +117,7 @@ def _tree(
     cmake: list[str],
     workflow: list[str],
     ossfuzz: list[str],
+    seeded: bool = True,
 ) -> Path:
     (tmp_path / "fuzz").mkdir()
     for name in harnesses:
@@ -123,6 +125,10 @@ def _tree(
             "int LLVMFuzzerTestOneInput(const uint8_t *d, size_t s) { return 0; }\n",
             encoding="utf-8",
         )
+        if seeded:
+            corpus = tmp_path / "fuzz" / "seed_corpus" / name
+            corpus.mkdir(parents=True)
+            (corpus / "seed-1.bin").write_bytes(b"\x00" * 40)
     entries = "\n".join(f"    {name}" for name in cmake)
     (tmp_path / "fuzz" / "CMakeLists.txt").write_text(
         f"set(FUZZ_CORE_TARGETS\n{entries}\n)\nset(FUZZ_PQC_TARGETS\n)\n",
@@ -172,6 +178,41 @@ def test_missing_from_cmake_is_reported(tmp_path: Path) -> None:
     assert "fuzz/CMakeLists.txt" in failures[0]
 
 
+def test_a_target_with_no_seed_corpus_is_reported(tmp_path: Path) -> None:
+    """The exact shape fuzz_ascon was in: registered everywhere, seeded nowhere.
+
+    The fuzz lanes guard corpus loading with `if [ -d ... ]`, so an absent
+    directory fails nothing and the campaign silently starts from zero.
+    """
+    root = _tree(
+        tmp_path,
+        harnesses=["fuzz_a"],
+        cmake=["fuzz_a"],
+        workflow=["fuzz_a"],
+        ossfuzz=["fuzz_a"],
+        seeded=False,
+    )
+    failures = audit(root)
+    assert len(failures) == 1
+    assert "seed_corpus/fuzz_a" in failures[0]
+
+
+def test_an_empty_seed_corpus_directory_is_reported(tmp_path: Path) -> None:
+    """A directory with no files loads exactly as much as no directory."""
+    root = _tree(
+        tmp_path,
+        harnesses=["fuzz_a"],
+        cmake=["fuzz_a"],
+        workflow=["fuzz_a"],
+        ossfuzz=["fuzz_a"],
+        seeded=False,
+    )
+    (root / "fuzz" / "seed_corpus" / "fuzz_a").mkdir(parents=True)
+    failures = audit(root)
+    assert len(failures) == 1
+    assert "seed_corpus/fuzz_a" in failures[0]
+
+
 def test_registry_naming_a_nonexistent_target_is_reported(tmp_path: Path) -> None:
     root = _tree(
         tmp_path,
@@ -215,13 +256,70 @@ def test_support_file_without_entry_point_is_ignored(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("missing_path", ["fuzz", "oss-fuzz/build.sh"])
 def test_main_refuses_outside_the_repository_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_path: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_path: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Running from the wrong directory must fail loudly, not report clean."""
+    """Running from the wrong directory must fail loudly, not report clean.
+
+    Every path main() probes for is created EXCEPT the parametrized one, so
+    each case exercises the refusal on exactly the path it names.  The
+    parametrization used to be dead: nothing read ``missing_path``, so both
+    cases ran the identical empty-directory scenario and only the first
+    probe (``fuzz``) was ever the one refusing.
+    """
     from tools.check_fuzz_target_registration import main
+
+    (tmp_path / "fuzz").mkdir()
+    (tmp_path / "fuzz" / "CMakeLists.txt").write_text("", encoding="utf-8")
+    workflow_dir = tmp_path / ".github" / "workflows"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "fuzzing.yml").write_text("", encoding="utf-8")
+    (tmp_path / "oss-fuzz").mkdir()
+    (tmp_path / "oss-fuzz" / "build.sh").write_text("", encoding="utf-8")
+
+    target = tmp_path / missing_path
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
 
     monkeypatch.chdir(tmp_path)
     assert main() == 1
+    assert missing_path in capsys.readouterr().out, (
+        "the refusal must name the path that is missing, and it must be the "
+        "one this case removed"
+    )
+
+
+def test_the_refusal_spells_the_path_posix_on_every_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """On Windows the probe constants render with backslashes, so the refusal
+    printed ``oss-fuzz\\build.sh`` — a spelling used by nothing else in this
+    repository (docs, workflows, and the parametrized case above all say
+    ``oss-fuzz/build.sh``), which is exactly how the Windows CI lanes failed
+    the test above while every POSIX host called the tool healthy.
+
+    ``PureWindowsPath`` renders with backslashes on every host, so swapping it
+    in for one probe constant reproduces the Windows formatting here: without
+    ``.as_posix()`` in the message this test fails on Linux the same way the
+    parametrized case failed on Windows.
+    """
+    from tools import check_fuzz_target_registration as mod
+
+    (tmp_path / "fuzz").mkdir()
+    monkeypatch.setattr(mod, "CMAKE_PATH", PureWindowsPath("fuzz/CMakeLists.txt"))
+    monkeypatch.chdir(tmp_path)
+    assert mod.main() == 1
+    out = capsys.readouterr().out
+    assert "fuzz/CMakeLists.txt" in out, (
+        f"the refusal must use the repository's forward-slash spelling on "
+        f"every platform; got: {out!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

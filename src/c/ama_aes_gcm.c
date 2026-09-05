@@ -293,15 +293,23 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
  * conditional.  The accumulator Z is read but not modified during the
  * loop, so the bit extraction sees a stable operand.
  *
- * The mask goes through ama_ct_value_barrier_u64() and that is load-bearing,
- * not decoration.  A bare source-level mask is constant-time only in the C
- * abstract machine: clang 18 at -O2/-O3 proves the mask is all-zero-or-all-
- * ones, recognises the masked accumulate as the identity in the all-zero
- * case, and emits `bt`/`jae` to branch straight over it — reintroducing a
- * branch on a bit of the accumulator, which is a function of the secret
- * subkey H from the second block onward.  gcc 13 does not.  The barrier
- * hides the mask's range from both, so the accumulation stays unconditional
- * regardless of toolchain.  See internal/ama_ct_barrier.h, and
+ * The mask goes through ama_ct_value_barrier_u64().  A bare source-level mask
+ * is constant-time only in the C abstract machine: a sufficiently clever
+ * optimizer can prove the mask is all-zero-or-all-ones, recognise the masked
+ * accumulate as the identity in the all-zero case, and branch straight over it
+ * — reintroducing a branch on a bit of the accumulator, which is a function of
+ * the secret subkey H from the second block onward.  The barrier hides the
+ * mask's range so the accumulation stays unconditional regardless of toolchain.
+ *
+ * Status on the currently-available compilers, re-measured for audit M24: the
+ * barrier is FORWARD INSURANCE, not a reproduced fix.  Removing the __asm__ and
+ * rebuilding this TU is byte-identical under clang 18.1.3 -O3 and leaves the
+ * conditional-branch count unchanged (100 vs 100, a register-allocation-only
+ * diff) under gcc 13 -O3 — neither reintroduces the branch here.  An earlier
+ * version of this comment asserted clang 18 emitted `bt`/`jae` without the
+ * barrier; that does not reproduce on clang 18.1.3 and is withdrawn.  The
+ * barrier is kept because it costs nothing and guards against a compiler that
+ * does perform the conversion.  See internal/ama_ct_barrier.h, and
  * tools/check_ghash_constant_time.py, which measures this path's retired
  * instruction count under two key classes and fails if it is key-dependent. */
 
@@ -740,5 +748,17 @@ ama_error_t ama_aes256_gcm_decrypt(
     ama_secure_memzero(tag_mask, sizeof(tag_mask));
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
-    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    /* Masked return-code selection — same defect class and same remedy
+     * as ama_chacha20poly1305.c's decrypt return (see the comment
+     * there).  Measured caveat: HERE gcc 13 -O2 on aarch64 happened to
+     * compile the ternary branch-free already (QEMU traces of the
+     * accept/reject pair were identical pre-change, 441,262
+     * instructions each), while the byte-for-byte identical ternary in
+     * the ChaCha decrypt got a `cbnz` with asymmetric arms — which is
+     * precisely why compiler luck is not a contract.  The mask form
+     * makes the symmetry a property of the source, and the aead-verify
+     * instruction-invariance gate pins both decrypts together. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    return (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED & ((int)tag_match - 1));
 }

@@ -1,5 +1,15 @@
 /* Copyright (C) 2025-2026 Steel Security Advisors LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
+/* The build compiles with a strict ISO C standard (-std=c11), under which
+ * glibc hides madvise() and every MADV_* constant (they are _DEFAULT_SOURCE
+ * interfaces, suppressed by __STRICT_ANSI__).  Without this define, the
+ * "#ifdef MADV_DONTDUMP" block below silently compiles OUT and the
+ * documented core-dump protection never exists in the binary — which is
+ * exactly what tests/c/test_secure_memory_dontdump.c caught.  It must
+ * precede the first libc header included by this translation unit. */
+#if !defined(_WIN32) && !defined(_WIN64) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
 /**
  * @file ama_secure_memory.c
  * @brief Secure memory allocation with mlock() + guaranteed zeroization
@@ -46,9 +56,34 @@ AMA_API ama_error_t ama_secure_mlock(void *ptr, size_t len) {
     if (mlock(ptr, len) != 0) {
         return AMA_ERROR_MEMORY;
     }
-    /* Prevent this memory from appearing in core dumps */
+    /* Prevent this memory from appearing in core dumps.
+     *
+     * madvise(2) demands a page-aligned address and fails with EINVAL
+     * otherwise — unlike mlock(2), which accepts any address.  Passing the
+     * caller's raw pointer therefore silently skipped the advice for every
+     * non-page-aligned (i.e. essentially every malloc-backed) buffer, and
+     * the discarded return value hid that.  The advice must cover the whole
+     * pages containing [ptr, ptr+len) — the same granularity mlock itself
+     * operates on.  Rounding outward marks neighbouring bytes on shared
+     * pages non-dumpable too; for a confidentiality control the
+     * over-inclusive direction is the safe one.  Failure to apply the
+     * advice is a real loss of the documented no-core-dump property, so it
+     * fails closed: the lock is undone and the error reported.
+     * (Verified by tests/c/test_secure_memory_dontdump.c against the
+     * kernel's own "dd" VmFlag record.) */
 #ifdef MADV_DONTDUMP
-    madvise(ptr, len, MADV_DONTDUMP);
+    {
+        long page_size = sysconf(_SC_PAGESIZE);
+        if (page_size > 0) {
+            uintptr_t mask = (uintptr_t)page_size - 1u;
+            uintptr_t base = (uintptr_t)ptr & ~mask;
+            uintptr_t end  = ((uintptr_t)ptr + len + mask) & ~mask;
+            if (madvise((void *)base, (size_t)(end - base), MADV_DONTDUMP) != 0) {
+                (void)munlock(ptr, len);
+                return AMA_ERROR_MEMORY;
+            }
+        }
+    }
 #endif
 #endif
     return AMA_SUCCESS;

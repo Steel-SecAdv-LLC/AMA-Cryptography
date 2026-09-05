@@ -12,13 +12,13 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 from __future__ import annotations
 
 import gc
-import inspect
 import re
 import subprocess
 import sys
 import threading
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -350,42 +350,59 @@ class TestConstantTimeRequirements:
 class TestSuppressionHygiene:
     """INVARIANT-13: all suppressions must have justification + tracking ID."""
 
-    _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
-    _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
-    _JUSTIFICATION_RE = re.compile(r"[—–]|--|#\s*\S")
+    #: The gate's own marker pattern, imported rather than re-spelled.
+    #:
+    #: The class carried its own copy, and it had already drifted: the gate
+    #: matches ``nosemgrep`` and the copy did not, so
+    #: ``test_no_suppressions_in_forbidden_dirs`` would have passed a
+    #: ``# nosemgrep`` sitting in a directory INVARIANT-13 forbids outright
+    #: while ``tools/check_suppression_hygiene.py`` reported it.  Same defect
+    #: as ``_scan_violations`` above, one attribute further down.
+    @staticmethod
+    def _suppression_re() -> re.Pattern[str]:
+        from tools.check_suppression_hygiene import _SUPPRESSION_RE
+
+        return _SUPPRESSION_RE
 
     _FORBIDDEN_DIRS = (
         "src/c/",
-        "ama_cryptography/_primitive",
-        "ama_cryptography/backend",
         "include/",
     )
 
     def _scan_violations(self, directory: str) -> list[str]:
+        """Drive the gate's own scan over ``directory``, not a copy of it.
+
+        This used to re-implement the rule with three regexes over raw lines.
+        A shadow copy of a gate drifts, and this one had drifted in BOTH
+        directions at once:
+
+        * it matched the whole LINE, so a marker inside a string literal or a
+          full-line prose comment counted.  ``check_source`` tokenises and
+          keeps the comment's own text, and only when the comment is
+          *trailing* — a full-line comment suppresses nothing, which is why
+          ``effective_suppressions`` was written.  That difference is not
+          theoretical: this test failed on a comment in ``key_formats.py``
+          that QUOTES the suppression it had just removed, while
+          ``tools/check_suppression_hygiene.py`` — the thing CI runs — passed
+          on the same file.
+        * it never applied ``_STRICT_FORMS``, so a bare ``noqa`` carrying a
+          justification and a tracking ID passed HERE and fails the gate.  The
+          copy was weaker than the original on every real suppression and
+          noisier than it on prose, and a copy that disagrees with the gate in
+          either direction is not a test of the gate.
+
+        ``test_no_suppressions_in_forbidden_dirs`` below was repaired the same
+        way in an earlier pass; this was the last copy in this class.
+        """
         repo_root = Path(__file__).resolve().parent.parent
-        target = repo_root / directory
+        gate = self._load_gate()
         violations: list[str] = []
-        for py_file in sorted(target.rglob("*.py")):
-            rel = str(py_file.relative_to(repo_root))
+        for py_file in sorted((repo_root / directory).rglob("*.py")):
             try:
-                lines = py_file.read_text(encoding="utf-8").splitlines()
+                source = py_file.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            for lineno, line in enumerate(lines, 1):
-                m = self._SUPPRESSION_RE.search(line)
-                if m is None:
-                    continue
-                # Check forbidden
-                for fd in self._FORBIDDEN_DIRS:
-                    if rel.startswith(fd):
-                        violations.append(f"{rel}:{lineno}: forbidden directory")
-                        break
-                else:
-                    rest = line[m.end() :]
-                    if not self._JUSTIFICATION_RE.search(rest):
-                        violations.append(f"{rel}:{lineno}: missing justification")
-                    elif not self._TRACKING_ID_RE.search(rest):
-                        violations.append(f"{rel}:{lineno}: missing tracking ID")
+            violations.extend(gate.check_source(py_file.relative_to(repo_root).as_posix(), source))
         return violations
 
     def test_ama_cryptography_suppressions_justified(self) -> None:
@@ -395,17 +412,104 @@ class TestSuppressionHygiene:
         )
 
     def test_no_suppressions_in_forbidden_dirs(self) -> None:
-        """Suppressions absolutely forbidden in src/c/, _primitive, backend, include/."""
+        """Suppressions absolutely forbidden in src/c/ and include/.
+
+        This used to walk ``rglob("*.py")`` under each forbidden directory.
+        ``src/c/`` and ``include/`` hold no Python, and the other two entries
+        name directories that do not exist, so it asserted over an empty set —
+        the same vacuity the gate itself had, and it passed for years while a
+        live suppression sat in ``src/c/ed25519_donna_shim.c``.  It now drives
+        the gate's own C-tree scan, which is the thing CI runs.
+        """
         repo_root = Path(__file__).resolve().parent.parent
+        gate = self._load_gate()
+        files = gate.c_tree_files(repo_root)
+        assert len(files) > 50, (
+            f"the C-tree scan found only {len(files)} files — an empty or "
+            "collapsed scope is a checker fault, not a clean tree"
+        )
+        assert gate.scan_c_tree(repo_root) == []
+        # And the Python trees the other rule governs, unchanged.
         for fd in self._FORBIDDEN_DIRS:
             target = repo_root / fd
             if not target.exists():
                 continue
             for py_file in target.rglob("*.py"):
                 content = py_file.read_text(encoding="utf-8", errors="replace")
-                assert not self._SUPPRESSION_RE.search(
+                assert not self._suppression_re().search(
                     content
                 ), f"INVARIANT-13: suppression found in forbidden dir: {py_file}"
+
+    @staticmethod
+    def _load_gate() -> Any:
+        import importlib.util
+
+        repo_root = Path(__file__).resolve().parent.parent
+        path = repo_root / "tools" / "check_suppression_hygiene.py"
+        spec = importlib.util.spec_from_file_location("_sup_gate", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_c_tree_scan_reports_a_planted_suppression(self) -> None:
+        """Negative control: the scan must not be a blanket pass.
+
+        Every marker form is planted, because the gate's value is that a
+        reviewer cannot reach for any of them.
+        """
+        import tempfile
+
+        gate = self._load_gate()
+        markers = (
+            "/* NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Assign) */",
+            "int x = 0;  /* NOLINT */",
+            "/* cppcheck-suppress nullPointer */",
+            "/* nosemgrep: some-rule */",
+            "/* coverity[tainted_data] */",
+            "/* LINTED */",
+        )
+        for marker in markers:
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                (root / "src" / "c").mkdir(parents=True)
+                (root / "include").mkdir()
+                (root / "include" / "ama_x.h").write_text("int f(void);\n", encoding="utf-8")
+                (root / "src" / "c" / "x.c").write_text(
+                    f"int f(void) {{\n    {marker}\n    return 0;\n}}\n", encoding="utf-8"
+                )
+                found = gate.scan_c_tree(root)
+                assert found, f"the scan missed {marker!r}"
+                assert "x.c" in found[0], found
+
+    def test_the_c_tree_scan_fails_closed_on_an_empty_scope(self) -> None:
+        """A glob that matches nothing must never read as "clean"."""
+        import tempfile
+
+        gate = self._load_gate()
+        with tempfile.TemporaryDirectory() as td:
+            found = gate.scan_c_tree(Path(td))
+        assert found and "scan scope is empty" in found[0], found
+
+    def test_vendored_code_is_out_of_scope(self) -> None:
+        """INVARIANT-13 governs what this project writes.
+
+        Rewriting a vendor comment would defeat the "no project-side
+        modifications" property the vendor-isolation gate enforces separately.
+        """
+        import tempfile
+
+        gate = self._load_gate()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src" / "c" / "vendor" / "thirdparty").mkdir(parents=True)
+            (root / "src" / "c" / "vendor" / "thirdparty" / "v.c").write_text(
+                "/* NOLINT */\nint g(void) { return 0; }\n", encoding="utf-8"
+            )
+            (root / "src" / "c" / "ours.c").write_text(
+                "int h(void) { return 0; }\n", encoding="utf-8"
+            )
+            assert gate.scan_c_tree(root) == []
 
     def test_ci_enforcement_script_exists(self) -> None:
         """The CI suppression hygiene script must exist."""
@@ -486,19 +590,118 @@ class TestSuppressionScanPrecision:
     def test_a_forbidden_directory_is_reported_regardless_of_justification(self) -> None:
         from tools.check_suppression_hygiene import check_source
 
-        violations = check_source(
-            "ama_cryptography/backend/x.py", "import os  # nosec B404 -- reason (AB-001)\n"
-        )
+        violations = check_source("include/x.py", "import os  # nosec B404 -- reason (AB-001)\n")
         assert any("forbidden" in v for v in violations)
 
     def test_tools_is_actually_in_the_scanned_set(self) -> None:
-        """A coverage extension that did not extend coverage would pass silently."""
-        from tools.check_suppression_hygiene import main
+        """A coverage extension that did not extend coverage would pass silently.
+
+        H8 replaced the hardcoded ``ama_cryptography/ + tests/ + tools/`` target
+        list with ``tracked_python_files()`` — every git-tracked ``.py`` — so a
+        source check for a literal ``Path("tools")`` no longer describes how
+        tools/ gets scanned.  Assert the BEHAVIOUR instead: the scanned set
+        actually reaches tools/, including the checker's own module.  Checking
+        the discovery function's output rather than its text means a future
+        refactor that keeps the coverage keeps this test green, and one that
+        drops tools/ fails it.
+        """
+        from tools.check_suppression_hygiene import tracked_python_files
 
         repo_root = Path(__file__).resolve().parent.parent
-        source = inspect.getsource(main)
-        assert 'Path("tools")' in source, "tools/ dropped out of the scanned set"
         assert (repo_root / "tools").is_dir()
+        scanned = tracked_python_files(repo_root)
+        tools_files = [p for p in scanned if "tools" in p.parts]
+        assert tools_files, (
+            "tracked_python_files() reaches no tools/ file — the suppression scan "
+            "no longer covers tools/, the tree the H8 widening was for"
+        )
+        assert any(
+            p.name == "check_suppression_hygiene.py" for p in tools_files
+        ), "the checker's own module is not in its scanned set"
+
+    # -- The marker must name the rule it silences ------------------------
+
+    def test_a_bare_nosec_is_reported_even_when_fully_justified(self) -> None:
+        """The sharp case: it reads targeted and is not.
+
+        bandit parses everything after ``# nosec`` as test ids, warns on each
+        word it cannot resolve, and treats the resulting EMPTY set as "no
+        specific tests" — i.e. blanket.  So this repository's own house style,
+        ``# nosec -- reason (TAG-NNN)``, silences every bandit test on the line
+        while carrying a justification that says otherwise.
+
+        Measured against bandit 1.9.4 on two files differing only in the
+        marker: with ``# nosec -- prose (DEMO-002)`` on a
+        ``subprocess.call(..., shell=True)`` line, bandit reports nothing for
+        that line; with ``# nosec B105`` — a code that matches nothing there —
+        it still reports B607.
+        """
+        from tools.check_suppression_hygiene import check_source
+
+        violations = check_source("a.py", "PW = 'x'  # nosec -- placeholder (AB-001)\n")
+        assert any("missing rule id" in v for v in violations), violations
+
+    @pytest.mark.parametrize("marker", ["# nosec B105", "# nosec: B105"])
+    def test_both_targeted_nosec_spellings_are_accepted(self, marker: str) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        assert check_source("a.py", f"PW = 'x'  {marker} -- placeholder (AB-001)\n") == []
+
+    def test_a_bare_noqa_is_reported_even_when_fully_justified(self) -> None:
+        """ruff treats a bare ``# noqa`` as every rule on the line."""
+        from tools.check_suppression_hygiene import check_source
+
+        violations = check_source("a.py", "import os  # noqa -- reason (AB-001)\n")
+        assert any("missing rule id" in v for v in violations), violations
+
+    def test_a_targeted_noqa_is_accepted(self) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        assert check_source("a.py", "import os  # noqa: F401 -- reason (AB-001)\n") == []
+
+    def test_the_repositorys_own_stacked_marker_form_is_accepted(self) -> None:
+        """``# fmt: skip  # noqa: S311 # nosec B311 -- reason (NM-010)``.
+
+        Verbatim from ``ama_cryptography/_numeric.py``: three markers on one
+        line, two of them strict-form families.  A rule that rejected this
+        would be a rule the tree could not satisfy.
+        """
+        from tools.check_suppression_hygiene import check_source
+
+        source = (
+            "rng = Random()  # fmt: skip  # noqa: S311 # nosec B311 "
+            "-- non-crypto math only (NM-010)\n"
+        )
+        assert check_source("a.py", source) == []
+
+    def test_no_marker_in_the_tree_is_written_bare(self) -> None:
+        """Asserted against the tree, not only through the checker.
+
+        The strict-form rule was added on a tree that already satisfied it, so
+        this is the assertion that keeps it satisfied rather than evidence that
+        it was ever violated.
+        """
+        from tools.check_suppression_hygiene import (
+            _STRICT_FORMS,
+            _SUPPRESSION_RE,
+            effective_suppressions,
+        )
+
+        repo_root = Path(__file__).resolve().parent.parent
+        blanket: list[str] = []
+        for tree in ("ama_cryptography", "tests", "tools"):
+            for py_file in sorted((repo_root / tree).rglob("*.py")):
+                source = py_file.read_text(encoding="utf-8", errors="replace")
+                for lineno, comment in effective_suppressions(source):
+                    for match in _SUPPRESSION_RE.finditer(comment):
+                        strict = _STRICT_FORMS.get(match.group(1))
+                        if strict is None:
+                            continue
+                        if not strict[0].match(comment[match.end() :]):
+                            blanket.append(
+                                f"{py_file.relative_to(repo_root)}:{lineno}: {comment.strip()}"
+                            )
+        assert blanket == [], f"blanket suppression marker(s): {blanket}"
 
     def test_every_tools_suppression_carries_a_tracking_id(self) -> None:
         """Asserted directly against the tree, not only through the checker."""
@@ -512,6 +715,98 @@ class TestSuppressionScanPrecision:
                 if _SUPPRESSION_RE.search(comment) and not re.search(r"\([A-Z]+-\d+\)", comment):
                     unjustified.append(f"{py_file.relative_to(repo_root)}:{lineno}")
         assert unjustified == [], f"suppressions in tools/ without a tracking ID: {unjustified}"
+
+
+class TestOptionalImportSuppressions:
+    """A ``type: ignore`` that cannot be right in both type-check environments.
+
+    Where the optional third-party package IS installed, the name bound by the
+    ``try`` carries the module's type and ``name = None`` in the fallback needs
+    the ignore.  Where it is NOT — the CI type-check image carries the pinned
+    tools and nothing else — the import resolves to ``Any`` through
+    ``ignore_missing_imports``, the assignment is fine, and the same marker is
+    an ERROR under ``warn_unused_ignores``.  One file, two verdicts.
+
+    It appeared four times in this tree, each a latent CI break.  The fix is
+    never another suppression: declare the name before the ``try``.
+    """
+
+    @staticmethod
+    def _gate() -> Any:
+        import importlib.util
+
+        repo_root = Path(__file__).resolve().parent.parent
+        path = repo_root / "tools" / "check_suppression_hygiene.py"
+        spec = importlib.util.spec_from_file_location("_sup_gate_optional", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    THIRD_PARTY_FALLBACK = (
+        "try:\n"
+        "    import numpy as np\n"
+        "\n"
+        "    HAVE = True\n"
+        "except ImportError:\n"
+        "    np = None  # type: ignore[assignment]\n"
+        "    HAVE = False\n"
+    )
+
+    FIRST_PARTY_FALLBACK = (
+        "try:\n"
+        "    from ama_cryptography.rfc3161_timestamp import get_timestamp\n"
+        "except ImportError:\n"
+        "    get_timestamp = None  # type: ignore[assignment]\n"
+    )
+
+    DECLARED_FORM = (
+        "np: Any\n"
+        "try:\n"
+        "    import numpy as _np\n"
+        "\n"
+        "    np = _np\n"
+        "    HAVE = True\n"
+        "except ImportError:\n"
+        "    np = None\n"
+        "    HAVE = False\n"
+    )
+
+    def test_a_third_party_fallback_ignore_is_flagged(self) -> None:
+        gate = self._gate()
+        covered = gate._third_party_import_fallback_lines(self.THIRD_PARTY_FALLBACK)
+        assert covered, "the numpy fallback body was not recognised"
+        marked = [
+            i
+            for i, line in enumerate(self.THIRD_PARTY_FALLBACK.splitlines(), start=1)
+            if i in covered and "type: ignore" in line
+        ]
+        assert marked == [6], marked
+
+    def test_a_first_party_fallback_ignore_is_not_flagged(self) -> None:
+        """The precision half: an in-tree module resolves in every environment.
+
+        ``crypto_api.py`` carries exactly this shape for the in-tree RFC 3161
+        module, and those three ignores are needed unconditionally. A gate that
+        cried wolf on them would stop being read.
+        """
+        gate = self._gate()
+        assert gate._third_party_import_fallback_lines(self.FIRST_PARTY_FALLBACK) == set()
+
+    def test_the_declared_form_is_accepted(self) -> None:
+        gate = self._gate()
+        covered = gate._third_party_import_fallback_lines(self.DECLARED_FORM)
+        marked = [
+            i
+            for i, line in enumerate(self.DECLARED_FORM.splitlines(), start=1)
+            if i in covered and "type: ignore" in line
+        ]
+        assert marked == [], marked
+
+    def test_the_shipped_tree_carries_none(self) -> None:
+        gate = self._gate()
+        repo_root = Path(__file__).resolve().parent.parent
+        assert gate.scan_optional_imports(repo_root) == []
 
 
 # ---------------------------------------------------------------------------

@@ -309,6 +309,7 @@ class TestNISTSHA3256Vectors:
 
 
 @pytest.mark.skipif(not _PYCA_AVAILABLE, reason="PyCA cryptography not installed")
+@pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
 class TestRFC5869HKDFStructure:
     """
     Validate HKDF structure against RFC 5869 test vectors (using SHA-256).
@@ -405,6 +406,7 @@ class TestProjectSpecificVectors:
         assert tag.hex() == expected_hex, "HMAC-SHA3-256 project vector #2 failed"
 
     @pytest.mark.skipif(not _PYCA_AVAILABLE, reason="PyCA cryptography not installed")
+    @pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
     def test_hkdf_sha3_256_project_vector(self) -> None:
         """
         Project-specific HKDF-SHA3-256 test vector.

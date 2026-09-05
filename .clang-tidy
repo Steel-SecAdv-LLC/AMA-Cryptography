@@ -24,15 +24,24 @@
 # doesn't belong on the list, drop it explicitly, do not pretend it's
 # enforced).
 #
-# Inline `// NOLINT(check-name)` comments are subject to INVARIANT-13
-# (justification + tracking ID required) — same hygiene policy as
-# ruff `# noqa` / bandit `# nosec` markers.  As of the audit Issue 9
-# close-out the codebase carries exactly one NOLINT (in
-# `src/c/ed25519_donna_shim.c::ama_ed25519_point_from_scalar`,
-# suppressing a clang-analyzer false positive on vendor donna code).
-# Adding a new NOLINT to silence a category-wide noise pattern is the
-# wrong answer; either fix the code, or drop the category from
-# `Checks:` here with a rationale.
+# Inline suppression comments are FORBIDDEN in the trees this config
+# governs.  INVARIANT-13 words it as "absolutely forbidden ... regardless
+# of justification" for `src/c/` and `include/`, which is every file this
+# job runs over, and as of 5.0.0 `tools/check_suppression_hygiene.py`
+# enforces it: a second pass scans every non-vendored `.c`/`.h` under
+# those roots and fails on any suppression marker, with no justification
+# escape hatch.  (Until then that pass did not exist — the checker
+# collected Python files only, so the forbidden-directory branch was
+# unreachable and the tree carried one live suppression while the gate
+# printed "all suppressions are properly justified" and exited 0.)
+#
+# So the answer to a finding is to fix the code, or to drop the category
+# from `Checks:` below with a rationale.  The one suppression this
+# codebase used to carry — three clang-analyzer uninitialised-read checks
+# in `src/c/ed25519_donna_shim.c::ama_ed25519_point_from_scalar`, on
+# donna's macro-driven initialisation — was resolved the first way:
+# zero-initialising the two locals at declaration removes the analyzer's
+# premise, and clang-tidy 18 reports the file clean without it.
 
 Checks: >
   -*,
@@ -106,10 +115,11 @@ Checks: >
 #     as "garbage".  The kernel is KAT-verified and vendor code gets
 #     no project-side modifications.  Dropping ONLY this one check
 #     keeps the rest of `clang-analyzer-*` (the security-bearing
-#     family) enforced.  Note: a NOLINT on the calling line in
-#     ed25519_donna_shim.c is preserved for the older clang-tidy
-#     releases that report the warning at the call site rather than
-#     at the vendor source location.
+#     family) enforced.  (No NOLINT survives at the call site:
+#     inline suppressions under src/c/ are forbidden and enforced by
+#     tools/check_suppression_hygiene.py — see the header of this
+#     file; an earlier revision of this note claimed one was
+#     "preserved", contradicting that policy.)
 
 # WarningsAsErrors flips every enabled check above to an ERROR.  See
 # the header for the audit Issue 9 close-out rationale.  PRs that
@@ -123,7 +133,20 @@ WarningsAsErrors: '*'
 #   under src/c/vendor/ and third-party headers under /usr/include are
 #   excluded — clang-tidy would otherwise drown the output in third-
 #   party-noise.
-HeaderFilterRegex: '^(.*/)?(src/c|include)/(?!vendor/).*\.h$'
+#
+#   POSITIVE alternation over the real header directories, in POSIX ERE.
+#   The previous spelling excluded vendor/ with a lookahead —
+#   '(?!vendor/)' — which llvm::Regex does not support: the pattern
+#   compiled invalid, Regex::match() answered false for EVERYTHING, no
+#   error was printed, and clang-tidy silently suppressed every
+#   diagnostic originating in the project's own headers.  Reproduced with
+#   clang-tidy 18.1.3: a bugprone-assignment-in-if-condition planted in a
+#   src/c header was reported 0 times under the lookahead filter and
+#   reported under this one — so the fail-closed `WarningsAsErrors: '*'`
+#   gate below covered no header code at all.  Enumerating the permitted
+#   subdirectories also means a NEW subdirectory gets a deliberate
+#   decision here instead of the default.
+HeaderFilterRegex: '^(.*/)?(include/.*\.h|src/c/[^/]+\.h|src/c/(avx2|internal|neon|sve2)/[^/]+\.h)$'
 
 # Format style — match the project's clang-format config.
 FormatStyle: file

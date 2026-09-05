@@ -8,8 +8,49 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
     hooks:
+      # These two hooks REWRITE the files they run on, so their scope is a
+      # correctness question, not a style one.  Unscoped, `pre-commit run
+      # --all-files` on this tree modified 150 files, among them 94 binary
+      # seeds under fuzz/seed_corpus/, all 32 vendored ed25519-donna headers,
+      # 19 NIST/Ascon KAT vector files, and the FIPS 140-3 power-on self-test
+      # KAT JSON.  Nothing in CI notices: measured on the rewritten tree, the
+      # corpus generators' --check, check_corpus_originality.py,
+      # check_vendor_isolation.py and all 135 KAT tests still passed.  Silent
+      # is what makes it dangerous.
+      #
+      # The excluded paths are bytes that must stay as published or as
+      # generated:
+      #   fuzz/seed_corpus     binary fuzzer inputs; whitespace IS content
+      #   tests/kat            NIST/Ascon reference vectors.  Their format uses
+      #                        a trailing space for an empty field, so the hook
+      #                        turns `PT = ` into `PT =` — the parsers here
+      #                        tolerate both, but the file no longer matches
+      #                        what NIST published
+      #   src/c/vendor         third-party source; INVARIANT-1 keeps it
+      #                        unmodified so it stays diffable against upstream
+      #   nist_vectors,
+      #   ama_cryptography/_post_kats,
+      #   wycheproof_vectors/*.json   published test vectors
+      #   benchmarks/charts,
+      #   benchmarks/*.json    generated artefacts; fixing them here only
+      #                        churns against the next regeneration
       - id: trailing-whitespace
+        # Without this, two trailing spaces — a Markdown hard line break — are
+        # stripped and the rendered document changes.
+        args: ['--markdown-linebreak-ext=md']
+        exclude: &verbatim_bytes |
+          (?x)^(
+            fuzz/seed_corpus/.*|
+            tests/kat/.*|
+            src/c/vendor/.*|
+            nist_vectors/.*|
+            wycheproof_vectors/.*\.json|
+            ama_cryptography/_post_kats/.*|
+            benchmarks/charts/.*|
+            benchmarks/[^/]*\.json
+          )$
       - id: end-of-file-fixer
+        exclude: *verbatim_bytes
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
@@ -33,9 +74,65 @@ repos:
     rev: v2.3.0
     hooks:
       - id: mypy
-        args: ['--ignore-missing-imports', '--no-warn-unused-ignores']
+        # --explicit-package-bases: without it this hook did not run at all on
+        # `pre-commit run --all-files`.  Neither `schemas/` nor
+        # `wycheproof_vectors/` has an `__init__.py`, so mypy reached each of
+        # their modules under two names — `crypto_package_v1` from the
+        # directory and `schemas.crypto_package_v1` from the repository root,
+        # which is how the tests import it — and stopped with
+        # "Found 1 error in 1 file (errors prevented further checking)".  It
+        # checked nothing while reporting what looked like an ordinary lint
+        # failure.  The flag makes the repository root the package base, which
+        # is mypy's own resolution (b) for that diagnostic and fixes every
+        # directory of that shape at once.  ci.yml passes it for the same
+        # reason.
+        #
+        # --ignore-missing-imports and --no-warn-unused-ignores are GONE, and
+        # their removal is the point rather than a tidy-up.  They were here
+        # because a developer's checkout need not have every stub installed,
+        # and under --ignore-missing-imports three load-bearing `# type:
+        # ignore` comments read as unused.  Both problems are now solved at the
+        # source: every third-party module this tree imports is listed under
+        # `[[tool.mypy.overrides]] ignore_missing_imports` in pyproject.toml,
+        # so the config answers the missing stubs file by file instead of a
+        # flag silencing them wholesale — and the ignores that flipped between
+        # environments have been replaced by declaring the name before the
+        # `try` (enforced by the third pass of
+        # tools/check_suppression_hygiene.py).  The hook now runs the same
+        # flags as CI, so it reports what CI reports.
+        args:
+          - '--explicit-package-bases'
+        # EVERY tracked Python file, which is now exactly what ci.yml's "Type
+        # checking with MyPy (--strict)" step gates.
+        #
+        # This was a hand-written list of the "surface CI gates", because the
+        # rest of the tree carried pre-existing findings and letting them fail
+        # the hook is what a developer learns to skip past.  Measured before
+        # this pass: 323 under benchmarks/ and tools/, 82 under examples/,
+        # docs/ and fuzz/, and 33 in setup.py — 438 in all, among them four
+        # `create_crypto_package(dna_codes=...)` calls in the published
+        # integration examples naming a parameter the function has never had.
+        # They are fixed, so the narrowing has nothing left to protect
+        # against.  Any divergence from ci.yml is still a divergence, and
+        # tests/test_precommit_mypy_scope.py compares the two.
+        files: \.py$
+        # Pinned to the same versions the "Type checking with MyPy (--strict)"
+        # step of ci.yml installs.  The hook runs in its own isolated venv, and
+        # with only types-requests in it mypy reported 16 errors CI does not
+        # have: `pytest.skip()` is annotated NoReturn, and that annotation is
+        # what narrows `Path | None` to `Path` after a skip guard in
+        # tests/test_vendor_isolation_gate.py and its neighbours.  With pytest
+        # absent the narrowing is lost and the guard's own tests look broken.
+        # types-setuptools is here for the same reason now that setup.py is in
+        # scope: without it `build_ext` is Any and every override on CMakeBuild
+        # goes unchecked while the run still reports success.
+        # A hook whose findings CI cannot reproduce is one developers learn to
+        # disbelieve, so the two environments are kept in step.
         additional_dependencies:
-          - types-requests
+          - types-PyYAML==6.0.12.20260724
+          - PyYAML==6.0.3
+          - pytest==9.1.1
+          - types-setuptools==84.0.0.20260812
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.9.4

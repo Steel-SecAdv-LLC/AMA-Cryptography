@@ -1,6 +1,6 @@
 # CSRC Standards Mapping — AMA Cryptography Library
 
-**Version:** 4.0.0
+**Version:** 5.0.0
 **Date:** 2026-07-25
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
@@ -19,9 +19,14 @@ algorithms with shipping code are listed — no aspirational entries.
 |-----------|----------|---------------|--------|----------|
 | SHA3-256 | FIPS 202 | SHA3-256 (r=1088, c=512, d=256) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHA3-512 | FIPS 202 | SHA3-512 (r=576, c=1024, d=512) | Final | https://csrc.nist.gov/pubs/fips/202/final |
+| SHA3-384 | FIPS 202 | SHA3-384 (r=832, c=768, d=384) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHAKE128 | FIPS 202 | SHAKE128 (r=1344, c=256, XOF) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHAKE256 | FIPS 202 | SHAKE256 (r=1088, c=512, XOF) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHA-256 | FIPS 180-4 | SHA-256 (256-bit digest) | Final | https://csrc.nist.gov/pubs/fips/180-4/upd1/final |
+| SHA-384 | FIPS 180-4 | SHA-384 (384-bit digest, SHA-512 core) | Final | https://csrc.nist.gov/pubs/fips/180-4/upd1/final |
+| SHA-512 | FIPS 180-4 | SHA-512 (512-bit digest) | Final | https://csrc.nist.gov/pubs/fips/180-4/upd1/final |
+| PBKDF2-HMAC-SHA256 | NIST SP 800-132 | PBKDF2 with HMAC-SHA-256 PRF | Final | https://csrc.nist.gov/pubs/sp/800/132/final |
+| PBKDF2-HMAC-SHA512 | NIST SP 800-132 | PBKDF2 with HMAC-SHA-512 PRF (BIP39 seed KDF) | Final | https://csrc.nist.gov/pubs/sp/800/132/final |
 | HMAC-SHA-256 | FIPS 198-1 | HMAC with SHA-256 (key ≤ block size 64 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
 | AES-256-GCM | NIST SP 800-38D | AES-256 key (256-bit), 96-bit nonce, 128-bit tag | Final | https://csrc.nist.gov/pubs/sp/800/38/d/final |
 | Ascon-AEAD128 | NIST SP 800-232 | 128-bit key, 128-bit nonce, 128-bit tag, rate 128 / capacity 192 | Final | https://csrc.nist.gov/pubs/sp/800/232/final |
@@ -29,6 +34,17 @@ algorithms with shipping code are listed — no aspirational entries.
 | ML-KEM-1024 (Kyber-1024) | FIPS 203 | ML-KEM-1024 (k=4, n=256, q=3329) | Final | https://csrc.nist.gov/pubs/fips/203/final |
 | ML-DSA-65 (Dilithium3) | FIPS 204 | ML-DSA-65 (k=6, l=5, η=4, γ₁=2¹⁹) | Final | https://csrc.nist.gov/pubs/fips/204/final |
 | SLH-DSA-SHA2-256f (SPHINCS+-256f) | FIPS 205 | SLH-DSA-SHA2-256f (n=32, h=68, d=17, w=16, fast) | Final | https://csrc.nist.gov/pubs/fips/205/final |
+| SLH-DSA-SHAKE-128s | FIPS 205 | SLH-DSA-SHAKE-128s (n=16, h=63, d=7, w=16, small) | Final | https://csrc.nist.gov/pubs/fips/205/final |
+| ML-KEM-512 (Kyber-512) | FIPS 203 | ML-KEM-512 (k=2, n=256, q=3329) | Final | https://csrc.nist.gov/pubs/fips/203/final |
+| ML-KEM-768 (Kyber-768) | FIPS 203 | ML-KEM-768 (k=3, n=256, q=3329) | Final | https://csrc.nist.gov/pubs/fips/203/final |
+| ML-DSA-44 (Dilithium2) | FIPS 204 | ML-DSA-44 (k=4, l=4, eta=2, gamma1=2^17) | Final | https://csrc.nist.gov/pubs/fips/204/final |
+| ML-DSA-87 (Dilithium5) | FIPS 204 | ML-DSA-87 (k=8, l=7, eta=2, gamma1=2^19) | Final | https://csrc.nist.gov/pubs/fips/204/final |
+| HMAC-SHA-384 | FIPS 198-1 | HMAC with SHA-384 (key <= block size 128 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
+| HMAC-SHA-512 | FIPS 198-1 | HMAC with SHA-512 (key <= block size 128 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
+| HMAC-SHA3-256 | FIPS 198-1 | HMAC with SHA3-256 as the underlying hash (FIPS 202; key <= block size / rate 136 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
+| ECDSA (P-256 / P-384 / P-521) | FIPS 186-5 | secp256r1 / secp384r1 / secp521r1; DER and fixed-width signatures; deterministic, hedged and randomised nonce policies | Final | https://csrc.nist.gov/pubs/fips/186-5/final |
+| ECDH (P-256 / P-384 / P-521) | NIST SP 800-56A rev. 3 | Ephemeral-unified and one-pass over the same three curves; cofactor 1 | Final | https://csrc.nist.gov/pubs/sp/800/56/a/r3/final |
+| LMS / HSS (verification only) | NIST SP 800-208 | Verification of LMS and HSS signatures; SIGNING IS NOT IMPLEMENTED (`ama_lms_signing_available()` returns 0), because a stateful hash-based signer that loses its one-time-key state forges trivially | Final | https://csrc.nist.gov/pubs/sp/800/208/final |
 
 ### 1.2 RFC-Only Algorithms (Not NIST Publications)
 
@@ -43,7 +59,7 @@ FIPS or SP publications. They are included for completeness.
 | Argon2id | RFC 9106 | Configurable: t_cost, m_cost, parallelism, tag length | Memory-hard KDF; not a NIST publication |
 | HKDF (with SHA3-256) | RFC 5869 | Extract-then-Expand with HMAC-SHA3-256, max output 8160 B | KDF construction; not a NIST publication. Uses SHA3-256 as the underlying hash |
 | secp256k1 | SEC 2 v2 / BIP-32 | 256-bit prime field, compressed SEC1 public keys (33 B) | Certicom/Bitcoin curve; not a NIST publication. Used for BIP-32 HD key derivation |
-| FROST(Ed25519, SHA-512) | RFC 9591 | t-of-n threshold Ed25519, Shamir secret sharing over Ed25519 scalar field | Flexible Round-Optimized Schnorr Threshold signatures; not a NIST publication |
+| FROST(Ed25519, SHA-512) | RFC 9591-style | t-of-n threshold Ed25519, Shamir secret sharing over Ed25519 scalar field | Flexible Round-Optimized Schnorr Threshold signatures; not a NIST publication. Protocol structure per RFC 9591, but the hash derivations omit the ciphersuite's "FROST-ED25519-SHA512-v1" contextString and per-role H1/H2 domain separation (`src/c/ama_frost.c`, Standards note), so partial signatures are not interoperable with RFC 9591 ciphersuite implementations; the aggregated signature is standard RFC 8032 Ed25519 |
 
 ---
 
@@ -156,3 +172,15 @@ not undergone formal FIPS 140-3 evaluation by an accredited laboratory.
    environment changes materially. CMVP validation certificates have a
    defined validity period and historical algorithm transitions (e.g.,
    3DES deprecation) require timely migration.
+
+6. **Approved Random-Bit Generation (SP 800-90A/90B/90C):** Random values are
+   currently drawn from the operating-system CSPRNG via Python's
+   `secrets.token_bytes`, which is not an approved SP 800-90A DRBG instantiated
+   inside the module boundary, and there is no entropy source with the
+   SP 800-90B startup and continuous health tests (Repetition Count, Adaptive
+   Proportion) that FIPS 140-3 requires — the repeated-output check in
+   `secure_token_bytes` is a defence-in-depth sanity check on the OS CSPRNG,
+   not that health-test suite, and POST carries no DRBG KAT. A validated module
+   would instantiate an approved SP 800-90A DRBG seeded from an SP 800-90B
+   entropy source (SP 800-90C construction) within the boundary and add a DRBG
+   KAT to the power-on self-tests.

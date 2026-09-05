@@ -14,7 +14,10 @@ library is present on the system.
 """
 
 import os
+import pathlib
+import re
 import shutil
+import sys
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -746,16 +749,328 @@ class TestPKCS11Paths:
         for hsm_type, paths in HSMKeyStorage.PKCS11_PATHS.items():
             assert len(paths) >= 1, f"{hsm_type} has no library paths"
 
+    def test_softhsm_auto_resolution_covers_windows(self) -> None:
+        """The choco/Disig install path is auto-resolvable, not override-only.
+
+        TestSoftHSMIntegration constructs ``HSMKeyStorage("softhsm")`` with no
+        ``library_path`` override, so the Windows lane only works if the DLL
+        the ``softhsm.install`` package lays down is in the search list.
+        """
+        assert "C:\\SoftHSM2\\lib\\softhsm2-x64.dll" in HSMKeyStorage.PKCS11_PATHS["softhsm"]
+
 
 # ===========================================================================
 # Conditional integration test: SoftHSM2
 # ===========================================================================
 
-_SOFTHSM_LIB = "/usr/lib/softhsm/libsofthsm2.so"
-_SOFTHSM_AVAILABLE = os.path.exists(_SOFTHSM_LIB) and shutil.which("softhsm2-util") is not None
+#: Where Debian/Ubuntu's ``softhsm2`` package installs the PKCS#11 module, and
+#: where a multiarch install puts it.  Both are checked: a host with the token
+#: available but at the second path used to read as "not installed".
+_SOFTHSM_LIB_CANDIDATES = (
+    "/usr/lib/softhsm/libsofthsm2.so",
+    "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+    "/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so",
+    "/usr/local/lib/softhsm/libsofthsm2.so",  # Homebrew on Intel macOS
+    "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # Homebrew on Apple Silicon
+    "C:\\SoftHSM2\\lib\\softhsm2-x64.dll",  # Disig MSI via `choco install softhsm.install`
+)
 
 
-@pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason="SoftHSM2 is not installed")
+def _softhsm_module_path() -> "str | None":
+    """The installed SoftHSM2 PKCS#11 module, or None.
+
+    Derived from ``softhsm2-util``'s own location first, then the fixed
+    candidate list.  Deriving matters: Homebrew's prefix differs by
+    architecture (``/opt/homebrew`` on Apple Silicon, ``/usr/local`` on
+    Intel), and a package manager is free to move it again.  A fixed list
+    that happens to omit the live prefix reports "SoftHSM2 not installed" on
+    a host where it *is* installed — the same failure as the ``.so.2`` SONAME
+    pin in the ACVP harness, and it would have made provisioning the macOS
+    runners look like it worked while the lane went on skipping.
+
+    On win32 the Disig build lays the module out differently: the DLL sits
+    directly under ``<prefix>\\lib`` (no ``softhsm`` subdirectory) as
+    ``softhsm2-x64.dll``, so the derivation has its own arm rather than
+    pretending the POSIX layout is universal.
+    """
+    util = shutil.which("softhsm2-util")
+    if util:
+        prefix = os.path.dirname(os.path.dirname(os.path.realpath(util)))
+        if sys.platform == "win32":
+            # <prefix>\bin\softhsm2-util.exe -> <prefix>\lib\softhsm2-x64.dll
+            derived = os.path.join(prefix, "lib", "softhsm2-x64.dll")
+        else:
+            # <prefix>/bin/softhsm2-util -> <prefix>/lib/softhsm/libsofthsm2.so
+            derived = os.path.join(prefix, "lib", "softhsm", "libsofthsm2.so")
+        if os.path.exists(derived):
+            return derived
+    return next((c for c in _SOFTHSM_LIB_CANDIDATES if os.path.exists(c)), None)
+
+
+_SOFTHSM_LIB = _softhsm_module_path()
+
+
+def _pykcs11_importable() -> bool:
+    """Whether ``HSMKeyStorage`` can actually reach a token.
+
+    Checked as part of the availability predicate, not left implicit.
+    ``HSMKeyStorage`` reaches the token through PyKCS11, so a host with
+    SoftHSM2 installed and PyKCS11 absent made this class ERROR rather than
+    skip — the predicate claimed a capability one of whose halves it never
+    tested.  It is a real configuration: the ``hsm`` extra is optional, and
+    SoftHSM2 arrives from the system package manager.
+    """
+    import importlib.util
+
+    return importlib.util.find_spec("PyKCS11") is not None
+
+
+_SOFTHSM_AVAILABLE = (
+    _SOFTHSM_LIB is not None and shutil.which("softhsm2-util") is not None and _pykcs11_importable()
+)
+
+
+def _softhsm_unavailable_reason() -> str:
+    """Which half is missing, so a skip line says what to install."""
+    missing = []
+    if _SOFTHSM_LIB is None:
+        missing.append(
+            "SoftHSM2 module (apt-get install softhsm2 / brew install softhsm / "
+            "choco install softhsm.install)"
+        )
+    if shutil.which("softhsm2-util") is None:
+        missing.append("softhsm2-util")
+    if not _pykcs11_importable():
+        missing.append("PyKCS11 (pip install '.[hsm]')")
+    return "SoftHSM2 integration unavailable: missing " + ", ".join(missing)
+
+
+def test_softhsm_lane_is_provisioned_in_ci() -> None:
+    """Under ``AMA_CI_REQUIRE_BACKENDS=1`` the HSM lane must actually run.
+
+    ``TestSoftHSMIntegration`` is the only coverage of the real PKCS#11 key
+    lifecycle — every other test in this file drives a mock.  It skipped on
+    every job this repository had ever run, because nothing installed SoftHSM2,
+    so "HSM support works" rested entirely on mocks agreeing with themselves.
+
+    The declarative ``skipif`` below cannot be escalated by conftest's
+    ``AMA_CI_REQUIRE_BACKENDS`` hook (its reason does not name a crypto
+    backend), so the requirement is asserted here instead: in the CI job that
+    promises every backend is present, a missing token is a failure with a
+    remedy attached, not a quiet skip.
+
+    Asserted on every platform CI runs.  The history of this test's scope is
+    a history of claims being retired one by one.  An earlier revision scoped
+    it to Linux only and wrote the macOS gap up as a known limitation; that
+    was a choice presented as a constraint — `brew install softhsm` ships the
+    same PKCS#11 module — so macOS was provisioned and asserted instead.
+
+    Windows was the last holdout, excused by "SoftHSM2 has no maintained
+    package on any Windows runner manager, only a manual installer".  That
+    claim was checked and found false: Chocolatey's ``softhsm.install``
+    package (which wraps the Disig SoftHSM2-for-Windows MSI) is live on the
+    community feed, and ``choco`` is on every windows-latest runner.  CI now
+    installs it with ``INSTALLDIR`` pinned to ``C:\\SoftHSM2`` and then
+    *discovers* the resulting module before putting its ``bin\\`` on the job
+    PATH.  The pin matters: the MSI parents its directory to ``TARGETDIR``,
+    which Windows Installer resolves to ``ROOTDRIVE`` — the fixed drive with
+    the most free space, ``D:`` on these runners — so the first revision's
+    hard-coded ``C:\\SoftHSM2\\lib\\softhsm2-x64.dll`` assertion failed every
+    Windows lane on an otherwise successful install.  Windows is held to the
+    same provisioning standard as Linux and macOS rather than skipped on the
+    strength of a falsified premise.
+
+    The requirement is not a hole if a step is deleted:
+    ``test_the_workflow_still_provisions_softhsm`` asserts the provisioning
+    steps still exist, so removing one fails the suite rather than silently
+    returning this lane to the skip it spent this release's whole history in.
+    """
+    if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() not in ("true", "1", "yes"):
+        pytest.skip("AMA_CI_REQUIRE_BACKENDS is not set — local run")
+    assert _SOFTHSM_AVAILABLE, (
+        _softhsm_unavailable_reason()
+        + ". This job asserts every backend is provisioned; install SoftHSM2 "
+        "and the [hsm] extra (see the 'Install SoftHSM2' step in ci.yml) "
+        "rather than letting the only real PKCS#11 coverage skip."
+    )
+
+
+def test_the_workflow_still_provisions_softhsm() -> None:
+    """Every workflow that promises provisioned backends must install the token.
+
+    ``test_softhsm_lane_is_provisioned_in_ci`` only fires where the token is
+    expected, so on its own it would be satisfied by removing the step that
+    installs it — the lane would return to skipping everywhere and both checks
+    would stay green. This asserts the provisioning exists, so the pair cannot
+    be satisfied by deletion.
+
+    Both workflows are checked, because both set ``AMA_CI_REQUIRE_BACKENDS=1``.
+    ``ci-build-test.yml`` set that flag while installing neither the token nor
+    PyKCS11, so it promised every backend was present and skipped the only
+    real PKCS#11 coverage in the tree — which is exactly the shape this test
+    exists to catch, and is how it was found.
+
+    Reads the workflows rather than trusting a comment: the claim is about
+    what CI does.
+    """
+    workflows = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
+    gating = []
+    for name in ("ci.yml", "ci-build-test.yml"):
+        text = (workflows / name).read_text(encoding="utf-8")
+        if "AMA_CI_REQUIRE_BACKENDS" not in text:
+            continue
+        gating.append(name)
+        assert "softhsm2" in text or "brew install softhsm" in text, (
+            f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs softhsm2. "
+            f"TestSoftHSMIntegration is the only real PKCS#11 coverage in the tree; "
+            f"without this step it skips while the flag claims every backend is present."
+        )
+        # Windows evidence is asserted separately: the choco package name is
+        # the only string the apt/brew checks above cannot be satisfied by,
+        # so deleting just the Windows step would otherwise stay green while
+        # test_softhsm_lane_is_provisioned_in_ci failed the Windows entries.
+        assert "softhsm.install" in text, (
+            f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs the "
+            f"Windows SoftHSM2 token (choco softhsm.install). The Windows matrix "
+            f"entries assert the real PKCS#11 lane runs there; without this step "
+            f"they fail — or, if the assertion is also removed, silently skip."
+        )
+        assert "hsm]" in text, (
+            f"{name} no longer installs the [hsm] extra, so PyKCS11 is absent and the "
+            f"SoftHSM2 lane skips even with the token installed."
+        )
+
+    # Without this the whole test is vacuous by deletion, which is the exact
+    # hole its docstring claims the pair does not have: drop the two
+    # AMA_CI_REQUIRE_BACKENDS lines and every assertion above is skipped by the
+    # `continue`, test_softhsm_lane_is_provisioned_in_ci skips on every job,
+    # and the conftest backend-skip escalation disarms — all with a green
+    # suite.  Nothing else in the tree pins the flag's presence.
+    assert gating, (
+        "neither ci.yml nor ci-build-test.yml sets AMA_CI_REQUIRE_BACKENDS any more. "
+        "That flag is what turns a missing backend into a failure instead of a silent "
+        "skip; without it the SoftHSM2 lane — the only real PKCS#11 coverage in the "
+        "tree — returns to skipping everywhere while this suite stays green."
+    )
+
+
+def _hsm_extra_requirements() -> "list[str]":
+    """The requirement strings of pyproject.toml's ``[hsm]`` extra.
+
+    Parsed with ``tomllib`` where it exists, and with a line scan of the one
+    array this test needs on the project's Python 3.10 floor, where
+    ``tomllib`` is unavailable — the same split, and the same static
+    ``sys.version_info`` narrowing for mypy's ``python_version = "3.10"``
+    pin, as ``tools/check_documented_extras``.  The fallback skips comment
+    lines: the extra's own comment block quotes ``pip install`` commands,
+    which a bare quoted-string scan would misread as declared requirements.
+    """
+    pyproject = pathlib.Path(__file__).resolve().parent.parent / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    if sys.version_info >= (3, 11):
+        import tomllib
+
+        data = tomllib.loads(text)
+        return list(data["project"]["optional-dependencies"]["hsm"])
+    block = re.search(r"^hsm\s*=\s*\[(.*?)^\]", text, re.S | re.M)
+    assert block is not None, "pyproject.toml no longer declares an [hsm] extra"
+    reqs = []
+    for line in block.group(1).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        quoted = re.match(r'"([^"]+)"', line)
+        if quoted:
+            reqs.append(quoted.group(1))
+    return reqs
+
+
+def test_pykcs11_broken_windows_wheels_stay_excluded() -> None:
+    """PyKCS11 1.5.19 must stay uninstallable on Windows — and only there.
+
+    1.5.19's win32/win_amd64 wheels (PyPI, 2026-08-26T13:44Z) crash the
+    interpreter with an access violation inside ``PyKCS11Lib.load()`` of
+    SoftHSM2's x64 module.  Measured with no HSM-relevant change between the
+    runs: every Windows job green on 1.5.18 at 9811476 (run 32968055782),
+    every Windows job dead in ``TestSoftHSMIntegration::test_full_lifecycle``
+    at 6e42de8 (run 33031586700) after pip resolved the freshly published
+    1.5.19 wheels on the same runner image.  The same release is fine where
+    its artefacts differ — its macOS wheels passed in the red run itself, and
+    its sdist passes the same lifecycle against SoftHSM2 2.6.1 on Linux — so
+    the exclusion must not leak beyond win32, and it must not become a cap
+    that would keep a fixed 1.5.20 from re-verifying the lane.
+
+    Both declaration sites are pinned: the ``[hsm]`` extra (what a user
+    installs) and the two workflows' install steps (what CI runs).  Evaluated
+    through ``packaging`` rather than string-matched, so any re-spelling that
+    preserves the semantics passes and one that reopens the hole fails.
+    """
+    from packaging.requirements import Requirement
+
+    pykcs11 = [
+        req
+        for req in (Requirement(r) for r in _hsm_extra_requirements())
+        if req.name.lower() == "pykcs11"
+    ]
+    assert pykcs11, "the [hsm] extra no longer names PyKCS11"
+
+    def allowed(version: str, sys_platform: str) -> bool:
+        env = {"sys_platform": sys_platform}
+        applicable = [r for r in pykcs11 if r.marker is None or r.marker.evaluate(environment=env)]
+        assert applicable, f"no PyKCS11 requirement applies when sys_platform={sys_platform}"
+        return all(r.specifier.contains(version, prereleases=False) for r in applicable)
+
+    assert not allowed("1.5.19", "win32"), (
+        "the [hsm] extra lets pip resolve PyKCS11 1.5.19 on Windows, whose "
+        "wheels access-violate inside load() — pip install ama-cryptography[hsm] "
+        "on Windows crashes on first HSMKeyStorage construction"
+    )
+    assert allowed(
+        "1.5.18", "win32"
+    ), "the exclusion took the known-good 1.5.18 with it; Windows has nothing left to install"
+    assert allowed("1.5.20", "win32"), (
+        "the exclusion is a cap: a fixed upstream release could never be adopted "
+        "or re-verified by the Windows lane"
+    )
+    for platform in ("linux", "darwin"):
+        assert allowed("1.5.19", platform), (
+            f"the 1.5.19 exclusion leaked to {platform}, whose artefacts of that "
+            "release are measured working (sdist on Linux, universal2 wheels on macOS)"
+        )
+
+    # The workflow half, SCOPED to the branch it claims to describe: a bare
+    # whole-file substring check would stay green with the exclusion moved
+    # into the non-Windows arm (or into a comment) — asserting the spelling
+    # exists somewhere is not asserting Windows installs it.  The branch
+    # shape is pinned structurally: the RUNNER_OS==Windows arm carries the
+    # exclusion, and the arm that follows `else` does not.
+    branch_re = re.compile(
+        r'if \[ "\$\{RUNNER_OS\}" = "Windows" \]; then\s*\n'
+        r"(?P<windows>(?:.*\n)*?)\s*else\s*\n"
+        r"(?P<other>(?:.*\n)*?)\s*fi",
+    )
+    workflows = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
+    for name in ("ci.yml", "ci-build-test.yml"):
+        text = (workflows / name).read_text(encoding="utf-8")
+        arms = [m for m in branch_re.finditer(text) if "PyKCS11" in m.group(0)]
+        assert arms, (
+            f"{name} no longer installs PyKCS11 through a RUNNER_OS==Windows "
+            "branch; re-scope this test to the new step shape"
+        )
+        for match in arms:
+            assert 'pip install "PyKCS11>=1.5.18,!=1.5.19"' in match.group("windows"), (
+                f"{name}'s PyKCS11 Windows arm no longer excludes 1.5.19; the "
+                "next Windows run resolves the broken wheels and every Windows "
+                "job dies in the SoftHSM lifecycle again"
+            )
+            assert "!=1.5.19" not in match.group("other"), (
+                f"{name}'s non-Windows arm now carries the 1.5.19 exclusion, "
+                "which the Linux/macOS artefacts of that release do not need "
+                "— it belongs to the Windows arm only"
+            )
+
+
+@pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason=_softhsm_unavailable_reason())
 class TestSoftHSMIntegration:
     """
     Integration tests that run against a real SoftHSM2 instance.
@@ -770,8 +1085,21 @@ class TestSoftHSMIntegration:
         token_dir = tmp_path / "softhsm_tokens"
         token_dir.mkdir()
 
+        # Mirror the configuration SoftHSM2 itself ships.  The Disig Windows
+        # MSI installs this exact shape (verified by extracting the package's
+        # own softhsm2.conf): a tokendir with a TRAILING separator, plus the
+        # objectstore/log/slots keys stated rather than left to defaults.  The
+        # first revision wrote only `directories.tokendir` with no trailing
+        # separator, which is fine on Linux and macOS but is not the layout
+        # the Windows build is shipped and tested against.
         conf_path = tmp_path / "softhsm2.conf"
-        conf_path.write_text(f"directories.tokendir = {token_dir}\n")
+        conf_path.write_text(
+            f"directories.tokendir = {token_dir}{os.sep}\n"
+            "objectstore.backend = file\n"
+            "log.level = INFO\n"
+            "slots.removable = false\n",
+            encoding="utf-8",
+        )
 
         env = os.environ.copy()
         env["SOFTHSM2_CONF"] = str(conf_path)
@@ -779,22 +1107,69 @@ class TestSoftHSMIntegration:
 
         import subprocess
 
-        subprocess.run(
-            [
-                "softhsm2-util",
-                "--init-token",
-                "--slot",
-                "0",
-                "--label",
-                "AmaTest",
-                "--so-pin",
-                "12345678",
-                "--pin",
-                "1234",
-            ],
+        # `--free` is the form softhsm2-util's own SYNOPSIS documents for
+        # initialising a token ("--init-token --free --label text"); `--slot 0`
+        # addresses a slot ID, and SoftHSM reassigns initialised tokens to a
+        # serial-derived slot, so slot 0 is only incidentally the free one.
+        # Verified equivalent on Linux 2.6.1 (both initialise a fresh store).
+        # `--module` is passed explicitly rather than left to the loader's
+        # search path.  softhsm2-util lives in <prefix>/bin while the PKCS#11
+        # module lives in <prefix>/lib, so a bare LoadLibrary/dlopen depends on
+        # that lib directory being on PATH (Windows) or the loader path (POSIX)
+        # — which is why the Windows lane failed with
+        #     LoadLibraryA failed: 0x0000007E   (ERROR_MOD_NOT_FOUND)
+        # even with a correct install and bin/ on PATH.
+        #
+        # The module must match the *loading process's* architecture, and on
+        # Windows that is not the same module the test process needs.  Verified
+        # from the MSI payload's PE headers:
+        #     softhsm2-util.exe  machine=0x014c  i386   (32-bit)
+        #     softhsm2.dll       machine=0x014c  i386   (32-bit)
+        #     softhsm2-x64.dll   machine=0x8664  AMD64  (64-bit)
+        # The Disig package ships both modules deliberately: its command-line
+        # tools are 32-bit, while a 64-bit Python loading the token through
+        # PyKCS11 needs the x64 module.  Naming the x64 DLL for the 32-bit
+        # utility is what turned 0x7E into
+        #     LoadLibraryA failed: 0x000000C1   (ERROR_BAD_EXE_FORMAT)
+        # — the module was found, and refused as a foreign image.  So the
+        # utility is paired with its own-architecture sibling; HSMKeyStorage
+        # keeps resolving the x64 module for this process.  On POSIX there is
+        # one module and _SOFTHSM_LIB serves both.
+        init_module = _SOFTHSM_LIB
+        if sys.platform == "win32" and init_module is not None:
+            sibling = pathlib.Path(init_module).with_name("softhsm2.dll")
+            if sibling.is_file():
+                init_module = str(sibling)
+
+        init_cmd = [
+            "softhsm2-util",
+            "--init-token",
+            "--free",
+            "--label",
+            "AmaTest",
+            "--so-pin",
+            "12345678",
+            "--pin",
+            "1234",
+        ]
+        if init_module is not None:
+            init_cmd += ["--module", init_module]
+
+        proc = subprocess.run(
+            init_cmd,
             env=env,
-            check=True,
+            check=False,
             capture_output=True,
+            text=True,
+        )
+        # Surface the tool's own diagnosis.  `check=True` with captured output
+        # raises a CalledProcessError whose message carries the exit status and
+        # nothing else, which is how a Windows token-init failure reached CI as
+        # an unactionable "returned non-zero exit status 1".
+        assert proc.returncode == 0, (
+            f"softhsm2-util --init-token failed (exit {proc.returncode})\n"
+            f"config: {conf_path}\n{conf_path.read_text(encoding='utf-8')}\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
 
         self._old_env = os.environ.get("SOFTHSM2_CONF")
@@ -827,3 +1202,30 @@ class TestSoftHSMIntegration:
             assert deleted is True
 
             assert hsm.find_key("integration-key") is None
+
+
+class TestProbeAndResolverAgree:
+    """The availability probe and HSMKeyStorage's resolver must not drift.
+
+    The probe (`_SOFTHSM_LIB_CANDIDATES` + the softhsm2-util derivation)
+    decides whether the real-token lane runs; `HSMKeyStorage.PKCS11_PATHS`
+    decides whether the class can then actually load the module.  They are
+    two lists that must agree, and they had already drifted: the probe knew
+    the Debian multiarch spellings while the resolver did not, so on a
+    multiarch host the skip lifted and construction raised "PKCS#11 library
+    not found" — an availability claim the consumer could not honour, the
+    exact shape of the semgrep probe and SONAME-pin findings this release
+    closed elsewhere.
+    """
+
+    def test_every_probe_candidate_is_resolvable_by_the_class(self) -> None:
+        from ama_cryptography.key_management import HSMKeyStorage
+
+        resolver_paths = set(HSMKeyStorage.PKCS11_PATHS["softhsm"])
+        missing = [c for c in _SOFTHSM_LIB_CANDIDATES if c not in resolver_paths]
+        assert missing == [], (
+            "the availability probe accepts SoftHSM2 module paths that "
+            f"HSMKeyStorage cannot resolve: {missing}. Add them to "
+            "PKCS11_PATHS['softhsm'] so a lifted skip cannot land on a "
+            "resolver error."
+        )

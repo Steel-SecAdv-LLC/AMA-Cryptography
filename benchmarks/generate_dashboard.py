@@ -135,14 +135,72 @@ def parse_raw_c(path: Path) -> list[dict[str, Any]]:
 def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str, Any]) -> str:
     results = bench["results"]
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    version = re.search(
-        r'__version__\s*=\s*"([^"]+)"',
-        (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-    ).group(1)
+
+    # The version and measured-at come from the measurement artefact's own
+    # provenance block (written by benchmark_runner.generate_report), not from
+    # the working tree at render time.  Stamping render-time state over
+    # archived measurements is the relabelling defect generate_competitive.py
+    # documents — a page regenerated at 5.0.0 from numbers measured at 3.4.0
+    # claimed the 5.0.0 label for them.  The tree lookup below survives only
+    # as the fallback for inputs that predate the provenance block, and the
+    # page says so when it is used.
+    provenance = bench.get("provenance")
+    measured_html: str
+    if isinstance(provenance, dict) and provenance.get("version") and provenance.get("commit"):
+        version = str(provenance["version"]).strip("`")
+        raw_commit = str(provenance["commit"]).strip("`")
+        # Older records carried dirtiness as a suffix on the commit string;
+        # newer ones carry a separate "tree" row. Honour both.
+        commit_id = raw_commit.split()[0]
+        dirty = "DIRTY" in raw_commit or "DIRTY" in str(provenance.get("tree", ""))
+        measured_when = "an unrecorded time"
+        timestamp = bench.get("timestamp")
+        if isinstance(timestamp, str):
+            try:
+                measured_when = (
+                    datetime.fromisoformat(timestamp)
+                    .astimezone(timezone.utc)
+                    .strftime("%Y-%m-%d %H:%M UTC")
+                )
+            except ValueError:
+                # A timestamp that does not parse is still a measurement; the
+                # page keeps the pre-set "an unrecorded time" rather than
+                # failing the whole dashboard over one malformed string.
+                pass
+        measured_html = (
+            f"Measured at commit <code>{html.escape(commit_id[:12])}</code> "
+            f"(v{html.escape(version)}), {html.escape(measured_when)}"
+            + (" — working tree DIRTY at measurement" if dirty else "")
+            + "."
+        )
+    else:
+        version_match = re.search(
+            r'__version__\s*=\s*"([^"]+)"',
+            (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
+        )
+        if version_match is None:
+            # Not a fallback literal: a dashboard stamped with a version that
+            # was not read from anywhere real is the defect this exists to
+            # avoid.
+            raise RuntimeError(
+                "the measurement artefact carries no provenance block and "
+                "ama_cryptography/__init__.py declares no __version__; refusing "
+                "to label the dashboard with an invented version"
+            )
+        version = version_match.group(1)
+        measured_html = (
+            "The measurement artefact predates its provenance block, so nothing "
+            "records when or at which commit these numbers were produced; the "
+            "version shown was read from the working tree at generation time."
+        )
 
     payload = {
         "generated": generated,
         "version": version,
+        # Carried through verbatim so the page's embedded data is as
+        # attributable as the page text.
+        "measuredAt": bench.get("timestamp"),
+        "provenance": provenance if isinstance(provenance, dict) else None,
         "results": [
             {
                 "key": r["name"],
@@ -165,6 +223,7 @@ def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str,
     )
     return (
         tmpl.replace("/*__DATA__*/", json.dumps(payload))
+        .replace("__MEASURED__", measured_html)
         .replace("__GENERATED__", html.escape(generated))
         .replace("__VERSION__", html.escape(version))
     )

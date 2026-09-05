@@ -144,12 +144,19 @@ static const uint8_t rfc8032_sig[64] = {
  *
  * For arbitrary 32-byte test inputs we feed both paths the
  * sc25519_reduce'd form of each scalar so the comparison is made using
- * canonical representatives modulo the Ed25519 group order l.  Neither
- * scalarmult has a hard <2^253 precondition — both consume all 256 bits
- * — but reducing first keeps the byte-identity check strictly "mod l"
- * and guarantees the joint and split constructions are exercised on the
- * same scalar values (any `s` and `s + k*l` are group-equivalent but
- * hit different wNAF expansions, which we do not want to compare here).
+ * canonical representatives modulo the Ed25519 group order l.
+ *
+ * The reduction here is redundant, not load-bearing: sc25519_to_wnaf
+ * reduces mod l itself, so `s` and `s + k*l` now hit the SAME wNAF
+ * expansion.  Both statements this comment used to make were false.  It
+ * claimed "neither scalarmult has a hard <2^253 precondition — both
+ * consume all 256 bits": sc25519_to_wnaf emitted 256 digits from eight
+ * 32-bit limbs, so a negative digit near the top carried out of limb 7,
+ * the carry was discarded, and the recoding silently represented
+ * s - 2^256 for ~17% of uniform 32-byte scalars.  Reducing every input
+ * before comparing is precisely why this file never saw that.  See
+ * tests/c/test_ed25519_scalarmult_contract.c, which drives the same two
+ * entry points on unreduced scalars and runs on both backends.
  * ============================================================================ */
 static int test_byte_identity_one(const uint8_t s1[32], const uint8_t P1[32],
                                   const uint8_t s2[32], const uint8_t P2[32],

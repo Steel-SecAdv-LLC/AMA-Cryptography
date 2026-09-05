@@ -924,14 +924,21 @@ static void
 curve25519_expand(bignum25519 out, const unsigned char in[32]) {
 	uint32_t x0,x1,x2,x3,x4,x5,x6,x7;
 
-	x0 = *(uint32_t *)(in + 0);
-	x1 = *(uint32_t *)(in + 4);
-	x2 = *(uint32_t *)(in + 8);
-	x3 = *(uint32_t *)(in + 12);
-	x4 = *(uint32_t *)(in + 16);
-	x5 = *(uint32_t *)(in + 20);
-	x6 = *(uint32_t *)(in + 24);
-	x7 = *(uint32_t *)(in + 28);
+	/* AMA-PATCH: memcpy, not `*(uint32_t *)(in + n)` — the same defect and the
+	 * same fix as in curve25519-donna-64bit.h, recorded once in
+	 * src/c/PROVENANCE.md.  `in` is caller memory with no alignment requirement,
+	 * so the cast was a misaligned load and undefined behaviour under C11
+	 * 6.3.2.3p7.  This variant has no endian branch to fall back on: SSE2
+	 * implies x86, so upstream reads little-endian unconditionally, which
+	 * memcpy preserves exactly. */
+	memcpy(&x0, in +  0, sizeof(x0));
+	memcpy(&x1, in +  4, sizeof(x1));
+	memcpy(&x2, in +  8, sizeof(x2));
+	memcpy(&x3, in + 12, sizeof(x3));
+	memcpy(&x4, in + 16, sizeof(x4));
+	memcpy(&x5, in + 20, sizeof(x5));
+	memcpy(&x6, in + 24, sizeof(x6));
+	memcpy(&x7, in + 28, sizeof(x7));
 
 	out[0] = (                        x0       ) & 0x3ffffff;
 	out[1] = ((((uint64_t)x1 << 32) | x0) >> 26) & 0x1ffffff;

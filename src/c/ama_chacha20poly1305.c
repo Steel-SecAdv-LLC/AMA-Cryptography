@@ -231,7 +231,9 @@ static void chacha20_xor(const uint8_t key[32], uint32_t initial_counter,
  */
 typedef struct {
     uint64_t r[3];       /* Clamped r key in 44/44/42-bit limbs */
-    uint64_t rs[2];      /* r[1]*5 and r[2]*5, precomputed for reduction */
+    uint64_t rs[2];      /* r[1]*20 and r[2]*20, the 2^132 fold — see
+                          * poly1305_init() for why 20 and not the 5 that
+                          * appears when limbs are aligned to 2^130 itself */
     uint64_t h[3];       /* Accumulator in 44/44/42-bit limbs */
     uint64_t pad[2];     /* s key (last 16 bytes of the OTK), little-endian */
     uint8_t buf[16];     /* Partial block buffer */
@@ -337,6 +339,11 @@ static void poly1305_init(poly1305_ctx *ctx, const uint8_t key[32]) {
     ctx->h[3] = 0;
     ctx->h[4] = 0;
     ctx->buf_len = 0;
+
+    /* Scrub the clamped one-time Poly1305 r key from the stack, matching the
+     * radix-2^44 branch above (INVARIANT-6).  r_bytes holds the authenticator
+     * key; recovering it for a (key, nonce) enables tag forgery. */
+    ama_secure_memzero(r_bytes, sizeof(r_bytes));
 #endif /* AMA_POLY1305_LIMBS_64 */
 }
 
@@ -828,22 +835,65 @@ ama_error_t ama_chacha20poly1305_decrypt(
 
     ama_secure_memzero(poly_key, sizeof(poly_key));
 
-    /* Step 3: Verify tag (constant-time comparison) */
-    if (ama_consttime_memcmp(computed_tag, tag, 16) != 0) {
-        /* SECURITY: plaintext was never written above this point;
-         * zeroing it here would silently corrupt caller memory with no
-         * cryptographic benefit.  Caller contract: on
-         * AMA_ERROR_VERIFY_FAILED, plaintext is not modified.  Matches
-         * the scalar AES-GCM decrypt path in ama_aes_gcm.c. */
-        ama_secure_memzero(computed_tag, sizeof(computed_tag));
-        return AMA_ERROR_VERIFY_FAILED;
-    }
-
+    /* Step 3: Verify tag (constant-time comparison) + unified post-verify
+     * control flow.
+     *
+     * The compare itself was always constant-time — ama_consttime_memcmp
+     * accumulates all 16 bytes with no early exit, so the *position* of a
+     * forgery has never been observable, which is the oracle that would let
+     * an attacker build a tag byte by byte.
+     *
+     * What was observable was coarser and structural: the verify-pass and
+     * verify-fail paths were two different straight lines.  Each arm of the
+     * `if` carried its OWN ama_secure_memzero() call site, and only the pass
+     * arm went on to evaluate `if (ct_len > 0)`.  Two call sites the compiler
+     * lays out independently, plus one extra test on one side, is
+     * class-dependent work — small, but systematic, and dudect measures
+     * exactly that.  The `chacha20-neon` SIMD slot on ubuntu-24.04-arm
+     * reported |t| = 7.68 against a 4.5 threshold in 2 of 3 rounds with a
+     * consistent sign, which is the signature of a systematic effect rather
+     * than host noise (a noisy host produces excursions that flip sign).
+     *
+     * ama_aes_gcm.c:705 had already been given this treatment — its comment
+     * records closing the same lane for AES-GCM — and this path was simply
+     * never brought into line with it.  Same remedy here: hoist the compare
+     * to a value, share ONE scrub call site, and drive the decrypt length
+     * from a constant-time mask of tag_match so both classes execute the
+     * same instruction-sequence shape and only the iteration count differs.
+     *
+     * SECURITY (unchanged contract): on AMA_ERROR_VERIFY_FAILED the caller's
+     * plaintext buffer is not modified.  `bounded_len` is 0 whenever
+     * tag_match is 0, so chacha20_xor is not entered on the failing path —
+     * the same fail-closed property the early return provided, without the
+     * divergent control flow.  Zeroing the caller's plaintext on failure
+     * would corrupt memory that was never written, so it is still not done.
+     */
+    int tag_match = (ama_consttime_memcmp(computed_tag, tag, 16) == 0);
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
-    /* Step 4: Decrypt ciphertext with ChaCha20 (counter starts at 1) */
-    if (ct_len > 0)
-        chacha20_xor(key, 1, nonce, ciphertext, plaintext, ct_len);
+    /* Step 4: Decrypt ciphertext with ChaCha20 (counter starts at 1),
+     * bounded by the verify result. */
+    size_t bounded_len = ct_len & ((size_t)0 - (size_t)tag_match);
+    if (bounded_len > 0)
+        chacha20_xor(key, 1, nonce, ciphertext, plaintext, bounded_len);
 
-    return AMA_SUCCESS;
+    /* Masked return-code selection.  The ternary form of this line was
+     * the one class-dependent instruction left in the ct_len == 0
+     * accept/reject pair: gcc 13 -O2/-O3 on aarch64 compiles it to a
+     * `cbnz` whose reject arm is one instruction longer than the accept
+     * arm — the dudect tag-verify lane times exactly that window, and
+     * the `chacha20-neon` sweep slot measured the residue at |t| = 8.08
+     * (3/3 rounds, consistently accept-faster) after the v3.3.0 rewrite
+     * above had removed every larger asymmetry.  QEMU instruction traces
+     * of the two classes are byte-identical for 166,799 instructions and
+     * then split at precisely this selection.  The mask form pins the
+     * accept and reject returns to one instruction sequence; the
+     * aead-verify instruction-invariance gate (tools/
+     * check_ghash_constant_time.py --target aead-verify) holds it there.
+     * The accept/reject outcome itself is public via the return code —
+     * this is measurement hygiene for the lane and hardening symmetry,
+     * not a secrecy fix. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    return (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED & ((int)tag_match - 1));
 }

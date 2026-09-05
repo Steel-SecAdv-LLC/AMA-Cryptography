@@ -10,7 +10,34 @@ CC = gcc
 # build).  Without this flag the harness silently exercised the table-based
 # S-box reference path and produced misleading "[KNOWN - table-based]"
 # attribution for failures actually unrelated to the S-box.
-CFLAGS = -O2 -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON
+#
+# -DAMA_USE_NATIVE_PQC for the same reason, and it was missing.  The
+# CRYPTO_SRCS comment below says linking ama_kyber.c / ama_dilithium.c
+# "keeps the harness binary in lockstep with what `cmake
+# -DAMA_USE_NATIVE_PQC=ON` produces for the production build".  Linking the
+# translation units without the macro does not: both compile their `#else`
+# arms, so every ML-KEM and ML-DSA entry point in this binary returned
+# AMA_ERROR_NOT_IMPLEMENTED, and the dispatch auto-tune in ama_dispatch.c
+# microbenched its NTT kernels inside a binary whose PQC was stubbed out.
+# It also left 15 -Wall -Wextra warnings standing (fourteen `defined but
+# not used` statics whose only callers are inside the native arms, plus one
+# unused parameter), which is how a real warning in this build would have
+# gone unnoticed.  Defining it costs one more source (ama_slhdsa.c, below --
+# ama_core.c references ama_sphincs_* under the macro) and the build is
+# warning-clean.
+#
+# The optimization flags match CMAKE_C_FLAGS_RELEASE (CMakeLists.txt:
+# -O3 -DNDEBUG -fomit-frame-pointer -funroll-loops), because the lockstep
+# claim above is empty if the codegen differs: the optimization level is
+# load-bearing for exactly this class of measurement — rebuilding an
+# instruction-count constant-time target at a different level immediately
+# measured a 9,424-instruction key-dependent spread in the secp256k1 scalar
+# arithmetic (see check_workflow_commands.check_cmake_build_type).  This
+# harness compiled at plain -O2 with no NDEBUG while the comment above
+# claimed lockstep with the shipped library; now the flags and the claim
+# agree.  (IPO/LTO is the remaining divergence: the CMake build may add it
+# when AMA_ENABLE_LTO is on; a plain Makefile link does not.)
+CFLAGS = -O3 -DNDEBUG -fomit-frame-pointer -funroll-loops -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON -DAMA_USE_NATIVE_PQC
 LDFLAGS = -lm -lpthread
 
 # Source directories
@@ -71,6 +98,7 @@ CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_cpuid.c \
               $(SRC_DIR)/ama_kyber.c \
               $(SRC_DIR)/ama_dilithium.c \
+              $(SRC_DIR)/ama_slhdsa.c \
               $(SRC_DIR)/ama_platform_rand.c \
               $(DISPATCH_DIR)/ama_dispatch.c
 

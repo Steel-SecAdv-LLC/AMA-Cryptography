@@ -319,8 +319,19 @@ ama_error_t ama_hkdf(
     uint8_t prk[SHA3_256_DIGEST_SIZE];
     ama_error_t rc;
 
-    /* Validate parameters */
+    /* Validate parameters.  A NULL pointer paired with a non-zero length is
+     * rejected on every argument, matching ama_hkdf_sha2_generic() below
+     * (INVARIANT-5): without the salt/info checks a NULL salt with a non-zero
+     * salt_len was silently treated as the RFC 5869 default zero salt, and a
+     * NULL info with a non-zero info_len reached hkdf_expand()'s
+     * memcpy(expand_data + offset, info, info_len) — a read from NULL. */
     if (!ikm && ikm_len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!salt && salt_len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!info && info_len > 0) {
         return AMA_ERROR_INVALID_PARAM;
     }
     if (!okm) {

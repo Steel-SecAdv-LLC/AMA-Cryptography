@@ -28,8 +28,9 @@ import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 # D-9: Preflight version checks for every build-time dependency listed in
 # pyproject.toml's [build-system].requires.  Each floor here is kept IDENTICAL
@@ -74,7 +75,18 @@ _BUILD_REQS = {
 }
 
 
-def _parse_version(raw: str) -> tuple:
+def _pad3(parts: Sequence[int]) -> tuple[int, int, int]:
+    """Exactly three components, so ``(70, 0)`` compares as ``(70, 0, 0)``.
+
+    Indexed rather than concatenated with a padding tuple: ``tuple(x) + (0,) *
+    n`` has type ``tuple[int, ...]``, which says nothing about the arity the
+    comparisons below depend on.
+    """
+    padded = list(parts[:3]) + [0, 0, 0]
+    return (padded[0], padded[1], padded[2])
+
+
+def _parse_version(raw: str) -> tuple[int, int, int]:
     """Best-effort PEP 440 parse → 3-tuple of ints.
 
     Falls back to a tolerant digit-only split when ``packaging`` is not
@@ -83,19 +95,16 @@ def _parse_version(raw: str) -> tuple:
     ``(70, 0)`` by a naive ``split('.')`` (Copilot review #6).
     """
     try:
-        from packaging.version import Version  # type: ignore[import-not-found]
+        from packaging.version import Version
 
         v = Version(raw)
-        release = v.release
-        # Pad to exactly three components so ``(70, 0)`` compares the same
-        # as ``(70, 0, 0)``.
-        return tuple(release) + (0,) * max(0, 3 - len(release))
+        return _pad3(v.release)
     except Exception:  # pragma: no cover - packaging is in modern setuptools
         # Strip local/build segments and any pre/post markers; keep only
         # the leading dotted-numeric release portion.
         head = raw.split("+", 1)[0].split("-", 1)[0]
         digits = [int(x) for x in head.split(".") if x.isdigit()]
-        return tuple(digits[:3]) + (0,) * max(0, 3 - len(digits[:3]))
+        return _pad3(digits)
 
 
 _REMEDY = (
@@ -154,7 +163,7 @@ def _check_cmake_version() -> None:
     raw: Optional[str] = None
     # Path A: PyPI cmake shim (PEP 517 isolated build env).
     try:
-        import cmake as _cmake  # type: ignore[import-not-found]
+        import cmake as _cmake
 
         raw = getattr(_cmake, "__version__", None)
     except ImportError:
@@ -202,9 +211,9 @@ def _check_cmake_version() -> None:
 # for any setup.py invocation regardless of whether Cython is enabled.
 # Cython and numpy are only required when the math_engine Cython
 # extension is being built; the documented ``AMA_NO_CYTHON=1`` opt-out
-# (and its companion ``AMA_NO_C_EXTENSIONS=1``, which short-circuits all
-# native build paths including the Cython one) must therefore skip those
-# preflight checks.  Copilot reviews #12/#15/#22 and Devin review #13
+# (and its companion ``AMA_NO_C_EXTENSIONS=1``, which empties the Cython
+# extension list — the native library itself is built via CMake in every
+# configuration) must therefore skip those preflight checks.  Copilot reviews #12/#15/#22 and Devin review #13
 # observed that the previous form ran every floor unconditionally,
 # turning a documented opt-out into an unconditional FATAL when the
 # environment lacked Cython/numpy (e.g. minimal embedded builders or
@@ -216,17 +225,21 @@ for _name in ("setuptools", "wheel"):
     _check_build_dependency(_name)
 
 # cmake is needed for the C-side build (CMakeBuild → cmake_minimum_required
-# in CMakeLists.txt).  Skip only when the entire native build is opted out
-# (AMA_NO_C_EXTENSIONS=1); AMA_NO_CYTHON=1 alone still builds C extensions
-# that go through cmake.  Copilot review @ setup.py:150 + Devin review
-# @ setup.py:63 caught the drift where pyproject.toml [build-system].requires
-# was bumped to cmake>=4.3.2 but setup.py's preflight hadn't matched —
-# documented "kept in lockstep" only became true when this check landed.
-_SKIP_C_PREFLIGHT = bool(os.getenv("AMA_NO_C_EXTENSIONS"))
-if not _SKIP_C_PREFLIGHT:
-    _check_cmake_version()
+# in CMakeLists.txt) — UNCONDITIONALLY.  This used to be skipped under
+# AMA_NO_C_EXTENSIONS=1 on the premise that the flag opts out of "the entire
+# native build"; that premise stopped holding when NativeDistribution made
+# has_ext_modules() return True in every configuration: `build` always
+# schedules build_ext, CMakeBuild.run() calls _build_cmake() before it ever
+# looks at self.extensions, and the native library is built for every wheel.
+# So the env var was silently bypassing the supply-chain version floor while
+# cmake was still invoked — the flag now selects only whether the CYTHON
+# binding extensions are built (see USE_C_EXTENSIONS below), never whether
+# cmake runs.  Copilot review @ setup.py:150 + Devin review @ setup.py:63
+# caught the original drift where pyproject.toml [build-system].requires was
+# bumped to cmake>=4.3.2 but setup.py's preflight hadn't matched.
+_check_cmake_version()
 
-_SKIP_CYTHON_PREFLIGHT = bool(os.getenv("AMA_NO_CYTHON")) or _SKIP_C_PREFLIGHT
+_SKIP_CYTHON_PREFLIGHT = bool(os.getenv("AMA_NO_CYTHON")) or bool(os.getenv("AMA_NO_C_EXTENSIONS"))
 if not _SKIP_CYTHON_PREFLIGHT:
     for _name in ("Cython", "numpy"):
         _check_build_dependency(_name)
@@ -236,15 +249,21 @@ else:
         "preflight (the math_engine accelerator will not be built).\n"
     )
 
-from setuptools import Extension, find_packages, setup  # noqa: E402
-from setuptools.command.build_ext import build_ext  # noqa: E402
+from setuptools import Extension, find_packages, setup  # noqa: E402 -- follows preflight (SU-001)
+from setuptools.command.build_ext import build_ext  # noqa: E402 -- follows preflight (SU-001)
+from setuptools.dist import Distribution  # noqa: E402 -- follows preflight (SU-001)
 
 # Check for Cython availability at the call-site level (the preflight
 # above only proves a minimum version; AMA_NO_CYTHON=1 still gates
 # whether Cython is actually invoked).
+# Declared before the import so the except branch can bind None: without the
+# declaration the name takes the imported function's type and `= None` is an
+# incompatible assignment.
+cythonize: Any
 try:
-    from Cython.Build import cythonize
+    from Cython.Build import cythonize as _cythonize
 
+    cythonize = _cythonize
     CYTHON_AVAILABLE = True
 except ImportError:  # pragma: no cover - preflight should have caught this
     # CodeQL flagged this as an empty except without explanation
@@ -260,9 +279,11 @@ except ImportError:  # pragma: no cover - preflight should have caught this
     cythonize = None
 
 # Check for NumPy availability (needed for C API headers)
+np: Any
 try:
-    import numpy as np
+    import numpy as _np
 
+    np = _np
     NUMPY_AVAILABLE = True
 except ImportError:  # pragma: no cover - preflight should have caught this
     # Same rationale as the Cython block above: the preflight enforces
@@ -273,7 +294,7 @@ except ImportError:  # pragma: no cover - preflight should have caught this
     np = None
 
 # Configuration
-VERSION = "4.0.0"
+VERSION = "5.0.0"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))
@@ -291,13 +312,17 @@ PY_CMAKE_BUILD_DIR = Path("build") / "python-cmake"
 long_description = (Path(__file__).resolve().parent / "README.md").read_text(encoding="utf-8")
 
 
-def get_compiler_flags():
+def get_compiler_flags() -> tuple[list[str], list[str]]:
     """Get compiler flags based on platform and configuration."""
     flags = []
     link_flags = []
 
     if platform.system() == "Windows":
-        flags.extend(["/O2", "/W3"])
+        # /guard:cf matches what CMakeLists.txt gives the MSVC library targets;
+        # without it the binding extensions — which marshal keys and plaintexts
+        # across the C boundary — were the least hardened artefacts in the wheel.
+        flags.extend(["/O2", "/W3", "/guard:cf"])
+        link_flags.extend(["/guard:cf", "/DYNAMICBASE", "/NXCOMPAT"])
     else:
         # Linux/macOS
         flags.extend(
@@ -315,7 +340,19 @@ def get_compiler_flags():
             flags.extend(["-O0", "-g3", "-DDEBUG"])
         else:
             # Note: -march=native removed for portability across CI environments
-            flags.extend(["-O3", "-DNDEBUG"])
+            # _FORTIFY_SOURCE mirrors the CMake Release flags; it is inert
+            # without optimisation, hence the non-DEBUG branch only.  The
+            # published wheels are built in manylinux containers whose GCC does
+            # not enable it by default, so these extensions shipped without the
+            # fortified string/memory checks the C library has had all along.
+            flags.extend(["-O3", "-DNDEBUG", "-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=2"])
+
+        # ELF link hardening, matching the library (see CMakeLists.txt): full
+        # RELRO closes GOT-overwrite, and an explicit non-executable stack does
+        # not depend on every linked object carrying .note.GNU-stack.  macOS's
+        # ld does not accept -z options, so this is Linux-only.
+        if platform.system() == "Linux":
+            link_flags.extend(["-Wl,-z,relro", "-Wl,-z,now", "-Wl,-z,noexecstack"])
 
         if COVERAGE:
             flags.extend(["--coverage"])
@@ -324,9 +361,9 @@ def get_compiler_flags():
     return flags, link_flags
 
 
-def get_extension_modules():
+def get_extension_modules() -> list[Extension]:
     """Build list of extension modules."""
-    extensions = []
+    extensions: list[Extension] = []
     compiler_flags, linker_flags = get_compiler_flags()
 
     if not USE_C_EXTENSIONS:
@@ -445,7 +482,7 @@ def get_extension_modules():
     return extensions
 
 
-def get_cythonized_extensions():
+def get_cythonized_extensions() -> list[Extension]:
     """Apply Cython to extensions if available."""
     extensions = get_extension_modules()
 
@@ -462,13 +499,60 @@ def get_cythonized_extensions():
             "linetrace": COVERAGE,
         }
 
-        return cythonize(
-            extensions,
-            compiler_directives=compiler_directives,
-            annotate=DEBUG,  # Generate HTML annotation files in debug mode
+        # list(): cythonize is untyped third-party, so its result is Any, and
+        # returning Any from a function declared to return list[Extension]
+        # silently erases the annotation for every caller.
+        cythonized: list[Extension] = list(
+            cythonize(
+                extensions,
+                compiler_directives=compiler_directives,
+                annotate=DEBUG,  # Generate HTML annotation files in debug mode
+            )
         )
+        return cythonized
 
     return extensions
+
+
+class NativeDistribution(Distribution):
+    """Declares this distribution native, whether or not it has ext_modules.
+
+    Two things read ``Distribution.has_ext_modules()``, and both were wrong
+    for this package whenever ``ext_modules`` came back empty:
+
+    1. ``build.sub_commands`` gates ``build_ext`` on it.  Every one of the six
+       binding Extensions is declared inside ``if USE_CYTHON:`` in
+       ``get_extension_modules()``, so ``AMA_NO_CYTHON=1`` (and
+       ``AMA_NO_C_EXTENSIONS=1``) empties the list, setuptools skips
+       ``build_ext`` entirely, and ``CMakeBuild.run`` — the ONLY caller of
+       ``_build_cmake`` and ``_copy_native_library_into_package`` — never
+       runs.  The resulting wheel contained no ``libama_cryptography.so`` at
+       all, so the install imported straight into
+       ``CryptoModuleError: no native library found in any of 17 searched
+       directories``.  Measured on 3baf6c3 and on ``origin/main`` before it:
+       ``AMA_NO_CYTHON=1 pip install .`` exits 0 and produces an install that
+       cannot import.  README, ENHANCED_FEATURES.md and IMPLEMENTATION_GUIDE
+       all list the variable as a supported "pure Python" mode, and setup.py
+       itself prints ``AMA_NO_CYTHON=1 pip install .`` as the escape from a
+       fatal Cython error — an escape into a broken install.
+    2. ``bdist_wheel.root_is_pure`` derives from it, so that same build was
+       tagged ``py3-none-any``.  A pure tag on a distribution whose only
+       working form ships a platform-specific shared object is a wheel that
+       installs anywhere and works nowhere.  With this class it is tagged
+       ``cp3XX-cp3XX-<platform>``, which is over-specific rather than wrong:
+       without binding extensions the package would in fact run on any
+       CPython >= 3.10, but a native artefact must never carry ``any``.
+
+    There is no configuration in which this package is pure.  INVARIANT-7
+    forbids operating without the native backend, and POST enforces it at
+    import, so "pure Python AMA Cryptography" is not a degraded mode — it is
+    a module that refuses to initialise.  The Cython switches select whether
+    the optional Python BINDINGS are built; they never selected whether the
+    library itself is.
+    """
+
+    def has_ext_modules(self) -> bool:
+        return True
 
 
 class CMakeBuild(build_ext):
@@ -489,7 +573,7 @@ class CMakeBuild(build_ext):
          Python builds opt out with AMA_NO_CYTHON=1.
     """
 
-    def run(self):
+    def run(self) -> None:
         self._build_cmake()
         self._copy_native_library_into_package()
 
@@ -514,20 +598,35 @@ class CMakeBuild(build_ext):
                 )
             super().run()
 
-        # Build-pipeline-only Ed25519 signed-integrity hook.
-        # Gated on AMA_BUILD_PIPELINE=1 so plain `pip install .` from a source
-        # checkout is unaffected — those users get the digest-only fallback
-        # (logged WARNING at import time).  Release CI sets the env var to
-        # produce a signed wheel; combined with -DAMA_INTEGRITY_TRUST_ANCHOR_
-        # PUBKEY_HEX on the CMake invocation above this gives anchored,
-        # trust-pinned wheels with no extra release-pipeline step.
+        # Ed25519 signed-integrity hook.  Runs on EVERY build.
         self._run_integrity_signer()
 
-    def _run_integrity_signer(self):
-        """Invoke ama_cryptography._build_sign when running under the wheel pipeline.
+    @staticmethod
+    def _stash_artefacts_aside(*pkg_dirs: Optional[Path]) -> list[tuple[Path, Path]]:
+        """Move each dir's artefact to ``.pre-sign`` and drop ``__pycache__``.
+
+        Extracted verbatim from _run_integrity_signer when the
+        --require-trust-anchor re-carry pushed that method over the C901
+        complexity ceiling; behaviour is unchanged and the restore/cleanup
+        paths still operate on the returned (artefact, aside) pairs.
+        """
+        stashed: list[tuple[Path, Path]] = []
+        for pkg_dir in pkg_dirs:
+            if pkg_dir is None or not pkg_dir.is_dir():
+                continue
+            artefact = pkg_dir / "_integrity_signature.py"
+            if artefact.is_file():
+                aside = pkg_dir / "_integrity_signature.py.pre-sign"
+                aside.unlink(missing_ok=True)
+                artefact.rename(aside)
+                stashed.append((artefact, aside))
+            shutil.rmtree(pkg_dir / "__pycache__", ignore_errors=True)
+        return stashed
+
+    def _run_integrity_signer(self) -> None:
+        """Sign and bind this build's artefact.  Runs on every build.
 
         The signer reads:
-          - AMA_BUILD_PIPELINE=1                   (required gate)
           - AMA_INTEGRITY_SIGNING_SEED_HEX         (release-CI deterministic seed)
           - AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX  (env-var trust anchor; optional
               when the native library was compiled with a CMake anchor)
@@ -535,12 +634,112 @@ class CMakeBuild(build_ext):
         and writes the signed-integrity artefact into BOTH the source tree
         copy of the package and the staging build_lib copy so the wheel
         builder picks it up exactly the way it picks up _integrity_digest.txt.
-        """
-        if os.environ.get("AMA_BUILD_PIPELINE") != "1":
-            return
+        AMA_BUILD_PIPELINE=1 is set on the child below unconditionally: it is
+        _build_sign's own "a build, not a user re-blessing an installed tree"
+        gate, and this IS the build.
 
+        This used to return early unless the caller had already exported
+        AMA_BUILD_PIPELINE=1, on the stated ground that "plain `pip install .`
+        from a source checkout is unaffected — those users get the digest-only
+        fallback (logged WARNING at import time)".  Measured, that fallback is
+        not a warning-shaped inconvenience.  A plain `pip install .` shipped
+        six binding extensions with ``INTEGRITY_BINDING_DIGESTS_HEX = {}``,
+        which produced, per interpreter start: twelve "present but not covered
+        by the signed artefact" lines, a POST verdict of "1 of 13 tests were
+        SKIPPED — this module is NOT fully verified", and — because
+        _check_binding_extensions treats uncovered inventory as a hard failure
+        on any build carrying a trust anchor — a CryptoModuleError under
+        AMA_FIPS_STRICT=1, the variable SECURITY.md tells release deployments
+        to set.  README names `pip install .` the primary install channel and
+        it is the only one that works while PyPI is unpublished, so the
+        default path produced the loudest possible unverified state.
+
+        The native library is built unconditionally a few lines above (a
+        missing CMake is already FATAL), so there is no build that reaches
+        here without something to sign.  A signer failure therefore fails the
+        build rather than downgrading it: an artefact that cannot be produced
+        is a broken install, not a developer convenience.
+        """
         src_pkg_dir = Path(__file__).resolve().parent / "ama_cryptography"
         staged_pkg_dir = Path(self.build_lib) / "ama_cryptography" if self.build_lib else None
+
+        # The signer's v3 artefact binds every compiled binding extension by
+        # digest, enumerated from the SOURCE package dir — but build_ext
+        # compiles the extensions into build_lib, so on a fresh checkout the
+        # source dir has none at signing time and the artefact binds an empty
+        # map while the wheel ships six unlisted bindings: POST then fails
+        # every install with "present but not covered" (caught by the
+        # wheel-install CI lane the first time a fresh tree built).  Sync the
+        # source dir's extension set to EXACTLY the staged set before
+        # signing: copy what the wheel will ship, and remove stale extension
+        # files the wheel will not (a leftover from a previous interpreter's
+        # build in the same tree — cibuildwheel builds every Python version
+        # sequentially from one /project — would otherwise be signed into an
+        # artefact whose wheel does not contain it, failing POST as
+        # "missing on disk").  The native library is excluded: it is synced
+        # by _copy_native_library_into_package and bound separately.
+        # Prune the staging dir to exactly the extensions THIS build declares,
+        # before the source dir is synced from it.
+        #
+        # setuptools' build_lib persists across invocations in one tree, and
+        # nothing empties it.  So a tree previously built with Cython, rebuilt
+        # with AMA_NO_CYTHON=1, still has the six binding extensions sitting
+        # in build_lib: _sync_binding_extensions_into_source faithfully copies
+        # them back into the source dir, _compute_binding_digests signs them,
+        # and the wheel ships six binding extensions from a build that
+        # declared none.  Reproduced here — the same command produced a
+        # 3,124,336-byte wheel with `bindings = 6` in a dirty tree and a
+        # 1,788,629-byte wheel with `bindings = 0` in a clean one.  The
+        # extensions themselves were valid, which is what makes it worth
+        # closing: the artefact signs a set the build did not choose, so
+        # "signed" stops meaning "produced by this build".
+        #
+        # _sync_binding_extensions_into_source already enforces
+        # source-set == staged-set; this makes staged-set == declared-set, so
+        # the chain reaches declared-set end to end.
+        self._prune_staged_extensions_not_declared(staged_pkg_dir)
+        self._sync_binding_extensions_into_source(src_pkg_dir, staged_pkg_dir)
+
+        # Delete the artefact this run is about to replace, BEFORE the signer
+        # process starts — the same delete-then-sign order
+        # tools/resign_wheel.py uses, and the one the package's own
+        # pre-import refusal prints as the remedy.
+        #
+        # `python -m ama_cryptography._build_sign` imports the package before
+        # _build_sign runs a line, and __init__'s
+        # _refuse_tampered_bindings_before_import compares every binding
+        # extension on disk against the artefact still sitting in the tree.
+        # A rebuild always changes those bytes, so a second build in a tree
+        # that already carries an artefact refuses the import with "digest
+        # MISMATCH", the signer exits 1, and the build fails.  That is not
+        # hypothetical: it is what cibuildwheel does — one /project, every
+        # Python version built sequentially — and it is what the three-way
+        # install check reproduced here the moment signing stopped being
+        # conditional.  The pre-import gate is right to refuse; what was
+        # wrong was asking it to adjudicate a tree mid-rebuild.
+        #
+        # Moved ASIDE, not deleted.  `_integrity_signature.py` is a git-TRACKED
+        # file, and an earlier form of this block unlinked it outright: any
+        # signer failure then left the developer's checkout with the artefact
+        # gone, a state `git checkout` is the only recovery from and which the
+        # RuntimeError below does not mention.  The rename is restored on every
+        # non-zero exit and on every exception, so a failed build leaves the
+        # tree exactly as it found it.  __pycache__ goes too, so a compiled
+        # copy cannot shadow the move.
+        #
+        # Removing it for the duration is safe and is not a downgrade: with no
+        # artefact, nothing is signed, so nothing reads as tampering; the .py
+        # digest is unaffected because the artefact is excluded from it by
+        # construction; and the signer writes a fresh one moments later or the
+        # build fails and the original comes back.
+        _stashed = self._stash_artefacts_aside(src_pkg_dir, staged_pkg_dir)
+
+        def _restore_stashed_artefacts() -> None:
+            for _artefact, _aside in _stashed:
+                if _aside.is_file() and not _artefact.is_file():
+                    _aside.rename(_artefact)
+                else:
+                    _aside.unlink(missing_ok=True)
 
         # _build_sign loads the native library via _find_native_library,
         # which searches the in-tree package dir first.  We already copied
@@ -553,18 +752,69 @@ class CMakeBuild(build_ext):
             "ama_cryptography._build_sign",
             "--package-dir",
             str(src_pkg_dir),
+            # Bind the just-synced binding extensions into the signed
+            # artefact.  BOTH callers pass this now — this one and the repair
+            # flow (`integrity --update --sign`), which sets the same argv.
+            # The flag stays explicit rather than becoming the default so
+            # `--digest-only` and genuinely extension-free trees remain
+            # reachable; see _build_sign's --bind-extensions help.
+            #
+            # This comment used to say the repair flow "deliberately omits
+            # this — ... why a source-tree artefact must bind none", which was
+            # true of the revision it was written for and was inverted by the
+            # change that made the repair flow bind too.  It pointed the reader
+            # at a help text that says the opposite.
+            "--bind-extensions",
         ]
         env = os.environ.copy()
         env["AMA_BUILD_PIPELINE"] = "1"
+        # Scrubbed from the CHILD's environment only.  Both describe how the
+        # INSTALLED module must behave, not how the signer's own import must:
+        # the signer necessarily imports a tree whose artefact has just been
+        # moved aside, so POST records the integrity stage at `digest-only`
+        # strength.  AMA_FIPS_STRICT=1 escalates that SKIP to a hard failure,
+        # and AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 fails the stage outright on
+        # an unanchored build.  Neither is a FAILED-and-repairable stage, so
+        # __init__'s signer carve-out cannot cover them — it keys on
+        # `_all_failures_repairable`, and a SKIP produces no failed row at all.
+        # An operator who exports either variable in their shell (the
+        # documented way to run a strict build) could not `pip install .`.
+        #
+        # AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR is dual-use, though: besides the
+        # import-time POST policy above, _build_sign reads the SAME variable
+        # as its own refuse-to-sign-unanchored gate.  Scrubbing it therefore
+        # silently dropped the operator's demanded anchor enforcement from
+        # the very signing step it was exported to constrain.  The intent is
+        # re-carried explicitly: when the installing environment had the
+        # variable enabled, the signer gets --require-trust-anchor on its
+        # command line, so the child imports leniently but still refuses to
+        # produce an unanchored signature.  (2026-08 v5 audit, item 15.)
+        _true_env_values = {"1", "true", "yes", "on"}  # mirrors _build_sign
+        if (
+            os.environ.get("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", "").strip().lower()
+            in _true_env_values
+        ):
+            cmd.append("--require-trust-anchor")
+        for _child_only in ("AMA_FIPS_STRICT", "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"):
+            env.pop(_child_only, None)
         try:
             subprocess.check_call(cmd, env=env)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"FATAL: integrity signer failed (exit {e.returncode}). "
-                "AMA_BUILD_PIPELINE=1 was set so the wheel must ship a "
-                "signed integrity artefact; refusing to produce an "
-                "unsigned release wheel."
-            ) from e
+        except BaseException as e:
+            _restore_stashed_artefacts()
+            if isinstance(e, subprocess.CalledProcessError):
+                raise RuntimeError(
+                    f"FATAL: integrity signer failed (exit {e.returncode}). "
+                    "Every build must produce a signed integrity artefact that "
+                    "covers the binding extensions it ships; an unsigned or "
+                    "partially-covered build imports with POST reporting itself "
+                    "NOT fully verified and fails outright under "
+                    "AMA_FIPS_STRICT=1.  Refusing to produce one.  The tree's "
+                    "previous artefact has been restored."
+                ) from e
+            raise
+        else:
+            for _artefact, _aside in _stashed:
+                _aside.unlink(missing_ok=True)
 
         # Mirror the freshly-written artefact into the staging dir so the
         # wheel builder packages it.  The signer ran against src_pkg_dir.
@@ -574,7 +824,85 @@ class CMakeBuild(build_ext):
                 if src_file.is_file():
                     shutil.copy2(src_file, staged_pkg_dir / name)
 
-    def _build_cmake(self):
+    # Mirrors _build_sign's enumeration criteria (and _self_test's): every
+    # file with one of these suffixes in the package dir, except the native
+    # library, is a binding extension the artefact must bind.
+    _EXTENSION_SUFFIXES = (".so", ".pyd", ".dylib")
+    _NATIVE_LIB_PREFIXES = ("libama_cryptography", "ama_cryptography.dll")
+
+    def _iter_extension_files(self, pkg_dir: Optional[Path]) -> list[Path]:
+        out: list[Path] = []
+        if pkg_dir is None or not pkg_dir.is_dir():
+            return out
+        for path in sorted(pkg_dir.iterdir()):
+            if not path.is_file() or path.suffix not in self._EXTENSION_SUFFIXES:
+                continue
+            if path.name.startswith(self._NATIVE_LIB_PREFIXES):
+                continue
+            out.append(path)
+        return out
+
+    def _declared_extension_filenames(self) -> set[str]:
+        """Basenames of the binding extensions this build declares.
+
+        Empty when ``ext_modules`` is empty — which is the case the pruning
+        exists for, and why this is derived from ``self.extensions`` rather
+        than from whatever happens to be on disk.
+        """
+        names: set[str] = set()
+        for ext in self.extensions or []:
+            # setuptools' build_ext.get_ext_filename / get_ext_fullname are
+            # untyped in the installed stubs, so a direct call is "call to
+            # untyped function in typed context" under mypy --strict.  Both go
+            # through a locally-typed alias rather than a suppression:
+            # INVARIANT-13 wants the code fixed, not the report silenced, and
+            # the alias states the type the stub omits instead of asserting a
+            # stronger one.
+            ext_fullname: Callable[[str], str] = self.get_ext_fullname
+            ext_filename: Callable[[str], str] = self.get_ext_filename
+            filename = ext_filename(ext_fullname(ext.name))
+            names.add(Path(filename).name)
+        return names
+
+    def _prune_staged_extensions_not_declared(self, staged_pkg_dir: Optional[Path]) -> None:
+        """Delete staged binding extensions no Extension in this build names.
+
+        See the call site.  A missing staging dir is a no-op for the same
+        reason it is in _sync_binding_extensions_into_source.
+        """
+        if staged_pkg_dir is None or not staged_pkg_dir.is_dir():
+            return
+        declared = self._declared_extension_filenames()
+        for path in self._iter_extension_files(staged_pkg_dir):
+            if path.name not in declared:
+                print(
+                    "Removing staged binding extension left by an earlier build "
+                    f"in this tree (not declared by this one): {path.name}"
+                )
+                path.unlink()
+
+    def _sync_binding_extensions_into_source(
+        self, src_pkg_dir: Path, staged_pkg_dir: Optional[Path]
+    ) -> None:
+        """Make the source dir's binding-extension set exactly the staged set.
+
+        See the call site for why both directions matter.  A missing staging
+        dir (an ``--inplace`` build, or ``AMA_NO_CYTHON=1`` before any
+        staging exists) is a no-op: the source dir already IS the build
+        output in those flows, so the signer's enumeration of it is correct.
+        """
+        if staged_pkg_dir is None or not staged_pkg_dir.is_dir():
+            return
+        staged = {path.name: path for path in self._iter_extension_files(staged_pkg_dir)}
+        for stale in self._iter_extension_files(src_pkg_dir):
+            if stale.name not in staged:
+                print(f"Removing stale binding extension not in this build: {stale.name}")
+                stale.unlink()
+        for name, path in staged.items():
+            print(f"Syncing binding extension into source package for signing: {name}")
+            shutil.copy2(path, src_pkg_dir / name)
+
+    def _build_cmake(self) -> None:
         """Build libama_cryptography via CMake."""
         # Check if CMake is available
         try:
@@ -686,12 +1014,15 @@ class CMakeBuild(build_ext):
                     d for d in ext.library_dirs if d not in link_candidates and d != "build/lib"
                 ]
 
-    def _copy_native_library_into_package(self):
+    def _copy_native_library_into_package(self) -> None:
         """Bundle libama_cryptography.so* (and Windows DLL) into the package.
 
         D-1 — without this step the produced wheel ships only the Cython
-        binding `.so` files; they NEEDED-link against `libama_cryptography.so.3`
-        which is not present anywhere on a fresh install, so any
+        binding `.so` files; they NEEDED-link against the library's current
+        SONAME (`libama_cryptography.so.<major>`, `.so.5` at this release —
+        CMake derives SOVERSION from the project major, so this tracks the
+        version rather than being a fixed name), which is not present anywhere
+        on a fresh install, so any
         `python -m ama_cryptography` invocation outside the source tree dies
         with `RuntimeError: AMA native C library required`.
 
@@ -708,9 +1039,11 @@ class CMakeBuild(build_ext):
               picked them up and the install ended in a broken state.
 
         We preserve the SONAME chain
-            libama_cryptography.so -> .so.3 -> .so.3.0.0
-        so the dynamic loader resolves the binding extensions' NEEDED entry
-        correctly via DT_RUNPATH=$ORIGIN.
+            libama_cryptography.so -> .so.<major> -> .so.<major>.<minor>.<patch>
+        (`.so.5` -> `.so.5.0.0` at this release; CMake derives SOVERSION from
+        the project major, so the chain tracks the version rather than being a
+        fixed name) so the dynamic loader resolves the binding extensions'
+        NEEDED entry correctly via DT_RUNPATH=$ORIGIN.
         """
         is_windows = platform.system() == "Windows"
         cmake_root = PY_CMAKE_BUILD_DIR.absolute()
@@ -744,6 +1077,8 @@ class CMakeBuild(build_ext):
                 ]
             )
 
+        shared_globs: tuple[str, ...]
+        archive_globs: tuple[str, ...]
         if is_windows:
             shared_globs = ("ama_cryptography*.dll", "libama_cryptography*.dll")
             archive_globs = ("ama_cryptography*.lib", "libama_cryptography*.lib")
@@ -774,7 +1109,7 @@ class CMakeBuild(build_ext):
         # dirs (e.g., one populated by single-config CMake, one by a
         # leftover Visual Studio Release/ dir) doesn't overwrite the
         # newer artifact with an older one.
-        seen_basenames: set = set()
+        seen_basenames: set[str] = set()
         copied = []
         for pat in patterns:
             for src in sorted(glob.glob(pat)):
@@ -787,8 +1122,10 @@ class CMakeBuild(build_ext):
                     if dst_path.is_symlink() or dst_path.exists():
                         dst_path.unlink()
                     if src_path.is_symlink() and not is_windows:
-                        # Preserve symlink so SONAME chain stays intact
-                        # (libama_cryptography.so -> .so.3 -> .so.3.0.0).
+                        # Preserve symlink so the SONAME chain stays intact
+                        # (libama_cryptography.so -> .so.<major> ->
+                        #  .so.<major>.<minor>.<patch>; `.so.5` at this
+                        #  release).
                         target = os.readlink(src)
                         os.symlink(target, dst_path)
                     else:
@@ -870,6 +1207,9 @@ setup(
     # second copy here would be a silent source of drift (see audit 2c).
     ext_modules=get_cythonized_extensions(),
     cmdclass={"build_ext": CMakeBuild},
+    # See NativeDistribution: the native library is required in every
+    # configuration, including the ones that build no Python extensions.
+    distclass=NativeDistribution,
     include_package_data=True,
     # D-1: ship the native shared library alongside the Cython bindings so
     # the dynamic loader can resolve libama_cryptography via DT_RUNPATH=$ORIGIN.

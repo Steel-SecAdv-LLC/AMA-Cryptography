@@ -1,0 +1,28 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# GNU ld / lld version script (audit B2).  Export ONLY AMA's own ama_* ABI from
+# libama_cryptography.so; localise everything else -- the vendored
+# ed25519-donna tree and every internal helper -- so no un-prefixed vendor name
+# (ed25519_sign, ed25519_sign_open, ed25519_sign_open_batch, ed25519_publickey,
+# curved25519_scalarmult_basepoint, batch_point_buffer) is exported where it
+# could be interposed by, or collide with, a co-loaded donna consumer.
+#
+# Anonymous version node: this controls symbol VISIBILITY only and introduces
+# no symbol versioning (no name@@NODE tags), so it is not itself an ABI change
+# beyond the export-set reduction the SONAME bump (.so.4 -> .so.5) already
+# permits.
+{
+    global:
+        ama_*;
+    local:
+        # Test-only raw Ascon permutation (see include/ama_cryptography.h).
+        # Deliberately kept OUT of the exported ABI: a raw permutation in a
+        # FIPS-aligned module's public surface invites non-approved
+        # constructions.  The C KAT (tests/c/test_ascon.c) reaches it through
+        # the static ama_cryptography_test archive, so it needs no dynamic
+        # export.  An exact name overrides the `ama_*` wildcard above (audit
+        # Low).
+        ama_ascon_permutation_for_test;
+        *;
+};

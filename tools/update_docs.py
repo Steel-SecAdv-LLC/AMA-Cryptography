@@ -13,19 +13,44 @@ Updates documentation targets from source-of-truth data:
                        cross-checked against ``benchmarks/baseline.json``
                        for the regression-floor secondary column. Pre-3.0.1
                        this generator pointed at ``baseline.json`` and so
-                       published the *floors* (~65% of measured) as if they
-                       were headline numbers — the wiki caption reflected
-                       that, calling the table "Regression Baselines".
-                       The published numbers now match what the suite
-                       actually measures on the canonical host; the floor
-                       remains visible as a secondary column so reviewers
-                       see both the headline and the CI safety net.
+                       published the *floors* as if they were headline
+                       numbers — the wiki caption reflected that, calling the
+                       table "Regression Baselines". The published numbers now
+                       match what the suite actually measures on the canonical
+                       host; the floor remains visible as a secondary column
+                       so reviewers see both the headline and the CI safety
+                       net. Since 5.0.0 the floor is a measured median on the
+                       runner class named in ``metadata.runner_cpu_class``,
+                       not a fraction of the headline, so the two columns are
+                       different hosts and the floor may legitimately exceed
+                       the measured figure.
   4. wiki/*.md       — update version and date stamps
 
 Usage:
     python tools/update_docs.py                # full update
     python tools/update_docs.py --dry-run      # preview only
     python tools/update_docs.py --changelog-only
+
+Text I/O
+--------
+Every read and write below passes ``encoding="utf-8"`` explicitly, and every
+write also passes ``newline=""``.  Neither is decoration.
+
+``Path.read_text()`` without an encoding uses the *locale* encoding, which on
+Windows is the ANSI code page (cp1252 on a US/Western install).  ``CHANGELOG
+.md`` is UTF-8 and full of em dashes, Greek letters and mathematical symbols,
+so the read raised ``UnicodeDecodeError: 'charmap' codec can't decode byte
+0x90`` on every Windows job — the doc-sync tool could not run at all on a
+platform this project tests across five Python versions.
+
+The write side was worse than an error, because it would have succeeded on the
+subset that round-trips: ``write_text`` in text mode translates ``"\\n"`` to
+``"\\r\\n"`` on Windows, so a single run would have rewritten every line ending
+in ``CHANGELOG.md`` and ``README.md``.  ``tools/check_line_endings.py`` exists
+precisely to reject that, so the tool that maintains the documentation would
+have failed the repository's own gate on the documentation it maintains.
+``newline=""`` disables the translation and pins LF on every platform, the
+same way ``ama_cryptography/_build_sign.py`` pins the signature artefact.
 """
 
 from __future__ import annotations
@@ -41,8 +66,9 @@ import datetime as _dt
 import json
 import re
 import subprocess
-from datetime import date
+import sys
 from pathlib import Path
+from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -54,9 +80,16 @@ README = ROOT / "README.md"
 #     ``.github/workflows/ci.yml``'s "Benchmark Regression Detection"
 #     step, which also flows ``benchmarks/benchmark-results.json`` and
 #     ``benchmark-report.md`` through to the workflow artifacts).
-#   * The regression floor (a deliberately-conservative ~65% of measured)
-#     stays in baseline.json and is shown in a secondary column so the
-#     reader can sanity-check that measured >> floor.
+#   * The regression floor stays in baseline.json and is shown in a
+#     secondary column.  Since 5.0.0 it is NOT a discount of the headline
+#     number: it is a measured median on the CI runner class named in
+#     `metadata.runner_cpu_class` (x86-64 slow-class median with a uniform
+#     45% tolerance; aarch64 homogeneous, 15%/25%).  The two columns are
+#     therefore different hosts, and a floor ABOVE a measured figure is an
+#     ordinary result — in wiki/Performance-Benchmarks.md it is the case on
+#     11 of 19 rows.  "Sanity-check that measured >> floor", which this
+#     comment used to say, is not a check the current scheme supports; the
+#     check is the tolerance, applied by the benchmark-regression job.
 BENCHMARK_RESULTS_JSON = ROOT / "benchmarks" / "benchmark-results.json"
 BASELINE_JSON = ROOT / "benchmarks" / "baseline.json"
 WIKI_DIR = ROOT / "wiki"
@@ -72,13 +105,13 @@ BENCH_END = "<!-- AUTO-BENCHMARK-TABLE-END -->"
 
 def _get_version() -> str:
     """Read __version__ from ama_cryptography/__init__.py."""
-    text = INIT_PY.read_text()
+    text = INIT_PY.read_text(encoding="utf-8")
     m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else "2.1"
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return _dt.date.today().isoformat()
 
 
 def _run_git(*args: str) -> str:
@@ -117,21 +150,43 @@ def _last_changelog_date() -> str | None:
     """Extract the date from the first ## [x.y.z] - YYYY-MM-DD line."""
     if not CHANGELOG.exists():
         return None
-    for line in CHANGELOG.read_text().splitlines():
+    for line in CHANGELOG.read_text(encoding="utf-8").splitlines():
         m = re.match(r"^##\s+\[.*?\]\s+-\s+(\d{4}-\d{2}-\d{2})", line)
         if m:
             return m.group(1)
     return None
 
 
+#: A ``## [version]`` heading, with or without a trailing date.
+#:
+#: The date is OPTIONAL, and that is the whole point.  Requiring it made
+#: :func:`_latest_changelog_version` blind to exactly the headings a
+#: pre-release tree carries — ``## [Unreleased]`` under the Keep a Changelog
+#: convention this file declares, and ``## [5.0.0] - Unreleased`` while a
+#: version is prepared but not yet tagged.  The duplicate-section guard in
+#: :func:`update_changelog` is built on that function, so with an undated top
+#: section the guard read the *previous* release's version, decided the current
+#: one had no section, and inserted a SECOND ``## [5.0.0]`` above the
+#: hand-written one — splitting the release's notes in two and leaving
+#: ``check_documented_counts``' breaking-row derivation reading an empty
+#: section.  Running the repository's own documentation sync must not corrupt
+#: the file it syncs.
+_CHANGELOG_HEADING_RE = re.compile(r"^##\s+\[([^\]]+)\]\s*(?:-\s*(\S.*))?$")
+
+
 def _latest_changelog_version() -> str | None:
-    """Extract the version from the first ## [x.y.z] - YYYY-MM-DD line."""
+    """The version of the newest release section, dated or not.
+
+    ``[Unreleased]`` is skipped: it is a standing placeholder, never a version,
+    and treating it as one would make the guard compare ``"Unreleased"`` against
+    the project version and always miss.
+    """
     if not CHANGELOG.exists():
         return None
-    for line in CHANGELOG.read_text().splitlines():
-        m = re.match(r"^##\s+\[([^\]]+)\]\s+-\s+\d{4}-\d{2}-\d{2}", line)
-        if m:
-            return m.group(1)
+    for line in CHANGELOG.read_text(encoding="utf-8").splitlines():
+        m = _CHANGELOG_HEADING_RE.match(line)
+        if m and m.group(1).strip().lower() != "unreleased":
+            return m.group(1).strip()
     return None
 
 
@@ -152,7 +207,7 @@ def update_changelog(dry_run: bool = False) -> bool:
     # Parse existing SHA7s from CHANGELOG to avoid duplicates
     existing_shas: set[str] = set()
     if CHANGELOG.exists():
-        for m in re.finditer(r"\(([0-9a-f]{7})\)", CHANGELOG.read_text()):
+        for m in re.finditer(r"\(([0-9a-f]{7})\)", CHANGELOG.read_text(encoding="utf-8")):
             existing_shas.add(m.group(1))
 
     commits: list[tuple[str, str]] = []
@@ -213,12 +268,12 @@ def update_changelog(dry_run: bool = False) -> bool:
         return True
 
     # Insert after the "---" that follows "## Overview"
-    text = CHANGELOG.read_text()
+    text = CHANGELOG.read_text(encoding="utf-8")
     # Find the insertion point: after "## Overview" block's "---"
     insert_re = re.compile(r"(## Overview.*?---\s*\n)", re.DOTALL)
-    m = insert_re.search(text)
-    if m:
-        pos = m.end()
+    insert_match = insert_re.search(text)
+    if insert_match:
+        pos = insert_match.end()
         text = text[:pos] + new_section + text[pos:]
     else:
         # Fallback: insert after first "---"
@@ -236,7 +291,7 @@ def update_changelog(dry_run: bool = False) -> bool:
         text,
     )
 
-    CHANGELOG.write_text(text)
+    CHANGELOG.write_text(text, encoding="utf-8", newline="")
     print(f"  CHANGELOG: updated with {len(commits)} commits")
     return True
 
@@ -251,7 +306,7 @@ def update_readme(dry_run: bool = False) -> bool:
         print("  README: not found")
         return False
 
-    text = README.read_text()
+    text = README.read_text(encoding="utf-8")
     version = _get_version()
     today = _today()
     changed = False
@@ -284,7 +339,7 @@ def update_readme(dry_run: bool = False) -> bool:
         print(f"  README: would update version to {version}, date to {today}")
         return True
 
-    README.write_text(text)
+    README.write_text(text, encoding="utf-8", newline="")
     print(f"  README: updated version={version} date={today}")
     return True
 
@@ -318,7 +373,7 @@ def _format_iso_date(timestamp: str | None) -> str:
         return timestamp[:10] if len(timestamp) >= 10 else "unknown"
 
 
-def _baseline_index() -> dict[str, dict]:
+def _baseline_index() -> dict[str, dict[str, Any]]:
     """Flatten baseline.json into ``{name: entry}`` so per-row lookup is O(1).
 
     Both the ``benchmarks`` and ``pqc_benchmarks`` blocks contribute.
@@ -348,8 +403,8 @@ def _baseline_index() -> dict[str, dict]:
     """
     if not BASELINE_JSON.exists():
         return {}
-    data = json.loads(BASELINE_JSON.read_text())
-    flat: dict[str, dict] = {}
+    data = json.loads(BASELINE_JSON.read_text(encoding="utf-8"))
+    flat: dict[str, dict[str, Any]] = {}
     flat.update(data.get("benchmarks", {}))
     flat.update(data.get("pqc_benchmarks", {}))
     return flat
@@ -367,7 +422,7 @@ def _generate_benchmark_table() -> str:
     if not BENCHMARK_RESULTS_JSON.exists():
         return ""
 
-    measured = json.loads(BENCHMARK_RESULTS_JSON.read_text())
+    measured = json.loads(BENCHMARK_RESULTS_JSON.read_text(encoding="utf-8"))
     rows = measured.get("results", [])
     if not rows:
         return ""
@@ -375,18 +430,32 @@ def _generate_benchmark_table() -> str:
     floor_for = _baseline_index()
     captured = _format_iso_date(measured.get("timestamp"))
 
+    # The host is rendered from the record's own provenance, never asserted.
+    # This header used to call every run "the canonical-host measurements",
+    # which was a claim about hardware the generator has no knowledge of: the
+    # committed record was produced on a 4-CPU build container, and the table
+    # published its numbers under a label naming an AVX-512 bench host.
+    provenance = measured.get("provenance", {})
+    host = str(provenance.get("host", "unrecorded host")).strip("` ")
+    cpu = str(provenance.get("cpu", "")).strip("` ")
+    host_desc = f"{host}" + (f", {cpu}" if cpu else "")
+
     lines = [
         "<!-- "
-        "Throughput numbers below are the canonical-host measurements written "
-        "by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` "
-        f"(the same command CI runs) on {captured}.  The regression-floor "
+        "Throughput numbers below were written by "
+        "`benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` "
+        f"(the same command CI runs) on {captured}, on the host that record "
+        f"names ({host_desc}).  They describe THAT host: compare rows within "
+        "the table, not against a different machine.  The regression-floor "
         "column is the value enforced by `benchmarks/baseline.json` (CI "
         "fails when measured drops more than `tolerance_percent` below "
         "floor).  Regenerate via `python tools/update_docs.py`. -->",
-        f"_Headline source: `benchmarks/benchmark-results.json` (run {captured}). "
-        "Regression floor: `benchmarks/baseline.json`.  CI fails on "
-        "(measured - tolerance%) < floor — both columns shown so reviewers "
-        "can sanity-check the headroom._",
+        f"_Headline source: `benchmarks/benchmark-results.json` (run {captured} on "
+        f"{host_desc}). Regression floor: `benchmarks/baseline.json`, measured on "
+        "the CI runner class named there — a floor and a throughput figure are "
+        "different machines on purpose, so the gap between the columns is not "
+        "headroom unless both were measured on the same host.  CI fails when "
+        "measured falls more than `tolerance_percent` below floor._",
         "",
         "| Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |",
         "|-----------|---------------------:|---------------------------:|----------:|------|",
@@ -483,13 +552,15 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
         return False
 
     changed = False
+    carrying = 0
 
     # Find all .md files that contain the markers
     md_files = list(ROOT.glob("*.md")) + list(ROOT.glob("wiki/*.md"))
     for md_file in md_files:
-        text = md_file.read_text()
+        text = md_file.read_text(encoding="utf-8")
         if BENCH_START not in text:
             continue
+        carrying += 1
 
         pattern = re.compile(
             re.escape(BENCH_START) + r".*?" + re.escape(BENCH_END),
@@ -502,12 +573,23 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
             if dry_run:
                 print(f"  BENCHMARKS: would update {md_file.name}")
             else:
-                md_file.write_text(new_text)
+                md_file.write_text(new_text, encoding="utf-8", newline="")
                 print(f"  BENCHMARKS: updated {md_file.name}")
             changed = True
 
     if not changed:
-        print("  BENCHMARKS: no files with AUTO-BENCHMARK-TABLE markers found")
+        # Two different outcomes, distinguished here because a single message
+        # for both is misleading: a page that is already current, and a page
+        # whose AUTO-BENCHMARK-TABLE-START/END markers are absent.  Reporting
+        # "table not found" for the first is how a DELETED marker pair — which
+        # silently stops the published table tracking the measurements — reads
+        # exactly like a no-op.
+        if carrying:
+            print(
+                f"  BENCHMARKS: {carrying} file(s) already match " f"{BENCHMARK_RESULTS_JSON.name}"
+            )
+        else:
+            print("  BENCHMARKS: no files with AUTO-BENCHMARK-TABLE markers found")
 
     return changed
 
@@ -527,7 +609,7 @@ def update_wiki(dry_run: bool = False) -> bool:
     changed = False
 
     for md_file in sorted(WIKI_DIR.glob("*.md")):
-        text = md_file.read_text()
+        text = md_file.read_text(encoding="utf-8")
         new_text = text
 
         # Update "| Version | X.Y |" table rows
@@ -548,7 +630,7 @@ def update_wiki(dry_run: bool = False) -> bool:
             if dry_run:
                 print(f"  WIKI: would update {md_file.name}")
             else:
-                md_file.write_text(new_text)
+                md_file.write_text(new_text, encoding="utf-8", newline="")
                 print(f"  WIKI: updated {md_file.name}")
             changed = True
 
@@ -563,6 +645,282 @@ def update_wiki(dry_run: bool = False) -> bool:
 # ============================================================================
 
 
+def _counts_module() -> Any:
+    """Load tools/check_documented_counts.py as a module.
+
+    The regenerator and the gate MUST share one measurement implementation:
+    a regenerator with its own counting rules is how the two would disagree
+    while both looked authoritative.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_documented_counts", ROOT / "tools" / "check_documented_counts.py"
+    )
+    if spec is None or spec.loader is None:  # pragma: no cover - loader contract
+        raise RuntimeError("tools/check_documented_counts.py could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class UnstagedAdditionsError(RuntimeError):
+    """New files exist that ``git ls-files`` cannot see yet."""
+
+
+def _unstaged_additions_that_would_count(repo: Path | None = None) -> list[str]:
+    """Untracked, non-ignored files a gated LoC row would select.
+
+    ``measure_loc_table`` enumerates with ``git ls-files``, which lists the
+    INDEX.  A file that has been written but not ``git add``-ed is therefore
+    invisible to the measurement while being very much part of the commit
+    about to be made — so running ``--loc`` before staging writes figures that
+    are correct for the index and wrong for the commit, and the gate goes red
+    on CI for a tree the author measured as green.
+
+    That is not hypothetical: it happened during this branch's own work, and
+    it is silent in both directions (the regenerator reports success, the
+    figures look plausible, and the failure surfaces one commit later
+    attributed to the wrong change).  Ignored paths — build directories,
+    virtualenvs, caches — are excluded by ``--exclude-standard``, so an
+    ordinary working tree with build output does not trip this.
+
+    ``repo`` overrides the tree inspected; it exists so the tests can drive a
+    scratch repository without relocating ROOT, which is also where the
+    predicate module is loaded from.
+    """
+    counts = _counts_module()
+    root = ROOT if repo is None else repo
+    if not (root / ".git").exists():
+        return []
+    proc = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return []
+    selects = counts._LOC_TABLE_ROWS["**Whole project** (source + docs + config)"]
+    return sorted(
+        path for path in (p.decode("utf-8") for p in proc.stdout.split(b"\0") if p) if selects(path)
+    )
+
+
+def update_loc_metrics(dry_run: bool = False) -> bool:
+    """Re-measure and rewrite every gated Lines-of-Code figure in
+    docs/METRICS_REPORT.md from the same functions the documented-counts
+    gate verifies with.
+
+    This is the one-command answer to "a line-total gate fails on every
+    commit": run this after a change, review the diff, done.  A figure the
+    regenerator does not know how to rewrite is a figure the gate does not
+    check — keep the two lists in lockstep.
+
+    Raises:
+        UnstagedAdditionsError: when a new, non-ignored file has not been
+            staged.  Measuring around it would produce figures that describe
+            the index rather than the commit; see
+            :func:`_unstaged_additions_that_would_count`.
+    """
+    pending = _unstaged_additions_that_would_count()
+    if pending:
+        shown = "\n  ".join(pending[:20])
+        more = f"\n  … and {len(pending) - 20} more" if len(pending) > 20 else ""
+        raise UnstagedAdditionsError(
+            "refusing to re-measure: these files are not staged, so "
+            "`git ls-files` cannot see them and the figures written here "
+            "would describe the index rather than the commit:\n"
+            f"  {shown}{more}\n\n"
+            "Stage them first (`git add …`), then re-run.  If a file should "
+            "never be committed, add it to .gitignore."
+        )
+    counts = _counts_module()
+    report = ROOT / "docs" / "METRICS_REPORT.md"
+    text = report.read_text(encoding="utf-8")
+    original = text
+
+    table = counts.measure_loc_table(ROOT)
+    composition = counts.measure_scope_composition(ROOT)
+    json_lines = counts.measure_tracked_json_lines(ROOT)
+
+    def _fmt(n: int) -> str:
+        return f"{n:,}"
+
+    # --- Lines of Code table rows (bold preserved on the two flagship
+    # cells: Library-total lines and the Whole-project row).
+    for label, (files, lines) in table.items():
+        lines_cell = _fmt(lines)
+        if label in ("Library total (Python + C + headers)",):
+            lines_cell = f"**{lines_cell}**"
+        if label.startswith("**Whole project**"):
+            lines_cell = f"**{lines_cell}**"
+        text = counts._loc_row_re(label).sub(f"| {label} | {_fmt(files)} | {lines_cell} |", text)
+
+    # --- Scope Composition table rows.
+    comp_paths = {
+        "Library (Python + C + headers)": "`ama_cryptography/` + `src/c/` + `include/`",
+        "Tests": "`tests/**/*.py`",
+        "Top-level Python": "`*.py` at repo root",
+        "Cython": "`*.pyx` + `*.pxd`",
+        "Everything else (remainder)": (
+            "`*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus "
+            "`.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, "
+            "`tools/`, `benchmarks/`, `examples/`)"
+        ),
+        "**Whole-project total**": "sum of the scopes above",
+    }
+    for label, (lines, pct) in composition.items():
+        bold = label.startswith("**")
+        lines_cell = f"**{_fmt(lines)}**" if bold else _fmt(lines)
+        pct_cell = f"**{pct}**" if bold else pct
+        text = re.sub(
+            rf"\|\s*{re.escape(label)}\s*\|[^|]*\|[^|]*\|[^|]*\|",
+            f"| {label} | {lines_cell} | {pct_cell} | {comp_paths[label]} |",
+            text,
+        )
+
+    # --- Prose restatements of the measured figures.
+    lib_files, lib_lines = table["Library total (Python + C + headers)"]
+    whole_lines = table["**Whole project** (source + docs + config)"][1]
+    tests_lines, tests_pct = composition["Tests"]
+    library_pct = composition["Library (Python + C + headers)"][1]
+    remainder_pct = composition["Everything else (remainder)"][1]
+    ratio = tests_lines / lib_lines if lib_lines else 0.0
+
+    text = re.sub(
+        r"\d[\d,]* lines\*\* across \d[\d,]* files under",
+        f"{_fmt(lib_lines)} lines** across {_fmt(lib_files)} files under",
+        text,
+    )
+    text = re.sub(
+        r"Whole-project total\*\* \(`\d[\d,]*` lines",
+        f"Whole-project total** (`{_fmt(whole_lines)}` lines",
+        text,
+    )
+    text = re.sub(
+        r"only\s*\*\*[\d.]+%\*\* of the repository is library code",
+        f"only **{library_pct}** of the repository is library code",
+        text,
+    )
+    text = re.sub(
+        r"Test code \([\d.]+%\) is roughly \S+ the size of the library\s*\([\d.]+%\)",
+        f"Test code ({tests_pct}) is roughly {ratio:.1f}x the size of the library "
+        f"({library_pct})",
+        text,
+    )
+    text = re.sub(
+        r"test-to-library ratio is roughly \*\*[\d.]+\*\*",
+        f"test-to-library ratio is roughly **{ratio:.2f}**",
+        text,
+    )
+    text = re.sub(
+        r"The remainder \([\d.]+%\)",
+        f"The remainder ({remainder_pct})",
+        text,
+    )
+    text = re.sub(
+        r"\(\d[\d,]* lines of\s*`\*\.json`",
+        f"({_fmt(json_lines)} lines of `*.json`",
+        text,
+    )
+
+    if text == original:
+        print("   METRICS_REPORT.md LoC figures: already current")
+        return False
+    if dry_run:
+        print("   METRICS_REPORT.md LoC figures: would be re-measured and rewritten")
+        return True
+    report.write_text(text, encoding="utf-8", newline="")
+    print("   METRICS_REPORT.md LoC figures: re-measured and rewritten")
+    return True
+
+
+#: The aggregate claim, with the connective text captured so a rewrite keeps
+#: each document's own wording ("4,085 test functions across 173 Python test
+#: files", "4,085 Python test functions across 173 test files", …).  Mirrors
+#: ``check_documented_counts._AGGREGATE_RE`` exactly, with groups added around
+#: the parts that must survive; the two are pinned equal by
+#: ``tests/test_documented_counts_gate.py``.  Every quantifier is bounded, for
+#: the reason recorded on the gate's copy.
+_AGGREGATE_REWRITE_RE = re.compile(
+    r"([\d,]{1,15})(\s{1,8}(?:static\s{1,8})?(?:Python\s{1,8})?"
+    r"test functions across\s{1,8})([\d,]{1,15})(\s{1,8}"
+    r"(?:Python\s{1,8})?(?:test\s{1,8})?files?)"
+)
+
+#: Documents carrying a gated static-test-count claim.
+_TEST_COUNT_DOCUMENTS = ("README.md", "ARCHITECTURE.md", "docs/METRICS_REPORT.md")
+
+
+def update_static_test_counts(dry_run: bool = False, root: Optional[Path] = None) -> bool:
+    """Re-measure and rewrite every gated static test-function/file count.
+
+    The LoC half of the documented-counts gate had a one-command fix
+    (``--loc``) and this half did not, so a commit that added a test left four
+    claims across three documents to be found and hand-edited — and the gate
+    that catches them names no command for them.  That asymmetry is what makes
+    a count gate feel like an obstacle instead of a tool, and this branch's own
+    CI went red on the LoC half for exactly the reason the other half would
+    have: a change landed and nobody re-measured.
+
+    Measured with ``check_documented_counts.measure_static_test_counts`` —
+    imported, never re-derived — so the regenerator and the gate cannot
+    disagree about what the number is.
+
+    Revision-history rows are skipped, on the same rule the gate applies: a row
+    like ``| 3.5.0 | 2026-07-30 | … 3,057 static Python test functions across
+    127 files … |`` records what was true at a past release, and rewriting it
+    would falsify the record rather than update a claim.
+
+    Args:
+        dry_run: report what would change and write nothing.
+        root: tree to measure and rewrite, defaulting to this repository.
+            An explicit parameter rather than a patched module global, so the
+            tests drive a real directory instead of redirecting the loader that
+            imports the gate module.
+    """
+    counts = _counts_module()
+    tree = ROOT if root is None else root
+    functions, files = counts.measure_static_test_counts(tree)
+    changed = False
+
+    for relative in _TEST_COUNT_DOCUMENTS:
+        path = tree / relative
+        if not path.is_file():
+            continue
+        original = path.read_text(encoding="utf-8")
+        rewritten_lines = []
+        for line in original.splitlines(keepends=True):
+            if counts._HISTORY_ROW_RE.match(line):
+                rewritten_lines.append(line)
+                continue
+            line = _AGGREGATE_REWRITE_RE.sub(
+                lambda m: f"{functions:,}{m.group(2)}{files:,}{m.group(4)}", line
+            )
+            line = counts._METRICS_FILES_RE.sub(
+                "| Python test files under `tests/` matching the static regex " f"| {files:,} |",
+                line,
+            )
+            line = counts._METRICS_FUNCS_RE.sub(
+                "| Syntactic `def test_` matches under `tests/**/*.py` " f"| **{functions:,}** |",
+                line,
+            )
+            rewritten_lines.append(line)
+        text = "".join(rewritten_lines)
+        if text == original:
+            continue
+        changed = True
+        if not dry_run:
+            path.write_text(text, encoding="utf-8", newline="")
+
+    if not changed:
+        print("   static test counts: already current")
+        return False
+    verb = "would be re-measured and rewritten" if dry_run else "re-measured and rewritten"
+    print(f"   static test counts ({functions:,} functions / {files:,} files): {verb}")
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AMA Cryptography auto-documentation updater")
     parser.add_argument(
@@ -575,12 +933,45 @@ def main() -> None:
         action="store_true",
         help="Only update CHANGELOG.md",
     )
+    parser.add_argument(
+        "--loc",
+        action="store_true",
+        help="Only re-measure and rewrite the Lines-of-Code figures in "
+        "docs/METRICS_REPORT.md (the one-command fix for a red LoC gate)",
+    )
+    parser.add_argument(
+        "--counts",
+        action="store_true",
+        help="Only re-measure and rewrite every count the documented-counts "
+        "gate checks: the Lines-of-Code figures AND the static "
+        "test-function/file claims in README.md, ARCHITECTURE.md and "
+        "docs/METRICS_REPORT.md (the one-command fix for a red counts gate)",
+    )
     args = parser.parse_args()
 
     if args.dry_run:
         print("=== DRY RUN ===\n")
 
     any_changed = False
+
+    if args.loc or args.counts:
+        print("LoC metrics")
+        try:
+            any_changed = update_loc_metrics(dry_run=args.dry_run)
+        except UnstagedAdditionsError as exc:
+            # Exit non-zero: a caller that scripted `update_docs.py --loc &&
+            # git commit` must not proceed on figures the commit invalidates.
+            print(f"   ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        if args.counts:
+            print("\nStatic test counts")
+            any_changed |= update_static_test_counts(dry_run=args.dry_run)
+        print(
+            "\n✓ Documentation updated" + (" (dry run)" if args.dry_run else "")
+            if any_changed
+            else "\n• No changes needed"
+        )
+        return
 
     print("1. CHANGELOG")
     any_changed |= update_changelog(dry_run=args.dry_run)
@@ -594,6 +985,16 @@ def main() -> None:
 
         print("\n4. Wiki pages")
         any_changed |= update_wiki(dry_run=args.dry_run)
+
+        print("\n5. LoC metrics")
+        try:
+            any_changed |= update_loc_metrics(dry_run=args.dry_run)
+        except UnstagedAdditionsError as exc:
+            print(f"   ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+
+        print("\n6. Static test counts")
+        any_changed |= update_static_test_counts(dry_run=args.dry_run)
 
     if any_changed:
         print("\n✓ Documentation updated" + (" (dry run)" if args.dry_run else ""))

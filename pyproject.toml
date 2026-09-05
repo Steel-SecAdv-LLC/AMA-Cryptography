@@ -27,7 +27,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-cryptography"
-version = "4.0.0"
+version = "5.0.0"
 description = "Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -85,12 +85,9 @@ math = [
     "Cython>=3.2.8",
 ]
 monitoring = [
-    # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
+    # NumPy for mathematical monitoring (equations, double_helix_engine)
     # Install with: pip install "ama-cryptography[monitoring]"
-    # scipy floor is 1.11.0 to match the [dev] extra and requirements-dev.txt:
-    # scipy < 1.11 has no wheels for this project's Python 3.10+ floor.
     "numpy>=1.24.0,<3.0.0",
-    "scipy>=1.11.0",
 ]
 legacy = [
     # PyCA cryptography is NOT a runtime fallback — INVARIANT-1 prohibits a
@@ -119,8 +116,33 @@ legacy = [
     "cryptography>=46.0.7",
 ]
 hsm = [
-    # PKCS#11 support for hardware security modules
-    "PyKCS11>=1.5.18",
+    # PKCS#11 support for hardware security modules.
+    #
+    # 1.5.19 is excluded on Windows because its win32/win_amd64 wheels
+    # (published 2026-08-26, PyPI) crash the process with an access
+    # violation inside PyKCS11Lib.load() — measured against SoftHSM2's
+    # x64 module on all of cp310-cp314 (CI run 33031586700, e.g. job
+    # 98385102886), on the same runner image and commit where the 1.5.18
+    # wheels and the 1.5.18 sdist build pass.  The same release's sdist
+    # and macOS wheels are unaffected (sdist verified against SoftHSM2
+    # 2.6.1 on Linux; macOS wheels green in the same CI run), so the
+    # exclusion is scoped to the platform whose artefacts are broken.
+    # tests/test_hsm_integration.py pins this split against both this
+    # extra and the CI install steps.
+    #
+    # Build note for platforms resolving the 1.5.18 sdist (no wheel for
+    # the interpreter, with 1.5.19 excluded): that sdist regenerates its
+    # wrapper with the host SWIG, and its interface file names the
+    # Python 2 `PyInt_FromLong` in a %typemap.  SWIG >= 4.3 removed the
+    # compatibility alias that made that compile, so install with the
+    # alias restored at the compiler command line, exactly as CI does
+    # (see .github/workflows/ci.yml):
+    #   CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install "PyKCS11>=1.5.18,!=1.5.19"
+    # (MSVC: set CL=-DPyInt_FromLong=PyLong_FromLong instead.)
+    # From 1.5.19 the sdist self-provisions SWIG >= 4.5 through its build
+    # requirements and compiles without the alias.
+    "PyKCS11>=1.5.18,!=1.5.19; sys_platform == 'win32'",
+    "PyKCS11>=1.5.18; sys_platform != 'win32'",
 ]
 benchmark = [
     # Peer cryptographic libraries for benchmarks/comparative_benchmark.py.
@@ -145,9 +167,6 @@ docs = [
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=4.0.0",
-    "pytest-timeout>=2.1.0",
-    "pytest-benchmark>=4.0.0",
-    "pytest-xdist>=3.0.0",
     "hypothesis>=6.161.8",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
@@ -155,6 +174,30 @@ dev = [
     "black>=26.5.1",
     "ruff>=0.16.0",
     "mypy>=2.3.0",
+    # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
+    # setuptools ships no `py.typed`.  Without these stubs the type-check job
+    # FAILS — measured, 5 errors in setup.py: `Library stubs not installed for
+    # "setuptools.command.build_ext"`, the same for `setuptools.dist`, and
+    # `Class cannot subclass "Distribution"/"build_ext" (has type "Any")`.
+    # (This comment used to say the base class "is Any and every override on
+    # CMakeBuild goes unchecked while the run still reports success".  There is
+    # no silent-Any outcome to have: reaching it would need an
+    # `ignore_missing_imports` override for setuptools, and the override list
+    # below does not contain one.)
+    "types-setuptools>=84.0.0.20260812",
+    # PyYAML is imported directly by thirteen modules under tests/ and tools/
+    # (the workflow, gate-coverage, secret-scan and severity-gate checkers all
+    # parse YAML structurally rather than by regex).  It arrived only as a
+    # transitive dependency of bandit, so `pip install -e ".[dev]"` produced an
+    # environment whose imports happened to work.  types-PyYAML is the same
+    # case as types-setuptools above: `mypy --strict` ships in this extra and
+    # the CI type-check step runs it over those same modules, so without the
+    # stubs the declared developer environment cannot reproduce the gate --
+    # measured as 13 `Library stubs not installed for "yaml"` errors in every
+    # test job.  requirements-dev.txt already declared both; this extra was the
+    # outlier.
+    "PyYAML>=6.0.3",
+    "types-PyYAML>=6.0.12.20260724",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
     # that NO CI workflow ever invoked.  Vulnerability scanning is
@@ -172,7 +215,15 @@ dev = [
     # posture both improve.
     "Cython>=3.2.8",
     "numpy>=1.24.0",
-    "scipy>=1.11.0",
+    # Build and packaging — mirrors requirements-dev.txt's "Build and
+    # packaging" block, which documents the two files as equivalent.  These
+    # were missing here, so the documented developer setup (`make
+    # dev-install` -> pip install -e ".[dev,all]") could not run the
+    # documented release target (`make dist` -> python -m build): "No
+    # module named build".
+    "build>=1.5.0",
+    "setuptools>=83.0.0",
+    "wheel>=0.47.0",
 ]
 # Umbrella extra — aggregates the non-overlapping extras above via PEP 508
 # self-reference so a single `pip install ama-cryptography[all]` pulls in
@@ -303,12 +354,6 @@ ignore = [
     "S310", "S603",
     "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
 ]
-# tools/monitoring/ama_cryptography_monitor.py — production monitoring module with same conventions
-"tools/monitoring/ama_cryptography_monitor.py" = [
-    "I001", "N806",
-    "RUF003", "RUF022", "RUF023",
-    "UP006", "UP015", "UP035",
-]
 "ama_cryptography/monitoring.py" = [
     "I001", "N806",
     "RUF003", "RUF022", "RUF023",
@@ -326,11 +371,13 @@ ignore = [
 #   E402/E501/F541/I001/RUF059/RUF100/UP006/UP035: same legacy-formatting / typing-imports patterns the
 #         rest of the codebase carries (see "ama_cryptography/*" header above).
 #   S603/S607: subprocess calls with bare executable name (git, cmake, ...) are intentional in benchmark tooling.
+#   S311: r3_efficacy_eval.py draws anomaly-injection positions from a seeded PRNG
+#         so the experiment reproduces; nothing cryptographic is drawn.
 "benchmarks/*" = [
     "C901",
     "E402", "E501", "F541", "I001",
     "RUF001", "RUF059", "RUF100",
-    "S603", "S607",
+    "S311", "S603", "S607",
     "UP006", "UP035",
 ]
 # examples/**  (double-star) is required — scripts live in examples/python/
@@ -384,29 +431,68 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = [
     "hypothesis.*",
-    "scipy.*",
     "numpy.*",
-    "pytest_benchmark.*",
     "pytest.*",
     "pytest",
     "_pytest.*",
-    "rfc3161ng.*",
     "nacl.*",
     "Crypto.*",
     "PyKCS11.*",
     "cryptography.*",
+    # Build-time optional imports in setup.py.  Listed here rather than
+    # suppressed at the import site: an inline `# type: ignore` is an ERROR
+    # under warn_unused_ignores on a machine where the package IS installed,
+    # so the verdict would depend on the environment rather than on the code.
+    "cmake",
+    "packaging.*",
+    # Cython.Build — setup.py imports it behind CYTHON_AVAILABLE, and the
+    # type-check image has no reason to carry a compiler toolchain.
+    "Cython.*",
+    # Frameworks the integration EXAMPLES import.  They are not dependencies
+    # of this library and are absent from every CI image; the examples are
+    # inside `mypy --strict` so their calls into ama_cryptography are checked
+    # (that is how four `create_crypto_package(dna_codes=...)` calls, a
+    # parameter the function has never had, were found), not so the frameworks
+    # themselves are.
+    "flask",
+    "flask.*",
+    "fastapi",
+    "fastapi.*",
+    "pydantic",
+    "pydantic.*",
+    "uvicorn",
+    "uvicorn.*",
+    # atheris — the libFuzzer driver, importable only under a fuzzing build.
+    "atheris",
+    "atheris.*",
 ]
 ignore_missing_imports = true
 
 
 # Cython extension modules — no .py source or PEP 561 stubs.
 [[tool.mypy.overrides]]
-module = "ama_cryptography.hmac_binding"
+module = [
+    "ama_cryptography.hmac_binding",
+    "ama_cryptography.math_engine",
+]
+ignore_missing_imports = true
+
+# Chart/report generators under benchmarks/ and tools/ import matplotlib and
+# psutil.  Neither ships type information and neither is a runtime dependency
+# of the library — they are dev-only, imported behind availability guards, and
+# absent from the CI type-check image.  Listed here for the same reason as the
+# block above: a missing third-party stub is not a typing defect in this tree.
+[[tool.mypy.overrides]]
+module = [
+    "matplotlib.*",
+    "matplotlib",
+    "psutil",
+    "psutil.*",
+]
 ignore_missing_imports = true
 
 # ama_cryptography_monitor — compatibility shim for production monitoring.
-# ama_cryptography.monitoring / tools.monitoring.ama_cryptography_monitor —
-# production monitoring, relax generic-type-arg.
+# ama_cryptography.monitoring — production monitoring, relax generic-type-arg.
 # NOTE: ama_cryptography.* is NOT blanket-relaxed. Only specific modules that
 # have pre-existing bare generic annotations (dict, list, tuple without type
 # params) are individually listed here. New modules must use strict generics.
@@ -414,12 +500,35 @@ ignore_missing_imports = true
 module = [
     "ama_cryptography_monitor",
     "ama_cryptography.monitoring",
-    "tools.monitoring.ama_cryptography_monitor",
     "ama_cryptography.pqc_backends",
     "ama_cryptography.crypto_api",
     "ama_cryptography.adaptive_posture",
 ]
 disallow_any_generics = false
+
+# examples/ — the two web-framework integrations. FastAPI/Flask/pydantic have
+# no stubs in any CI image (they are not dependencies of this library), so
+# their base classes and route decorators are Any. Two strict flags fire on
+# that alone and cannot be answered from this tree: subclassing an Any base,
+# and a decorator that erases the type of what it wraps. Relaxed HERE rather
+# than with inline ignores, and only these two flags — everything else stays
+# on, which is what caught four `create_crypto_package(dna_codes=...)` calls
+# naming a parameter the function has never had.
+#
+# Both spellings of each module: mypy derives the name from how it was
+# invoked, so `mypy examples/` sees `fastapi_integration` while the CI run
+# (`--explicit-package-bases`, needed so `schemas/` resolves the same way
+# `tests/` imports it) sees `examples.python.fastapi_integration`. An override
+# that matches only one spelling silently stops applying under the other.
+[[tool.mypy.overrides]]
+module = [
+    "fastapi_integration",
+    "flask_integration",
+    "examples.python.fastapi_integration",
+    "examples.python.flask_integration",
+]
+disallow_subclassing_any = false
+disallow_untyped_decorators = false
 
 # tests/ — pytest decorators (@pytest.fixture, @pytest.mark.*) are untyped;
 # relax decorator and call strictness for test modules.
@@ -462,10 +571,10 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "quantum: marks tests that require quantum-resistant libraries",
     "integration: marks integration tests",
     "fips: marks FIPS 140-3 self-test and compliance tests",
-    "smoke: marks smoke tests that verify no exception is raised",
+    "requires_host_isa(token): the test's subject is an instruction-set extension; on a host without it the CI backend-skip escalation in tests/conftest.py leaves the skip alone (tokens: x86, x86-64, aarch64)",
+    "requires_interop_oracle: the test cross-checks an AMA primitive against an external reference implementation (PyCA cryptography / PyNaCl / pycryptodome); under AMA_CI_REQUIRE_BACKENDS the require-backends lane installs those, so a skip means the oracle install broke and tests/conftest.py escalates it to a failure (audit M18)",
 ]
 filterwarnings = [
     "error",

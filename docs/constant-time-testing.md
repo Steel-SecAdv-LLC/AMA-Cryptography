@@ -23,7 +23,10 @@ Both are essential: structural tests catch logic bugs, while empirical tests cat
 1. **Define two input classes**: Class 0 (e.g., fixed/known input) and Class 1 (e.g., random input)
 2. **Measure execution times**: For many iterations, randomly select a class, prepare the input, and time the computation
 3. **Apply Welch's t-test**: Compare the timing distributions of the two classes
-4. **Evaluate**: If |t| > 4.5, the timing distributions are statistically distinguishable at 99.999% confidence — indicating timing leakage
+4. **Crop and reduce**: Cut the pooled samples at a ladder of 20 percentile thresholds and take the signed t of largest magnitude over those rungs and the uncropped one. Cropping is what lets a systematic shift in the *bulk* survive the heavy right tail that preemption and frequency changes add.
+5. **Evaluate**: If |t| exceeds the calibrated threshold, the timing distributions are statistically distinguishable at 99.999% confidence — indicating timing leakage.
+
+The threshold is **5.0, not 4.5**. 4.5 is the critical value of a *single* Welch t; step 4 reports the maximum of 21 correlated t-values, whose null distribution is wider. Measured over 6,000,000 null replicates: E|t| = 1.618 and sd = 1.717, against 0.798 and 1.000 for one t; `P(|t| >= 4.5)` = 7.2e-5 where the stated confidence asserts 1e-5, and `P(|t| >= 5.0)` = 6.5e-6.
 
 The key insight is that if code is truly constant-time, the execution time should be independent of the input class, and Welch's t-test will show no significant difference.
 
@@ -106,11 +109,15 @@ make test-crypto-full
 
 ## Interpreting Results
 
-### PASS (|t| < 4.5)
+### PASS (|t| < 5.0)
 
 No statistically significant timing difference detected between the two input classes. The implementation is empirically constant-time at the 99.999% confidence level.
 
-### FAIL (|t| >= 4.5)
+### OVER THRESHOLD (|t| >= 5.0)
+
+A single round over the threshold is not a verdict. A lane fails only if it exceeds the threshold in a **majority of rounds with a consistent sign, and the per-class mean difference is at least 2 ns**; excursions that disagree about direction are classified `UNUSABLE` rather than as a leak finding — but `UNUSABLE` still FAILS the build, because a gate that cannot measure has not cleared anything; what changes is the diagnosis and the operator's next action (re-run on a quiet host, versus audit the primitive). Excursions below 2 ns are reported as `SUB-FLOOR` and do NOT fail. `SUB-FLOOR` means the excursion is not adjudicable by a wall-clock test on shared hardware — not that a difference was shown to be absent. The deterministic instruction-count gates in `.github/workflows/dudect.yml` cover the part of that range that changes the instruction *sequence*, for the calls they target; a difference living only in operand-dependent latency is measured by neither instrument.
+
+The magnitude condition is load-bearing, not a rounding rule. Measured on one host, five consecutive runs of the same binary at 100,000 measurements: of the eleven lanes whose mean difference stayed under 2 ns, ten changed sign at least once. A sign-consistency test is meaningless where the sign is not reproducible — which is exactly the range the floor covers. Read the per-class mean difference the harness prints beside the t-value: |t| grows as sqrt(n), so at high measurement counts the statistic reaches the threshold on differences well under one CPU cycle, and the nanosecond figure is what says whether a difference is exploitable.
 
 A statistically significant timing difference was detected. This could indicate:
 

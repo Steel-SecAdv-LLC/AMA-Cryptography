@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 4.0.0 |
-| Last Updated | 2026-08-01 |
+| Document Version | 5.0.0 |
+| Last Updated | 2026-08-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -110,7 +110,37 @@ We provide a dudect-style timing analysis harness based on the methodology from:
 > "Dude, is my code constant time?"
 > https://eprint.iacr.org/2016/1123.pdf
 
-The harness uses Welch's t-test to compare execution times between two input classes. A t-value with |t| < 4.5 after 10^6 measurements suggests no detectable timing leakage at the 99.999% confidence level.
+The harness uses Welch's t-test to compare execution times between two input classes, with the percentile cropping the paper specifies in §3.3: the pooled samples are cut at a ladder of 20 thresholds and the reported statistic is the signed t of largest magnitude over those rungs and the uncropped one. Cropping is what lets the test see a systematic shift in the *bulk* of the distribution rather than losing it under the heavy right tail that preemption and frequency changes produce; measured against a textbook early-exit `memcmp` at 50,000 iterations, the cropped statistic detected the leak 48 times out of 48 where a single raw Welch t detected it 19 times.
+
+A t-value below `DUDECT_T_THRESHOLD` suggests no detectable timing leakage at the 99.999% confidence level. **That threshold is 5.0, not the 4.5 usually quoted**, because the statistic is a maximum over 21 rungs rather than one t-test, and the maximum of 21 correlated t-values has a wider null distribution: 6,000,000 null replicates put E|t| at 1.618 and sd at 1.717, against 0.798 and 1.000 for a single t. Under that null `P(|t| >= 4.5)` is 7.2e-5 — seven times the 1e-5 that "99.999%" asserts — while `P(|t| >= 5.0)` is 6.5e-6. The calibration is re-derived on every run by the harness self-test, which fails if a change to the rung ladder moves the null out of its measured band.
+
+Two properties of the measurement matter as much as the statistic:
+
+- **A verdict needs a majority of rounds.** A lane must exceed the threshold in more than half of the rounds run, with a consistent sign, before the run fails; excursions that disagree about direction are reported as unusable measurements rather than findings. See `tests/c/dudect/dudect_rounds.h`.
+- **A verdict needs an effect size, not just a t-value.** |t| grows as sqrt(n), so significance measures how well a difference was *resolved*, not how large it is — and at these measurement counts the statistic resolves well under one CPU cycle. On one CI run the lanes that failed had per-class differences of 0.199, 0.596 and 1.141 ns while lanes that passed had differences of 35, 78 and 53,932 ns: the verdict was tracking precision, not size. A lane therefore fails only if it is significant **and** its difference reaches `DUDECT_MIN_EFFECT_NS` (2 ns) — above every artefact observed on shared runners and below every real mechanism (a mispredicted branch is 7–10 ns, an L1 miss 30–50 ns, an early-exit `memcmp` hundreds). Below that, a wall-clock test on shared hardware cannot separate a source-level leak from data-operand-dependent execution in the CPU (Intel DOITM / ARM PSTATE.DIT); for the calls they target, the deterministic instruction-count gates measure the part of that range that changes the instruction sequence, with a zero-instruction noise floor (a difference living only in operand-dependent latency is measured by neither instrument — see below). Sub-floor excursions are printed with their own `SUB-FLOOR` verdict, never folded into a pass. Because the floor adjudicates on a number the harness supplies, a lane that trips the threshold while reporting a difference of exactly zero is treated as a harness fault rather than a sub-floor pass: the statistic *is* `delta / se`, so that combination cannot come from a measurement — it can only mean the field was never populated, and a lane in that state would be permanently unable to fail a build. Info-only lanes are exempt, since they are classified as noise before the verdict reaches an effect size at all.
+
+- **The floor is a precondition for adjudication, so it is applied before the direction rule rather than after it.** The direction rule's premise is that a real leak keeps a fixed sign; that presupposes the effect is resolvable. Below the floor it is not, and the consequence was observed: `Ascon-AEAD128 encrypt` read 3/3 consistently signed at +0.596 ns on one CI runner and 2+/1− at +0.607 ns on another — same binary, same measurement count, same effect size to within 2%, opposite verdicts (SUB-FLOOR/green vs UNUSABLE/red). A sign-consistency test applied to a quantity whose sign is not reproducible decides nothing.
+
+Re-measured on one host rather than across two, which is the stronger form of the same result: five consecutive runs of the same binary at 100,000 measurements, pinned to one core, on an Intel Xeon @ 2.10GHz. Eleven lanes reported a per-class mean difference under 2 ns in every run. **Ten of the eleven changed sign at least once across those five runs** — `ama_consttime_lookup` read +0.040, +0.014, +0.006, -0.021, +0.056 ns; `Ascon-AEAD128 encrypt` -0.046, +0.024, -0.023, -0.137, -0.040; `HMAC-SHA3-256 verify` +0.262, +0.167, -0.105, -0.033, +0.203. The sign below the floor is not a property of the code, so the floor cannot be lowered here by taking more measurements: it is not a sampling-noise problem that averages away. At or above 2 ns direction disagreement is still `UNUSABLE` and still fails, and the floor sits below every mechanism that produces a different instruction SEQUENCE — a mispredicted branch is 7-10 ns, an L1 miss 30-50 ns, one extra AES round about 4 ns, an early-exit memcmp hundreds.
+
+What is genuinely given up, stated because it was previously written as "no sensitivity is lost": a secret-dependent difference below 2 ns that comes from operand-dependent instruction LATENCY rather than from a different instruction sequence is measured by NEITHER instrument here. The wall-clock t-test cannot resolve it — see the measurement below — and the callgrind gates count retired instructions, which are identical when only the latency differs. This project's primitives are written to avoid data-dependent instruction selection, which is the class both instruments do cover; the latency class is out of reach of the apparatus as built, and saying otherwise would be the opposite of what this document is for. A sub-floor excursion whose signs disagreed says so in the report rather than being printed identically to a consistently-signed one.
+
+- **The sub-floor exemption's claim is now true for the lanes that reach it.** It says the deterministic instruction-count gates own the sequence-visible part of the range below 2 ns. For two of the lanes observed reaching it, they did not: nothing covered `ama_ascon_aead128_encrypt`, and nothing covered `ama_agent_binding_check`. Both are now covered rather than the claim softened — Ascon-AEAD128 encryption retires 32,069,814 instructions identically across all eight key classes, and the agent binding check 612,810,230 identically whether it accepts or rejects; cross-class delta 0 and noise floor 0 in both cases. The same gap recurred for the constant-time utility primitives, whose strict lanes spend their lives below the floor — the five-run re-measurement above read `ama_consttime_lookup` between −0.021 and +0.056 ns in all five runs, and no deterministic target stood behind that abstention. The `consttime-lookup`, `consttime-swap`, `consttime-copy` and `secure-memzero` targets close it the same way: byte-identical across all eight classes on all four metrics under gcc 13 and clang 18 (lookup 99,715,167 / 99,730,903 instruction references respectively; swap 98,548,267 / 98,584,191; copy 65,782,267 / 65,818,191; memzero 12,529,232 / 19,761,950), same-class floor 0, and each gate verified to fail on a planted condition branch or scan truncation before it was trusted. The strict lanes that remain wall-clock-only are `Argon2id legacy verify`, whose adjudicable component — the tag compare — is `ama_consttime_memcmp` and is covered at primitive level by the `consttime` target, and the two `FROST scalar_negate` lanes, whose branchless borrow loop contains no data-dependent instruction selection to count; both statements are checked against the lane inventory in `tests/c/test_dudect.c` rather than assumed.
+
+- **Where a deterministic gate covers a lane, that gate is the blocking authority and the wall-clock lane is informational.** `Kyber-1024 decaps` read |t| = 11.81 in 3/3 rounds at **+5.630 ns** — above the floor, in mispredicted-branch range, and on the FIPS 203 §6.3 implicit-rejection path, where a timing difference is the plaintext-checking oracle the Fujisaki–Okamoto transform exists to deny. It was treated as real until measurement said otherwise. Over 60 decapsulations per class the `kyber-decaps` target reports, on the Release (-O3) library the wheel ships and with the simulated cache geometry pinned, retired instructions, data references, D1 misses and LLd misses all four identical between the valid and the rejected ciphertext, under gcc 13 and clang 18 alike (the absolute figures for the measuring commit are in `CHANGELOG.md`; the zero deltas are the invariant). Instructions rule out a branch or skipped work; the data-reference and miss figures rule out a secret-dependent access, which instruction counts alone cannot see. (An earlier revision of this bullet argued from the excursion being "one part in 90,000" of a decapsulation; that ratio was computed from an unoptimized build, and the argument does not hold at any denominator, because a mispredicted branch costs a fixed 5–20 ns however long the surrounding operation is. The deterministic identity is the evidence.) The wall-clock lane is therefore INFO and `kyber-decaps` blocks — a strictly more sensitive instrument for the property that matters, resolving a single instruction where the lane cannot resolve 2 ns. This is the pairing `secp256k1 ECDSA sign` already uses with `ecdsa`. **Where the excursion came from is now measured rather than inferred:** the lane selected its ciphertext with a class-correlated ternary sitting between the class draw and the opening timer, and on a null experiment — byte-identical ciphertexts in both classes, so the true effect is exactly zero, 200,000 measurements x 5 runs — that construction reads over threshold in 3 of 5 runs at worst |t| = 6.99 with every excursion the same sign, while the masked-merge staging the lane now uses reads 0 of 5. An earlier revision of this bullet attributed the residual to data-operand-dependent execution (Intel DOITM / ARM PSTATE.DIT); that inference is withdrawn as unnecessary. The deterministic identity is unchanged and is what settles the primitive.
+
+- **The absolute floor is calibrated for short primitives.** 2 ns is the right scale for operations of tens to hundreds of nanoseconds, where a mechanism's cost is a large fraction of the whole. It is not the right scale for an operation four orders of magnitude longer, which accumulates many tiny operand-dependent effects that no mechanism produced. Rather than scale the floor — which would risk hiding a real branch inside a long operation — the long-running lanes are given deterministic coverage, which has no such trade-off.
+- **Both classes are staged through one buffer.** Cropping resolves the bulk of the distribution, which at these sample counts means a standard error near 0.04 ns — finer than one CPU cycle. At that resolution the *address* of a lane's input is a confounder: with identical data in both classes, placing one class's key across two cache lines drives |t| to 13.5–30.9 with a consistent sign, which is what a leak looks like and is not one. Every lane therefore copies the selected class's input into a single cache-line-aligned buffer before the timed region, so the classes differ in data and not in address.
+
+Each lane also reports the per-class mean difference in nanoseconds beside its t-value, because |t| alone does not distinguish a 0.2 ns measurement artefact from an exploitable difference.
+
+- **The SVE2 dispatch slots have no constant-time measurement, on any commit.** The nightly SIMD sweep carries `kyber-sve2` and `sha3-sve2` cells, and the SVE2 kernels are in the build those cells run (`-DAMA_ENABLE_SVE2=ON`) — but the hosted AArch64 runners' silicon lacks SVE2, so the measurement step exits 77 (Skipped) on every recorded run while the surrounding job reports success; the exit-77 audit trail in `dudect.yml` is the record of that. The functional correctness of the SVE2 kernels is verified under QEMU at two vector lengths on pull requests that touch the native tree (`arm-qemu.yml`); their timing behaviour is verified nowhere, because QEMU timing is not silicon timing and the deterministic instruction-count gates run on x86-64. Reading a green sweep as SVE2 constant-time coverage would be false confidence; that verification requires SVE2 hardware.
+
+- **The AVX-512 SHA-3 slot has no constant-time measurement either.** `sha3-avx512x4` sits alongside the two SVE2 cells in the sweep's `OPTIONAL_SLOTS` list (`dudect.yml`), so a 77 from it emits a `::warning::` and the job still exits 0. Unlike SVE2, whether it is measured at all is decided by runner-pool luck rather than by a fixed hardware fact: AVX-512 is present on some hosted x86-64 runner SKUs and absent on others, so the same commit can be measured on one run and silently unmeasured on the next, with nothing in the record distinguishing the two. What bounds the exposure is that the kernel is not in anything this project ships: `AMA_ENABLE_AVX512` defaults to `OFF` (`CMakeLists.txt`), and `setup.py` never sets it, so no released wheel contains the AVX-512 kernel — it reaches a user only through a deliberate source build with the flag turned on. Its *functional* correctness is verified on every relevant pull request under Intel SDE (`ci.yml`, byte-identity against the scalar and AVX2 paths); its timing behaviour is not verified anywhere.
+
+- **~~Three NEON slots are not measurable at all, because the dispatch names do not exist.~~ Closed.** The NEON ML-KEM NTT, ML-DSA NTT and Argon2-G kernels ship in every AArch64 build and every arm64 wheel, and had no timing measurement on any commit — not because the silicon was unavailable, but because `AMA_DISPATCH_ONLY_SLOTS` in `src/c/dispatch/ama_dispatch.c` carried no name that resolved to them, so the sweep could not pin them even in principle. `kyber-ntt-neon`, `dilithium-ntt-neon` and `argon2-g-neon` now exist and are **mandatory** cells of the nightly sweep on `ubuntu-24.04-arm` — not optional, because AdvSIMD is architecturally guaranteed on AArch64, so a 77 from one of them is a dispatch-wiring regression rather than a hardware fact, and `dudect.yml`'s confirm step fails the lane on it. They resolve the way `sha3-neon` does rather than the way the AVX2 and SVE2 branches do: on an SVE2 build running on SVE2 silicon the higher tier has already overwritten `kyber_ntt` and `dilithium_ntt`, so a `saved ==` comparison would answer UNSUPPORTED and blame the CPU, which is the defect recorded above for `sha3-neon`. Verified under QEMU at the commit that added them: all three resolve HONORED (`ama_dispatch_active_slot()` returns the requested label), `test_kat` passes under each pin, the AArch64 C suite goes 68/68 → 71/71, and on x86-64 the same three names report UNSUPPORTED (exit 77) rather than UNRECOGNISED.
+
+  Remaining after this: the two SVE2 cells and `sha3-avx512x4` above, both of which are genuine hardware-availability limits rather than missing wiring.
 
 ### Running the Verification
 
@@ -147,7 +177,8 @@ AMA Cryptography Cryptographic Library
 =======================================================
 
 Methodology: Welch's t-test on execution times
-Threshold: |t| < 4.5 (99.999% confidence)
+Threshold: |t| < 5.0 (99.999% confidence, calibrated for the
+           max-over-21-rungs statistic; a single Welch t would be 4.5)
 Iterations: 1000000 per test
 
 Testing ama_consttime_memcmp (1000000 iterations)...
@@ -169,11 +200,29 @@ Overall: PASS - No timing leakage detected
 
 | t-value | Interpretation |
 |---------|----------------|
-| |t| < 4.5 | No detectable timing leakage (PASS) |
-| 4.5 <= |t| < 10 | Potential leakage, investigate further |
-| |t| >= 10 | Strong evidence of timing leakage (FAIL) |
+| \|t\| < 5.0 | No detectable timing leakage (PASS) |
+| 5.0 <= \|t\| < 10 | Over threshold: a finding only if it reproduces in a majority of rounds with a consistent sign **and** the per-class mean difference is at least 2 ns |
+| \|t\| >= 10 | Over threshold, same three conditions |
 
-**Note**: Environmental factors such as CPU frequency scaling, interrupts, and cache effects can cause false positives. Run the test multiple times and consider disabling CPU frequency scaling for more accurate results.
+The magnitude condition is not a footnote to the first two, and this table
+used to omit it — which made the row above say that a sign-consistent
+majority is a finding, seventy lines after the paragraph that explains why it
+is not.  A majority of rounds over the threshold, consistently signed, with a
+mean difference under 2 ns is `SUB-FLOOR`: it is reported, and it does not
+fail the build.  Nor does a large \|t\| on its own — the statistic grows as
+sqrt(n), so at 100,000 measurements it crosses 5.0 on differences far below
+one CPU cycle.
+
+Read the reported per-class mean difference alongside the t-value. |t| grows
+as sqrt(n) for any non-zero difference, so at high measurement counts the
+statistic reaches the threshold on differences far below one CPU cycle, and
+the difference in nanoseconds is what says whether a finding is exploitable.
+A real leak mechanism — a mispredicted branch, an extra cache line, an extra
+round — costs nanoseconds to tens of nanoseconds; a lane reporting |t| over
+the threshold on a difference of 0.2 ns is measuring the harness or the host,
+not the primitive.
+
+**Note**: Environmental factors such as CPU frequency scaling, interrupts, and cache effects can cause false positives. The multi-round majority rule exists for exactly this and handles excursions that vary between rounds; it does **not** handle a bias that is fixed for a given binary and host, which reproduces every round with the same sign. That class is removed by construction instead — see the staging discipline below. Run the test multiple times and consider disabling CPU frequency scaling for more accurate results.
 
 ### Harness Setup-Symmetry Discipline
 
@@ -199,13 +248,54 @@ The post-fix pattern, codified at the top of each lane in
 2. Stage every reference input into the same memory class (typically
    the local stack frame) so the kernel reads them through equivalent
    cache paths.
-3. Pointer-select between the two staged inputs OUTSIDE the timing
-   region.  The timed window contains exactly one indirect call with
-   no class-correlated control flow.
+3. Choose the class OUTSIDE the timing region.  The timed window
+   contains exactly one call with no class-correlated control flow.
 
-Future dudect lanes should follow the same discipline.  Helper
-patterns: a `b_equal` / `b_diff` pair for compare-style primitives, a
-single stack-staged reference for scalar-input primitives.
+**Point 3 was necessary and not sufficient, and the missing half is now
+point 4.** Selecting a *pointer* outside the timer still leaves the two
+classes reading two different addresses inside it, and an address is
+something a load's timing legitimately depends on: which cache line it
+falls in, whether it spans two, which set it maps to.  Unlike scheduler
+noise, that difference is fixed for a given binary on a given host, so it
+reproduces in every round with the same sign — the shape the multi-round
+majority rule is specifically unable to distinguish from a leak.
+
+Measured with the Ascon-AEAD128-encrypt lane's own cipher call and
+**identical key data in both classes**, so the true effect is exactly zero:
+placing class 0's key across two cache lines while class 1's sits inside one
+drives the cropped statistic to |t| = 13.5–30.9, over threshold in 10 of 10
+runs, all one sign.  Staged through a single buffer, the same measurement
+reports 0 of 10.  This became reachable when the harnesses adopted percentile
+cropping: cropping resolves the bulk of the distribution, which for that lane
+means a bulk standard deviation of about 4 ns over ~22,000 samples per class,
+a standard error near 0.04 ns, and a threshold crossed by a systematic
+difference of roughly 0.2 ns — under half a cycle at 2.1 GHz.
+
+4. Copy the selected class's input into ONE shared, cache-line-aligned
+   buffer, and hand the timed call that buffer.  Both classes then present
+   the same address and the same alignment, and only the data differs.  The
+   copy is identical work for both classes and happens outside the timed
+   region.  `dudect_stage_select(dst, src0, src1, len, class_idx)` in
+   `tests/c/dudect/dudect_stage.h` is the helper; it is used by every lane
+   that feeds a buffer to the timed call, in `tests/c/test_dudect.c` and by
+   the keyed lanes in `tools/constant_time/dudect_crypto.c`.
+
+   These two lines used to name `dudect_stage()` in `dudect.h`.  No such
+   symbol exists, and the three-argument `dudect_stage(dst, src, len)` shape
+   they described is the construction this file's own headers document as
+   UNSAFE: copying only the selected class's bytes makes the SOURCE address
+   class-correlated, which is the leak the staging exists to remove.  The
+   five-argument form reads both sources every iteration and merges them
+   under a constant-time mask; `tools/check_dudect_class_staging.py` refuses
+   the one-source form outright.
+
+Sensitivity is untouched by point 4: a data-dependent leak follows the data,
+which still differs by class.  For compare-style primitives the equivalent —
+and stronger — form is a single reused probe whose bytes are rewritten
+class-symmetrically each iteration, which is what the AES-GCM and Ascon
+tag-compare lanes use.
+
+Future dudect lanes should follow all four points.
 
 ## ctgrind/Valgrind Verification
 
@@ -248,9 +338,104 @@ A clean run should show:
 The native C implementations provide constant-time operations:
 
 - All NTT and polynomial arithmetic use constant-time primitives
-- No secret-dependent branches or memory accesses
+- No secret-dependent branches or memory accesses **inside a primitive** —
+  see *Rejection sampling and what these gates cannot cover* immediately
+  below for the one place this does not extend to, which is the signing
+  loop the standards themselves define as variable-iteration
 - Validated through NIST KAT (Known Answer Test) vectors (FIPS 203/204/205)
 - Rejection sampling uses constant-time comparisons
+
+#### Rejection sampling and what these gates cannot cover
+
+The bullet above used to read "No secret-dependent branches or memory
+accesses", unqualified, for all three PQC algorithms. This repository's own
+dudect lane falsifies that for ML-DSA-65 signing, and has for as long as the
+lane has existed: at 100,000 measurements against two constant messages under
+one key, `ML-DSA-65 sign` reads **t = -815.72** at a per-class difference of
+**-48.7 us**. That is five orders of magnitude above the harness's 2 ns
+effect-size floor. Recording the unqualified claim beside a measurement that
+contradicts it is the documentation failure INVARIANT-16 exists to prevent, so
+the claim is narrowed to what the code delivers.
+
+**What is true.** FIPS 204 Algorithm 2 signs inside a rejection loop.
+`dil_sign_internal` (`src/c/ama_dilithium.c`) restarts on three norm checks —
+`||z||`, `||w0 - c*s2||`, `||c*t0||` — and on the hint-weight check, and every
+one of those predicates is a function of the secret vectors `s1`, `s2`, `t0`
+and of the message. Both the number of attempts and the point at which an
+attempt aborts are therefore secret-dependent control flow, **by the
+standard's construction** and identically to the pq-crystals reference
+implementation. SLH-DSA's WOTS+ chain lengths depend on the message digest,
+which depends on the secret PRF key through the randomiser `R`, in the same
+way. Neither is an AMA defect; both are properties of the algorithms as
+standardised.
+
+**What follows for the gates.** A deterministic zero-delta instruction count
+is not merely absent for these two primitives, it is *impossible*: the code
+does a different amount of work by design, so a target that demanded equality
+would fail on a correct implementation. `ML-DSA-65 sign` and
+`SLH-DSA-SHA2-256f sign` are consequently the only two info-only wall-clock
+lanes in `tests/c/test_dudect.c` whose blocking counterpart in
+`tools/check_ghash_constant_time.py` is IMPOSSIBLE rather than unwanted, and
+that is stated rather than left to be inferred from a flag.  There are three
+such lanes without a counterpart: the table below lists `Ed25519 verify` as
+the third, with "**none, and none is wanted**" — a different reason, and the
+sentence used to say "the only two ... with no blocking counterpart", which
+the table it introduces contradicts five lines later.
+
+`tests/c/test_dudect.c` registers **eight** info-only lanes, and here is every
+one of them with its counterpart, because a paragraph that lists some of them
+reads as listing all of them:
+
+| Info-only lane | Blocking counterpart |
+|----------------|----------------------|
+| `Kyber-1024 decaps` | `--target kyber-decaps` |
+| `secp256k1 ECDSA sign (RFC 6979)` | `--target ecdsa` |
+| `secp256k1 scalar multiplication` | `--target secp256k1-scalarmult` |
+| `X25519 scalarmult` | `--target x25519` |
+| `X25519 scalarmult batch x4` | `--target x25519-batch` |
+| `Ed25519 verify` | **none, and none is wanted** — verification is
+  variable-time by design (RFC 8032 §5.1.7 operates on the signature and the
+  public key, both public), so a target demanding equality would be asserting
+  a property the algorithm does not claim |
+| `ML-DSA-65 sign` | **none possible** — see above |
+| `SLH-DSA-SHA2-256f sign` | **none possible** — see above |
+
+An earlier version of this paragraph named six of the eight and asserted that
+`X25519 scalarmult batch x4` was "the third lane with no counterpart, and the
+only one of the three where a counterpart was possible". It omitted
+`Ed25519 verify` and `secp256k1 scalar multiplication` entirely. The second of
+those was a real gap rather than a documentation one: the lane's own source
+comment claimed "fail-loud variants of this lane are intentionally surfaced
+separately via `tests/c/test_consttime.c`", and that file contains no
+secp256k1 scalar-multiplication case — so a 256-step Montgomery ladder over a
+secret scalar was covered only by a lane that cannot fail CI. `--target
+secp256k1-scalarmult` closes it: the same ladder, the same Hamming-weight class
+contrast the dudect lane uses (k = 1 against a scalar just under n, so every
+ladder step takes the opposite `cswap` branch), measured at limit 0 on all four
+metrics — I refs 16,020,324 and D refs 3,835,722 byte-identical across all
+eight classes, D1 and LL misses identical too.
+
+That measurement took two attempts, which is worth recording. The first driver
+selected between two constant arrays with `k = (cls & 1) ? k_high : k_low`, and
+the miss columns split exactly along the odd/even classes at 1,661 vs 1,660
+while instruction and data-reference counts were already identical. The
+library was not leaking; the *driver* was, by handing the ladder a different
+address per class. Staging the scalar into one aligned buffer with a branchless
+select — the same thing `dudect_stage_select` does in `tests/c/test_dudect.c` —
+took all four columns to zero.
+
+**What remains covered for ML-DSA and SLH-DSA.** Every primitive the loop
+calls — NTT, pointwise Montgomery multiplication, the norm checks, SHAKE — is
+branch-free on its own operands; the FIPS 203/204/205 KAT suites pin
+functional correctness; `tools/check_secret_division.py` proves no divide
+instruction in the linked object stands on a secret operand; and
+`tools/check_c_secret_zeroization.py` pins the scrubbing of every per-attempt
+intermediate, including the sponge contexts `dil_polyvec_uniform_eta` and
+`dil_polyvecl_uniform_gamma1` leave holding `rhoprime`.
+
+**What is not claimed.** That the attempt count leaks nothing. It correlates
+with the norm distribution of the secret vectors. The standard accepts this
+for the ML-DSA parameter sets and AMA claims no more than the standard does.
 
 ### Native Ed25519
 
@@ -284,6 +469,19 @@ Two consequences worth stating rather than leaving implied:
   (x86-64 inline assembly for constant-time table selection, see
   `ed25519-donna-64bit-x86.h`).
 
+> **Sanitizer coverage caveat (audit M21).** When a sanitizer build is
+> configured (`AMA_ENABLE_SANITIZERS=ON`), CMake defines `ED25519_NO_INLINE_ASM`
+> (see `CMakeLists.txt`), which disables `ED25519_GCC_64BIT_X86_CHOOSE` — the
+> hand-written constant-time choose-niels conditional move donna's x86-64 scalar
+> multiply uses, and the code the default x86-64 wheel ships
+> (`AMA_ED25519_ASSEMBLY` defaults ON). So the ASan / MSan / UBSan / TSan lanes
+> exercise the **portable** donna C path, not the choose-niels assembly that
+> actually ships. The trade-off is deliberate — sanitizers cannot instrument
+> that asm meaningfully and it raises register pressure — but it means a
+> "67/67 under ASan+UBSan" figure is a statement about the portable path: the
+> shipping choose-niels asm is covered by the functional test suite and the
+> dudect constant-time lane, not by the sanitizers.
+
 #### The portable fe51 backend (`src/c/ama_ed25519.c`, AArch64 and generic)
 
 The native C Ed25519 implementation provides constant-time operations:
@@ -307,8 +505,12 @@ The native C Ed25519 implementation provides constant-time operations:
 ### Native AES-256-GCM (`src/c/ama_aes_gcm.c`)
 
 **Default build is constant-time.** `AMA_AES_CONSTTIME` defaults to `ON`
-(`CMakeLists.txt`), which selects the algebraic bitsliced S-box in
-`src/c/ama_aes_bitsliced.c` — no table, no secret-dependent memory access.
+(`CMakeLists.txt`), which selects the masked full-table-scan S-box in
+`src/c/ama_aes_bitsliced.c` — a lookup reads all 256 entries and selects with
+an arithmetic mask, so the memory access pattern is uniform and independent of
+the secret index.  (The construct is a masked scan, not an algebraic circuit:
+both are constant-time, but a side-channel reviewer assesses them differently,
+and THREAT_MODEL.md:136 already describes it correctly.)
 Hosts with AES-NI / VAES dispatch to the hardware kernels instead, which are
 likewise table-free.
 

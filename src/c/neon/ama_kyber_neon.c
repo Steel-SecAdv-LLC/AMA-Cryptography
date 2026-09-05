@@ -22,6 +22,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 #define KYBER_Q       3329
 #define KYBER_N       256
@@ -44,19 +45,46 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
 /* ============================================================================
  * Scalar Barrett reduction (for sub-register fallback paths)
  *
- * Reduces a mod q for values up to 2^26.
- * Matches the generic C implementation in ama_kyber.c.
+ * Domain is the whole int16_t range.  This block used to say "values up to
+ * 2^26", which names a domain the parameter type cannot express — 2^26 does
+ * not fit an int16_t.  The 2^26 is the scaling constant of the reciprocal
+ * (`v = round(2^26 / q)`), not an input bound; the sentence came from
+ * ama_kyber.c, where it has also been corrected.
  * ============================================================================ */
 static inline int16_t barrett_reduce_scalar(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = ((int32_t)v * a) >> 26;
+    /* Same int32-accumulator form as ama_kyber.c's barrett_reduce, and the
+     * same measured bounds: t lies in [-10, 9] and the result in [0, q] over
+     * the full int16_t domain — exhaustively verified, so the narrowing cast
+     * is value-preserving.  q itself is attained, at the nine inputs that are
+     * exact negative multiples of q from -3329 to -29961; negative outputs
+     * are not, because the truncating shift floors toward -infinity and
+     * always undershoots the quotient.  (This comment used to bound the
+     * result at (-2q, 2q) — true, but 4x loose and admitting a sign the
+     * formula cannot produce.)  The
+     * old int16_t-accumulator form was the exact -Wconversion pattern fixed
+     * in the generic and AVX2 twins — latent here only because no ARM lane
+     * compiles with -Wconversion. */
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* Barrett constant: floor(2^26 / q) + 1 */
 #define KYBER_BARRETT_V  20159
+
+/* Low 16 bits of a signed 16x16 lane multiply, computed on unsigned lanes.
+ *
+ * GCC/Clang implement vmulq_s16 as `__a * __b` on a signed vector type
+ * (arm_neon.h), so a low-half-only multiply whose product exceeds int16 — every
+ * Montgomery and Barrett step below does, by design — is signed integer
+ * overflow.  That is undefined behaviour: `-fsanitize=undefined` aborts on it
+ * ("cannot be represented in type 'short int'", audit H15).  The unsigned
+ * multiply emits the SAME MUL instruction and has defined wraparound, so the
+ * low-half result is bit-for-bit identical while the UB is gone. */
+static inline int16x8_t mullo_s16(int16x8_t a, int16x8_t b) {
+    return vreinterpretq_s16_u16(vmulq_u16(vreinterpretq_u16_s16(a), vreinterpretq_u16_s16(b)));
+}
 
 /* ============================================================================
  * NEON Barrett reduction for Kyber (q = 3329)
@@ -80,7 +108,7 @@ static inline int16x8_t barrett_reduce_neon(int16x8_t a) {
      * then >> 11 more => total >> 26 */
     int16x8_t t = vqdmulhq_s16(a, v);   /* (a*v) >> 15 */
     t = vshrq_n_s16(t, 11);             /* >> 11 more => total >> 26 */
-    t = vmulq_s16(t, q);                /* t * q */
+    t = mullo_s16(t, q);                /* t * q (low 16 bits; see mullo_s16) */
     return vsubq_s16(a, t);             /* a - t*q */
 }
 
@@ -91,9 +119,9 @@ static inline int16x8_t barrett_reduce_neon(int16x8_t a) {
  *
  * The NEON ISA lacks a direct "high 16 bits of 16x16 multiply" intrinsic
  * like AVX2's _mm256_mulhi_epi16.  Instead we use:
- *   lo = vmulq_s16(a, b)            -- low 16 bits of a*b
+ *   lo = mullo_s16(a, b)           -- low 16 bits of a*b (unsigned lanes, no UB)
  *   hi = vqdmulhq_s16(a, b)         -- 2 * high16(a*b), saturated
- *   t  = vmulq_s16(lo, qinv)        -- t = lo * qinv mod 2^16
+ *   t  = mullo_s16(lo, qinv)       -- t = lo * qinv mod 2^16
  *   u  = vqdmulhq_s16(t, q)         -- 2 * high16(t*q)
  *   result = vhsubq_s16(hi, u)      -- (hi - u) >> 1
  *
@@ -107,9 +135,9 @@ static inline int16x8_t montgomery_mul_neon(int16x8_t a, int16x8_t b) {
     const int16x8_t q    = vdupq_n_s16(KYBER_Q);
     const int16x8_t qinv = vdupq_n_s16((int16_t)KYBER_QINV);
 
-    int16x8_t lo = vmulq_s16(a, b);           /* low 16 bits of a*b */
+    int16x8_t lo = mullo_s16(a, b);           /* low 16 bits of a*b */
     int16x8_t hi = vqdmulhq_s16(a, b);        /* 2 * high16(a*b) */
-    int16x8_t t  = vmulq_s16(lo, qinv);       /* t = lo * qinv mod 2^16 */
+    int16x8_t t  = mullo_s16(lo, qinv);       /* t = lo * qinv mod 2^16 */
     int16x8_t u  = vqdmulhq_s16(t, q);        /* u = 2 * high16(t*q) */
     return vhsubq_s16(hi, u);                  /* (hi - u) >> 1 */
 }
@@ -255,31 +283,12 @@ void ama_kyber_poly_pointwise_neon(int16_t r[KYBER_N],
     }
 }
 
-/* ============================================================================
- * Polynomial addition (NEON)
- * ============================================================================ */
-void ama_kyber_poly_add_neon(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 32; i++) {
-        int16x8_t va = vld1q_s16(a + i * 8);
-        int16x8_t vb = vld1q_s16(b + i * 8);
-        vst1q_s16(r + i * 8, vaddq_s16(va, vb));
-    }
-}
-
-/* ============================================================================
- * Polynomial subtraction (NEON)
- * ============================================================================ */
-void ama_kyber_poly_sub_neon(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 32; i++) {
-        int16x8_t va = vld1q_s16(a + i * 8);
-        int16x8_t vb = vld1q_s16(b + i * 8);
-        vst1q_s16(r + i * 8, vsubq_s16(va, vb));
-    }
-}
+/* ama_kyber_poly_add_neon / ama_kyber_poly_sub_neon were removed: they had no
+ * caller, no test and no benchmark, and the NEON tier already gets this
+ * arithmetic from -O3 auto-vectorisation of the scalar int16 loops in
+ * src/c/ama_kyber.c (only the SVE2 slots are dispatch-wired).  Shipping
+ * unexercised kernels is the gap this drop closes (audit Low); git history
+ * carries them if a future PR wires and tests a NEON kyber_poly_* slot. */
 
 #else
 typedef int ama_kyber_neon_not_available;

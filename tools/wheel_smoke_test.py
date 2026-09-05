@@ -54,6 +54,7 @@ failing check named on stderr.
 
 from __future__ import annotations
 
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -121,6 +122,133 @@ def check_module_health() -> None:
         not failed,
         "; ".join(failed),
     )
+
+
+def check_binding_extensions_are_bound() -> None:
+    """A release wheel must ship the EXACT binding extensions it signed.
+
+    Since 5.0.0 the six Cython binding extensions are digest-bound into the v3
+    integrity artefact, so this is checkable — and it needs checking, because
+    the thing that breaks it is a post-signing step in the packaging pipeline,
+    which no unit test can see.  The 5.0.0 release dry run found precisely
+    that: `delocate-wheel` runs after the signer on macOS and rewrites each
+    extension's Mach-O load commands, so all five bindings in the macOS wheels
+    mismatched their signed digests.
+
+    An import failure would surface it too — the pre-import gate refuses a
+    mismatch outright — but this states the requirement instead of relying on
+    a side effect, and it distinguishes "mismatch" (tampering or a rewriting
+    build step) from "uncovered" (the wheel was built without
+    `--bind-extensions`), which are different pipeline faults with different
+    fixes.
+    """
+    results = ama_cryptography.module_self_test_results()
+    integrity = [detail for name, _passed, detail in results if name == "integrity"]
+    check("the POST integrity stage ran", bool(integrity), "no integrity stage in the results")
+    if not integrity:
+        return
+
+    detail = integrity[0]
+    check(
+        "no binding extension mismatches its signed digest",
+        "MISMATCH" not in detail,
+        detail,
+    )
+    # "PARTIALLY covered" is the developer-tree wording; a release wheel is an
+    # anchored build and must be fully covered.
+    check(
+        "every shipped binding extension is covered by the signature",
+        "PARTIALLY covered" not in detail and "not covered by the signed artefact" not in detail,
+        detail,
+    )
+    # Parse the COUNT, not the sentence.  `_check_binding_extensions` returns
+    # f"{len(binding_digests)} binding extension(s) verified", so an artefact
+    # that binds nothing yields "0 binding extension(s) verified" — which
+    # contains the substring this used to test for.  The two checks above pass
+    # on that string too ("MISMATCH" absent, "PARTIALLY covered" absent), so all
+    # three assertions were green for a wheel whose integrity artefact covered
+    # no extension at all: exactly the "the wheel was built without
+    # --bind-extensions" pipeline fault this function's docstring claims to
+    # distinguish from a mismatch.
+    bound = _bound_extension_count(detail)
+    check(
+        "the artefact binds at least one binding extension",
+        bound is not None and bound > 0,
+        f"expected a non-zero verified-bindings count; got: {detail}",
+    )
+
+
+_BOUND_COUNT_RE = re.compile(r"(?<!\d)(\d+)\s+binding extension\(s\) verified")
+
+
+def _bound_extension_count(detail: str) -> int | None:
+    """The integer in ``"<n> binding extension(s) verified"``, or None.
+
+    None means the sentence is absent or unparseable, which the caller treats
+    as a failure — a smoke test that cannot read the count must not pass.
+    """
+    match = _BOUND_COUNT_RE.search(detail)
+    return int(match.group(1)) if match else None
+
+
+def check_integrity_anchoring() -> None:
+    """A canonical-repository release must ship an ANCHORED wheel (audit H3).
+
+    An anchored wheel compiles a long-lived trust-anchor public key into the
+    native library; the import-time integrity check then requires the
+    signature's key to equal it, so re-signing edited ``.py`` files with an
+    attacker-chosen key no longer verifies.  An unanchored wheel is signed with
+    a per-build ephemeral key and is self-referential — tamper-evident against
+    accidental corruption, not against a re-sign.
+
+    ``release.yml`` sets ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`` iff the
+    trust-anchor variable is configured, and cibuildwheel forwards it into the
+    test environment, so it is the honest signal for "this build was meant to be
+    anchored".  Forks legitimately build unanchored, so anchoring is ENFORCED
+    only when that flag is set; otherwise the status is reported and allowed.
+
+    When the flag IS set, the build-time signer already refuses to emit an
+    unanchored artefact — this check is a second, independent confirmation that
+    the anchor actually reached the compiled ``.so`` (a forward-to-signer-only
+    bug would leave the signature anchored and the library not), which is the
+    property audit H3 is about.
+
+    ``ama_cryptography._self_test`` is a submodule of the INSTALLED wheel under
+    test, not a source-tree import; its ``_load_integrity_trust_anchor`` is the
+    same resolver POST and the signer consult, so reusing it (and the module's
+    own env-flag semantics) cannot drift from what the wheel itself enforces.
+    """
+    # Deferred to call time (the module under test must have completed its own
+    # import, POST included, before this runs) and spelled as a submodule
+    # ``import`` rather than ``from ama_cryptography import _self_test``:
+    # module scope already binds ``ama_cryptography`` with a plain ``import``,
+    # and mixing the two forms for one module is CodeQL's
+    # py/import-and-import-from (the class swept with alert 647).
+    import ama_cryptography._self_test as _self_test
+
+    anchor_hex, error = _self_test._load_integrity_trust_anchor()
+    anchored = anchor_hex is not None and error is None
+    required = _self_test._env_flag_enabled(_self_test._INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV)
+
+    status = "ANCHORED" if anchored else "unanchored (per-build ephemeral key)"
+    print(f"        integrity trust anchor: {status}" + (f" — {error}" if error else ""))
+
+    if required:
+        check(
+            "release wheel is anchored to a long-lived trust anchor",
+            anchored,
+            error
+            or "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR is set but the compiled library carries no anchor",
+        )
+    else:
+        # Off the canonical path unanchored is allowed, but the status must be
+        # READABLE — a resolver error (a malformed anchor, a library that could
+        # not answer) is a real fault even when anchoring is not required.
+        check(
+            "integrity anchor status is readable (unanchored allowed off the canonical repo)",
+            error is None,
+            error or "",
+        )
 
 
 def check_no_fallback_backends() -> None:
@@ -281,6 +409,8 @@ def main() -> int:
     for group in (
         check_installed_not_source,
         check_module_health,
+        check_binding_extensions_are_bound,
+        check_integrity_anchoring,
         check_no_fallback_backends,
         check_ml_kem,
         check_x25519,

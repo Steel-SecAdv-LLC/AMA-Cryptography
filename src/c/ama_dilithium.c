@@ -231,7 +231,21 @@ static int32_t dil_montgomery_reduce(int64_t a) {
 
 /**
  * Barrett reduction mod q
- * Reduces a to range [0, q)
+ *
+ * Returns the CENTRED representative of a mod q, not a value in [0, q): the
+ * result is negative for roughly half of all inputs, which is what makes the
+ * `dil_caddq` in `dil_freeze` below necessary rather than decorative.  This
+ * header used to claim [0, q), and every bound derived from that claim would
+ * have been wrong by a factor of two in the wrong direction.
+ *
+ * Image, enumerated rather than quoted: over |a| <= 7q — which covers every
+ * value this file passes it, the widest being the l-fold accumulator bounded
+ * by l*q with l = 7 on ML-DSA-87 — the result lies in [-4243450, 4243449],
+ * i.e. |t| <= 0.507q.  (An earlier revision enumerated |a| <= 6q, giving
+ * [-4235259, 4235258], and claimed that band covered every caller; it did
+ * not cover ML-DSA-87's seven-fold accumulator.)  Over the whole int32
+ * domain it widens to [-6283009, 6283008], |t| <= 0.750q.  The inverse-NTT
+ * precondition argued at the keygen call site rests on the 7q-band figure.
  */
 static int32_t dil_reduce32(int32_t a) {
     int32_t t;
@@ -350,7 +364,71 @@ static void dil_ntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
  * Inverse NTT for Dilithium.
  * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
  */
+#ifdef AMA_TESTING_MODE
+#include "internal/ama_testing_exports.h"
+
+/* Largest |coefficient| seen at ANY inverse-NTT entry since the last reset.
+ *
+ * The inverse NTT's input precondition (|coeff| < q — see the bound note at
+ * the keygen call site) is what keeps its unreduced additive butterfly inside
+ * int32, and it is a precondition of the CALL SITES rather than something the
+ * transform can enforce on itself.  A future edit that drops one of the three
+ * `reduce`-before-`invntt` calls would reintroduce an l*q input silently: the
+ * signatures would still verify, every KAT would still pass, and only the
+ * overflow margin would change.  This counter is what makes that observable,
+ * and `tests/c/test_dilithium_invntt_bound.c` is what reads it.
+ *
+ * Instrumented here, at the dispatch wrapper, rather than inside
+ * `dil_invntt_scalar` — so the measurement covers the SIMD kernels too, which
+ * carry the same precondition and are what actually runs on a host with AVX2
+ * or NEON.
+ *
+ * `AMA_TESTING_MODE` is PRIVATE to the `ama_cryptography_test` CMake target,
+ * so the shipped shared and static libraries contain neither the counter nor
+ * the loop that maintains it. */
+static _Thread_local int32_t dil_test_invntt_max_input = 0;
+
+/* OFF until a test asks for it, and that is not tidiness.
+ *
+ * `ama_cryptography_test` is the archive `tests/c/test_dudect.c` links, and
+ * dudect has an `ML-DSA-65 sign` lane — so this accumulator sits inside a
+ * measured constant-time path.  Its inner comparison branches on the
+ * coefficient magnitude, which is secret-derived: left unconditional it would
+ * put a data-dependent branch into the very lane that exists to prove there
+ * is none, either producing a false verdict or masking a real one.  Gated on a
+ * flag no dudect binary ever sets, the loop does not execute there at all and
+ * the only residue is one perfectly-predicted test against a value that is
+ * constant for the life of the process — identical in both dudect classes by
+ * construction, and therefore invisible to the statistic.
+ *
+ * `ama_dilithium_test_invntt_bound_reset()` is what arms it, so a test that
+ * reads the bound necessarily enabled it first and one that does not never
+ * pays for it. */
+static _Thread_local int dil_test_invntt_bound_armed = 0;
+
+void ama_dilithium_test_invntt_bound_reset(void) {
+    dil_test_invntt_max_input = 0;
+    dil_test_invntt_bound_armed = 1;
+}
+
+int32_t ama_dilithium_test_invntt_bound_get(void) {
+    return dil_test_invntt_max_input;
+}
+
+static void dil_test_note_invntt_input(const int32_t a[DIL_N]) {
+    unsigned int i;
+    if (!dil_test_invntt_bound_armed) return;
+    for (i = 0; i < DIL_N; ++i) {
+        int32_t v = a[i] < 0 ? -a[i] : a[i];
+        if (v > dil_test_invntt_max_input) dil_test_invntt_max_input = v;
+    }
+}
+#endif /* AMA_TESTING_MODE */
+
 static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
+#ifdef AMA_TESTING_MODE
+    dil_test_note_invntt_input(a);
+#endif
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
     if (dt->dilithium_invntt) {
         dt->dilithium_invntt(a, dil_zetas);
@@ -1111,9 +1189,11 @@ static void dil_polyvec_uniform_eta(dil_poly *polys, unsigned int count,
 
         /* `streams` is the RejBoundedPoly input for s1/s2 and `bufs` carries
          * rhoprime — both secret-derived, neither previously scrubbed
-         * (INVARIANT-12). */
+         * (INVARIANT-12).  The x4 sponge state absorbed rhoprime||nonce and is
+         * equally recoverable until re-permuted — scrub it in the same class. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        ama_secure_memzero(&ctx, sizeof(ctx));
         idx += 4;
     }
 
@@ -1200,9 +1280,11 @@ static void dil_polyvecl_uniform_gamma1(dil_polyvecl *y,
          * the single most sensitive ephemeral in ML-DSA: y together with the
          * emitted z = y + c*s1 and the public c yields c*s1 and hence s1.
          * `dil_sign_internal` scrubs its own copy of y; this one was missed
-         * (INVARIANT-12). */
+         * (INVARIANT-12).  The x4 sponge absorbed rhoprime||kappa and is
+         * recoverable until re-permuted — scrub it in the same class. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        ama_secure_memzero(&ctx, sizeof(ctx));
         idx += 4;
     }
 
@@ -1710,6 +1792,59 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     s1hat = s1;
     dil_polyvecl_ntt(&s1hat, P->l);
     dil_matrix_pointwise_rowwise(&t, rho, &s1hat, P);
+    /* Reduce BEFORE the inverse NTT, not only after it.
+     *
+     * `dil_invntt_scalar` and every SIMD counterpart carry an implicit input
+     * precondition that the FIPS 204 reference states explicitly for
+     * `poly_invntt_tomont` ("input coefficients need to be less than Q in
+     * absolute value"), and it is load-bearing rather than decorative.  The
+     * inverse transform performs no modular reduction on the additive half of
+     * its butterfly: at each of the 8 levels `a[j] = a[j] + a[j + len]` adds
+     * two values that were themselves sums at the level below, so the bound on
+     * the accumulating position doubles per level and the structural worst case
+     * is 2^8 = 256x the input bound.  With |input| < q that is 256q =
+     * 2,145,386,752, which fits int32 with 0.1% to spare — the reference's
+     * precondition is exactly the margin.
+     *
+     * The producer here is a sum of l Montgomery products.  Each is in (-q, q)
+     * by `dil_montgomery_reduce`'s own bound, and `dil_poly_add` does not
+     * reduce, so the accumulator is bounded by l*q — 5q for ML-DSA-65 — and by
+     * nothing tighter.  256 * 5q = 10,726,933,760 overflows int32 by ~5x, and
+     * signed overflow is undefined behaviour, not a wrap this code could rely
+     * on.  Measured over 36,990 invNTT calls from 400 keygen/sign/verify
+     * cycles, entry reached 2.415q and intermediates 0.167 * INT32_MAX; the
+     * 6x observed headroom is sign cancellation in the sampled data, not a
+     * bound, and this project does not rest a memory-safety property on it.
+     *
+     * `dil_reduce32`'s image was enumerated rather than quoted: over
+     * |a| <= 7q — the widest input any caller produces, ML-DSA-87's l = 7
+     * accumulator — it lands in [-4243450, 4243449], so after this call the
+     * worst case is 256 * 4243450 = 1,086,323,200 — inside int32 with a
+     * 1.98x margin, and provable rather than probabilistic.  (Its image over
+     * the whole int32 domain is wider, |t| <= 6283009, which still gives
+     * 256 * 6283009 = 1,608,450,304 and a 1.33x margin; the tighter figure
+     * is the one that applies here.)
+     *
+     * The three single-pointwise-product sites in signing need no such call:
+     * a lone `dil_montgomery_reduce` output is already in (-q, q), and 256 *
+     * (q-1) = 2,145,386,496 is under INT32_MAX by 0.1% — the reference's own
+     * tight case, and the reason its precondition is stated in exactly those
+     * terms.
+     *
+     * Mathematically transparent: reduction is the identity modulo q, the
+     * inverse NTT is linear over Z_q, and the result is reduced and caddq'd
+     * downstream regardless.  Verified byte-identical rather than argued —
+     * the SHA3-256 digest over the public and secret keys of 64 distinct
+     * seeds is unchanged with and without these three calls, sign/verify
+     * round-trips 64/64 either way, and the C suite passes either way.
+     *
+     * The verify path below already does this (see `dil_polyveck_reduce`
+     * immediately before the invNTT in `ama_dilithium_verify`), as do the
+     * three single-pointwise-product sites in signing whose inputs are already
+     * < q by construction.  These three call sites — keygen, the secret-key
+     * consistency check, and w = A*NTT(y) in signing — were the only ones that
+     * fed an l-fold accumulator straight in. */
+    dil_polyveck_reduce(&t, P->k);
     dil_polyveck_invntt(&t, P->k);
     dil_polyveck_add(&t, &t, &s2, P->k);
     dil_polyveck_reduce(&t, P->k);
@@ -1748,12 +1883,17 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
                         &t0.vec[i]);
     }
 
-    /* Scrub sensitive data */
+    /* Scrub sensitive data.  `t` too: t1 is public (it is packed into the
+     * public key) but t = A*s1 + s2 in full, and t0 = t - t1*2^d is the
+     * secret half the sk carries — a dead frame holding t hands t0 to
+     * anyone who can read the stack, which is exactly why t0 itself is on
+     * this list (INVARIANT-12). */
     ama_secure_memzero(seedbuf, sizeof(seedbuf));
     ama_secure_memzero(&s1, sizeof(s1));
     ama_secure_memzero(&s1hat, sizeof(s1hat));
     ama_secure_memzero(&s2, sizeof(s2));
     ama_secure_memzero(&t0, sizeof(t0));
+    ama_secure_memzero(&t, sizeof(t));
 
     return AMA_SUCCESS;
 }
@@ -1896,6 +2036,10 @@ static ama_error_t dil_pubkey_from_sk(const dil_params *P,
             dil_poly_pointwise_montgomery(&tmp, &mat_row[j], &s1hat.vec[j]);
             dil_poly_add(&acc, &acc, &tmp);
         }
+        /* Same l-fold accumulator, same precondition — see the bound note in
+         * the keygen path above.  `acc` is a sum of l Montgomery products and
+         * is therefore bounded only by l*q on entry. */
+        dil_poly_reduce(&acc);
         dil_poly_invntt(&acc);
 
         sk_bad |= dil_polyeta_unpack(&tmp,
@@ -2193,6 +2337,10 @@ static ama_error_t dil_sign_internal(const dil_params *P,
         yhat = y;
         dil_polyvecl_ntt(&yhat, P->l);
         dil_polyvec_matrix_pointwise(&w1, mat, &yhat, P);
+        /* Same l-fold accumulator, same precondition — see the bound note in
+         * the keygen path above.  This one runs once per rejection-sampling
+         * attempt, so it is the hottest of the three. */
+        dil_polyveck_reduce(&w1, P->k);
         dil_polyveck_invntt(&w1, P->k);
         dil_polyveck_reduce(&w1, P->k);
         dil_polyveck_caddq(&w1, P->k);

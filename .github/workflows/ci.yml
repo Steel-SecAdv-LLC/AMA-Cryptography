@@ -25,18 +25,72 @@ jobs:
   test:
     name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows gets 30, everything else keeps 20.  The budget is set by the
+    # spread between two runs of the SAME matrix entry, not by one overrun.
+    #
+    # `Test windows-latest / Python 3.14`, per-step minutes, from the Actions
+    # API rather than from the summary line:
+    #
+    #   step                 33664217074   33672116191   3.13 in 33664217074
+    #                        (da493ea)     (990a248)     (same run, sibling)
+    #   build native C lib      1.95          0.58            0.62
+    #   install SoftHSM2        1.42          0.23            0.25
+    #   install PyKCS11         1.30          0.67            0.15
+    #   install deps            2.40          1.60            1.93
+    #   pytest                 11.38         10.92           10.18
+    #   TOTAL                  20.1          15.0            14.2
+    #                          CANCELLED     success         success
+    #
+    # Read the last two columns together.  On 33672116191 the 3.14 leg's C
+    # build and SoftHSM2 install land within two seconds of what 3.13 spent on
+    # them in the other run, so neither is a cp314 cost — both were runner
+    # variance, and an earlier revision of this comment attributed +1.3 and
+    # +1.2 minutes to the interpreter version on the strength of the slow run
+    # alone.  The one real version-specific cost is PyKCS11 at +31 s: there is
+    # no cp314 wheel and the Windows exclusion below sends pip to the 1.5.18
+    # sdist, so it compiles.  Measured in job 100388003250: `Building wheel for
+    # PyKCS11 (pyproject.toml)` ran 19:18:06.79 -> 19:18:28.31 = 21.5 s, and it
+    # rebuilds every run — setup-python's pip cache reported a hit on that same
+    # run, because that cache carries pip's HTTP downloads, not this PEP 517
+    # build product.  21.5 s is not worth adding a third-party cache action to
+    # the supply chain of a library that vendors its dependencies, so the cost
+    # is recorded here and accepted rather than optimised.
+    #
+    # So the same job, one commit apart with only this line changed between
+    # them, took 20.1 and then 15.0 minutes: a 34 % spread driven by the
+    # runner, on a job whose own content varies by well under a minute.  A
+    # 20-minute cap gives a 15.0-minute job 33 % headroom, and the slow run
+    # proves 33 % is not enough — it was cancelled 30 seconds into the examples
+    # step having already PASSED the whole suite, and took `CI Gate` red with
+    # it, exactly the "a cancelled dependency is not a success" shape the
+    # apt-retry gate below documents.  30 minutes is 100 % headroom over the
+    # measured job and 49 % over the worst observed run.  A timeout is a
+    # resource budget, not a correctness threshold: nothing here is made
+    # easier to pass, and a leg that genuinely hangs still fails.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
-          # ARM64 (AArch64) runners — GitHub-hosted ubuntu arm64
+          # ARM64 (AArch64) runners — GitHub-hosted ubuntu arm64.  All five
+          # interpreters, not a sample: release.yml builds aarch64 wheels for
+          # cp310-cp314, and its matrix comment states the invariant that a
+          # wheel for a platform and interpreter no CI lane exercises ships
+          # untested.  Until 3.10/3.12/3.14 were added here, three of the
+          # five aarch64 wheels shipped with only cibuildwheel's import
+          # smoke test.
+          - os: ubuntu-24.04-arm
+            python-version: "3.10"
           - os: ubuntu-24.04-arm
             python-version: "3.11"
           - os: ubuntu-24.04-arm
+            python-version: "3.12"
+          - os: ubuntu-24.04-arm
             python-version: "3.13"
+          - os: ubuntu-24.04-arm
+            python-version: "3.14"
 
     steps:
     - name: Checkout code
@@ -65,8 +119,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+        .github/scripts/apt-install.sh build-essential cmake
 
     - name: Install system dependencies (Windows)
       if: runner.os == 'Windows'
@@ -84,24 +137,12 @@ jobs:
           Write-Host "CMake already available: $(cmake --version | Select-Object -First 1)"
         } else {
           Write-Host "CMake not found; installing via Chocolatey with retries..."
-          $maxAttempts = 5
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            Write-Host "Attempt ${attempt}/${maxAttempts}: choco install cmake..."
-            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y 2>&1
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "Successfully installed cmake"
-              break
-            }
-            if ($attempt -lt $maxAttempts) {
-              $delay = $attempt * 15
-              Write-Host "Install failed, waiting ${delay}s before retry..."
-              Start-Sleep -Seconds $delay
-            }
-          }
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "All ${maxAttempts} attempts to install cmake via Chocolatey failed"
-            exit 1
-          }
+          # Retries live in the script, and they key on the OUTCOME rather
+          # than on Chocolatey's exit code, which is 0 even when the feed is
+          # down and nothing was installed.  See .github/scripts/choco-install.ps1.
+          & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1" `
+            -Package cmake -InstallArgs 'ADD_CMAKE_TO_PATH=System'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
           refreshenv
         }
@@ -118,9 +159,173 @@ jobs:
         cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
         cmake --build build --config Release --parallel
 
-    - name: Install Python dependencies
+    # SoftHSM2 is a software PKCS#11 token: it makes tests/test_hsm_integration.py's
+    # TestSoftHSMIntegration executable without hardware.  Without it that class
+    # skipped on every job this repository has ever run, so the entire HSM key
+    # lifecycle (connect, generate, encrypt/decrypt, find, delete) was covered
+    # only by mocks — the "a lane that never runs is not a lane" failure this
+    # branch removed from the SVE2 kernels, still present here.  Provisioned on
+    # every OS this matrix runs: Linux via apt here, Windows via Chocolatey in
+    # the next step (this workflow has no macOS entries; ci-build-test.yml
+    # carries the Homebrew lane).  The mock-backed tests still run everywhere.
+    - name: Install SoftHSM2 (PKCS#11 test token)
+      if: runner.os == 'Linux'
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+        .github/scripts/apt-install.sh --no-install-recommends softhsm2
+        test -f /usr/lib/softhsm/libsofthsm2.so
+        command -v softhsm2-util
+
+    - name: Install SoftHSM2 (PKCS#11 test token, Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      # Chocolatey's softhsm.install embeds the Disig SoftHSM2-for-Windows MSI,
+      # which statically links OpenSSL 1.1.1 (EOL) — acceptable ONLY as a test
+      # token that never executes in or for product code, the same posture as
+      # the OpenSSL-linked apt/brew SoftHSM2 builds Linux/macOS already use.
+      # Retry shape matches the cmake choco step above (transient CDN outages).
+      run: |
+        # INSTALLDIR is pinned, not assumed.  The Disig MSI parents its
+        # install directory to TARGETDIR, which Windows Installer resolves to
+        # ROOTDRIVE — the fixed drive with the MOST FREE SPACE, which on
+        # GitHub's Windows runners is D:, not C:.  The first revision of this
+        # step asserted C:\SoftHSM2\lib\softhsm2-x64.dll and every Windows
+        # lane in both workflows failed on a *successful* install.  Pinning
+        # the property makes the location deterministic and keeps the constant
+        # in HSMKeyStorage.PKCS11_PATHS truthful.
+        $installDir = 'C:\SoftHSM2'
+        # Retries live in the script, and -RequirePath makes them key on the
+        # OUTCOME.  Chocolatey exits 0 when the community feed is down and it
+        # installed nothing, so the inline loop that used to sit here "succeeded"
+        # on attempt 1 of 5 and this step then failed at the DLL check below with
+        # no retry ever attempted — every Windows lane in both workflows went red
+        # on a 503.  See .github/scripts/choco-install.ps1.
+        & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1" `
+          -Package softhsm.install `
+          -InstallArgs "INSTALLDIR=$installDir" `
+          -RequirePath (Join-Path $installDir 'lib\softhsm2-x64.dll')
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+        # Discover rather than assume.  The pin above should make the first
+        # candidate exact; searching every fixed drive's two plausible roots
+        # means a future runner-image or MSI change degrades into a slower
+        # success instead of a red lane, while a genuine miss still fails.
+        $roots = @($installDir)
+        foreach ($fs in (Get-PSDrive -PSProvider FileSystem)) {
+          $roots += (Join-Path $fs.Root 'SoftHSM2')
+          $roots += (Join-Path $fs.Root 'Program Files\SoftHSM2')
+        }
+        $dll = $null
+        foreach ($root in ($roots | Select-Object -Unique)) {
+          $candidate = Join-Path $root 'lib\softhsm2-x64.dll'
+          if (Test-Path $candidate) { $dll = $candidate; break }
+        }
+        # Fail loudly WITH evidence: a missing DLL must fail this step, not
+        # quietly return the HSM lane to the skip it spent its history in.
+        if (-not $dll) {
+          Write-Error "softhsm2-x64.dll not found after a successful install. Roots searched:`n$($roots -join "`n")"
+          Get-ChildItem -Path $installDir -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 50 -ExpandProperty FullName
+          exit 1
+        }
+        $root = Split-Path -Parent (Split-Path -Parent $dll)
+        Write-Host "SoftHSM2 resolved at $root (module: $dll)"
+        # TestSoftHSMIntegration constructs HSMKeyStorage("softhsm") with NO
+        # library_path override, so the module must land somewhere
+        # PKCS11_PATHS lists.  If the INSTALLDIR pin did not take effect the
+        # install is still "successful" but the lane would fail later with an
+        # opaque PKCS#11 error, so assert the contract here, where the message
+        # can name the real location.
+        if ($root -ne $installDir) {
+          Write-Error "SoftHSM2 installed to $root, not the pinned $installDir; HSMKeyStorage's PKCS11_PATHS would not find it. The INSTALLDIR property did not take effect."
+          exit 1
+        }
+        # Publish BOTH bin\ and lib\ to the remaining steps.  The MSI appends
+        # INSTALLDIR\lib to the *machine* PATH, which an already-running job
+        # never re-reads — and lib\ is the half that matters to the loader:
+        # softhsm2-util.exe lives in bin\ but the PKCS#11 module it loads is
+        # softhsm2-x64.dll in lib\, so publishing bin\ alone made the util
+        # resolvable and the module not, failing token init with
+        # "LoadLibraryA failed: 0x0000007E" (ERROR_MOD_NOT_FOUND).  The test
+        # also passes --module explicitly, so this is defence in depth rather
+        # than the only thing holding the lane up.
+        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'bin')
+        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'lib')
+        & (Join-Path $root 'bin\softhsm2-util.exe') --version
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "softhsm2-util --version failed (exit ${LASTEXITCODE})"
+          exit 1
+        }
+
+    # MUST run before the install below.  `pip install -e .` runs setup.py's
+    # build_ext, which builds the native library and re-signs the artefact —
+    # and re-signing REWRITES ama_cryptography/_integrity_digest.txt in the
+    # source tree.  Reading that file afterwards and comparing it to a freshly
+    # computed digest compares the signer's own output to itself and can never
+    # disagree.  Snapshot the checked-out value first so the comparison below
+    # is against what the commit actually carries.
+    - name: Snapshot the committed .py integrity digest (before any build re-signs it)
+      shell: bash
+      run: |
+        cp ama_cryptography/_integrity_digest.txt "${RUNNER_TEMP}/committed_integrity_digest.txt"
+        echo "Committed digest recorded: $(cat "${RUNNER_TEMP}/committed_integrity_digest.txt")"
+
+    # PyKCS11 is installed in its own step because its sdist can need help to
+    # build on a current runner, and the failure kills the entire test job
+    # before one AMA test runs.  Root cause, established against the 1.5.18
+    # sdist: src/pykcs11.i:66 uses `PyInt_FromLong` (a Python 2 API) inside a
+    # custom %typemap, and the sdist ships no pre-generated wrapper — SWIG
+    # regenerates it at build time.  SWIG <= 4.2 emitted a Python 2
+    # compatibility shim (`#define PyInt_FromLong PyLong_FromLong`) into every
+    # generated wrapper, which is why this ever compiled; SWIG 4.3 removed
+    # those aliases, and the runner images now carry >= 4.3.  The two defines
+    # below restore, at the compiler command line, exactly the alias SWIG's
+    # own shim used to provide: CPPFLAGS for POSIX compilers, CL for MSVC
+    # (cl.exe reads it from the environment); each is inert on the other
+    # platform, and inert entirely when pip resolves a wheel.  Scoped to this
+    # step so the define never reaches the ama-cryptography build.  The
+    # 1.5.19 sdist (2026-08-27) ends the class: it self-provisions SWIG >=
+    # 4.5 through its pyproject build requirements and compiles without the
+    # alias, so the defines matter only when pip falls back to the 1.5.18
+    # sdist — which the Windows exclusion below makes it do on cp314.
+    #
+    # Windows excludes 1.5.19: that release's win32/win_amd64 wheels
+    # (published 2026-08-26T13:44Z) crash the interpreter with an access
+    # violation inside PyKCS11Lib.load() of SoftHSM2's x64 module, on every
+    # Windows matrix entry, cp310 through cp314.  Measured both ways on this
+    # branch with no HSM-relevant change between the runs: at 9811476 (run
+    # 32968055782, before the wheels existed) all five Windows jobs pass on
+    # PyKCS11 1.5.18; at 6e42de8 (run 33031586700, e.g. job 98385102886)
+    # pip resolves the new 1.5.19 wheels on the same runner image
+    # (win25-vs2026/20260824.214) and every Windows job dies in
+    # TestSoftHSMIntegration::test_full_lifecycle.  The same release is fine
+    # where its artefacts differ — macOS universal2 wheels passed in the red
+    # run itself, and the sdist passes the same lifecycle against SoftHSM2
+    # 2.6.1 on Linux — so the exclusion is scoped to win32, where pip would
+    # otherwise prefer the broken wheels.  A future 1.5.20 is deliberately
+    # left resolvable so the first Windows run against it re-verifies the
+    # lane.  pyproject.toml's [hsm] extra carries the same split, and
+    # tests/test_hsm_integration.py pins both.
+    - name: Install PyKCS11 (PKCS#11 binding for the HSM lane)
+      shell: bash
+      env:
+        CPPFLAGS: "-DPyInt_FromLong=PyLong_FromLong"
+        # -D, not /D: cl.exe accepts both, but Git Bash (this step's
+        # shell) applies MSYS path conversion to environment values that
+        # look like absolute POSIX paths, and "/DPyInt..." reached the
+        # compiler as "C:/Program Files/Git/DPyInt..." split across two
+        # bogus source-file arguments (job 97256304451). A leading dash
+        # is never path-converted.
+        CL: "-DPyInt_FromLong=PyLong_FromLong"
       run: |
         python -m pip install --upgrade pip setuptools wheel
+        if [ "${RUNNER_OS}" = "Windows" ]; then
+          pip install "PyKCS11>=1.5.18,!=1.5.19"
+        else
+          pip install "PyKCS11>=1.5.18"
+        fi
+
+    - name: Install Python dependencies
+      run: |
         pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         # [legacy] + [benchmark] supply PyCA cryptography / PyNaCl, and
         # pycryptodome backs the AES-GCM differential harness.  Without them the
@@ -129,7 +334,11 @@ jobs:
         # / test_hkdf_sha3_256.py) silently SKIP, so a divergence between AMA's
         # native C primitives and a reference implementation would go unnoticed.
         # Installing them converts those skips into real assertions.
-        pip install -e ".[dev,legacy,benchmark]" pycryptodome
+        #
+        # [hsm] supplies PyKCS11, for the same reason: SoftHSM2 alone is not
+        # enough to run the HSM lane, because HSMKeyStorage reaches the token
+        # through PyKCS11.
+        pip install -e ".[dev,legacy,benchmark,hsm]" pycryptodome
 
     # The signed integrity artefact binds two digests: the .py sources
     # (platform-independent) and the built native library (specific to the exact
@@ -143,17 +352,25 @@ jobs:
     - name: Verify committed .py integrity digest is current (platform-independent)
       shell: bash
       # Catches the real thing the old committed-artefact check protected: a .py
-      # source edited without refreshing _integrity_digest.txt. AMA_BUILD_PIPELINE
-      # lets the import complete for this read even though the native digest does
-      # not match this build; the module stays in ERROR and refuses crypto.
-      env:
-        AMA_BUILD_PIPELINE: "1"
+      # source edited without refreshing _integrity_digest.txt.
+      #
+      # Compares the SNAPSHOT taken before the install (see that step for why)
+      # against the digest computed from the tree now.  The .py sources are not
+      # touched by the build, so a difference means the commit shipped a stale
+      # digest.
+      #
+      # No AMA_BUILD_PIPELINE here, and not because it was tidied away: the
+      # install above now signs and binds on every build, so this import needs
+      # no escape at all — POST passes outright.  The variable would not work
+      # anyway; __init__'s repairable-POST carve-out is gated on the process
+      # BEING the signer (pqc_backends._process_is_the_integrity_signer), and a
+      # `python -` heredoc is not.
       run: |
-        python - <<'PY'
+        python - "${RUNNER_TEMP}/committed_integrity_digest.txt" <<'PY'
+        import sys
         from pathlib import Path
-        import ama_cryptography as a
         from ama_cryptography._self_test import _compute_module_digest
-        committed = (Path(a.__file__).parent / "_integrity_digest.txt").read_text().strip()
+        committed = Path(sys.argv[1]).read_text().strip()
         computed = _compute_module_digest()
         if committed != computed:
             raise SystemExit(
@@ -242,6 +459,21 @@ jobs:
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 
+    - name: "3R detector efficacy gates (real timings, measured contract)"
+      # benchmarks/detector_baseline_eval.py is the measurement that found
+      # the pre-5.0.0 detector non-functional (sigma inert, 12.5% clean
+      # false-alarm rate, 17.6% shift recall) and is now the regression gate
+      # on the rebuilt detector's measured contract: point-alarm rate within
+      # the declared budget, budget and sigma-floor liveness, prompt
+      # sustained-shift events, and not losing to the trivial baselines at a
+      # matched alarm budget.  One matrix cell is enough — the gates bound
+      # detector behaviour, not host performance — and this cell has the
+      # freshly built native library bound, so the stream is real
+      # ed25519_sign wall-clock timings, not the synthetic fallback.
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+      run: |
+        python benchmarks/detector_baseline_eval.py --samples 4000 --gate
+
     - name: Run the shipped Python examples
       env:
         AMA_CI_REQUIRE_BACKENDS: "1"
@@ -284,7 +516,7 @@ jobs:
       # The corpus is vendored under wycheproof_vectors/ and pinned by
       # manifest.json (upstream commit, per-file SHA-256, per-file vector
       # count), so nothing is fetched at test time and a swapped vector file
-      # fails before a single vector runs. Every one of the 2,733 vectors
+      # fails before a single vector runs. Every one of the 4,263 vectors
       # lands in a named bucket with an asserted count — there is no silent
       # skip, and an unrunnable vector is a red build with a reason.
       run: |
@@ -389,6 +621,7 @@ jobs:
         # against a pristine checkout — so this stays a fast, tool-only job.
         pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
                     "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
+                    "types-setuptools==84.0.0.20260812" \
                     "pytest==9.1.1"
 
     - name: Lint with ruff
@@ -402,7 +635,39 @@ jobs:
     - name: Type checking with MyPy (--strict)
       continue-on-error: false
       run: |
-        mypy --strict ama_cryptography/ tests/
+        # Scope: EVERY tracked Python file, verified rather than asserted.
+        #
+        # This used to be a hand-written list — the shipped package, the test
+        # tree, the gate scripts, four benchmark files — with the chart,
+        # dashboard and comparative generators left out as "demo tooling ...
+        # annotating them adds churn without protecting anything". The list
+        # was maintained by hand, so a new tool joined the check only if
+        # someone remembered; and the excluded third of the tree was not
+        # inert. It held a `dict[str, dict[str, bool]]` populated with ints, a
+        # zip-built coverage matrix that would silently drop a library from
+        # the comparison if one row were short, three
+        # `re.search(...).group(1)` version reads that raise AttributeError
+        # instead of reporting a missing version, a Dilithium keypair
+        # dereferenced without its Optional check, and four
+        # `create_crypto_package(dna_codes=...)` calls in the published
+        # integration examples naming a parameter the function never had.
+        #
+        # --explicit-package-bases (with MYPYPATH=.) so `schemas/` resolves as
+        # `schemas.crypto_package_v1`, the way tests/ imports it, rather than
+        # as a second top-level module of the same file.
+        #
+        # The coverage report feeds the scope gate below: mypy exiting 0 says
+        # nothing about what it looked at, and "every Python file" is a claim
+        # that has to be checked like any other.
+        MYPYPATH=. mypy --strict --explicit-package-bases \
+          --linecoverage-report .mypy-coverage \
+          ama_cryptography/ tests/ tools/ benchmarks/ examples/ \
+          fuzz/python/ nist_vectors/ schemas/ wycheproof_vectors/ \
+          docs/conf.py setup.py ama_cryptography_monitor.py
+
+    - name: "Type-check scope: every tracked .py file was actually checked"
+      run: |
+        python tools/check_type_check_scope.py .mypy-coverage/coverage.json
 
     - name: "INVARIANT-13: Suppression hygiene check"
       run: |
@@ -420,6 +685,67 @@ jobs:
       # so the gate cannot silently degrade into a no-op.
       run: |
         python tools/check_headers.py --check
+
+    - name: "dudect lanes stage their class input (no class/address confound)"
+      # A dudect lane that hands the timed call one of two per-class buffers
+      # confounds the class with the input's ADDRESS.  Unlike scheduler noise,
+      # that bias is fixed for a given binary on a given host, so it
+      # reproduces in every round with the same sign — which is exactly the
+      # shape the multi-round majority rule and the direction rule in
+      # dudect_rounds.h cannot tell apart from a leak.  Neither a threshold
+      # nor more rounds separates them; only the experiment's design does.
+      #
+      # Measured with the Ascon-AEAD128-encrypt lane's own cipher call and
+      # IDENTICAL key data in both classes, so the true effect is exactly
+      # zero: placing class 0's key across two cache lines drives the cropped
+      # statistic to |t| = 13.5..30.9, over threshold in 10 of 10 runs, all
+      # one sign.  Staged through a single buffer, 0 of 10.
+      #
+      # This is enforced rather than reviewed because it has already regressed
+      # once: the AES-GCM tag-compare lane was fixed for this exact defect and
+      # carries a comment describing it, the pattern was not propagated, and
+      # the Ascon-AEAD128-encrypt lane subsequently went red in CI for the
+      # reason that comment describes.  tests/test_dudect_staging_gate.py pins
+      # that the gate fails on the unstaged form, on the legacy
+      # `(class_idx == 0) ?` spelling, on an unaligned staging buffer and on a
+      # missing input file, so it cannot decay into a no-op.
+      run: |
+        python tools/check_dudect_class_staging.py
+
+    - name: "Every apt call goes through the bounded-retry helper"
+      # apt-get hangs on hosted runners.  When it does the step consumes its
+      # job's whole timeout-minutes and the job is CANCELLED — and a cancelled
+      # dependency is not a success, so an aggregating gate goes red on a
+      # commit whose every real check passed.
+      #
+      # This was diagnosed once already (868c354) and fixed inline, in one of
+      # thirty-eight apt call sites.  On a later push three of the other
+      # thirty-seven hung at once — Cppcheck (10 min), Validate fuzz
+      # dictionaries (15), Fuzz Core Primitives/fuzz_aes_gcm (20) — taking
+      # `Static Analysis Gate` and `Fuzzing Gate` down with them while sibling
+      # jobs finished the same step in 11 seconds.  A fix applied to one of
+      # thirty-eight identical sites is a sample, not a fix.
+      #
+      # The policy now lives in .github/scripts/apt-install.sh and this gate
+      # keeps it there.  tests/test_apt_retry_gate.py pins both halves,
+      # including the one that matters most: the retry still fails the job
+      # when a package is genuinely unavailable, so it can never turn a real
+      # failure into a green run.
+      run: |
+        python tools/check_apt_retry.py
+
+    - name: "Chocolatey retry policy: no bare choco install in a workflow"
+      # Same failure class as the apt gate above, on the other package
+      # manager, and it bit for real: Chocolatey v2 exits 0 when the
+      # community feed 503s and it installed 0/0 packages, so all four
+      # `if ($LASTEXITCODE -eq 0) { break }` retry loops "succeeded" on
+      # attempt 1 of 5 and every Windows lane in both workflows went red
+      # with no retry ever attempted.  The policy now lives in
+      # .github/scripts/choco-install.ps1, whose retries key on the OUTCOME,
+      # and tests/test_choco_retry_gate.py pins both halves — including that
+      # a genuinely unavailable package still fails the job.
+      run: |
+        python tools/check_choco_retry.py
 
   docs-build:
     # Run sphinx-build with -W on every PR / push so any docstring-format
@@ -453,10 +779,29 @@ jobs:
         AMA_SPHINX_BUILD: '1'
       run: sphinx-build -W --keep-going -b html docs docs/_build/html
 
+    - name: Build Doxygen HTML (C API) — the half `make docs` runs first
+      # `make docs` was broken end to end and nothing in CI would have
+      # noticed: it cd'd into a build/ nothing creates, and even with
+      # build/ present doxygen resolved the Doxyfile's relative INPUT and
+      # OUTPUT_DIRECTORY against that subdirectory — reading absent source
+      # dirs and writing somewhere other than the path the recipe printed.
+      # The recipe now runs doxygen from the repository root; this step
+      # executes the same invocation and asserts the output lands at the
+      # documented path, so the target cannot silently regress again.
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+        .github/scripts/apt-install.sh doxygen graphviz
+        mkdir -p build
+        doxygen docs/Doxyfile
+        test -f build/docs/html/index.html
+
   security-checks:
     name: Security Checks
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 -> 15: this job now compiles the native library so it can run the
+    # semgrep gate's end-to-end assertion (see the build step below).  The
+    # scans themselves take ~4 minutes; the build adds ~2.
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -520,7 +865,11 @@ jobs:
     # One unfiltered `--exit-zero` scan now feeds both the artefact and the
     # gate, matching the other two workflows exactly.
     - name: Security linting with Bandit (unfiltered JSON report)
-      run: bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+      # Scope covers the runtime package AND the build/release Python CI trusts
+      # to be honest: setup.py runs the integrity signer on every wheel build,
+      # and tools/ holds resign_wheel.py plus the ~40 gate scripts.  Scanning
+      # only ama_cryptography/ left those unscanned (audit Low).
+      run: bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
 
     - name: Bandit severity gate (fail-closed)
       run: python3 tools/check_bandit_severity.py bandit-report.json
@@ -538,19 +887,110 @@ jobs:
       # merge-blocking step could not fail on a finding, or even on a rule that
       # failed to evaluate.  tools/check_semgrep_severity.py applies the policy
       # to the JSON: fail closed on a missing/erroring scan, and block on any
-      # finding at or above ERROR severity (the config's insecure-random,
-      # weak-hash, deprecated-crypto-api, private-key-logging, unsafe-pickle and
-      # bare-memset rules).  Mirrors the Bandit gate already in this job; both
+      # finding at or above ERROR severity (the config's Python ERROR rules
+      # insecure-random, weak-hash, deprecated-crypto-api, private-key-logging
+      # and unsafe-pickle).  The config's bare-memset C rule is NOT enforced by
+      # this gate — semgrep's C parser cannot handle the AMA_API macro and the
+      # rule targets src/c/, which this scan does not — so that property is
+      # enforced by tools/check_c_secret_zeroization.py (see .semgrep.yml's
+      # ENFORCEMENT NOTE).  Mirrors the Bandit gate already in this job; both
       # directions are pinned by tests/test_semgrep_severity_gate.py.
       continue-on-error: false
       run: |
         python -m pip install semgrep==1.74.0
-        semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
+        # Same broadened scope as the Bandit gate above: setup.py and tools/ run
+        # during build/release and are trusted, so they are scanned too (audit Low).
+        semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/ --json -o semgrep-report.json
         python tools/check_semgrep_severity.py semgrep-report.json
+
+    - name: Build the native library (pytest cannot start without it)
+      # This job's other steps drive tools/ scripts, which do not import the
+      # package — so it had never needed a native library.  The step below
+      # runs pytest, and tests/conftest.py imports ama_cryptography at
+      # pytest_configure; since 5.0.0 a failed POST RAISES rather than logging,
+      # so with no library the run dies with INTERNALERROR before collecting a
+      # single test.  That is the fail-closed behaviour working as designed —
+      # the job simply has to provide what the package requires.
+      #
+      # Built here rather than by moving the pytest step to a job that already
+      # has a library, because no such job has semgrep, and installing semgrep
+      # into the test matrix would put a large scanner in every matrix entry to
+      # serve one assertion.
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+          -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+        cmake --build build -j"$(nproc)"
+
+    - name: Bind the freshly-built library into the integrity artefact
+      # Same reason as every other build-then-import job: a library built here
+      # is not the one the committed artefact was signed over, and the digest
+      # mismatch is refused before the object is mapped.
+      env:
+        AMA_BUILD_PIPELINE: "1"
+      run: python -m ama_cryptography.integrity --update --sign
+
+    - name: "INVARIANT-1: verify vendor isolation by linkage and runtime, not by comment"
+      # INVARIANT-1 says no third-party cryptographic implementation may be
+      # linked, imported or called by the shipped library.  Before this step
+      # the enforcement was tools/check_corpus_originality.py, which AST-scans
+      # for *subprocess* invocations of external crypto binaries — a real
+      # control, but blind to the two ways a vendor would most plausibly get
+      # in: a linker flag, and a transitive Python import that no `import`
+      # statement in this repository names.
+      #
+      # This job is where the check belongs because it is the only one that
+      # both builds the native library and binds it into the integrity
+      # artefact, so all three checks have their evidence available:
+      #   source   — no package module imports a vendor binding, loads one by
+      #              name through ctypes, or imports `benchmarks` (which is
+      #              authorised to use peer implementations and must not enter
+      #              the shipped package's import graph)
+      #   runtime  — no vendor binding is resident in sys.modules after
+      #              `import ama_cryptography`
+      #   library  — the built shared object names no vendor in its DT_NEEDED /
+      #              LC_LOAD_DYLIB / PE import table, and imports no undefined
+      #              symbol with a vendor's prefix
+      #
+      # All three are verified to FAIL under mutation by
+      # tests/test_vendor_isolation_gate.py, including the ELF parser against
+      # a genuinely OpenSSL-linked object.
+      run: |
+        python tools/check_vendor_isolation.py \
+          --library build/lib/libama_cryptography.so
+
+    - name: "audit B2: shared library exports only the ama_* ABI"
+      # Companion to the vendor-isolation gate above: that checks what the
+      # library pulls IN, this checks what it sends OUT.  Off-Windows AMA_API is
+      # empty, so before cmake/ama_exports.map the .so exported six un-prefixed
+      # ed25519-donna names (ed25519_sign / _sign_open / _sign_open_batch /
+      # _publickey / curved25519_scalarmult_basepoint) and the mutable data
+      # symbol batch_point_buffer, any of which a co-loaded donna consumer could
+      # interpose.  The version script now restricts exports to ama_*; this gate
+      # keeps them restricted (it fails on the pre-fix object, which exports the
+      # six names).
+      run: |
+        python tools/check_export_allowlist.py \
+          build/lib/libama_cryptography.so
+
+    - name: Semgrep gate self-tests (the end-to-end case needs semgrep present)
+      # tests/test_semgrep_severity_gate.py's only end-to-end assertion — that
+      # the shipped package passes the gate on a report the gate generated
+      # itself — is skipped wherever semgrep is absent, which is every job in
+      # the test matrix.  This job is the one that has semgrep, so it is the
+      # one that can run it.  Until 5.0.0 the test was skipped even here,
+      # because its availability probe used the deprecated `python -m semgrep`
+      # entry point, which exits non-zero on a working install.
+      #
+      # The module is named explicitly so this step cannot silently broaden
+      # into the whole suite, which belongs to the test matrix.
+      run: python -m pytest tests/test_semgrep_severity_gate.py -q
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      # always(), not success(): the report is the evidence for a FAILED gate,
+      # so publishing it only when the gate passed withheld it exactly when a
+      # reviewer needs it.  Same reasoning as the Bandit upload above.
+      if: always()
       with:
         name: semgrep-security-report
         path: semgrep-report.json
@@ -565,6 +1005,20 @@ jobs:
       # that introduces it, not on release day.
       run: |
         python tools/check_action_pins.py --strict
+
+    - name: "Verify container base images are pinned and still supported"
+      # The other half of the same supply-chain property the step above
+      # enforces for Actions.  The published images built FROM `alpine:3.18`
+      # and `ubuntu:22.04` — mutable tags, so the same line resolved to
+      # different bytes over time — and alpine:3.18 had been past
+      # end-of-support since 2025-05-09, fifteen months of unpatched base CVEs
+      # under a cryptography container.  Neither was visible from the
+      # Dockerfile, because a tag for an end-of-life release keeps resolving
+      # perfectly well.  The gate also fails 60 days BEFORE a declared
+      # end-of-support date, so the base moves while it is still getting
+      # fixes.  Both directions pinned by tests/test_docker_pins_gate.py.
+      run: |
+        python tools/check_docker_pins.py
 
     - name: "INVARIANT-25: Verify workflow runner labels and command strings"
       # release.yml runs only on a tag push, so anything wrong inside it stays
@@ -627,6 +1081,50 @@ jobs:
       run: |
         python tools/check_fuzz_target_registration.py
 
+    - name: "INVARIANT-43: Verify logged text survives a Windows handler"
+      # `logging` fails closed AND silent. A handler that cannot encode a
+      # record's text raises inside emit(); logging routes that to
+      # handleError, prints a traceback to stderr, and DISCARDS the record.
+      # The call site is told nothing. logging.FileHandler opens with
+      # encoding=None -> locale.getpreferredencoding(), which on a default
+      # Windows install is cp1252.
+      #
+      # adaptive_posture.py logged both the key-rotation and the
+      # algorithm-switch events with a `→` (U+2192) between the old and new
+      # identifiers. cp1252 cannot encode it, so on Windows the two records
+      # stating that a signing key had changed were exactly the two records a
+      # file handler dropped. An audit trail that silently loses its
+      # key-rotation entries is worse than one never claimed: the absence
+      # reads as "no rotation happened".
+      #
+      # sys.stderr hides this — CPython gives it errors="backslashreplace", so
+      # a bare StreamHandler degrades to a visible → rather than a loss.
+      # Only a handler that opens its own stream fails into handleError, which
+      # is why "it looked fine in my terminal" was not evidence and why this is
+      # decided here instead.
+      #
+      # The rule is cp1252-encodable, not ASCII: `—` and `§` encode fine and
+      # appear in over a thousand POST strings where they read correctly.
+      # cp1252 is precisely the line at which a record stops being written.
+      # Both directions are pinned by tests/test_log_message_encodability_gate.py.
+      run: |
+        python tools/check_log_message_encodability.py
+
+    - name: "stdlib hashlib must stay inside the trust bootstrap (INVARIANT-1)"
+      # CPython's hashlib constructors resolve to OpenSSL in every build that
+      # links libcrypto — hashlib.sha3_256 IS _hashlib.openssl_sha3_256 — so a
+      # production hashlib call in the package is OpenSSL performing an AMA
+      # primitive in-process.  Fifty such sites accumulated under
+      # zero-dependency documentation before the 2026-08 sweep converted them
+      # to the native kernels.  What remains is the pre-execution trust
+      # bootstrap (pre-load digest, integrity chain, build signer, the KAT
+      # comparator, the guarded test-only HKDF reference), pinned file-by-file
+      # WITH exact reference counts, so a new use anywhere fails loudly.
+      # Both failure directions are pinned by
+      # tests/test_stdlib_hash_boundary_gate.py.
+      run: |
+        python tools/check_stdlib_hash_boundary.py
+
     - name: "Verify every count the documentation pins"
       # docs/KEY_FORMATS.md said "tests/test_key_formats.py — 301 tests". True
       # when written, checked by nothing, so the only question was how long
@@ -639,8 +1137,20 @@ jobs:
       # arrays, and the Wycheproof manifest. Same class of duplication as the
       # version strings check_version_consistency.py polices, same fix.
       #
-      # AMA_POST_DIAGNOSTIC_IMPORT=1: this job deliberately installs no native
-      # library (see the Install step — "collection needs no native library").
+      # AMA_POST_DIAGNOSTIC_IMPORT=1: this step runs `pytest --collect-only`
+      # over files that import the package, and a failed POST makes that import
+      # raise, so without the flag a POST failure is indistinguishable from
+      # "every pinned file drifted".
+      #
+      # The original rationale — "this job installs no native library" — stopped
+      # being true when this PR added the build-and-bind steps above (pytest
+      # could not start at all without them). The job now DOES have a signed
+      # native library, so the flag is narrower in effect than it was: it only
+      # matters if POST fails, and it makes such a failure surface as a count
+      # mismatch here rather than as an import traceback. That is a weaker
+      # signal than a raise, and it is bounded to this counting step — the
+      # test-running jobs do not set it, so a genuine KAT or RNG fault still
+      # fails the suite loudly.
       # Since INVARIANT-39, a failed POST makes `import ama_cryptography` raise,
       # so `pytest --collect-only` on any file importing the package now yields
       # no count and the gate reports every pinned file as drift. The diagnostic
@@ -652,6 +1162,19 @@ jobs:
         AMA_POST_DIAGNOSTIC_IMPORT: "1"
       run: |
         python tools/check_documented_counts.py
+
+    - name: "Committed visual assets must match the numbers the tree produces"
+      # The five README-embedded PNGs are produced only by two manual
+      # generators; with no --check and no CI wiring the committed assets sat
+      # frozen and version-stamped at v3.4.0 two majors behind HEAD, and the
+      # coverage chart silently dropped 46% of the test suite while its title
+      # claimed to describe all of it.  The generators now write
+      # assets/visuals_manifest.json beside the PNGs; this step re-derives
+      # the tree-computable numbers and holds the measurement-derived
+      # dashboards to the package version.  Needs no matplotlib — the check
+      # is for environments that cannot regenerate.
+      run: |
+        python tools/generate_visuals.py --check
 
     - name: "INVARIANT-36: No third-party cryptographic implementation in the validation path"
       # AMA is built from standardised primitives and its own code, and ships
@@ -764,6 +1287,49 @@ jobs:
       run: |
         python tools/check_error_state_gating.py
 
+    - name: "INVARIANT-1 Addendum: Algorithm registry completeness"
+      # CSRC_STANDARDS.md's first paragraph claims it maps EVERY implemented
+      # primitive, and INVARIANTS.md makes that binding ("updating
+      # CSRC_STANDARDS.md ... before implementation is permitted").  Nothing
+      # checked it, and it did not hold.  Run against the registry as it stood
+      # before this change, the gate reports 18 violations by name: FIPS 186-5
+      # and SP 800-56A rev. 3 both uncited and P-256/P-384/P-521 each without a
+      # row, SP 800-208 uncited for LMS and HSS, no row for ML-KEM-512,
+      # ML-KEM-768, ML-DSA-44, ML-DSA-87 or SLH-DSA-SHAKE-128s, and none for
+      # HMAC-SHA-384, HMAC-SHA-512 or HMAC-SHA3-256.
+      #
+      # Both the family list (from include/ama_cryptography.h's AMA_API
+      # prototypes) and the parameter-set list (from the header's parameter-set
+      # enums and the ama_hmac_<hash> prototypes) are DISCOVERED, so neither a
+      # new algorithm nor a new parameter set can be quietly left out of the
+      # registry or the gate's mapping.  The parameter-set level is what makes
+      # the three HMAC entries visible at all: a family-level check saw
+      # ama_hmac_* cite FIPS 198-1 through the HMAC-SHA-256 row and called the
+      # family covered.  Every direction is pinned by
+      # tests/test_algorithm_registry_gate.py.
+      run: |
+        python tools/check_algorithm_registry.py
+
+    - name: "INVARIANT-41: Keygen pairwise-consistency wiring"
+      # The same shape as the step above, for the same reason.  INVARIANTS.md
+      # claimed tests/test_keygen_pct.py enforced this ("a new keygen path that
+      # forgets the test fails the coverage assertion") and it does not: that
+      # test monkeypatches the three helpers into recorders, calls a HAND-
+      # WRITTEN list of thirteen entry points, builds `expected` alongside, and
+      # asserts the two lists match.  A fourteenth keygen that omits its
+      # pairwise test is never called by it, so both lists are unchanged and it
+      # passes.
+      # Measured: adding an unwired `native_widget_keypair()` left that test at
+      # 17 passed / exit 0 while this gate reported the violation by name.
+      #
+      # tools/check_keygen_pct.py discovers the entry points from the module's
+      # AST — 19 today, against the test's thirteen — and fails on any that does
+      # not reach pairwise_test_signature / _kem / _agreement, directly or
+      # through one level of delegation.  Both directions are pinned by
+      # tests/test_keygen_pct_gate.py.
+      run: |
+        python tools/check_keygen_pct.py
+
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a
       # third-party scanner — see the module docstring for why a generic
@@ -788,6 +1354,20 @@ jobs:
       # Both directions are pinned by tests/test_fdopen_safety.py.
       run: |
         python tools/check_fdopen_safety.py
+
+    - name: Enforce ama_secure_memzero for C secret scrubbing (INVARIANT-6)
+      # The .semgrep.yml rule `bare-memset-zero-secret-named-buffer` states this
+      # property at ERROR severity, and the Semgrep step above names it as one
+      # of its blocking rules — but that rule is scoped to `src/c/**` while
+      # every semgrep invocation here scans `ama_cryptography/` only, so it
+      # matched nothing and could never fail.  Widening the semgrep scope is not
+      # the fix either: semgrep's C parser does not know the AMA_API export
+      # macro and errors on every file that uses it, which the severity gate
+      # (correctly) treats as a failed scan.  This tool enforces the same rule,
+      # with the same secret-name test, in a parser that handles the codebase.
+      # Both directions are pinned by tests/test_c_secret_zeroization_gate.py.
+      run: |
+        python tools/check_c_secret_zeroization.py
 
     - name: Checkout byte-identity (line endings)
       # Several controls in this repository measure octets rather than meaning:
@@ -851,8 +1431,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake util-linux
+        .github/scripts/apt-install.sh build-essential cmake util-linux
 
     - name: Capture runner CPU class
       id: cpu_class
@@ -908,13 +1487,19 @@ jobs:
         AMA_RUNNER_CPU_CLASS: ${{ steps.cpu_class.outputs.arch }}
         AMA_MATRIX_BASELINE: ${{ matrix.baseline_path }}
       run: |
-        # Pin to a single core (`taskset -c 0`) and raise scheduling
-        # priority (`nice -n -10`) so the benchmark numbers are not
-        # contaminated by other tasks on the shared GitHub-hosted
-        # runner.  Mirrors the same harness dudect.yml uses for its
-        # constant-time measurements at the identical priority — the
-        # dudect t-statistic and the benchmark medians both depend on
-        # the same noise floor.
+        # Pin to a single core (`taskset -c 0`) so the benchmark numbers
+        # are not contaminated by other tasks on the shared GitHub-hosted
+        # runner.  The negative-nice prefix is probed first: hosted
+        # runners lack CAP_SYS_NICE, and an unconditional `nice -n -10`
+        # prints "cannot set niceness" on every run while silently
+        # executing at priority 0 — a stated control that was not in
+        # effect.  The probe reads the RESULTING niceness, not nice's
+        # exit status: GNU nice warns-and-continues on EPERM and exits
+        # with the command's status, so an exit-status probe (this
+        # step's first draft, copied from dudect.yml) reinstated the
+        # dead prefix everywhere.  Core pinning is the load-bearing
+        # part; the raised priority applies only where the runner
+        # actually permits it.
         #
         # `--baseline "$AMA_MATRIX_BASELINE"` is the per-matrix entry
         # baseline path (Copilot review #3249188319): the x86 entry
@@ -922,7 +1507,9 @@ jobs:
         # against benchmarks/arm-baseline.json.  Without this, both
         # entries default to the x86 baseline and the AArch64 job
         # reports spurious regressions on every PR.
-        taskset -c 0 nice -n -10 python benchmarks/benchmark_runner.py \
+        NICE_PREFIX=""
+        if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
+        taskset -c 0 $NICE_PREFIX python benchmarks/benchmark_runner.py \
           --verbose \
           --baseline "$AMA_MATRIX_BASELINE" \
           --require-runner-class "$AMA_RUNNER_CPU_CLASS" \
@@ -950,7 +1537,10 @@ jobs:
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      # always(), not success(): a success()-gated upload withholds the
+      # evidence exactly when the gate fails and somebody needs it — the
+      # same defect the Bandit report upload above documents and fixes.
+      if: always()
       with:
         name: benchmark-results-${{ matrix.runner_cpu_class }}
         path: |
@@ -969,14 +1559,18 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+        .github/scripts/apt-install.sh build-essential cmake
 
     - name: Build C library
       run: |
         mkdir -p build
         cd build
-        cmake ..
+        # The harnesses below do NOT link this build — tools/constant_time's own
+        # Makefile compiles the sources it needs at -O2.  The build type is
+        # pinned anyway so the configuration is stated rather than inherited
+        # from a default this project does not set (a bare configure yields
+        # C_FLAGS with no -O flag at all).
+        cmake .. -DCMAKE_BUILD_TYPE=Release
         make
 
     - name: Build and run dudect harnesses
@@ -995,7 +1589,11 @@ jobs:
         # GHA hosted runners lack CAP_SYS_NICE so the negative-nice
         # request prints "Permission denied" but still execs the
         # binary; probe once up front and drop the prefix when the
-        # runner refuses (PR #326), so the log stays clean.  The
+        # runner refuses (PR #326), so the log stays clean.  The probe
+        # reads the RESULTING niceness — GNU nice warns-and-continues
+        # on EPERM and exits with the command's status, so the earlier
+        # exit-status probe succeeded everywhere and never dropped the
+        # dead prefix.  The
         # v3.2.0 dudect setup-symmetry harness fixes made the lanes
         # noise-tolerant enough that taskset-only pinning is the
         # load-bearing CI gate; the nice prefix is opportunistic on
@@ -1004,7 +1602,7 @@ jobs:
         # authoritative constant-time check; this smoke test exists
         # as a fast pre-gate for every PR regardless of path filter.
         NICE_PREFIX=""
-        if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+        if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
         echo "=== Utility function timing analysis ==="
         taskset -c 0 $NICE_PREFIX ./dudect_harness 50000
         echo "=== Crypto primitive timing analysis ==="
@@ -1012,60 +1610,116 @@ jobs:
 
     - name: Upload timing analysis results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      # always(), not success(): the timing artefacts matter most on the run
+      # where a dudect stage failed — same rationale as the Bandit upload.
+      if: always()
       with:
         name: constant-time-results
         path: tools/constant_time/
 
   # ============================================================================
-  # AVX-512 SHA3 4-way KAT (PR C — 2026-04)
+  # AVX-512 SHA3 4-way KAT (PR C — 2026-04; made unconditional 2026-08, audit H2)
   #
-  # Best-effort gate: GitHub-hosted ubuntu-latest currently rotates among
-  # Cascade Lake / Ice Lake / Sapphire Rapids host CPUs, so AVX-512 hits
-  # only some fraction of runs.  We probe /proc/cpuinfo for the avx512f
-  # feature flag and skip honestly when it's missing — the build/test
-  # body itself never uses continue-on-error (INVARIANT-2: fail-closed
-  # CI on the steps that actually run).  Local validation ladder for
-  # pre-merge: SDE (`sde64 -spr -- ./test_sha3_avx512_kat`) plus a
-  # quarterly bare-metal bench post-merge.
+  # This lane asserts the in-house AVX-512 4-way Keccak kernel is byte-identical
+  # to the scalar and AVX2 kernels.  It used to probe /proc/cpuinfo and put
+  # EVERY build/test step behind `if: have_avx512 == '1'`.  GitHub-hosted
+  # ubuntu-latest rarely exposes AVX-512, so on almost every run all steps
+  # skipped, the job — which carries no job-level `if:` — went green having done
+  # nothing, and `ci-gate` (which needs this job) counted that as success.  A
+  # required check that never executed proved nothing about the kernel: the
+  # byte-identity claim was unverified by CI on every green run (audit H2).
+  #
+  # It now runs UNCONDITIONALLY under Intel SDE — the same "emulate the ISA the
+  # host lacks" approach arm-qemu.yml uses for the AArch64 and SVE2 kernels.
+  # qemu is not usable here: qemu 8.2 (ubuntu-latest) has no AVX-512 in its
+  # linux-user TCG — `-cpu max` reports AVX512F=0 and leaves XCR0 bits 5-7
+  # clear — so ama_cpuid_has_avx512_keccak() would self-skip under it.  SDE
+  # presents AVX-512F + AVX-512VL and enables the AVX-512 save area, and it
+  # executes the real EVEX opcodes the compiler emitted, so the CPUID bundle
+  # passes, the kernel actually runs, and a divergence fails the build.  Byte-
+  # identity of hand-written SIMD is a claim about emitted code, so the build is
+  # Release, as before.
+  #
+  # The kernel compiles on any x86-64 runner regardless of host CPU:
+  # CMakeLists.txt gates AMA_ENABLE_AVX512 on architecture (x86_64, not-MSVC),
+  # never on a host feature, and applies -mavx512f/-mavx512vl per source file.
+  # SDE is a CPU emulator used only as a test harness — it is not linked into
+  # the library and is not a crypto dependency (INVARIANT-1 unaffected), exactly
+  # as qemu-user-static is for the AArch64 lanes.  Local ladder unchanged:
+  # a native run on real AVX-512 silicon plus a quarterly bare-metal bench.
   # ============================================================================
   test-avx512:
     name: AVX-512 SHA3 4-way KAT
     runs-on: ubuntu-latest
     needs: test
+    timeout-minutes: 20
     steps:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-    - name: Probe /proc/cpuinfo for AVX-512F + AVX-512VL
-      id: cpu
-      run: |
-        if grep -q '\bavx512f\b' /proc/cpuinfo && grep -q '\bavx512vl\b' /proc/cpuinfo; then
-          echo "have_avx512=1" >> "$GITHUB_OUTPUT"
-          echo "::notice::ubuntu-latest runner reports AVX-512F + AVX-512VL — running KAT"
-        else
-          echo "have_avx512=0" >> "$GITHUB_OUTPUT"
-          echo "::notice::ubuntu-latest runner lacks AVX-512F or AVX-512VL — skipping KAT job"
-        fi
-
     - name: Install build dependencies
-      if: steps.cpu.outputs.have_avx512 == '1'
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
+        .github/scripts/apt-install.sh cmake build-essential xz-utils
+
+    - name: Fetch Intel SDE (pinned version, checksum-verified)
+      # Pinned to an explicit version and SHA-256 so a mirror swap cannot change
+      # what runs — the same supply-chain discipline as the SHA-pinned actions.
+      # A download or checksum failure fails the job (fail-closed), it does not
+      # silently drop the lane the way the old /proc/cpuinfo probe did.
+      run: |
+        SDE_VER="9.48.0-2024-11-25"
+        SDE_TARBALL="sde-external-${SDE_VER}-lin.tar.xz"
+        SDE_URL="https://downloadmirror.intel.com/843185/${SDE_TARBALL}"
+        SDE_SHA256="3173d2a5369e3385226b488d8b75403951bc14af601435fe707d9f83e0b533e6"
+        curl -fsSL -o "$SDE_TARBALL" "$SDE_URL"
+        echo "${SDE_SHA256}  ${SDE_TARBALL}" | sha256sum -c -
+        tar xf "$SDE_TARBALL"
+        echo "SDE=$PWD/sde-external-${SDE_VER}-lin/sde64" >> "$GITHUB_ENV"
 
     - name: Configure with AVX-512 enabled
-      if: steps.cpu.outputs.have_avx512 == '1'
-      run: cmake -S . -B build -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON
+      # Release: this job asserts the AVX-512 Keccak kernel is byte-identical to
+      # the scalar and AVX2 ones, and a byte-identity claim about hand-written
+      # SIMD is a claim about what the compiler emits.  Unoptimized, it compares
+      # code no build ships.
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON
 
     - name: Build AVX-512 KAT test
-      if: steps.cpu.outputs.have_avx512 == '1'
       run: cmake --build build --target test_sha3_avx512_kat --parallel
 
-    - name: Run AVX-512 KAT test (byte-identity vs scalar + AVX2)
-      if: steps.cpu.outputs.have_avx512 == '1'
-      run: ctest --test-dir build -R test_sha3_avx512_kat --output-on-failure
+    - name: Run AVX-512 KAT under Intel SDE (byte-identity vs scalar + AVX2)
+      # -spr = Sapphire Rapids: presents AVX-512F + AVX-512VL and enables the
+      # AVX-512 save area in XCR0, so ama_cpuid_has_avx512_keccak() passes and
+      # the kernel executes rather than self-skipping (SKIP code 77).
+      #
+      # `shell: bash` is load-bearing: the default `bash -e {0}` has no
+      # `pipefail`, so in `"$SDE" ... | tee ... || rc=$?` the captured status
+      # is `tee`'s (always 0) and the `[ "$rc" -ne 0 ]` branch below could
+      # never be taken.  The "Results: ... 0 failed" grep still caught a crash,
+      # so the lane was not vacuous — but a guard that reads as live protection
+      # must actually be live.  `shell: bash` selects `-eo pipefail`, so `rc`
+      # now carries the test binary's exit status.
+      shell: bash
+      run: |
+        rc=0
+        "$SDE" -spr -- ./build/bin/test_sha3_avx512_kat | tee /tmp/avx512_kat.out || rc=$?
+        # INVARIANT-3 (no silent passes): under SDE the CPUID gate ALWAYS holds,
+        # so a skip (code 77) can only mean SDE stopped presenting AVX-512 and
+        # the kernel never ran.  That is a failure of THIS lane, not a pass —
+        # the whole point of the change is that the kernel executes every run.
+        if grep -q "SKIP:" /tmp/avx512_kat.out; then
+          echo "::error::AVX-512 KAT reported SKIP under Intel SDE — the kernel did not execute; this lane must run it, not skip it"
+          exit 1
+        fi
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::AVX-512 KAT exited $rc under Intel SDE — the AVX-512 kernel diverged from the scalar/AVX2 reference, or the test crashed"
+          exit 1
+        fi
+        if ! grep -Eq "Results: [0-9]+ checks, 0 failed" /tmp/avx512_kat.out; then
+          echo "::error::AVX-512 KAT did not report a clean '0 failed' result line under Intel SDE"
+          exit 1
+        fi
+        echo "AVX-512 KAT executed under Intel SDE and passed: scalar = AVX2 = AVX-512, byte-identical."
 
   ed25519-backend-differential:
     name: Ed25519 backend differential (donna vs fe51)
@@ -1110,8 +1764,7 @@ jobs:
 
     - name: Install build toolchain
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+        .github/scripts/apt-install.sh build-essential cmake
 
     - name: Build donna backend (x86-64 default)
       run: |
@@ -1145,6 +1798,52 @@ jobs:
           --donna build-donna/lib/libama_cryptography.so \
           --fe51  build-fe51/lib/libama_cryptography.so
 
+  c-consumer:
+    name: C consumer (install + link, gcc & clang, shared & static)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install clang
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh clang
+
+      - name: Install the library and link a downstream C consumer
+        # audit H4: nothing in CI ever installed the library and linked a
+        # downstream C consumer against it, so the static archive shipped as pure
+        # GCC LTO bytecode (.text size 0) -- unlinkable by any toolchain but a
+        # matching GCC + plugin -- and the generated ama_cryptography.pc was
+        # never validated. Install to a prefix and compile
+        # examples/c/simple_example.c against BOTH the shared and static
+        # libraries with BOTH gcc and clang via pkg-config, then run each.
+        run: |
+          set -euxo pipefail
+          PREFIX="$PWD/consumer-prefix"
+          cmake -B build-consumer -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX"
+          cmake --build build-consumer \
+            --target ama_cryptography_shared ama_cryptography_static -j"$(nproc)"
+          cmake --install build-consumer
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+          pkg-config --exists ama_cryptography
+          echo "pkg-config: $(pkg-config --cflags --libs ama_cryptography)"
+          for cc in gcc clang; do
+            echo "== $cc: shared via pkg-config =="
+            "$cc" examples/c/simple_example.c \
+              $(pkg-config --cflags --libs ama_cryptography) -o "consumer_${cc}_shared"
+            LD_LIBRARY_PATH="$PREFIX/lib" "./consumer_${cc}_shared"
+            echo "== $cc: static =="
+            "$cc" examples/c/simple_example.c -I"$PREFIX/include" \
+              "$PREFIX/lib/libama_cryptography_static.a" -lpthread -lm \
+              -o "consumer_${cc}_static"
+            "./consumer_${cc}_static"
+          done
+          echo "OK: C consumer linked and ran under gcc and clang, shared and static."
+
   ci-gate:
     name: CI Gate
     # Single aggregating status check for this workflow. Branch protection
@@ -1168,6 +1867,7 @@ jobs:
       - constant-time-check
       - test-avx512
       - ed25519-backend-differential
+      - c-consumer
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

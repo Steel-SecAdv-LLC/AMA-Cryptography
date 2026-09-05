@@ -162,6 +162,47 @@ def _python_fallback_opt_in() -> bool:
     )
 
 
+def _byte_length(data: "Union[bytes, bytearray, memoryview]") -> int:
+    """Length of ``data`` in BYTES — which is not ``len(data)`` for a memoryview.
+
+    ``len()`` on a memoryview counts ITEMS, not bytes.  For the byte-format
+    views this module is usually handed the two agree, and for a ``bytearray``
+    they always do — which is exactly why the difference went unnoticed.  On a
+    view whose ``itemsize`` is greater than one they diverge by that factor,
+    and every native back-end here sized its wipe with ``len()``:
+
+        buf = (ctypes.c_char * length).from_buffer(data)
+
+    ``from_buffer`` accepts a length SMALLER than the buffer, so nothing
+    raised.  Measured on ``memoryview(array('I', [0xDEADBEEF] * 8))`` — 8
+    items, 32 bytes — ``secure_memzero`` zeroed 8 bytes, returned normally, and
+    left **24 of 32 secret bytes intact**.  A wipe that reports success while
+    three quarters of the secret survives is worse than no wipe at all, because
+    the caller stops worrying (INVARIANT-6).
+
+    ``secure_mlock``/``secure_munlock`` had the same defect with a different
+    consequence: locking ``len()`` bytes of a wider buffer leaves the remaining
+    pages swappable, so secret material could still reach disk.
+
+    Non-contiguous views are refused rather than mis-wiped.  A strided view's
+    bytes are not the ``nbytes`` bytes starting at its address, so any
+    address+length wipe would clear memory the caller did not pass and miss
+    memory it did.  ``ctypes.from_buffer`` already rejects them with
+    ``TypeError``; raising ``SecureMemoryError`` here makes the refusal this
+    module's own documented failure type instead of an escaping one.
+    """
+    if isinstance(data, memoryview):
+        if not data.c_contiguous:
+            raise SecureMemoryError(
+                "secure memory operations require a C-contiguous buffer; this "
+                "memoryview is strided or multi-dimensional, so its bytes are not "
+                "the nbytes bytes at its address and any wipe would clear the "
+                "wrong memory. Pass a contiguous view (e.g. bytearray(data))."
+            )
+        return data.nbytes
+    return len(data)
+
+
 def secure_memzero(data: Union[bytearray, memoryview]) -> None:
     """
     Securely zero memory using a multi-pass overwrite.
@@ -174,9 +215,9 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
 
     Raises:
         TypeError: If ``data`` is not a mutable buffer.
-        SecureMemoryError: Raised in two distinct fail-closed cases (the
+        SecureMemoryError: Raised in three distinct fail-closed cases (the
             native ``ama_secure_memzero`` and the libc ``explicit_bzero`` /
-            ``memset_s`` back-ends never raise).
+            ``memset_s`` back-ends never raise once they are entered).
 
             **Case 1 — no native backend, no opt-in.** If the active
             backend is the Python fallback AND none of
@@ -196,6 +237,16 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
             deliberate hard failure — a silently incomplete wipe would
             leave secret material in memory.
 
+            **Case 3 — a non-contiguous memoryview.**  A strided or
+            multi-dimensional view's bytes are not the ``nbytes`` bytes
+            at its address, so an address+length wipe would clear memory
+            the caller did not pass and miss memory it did.  Refused
+            rather than mis-wiped, and refused uniformly: the native
+            back-ends' ``ctypes.from_buffer`` already rejected such a
+            view with ``TypeError`` while the Python fallback wiped it
+            correctly, so the behaviour used to depend on which back-end
+            was selected.  Pass a contiguous view (``bytearray(data)``).
+
     **Propagation from cleanup contexts.**  ``SecureBuffer.__exit__`` and
     ``secure_buffer()``'s ``finally`` clause both call ``secure_memzero``
     on the way out, so a ``SecureMemoryError`` raised here can propagate
@@ -213,7 +264,7 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
     if not isinstance(data, (bytearray, memoryview)):
         raise TypeError("data must be a mutable buffer (bytearray or memoryview)")
 
-    if len(data) == 0:
+    if _byte_length(data) == 0:
         return
 
     # Fail-closed gate: refuse to silently use the python_fallback path
@@ -254,7 +305,7 @@ def _try_native_ama_memzero() -> "Optional[Callable[[Union[bytearray, memoryview
         fn.restype = None
 
         def _zero_via_native(data: Union[bytearray, memoryview]) -> None:
-            length = len(data)
+            length = _byte_length(data)
             buf = (ctypes.c_char * length).from_buffer(data)
             fn(ctypes.addressof(buf), length)
 
@@ -279,7 +330,7 @@ def _try_libc_explicit_bzero() -> "Optional[Callable[[Union[bytearray, memoryvie
         fn.restype = None
 
         def _zero_via_bzero(data: Union[bytearray, memoryview]) -> None:
-            length = len(data)
+            length = _byte_length(data)
             buf = (ctypes.c_char * length).from_buffer(data)
             fn(ctypes.addressof(buf), length)
 
@@ -304,7 +355,7 @@ def _try_libc_memset_s() -> "Optional[Callable[[Union[bytearray, memoryview]], N
         fn.restype = ctypes.c_int
 
         def _zero_via_memset_s(data: Union[bytearray, memoryview]) -> None:
-            length = len(data)
+            length = _byte_length(data)
             buf = (ctypes.c_char * length).from_buffer(data)
             fn(ctypes.addressof(buf), length, 0, length)
 
@@ -322,14 +373,26 @@ def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
     below forces the final zero pass to be materialized: every byte must be
     observed as zero, so the JIT/optimizer cannot discard the pass without
     breaking the assertion's value dependency.
+
+    The passes run over a ``'B'``-format byte view, never over the caller's
+    item view: ``len(data)`` on a memoryview counts ITEMS, and item-wise
+    stores carry item semantics — on a signed-char view the ``0xFF`` pass
+    raised ``ValueError`` mid-wipe, and on a float view all three passes
+    "succeeded" (0.0 is the all-zero-bytes double) and then the ``acc |=``
+    barrier raised ``TypeError``.  That is the same items-vs-bytes defect
+    ``_byte_length()`` was added to close for every native backend; the
+    opt-in Python fallback was the one wiper left item-wise.  ``cast("B")``
+    requires C-contiguity, which ``_byte_length`` has already enforced by
+    the time any backend is called.
     """
-    length = len(data)
+    view = memoryview(data).cast("B")
+    length = len(view)
     for i in range(length):
-        data[i] = 0
+        view[i] = 0
     for i in range(length):
-        data[i] = 0xFF
+        view[i] = 0xFF
     for i in range(length):
-        data[i] = 0
+        view[i] = 0
     # Dead-store-elimination barrier: any optimizer that wanted to drop the
     # final zero-pass would have to prove ``acc`` is unused, which it can't —
     # the ``if acc != 0`` check below has a visible side effect (a
@@ -338,7 +401,7 @@ def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
     # ``PYTHONOPTIMIZE`` which would silently defeat the barrier.
     acc = 0
     for i in range(length):
-        acc |= data[i]
+        acc |= view[i]
     if acc != 0:
         raise SecureMemoryError(
             "_python_fallback_memzero: post-wipe verification failed "
@@ -397,8 +460,12 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
     Raises:
         NotImplementedError: If no native backend available and not on POSIX
+        SecureMemoryError: If ``data`` is a non-contiguous memoryview.  The
+            lock is an address+length call, and a strided view's bytes are not
+            the ``nbytes`` bytes at its address, so it would pin the wrong
+            pages and leave the caller's swappable.
     """
-    size = len(data)
+    size = _byte_length(data)
     if size == 0:
         return
 
@@ -482,8 +549,12 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
 
     Raises:
         NotImplementedError: If no native backend available and not on POSIX
+        SecureMemoryError: If ``data`` is a non-contiguous memoryview, for the
+            same reason as :func:`secure_mlock` — the unlock is an
+            address+length call and a strided view's bytes are not the
+            ``nbytes`` bytes at its address.
     """
-    size = len(data)
+    size = _byte_length(data)
     if size == 0:
         return
 

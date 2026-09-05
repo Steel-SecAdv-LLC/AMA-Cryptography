@@ -262,7 +262,8 @@ class TestHighConcurrencyAgenticLoad:
         structural path inside ``ama_agent_binding_check``, so a class
         separation would be a real leak in the verdict.
         ``tests/c/test_dudect.c`` runs the rigorous version at the C level with
-        a hard |t| < 4.5 gate; this lane adds the condition an agent would
+        a hard ``DUDECT_T_THRESHOLD`` gate on a percentile-cropped statistic;
+        this lane adds the condition an agent would
         actually create — other threads competing for the CPU — and checks the
         property still holds when the call is reached through ctypes.
 

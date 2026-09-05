@@ -1,11 +1,11 @@
 {
   "metadata": {
-    "baseline_source_release": "3.1.0",
-    "applies_through_release": "4.0.0",
+    "baseline_source_release": "4.0.0",
+    "applies_through_release": "5.0.0",
     "created": "2026-05-15T18:49:48Z",
-    "description": "AArch64 (ubuntu-24.04-arm) populated baseline for regression detection. Values are conservative 65% floors from the first successful PR #305 AArch64 benchmark artifact; subsequent updates require line-item justification per benchmarks/check_baseline_justification.py.",
+    "description": "AArch64 (ubuntu-24.04-arm) regression baseline. baseline_value IS the measured median on the canonical runner (no pre-discounting); tolerance_percent is the single derived allowance. The runner fleet is homogeneous (cross-run spreads <= 3% for deterministic primitives over the 2026-08-14 calibration runs), so tolerance is 15, or 25 for the rejection-averaged composites dilithium_sign and full_package_create. The gate fires at a 15-25% regression; the previous 65%-floor-times-35-70%-tolerance convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM wrapper regression without firing. Updates require line-item justification per benchmarks/check_baseline_justification.py.",
     "system": "GitHub Actions ubuntu-24.04-arm shared runner, Linux AArch64, Python 3.11",
-    "notes": "AArch64 floors measured 2026-05-15 on the benchmark-regression job's ubuntu-24.04-arm runner (PR #305; the library then shipped 3.1.0 \u2014 see `baseline_source_release`), with the two secp256k1 floors added alongside the native secp256k1 implementation (PR #370). Floors set to ~65% of measured performance for 35% regression headroom, matching the x86-64 file's convention. These floors were NOT re-measured during the 2026-07-29 x86-64 recalibration (no AArch64 hardware was available); the 2026-07-29 change-log entry's ACTION REQUIRED to re-measure on the ubuntu-24.04-arm matrix runner still stands. SHA3 dispatches through the NEON Keccak path on this target; PQC benchmarks use the native C library.",
+    "notes": "Re-measured 2026-08-14 on the benchmark-regression job's ubuntu-24.04-arm runner across five CI runs of the repaired harness (sample-window sizing, fastest-of-three full-window batches, and input cycling for the deterministic-ML-DSA rejection-sampling benchmarks). aes_256_gcm_encrypt and chacha20poly1305_encrypt are floored from the final-wrapper-state runs only: the one-shot AEAD wrapper work in this same release moved their throughput (AES 132k -> ~234k ops/sec), so earlier runs measure a wrapper the tree no longer has — the exact staleness mode that let the May 2026 floors drift to 0.55x-9.54x of measured.",
     "peer_references": {
       "description": "Published ops/sec figures for peer cryptographic libraries on comparable x86-64 hardware. These are context numbers for the `Peer Comparison` table in `benchmark-report.md`; the regression harness does not compare against them. When `benchmarks/comparative_benchmark.py` runs with `pynacl`/`oqs`/`cryptography` installed it produces live measurements that supersede these static references for that specific run.",
       "sources": {
@@ -81,7 +81,7 @@
           "chacha20poly1305_encrypt",
           "x25519_scalarmult"
         ],
-        "reason": "Re-floored after observing stable runner-variance on a slower contended sandbox host (3-run medians taken with build configured at -DAMA_ENABLE_AVX512=ON; AVX-512 SHA3 4-way kernel landed in this release). Each baseline set to ~65% of the slowest-runner stable median so even a contended GitHub-hosted shared runner clears the regression threshold without false positives; canonical Sapphire Rapids / Zen 4 hosts continue to clear by a wide negative-regression margin (faster than baseline). full_package_create tolerance bumped 50%\u219270% to absorb the GC-stall variance observed at 3-run min/max ratios > 2.5x. README, benchmark-report.md, and wiki/Performance-Benchmarks.md continue to publish the canonical-host throughput numbers \u2014 those are distinct from this regression floor, which is the worst-case-runner safety net. Source measurements: stable-medians captured 2026-04-25 across 30+ runs of validation_suite.py and 10+ runs of benchmark_runner.py; full_package_verify floor lowered 2044\u2192700 to absorb the borderline 47\u201355% variance band. Source measurements: 3-run medians captured 2026-04-25, full transcript saved alongside benchmark-results.json on the consolidate branch."
+        "reason": "Re-floored after observing stable runner-variance on a slower contended sandbox host (3-run medians taken with build configured at -DAMA_ENABLE_AVX512=ON; AVX-512 SHA3 4-way kernel landed in this release). Each baseline set to ~65% of the slowest-runner stable median so even a contended GitHub-hosted shared runner clears the regression threshold without false positives; canonical Sapphire Rapids / Zen 4 hosts continue to clear by a wide negative-regression margin (faster than baseline). full_package_create tolerance bumped 50%→70% to absorb the GC-stall variance observed at 3-run min/max ratios > 2.5x. README, benchmark-report.md, and wiki/Performance-Benchmarks.md continue to publish the canonical-host throughput numbers — those are distinct from this regression floor, which is the worst-case-runner safety net. Source measurements: stable-medians captured 2026-04-25 across 30+ runs of validation_suite.py and 10+ runs of benchmark_runner.py; full_package_verify floor lowered 2044→700 to absorb the borderline 47–55% variance band. Source measurements: 3-run medians captured 2026-04-25, full transcript saved alongside benchmark-results.json on the consolidate branch."
       },
       {
         "date": "2026-05-15",
@@ -162,30 +162,509 @@
       {
         "date": "2026-07-29",
         "release": "3.4.0",
-        "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNVERIFIED. The x86-64 baseline was re-floored for 3.4.0 against fresh measurements; these AArch64 floors were NOT, because recalibrating them requires the ubuntu-24.04-arm runner and no AArch64 hardware was available. No floor value in this file was changed, so the AArch64 gate is exactly as strong as it was before \u2014 but it is still calibrated against v2.1.2 and therefore still far looser than it should be. ACTION REQUIRED: re-measure on the benchmark-regression job's ubuntu-24.04-arm matrix entry and re-floor at 0.65 * measured, matching what benchmarks/baseline.json now does for x86-64. Recorded here rather than left implicit so the carry-forward is auditable."
+        "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNVERIFIED. The x86-64 baseline was re-floored for 3.4.0 against fresh measurements; these AArch64 floors were NOT, because recalibrating them requires the ubuntu-24.04-arm runner and no AArch64 hardware was available. No floor value in this file was changed, so the AArch64 gate is exactly as strong as it was before — but it is still calibrated against v2.1.2 and therefore still far looser than it should be. ACTION REQUIRED: re-measure on the benchmark-regression job's ubuntu-24.04-arm matrix entry and re-floor at 0.65 * measured, matching what benchmarks/baseline.json now does for x86-64. Recorded here rather than left implicit so the carry-forward is auditable."
       },
       {
         "date": "2026-07-30",
         "release": "3.5.0",
-        "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNCHANGED. The tree-delta argument for extending the window to 3.5.0 is the same as for the x86-64 file \u2014 PR #380, the only change since 66d2073, touches no src/c kernel, dispatch path, or Python hot path \u2014 but unlike the x86-64 file these floors were NOT re-measured on 2026-07-29: they remain the 2026-05-15 ubuntu-24.04-arm calibration (PR #305; secp256k1 rows added by PR #370), carried forward exactly as the 2026-07-29 entry records, and that entry's ACTION REQUIRED to re-measure on the ubuntu-24.04-arm matrix runner still stands. No floor value in this file was re-measured or altered."
+        "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNCHANGED. The tree-delta argument for extending the window to 3.5.0 is the same as for the x86-64 file — PR #380, the only change since 66d2073, touches no src/c kernel, dispatch path, or Python hot path — but unlike the x86-64 file these floors were NOT re-measured on 2026-07-29: they remain the 2026-05-15 ubuntu-24.04-arm calibration (PR #305; secp256k1 rows added by PR #370), carried forward exactly as the 2026-07-29 entry records, and that entry's ACTION REQUIRED to re-measure on the ubuntu-24.04-arm matrix runner still stands. No floor value in this file was re-measured or altered."
       },
       {
         "date": "2026-07-30",
         "release": "3.5.0",
-        "change": "PROVENANCE METADATA CORRECTED, NO FLOOR CHANGES. `baseline_source_release` said 2.1.2 and `notes` was an x86-64 copy-paste (\u2018Sapphire Rapids / Zen 4 hosts\u2019, a 2026-04-25 recalibration this file never had); no floor in this file ever came from a v2.1.2 measurement \u2014 they date from the 2026-05-15 PR #305 ARM run (secp256k1 rows: PR #370). `baseline_source_release` now names 3.1.0, the release current at that measurement, and `notes` now describes this file. This also corrects the 2026-07-29 entry's \u2018still calibrated against v2.1.2\u2019 aside \u2014 historical entries are records and were left verbatim; the correction lives here."
+        "change": "PROVENANCE METADATA CORRECTED, NO FLOOR CHANGES. `baseline_source_release` said 2.1.2 and `notes` was an x86-64 copy-paste (‘Sapphire Rapids / Zen 4 hosts’, a 2026-04-25 recalibration this file never had); no floor in this file ever came from a v2.1.2 measurement — they date from the 2026-05-15 PR #305 ARM run (secp256k1 rows: PR #370). `baseline_source_release` now names 3.1.0, the release current at that measurement, and `notes` now describes this file. This also corrects the 2026-07-29 entry's ‘still calibrated against v2.1.2’ aside — historical entries are records and were left verbatim; the correction lives here."
       },
       {
         "date": "2026-07-31",
         "release": "4.0.0",
-        "change": "WINDOW EXTENDED TO 4.0.0, NO FLOOR CHANGES. The 4.0.0 major bump pushed the package past `applies_through_release` (3.5.0) and tripped test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moved. Rationale: of the primitives this file floors, 4.0.0 touches exactly one measured path \u2014 Ed25519 verify and point decode gain `ama_ed25519_point_y_is_canonical`, a single branch-free 32-byte comparison per decode, against a verify costing ~10^5 ns. The scalar-GHASH rewrite earlier in this release affects only the non-SIMD AES-GCM fallback; the AArch64 runner class named in `system` dispatches `aes_256_gcm_encrypt` to the PMULL/NEON kernel, so it measures the same code as before. No other floored primitive changed \u2014 ed25519_keygen, ed25519_sign, ed25519_verify, secp256k1_ecdsa_sign, secp256k1_ecdsa_verify, ama_sha3_256_hash, hmac_sha3_256, hkdf_derive, dilithium_keygen, dilithium_sign, dilithium_verify, kyber_keygen, kyber_encapsulate, aes_256_gcm_encrypt, chacha20poly1305_encrypt, x25519_scalarmult, full_package_create and full_package_verify all keep their existing floors. AUTHORITY: these floors were NOT re-measured for this entry, and no AArch64 measurement of any kind was taken for it. The canonical measurement is the benchmark-regression (aarch64) CI job, which runs on the calibrated runner class named in `system` and gates this PR. The sandbox numbers recorded in the sibling x86-64 `baseline.json` entry for this release were measured on an x86-64 host and bear on that file only: this file's Ed25519 floors are 11855/30266/28626 ops/sec for verify/sign/keygen, not the x86-64 file's 13000/33000/31000, and no cross-architecture comparison between the two is meaningful. (Corrected 2026-08-01: as first written, this entry quoted the x86-64 floors and that x86-64 sandbox run as though they bore on this file \u2014 the same x86-64 copy-paste into the AArch64 baseline that the 2026-07-30 entry above exists to correct.) If the aarch64 benchmark-regression job fails on this PR, these floors need a genuine canonical re-measure, not a further window extension."
+        "change": "WINDOW EXTENDED TO 4.0.0, NO FLOOR CHANGES. The 4.0.0 major bump pushed the package past `applies_through_release` (3.5.0) and tripped test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moved. Rationale: of the primitives this file floors, 4.0.0 touches exactly one measured path — Ed25519 verify and point decode gain `ama_ed25519_point_y_is_canonical`, a single branch-free 32-byte comparison per decode, against a verify costing ~10^5 ns. The scalar-GHASH rewrite earlier in this release affects only the non-SIMD AES-GCM fallback; the AArch64 runner class named in `system` dispatches `aes_256_gcm_encrypt` to the PMULL/NEON kernel, so it measures the same code as before. No other floored primitive changed — ed25519_keygen, ed25519_sign, ed25519_verify, secp256k1_ecdsa_sign, secp256k1_ecdsa_verify, ama_sha3_256_hash, hmac_sha3_256, hkdf_derive, dilithium_keygen, dilithium_sign, dilithium_verify, kyber_keygen, kyber_encapsulate, aes_256_gcm_encrypt, chacha20poly1305_encrypt, x25519_scalarmult, full_package_create and full_package_verify all keep their existing floors. AUTHORITY: these floors were NOT re-measured for this entry, and no AArch64 measurement of any kind was taken for it. The canonical measurement is the benchmark-regression (aarch64) CI job, which runs on the calibrated runner class named in `system` and gates this PR. The sandbox numbers recorded in the sibling x86-64 `baseline.json` entry for this release were measured on an x86-64 host and bear on that file only: this file's Ed25519 floors are 11855/30266/28626 ops/sec for verify/sign/keygen, not the x86-64 file's 13000/33000/31000, and no cross-architecture comparison between the two is meaningful. (Corrected 2026-08-01: as first written, this entry quoted the x86-64 floors and that x86-64 sandbox run as though they bore on this file — the same x86-64 copy-paste into the AArch64 baseline that the 2026-07-30 entry above exists to correct.) If the aarch64 benchmark-regression job fails on this PR, these floors need a genuine canonical re-measure, not a further window extension."
       },
       {
         "date": "2026-08-13",
         "release": "4.0.0",
-        "change": "KEYGEN FLOORS RE-MEASURED FOR INVARIANT-41 (PR #391): key generation now includes the FIPS 140-3 pairwise consistency test on every keypair \u2014 a sign+verify for signature keys, an encapsulate+decapsulate for KEM keys \u2014 so the keygen benchmarks measure keygen-plus-PCT, deliberately: hiding the test from the benchmark would report a cost users do not get. Floors are set to the canonical benchmark-regression CI job's measurements on the PCT-bearing head (commit f195e69): ed25519_keygen 28626 -> 10116 ops/sec, dilithium_keygen 2700 -> 1705 ops/sec, kyber_keygen 4094 -> 3684 ops/sec. Only ed25519_keygen, dilithium_keygen and kyber_keygen change; no other primitive's measured path was touched by INVARIANT-41 (x25519_scalarmult and the secp256k1/sign/verify/encrypt benches do not generate keys). AUTHORITY: these ARE the canonical runner's own measurements, taken from the failing gate run itself on ubuntu-24.04-arm (AArch64)."
+        "change": "KEYGEN FLOORS RE-MEASURED FOR INVARIANT-41 (PR #391): key generation now includes the FIPS 140-3 pairwise consistency test on every keypair — a sign+verify for signature keys, an encapsulate+decapsulate for KEM keys — so the keygen benchmarks measure keygen-plus-PCT, deliberately: hiding the test from the benchmark would report a cost users do not get. Floors are set to the canonical benchmark-regression CI job's measurements on the PCT-bearing head (commit f195e69): ed25519_keygen 28626 -> 10116 ops/sec, dilithium_keygen 2700 -> 1705 ops/sec, kyber_keygen 4094 -> 3684 ops/sec. Only ed25519_keygen, dilithium_keygen and kyber_keygen change; no other primitive's measured path was touched by INVARIANT-41 (x25519_scalarmult and the secp256k1/sign/verify/encrypt benches do not generate keys). AUTHORITY: these ARE the canonical runner's own measurements, taken from the failing gate run itself on ubuntu-24.04-arm (AArch64)."
+      },
+      {
+        "date": "2026-08-14",
+        "release": "4.0.0",
+        "change": "FULL RECALIBRATION FROM THE REPAIRED HARNESS (PR #394). baseline_value becomes the measured median (slow-class median for x86) and tolerance_percent the single derived allowance — see description. Every primitive changed; per-primitive from/to values with measurements and runner identifiers are in the recalibration commit message and in calibration_evidence.per_primitive. baseline_source_release advances to 4.0.0, making the freshness window honest for the first time since 2026-05-15 (ARM) / 2026-07-29 (x86)."
+      },
+      {
+        "date": "2026-08-14",
+        "release": "5.0.0",
+        "change": "WINDOW EXTENDED TO 5.0.0, NO FLOOR CHANGES. The 5.0.0 major bump pushes the package past `applies_through_release` (4.0.0) and would trip test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moves. Rationale: these floors ARE the 2026-08-14 full recalibration recorded in the previous entry — measured in this same PR (#394) from the repaired harness on the canonical benchmark-regression runner class for this file (ubuntu-24.04-arm, AArch64) — and 5.0.0 is cut from the tree those medians describe. The only commits between the recalibration head and the 5.0.0 cut are: the CodeQL alert cleanup (an error-path log line in `keypair_generate`'s ctypes guard, import-style unification), the polynomial-regex (ReDoS) hardening in three tools/ gate scripts (no shipped code path), the fail-closed unreadable-candidate rule in library discovery (load-time, not per-operation), the binding-extension digest signing (build- and import-time), CI probe and C-test-lane fixes, documentation and CHANGELOG restructuring, and the version bump itself. Code the floors describe DID change after they were measured, and this entry no longer claims otherwise: the Kyber barrett_reduce rewrite (an NTT inner-loop function), the ChaCha20-Poly1305 post-verify control flow, the dispatch auto-tune sentinel, a SHA3 squeeze-entry guard, and the benchmark harness itself all landed after the calibration head. Each is itemised with its reasoning in metadata.floor_drift_acknowledged, which benchmarks/check_baseline_justification.py now verifies against `git diff` from the calibration commit — the previous sentence here asserted the opposite and nothing checked it. The floors are therefore carried as a coarse safety net that describes a very slightly older tree, not as a measurement of the shipped one — the same tree-delta argument as the 3.5.0 and 4.0.0 window extensions above, this time with floors measured inside the same PR rather than carried forward from an earlier release. AUTHORITY: no new measurement was taken for this entry; the benchmark-regression (aarch64) CI job gates this PR against these floors on the canonical runner class, which is the check that matters. If that job fails on this PR, the floors need a genuine canonical re-measure, not a further window extension."
       }
     ],
-    "runner_cpu_class": "aarch64"
+    "runner_cpu_class": "aarch64",
+    "calibration_evidence": {
+      "recorded": "2026-08-14",
+      "harness": "benchmarks/benchmark_runner.py with sample-window sizing, fastest-of-three full-window batches, and 256-input cycling for the rejection-sampled benchmarks",
+      "runs": {
+        "p1": "94658628069 (7766faa)",
+        "p2": "94660464351 (e7f378d)",
+        "p3": "94661088578 (1c0cd29)",
+        "p4": "94661711495 (5fe7edb)",
+        "p5": "94662905908 (26df305)"
+      },
+      "per_primitive": {
+        "aes_256_gcm_encrypt": {
+          "median": 234678,
+          "n": 2,
+          "min": 233817,
+          "max": 235540
+        },
+        "ama_sha3_256_hash": {
+          "median": 426967,
+          "n": 5,
+          "min": 426774,
+          "max": 427394
+        },
+        "chacha20poly1305_encrypt": {
+          "median": 195365,
+          "n": 2,
+          "min": 195285,
+          "max": 195446
+        },
+        "dilithium_keygen": {
+          "median": 1634,
+          "n": 5,
+          "min": 1617,
+          "max": 1661
+        },
+        "dilithium_sign": {
+          "median": 3316,
+          "n": 5,
+          "min": 2908,
+          "max": 3491
+        },
+        "dilithium_verify": {
+          "median": 11733,
+          "n": 5,
+          "min": 11729,
+          "max": 11737
+        },
+        "ed25519_keygen": {
+          "median": 10099,
+          "n": 5,
+          "min": 10062,
+          "max": 10123
+        },
+        "ed25519_sign": {
+          "median": 45539,
+          "n": 5,
+          "min": 45334,
+          "max": 46069
+        },
+        "ed25519_verify": {
+          "median": 18199,
+          "n": 5,
+          "min": 18131,
+          "max": 18358
+        },
+        "full_package_create": {
+          "median": 2379,
+          "n": 5,
+          "min": 2045,
+          "max": 2647
+        },
+        "full_package_verify": {
+          "median": 4426,
+          "n": 5,
+          "min": 4378,
+          "max": 4469
+        },
+        "hkdf_derive": {
+          "median": 176697,
+          "n": 5,
+          "min": 176575,
+          "max": 176867
+        },
+        "hmac_sha3_256": {
+          "median": 285176,
+          "n": 5,
+          "min": 284579,
+          "max": 285907
+        },
+        "kyber_encapsulate": {
+          "median": 20105,
+          "n": 5,
+          "min": 20006,
+          "max": 20143
+        },
+        "kyber_keygen": {
+          "median": 3729,
+          "n": 5,
+          "min": 3722,
+          "max": 3733
+        },
+        "secp256k1_ecdsa_sign": {
+          "median": 10342,
+          "n": 5,
+          "min": 10321,
+          "max": 10349
+        },
+        "secp256k1_ecdsa_verify": {
+          "median": 4316,
+          "n": 5,
+          "min": 4310,
+          "max": 4318
+        },
+        "x25519_scalarmult": {
+          "median": 25167,
+          "n": 5,
+          "min": 25146,
+          "max": 25183
+        },
+        "x25519_scalarmult_batch4": {
+          "median": 6011,
+          "n": 5,
+          "min": 6004,
+          "max": 6012
+        }
+      }
+    },
+    "floor_drift_acknowledged": [
+      {
+        "path": "src/c/ama_ascon.c",
+        "reason": "ama_ascon_permutation_for_test dropped its AMA_API qualifier (a test-only function, now delocalised via cmake/ama_exports.map for the B2 export-hardening) and gained an explanatory comment. Measured rather than asserted: on ELF AMA_API expands to nothing (include/ama_cryptography.h), so the translation unit is OBJECT-IDENTICAL before and after -- the .text section is byte-identical and the full defined-symbol set is identical under x86-64 gcc -O3 -DNDEBUG -std=c11. The de-export is effected by the version script and -fvisibility=hidden at link time, not by this source edit, and the test hook is on no benchmarked path. It cannot move a floor on either file."
+      },
+      {
+        "path": "src/c/ama_kyber.c",
+        "reason": "barrett_reduce rewritten with int32 intermediates for -Wconversion (94e4bd6). Proven bit-identical over all 65,536 inputs, but it is an NTT inner-loop function, so kyber_keygen/kyber_encapsulate throughput is NOT vouched for by the pre-change medians. Carried as a coarse floor pending a canonical re-measure; the benchmark-regression job on this PR is the check that exercises it. SampleNTT (FIPS 203 Algorithm 7) additionally now streams the XOF until the polynomial is full instead of stopping at a fixed 672-octet window (aff4861), so kyber_poly_uniform and kyber_gen_matrix_flush4 changed shape. No aarch64 valgrind was available on the runner this was measured from, so the dynamic figures are x86-64: kyber_keygen 736,964 -> 731,145 Ir (-0.79%), kyber_encapsulate 807,730 -> 801,942 Ir (-0.72%), both cheaper. The aarch64 evidence is static: aarch64-linux-gnu-gcc -O3 per-symbol disassembly confines the shape change to kyber_poly_uniform (68 -> 120 instructions) and kyber_gen_matrix_flush4 (96 -> 165), with 22 of 32 symbols byte-identical and every remaining delta 0 or -1. The sampler is architecture-independent scalar C in the shared translation unit and the NEON kernels it feeds are untouched."
+      },
+      {
+        "path": "src/c/ama_cpuid.c",
+        "reason": "detect_arm_features' non-Linux/non-Apple arm now reports AdvSIMD/NEON as present instead of absent — NEON is part of the AArch64 base architecture, so reporting 0 there was wrong rather than conservative. Measured rather than asserted: the translation unit is OBJECT-IDENTICAL before and after on both canonical runners — 25 of 25 symbols byte-identical under x86-64 cc -O3 and under aarch64-linux-gnu-gcc -O3 — because the edited arm sits behind #else and neither ubuntu-latest (x86-64, no ARM detection) nor ubuntu-24.04-arm (Linux, the getauxval arm) compiles it. It cannot move a floor on either file."
+      },
+      {
+        "path": "src/c/avx2/ama_kyber_avx2.c",
+        "reason": "Same barrett_reduce form as the generic path (94e4bd6); same status."
+      },
+      {
+        "path": "src/c/neon/ama_kyber_neon.c",
+        "reason": "Same barrett_reduce form (94e4bd6); aarch64 floors carry the same caveat."
+      },
+      {
+        "path": "src/c/sve2/ama_kyber_sve2.c",
+        "reason": "Same barrett_reduce form (94e4bd6). SVE2 is off in the benchmarked configuration, so no floored primitive dispatches here."
+      },
+      {
+        "path": "src/c/ama_sha3.c",
+        "reason": "Cross-family squeeze-position guard added: two comparisons on entry to ama_shake{128,256}_inc_squeeze, outside the absorb/permute loops. sha3_256_hash and the SHAKE-driven PQC paths keep their per-block cost. Revisited in this pass for the COMMENT only — the guard's justification was rewritten to name SHA3_CTX_CONSUMED as the live counter-example rather than calling the guard future insurance. Object-identical: 26 of 26 symbols byte-identical before and after under x86-64 cc -O3."
+      },
+      {
+        "path": "src/c/ama_chacha20poly1305.c",
+        "reason": "Post-verify control flow unified with AES-GCM (7bc7e58): the tag compare is hoisted to a value and the decrypt length masked. chacha20poly1305_encrypt is the floored primitive and does not execute the verify path. Revisited in this pass for a COMMENT only (the Poly1305 rs[] limb note, which said 5 where the 44/44/42 limb split makes it 20). Object-identical: 7 of 7 symbols byte-identical before and after under x86-64 cc -O3."
+      },
+      {
+        "path": "src/c/dispatch/ama_dispatch.c",
+        "reason": "Auto-tune verdict timings seed to -1 instead of 0 (d500783) so 'not measured' and 'measured zero' are distinguishable. One-time initialisation; per-operation dispatch is a function-pointer read either way. The same file now also benchmarks the generic Keccak reference whenever a SIMD Keccak kernel is pinned, records keccak_fallback_regressed in the dispatch cache and bumps the cache fingerprint to v2. Measured rather than asserted: per-symbol disassembly confines the change to dispatch_init_internal (2,849 -> 2,843 instructions), ama_print_dispatch_info (146 -> 151, diagnostics only) and one new file-static bench helper; the remaining seven symbols, the dispatch-table getters among them, are byte-identical. One-time initialisation and diagnostic output only.  This branch additionally changed that file's PLATFORM guards from `_MSC_VER` to `_WIN32` (the compiler-vs-OS confusion that stopped the library compiling under MinGW-w64 at all: no openat / unlinkat / renameat / O_CLOEXEC). Both baselines are POSIX targets, where `!_MSC_VER` and `!_WIN32` are alike true, so the benchmarked translation unit is unchanged by construction rather than by argument — verify with `gcc -E -P -Iinclude -Isrc/c -Isrc/c/internal -DAMA_USE_NATIVE_PQC=1 -std=c11 src/c/dispatch/ama_dispatch.c` on either revision and diff: the output is byte-identical."
+      },
+      {
+        "path": "src/c/internal/ama_once.h",
+        "reason": "The INVARIANT-15 once-primitive selection changed from `#if defined(_MSC_VER)` to `#if defined(_WIN32)`, so Windows builds that are not MSVC stop taking the POSIX branch and linking winpthreads for a facility Windows supplies (the header's own doc block already specified \"Windows\", only the guard said \"MSVC\"). Both baseline files describe POSIX runners — x86-64 ubuntu-latest and ubuntu-24.04-arm — where `!_MSC_VER` and `!_WIN32` are alike true, so every benchmarked translation unit that includes this header still expands to pthread_once, with the same flag type and the same call. Not asserted: `gcc -E -P` output for this header is byte-identical before and after on POSIX, which is the whole of what the floors measure. No re-measurement is possible on this host in any case — the floors are calibrated on the canonical runners named in metadata.calibration_evidence, and figures taken anywhere else would be worse than none."
+      },
+      {
+        "path": "benchmarks/benchmark_runner.py",
+        "reason": "The harness itself: batch sizing, provenance capture and the switch of full_package_* to crypto_api. Floors for the affected rows were re-measured from the repaired harness in this PR. Additionally, full_package_create no longer takes its own best-of on top of _SAMPLING_REPEATS.  The two mechanisms multiplied: _measure_benchmark called the function 5 times and kept the max, and each call ran benchmark_operation 5 more times, so the row was sampled 25 times over 75 windows against 5 and 15 for its sibling full_package_verify, which carries the same registry entry — while the provenance line published \"x5\".  Measured rather than asserted: 17.7 s -> 5.5 s for the row, and the reported rate moves 1,446.8 -> 1,371.7 ops/sec (-5.2%) because the maximum is now over 15 windows rather than 75.  The floor is 1,983 with a 45% tolerance, i.e. a 1,091 ops/sec minimum, so both numbers clear it and the two composites are now sampled identically.  The runner also serialises its JSON report before opening the output file, so a non-finite rate leaves no truncated record behind; that path writes nothing a floor is read from.  This pass adds a coverage check to main() and changes no measurement path: the two benchmark dispatch tables move from locals of run_all_benchmarks to module-level BENCHMARK_FUNCTIONS / PQC_BENCHMARK_FUNCTIONS so main() can ask whether a baseline name is one this runner can even run, and main() then refuses to exit 0 on a run that measured nothing. Measured rather than asserted: against the real baseline the run still reports 19 of 19 rows measured, byte-for-byte the same set as before, and the new code executes only after every rate has been recorded -- no sampling constant, batch size, warmup or timing window is touched. The defect it closes was reproduced first: a copy of this baseline with every key renamed passes --require-populated-baseline (that flag rejects only zero baseline_values) and produced 19 populated floors, 0 benchmarks measured, exit 0."
+      },
+      {
+        "path": "src/c/ama_frost.c",
+        "reason": "FROST threshold-signing helpers. No floored primitive in either baseline file calls FROST — the benchmarked set is Dilithium, Kyber, Ed25519, X25519, secp256k1, AES-GCM, ChaCha20-Poly1305, SHA3, HMAC, HKDF and the package composites."
+      },
+      {
+        "path": "src/c/sve2/ama_sha3_sve2.c",
+        "reason": "SVE2 Keccak theta fix. SVE2 is disabled in the benchmarked build configuration, so this kernel is not dispatched on either canonical runner. Revisited in this pass for COMMENTS only — the file header and the chi-loop comment described SVE intrinsics the shipped code does not contain. Object-identical: 2 of 2 symbols byte-identical before and after under aarch64-linux-gnu-gcc -O3 -march=armv9-a+sve2."
+      },
+      {
+        "path": "src/c/internal/ama_testing_exports.h",
+        "reason": "Declarations behind AMA_TESTING_MODE, which the benchmarked library is not built with."
+      },
+      {
+        "path": "src/c/avx2/ama_aes_gcm_avx2.c",
+        "reason": "Encrypt-path partial-block plaintext scrub added (a4cbf55): one barriered 16-byte ama_secure_memzero on the trailing-partial tail only, outside the block loops, mirroring the scrub the decrypt twin already carried inside the measured medians. Sub-noise for the floored aes_256_gcm rates; the benchmark-regression jobs on this PR are the check that exercises it."
+      },
+      {
+        "path": "src/c/avx2/ama_aes_gcm_vaes_avx2.c",
+        "reason": "Same encrypt-path partial-block scrub (a4cbf55); same status."
+      },
+      {
+        "path": "src/c/neon/ama_aes_gcm_neon.c",
+        "reason": "Same encrypt-path partial-block scrub plus a header-comment correction with no code change (a4cbf55); aarch64 floors carry the same sub-noise caveat."
+      },
+      {
+        "path": "src/c/ama_aes_gcm.c",
+        "reason": "Masked return-code selection replaces the ternary in ama_aes256_gcm_decrypt's tail (b8fffe3): two arithmetic instructions once per call on the post-scrub return path, outside every per-block loop. Sub-noise for the floored AES-GCM throughput medians; the aead-verify instruction-invariance gate pins the change's shape, and the benchmark-regression job on this PR exercises the floors."
+      },
+      {
+        "path": "src/c/ama_sha256.c",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/ama_sha256_ni.c",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/neon/ama_argon2_neon.c",
+        "reason": "Superseded (v5 audit item 15): this file is no longer declaration-only. ama_argon2_g_neon now also gains three ama_secure_memzero calls (R[128] / Z[128] / scratch[16], ~2 KiB password-derived block staging) at return (INVARIANT-6/12; the AVX2 twin src/c/avx2/ama_argon2_avx2.c carries the identical scrub). Argon2 is NOT among the floored primitives in either baseline, so no floor measures this function and none is at risk. (The prior reason — an ama_neon_internal.h include making the object byte-identical — no longer holds now that instructions were added.)"
+      },
+      {
+        "path": "src/c/neon/ama_chacha20poly1305_neon.c",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/neon/ama_dilithium_neon.c",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/neon/ama_ed25519_neon.c",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/neon/ama_neon_internal.h",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/neon/ama_sha3_neon.c",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/neon/ama_sphincs_neon.c",
+        "reason": "Superseded (v5 audit item 15): this file is no longer declaration-only. The scalar SHA-256 fallback ama_sha256_compress_neon now scrubs its 256-byte message schedule w[64] at return (INVARIANT-6/12: w[0..15] is the verbatim input block — HMAC K^ipad / K^opad when reached through ama_sha256.c runtime dispatch). Neither SPHINCS / SLH-DSA nor SHA-256 is a floored primitive (only SHA3-256 is), and this scalar branch compiles only when __ARM_FEATURE_SHA2 is undefined — the shipped +sha2 AArch64 build runs the crypto-extension path instead — so no floor measures the scrubbed code and none is at risk. (The prior byte-identical reason no longer holds now that instructions were added.)"
+      },
+      {
+        "path": "src/c/sve2/ama_dilithium_sve2.c",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/sve2/ama_sve2_internal.h",
+        "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/ama_ed25519.c",
+        "reason": "Re-measured after the Ed25519 correctness fixes. This file IS the Ed25519 backend on aarch64, and this branch changed sc25519_to_wnaf to canonicalise the scalar mod l before recoding — the fix for a dropped carry out of bit 255 that made [s]P return [s - 2^256]P for about 17% of uniform 32-byte scalars. Compiling at 26df305 and at this commit with aarch64-linux-gnu-gcc -O3 and diffing per-symbol instruction counts: 31 symbols on both sides, ELEVEN differ — ama_ed25519_verify 1760 -> 1885, ge25519_frombytes 4220 -> 4239, sc25519_to_wnaf.constprop.0 136 -> 164, ama_ed25519_point_add 484 -> 369, ama_ed25519_scalarmult_public 860 -> 859, ama_ed25519_batch_verify 40 -> 47, ge25519_p2_dbl 332 -> 364, ge25519_p1p1_to_p3 420 -> 416, ge25519_p3_tobytes 324 -> 297, and ama_sha512 renamed to ama_sha512_oneshot at the same 296. ed25519_sign and ed25519_verify throughput is therefore NOT vouched for by the pre-change medians on this lane; carried as a coarse floor pending a canonical re-measure, with the benchmark-regression job on this PR as the check that exercises it. The previous reason named only the -Wconversion change to ge25519_p3_tobytes, which was accurate when written and is now incomplete. Correctness is pinned by ctest under QEMU including the RFC 8032 KATs, by the donna-vs-fe51 differential, and by tests/c/test_ed25519_scalarmult_contract.c."
+      },
+      {
+        "path": "src/c/ed25519_donna_shim.c",
+        "reason": "Re-measured after the Ed25519 correctness fixes, and the previous reason is withdrawn: it said \"exactly ONE symbol differs — ama_ed25519_batch_verify, 556 -> 562 instructions under x86-64 cc -O3 (1 of 49), and 295 -> 303 under aarch64-linux-gnu-gcc -O3 (1 of 48). Every other symbol is byte-identical, ed25519_keygen / ed25519_sign / ed25519_verify among them.\" That was true of the revision it was written for and false once this branch fixed donna's stale extended-t coordinate, added the per-entry NULL guard to the batch path and the AMA_TESTING_MODE allocation hook. Compiling this translation unit at 26df305 and at this commit with -O3 and diffing per-symbol instruction counts: x86-64 cc -O3, 49 -> 50 symbols, SIX differ — ama_ed25519_batch_verify 339 -> 541, ama_ed25519_verify 229 -> 389, ed25519_sign 282 -> 356, ama_ed25519_double_scalarmult_public 1053 -> 1057, ama_ed25519_point_from_scalar 37 -> 44, plus the new static ama_ge25519_restore_extended_t at 663. aarch64-linux-gnu-gcc -O3, 48 -> 49 symbols, NINE differ — batch_verify 291 -> 452, verify 189 -> 316, ed25519_sign 416 -> 477, double_scalarmult_public 871 -> 875, point_from_scalar 41 -> 52, point_add 835 -> 832, ed25519_sign_open 356 -> 355, ge25519_scalarmult_base_choose_niels.constprop.0 208 -> 209, plus the new static at 483. ed25519_sign and ama_ed25519_verify ARE on floored rows (legacy_compat.ed25519_sign / ed25519_verify), so those floors are explicitly NOT vouched for by the pre-change medians and are carried as coarse pending a canonical re-measure. The added work on the verify path is two branch-free 32-byte comparisons on public signature bytes; on the sign path it is the prologue growth from the same header being inlined. Correctness is pinned by ctest on both backends and by tools/check_ed25519_backend_parity.py, whose new byte-exact arithmetic family compares 3783 cases."
+      },
+      {
+        "path": "src/c/ama_sha512.c",
+        "reason": "New translation unit (d14ad84): public one-shot exports over the pre-existing internal/ama_sha2.h streaming core. Adds symbols nothing benchmarked calls; no instruction in any existing benchmarked path changed."
+      },
+      {
+        "path": "src/c/ama_pbkdf2.c",
+        "reason": "New translation unit (d14ad84): PBKDF2-HMAC-SHA256/512 on the existing SHA-2 cores. Adds symbols nothing benchmarked calls; no existing benchmarked path changed."
+      },
+      {
+        "path": "src/c/internal/ama_sha2.h",
+        "reason": "Rename-only (d14ad84): the file-static one-shots ama_sha512/ama_sha384 became ama_sha512_oneshot/ama_sha384_oneshot to free the names for the public exports, plus the matching call in ama_hmac_sha512_3. Static symbol names do not affect codegen; the compiled instructions are identical."
+      },
+      {
+        "path": "src/c/ama_hmac_sha384.c",
+        "reason": "Call-site rename only (d14ad84): ama_sha384 -> ama_sha384_oneshot in the long-key pre-hash. Same function, same instructions."
+      },
+      {
+        "path": "src/c/ama_slhdsa.c",
+        "reason": "Call-site renames only (d14ad84): two ama_sha512 -> ama_sha512_oneshot calls. Same function, same instructions; SLH-DSA floors describe unchanged code."
+      },
+      {
+        "path": "src/c/ama_secp256k1.c",
+        "reason": "Value barrier applied to the seven secret-derived selection masks, removing a clang -O3 branch on the Montgomery extra-reduction predicate (see baseline.json's entry for the list and CHANGELOG 'fifth pass'). secp256k1_ecdsa_sign/verify are floored primitives here too; measured cost on the x86 review host was 1.6-4.5%, well inside this lane's tolerance, but the aarch64 floors are NOT vouched for by pre-change medians. Carried as a coarse floor pending the benchmark-regression job on this PR, which is the check that exercises it."
+      },
+      {
+        "path": "src/c/ama_nistp.c",
+        "reason": "Barrier inside nistp_mask64() plus zero-initialisation of nistp_mod_add's limb buffer. No P-curve primitive carries a floor in this file; recorded because the gate reads paths, not floors.  Extended for a second change to this file: nistp_mulx_gate became `_Atomic int` with memory_order_relaxed accesses, closing a data race on the lazily-resolved MULX/ADX predicate (INVARIANT-15). Measured rather than asserted, twice over. (1) Cost: under gcc -O3 all 46 symbols in the translation unit have IDENTICAL instruction counts before and after, and the only difference anywhere in .text is five bytes -- the same five `mov` instructions with two stack spill slots exchanged (0x40(%rsp) and 0x30(%rsp)); cross-compiled for AArch64 the objects are byte-identical, because the whole block sits inside AMA_HAVE_NISTP_MONT_MULX_IMPL, which CMakeLists.txt defines only for x86-64 GCC/Clang. (2) Reach: a live call counter wrapped around every native_nistp_* entry point and run over all 19 benchmarked operations recorded 0 calls -- and the counter is not vacuous, since it increments on a direct native_nistp_keypair call. The structural claim above is therefore confirmed by measurement rather than inherited: no floored row reaches this file."
+      },
+      {
+        "path": "src/c/ama_consttime.c",
+        "reason": "Adds ama_build_optimization_probe() under AMA_TESTING_MODE only; the production library never compiles it, so no benchmarked call changes."
+      },
+      {
+        "path": "ama_cryptography/__init__.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/_artefact_source.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/_build_sign.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/_module_state.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/_self_test.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call. Specific to this file: the package-integrity digest is length-prefixed and _cache_header_is_live consults _imp.check_hash_based_pycs. Both are import-time POST work."
+      },
+      {
+        "path": "ama_cryptography/adaptive_posture.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/ascon.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/crypto_api.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/double_helix_engine.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/equations.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/exceptions.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/hybrid_combiner.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/integrity.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/key_formats.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/key_management.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/legacy_compat.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/monitoring.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/pqc_backends.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call. Specific to this file: it IS on the benchmarked path, and that is why its floors were re-measured in this PR rather than acknowledged."
+      },
+      {
+        "path": "ama_cryptography/rfc3161_timestamp.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call. Specific to this file: the replay nonce now draws through secure_token_bytes instead of secrets.randbits (INVARIANT-41); it is minted once per TSA request, not inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/secure_channel.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "ama_cryptography/session.py",
+        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+      },
+      {
+        "path": "include/ama_cryptography.h",
+        "reason": "Declarations only — no executable code is generated from this header into the benchmarked library. Itemised per file rather than acknowledged as the `include` prefix, which pre-approved every future header this project might add, including one that is not declarations-only."
+      },
+      {
+        "path": "include/ama_dispatch.h",
+        "reason": "Declarations only — no executable code is generated from this header into the benchmarked library. Itemised per file rather than acknowledged as the `include` prefix, which pre-approved every future header this project might add, including one that is not declarations-only."
+      },
+      {
+        "path": "src/c/avx2/ama_avx2_internal.h",
+        "reason": "Declaration removed (ama_sha3_256_avx2) when the unread dispatch-table slot went. No executable code is generated from this header."
+      },
+      {
+        "path": "src/c/avx2/ama_sha3_avx2.c",
+        "reason": "ama_sha3_256_avx2 deleted with the dispatch slot that was its only caller. Measured before removal at 4.4x-4.7x SLOWER than the ama_sha3_256 path that replaces it, so no benchmarked call gets slower; ama_keccak_f1600_avx2, which the floors do describe, is untouched."
+      },
+      {
+        "path": "src/c/internal/ama_ed25519_canonical.h",
+        "reason": "Adds ama_ed25519_signature_r_is_canonical and ama_ed25519_point_encoding_is_canonical — branch-free byte comparisons on PUBLIC signature and point encodings, on the verify and decode paths only. Header-only static inline, so its cost appears inside the translation units that include it; the measured per-symbol effect on both Ed25519 backends is recorded on the src/c/ed25519_donna_shim.c and src/c/ama_ed25519.c entries rather than repeated here. The Ed25519 verify floors are not vouched for by the pre-change medians to better than that; carried as a coarse floor pending a canonical re-measure."
+      },
+      {
+        "path": "ama_cryptography/_integrity_digest.txt",
+        "reason": "Generated integrity artefact, rewritten by the signer on every build. It carries only literal assignments (a digest, a pubkey, a signature, a binding-digest map) and is read once at import by POST; no benchmarked call touches it. Named explicitly because the `ama_cryptography` directory prefix that used to cover it has been removed — a generated file is still a file, and the point of itemising is that nothing is covered by accident."
+      },
+      {
+        "path": "ama_cryptography/_integrity_signature.py",
+        "reason": "Generated integrity artefact, rewritten by the signer on every build. It carries only literal assignments (a digest, a pubkey, a signature, a binding-digest map) and is read once at import by POST; no benchmarked call touches it. Named explicitly because the `ama_cryptography` directory prefix that used to cover it has been removed — a generated file is still a file, and the point of itemising is that nothing is covered by accident."
+      },
+      {
+        "path": "src/c/avx2/ama_x25519_avx2.c",
+        "reason": "Comment-only change: the file-header optimization marker was re-headed from TODO(AVX-512-IFMA) to an explicit design note in the 2026-08-23 maintenance pass; no statement outside comments was touched. Measured rather than asserted: the compiled .text section is byte-identical before and after under gcc -O3 -mavx2 (12,684 bytes, cmp exit 0). It cannot move a floor."
+      },
+      {
+        "path": "src/c/ama_dilithium.c",
+        "reason": "Three dil_*_reduce calls added immediately before an invNTT: keygen (dil_keygen_internal, t = A*s1, a k-fold accumulator), the secret-key consistency check (dil_pubkey_from_sk, acc = A_row*s1hat, l-fold), and signing (dil_sign_internal, w = A*NTT(y), l-fold, once per rejection-sampling attempt). Each fed an accumulator bounded only by l*q straight into dil_invntt, whose butterfly bound assumes |coeff| < q; the reduce restores that precondition. No aarch64 valgrind was available on the runner this was measured from, so the dynamic figures are x86-64 (gcc -O3 -DNDEBUG Release static link, per-op cost isolated as (Ir at n=20 minus Ir at n=4) / 16 so startup and the FIPS 140-3 POST cancel): dilithium_keygen 1,552,881 -> 1,557,464 Ir (+0.295%), dilithium_sign 5,413,012 -> 5,435,056 Ir (+0.407%), and the untouched dilithium_verify control 1,577,424 -> 1,577,424 Ir (-0.6 instructions per op, the instrument's resolution). The aarch64 evidence is static: aarch64-linux-gnu-gcc 13.3.0 -O3 -mbranch-protection=standard per-symbol disassembly puts 42 of 47 symbols instruction-identical after branch-target normalisation, and the four that changed are the three functions holding the new call sites plus gcc's constprop clone of the signing one -- dil_keygen_internal 1403 -> 1452, dil_pubkey_from_sk 1088 -> 1183, dil_sign_internal 3128 -> 3161, dil_sign_internal.constprop.0 2228 -> 2284. The fifth delta is a single alignment nop dropped from ama_dilithium_ntt_generic_ref (284 -> 283); no instruction in that kernel changed. gcc vectorises the added reduce to NEON -- add v.4s #0x40 lsl 16 / sshr v.4s #23 / mla v.4s -- four coefficients per iteration, so the per-coefficient cost on aarch64 is at or below the x86-64 path that was measured and the x86-64 percentages stand as a conservative upper bound. The AArch64 floors carry 15 / 25 / 15 percent tolerance against 1634 / 3316 / 11733 ops/sec, so a 0.41% worst-case cost is far inside the band. The benchmarked operation is unchanged: over 64 deterministic seeds the public key, secret key, signature, and pubkey-from-privkey output are byte-identical before and after and every signature verifies, because dil_reduce32 returns the centred representative of the same residue and the invNTT is linear mod q."
+      },
+      {
+        "path": "ama_cryptography/secure_memory.py",
+        "reason": "secure_memzero and secure_mlock/secure_munlock now size their address+length call from .nbytes rather than len() -- len() on a memoryview counts ITEMS, and the native back-ends' ctypes.from_buffer accepts a length smaller than the buffer, so a wide-itemsize view was wiped in part and reported success -- via a new _byte_length helper that also refuses a non-contiguous view. Measured rather than asserted: the edited functions are on NO benchmarked path. A live call counter wrapped around all three and run over every one of the 19 benchmarked operations -- every entry of benchmark_runner.py's benchmark_functions and pqc_benchmark_functions -- recorded 0 calls to each, and the counter is not vacuous: the same instrumentation records 2 secure_memzero calls during SecureSession.close(). Were it on such a path, the helper costs 67 ns per call over the bare len() it replaced (best of 7 x 2,000,000 timeit rounds on x86-64 CPython 3.11: 101.18 ns against 34.05 ns for a bytearray). Nothing else in the module changed: the pure-Python fallback loop, the back-end selection and every wipe pass are untouched."
+      },
+      {
+        "path": "src/c/PROVENANCE.md",
+        "reason": "A Markdown file. _FLOORED_CODE_PATHS matches the src/c prefix, so every file beneath it is reported, documentation included. The edit corrects a sentence that named a tests/test_constant_time.py -- a file that has never existed in this repository -- as where the dudect regression tests run; they run from tests/c/test_dudect.c (built with -DAMA_ENABLE_DUDECT=ON) and the standalone harnesses under tools/constant_time/. Measured rather than asserted: the file appears in no CMake source list and in no build script (grep over CMakeLists.txt and cmake/ returns nothing), and no translation unit includes it -- the five matches under src/c are prose inside comments, not #include directives. It reaches no compiled artefact, so it cannot move a floor on either file."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/curve25519-donna-64bit.h",
+        "reason": "Not compiled on AArch64 at all, so it cannot move an arm64 benchmark: AMA_ED25519_ASSEMBLY defaults ON only for x86_64 (build-arm/CMakeCache.txt records it OFF), the donna shim is added to AMA_SOURCES only inside the x86_64 branch, and this target builds src/c/ama_ed25519.c (fe51) instead -- grep for ed25519_donna_shim in build-arm/build.ninja returns 0. The change itself replaces four *(uint64_t *)(in + n) loads in curve25519_expand with memcpy of the same spans, and on x86-64 -- where it IS compiled -- the linked library is byte-identical before and after (md5 831a0934cb230e2a009e59a0291f461f, control 48cd36a1f63492daa2be50802c883d10)."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/curve25519-donna-32bit.h",
+        "reason": "Not compiled on AArch64 at all, so it cannot move an arm64 benchmark: AMA_ED25519_ASSEMBLY defaults ON only for x86_64 (build-arm/CMakeCache.txt records it OFF), the donna shim is added to AMA_SOURCES only inside the x86_64 branch, and this target builds src/c/ama_ed25519.c (fe51) instead -- grep for ed25519_donna_shim in build-arm/build.ninja returns 0. It is additionally unselected on every platform: ED25519_SSE2 and ED25519_FORCE_32BIT are defined 0 times across CMakeLists.txt, cmake/, setup.py and the Makefile."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/curve25519-donna-sse2.h",
+        "reason": "Not compiled on AArch64 at all, so it cannot move an arm64 benchmark: AMA_ED25519_ASSEMBLY defaults ON only for x86_64 (build-arm/CMakeCache.txt records it OFF), the donna shim is added to AMA_SOURCES only inside the x86_64 branch, and this target builds src/c/ama_ed25519.c (fe51) instead -- grep for ed25519_donna_shim in build-arm/build.ninja returns 0. It is additionally unselected on every platform: ED25519_SSE2 is defined 0 times across CMakeLists.txt, cmake/, setup.py and the Makefile."
+      },
+      {
+        "path": "src/c/internal/ama_ct_barrier.h",
+        "reason": "Comment-only: the audit-M24 withdrawal of the clang-18 bt/jae claim is now stated here as well as at the use site, ending the contradiction between the two records. Measured, not asserted: gcc -E -P over src/c/ama_aes_gcm.c (the including TU) is byte-identical before and after the edit — the preprocessor strips comments, so no compiler can produce a different object from this change."
+      },
+      {
+        "path": "src/c/ama_argon2.c",
+        "reason": "blake2b_final gains one ama_secure_memzero of its 64-byte local serialization buffer, which held the full password-derived H0 on the dead frame (INVARIANT-6). Cost is bounded by call structure, not measured noise: blake2b_final has 5 call sites, all in the constant-count H0/H' phases of a derive — never in the per-block G loop that dominates Argon2id — so the addition is a few hundred cycles against a memory-hard derive, and no floored primitive in this baseline calls blake2b at all (their hash paths are SHA-2/SHA-3)."
+      },
+      {
+        "path": "src/c/avx2/ama_dilithium_avx2.c",
+        "reason": "ama_dilithium_ntt_avx2 / ama_dilithium_invntt_avx2 each gain one ama_secure_memzero of their 1 KiB __m256i f[32] staging array, which held the complete polynomial (s1/s2 and the signing mask y on the ML-DSA signing path) in the frame after return (INVARIANT-6/12; the same scrub the SVE2 twin src/c/sve2/ama_dilithium_sve2.c already carries). Measured, not asserted: build-release benchmark_c_raw on this host, 3 runs each side, ML-DSA-65 NTT (dispatch) median 1.266-1.272 us before vs 1.417-1.431 us after (+~0.16 us/call), invNTT 1.293-1.307 -> 1.477-1.492 us. At the floored Python-path granularity that bounds to ~1-2% of an ML-DSA-65 sign (tens of NTT/invNTT calls against a 175-350 us operation), well inside the dilithium rows' tolerance; erasing key material off dead frames is what the barrier exists to buy."
+      },
+      {
+        "path": "src/c/ama_secure_memory.c",
+        "reason": "ama_secure_mlock() gains a page-aligned madvise(MADV_DONTDUMP) with fail-closed reporting and a translation-unit _DEFAULT_SOURCE feature guard (v5 audit item 10: under -std=c11 the MADV_* macros were hidden so the documented core-dump protection had never compiled into any Linux binary). ama_secure_mlock is not on any floored primitive's measured path — it is invoked from ama_secure_alloc for key-material buffers, never from the KEM / signature / hash / HKDF / AEAD hot loops these floors describe. No floor is at risk."
+      },
+      {
+        "path": "src/c/avx2/ama_argon2_avx2.c",
+        "reason": "ama_argon2_g_avx2 gains three ama_secure_memzero calls (R[128] / Z[128] / scratch[16], ~2 KiB of password-derived block staging) at return (v5 audit item 15, INVARIANT-6/12; matches the identical scrub added to the NEON twin and the treatment ama_dilithium_avx2 already carries). Argon2 is NOT among the floored primitives in this baseline — benchmarks + pqc_benchmarks cover SHA3 / HMAC / Ed25519 / secp256k1 / HKDF / package / Dilithium / Kyber / AES-GCM / ChaCha20 / X25519, with no Argon2 row — so no floor measures this function and none is at risk."
+      },
+      {
+        "path": "include/ama_cpuid.h",
+        "reason": "Declaration-only removal: the AEAD backend-selection surface (ama_aead_backend_t, ama_select_aead, ama_aead_backend_name) had no caller anywhere in the tree — not in C, the ctypes layer, tests, fuzz harnesses or docs — and its definitions left src/c/ama_cpuid.c in the same edit. No floored primitive reached that code, so no measured path changed."
+      },
+      {
+        "path": "src/c/ama_sha256.h",
+        "reason": "Declaration-only removal: the ama_sha256_2 prototype, an AMA_API export with no caller in C, Python, tests or fuzz harnesses; its definition left src/c/ama_sha256.c in the same edit. The floored SHA-256 paths (ama_sha256, ama_hmac_sha256_2) are untouched."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/test.c",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/test-internals.c",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/test-ticks.h",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/regression.h",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
+      }
+    ]
   },
   "thresholds": {
     "regression_threshold_percent": 10,
@@ -196,81 +675,81 @@
     "ama_sha3_256_hash": {
       "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 267241,
+      "baseline_value": 426967,
       "unit": "ops/sec",
-      "tolerance_percent": 35,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "hmac_sha3_256": {
       "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 169111,
+      "baseline_value": 285176,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 10116,
+      "baseline_value": 10099,
       "unit": "ops/sec",
-      "tolerance_percent": 35,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 30266,
+      "baseline_value": 45539,
       "unit": "ops/sec",
-      "tolerance_percent": 35,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "ed25519_verify": {
       "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 11855,
+      "baseline_value": 18199,
       "unit": "ops/sec",
-      "tolerance_percent": 35,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "secp256k1_ecdsa_sign": {
       "description": "secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
       "metric": "operations_per_second",
-      "baseline_value": 1050,
+      "baseline_value": 10342,
       "unit": "ops/sec",
-      "tolerance_percent": 45,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "secp256k1_ecdsa_verify": {
       "description": "secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
       "metric": "operations_per_second",
-      "baseline_value": 1300,
+      "baseline_value": 4316,
       "unit": "ops/sec",
-      "tolerance_percent": 45,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "hkdf_derive": {
       "description": "HKDF-SHA3-256 key derivation (3 keys)",
       "metric": "operations_per_second",
-      "baseline_value": 112321,
+      "baseline_value": 176697,
       "unit": "ops/sec",
-      "tolerance_percent": 35,
+      "tolerance_percent": 15,
       "tier": "microbenchmark"
     },
     "full_package_create": {
       "description": "Complete crypto package creation (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 3301,
+      "baseline_value": 2379,
       "unit": "ops/sec",
-      "tolerance_percent": 70,
+      "tolerance_percent": 25,
       "tier": "complex_operation"
     },
     "full_package_verify": {
       "description": "Complete crypto package verification (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 3965,
+      "baseline_value": 4426,
       "unit": "ops/sec",
-      "tolerance_percent": 50,
+      "tolerance_percent": 15,
       "tier": "complex_operation"
     }
   },
@@ -278,74 +757,74 @@
     "dilithium_keygen": {
       "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 1705,
+      "baseline_value": 1634,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     },
     "dilithium_sign": {
       "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 3053,
+      "baseline_value": 3316,
       "unit": "ops/sec",
-      "tolerance_percent": 50,
-      "optional": true
+      "tolerance_percent": 25,
+      "optional": false
     },
     "dilithium_verify": {
       "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 7383,
+      "baseline_value": 11733,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     },
     "kyber_keygen": {
       "description": "ML-KEM-1024 (Kyber) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 3684,
+      "baseline_value": 3729,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     },
     "kyber_encapsulate": {
       "description": "ML-KEM-1024 (Kyber) encapsulation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 12889,
+      "baseline_value": 20105,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     },
     "aes_256_gcm_encrypt": {
       "description": "AES-256-GCM encryption of 1KB data (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 184088,
+      "baseline_value": 234678,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     },
     "chacha20poly1305_encrypt": {
       "description": "ChaCha20-Poly1305 encryption of 1KB data (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 132056,
+      "baseline_value": 195365,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     },
     "x25519_scalarmult": {
-      "description": "X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts \u2014 see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 \u2192 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it.",
+      "description": "X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 → 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it.",
       "metric": "operations_per_second",
-      "baseline_value": 16281,
+      "baseline_value": 25167,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     },
     "x25519_scalarmult_batch4": {
-      "description": "X25519 batch-4 Diffie-Hellman under default dispatch \u2014 measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default \u2014 that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls.",
+      "description": "X25519 batch-4 Diffie-Hellman under default dispatch — measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default — that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls.",
       "metric": "operations_per_second",
-      "baseline_value": 3888,
+      "baseline_value": 6011,
       "unit": "ops/sec",
-      "tolerance_percent": 40,
-      "optional": true
+      "tolerance_percent": 15,
+      "optional": false
     }
   }
 }

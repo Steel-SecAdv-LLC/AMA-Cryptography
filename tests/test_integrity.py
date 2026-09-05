@@ -16,12 +16,17 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from ama_cryptography.integrity import main
+
+#: The installed package directory, for the two subprocess tests that need a
+#: real tree to verify and a real tree to tamper with.
+PACKAGE_DIR = Path(__file__).resolve().parent.parent / "ama_cryptography"
 
 # ---------------------------------------------------------------------------
 # CLI argument parsing
@@ -136,17 +141,64 @@ class TestModuleInvocation:
         assert len(result.stdout.strip()) > 0
 
     def test_verify_via_subprocess(self) -> None:
-        """Verify command should succeed when digest is up to date."""
+        """``--verify`` must SUCCEED on this tree, and say so.
+
+        It used to assert ``returncode in (0, 1)`` — which is every outcome the
+        subcommand has, success and integrity failure alike — and then that the
+        combined output contained "integrity" or "Module", which both the
+        success and the failure banner do.  The only way it could fail was an
+        unhandled crash at exit >= 2 with no matching text, so it did not test
+        the verification it names.
+
+        The clean direction is asserted here; the tampered direction is
+        :meth:`test_a_tampered_tree_is_refused` below.  A one-sided pass
+        proves nothing on its own — the command could return 0 unconditionally.
+        """
+        if not (PACKAGE_DIR / "_integrity_signature.py").exists():
+            pytest.skip("unsigned tree: run `python -m ama_cryptography.integrity --update --sign`")
         result = subprocess.run(
             [sys.executable, "-m", "ama_cryptography.integrity", "--verify"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
         )
-        # May fail if digest is stale, but should not crash
-        assert result.returncode in (0, 1)
+        assert result.returncode == 0, (
+            "--verify failed on the repository's own tree:\n"
+            + (result.stdout + result.stderr)[-2000:]
+        )
+        assert "Module integrity: OK" in result.stdout, result.stdout[-2000:]
+
+    def test_a_tampered_tree_is_refused(self, tmp_path: Path) -> None:
+        """The other direction, in a copy: one changed byte must be caught.
+
+        Without this the assertion above is satisfied by a command that always
+        returns 0.
+        """
+        if not (PACKAGE_DIR / "_integrity_signature.py").exists():
+            pytest.skip("unsigned tree: nothing to tamper with")
+        import os
+        import shutil
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        shutil.copytree(PACKAGE_DIR, root / "ama_cryptography")
+        shutil.rmtree(root / "ama_cryptography" / "__pycache__", ignore_errors=True)
+
+        # Change one signed .py file, leaving the artefact untouched.
+        victim = root / "ama_cryptography" / "exceptions.py"
+        victim.write_text(victim.read_text(encoding="utf-8") + "\n# tampered\n", encoding="utf-8")
+
+        result = subprocess.run(
+            [sys.executable, "-m", "ama_cryptography.integrity", "--verify"],
+            capture_output=True,
+            text=True,
+            cwd=str(root),
+            env=dict(os.environ, PYTHONPATH=str(root), AMA_POST_DIAGNOSTIC_IMPORT="1"),
+            timeout=120,
+        )
         combined = result.stdout + result.stderr
-        assert "integrity" in combined.lower() or "Module" in combined
+        assert result.returncode != 0, combined[-2000:]
+        assert "Module integrity: OK" not in result.stdout, combined[-2000:]
 
 
 # ---------------------------------------------------------------------------

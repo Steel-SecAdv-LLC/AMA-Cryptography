@@ -3,10 +3,16 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(AmaCryptography
-    VERSION 4.0.0
+    VERSION 5.0.0
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
 )
+
+# GNU install-directory conventions: gives CMAKE_INSTALL_LIBDIR (lib vs lib64
+# vs lib/<triplet>) and CMAKE_INSTALL_INCLUDEDIR so install destinations and
+# the generated .pc track the host's multilib layout instead of a hardcoded
+# `lib` a distro packager would otherwise have to patch (audit Low).
+include(GNUInstallDirs)
 
 # Build options
 option(AMA_BUILD_SHARED "Build shared library" ON)
@@ -181,6 +187,102 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
 
+    # ELF link-time hardening.
+    #
+    # The MSVC branch above has carried /guard:cf /DYNAMICBASE /NXCOMPAT since
+    # this file was written; the ELF equivalents were never added, so on the
+    # platform that ships the overwhelming majority of installs the library had
+    # a lazily-bound, writable GOT and relied on the toolchain default for a
+    # non-executable stack.  A memory-corruption bug anywhere in the C code was
+    # therefore more exploitable here than on Windows.
+    #
+    #   relro + now  — full RELRO: the GOT is resolved at load and mapped
+    #                  read-only, closing GOT-overwrite as an exploit primitive.
+    #   noexecstack  — marks the stack non-executable.  Usually the default, but
+    #                  a single assembly object without .note.GNU-stack silently
+    #                  makes the WHOLE image executable-stack, and this project
+    #                  links hand-written assembly (ed25519-donna).
+    #
+    # Checked for support rather than assumed, so a toolchain without them still
+    # configures (the checks below are cheap and run once).
+    include(CheckLinkerFlag OPTIONAL RESULT_VARIABLE _have_check_linker_flag)
+    if(_have_check_linker_flag)
+        check_linker_flag(C "LINKER:-z,relro,-z,now" AMA_HAVE_RELRO_NOW)
+        check_linker_flag(C "LINKER:-z,noexecstack" AMA_HAVE_NOEXECSTACK)
+    endif()
+    if(AMA_HAVE_RELRO_NOW)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now")
+    endif()
+    if(AMA_HAVE_NOEXECSTACK)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack")
+    endif()
+
+    # Control-flow integrity, per architecture — and NOT left to the toolchain.
+    #
+    # The MSVC branch above has carried /guard:cf since this file was written.
+    # On ELF the property was arriving by accident where it arrived at all:
+    # Ubuntu patches GCC to enable -fcf-protection by default, so every AMA
+    # x86-64 object happened to carry IBT + shadow stack (measured: `readelf
+    # -nW` on the built .so reports "x86 feature: IBT, SHSTK", and so does a
+    # flagless `int main(void){return 0;}` compiled with the same gcc — the
+    # flag is the distribution's, not this project's).  A toolchain without
+    # that patch — upstream GCC, or the musl/Alpine image this repository
+    # ships a Dockerfile for — produces the same sources with no CET at all,
+    # and nothing here would have noticed.
+    #
+    # AArch64 had no such accident to inherit.  The same probe against
+    # aarch64-linux-gnu-gcc emits no AArch64 GNU property, and neither did
+    # libama_cryptography.so on that architecture: **every arm64 wheel shipped
+    # with no branch-target identification and no return-address signing while
+    # the x86-64 wheel shipped with full CET.**  That asymmetry was not a
+    # decision recorded anywhere; it was the absence of one.
+    #
+    #   -fcf-protection=full        x86: ENDBR64 landing pads (IBT) + shadow
+    #                               stack (SHSTK).
+    #   -mbranch-protection=standard AArch64: `bti c` landing pads (FEAT_BTI)
+    #                               + PAC-RET return-address signing
+    #                               (FEAT_PAuth), which is what `standard`
+    #                               expands to.
+    #
+    # Both are backwards-compatible by construction, which is why this is a
+    # free hardening rather than a portability trade: ENDBR64 decodes as a
+    # multi-byte NOP on pre-CET x86, and `bti`/`paciasp`/`autiasp` sit in the
+    # AArch64 hint (NOP) space on pre-Armv8.3/8.5 cores.  A binary built with
+    # them runs unchanged on hardware that has neither.
+    #
+    # Neither is secret-dependent: the inserted instructions are unconditional
+    # and data-independent, so INVARIANT-12 is unaffected (confirmed by the
+    # constant-time suites after the change).
+    #
+    # BTI in particular is all-or-nothing at link time — the linker emits the
+    # output property only if EVERY input object carries it — so this must stay
+    # a global flag rather than a per-file one.  This tree has no hand-written
+    # assembly translation unit (`git ls-files '*.S' '*.s'` is empty), so there
+    # is no object that cannot carry the marking.
+    #
+    # Probed rather than assumed, matching the linker-flag checks above: a
+    # toolchain that does not accept the flag still configures.
+    include(CheckCCompilerFlag)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        check_c_compiler_flag("-mbranch-protection=standard" AMA_HAVE_BRANCH_PROTECTION)
+        if(AMA_HAVE_BRANCH_PROTECTION)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mbranch-protection=standard")
+            message(STATUS "CFI: AArch64 BTI + PAC-RET (-mbranch-protection=standard)")
+        else()
+            message(STATUS "CFI: -mbranch-protection=standard unsupported — AArch64 CFI off")
+        endif()
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|i[3-6]86|x86")
+        check_c_compiler_flag("-fcf-protection=full" AMA_HAVE_CF_PROTECTION)
+        if(AMA_HAVE_CF_PROTECTION)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fcf-protection=full")
+            message(STATUS "CFI: x86 IBT + shadow stack (-fcf-protection=full)")
+        else()
+            message(STATUS "CFI: -fcf-protection=full unsupported — x86 CFI off")
+        endif()
+    endif()
+
     # Position-independent code: scoped to shared library target only
     # (see set_target_properties on ama_cryptography_shared below)
 
@@ -189,11 +291,22 @@ else()
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fomit-frame-pointer")
 
     # -march=native enables the full ISA of the build host (AVX2, SHA-NI,
-    # AES-NI, BMI2, AVX-512 etc.). Guarded by AMA_ENABLE_NATIVE_ARCH so CI
-    # can disable it for portable builds.
+    # AES-NI, BMI2, AVX-512 etc.).  It is appended to the GLOBAL
+    # CMAKE_C_FLAGS_RELEASE, so it deliberately applies to every TU — a strict
+    # superset of the per-file SIMD scoping the default build relies on.  That
+    # is intentional and confined to one use: host-tuned benchmark/local builds,
+    # where the numbers must reflect the microarchitecture users run on.
+    #
+    # AMA_ENABLE_NATIVE_ARCH is OFF by default (see option() above) and is set
+    # ON by exactly one CI lane — the benchmark build in .github/workflows/ci.yml
+    # (AMA_BUILD_TESTS=OFF) — and by NO wheel, sdist, release or static-analysis
+    # path.  So the CHANGELOG's "zero AVX opcodes outside src/c/avx2 /
+    # src/c/avx512" and the objdump scoping gate describe the DEFAULT build,
+    # which is what ships; this knob is the one documented exception — opt-in,
+    # global by design, and never on a release artefact.
     if(AMA_ENABLE_NATIVE_ARCH)
         set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
-        message(STATUS "Native arch: -march=native enabled (host-optimized)")
+        message(STATUS "Native arch: -march=native enabled (host-optimized, GLOBAL; benchmark/local only)")
     endif()
 
     # -funroll-loops helps the Keccak-f[1600] 24-round permutation loop
@@ -204,26 +317,96 @@ else()
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fno-omit-frame-pointer")
 endif()
 
-# Sanitizers for debug builds (GCC/Clang only)
+# Sanitizers (GCC/Clang only).
+#
+# Applied to CMAKE_C_FLAGS, not CMAKE_C_FLAGS_DEBUG: the config-specific form
+# meant `-DAMA_ENABLE_SANITIZERS=ON` was a silent no-op for every build type
+# except Debug — including the realistic "test what you ship" Release run and
+# the empty default — while the configuration summary still printed
+# "Sanitizers: ON".  A sanitizer run that instruments nothing and reports clean
+# is worse than not running one.
 if(AMA_ENABLE_SANITIZERS AND NOT MSVC)
-    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address,undefined")
-    set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address,undefined -fno-omit-frame-pointer")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address,undefined")
+
+    # ...and take -fomit-frame-pointer back OUT of the per-config flags.
+    #
+    # CMake emits `${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_<CONFIG>}` in that order,
+    # and GCC/Clang resolve conflicting -f options last-one-wins.  The Release
+    # block above appends `-fomit-frame-pointer`, so it landed AFTER the
+    # `-fno-omit-frame-pointer` set here and cancelled it — in exactly the
+    # "test what you ship" Release configuration the move to CMAKE_C_FLAGS was
+    # made for.  Without frame pointers ASan/UBSan still detect, but their
+    # stack traces degrade to the unwinder's best guess, which is the half of a
+    # sanitizer report a human uses.
+    #
+    # Stripped rather than re-appended, so there is one flag on the line and no
+    # dependence on the order two blocks happen to run in.
+    foreach(_ama_san_config C_FLAGS_RELEASE C_FLAGS_RELWITHDEBINFO C_FLAGS_MINSIZEREL
+                            CXX_FLAGS_RELEASE CXX_FLAGS_RELWITHDEBINFO CXX_FLAGS_MINSIZEREL)
+        string(REPLACE "-fomit-frame-pointer" "" _ama_san_stripped
+               "${CMAKE_${_ama_san_config}}")
+        set(CMAKE_${_ama_san_config} "${_ama_san_stripped}")
+    endforeach()
+    unset(_ama_san_stripped)
+    unset(_ama_san_config)
 endif()
 
-# SIMD flags (AVX2 is x86_64-only — skip on ARM/Apple Silicon)
-if(AMA_ENABLE_SIMD)
-    if(AMA_ENABLE_AVX2)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
-            if(MSVC)
-                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX2 /DAMA_HAS_AVX2")
-            else()
-                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -DAMA_HAS_AVX2")
-            endif()
-        else()
-            message(STATUS "AVX2 requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
-        endif()
+# Fuzzing instrumentation.
+#
+# MUST be set here, before any target is created, so it reaches the LIBRARY the
+# harnesses link against.  fuzz/CMakeLists.txt applies its flags with
+# target_compile_options on the harness executables only, and those harnesses
+# link `ama_cryptography_static` — built, until this block existed, from the
+# ordinary flags with no sanitizer and no coverage instrumentation at all.
+# The consequences were that libFuzzer received SanitizerCoverage feedback from
+# the ~100-line harness and nothing else (so "coverage-guided" fuzzing of the
+# crypto code was effectively blind random testing), and ASan/UBSan could not
+# see an out-of-bounds access or an overflow inside the library, because
+# uninstrumented loads and stores are never shadow-checked.  Every 60-second CI
+# fuzz run and every `make fuzz-run` reported green while being structurally
+# incapable of finding a memory-safety bug in ML-KEM, ML-DSA, AES-GCM or the
+# signature parsers.  oss-fuzz/build.sh has always injected $CFLAGS into the
+# library for exactly this reason; the first-party path was the anomaly.
+#
+# `fuzzer-no-link` gives the library coverage instrumentation without pulling in
+# libFuzzer's main(); the harness targets add plain `fuzzer` at link time.
+if(AMA_BUILD_FUZZ AND NOT MSVC)
+    if(NOT DEFINED AMA_FUZZ_ENGINE OR AMA_FUZZ_ENGINE STREQUAL "libfuzzer")
+        set(CMAKE_C_FLAGS
+            "${CMAKE_C_FLAGS} -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer")
+    else()
+        set(CMAKE_C_FLAGS
+            "${CMAKE_C_FLAGS} -fsanitize=address,undefined -fno-omit-frame-pointer")
     endif()
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address,undefined")
+endif()
 
+# SIMD build gating.
+#
+# AVX2 (and any other ISA-extension code) is enabled PER FILE via
+# set_source_files_properties below, never globally.  A global `-mavx2` on
+# CMAKE_C_FLAGS licenses the compiler to auto-vectorise ordinary C in EVERY
+# translation unit — including the CPUID probe, the runtime dispatcher, and
+# the portable scalar fallbacks that exist precisely for CPUs WITHOUT AVX2 —
+# into YMM instructions.  Those TUs are reached on every host regardless of
+# the runtime CPUID dispatch, so a global flag turns "portable fallback the
+# dispatcher correctly selected" into a SIGILL on any pre-AVX2 x86-64 part
+# (pre-Haswell Intel, pre-Excavator AMD, and the Atom/Celeron/Pentium lines
+# that shipped without AVX2 well into the 2020s).  Release wheels build with
+# the defaults, so this would crash real installs before main().
+#
+# The hand-written AVX2/AVX-512/VAES/SHA-NI kernels below get their -m flags
+# per file and are only ever entered through the CPUID-gated dispatch table,
+# so nothing that needs the flags loses them.  The former `-DAMA_HAS_AVX2`
+# macro was consumed by no source file (the real gate is AMA_HAVE_AVX2_IMPL,
+# set alongside the per-file sources) and is intentionally not reintroduced.
+if(AMA_ENABLE_SIMD)
+    if(AMA_ENABLE_AVX2 AND NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86"))
+        message(STATUS "AVX2 requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
+    endif()
 endif()
 
 # ============================================================================
@@ -233,6 +416,19 @@ endif()
 # ============================================================================
 
 set(AMA_AVX2_SOURCES "")
+# AES-NI + PCLMULQDQ kernels.  A SEPARATE list from AMA_AVX2_SOURCES on
+# purpose: src/c/avx2/ama_aes_gcm_avx2.c emits AESENC / AESENCLAST /
+# AESKEYGENASSIST / PCLMULQDQ plus SSSE3 pshufb (the GCM byte-swap) and
+# NOTHING WIDER — no _mm256_* intrinsic appears in it — so requiring AVX2 to
+# compile it was a coupling the ISA does not have.  Its per-file flags below
+# are -maes -mpclmul -mssse3 -msse4.1 (never -mavx2).  It cost hardware AES-GCM on every x86 CPU with AES-NI but without
+# AVX2 (Westmere through Ivy Bridge, and any VM masking the AVX2 bit), and on
+# every build configured with -DAMA_ENABLE_AVX2=OFF or -DAMA_ENABLE_SIMD=OFF —
+# silently, since the dispatcher simply installs the constant-time bitsliced
+# software path instead.  The file keeps its src/c/avx2/ location so its
+# history, its warning-allowlist entries and its benchmark-baseline
+# acknowledgements stay attached to one path; only the gating moves.
+set(AMA_X86_AESNI_SOURCES "")
 set(AMA_AVX512_SOURCES "")
 set(AMA_NEON_SOURCES "")
 set(AMA_SVE2_SOURCES "")
@@ -246,7 +442,6 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             src/c/avx2/ama_kyber_avx2.c
             src/c/avx2/ama_dilithium_avx2.c
             src/c/avx2/ama_sphincs_avx2.c
-            src/c/avx2/ama_aes_gcm_avx2.c
             src/c/avx2/ama_aes_gcm_vaes_avx2.c
             src/c/avx2/ama_chacha20poly1305_avx2.c
             src/c/avx2/ama_argon2_avx2.c
@@ -408,13 +603,54 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
             src/c/neon/ama_dilithium_neon.c
             src/c/neon/ama_sphincs_neon.c
             src/c/neon/ama_aes_gcm_neon.c
-            src/c/neon/ama_ed25519_neon.c
             src/c/neon/ama_chacha20poly1305_neon.c
             src/c/neon/ama_argon2_neon.c
         )
-        if(NOT MSVC)
+        if(NOT MSVC AND NOT AMA_FORCE_NO_ARM_CRYPTO)
             set_source_files_properties(${AMA_NEON_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-march=armv8-a+crypto")
+            # The AES-GCM and SPHINCS+ NEON kernels are the two whose bodies
+            # sit behind ARM Crypto Extension feature macros
+            # (__ARM_FEATURE_AES / __ARM_FEATURE_SHA2), which only the
+            # +crypto flag above turns on.  This definition says "those
+            # kernels exist in this build", so the dispatcher can reference
+            # them; without it, src/c/dispatch/ama_dispatch.c took the
+            # address of ama_aes256_gcm_encrypt_neon / _decrypt_neon
+            # unconditionally under AMA_HAVE_NEON_IMPL while
+            # src/c/neon/ama_aes_gcm_neon.c compiled to a bare typedef.
+            #
+            # MSVC is the configuration that made that unlinkable: it never
+            # defines the ACLE feature macros (they are GCC/Clang spellings),
+            # takes no -march flag, and CMAKE_SYSTEM_PROCESSOR ARM64 sets
+            # AMA_HAVE_NEON_IMPL for it — so every MSVC ARM64 build ended in
+            # LNK2019 on two symbols the TU had not defined.  Reproduced here
+            # with the equivalent GCC condition: compiling that TU for
+            # aarch64 at -march=armv8-a (no +crypto) yields an object with
+            # ZERO defined global symbols.
+            #
+            # It is not only about MSVC.  Any aarch64 toolchain targeting
+            # baseline armv8-a without the Crypto Extensions reaches the same
+            # state, and this is what makes such a build link and run: the
+            # slots stay NULL and ama_aes256_gcm_encrypt falls through to its
+            # own scalar path, which is what NULL slots already mean
+            # everywhere else in this table.
+            add_compile_definitions(AMA_HAVE_NEON_CRYPTO_EXT_IMPL)
+            # The link problem this used to set a CMake variable for is solved
+            # at SOURCE level instead: tests/c/test_aes_gcm_neon_equiv.c puts
+            # its `extern` declarations and every call site behind
+            # `#if defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL)`, so the target links
+            # unconditionally and reports Skipped via SKIP_RETURN_CODE 77.
+            # `set(AMA_NEON_CRYPTO_EXT ON)` stood here with a comment saying
+            # tests/c/CMakeLists.txt used it to decide whether to build that
+            # test; nothing ever read the variable, and the test is added
+            # unconditionally.  Removed rather than left as dead configuration
+            # describing a mechanism that does not exist.
+        else()
+            message(STATUS
+                "SIMD: no ARM Crypto Extension feature macros (MSVC ARM64, or "
+                "AMA_FORCE_NO_ARM_CRYPTO) — NEON AES-GCM kernels not built; "
+                "AES-GCM uses the portable path and the dispatch slots stay "
+                "NULL")
         endif()
         message(STATUS "SIMD: ARM NEON hand-written intrinsics enabled (8 algorithms)")
         # Tell dispatch code that NEON implementations are linked in
@@ -438,17 +674,49 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
         if(NOT MSVC)
             set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-march=armv9-a+sve2")
+            # AMA_HAVE_SVE2_IMPL says "the SVE2 kernels exist in this build", so
+            # src/c/dispatch/ama_dispatch.c may take the addresses of the ten
+            # SVE2 kernel symbols.  It MUST sit inside this NOT-MSVC guard,
+            # beside the +sve2 flag, for the same reason the NEON block above
+            # conditions AMA_HAVE_NEON_CRYPTO_EXT_IMPL: every SVE2 TU guards its
+            # whole body on __ARM_FEATURE_SVE2, which ONLY -march=...+sve2
+            # defines.  MSVC never takes that flag and never defines the ACLE
+            # macro, yet CMAKE_SYSTEM_PROCESSOR ARM64 reached this block — so
+            # with the definition outside the guard every SVE2 TU compiled to an
+            # object with zero defined symbols while the dispatcher still
+            # referenced all ten under AMA_HAVE_SVE2_IMPL: LNK2019 unresolved
+            # externals, the exact MSVC ARM64 break the NEON rewrite removed
+            # (audit H5).  Reproduced with the equivalent GCC condition:
+            # compiling any SVE2 TU for aarch64 WITHOUT +sve2 yields an object
+            # with zero defined global symbols.
+            add_compile_definitions(AMA_HAVE_SVE2_IMPL)
+            message(STATUS "SIMD: ARM SVE2 hand-written intrinsics enabled (8 algorithms)")
+        else()
+            # Same fall-through the NEON block documents: the SVE2 sources still
+            # compile (to empty objects), the dispatcher does not reference them,
+            # and the SVE2 dispatch slots stay NULL — every kernel falls through
+            # to the path a NULL slot already means everywhere else in the table.
+            message(STATUS
+                "SIMD: no SVE2 feature macro (MSVC ARM64 takes no -march flag and "
+                "never defines __ARM_FEATURE_SVE2) — SVE2 kernels not built; the "
+                "dispatcher does not reference them and the SVE2 slots stay NULL")
         endif()
-        add_compile_definitions(AMA_HAVE_SVE2_IMPL)
-        message(STATUS "SIMD: ARM SVE2 hand-written intrinsics enabled (8 algorithms)")
     endif()
 endif()
 
-# AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
-# to prevent illegal instruction crashes on CPUs without AES-NI.
-# Runtime dispatch via ama_cpuid.c selects the correct path.
-# NOTE: Independent of AMA_ENABLE_SIMD — AES-NI is a distinct ISA extension
-# from AVX2/SSE. Disabling SIMD should not disable hardware AES acceleration.
+# AES-NI + PCLMULQDQ for x86 — applied per-file (not globally) to prevent
+# illegal-instruction crashes on CPUs without AES-NI.  Runtime dispatch via
+# ama_cpuid.c selects the correct path.
+#
+# Independent of AMA_ENABLE_SIMD, and now ACTUALLY so.  This block carried that
+# claim — "Disabling SIMD should not disable hardware AES acceleration" — while
+# the only x86 AES-NI kernel in the tree lived in AMA_AVX2_SOURCES, compiled
+# only inside `if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)`, and while the one
+# flag this block actually set went to src/c/ama_aes_gcm.c, which contains zero
+# SIMD intrinsics (grep: 0 occurrences of _mm_/_mm256_/__m128i) and from which
+# no compiler synthesises AESENC.  So the flag emitted nothing, the STATUS line
+# advertised an acceleration that was not being enabled, and the documented
+# independence was inverted: turning SIMD off turned hardware AES off.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
     # ama_sha256_ni.c is unconditionally compiled into the library on x86
     # (its body is #if-guarded to x86), so the SHA-NI compression kernel is
@@ -457,18 +725,50 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
     # that do NOT link the kernel (e.g. the standalone dudect harness) leave
     # this undefined and fall back to the scalar SHA-256 core.
     add_compile_definitions(AMA_HAVE_X86_SHANI_IMPL)
+    # The AES-NI AES-GCM kernel, gated on the architecture alone — but on
+    # 64-bit x86 only, which is NARROWER than the enclosing block.
+    #
+    # The enclosing condition includes a bare `x86` because ama_sha256_ni.c
+    # guards its body on `__x86_64__ || _M_X64 || __i386__ || _M_IX86` and so
+    # genuinely builds 32-bit.  ama_aes_gcm_avx2.c does not: its guard is
+    # `__x86_64__ || _M_X64`.  Defining AMA_HAVE_X86_AESNI_IMPL on a 32-bit
+    # target would therefore hand the dispatcher a macro over an EMPTY
+    # translation unit, and the reference to ama_aes256_gcm_encrypt_avx2 it
+    # then compiles has nothing to link against.  `x86` is what
+    # CMAKE_SYSTEM_PROCESSOR reports for a 32-bit MSVC target, so this is
+    # reachable rather than theoretical.
+    #
+    # Matched to the kernel's own guard, not to its neighbour's.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)
+        add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)
+    else()
+        message(STATUS "AES-NI/PCLMULQDQ: ${CMAKE_SYSTEM_PROCESSOR} is not 64-bit x86 "
+                       "— kernel not compiled, dispatcher uses the bitsliced software path")
+    endif()
     if(NOT MSVC)
-        set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
-            COMPILE_FLAGS "-maes -mpclmul")
-        # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
-        # — it is the constant-time software fallback for CPUs without AES-NI.
-        message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only")
         # SHA-NI (Intel SHA Extensions) for the x86 SHA-256 compression kernel.
         # Per-file only — the whole-library scalar SHA-256 stays baseline so the
         # binary runs on CPUs without SHA-NI; ama_cpuid.c selects at runtime.
+        #
+        # NOT conditioned on AMA_X86_AESNI_SOURCES: ama_sha256_ni.c builds on
+        # 32-bit x86 too, so tying its flags to the 64-bit-only AES-NI kernel
+        # would silently drop -msha on exactly the targets the enclosing `x86`
+        # alternative exists to cover.
         set_source_files_properties(src/c/ama_sha256_ni.c PROPERTIES
             COMPILE_FLAGS "-msha -mssse3 -msse4.1")
         message(STATUS "SHA-NI: per-file flags for ama_sha256_ni.c only")
+
+        if(AMA_X86_AESNI_SOURCES)
+            set_source_files_properties(${AMA_X86_AESNI_SOURCES} PROPERTIES
+                COMPILE_FLAGS "-maes -mpclmul -mssse3 -msse4.1")
+            # Note: ama_aes_bitsliced.c intentionally does NOT get
+            # -maes/-mpclmul — it is the constant-time software fallback for
+            # CPUs without AES-NI, and neither does src/c/ama_aes_gcm.c, which
+            # has no intrinsics to enable.
+            message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm_avx2.c "
+                           "(architecture-gated, independent of AMA_ENABLE_SIMD)")
+        endif()
     else()
         message(STATUS "AES-NI/PCLMULQDQ/SHA-NI: MSVC detected — intrinsics available by default")
     endif()
@@ -512,6 +812,13 @@ set(AMA_SOURCES
     src/c/ama_sha256_ni.c
     src/c/ama_hmac_sha256.c
     src/c/ama_hmac_sha384.c
+    # Public SHA-512/384 one-shots (surface the internal/ama_sha2.h core to
+    # the Python layer) and PBKDF2-HMAC-SHA256/512 (SP 800-132) on the same
+    # cores.  Unconditional for the same reason the rest of the SHA-2 block
+    # is: they are not PQC-specific, and the Python layer binds them in
+    # every configuration (INVARIANT-1 — no stdlib hashlib for primitives).
+    src/c/ama_sha512.c
+    src/c/ama_pbkdf2.c
     # HSS/LMS verification (RFC 8554).  Consumes only SHA-256, holds no secret
     # and keeps no state, so it belongs in the unconditional list: the
     # firmware-update verifiers this exists for are exactly the constrained
@@ -525,6 +832,7 @@ set(AMA_SOURCES
     src/c/ama_secure_memory.c
     ${AMA_DISPATCH_SOURCES}
     ${AMA_AVX2_SOURCES}
+    ${AMA_X86_AESNI_SOURCES}
     ${AMA_AVX512_SOURCES}
     ${AMA_X25519_MULX_SOURCES}
     ${AMA_KECCAK_BMI_SOURCES}
@@ -593,8 +901,17 @@ if(AMA_ED25519_ASSEMBLY)
                 "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
         endif()
     else()
-        message(WARNING "AMA_ED25519_ASSEMBLY requires x86-64 — falling back to fe51")
-        set(AMA_ED25519_ASSEMBLY OFF)
+        # M14: an explicit -DAMA_ED25519_ASSEMBLY=ON on a non-x86-64 host used to
+        # WARN and silently fall back to fe51.  That silent downgrade is how the
+        # Ed25519 backend differential could end up comparing two fe51 builds (a
+        # library with itself) and pass vacuously.  The default on non-x86-64 is
+        # already OFF (_AMA_DONNA_DEFAULT above), so reaching this branch means ON
+        # was requested explicitly — make that a hard error, not a silent switch.
+        message(FATAL_ERROR
+            "AMA_ED25519_ASSEMBLY=ON was requested but the donna assembly scalar "
+            "multiply requires x86-64 (host is ${CMAKE_SYSTEM_PROCESSOR}). Build "
+            "with -DAMA_ED25519_ASSEMBLY=OFF for the portable fe51 backend on this "
+            "architecture.")
     endif()
 endif()
 
@@ -704,7 +1021,6 @@ if(AMA_BUILD_SHARED)
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
     target_compile_definitions(ama_cryptography_shared PRIVATE
-        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
     )
 
     if(AMA_USE_NATIVE_PQC)
@@ -726,6 +1042,39 @@ if(AMA_BUILD_SHARED)
     if(WIN32)
         target_link_libraries(ama_cryptography_shared PRIVATE bcrypt)
     endif()
+
+    # Export only the ama_* ABI from the shared library (audit B2).
+    #
+    # Off-Windows AMA_API expands to nothing, so the linked .so exported all of
+    # its ~246 defined symbols -- including six un-prefixed vendor names from the
+    # bundled ed25519-donna tree (ed25519_sign, ed25519_sign_open,
+    # ed25519_sign_open_batch, ed25519_publickey,
+    # curved25519_scalarmult_basepoint) and the mutable data symbol
+    # batch_point_buffer.  A process loading AMA alongside another ed25519-donna
+    # consumer could have AMA's Ed25519 silently serviced by the other copy (ELF
+    # flat-namespace interposition; a static consumer's symbols always win),
+    # bypassing the canonical-R/S/y hardening -- and once .so.5 publishes, every
+    # exported name becomes an ABI promise.  This is the release that must carry
+    # the fix, since the SONAME already moves .so.4 -> .so.5.
+    #
+    # A version script restricts the dynamic symbol table to ama_* and localises
+    # everything else; -Bsymbolic-functions binds AMA's own intra-library calls
+    # (e.g. ama_ed25519_verify -> the vendored ed25519_sign_open) internally so
+    # they are not interposable even before a SONAME consumer relinks.  MSVC
+    # controls exports through AMA_API/__declspec on the header; macOS uses a
+    # two-level namespace and the exported-symbols list for parity.
+    if(APPLE)
+        target_link_options(ama_cryptography_shared PRIVATE
+            "-Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.macos.sym")
+        set_property(TARGET ama_cryptography_shared APPEND PROPERTY
+            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.macos.sym")
+    elseif(NOT MSVC)
+        target_link_options(ama_cryptography_shared PRIVATE
+            "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"
+            "-Wl,-Bsymbolic-functions")
+        set_property(TARGET ama_cryptography_shared APPEND PROPERTY
+            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map")
+    endif()
 endif()
 
 # Create static library
@@ -737,7 +1086,6 @@ if(AMA_BUILD_STATIC)
     )
     target_compile_definitions(ama_cryptography_static PRIVATE AMA_BUILDING_STATIC)
     target_compile_definitions(ama_cryptography_static PRIVATE
-        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
     )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
@@ -755,6 +1103,54 @@ if(AMA_BUILD_STATIC)
 
     if(WIN32)
         target_link_libraries(ama_cryptography_static PRIVATE bcrypt)
+    endif()
+
+    # H4: the installed static archive must contain real MACHINE CODE, not just
+    # GCC LTO bytecode. With CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE on, every
+    # member of libama_cryptography_static.a was a thin -flto object (.text size
+    # 0), linkable only through the GCC driver's plugin: a downstream C consumer
+    # linking with clang/ld got "plugin needed to handle lto object" and
+    # undefined references. -ffat-lto-objects makes GCC (and clang >= 17) emit
+    # BOTH the bytecode and machine code, so the archive keeps LTO for a
+    # matching-toolchain consumer while staying universally linkable; a compiler
+    # without fat-LTO support falls back to no IPO on this target, which also
+    # guarantees machine code.
+    if(AMA_ENABLE_LTO)
+        include(CheckCCompilerFlag)
+        # Apple clang is NOT trustworthy through check_c_compiler_flag here: it
+        # accepts a bare `-ffat-lto-objects` probe (no LTO mode, no target
+        # arch), so the check returns TRUE, but the real static-library compile
+        # — `-arch arm64 -flto=thin -ffat-lto-objects` — dies with
+        # "clang: error: unsupported option '-ffat-lto-objects' for target
+        # arm64-apple-darwin*" on Xcode 26 / darwin25.  `-ffat-lto-objects` is a
+        # GCC feature that upstream LLVM clang >= 17 also implements, but Apple's
+        # fork does not for this target.  Exclude AppleClang explicitly and fall
+        # back to no-IPO on the static target, which delivers the same
+        # machine-code guarantee the fat-LTO path exists for (H4).
+        if(CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+            set(AMA_HAVE_FAT_LTO FALSE)
+        else()
+            check_c_compiler_flag("-ffat-lto-objects" AMA_HAVE_FAT_LTO)
+        endif()
+        if(AMA_HAVE_FAT_LTO)
+            target_compile_options(ama_cryptography_static PRIVATE
+                $<$<CONFIG:Release>:-ffat-lto-objects>)
+        else()
+            # The PER-CONFIG property, not the generic one: the target was
+            # born with INTERPROCEDURAL_OPTIMIZATION_RELEASE=TRUE (inherited
+            # from the CMAKE_ variable set before add_library), and CMake
+            # consults the per-config property first — so the generic
+            # `INTERPROCEDURAL_OPTIMIZATION OFF` this line used to set was a
+            # no-op for Release, and the AppleClang arm two branches up
+            # (which deliberately lands here) still shipped a bytecode-only
+            # static archive: the exact H4 breakage this fallback exists to
+            # prevent.  Reproduced on CMake 3.28.3 with a minimal project —
+            # generic OFF leaves `-flto=auto` in C_FLAGS, `_RELEASE OFF`
+            # removes it.
+            set_target_properties(ama_cryptography_static PROPERTIES
+                INTERPROCEDURAL_OPTIMIZATION OFF
+                INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
+        endif()
     endif()
 endif()
 
@@ -782,7 +1178,6 @@ if(AMA_BUILD_TESTS)
     )
     target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)
     target_compile_definitions(ama_cryptography_test PRIVATE
-        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
     )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_USE_NATIVE_PQC)
@@ -831,17 +1226,17 @@ endif()
 # Installation
 if(AMA_BUILD_SHARED)
     install(TARGETS ama_cryptography_shared
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
 endif()
 
 if(AMA_BUILD_STATIC)
     install(TARGETS ama_cryptography_static
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
 endif()
 
@@ -852,7 +1247,7 @@ configure_file(
     @ONLY
 )
 install(FILES ${CMAKE_BINARY_DIR}/ama_cryptography.pc
-    DESTINATION lib/pkgconfig
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 )
 
 # Print configuration summary

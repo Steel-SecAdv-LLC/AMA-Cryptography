@@ -18,7 +18,6 @@
  */
 
 #include "../include/ama_cpuid.h"
-#include <stdio.h>
 
 /* ============================================================================
  * Platform once-primitive abstraction (INVARIANT-15)
@@ -143,10 +142,17 @@ static int xcr0_has_avx_state(void) {
      *     legacy harnesses (tools/constant_time/Makefile) compile with
      *     plain `-O2` and would link-fail on the builtin.
      *
-     * Strategy: use the intrinsic when __XSAVE__ is defined (CMake
-     * AVX2 build sets this transitively via -mavx2), otherwise the raw
-     * .byte sequence — same XGETBV opcode, no compile-time feature
-     * dependency, so the legacy dudect Makefile keeps building. */
+     * Strategy: use the intrinsic when __XSAVE__ is defined, otherwise the
+     * raw .byte sequence — same XGETBV opcode, no compile-time feature
+     * dependency, so the legacy dudect Makefile keeps building.
+     *
+     * In first-party builds __XSAVE__ is normally UNSET for this TU: 5.0.0
+     * removed the global -mavx2 that used to define it transitively (SIMD
+     * flags are per-file now, and ama_cpuid.c is a baseline TU with none), so
+     * the .byte fallback below is the branch these builds compile.  The
+     * intrinsic branch is taken only when this TU is built with -mxsave /
+     * -march=native — e.g. an AMA_ENABLE_NATIVE_ARCH=ON host-tuned build, or
+     * an external consumer's own flags. */
     unsigned long long xcr0;
 #if defined(_MSC_VER)
     xcr0 = _xgetbv(0);
@@ -552,10 +558,23 @@ static void detect_arm_features(void) {
 
 #else
 static void detect_arm_features(void) {
+    /* An AArch64 target with neither getauxval nor sysctl — FreeBSD, a
+     * Windows-on-ARM build, a bare-metal toolchain.  The OPTIONAL features
+     * cannot be probed here, so they answer 0 and the dispatcher declines
+     * their kernels, which is the correct fail-closed direction.
+     *
+     * NEON is not optional.  AdvSIMD is part of the AArch64 base
+     * architecture and of the standard procedure call standard: every
+     * conforming AArch64 implementation has it, and the compiler is already
+     * free to emit it without any runtime check.  Reporting 0 here was
+     * therefore not conservative, it was wrong — and it cost the NEON kernels
+     * on every platform outside Linux and Apple, silently, because the only
+     * symptom is a slower dispatch tier.  This is the same reasoning the two
+     * arms above already apply; they simply never reached this one. */
     has_arm_aes_cached = 0;
     has_arm_pmull_cached = 0;
     has_arm_sha2_cached = 0;
-    has_arm_neon_cached = 0;
+    has_arm_neon_cached = 1;
     has_arm_sve2_cached = 0;
 }
 #endif
@@ -643,50 +662,3 @@ int ama_cpuid_has_arm_aes(void) { return 0; }
 
 #endif
 
-/* ============================================================================
- * AEAD Backend Selection (Runtime Dispatch)
- *
- * Thread safety: ama_select_aead_init() runs exactly once via the platform
- * once-primitive.  All shared state (selected_backend) is written inside the
- * init function and is fully visible to every thread after the once-call
- * returns — guaranteed by the memory ordering semantics of pthread_once /
- * InitOnceExecuteOnce.
- * ============================================================================ */
-
-static AMA_ONCE_FLAG dispatch_once = AMA_ONCE_FLAG_INIT;
-static ama_aead_backend_t selected_backend = AMA_AEAD_CHACHA20_POLY1305;
-
-static void ama_select_aead_init(void) {
-    if ((ama_has_aes_ni() && ama_has_pclmulqdq()) ||
-        (ama_has_arm_aes() && ama_has_arm_pmull())) {
-        selected_backend = AMA_AEAD_HW_AES_GCM;
-    } else {
-        /* No hardware AES — use ChaCha20-Poly1305 (constant-time by design).
-         * Never use software table-based AES-GCM on secret data at runtime. */
-        selected_backend = AMA_AEAD_CHACHA20_POLY1305;
-    }
-
-    /* Log selection once */
-    fprintf(stderr, "[AMA Cryptography] AEAD backend selected: %s (AES-NI=%d, PCLMULQDQ=%d, ARM-AES=%d, ARM-PMULL=%d)\n",
-            ama_aead_backend_name(selected_backend),
-            ama_has_aes_ni(), ama_has_pclmulqdq(),
-            ama_has_arm_aes(), ama_has_arm_pmull());
-}
-
-ama_aead_backend_t ama_select_aead(void) {
-    AMA_CALL_ONCE(dispatch_once, ama_select_aead_init);
-    return selected_backend;
-}
-
-const char *ama_aead_backend_name(ama_aead_backend_t backend) {
-    switch (backend) {
-        case AMA_AEAD_HW_AES_GCM:
-            return "Hardware AES-256-GCM (AES-NI/ARMv8-CE)";
-        case AMA_AEAD_CHACHA20_POLY1305:
-            return "ChaCha20-Poly1305 (constant-time)";
-        case AMA_AEAD_SW_AES_GCM:
-            return "Software AES-256-GCM (bitsliced constant-time)";
-        default:
-            return "Unknown";
-    }
-}

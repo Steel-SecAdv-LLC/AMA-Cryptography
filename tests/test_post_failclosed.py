@@ -38,6 +38,7 @@ Run with:  pytest tests/test_post_failclosed.py -v
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -46,9 +47,11 @@ import textwrap
 import threading
 from pathlib import Path
 from types import ModuleType
-from typing import Generator
+from typing import Any, Generator
 
 import pytest
+
+from tests.conftest import native_library_present
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
@@ -89,6 +92,14 @@ def _run_python(
     env.pop("PYTHONPATH", None)
     # An installed copy of the package would shadow the tree under test.
     env["PYTHONPATH"] = str(cwd)
+    # ...and AMA_CRYPTO_LIB_PATH would hand the tree a native backend, which
+    # is the one thing this fixture exists to withhold.  The loader's own
+    # error message tells the reader to "point AMA_CRYPTO_LIB_PATH at an
+    # existing build", so running this suite the documented way exported it —
+    # and these subprocesses then found a backend, which silently falsified
+    # the "no native backend" premise and produced 5 failures that say nothing
+    # about the code.  Scrubbing PYTHONPATH and not this was half a fixture.
+    env.pop("AMA_CRYPTO_LIB_PATH", None)
     env.update(env_extra or {})
     argv = [sys.executable, "-S", "-c"] if isolated else [sys.executable, "-c"]
     return subprocess.run(
@@ -101,6 +112,37 @@ def _run_python(
     )
 
 
+def _drop_unbound_extensions(pkg_root: Path) -> None:
+    """Remove compiled binding extensions the signed artefact does not cover.
+
+    A source-tree artefact deliberately binds NO extensions: they are
+    per-interpreter and not reproducible, so binding one tree's would read as
+    a digest MISMATCH — a tampering verdict — on every other machine (see
+    ``_build_sign``'s ``--bind-extensions`` help).  The documented consequence
+    is that a tree carrying built-but-uncovered extensions is *correctly*
+    reported at below-full integrity strength.
+
+    ``pip install -e .`` builds six such extensions into the package
+    directory, so a fixture that copies the package wholesale inherits them
+    and can never be "fully verified" — which is what turned five tests red
+    across ubuntu, macOS and arm once the strength downgrade stopped being
+    dead code.  Dropping the uncovered ones makes the copied tree internally
+    consistent, which is the state these tests mean by "healthy".
+    """
+    try:
+        from ama_cryptography import _integrity_signature as _sig
+
+        covered = set(getattr(_sig, "INTEGRITY_BINDING_DIGESTS_HEX", {}) or {})
+    except Exception:
+        covered = set()
+    for suffix in (".so", ".pyd", ".dylib"):
+        for path in pkg_root.glob(f"*{suffix}"):
+            if path.name.startswith(("libama_cryptography", "ama_cryptography.dll")):
+                continue  # the native library, bound separately
+            if path.name not in covered:
+                path.unlink()
+
+
 @pytest.fixture(scope="module")
 def tree_without_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A copy of the package with the native library removed.
@@ -110,6 +152,8 @@ def tree_without_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     root = tmp_path_factory.mktemp("no_native")
     shutil.copytree(PKG_DIR, root / "ama_cryptography")
+    # No _drop_unbound_extensions here: the loop below removes every compiled
+    # artefact anyway, which is this fixture's whole point.
     for pattern in ("*.so", "*.so.*", "*.dylib", "*.dll", "*.pyd"):
         for artefact in (root / "ama_cryptography").glob(pattern):
             artefact.unlink()
@@ -121,8 +165,63 @@ def tree_with_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A copy of the package with whatever native library the tree has."""
     root = tmp_path_factory.mktemp("with_native")
     shutil.copytree(PKG_DIR, root / "ama_cryptography")
-    if not any((root / "ama_cryptography").glob("libama_cryptography*")):
+    _drop_unbound_extensions(root / "ama_cryptography")
+    if not native_library_present(root / "ama_cryptography"):
         pytest.skip("native library not built in this tree")
+    return root
+
+
+#: The binding extensions ``TestCythonBindingsGated`` needs to exist for its
+#: probe to reach any Cython entry point at all.
+_REQUIRED_BINDING_STEMS = ("ed25519_binding", "hmac_binding", "sha3_binding")
+
+
+def _binding_extension_names(pkg_root: Path) -> set[str]:
+    """Compiled binding extensions present in ``pkg_root``, by module stem."""
+    stems: set[str] = set()
+    for suffix in (".so", ".pyd", ".dylib"):
+        for path in pkg_root.glob(f"*{suffix}"):
+            if path.name.startswith(("libama_cryptography", "ama_cryptography.dll")):
+                continue
+            stems.add(path.name.split(".", 1)[0])
+    return stems
+
+
+@pytest.fixture(scope="module")
+def tree_with_bindings(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A copy of the package that KEEPS its compiled binding extensions.
+
+    ``tree_with_native`` drops every extension the signed artefact does not
+    cover, and in a source tree ``INTEGRITY_BINDING_DIGESTS_HEX`` is ``{}`` by
+    design, so it drops ALL of them.  That is right for the tests that need an
+    internally consistent tree, and fatal for the one test whose subject is the
+    extensions themselves: its probe's ``import ... except ImportError`` arm
+    fired on every run, and the assertion's ``or "SKIP" in result.stdout``
+    escape turned that into a pass.  Measured on this tree — the fixture
+    removed all six extensions and the probe printed
+    ``SKIP: Cython bindings not compiled`` — so the only behavioural proof that
+    the Cython bindings inhibit output in the FIPS ERROR state had stopped
+    executing any of the code it names.
+
+    Keeping the extensions means this copy reports at below-full integrity
+    strength ("binding extensions PARTIALLY covered (developer build)"), which
+    is the CORRECT verdict for a tree carrying built-but-uncovered extensions
+    and is not what this test asserts on.  A genuinely unbuilt tree skips here,
+    in the parent process, so it is reported as ``skipped`` rather than passing
+    on a string the assertion happens to accept.
+    """
+    root = tmp_path_factory.mktemp("with_bindings")
+    shutil.copytree(PKG_DIR, root / "ama_cryptography")
+    if not native_library_present(root / "ama_cryptography"):
+        pytest.skip("native library not built in this tree")
+    present = _binding_extension_names(root / "ama_cryptography")
+    missing = [stem for stem in _REQUIRED_BINDING_STEMS if stem not in present]
+    if missing:
+        pytest.skip(
+            "Cython binding extensions not built in this tree "
+            f"(missing: {', '.join(missing)}); build with "
+            "`python setup.py build_ext --inplace`"
+        )
     return root
 
 
@@ -341,6 +440,14 @@ class TestErrorStateInhibitsOutput:
         "native_hkdf_sha256(bytes(32), 32)",
         "native_hkdf_sha384(bytes(32), 32)",
         "native_hkdf_sha512(bytes(32), 32)",
+        # SHA-512/384, SHA3-384 and PBKDF2 route through _native_sha2_ext /
+        # _native_pbkdf2 — the same getattr indirection, the same blindness
+        # in the static gate, the same rule: every wrapper, not a sample.
+        "native_sha512(b'm')",
+        "native_sha384(b'm')",
+        "native_sha3_384(b'm')",
+        "native_pbkdf2_hmac_sha256(b'p', b's', 1, 32)",
+        "native_pbkdf2_hmac_sha512(b'p', b's', 1, 32)",
     )
 
     def test_indirect_native_surfaces_refuse_in_error_state(self, tree_with_native: Path) -> None:
@@ -432,6 +539,185 @@ class TestErrorStateInhibitsOutput:
         assert stale == []
         assert checked == 3, "only public functions touching _native_lib count"
         assert [name for name, _ in ungated] == ["ungated_op"]
+
+    def test_gate_tool_sees_a_symbol_selected_by_a_conditional(self, tmp_path: Path) -> None:
+        """A native symbol chosen with ``a if cond else b`` is still a native call.
+
+        ``_native_handle_aliases`` matched only two flat shapes —
+        ``getattr(_native_lib, name)`` and ``_native_lib.ama_x`` — so a symbol
+        selected between two of those was invisible, the body appeared to make
+        no native call, and ``audit()`` skipped the function without ever
+        asking whether it was gated.
+
+        That was live: ``native_nistp_ecdsa_verify`` in ``pqc_backends.py``
+        binds ``fn = _native_lib.ama_..._raw_ex if raw else _native_lib.ama_..._ex``
+        and is a public module-level entry point in the one module this gate
+        audits.  Removing its guard changed the audit's output not at all.
+
+        The annotated-assignment case is here for the same reason: an
+        annotation on the binding is not a different kind of binding.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_conditional.py"
+        module.write_text(
+            textwrap.dedent('''
+                from typing import Callable
+
+                def ungated_conditional(x, raw):
+                    """The shape pqc_backends actually uses."""
+                    fn = _native_lib.ama_verify_raw if raw else _native_lib.ama_verify
+                    return fn(x)
+
+                def gated_conditional(x, raw):
+                    """Same shape, correctly guarded — must NOT be reported."""
+                    check_crypto_permitted()
+                    fn = _native_lib.ama_verify_raw if raw else _native_lib.ama_verify
+                    return fn(x)
+
+                def ungated_annotated(x):
+                    """An annotation does not make it a different binding."""
+                    fn: Callable = _native_lib.ama_thing
+                    return fn(x)
+
+                def ungated_getattr_conditional(x, raw):
+                    """Conditional over the getattr route."""
+                    fn = getattr(_native_lib, "a") if raw else getattr(_native_lib, "b")
+                    return fn(x)
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, stale, checked = gate.audit(module, exempt={})
+        assert stale == []
+        assert checked == 4, "every conditional/annotated binding must be audited"
+        assert sorted(name for name, _ in ungated) == [
+            "ungated_annotated",
+            "ungated_conditional",
+            "ungated_getattr_conditional",
+        ]
+
+    def test_gate_tool_does_not_demand_a_guard_for_a_wrapped_reference(
+        self, tmp_path: Path
+    ) -> None:
+        """The widening must not over-reach into "mentions the library".
+
+        ``x = wrapper(_native_lib.ama_y)`` does not bind ``x`` to the native
+        symbol, so calling ``x`` is not a native call and the function must not
+        be required to carry a guard.  A gate that fires on correct code is one
+        people learn to bypass, which is why the recursion covers only the
+        forms that ARE the resulting callable.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_wrapped.py"
+        module.write_text(
+            textwrap.dedent('''
+                def passes_symbol_to_a_wrapper(x):
+                    """Not a native call: `handle` is whatever wrapper returns."""
+                    handle = _wrap(_native_lib.ama_thing)
+                    return handle(x)
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, stale, checked = gate.audit(module, exempt={})
+        assert ungated == []
+        assert stale == []
+        assert checked == 0, "a wrapped reference is not a native entry point"
+
+    def test_gate_tool_rejects_a_guard_placed_after_the_native_call(self, tmp_path: Path) -> None:
+        """A guard that runs after the C call cannot inhibit its output.
+
+        ``audit_pyx`` has rejected this ordering since it was written; the
+        Python half asked only whether a guard appeared anywhere in the body,
+        so the two halves of one gate enforced different rules. FIPS 140-3
+        §4.9.2 output inhibition is about *not producing* the output, which a
+        guard reached afterwards does not achieve.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_backends.py"
+        module.write_text(
+            textwrap.dedent('''
+                def guard_after_call(x):
+                    """The C kernel has already run and produced output."""
+                    out = _native_lib.ama_thing(x)
+                    check_crypto_permitted()
+                    return out
+
+                def guard_before_call(x):
+                    """Correct ordering — must not be flagged."""
+                    check_crypto_permitted()
+                    return _native_lib.ama_thing(x)
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, _stale, checked = gate.audit(module, exempt={})
+        assert checked == 2
+        assert [name for name, _ in ungated] == ["guard_after_call"]
+
+    def test_gate_tool_sees_a_native_symbol_reached_through_an_alias(self, tmp_path: Path) -> None:
+        """Resolving the symbol and calling it in two statements is still a call.
+
+        ``getattr(_native_lib, name)(...)`` was matched only as a single
+        expression. Split in two, neither line matched: the binding is not a
+        call and the call is of a plain local name. A function using that shape
+        reached the C kernel while the gate recorded it as making no native
+        call at all — and a function that makes no native call is never
+        required to carry a guard.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_backends.py"
+        module.write_text(
+            textwrap.dedent('''
+                def aliased_getattr(x):
+                    """Two-statement getattr indirection, no guard."""
+                    fn = getattr(_native_lib, "ama_thing")
+                    return fn(x)
+
+                def aliased_attribute(x):
+                    """Bound by attribute access, then called. No guard."""
+                    fn = _native_lib.ama_thing
+                    return fn(x)
+
+                def aliased_but_gated(x):
+                    """Same indirection, guarded first — must not be flagged."""
+                    check_crypto_permitted()
+                    fn = getattr(_native_lib, "ama_thing")
+                    return fn(x)
+
+                def probe_only(x):
+                    """An un-called probe configures a signature; not a call."""
+                    fn = getattr(_native_lib, "ama_thing", None)
+                    return fn is not None
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, _stale, checked = gate.audit(module, exempt={})
+        assert checked == 3, "the un-called probe must not count as a native call"
+        assert [name for name, _ in ungated] == ["aliased_attribute", "aliased_getattr"] or [
+            name for name, _ in ungated
+        ] == ["aliased_getattr", "aliased_attribute"], ungated
 
     def test_gate_tool_covers_cython_binding_pyx(self, tmp_path: Path) -> None:
         """The gate's .pyx auditor must flag an ungated cy_* binding function."""
@@ -547,44 +833,125 @@ class TestKeyFormatsInhibitsSecretExport:
 class TestCythonBindingsGated:
     """A direct importer of a binding submodule must not reach ungated crypto."""
 
-    def test_bindings_refuse_in_error_state(self, tree_with_native: Path) -> None:
+    def test_bindings_refuse_in_error_state(self, tree_with_bindings: Path) -> None:
+        """Every Cython entry point refuses once the module is faulted.
+
+        The import is NOT wrapped in ``try/except ImportError`` any more: the
+        fixture has already established that the extensions exist, so an
+        ImportError here is a real failure and must surface as one.  The
+        previous form swallowed it and printed a token the assertion accepted,
+        which is how this test came to run zero lines of the code it names.
+
+        The entry-point list is not hand-maintained either — it is derived from
+        each binding module's own ``cy_*`` surface, so a binding that grows a
+        new entry point is covered the day it lands rather than the day someone
+        remembers to add it here.
+        """
         result = _run_python(
             """
             import ama_cryptography as a
             import ama_cryptography._self_test as st
+            import ama_cryptography.ed25519_binding as eb
+            import ama_cryptography.hmac_binding as hb
+            import ama_cryptography.sha3_binding as sb
+            import ama_cryptography.hkdf_binding as kb
+            import ama_cryptography.dilithium_binding as db
 
-            try:
-                import ama_cryptography.ed25519_binding as eb
-                import ama_cryptography.hmac_binding as hb
-                import ama_cryptography.sha3_binding as sb
-            except ImportError:
-                print("SKIP: Cython bindings not compiled")
-            else:
-                pk, sk = eb.cy_ed25519_keypair(bytes(32))
-                st._set_error("simulated POST failure")
-                leaked = []
-                for label, fn in [
-                    ("cy_ed25519_sign", lambda: eb.cy_ed25519_sign(b"m", sk)),
-                    ("cy_ed25519_keypair", lambda: eb.cy_ed25519_keypair(bytes(32))),
-                    ("cy_hmac_sha3_256", lambda: hb.cy_hmac_sha3_256(bytes(32), b"m")),
-                    ("cy_sha3_256", lambda: sb.cy_sha3_256(b"m")),
-                ]:
-                    try:
-                        fn()
-                    except a.CryptoModuleError:
-                        pass
-                    except Exception as exc:
-                        leaked.append((label, repr(exc)))
-                    else:
-                        leaked.append((label, "PRODUCED OUTPUT"))
-                if leaked:
-                    raise SystemExit("LEAKED: %r" % (leaked,))
-                print("ALL REFUSED")
+            # Every probe is a call the entry point ACCEPTS when the module is
+            # healthy.  That matters: a call with the wrong arity raises
+            # TypeError during argument conversion, before the gate is ever
+            # consulted, so it would report "refused" without the gate having
+            # done anything.  Building the probe table against a healthy module
+            # first (below) is what rules that out.
+            pk, sk = eb.cy_ed25519_keypair(bytes(32))
+            sig = eb.cy_ed25519_sign(b"m", sk)
+            dpk, dsk = db.cy_dilithium_keygen()
+            dsig = db.cy_dilithium_sign(b"m", dsk)
+
+            probes = {
+                "ed25519_binding.cy_ed25519_keypair":
+                    lambda: eb.cy_ed25519_keypair(bytes(32)),
+                "ed25519_binding.cy_ed25519_sign":
+                    lambda: eb.cy_ed25519_sign(b"m", sk),
+                "ed25519_binding.cy_ed25519_verify":
+                    lambda: eb.cy_ed25519_verify(sig, b"m", pk),
+                "ed25519_binding.cy_ed25519_batch_verify":
+                    lambda: eb.cy_ed25519_batch_verify([(b"m", sig, pk)]),
+                "hmac_binding.cy_hmac_sha3_256":
+                    lambda: hb.cy_hmac_sha3_256(bytes(32), b"m"),
+                "sha3_binding.cy_sha3_256":
+                    lambda: sb.cy_sha3_256(b"m"),
+                "hkdf_binding.cy_hkdf":
+                    lambda: kb.cy_hkdf(bytes(32), 32, bytes(16), b"info"),
+                "dilithium_binding.cy_dilithium_keygen":
+                    lambda: db.cy_dilithium_keygen(),
+                "dilithium_binding.cy_dilithium_sign":
+                    lambda: db.cy_dilithium_sign(b"m", dsk),
+                "dilithium_binding.cy_dilithium_verify":
+                    lambda: db.cy_dilithium_verify(dsig, b"m", dpk),
+            }
+
+            modules = {
+                "ed25519_binding": eb,
+                "hmac_binding": hb,
+                "sha3_binding": sb,
+                "hkdf_binding": kb,
+                "dilithium_binding": db,
+            }
+            entry_points = []
+            for mod_name, mod in modules.items():
+                for attr in dir(mod):
+                    if attr.startswith("cy_") and callable(getattr(mod, attr)):
+                        entry_points.append(mod_name + "." + attr)
+            if not entry_points:
+                raise SystemExit("NO ENTRY POINTS DISCOVERED")
+
+            # Discovery drives the probe table, not the other way round: an
+            # entry point that grows without a probe is a hard failure here
+            # rather than a silent hole in the only behavioural coverage these
+            # bindings have.
+            unprobed = sorted(set(entry_points) - set(probes))
+            if unprobed:
+                raise SystemExit("UNPROBED ENTRY POINTS: %r" % (unprobed,))
+            stale = sorted(set(probes) - set(entry_points))
+            if stale:
+                raise SystemExit("PROBES FOR ABSENT ENTRY POINTS: %r" % (stale,))
+
+            # Each probe must SUCCEED while the module is healthy.  Without
+            # this, a probe that was wrong in some other way (bad argument
+            # types, a stale signature) would raise on the faulted run too and
+            # be scored as a refusal.
+            for name in entry_points:
+                probes[name]()
+
+            st._set_error("simulated POST failure")
+
+            leaked = []
+            for name in entry_points:
+                try:
+                    probes[name]()
+                except a.CryptoModuleError:
+                    pass
+                except Exception as exc:
+                    leaked.append((name, repr(exc)))
+                else:
+                    leaked.append((name, "PRODUCED OUTPUT"))
+            if leaked:
+                raise SystemExit("LEAKED: %r" % (leaked,))
+            print("ALL REFUSED (%d entry points)" % len(entry_points))
             """,
-            cwd=tree_with_native,
+            cwd=tree_with_bindings,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "ALL REFUSED" in result.stdout or "SKIP" in result.stdout
+        assert "ALL REFUSED" in result.stdout, result.stdout + result.stderr
+        # Non-vacuity: the probe must have found entry points to call.  A run
+        # that discovered zero would print "ALL REFUSED (0 entry points)" and
+        # otherwise look identical to a successful one.
+        count = int(result.stdout.split("ALL REFUSED (")[1].split(" ")[0])
+        assert count >= len(_REQUIRED_BINDING_STEMS), (
+            f"only {count} Cython entry point(s) discovered",
+            result.stdout,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -811,10 +1178,29 @@ class TestAttestation:
         yield st
 
     def test_reports_fully_verified_on_a_complete_run(self, fresh_post: ModuleType) -> None:
-        att = fresh_post.module_attestation()
-        assert att["state"] == "OPERATIONAL"
-        assert att["fully_verified"] is True, att
-        assert att["tests_skipped"] == 0, att
+        """A run in which every row passed reports itself fully verified.
+
+        The completeness is CONSTRUCTED rather than assumed.  The ambient tree
+        legitimately may not be complete: ``pip install -e .`` builds binding
+        extensions that a source-tree artefact deliberately does not cover, and
+        the documented consequence is an integrity SKIP and below-full
+        strength.  Asserting on the ambient state therefore tested the
+        environment, not ``module_attestation`` — and failed on every CI job
+        that installs the package.  Substituting a passing row for that stage
+        keeps the property this test is named for.
+        """
+        st = fresh_post
+        saved = list(st._SELF_TEST_RESULTS)
+        try:
+            st._SELF_TEST_RESULTS[:] = [
+                (name, True if passed is None else passed, detail) for name, passed, detail in saved
+            ]
+            att = st.module_attestation()
+            assert att["state"] == "OPERATIONAL"
+            assert att["fully_verified"] is True, att
+            assert att["tests_skipped"] == 0, att
+        finally:
+            st._SELF_TEST_RESULTS[:] = saved
 
     def test_digest_only_integrity_is_not_fully_verified(self, fresh_post: ModuleType) -> None:
         """An unsigned digest is corruption detection, not tamper detection.
@@ -843,14 +1229,21 @@ class TestAttestation:
         st = fresh_post
 
         saved = list(st._SELF_TEST_RESULTS)
+        # Measure the DELTA, not an absolute.  The ambient tree may already
+        # carry a legitimate skip (an editable install's binding extensions are
+        # uncovered by a source-tree artefact by design), which made the old
+        # `== 1` read `assert 2 == 1` on every CI job that installs the
+        # package.  One added skip must add exactly one, and must drag
+        # fully_verified down — that is the property.
+        before = st.module_attestation()["tests_skipped"]
         try:
             st._SELF_TEST_RESULTS.append(("ML-KEM-1024", None, "skipped (backend absent)"))
             att = st.module_attestation()
             assert att["fully_verified"] is False, (
                 "a run with an untested approved algorithm reported itself as " "fully verified"
             )
-            assert att["tests_skipped"] == 1
-            assert att["skipped"][0][0] == "ML-KEM-1024"
+            assert att["tests_skipped"] == before + 1
+            assert "ML-KEM-1024" in [name for name, _detail in att["skipped"]]
         finally:
             st._SELF_TEST_RESULTS[:] = saved
 
@@ -870,7 +1263,7 @@ class TestIntegrityTriState:
     """ "Cannot verify" and "verification failed" are different claims."""
 
     def test_missing_artefact_is_not_a_tamper_verdict(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """No artefact means "nothing was checked", not "the check failed"."""
         # ``None`` in sys.modules makes an import of that name raise
@@ -887,8 +1280,17 @@ class TestIntegrityTriState:
         # pattern the code scanner flags.
         pkg = sys.modules["ama_cryptography"]
 
-        monkeypatch.setitem(sys.modules, "ama_cryptography._integrity_signature", None)
-        monkeypatch.delattr(pkg, "_integrity_signature", raising=False)
+        # Point the artefact reader at a path that does not exist.  Removing
+        # the module from ``sys.modules`` no longer simulates an unsigned tree:
+        # ``_verify_signed_integrity`` parses the artefact's SOURCE, because
+        # reading it through the import system meant reading unvalidated
+        # ``__pycache__`` bytecode at a point where nothing had checked it.
+        del pkg  # kept above for the import-style note; not the seam any more
+        from ama_cryptography import _artefact_source
+
+        monkeypatch.setattr(
+            _artefact_source, "artefact_path", lambda *_a, **_k: tmp_path / "absent.py"
+        )
         verdict, detail = st._verify_signed_integrity("00" * 32)
         assert (
             verdict is None
@@ -1063,3 +1465,225 @@ class TestInvariant7Enforcement:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "REFUSED" in result.stdout
+
+
+class TestContinuousRNGTest:
+    """FIPS 140-3 §4.9.2 continuous RNG test — the control's own integrity.
+
+    These pin two properties the implementation is easy to lose: the
+    compare-and-store is atomic (so the one fault it exists to catch cannot slip
+    through an interleaving), and it never retains the caller's key material.
+    """
+
+    def test_compare_and_store_is_atomic_under_concurrency(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stuck RNG must be caught even when many threads draw at once.
+
+        Without a lock this is a check-then-act race: threads A and B both read
+        the same stale ``previous``, both compare their identical stuck value
+        against it, both pass, and two consecutive identical outputs are issued
+        as key material with the control silently satisfied.
+
+        Eight threads on a ``Barrier`` are not enough to produce that
+        interleaving, and this test used to be exactly that.  The health digest
+        is computed BEFORE the critical section, so the unlocked check-then-act
+        window is about five pure-Python bytecodes; under the GIL a switch
+        lands inside it essentially never.  Measured against a build with
+        ``_rng_lock`` removed: 60 consecutive runs of the eight-thread
+        scenario, 0 failures.  The test asserted a property it could not
+        observe, and the branch's own description of it — "reverting the lock
+        makes all 8 threads receive the stuck value" — was false.
+
+        The window is now held open from inside, by instrumenting the state
+        the critical section reads rather than the code that reads it:
+        ``_rng_state`` is replaced with a mapping whose first eight reads of
+        ``previous`` rendezvous on a barrier before returning.  With the lock,
+        one thread is inside and the other seven are queued on the lock, so
+        that barrier can never fill and times out — one success, seven
+        refusals.  Without the lock, all eight are inside together, the
+        barrier fills immediately, all eight read ``None`` and all eight are
+        issued the identical stuck buffer.  The two outcomes are structurally
+        different rather than probabilistically different, which is what makes
+        this an assertion instead of a hope.
+
+        The timeout is the only cost, and it is paid only on the correct
+        build: 0.5 s once.
+        """
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        # The REAL state object, captured before the monkeypatch below rebinds
+        # the attribute.  The finally-block used to write `saved_previous` back
+        # through `ms._rng_state`, which by then names the throwaway
+        # `_RendezvousState`: the restore landed on an object about to be
+        # discarded, monkeypatch rebound the original dict, and the `previous`
+        # this test had cleared to None was never put back — leaking a cleared
+        # continuous-RNG baseline into the rest of the session.  The comment
+        # said "_rng_state [is] restored by monkeypatch's teardown", which is
+        # true of the BINDING and not of the value the test mutated first.
+        real_rng_state = ms._rng_state
+        saved_previous = real_rng_state["previous"]
+        saved_state = ms._MODULE_STATE
+        saved_reason = ms._ERROR_REASON
+        stuck = b"\xa5" * 32
+
+        try:
+            real_rng_state["previous"] = None
+            ms._MODULE_STATE = "OPERATIONAL"
+            ms._ERROR_REASON = None
+
+            # Force the "stuck DRBG" condition: every draw returns the same
+            # buffer.  Patched through monkeypatch's dotted-target form so it is
+            # undone automatically — assigning to ``ms.secrets.token_bytes``
+            # directly would mutate the shared stdlib module for every other
+            # test in the session, including any running concurrently.
+            def _stuck_token_bytes(n: int) -> bytes:
+                return stuck[:n] if n <= 32 else stuck * (n // 32 + 1)
+
+            monkeypatch.setattr(
+                "ama_cryptography._module_state.secrets.token_bytes",
+                _stuck_token_bytes,
+            )
+
+            refusals: list[BaseException] = []
+            successes: list[bytes] = []
+            start = threading.Barrier(8)
+            # Filled only if eight threads are inside the critical section at
+            # once — which is precisely what the lock must prevent.
+            inside = threading.Barrier(8)
+
+            class _RendezvousState(dict[str, Any]):
+                """A ``_rng_state`` that holds the check-then-act window open.
+
+                Only the ``previous`` read is instrumented, and only while the
+                threads are running; every other access behaves as a dict.
+                """
+
+                def __getitem__(self, key: str) -> Any:
+                    value = super().__getitem__(key)
+                    if key == "previous":
+                        try:
+                            inside.wait(timeout=0.5)
+                        except threading.BrokenBarrierError:
+                            # The lock is doing its job: the other seven
+                            # threads cannot get here.
+                            pass
+                    return value
+
+            monkeypatch.setattr(ms, "_rng_state", _RendezvousState(previous=None))
+
+            def draw() -> None:
+                start.wait()
+                try:
+                    successes.append(ms.secure_token_bytes(32))
+                except CryptoModuleError as exc:
+                    refusals.append(exc)
+
+            threads = [threading.Thread(target=draw) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Exactly one draw may establish the baseline; every other draw sees
+            # the identical value and must be refused.  The pre-lock code let
+            # several through.
+            assert len(successes) <= 1, (
+                f"{len(successes)} identical draws were issued as key material; "
+                "the continuous RNG test must catch consecutive identical outputs"
+            )
+            assert refusals, "a stuck RNG must trip the continuous test"
+            assert (
+                len(refusals) == 7
+            ), f"expected the other seven draws to be refused, got {len(refusals)}"
+            assert ms.module_status() == "ERROR"
+        finally:
+            # token_bytes and the _rng_state BINDING are restored by
+            # monkeypatch's teardown; the value inside the original dict is
+            # this test's to put back, and only through the object captured
+            # before the patch.
+            real_rng_state["previous"] = saved_previous
+            ms._MODULE_STATE = saved_state
+            ms._ERROR_REASON = saved_reason
+
+    def test_the_stuck_drbg_test_restores_the_real_baseline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The test above must leave the module's RNG baseline as it found it.
+
+        It clears `_rng_state["previous"]` on the REAL dict, then rebinds
+        `_rng_state` to a throwaway rendezvous object.  A finally-block written
+        as `ms._rng_state["previous"] = saved` therefore wrote into the
+        throwaway; monkeypatch then rebound the original dict, whose `previous`
+        stayed None.  Every later draw in the session then started from "no
+        baseline", so the continuous test could not catch a repeat of whatever
+        value had been issued before.
+
+        Asserted directly rather than by inspection, and ordered after the test
+        it checks so it observes that test's aftermath.
+        """
+        from ama_cryptography import _module_state as ms
+
+        sentinel = b"a-recognisable-32-byte-baseline!"
+        # The REAL dict, held across the call: the inner test rebinds
+        # ``ms._rng_state`` through the same monkeypatch fixture this test
+        # owns, so the binding is still the throwaway rendezvous object when
+        # the assertion runs.  Reading through ``ms._rng_state`` here would
+        # inspect that object and prove nothing about the module's own state.
+        real_rng_state = ms._rng_state
+        saved = real_rng_state["previous"]
+        try:
+            real_rng_state["previous"] = sentinel
+            self.test_compare_and_store_is_atomic_under_concurrency(monkeypatch)
+            assert real_rng_state["previous"] == sentinel, (
+                "the concurrency test cleared the module's continuous-RNG "
+                "baseline and did not restore it"
+            )
+        finally:
+            real_rng_state["previous"] = saved
+
+    def test_health_state_does_not_retain_issued_key_material(self) -> None:
+        """The health state stores a digest, never the bytes handed to the caller.
+
+        For the common 32-byte draw CPython returns the same object for
+        ``buf[:32]``, so storing the sample pinned live key material — an
+        Ed25519 seed, say — in module state until the next draw.
+        """
+        from ama_cryptography import _module_state as ms
+
+        saved_previous = ms._rng_state["previous"]
+        try:
+            ms._rng_state["previous"] = None
+            issued = ms.secure_token_bytes(32)
+            stored = ms._rng_state["previous"]
+
+            assert stored is not None
+            assert stored != issued, "health state must not hold the issued bytes"
+            assert stored is not issued
+            assert stored == hashlib.sha256(issued).digest()
+        finally:
+            ms._rng_state["previous"] = saved_previous
+
+    def test_post_seeds_the_health_state_in_digest_form(self) -> None:
+        """POST's seed must match what secure_token_bytes compares against.
+
+        If POST stored the raw sample while the draw compares digests, the first
+        comparison after POST could never match and the very first post-POST
+        draw would escape the continuous check entirely.
+        """
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        saved_previous = ms._rng_state["previous"]
+        saved_results = list(st._SELF_TEST_RESULTS)
+        try:
+            ms._rng_state["previous"] = None
+            passed, reason = st._run_rng_stage()
+            assert passed, reason
+            stored = ms._rng_state["previous"]
+            assert stored is not None
+            assert len(stored) == 32  # a SHA-256 digest, not a raw token
+        finally:
+            ms._rng_state["previous"] = saved_previous
+            st._SELF_TEST_RESULTS[:] = saved_results

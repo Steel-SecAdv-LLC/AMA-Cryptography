@@ -80,8 +80,9 @@
 
 /* SHA-512 provided by internal/ama_sha2.h (shared with ama_slhdsa.c) */
 
-/* sha512() is now ama_sha512() from internal/ama_sha2.h */
-#define sha512 ama_sha512
+/* sha512() is now ama_sha512_oneshot() from internal/ama_sha2.h (the
+ * public AMA_API ama_sha512 lives in src/c/ama_sha512.c) */
+#define sha512 ama_sha512_oneshot
 
 /* Stack buffer threshold: messages up to 4KB use stack allocation,
  * larger messages fall back to heap. Covers >99% of real-world use
@@ -229,7 +230,18 @@ static void ge25519_p3_tobytes(uint8_t *s, const ge25519_p3 *h) {
     fe25519_mul(x, h->X, recip);
     fe25519_mul(y, h->Y, recip);
     fe25519_tobytes(s, y);
-    s[31] ^= fe25519_isnegative(x) << 7;
+    /* Explicit cast, in the style the Kyber packers use: fe25519_isnegative
+     * returns int in {0, 1} (it is the low bit of the canonical encoding), so
+     * the shifted value is {0, 0x80} and the narrowing is exact.  Without the
+     * cast the compound assignment converts int -> uint8_t implicitly, which
+     * -Wconversion reports.
+     *
+     * This file is compiled ONLY on non-x86-64 targets — CMakeLists.txt drops
+     * it in favour of the donna shim when AMA_ED25519_ASSEMBLY is on, which is
+     * the x86-64 default — so the whole in-tree Ed25519 backend sat outside
+     * the strict-warnings gate until that gate gained an AArch64 lane.  This
+     * was the one finding it carried. */
+    s[31] ^= (uint8_t)(fe25519_isnegative(x) << 7);
 }
 
 /*
@@ -251,7 +263,8 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
      * representations.  See internal/ama_ed25519_canonical.h for why this
      * diverges from ref10/libsodium.  Every call site funnels through here,
      * so verification and the point helpers are covered alike. */
-    if (!ama_ed25519_point_y_is_canonical(s)) return -1;
+    if (!ama_ed25519_point_y_is_canonical(s) ||
+        !ama_ed25519_point_x_sign_is_admissible(s)) return -1;
 
     fe25519_frombytes(h->Y, s);
     fe25519_1(h->Z);
@@ -291,6 +304,23 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
             0x78595a6804c9eULL, 0x2b8324804fc1dULL
         };
         fe25519_mul(h->X, h->X, sqrt_m1);
+    }
+
+    /* RFC 8032 §5.1.3 step 3: "if x = 0, and x_0 = 1, decoding fails."
+     *
+     * x = 0 has a single square root, so the sign bit carries no information
+     * and the encoding with it SET is a second, non-canonical spelling of a
+     * point whose canonical form has it clear.  Without this check the
+     * identity (0, 1) and (0, p-1) each admitted two accepted 32-byte
+     * encodings — the encoding-uniqueness property INVARIANT-26 (canonical S),
+     * -29 (canonical ECDSA coordinates) and -38 (canonical y) exist to
+     * establish, applied to the remaining coordinate.  Not a forgery route on
+     * its own: only x = 0 points are affected and those are the identity and a
+     * low-order point, neither a legitimate verification key.  Checked BEFORE
+     * the conditional negation below, which would otherwise mask it by mapping
+     * -0 back to 0. */
+    if (fe25519_iszero(h->X) && x_sign) {
+        return -1;
     }
 
     /* Adjust sign of x to match the sign bit */
@@ -447,15 +477,44 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
 
 /* Compute width-w wNAF expansion of a 32-byte little-endian scalar.
  * Output: 256 signed digits in wnaf[], each odd in [-(2^(w-1)-1),
- * 2^(w-1)-1] or 0. */
+ * 2^(w-1)-1] or 0.
+ *
+ * Scalar range: accepts any 32-byte little-endian scalar in [0, 2^256),
+ * and reduces it mod l first — the same canonicalisation, for the same
+ * reason, as ge25519_scalarmult_base_comb_signed above.
+ *
+ * The reduction is load-bearing, not hygiene.  A width-w wNAF of a
+ * 256-bit integer needs up to 257 digits, and the compensation step for
+ * a negative digit ADDS to the running value, so a digit selected near
+ * the top of an unreduced scalar carries out of limb 7.  This loop has
+ * 256 slots and eight 32-bit limbs: that carry was discarded and the
+ * 257th digit never emitted, so the recoding silently represented
+ * s - 2^256 (a negative integer) instead of s for ~17% of uniform
+ * 32-byte scalars — ff..ff recoded as -1, making
+ * ama_ed25519_scalarmult_public(out, ff..ff, B) return -B with
+ * AMA_SUCCESS while the donna backend, which expands through
+ * expand256_modm, returned [s mod l]B.  After reducing, s < l < 2^253,
+ * so the expansion is at most 254 digits and the running value stays
+ * below 2^254: neither the slot count nor the limb count can overflow,
+ * and both backends compute the same function of the same input. */
 static void sc25519_to_wnaf(int8_t wnaf[256], const uint8_t scalar[32], int w) {
     uint32_t s[8];
+    /* Canonicalise mod l via sc25519_reduce, which expects a 64-byte
+     * little-endian integer.  Zero-pad the high half and reduce in a
+     * local buffer — the caller's scalar is not mutated.  The scrub is
+     * INVARIANT-6: sc25519_to_wnaf is documented public-scalar-only, but
+     * the buffer shares a scrub class with the digits below. */
+    uint8_t scalar_reduced[64];
+    memcpy(scalar_reduced, scalar, 32);
+    ama_secure_memzero(scalar_reduced + 32, 32);
+    sc25519_reduce(scalar_reduced);
     for (int i = 0; i < 8; i++) {
-        s[i] = (uint32_t)scalar[4*i]
-             | ((uint32_t)scalar[4*i+1] << 8)
-             | ((uint32_t)scalar[4*i+2] << 16)
-             | ((uint32_t)scalar[4*i+3] << 24);
+        s[i] = (uint32_t)scalar_reduced[4*i]
+             | ((uint32_t)scalar_reduced[4*i+1] << 8)
+             | ((uint32_t)scalar_reduced[4*i+2] << 16)
+             | ((uint32_t)scalar_reduced[4*i+3] << 24);
     }
+    ama_secure_memzero(scalar_reduced, sizeof(scalar_reduced));
     /* `wnaf` is the secret-scalar's signed digit expansion — every
      * non-zero entry leaks one bit of the secret scalar if observable.
      * Zero-initialise on the secure path so the bytes that stay zero
@@ -1372,11 +1431,17 @@ ama_error_t ama_ed25519_sign(
     if (message_len <= ED25519_STACK_THRESHOLD) {
         buf = stack_buf;
     } else {
+        /* Both early exits fire AFTER the expansion above, so `hash`
+         * already holds the clamped secret scalar and the PRF key —
+         * scrub it on the way out, as the secp256k1 signer's error exits
+         * do (INVARIANT-6). */
         if (message_len > SIZE_MAX - 64) {
+            ama_secure_memzero(hash, sizeof(hash));
             return AMA_ERROR_INVALID_PARAM;
         }
         buf = (uint8_t *)malloc(64 + message_len);
         if (!buf) {
+            ama_secure_memzero(hash, sizeof(hash));
             return AMA_ERROR_MEMORY;
         }
         buf_on_heap = 1;
@@ -1457,6 +1522,24 @@ ama_error_t ama_ed25519_verify(
      * Without this, (R, S + L) verifies wherever (R, S) does.  Wycheproof
      * tc63/tc85.  See internal/ama_ed25519_canonical.h. */
     if (!ama_ed25519_signature_s_is_canonical(signature)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
+    /* RFC 8032 §5.1.7 step 1 also says to DECODE the first half as a point,
+     * and §5.1.3 is what decoding means: y >= p fails, and x = 0 with the
+     * sign bit set fails.  This path already rejected every such R, but as a
+     * side effect of ge25519_p3_tobytes emitting only canonical encodings —
+     * the comparison at the bottom could never match a non-canonical R.
+     * Stating the rule explicitly costs one byte predicate on a public input,
+     * accepts exactly the set it accepted before (no legitimate R is
+     * produced by anything but that same encoder), and puts the two backends
+     * on one shared predicate rather than on two different accidents.
+     *
+     * It is not decorative here even though this path was already correct:
+     * ama_ed25519_batch_verify below is a loop over this function, so this is
+     * where the fe51 batch path inherits the rule that the donna batch path
+     * needed added by hand.  See internal/ama_ed25519_canonical.h. */
+    if (!ama_ed25519_signature_r_is_canonical(signature)) {
         return AMA_ERROR_VERIFY_FAILED;
     }
 
@@ -1543,6 +1626,10 @@ ama_error_t ama_ed25519_verify(
  * @param results  Output: 1=valid, 0=invalid per entry
  * @return AMA_SUCCESS if all valid, AMA_ERROR_VERIFY_FAILED if any invalid,
  *         AMA_ERROR_INVALID_PARAM on NULL inputs
+ *
+ * `results` is zeroed before any entry is verified, so every slot is written
+ * on every path that gets past the NULL check — see the public contract in
+ * include/ama_cryptography.h, which the donna shim honours identically.
  */
 ama_error_t ama_ed25519_batch_verify(
     const ama_ed25519_batch_entry *entries,
@@ -1554,6 +1641,42 @@ ama_error_t ama_ed25519_batch_verify(
     }
     if (count == 0) {
         return AMA_SUCCESS;
+    }
+
+    /* The same `count` rejection the donna shim applies, on the same
+     * thresholds, BEFORE the pre-zero loop below.
+     *
+     * This path allocates nothing, so there is no wrapped malloc here to
+     * guard — but the guard was never only about the malloc.  The public
+     * contract in include/ama_cryptography.h states the rejection
+     * unconditionally, for both backends, and gives the reason in terms of
+     * `results`: a `count` large enough to wrap `count * sizeof(void *)`
+     * cannot describe a real array, so walking `results[0..count)` is itself
+     * the wild write.  Without this, fe51 began exactly that walk — and fe51
+     * is the default on every target CMakeLists.txt does not match against
+     * x86_64/amd64/AMD64, i.e. the shipped ARM build.
+     *
+     * The comment below used to claim this pre-zero "buys the two
+     * implementations an identical, fail-closed output contract".  It did
+     * not: the contract has two halves, and only the second was implemented
+     * here.  Both are now.
+     *
+     * The sizeof operands are the donna shim's, not this path's, on purpose:
+     * the threshold is part of the published argument contract and must not
+     * differ by backend.  A caller that gets AMA_ERROR_INVALID_PARAM from one
+     * build must get it from the other for the same `count`. */
+    if (count > SIZE_MAX / sizeof(const unsigned char *) ||
+        count > SIZE_MAX / sizeof(size_t)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Same pre-zero as the donna shim: `results` is fully written before any
+     * per-entry work, so no path can leave a stale 1 from an earlier batch
+     * visible to a caller that reads the array before the return code.  The
+     * loop below overwrites every slot, so this costs one pass and completes
+     * the two implementations' identical, fail-closed output contract. */
+    for (size_t i = 0; i < count; i++) {
+        results[i] = 0;
     }
 
     int all_valid = 1;
@@ -1580,6 +1703,17 @@ ama_error_t ama_ed25519_batch_verify(
  * ama_frost.c without breaking encapsulation of the internal types.
  * All compressed points are 32-byte little-endian Y||sign(X).
  * ====================================================================== */
+
+/* Which Ed25519 backend this build selected: "donna" (x86-64 assembly shim) or
+ * "fe51" (the portable in-tree path).  The two are compile-time mutually
+ * exclusive -- CMake swaps the source file on AMA_ED25519_ASSEMBLY -- so each
+ * backend file defines this to name itself and exactly one is linked.  Exists
+ * so tools/check_ed25519_backend_parity.py can REFUSE to run unless the two
+ * objects it was handed actually report different backends: a differential that
+ * compares a library with itself passes vacuously (audit M14). */
+AMA_API const char *ama_ed25519_active_backend(void) {
+    return "fe51";
+}
 
 /**
  * Raw scalar-basepoint multiplication: point = scalar * G.

@@ -66,12 +66,10 @@ Forward-secrecy properties (read before deploying):
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 4.0.0
+Version: 5.0.0
 """
 
-import hashlib
 import logging
-import secrets
 import struct
 import threading
 import time
@@ -80,6 +78,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional, Tuple
 
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.secure_memory import SecureMemoryError, secure_memzero
 
 logger = logging.getLogger(__name__)
@@ -224,10 +223,28 @@ class ChannelMessage:
                 f"but only {len(data) - offset - TAG_BYTES} bytes available"
             )
 
+        # Ceiling the declared ciphertext length BEFORE slicing, so a hostile
+        # 32-bit ct_len cannot drive a large receive-side allocation — the
+        # size-cap symmetry HandshakeMessage/HandshakeResponse already enforce
+        # but this frame lacked.  GCM ciphertext length equals plaintext
+        # length, so MAX_MESSAGE_SIZE (the ceiling encrypt() imposes on the
+        # send side) is the tight bound.
+        if ct_len > MAX_MESSAGE_SIZE:
+            raise ChannelError(
+                f"ChannelMessage: ct_len={ct_len} exceeds maximum {MAX_MESSAGE_SIZE}"
+            )
+
         ciphertext = data[offset : offset + ct_len]
         offset += ct_len
 
         tag = data[offset : offset + TAG_BYTES]
+        offset += TAG_BYTES
+
+        # Reject trailing bytes, exactly as HandshakeMessage/HandshakeResponse
+        # do: a frame with bytes past the tag is malformed, and silently
+        # ignoring them invites parser-differential ambiguity.
+        if offset != len(data):
+            raise ChannelError(f"Malformed ChannelMessage: {len(data) - offset} trailing bytes")
 
         return cls(
             session_id=session_id,
@@ -629,7 +646,9 @@ class SecureSession:
                     "the 96-bit random-nonce collision bound."
                 )
 
-            nonce = secrets.token_bytes(NONCE_BYTES)
+            # INVARIANT-41: the AEAD nonce whose uniqueness the epoch
+            # encryption budget presumes — health-tested, gated draw.
+            nonce = secure_token_bytes(NONCE_BYTES)
             # AAD binds ciphertext to session_id, rekey epoch, and sequence
             # number.  Including the epoch ensures that a silent rekey failure
             # (same key across two epochs) produces distinct AAD, preventing
@@ -690,6 +709,19 @@ class SecureSession:
                 raise SessionExpiredError("Session TTL expired")
             if msg.session_id != self.session_id:
                 raise ChannelError("Session ID mismatch")
+
+            # Bound the receive-side AEAD work.  native_aes256_gcm_decrypt
+            # allocates a plaintext buffer the size of the ciphertext and runs
+            # the full GHASH+CTR pass BEFORE the tag is checked, so an oversized
+            # frame is proportional allocation + AEAD work an on-path attacker
+            # who knows the cleartext session_id can force per fresh-seq frame.
+            # encrypt() already refuses plaintext > MAX_MESSAGE_SIZE; mirror
+            # that ceiling here (GCM ciphertext length == plaintext length) so
+            # the receive path is not the asymmetric one.
+            if len(msg.ciphertext) > MAX_MESSAGE_SIZE:
+                raise ValueError(
+                    f"Ciphertext too large: {len(msg.ciphertext)} > {MAX_MESSAGE_SIZE}"
+                )
 
             # Replay detection: sliding window — read AND mutated under
             # the same lock, so two concurrent decrypts cannot both
@@ -908,8 +940,16 @@ class SecureChannelInitiator:
             kem_ciphertext=encap_result.ciphertext,
         )
 
-        # Hash the handshake transcript for signature verification
-        self._handshake_hash = hashlib.sha3_256(msg.serialize()).digest()
+        # Hash the handshake transcript for signature verification.  The
+        # transcript hash binds the key exchange, so it is computed by this
+        # module's own SHA3-256 kernel — stdlib hashlib resolves to OpenSSL
+        # (INVARIANT-1), and both sides must agree byte-for-byte, which two
+        # FIPS 202 implementations do.
+        from ama_cryptography.pqc_backends import (
+            native_sha3_256,  # noqa: PLC0415  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
+        )
+
+        self._handshake_hash = native_sha3_256(msg.serialize())
         self._state = ChannelState.HANDSHAKE_SENT
         return msg
 
@@ -923,12 +963,73 @@ class SecureChannelInitiator:
             Established SecureSession for encrypted communication
 
         Raises:
-            HandshakeError: If signature verification fails
+            HandshakeError: If signature verification fails, or if any field of
+                ``response`` is malformed.  Every field arrives over the wire,
+                so a malformed one must surface as the type this method
+                documents — see ``_abandon_handshake`` for what went wrong when
+                it did not.
             ChannelError: If not in HANDSHAKE_SENT state
         """
         if self._state != ChannelState.HANDSHAKE_SENT:
             raise ChannelError(f"Cannot complete handshake in state {self._state}")
 
+        try:
+            return self._complete_handshake_inner(response)
+        except HandshakeError:
+            # Documented failure: still an abandoned handshake, and the state
+            # below must go with it.
+            self._abandon_handshake()
+            raise
+        except (ValueError, TypeError) as exc:
+            # An undocumented type escaping from a peer-supplied field.
+            self._abandon_handshake()
+            raise HandshakeError(f"Malformed handshake response from the peer: {exc}") from exc
+        except BaseException:
+            # Anything else — a key-derivation failure, an OSError from the
+            # native HKDF, an interrupt landing between the signature check and
+            # the state clear.  INVARIANT-6 is about exit paths, not about the
+            # exception types we happened to anticipate, so the secret is
+            # dropped here too.  Re-raised unchanged: only the two peer-data
+            # cases above are re-typed, because only those are the peer's doing.
+            self._abandon_handshake()
+            raise
+
+    def _abandon_handshake(self) -> None:
+        """Drop handshake state after a failed ``complete_handshake``.
+
+        Every failure path used to leave it in place.  The block that clears
+        ``_shared_secret`` and ``_handshake_hash`` sat at the END of
+        ``complete_handshake``, reached only on success, so a rejected
+        handshake left the negotiated shared secret live in the initiator for
+        the lifetime of the object — including on the two paths that raise
+        ``HandshakeError`` deliberately (a pinned-key mismatch and a failed
+        signature).  Measured: after a rejected handshake,
+        ``initiator._shared_secret is not None``.
+
+        A peer could also reach a path that raised something else entirely.
+        ``HybridSignatureProvider.verify`` splits the peer-supplied public key
+        at a fixed offset and hands the tail to ``MLDSAProvider.verify``, which
+        returns ``dilithium_verify(...)`` with no exception handling, and that
+        raises ``ValueError`` for any length other than 1952.  So a responder
+        returning a wrong-length ``responder_public_key`` made
+        ``complete_handshake`` raise a raw ``ValueError`` — not the documented
+        ``HandshakeError`` — which a caller's ``except HandshakeError`` does not
+        catch.  Reproduced end to end against a real responder: one byte short
+        gives ``ValueError: Invalid public key length: expected 1952, got 1951``
+        and leaves the shared secret live.
+
+        ``_shared_secret`` is ``bytes`` and cannot be wiped in place; dropping
+        the reference is what the success path does and is all that is
+        available here.  The channel moves to CLOSED rather than back to
+        HANDSHAKE_SENT: a handshake that failed must not be completable by a
+        second attempt with a different response.
+        """
+        self._shared_secret = None
+        self._handshake_hash = None
+        self._state = ChannelState.CLOSED
+
+    def _complete_handshake_inner(self, response: HandshakeResponse) -> SecureSession:
+        """The handshake completion proper; see :meth:`complete_handshake`."""
         from ama_cryptography.crypto_api import HybridSignatureProvider
 
         sig_provider = HybridSignatureProvider()
@@ -1094,11 +1195,30 @@ class SecureChannelResponder:
             )
             raise HandshakeError("Handshake failed") from None
 
-        # Generate session ID
-        session_id = secrets.token_bytes(SESSION_ID_BYTES)
+        # Generate session ID — through the health-tested draw, not bare
+        # secrets.token_bytes.  The session ID is signed into the handshake
+        # transcript and is a _derive_session input, and INVARIANT-41's
+        # contract is that every identifier a key derivation consumes passes
+        # the continuous stuck-DRBG check.
+        #
+        # The module has two random draws — this identifier and the AEAD
+        # nonce — and only the responder generates a session ID; the initiator
+        # receives one from its peer and passes it to `_derive_session`.
+        #
+        # Both draws are covered by enforcement rather than by review:
+        # tests/test_invariant41_rng_sweep.py enumerates every bare draw in the
+        # shipped package against an allowlist, so an unrouted site fails CI
+        # instead of waiting to be noticed.
+        session_id = secure_token_bytes(SESSION_ID_BYTES)
 
-        # Sign the handshake transcript (proves we hold the static key)
-        handshake_hash = hashlib.sha3_256(msg.serialize()).digest()
+        # Sign the handshake transcript (proves we hold the static key).
+        # Same kernel as the initiator side above — the two transcript hashes
+        # must be equal, and neither may come from OpenSSL (INVARIANT-1).
+        from ama_cryptography.pqc_backends import (
+            native_sha3_256,  # noqa: PLC0415  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
+        )
+
+        handshake_hash = native_sha3_256(msg.serialize())
         transcript = handshake_hash + session_id
         sig_result = self._sig.sign(transcript, self._sig_sk)
 

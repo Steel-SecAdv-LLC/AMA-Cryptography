@@ -34,8 +34,14 @@ rules:
 
   - id: hardcoded-secret-key
     # Match an assignment of a non-empty string literal to a variable whose
-    # NAME looks like secret material (key / secret / password / token /
-    # credential / api-key / private-key).
+    # NAME looks like secret material.  The positive regex below is the exact
+    # list: secret, passwd, password, api_key/apikey, private_key/privatekey,
+    # access_token/accesstoken, auth_token/authtoken, credential.  Bare `key`
+    # and bare `token` are deliberately NOT in it — `key = "name"` in a dict
+    # loop and `token = "("` in a parser are both common and neither is a
+    # secret — so `signing_key`, `master_key` and `hmac_key` are not matched
+    # either.  An earlier version of this comment listed `key` and `token` as
+    # covered categories, which read as a promise the rule never kept.
     #
     # This rule was previously written with three separate metavariables
     # ($KEY / $SECRET / $PASSWORD), each bound in only one branch of a
@@ -295,6 +301,21 @@ rules:
   # C rules
   # --------------------------------------------------------------------------
   - id: bare-memset-zero-secret-named-buffer
+    # ENFORCEMENT NOTE — this rule does not run, and cannot.
+    #
+    # It is scoped to `src/c/**` (below), while every semgrep invocation in this
+    # repository scans `ama_cryptography/` only, so it has never matched a file.
+    # Widening the scan target does not help either: semgrep's C parser does not
+    # know this codebase's AMA_API export macro and reports a syntax error on
+    # every file that uses it, which tools/check_semgrep_severity.py correctly
+    # treats as a failed scan.
+    #
+    # The property below IS enforced, by tools/check_c_secret_zeroization.py —
+    # same destination-name regex, same scope, same severity, in a parser that
+    # handles the codebase — wired into ci.yml and pinned in both directions by
+    # tests/test_c_secret_zeroization_gate.py.  The rule is kept here as the
+    # written statement of the policy; edit both together.
+    #
     # INVARIANT-6 hardening (audit Issue 4): bare `memset(BUF, 0, LEN)`
     # in C cryptographic code is fragile — the compiler is permitted by
     # the as-if rule to elide the zero write when BUF is not subsequently

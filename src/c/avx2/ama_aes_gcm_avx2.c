@@ -2,14 +2,19 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_aes_gcm_avx2.c
- * @brief AVX2/AES-NI optimized AES-256-GCM with pipelined rounds and GHASH
+ * @brief AES-NI/PCLMULQDQ AES-256-GCM with pipelined rounds and GHASH
+ *        (lives in the avx2/ tree for historical layout; needs no AVX2)
  *
  * Enhances the existing AES-NI path with:
  *   - Pipelined AES-NI rounds (process 8 blocks simultaneously)
  *   - Vectorized GHASH using PCLMULQDQ with Karatsuba multiplication
  *   - Interleaved AES-CTR + GHASH for maximum throughput
  *
- * Requires: AES-NI + PCLMULQDQ + AVX2
+ * Requires: AES-NI + PCLMULQDQ + SSSE3 (pshufb, for the GCM<->PCLMULQDQ
+ * byte-swap below).  Built with -maes -mpclmul -mssse3 -msse4.1.  It does
+ * NOT require AVX2 — no 256- or 512-bit (_mm256_ / _mm512_) intrinsic appears
+ * here, so the dispatcher installs it on any AES-NI + PCLMULQDQ host, with or
+ * without AVX2 (see src/c/dispatch/ama_dispatch.c).
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -504,6 +509,13 @@ void ama_aes256_gcm_encrypt_avx2(
         memset(pad_ct + remaining, 0, 16 - remaining);  // PUBLIC-DATA: pad_ct trailing zero-pad — AES-GCM partial-block GHASH input: pad bytes [remaining..16) zero so GHASH absorbs the public ciphertext + zero pad
         ct_block = _mm_loadu_si128((const __m128i *)pad_ct);
         ghash_acc = ghash_absorb_block_sw(ghash_acc, bswap128(ct_block), H_sw);
+        /* Scrub the plaintext staging copy: pad_pt holds up to 15 bytes of
+         * caller plaintext on the stack, exactly the buffer the DECRYPT
+         * twin below already scrubs.  Encrypt staged the same class of
+         * data and left it behind — one barriered write per call, on the
+         * partial-block path only.  pad_ct is the public ciphertext and
+         * needs nothing. */
+        ama_secure_memzero(pad_pt, sizeof(pad_pt));
     }
 
     /* Final GHASH block: len(AAD) || len(C) in bits, big-endian */
@@ -542,6 +554,14 @@ void ama_aes256_gcm_encrypt_avx2(
     ama_secure_memzero(&H,      sizeof(H));
     ama_secure_memzero(&H_sw,   sizeof(H_sw));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
 }
 
 /**
@@ -731,11 +751,28 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
     ama_secure_memzero(&H, sizeof(H));
     ama_secure_memzero(&H_sw, sizeof(H_sw));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
 
     /* Unified post-verify return — branch on the precomputed
      * `tag_match` flag.  Both classes have reached this point via
      * the identical scrub+loop sequence above. */
-    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    /* Masked return-code selection -- source-level branch-freedom for the
+     * public accept/reject pick, matching ama_aes_gcm.c and
+     * ama_chacha20poly1305.c (where gcc 13 aarch64 compiled this exact
+     * ternary into a cbnz with asymmetric arms; see the scalar files
+     * for the measurement).  The aead-verify invariance gate pins the
+     * scalar pair; SIMD kernels carry the same source form so the
+     * guarantee does not depend on per-kernel compiler luck. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    return (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED & ((int)tag_match - 1));
 }
 
 #else

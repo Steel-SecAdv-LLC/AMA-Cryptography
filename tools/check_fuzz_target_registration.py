@@ -289,6 +289,25 @@ def audit(root: Path = Path(".")) -> list[str]:
             f"fuzz/python/<name>.py source — {', '.join(unknown_py)}."
         )
 
+    # The seed corpus. The workflow and OSS-Fuzz both guard corpus loading
+    # with `if [ -d ... ]`, so an absent directory does not fail anything — it
+    # silently starts the campaign from zero, spending the fixed CI budget
+    # rediscovering the harness's fixed-header layout instead of exercising
+    # the properties the harness asserts. fuzz_ascon ran that way from the day
+    # it was added: the only registered target with no seed corpus at all,
+    # invisible precisely because an empty start is legal. Registered means
+    # seeded.
+    for target in sorted(sources):
+        corpus_dir = root / FUZZ_DIR / "seed_corpus" / target
+        if not corpus_dir.is_dir() or not any(corpus_dir.iterdir()):
+            failures.append(
+                f"fuzz/seed_corpus/{target}/: absent or empty — the fuzz lanes "
+                f"skip corpus loading silently when the directory is missing, "
+                f"so this target starts every campaign from zero. Commit seeds "
+                f"that reach the harness's interesting states (see "
+                f"tools/build_ascon_seed_corpus.py for the pattern)."
+            )
+
     for name, registered in registries.items():
         missing = sorted(sources - registered)
         if missing:
@@ -311,7 +330,11 @@ def main() -> int:
     root = Path.cwd()
     for required in (FUZZ_DIR, CMAKE_PATH, WORKFLOW_PATH, OSSFUZZ_PATH):
         if not (root / required).exists():
-            print(f"ERROR: {required} not found — run from the repository root.")
+            # .as_posix(): repo-relative paths are spelled with forward
+            # slashes everywhere this repo names them (docs, workflows, this
+            # tool's own audit output); on Windows a bare Path renders with
+            # backslashes and the refusal named a spelling nothing else uses.
+            print(f"ERROR: {required.as_posix()} not found — run from the repository root.")
             return 1
 
     failures = audit(root)

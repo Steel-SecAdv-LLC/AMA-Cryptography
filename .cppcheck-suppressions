@@ -1,0 +1,54 @@
+# cppcheck per-site suppressions — INVARIANT-13.
+
+# Format: <id>:<file>:<line>.  Blank lines and `#` comments are ignored.
+
+# WHY THIS FILE EXISTS
+# --------------------
+# The static-analysis workflow used to pass four FILE-WIDE suppressions on the
+# command line:
+
+#   --suppress=uninitvar:src/c/ama_nistp.c
+#   --suppress=uninitvar:src/c/ama_kyber.c
+#   --suppress=uninitvar:src/c/ama_dilithium.c
+#   --suppress=arrayIndexOutOfBounds:src/c/dispatch/ama_dispatch.c
+
+# Each was justified in a comment, and each silenced the whole ID for the whole
+# file: a genuinely uninitialised read introduced later into ama_nistp.c — 1,100
+# lines of P-256/P-384/P-521 field arithmetic — would have been reported and
+# discarded.  ama_dispatch.c was the substantive one, being full of
+# `char[AMA_DISPATCH_PATH_MAX]` buffers.
+
+# INVARIANT-13 forbids in-source suppression markers under src/c/ regardless of
+# justification, so `--inline-suppr` comments are not the alternative.  A
+# suppressions file is: it is per site, it carries the reason, and it lives
+# outside the sources.
+
+# Line numbers drift.  That is the intended failure mode: a suppression whose
+# line moved stops matching, the finding reappears, and CI goes red until
+# someone confirms it is still the same false positive.  A file-wide
+# suppression can never do that.
+
+# arrayIndexOutOfBounds is NOT listed here.  It was not a cppcheck limitation
+# at all: with `--force`, cppcheck invents a configuration in which PATH_MAX is
+# defined but unknown, evaluates `char dir[AMA_DISPATCH_PATH_MAX]` as `dir[1]`,
+# and reports the writes into it.  Passing the real value, `-DPATH_MAX=4096`,
+# removes both findings outright and leaves the check LIVE on those buffers,
+# which is strictly better than silencing it.  Verified with cppcheck 2.13.0:
+# the two findings at ama_dispatch.c:1010 and :1015 disappear and no new
+# finding appears anywhere.
+
+# ama_nistp.c — `out` is a local ge/fe struct passed by address to
+# nistp_mont_mul / nistp_mod_sub, which write every limb before any read.
+# cppcheck does not follow through those helpers, so it sees `*r = out` as a
+# read of an uninitialised object.
+uninitvar:src/c/ama_nistp.c:699
+uninitvar:src/c/ama_nistp.c:801
+uninitvar:src/c/ama_nistp.c:1168
+
+# ama_kyber.c — `&mat[i].vec[j]` takes the address of a matrix entry so
+# kyber_gen_matrix can fill it.  Taking the address of an object in order to
+# have it written is the operation cppcheck cannot distinguish from reading it.
+uninitvar:src/c/ama_kyber.c:577
+
+# ama_dilithium.c — w1_packed is filled by polyveck_pack_w1 through a pointer.
+uninitvar:src/c/ama_dilithium.c:2363

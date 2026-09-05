@@ -16,7 +16,6 @@ Enterprise-grade key management with:
 
 import base64
 import contextlib
-import hashlib
 import json
 import logging
 import os
@@ -313,8 +312,19 @@ class HDKeyDerivation:
             # seed_phrase is guaranteed non-None here: the first `if` excluded
             # the (seed is None AND seed_phrase is None) case, and the `elif`
             # excluded seed is not None, so seed is None and seed_phrase is not None.
-            self.master_seed = hashlib.pbkdf2_hmac(
-                "sha512", cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
+            # BIP39 seed derivation (PBKDF2-HMAC-SHA512, c=2048, salt
+            # "mnemonic" + passphrase, empty here) on this module's own KDF
+            # (SP 800-132, src/c/ama_pbkdf2.c).  hashlib.pbkdf2_hmac is
+            # OpenSSL's PBKDF2 — a master-seed derivation delegated to an
+            # unauthorized vendor (INVARIANT-1).  Byte-identical: pinned
+            # against the official BIP39 vector and differentially against
+            # hashlib in tests/test_sha2_pbkdf2_native.py.
+            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+                native_pbkdf2_hmac_sha512,
+            )
+
+            self.master_seed = native_pbkdf2_hmac_sha512(
+                cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
             )
 
         # Generate master key
@@ -372,6 +382,7 @@ class HDKeyDerivation:
             native_secp256k1_ecdsa_verify,
             native_secp256k1_pubkey_decompress,
             native_secp256k1_pubkey_from_privkey,
+            native_sha256,
         )
 
         if not _SECP256K1_NATIVE_AVAILABLE:
@@ -394,11 +405,16 @@ class HDKeyDerivation:
                 f"Module in error state: Pairwise test failed for {label}"
             ) from exc
         # The ECDSA primitives take a 32-byte digest, not a message; hash the
-        # helper's test message on both sides so sign and verify agree.
+        # helper's test message on both sides so sign and verify agree.  The
+        # digest comes from this module's own SHA-256 kernel: a FIPS pairwise
+        # test that hashed through stdlib hashlib was routing part of itself
+        # through OpenSSL (INVARIANT-1), and the native hash is definitionally
+        # present here — the keypair that is being tested came from the same
+        # library.
         pairwise_test_signature(
-            lambda message, sk: native_secp256k1_ecdsa_sign(hashlib.sha256(message).digest(), sk),
+            lambda message, sk: native_secp256k1_ecdsa_sign(native_sha256(message), sk),
             lambda message, signature, pk: native_secp256k1_ecdsa_verify(
-                signature, hashlib.sha256(message).digest(), pk
+                signature, native_sha256(message), pk
             ),
             private_key,
             public_key_64,
@@ -809,7 +825,11 @@ class SecureKeyStorage:
             self._derive_key_from_password(master_password)
         else:
             # Generate random encryption key (should be HSM-backed in production)
-            self.encryption_key = bytearray(secrets.token_bytes(32))
+            # INVARIANT-41: this key protects every key at rest — draw it
+            # through the health-tested, error-state-gated CSPRNG, not a bare
+            # secrets.token_bytes (which neither detects a stuck DRBG nor
+            # refuses to mint key material while the module is in ERROR).
+            self.encryption_key = bytearray(secure_token_bytes(32))
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
     @staticmethod
@@ -1016,7 +1036,7 @@ class SecureKeyStorage:
                 version = 1
         else:
             # New installation: generate random salt
-            self.salt = secrets.token_bytes(self.KDF_SALT_BYTES)
+            self.salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
             # Save salt with secure permissions (0600), no world-readable window.
             _atomic_write_bytes(self.salt_file, self.salt)
@@ -1149,9 +1169,14 @@ class SecureKeyStorage:
             self._enforce_kdf_policy(self.kdf_params)
             iterations = self._usable_cost(iterations, self.KDF_ITERATIONS)
             self.kdf_params["iterations"] = iterations
+            # Key-encryption-key derivation on this module's own PBKDF2
+            # (INVARIANT-1; see the BIP39 site above for the full rationale).
+            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+                native_pbkdf2_hmac_sha256,
+            )
+
             self.encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
+                native_pbkdf2_hmac_sha256(
                     master_password.encode("utf-8"),
                     self.salt,
                     iterations,
@@ -1198,7 +1223,7 @@ class SecureKeyStorage:
                 old_keys[key_id] = (key_data, metadata)
 
         # Generate new salt
-        new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
+        new_salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
         # Derive new key — prefer Argon2id, fall back to PBKDF2
         from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
@@ -1217,9 +1242,13 @@ class SecureKeyStorage:
                 )
             )
         else:
+            # Same KDF as the initial derivation above (INVARIANT-1).
+            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+                native_pbkdf2_hmac_sha256,
+            )
+
             new_encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
+                native_pbkdf2_hmac_sha256(
                     master_password.encode("utf-8"),
                     new_salt,
                     self.KDF_ITERATIONS,
@@ -1395,7 +1424,10 @@ class SecureKeyStorage:
         # from escaping ``storage_path`` — see ``_validate_key_id``).
         self._validate_key_id(key_id)
 
-        nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
+        # INVARIANT-41: a repeated GCM nonce under one key is catastrophic
+        # (keystream reuse + GHASH subkey recovery), so the draw that mints it
+        # must be the one carrying the continuous repeated-output test.
+        nonce = secure_token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
         # Associated data binds the ciphertext to key_id and, from format v3,
         # to the KDF parameters this instance derived its key with.  The
@@ -1600,8 +1632,25 @@ class HSMKeyStorage:
         ],
         "softhsm": [
             "/usr/lib/softhsm/libsofthsm2.so",
+            # Debian-style multiarch layouts install under the triplet
+            # directory instead.  The test suite's availability probe knew
+            # both spellings while this list knew only the first, so on a
+            # multiarch host the probe lifted the skip and this resolver
+            # then raised "PKCS#11 library not found" — and outside the
+            # tests, the class simply could not find a SoftHSM2 the distro
+            # had installed.  tests/test_hsm_integration.py now pins that
+            # every path the probe accepts is one this list can resolve.
+            "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+            "/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so",
             "/usr/local/lib/softhsm/libsofthsm2.so",
             "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # macOS ARM
+            # Windows (Disig MSI, via `choco install softhsm.install`).  The
+            # MSI parents its directory to TARGETDIR, so the drive follows
+            # ROOTDRIVE unless INSTALLDIR is pinned; both the drive-root form
+            # the installer defaults to and the Program Files form an operator
+            # may choose are listed.
+            "C:\\SoftHSM2\\lib\\softhsm2-x64.dll",
+            "C:\\Program Files\\SoftHSM2\\lib\\softhsm2-x64.dll",
         ],
         "aws-cloudhsm": [
             "/opt/cloudhsm/lib/libcloudhsm_pkcs11.so",
@@ -1826,7 +1875,7 @@ class HSMKeyStorage:
         handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
 
         try:
-            nonce = secrets.token_bytes(12)
+            nonce = secure_token_bytes(12)  # INVARIANT-41 (see store_key)
             mechanism = self.pkcs11.AES_GCM_Mechanism(nonce, b"", 128)
             ciphertext_with_tag = bytes(self.session.encrypt(handle, plaintext, mechanism))
 
@@ -1953,8 +2002,15 @@ if __name__ == "__main__":
     # to logs / terminal scrollback.  A SHA3-256 fingerprint is one-way,
     # supports `grep` / log-correlation just as well as a hex prefix,
     # and reveals nothing about the key value itself.
-    sk_fp = hashlib.sha3_256(signing_key).hexdigest()[:16]
-    ek_fp = hashlib.sha3_256(encryption_key).hexdigest()[:16]
+    # The fingerprint input IS key material, so even this display path uses
+    # the module's own SHA3-256 rather than OpenSSL-backed hashlib
+    # (INVARIANT-1).
+    from ama_cryptography.pqc_backends import (
+        native_sha3_256,  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+    )
+
+    sk_fp = native_sha3_256(signing_key).hex()[:16]
+    ek_fp = native_sha3_256(encryption_key).hex()[:16]
     logger.info(f"Signing key fingerprint:    sha3-256:{sk_fp}")
     logger.info(f"Encryption key fingerprint: sha3-256:{ek_fp}")
 
@@ -1986,14 +2042,14 @@ if __name__ == "__main__":
     # Store a key
     test_key = secrets.token_bytes(32)
     storage.store_key("master-key-001", test_key, metadata={"purpose": "signing"})
-    logger.info("✓ Key stored securely")
+    logger.info("[OK] Key stored securely")
 
     # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
     logger.info(
-        f"✓ Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
+        f"[OK] Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
     )
 
     logger.info("\n" + "=" * 70)
-    logger.info("✓ Key Management System operational")
+    logger.info("[OK] Key Management System operational")
     logger.info("=" * 70)

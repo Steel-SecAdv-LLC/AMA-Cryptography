@@ -54,7 +54,11 @@ Ethical constraints are mathematically bound to cryptographic operations through
 Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC). No custom ciphers, hash functions, or signature schemes. The composition protocol is an original design by Steel Security Advisors LLC.
 
 ### Performance Efficiency
-Cryptographic operations maintain throughput exceeding 1,000 operations per second with monitoring overhead measured per environment.
+Throughput is per-primitive, not uniform: the fast signers and KEMs exceed 1,000
+operations per second, while SLH-DSA-SHAKE-128s sign is ~1,250 ms (under 1 op/s)
+by design — FIPS 205 trades sign time for the most conservative assumption. See
+[Performance-Benchmarks](Performance-Benchmarks.md) for per-algorithm figures;
+monitoring overhead is measured per environment.
 
 ---
 
@@ -66,7 +70,7 @@ flowchart TD
         direction LR
         kms["KeyManagementSystem\nkey_management.py\nHKDF derivation"]:::blue
         cpkg["CryptoPackage\ncreate_crypto_package()\nverify_crypto_package()"]:::blue
-        mon["AmaCryptographyMonitor\ntools/monitoring/ama_cryptography_monitor.py\n3R runtime security"]:::blue
+        mon["AmaCryptographyMonitor\nama_cryptography/monitoring.py\n3R runtime security"]:::blue
         capi["AmaCryptography\ncrypto_api.py\nHigh-level interface"]:::blue
     end
 
@@ -100,7 +104,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 **C Layer (`src/c/`):**
-Implements all cryptographic primitives in C11 with zero external dependencies. NIST FIPS compliant implementations for ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f, SHA3-256, HKDF, Ed25519, AES-256-GCM, and more.
+Implements all cryptographic primitives in C11 with zero external dependencies. Specification-conformant implementations (NIST FIPS/SP where the algorithm is a NIST standard, IETF RFC otherwise) for ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f, SHA3-256, HKDF, Ed25519, AES-256-GCM, and more.  Not FIPS-validated: no CAVP/CMVP certificate has been issued (see CSRC_STANDARDS.md).
 
 **Cython Layer:**
 Optional acceleration for mathematical operations (18–37x vs pure Python). Provides NumPy integration for the 3R monitoring engine.

@@ -3,9 +3,22 @@
 #
 # Multi-stage Docker build for AMA Cryptography
 # Optimized for production deployment with minimal attack surface
+#
+# Base image: pinned by digest, not by tag alone. A tag is a mutable pointer,
+# so a tag-only FROM makes the build unreproducible and gives an upstream
+# account takeover a path straight into this image -- the same supply-chain
+# reasoning behind pinning every GitHub Action to a commit SHA
+# (tools/check_action_pins.py), applied to the other half of the build inputs.
+# The tag is kept alongside the digest so the line stays readable; Docker
+# verifies the digest and ignores the tag. ubuntu:22.04 is an LTS release
+# supported to 2027-04; refreshing the digest is a deliberate edit.
+#
+# base-eol: 2027-04-30
+# ^ read by tools/check_docker_pins.py, which fails 60 days out so the
+#   base can be moved while it is still receiving fixes.
 
 # Stage 1: Builder
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS builder
 
 # Install build dependencies
 # INVARIANT-1: no external cryptographic libraries are linked. libssl-dev is
@@ -76,11 +89,11 @@ RUN pip3 install --no-cache-dir build && \
     python3 -m build --wheel
 
 # Stage 2: Runtime
-FROM ubuntu:22.04
+FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System"
-LABEL version="4.0.0"
+LABEL version="5.0.0"
 
 # Install runtime dependencies only
 # INVARIANT-1: libssl3 is NOT installed — AMA's native C primitives do not

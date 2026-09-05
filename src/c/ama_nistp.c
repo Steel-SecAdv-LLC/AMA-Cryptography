@@ -70,6 +70,7 @@
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_once.h"
+#include "internal/ama_ct_barrier.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -238,9 +239,22 @@ static const nistp_curve *nistp_lookup(ama_nist_curve_t curve) {
  * *values*; `nl` itself is a public curve parameter.
  * ============================================================================ */
 
-/** Mask of all ones when `c != 0`, all zeros when `c == 0`. */
+/** Mask of all ones when `c != 0`, all zeros when `c == 0`.
+ *
+ * Every mask in this file is produced here, so this is the one place the
+ * value barrier has to be applied.  Without it the optimizer knows the result
+ * is 0 or ~0, which licenses it to replace a masked select with a branch on
+ * the predicate — and the predicates here are the Montgomery extra-reduction
+ * carry, the group law's exceptional-case flags, and the comb digit, i.e.
+ * the ECDSA nonce and the long-term key.  Measured before this barrier
+ * existed, with clang 18 at -O3 over four P-256 signatures with a fixed
+ * digest: 1,251 retired instructions of key-dependent spread inside
+ * `nistp_mont_mul` alone, deterministic under callgrind.  That is the
+ * Montgomery extra-reduction distinguisher of Walter & Thompson (CT-RSA
+ * 2001) reintroduced by codegen, on the same scalar path secp256k1 carried
+ * it on.  See internal/ama_ct_barrier.h. */
 static inline uint64_t nistp_mask64(uint64_t c) {
-    return (uint64_t)0 - (uint64_t)((c | (~c + 1u)) >> 63);
+    return ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)((c | (~c + 1u)) >> 63));
 }
 
 /** 1 when every limb is zero, else 0.  Constant time. */
@@ -373,17 +387,49 @@ extern void ama_nistp_mont_mul4_mulx(uint64_t r[4], const uint64_t a[4],
  * `ama_has_bmi2()` and `ama_has_adx()` are each a load-and-branch after
  * their shared one-shot probe, but this predicate is consulted on the order
  * of ten thousand times per verification, so it is worth collapsing to a
- * single relaxed load.  The write is idempotent — every thread computes the
- * same value from the same cached CPUID result — and a torn read is not
- * possible for an aligned int, so no synchronisation is needed beyond the
- * once-guard already inside the CPUID getters. */
-static int nistp_mulx_gate = -1;
+ * single relaxed load.
+ *
+ * `_Atomic int`, not a plain `int`.  An earlier revision of this comment
+ * argued that "the write is idempotent ... so no synchronisation is needed
+ * beyond the once-guard already inside the CPUID getters", and both halves
+ * were wrong.  An idempotent value does not stop concurrent unsynchronised
+ * read and write from being a data race — C11 5.1.2.4p25 makes it undefined
+ * behaviour regardless of what the store does at the architecture level — and
+ * the CPUID getters' once orders nothing about *this* object.  It was exactly
+ * the "lockless flag + plain variable" shape that INVARIANT-15 and
+ * `src/c/internal/ama_once.h` prohibit outright, in a file whose other
+ * one-time state (NISTP_COMB_ONCE) already goes through AMA_CALL_ONCE.
+ *
+ * It was also live rather than theoretical, and its invisibility was an
+ * accident of which entry point ran first: on the keygen/sign/verify paths
+ * the first write happens inside `nistp_comb_build()` under NISTP_COMB_ONCE,
+ * so nothing races.  `ama_nistp_point_decode` and `ama_nistp_pubkey_validate`
+ * — both attacker-input paths — reach this gate through `nistp_load_point`
+ * with no once in the way, and ThreadSanitizer reports the race there.
+ * `tests/c/test_concurrent_init.c` drives exactly that shape from eight
+ * threads released together, and is what turned the finding into a
+ * reproduction.
+ *
+ * `memory_order_relaxed` is the correct order and is what finally makes the
+ * paragraph above true: the gate publishes no other data, so no reader needs
+ * to observe anything that happened before the write, and the value is
+ * idempotent so a reader that misses it simply recomputes the same answer.
+ * The hot path does not pay for this — on x86-64 a relaxed load of an aligned
+ * int is the same instruction a plain load compiles to.
+ *
+ * No portability fallback is needed here.  This block is inside
+ * AMA_HAVE_NISTP_MONT_MULX_IMPL, which CMakeLists.txt defines only for
+ * x86-64 GCC/Clang (`if(... x86_64 ... AND NOT MSVC)`), and both provide C11
+ * <stdatomic.h>. */
+#include <stdatomic.h>
+
+static _Atomic int nistp_mulx_gate = -1;
 
 static inline int nistp_use_mulx4(void) {
-    int g = nistp_mulx_gate;
+    int g = atomic_load_explicit(&nistp_mulx_gate, memory_order_relaxed);
     if (g < 0) {
         g = (ama_has_bmi2() && ama_has_adx()) ? 1 : 0;
-        nistp_mulx_gate = g;
+        atomic_store_explicit(&nistp_mulx_gate, g, memory_order_relaxed);
     }
     return g;
 }
@@ -473,7 +519,16 @@ static void nistp_mont_sqr(uint64_t *r, const uint64_t *a,
 /** r = (a + b) mod m, for a, b < m. */
 static void nistp_mod_add(uint64_t *r, const uint64_t *a, const uint64_t *b,
                           const uint64_t *m, unsigned nl) {
-    uint64_t sum[AMA_NISTP_MAX_LIMBS];
+    /* Zero-initialised, not merely written: `nistp_add` fills `nl` limbs of a
+     * buffer sized for the widest curve, so limbs `nl..AMA_NISTP_MAX_LIMBS-1`
+     * are never assigned.  Every reader is bounded by the same `nl` and the
+     * tail is unreachable, but gcc 13 at -O3 cannot prove that across the
+     * inlining it performs once `nistp_mask64` carries a value barrier, and
+     * emits -Wmaybe-uninitialized on the call below.  Initialising the array
+     * is the fix at source: it costs a handful of stores against a modular
+     * addition, and it keeps uninitialised stack out of a buffer that feeds
+     * the constant-time conditional subtract. */
+    uint64_t sum[AMA_NISTP_MAX_LIMBS] = {0};
     uint64_t carry = nistp_add(sum, a, b, nl);
     nistp_cond_sub_mod(r, sum, carry, m, nl);
 }

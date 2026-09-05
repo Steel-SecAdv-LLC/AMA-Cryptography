@@ -54,15 +54,26 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
 /* ============================================================================
  * Scalar Barrett reduction (for sub-register fallback paths)
  *
- * Reduces a mod q for values in [-q, 2q).
- * Matches the generic C implementation in ama_kyber.c.
+ * Domain is the whole int16_t range, not [-q, 2q) as this block used to say:
+ * the routine is byte-identical to ama_kyber.c's barrett_reduce, which is
+ * exhaustively verified over all 65,536 inputs, and the invNTT layers below
+ * call it on sums that are not pre-restricted to that window.
  * ============================================================================ */
 static inline int16_t barrett_reduce_scalar(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = ((int32_t)v * a) >> 26;
+    /* Same int32-accumulator form as ama_kyber.c's barrett_reduce, and the
+     * same measured bounds: t lies in [-10, 9] and the result in [0, q] over
+     * the full int16_t domain — exhaustively verified, so the narrowing cast
+     * is value-preserving.  q itself is attained, at the nine inputs that are
+     * exact negative multiples of q from -3329 to -29961; negative outputs
+     * are not, because the truncating shift floors toward -infinity and
+     * always undershoots the quotient.  (This comment used to bound the
+     * result at (-2q, 2q) — true, but 4x loose and admitting a sign the
+     * formula cannot produce.  ama_kyber.c's copy was tightened and these
+     * two were left behind.) */
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* ============================================================================

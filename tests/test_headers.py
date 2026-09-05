@@ -364,3 +364,37 @@ def test_data_files_are_not_selected(tool_module: ModuleType) -> None:
         ".gitignore",
     ):
         assert tool_module.style_for(rel) is None, rel
+
+
+def test_apply_keeps_a_block_comment_openable(tool_module: ModuleType) -> None:
+    """Normalising a header that OPENS a longer block must not orphan the body.
+
+    ``--apply`` deleted every license line in a mixed block, including the
+    ``/*`` opener when the copyright sat on it.  The surviving ``* ...`` lines
+    then became code, so the rewritten C no longer compiled — and ``--check``
+    reported the corrupted file as clean, because the canonical header was
+    present.  The gate's own remedy silently broke three source files before
+    this was caught.  The opener is now kept as a bare ``/*``."""
+    src = (
+        "/* Copyright (C) 2025-2026 Steel Security Advisors LLC\n"
+        " * SPDX-License-Identifier: Apache-2.0\n"
+        " *\n"
+        " * Descriptive text that must survive.\n"
+        " */\n"
+        "#include <stdio.h>\n"
+    )
+    out = tool_module.render(src, "c")
+
+    # The descriptive body survived...
+    assert "Descriptive text that must survive." in out
+    # ...and it is still inside a comment: every block opened is closed, and no
+    # continuation line is left dangling outside one.
+    assert out.count("/*") == out.count("*/"), out
+    body_line = next(
+        i
+        for i, line in enumerate(out.splitlines())
+        if "Descriptive text that must survive." in line
+    )
+    opened = "\n".join(out.splitlines()[:body_line]).count("/*")
+    closed = "\n".join(out.splitlines()[:body_line]).count("*/")
+    assert opened > closed, f"body line is not inside an open comment:\n{out}"

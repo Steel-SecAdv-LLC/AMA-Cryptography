@@ -159,6 +159,9 @@ static ama_error_t kyber_pubkey_check(const kyber_params* P,
                                       const uint8_t* ek, size_t ek_len);
 static int16_t montgomery_reduce(int32_t a);
 static int16_t coeff_normalize(int16_t a);
+/* Division-free FIPS 203 Compress_d — defined beside coeff_normalize, whose
+ * [0, q-1] output is its documented input domain. */
+static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d);
 static void poly_tomont(poly* r);
 
 /* Public wrapper prototypes (called from ama_core.c via extern) */
@@ -233,13 +236,18 @@ static void polyvec_reduce(polyvec* r, unsigned int k) {
  *   suite, but only after producing wrong ciphertexts on encaps.
  *
  *   Similar audit results in the generic C path:
- *     - poly_invntt's final montgomery_reduce(f * x) is the only
- *       reduction; output is in (-q, q), exactly what the callers
- *       (poly_add, poly_sub, coeff_normalize) tolerate.  No pair.
+ *     - poly_invntt's final montgomery_reduce(f * x) now carries a
+ *       barrett_reduce in the same loop (kyber_invntt_scalar), so its
+ *       output is canonical [0, q], matching the SIMD inverse kernels.
+ *       No interior pair.
  *     - poly_ntt's per-butterfly montgomery_reduce keeps |coeff|
- *       bounded by q + |a|/R.  After log2(KYBER_N)=8 layers the
- *       bound is ≲ 9q (per Bos–Friedberger §3.3); the trailing
- *       polyvec_reduce in callers covers it.  No interior pair.
+ *       bounded by q + |a|/R — ≲ 9q after log2(KYBER_N)=8 layers (per
+ *       Bos–Friedberger §3.3) — and kyber_ntt_scalar now ends with its
+ *       own canonicalising barrett_reduce sweep into [0, q], the
+ *       post-condition the SIMD forward kernels already established.
+ *       An earlier revision of this note said the trailing
+ *       polyvec_reduce in callers covered the 9q band instead; that
+ *       described the pre-sweep layout.  No interior pair.
  *
  *   The generic-C reduction layout is already algorithmically minimal
  *   at q=3329 / int16 coefficients.
@@ -299,48 +307,55 @@ static void polyvec_decompress(polyvec* r, const uint8_t* a, const kyber_params*
     }
 }
 
-/**
- * Sample polynomial uniformly from SHAKE128 stream (for matrix A)
- */
-static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8_t y) {
-    uint8_t buf[34];
-    uint8_t stream[672];  /* Sufficient for rejection sampling */
-    unsigned int ctr, pos;
-    uint16_t val0, val1;
-
-    memcpy(buf, seed, 32);
-    buf[32] = x;
-    buf[33] = y;
-
-    ama_shake128(buf, 34, stream, sizeof(stream));
-
-    ctr = 0;
-    pos = 0;
-    while (ctr < KYBER_N && pos + 3 <= sizeof(stream)) {
-        val0 = ((stream[pos] | ((uint16_t)stream[pos + 1] << 8)) & 0xFFF);
-        val1 = ((stream[pos + 1] >> 4) | ((uint16_t)stream[pos + 2] << 4)) & 0xFFF;
-        pos += 3;
-
-        if (val0 < KYBER_Q) {
-            a->coeffs[ctr++] = (int16_t)val0;
-        }
-        if (ctr < KYBER_N && val1 < KYBER_Q) {
-            a->coeffs[ctr++] = (int16_t)val1;
-        }
-    }
-}
-
-/**
- * Rejection-sample one polynomial from an already-squeezed SHAKE128
- * stream window.  Returns 1 if all KYBER_N coefficients were filled,
- * 0 if the stream was exhausted first.
+/* SHAKE128 rate, in bytes: the granularity at which SampleNTT extends its
+ * XOF window.  Stated as its own constant because two properties depend on
+ * the exact value and neither is obvious at a call site:
  *
- * Byte-for-byte equivalent to the rejection loop in kyber_poly_uniform().
+ *   - 168 is divisible by 3, so a 3-octet candidate group never straddles a
+ *     block boundary.  That is what lets the continuation below resume at
+ *     `pos = 0` in the fresh block with nothing carried over; FIPS 203
+ *     Algorithm 7 consumes the stream in 3-octet groups and a rate that was
+ *     NOT a multiple of 3 would require carrying the remainder forward.
+ *   - it must equal the 4-way kernel's rate, or the scalar and batched paths
+ *     would extend their windows by different amounts and diverge.
  */
-static int kyber_rej_uniform_from_stream(poly *a,
-                                          const uint8_t *stream, size_t stream_len)
+#define KYBER_XOF_BLOCKBYTES 168u
+
+/* The initial squeeze, in blocks.  4 blocks = 672 octets = 224 candidate
+ * groups = 448 candidates; at ML-KEM's 3329/4096 acceptance rate the expected
+ * yield is 364.2 with sd 8.25, so 256 is 13.1 sd below the mean.  This is the
+ * same first-window budget the pq-crystals reference uses (its
+ * GEN_MATRIX_NBLOCKS rounds up to 4 for a 168-octet rate) — but a budget is
+ * not a guarantee, which is what the continuation loops below exist for. */
+#define KYBER_XOF_INITIAL_BLOCKS 4u
+
+_Static_assert(KYBER_XOF_BLOCKBYTES % 3u == 0u,
+               "SampleNTT consumes the XOF in 3-octet groups; a rate that is "
+               "not a multiple of 3 would strand bytes at every block boundary");
+_Static_assert(KYBER_XOF_BLOCKBYTES == AMA_SHAKE128_X4_RATE,
+               "the scalar and 4-way SampleNTT paths must extend their XOF "
+               "windows by the same amount or their outputs diverge");
+
+/**
+ * Rejection-sample coefficients from an already-squeezed SHAKE128 window,
+ * continuing from `ctr`, and return the updated counter.
+ *
+ * FIPS 203 Algorithm 7 (SampleNTT) consumes the XOF in 3-octet groups, each
+ * carrying two 12-bit candidates, and accepts a candidate iff it is < q.
+ * `stream_len` must be a multiple of 3 (every caller passes a whole number of
+ * rate blocks, and KYBER_XOF_BLOCKBYTES is asserted divisible by 3 above), so
+ * no partial group is left behind for the next window to carry.
+ *
+ * Taking and returning the counter is what makes the sampler resumable: the
+ * caller squeezes another block and calls again, exactly as the reference
+ * implementation does.  The previous form returned a 1/0 "did it fit" flag
+ * and discarded the partial progress, which left the caller with no way to
+ * finish the polynomial.
+ */
+static unsigned int kyber_rej_uniform_from_stream(poly *a, unsigned int ctr,
+                                                 const uint8_t *stream,
+                                                 size_t stream_len)
 {
-    unsigned int ctr = 0;
     size_t pos = 0;
 
     while (ctr < KYBER_N && pos + 3 <= stream_len) {
@@ -356,7 +371,87 @@ static int kyber_rej_uniform_from_stream(poly *a,
         }
     }
 
-    return (ctr == KYBER_N) ? 1 : 0;
+    return ctr;
+}
+
+#ifdef AMA_TESTING_MODE
+/* Test-only window size for the initial squeeze, so the continuation path can
+ * be reached on EVERY seed rather than on none.  See the header declaration in
+ * src/c/internal/ama_testing_exports.h for why a probability-1e-39 branch
+ * needs a deterministic way in. */
+static unsigned int kyber_sample_initial_blocks = KYBER_XOF_INITIAL_BLOCKS;
+
+void ama_kyber_test_set_sample_initial_blocks(unsigned int blocks) {
+    kyber_sample_initial_blocks =
+        (blocks == 0u || blocks > KYBER_XOF_INITIAL_BLOCKS)
+            ? KYBER_XOF_INITIAL_BLOCKS
+            : blocks;
+}
+
+unsigned int ama_kyber_test_get_sample_initial_blocks(void) {
+    return kyber_sample_initial_blocks;
+}
+
+unsigned int ama_kyber_test_rej_uniform_from_stream(int16_t coeffs[256],
+                                                   unsigned int ctr,
+                                                   const uint8_t *stream,
+                                                   size_t stream_len) {
+    /* `poly` is a struct whose sole member is `int16_t coeffs[KYBER_N]`, so
+     * the cast below is the identity on layout; going through the real
+     * function keeps the test on the shipped rejection loop rather than a
+     * copy of it. */
+    return kyber_rej_uniform_from_stream((poly *)(void *)coeffs, ctr,
+                                         stream, stream_len);
+}
+#define KYBER_SAMPLE_INITIAL_BLOCKS ((size_t)kyber_sample_initial_blocks)
+#else
+#define KYBER_SAMPLE_INITIAL_BLOCKS ((size_t)KYBER_XOF_INITIAL_BLOCKS)
+#endif
+
+/**
+ * Sample one matrix entry uniformly from a SHAKE128 stream — FIPS 203
+ * Algorithm 7, SampleNTT.
+ *
+ * The XOF is streamed incrementally and the loop runs until all KYBER_N
+ * coefficients have been accepted.  The previous implementation squeezed a
+ * FIXED 672-octet window and stopped when it ran out, leaving
+ * `a->coeffs[ctr .. 255]` at whatever the caller's storage happened to hold —
+ * uninitialised stack for `mat[i].vec[j]` in kyber_gen_matrix().  A matrix
+ * entry that is partly stale bytes is not the A the key holder's counterpart
+ * derives from the same public rho, so keygen and encapsulation would agree
+ * with nobody; and because rho is public, an adversary can search seeds for
+ * the condition offline.  The event needs 448 candidates to yield fewer than
+ * 256 accepts (p is about 1e-39 for a well-behaved XOF), but "improbable" is
+ * not the property FIPS 203 states, and the reference implementations all
+ * loop here.  Termination is certain for any XOF with a non-degenerate output
+ * distribution: each additional block contributes 112 candidates, each
+ * accepted with probability 3329/4096.
+ *
+ * `ama_shake128_inc_*` can only fail on a NULL context or output pointer;
+ * both are stack objects here, so no error path exists to propagate.  This is
+ * the same contract dil_poly_uniform() in ama_dilithium.c already relies on.
+ */
+static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8_t y) {
+    uint8_t buf[34];
+    uint8_t stream[KYBER_XOF_BLOCKBYTES * KYBER_XOF_INITIAL_BLOCKS];
+    const size_t initial_len = KYBER_XOF_BLOCKBYTES * KYBER_SAMPLE_INITIAL_BLOCKS;
+    unsigned int ctr;
+    ama_sha3_ctx shake_ctx;
+
+    memcpy(buf, seed, 32);
+    buf[32] = x;
+    buf[33] = y;
+
+    ama_shake128_inc_init(&shake_ctx);
+    ama_shake128_inc_absorb(&shake_ctx, buf, 34);
+    ama_shake128_inc_finalize(&shake_ctx);
+    ama_shake128_inc_squeeze(&shake_ctx, stream, initial_len);
+
+    ctr = kyber_rej_uniform_from_stream(a, 0u, stream, initial_len);
+    while (ctr < KYBER_N) {
+        ama_shake128_inc_squeeze(&shake_ctx, stream, KYBER_XOF_BLOCKBYTES);
+        ctr = kyber_rej_uniform_from_stream(a, ctr, stream, KYBER_XOF_BLOCKBYTES);
+    }
 }
 
 /**
@@ -368,40 +463,70 @@ static int kyber_rej_uniform_from_stream(poly *a,
  * reference above.
  *
  * For Kyber-1024 (KYBER_K=4), the matrix has 16 polys → 4 full
- * groups of 4 with no trailing scalar work.  The initial 4-block
- * squeeze (672 bytes per lane) matches the scalar stream[672].
+ * groups of 4 with no trailing scalar work.  Both paths take the same
+ * KYBER_XOF_INITIAL_BLOCKS first window and extend it one
+ * KYBER_XOF_BLOCKBYTES block at a time until all 256 coefficients are
+ * accepted, so their outputs agree octet for octet at every seed.
  */
 /**
  * Flush one batch of exactly four matrix entries through the 4-way SHAKE128
  * kernel.  Split out of kyber_gen_matrix so the caller's loop carries nothing
  * but the (i, j) matrix indices — which is what lets both a reader and the
  * optimiser see that `mat[i].vec[j]` is in bounds.
+ *
+ * Each lane continues from its own counter, so a lane whose first window fell
+ * short is finished from the SAME sponge state rather than restarted.  The
+ * previous form called the scalar sampler as a "fallback", which could not
+ * help: the scalar path absorbs the identical seed||x||y and squeezes the
+ * identical first 672 octets, so it reproduced the shortfall exactly.  A
+ * fallback that is byte-identical to the path it rescues is not a fallback.
+ *
+ * Extending squeezes all four lanes — the 4-way kernel advances the four
+ * Keccak states in lockstep — but a lane that is already full ignores its
+ * extra block, and a lane's coefficients depend only on the prefix of its own
+ * stream that it consumed in order.  The output is therefore byte-identical
+ * to running four independent scalar SampleNTT streams, which is the contract
+ * internal/ama_sha3_x4.h states.
  */
-static void kyber_gen_matrix_flush4(uint8_t bufs[4][34],
-                                    poly *polys[4],
-                                    uint8_t xy[4][2],
-                                    const uint8_t seed[32]) {
-    /* 4 blocks matches the scalar kyber_poly_uniform stream[672] budget. */
-    const size_t kInitialBlocks = 4;
+static void kyber_gen_matrix_flush4(uint8_t bufs[4][34], poly *polys[4]) {
+    const size_t initial_blocks = KYBER_SAMPLE_INITIAL_BLOCKS;
     ama_shake128_x4_ctx ctx;
-    uint8_t streams[4][AMA_SHAKE128_X4_RATE * 4];
+    uint8_t streams[4][AMA_SHAKE128_X4_RATE * KYBER_XOF_INITIAL_BLOCKS];
+    unsigned int ctr[4];
     int lane;
+    int incomplete;
 
     ama_shake128_x4_absorb_once(&ctx,
         bufs[0], 34, bufs[1], 34, bufs[2], 34, bufs[3], 34);
     ama_shake128_x4_squeezeblocks(&ctx,
-        streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
+        streams[0], streams[1], streams[2], streams[3], initial_blocks);
 
     for (lane = 0; lane < 4; lane++) {
-        int ok = kyber_rej_uniform_from_stream(polys[lane],
-                                               streams[lane],
-                                               AMA_SHAKE128_X4_RATE * kInitialBlocks);
-        if (!ok) {
-            /* Scalar fallback (effectively unreachable: ML-KEM's ~18.7 %
-             * rejection rate over 448 candidates per 4 blocks gives expected
-             * accepts >> 256, matching the scalar reference's one-shot
-             * squeeze budget exactly). */
-            kyber_poly_uniform(polys[lane], seed, xy[lane][0], xy[lane][1]);
+        ctr[lane] = kyber_rej_uniform_from_stream(polys[lane], 0u,
+                                                  streams[lane],
+                                                  AMA_SHAKE128_X4_RATE * initial_blocks);
+    }
+
+    for (;;) {
+        incomplete = 0;
+        for (lane = 0; lane < 4; lane++) {
+            if (ctr[lane] < KYBER_N) {
+                incomplete = 1;
+            }
+        }
+        if (!incomplete) {
+            break;
+        }
+
+        ama_shake128_x4_squeezeblocks(&ctx,
+            streams[0], streams[1], streams[2], streams[3], 1);
+
+        for (lane = 0; lane < 4; lane++) {
+            if (ctr[lane] < KYBER_N) {
+                ctr[lane] = kyber_rej_uniform_from_stream(polys[lane], ctr[lane],
+                                                          streams[lane],
+                                                          AMA_SHAKE128_X4_RATE);
+            }
         }
     }
 }
@@ -452,7 +577,7 @@ static void kyber_gen_matrix(polyvec *mat, const uint8_t seed[32],
             polys[pending] = &mat[i].vec[j];
 
             if (++pending == 4u) {
-                kyber_gen_matrix_flush4(bufs, polys, xy, seed);
+                kyber_gen_matrix_flush4(bufs, polys);
                 pending = 0;
             }
         }
@@ -575,12 +700,18 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
             kyber_poly_cbd_eta(&r->vec[i], streams[i]);
         }
         /* The CBD input *is* the secret vector s (and e, from which s follows
-         * given the public t = A*s + e and A), and `bufs` carries sigma.  The
-         * scalar arm below has always scrubbed its equivalents; the batched
-         * arm did not, so widening the SIMD path quietly widened the residue.
-         * INVARIANT-12 applies to both arms of one function. */
+         * given the public t = A*s + e and A), and `bufs` carries sigma.
+         * INVARIANT-12 applies to both arms of one function, and until the
+         * commit carrying this comment NEITHER arm was complete: the batched
+         * arm scrubbed nothing, and the scalar arm below scrubbed `stream`
+         * but never the `buf` holding sigma||nonce.  Both are closed now. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        /* The x4 sponge state was seeded with sigma||nonce and, until it is
+         * re-permuted, its absorbed lanes are as recoverable as `streams`
+         * itself (a Keccak state is invertible within a permutation).  Scrub
+         * it in the same class as streams/bufs — INVARIANT-12. */
+        ama_secure_memzero(&ctx, sizeof(ctx));
         return;
     }
 
@@ -600,6 +731,12 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
             }
         }
         ama_secure_memzero(stream, sizeof(stream));
+        /* `buf` is sigma||nonce — the CBD seed, not a derivative of it.  It
+         * is the same secret class as `stream` (which it generates) and as
+         * the x4 arm's `bufs`, which is scrubbed above.  Scrubbing only the
+         * expanded stream left the seed itself in a dead frame, where the
+         * whole noise vector is re-derivable from it. */
+        ama_secure_memzero(buf, sizeof(buf));
     }
 }
 
@@ -620,6 +757,10 @@ static void kyber_cbd_poly(poly* r, const uint8_t seed[32], uint8_t nonce, unsig
         kyber_poly_cbd_eta(r, stream);
     }
     ama_secure_memzero(stream, sizeof(stream));
+    /* Same class as `stream`: `buf` holds the CBD seed (the FO coins `r`
+     * during encapsulation and the decapsulation re-encryption), from which
+     * this polynomial is fully re-derivable.  INVARIANT-12. */
+    ama_secure_memzero(buf, sizeof(buf));
 }
 
 #ifdef AMA_TESTING_MODE
@@ -978,6 +1119,7 @@ static ama_error_t kyber_encapsulate_internal(
     }
 #else
     (void)public_key;
+    (void)m_in;
     (void)ciphertext;
     (void)ciphertext_len;
     (void)shared_secret;
@@ -1050,8 +1192,9 @@ static ama_error_t kyber_decapsulate_internal(
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(mp.coeffs[8*i + j]);
-                /* Compress_1: round(2t/q) mod 2 */
-                t = (int16_t)((((uint32_t)t << 1) + KYBER_Q / 2) / KYBER_Q);
+                /* Compress_1: round(2t/q) mod 2.  Division-free — mp is
+                 * secret-key-derived, see kyber_compress_d (KyberSlash). */
+                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
                 m[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -1554,7 +1697,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
             m_test[ii] = 0;
             for (jj = 0; jj < 8; jj++) {
                 int16_t tv = coeff_normalize(stu_man.coeffs[8*ii + jj]);
-                tv = (int16_t)((((uint32_t)tv << 1) + KYBER_Q / 2) / KYBER_Q);
+                tv = (int16_t)kyber_compress_d((uint32_t)tv, 1);
                 m_test[ii] |= (uint8_t)((tv & 1) << jj);
             }
         }
@@ -1660,7 +1803,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
             unsigned int kj;
             for (kj = 0; kj < 8; kj++) {
                 int16_t tv2 = coeff_normalize(stu3.coeffs[8*ki + kj]);
-                tv2 = (int16_t)((((uint32_t)tv2 << 1) + KYBER_Q / 2) / KYBER_Q);
+                tv2 = (int16_t)kyber_compress_d((uint32_t)tv2, 1);
                 msg_dec3[ki] |= (uint8_t)((tv2 & 1) << kj);
             }
         }
@@ -1850,7 +1993,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(stu_poly.coeffs[8*i + j]);
-                t = (int16_t)((((uint32_t)t << 1) + KYBER_Q / 2) / KYBER_Q);
+                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
                 m_recov[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -1901,7 +2044,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(mp.coeffs[8*i + j]);
-                t = (int16_t)((((uint32_t)t << 1) + KYBER_Q / 2) / KYBER_Q);
+                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
                 m_recov[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -2070,12 +2213,17 @@ static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
     if (rc != AMA_SUCCESS) {
         ama_secure_memzero(ss_enc, sizeof(ss_enc));
         ama_secure_memzero(ss_dec, sizeof(ss_dec));
+        ama_secure_memzero(ct, sizeof(ct));
         return rc;
     }
 
     mismatch = ama_consttime_memcmp(ss_enc, ss_dec, sizeof(ss_enc));
     ama_secure_memzero(ss_enc, sizeof(ss_enc));
     ama_secure_memzero(ss_dec, sizeof(ss_dec));
+    /* The pairwise-check ciphertext as well: the doc comment above this
+     * function promises "the ciphertext and both shared secrets are
+     * scrubbed before return", and until this line only the secrets were. */
+    ama_secure_memzero(ct, sizeof(ct));
     if (mismatch != 0) {
         return AMA_ERROR_VERIFY_FAILED;
     }
@@ -2284,14 +2432,33 @@ static int16_t montgomery_reduce(int32_t a) {
 
 /**
  * Barrett reduction
- * Reduces a mod q for values up to 2^26
+ *
+ * Domain is the whole `int16_t` range and the image is [0, q] — both
+ * exhaustively verified over all 65,536 inputs; see the body comment for the
+ * intermediate bounds and for the nine inputs at which q itself is attained.
+ *
+ * This header used to read "reduces a mod q for values up to 2^26", which
+ * named a domain the parameter type cannot express: 2^26 does not fit an
+ * int16_t, so no caller could ever supply such a value.  The 2^26 is the
+ * scaling constant of the reciprocal (`v = round(2^26 / q)`), not an input
+ * bound, and the two SIMD copies of this routine inherited the same sentence.
  */
 static int16_t barrett_reduce(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = ((int32_t)v * a) >> 26;
+    /* All intermediates in int32: v*a is at most 20159 * 32768 < 2^31, the
+     * shifted quotient t lies in [-10, 9], and a - t*q lies in [0, q] — all
+     * three exhaustively verified over every int16_t input, not only over
+     * the in-contract range — so the single narrowing cast at the return
+     * cannot change the value.  q itself is attainable, at the nine inputs
+     * that are exact negative multiples of q from -3329 to -29961; negative
+     * outputs are not, because the truncating shift floors toward -infinity
+     * and always undershoots the quotient.  (This comment used to bound the
+     * full-range case at (-2q, 2q), which is true but 4x loose and admits a
+     * sign the formula cannot produce.)  Bit-identical to the previous
+     * int16_t-accumulator form over all 65,536 inputs. */
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /**
@@ -2366,6 +2533,21 @@ static void kyber_ntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128]) 
             }
         }
     }
+
+    /* Canonicalising sweep into [0, q], matching the trailing barrett_reduce
+     * every SIMD kernel appends (avx2/ama_kyber_avx2.c, neon/ama_kyber_neon.c,
+     * sve2/ama_kyber_sve2.c).  Without it this function — the one the dispatch
+     * auto-tune benches the SIMD slots against, and the fallback installed
+     * whenever a SIMD slot is NULL — left coefficients unreduced and disagreed
+     * with all three kernels by exact multiples of q on ~58% of coefficients.
+     * No wrong bytes ever reached a caller, because every serialization path
+     * funnels through poly_reduce/coeff_normalize; but the post-condition this
+     * file documents as a "single source of truth" was not one, the
+     * auto-tune was comparing unequal work, and a future consumer of
+     * dt->kyber_ntt relying on the canonical range would have been wrong. */
+    for (j = 0; j < KYBER_N; j++) {
+        coeffs[j] = barrett_reduce(coeffs[j]);
+    }
 }
 
 static void kyber_invntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128]) {
@@ -2385,9 +2567,12 @@ static void kyber_invntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128
         }
     }
 
-    /* Multiply by f = 128^{-1} */
+    /* Multiply by f = 128^{-1}, then canonicalise — the SIMD inverse kernels
+     * apply barrett_reduce in this same final loop (see the montgomery_mul +
+     * barrett_reduce pair in ama_kyber_invntt_avx2 and its NEON/SVE2 twins).
+     * Same rationale as the forward sweep above. */
     for (j = 0; j < KYBER_N; j++) {
-        coeffs[j] = montgomery_reduce((int32_t)f * coeffs[j]);
+        coeffs[j] = barrett_reduce(montgomery_reduce((int32_t)f * coeffs[j]));
     }
 }
 
@@ -2548,6 +2733,124 @@ static int16_t coeff_normalize(int16_t a) {
     return csubq(a);            /* Reduce: [0,2q-1] -> [0,q-1] */
 }
 
+/* FIPS 203 Compress_d, division-free (the KyberSlash fix).
+ *
+ * Compress_d(x) = round(2^d * x / q) mod 2^d, which reads most directly as
+ *
+ *     (((uint32_t)x << d) + q/2) / KYBER_Q
+ *
+ * and that is how this file computed it.  The operand of that division is
+ * secret on two reachable paths: the Compress_1 message decode in
+ * decapsulation works on mp = v - s^T u (a function of the secret key), and
+ * poly_compress runs over the re-encryption inside the FO transform.  A
+ * division by a compile-time constant is only constant-time if the compiler
+ * lowers it to a reciprocal multiply — usual at -O2/-O3, but NOT guaranteed,
+ * and this project builds Debug at -O0 where a hardware divide with
+ * operand-dependent latency is emitted.  That is precisely the KyberSlash
+ * defect class (secret-dependent division timing in ML-KEM compression,
+ * exploitable as a decapsulation timing oracle for key recovery), and it
+ * contradicts INVARIANT-12 and CRYPTO_REVIEW_CHECKLIST's "no variable-time
+ * division/modulo on secret values".  ama_dilithium.c's dil_decompose already
+ * uses the multiply/shift idiom for the same reason.
+ *
+ * The replacement is a Granlund-Montgomery reciprocal multiply chosen so it is
+ * EXACT, not approximate, over this function's whole domain:
+ *
+ *     M = ceil(2^40 / q) = 330282857,  S = 40
+ *     Compress_d(x) = ((((uint64_t)x << d) + q/2) * M >> S) & (2^d - 1)
+ *
+ * Callers always pass x through coeff_normalize() first, so x is in [0, q-1]
+ * and the widest intermediate (d = 11) is 3328*2^11 + 1664 = 6_817_408 < 2^23;
+ * the 64-bit product cannot overflow.  Equivalence to the division form was
+ * verified by exhaustive comparison over every x in [0, q-1] for every width
+ * d in {1, 4, 5, 10, 11} — all 16_645 pairs agree, so the ciphertext bytes and
+ * every KAT are unchanged by construction.  The 64-bit multiply is a
+ * fixed-latency instruction on every supported target, unlike the divide it
+ * replaces.
+ *
+ * THE WIDTH IS PART OF THE CONTRACT, AND IT IS BOUNDED
+ *
+ * A reciprocal multiply substitutes for a division only over the interval
+ * where it is exact, and that interval is finite.  For M = ceil(2^40/q) the
+ * error term is e = M*q - 2^40 = 3177, and the Granlund-Montgomery condition
+ * gives exactness for every numerator n <= 2^40/e = 346_084_868.  With
+ * x <= q-1 that is satisfied for every d <= 16; enumerating the remaining
+ * widths shows the identity in fact survives to d = 18 and breaks at d = 19
+ * (first disagreement x = 1862).  By d = 30 it is wrong for 2_791 of the
+ * 3_329 coefficients.
+ *
+ * The previous revision of this function carried no width bound at all: it
+ * shifted first and then chose a mask on `d >= 32`, which (a) advertised
+ * support for every width up to 31 while returning wrong values from 19
+ * upwards, and (b) left `(uint64_t)x << d` undefined for d >= 64 (C11
+ * 6.5.7p3), since the guard protected only the mask.  The guard is now the
+ * first thing the function does and it names the real bound.
+ *
+ * FIPS 203 §4.2.1 defines Compress_d only for d < 12, and every call site in
+ * this file passes a literal in {1, 4, 5, 10, 11}, so the refusal arm is dead
+ * code that constant-folds away.  It exists so that a width outside the
+ * proven interval yields a value the callers' own range checks reject rather
+ * than a coefficient that is wrong by one — the failure mode that makes an
+ * interoperability break look like a decapsulation failure.
+ * tests/c/test_kyber_compress.c enumerates the ENTIRE declared domain
+ * (3_329 coefficients x 18 widths = 59_922 pairs, plus the refused widths),
+ * so the bound below is a result rather than an assertion. */
+#define AMA_KYBER_COMPRESS_MULT  330282857ULL  /* ceil(2^40 / KYBER_Q) */
+#define AMA_KYBER_COMPRESS_SHIFT 40
+/* Widest d for which the reciprocal above is exact for every x in [0, q-1].
+ * Verified by enumeration, not by the sufficient condition alone. */
+#define AMA_KYBER_COMPRESS_MAX_D 18u
+/* Returned for a width outside [1, AMA_KYBER_COMPRESS_MAX_D].  Unreachable at
+ * every call site; see the contract note above. */
+#define AMA_KYBER_COMPRESS_REFUSED 0u
+
+static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
+    uint64_t n;
+    uint32_t quotient;
+
+    if (d == 0u || d > AMA_KYBER_COMPRESS_MAX_D) {
+        return AMA_KYBER_COMPRESS_REFUSED;
+    }
+
+    n = ((uint64_t)x_normalized << d) + (KYBER_Q / 2);
+    quotient = (uint32_t)((n * AMA_KYBER_COMPRESS_MULT) >> AMA_KYBER_COMPRESS_SHIFT);
+    /* The `mod 2^d` of the definition, applied HERE rather than left to the
+     * caller.  It is not cosmetic at d = 1: x = q-1 = 3328 gives
+     * round(2*3328/3329) = 2, and FIPS 203 Compress_1(3328) is 2 mod 2 = 0.
+     * 832 of the 3,329 coefficients exceed 2^d before the mask at d=1 (104 at
+     * d=4, 52 at d=5, 1 at d=10 — tests/c/test_kyber_compress.c counts them).
+     * Every current call site happens to mask with the matching width, so the
+     * shipped ciphertext bytes are unchanged by this line — but a helper whose
+     * documented contract is `mod 2^d` and whose return value is not is a trap
+     * for the next caller, and the values it gets wrong are the ones nearest
+     * the decision boundary an attacker steers toward.
+     *
+     * `d` is a plaintext parameter (the compression width, a literal at every
+     * call site), never secret, so selecting the mask on it is not a timing
+     * channel — and it folds away entirely, since this is `static inline` and
+     * every call passes a constant.  The shift below needs no width guard of
+     * its own: the refusal at the top of the function already bounds d by
+     * AMA_KYBER_COMPRESS_MAX_D (18), well inside the range where `1u << d` is
+     * defined (C11 6.5.7p3). */
+    return quotient & ((1u << d) - 1u);
+}
+
+#ifdef AMA_TESTING_MODE
+/**
+ * Test-only export of Compress_d.
+ *
+ * `kyber_compress_d` is `static inline`, so tests/c/test_kyber_compress.c
+ * cannot link it directly, and a copy of the implementation in the test would
+ * verify the copy rather than the code that ships.  This forwards to the real
+ * definition, so the exhaustive equivalence proof for the Granlund-Montgomery
+ * reciprocal is executed against the shipped translation unit.
+ * Not declared in any public header — visible only to AMA_TESTING_MODE builds.
+ */
+uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d) {
+    return kyber_compress_d(x_normalized, d);
+}
+#endif
+
 /**
  * Serialize polynomial to bytes (12-bit coefficients)
  * Packs 256 coefficients into 384 bytes
@@ -2592,22 +2895,25 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
         for (i = 0; i < KYBER_N / 2; i++) {
             for (j = 0; j < 2; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[2*i + j]);
-                t[j] = (uint8_t)(((((uint32_t)coeff << 4) + KYBER_Q / 2) / KYBER_Q) & 0xF);
+                t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 4) & 0xF);
             }
-            r[i] = t[0] | (t[1] << 4);
+            r[i] = (uint8_t)(t[0] | (t[1] << 4));
         }
     } else if (bits == 5) {
         /* Compress to 5 bits per coefficient */
         for (i = 0; i < KYBER_N / 8; i++) {
             for (j = 0; j < 8; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[8*i + j]);
-                t[j] = (uint8_t)(((((uint32_t)coeff << 5) + KYBER_Q / 2) / KYBER_Q) & 0x1F);
+                t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 5) & 0x1F);
             }
-            r[5*i + 0] = (t[0]) | (t[1] << 5);
-            r[5*i + 1] = (t[1] >> 3) | (t[2] << 2) | (t[3] << 7);
-            r[5*i + 2] = (t[3] >> 1) | (t[4] << 4);
-            r[5*i + 3] = (t[4] >> 4) | (t[5] << 1) | (t[6] << 6);
-            r[5*i + 4] = (t[6] >> 2) | (t[7] << 3);
+            /* (uint8_t) narrowing is the packing itself: high bits of a
+             * shifted 5-bit field continue in the next byte (same explicit-
+             * cast style as the 10-bit branch below). */
+            r[5*i + 0] = (uint8_t)((t[0]) | (t[1] << 5));
+            r[5*i + 1] = (uint8_t)((t[1] >> 3) | (t[2] << 2) | (t[3] << 7));
+            r[5*i + 2] = (uint8_t)((t[3] >> 1) | (t[4] << 4));
+            r[5*i + 3] = (uint8_t)((t[4] >> 4) | (t[5] << 1) | (t[6] << 6));
+            r[5*i + 4] = (uint8_t)((t[6] >> 2) | (t[7] << 3));
         }
     } else if (bits == 10) {
         /* Compress to 10 bits per coefficient */
@@ -2615,7 +2921,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
             uint16_t d[4];
             for (j = 0; j < 4; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[4*i + j]);
-                d[j] = (uint16_t)(((((uint32_t)coeff << 10) + KYBER_Q / 2) / KYBER_Q) & 0x3FF);
+                d[j] = (uint16_t)(kyber_compress_d((uint32_t)coeff, 10) & 0x3FF);
             }
             r[5*i + 0] = (uint8_t)(d[0]);
             r[5*i + 1] = (uint8_t)((d[0] >> 8) | (d[1] << 2));
@@ -2629,7 +2935,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
             uint16_t d[8];
             for (j = 0; j < 8; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[8*i + j]);
-                d[j] = (uint16_t)(((((uint32_t)coeff << 11) + KYBER_Q / 2) / KYBER_Q) & 0x7FF);
+                d[j] = (uint16_t)(kyber_compress_d((uint32_t)coeff, 11) & 0x7FF);
             }
             r[11*i + 0]  = (uint8_t)(d[0]);
             r[11*i + 1]  = (uint8_t)((d[0] >> 8) | (d[1] << 3));
@@ -2682,14 +2988,18 @@ static void poly_decompress(poly* r, const uint8_t* a, int bits) {
         }
     } else if (bits == 11) {
         for (i = 0; i < KYBER_N / 8; i++) {
-            uint16_t t0 = ((uint16_t)a[11*i]) | (((uint16_t)a[11*i + 1] & 0x07) << 8);
-            uint16_t t1 = ((uint16_t)a[11*i + 1] >> 3) | (((uint16_t)a[11*i + 2] & 0x3F) << 5);
-            uint16_t t2 = ((uint16_t)a[11*i + 2] >> 6) | ((uint16_t)a[11*i + 3] << 2) | (((uint16_t)a[11*i + 4] & 0x01) << 10);
-            uint16_t t3 = ((uint16_t)a[11*i + 4] >> 1) | (((uint16_t)a[11*i + 5] & 0x0F) << 7);
-            uint16_t t4 = ((uint16_t)a[11*i + 5] >> 4) | (((uint16_t)a[11*i + 6] & 0x7F) << 4);
-            uint16_t t5 = ((uint16_t)a[11*i + 6] >> 7) | ((uint16_t)a[11*i + 7] << 1) | (((uint16_t)a[11*i + 8] & 0x03) << 9);
-            uint16_t t6 = ((uint16_t)a[11*i + 8] >> 2) | (((uint16_t)a[11*i + 9] & 0x1F) << 6);
-            uint16_t t7 = ((uint16_t)a[11*i + 9] >> 5) | ((uint16_t)a[11*i + 10] << 3);
+            /* Every assembled value is an 11-bit field scattered over at
+             * most 2^11 (largest term: a byte shifted left by 3, < 2^11),
+             * so the (uint16_t) narrowing after int promotion is
+             * value-preserving. */
+            uint16_t t0 = (uint16_t)(((uint16_t)a[11*i]) | (((uint16_t)a[11*i + 1] & 0x07) << 8));
+            uint16_t t1 = (uint16_t)(((uint16_t)a[11*i + 1] >> 3) | (((uint16_t)a[11*i + 2] & 0x3F) << 5));
+            uint16_t t2 = (uint16_t)(((uint16_t)a[11*i + 2] >> 6) | ((uint16_t)a[11*i + 3] << 2) | (((uint16_t)a[11*i + 4] & 0x01) << 10));
+            uint16_t t3 = (uint16_t)(((uint16_t)a[11*i + 4] >> 1) | (((uint16_t)a[11*i + 5] & 0x0F) << 7));
+            uint16_t t4 = (uint16_t)(((uint16_t)a[11*i + 5] >> 4) | (((uint16_t)a[11*i + 6] & 0x7F) << 4));
+            uint16_t t5 = (uint16_t)(((uint16_t)a[11*i + 6] >> 7) | ((uint16_t)a[11*i + 7] << 1) | (((uint16_t)a[11*i + 8] & 0x03) << 9));
+            uint16_t t6 = (uint16_t)(((uint16_t)a[11*i + 8] >> 2) | (((uint16_t)a[11*i + 9] & 0x1F) << 6));
+            uint16_t t7 = (uint16_t)(((uint16_t)a[11*i + 9] >> 5) | ((uint16_t)a[11*i + 10] << 3));
 
             r->coeffs[8*i + 0] = (int16_t)(((uint32_t)(t0 & 0x7FF) * KYBER_Q + 1024) >> 11);
             r->coeffs[8*i + 1] = (int16_t)(((uint32_t)(t1 & 0x7FF) * KYBER_Q + 1024) >> 11);

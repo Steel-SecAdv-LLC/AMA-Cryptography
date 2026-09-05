@@ -11,6 +11,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "internal/ama_testing_exports.h"
 #include <string.h>
 #include <stdint.h>
 #ifdef _MSC_VER
@@ -195,3 +196,27 @@ void ama_consttime_copy(int condition, void* dst, const void* src, size_t len) {
         vdst[i] = (vdst[i] & ~mask) | (vsrc[i] & mask);
     }
 }
+
+#ifdef AMA_TESTING_MODE
+/**
+ * Whether THIS translation unit — and therefore the library it is part of —
+ * was compiled with optimization enabled.
+ *
+ * See internal/ama_testing_exports.h for why this exists and what the return
+ * values mean.  It is deliberately in ama_consttime.c: the caller is the
+ * constant-time instruction-count gate, and this file is the one every such
+ * build must contain.
+ */
+int ama_build_optimization_probe(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    /* Defined by gcc and clang at -O1 and above; absent at -O0. */
+#  if defined(__OPTIMIZE__)
+    return 1;
+#  else
+    return 0;
+#  endif
+#else
+    return -1;
+#endif
+}
+#endif /* AMA_TESTING_MODE */

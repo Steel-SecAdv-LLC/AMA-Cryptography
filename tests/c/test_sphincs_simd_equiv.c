@@ -99,6 +99,16 @@ extern void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
  * here it used a separate `scalar_wots_chain_no_hash_addr`
  * reference, which was removed alongside the NEON lane itself.
  * -------------------------------------------------------------- */
+/* The scalar SHA-256 reference and the `wots_chain` reference built on it
+ * exist for exactly one caller: the AVX2 byte-identity sub-lane in
+ * run_wots_chain_parity() below.  The NEON sub-lane was retired (see the
+ * rationale there), so on any non-x86-64 build these were compiled and never
+ * called — the -Wunused-function class `-Werror=unused-function` makes fatal
+ * in the strict-warnings gate, and that the gate could not see while it ran
+ * on x86-64 alone.  Guarding the block with its call site's own predicate
+ * keeps the reference beside the lane it serves. */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+
 static const uint32_t SHA256_K[64] = {
     0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,
     0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
@@ -189,6 +199,8 @@ static void scalar_wots_chain(uint8_t *out, const uint8_t *in,
     }
     (void)pub_seed;
 }
+
+#endif /* AMA_HAVE_AVX2_IMPL && x86-64 */
 
 /* (Previously: `scalar_wots_chain_no_hash_addr`, an AArch64-only scalar
  * reference matching the NEON helper's block-build pattern.  Removed
@@ -297,6 +309,13 @@ static int run_wots_chain_parity(int *exercised) {
      * compression primitive is separately pinned by
      * `tests/c/test_sha256_neon_kat.c` on AArch64 builds. */
     int pinned_avx2 = 0;
+
+#if !(defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64)))
+    /* The AVX2 sub-lane below is the only writer of *exercised in this lane;
+     * without it the parameter is genuinely unused.  Same `(void)` idiom this
+     * file already uses for the helper's unused `pub_seed`. */
+    (void)exercised;
+#endif
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
     /* Runtime ISA gate: the AVX2 helper compiles into the binary

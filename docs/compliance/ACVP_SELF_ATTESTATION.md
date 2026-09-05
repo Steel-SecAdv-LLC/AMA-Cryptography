@@ -110,28 +110,34 @@ under the per-resultsArray-entry accounting convention.
 **5,789 vectors were skipped total**, split into two buckets by the kind
 of thing that was skipped:
 
-- **4,757 AFT-filtered skips** — individual vectors filtered out *within*
+- **4,667 AFT-filtered skips** — individual vectors filtered out *within*
   AFT (Algorithm Functional Test) groups: non-byte-aligned inputs,
   non-target parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA
-  non-SHA2-256f), ML-KEM encapsulation (randomness parameter `m` not
-  exposed by the AMA API), and ML-DSA / SLH-DSA internal and pre-hash
-  test groups. This is the number reported by
+  non-SHA2-256f), and ML-DSA / SLH-DSA internal and pre-hash test groups.
+  This is the number reported by
   `nist_vectors/results.json::summary.total_skipped`, aggregated from
   each algorithm's `vectors_skipped`, and surfaced as
   `total_skipped_aft_filtered` in the CI `validation_summary.json`.
-- **1,032 non-AFT skips** — entire test groups with `testType != "AFT"`
+- **1,122 non-AFT skips** — entire test groups with `testType != "AFT"`
   that the AMA harness does not exercise: **Large Data Test (LDT)**
   groups (8 SHA-3 tcIds total — multi-gigabyte inputs outside the CI
-  harness scope) and **Variable Output Test (VOT)** groups (1,024
+  harness scope), **Variable Output Test (VOT)** groups (1,024
   SHAKE-128/256 tcIds — output-length coverage is already exercised by
-  AFT vectors in the same upstream vector files). MCT groups for the
-  four SHA-3 algorithms are no longer counted here; they moved from
-  "skipped" to "tested" when MCT coverage was added on the 2.1.5 line
-  (reducing this count from 1,036 to 1,032). Tracked per-algorithm in
+  AFT vectors in the same upstream vector files), and the
+  **ML-KEM-1024 EncapDecap** groups (90 tcIds — the encapsulation
+  randomness parameter `m` is not exposed by the AMA API, so these
+  groups are skipped wholesale rather than filtered within an AFT
+  group). MCT groups for the four SHA-3 algorithms are no longer counted
+  here; they moved from "skipped" to "tested" when MCT coverage was added
+  on the 2.1.5 line. Tracked per-algorithm in
   `nist_vectors/run_vectors.py` under the legacy field name
   `mct_skipped` (now a semantic misnomer — the field counts non-AFT
   groups generally); surfaced as `total_non_aft_skipped` in
-  `validation_summary.json`.
+  `validation_summary.json`. (An earlier revision placed the 90 ML-KEM
+  EncapDecap groups in the AFT-filtered bucket, giving a 4,757 / 1,032
+  split; the harness counts them as non-AFT, so the corrected split is
+  4,667 / 1,122 — the 5,789 total is unchanged. Re-derived by running the
+  harness at the release head.)
 
 The total (5,789) and the split match
 [`docs/compliance/acvp_attestation.json`](acvp_attestation.json) fields

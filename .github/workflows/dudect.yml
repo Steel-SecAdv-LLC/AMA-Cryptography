@@ -33,6 +33,10 @@ name: CI - dudect Constant-Time Verification
 # fires, so the per-PR coverage shrinks to "changed code" and the
 # full SIMD dispatch-table sweep happens out of the critical path.
 on:
+  # The push and pull_request filters are deliberately IDENTICAL.  They were
+  # not: push carried six patterns and pull_request nine, so the three gate
+  # scripts were re-verified on a PR and skipped on a direct push to main,
+  # develop or a feature branch — the same change, gated on how it arrived.
   push:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
     paths:
@@ -41,6 +45,21 @@ on:
       - 'ama_cryptography/**'
       - 'tests/c/test_dudect.c'
       - 'tests/c/dudect/**'
+      # tests/c/CMakeLists.txt registers test_dudect and sets its build flags;
+      # the root CMakeLists.txt is where the per-file ISA scoping this
+      # workflow's `check_avx_scoping.py` step verifies is actually set.  A PR
+      # that reintroduces a library-wide `-mavx2` or `-maes` touches ONLY that
+      # file — so without it here, the gate written for exactly that regression
+      # did not run on the change that causes it.
+      - 'tests/c/CMakeLists.txt'
+      - 'CMakeLists.txt'
+      # The constant-time gate scripts and the workflow itself: a PR that only
+      # raises a threshold, edits a lane, or changes this file must still
+      # re-run dudect, or the change ships unexercised (audit Low).
+      - 'tools/check_ghash_constant_time.py'
+      - 'tools/check_secret_division.py'
+      - 'tools/check_avx_scoping.py'
+      - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
   pull_request:
     branches: [ main, develop ]
@@ -50,6 +69,22 @@ on:
       - 'ama_cryptography/**'
       - 'tests/c/test_dudect.c'
       - 'tests/c/dudect/**'
+      # tests/c/CMakeLists.txt registers test_dudect and sets its build flags;
+      # the root CMakeLists.txt is where the per-file ISA scoping this
+      # workflow's `check_avx_scoping.py` step verifies is actually set.  A PR
+      # that reintroduces a library-wide `-mavx2` or `-maes` touches ONLY that
+      # file — so without it here, the gate written for exactly that regression
+      # did not run on the change that causes it.
+      - 'tests/c/CMakeLists.txt'
+      - 'CMakeLists.txt'
+      # The constant-time gate scripts and the workflow itself: a PR that only
+      # raises a threshold, edits a lane, or changes this file must still
+      # re-run dudect, or the change ships unexercised (audit Low).
+      - 'tools/check_ghash_constant_time.py'
+      - 'tools/check_secret_division.py'
+      - 'tools/check_avx_scoping.py'
+      - 'tools/constant_time/**'
+      - '.github/workflows/dudect.yml'
   schedule:
     # Run weekly on Sundays at 02:00 UTC (existing schedule).
     - cron: '0 2 * * 0'
@@ -89,7 +124,10 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20, matching dudect-pqc: the measurement budget is now 600 s and
+    # install + build takes 3-6 min on a hosted runner, so 15 left no
+    # margin above the schedule the verdict rule can demand.
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -97,8 +135,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build with dudect enabled
         run: |
@@ -118,7 +155,11 @@ jobs:
           # GHA hosted runners lack CAP_SYS_NICE so `nice -n -10` would
           # print "Permission denied" but still exec the binary —
           # detect that once up front and drop the nice prefix so the
-          # log stays clean.  The harness setup-symmetry fixes
+          # log stays clean.  The probe reads the RESULTING niceness:
+          # GNU nice warns-and-continues on EPERM and exits with the
+          # command's status, so the previous exit-status probe
+          # (`if nice -n -10 true`) succeeded everywhere and never
+          # dropped the dead prefix.  The harness setup-symmetry fixes
           # (v3.2.0) made the lanes noise-tolerant enough that
           # taskset-only pinning is the load-bearing CI gate.
           # The verdict rule decides whether this gate can block a merge, and
@@ -128,9 +169,22 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
+          # 600 s, not 300.  The verdict rule may demand up to MAX_ROUNDS
+          # rounds (it refuses the early exit once any lane has tripped), and
+          # a round of 100,000 measurements over 27 lanes takes about 100 s on
+          # a hosted runner — so a 300 s budget could not cover the schedule
+          # the rule can ask for.  It did not: a run that tripped one lane in
+          # round 1 was cut short in round 3 and recorded NINE lanes as
+          # harness faults, which is not a result anyone can act on.  This is
+          # the same budget `dudect-pqc` below already uses for the same
+          # binary at the same measurement count; the three jobs disagreeing
+          # (300 / 600 / 900) was the defect.  The harness also refuses to
+          # START a round the remaining budget cannot finish, so an
+          # underestimate here degrades to "judged on fewer rounds, and says
+          # so" rather than to a wall of faults.
           taskset -c 0 $NICE_PREFIX \
-            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
 
   dudect-pqc:
     name: dudect - PQC Primitives
@@ -150,8 +204,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build with dudect and PQC enabled
         run: |
@@ -179,7 +232,7 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           # Give the high-N scheduled reading more wall-clock than a PR run.
           DUDECT_TIMEOUT=600
           if [ "${{ github.event_name }}" = "schedule" ]; then DUDECT_TIMEOUT=1800; fi
@@ -201,12 +254,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build C library
+        # The harnesses below do NOT link this build — tools/constant_time's
+        # own Makefile compiles the sources it needs at -O2.  The build type is
+        # pinned anyway so the configuration is stated rather than inherited
+        # from a default this project does not set.
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_ENABLE_LTO=OFF
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j$(nproc)
 
       - name: Build and run legacy dudect harnesses
@@ -222,7 +278,7 @@ jobs:
           ./dudect_crypto --self-test
           # Best-effort priority elevation — see `dudect-utility` for rationale.
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           echo "=== Utility function timing analysis ==="
           taskset -c 0 $NICE_PREFIX ./dudect_harness 50000
           echo "=== Crypto primitive timing analysis ==="
@@ -242,7 +298,10 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20, matching dudect-pqc: the measurement budget is now 600 s and
+    # install + build takes 3-6 min on a hosted runner, so 15 left no
+    # margin above the schedule the verdict rule can demand.
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -250,8 +309,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build with dudect enabled
         run: |
@@ -276,9 +334,11 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
+          # Same budget as the other two full-suite jobs — see `dudect-utility`
+          # for why 300 s could not cover MAX_ROUNDS rounds.
           taskset -c 0 $NICE_PREFIX \
-            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
 
   # ===========================================================================
   # SIMD sweep — nightly cron only (audit Issue 3 close-out)
@@ -340,6 +400,15 @@ jobs:
           - aes-gcm-neon
           - chacha20-neon
           - sha3-neon
+          # The ML-KEM NTT, ML-DSA NTT and Argon2-G NEON kernels.  They ship in
+          # every arm64 wheel and had no timing measurement on any commit,
+          # because no AMA_DISPATCH_ONLY name resolved to them; the names now
+          # exist (src/c/dispatch/ama_dispatch.c).  Mandatory on this side, not
+          # optional: AdvSIMD is architecturally guaranteed on AArch64, so a 77
+          # from one of these is a dispatch-wiring regression, never silicon.
+          - kyber-ntt-neon
+          - dilithium-ntt-neon
+          - argon2-g-neon
           - kyber-sve2
           - sha3-sve2
           - x25519-avx2
@@ -356,16 +425,24 @@ jobs:
           - os: ubuntu-latest
             slot: sha3-neon
           - os: ubuntu-latest
+            slot: kyber-ntt-neon
+          - os: ubuntu-latest
+            slot: dilithium-ntt-neon
+          - os: ubuntu-latest
+            slot: argon2-g-neon
+          - os: ubuntu-latest
             slot: kyber-sve2
           - os: ubuntu-latest
             slot: sha3-sve2
           # AArch64 hosts (ubuntu-24.04-arm): exclude AVX-* slots and
           # the AVX2 X25519 lane.  Same rationale as above, with
-          # `aes-gcm-neon` / `chacha20-neon` / `sha3-neon` retained
-          # on this side because AArch64 mandates NEON.  SVE2 slots
-          # are KEPT on this side — when the runner's silicon lacks
-          # SVE2 the dispatcher reports the slot unsupported and the
-          # test exits 77 (Skipped), preserving an audit trail.
+          # the six NEON slots retained on this side because AArch64
+          # mandates NEON.  SVE2 slots
+          # are KEPT on this side: the build step now passes
+          # -DAMA_ENABLE_SVE2=ON, so a 77 (Skipped) here means the
+          # RUNNER'S SILICON lacks SVE2 — a real audit trail — rather
+          # than the kernels having been omitted from the build, which
+          # is what it silently meant while that flag was missing.
           - os: ubuntu-24.04-arm
             slot: sha3-avx512x4
           - os: ubuntu-24.04-arm
@@ -385,8 +462,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build with dudect + every SIMD path the host supports
         run: |
@@ -395,6 +471,19 @@ jobs:
           # future change of those defaults.  AVX-512 is opt-in (see
           # CMakeLists.txt:64); enable it on x86-64 so the AVX-512
           # 4-way Keccak kernel is sampled when the runner exposes it.
+          #
+          # AMA_ENABLE_SVE2 is opt-in and defaults OFF, and omitting it here
+          # made the two sve2 slots below unrunnable rather than unsupported:
+          # with the kernels never compiled, the dispatcher reported the slot
+          # missing and the cell exited 77 on EVERY run, on silicon that has
+          # SVE2 and silicon that does not alike.  That is the failure this
+          # workflow exists to prevent — an availability probe answering "not
+          # applicable" in the same words it would use if it had passed — so
+          # the sve2 kernels this repository ships had, and would have kept,
+          # no timing coverage at all.  Enabling it is safe on x86-64: the
+          # CMake block is guarded on CMAKE_SYSTEM_PROCESSOR (CMakeLists.txt
+          # :506-507), so on a non-AArch64 host the flag is a no-op and those
+          # slots are excluded from the matrix anyway.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DAMA_ENABLE_DUDECT=ON \
@@ -405,6 +494,7 @@ jobs:
             -DAMA_ENABLE_AVX2=ON \
             -DAMA_ENABLE_AVX512=ON \
             -DAMA_ENABLE_NEON=ON \
+            -DAMA_ENABLE_SVE2=ON \
             -DAMA_ENABLE_LTO=OFF \
             -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j$(nproc)
@@ -443,10 +533,30 @@ jobs:
           fi
           rc=0
           "$TEST_BIN" || rc=$?
+          # Which slots may legitimately answer "unsupported" (exit 77) on their
+          # runner: AVX-512 is absent on most hosted x86-64 runners, and SVE2
+          # depends on the specific AArch64 runner's silicon.  Every OTHER slot
+          # is mandated by the runner's base ISA — AVX2 on every GHA x86-64
+          # runner, NEON on every AArch64 runner — so for those a 77 is not a
+          # hardware fact but a dispatch-wiring regression that left a SHIPPED
+          # kernel unmeasured.  The old code exit 0'd on 77 for every slot, so
+          # such a regression rode a green gate with only a ::warning:: — the
+          # same "a gate slot that cannot fail" shape as the AVX-512 KAT lane
+          # (audit M26).  Fail the mandatory slots; skip only the optional ones.
+          OPTIONAL_SLOTS="sha3-avx512x4 kyber-sve2 sha3-sve2"
           if [ "$rc" -eq 77 ]; then
-            echo "supported=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Slot '${{ matrix.slot }}' unsupported on this host — skipping dudect lane."
-            exit 0
+            case " ${OPTIONAL_SLOTS} " in
+              *" ${AMA_DISPATCH_ONLY} "*)
+                echo "supported=false" >> "$GITHUB_OUTPUT"
+                echo "::warning::Optional slot '${{ matrix.slot }}' unsupported on this runner's silicon — skipping dudect lane."
+                exit 0
+                ;;
+              *)
+                echo "supported=false" >> "$GITHUB_OUTPUT"
+                echo "::error::Slot '${{ matrix.slot }}' is mandated by this runner's base ISA (AVX2 on x86-64, NEON on AArch64) but the dispatcher could not honor it (exit 77). A shipped SIMD kernel would go unmeasured behind a green gate — this is a dispatch-wiring regression, not a hardware fact (M26)."
+                exit 1
+                ;;
+            esac
           elif [ "$rc" -ne 0 ]; then
             echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::error::Dispatch contract test failed for '${{ matrix.slot }}' (exit=$rc)"
@@ -474,7 +584,7 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
 
@@ -503,8 +613,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake valgrind
+          .github/scripts/apt-install.sh build-essential cmake valgrind
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -512,11 +621,25 @@ jobs:
           python-version: '3.12'
 
       - name: Build the AMA_TESTING_MODE static library
+        # Release is load-bearing, not tidiness.  Every target in
+        # check_ghash_constant_time.py looks for a transformation the OPTIMIZER
+        # performs — a mask it can prove is 0 or ~0, turned back into a branch
+        # on the secret predicate (src/c/internal/ama_ct_barrier.h).  This
+        # project sets no default CMAKE_BUILD_TYPE, so the configure line that
+        # stood here produced C_FLAGS with no -O flag at all, and the gate
+        # measured a program in which its own defect class cannot occur.  It
+        # passed for that reason: re-run at -O3, `--target ecdsa` measured a
+        # 9,424-instruction key-dependent spread in the secp256k1 scalar
+        # arithmetic under clang 18, a live Montgomery extra-reduction leak.
+        # The tool now refuses an unoptimized library rather than trusting this
+        # line to be right (ama_build_optimization_probe).
+        #
         # LTO off: the check reads instruction counts out of this archive, and
         # link-time optimisation would let the driver's call site reshape the
         # very code under measurement.
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_test
 
       - name: Scalar AES-GCM instruction count must not depend on the key
@@ -537,6 +660,233 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target consttime
 
+      - name: Ascon-Hash256 instruction count must not depend on the input
+        # Same deterministic counterpart, for the same reason and with a
+        # sharper case behind it.  The wall-clock lane reported |t| = 19.0 in
+        # 5 of 5 rounds, consistently signed, on a shared runner — while the
+        # SAME binary is a null elsewhere (t = +2.16 / -1.57 / -1.18 at
+        # 50,000 / 200,000 / 800,000 iterations: no sqrt(n) growth, sign
+        # flipping).  The lane's construction is already symmetric, so the
+        # disagreement was between two machines rather than two harnesses.
+        #
+        # Measured here: 20,167,057 retired instructions for all eight input
+        # classes, cross-class delta 0, noise floor 0.  ama_ascon_hash256 is
+        # therefore input-independent, and the wall-clock difference belongs
+        # to the CPU's data-operand-dependent execution — what Intel's DOITM
+        # and ARM's PSTATE.DIT exist to control — not to src/c/ama_ascon.c.
+        # This gate is what a real regression in that file trips; the dudect
+        # lane stays as the wall-clock cross-check.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ascon-hash
+
+      - name: SHA3-256 instruction count must not depend on the input
+        # Same question as the Ascon-Hash256 gate above, raised by the same
+        # kind of evidence.  The `Constant-Time Verification (Smoke Test)`
+        # lane in ci.yml reported SHA3-256 at t = +12.05 in 3 of 5 rounds,
+        # consistently signed, on commit 09b2e51 — and t = +2.42 (0/1) on
+        # its parent 2b2dc9d, which differs by no C code at all: that commit
+        # changed Python and documentation only.  The harness escalates past
+        # round 1 only when a lane trips, so the two runs are the same binary
+        # measured twice on the same runner class.
+        #
+        # The lane's construction is not the suspect either: it builds both
+        # inputs before the loop and selects between them with a branchless
+        # pointer select outside the timer.  That lane USED to have exactly
+        # the defect one would suspect, and it is documented as fixed in
+        # tools/constant_time/dudect_crypto.c.
+        #
+        # Measured here: SHA3-256 costs 10,055 retired instructions per call
+        # and that cost does not depend on the input.  The whole-process
+        # figure this gate prints is dominated by a ~1.736e9 one-time
+        # dispatch initialisation (dispatch_init_internal plus the
+        # Dilithium/Kyber NTT reference-vs-AVX2 equivalence self-checks) that
+        # the first SHA3 call triggers; that initialisation is
+        # class-independent but not bit-reproducible, and it is the entire
+        # source of the small cross-class spread this gate tolerates.  It was
+        # separated out by differencing iteration counts and by re-running a
+        # single class: identical input, five runs, spread 17 instructions.
+        # A zero-hash control over all eight classes is exactly constant.
+        #
+        # So ama_sha3_256 is input-independent and the wall-clock reading
+        # belongs to the CPU's data-operand-dependent execution (DOITM /
+        # PSTATE.DIT), not to src/c/ama_sha3.c.  This gate is what a real
+        # regression in that file trips.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target sha3-256
+
+      - name: Ed25519 signing instruction count must not depend on the key
+        # The same CI run flagged Ed25519 sign at t = -6.71 in 4 of 5 rounds,
+        # consistently signed, having passed at -2.40 on the parent commit.
+        # This is the most serious of the three lanes, because unlike a hash
+        # the class variable here IS the long-term secret: a real
+        # input-dependence would be a key-recovery surface rather than a
+        # nuisance, so it gets the deterministic instrument rather than an
+        # argument from the wall clock.
+        #
+        # Measured here: 33,949,265 retired instructions for all eight
+        # secret-key classes — cross-class delta 0, noise floor 0.  Signing
+        # is deterministic per RFC 8032 §5.1.6, so for the fixed message this
+        # driver uses the count is a pure function of the key; that function
+        # is constant.  ama_ed25519_sign is key-independent, and this gate is
+        # what a conditional point-add or a data-dependent window index in
+        # the comb would trip.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ed25519-sign
+
+      - name: Ascon-AEAD128 encryption instruction count must not depend on the key
+        # The wall-clock lane `Ascon-AEAD128 encrypt (key-independent)` in
+        # tests/c/test_dudect.c crosses the threshold on shared runners with a
+        # per-class difference around +0.6 ns — under a quarter of the 2 ns
+        # effect-size floor — and the SAME binary at the SAME measurement count
+        # read 3/3 consistently signed (+0.596 ns) on one runner and 2+/1- on
+        # another (+0.607 ns).  A quantity whose sign is not reproducible
+        # between two machines executing identical instructions is not a
+        # property of the code.
+        #
+        # dudect declines to adjudicate that range on the stated grounds that
+        # these deterministic gates own it.  For Ascon ENCRYPT that was not
+        # true: `ascon-hash` covers Ascon-Hash256 and `aead-verify` covers the
+        # AEAD accept/reject pair, and neither covers this call — the exemption
+        # rested on coverage that did not exist.  This is that coverage.
+        #
+        # Measured here: 32,069,814 retired instructions, byte-identical across
+        # all eight key classes — cross-class delta 0, noise floor 0.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ascon-encrypt
+
+      - name: Agent binding check instruction count must not depend on the verdict
+        # Same gap, same remedy, for the other lane observed reaching the
+        # sub-floor range: `agent binding check (verdict-independent)` read
+        # |t| = 41.72 in 3 of 3 rounds at -1.141 ns on a shared runner.
+        #
+        # Here the two classes are not two secrets but two VERDICTS — an
+        # authorization that verifies against one whose first byte is flipped.
+        # A verdict oracle is the leak that matters for this call: if rejecting
+        # costs less than accepting, an attacker learns whether a forged
+        # authorization was close.  That is the same defect `aead-verify` pins
+        # for the ciphers.
+        #
+        # Measured here: 612,810,230 retired instructions, byte-identical
+        # whether the check accepts or rejects — delta 0, noise floor 0.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target agent-binding
+
+      # The four steps below are the deterministic counterparts for the
+      # constant-time utility primitives beyond `ama_consttime_memcmp`
+      # (which the `consttime` target already covers).  Each has a strict
+      # wall-clock lane in tests/c/test_dudect.c, and each lives in the
+      # sub-floor range there — the five-run floor re-measurement recorded
+      # in 8abb0ed read `ama_consttime_lookup` between -0.021 and +0.056 ns
+      # in all five runs.  Below the floor the wall-clock test abstains by
+      # design, and until these targets existed nothing deterministic stood
+      # behind that abstention for these calls: the same coverage gap
+      # e46906c closed for ascon-encrypt and agent-binding, recurring for
+      # the lanes nobody re-checked.  Every primitive here is a mask-select
+      # loop whose count is invariant by construction — measured 0/0 on all
+      # four metrics under gcc 13 and clang 18, and each gate is verified
+      # to FAIL on a planted condition branch or scan truncation.
+      - name: Constant-time lookup instruction count must not depend on the index
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target consttime-lookup
+
+      - name: Constant-time swap instruction count must not depend on the condition
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target consttime-swap
+
+      - name: Constant-time copy instruction count must not depend on the condition
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target consttime-copy
+
+      - name: Secure memzero instruction count must not depend on the buffer contents
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target secure-memzero
+
+      - name: ML-KEM decapsulation instruction count must not depend on the FO verdict
+        # A decapsulator measurably faster on implicit rejection hands an
+        # attacker the plaintext-checking oracle the Fujisaki-Okamoto transform
+        # exists to deny — the IND-CCA2 argument for the whole scheme.
+        #
+        # The wall-clock lane `Kyber-1024 decaps (CT reject)` read |t| = 11.81
+        # in 3 of 3 rounds at +5.630 ns on a shared runner: ABOVE the 2 ns
+        # effect-size floor and in mispredicted-branch range, so it failed the
+        # build and needed a deterministic answer rather than an excuse.
+        #
+        # Over 60 decapsulations per class on the Release (-O3) library this
+        # job now builds, retired instructions, data references and both
+        # cache-miss counts are byte-identical between the valid and the
+        # rejected ciphertext, under gcc 13 and clang 18 alike — the deltas
+        # are the invariant; the absolute figures move with the build and are
+        # recorded in CHANGELOG.md against the commit that produced them.
+        # Instructions rule out a branch or skipped work; the data-reference
+        # and miss figures rule out a secret-dependent access, which an
+        # instruction count alone cannot see. The dudect wall-clock lane is
+        # INFO for that reason and THIS is what blocks.
+        #
+        # The excursion that prompted this target has since been traced to the
+        # lane rather than to ML-KEM: it selected its ciphertext with a
+        # class-correlated ternary in front of the timer, and on a null
+        # experiment (byte-identical ciphertexts, true effect zero, 200,000
+        # measurements x 5 runs) that construction reads over threshold in 3
+        # of 5 runs, worst |t| = 6.99, all one sign. The lane now stages both
+        # classes under a mask and is 0 of 5. This target's verdict does not
+        # depend on that history — it never did — but the reason it was added
+        # was a measurement the harness produced on its own.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target kyber-decaps
+
+      - name: NIST P-256 ECDSA instruction count must not depend on the key
+        # The `ecdsa` step below measures src/c/ama_secp256k1.c. The NIST
+        # P-curves are a separate implementation with their own limb
+        # arithmetic, and nothing measured it — which is how clang 18 at -O3
+        # came to be making `nistp_mont_mul` key-dependent by 1,251 retired
+        # instructions over four signatures, branching on the Montgomery
+        # extra-reduction predicate. P-256, P-384 and P-521 share that
+        # arithmetic, so this covers the family's scalar core.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target nistp-ecdsa
+
+      - name: X25519 instruction count must not depend on the scalar
+        # The Montgomery ladder's conditional swap is predicated on one bit of
+        # the secret scalar per step. The dudect lane for X25519 is wall-clock
+        # on a shared runner; this is its deterministic counterpart, the same
+        # pairing `ecdsa` has with the `secp256k1 ECDSA sign` lane.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target x25519
+
+      - name: Batched X25519 instruction count must not depend on the scalars
+        # `ama_x25519_scalarmult_batch` is a separate entry point from
+        # `ama_x25519_key_exchange`, with its own four-lane chunker, scalar
+        # tail, and an aggregated low-order rejection that must zero EVERY
+        # output when ANY lane rejects.  The step above reaches none of it.
+        #
+        # Its dudect lane (`X25519 scalarmult batch x4`) is info-only, and
+        # info-only is defensible exactly where a deterministic gate blocks
+        # instead — the pairing `Kyber-1024 decaps` and `secp256k1 ECDSA sign`
+        # both cite.  This lane had no such counterpart, so nothing could fail
+        # on a batch-path regression.
+        #
+        # Both wirings are measured, because which one runs is an environment
+        # choice: the second run opts the AVX2 4-way kernel in, and that kernel
+        # had never been measured by a deterministic instrument at all.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target x25519-batch
+          AMA_DISPATCH_USE_X25519_AVX2=1 \
+            python tools/check_ghash_constant_time.py \
+              --lib build/lib/libama_cryptography_test.a --target x25519-batch
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).
@@ -547,6 +897,126 @@ jobs:
         run: |
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ecdsa
+
+      - name: secp256k1 scalar multiplication must not depend on the scalar
+        # The blocking counterpart to the `secp256k1 scalar multiplication`
+        # dudect lane, which is info-only (a 256-step ladder at ~200 us per
+        # iteration is dominated by runner noise) and had NO counterpart —
+        # while its own source comment claimed one, "fail-loud variants of this
+        # lane are intentionally surfaced separately via
+        # tests/c/test_consttime.c".  That file has no secp256k1
+        # scalar-multiplication case, so the primitive's constant-time property
+        # rested on a lane that cannot fail CI.
+        #
+        # `ecdsa` does not cover it: that target's ladder input is the RFC 6979
+        # nonce derived from a fixed digest, so the scalar is a hash output
+        # rather than a controlled bit pattern.  Here the two classes are a
+        # Hamming-weight contrast — k = 1 against a scalar just under n — so
+        # every ladder step takes the opposite cswap branch between classes.
+        #
+        # Measured at limit 0 on all four metrics: I refs 16,020,324 and D refs
+        # 3,835,722 byte-identical across all eight classes, D1 and LL misses
+        # identical too.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target secp256k1-scalarmult
+
+      - name: Build the shared object this branch actually ships
+        # The steps above measure the AMA_TESTING_MODE static archive, which is
+        # the right subject for callgrind but not for the check below: the
+        # KyberSlash question is about the instructions the SHIPPED object
+        # contains, and LTO across the real link is exactly where a division
+        # would or would not survive.
+        run: |
+          cmake -B build-shared -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-shared -j"$(nproc)" --target ama_cryptography_shared
+
+      - name: No divide instruction may take a secret operand (KyberSlash)
+        # ML-KEM's Compress_d written as a division by q, lowered by the
+        # compiler to a `div` with operand-dependent latency over a
+        # secret-derived numerator.  This repository shipped that once; the fix
+        # was the Granlund-Montgomery reciprocal in src/c/ama_kyber.c, and
+        # nothing existed that would notice the fix being undone.  Reading the
+        # C does not settle it — the source says `/`, and only the object says
+        # whether a divide was emitted.
+        #
+        # Verified against the real defect rather than a mock: with the
+        # reciprocal replaced by `n / q_div` and the library rebuilt, this gate
+        # reported 32 new divide instructions (kyber_decapsulate_internal 8,
+        # poly_compress 24) and exited 1.  The mutation was reverted.
+        run: |
+          python tools/check_secret_division.py \
+            --lib build-shared/lib/libama_cryptography.so
+
+      - name: AVX2/AVX-512 code must stay inside its scoped kernels (audit M3)
+        # Of the three SIMD-scoping principal findings, KyberSlash got the gate
+        # above and SVE2 got the arm-qemu-sve2 lane; the AVX2-scoping fix got
+        # only a CMake comment.  A library-wide -mavx2 auto-vectorises the whole
+        # object with YMM and reintroducing it builds clean and passes the
+        # functional suite — nothing kept the per-file scoping holding.  This
+        # reads the SAME shipped shared object as the KyberSlash gate and fails
+        # if any YMM/ZMM operand appears outside an AVX2/AVX-512 kernel.
+        #
+        # Verified against the real defect: rebuilt with -DCMAKE_C_FLAGS=-mavx2
+        # (global), this gate reported YMM/ZMM in dozens of non-kernel symbols
+        # (ama_aes_sbox_consttime, ama_argon2id_core, ama_ascon_*, ama_ed25519_*)
+        # and exited 1.  On the per-file-scoped build it reports 0 outside a
+        # kernel.
+        run: |
+          python tools/check_avx_scoping.py \
+            --lib build-shared/lib/libama_cryptography.so
+
+  aead-verify-invariance:
+    # The AEAD accept/reject pair at ct_len == 0, pinned by retired
+    # instruction counts.  Runs on the ARM runner deliberately: the
+    # defect this gate exists to catch was aarch64-specific — gcc 13
+    # compiled the ChaCha20-Poly1305 decrypt's ternary return into a
+    # cbnz whose reject arm was one instruction longer, which the
+    # chacha20-neon dudect sweep slot measured statistically at
+    # |t| = 8.08 (3/3 rounds, reject-slower) while the same source
+    # compiled branch-free on x86-64.  QEMU instruction traces of the
+    # accept/reject pair localized the divergence to that single
+    # branch; the masked return in ama_chacha20poly1305.c /
+    # ama_aes_gcm.c removes it, and this job holds both decrypts
+    # there, deterministically, on the architecture where the
+    # regression manifests.  Same callgrind methodology as
+    # ghash-scalar-invariance above — no statistics, no quiet-machine
+    # requirement — and unconditional on every trigger for the same
+    # reason.
+    name: AEAD verify instruction-count invariance
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential cmake valgrind
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the AMA_TESTING_MODE static library
+        # LTO off for the same reason as ghash-scalar-invariance: the
+        # check reads instruction counts out of this archive.
+        run: |
+          # Release for the reason recorded on the x86 job above: an
+          # unoptimized library cannot exhibit the codegen this gate exists to
+          # catch, and the aarch64 defect it was built for — gcc 13 compiling a
+          # ternary return into a cbnz with unequal arms — is an -O decision.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      - name: AEAD accept/reject instruction counts must be equal
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-verify
 
   dudect-gate:
     name: Constant-Time Gate
@@ -567,6 +1037,7 @@ jobs:
       - dudect-x25519-avx2-batch
       - dudect-simd-sweep
       - ghash-scalar-invariance
+      - aead-verify-invariance
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -600,6 +1071,7 @@ jobs:
         R_X25519:  ${{ needs.dudect-x25519-avx2-batch.result }}
         R_SWEEP:   ${{ needs.dudect-simd-sweep.result }}
         R_GHASH:   ${{ needs['ghash-scalar-invariance'].result }}
+        R_AEADVER: ${{ needs['aead-verify-invariance'].result }}
       run: |
         set -euo pipefail
         rc=0
@@ -645,6 +1117,7 @@ jobs:
         # Unconditional job: it carries no `if:`, so the only acceptable
         # result on every trigger is success.
         check ghash-scalar-invariance   "${R_GHASH}"   "success"
+        check aead-verify-invariance    "${R_AEADVER}" "success"
 
         if [ "${rc}" -ne 0 ]; then
           echo "::error::Constant-Time Gate failed."

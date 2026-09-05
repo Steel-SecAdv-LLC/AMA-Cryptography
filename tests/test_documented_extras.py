@@ -211,3 +211,32 @@ def test_every_declared_extra_is_documented_somewhere() -> None:
         f"declared in pyproject.toml but named in no install instruction: "
         f"{', '.join(undocumented)}"
     )
+
+
+def test_dev_extra_carries_the_build_and_packaging_block() -> None:
+    """`make dev-install` must be able to run `make dist`.
+
+    requirements-dev.txt carries build/setuptools/wheel under "Build and
+    packaging" and documents the two dependency records as equivalent, but
+    the [dev] extra omitted all three — so the documented developer setup
+    (`pip install -e ".[dev,all]"`) could not run the documented release
+    target (`python -m build`): "No module named build".
+    """
+    import re
+
+    from tools.check_documented_extras import _toml_load
+
+    if _toml_load is None:  # pragma: no cover - Python 3.10 floor
+        pytest.skip(
+            "tomllib unavailable on Python 3.10; the equivalence still "
+            "holds and is checked wherever 3.11+ runs this suite"
+        )
+    with open(REPO_ROOT / "pyproject.toml", "rb") as fh:
+        dev = _toml_load(fh)["project"]["optional-dependencies"]["dev"]
+    names = {re.split(r"[><=\[; ]", spec, maxsplit=1)[0].lower() for spec in dev}
+    for pkg in ("build", "setuptools", "wheel"):
+        assert pkg in names, (
+            f"the [dev] extra lost {pkg!r}; requirements-dev.txt's Build and "
+            f"packaging block is no longer covered and `make dist` breaks "
+            f"after `make dev-install`"
+        )

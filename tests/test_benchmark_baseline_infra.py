@@ -5,18 +5,24 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from benchmarks.benchmark_runner import (
-    benchmark_operation_best_of,
-    normalize_runner_cpu_class,
-    run_full_package_create_benchmark,
-    validate_baseline_contract,
-)
+# One import style throughout: the module object.  This file also patches
+# attributes on the module (monkeypatch through the "benchmarks.benchmark_runner"
+# string target), and mixing `from ... import name` with `import ... as br`
+# left half the references bound to stale objects the patches never touched —
+# and tripped CodeQL's imported-both-ways check once benchmarks/ became a real
+# package.
+import benchmarks.benchmark_runner as br
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _baseline(runner_cpu_class: str = "aarch64", baseline_value: int = 1) -> dict[str, Any]:
@@ -34,13 +40,13 @@ def _baseline(runner_cpu_class: str = "aarch64", baseline_value: int = 1) -> dic
 
 def test_normalize_runner_cpu_class_aliases() -> None:
     """Common architecture spellings collapse to the matrix baseline key."""
-    assert normalize_runner_cpu_class("arm64") == "aarch64"
-    assert normalize_runner_cpu_class("AMD64") == "x86_64"
+    assert br.normalize_runner_cpu_class("arm64") == "aarch64"
+    assert br.normalize_runner_cpu_class("AMD64") == "x86_64"
 
 
 def test_validate_baseline_contract_accepts_matching_arm_alias() -> None:
     """A GitHub arm64 runner may consume an aarch64 baseline."""
-    validate_baseline_contract(
+    br.validate_baseline_contract(
         _baseline("aarch64"),
         Path("benchmarks/arm-baseline.json"),
         expected_runner_cpu_class="arm64",
@@ -50,7 +56,7 @@ def test_validate_baseline_contract_accepts_matching_arm_alias() -> None:
 def test_validate_baseline_contract_rejects_runner_mismatch() -> None:
     """x86 baselines must not be used on the AArch64 matrix entry."""
     with pytest.raises(ValueError, match="runner_cpu_class"):
-        validate_baseline_contract(
+        br.validate_baseline_contract(
             _baseline("x86_64"),
             Path("benchmarks/baseline.json"),
             expected_runner_cpu_class="aarch64",
@@ -60,7 +66,7 @@ def test_validate_baseline_contract_rejects_runner_mismatch() -> None:
 def test_validate_baseline_contract_rejects_zero_when_required() -> None:
     """Strict baseline publication mode refuses first-run zero placeholders."""
     with pytest.raises(ValueError, match="unpopulated zero baselines"):
-        validate_baseline_contract(
+        br.validate_baseline_contract(
             _baseline("aarch64", baseline_value=0),
             Path("benchmarks/arm-baseline.json"),
             expected_runner_cpu_class="aarch64",
@@ -82,25 +88,1760 @@ def test_benchmark_operation_best_of_uses_fastest_round(
         assert warmup == 2
         return next(measurements)
 
-    import benchmarks.benchmark_runner as br
-
     monkeypatch.setattr(br, "benchmark_operation", fake_benchmark_operation)
 
-    assert benchmark_operation_best_of(lambda: None, iterations=20, warmup=2, rounds=3) == 42.0
+    assert br.benchmark_operation_best_of(lambda: None, iterations=20, warmup=2, rounds=3) == 42.0
 
 
-def test_full_package_create_uses_best_of_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The GC-heavy package-create benchmark samples multiple rounds."""
+def test_the_two_composites_are_sampled_identically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``full_package_create`` and ``full_package_verify`` are compared to each
+    other and to their own floors, so they must be measured the same way.
 
-    calls: list[tuple[int, int, int]] = []
+    ``full_package_create`` used to call
+    ``benchmark_operation_best_of(..., rounds=5)`` while ``_SAMPLING_REPEATS``
+    ALSO registered it for ``_COMPOSITE_SAMPLED_ROUNDS`` (5).  The two compound:
+    ``_measure_benchmark`` calls the function 5 times and keeps the max, and
+    each call ran ``benchmark_operation`` 5 more times — 25 whole measurements
+    and 75 windows, against 5 and 15 for its sibling with the same registry
+    entry.  The published provenance said "x5".
 
-    def fake_best_of(
-        operation: Callable[[], object], iterations: int, warmup: int, rounds: int
+    Measured: 17.7 s -> 5.5 s for the row, and 1,446.8 -> 1,371.7 ops/sec
+    (-5.2%) against a floor of 1,983 with a 45% tolerance (1,091 minimum).
+    """
+    calls: list[tuple[int, int]] = []
+
+    def fake_operation(
+        operation: Callable[[], object], iterations: int = 100, warmup: int = 5
     ) -> float:
-        calls.append((iterations, warmup, rounds))
+        calls.append((iterations, warmup))
         return 123.0
 
-    monkeypatch.setattr("benchmarks.benchmark_runner.benchmark_operation_best_of", fake_best_of)
+    monkeypatch.setattr(br, "benchmark_operation", fake_operation)
 
-    assert run_full_package_create_benchmark() == 123.0
-    assert calls == [(20, 2, 5)]
+    assert br.run_full_package_create_benchmark() == 123.0
+    assert br.run_full_package_verify_benchmark() == 123.0
+    assert calls == [(20, 2), (20, 2)], calls
+
+
+def test_no_registered_benchmark_double_samples(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row in ``_SAMPLING_REPEATS`` must not also take its own best-of.
+
+    Read statically, because the compounding is invisible at run time: each
+    mechanism is correct on its own and the product is what is wrong.
+    """
+    import ast
+    import inspect
+
+    source = inspect.getsource(br)
+    tree = ast.parse(source)
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        name = node.name
+        if not (name.startswith("run_") and name.endswith("_benchmark")):
+            continue
+        registry_key = name[len("run_") : -len("_benchmark")]
+        if registry_key not in br._SAMPLING_REPEATS:
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id == "benchmark_operation_best_of"
+            ):
+                offenders.append(f"{name} (registry key {registry_key!r})")
+    assert offenders == [], (
+        "these benchmarks are sampled by _SAMPLING_REPEATS AND take their own "
+        f"best-of, so the two multiply: {offenders}"
+    )
+
+
+class TestSampleWindow:
+    """Every benchmark must be measured over a window long enough to mean something.
+
+    The per-benchmark ``iterations`` defaults span 20-100 across primitives whose
+    costs differ by three orders of magnitude, so they bought very different
+    amounts of signal — 20 ML-DSA-65 signatures is roughly 6 ms, and the whole
+    19-benchmark suite finished in about 0.4 s on the CI runner. Measured
+    directly on an unchanged binary, ``dilithium_sign`` reported 917, 1845 and
+    3086 ops/sec on three consecutive runs: a 3.4x spread against a 10%
+    regression threshold. These pin the batch sizing that fixes it.
+    """
+
+    @staticmethod
+    def _virtual_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
+        """A perf_counter that only advances when the operation says it did.
+
+        Real timing would make these tests flaky for exactly the reason the
+        suite is being fixed.
+
+        Patched through the string target rather than ``br.time`` so that
+        ``mypy --strict`` does not read it as importing a name the runner
+        never re-exported (``no_implicit_reexport``). monkeypatch restores it
+        when the test ends.
+        """
+        clock = {"t": 0.0}
+        monkeypatch.setattr("benchmarks.benchmark_runner.time.perf_counter", lambda: clock["t"])
+        return clock
+
+    def test_batch_grows_until_the_window_is_reached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A too-small starting batch is grown, not accepted."""
+        clock = self._virtual_clock(monkeypatch)
+        sizes: list[int] = []
+        real_batch = br._timed_batch
+
+        def spy(op: Callable[[], object], n: int) -> tuple[float, float]:
+            sizes.append(n)
+            return real_batch(op, n)
+
+        monkeypatch.setattr(br, "_timed_batch", spy)
+
+        def op() -> None:
+            clock["t"] += 0.001  # 1 ms per op -> 150 needed for a 0.15 s window
+
+        rate = br.benchmark_operation(op, iterations=5, warmup=0, rounds=2)
+        assert rate == pytest.approx(1000.0, rel=0.05)
+        assert sizes[0] == 5, "should start from the caller's floor"
+        assert (
+            sizes[-1] >= br._MIN_SAMPLE_SECONDS / 0.001
+        ), f"settled batch {sizes[-1]} spans less than _MIN_SAMPLE_SECONDS at 1 ms/op"
+
+    def test_batch_growth_is_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An operation too cheap to fill the window cannot run unbounded."""
+        clock = self._virtual_clock(monkeypatch)
+        sizes: list[int] = []
+        real_batch = br._timed_batch
+
+        def spy(op: Callable[[], object], n: int) -> tuple[float, float]:
+            sizes.append(n)
+            return real_batch(op, n)
+
+        monkeypatch.setattr(br, "_timed_batch", spy)
+
+        def op() -> None:
+            clock["t"] += 1e-9  # would need 150M iterations to fill the window
+
+        br.benchmark_operation(op, iterations=1, warmup=0, rounds=1)
+        assert max(sizes) <= br._MAX_ITERATIONS
+
+    def test_an_unlucky_slow_batch_does_not_lock_in_a_short_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The case that broke the first version of this sizing.
+
+        A batch that is slow because it was unlucky satisfies an
+        elapsed-time target with very few iterations. Sizing on elapsed time
+        alone therefore accepted a 5-iteration batch and reused it for every
+        remaining round. Keying the target off the fastest rate seen recovers,
+        because interference can only make an operation look slower.
+        """
+        clock = self._virtual_clock(monkeypatch)
+        sizes: list[int] = []
+        real_batch = br._timed_batch
+
+        def spy(op: Callable[[], object], n: int) -> tuple[float, float]:
+            sizes.append(n)
+            return real_batch(op, n)
+
+        monkeypatch.setattr(br, "_timed_batch", spy)
+        calls = {"n": 0}
+
+        def op() -> None:
+            calls["n"] += 1
+            # The first batch of 5 stalls at 100 ms/op; everything after is 1 ms.
+            clock["t"] += 0.1 if calls["n"] <= 5 else 0.001
+
+        rate = br.benchmark_operation(op, iterations=5, warmup=0, rounds=2)
+        assert (
+            sizes[-1] >= br._MIN_SAMPLE_SECONDS / 0.001
+        ), f"settled batch {sizes[-1]} was locked in by the stalled first batch"
+        assert rate == pytest.approx(
+            1000.0, rel=0.05
+        ), "the stalled batch's rate was reported instead of the recovered one"
+
+    def test_reported_rate_is_the_fastest_full_window_round(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Throughput noise is one-sided, so the fastest round is the estimate.
+
+        Fails if the mean is reported: the mean of these rounds is well below
+        the fastest.
+        """
+        self._virtual_clock(monkeypatch)
+        rates = iter([500.0, 2000.0, 800.0])
+        # Every batch is already full-window, so sizing never intervenes.
+        monkeypatch.setattr(br, "_required_batch", lambda rate: 1)
+        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (next(rates), 0.2))
+
+        assert br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3) == 2000.0
+
+    def test_a_slow_batch_cannot_shrink_the_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Sizing keys off the fastest rate seen, not the most recent one.
+
+        With the target derived from the latest batch, one slow reading while
+        the batch is still small drops the requirement to almost nothing and
+        the batch never grows to span the window at the true rate. Because
+        interference is one-sided, the fastest rate seen is the better
+        estimate of what the batch must be to fill the window.
+
+        The scripted ``(ops, elapsed)`` pairs satisfy ``ops = n / elapsed``,
+        the identity the real ``_timed_batch`` guarantees; an earlier version
+        of this test scripted ``elapsed = 0.0`` beside finite rates, a state
+        the code under test cannot produce.
+        """
+        self._virtual_clock(monkeypatch)
+        # Fast, then a stall while the batch is still small, then fast again.
+        # The stalled batch is slow but still under the window (8 iterations
+        # at 100 ops/sec is 0.08 s), so nothing may be credited off it.
+        rates = iter([1_000.0, 100.0] + [1_000.0] * 40)
+        sizes: list[int] = []
+
+        def scripted(op: Callable[[], object], n: int) -> tuple[float, float]:
+            sizes.append(n)
+            rate = next(rates)
+            return rate, n / rate
+
+        monkeypatch.setattr(br, "_timed_batch", scripted)
+
+        rate = br.benchmark_operation(lambda: None, iterations=1, warmup=0, rounds=1)
+        needed = br._required_batch(1_000.0)
+        assert sizes[-1] >= needed, (
+            f"settled at batch {sizes[-1]}, below the {needed} needed at the "
+            f"fastest observed rate — a slow batch shrank the target"
+        )
+        assert rate == pytest.approx(1_000.0), f"reported the stalled rate ({rate})"
+
+    def test_undersized_batches_cannot_inflate_the_result(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Baselines are floors, so a lucky short batch must not be reported.
+
+        The first batch reports an implausibly high rate off a window far
+        shorter than the sampling rule requires. It may inform sizing; it
+        must not be the number that ships.
+
+        The scripted pairs satisfy ``ops = n / elapsed``: the lucky batch is
+        10 iterations over 1 ms. An earlier version scripted the high rate
+        beside a 0.2 s window — a pair the real ``_timed_batch`` cannot
+        return, and one that would make the "undersized" batch a genuine
+        full-window measurement.
+        """
+        self._virtual_clock(monkeypatch)
+        batches = iter([(9_999.0, 10 / 9_999.0), (1_000.0, 0.2), (1_000.0, 0.2)])
+        monkeypatch.setattr(br, "_timed_batch", lambda op, n: next(batches))
+
+        rate = br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=1)
+        assert rate == 1_000.0, f"an undersized batch's {rate} ops/sec reached the report"
+
+    def test_a_faster_observation_does_not_revoke_batches_already_measured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The AArch64 CI failure, reduced (job 97221692527 at 7432e0d).
+
+        On a shared runner the fastest observed rate creeps upward as
+        interference subsides.  Qualifying batches against a target predicted
+        from that fastest rate re-derived the requirement after every new
+        maximum and discarded every batch already credited, so the attempt
+        budget drained on re-validation and the run hard-failed with
+        ``completed 1 of 3`` — on a host that was producing genuine
+        full-window batches the whole time.  A batch that spanned the window
+        when it ran is a valid measurement whatever runs after it.
+
+        The script models the creep: after sizing settles, batches alternate
+        two-window-spanning-credits-then-a-new-maximum, so a streak-based
+        rule can never see three credits in a row, while a batch-owned rule
+        accumulates them.  Verified to raise ``completed \\d of 3`` under the
+        prediction-based rule this replaces.
+        """
+        state = {"attempt": 0, "peak": 1_000.0}
+
+        def creeping(op: Callable[[], object], n: int) -> tuple[float, float]:
+            state["attempt"] += 1
+            if state["attempt"] <= 2:
+                # Sizing phase: honest short batches at the initial rate.
+                return state["peak"], n / state["peak"]
+            if state["attempt"] % 3 == 0:
+                # Every third batch, interference subsides a little more and
+                # the batch beats the previous maximum — its own window comes
+                # up short of _MIN_SAMPLE_SECONDS as a consequence.
+                state["peak"] *= 1.01
+                return state["peak"], n / state["peak"]
+            # The common case: slightly slower than the peak, so the sized
+            # batch spans MORE than the window.  These are the measurements
+            # the old rule kept revoking.
+            rate = state["peak"] * 0.99
+            return rate, n / rate
+
+        monkeypatch.setattr(br, "_timed_batch", creeping)
+
+        rate = br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)
+        assert rate == pytest.approx(state["peak"] * 0.99, rel=0.02), (
+            f"reported {rate}, not a credited full-window rate near the "
+            f"fastest observed {state['peak']}"
+        )
+
+
+class TestAnUnderSampledRunIsNotReported:
+    """The fallbacks below the sampling loop published numbers the loop refused.
+
+    ``benchmark_operation`` ends with the loop having either satisfied the
+    sampling rule (``completed >= rounds`` full-window batches) or not.  It used
+    to report a rate in both cases:
+
+      * ``if best > 0.0: return best`` returned the fastest FULL-WINDOW batch
+        even when fewer than ``rounds`` of them completed — a run sampled less
+        than the rule the docstring states.
+      * ``if observed > 0.0 ...: return observed`` returned the fastest
+        UNDER-TARGET batch, which is precisely what the docstring forbids:
+        "Only full-window batches are eligible to be reported. An undersized
+        batch can report a lucky-high rate off a very short window, and since
+        the baselines this feeds are *floors*, an inflated number makes the
+        gate weaker."
+
+    ``TestSampleWindow.test_undersized_batches_cannot_inflate_the_result``
+    pins the loop's own behaviour, and passed throughout: it scripts a run that
+    DOES reach ``rounds``, so the fallback is never taken.  These two cases are
+    the ones that reach it.
+    """
+
+    def test_a_never_full_window_run_raises_instead_of_reporting_a_short_batch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No batch ever spans the window, so only short-window rates exist.
+
+        The one physical scenario a working clock permits here is a machine
+        that keeps looking faster: each batch is sized for the fastest rate
+        seen, and each batch then beats that rate by enough that its own
+        window falls short again.  The scripted pairs model exactly that —
+        every batch runs 20% faster than the previous maximum, so ``elapsed``
+        lands near ``window / 1.2`` every time — and satisfy the
+        ``ops = n / elapsed`` identity the real ``_timed_batch`` guarantees.
+        """
+        state = {"rate": 10_000.0}
+
+        def accelerating(op: Callable[[], object], n: int) -> tuple[float, float]:
+            state["rate"] *= 1.2
+            return state["rate"], n / state["rate"]
+
+        monkeypatch.setattr(br, "_timed_batch", accelerating)
+
+        with pytest.raises(RuntimeError, match="full-window batches"):
+            br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)
+
+    def test_a_partly_sampled_run_raises_instead_of_reporting_fewer_rounds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Full-window batches happen, but fewer than ``rounds`` of them.
+
+        One batch is credited, and every remaining attempt times faster than
+        the window (the machine is still ramping — each batch beats the
+        previous maximum, so its own window falls short), so the attempt
+        budget exhausts holding ``completed == 1`` and a non-zero ``best``.
+        That is the input on which ``return best`` once reported a one-round
+        measurement as if it were a three-round one.
+        """
+        state = {"rate": 0.0}
+
+        def one_credit_then_ramp(op: Callable[[], object], n: int) -> tuple[float, float]:
+            if state["rate"] == 0.0:
+                # The first batch spans the window: 10 iterations at 50/sec.
+                state["rate"] = 1_000.0
+                return 50.0, 0.2
+            state["rate"] *= 1.2
+            return state["rate"], n / state["rate"]
+
+        monkeypatch.setattr(br, "_timed_batch", one_credit_then_ramp)
+
+        with pytest.raises(RuntimeError, match=r"completed 1 of 3 full-window"):
+            br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)
+
+    def test_a_fully_sampled_run_still_returns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control: a run that satisfies the rule must not start raising."""
+        monkeypatch.setattr(br, "_required_batch", lambda rate: 1)
+        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (1_000.0, 0.2))
+
+        assert br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3) == 1_000.0
+
+
+class TestAnUnmeasurableBatchCannotBecomeAnInfiniteRate:
+    """`elapsed == 0` used to be reported as an infinite throughput.
+
+    ``_timed_batch`` yields ``float("inf")`` when the clock reads exactly zero
+    for a batch, and ``benchmark_operation`` returned that straight out. It is
+    a fail-open twice over: ``inf`` serialises as ``Infinity``, which is not
+    JSON (RFC 8259) and which a strict reader rejects, and an infinite rate
+    clears every regression FLOOR it is compared against — so the one value
+    that means "not measured" would have passed the gate that exists to catch
+    a slowdown.
+
+    A batch too short to time is a sizing problem, and is now treated as one.
+    """
+
+    @staticmethod
+    def _virtual_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
+        clock = {"t": 0.0}
+        monkeypatch.setattr("benchmarks.benchmark_runner.time.perf_counter", lambda: clock["t"])
+        return clock
+
+    def test_an_unmeasurable_batch_grows_instead_of_returning_infinity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It must try to measure, not give up with a number it cannot stand behind."""
+        self._virtual_clock(monkeypatch)
+        sizes: list[int] = []
+        real_batch = br._timed_batch
+
+        def spy(op: Callable[[], object], n: int) -> tuple[float, float]:
+            sizes.append(n)
+            return real_batch(op, n)
+
+        monkeypatch.setattr(br, "_timed_batch", spy)
+
+        def op() -> None:
+            """Never advances the clock: every batch reads as zero elapsed."""
+
+        with pytest.raises(RuntimeError, match="zero elapsed time"):
+            br.benchmark_operation(op, iterations=1, warmup=0, rounds=1)
+        assert len(sizes) > 1, "the batch was never grown; it gave up on the first read"
+        assert max(sizes) > sizes[0], "the batch did not grow"
+
+    def test_it_recovers_when_the_batch_becomes_measurable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Growing is the point; raising is only the terminal case.
+
+        A batch that is briefly too short to time must end up measured, not
+        abandoned — otherwise this fix would trade a fail-open for a
+        fail-noisy on a fast primitive.
+        """
+        clock = self._virtual_clock(monkeypatch)
+        calls = {"n": 0}
+
+        def op() -> None:
+            calls["n"] += 1
+            # The first 8 operations are free; everything after costs 1 ms.
+            if calls["n"] > 8:
+                clock["t"] += 0.001
+
+        rate = br.benchmark_operation(op, iterations=8, warmup=0, rounds=1)
+        assert rate == pytest.approx(1000.0, rel=0.05)
+        assert rate != float("inf")
+
+    def test_the_json_record_refuses_a_non_finite_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The writer is the second line, and it fails closed.
+
+        Even if some future path produced a non-finite rate, the record must
+        not be written: ``Infinity`` in a results file is unparseable by a
+        strict reader (RFC 8259) and clears every floor it is compared
+        against.
+
+        This drives ``benchmark_runner.main()``.  It used to be::
+
+            with pytest.raises(ValueError):
+                with open(out, "w") as handle:
+                    json.dump({"ops_per_sec": float("inf")}, handle, allow_nan=False)
+
+        which touches no repository code at all: it asserts that CPython's
+        ``json.dump`` raises on ``inf`` when the caller passes
+        ``allow_nan=False``.  No change to this repository could make it fail,
+        and it was counted as one of the tests pinning the control.
+        """
+        out = tmp_path / "results.json"
+        # Built from the runner's OWN report generator so the fixture cannot
+        # drift from the schema main() consumes, then poisoned in one field.
+        poisoned = br.generate_report([])
+        poisoned["benchmarks"] = {"widget": {"ops_per_sec": float("inf")}}
+        monkeypatch.setattr(br, "run_all_benchmarks", lambda *a, **k: {})
+        monkeypatch.setattr(br, "generate_report", lambda *a, **k: poisoned)
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--output", str(out)])
+
+        with pytest.raises(ValueError):
+            br.main()
+
+        assert not out.exists(), (
+            "a truncated record was left on disk. json.dump() encodes into the "
+            "open file and raises part way through; a downstream step that "
+            "checks whether the artefact exists would call that a run. "
+            "Serialise with json.dumps() before opening the file."
+        )
+
+    def test_the_same_path_writes_a_finite_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-vacuity for the test above: ``main()`` must otherwise write."""
+        out = tmp_path / "results.json"
+        clean = br.generate_report([])
+        clean["benchmarks"] = {"widget": {"ops_per_sec": 1234.5}}
+        monkeypatch.setattr(br, "run_all_benchmarks", lambda *a, **k: {})
+        monkeypatch.setattr(br, "generate_report", lambda *a, **k: clean)
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--output", str(out)])
+
+        br.main()
+
+        assert json.loads(out.read_text(encoding="utf-8")) == clean
+
+    def test_the_runner_writes_with_allow_nan_disabled(self) -> None:
+        """Stated at the call site, because the default is the unsafe one."""
+        source = (REPO_ROOT / "benchmarks" / "benchmark_runner.py").read_text(encoding="utf-8")
+        assert "allow_nan=False" in source
+        assert "json.dump(report, f, indent=2)" not in source
+
+
+class TestPerPrimitiveSampling:
+    """The high-variance primitives get more measurements, and the map stays real.
+
+    Fourteen of the nineteen benchmarks agree within 3% across whole runs on a
+    quiet host.  Five do not, and they share a shape: each is either
+    rejection-sampled (the ML-DSA family — the rejection count is a constant
+    per (key, message) pair, so one run samples a pair's luck) or a composite
+    containing one.  The 256-input pool removed the message half of that
+    variance; the key half is redrawn per run, so the remedy is more
+    independent measurements.
+
+    These pin the mechanism rather than a measured number, so they are
+    meaningful on any host.
+    """
+
+    def test_every_repeated_name_is_a_registered_benchmark(self) -> None:
+        """A rename must not silently drop a primitive back to one measurement."""
+        registered: set[str] = set()
+        for path in (Path("benchmarks/baseline.json"), Path("benchmarks/arm-baseline.json")):
+            baseline = br.load_baseline(path)
+            registered |= set(baseline.get("benchmarks", {}))
+            registered |= set(baseline.get("pqc_benchmarks", {}))
+        unknown = set(br._SAMPLING_REPEATS) - registered
+        assert not unknown, (
+            f"_SAMPLING_REPEATS names primitives the baseline does not define: "
+            f"{sorted(unknown)} — a rename left the extra sampling pointing at "
+            f"nothing, and the primitive it was meant to cover is back to a "
+            f"single measurement"
+        )
+
+    def test_repeat_counts_are_greater_than_one(self) -> None:
+        """An entry of 1 is a no-op that reads like coverage."""
+        for name, repeats in br._SAMPLING_REPEATS.items():
+            assert repeats > 1, f"{name}: a repeat count of {repeats} measures nothing extra"
+
+    def test_a_repeated_benchmark_is_actually_invoked_repeatedly(self) -> None:
+        calls = {"n": 0}
+
+        def fake() -> float:
+            calls["n"] += 1
+            return float(calls["n"])
+
+        name = next(iter(br._SAMPLING_REPEATS))
+        result = br._measure_benchmark(name, fake)
+        assert calls["n"] == br._SAMPLING_REPEATS[name]
+        # Fastest wins, matching benchmark_operation's estimator.
+        assert result == float(br._SAMPLING_REPEATS[name])
+
+    def test_an_unlisted_benchmark_is_invoked_once(self) -> None:
+        calls = {"n": 0}
+
+        def fake() -> float:
+            calls["n"] += 1
+            return 1.0
+
+        assert br._measure_benchmark("not-a-registered-name", fake) == 1.0
+        assert calls["n"] == 1
+
+    def test_none_short_circuits_without_further_calls(self) -> None:
+        """An absent primitive must not be probed once per repeat."""
+        calls = {"n": 0}
+
+        def absent() -> None:
+            calls["n"] += 1
+            return None
+
+        name = next(iter(br._SAMPLING_REPEATS))
+        assert br._measure_benchmark(name, absent) is None
+        assert calls["n"] == 1
+
+    def test_the_rejection_sampled_primitives_are_covered(self) -> None:
+        """The ML-DSA family is a reason this exists; it must stay covered.
+
+        Named individually rather than derived, because the point is that a
+        future addition to the suite gets a deliberate decision rather than the
+        default.
+        """
+        for name in ("dilithium_keygen", "dilithium_sign"):
+            assert name in br._SAMPLING_REPEATS, (
+                f"{name} is rejection-sampled and needs more than one whole-run "
+                f"measurement to produce a stable floor"
+            )
+
+
+class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
+    """The escape hatch in the freshness test, closed.
+
+    ``tests/test_benchmark_baseline_freshness.py`` fails once the package
+    version passes a baseline's ``applies_through_release`` — but bumping that
+    field is itself a way to satisfy it, and nothing required the floors to be
+    re-measured first. The cheapest way to make the freshness test green was to
+    declare the stale floors valid for longer.
+
+    ``arm-baseline.json`` shows the shape: ``baseline_source_release: 3.1.0``
+    against ``applies_through_release: 4.0.0``, floors measured nine minor
+    releases before the window they are declared valid for, with the file's own
+    notes recording that the 2026-07-29 recalibration skipped AArch64. The
+    freshness gate passed throughout.
+
+    The rule is about the diff, not the current state, so it constrains the
+    next extension rather than retroactively failing the files as they stand.
+    """
+
+    @staticmethod
+    def _install_refs(
+        monkeypatch: pytest.MonkeyPatch,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> Any:
+        """Stub ``_run_git`` so the guard reads synthetic before/after files."""
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        def fake_run_git(*args: str) -> str:
+            ref, _, path = args[1].partition(":")
+            if path != guard.ARM_BASELINE_PATH:
+                raise subprocess.CalledProcessError(1, "git")
+            return json.dumps(before if ref == "BASE" else after)
+
+        monkeypatch.setattr(guard, "_run_git", fake_run_git)
+        return guard
+
+    @staticmethod
+    def _baseline(through: str, source: str, value: int) -> dict[str, Any]:
+        return {
+            "metadata": {
+                "applies_through_release": through,
+                "baseline_source_release": source,
+            },
+            "benchmarks": {"ama_sha3_256_hash": {"baseline_value": value}},
+            "pqc_benchmarks": {},
+        }
+
+    def test_extending_the_window_alone_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        guard = self._install_refs(
+            monkeypatch,
+            self._baseline("4.0.0", "3.1.0", 100),
+            self._baseline("5.0.0", "3.1.0", 100),
+        )
+        failures = guard._check_validity_window("BASE", "HEAD")
+        assert len(failures) == 1, failures
+        assert "no floor was re-measured" in failures[0]
+
+    @pytest.mark.parametrize(
+        "after,why",
+        [
+            (("5.0.0", "3.1.0", 150), "a floor was re-measured"),
+            (("5.0.0", "5.0.0", 100), "baseline_source_release advanced"),
+            (("4.0.0", "3.1.0", 100), "the window did not move"),
+            (("3.5.0", "3.1.0", 100), "the window was narrowed"),
+        ],
+    )
+    def test_legitimate_edits_are_allowed(
+        self, monkeypatch: pytest.MonkeyPatch, after: tuple[str, str, int], why: str
+    ) -> None:
+        guard = self._install_refs(
+            monkeypatch,
+            self._baseline("4.0.0", "3.1.0", 100),
+            self._baseline(*after),
+        )
+        assert guard._check_validity_window("BASE", "HEAD") == [], why
+
+    def test_drift_failure_names_the_calibration_commit_not_a_false_no_remeasure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The drift branch fires even when floors WERE re-measured — by design:
+        a re-measurement that leaves ``calibration_evidence`` naming the old
+        commit has not answered the drift question.  But the message used to
+        assert "with no floor re-measured" on every firing, false in exactly
+        that case — a maintainer who had just re-measured everything and
+        advanced ``baseline_source_release`` was told they had measured
+        nothing.  The message must state what the check established: the
+        evidence still names the old commit, and floored code changed since
+        it.
+        """
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        def calibrated(through: str, source: str, value: int) -> dict[str, Any]:
+            data = self._baseline(through, source, value)
+            data["metadata"]["calibration_evidence"] = {"runs": {"p1": "300 (abc1234, release)"}}
+            return data
+
+        before = calibrated("4.0.0", "3.1.0", 100)
+        # Floors re-measured AND source advanced — yet calibration_evidence
+        # still names abc1234, and a floored file changed since it.
+        after = calibrated("5.0.0", "5.0.0", 150)
+
+        def fake_run_git(*args: str) -> str:
+            if args[0] == "cat-file":
+                return ""
+            if args[0] == "diff":
+                return "src/c/ama_sha3.c\n"
+            ref, _, path = args[1].partition(":")
+            if path != guard.ARM_BASELINE_PATH:
+                raise subprocess.CalledProcessError(1, "git")
+            return json.dumps(before if ref == "BASE" else after)
+
+        monkeypatch.setattr(guard, "_run_git", fake_run_git)
+        failures = guard._check_validity_window("BASE", "HEAD")
+        assert len(failures) == 1, failures
+        message = failures[0]
+        assert "calibration_evidence still names commit 'abc1234'" in message
+        assert "src/c/ama_sha3.c" in message
+        assert "no floor re-measured" not in message
+        assert "no floor was re-measured" not in message
+
+        # And the acknowledgement route still clears it: with the drift
+        # acknowledged and the floors genuinely re-measured, the extension
+        # stands.
+        after["metadata"]["floor_drift_acknowledged"] = [
+            {"path": "src/c/ama_sha3.c", "reason": "re-measured in this pass"}
+        ]
+        assert guard._check_validity_window("BASE", "HEAD") == []
+
+    def test_the_current_tree_satisfies_the_rule(self) -> None:
+        """This branch must not itself be extending a window silently."""
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        try:
+            assert guard._check_validity_window("origin/main", "HEAD") == []
+        except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
+            pytest.skip("origin/main is not available in this checkout")
+
+    def test_the_working_tree_satisfies_it_too(self) -> None:
+        """The same rule, one commit earlier.
+
+        The test above compares ``origin/main`` to ``HEAD``, so it can only see
+        drift that has already been committed — which is a push too late.  A
+        branch that edits a floored file and pushes before acknowledging it gets
+        the answer from CI, on a red check, after the fact; that happened on this
+        branch, twice, for ``src/c/ama_dilithium.c`` and then for
+        ``ama_cryptography/secure_memory.py`` and ``src/c/PROVENANCE.md``.
+
+        ``git diff <commit> -- <paths>`` with no second ref includes the working
+        tree, so this one fails while the edit is still local.  In CI the working
+        tree is clean and the two tests are the same assertion.
+        """
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        repo_root = Path(__file__).resolve().parent.parent
+        for path in guard.ALL_BASELINE_PATHS:
+            # The metadata comes from the file on disk, not from HEAD: this is a
+            # working-tree check, and the acknowledgement is written in the same
+            # edit that causes the drift.
+            baseline = repo_root / path
+            if not baseline.is_file():  # pragma: no cover - baseline absent
+                pytest.skip(f"{path} is not present in the working tree")
+            metadata = json.loads(baseline.read_text(encoding="utf-8")).get("metadata", {})
+            assert metadata, f"{path} carries no metadata block"
+            commit = guard._calibration_commit(metadata)
+            assert commit is not None, f"{path} records no calibration commit"
+            try:
+                changed = guard._run_git(
+                    "diff", "--name-only", commit, "--", *guard._FLOORED_CODE_PATHS
+                )
+            except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
+                pytest.skip(f"calibration commit {commit} is not in this checkout")
+            unacknowledged = sorted(
+                name
+                for name in (line.strip() for line in changed.splitlines())
+                if name and not guard._drift_is_acknowledged(metadata, name)
+            )
+            assert not unacknowledged, (
+                f"{path}: these floored files differ from the calibration commit "
+                f"{commit} and are not in metadata.floor_drift_acknowledged:\n"
+                + "".join(f"    {name}\n" for name in unacknowledged)
+                + "  Add a {path, reason} entry for each — measured, not asserted — "
+                "before committing. Leaving it to CI costs a red check and a cycle."
+            )
+
+
+class TestReleaseParsing:
+    """The release parser must be exact, and must not be quadratic.
+
+    ``re.fullmatch(r"(\\d+)\\.(\\d+)\\.(\\d+)")`` — three unbounded quantifiers
+    separated by literals — is the shape CodeQL reports as a polynomial ReDoS.
+    Measured before the rewrite: 4.2x per doubling, 1,545 ms on a 16,000-character
+    run. The parsed value comes from a JSON file in this repository rather than
+    from a remote party, so the exposure was small; a version parser simply has
+    no need of a regex, and "the input is trusted today" is a weaker guarantee
+    than not being quadratic at all.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("4.0.0", (4, 0, 0)),
+            (" 3.1.0 ", (3, 1, 0)),
+            ("10.20.30", (10, 20, 30)),
+            ("4.0", None),
+            ("4.0.0.1", None),
+            ("4..0", None),
+            ("a.b.c", None),
+            ("", None),
+            ("-1.0.0", None),
+            ("99999.0.0", None),  # beyond the component width bound
+            ("٤.٠.٠", None),  # non-ASCII digits: isdigit() is true, int() would accept
+            (None, None),
+            (4.0, None),
+        ],
+    )
+    def test_parses_exactly(self, value: object, expected: tuple[int, ...] | None) -> None:
+        import benchmarks.check_baseline_justification as guard
+
+        assert guard._release_tuple(value) == expected
+
+    def test_is_linear_on_a_long_run_of_digits(self) -> None:
+        """The input that cost 1.5 s before."""
+        import time
+
+        import benchmarks.check_baseline_justification as guard
+
+        pathological = "0" * 200_000
+        start = time.perf_counter()
+        assert guard._release_tuple(pathological) is None
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.5, f"parsing 200k digits took {elapsed:.2f}s"
+
+    def test_ordering_is_by_component_not_lexicographic(self) -> None:
+        """The comparison the window rule depends on.
+
+        Each parse is asserted non-None first: the return type is Optional, and
+        comparing through it would make the ordering assertions unreachable on
+        a parser regression rather than failing them.
+        """
+        import benchmarks.check_baseline_justification as guard
+
+        for higher, lower in (("4.10.0", "4.9.0"), ("10.0.0", "9.9.9")):
+            a = guard._release_tuple(higher)
+            b = guard._release_tuple(lower)
+            assert a is not None and b is not None, (higher, lower)
+            assert a > b
+
+
+class TestProvenanceRecordsTheMeasuredTree:
+    """The tree state in the provenance block must describe the measured tree.
+
+    ``_provenance`` used to sample ``git status --porcelain`` at the moment the
+    markdown was rendered. A normal run writes ``benchmarks/benchmark-results.
+    json`` — a tracked file — before rendering, so the working tree was always
+    dirty by then and every report the tool had ever produced carried
+    ``(working tree DIRTY)``, including reports produced from a pristine
+    checkout.
+
+    A field that always prints the same value carries no information; one that
+    always prints the alarming value trains the reader to ignore it. The state
+    is now captured once, before the first measurement.
+    """
+
+    def test_the_snapshot_is_used_in_preference_to_a_live_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("c0ffee" * 6 + "abcd", False))
+
+        def _fail(*args: str) -> str:
+            raise AssertionError("_provenance queried git despite a captured snapshot")
+
+        monkeypatch.setattr(br, "_git", _fail)
+        rendered = dict(br._provenance())["Commit"]
+        assert "DIRTY" not in rendered
+        assert "c0ffee" in rendered
+
+    def test_a_dirty_snapshot_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The flag must still fire when the tree really was modified."""
+        monkeypatch.setattr(br, "_TREE_STATE", ("deadbeef", True))
+        assert "working tree DIRTY" in dict(br._provenance())["Commit"]
+
+    def test_writing_the_report_files_does_not_make_the_snapshot_dirty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression itself, exercised through the ordering that caused it.
+
+        ``capture_tree_state`` reads a clean tree; the run then modifies it;
+        the rendered provenance must still describe what was measured.
+        """
+        observed: list[tuple[str, ...]] = []
+
+        def _fake_git(*args: str) -> str:
+            observed.append(args)
+            # Clean on the first status query, dirty on every later one — the
+            # shape a run has once it has written its own tracked output.
+            if args[0] == "status":
+                return "" if len(observed) <= 2 else " M benchmarks/benchmark-results.json"
+            return "1234567890abcdef"
+
+        monkeypatch.setattr(br, "_git", _fake_git)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+
+        captured = br.capture_tree_state()
+        assert captured[1] is False, "precondition: the tree was clean when measuring began"
+
+        monkeypatch.setattr(br, "_TREE_STATE", captured)
+        assert "DIRTY" not in dict(br._provenance())["Commit"]
+
+    def test_without_a_snapshot_it_still_produces_a_block(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct calls (tests, embeddings) must not crash on the fallback."""
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        block = dict(br._provenance())
+        assert "Commit" in block and "Aggregation" in block
+
+    def test_git_failures_degrade_rather_than_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _boom(*args: str) -> str:
+            raise OSError("no git here")
+
+        monkeypatch.setattr(subprocess, "run", _boom)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        commit, dirty = br.capture_tree_state()
+        assert commit == "unknown"
+        assert dirty is False, "an unavailable git must not be reported as a modified tree"
+
+
+class TestBothRecordsCarryProvenance:
+    """The JSON record is the machine-readable one; it had no provenance.
+
+    ``benchmark-report.md`` recorded commit, host, sampling and aggregation;
+    ``benchmarks/benchmark-results.json`` recorded none of it. That put the two
+    published records on different footings, and left the record another tool
+    is most likely to consume unable to say what produced it.
+    """
+
+    def test_the_json_report_carries_the_same_fields_as_the_markdown(self) -> None:
+        report = br.generate_report([])
+        assert "provenance" in report, "the JSON record must carry provenance"
+        rendered = {br._provenance_key(label) for label, _ in br._provenance()}
+        assert set(report["provenance"]) == rendered, "the two blocks must not drift apart"
+
+    def test_keys_are_machine_readable(self) -> None:
+        keys = set(br.generate_report([])["provenance"])
+        assert "extra_whole_run_repeats" in keys
+        assert all(k == k.lower() and " " not in k for k in keys)
+
+    def test_the_shipped_json_record_has_provenance(self) -> None:
+        """The committed record, not just a freshly generated one."""
+        path = Path(__file__).resolve().parent.parent / "benchmarks" / "benchmark-results.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        provenance = record.get("provenance")
+        assert provenance, f"{path.name} was regenerated without provenance"
+        assert provenance.get("commit", "").strip("`") not in ("", "unknown")
+        assert "version" in provenance and "host" in provenance
+
+    def test_the_shipped_records_code_derived_rows_match_the_generator(self) -> None:
+        """Rows that are pure functions of runner code must match that code.
+
+        ``sampling``, ``extra_whole_run_repeats``, ``aggregation`` and
+        ``reading_these_numbers`` do not describe the host or the moment of
+        the run — they describe the measurement METHOD, and the method is the
+        runner's code.  When the estimator changes and the record is not
+        regenerated, the committed numbers were produced by a rule the record
+        no longer states — the shipped record carried ``"batches sized to
+        span >= 0.15s"`` (the predicted-count qualification rule) after the
+        runner had replaced that estimator with measured-wall-clock credit,
+        and no test could see it: the markdown round-trip test renders from
+        the recorded block, so both artefacts agreed with each other while
+        both disagreed with the code.
+
+        Host-dependent rows (commit, host, cpu, python, native backend,
+        command, timestamp) are deliberately NOT compared: they legitimately
+        differ between the measurement run and whoever runs this test.
+        """
+        path = Path(__file__).resolve().parent.parent / "benchmarks" / "benchmark-results.json"
+        recorded = json.loads(path.read_text(encoding="utf-8"))["provenance"]
+        live = dict(br._provenance())
+        for label in (
+            "Sampling",
+            "Extra whole-run repeats",
+            "Aggregation",
+            "Reading these numbers",
+        ):
+            key = br._provenance_key(label)
+            expected = br._provenance_json_value(live[label])
+            assert recorded.get(key) == expected, (
+                f"benchmark-results.json provenance.{key} does not match what "
+                f"benchmark_runner.py would record today:\n"
+                f"  recorded: {recorded.get(key)!r}\n"
+                f"  code:     {expected!r}\n"
+                f"The numbers in the record were produced under a different "
+                f"measurement rule than the record describes. Re-run "
+                f"benchmark_runner.py to regenerate benchmark-results.json and "
+                f"benchmark-report.md together rather than editing the field."
+            )
+
+
+class TestTheRecordedCommandIsTheCommandThatRan:
+    """It was a hard-coded string that omitted the flag writing the record.
+
+    Every real run passes ``--output`` as well as ``--baseline``/``--markdown``,
+    so copying the recorded command would not reproduce the JSON file it was
+    printed in.
+    """
+
+    def test_the_flags_actually_used_are_recorded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["benchmarks/benchmark_runner.py", "--baseline", "b.json", "--output", "o.json"],
+        )
+        rendered = br._invocation()
+        assert "--output o.json" in rendered
+        assert "--baseline b.json" in rendered
+
+    def test_arguments_needing_quoting_are_quoted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            sys, "argv", ["benchmarks/benchmark_runner.py", "--baseline", "a file.json"]
+        )
+        assert "'a file.json'" in br._invocation()
+
+    def test_an_absolute_script_path_is_made_repository_relative(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        absolute = str(Path(br.__file__).resolve())
+        monkeypatch.setattr(sys, "argv", [absolute, "--verbose"])
+        rendered = br._invocation()
+        assert rendered.startswith("python benchmarks/benchmark_runner.py")
+        assert str(Path(absolute).parent.parent) not in rendered
+
+    def test_the_script_path_is_rendered_the_same_on_every_platform(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Windows regression, asserted as the property it violated.
+
+        ``str(Path(...))`` yields ``benchmarks\\benchmark_runner.py`` on
+        Windows, and ``shlex.quote`` then wraps it in single quotes because a
+        backslash is a POSIX metacharacter — producing
+        ``python 'benchmarks\\benchmark_runner.py'``, which is neither valid
+        Windows nor comparable with the same run recorded on Linux. A
+        provenance field that renders differently per platform cannot be used
+        to compare two measurements, which is most of what it is for.
+        """
+        monkeypatch.setattr(sys, "argv", [str(Path(br.__file__).resolve())])
+        rendered = br._invocation()
+        assert "\\" not in rendered, f"platform-specific separator leaked: {rendered!r}"
+        assert "'" not in rendered, f"the script path was needlessly quoted: {rendered!r}"
+        assert rendered == "python benchmarks/benchmark_runner.py"
+
+    def test_caller_arguments_are_reproduced_verbatim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the script path is normalised; the caller's strings are not.
+
+        Rewriting an argument the caller actually passed would make the field
+        describe a command that did not run — the defect it was added to fix.
+        """
+        monkeypatch.setattr(
+            sys, "argv", ["benchmarks/benchmark_runner.py", "--baseline", r"C:\\bench\\b.json"]
+        )
+        assert r"C:\\bench\\b.json" in br._invocation()
+
+    def test_an_unrelated_script_path_degrades_to_its_basename(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["/opt/elsewhere/runner.py"])
+        assert br._invocation() == "python runner.py"
+
+    def test_an_empty_argv_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", [])
+        assert "benchmark_runner.py" in br._invocation()
+
+
+class TestPqcRowsAreHardGated:
+    """A measured AEAD/PQC/X25519 row must be able to fail the run.
+
+    These rows were built ``optional=True``, which ``main()`` maps to
+    warn-and-exit-0 — so all nine populated floors had an infinite blind
+    spot while both baseline files described a 15–25% firing threshold and
+    cited the 2.1x AES-GCM wrapper regression as the case the recalibration
+    prevents.  Reproduced against the real arm baseline: halving the
+    aes_256_gcm_encrypt floor's measured rate printed ``[WARN]`` and exited
+    0.  A row is only built after a successful measurement (the None path
+    skips an absent backend before any row exists), so "optional" carried
+    no availability meaning — only the blind spot.
+    """
+
+    def _run_one_pqc_row(
+        self, monkeypatch: pytest.MonkeyPatch, measured_rate: float | None
+    ) -> list[br.BenchmarkResult]:
+        baseline = {
+            "thresholds": {"regression_threshold_percent": 10},
+            "benchmarks": {},
+            "pqc_benchmarks": {
+                "aes_256_gcm_encrypt": {
+                    "description": "synthetic",
+                    "baseline_value": 1000.0,
+                    "tolerance_percent": 15,
+                }
+            },
+        }
+        monkeypatch.setattr(br, "_measure_benchmark", lambda name, func: measured_rate)
+        return br.run_all_benchmarks(baseline)
+
+    def test_a_breached_measured_row_fails_the_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        results = self._run_one_pqc_row(monkeypatch, measured_rate=400.0)  # -60%
+        assert len(results) == 1
+        row = results[0]
+        assert row.passed is False
+        assert row.optional is False, (
+            "a measured PQC row must be hard-gated — optional=True is the "
+            "warn-and-exit-0 blind spot the baseline notes claim does not exist"
+        )
+        # main()'s failure collapse: the row must survive the filter.
+        failed = [r for r in results if not r.passed and not r.optional]
+        assert failed, "the breached row must reach the CI-failing branch"
+
+    def test_a_healthy_measured_row_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        results = self._run_one_pqc_row(monkeypatch, measured_rate=1000.0)
+        assert len(results) == 1 and results[0].passed is True
+
+    def test_an_absent_backend_still_skips_without_a_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        results = self._run_one_pqc_row(monkeypatch, measured_rate=None)
+        assert results == [], "no measurement, no row — the only meaning 'optional' ever had"
+
+    def test_no_populated_baseline_row_is_optional(self) -> None:
+        """Both committed baseline files must carry optional=false everywhere."""
+        for name in ("baseline.json", "arm-baseline.json"):
+            data = json.loads((Path(br.__file__).parent / name).read_text(encoding="utf-8"))
+            offenders = [
+                key
+                for key, row in data.get("pqc_benchmarks", {}).items()
+                if row.get("optional") is True
+            ]
+            assert offenders == [], f"{name}: rows opted back out of the gate: {offenders}"
+
+
+class TestTheReportDoesNotInvertItsOwnColumn:
+    """A row 43% slower than its floor rendered as ``+43.0%`` under "Delta".
+
+    ``regression_percent`` is ``-pct_change`` and ``pct_change`` is positive
+    when FASTER, so the number is positive when the primitive is SLOWER.  The
+    machine-readable sibling names the field honestly
+    (``regression_percent`` in ``benchmark-results.json``); the human-facing
+    table called the same number "Delta", which a reader takes to mean change
+    in throughput, and nothing in the header, legend or provenance block said
+    otherwise.  Only the artefact a person reads was ambiguous.
+    """
+
+    @staticmethod
+    def _render(rows: list[tuple[float, float, float]]) -> str:
+        results = [
+            br.BenchmarkResult(
+                name=f"row{i}",
+                description=f"row {i}",
+                ops_per_second=ops,
+                baseline_value=floor,
+                tolerance_percent=45.0,
+                regression_percent=regression,
+                passed=True,
+            )
+            for i, (ops, floor, regression) in enumerate(rows)
+        ]
+        return br.generate_markdown_report(results, br.generate_report(results))
+
+    def test_the_column_is_named_for_the_field_it_carries(self) -> None:
+        md = self._render([(100.0, 200.0, 50.0)])
+        assert "| Regression |" in md
+        assert "| Delta |" not in md
+
+    def test_the_legend_states_the_direction(self) -> None:
+        md = self._render([(100.0, 200.0, 50.0)])
+        assert "positive means SLOWER" in md
+
+    def test_a_slower_row_renders_positive_and_a_faster_row_negative(self) -> None:
+        """The property itself, in both directions.
+
+        Slower than the floor is ``+``; faster is ``-``.  Whichever convention
+        is chosen, the legend and the sign must agree, and this is what would
+        catch a future "fix" that negated one without the other.
+        """
+        md = self._render([(100.0, 200.0, 50.0), (300.0, 200.0, -50.0)])
+        slower = next(line for line in md.splitlines() if "| row 0 |" in line)
+        faster = next(line for line in md.splitlines() if "| row 1 |" in line)
+        assert "+50.0%" in slower, slower
+        assert "-50.0%" in faster, faster
+
+    def test_the_published_report_matches_the_generator(self) -> None:
+        """The committed artefact must be what the current generator emits.
+
+        Rendered from the committed ``benchmark-results.json``, so this
+        compares presentation only — the numbers are that run's, not this
+        host's.
+        """
+        data = json.loads(
+            (REPO_ROOT / "benchmarks" / "benchmark-results.json").read_text(encoding="utf-8")
+        )
+        results = [br.BenchmarkResult(**row) for row in data["results"]]
+        expected = br.generate_markdown_report(results, data)
+        published = (REPO_ROOT / "benchmark-report.md").read_text(encoding="utf-8")
+        assert published == expected, (
+            "benchmark-report.md is not what benchmark_runner would produce from "
+            "benchmarks/benchmark-results.json; regenerate it rather than editing "
+            "it by hand"
+        )
+
+
+class TestTheTwoPublishedArtefactsCannotDisagreeByARounding:
+    """The markdown must render the numbers the JSON record stores.
+
+    ``generate_report()`` quantises every published measurement to
+    ``PUBLISHED_DECIMALS`` (2); the table displays fewer digits than that.  The
+    table used to format the RAW value, so wherever the two roundings disagree
+    the pair contradicted itself: ``hkdf_derive``'s regression was
+    6.747801524276505%,
+    which the table rendered ``+6.7%`` while the JSON stored ``6.75``, from
+    which the same generator renders ``+6.8%``.
+
+    ``test_the_published_report_matches_the_generator`` above caught that
+    instance, but only because the committed record happened to contain a
+    half-way value.  A later run whose numbers all round the same way would
+    make that assertion pass over the same defect, so the property is pinned
+    here directly, on values chosen to exercise it in both columns.
+    """
+
+    @staticmethod
+    def _rendered_both_ways(result: br.BenchmarkResult) -> tuple[str, str]:
+        """The page from live results, and from those results JSON round-tripped.
+
+        The same ``report`` dict feeds both renders, so the timestamp and
+        provenance are identical and any difference is the measurements.
+        """
+        report = br.generate_report([result])
+        from_live = br.generate_markdown_report([result], report)
+        stored = [br.BenchmarkResult(**row) for row in json.loads(json.dumps(report))["results"]]
+        return from_live, br.generate_markdown_report(stored, report)
+
+    def test_a_half_way_regression_renders_identically_from_both(self) -> None:
+        """6.7478 -> raw ``+6.7%``; stored as 6.75 -> ``+6.8%``.
+
+        The three numbers are the repaired record's own: ``hkdf_derive`` at
+        122,478.37 ops/sec against a 131,341 floor is a regression of
+        6.747801524276505%.  ``BenchmarkResult`` does not derive
+        ``regression_percent`` from the other two, so a fixture is free to set
+        them inconsistently — this one does not, because a reader checking the
+        arithmetic should find it holds.
+        """
+        result = br.BenchmarkResult(
+            name="row0",
+            description="row 0",
+            ops_per_second=122478.37,
+            baseline_value=131341.0,
+            tolerance_percent=45.0,
+            regression_percent=6.747801524276505,
+            passed=True,
+        )
+        from_live, from_json = self._rendered_both_ways(result)
+        assert from_live == from_json
+        assert "+6.8%" in from_live
+
+    def test_a_half_way_throughput_renders_identically_from_both(self) -> None:
+        """The Ops/sec column has the same hazard: 1.4999 -> ``1``; 1.5 -> ``2``."""
+        result = br.BenchmarkResult(
+            name="row0",
+            description="row 0",
+            ops_per_second=1.4999,
+            baseline_value=2.0,
+            tolerance_percent=45.0,
+            regression_percent=25.005,  # (2.0 - 1.4999) / 2.0 * 100, exactly
+            passed=True,
+        )
+        from_live, from_json = self._rendered_both_ways(result)
+        assert from_live == from_json
+
+    def test_an_ordinary_row_is_unaffected(self) -> None:
+        """The control: quantising must not move a number that needs no rounding."""
+        result = br.BenchmarkResult(
+            name="row0",
+            description="row 0",
+            ops_per_second=1234.0,
+            baseline_value=1000.0,
+            tolerance_percent=45.0,
+            regression_percent=-23.4,
+            passed=True,
+        )
+        from_live, from_json = self._rendered_both_ways(result)
+        assert from_live == from_json
+        assert "| 1,234 |" in from_live
+        assert "-23.4%" in from_live
+
+
+class TestTheJsonProvenanceIsMachineReadable:
+    """The JSON block's values must be values, not rendered markdown.
+
+    `_provenance()` renders ONE list for two artefacts, which is the point.
+    What it emits is markdown, and `generate_report()` copied it into the JSON
+    verbatim, so `provenance.commit` carried the markdown backticks and — on a
+    dirty tree — the ``(working tree DIRTY)`` suffix as well:
+
+        "commit": "`3ce4b588…`"                     (clean)
+        "commit": "`3ce4b588…` (working tree DIRTY)" (dirty)
+
+    Splitting cleanliness into its own "Tree" row was supposed to fix exactly
+    this, and did not touch the commit row.  A consumer comparing the field to
+    `git rev-parse HEAD` gets a mismatch it cannot interpret, in both states.
+    """
+
+    def test_commit_is_a_bare_hash_on_a_clean_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("a" * 40, False))
+        provenance = br.generate_report([])["provenance"]
+        assert provenance["commit"] == "a" * 40, provenance["commit"]
+        assert provenance["tree"] == "clean"
+
+    def test_commit_is_a_bare_hash_on_a_dirty_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("b" * 40, True))
+        provenance = br.generate_report([])["provenance"]
+        assert provenance["commit"] == "b" * 40, (
+            "the dirty marker is still glued to the commit id, which is what "
+            "the Tree row was added to stop"
+        )
+        assert "DIRTY" in provenance["tree"]
+
+    def test_the_markdown_still_shows_the_dirt_on_the_commit_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The human-facing rendering is unchanged: only the JSON was wrong."""
+        monkeypatch.setattr(br, "_TREE_STATE", ("c" * 40, True))
+        commit_cell = dict(br._provenance())["Commit"]
+        assert commit_cell.startswith("`c" + "c" * 39 + "`")
+        assert "working tree DIRTY" in commit_cell
+
+    def test_no_json_provenance_value_carries_markdown_ticks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("d" * 40, False))
+        provenance = br.generate_report([])["provenance"]
+        ticked = {k: v for k, v in provenance.items() if isinstance(v, str) and "`" in v}
+        assert not ticked, f"markdown formatting reached the JSON block: {ticked}"
+
+
+class TestARunThatMeasuredNothingIsNotAPass:
+    """The regression gate must not exit 0 on zero measured rows.
+
+    Every ``continue`` in :func:`run_all_benchmarks` — a baseline that does not
+    name the benchmark, a primitive absent from the build — is silent to the
+    exit code.  With all of them taken, ``main()`` printed "All benchmarks
+    within acceptable range" and returned 0, so the CI job was green *because*
+    it had stopped measuring.
+
+    Reproduced before the fix against a copy of the shipped baseline with every
+    key renamed, which passes ``--require-populated-baseline`` (that flag only
+    rejects zero ``baseline_value``s): **19 populated floors, 0 benchmarks
+    measured, exit 0**.
+
+    The three states below are separated because they mean different things. A
+    baseline name with no function behind it is a rename — the floor is still
+    in the JSON, still justified, and can never fire again — so it is fatal
+    everywhere. A name whose function exists but produced no measurement is the
+    documented "primitive absent from this build" skip: legitimate locally,
+    never true of the CI job, so it is fatal exactly under
+    ``--require-populated-baseline``.
+    """
+
+    @staticmethod
+    def _baseline(core: dict[str, Any], pqc: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "metadata": {"runner_cpu_class": "x86_64"},
+            "thresholds": {"regression_threshold_percent": 10},
+            "benchmarks": core,
+            "pqc_benchmarks": pqc,
+        }
+
+    @staticmethod
+    def _entry(value: float = 1000.0) -> dict[str, Any]:
+        return {"description": "synthetic", "baseline_value": value, "tolerance_percent": 15}
+
+    def _run(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        baseline: dict[str, Any],
+        *,
+        strict: bool,
+        rate: float | None = 1000.0,
+    ) -> int:
+        path = tmp_path / "baseline.json"
+        path.write_text(json.dumps(baseline), encoding="utf-8")
+        argv = ["benchmark_runner.py", "--baseline", str(path)]
+        if strict:
+            argv.append("--require-populated-baseline")
+        monkeypatch.setattr(sys, "argv", argv)
+        monkeypatch.setattr(br, "_measure_benchmark", lambda name, func: rate)
+        return br.main()
+
+    def test_a_healthy_run_still_passes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Non-vacuity: without this, every assertion below could pass on a
+        ``main()`` that had simply become unable to return 0."""
+        name = next(iter(br.BENCHMARK_FUNCTIONS))
+        rc = self._run(
+            monkeypatch, tmp_path, self._baseline({name: self._entry()}, {}), strict=True
+        )
+        assert rc == 0, "a measured, in-tolerance row must still exit 0"
+
+    def test_a_baseline_naming_no_known_benchmark_is_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A rename leaves the floor in the JSON and unenforceable forever."""
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({"renamed_ed25519_sign": self._entry()}, {}),
+            strict=False,
+        )
+        assert rc != 0, (
+            "a baseline entry no benchmark function answers to is a floor that "
+            "can never fire; the run skipped it and exited 0"
+        )
+
+    def test_it_is_fatal_without_the_strict_flag_too(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The rename case does not depend on how the run was invoked."""
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({}, {"renamed_kyber_keygen": self._entry()}),
+            strict=False,
+        )
+        assert rc != 0
+
+    def test_an_empty_baseline_is_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Nothing requested, nothing measured, nothing compared."""
+        rc = self._run(monkeypatch, tmp_path, self._baseline({}, {}), strict=False)
+        assert rc != 0, "a run that compared nothing against anything is not a pass"
+
+    def test_an_unmeasured_primitive_is_fatal_under_the_strict_flag(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``rate=None`` is the "primitive absent from this build" skip."""
+        name = next(iter(br.BENCHMARK_FUNCTIONS))
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({name: self._entry()}, {}),
+            strict=True,
+            rate=None,
+        )
+        assert rc != 0, (
+            "--require-populated-baseline is the CI invocation; a floor that was "
+            "skipped there cannot fire and must not read as a pass"
+        )
+
+    def test_the_same_run_is_tolerated_without_the_flag(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A local build that knowingly covers less is still usable — but says so.
+
+        This is the other half of the test above: without it, the strict-flag
+        assertion would pass equally against a runner that rejected every
+        unmeasured entry, which would make a developer build unusable.
+        """
+        name = next(iter(br.BENCHMARK_FUNCTIONS))
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({name: self._entry()}, {}),
+            strict=False,
+            rate=None,
+        )
+        assert rc != 0, "zero measured rows is fatal regardless of the flag"
+        assert "NO BENCHMARK WAS MEASURED" in capsys.readouterr().out
+
+    def test_a_partial_measurement_without_the_flag_only_notes_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """One measured and one skipped: usable locally, and reported."""
+        measured, skipped = list(br.BENCHMARK_FUNCTIONS)[:2]
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps(self._baseline({measured: self._entry(), skipped: self._entry()}, {})),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--baseline", str(path)])
+        monkeypatch.setattr(
+            br, "_measure_benchmark", lambda name, func: 1000.0 if name == measured else None
+        )
+        rc = br.main()
+        out = capsys.readouterr().out
+        assert rc == 0, "one good row on a partial build is a usable local run"
+        assert (
+            skipped in out and "not measured" in out
+        ), "a skipped floor must be named, or the run silently covers less than it claims"
+
+    def test_the_dispatch_tables_are_module_level_and_populated(self) -> None:
+        """The coverage check reads them; empty tables would make it vacuous."""
+        assert len(br.BENCHMARK_FUNCTIONS) >= 8
+        assert len(br.PQC_BENCHMARK_FUNCTIONS) >= 8
+        overlap = set(br.BENCHMARK_FUNCTIONS) & set(br.PQC_BENCHMARK_FUNCTIONS)
+        assert not overlap, f"a name in both tables is ambiguous: {sorted(overlap)}"
+
+    def test_every_shipped_baseline_name_has_a_benchmark_behind_it(self) -> None:
+        """The check above is what CI runs; this is the standing state of the tree."""
+        runnable = set(br.BENCHMARK_FUNCTIONS) | set(br.PQC_BENCHMARK_FUNCTIONS)
+        for name in ("baseline.json", "arm-baseline.json"):
+            doc = json.loads((REPO_ROOT / "benchmarks" / name).read_text(encoding="utf-8"))
+            requested = set(doc.get("benchmarks", {})) | set(doc.get("pqc_benchmarks", {}))
+            assert requested, f"{name} names no benchmarks at all"
+            assert not (requested - runnable), (
+                f"{name} names {sorted(requested - runnable)}, which no benchmark "
+                f"function answers to — those floors cannot fire"
+            )
+
+
+class TestJustificationMustAccountForTheChange:
+    """A floor change is justified by text that explains *that* change.
+
+    The guard used to concatenate every commit message on the branch that
+    touched a baseline JSON and scan the blob for "a name, a number, a runner"
+    anywhere in it.  On a long branch that is unfalsifiable, and measured on
+    this one it already was: 25 commits, 86,892 bytes of accumulated message
+    text, already containing a measurement, a runner token, and all 19
+    primitive names before any new commit was written.
+
+    Demonstrated end to end against the real branch — a commit whose entire
+    message was ``wip``, halving ``ed25519_sign``'s floor, passed with an empty
+    PR body and **exit 0**, the guard reporting that "every changed baseline is
+    named, a measurement value is cited, and a CI runner is identified".  All
+    of it came from text written for unrelated changes.
+
+    Each change is now attributed to the commit that last wrote that number.
+    "Last", not "any": an earlier commit justified the value it wrote, and a
+    later commit moving the same floor is a new claim needing its own evidence.
+    That distinction is not theoretical — the first version of this fix used
+    ``any`` and the ``wip`` commit still passed, riding on the recalibration
+    commit that had set the previous value.
+    """
+
+    JUSTIFIED = "recalibrate: ed25519_sign measured at 53885 ops/sec on ubuntu-latest"
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout
+
+    def _repo(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "benchmarks").mkdir(parents=True)
+        self._git(repo.parent, "init", "-q", "repo")
+        self._git(repo, "config", "user.email", "t@example.com")
+        self._git(repo, "config", "user.name", "t")
+        return repo
+
+    def _write(self, repo: Path, value: float) -> None:
+        (repo / "benchmarks" / "baseline.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {},
+                    "thresholds": {"regression_threshold_percent": 10},
+                    "benchmarks": {"ed25519_sign": {"description": "d", "baseline_value": value}},
+                    "pqc_benchmarks": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _commit(self, repo: Path, value: float, message: str) -> None:
+        self._write(repo, value)
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", message)
+
+    def _run(self, repo: Path, pr_body: str = "") -> int:
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        base = self._git(repo, "rev-parse", "HEAD~1").strip()
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                pr_body,
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        return proc.returncode
+
+    def test_a_justified_change_passes(self, tmp_path: Path) -> None:
+        """Non-vacuity: without this, every failure below could be the guard
+        having become unable to pass anything at all."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, self.JUSTIFIED)
+        assert self._run(repo) == 0
+
+    def test_an_unjustified_change_fails(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, "wip")
+        assert self._run(repo) == 1
+
+    def test_a_later_commit_cannot_ride_on_an_earlier_justification(self, tmp_path: Path) -> None:
+        """The exact shape the branch exhibited, and what ``any`` got wrong."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, self.JUSTIFIED)
+        self._commit(repo, 26942, "wip")
+        base = self._git(repo, "rev-parse", "HEAD~2").strip()
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                "",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 1, (
+            "the halving commit rode on the earlier recalibration's "
+            "justification; a floor moved again is a new claim"
+        )
+        assert "ed25519_sign" in proc.stderr
+
+    def test_another_commits_message_does_not_justify_this_change(self, tmp_path: Path) -> None:
+        """Justification from a sibling commit is what made the guard vacuous."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        # A commit that says all the right words but moves nothing...
+        (repo / "notes.txt").write_text("x", encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", self.JUSTIFIED)
+        # ...and the commit that actually moves the floor, saying nothing.
+        self._commit(repo, 53885, "wip")
+        base = self._git(repo, "rev-parse", "HEAD~2").strip()
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                "",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 1
+
+    def test_the_pr_body_still_justifies(self, tmp_path: Path) -> None:
+        """The documented escape hatch: a body written for THIS pull request."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, "wip")
+        assert self._run(repo, pr_body=self.JUSTIFIED) == 0
+
+    def test_all_three_requirements_must_share_one_text(self, tmp_path: Path) -> None:
+        """A name here and a number there is not a line-item justification."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, "ed25519_sign was re-measured")  # no number, no runner
+        assert self._run(repo) == 1
+        assert self._run(repo, pr_body="53885 ops/sec on ubuntu-latest") == 1, (
+            "splitting the name from the number and runner across two texts is "
+            "the blend the attributed check exists to refuse"
+        )
+
+    def test_an_unchanged_baseline_still_needs_nothing(self, tmp_path: Path) -> None:
+        """A commit that touches the file without moving a floor is not a claim."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._write(repo, 33000)
+        (repo / "benchmarks" / "baseline.json").write_text(
+            (repo / "benchmarks" / "baseline.json").read_text(encoding="utf-8") + "\n",
+            encoding="utf-8",
+        )
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", "whitespace")
+        assert self._run(repo) == 0
+
+    def test_the_replaced_algorithm_would_have_passed_the_same_history(
+        self, tmp_path: Path
+    ) -> None:
+        """The two algorithms, side by side, on one repository.
+
+        The old one is reproduced here rather than described: concatenate every
+        commit message in ``base..head`` that touched a baseline JSON, then look
+        for a name, a number and a runner token anywhere in the blob.  That is
+        what shipped, and it calls this history justified.  The guard now
+        rejects it.  Without this test the class above would pin the new
+        behaviour without recording what it replaced, and the next person to
+        find the concatenation "simpler" has no evidence in front of them.
+        """
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, self.JUSTIFIED)
+        self._commit(repo, 26942, "wip")
+        base = self._git(repo, "rev-parse", "HEAD~2").strip()
+
+        import benchmarks.check_baseline_justification as guard
+
+        blob = subprocess.run(
+            ["git", "log", f"{base}..HEAD", "--pretty=format:%B", "--", "benchmarks/baseline.json"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        old_verdict = (
+            "ed25519_sign" in blob
+            and bool(guard._MEASUREMENT_RE.search(blob))
+            and any(t in blob.lower() for t in guard._RUNNER_TOKENS)
+        )
+        assert old_verdict, (
+            "the reproduction of the old algorithm no longer accepts this "
+            "history, so the comparison below proves nothing — fix the "
+            "reproduction, not the assertion"
+        )
+
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                "",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 1, (
+            "same history, same repository: the blob scan calls it justified "
+            "and the attributed check must not"
+        )

@@ -185,6 +185,9 @@ def _strip_c_license(lines: list[str]) -> list[str]:
     spacer above them.
     """
     drop: set[int] = set()
+    # Lines that must survive but in rewritten form.  The only case today is a
+    # block opener that was itself a license line (see below).
+    rewrite: dict[int, str] = {}
     i = 0
     while i < len(lines):
         # Only a line whose first token is ``/*`` opens a block.  Testing
@@ -209,6 +212,17 @@ def _strip_c_license(lines: list[str]) -> list[str]:
                     drop.add(j + 1)
             else:
                 drop.update(licensed)
+                # If the block's OPENER is itself a license line, dropping it
+                # deletes the "/*" that opens the comment and every surviving
+                # " * ..." line below becomes code.  That silently produced a
+                # source file which no longer compiles, while this checker went
+                # on reporting it clean -- the corruption was invisible to the
+                # gate that caused it.  Keep the opener, reduced to a bare "/*",
+                # so the block stays a block.
+                if i in drop:
+                    drop.discard(i)
+                    indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                    rewrite[i] = indent + "/*"
                 # Drop the spacer lines that now sit directly under the
                 # opener because the license lines above them are gone.
                 for k, text in content[1:]:
@@ -218,7 +232,7 @@ def _strip_c_license(lines: list[str]) -> list[str]:
                         break
                     drop.add(k)
         i = j + 1
-    return [line for k, line in enumerate(lines) if k not in drop]
+    return [rewrite.get(k, line) for k, line in enumerate(lines) if k not in drop]
 
 
 def strip_license(lines: list[str], style: str) -> list[str]:

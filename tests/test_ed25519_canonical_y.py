@@ -315,3 +315,63 @@ class TestSignatureVerificationIsUnaffected:
             assert int.from_bytes(public_key, "little") & ((1 << 255) - 1) < P
             signature = native_ed25519_sign(MESSAGE, secret_key)
             assert native_ed25519_verify(signature, MESSAGE, public_key) is True
+
+
+class TestXIsZeroWithSignBitSet:
+    """RFC 8032 §5.1.3 step 3: "if x = 0, and x_0 = 1, decoding fails."
+
+    ``x = 0`` has a single square root, so the sign bit distinguishes nothing
+    and the encoding carrying it is a SECOND spelling of a point whose
+    canonical encoding does not.  Neither backend implemented the rule: the
+    fe51 decoder negates conditionally and ``-0 == 0``, so the bit was silently
+    ignored; donna compares parity and skips the negate for the same reason.
+
+    ``x = 0`` exactly when ``y² = 1`` — the numerator of
+    ``x² = (y²-1)/(dy²+1)`` vanishes — i.e. ``y = 1`` (the identity) or
+    ``y = p-1``.  Those two, and only those two, must reject with the bit set.
+
+    Not a forgery route: neither point is a usable verification key.  This is
+    the encoding-uniqueness family of INVARIANT-26/29/38, applied to the
+    coordinate those invariants do not cover.
+    """
+
+    @pytest.mark.parametrize("op", OPS)
+    @pytest.mark.parametrize("y", [1, P - 1], ids=["y=1 (identity)", "y=p-1"])
+    def test_sign_bit_set_is_refused(
+        self, decode: dict[str, Callable[[bytes], bool]], op: str, y: int
+    ) -> None:
+        assert decode[op](_encode(y, sign_bit=1)) is False
+
+    @pytest.mark.parametrize("op", OPS)
+    @pytest.mark.parametrize("y", [1, P - 1], ids=["y=1 (identity)", "y=p-1"])
+    def test_the_canonical_encoding_still_decodes(
+        self, decode: dict[str, Callable[[bytes], bool]], op: str, y: int
+    ) -> None:
+        """The fix must reject the twin, not the point."""
+        assert decode[op](_encode(y, sign_bit=0)) is True
+
+    @pytest.mark.parametrize("op", OPS)
+    def test_ordinary_points_keep_both_sign_bits(
+        self, decode: dict[str, Callable[[bytes], bool]], op: str
+    ) -> None:
+        """Only x = 0 is affected.
+
+        For every other y both sign bits are legitimate — they select the two
+        distinct square roots — so a check that rejected them would break
+        half of all public keys.  2G is a real point on the curve; its
+        y-coordinate is not ±1, so flipping the bit must still decode.
+        """
+        y = int.from_bytes(_TWO_G, "little") & ((1 << 255) - 1)
+        assert decode[op](_encode(y, sign_bit=0)) is True
+        assert decode[op](_encode(y, sign_bit=1)) is True
+
+    def test_real_keys_are_unaffected(self) -> None:
+        """Freshly generated keypairs still sign and verify.
+
+        The guard runs on every public-key decode, so a regression in it would
+        surface here as a wholesale verification failure.
+        """
+        for _ in range(32):
+            public_key, secret_key = native_ed25519_keypair()
+            signature = native_ed25519_sign(MESSAGE, secret_key)
+            assert native_ed25519_verify(signature, MESSAGE, public_key) is True

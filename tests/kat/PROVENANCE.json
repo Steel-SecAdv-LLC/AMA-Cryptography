@@ -1,0 +1,130 @@
+{
+  "files": {
+    "ama_cryptography/_post_kats/ml_dsa_65_kat.json": {
+      "bytes": 19214,
+      "sha256": "035859e9c2a2fbc861aed6c78f8e09d0b322b988f96313fd394a7ec45f0cb391"
+    },
+    "ama_cryptography/_post_kats/ml_kem_1024_kat.json": {
+      "bytes": 13235,
+      "sha256": "4c5a9fe9b2b0072f31293769005c5011cb43578536337d918f60ea7f9ba5db71"
+    },
+    "ama_cryptography/_post_kats/slh_dsa_sha2_256f_kat.json": {
+      "bytes": 101650,
+      "sha256": "a6261cf1f7abcae7c049d475c840c35f276647f3861f91c2449d3ad2aa28f52b"
+    },
+    "ama_cryptography/_post_kats/slh_dsa_shake_128s_sigver.json": {
+      "bytes": 30763,
+      "sha256": "d07f443b7dab059e6f61e5b862ccd46b1fb8595cdb9e3dabff2b899a3d296b3a"
+    },
+    "nist_vectors/AES-256-GCM-SP800-38D.json": {
+      "bytes": 2010,
+      "sha256": "3d0fc923d65f538d2bc7264f73d2d98e6b6fe7fc8424c9eada807370e1d30ce9"
+    },
+    "nist_vectors/SHA-256-FIPS180-4.json": {
+      "bytes": 905,
+      "sha256": "cde92bc3362bb4e2f2c05de00b26c7a4a826cb9dd87be8618c7e78874257dfd2"
+    },
+    "tests/kat/ascon/ascon_aead128.kat": {
+      "bytes": 260253,
+      "sha256": "bbbc34692fe05e5fda0a3b025585622ab3e3747495e5e3655b29aae8c2a4bd33"
+    },
+    "tests/kat/ascon/ascon_hash256.kat": {
+      "bytes": 1141768,
+      "sha256": "b7d6fbc51362f0d62bc7e57b21f3e83242983434a7c92320a4956d915749df17"
+    },
+    "tests/kat/fips203/ml_kem_1024.kat": {
+      "bytes": 1290400,
+      "sha256": "12eb413b3aaf8fc4b972f71a98e30906a21c77b13ac0ca0d972bc524d8f0b27b"
+    },
+    "tests/kat/fips203/ml_kem_512.kat": {
+      "bytes": 570065,
+      "sha256": "ec2798f0c1fc64b4abb2e580bf3f054c95e56de4a70f846deee548e21c7717df"
+    },
+    "tests/kat/fips203/ml_kem_768.kat": {
+      "bytes": 809819,
+      "sha256": "14643a5635592b50c0dc4b81ac93a12fd644d7fd0ec60a23525fe7d3e90977fc"
+    },
+    "tests/kat/fips204/ml_dsa_44.kat": {
+      "bytes": 721954,
+      "sha256": "8d0a940450b7c6f3dbd481a276f6f22b1f4d79a0a7d5e2a5b5491c7ed71cf1ab"
+    },
+    "tests/kat/fips204/ml_dsa_65.kat": {
+      "bytes": 2238625,
+      "sha256": "34286eb745b5f1d5844370f543f6e51a92bd47fcb964cdebbf075c615eb1cbb0"
+    },
+    "tests/kat/fips204/ml_dsa_87.kat": {
+      "bytes": 1228176,
+      "sha256": "abc204125f035427a9d66b95a31ea75689419525fe1c3da3b8564c6c8c3d3bc9"
+    },
+    "tests/kat/fips205/SLH-DSA-SHA2-256f-sigGen-FIPS205.json": {
+      "bytes": 420185,
+      "sha256": "0ba4c6018b8e2b1eb5c96288faddcb9257feeeeee3a72fb3a7b8c8c88f8c55e6"
+    },
+    "tests/kat/fips205/SLH-DSA-SHAKE-128s-sigGen-FIPS205.json": {
+      "bytes": 362660,
+      "sha256": "4cd48b4c2a03c3ae7b461f454b01c73eb0761d6bc3a8b43e125dc3ffa982ee0b"
+    },
+    "tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json": {
+      "bytes": 30731848,
+      "sha256": "a013fc2104f4ed4799d96d51141f65b965969b2cf10646626a021b6d456ce792"
+    },
+    "tests/kat/keyformats/jose_cose.json": {
+      "bytes": 2188,
+      "sha256": "7dd4effbc20a4eb19b9f0ef91fedded9b7abbe956a16e1e8ec04d44b6a651559"
+    },
+    "tests/kat/keyformats/lamps_ml_kem.json": {
+      "bytes": 36520,
+      "sha256": "1be93776b2cdcbd97c9f26383bd9165f7787d21ae3b435dc76c41530684ab98d"
+    },
+    "tests/kat/keyformats/rfc8410_okp.json": {
+      "bytes": 873,
+      "sha256": "aab7df1104411a6c7111d3ccfcd3e33835ebc4ea2b3e27503317a097cac42aa1"
+    },
+    "tests/kat/keyformats/rfc8554_hss_lms.json": {
+      "bytes": 14744,
+      "sha256": "646ffd8f60f2aef07a1084a887bb174cb5e7fffc7f56804de5b7ab7aca1a185e"
+    },
+    "tests/kat/keyformats/rfc9500_ec.json": {
+      "bytes": 1246,
+      "sha256": "7ab7325379ce9e80be0c2aafedd0d04a7a0642ebb260e24601b31a71e9d3f499"
+    },
+    "tests/kat/keyformats/rfc9881_ml_dsa.json": {
+      "bytes": 51878,
+      "sha256": "3f64b4ee3d6ea00952ebb117f3778ae9ba60bb01e846485acf04174daf278da2"
+    },
+    "tests/kat/ml_dsa/dilithium2.rsp": {
+      "bytes": 1938371,
+      "sha256": "9b16411bf7334b323e9959a2d4c10813b9e5123658240c8c54564a9cbfcbff0f"
+    },
+    "tests/kat/ml_dsa/dilithium3.rsp": {
+      "bytes": 2535371,
+      "sha256": "023766a8bd0830e4b1d69a04e1b76697f2a03e2f53d6e127fbccfc55bfb7c1f5"
+    },
+    "tests/kat/ml_dsa/dilithium5.rsp": {
+      "bytes": 3096571,
+      "sha256": "1ee33f50a6faf2d8d98916639a3b9f1bee6c0579d129d57c2ec3720ce95a5b1d"
+    },
+    "tests/kat/ml_kem/kyber1024.rsp": {
+      "bytes": 1281203,
+      "sha256": "89248f2f33f7f4f7051729111f3049c409a933ec904aedadf035f30fa5646cd5"
+    },
+    "tests/kat/ml_kem/kyber512.rsp": {
+      "bytes": 660402,
+      "sha256": "e9c2bd37133fcb40772f81559f14b1f58dccd1c816701be9ba6214d43baf4547"
+    },
+    "tests/kat/ml_kem/kyber768.rsp": {
+      "bytes": 954802,
+      "sha256": "a1e122cad3c24bc51622e4c242d8b8acbcd3f618fee4220400605ca8f9ea02c2"
+    },
+    "tests/kat/rfc6979/ecdsa_prime_curves.kat": {
+      "bytes": 10001,
+      "sha256": "91edd813db0059fb0d906c11006ab7647a542ebf3bdeffd5c48797120098778e"
+    }
+  },
+  "note": "SHA-256 per file. Regenerate with `python tools/check_vector_provenance.py --update` only when a vector is deliberately added or a pin is deliberately advanced; a digest that changed on its own is a corrupted vector, not a stale manifest.",
+  "roots": {
+    "ama_cryptography/_post_kats": "FIPS 140-3 power-on self-test vectors",
+    "nist_vectors": "NIST reference vectors for the classical primitives",
+    "tests/kat": "NIST and Ascon known-answer vectors, as published"
+  }
+}

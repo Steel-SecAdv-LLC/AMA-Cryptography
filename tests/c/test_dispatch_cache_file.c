@@ -43,31 +43,11 @@
 
 #include "ama_dispatch.h"
 
-/* Detect a MemorySanitizer build (clang __has_feature). */
-#if defined(__has_feature)
-#  if __has_feature(memory_sanitizer)
-#    define AMA_TEST_UNDER_MSAN 1
-#  endif
-#endif
-
 #if defined(_MSC_VER)
 int main(void) {
     /* The dispatch cache code path is compiled out under MSVC (no
      * POSIX clock_gettime / open / fdopen). Surface as Skipped. */
     printf("SKIP: dispatch cache is a no-op under MSVC\n");
-    return 77;
-}
-#elif defined(AMA_TEST_UNDER_MSAN)
-int main(void) {
-    /* The MSan lane builds with -DAMA_ENABLE_SIMD=OFF, so the keccak SIMD
-     * bench never runs and keccak_simd_ns legitimately reads 0 — while the
-     * dispatch info can still report a non-generic sha3 slot, tripping this
-     * test's SIMD-active positivity assertion.  The cache-file mode / schema /
-     * timing / path-sanitizer contracts this test pins are uninit-read-free
-     * and are fully exercised under the ASan+UBSan, TSan and regular ctest
-     * lanes (SIMD on).  Skip under MSan rather than assert a SIMD timing the
-     * MSan build deliberately compiles out. */
-    printf("SKIP: keccak SIMD timing contract needs SIMD (disabled in the MSan build)\n");
     return 77;
 }
 #else
@@ -139,15 +119,25 @@ int main(void) {
     }
     /* Fingerprint must include arch + per-slot impl levels + CPU-feature
      * keys (verbatim names from include/ama_dispatch.h v3.2.0).  Any
-     * drift between docs and emitted key names would be caught here. */
+     * drift between docs and emitted key names would be caught here.
+     *
+     * The version prefix moved v1 -> v2 when the verdict record gained
+     * `keccak_fallback_regressed`.  That field decides whether a regressed
+     * top tier falls to the intermediate kernel or to the scalar baseline,
+     * and a v1 file does not carry it — an absent key parses as 0, i.e.
+     * "install the intermediate tier", which is the fail-open the field
+     * exists to close.  Bumping the prefix makes every v1 file miss and
+     * re-bench rather than replay an incomplete verdict, and pinning the
+     * prefix here is what stops a future field being added without one. */
     const char *required_keys[] = {
-        "fingerprint=v1|",
+        "fingerprint=v2|",
         "|sha3=", "|kyber=", "|dilithium=", "|aes_gcm=",
         "|chacha20=", "|argon2=", "|x25519=", "|ed25519=",
         "|sphincs=",
         "|avx2=", "|avx512f=", "|avx512kc=", "|aesni=",
         "|pclmul=", "|vaes=", "|arm_aes=", "|arm_pmull=",
         "keccak_regressed=",
+        "keccak_fallback_regressed=",
         "keccak_x4_regressed=",
         "kyber_ntt_regressed=",
         "kyber_invntt_regressed=",
@@ -155,6 +145,8 @@ int main(void) {
         "dilithium_invntt_regressed=",
         "keccak_simd_ns=",
         "keccak_generic_ns=",
+        "keccak_fallback_ns=",
+        "keccak_fallback_generic_ns=",
         NULL,
     };
     for (const char **p = required_keys; *p; ++p) {
@@ -170,61 +162,93 @@ int main(void) {
         }
     }
 
-    /* Timing fields must be NUMERIC integers so the cache-hit verbose
-     * log reports the cached readings rather than zeros (Copilot
-     * alert #10).  Read-side parse must succeed regardless of host
-     * — but the POSITIVITY contract only holds when the keccak
-     * single-state bench actually ran, which `dispatch_init_internal`
-     * gates on `dispatch_table.keccak_f1600 != ama_keccak_f1600_generic`.
-     * On hosts/builds where keccak stays generic (SIMD disabled, host
-     * CPU lacks AVX2/NEON/SVE2), the bench skips slot 1 entirely and
-     * the field legitimately reads 0 (Copilot review #326).  Branch
-     * the assertion strength on the active dispatch info to keep the
-     * pin tight without spurious failures.
+    /* Timing fields must be NUMERIC integers so the cache-hit verbose log
+     * reports the cached readings rather than zeros (Copilot alert #10), and
+     * every reading must be either a real measurement (> 0) or the explicit
+     * "not measured" sentinel (-1).
+     *
+     * ZERO is the state this pins out, and it is the interesting one: it used
+     * to mean both "the bench never ran" and "the bench ran and the clock
+     * returned nothing", and nothing could tell those apart.  The previous
+     * version of this check branched on `ama_get_dispatch_info()->sha3 !=
+     * AMA_IMPL_GENERIC` to guess which had happened — but that field reports
+     * the dispatch LEVEL, which the BMI1/BMI2 *scalar* Keccak also raises above
+     * GENERIC, while the bench is gated on a SIMD kernel actually being
+     * installed.  On every -DAMA_ENABLE_SIMD=OFF build (the MSan and Valgrind
+     * lanes are both configured that way) the guess was wrong and this test
+     * failed; it was papered over with an `#ifdef AMA_TEST_UNDER_MSAN` skip of
+     * the whole file, which removed the coverage instead of the ambiguity.
+     *
+     * dispatch_init_internal now seeds the timings to -1, so the states are
+     * distinguishable at the source and this test can assert the real
+     * invariant on every host and every build configuration — no branch on
+     * dispatch info, no build-specific skip.
      *
      * `ama_get_dispatch_info()` is safe to call here because
      * `ama_dispatch_init()` already ran above to populate the cache. */
-    const char *timing_line = strstr(body, "keccak_simd_ns=");
-    if (!timing_line) {
-        fprintf(stderr,
-            "FAIL: timing key keccak_simd_ns= not present "
-            "(structurally checked above; this is a programmer "
-            "error if we reach here)\n");
-        (void)unlink(cache_path);
-        return 1;
-    }
-    long long ns_value = -1;
-    if (sscanf(timing_line + strlen("keccak_simd_ns="),
-               "%lld", &ns_value) != 1) {
-        fprintf(stderr,
-            "FAIL: keccak_simd_ns= must parse as an integer, "
-            "got '%.40s' — the cache file is malformed\n",
-            timing_line);
-        (void)unlink(cache_path);
-        return 1;
-    }
-    const ama_dispatch_info_t *info = ama_get_dispatch_info();
-    int simd_keccak_active = info && info->sha3 != AMA_IMPL_GENERIC;
-    if (simd_keccak_active) {
-        if (ns_value <= 0) {
+    static const char *const timing_keys[] = {
+        "keccak_simd_ns=", "keccak_generic_ns=", NULL,
+    };
+    for (const char *const *k = timing_keys; *k; ++k) {
+        const char *timing_line = strstr(body, *k);
+        if (!timing_line) {
             fprintf(stderr,
-                "FAIL: keccak_simd_ns=%lld but dispatch_info.sha3=%d "
-                "(SIMD active); a positive timing is required so the "
-                "cache-hit log reports non-zero readings\n",
-                ns_value, info ? (int)info->sha3 : -1);
+                "FAIL: timing key %s not present "
+                "(structurally checked above; this is a programmer "
+                "error if we reach here)\n", *k);
             (void)unlink(cache_path);
             return 1;
         }
-    } else {
-        if (ns_value != 0) {
+        long long ns_value = 0;
+        if (sscanf(timing_line + strlen(*k), "%lld", &ns_value) != 1) {
             fprintf(stderr,
-                "FAIL: keccak_simd_ns=%lld but dispatch_info.sha3=%d "
-                "(generic); a 0 reading is required when the bench "
-                "didn't run\n",
-                ns_value, info ? (int)info->sha3 : -1);
+                "FAIL: %s must parse as an integer, got '%.40s' — "
+                "the cache file is malformed\n", *k, timing_line);
             (void)unlink(cache_path);
             return 1;
         }
+        if (ns_value == 0) {
+            fprintf(stderr,
+                "FAIL: %s0 — zero is neither a measurement nor the "
+                "not-measured sentinel. A slot that was not benched must "
+                "record -1; a slot that was benched must record a positive "
+                "duration. Zero means a reading was taken and came back "
+                "empty, which the cache-hit log would then report as a real "
+                "timing.\n", *k);
+            (void)unlink(cache_path);
+            return 1;
+        }
+        if (ns_value < -1) {
+            fprintf(stderr,
+                "FAIL: %s%lld — the only admissible negative value is the "
+                "-1 not-measured sentinel\n", *k, ns_value);
+            (void)unlink(cache_path);
+            return 1;
+        }
+    }
+
+    /* Both readings describe the same bench, so they must agree about whether
+     * it ran. One measured and one sentinel would mean the pair was written
+     * from two different states. */
+    long long keccak_simd_ns_reported = 0;
+    {
+        long long simd_ns = 0, generic_ns = 0;
+        (void)sscanf(strstr(body, "keccak_simd_ns=") + strlen("keccak_simd_ns="),
+                     "%lld", &simd_ns);
+        (void)sscanf(strstr(body, "keccak_generic_ns=") + strlen("keccak_generic_ns="),
+                     "%lld", &generic_ns);
+        if ((simd_ns == -1) != (generic_ns == -1)) {
+            fprintf(stderr,
+                "FAIL: keccak_simd_ns=%lld and keccak_generic_ns=%lld "
+                "disagree about whether the bench ran\n",
+                simd_ns, generic_ns);
+            (void)unlink(cache_path);
+            return 1;
+        }
+        keccak_simd_ns_reported = simd_ns;
+        const ama_dispatch_info_t *info = ama_get_dispatch_info();
+        printf("  keccak timings: simd=%lld generic=%lld (dispatch sha3 level=%d)\n",
+               simd_ns, generic_ns, info ? (int)info->sha3 : -1);
     }
 
     /* Setuid-safety contract — passing a setuid binary an env-var
@@ -444,7 +468,7 @@ int main(void) {
            "schema+timings+ownership all pin OK, "
            "keccak_simd_ns=%lld, sanitizer accept+reject contract "
            "pinned across %d input classes + oversized)\n",
-           ns_value, n_cases);
+           keccak_simd_ns_reported, n_cases);
     (void)unlink(cache_path);
     return 0;
 }

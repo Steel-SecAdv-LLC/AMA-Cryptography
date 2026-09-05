@@ -612,7 +612,14 @@ def test_the_reference_encoder_is_independent_of_the_production_one() -> None:
     """
     import ast
 
-    source = (REPO_ROOT / "tests" / "ref_keyformat.py").read_text()
+    # Explicit encoding: ref_keyformat.py contains non-ASCII, and ci.yml's
+    # Windows lanes deliberately do not set PYTHONUTF8 (see the note in that
+    # workflow), so a bare read_text() decodes UTF-8 source through cp1252.
+    # That does not raise — cp1252 maps every byte — it silently yields
+    # mojibake, so this import scan would parse subtly wrong text and still
+    # report success.  Same root cause as the UnicodeDecodeError this commit
+    # fixes in test_conftest_backend_skip_scoping.py, one failure mode quieter.
+    source = (REPO_ROOT / "tests" / "ref_keyformat.py").read_text(encoding="utf-8")
     imported: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -2490,11 +2497,15 @@ def test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one() -> N
     ed_spki = public.to_spki()
     x_spki = kf.PublicKey("X25519", public.key).to_spki()
 
+    assert len(ed_spki) == len(x_spki), "the two SPKIs should be the same length"
     differing = [i for i in range(len(ed_spki)) if ed_spki[i] != x_spki[i]]
-    assert differing == [len(differing) - 1 + differing[0]] or len(differing) == 1, (
-        "the Ed25519 and X25519 SPKI encodings should differ in exactly the OID "
-        f"octet; they differ at {differing}"
+    # Both encodings open with the fixed DER prefix 30 2A 30 05 06 03 2B 65 xx,
+    # so the final OID arc (112 vs 110) sits at index 8.
+    assert differing == [8], (
+        "the Ed25519 and X25519 SPKI encodings should differ in exactly the final "
+        f"OID octet at index 8; they differ at {differing}"
     )
+    assert (ed_spki[8], x_spki[8]) == (0x70, 0x6E)
     assert kf.load_spki(x_spki).algorithm == "X25519"
     assert kf.load_spki(ed_spki).algorithm == "Ed25519"
     assert kf.load_spki(x_spki).key == public.key

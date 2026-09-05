@@ -32,9 +32,24 @@
  * but needed to compile). Backed by AMA's platform CSPRNG. */
 #include "ama_platform_rand.h"
 
+/* donna's ed25519_sign_open_batch() draws its per-signature randomizers
+ * through this hook.  As of the 5.0.0 pre-tag audit (B1), AMA no longer calls
+ * that routine at all: ama_ed25519_batch_verify below is a per-entry loop over
+ * ama_ed25519_verify, so no AMA verify path reaches a randomized aggregate.
+ * The hook remains defined only because ed25519_sign_open_batch is still
+ * compiled from the vendored donna unit and the linker requires the symbol; on
+ * the off chance that routine is ever exercised, a failed CSPRNG draw
+ * aborts the process: the randomizers exist to prevent adversarial signature
+ * cancellation in the aggregate check, and all-zero randomizers would turn a
+ * hypothetically revived batch path into one that accepts forged combinations
+ * — the earlier zero-fill made the failure deterministic but fail-OPEN.
+ * Dead code is held to the same fail-closed bar as live code.  AMA's own
+ * batch verify is a per-entry loop and never draws here. */
 static void
 ed25519_randombytes_unsafe(void *p, size_t len) {
-    ama_randombytes((uint8_t *)p, len);
+    if (ama_randombytes((uint8_t *)p, len) != AMA_SUCCESS) {
+        abort();
+    }
 }
 
 /* Suppress -Wmissing-prototypes for donna's static functions */
@@ -179,7 +194,20 @@ ama_error_t ama_ed25519_verify(
      * form.  The in-tree fe51 backend enforces this inside its own
      * ge25519_frombytes(); applied here so both backends accept exactly the
      * same set of encodings.  donna's sources stay unmodified. */
-    if (!ama_ed25519_point_y_is_canonical(public_key)) {
+    if (!ama_ed25519_point_y_is_canonical(public_key) ||
+        !ama_ed25519_point_x_sign_is_admissible(public_key)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
+    /* RFC 8032 §5.1.7 step 1 applies §5.1.3's decode rules to R as well as to
+     * A.  This path already rejected every non-canonical R, but by accident:
+     * ed25519_sign_open re-encodes [S]B - [h]A with ge25519_pack, which emits
+     * only canonical encodings, so the byte comparison could never match one.
+     * Stating the rule here rather than relying on the encoder's range makes
+     * the two verify paths in this file reject for the same stated reason —
+     * and the batch path below has no such comparison to lean on.  Accepts
+     * exactly what it accepted before; see internal/ama_ed25519_canonical.h. */
+    if (!ama_ed25519_signature_r_is_canonical(signature)) {
         return AMA_ERROR_VERIFY_FAILED;
     }
 
@@ -190,21 +218,17 @@ ama_error_t ama_ed25519_verify(
 }
 
 /* ============================================================================
- * BATCH VERIFICATION — donna Bos-Carter multi-scalar multiplication
+ * BATCH VERIFICATION — per-entry loop over ama_ed25519_verify
  *
- * donna's ed25519_sign_open_batch() uses a binary heap for multi-scalar
- * multiplication (Bos-Carter method), supporting up to 64 signatures per
- * batch for ~2.5x throughput vs sequential verify.
- *
- * donna's API expects separate arrays of pointers:
- *   const unsigned char **m     — messages
- *   size_t              *mlen   — message lengths
- *   const unsigned char **pk    — 32-byte public keys
- *   const unsigned char **RS    — 64-byte signatures (R || S)
- *   size_t               num    — number of entries
- *   int                 *valid  — per-entry result (1=valid, 0=invalid)
- *
- * We convert from AMA's ama_ed25519_batch_entry struct array.
+ * donna ships a Bos-Carter multi-scalar batch verifier
+ * (ed25519_sign_open_batch), but AMA no longer uses it: its randomized
+ * aggregate predicate is not the one single verify decides, so it accepted
+ * canonically encoded small-order residues that single verify rejects (B1,
+ * 5.0.0 pre-tag audit).  This function is now a per-entry loop over
+ * ama_ed25519_verify — byte-for-byte the fe51 backend's implementation in
+ * src/c/ama_ed25519.c — so the two backends cannot disagree on any signature,
+ * and batch verify cannot disagree with single verify.  The trade is donna's
+ * batch throughput, which is the right price for one verdict per signature.
  * ============================================================================ */
 
 ama_error_t ama_ed25519_batch_verify(
@@ -219,92 +243,91 @@ ama_error_t ama_ed25519_batch_verify(
         return AMA_SUCCESS;
     }
 
-    /* SECURITY FIX: Guard against integer overflow in ALL allocation sizes.
-     * Each malloc below uses count * sizeof(...); validate each size so no
-     * allocation can wrap to a smaller-than-expected buffer (audit C-MEM-1). */
+    /* Oversized-count rejection, retained from the allocating path this
+     * function used to have (audit C-MEM-1).  The per-entry loop below no
+     * longer allocates, but the threshold is part of the published argument
+     * contract and MUST NOT differ by backend: fe51 keeps the identical guard
+     * (src/c/ama_ed25519.c), so a caller that gets AMA_ERROR_INVALID_PARAM for
+     * a given `count` from one build gets it from the other. */
     if (count > SIZE_MAX / sizeof(const unsigned char *) ||
         count > SIZE_MAX / sizeof(size_t)) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Allocate pointer arrays for donna's batch verify interface */
-    const unsigned char **msgs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
-    size_t *mlens = (size_t *)malloc(count * sizeof(size_t));
-    const unsigned char **pks = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
-    const unsigned char **sigs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
-
-    if (!msgs || !mlens || !pks || !sigs) {
-        /* Explicit (void *) casts: free() takes `void *` but `msgs` /
-         * `pks` / `sigs` are `const unsigned char **`.  Without the
-         * cast, clang-tidy's bugprone-multi-level-implicit-pointer-conversion
-         * fires (audit Issue 9 fail-closed). */
-        free((void *)msgs);
-        free((void *)mlens);
-        free((void *)pks);
-        free((void *)sigs);
-        return AMA_ERROR_MEMORY;
+    /* Every return past this point leaves `results` fully written, so the
+     * header's "exactly `count` are written" holds on the error paths too.
+     * The per-entry loop below writes every slot, so this pre-zero is
+     * belt-and-braces — but it keeps donna byte-identical to fe51 (which has
+     * the same loop for the same reason) and it fixes the fail direction: a
+     * caller that reuses one buffer across batches, or reads `results` before
+     * checking the return code, sees "everything invalid" rather than stale 1s
+     * from an earlier successful batch, which is the direction a verifier must
+     * fail in.
+     *
+     * AFTER the overflow guard, deliberately: a `count` large enough to wrap
+     * `count * sizeof(...)` in the argument-contract check above cannot describe
+     * a real array, so writing `results[0..count)` would be the very
+     * out-of-bounds write the guard exists to prevent.  The header says so
+     * ("touching `results[0..count)` would be the wild write"), and
+     * tests/c/test_ed25519_canonical_s.c pins that an argument rejection leaves
+     * the caller's array exactly as it was. */
+    for (size_t i = 0; i < count; i++) {
+        results[i] = 0;
     }
 
-    /* Convert ama_ed25519_batch_entry structs to donna's separate arrays */
+    /* Per-entry verification, unconditionally.
+     *
+     * B1 (5.0.0 pre-tag audit).  This path formerly handed the batch to
+     * ed25519-donna-batchverify.h's multi-scalar routine, whose aggregate
+     * predicate -- Sum_i r_i * (S_i*B - h_i*A_i - R_i) is neutral -- is NOT the
+     * predicate ama_ed25519_verify decides.  Single verify is cofactorless: it
+     * re-encodes [S]B - [h]A and compares bytes, demanding S*B - h*A - R == 0
+     * exactly.  A canonically encoded small-order residue in one entry makes
+     * the aggregate vanish with probability ~1/ord over the uniform randomizer
+     * r_i, so batch verify reported VALID -- non-deterministically, at count
+     * >= 4 -- for signatures single verify rejects, with the signer's own key
+     * and no forgery.  The per-entry canonical-R/S/y/x loop this path used to
+     * run AFTER the aggregate screened non-canonical ENCODINGS; it could not
+     * screen a canonically encoded torsion point, which is the real divergence.
+     *
+     * The only way two verifiers of one API cannot disagree on the same 64
+     * bytes is for the batch verifier to BE the single verifier, per entry.
+     * That is what the fe51 backend already does (src/c/ama_ed25519.c) and what
+     * this shim already did for its malformed-entry fallback.  Doing it
+     * unconditionally costs donna's multi-scalar speedup -- the correct trade
+     * against two APIs that disagree -- and needs none of the pointer arrays,
+     * the randomizer draw, or the post-hoc override loops the old path carried.
+     * ama_ed25519_verify applies every pointer guard (NULL signature / public
+     * key / message-with-length), canonicality rule (S, R, y, x-sign) and
+     * return code by construction, so this preserves the single-verify accept
+     * set exactly and makes the two backends byte-identical here.  The
+     * torsion/count-sweep corpus in tools/check_ed25519_backend_parity.py fails
+     * on the old aggregate path and passes on this one. */
+    int all_valid = 1;
     for (size_t i = 0; i < count; i++) {
-        msgs[i] = entries[i].message;
-        mlens[i] = entries[i].message_len;
-        pks[i] = entries[i].public_key;
-        sigs[i] = entries[i].signature;
-    }
-
-    /* donna's batch verify: returns 0 if all valid, nonzero otherwise.
-     * Per-entry results are written to the valid[] array (1=valid, 0=invalid). */
-    int ret = ed25519_sign_open_batch(msgs, mlens, pks, sigs, count, results);
-
-    /* RFC 8032 §5.1.7 canonical-S enforcement, applied per entry.
-     *
-     * This cannot be delegated to the single-signature path: donna's batch
-     * routine calls its own ed25519_sign_open() internally (see
-     * ed25519-donna-batchverify.h), never ama_ed25519_verify(), so the check
-     * added there does not reach here.  Without this loop, batch verification
-     * would accept malleable signatures that single verification rejects —
-     * a difference in accepted-signature sets between two APIs documented to
-     * agree, which is worse than either behaviour on its own.
-     *
-     * Applied after the batch rather than before it so donna's multi-scalar
-     * arithmetic runs over the inputs it was handed; the override below is
-     * what decides the result.  S is public, so no timing property is at
-     * stake in overriding rather than skipping. */
-    /* RFC 8032 §5.1.3 canonical-y enforcement (INVARIANT-38), applied per
-     * entry for exactly the reason spelled out above for canonical S.
-     *
-     * ama_ed25519_verify() gained this check, but donna's batch routine
-     * reaches ge25519_unpack_negative_vartime() through its own internal
-     * ed25519_sign_open(), so nothing added there reaches here.  Leaving it
-     * out would make batch verification accept a public-key encoding that
-     * single verification rejects — and would also split the two Ed25519
-     * backends, since the fe51 batch path (ama_ed25519.c) is a loop over
-     * ama_ed25519_verify() and therefore already enforces it.
-     *
-     * Only the 19 encodings with y in [p, 2^255) are affected, and a
-     * legitimate key can collide with one only if its y is below 19, so this
-     * is an encoding-uniqueness guarantee rather than a reachable forgery.
-     * That is the same standing INVARIANT-38 has on the single-signature
-     * path; the point is that both APIs enforce it, not that either is a
-     * break. */
-    for (size_t i = 0; i < count; i++) {
-        if (!ama_ed25519_signature_s_is_canonical(entries[i].signature) ||
-            !ama_ed25519_point_y_is_canonical(entries[i].public_key)) {
-            results[i] = 0;
-            ret = -1;
+        ama_error_t rc = ama_ed25519_verify(
+            entries[i].signature,
+            entries[i].message,
+            entries[i].message_len,
+            entries[i].public_key
+        );
+        results[i] = (rc == AMA_SUCCESS) ? 1 : 0;
+        if (!results[i]) {
+            all_valid = 0;
         }
     }
+    return all_valid ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+}
 
-    /* Same explicit (void *) casts as the early-error path above —
-     * bugprone-multi-level-implicit-pointer-conversion (audit Issue 9). */
-    free((void *)msgs);
-    free((void *)mlens);
-    free((void *)pks);
-    free((void *)sigs);
-
-    /* Map donna's return: 0 = all valid, nonzero = at least one invalid */
-    return (ret == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+/* Which Ed25519 backend this build selected: "donna" (x86-64 assembly shim) or
+ * "fe51" (the portable in-tree path).  The two are compile-time mutually
+ * exclusive -- CMake swaps the source file on AMA_ED25519_ASSEMBLY -- so each
+ * backend file defines this to name itself and exactly one is linked.  Exists
+ * so tools/check_ed25519_backend_parity.py can REFUSE to run unless the two
+ * objects it was handed actually report different backends: a differential that
+ * compares a library with itself passes vacuously (audit M14). */
+AMA_API const char *ama_ed25519_active_backend(void) {
+    return "donna";
 }
 
 /* ============================================================================
@@ -317,21 +340,29 @@ ama_error_t ama_ed25519_batch_verify(
 
 AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
                                                   const uint8_t scalar[32]) {
-    bignum256modm s;
-    ge25519 ALIGN(16) R;
+    /* Both zero-initialised at declaration, and that is a FIX rather than a
+     * style choice.  This function used to carry the repository's only
+     * clang-tidy next-line suppression comment, silencing three
+     * clang-analyzer uninitialised-read checks: donna fills these through
+     * macros that the analyzer's interprocedural pass does not follow, so it
+     * read `s` and `R` as garbage at the call below.  INVARIANT-13 forbids
+     * suppressions under src/c/ "regardless of justification", and
+     * .clang-tidy's own header says the answer to a false positive is to fix
+     * the code or drop the category, never to silence a site.  Zeroing removes
+     * the analyzer's premise instead of arguing with it, costs two small stack
+     * objects once per call outside every loop, and changes no output:
+     * expand256_modm and ge25519_scalarmult_base_niels overwrite both in
+     * full.  (The suppression token itself is deliberately not spelled here:
+     * clang-tidy matches it anywhere in a comment, so writing it in prose
+     * would re-arm the very suppression this removed.) */
+    bignum256modm s = {0};
+    ge25519 ALIGN(16) R = {0};
     /* BREAKING in 4.0.0: returns ama_error_t so a NULL argument is an error
      * rather than a segfault.  Returning void left no honest fix — an early
      * return would leave `point` uninitialised, which is silent where the
      * crash at least was not.  See include/ama_cryptography.h. */
     if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     expand256_modm(s, scalar, 32);
-    /* NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult,clang-analyzer-core.uninitialized.Assign,clang-analyzer-core.uninitialized.UndefReturn): vendor (ed25519-donna) initialisation pattern.  donna's curve25519-donna-64bit.h
-     * line 85 reads `out[0] = a[0] + fourP0 - b[0]` with `a` filled by
-     * the donna macros above; the analyzer's interprocedural pass
-     * misses the macro write and flags `a[0]` as garbage.  donna is
-     * in src/c/vendor/, gets no project-side modifications, and is
-     * KAT-verified.  INVARIANT-13 justification: vendor false positive,
-     * tracked under audit Issue 9 close-out. */
     ge25519_scalarmult_base_niels(&R, ge25519_niels_base_multiples, s);
     ge25519_pack(point, &R);
     return AMA_SUCCESS;
@@ -350,11 +381,13 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
      * interpreter down with it. */
     if (!result || !p || !q) return AMA_ERROR_INVALID_PARAM;
     /* donna's unpack negates Y; we negate back */
-    if (!ama_ed25519_point_y_is_canonical(p)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(p) ||
+        !ama_ed25519_point_x_sign_is_admissible(p)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, p)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
-    if (!ama_ed25519_point_y_is_canonical(q)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(q) ||
+        !ama_ed25519_point_x_sign_is_admissible(q)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&Q, q)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(Q.x, Q.x);
     curve25519_neg(Q.t, Q.t);
@@ -366,6 +399,38 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     return AMA_SUCCESS;
 }
 
+/* donna's ge25519_double_scalarmult_vartime finishes its ladder with
+ * ge25519_p1p1_to_partial (vendor/ed25519-donna/ed25519-donna-impl-base.h),
+ * which writes x, y and z but NEVER t: the returned point's extended
+ * coordinate holds whatever an intermediate ge25519_p1p1_to_full left
+ * there.  That is harmless upstream, because donna only ever hands the
+ * result to ge25519_pack, which reads x, y and z alone.  It is NOT
+ * harmless here: ama_ed25519_double_scalarmult_public adds two such
+ * results with ge25519_add_p1p1, whose third product is
+ * curve25519_mul(c, p->t, q->t) — with two stale t's the sum is an
+ * arbitrary point and the function still returns AMA_SUCCESS.
+ *
+ * Restore a valid extended representation without an inversion by
+ * scaling the projective point by z:
+ *
+ *     (x : y : z)  ->  (x*z : y*z : z^2 : x*y)
+ *
+ * which denotes the same point and satisfies the extended-coordinate
+ * invariant X*Y == Z*T (both sides equal x*y*z^2).  Cost is three
+ * multiplications and one squaring; the alternative, packing and
+ * unpacking each summand, costs two field inversions. */
+static void ama_ge25519_restore_extended_t(ge25519 *r) {
+    bignum25519 ALIGN(16) xy, xz, yz, zz;
+    curve25519_mul(xy, r->x, r->y);
+    curve25519_mul(xz, r->x, r->z);
+    curve25519_mul(yz, r->y, r->z);
+    curve25519_square(zz, r->z);
+    curve25519_copy(r->x, xz);
+    curve25519_copy(r->y, yz);
+    curve25519_copy(r->z, zz);
+    curve25519_copy(r->t, xy);
+}
+
 /* Renamed from ama_ed25519_scalar_mult (audit finding C7).
  * NOT constant-time — public_scalar MUST be non-secret. */
 AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
@@ -374,7 +439,8 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
     ge25519 ALIGN(16) P, R;
     bignum256modm s1, s2_zero = {0};
     if (!result || !public_scalar || !point) return AMA_ERROR_INVALID_PARAM;
-    if (!ama_ed25519_point_y_is_canonical(point)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(point) ||
+        !ama_ed25519_point_x_sign_is_admissible(point)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
@@ -403,11 +469,13 @@ AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     ge25519_p1p1 ALIGN(16) sum;
 
     if (!result || !s1 || !P1 || !s2 || !P2) return AMA_ERROR_INVALID_PARAM;
-    if (!ama_ed25519_point_y_is_canonical(P1)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(P1) ||
+        !ama_ed25519_point_x_sign_is_admissible(P1)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P1u, P1)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P1u.x, P1u.x);
     curve25519_neg(P1u.t, P1u.t);
-    if (!ama_ed25519_point_y_is_canonical(P2)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(P2) ||
+        !ama_ed25519_point_x_sign_is_admissible(P2)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P2u, P2)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P2u.x, P2u.x);
     curve25519_neg(P2u.t, P2u.t);
@@ -419,6 +487,12 @@ AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
      * with a zero basepoint scalar). */
     ge25519_double_scalarmult_vartime(&R1, &P1u, e1, zero);
     ge25519_double_scalarmult_vartime(&R2, &P2u, e2, zero);
+
+    /* Both results are PARTIAL points — t is stale.  ge25519_add_p1p1
+     * multiplies p->t by q->t, so it must be repaired first; see
+     * ama_ge25519_restore_extended_t above. */
+    ama_ge25519_restore_extended_t(&R1);
+    ama_ge25519_restore_extended_t(&R2);
 
     ge25519_add_p1p1(&sum, &R1, &R2);
     ge25519_p1p1_to_full(&R, &sum);

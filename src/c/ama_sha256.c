@@ -44,7 +44,12 @@ extern int ama_has_arm_sha2(void);
 extern void ama_sha256_compress_x86_shani(uint32_t state[8], const uint8_t block[64]);
 #define AMA_SHA256_HAVE_X86_SHANI 1
 #elif (defined(__aarch64__) || defined(_M_ARM64)) && defined(AMA_HAVE_NEON_IMPL)
-extern void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
+/* Declared by the NEON kernels' own internal header rather than re-typed
+ * here.  This file, src/c/dispatch/ama_dispatch.c and
+ * tests/c/test_sha256_neon_kat.c each carried an independent transcription
+ * of this signature while the definition in src/c/neon/ama_sphincs_neon.c
+ * had no declaration at all. */
+#include "neon/ama_neon_internal.h"
 #define AMA_SHA256_HAVE_ARM_SHA2 1
 #endif
 
@@ -149,6 +154,13 @@ static void sha256_compress_scalar(uint32_t state[8], const uint8_t block[64]) {
     /* Compute intermediate hash (Step 4) */
     state[0] += a; state[1] += b; state[2] += c; state[3] += d;
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+
+    /* W[0..15] is the input block VERBATIM — for an HMAC that is K^ipad or
+     * K^opad, for PBKDF2 it is password-derived — and it outlives the
+     * return in this frame's dead stack otherwise, defeating the k_pad
+     * scrubs the callers perform (INVARIANT-6).  ~256 bytes against a
+     * multi-thousand-cycle compress. */
+    ama_secure_memzero(W, sizeof(W));
 }
 
 /* Runtime-dispatched single-block compression.  The CPU-feature probe is
@@ -254,14 +266,5 @@ void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen) {
     ama_sha256_ctx ctx;
     ama_sha256_init(&ctx);
     ama_sha256_update(&ctx, in, inlen);
-    ama_sha256_final(&ctx, out);
-}
-
-void ama_sha256_2(uint8_t *out, const uint8_t *in1, size_t in1len,
-                   const uint8_t *in2, size_t in2len) {
-    ama_sha256_ctx ctx;
-    ama_sha256_init(&ctx);
-    ama_sha256_update(&ctx, in1, in1len);
-    ama_sha256_update(&ctx, in2, in2len);
     ama_sha256_final(&ctx, out);
 }

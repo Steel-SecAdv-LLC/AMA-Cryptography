@@ -25,17 +25,15 @@ symbols — they are intentionally excluded to prevent name collisions.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 4.0.0
+Version: 5.0.0
 """
 
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import os
-import secrets
 import struct
 import sys
 import threading
@@ -64,6 +62,7 @@ _logger = logging.getLogger(__name__)
 # (e.g. ``monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)``) land
 # in *this* module's namespace.
 # ---------------------------------------------------------------------------
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
@@ -73,6 +72,10 @@ from ama_cryptography.pqc_backends import (
     native_ed25519_sign,
     native_ed25519_verify,
     native_hkdf,
+    native_sha3_256,
+)
+from ama_cryptography.pqc_backends import (
+    native_sha256 as _native_sha256,
 )
 from ama_cryptography.rfc3161_timestamp import (
     TimestampError,
@@ -317,6 +320,13 @@ def canonical_hash_code(
 
     helix_parts = [f"{r:.10f}:{c:.10f}" for r, c in helix_params]
 
+    if hash_version not in (HASH_FORMAT_V1, HASH_FORMAT_V2):
+        # No default branch (INVARIANT-35): an unrecognised version silently
+        # resolved to the V2 encoding below rather than being refused.
+        raise ValueError(
+            f"unknown hash_version {hash_version!r}: expected "
+            f"{HASH_FORMAT_V1!r} or {HASH_FORMAT_V2!r}"
+        )
     if hash_version == HASH_FORMAT_V1:
         encoded = length_prefixed_encode("CODE", codes, "HELIX", *helix_parts)
     else:
@@ -337,7 +347,9 @@ def canonical_hash_code(
             "|".join(invariant_parts),
         )
 
-    return hashlib.sha3_256(encoded).digest()
+    # This module's own SHA3-256 kernel, not OpenSSL-backed hashlib
+    # (INVARIANT-1).
+    return native_sha3_256(encoded)
 
 
 # ============================================================================
@@ -495,10 +507,12 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         # what `CryptoPackage.timestamp_token` stores, so the stored format is
         # unchanged; `verify_token_binding` accepts either shape.
         response, _token = request_timestamp_exchange(
-            hashlib.sha256(data).digest(),
+            _native_sha256(data),
             "sha256",
             tsa_url,
-            nonce=secrets.randbits(64),
+            # INVARIANT-41 health-tested draw; see the note at the other TSA
+            # nonce site in rfc3161_timestamp.py.
+            nonce=int.from_bytes(secure_token_bytes(8), "big"),
             cert_req=True,
         )
         return response
@@ -650,7 +664,7 @@ def create_ethical_hkdf_context(
         ethical_vector = ETHICAL_VECTOR
 
     ethical_json = json.dumps(ethical_vector, sort_keys=True)
-    ethical_hash = hashlib.sha3_256(ethical_json.encode()).digest()
+    ethical_hash = native_sha3_256(ethical_json.encode())
     ethical_signature = ethical_hash[:16]
     enhanced_context = base_context + ethical_signature
 
@@ -686,7 +700,7 @@ def derive_keys(
     if salt is not None:
         hkdf_salt = salt
     else:
-        hkdf_salt = secrets.token_bytes(32)
+        hkdf_salt = secure_token_bytes(32)  # INVARIANT-41 health-tested draw
 
     derived_keys = []
     for i in range(num_keys):
@@ -733,7 +747,8 @@ def generate_key_management_system(
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR.copy()
 
-    master_secret = secrets.token_bytes(32)
+    # INVARIANT-41: the root secret of the KMS — health-tested, gated draw.
+    master_secret = secure_token_bytes(32)
 
     derived_keys, hkdf_salt = derive_keys(
         master_secret, f"OMNI_CODES:{author}", num_keys=3, ethical_vector=ethical_vector
@@ -933,7 +948,7 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     # 3. Compute ethical hash BEFORE signing
     ethical_vector_copy = kms.ethical_vector.copy()
     ethical_json = json.dumps(ethical_vector_copy, sort_keys=True)
-    ethical_hash_bytes = hashlib.sha3_256(ethical_json.encode()).digest()
+    ethical_hash_bytes = native_sha3_256(ethical_json.encode())
     ethical_hash_hex = ethical_hash_bytes.hex()
 
     # 4. Build domain-separated message for hybrid signature binding (v2 format)
@@ -1312,6 +1327,19 @@ def verify_crypto_package(
             monitor.monitor_crypto_operation("hmac_verify", (time.time() - start_time) * 1000)
 
         sig_format = getattr(package, "signature_format_version", SIGNATURE_FORMAT_V1)
+        if sig_format not in (SIGNATURE_FORMAT_V1, SIGNATURE_FORMAT_V2):
+            # No default branch (INVARIANT-35).  signature_format_version is an
+            # unauthenticated package field, and the else-branch below is the
+            # V1 construction — a bare digest with no domain prefix and no
+            # ethical-hash binding.  Any unrecognised spelling ("3.0.0", "2.0",
+            # "") therefore selected the WEAKER of the two, so the
+            # cross-protocol replay that SIGNATURE_DOMAIN_PREFIX exists to
+            # prevent was reachable through infinitely many selector values,
+            # not just the literal "1.0.0".
+            raise ValueError(
+                f"unknown signature_format_version {sig_format!r}: expected "
+                f"{SIGNATURE_FORMAT_V1!r} or {SIGNATURE_FORMAT_V2!r}"
+            )
         if sig_format == SIGNATURE_FORMAT_V2:
             ethical_hash_bytes = bytes.fromhex(package.ethical_hash)
             signature_message = build_signature_message(

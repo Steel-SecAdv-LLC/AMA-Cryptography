@@ -60,14 +60,14 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
 
       - name: Build fuzz targets
         run: |
           cmake -B build-fuzz \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -101,10 +101,20 @@ jobs:
             DICT_ARG="-dict=fuzz/dictionaries/${{ matrix.target }}.dict"
             echo "Using dictionary fuzz/dictionaries/${{ matrix.target }}.dict"
           fi
-          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
+          # The ceiling comes from the harness, not from a number written
+          # here.  libFuzzer never generates a unit longer than -max_len and
+          # TRUNCATES corpus units to it, so a target whose deepest branch
+          # needs more bytes than this can never enter that branch — measured:
+          # fuzz_dilithium's fully-fuzzed ML-DSA verify needs 5,262 bytes and
+          # fuzz_sphincs' two SLH-DSA verify cases need 49,921 and 49,857,
+          # against the 4,096 that used to be hard-coded here.  Those branches
+          # had never executed in any run.
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
+                       --max-len ${{ matrix.target }})"
+          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s (-max_len=$MAX_LEN)..."
           ./build-fuzz/bin/${{ matrix.target }} \
             -max_total_time=${FUZZ_DURATION} \
-            -max_len=4096 \
+            -max_len="$MAX_LEN" \
             ${DICT_ARG} \
             -artifact_prefix=artifacts/${{ matrix.target }}/ \
             corpus/${{ matrix.target }}/
@@ -141,12 +151,28 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-18-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-18-dev
 
       - name: Build one fuzz target (dictionary parser host)
         run: |
+          # -O2 -g with NDEBUG stripped, matching every other fuzz configure
+          # in this file.  This was `Debug` (-O0) on the stated ground that
+          # "Release would append -fomit-frame-pointer after them and cost the
+          # stack traces a crash report is for" — measured false: CMake appends
+          # the target's own flags AFTER CMAKE_C_FLAGS_<CONFIG>, and
+          # fuzz/CMakeLists.txt ends its FUZZ_FLAGS with -fno-omit-frame-pointer,
+          # so the frame pointer survives at every build type (checked in the
+          # emitted flags.make of a Release fuzz configure).  What -O0 did cost
+          # is depth: at 60 s per target, one seed corpus and the same -max_len,
+          # -O2 -g reached 3.0x to 16.7x more executions per target than -O0
+          # (measured per target at both optimisation levels: fuzz_sphincs
+          # 20 -> 116, fuzz_frost 515 -> 5,627, fuzz_dilithium
+          # 1,748 -> 7,167).  NDEBUG is left OUT so assert() stays live exactly
+          # as it was under Debug — the ONLY semantic difference between the two
+          # configurations is the optimisation level.
           cmake -B build-fuzz -DAMA_BUILD_FUZZ=ON \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DAMA_USE_NATIVE_PQC=ON
           cmake --build build-fuzz --target fuzz_sha3 -j$(nproc)
@@ -166,6 +192,29 @@ jobs:
             fi
           done
           exit $rc
+
+      - name: Generated seed corpora must match their generators
+        # Two corpora are produced by a script rather than by hand, so that
+        # what each seed covers is stated and reproducible.  Both scripts have
+        # a --check mode and NEITHER was wired to anything, which makes the
+        # generator and the committed bytes free to drift apart silently —
+        # and a corpus that no longer matches its documented rationale is a
+        # corpus whose rationale is fiction.  This is the step that notices.
+        run: |
+          set -euo pipefail
+          python3 tools/build_ascon_seed_corpus.py --check
+          python3 tools/build_kyber_seed_corpus.py --check
+          python3 tools/build_pqc_verify_seed_corpus.py --check
+
+      - name: Every harness branch must be reachable by its own lane
+        # Registration (check_fuzz_target_registration.py) says a harness
+        # RUNS.  This says its branches can be ENTERED: libFuzzer never
+        # generates a unit longer than -max_len and truncates corpus units to
+        # it, so a guard above that ceiling is a branch no run can reach.
+        # fuzz_dilithium's fully-fuzzed ML-DSA verify and both of
+        # fuzz_sphincs' SLH-DSA verify cases sat above it and had never
+        # executed.
+        run: python3 tools/check_fuzz_input_reachability.py
 
   fuzz-pqc:
     name: Fuzz PQC Primitives (${{ matrix.target }})
@@ -193,14 +242,14 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
 
       - name: Build fuzz targets
         run: |
           cmake -B build-fuzz \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -228,10 +277,20 @@ jobs:
             DICT_ARG="-dict=fuzz/dictionaries/${{ matrix.target }}.dict"
             echo "Using dictionary fuzz/dictionaries/${{ matrix.target }}.dict"
           fi
-          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
+          # The ceiling comes from the harness, not from a number written
+          # here.  libFuzzer never generates a unit longer than -max_len and
+          # TRUNCATES corpus units to it, so a target whose deepest branch
+          # needs more bytes than this can never enter that branch — measured:
+          # fuzz_dilithium's fully-fuzzed ML-DSA verify needs 5,262 bytes and
+          # fuzz_sphincs' two SLH-DSA verify cases need 49,921 and 49,857,
+          # against the 4,096 that used to be hard-coded here.  Those branches
+          # had never executed in any run.
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
+                       --max-len ${{ matrix.target }})"
+          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s (-max_len=$MAX_LEN)..."
           ./build-fuzz/bin/${{ matrix.target }} \
             -max_total_time=${FUZZ_DURATION} \
-            -max_len=4096 \
+            -max_len="$MAX_LEN" \
             ${DICT_ARG} \
             -artifact_prefix=artifacts/${{ matrix.target }}/ \
             corpus/${{ matrix.target }}/
@@ -278,8 +337,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential
+          .github/scripts/apt-install.sh cmake build-essential
 
       - name: Build the native library
         # The parsers call into the native backend for key derivation and the
@@ -290,6 +348,25 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j$(nproc)
+
+      - name: Bind the freshly-built library into the integrity artefact
+        # A library built here is not the library the committed artefact was
+        # signed over, and since 5.0.0 a digest mismatch is refused BEFORE the
+        # object is mapped rather than reported after — so without this step
+        # the harness cannot import the package it is meant to fuzz, and the
+        # job fails on the import rather than on a parser defect.
+        #
+        # Every other job that builds the library and then imports the package
+        # already does this (ci.yml, ci-build-test.yml, integrity-anchor-
+        # check.yml); this one built the library and skipped the step, which
+        # only became visible once the refusal stopped being demotable.
+        #
+        # This is the positive path (a valid signature verifies). Tamper
+        # DETECTION is covered by tests/test_native_integrity.py on a
+        # purpose-built tree, so re-signing here removes no coverage.
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: python -m ama_cryptography.integrity --update --sign
 
       - name: Fuzz the key parsers
         env:
@@ -327,14 +404,14 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
 
       - name: Build with constant-time AES
         run: |
           cmake -B build-fuzz-ct \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -347,9 +424,14 @@ jobs:
         run: |
           mkdir -p corpus/fuzz_aes_gcm_ct
           mkdir -p artifacts/fuzz_aes_gcm_ct
+          # Same derivation as the main lanes — see the comment there.  This
+          # target's deepest branch fits well inside the floor, but a ceiling
+          # written by hand is the defect, not the number it happens to hold.
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
+                       --max-len fuzz_aes_gcm)"
           ./build-fuzz-ct/bin/fuzz_aes_gcm \
             -max_total_time=30 \
-            -max_len=4096 \
+            -max_len="$MAX_LEN" \
             -artifact_prefix=artifacts/fuzz_aes_gcm_ct/ \
             corpus/fuzz_aes_gcm_ct/
 

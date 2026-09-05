@@ -105,6 +105,76 @@ def find_pins(workflows_dir: Path) -> list[Pin]:
     return pins
 
 
+#: Any ``uses:`` reference at all, pinned or not.  ``_PIN_RE`` above matches
+#: only the already-correct form, which is why nothing in this repository ever
+#: enforced INVARIANT-4: the checker verified that SHA pins RESOLVE upstream and
+#: was structurally blind to a reference that carried no SHA.  INVARIANTS.md
+#: states the rule as "All third-party GitHub Actions used in security workflows
+#: **must** be pinned to a full commit SHA, not a mutable tag (`@main`, `@v1`,
+#: etc.)" and ARCHITECTURE.md restates it as enforced.  It was not enforced
+#: anywhere, and ``tests/test_action_pin_checks.py`` recorded the gap in a
+#: comment rather than closing it.
+_USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>\S+)")
+
+#: References exempt from the SHA rule, each with the reason it cannot comply.
+#: A path, not a prefix match, so a different workflow from the same generator
+#: does not inherit the exemption silently.
+_PIN_EXEMPT: dict[str, str] = {
+    "slsa-framework/slsa-github-generator/.github/workflows/"
+    "generator_generic_slsa3.yml": (
+        "upstream REFUSES a SHA reference: the SLSA generator verifies that the "
+        "caller referenced it by a semantic-version tag and fails the build "
+        "otherwise, because the tag is what its own provenance attests. Pinning "
+        "it by SHA would not harden the supply chain, it would break the "
+        "attestation this workflow exists to produce."
+    ),
+}
+
+
+@dataclass(frozen=True)
+class Unpinned:
+    """One ``uses:`` reference that is not pinned to a commit SHA."""
+
+    workflow: str
+    line_no: int
+    ref: str
+
+
+def _workflow_files(workflows_dir: Path) -> list[Path]:
+    return sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml"))
+
+
+def find_unpinned(workflows_dir: Path) -> list[Unpinned]:
+    """Every third-party ``uses:`` reference that is not a 40-hex commit SHA.
+
+    Local references (``./.github/workflows/x.yml``, ``docker://…``) are not
+    third-party actions and carry no upstream ref to pin; entries in
+    :data:`_PIN_EXEMPT` are named individually with the reason.
+    """
+    out: list[Unpinned] = []
+    for path in _workflow_files(workflows_dir):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            m = _USES_RE.match(line)
+            if not m:
+                continue
+            ref = m.group("ref").strip().strip("\"'")
+            if ref.startswith("./") or ref.startswith("docker://"):
+                continue
+            action, _, version = ref.partition("@")
+            if action in _PIN_EXEMPT:
+                continue
+            if re.fullmatch(r"[0-9a-f]{40}", version):
+                continue
+            out.append(Unpinned(workflow=path.name, line_no=i, ref=ref))
+    return out
+
+
 def list_remote_refs(base_repo: str, timeout: int = 60) -> Optional[dict[str, list[str]]]:
     """Return ``{sha: [refs]}`` advertised by ``base_repo``, or None on failure.
 
@@ -153,13 +223,51 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "does not match a tag the pinned SHA actually points at"
         ),
     )
+    parser.add_argument(
+        "--root",
+        default=None,
+        help=(
+            "repository root to scan (default: this file's repository). Present "
+            "so the fail-closed branches can be exercised against a staged tree "
+            "-- without it the empty-pin-set path could only be asserted about, "
+            "not run, and tests/test_action_pin_checks.py was doing exactly "
+            "that. Every other gate in tools/ takes this option."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    repo_root = Path(__file__).resolve().parent.parent
-    pins = find_pins(repo_root / ".github" / "workflows")
+    repo_root = Path(args.root) if args.root else Path(__file__).resolve().parent.parent
+    workflows_dir = repo_root / ".github" / "workflows"
+
+    # INVARIANT-4 itself, checked before anything else: a reference with no SHA
+    # is the violation, and no amount of verifying the OTHER references finds
+    # it.  Reported even under --offline, since it needs no network.
+    unpinned = find_unpinned(workflows_dir)
+    if unpinned:
+        print(f"INVARIANT-4 violation: {len(unpinned)} unpinned action reference(s):")
+        for item in unpinned:
+            print(f"  {item.workflow}:{item.line_no}: {item.ref}")
+        print(
+            "\nEvery third-party Action must be pinned to a full 40-character "
+            "commit SHA. A tag is mutable: whoever controls the upstream "
+            "repository can move it, and the workflow then runs different code "
+            "with no diff in this repository. Add an exemption to _PIN_EXEMPT "
+            "only when upstream makes a SHA reference impossible, with the "
+            "reason written out."
+        )
+        return 1
+
+    pins = find_pins(workflows_dir)
     if not pins:
-        print("No SHA-pinned actions found — nothing to verify.")
-        return 0
+        # Fail closed, like every other gate in tools/.  An empty pin set on
+        # this repository means the collector broke or the workflows moved; it
+        # has never meant "there is nothing to check".
+        print(
+            "FATAL: no SHA-pinned actions found. This repository pins every "
+            "third-party Action, so an empty scan is a checker fault, not a "
+            "clean tree — refusing to pass vacuously."
+        )
+        return 1
 
     # One ls-remote per distinct repository, not per pin.
     ref_cache: dict[str, Optional[dict[str, list[str]]]] = {}

@@ -14,6 +14,24 @@ endmacro()
 # Core tests
 add_ama_test(test_consttime test_consttime.c)
 add_ama_test(test_core test_core.c)
+# Item-10 core-dump hygiene (2026-08 v5 audit): ama_secure_mlock() must leave
+# the kernel's own "dd" (MADV_DONTDUMP) VmFlag on every page of a locked,
+# page-UNALIGNED buffer — madvise(2) EINVALs on unaligned addresses, so a
+# call sequence containing madvise proves nothing by itself.  Linux-only;
+# skips (77) elsewhere or when mlock is impossible (RLIMIT_MEMLOCK).
+add_ama_test(test_secure_memory_dontdump test_secure_memory_dontdump.c)
+set_tests_properties(test_secure_memory_dontdump PROPERTIES SKIP_RETURN_CODE 77)
+# Item-8 post-free scrub (2026-08 v5 audit): heap inspection via
+# /proc/self/mem proving ama_secure_free() leaves no copy of a planted
+# 32-byte sentinel key anywhere in anonymous rw memory.  Its negative mode
+# (plain free, no scrub) PASSES only when the sentinel IS still found: it is
+# registered as a CTest case of its own so every lane proves the inspector
+# can see an unscrubbed secret before the clean run's "not found" counts.
+add_ama_test(test_secure_free_scrub test_secure_free_scrub.c)
+set_tests_properties(test_secure_free_scrub PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME test_secure_free_scrub_negative
+         COMMAND test_secure_free_scrub negative)
+set_tests_properties(test_secure_free_scrub_negative PROPERTIES SKIP_RETURN_CODE 77)
 add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
 # Standalone SHA-512 (FIPS 180-4) byte-exact KAT over the exported
 # ama_ed25519_sha512 one-shot (the shipped FIPS 180-4 SHA-512 core shared by
@@ -56,6 +74,9 @@ foreach(slot
     aes-gcm-neon
     chacha20-neon
     sha3-neon
+    kyber-ntt-neon
+    dilithium-ntt-neon
+    argon2-g-neon
     kyber-sve2
     sha3-sve2)
     add_test(NAME test_dispatch_only_${slot}
@@ -126,6 +147,16 @@ add_test(NAME test_lms COMMAND test_lms
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_ama_test(test_ed25519 test_ed25519.c)
 
+# The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
+# "exactly 32 / 64 readable bytes" — and nothing about alignment, so an
+# unaligned caller buffer is a legal call.  Until this test, every test in the
+# tree handed the library a `uint8_t[32]` local or static, which every compiler
+# in use aligns to at least 8, so donna's `*(uint64_t *)(in + 0)` in
+# curve25519_expand was never given an address that could expose it.  This one
+# walks 16 offsets and asserts both verdicts at each.  See
+# tests/c/test_ed25519_unaligned_input.c.
+add_ama_test(test_ed25519_unaligned_input test_ed25519_unaligned_input.c)
+
 # RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built
 # UNCONDITIONALLY, unlike test_ed25519_verify_equiv below: the fix
 # lands at three sites — ama_ed25519_verify in each backend plus the
@@ -133,6 +164,53 @@ add_ama_test(test_ed25519 test_ed25519.c)
 # test has to run against whichever backend CMake selected, and it
 # drives the batch API as well as the single-verify path.
 add_ama_test(test_ed25519_canonical_s test_ed25519_canonical_s.c)
+# The backend selector is PRIVATE on the library target, so mirror it: this
+# test drives the donna-only AMA_TESTING_MODE allocation-failure hook (the
+# only path on which the fail-closed pre-zeroing of `results` is observable),
+# and the in-tree backend, which allocates nothing, does not define it.
+if(AMA_ED25519_ASSEMBLY)
+    target_compile_definitions(test_ed25519_canonical_s PRIVATE AMA_ED25519_ASSEMBLY)
+endif()
+
+# INVARIANT-38 applied to the signature's R half (RFC 8032 §5.1.7 step 1 ->
+# §5.1.3).  Separate from test_ed25519_canonical_s because it was written for
+# a different site: donna's old batch routine decoded R instead of
+# re-encoding it, so at count >= 4 (its multi-scalar boundary) nothing
+# enforced the R rule there.  B1 (commit 0cd6bb3) deleted that path: both
+# backends' batch verify is now an unconditional per-entry loop over
+# ama_ed25519_verify, whose re-encode comparison rejects a non-canonical R
+# with or without the predicate.  Post-B1 the batch assertions are
+# behavioral SMOKEs on every backend (measured: neutering the predicate on
+# the donna-assembly build fails only the four RANGE unit tests of the
+# predicate itself), and the RANGE block is the predicate's pin — see
+# R_RULE_LABEL in the TU.  An earlier revision of this comment described the
+# pre-B1 aggregate path and claimed the PINs discriminate on donna; that
+# stopped being true when the path was removed.
+add_ama_test(test_ed25519_canonical_r test_ed25519_canonical_r.c)
+# The backend selector is PRIVATE on the library target (see
+# ama_apply_donna_settings in the top-level CMakeLists.txt), so a test TU
+# cannot see it.  This test names the backend it exercised in its banner, and
+# a banner that says fe51 over a donna build is exactly the kind of claim
+# this file exists to stop, so mirror the selection onto the test.
+if(AMA_ED25519_ASSEMBLY)
+    target_compile_definitions(test_ed25519_canonical_r PRIVATE AMA_ED25519_ASSEMBLY)
+endif()
+
+# Public scalar-multiplication contract for ama_ed25519_scalarmult_public and
+# ama_ed25519_double_scalarmult_public.  Built UNCONDITIONALLY: the two
+# defects it pins are one per backend (donna's stale extended-t on the joint
+# routine, fe51's dropped wNAF carry out of bit 255), and the only in-tree
+# byte-identity test that could have caught either — test_ed25519_verify_equiv
+# — is built solely under `if(NOT AMA_ED25519_ASSEMBLY)` and reduces every
+# scalar before comparing.  Uses the public API only, so it discriminates
+# whichever backend CMake selected.
+add_ama_test(test_ed25519_scalarmult_contract test_ed25519_scalarmult_contract.c)
+# Same reason as test_ed25519_canonical_r above: the selector is PRIVATE on
+# the library target, and a banner naming the wrong backend is exactly the
+# kind of claim this file exists to stop.
+if(AMA_ED25519_ASSEMBLY)
+    target_compile_definitions(test_ed25519_scalarmult_contract PRIVATE AMA_ED25519_ASSEMBLY)
+endif()
 
 # test_ed25519_comb_equiv validates the in-tree signed 4-bit window comb
 # (ge25519_scalarmult_base_comb_signed) against the variable-base wNAF
@@ -176,6 +254,26 @@ if(AMA_USE_NATIVE_PQC)
         )
         target_link_libraries(test_x25519_field_equiv ama_cryptography_test)
         add_test(NAME test_x25519_field_equiv COMMAND test_x25519_field_equiv)
+    endif()
+
+    # Field-arithmetic cross-validation: fe51 and fe64 against the ref10
+    # fe25519 path, plus a raw multiply/square benchmark.
+    #
+    # This file has existed since #370 and was referenced by NO build file:
+    # 434 lines of cross-validation that nothing ever compiled, while
+    # ARCHITECTURE.md and docs/METRICS_REPORT.md counted it among the
+    # `test_*.c` files "registered via ctest".  It compiles and its
+    # cross-validation passes (known values, then 10,000 random vectors each
+    # through frombytes/tobytes, mul, sq and add/sub, and 100 through invert),
+    # so the honest repair is to run it rather than to renumber around it.
+    #
+    # Same gate as test_x25519_field_equiv above: the TU includes
+    # src/c/fe64.h unconditionally, and fe64 needs a native 128-bit integer
+    # type (AMA_FE64_AVAILABLE — 64-bit GNU/Clang with __SIZEOF_INT128__).
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"
+       AND CMAKE_SIZEOF_VOID_P EQUAL 8
+       AND NOT MSVC)
+        add_ama_test(test_field_bench test_field_bench.c)
     endif()
 
     # PR D (2026-04) — MULX+ADX kernel vs pure-C fe64 byte-equivalence.
@@ -268,18 +366,60 @@ if(AMA_USE_NATIVE_PQC)
     find_package(Threads REQUIRED)
     target_link_libraries(test_pq_parser_stack Threads::Threads)
 
+    # Something for the ThreadSanitizer lane to observe.  Until this existed,
+    # test_pq_parser_stack was the only C test that created a thread at all,
+    # and it joins on the next statement — so the TSan job instrumented a
+    # single-threaded program and could not report the race class its own
+    # comment names.  This one starts N threads behind a barrier and enters
+    # every lazily-initialised path from all of them at once.  See
+    # tests/c/test_concurrent_init.c for what it caught.
+    add_ama_test(test_concurrent_init test_concurrent_init.c)
+    target_link_libraries(test_concurrent_init Threads::Threads)
+
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)
+    # Exhaustive proof that the division-free Compress_d (the KyberSlash fix)
+    # equals the FIPS 203 definition over all 16,645 (coefficient, width)
+    # pairs, and that it applies its own `mod 2^d`.  Cheap enough to be
+    # unconditional; the argument for the reciprocal multiply otherwise lives
+    # only in a comment.
+    add_ama_test(test_kyber_compress test_kyber_compress.c)
+    # FIPS 203 Algorithm 7 (SampleNTT) squeezes the XOF *until* 256
+    # coefficients are accepted.  The sampler used to stop at a fixed
+    # four-block window and leave the rest of the polynomial at whatever the
+    # caller's storage held.  The shortfall has probability ~1e-39, so the
+    # continuation cannot be reached by searching seeds; this test shrinks the
+    # first window through an AMA_TESTING_MODE switch so it runs on every seed,
+    # and asserts the result is byte-identical to the full-window one.
+    add_ama_test(test_kyber_sample_ntt test_kyber_sample_ntt.c)
     add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
     # Returns 77 (CTest SKIP) when no dispatched CBD2 was exercised
     # (non-AVX2 hosts where the dispatch table leaves kyber_cbd2 NULL
     # by design — generic inline path is exercised elsewhere by
     # test_kat / test_kyber_cpa).
     set_tests_properties(test_kyber_cbd2_equiv PROPERTIES SKIP_RETURN_CODE 77)
+    # The ML-DSA inverse NTT does not reduce the additive half of its
+    # butterfly, so the accumulating coefficient's bound doubles at each of its
+    # 8 levels and the structural worst case is 256x the input bound.  |input|
+    # < q is therefore a real precondition (256q is 0.1% under INT32_MAX), and
+    # it belongs to the CALL SITES rather than to the transform.  Three sites
+    # feed an l-fold accumulator bounded by nothing tighter than l*q and each
+    # reduces first; dropping one leaves every signature verifying and every
+    # KAT passing, changing only the overflow margin.  Unconditional, and
+    # never a SKIP: it reads a counter maintained at the dispatch wrapper, so
+    # it holds for whichever kernel this host runs.
+    add_ama_test(test_dilithium_invntt_bound test_dilithium_invntt_bound.c)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
     set_tests_properties(test_dilithium_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
     add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)
+    # SKIP_RETURN_CODE 77, matching test_dilithium_ntt_equiv directly above.
+    # dispatch_table.dilithium_rej_uniform is assigned only in the AVX2 block
+    # of ama_dispatch.c, so this test's skip branch is permanent on AArch64 —
+    # and without this property its skip (formerly `return 0`) was reported by
+    # CTest as "Passed", certifying ML-DSA rejection sampling on every ARM lane
+    # while executing zero checks.
+    set_tests_properties(test_dilithium_rej_equiv PROPERTIES SKIP_RETURN_CODE 77)
     # 2026-05 — public-API regression for `ama_dilithium_{ntt,invntt}_bench()`.
     # The two new benchmark wrappers route through `dil_{ntt,invntt}_cached`
     # with the dispatch slot bound explicitly. This test pairs the wrapper
@@ -296,6 +436,13 @@ if(AMA_USE_NATIVE_PQC)
     # tag against the AVX2 AES-NI reference, round-trip decrypt
     # correctness, and tag-tamper rejection.
     add_ama_test(test_aes_gcm_vaes_equiv test_aes_gcm_vaes_equiv.c)
+    # SKIP_RETURN_CODE 77, matching test_aes_gcm_neon_equiv below.  This test
+    # has four skip paths (no AES-NI/PCLMULQDQ, NULL dispatch slot, dispatcher
+    # chose the AES-NI reference rather than VAES, and non-AVX2 build); all
+    # four formerly returned 0, so CTest reported "Passed" on every AArch64
+    # lane and on any x86-64 host without VAES — a green AES-GCM equivalence
+    # result from a run that compared nothing.
+    set_tests_properties(test_aes_gcm_vaes_equiv PROPERTIES SKIP_RETURN_CODE 77)
 
     # AArch64-completeness PR (2026-05) — NEON AES-GCM kernel
     # equivalence test.  Pairs the dispatch-resolved NEON AES-GCM
@@ -376,13 +523,13 @@ if(AMA_USE_NATIVE_PQC)
     # slots (SVE2 today; future NEON/AVX2 helpers ride the same
     # multi-lane harness).  Two lanes: dispatched-pointer + direct
     # per-ISA SVE2 symbol.  1024 random polynomials per helper over
-    # the full [-q+1, q-1] coefficient range.  poly_add / poly_sub
-    # use strict byte-identity comparison; poly_reduce uses a
-    # mod-q-tolerant comparator because the production scalar Barrett
-    # and the SVE2 centered Barrett can pick representatives that
-    # differ by an exact multiple of q (both valid; production code
-    # always re-reduces before bit extraction — see the file header
-    # in tests/c/test_kyber_poly_equiv.c for the full rationale).
+    # the full [-q+1, q-1] coefficient range.  All three helpers use
+    # strict byte-identity comparison: every wired kernel computes
+    # the same truncating Barrett as the scalar reference, so the
+    # old mod-q-tolerant comparator for poly_reduce is gone; a
+    # tightened [0, q] range guard on the Barrett output survives
+    # as check_reduce_range() (see the file header in
+    # tests/c/test_kyber_poly_equiv.c for the full rationale).
     # SKIPs with 77 when no SIMD helper is wired AND no direct-symbol
     # lane runs (truly scalar build on a scalar runtime).
     add_executable(test_kyber_poly_equiv test_kyber_poly_equiv.c)
@@ -510,4 +657,23 @@ if(AMA_ENABLE_DUDECT)
     # deterministic, milliseconds.
     add_test(NAME test_dudect_verdict COMMAND test_dudect --self-test)
     message(STATUS "dudect: Empirical constant-time verification tests enabled")
+endif()
+
+# Generic-POSIX /dev/urandom fallback of ama_platform_rand.c, EXECUTED.
+# The fallback compiles only on BSD-class hosts no CI lane runs, which is
+# how a half-landed rewrite of it survived to the 2026-08 audit: reviewed,
+# syntax-checked, never run.  This target compiles that one translation
+# unit with -U__linux__ -U__APPLE__ so the preprocessor takes the #else
+# branch on this host, then draws real bytes through open/read/close.
+# It deliberately does NOT link ama_cryptography_test — the library carries
+# its own platform-selected ama_randombytes, and the point is to run the
+# other one.  The test source #errors if the -U flags are ever dropped.
+# Not built on Windows: the generic branch is POSIX and MSVC has no -U.
+if(NOT WIN32)
+    add_executable(test_platform_rand_generic
+        test_platform_rand_generic.c
+        ${CMAKE_SOURCE_DIR}/src/c/ama_platform_rand.c)
+    target_compile_options(test_platform_rand_generic PRIVATE
+        -U__linux__ -U__APPLE__)
+    add_test(NAME test_platform_rand_generic COMMAND test_platform_rand_generic)
 endif()

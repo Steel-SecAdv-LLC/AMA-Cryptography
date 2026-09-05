@@ -41,6 +41,7 @@ from types import CodeType, ModuleType
 import pytest
 
 from ama_cryptography import _self_test as st
+from tests.conftest import native_library_present
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
@@ -78,6 +79,51 @@ class TestCodeMatches:
         a = compile("def f(x):\n    return x + 1\n", "m.py", "exec")
         b = compile("def f(x):\n    return x + 2\n", "m.py", "exec")
         assert not st._code_matches(a, b)
+
+    @pytest.mark.skipif(
+        not hasattr((lambda: None).__code__, "co_exceptiontable"),
+        reason="co_exceptiontable exists only on Python 3.11+; on 3.10 the same "
+        "information is encoded as instructions inside co_code, which is already compared",
+    )
+    def test_rewritten_exception_table_is_caught(self) -> None:
+        """A deleted ``except`` arm with byte-identical ``co_code``.
+
+        From 3.11, exception handling is a side table mapping instruction
+        ranges to handlers rather than ``SETUP_FINALLY``-style instructions.
+        Blanking that table removes the handler WITHOUT touching one byte of
+        ``co_code`` or one entry of ``co_consts`` — so before this was
+        compared, a poisoned ``.pyc`` could delete any ``try``/``except`` in
+        the package and pass execution integrity.  Applied to the
+        ``except Exception`` arms that turn a failed KAT into a POST failure,
+        the module would stay OPERATIONAL after a failed FIPS 140-3 §4.9.2
+        conditional self-test.
+
+        The assertions below prove the tamper is invisible to every other
+        field, so the test fails if the ``co_exceptiontable`` comparison is
+        removed rather than merely passing for some other reason.
+        """
+        src = (
+            "def f(x):\n"
+            "    try:\n"
+            "        if x:\n"
+            "            raise ValueError('boom')\n"
+            "        return 'no-raise'\n"
+            "    except ValueError:\n"
+            "        return 'handled'\n"
+        )
+        fresh = next(c for c in compile(src, "m.py", "exec").co_consts if isinstance(c, CodeType))
+        # getattr / kwargs-dict rather than direct access: mypy checks against
+        # the 3.10 support floor, where neither the attribute nor the replace()
+        # keyword exists.  The skipif above is the runtime guard.
+        assert getattr(fresh, "co_exceptiontable", b""), "fixture: the handler makes a table"
+        # co_exceptiontable is a 3.11+ only replace() keyword; the skipif above
+        # is the runtime guard, and mypy checks against the 3.10 floor (EXI-001)
+        blank_table: dict[str, bytes] = {"co_exceptiontable": b""}
+        tampered = fresh.replace(**blank_table)  # type: ignore[arg-type]  # 3.10 floor (EXI-001)
+
+        assert fresh.co_code == tampered.co_code, "the tamper must not touch co_code"
+        assert fresh.co_consts == tampered.co_consts, "nor co_consts"
+        assert not st._code_matches(fresh, tampered)
 
     def test_constant_type_swap_is_caught(self) -> None:
         """``1 == 1.0`` and ``1 == True`` in Python, so a bare == would let an
@@ -149,6 +195,62 @@ class TestVerifySourceFileBytecode:
         status, error = st._verify_source_file_bytecode(py)
         assert status == "verified"
         assert error is not None and "unreadable" in error
+
+    def test_timestamp_stale_pyc_is_skipped(self, tmp_path: Path) -> None:
+        """A (mtime,size)-invalid cache is recompiled by the interpreter.
+
+        The same rule the wrong-magic case already applied: bytecode the
+        running interpreter refuses to load is not what executes and is not
+        ours to judge.  Judging it produced a false ``poisoned or stale .pyc``
+        POST failure for the most ordinary state there is — edit a lazily
+        imported module, re-sign, and the next import died on a cache that
+        never ran, in a stage ``AMA_BUILD_PIPELINE=1`` does not repair.
+        """
+        py = _make_module(tmp_path, "stale_ts", "X = 5\n")
+        py_compile.compile(str(py), doraise=True)
+        # Change the size as well as the content: the header records the source
+        # size alongside a whole-second mtime, so a same-size rewrite inside the
+        # same second would still look current.
+        py.write_text("X = 5\nY = 6\nZ = 7\n", encoding="utf-8")
+        assert st._verify_source_file_bytecode(py) == ("skipped", None)
+
+    def test_checked_hash_stale_pyc_is_skipped(self, tmp_path: Path) -> None:
+        """PEP 552 checked-hash caches are validated by the interpreter too."""
+        py = _make_module(tmp_path, "stale_hash", "X = 8\n")
+        py_compile.compile(
+            str(py), doraise=True, invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH
+        )
+        py.write_text("X = 9\n", encoding="utf-8")
+        assert st._verify_source_file_bytecode(py) == ("skipped", None)
+
+    def test_unchecked_hash_pyc_is_still_judged(self, tmp_path: Path) -> None:
+        """An UNCHECKED-hash cache is loaded blindly, so it must still be judged.
+
+        This is the direction that matters for the attack: the interpreter does
+        not validate the recorded hash, so a poisoned body executes.  Skipping
+        every cache whose source moved on would have handed exactly this case a
+        pass.
+        """
+        py = _make_module(tmp_path, "unchecked", "SECRET = 1\n\ndef check():\n    return True\n")
+        py_compile.compile(
+            str(py), doraise=True, invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH
+        )
+        pyc = Path(importlib.util.cache_from_source(str(py)))
+        poisoned = compile("SECRET = 1\n\ndef check():\n    return False\n", str(py), "exec")
+        _poison_pyc_body(pyc, poisoned)
+        status, error = st._verify_source_file_bytecode(py)
+        assert status == "verified"
+        assert error is not None and "poisoned or stale" in error
+
+    def test_truncated_header_is_a_fault(self, tmp_path: Path) -> None:
+        """A cache too short to carry a validation header is a fault, not a skip."""
+        py = _make_module(tmp_path, "truncated", "X = 10\n")
+        py_compile.compile(str(py), doraise=True)
+        pyc = Path(importlib.util.cache_from_source(str(py)))
+        pyc.write_bytes(pyc.read_bytes()[:10])
+        status, error = st._verify_source_file_bytecode(py)
+        assert status == "verified"
+        assert error is not None and "truncated header" in error
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +328,7 @@ def importable_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     if not (PKG_DIR / "_integrity_signature.py").is_file():
         pytest.skip("no signed-integrity artefact in the source tree")
-    if not any(PKG_DIR.glob("libama_cryptography*")):
+    if not native_library_present(PKG_DIR):
         pytest.skip("native library not built in this tree")
 
     root = tmp_path_factory.mktemp("exec_integrity")

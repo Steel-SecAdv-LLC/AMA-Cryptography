@@ -35,10 +35,30 @@ Naming another implementation is not calling it. Curve aliases such as
 crediting where an approach came from is scholarship; the check works on the AST
 so neither trips it.
 
-Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
-non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
-substitute for AMA's own implementations of HMAC, memory zeroing, or core
-cipher operations.
+Python stdlib modules (`os`, `secrets`) are permitted for OS services —
+entropy is the operating system's to provide, not a competing implementation.
+
+**`hashlib` policy (tightened 2026-08):** CPython's `hashlib` is not a neutral
+helper. In every build that links libcrypto its constructors resolve to
+OpenSSL — `hashlib.sha3_256` *is* `_hashlib.openssl_sha3_256` — so a
+production `hashlib` call inside the package is OpenSSL performing an AMA
+cryptographic primitive in-process. An earlier revision of this invariant
+permitted stdlib "hashing" as a non-primitive operation; that parenthetical
+granted what the rule forbids, and roughly fifty call sites accumulated under
+it. All production hashing and key derivation now runs on AMA's own kernels
+(`native_sha256/384/512`, `native_sha3_256/384/512`,
+`native_pbkdf2_hmac_sha256/512`). `hashlib` is confined to the pre-execution
+**trust bootstrap** — the pre-load shared-object digest (which cannot be
+computed by the library not yet loaded), the pre-import binding-extension
+digest gate in `__init__.py` (which hashes each signed compiled extension
+before its module-init code may execute), the signed-integrity source
+digests, the build-time signer, the SHA3-256 KAT cross-check against fixed
+FIPS 202 vectors, and the RuntimeError-guarded test-only HKDF reference —
+pinned file-by-file with exact reference counts by
+`tools/check_stdlib_hash_boundary.py`, so a new use anywhere fails CI.
+
+They **must NOT** be used as a substitute for AMA's own implementations of
+HMAC, memory zeroing, or core cipher operations.
 
 **`hmac` module policy:** `hmac.compare_digest()` is permitted for constant-time
 comparison. `hmac.new()` / `hmac.HMAC()` are not permitted — use AMA's own HMAC
@@ -53,6 +73,44 @@ standard, parameter set, status, and source URL **before** implementation is
 permitted. Algorithms whose governing standard has been deprecated or
 withdrawn must be removed from the library or explicitly documented with a
 migration timeline.
+
+**Enforcement.** `tools/check_algorithm_registry.py`, run in `ci.yml`, at two
+levels.
+
+1. **Families.** DISCOVERED from `include/ama_cryptography.h` — every `AMA_API`
+   prototype contributes its `ama_<family>_` prefix. Each family must carry a
+   mapping to one or more `CSRC_STANDARDS.md` tokens (a tuple where the family
+   spans two publications, as `ama_nistp_*` does: FIPS 186-5 for ECDSA and
+   SP 800-56A rev. 3 for ECDH), and each token must appear in that file's
+   tables.
+2. **Parameter sets.** Also discovered: the enumerators of the header's
+   parameter-set enums (`AMA_ML_DSA_*`, `AMA_ML_KEM_*`, `AMA_SLHDSA_*`,
+   `AMA_NIST_CURVE_*`) and the `ama_hmac_<hash>` prototypes. Each must map to a
+   token that appears in the **Algorithm column** of a row — its own row, not a
+   mention inside another algorithm's prose.
+
+At both levels an identifier the mapping does not know fails, which is the
+"before implementation is permitted" clause expressed as a check. The gate
+fails closed on a collapsed header scan, a header with no parameter sets, or a
+truncated registry, and every direction is pinned by
+`tests/test_algorithm_registry_gate.py`.
+
+The second level exists because the first is too coarse to see what the audit
+found. `ama_hmac_*` maps to FIPS 198-1, which the HMAC-SHA-256 row satisfies,
+so the family read as covered while three further HMAC constructions shipped
+with no row at all; `ama_dilithium_*` maps to ML-DSA-65, which said nothing
+about ML-DSA-44 or ML-DSA-87.
+
+Until 5.0.0 nothing checked this, and the registry did not hold. Run against
+`CSRC_STANDARDS.md` as it stood, the gate reports **18** violations by name:
+FIPS 186-5 and SP 800-56A rev. 3 both uncited and P-256/P-384/P-521 each
+without a row; SP 800-208 uncited for both LMS and HSS; ML-KEM-512, ML-KEM-768,
+ML-DSA-44, ML-DSA-87 and SLH-DSA-SHAKE-128s each without a row; and
+HMAC-SHA-384, HMAC-SHA-512 and HMAC-SHA3-256 the same — in a document whose
+first paragraph says it maps *every* primitive implemented in the library and
+lists no aspirational entries. The same pass that found this had itself added
+five other rows, so the rule was known and still not met, which is what a rule
+with no gate looks like.
 
 ### INVARIANT-1 Addendum — Vendoring Policy
 
@@ -142,7 +200,37 @@ query API.  All `__del__` methods in cryptographic classes must call
 ## INVARIANT-4 — Pinned Action References
 
 All third-party GitHub Actions used in security workflows **must** be pinned
-to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.).
+to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.). A tag is
+mutable: whoever controls the upstream repository can move it, and the workflow
+then runs different code with no diff in this repository.
+
+**Enforcement:** `tools/check_action_pins.py`, run with `--strict` in
+`ci.yml`. It performs two checks:
+
+1. **`find_unpinned()`** — every `uses:` reference whose ref is not a
+   40-character commit SHA is a violation. Local references (`./…`) and
+   `docker://` images are out of scope; anything else needs an entry in
+   `_PIN_EXEMPT` with a written reason.
+2. **`find_pins()` + `list_remote_refs()`** — every SHA pin must still resolve
+   upstream, and under `--strict` its trailing version comment must name a tag
+   the SHA actually carries.
+
+Check 1 did not exist until 5.0.0, and this invariant had **no enforcement
+anywhere** until then. The pin checker matched `uses: <action>@[0-9a-f]{40}`
+and nothing else, so a reference carrying no SHA was structurally invisible to
+it — the rule's only checker could not see its violations, and
+`tests/test_action_pin_checks.py` recorded that in a comment ("Non-detection:
+`@v1` is a different violation") rather than closing it. The gate also exited
+**0** when it found no pins at all; it now fails closed, like every other gate
+in `tools/`.
+
+**The one exemption**, named individually rather than by prefix:
+`slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0`.
+Upstream *refuses* a SHA reference — the generator verifies that its caller
+referenced it by a semantic-version tag and fails the build otherwise, because
+the tag is what its own provenance attests. Pinning it by SHA would not harden
+the supply chain; it would break the attestation that workflow exists to
+produce.
 
 ## INVARIANT-5 — Input Validation at Python/C Boundary
 
@@ -350,15 +438,63 @@ not happened.
 preflight stage before any wheel is built. It checks *shape* — the ref
 resolves, names a tag object rather than a commit, and the object contains an
 OpenPGP, SSH, or X.509 signature block — and states in its own output that it
-does **not** verify the signature, since verification needs a trust store this
-repository deliberately does not ship (publishing an `allowed_signers` file
-would assert a key binding only the account owner can establish). GitHub's
-verified/unverified verdict is the complementary half; it is account-level
+does **not** verify the signature. That is a division of labour rather than a
+gap: preflight's job is the properties that were wrong on all eleven historical
+tags, and it needs no key material, no `ssh-keygen` and no network to do it,
+which is what lets it run first, before anything is built. Verification is a
+separate check with a separate input, and it exists — see the addendum below.
+GitHub's verified/unverified verdict is the third half; it is account-level
 state, so preflight reports it rather than gating on it.
 `tests/test_release_tag_gate.py` supplies the negative controls for each
 rejected shape, including one asserting that a fabricated signature block
 passes — so a future reader cannot mistake this gate's PASS for a
 cryptographic result.
+
+### INVARIANT-10 Addendum — The Trust Store, and a Correction
+
+Until 5.0.0 the paragraph above ended differently. It said verification needs a
+trust store "this repository deliberately does not ship", because "publishing an
+`allowed_signers` file would assert a key binding only the account owner can
+establish".
+
+The reasoning was sound; the conclusion was false when it was written. The
+account owner had already established the binding: the release signing key was
+registered on the account the same day v4.0.0 was tagged, and v4.0.0 — tagged
+twenty-eight minutes after that sentence was committed — is signed with it. What
+got recorded as a property of the project was really the author's inability to
+read account-level state. **An unverifiable claim and a claim that must not be
+published are not the same thing**, and a repository that enforces INVARIANT-37
+against its own APIs is the last place that confusion belongs. The sentence then
+propagated into `tools/check_release_tag.py` and
+`tests/test_release_tag_gate.py`, which is how a reasoned aside becomes a
+project policy nobody re-examines.
+
+**What ships instead.** `.github/allowed_signers` carries the binding, scoped
+`namespaces="git"`. It is a mirror of an owner-established fact, not the
+repository vouching for itself — and on its own it would still be worth exactly
+as much as the repository carrying it, which is why it does not stand on its
+own:
+
+**Enforcement:** `tests/test_release_tag_trust_store.py` verifies the v4.0.0 tag
+object against the published key on every run, with negative controls for a
+substituted key, a substituted principal, a tampered payload and a wrong
+signature namespace. The tag object is embedded in the test rather than read
+through `git`, because `actions/checkout` does not fetch tags at its default
+depth and a check that silently skips on the runners that matter is not a check.
+Ed25519 verification is implemented there in the standard library alone, pinned
+by the RFC 8032 §7.1 known-answer vector; INVARIANT-1's refusal of external
+cryptographic dependencies is a poor thing to honour everywhere except in the
+test that checks the release key. A fingerprint copied from a settings page
+proves nothing. A signature checked against the bytes it covers does.
+
+Consumers verify a release tag with
+
+```bash
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v5.0.0
+```
+
+documented in `README.md` beside the Sigstore and SLSA commands. That check is
+offline: no GitHub account, no network, no trust in this repository's hosting.
 
 ## INVARIANT-11 — SBOM as Release Gate
 
@@ -418,7 +554,15 @@ attacker-observable.
 
 4. **No secret-dependent branching:** Branching, table indexing, loop counts,
    and memory access patterns dependent on secret data are **prohibited** in
-   both C and Python cryptographic paths.
+   both C and Python cryptographic paths, with one carve-out mandated by the
+   standards themselves: **the FIPS 204 (ML-DSA) and FIPS 205 (SLH-DSA)
+   signing loops reject and resample by construction, so their iteration count
+   is secret-dependent.** This is not a defect and not fixable without
+   diverging from the standard; `CONSTANT_TIME_VERIFICATION.md` §"ML-DSA /
+   SLH-DSA signing" documents it, the dudect lane measures it (info-only, with
+   its deterministic counterpart gate), and it leaks no private-key material —
+   only a timing signal on the number of rejections for a given message. Every
+   *other* secret-dependent construct remains prohibited.
 
 **Enforcement:** CI runs constant-time verification checks (dudect, ctgrind,
 custom timing harnesses, static structural scans) and **must** fail on
@@ -431,10 +575,17 @@ verification methodology.
 The nightly SIMD dudect sweep in `.github/workflows/dudect.yml`
 (`dudect-simd-sweep`) **must** measure each dispatch-table-routable
 SIMD slot in isolation via `AMA_DISPATCH_ONLY=<slot>`.  A t-value
-regression on any slot is a hard fail, not a "noise" excuse — the
-per-slot isolation is exactly what makes the t-value attributable
-to a single SIMD kernel rather than to the union of every SIMD
-path that happens to be on the host.
+excursion on any slot is a hard fail — never excused as noise — when it
+meets the adjudication rule in `tests/c/dudect/dudect_rounds.h`: |t| at
+or above `DUDECT_T_THRESHOLD` (5.0) in a strict majority of rounds, with
+a consistently signed per-class difference of at least
+`DUDECT_MIN_EFFECT_NS` (2 ns).  Below that measured floor the lane
+reports `SUB-FLOOR` without failing, because on shared hardware the
+apparatus cannot attribute a sub-2 ns difference to the code (the floor's
+derivation and its limits are documented at the definition).  The
+per-slot isolation is exactly what makes an adjudicable t-value
+attributable to a single SIMD kernel rather than to the union of every
+SIMD path that happens to be on the host.
 
 The slot inventory (also enumerated in `include/ama_dispatch.h` and
 in CHANGELOG `[Unreleased]`) is the authoritative list.  Adding a
@@ -463,9 +614,11 @@ equivalent suppression marker is **prohibited** unless **all three** of the
 following conditions are met:
 
 1. The suppression is **line-scoped**, not file-scoped.
-2. It includes a **human-readable justification** and a **tracking reference**,
+2. It **names the rule it silences** — `# nosec B110`, `# noqa: S310`,
+   `# nosemgrep: <rule_id>` — never the bare marker.
+3. It includes a **human-readable justification** and a **tracking reference**,
    for example: `# nosec B110: __del__ must not raise (FIN-001)`.
-3. The suppressed line is **covered by tests** or a deterministic runtime check.
+4. The suppressed line is **covered by tests** or a deterministic runtime check.
 
 The **only** permitted exception is finalizers and destructors that must not
 raise, provided the reason is explicitly documented inline.
@@ -474,22 +627,65 @@ Suppressions are **absolutely forbidden** in the following locations regardless
 of justification:
 
 - `src/c/` (core cryptographic C primitives)
-- `ama_cryptography/_primitive` (if present)
-- `ama_cryptography/backend` (if present)
 - `include/ama_*.h` (C header files)
 
 **Enforcement:** CI scans the repository for suppression tokens and **must**
 fail if a suppression is missing a justification, missing a tracking ID, or
 appears in a forbidden directory.
 
-**Scope.** `tools/check_suppression_hygiene.py` covers `ama_cryptography/`,
-`tests/` **and `tools/`**. `tools/` was outside it until someone noticed what
-lives there: the gate scripts themselves. A suppression in that tree silences a
-static analyser *inside the layer that enforces this invariant*, which is the
-last place an unexplained one belongs. Widening the scan found two bare
-`# noqa: S310` markers — no reason, no tracking ID — over `urllib` calls in the
-corpus fetchers that accepted `file:` and `ftp:` URLs; both now check the
-scheme, so the suppression states a fact rather than a hope.
+**Scope.** `tools/check_suppression_hygiene.py` runs three passes, because this
+invariant states more than one rule.
+
+*The justified-and-tracked pass* covers `ama_cryptography/`, `tests/` **and
+`tools/`**. `tools/` was outside it until someone noticed what lives there: the
+gate scripts themselves. A suppression in that tree silences a static analyser
+*inside the layer that enforces this invariant*, which is the last place an
+unexplained one belongs. Widening the scan found two bare `# noqa: S310`
+markers — no reason, no tracking ID — over `urllib` calls in the corpus fetchers
+that accepted `file:` and `ftp:` URLs; both now check the scheme, so the
+suppression states a fact rather than a hope.
+
+*The absolutely-forbidden pass* covers every non-vendored `.c` and `.h` under
+`src/c/` and `include/` — the same enumeration the fail-closed clang-tidy job
+performs — and fails on the presence of `NOLINT*`, `cppcheck-suppress`,
+`nosemgrep`, `coverity[` or `LINTED`, with no justification escape hatch,
+because that is what "regardless of justification" means. It fails closed on an
+empty scope: a glob that matches nothing is a checker fault, not a clean tree.
+
+*The portability pass* covers every tracked Python file and fails on a
+`# type: ignore` sitting inside an `except ImportError` whose `try` imports a
+THIRD-PARTY module. Such a marker cannot be correct in both environments this
+project type-checks in: where the optional package is installed, the name bound
+by the `try` carries the module's type and `name = None` in the fallback needs
+the ignore; where it is not — the CI type-check image carries the pinned tools
+and nothing else — the import resolves to `Any` through
+`ignore_missing_imports`, the assignment is fine, and the same marker is an
+error under `warn_unused_ignores`. One file, two verdicts, and the one CI sees
+is the red one. The remedy is never another suppression: declare the name
+before the `try` (`np: Any`) and import under an alias.
+
+The third-party restriction is what makes the pass precise rather than noisy.
+`crypto_api.py` guards `from ama_cryptography.rfc3161_timestamp import …` — an
+in-tree module mypy resolves in every environment — so the three ignores in
+that handler are needed unconditionally and are correctly left alone. Both
+directions are pinned by `tests/test_invariant_upgrades.py`
+::`TestOptionalImportSuppressions`.
+
+Neither the C-tree pass nor the portability pass existed until 5.0.0, and the
+enforcement sentence above was false without the first of them. The checker listed the forbidden directories and had a branch
+that reported on them, but it only ever collected
+`ama_cryptography/**/*.py`, `tests/**/*.py` and `tools/**/*.py`, so no path
+under `src/c/` or `include/` could reach that branch — dead code for all four
+entries, two of which (`ama_cryptography/_primitive`, `ama_cryptography/backend`)
+name directories that do not exist. Meanwhile a live suppression sat in
+`src/c/ed25519_donna_shim.c`: a next-line marker silencing three
+clang-analyzer uninitialised-read checks on donna's macro-driven
+initialisation, while the gate printed "all suppressions are properly justified"
+and exited 0. It is gone — not moved or re-justified, but removed by making the
+analyzer's premise false, zero-initialising the two locals at declaration, after
+which clang-tidy 18 reports the file clean. The tree now carries **zero**
+suppressions under either root, and the gate is the thing that keeps it that
+way.
 
 Widening it also required the scanner to become precise about what a
 suppression *is*. It had been collecting the line numbers carrying a comment
@@ -504,6 +700,26 @@ real, and it is kept in scope explicitly. The set of suppressions policed in
 `ama_cryptography/` and `tests/` is unchanged by this — 96 before and after —
 so the precision gain removed false positives only. Both directions are pinned
 by `tests/test_invariant_upgrades.py::TestSuppressionScanPrecision`.
+
+**Naming the rule (condition 2) is not style.** A bare marker blanket-suppresses
+its whole scanner on that line, and for `# nosec` the failure is worse than
+that: bandit parses everything after the marker as test ids, warns for each word
+it cannot resolve, and treats the resulting *empty* set as "no specific tests" —
+i.e. blanket. So this repository's own justification style, `# nosec -- reason
+(TAG-NNN)`, reads to a reviewer as targeted while silencing every bandit test on
+the line. Measured against bandit 1.9.4 on two files differing only in the
+marker: a `subprocess.call(..., shell=True)` line carrying `# nosec -- prose
+(DEMO-002)` produces no finding, while the same line carrying `# nosec B105` — a
+code that matches nothing there — still reports `B607`. `ruff` treats a bare
+`# noqa` the same way. Both are now required to name a rule, alongside the
+`nosemgrep` rule that already was; `# type: ignore` is deliberately exempt,
+because mypy's file-level form on line 1 is a legitimate bare spelling and
+`--strict`'s `warn_unused_ignores` already reports an ignore that suppresses
+nothing. The tree satisfied the rule before it existed — zero bare markers in
+`ama_cryptography/`, `tests/` and `tools/` — so this keeps the property rather
+than repairing a violation, and
+`TestSuppressionScanPrecision::test_no_marker_in_the_tree_is_written_bare`
+asserts it directly against the tree as well as through the checker.
 
 ## INVARIANT-14 — CVE Ignore-List Hygiene
 
@@ -536,7 +752,14 @@ exactly-once execution with full memory visibility across threads. The
 approved primitives are:
 
 - **POSIX** (Linux, macOS, BSDs): `pthread_once` (IEEE Std 1003.1)
-- **Windows** (MSVC): `InitOnceExecuteOnce` (`synchapi.h`, Vista+)
+- **Windows** (MSVC and MinGW-w64): `InitOnceExecuteOnce` (`synchapi.h`, Vista+)
+
+The selection is made on `_WIN32`, not on `_MSC_VER`: which primitive is
+available is a property of the operating system, not of the compiler.
+`src/c/internal/ama_once.h` and `src/c/dispatch/ama_dispatch.c` both asked
+the compiler until this was corrected, which sent MinGW-w64 — Windows, but
+not MSVC — down the POSIX branch to link `winpthreads` for a facility
+Windows itself supplies.
 
 Lockless flag + plain-variable patterns (e.g., `volatile int done` guarding a
 non-atomic shared variable) are **prohibited** — they constitute data races
@@ -1053,10 +1276,20 @@ returning an all-zero shared secret.
 
 ## INVARIANT-28 — ECDSA Signatures Must Be Low-s and Strictly Encoded
 
-**Statement.** `ama_secp256k1_ecdsa_sign` must emit only the canonical low
+**Statement.** `ama_secp256k1_ecdsa_sign` **and
+`ama_secp256k1_ecdsa_sign_raw`** must emit only the canonical low
 representative (`s <= (n-1)/2`), and `ama_secp256k1_ecdsa_verify` must reject
 a high `s`, an `r` or `s` outside `[1, n-1]`, and any signature that is not
 minimal DER.
+
+Both signing entry points are named because they are one implementation:
+`secp256k1_ecdsa_sign_scalars()` performs the arithmetic, including the
+`sc_cond_negate` low-`s` selection, and the two public functions differ only
+in whether they DER-encode the result or return it as fixed-width `r || s`.
+`tests/c/test_secp256k1.c` decodes the DER form back to (r, s) and compares
+it against `r || s` over 512 keys, so a divergence between them — which is
+the only way one could satisfy this invariant while the other did not —
+fails there.
 
 The high-`s` rejection — and only that — is caller-selectable through
 `ama_secp256k1_ecdsa_verify_ex(..., flags)`: the strict default
@@ -1221,9 +1454,17 @@ property-based injectivity over the encoding.
 `tests/test_agentic_load_adversarial.py` runs the four adversarial scenarios
 (high-concurrency ephemeral load, future-version note simulation,
 lateral-probe simulation, fail-closed under parallel load). The constant-time
-claim is measured by the `Agent binding check` lane in
-`tests/c/test_dudect.c`, which is registered strict (`is_info_only = 0`) and
-therefore fails CI on |t| >= 4.5.
+claim is measured by two instruments. The `Agent binding check` lane in
+`tests/c/test_dudect.c` is registered strict (`is_info_only = 0`), and a
+strict lane fails CI only when |t| >= 5.0 (`DUDECT_T_THRESHOLD`) in a strict
+majority of rounds with a consistently signed per-class difference of at
+least `DUDECT_MIN_EFFECT_NS` (2 ns); below that floor the lane reports
+`SUB-FLOOR` and exits 0 — as this lane did on a shared runner at
+|t| = 41.72 in 3 of 3 rounds with a −1.141 ns difference
+(`tests/c/dudect/dudect_rounds.h`). The blocking instrument for the
+sub-floor range is therefore the deterministic `--target agent-binding`
+gate in `.github/workflows/dudect.yml`, which measures 612,810,230 retired
+instructions byte-identical whether the check accepts or rejects.
 
 `fuzz/fuzz_agent_binding.c` attacks the same invariant from the other
 direction. Where the tests above assert the policy on *chosen* records, the
@@ -1431,9 +1672,9 @@ confirm each is still caught.
 one control**. A curve's default must set both or neither, and any API that
 exposes them must expose both.
 
-- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` emits only the
-  low representative and `ama_secp256k1_ecdsa_verify` rejects the high twin
-  (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
+- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` and
+  `ama_secp256k1_ecdsa_sign_raw` emit only the low representative and
+  `ama_secp256k1_ecdsa_verify` rejects the high twin (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
   third-party X9.62 interop.
 - **P-256 / P-384 / P-521** set neither by default: `ama_nistp_ecdsa_sign`
   emits RFC 6979's `s` verbatim and `ama_nistp_ecdsa_verify` accepts either
@@ -1593,10 +1834,15 @@ derives its list from the modules rather than from a hand-written literal.
 ## INVARIANT-36 — AMA Is Not Measured Against Another Implementation
 
 **Statement.** No other cryptographic implementation's output may serve as an
-answer key for AMA's correctness, and no test or development tool may invoke
-another cryptographic binary. Where a specification publishes no worked example,
-the substitute is a reference derived **from the specification text**, written
-in this repository.
+answer key for AMA's correctness, and no code under `ama_cryptography/`,
+`tests/` or `tools/` — the runtime, correctness and gate surfaces the gate below
+scans — may invoke another cryptographic binary. Where a specification publishes
+no worked example, the substitute is a reference derived **from the specification
+text**, written in this repository. The one recorded exception is `benchmarks/`,
+which deliberately links and drives reference implementations (OpenSSL,
+libsodium, wolfSSL, Botan, Nettle, libgcrypt, mbedTLS) **solely to measure AMA
+against them**; it is on no correctness, runtime or release path, feeds no answer
+key, and is outside the gate's scope by design (see the exception note below).
 
 **Why.** AMA's stated position is that it depends on no other cryptographic
 implementation: the README says "zero external crypto deps", `CMakeLists.txt`
@@ -1656,13 +1902,24 @@ implementers to run — the same category as a specification's worked example, a
 they keep their own provenance gates (INVARIANT-24's sibling machinery in
 `.github/workflows/corpus-provenance.yml`).
 
-**No exceptions are recorded.** One used to be — `ama_cryptography/legacy_compat.py`
-shelling out to `openssl ts` for RFC 3161 timestamping, described here as "a
-shipped interop feature, not a validation path". It is gone: AMA encodes and
-decodes RFC 3161 on its own DER codec, `rfc3161_timestamp.py` no longer imports
-`rfc3161ng` either, and the gate below scans `ama_cryptography/` precisely so
-neither can return. An invariant register that still names a removed exception
-is worse than one that names none, because a reader takes it as current.
+**One exception is recorded: `benchmarks/` (audit M22).** The benchmark harness
+links and drives the reference implementations named in the Statement to measure
+AMA's throughput against them. That is the sole place external cryptographic code
+is invoked anywhere in the tree; it is intentional — the project benchmarks
+*against* these vendors, it does not use them in any operation — it feeds no
+answer key, and it is deliberately outside the gate's scope (the gate scans
+`ama_cryptography/`, `tests/` and `tools/`, not `benchmarks/`). Recording it is
+the point: an absolute "no exceptions" that omits a live one is the converse of
+the failure this register warns against below — as misleading as a named-but-
+removed exception, because a reader takes the register as complete.
+
+A former exception is gone: `ama_cryptography/legacy_compat.py` shelled out to
+`openssl ts` for RFC 3161 timestamping, described here as "a shipped interop
+feature, not a validation path". It is gone: AMA encodes and decodes RFC 3161 on
+its own DER codec, `rfc3161_timestamp.py` no longer imports `rfc3161ng` either,
+and the gate below scans `ama_cryptography/` precisely so neither can return. An
+invariant register that still names a removed exception is worse than one that
+names none, because a reader takes it as current.
 
 **Enforcement.** `tools/check_corpus_originality.py`, run in the
 `security-checks` job of `ci.yml`. Three checks:
@@ -1798,12 +2055,17 @@ not prevent a single one of them.
 The table is read with `ast` rather than by importing the module, so the gate
 runs in a lint job with nothing built.
 
-**Verification.** `tests/test_verification_claim_honesty_gate.py` — 46 tests —
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 71 tests —
 pins both directions: the repository as it stands, plus a reproduction of every
 violation class and, equally, the near-misses that must **not** fire. It also
 pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
 property the design rests on, and `test_ast_parsed_table_equals_the_imported_one`,
-so the gate's reading of the table and everyone else's cannot drift.
+so the gate's reading of the table and everyone else's cannot drift.  The ten
+added last pin the two scoping defects found in the gate itself: the
+formal-verification exemption was tested against the whole SENTENCE, so a
+denial in one clause exempted a live claim in another, and a past-tense
+attribution cue matched any of eight ordinary reporting verbs within eighty
+characters of a `was`.
 
 That suite has already earned its place. An early version of the pattern for
 the phrase this section will not repeat ended `(?:stamp|-stamp|stamping)?\b`,
@@ -1882,8 +2144,8 @@ encodings, which the Ed25519 backend-differential job depends on.
 **Not a constant-time requirement.** The `y` coordinate arrives in a public
 key and is public. The comparison is branch-free regardless.
 
-**Verification.** `tests/c/test_ed25519_canonical_y.c`-style coverage lives in
-`tests/c/test_ed25519_canonical_s.c` alongside the `S < L` cases: the full
+**Verification.** The canonical-`y` coverage lives in
+`tests/c/test_ed25519_canonical_s.c`, alongside the `S < L` cases: the full
 19-value band, the `p-1` / `p` boundary, sign-bit independence in both
 directions, and integration assertions through single and batch verify.
 `tests/test_ed25519_canonical_y.py` drives the policy through the Python
@@ -1932,12 +2194,35 @@ cryptography:
   lifetime — cannot smoke-test a genuinely broken wheel and call it built.
 
 **The error state must inhibit output.** The requirement was met only by
-`crypto_api`, which calls `check_operational()` on its public methods.  All
-eighty public entry points in `pqc_backends` — key generation, signing, KEM
+`crypto_api`, which calls `check_operational()` on its public methods.  Every
+public entry point in `pqc_backends` — key generation, signing, KEM
 encapsulation, AEAD, HMAC, KDF — called straight through to the C library with
 no state check, so a module in `ERROR` kept producing keys and signatures for
 any caller that reached past `crypto_api`, which is what this package's own
 internal modules do.  Each now calls `check_crypto_permitted()` first.
+
+The count is not written down here, because a number in prose is a number that
+goes stale: `tools/check_error_state_gating.py` enumerates the surface from the
+modules' own ASTs and fails when any entry point is ungated, and its output is
+the authoritative figure (94 native entry points across `pqc_backends`, `ascon`,
+`agent_binding` and `secure_memory`, plus 10 Cython binding entry points at the
+time of writing, with 4 documented exemptions, and a discovery step that fails
+if any other module reaches the native library while listed in neither the
+audited nor the exempted set).
+
+The parenthesis above is now checked rather than trusted: it said 85 while the
+tool reported 86, having missed a commit that started tracking a native symbol
+selected by a conditional expression.  `tools/check_documented_counts.py` reads
+the figure from the tool and compares every published occurrence against it, so
+the sentence that calls the tool authoritative is now enforced by the tool.
+
+`ascon` joined the scanned modules once the gate learned to follow one level of
+guard delegation.  Its public entry points call `lib.ama_ascon_*(...)` in their
+own bodies, so the native reach was always visible; the guard was not, because
+it lives in the private `_require_native()` choke point every one of them
+passes through.  The module had been excluded on the stated grounds that "a
+body-level scan cannot see the reach", which was true of `hybrid_combiner` and
+not of this one.
 
 `check_crypto_permitted()` is deliberately weaker than `check_operational()`:
 it permits `SELF_TEST` **on the POST thread only**, because POST's Known Answer
@@ -1977,10 +2262,45 @@ digest to match a tampered `.so` breaks the signature, which cannot be forged.
 Because `_build_sign` can only sign by calling the native `ama_ed25519_sign`, a
 working library is present at signing time by construction, so every signed
 artefact binds it — there is no unsigned-native downgrade path. The one
-non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override, which
-is recorded as *unverified* (a skip, `fully_verified` `False`) rather than
-tampering. Pinned by `tests/test_native_integrity.py`, including the tamper and
+non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override whose
+bytes differ from the signed library's, which is recorded as *unverified* (a
+skip, `fully_verified` `False`) rather than tampering; a byte-identical
+override verifies in full, because verification binds the bytes, not the path.
+Pinned by `tests/test_native_integrity.py`, including the tamper and
 forge-attempt cases and the signer/verifier domain-constant agreement.
+
+**The check runs before the object is mapped, not only after.** A shared
+object executes its constructors at `dlopen` time, so a digest comparison
+performed after load detects tampering the tampered code has already had a
+chance to act on — the "raw discovery" boundary the 2026-08 audit recorded.
+Discovery now hashes every candidate first and refuses to map an object whose
+SHA3-256 does not match the artefact's signed native digest; on Linux the
+mapping goes through `/proc/self/fd` on the descriptor that was hashed, so
+the verified and mapped bytes cannot be split by a path swap, and the POST
+stage compares the recorded digest of those mapped bytes rather than
+re-reading the file. The pre-load comparison uses the artefact before its
+signature can be verified (the verifier is inside the library being loaded),
+so it defeats the `.so`-only attacker outright; the rewrites-both attacker is
+caught post-load by the unforgeable signature or the trust anchor, with the
+constructor residue that entails — that attacker remains the OS-code-signing
+boundary `SECURITY.md` documents. The refusal is demoted to a
+warning only for a process that IS the signer: `_SIGNING_LOAD_OVERRIDE`, a
+module attribute `ama_cryptography._build_sign` sets around its own discovery
+call, or `_process_is_the_integrity_signer()`, which keys on `__main__`'s
+module name and `sys.orig_argv` — `ama_cryptography._build_sign`, or
+`ama_cryptography.integrity` running a WRITING subcommand — and in both cases
+only outside secure-execution mode.
+
+`AMA_BUILD_PIPELINE=1` does NOT demote it, which this paragraph used to say it
+did. The variable is read on every import, so any attacker who could set one
+environment variable in the victim's process would have turned a pre-execution
+refusal into a post-hoc report, with no code execution required. Setting a
+module attribute inside the victim's interpreter is not a capability an
+environment variable confers. Pinned by
+`tests/test_preload_native_digest.py` (including
+`TestSigningScopeRequiresIntentNotJustIdentity`, which drives the flag and a
+signer-module argv together) and the refused-before-mapping tamper case in
+`tests/test_native_integrity.py`.
 
 **CASTs precede the integrity test that relies on them.** FIPS 140-3
 (NIST IG 10.3.A) requires the algorithm self-test for any approved algorithm the
@@ -2127,6 +2447,23 @@ the Ed25519 seed, the BIP32 master seed, the Ascon key and nonce — now
 routes through the §4.9.2 health-tested, error-state-gated CSPRNG draw
 rather than a bare `secrets.token_bytes` / `os.urandom`.
 
+**Scope — the Python API surface, not the bare `.so` (audit M1).** This
+pairwise test, POST (INVARIANT-39) and the error-state output inhibition are
+properties of the `ama_cryptography` **Python package**, which wraps every
+approved operation behind `check_crypto_permitted()` and runs POST at import.
+They are **not** properties of `libama_cryptography.so` linked directly:
+`check_crypto_permitted` appears throughout `pqc_backends.py` and nowhere in
+`src/c/`, and the C library's `ama_ed25519_keypair()` performs no pairwise test
+(C-side PCT exists for ML-KEM only). `tools/check_keygen_pct.py` enforces this
+over `pqc_backends.py`'s AST — the Python surface — alone. A C consumer that
+links the shared object directly — the audience the SONAME, the pkg-config file
+and `Dockerfile.c-api` serve — gets the constant-time primitives but **not**
+POST, the error-state inhibition, or the PCT; those are supplied by the Python
+wrapper. This invariant, and the FIPS-140-3-alignment claims in README and the
+`CSRC_*` documents, are therefore scoped to the Python API surface until the
+controls are either moved into the C boundary or the boundary is formally
+defined as the Python package (INVARIANT-16, honest compliance claims).
+
 The test is deliberately **unconditional**. Gating it behind an environment
 flag would make the default configuration the non-compliant one; validation
 applies to a configuration, not to a runtime toggle. Where a pairwise test's
@@ -2137,11 +2474,30 @@ the module ERROR state, which is reserved for a test that *ran and failed*. A
 failed pairwise test enters ERROR through the shared helpers and inhibits all
 further output (INVARIANT-39).
 
-**Enforcement.** `tests/test_keygen_pct.py` pins the wiring (every keygen
-entry point invokes its helper — a new keygen path that forgets the test
-fails the coverage assertion), both failure directions (a verify that lies →
-`CryptoModuleError` + ERROR state; the ERROR state then refuses further
-keygen), and the positive path on real keypairs for every fast family.
+**Enforcement.** Two halves, and until 5.0.0 only one of them existed.
+
+`tools/check_keygen_pct.py` is the coverage half: it DISCOVERS every keygen
+entry point from `ama_cryptography/pqc_backends.py`'s own AST — 19 today — and
+fails on any that does not reach `pairwise_test_signature` / `_kem` /
+`_agreement`, directly or through one level of delegation. Exemptions must
+name a reason and are checked for staleness. It runs in `ci.yml` and both
+directions are pinned by `tests/test_keygen_pct_gate.py`.
+
+`tests/test_keygen_pct.py` is the behaviour half: both failure directions (a
+verify that lies → `CryptoModuleError` + ERROR state; the ERROR state then
+refuses further keygen) and the positive path on real keypairs for every fast
+family.
+
+This paragraph used to credit the second file with the first file's job — "a
+new keygen path that forgets the test fails the coverage assertion". It does
+not, and could not: that test monkeypatches the three helpers into recorders,
+calls a hand-written list of thirteen entry points, builds its `expected` list
+alongside, and asserts the two match. A fourteenth keygen that omits its
+pairwise test is never called by it, so both lists are unchanged and it passes.
+Measured: an unwired `native_widget_keypair()` appended to `pqc_backends.py`
+left that test at 17 passed / exit 0 while the new gate named the violation
+and exited 1. This is the same gap INVARIANT-39 had before
+`tools/check_error_state_gating.py`, closed the same way.
 
 **Measured cost.** Sub-millisecond for every family except the hash-based
 signatures: ~220 ms for SPHINCS+-SHA2-256f, ~1.0 s for SLH-DSA-SHAKE-128s —
@@ -2160,8 +2516,12 @@ does carry is the contract the library was compiled from.
 
 **Two halves, static and runtime.** `tools/check_ctypes_abi.py` parses every
 `AMA_API` prototype out of the C headers and every `argtypes`/`restype`
-assignment out of the Python sources (`pqc_backends`, `ascon`,
-`agent_binding`, `secure_memory` — 124 symbols), and requires agreement on
+assignment out of every package module that declares one — the scope is
+DISCOVERED from the package's ASTs rather than enumerated, with
+`REQUIRED_MODULES` as a seven-module floor beneath it (`pqc_backends`,
+`ascon`, `agent_binding`, `secure_memory`, `hybrid_combiner`, `_build_sign`,
+`_self_test`; 136 symbols against 177 header prototypes today) — and requires
+agreement on
 arity and on a coarse class per position (pointer-like vs. integer-like,
 pointer/integer/void for returns) — the classes that decide call-frame
 layout. Coverage is closed in both directions: a symbol called without a
@@ -2185,7 +2545,39 @@ against a fake library object reporting a foreign version.
 **Measured cost.** The static gate is CI-only. The handshake is one call
 returning three compile-time constants, once per import.
 
+## INVARIANT-43 — Every Logged Literal Must Survive a cp1252 Handler
+
+`logging` fails closed and silent: when a handler cannot encode a record's
+text, the encode raises inside `Handler.emit`, `logging` routes it to
+`Handler.handleError`, prints a traceback to stderr, and **discards the
+record** — the call site is told nothing. `logging.FileHandler` opens with
+`encoding=None`, which resolves to the platform's preferred encoding —
+cp1252 on a default Windows install. The 2026-08 audit found
+`adaptive_posture` logging both the posture-triggered key rotation and the
+algorithm switch with a `→` (U+2192) between the old and new identifiers,
+so on Windows the two records stating that a signing key had changed were
+exactly the two records a file handler dropped. An audit trail that
+silently loses its key-rotation entries is worse than one never claimed:
+the absence is indistinguishable from "no rotation happened".
+
+**The rule is cp1252-encodable, not ASCII.** `—` and `§` encode in cp1252
+and appear, correctly, in over a thousand POST and diagnostic strings;
+cp1252 is precisely the line at which a record stops being written, so it
+is the line this invariant draws. Only literal text is checked —
+interpolated values are runtime data and cannot be decided statically.
+
+**Enforcement.** `tools/check_log_message_encodability.py` walks every
+module's AST for logger and `warnings.warn` emission sites — bound-name
+loggers, `self.logger`, and the inline
+`logging.getLogger(__name__).<level>(...)` idiom alike — and fails on any
+literal a cp1252 handler would refuse. It runs in ci.yml's Security Checks
+job; both directions, including the inline idiom the first version of the
+gate could not see, are pinned by
+`tests/test_log_message_encodability_gate.py`.
+
+**Measured cost.** CI-only; one AST pass over the shipped package.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-08-13_
+_Last updated: 2026-08-17_

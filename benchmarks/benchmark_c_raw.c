@@ -40,6 +40,57 @@
 #include "ama_dispatch.h"
 
 /* ============================================================================
+ * FAIL-CLOSED CONTRACT
+ *
+ * Every AMA entry point this harness calls returns ama_error_t, and every one
+ * of those returns used to be discarded.  Two consequences, both of which
+ * reach published numbers — README.md and wiki/Performance-Benchmarks.md quote
+ * `build/bin/benchmark_c_raw --json`, and tools/generate_visuals.py anchors a
+ * chart panel on it:
+ *
+ *   1. A failed setup call leaves the buffer it was asked to fill
+ *      INDETERMINATE, and the harness reads it anyway.  gcc 13 at -O2 with
+ *      _FORTIFY_SOURCE=2 diagnosed exactly that in bench_x25519_dh_batch
+ *      ("'pk_k' may be used uninitialized"); the same shape was present at
+ *      every other keygen/sign setup site in the file.
+ *   2. A primitive that fails IMMEDIATELY is timed as if it were fast, so the
+ *      failure mode of a broken build is an inflated ops/sec, not a visible
+ *      error.  A harness whose numbers get better the more broken the library
+ *      is cannot serve as evidence.
+ *
+ * bench_require() ends the run at the first failure with the call, the code
+ * and the source location, and exits non-zero so a runner notices.  Inside the
+ * timed loops the check is evaluated AFTER the closing now_ns(), so it is
+ * outside every measurement window and cannot perturb a sample.
+ * ============================================================================ */
+
+static void bench_require(ama_error_t rc, const char *what,
+                          const char *file, int line) {
+    if (rc == AMA_SUCCESS) {
+        return;
+    }
+    fflush(stdout);
+    fprintf(stderr,
+            "benchmark_c_raw: %s returned %d at %s:%d — refusing to report "
+            "timings for an operation that did not complete.\n",
+            what, (int)rc, file, line);
+    exit(EXIT_FAILURE);
+}
+
+/* Fatal setup failure that is not an ama_error_t (allocation, key setup). */
+static void bench_fatal(const char *what, const char *file, int line) {
+    fflush(stdout);
+    fprintf(stderr, "benchmark_c_raw: %s at %s:%d — refusing to publish a row "
+                    "the harness could not measure.\n",
+            what, file, line);
+    exit(EXIT_FAILURE);
+}
+
+#define BENCH_REQUIRE(call) bench_require((call), #call, __FILE__, __LINE__)
+#define BENCH_CHECK(rc, what) bench_require((rc), (what), __FILE__, __LINE__)
+#define BENCH_FATAL(what) bench_fatal((what), __FILE__, __LINE__)
+
+/* ============================================================================
  * TIMING HELPERS
  * ============================================================================ */
 
@@ -53,8 +104,26 @@ static double now_ns(void) {
  * STATISTICS
  * ============================================================================ */
 
+/* Row label storage.
+ *
+ * `name` is an in-struct array rather than a `const char *` on purpose.  The
+ * pointer form forced every parameterised benchmark to park its label in a
+ * function-local `static char labels[N][64]` rotated modulo N, because the
+ * struct outlives the function that built the string.  Five such caches
+ * existed with three different depths (8, 4, 2), each one silently correct
+ * only while the number of call sites stayed below its own N — adding a fifth
+ * AES-GCM size, say, would have made two rows share one label with nothing to
+ * catch it.  Copying the label into the row removes the aliasing hazard by
+ * construction, removes the statics, and removes the `strncpy(dst, src, 63)`
+ * idiom that drew -Wstringop-truncation at -O2 in seven places.
+ *
+ * 64 bytes holds every label the harness produces (longest today:
+ * "ML-KEM-1024 poly_reduce (dispatch)", 34 chars); compute_stats() copies with
+ * snprintf, so an over-long future label truncates instead of overrunning. */
+#define BENCH_NAME_MAX 64
+
 typedef struct {
-    const char *name;
+    char name[BENCH_NAME_MAX];
     double mean_ns;
     double median_ns;
     double stddev_ns;
@@ -73,7 +142,10 @@ static int cmp_double(const void *a, const void *b) {
 static bench_result_t compute_stats(const char *name, double *samples, int n) {
     bench_result_t r;
     memset(&r, 0, sizeof(r));
-    r.name = name;
+    /* snprintf, not strncpy: bounded, always NUL-terminated, and it does not
+     * draw -Wstringop-truncation the way strncpy(dst, src, sizeof(dst) - 1)
+     * does at -O2. */
+    snprintf(r.name, sizeof(r.name), "%s", (name != NULL) ? name : "(unnamed)");
     r.iterations = n;
 
     if (n == 0) return r;
@@ -135,6 +207,40 @@ static void fill_random(uint8_t *buf, size_t len) {
 
 static double g_samples[MAX_SAMPLES];
 
+/* Iteration tiers.
+ *
+ * Declared here as enum constants rather than as `const int` locals in main()
+ * so the relationship every timed loop depends on — `iters <= MAX_SAMPLES`,
+ * because each loop writes g_samples[i] for i in [0, iters) — is checked by
+ * the compiler instead of by inspection.  A `const int` is not a constant
+ * expression in C, so it cannot carry a _Static_assert; raising a tier past
+ * MAX_SAMPLES would have overrun a file-scope array silently. */
+enum {
+    BENCH_WARMUP     = 50,
+    ITERS_FAST       = 5000,  /* < 1 us ops */
+    ITERS_MED        = 1000,  /* 1-100 us ops */
+    ITERS_SLOW       = 200,   /* 100 us+ ops */
+    ITERS_VSLOW      = 50,    /* 1 ms+ ops */
+    /* SLH-DSA-SHAKE-128s sign is ~1.25 s / op on a modern x86-64 core — three
+     * to four orders of magnitude beyond ITERS_VSLOW's intended 1 ms+ band.
+     * A dedicated, much smaller count keeps the sign row proportionate to
+     * the harness's measured ~109 s total (2026-08-30, 4-core x86-64
+     * sandbox), against which benchmarks/comparative_benchmark.py now sets
+     * its 600 s ceiling — the previous 60 s ceiling predated the SLH-DSA
+     * rows and expired on every run.  At 5 iters the sign row is ~6 s, and
+     * the harness emits min / median / max / stddev so a 5-sample median
+     * still surfaces a gross regression even if it is not statistically
+     * tight. */
+    ITERS_SLH_SIGN   = 5       /* seconds-scale ops (SLH-DSA Sign only) */
+};
+
+_Static_assert(ITERS_FAST <= MAX_SAMPLES, "ITERS_FAST overruns g_samples");
+_Static_assert(ITERS_MED <= MAX_SAMPLES, "ITERS_MED overruns g_samples");
+_Static_assert(ITERS_SLOW <= MAX_SAMPLES, "ITERS_SLOW overruns g_samples");
+_Static_assert(ITERS_VSLOW <= MAX_SAMPLES, "ITERS_VSLOW overruns g_samples");
+_Static_assert(ITERS_SLH_SIGN <= MAX_SAMPLES,
+               "ITERS_SLH_SIGN overruns g_samples");
+
 /* ============================================================================
  * INDIVIDUAL BENCHMARKS
  * ============================================================================ */
@@ -143,28 +249,30 @@ static double g_samples[MAX_SAMPLES];
 static bench_result_t bench_x25519_keygen(int iters, int warmup) {
     uint8_t pk[32], sk[32];
     for (int i = 0; i < warmup; i++)
-        ama_x25519_keypair(pk, sk);
+        BENCH_REQUIRE(ama_x25519_keypair(pk, sk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_x25519_keypair(pk, sk);
+        ama_error_t rc = ama_x25519_keypair(pk, sk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_x25519_keypair");
     }
     return compute_stats("X25519 KeyGen", g_samples, iters);
 }
 
 static bench_result_t bench_x25519_dh(int iters, int warmup) {
     uint8_t pk_a[32], sk_a[32], pk_b[32], sk_b[32], shared[32];
-    ama_x25519_keypair(pk_a, sk_a);
-    ama_x25519_keypair(pk_b, sk_b);
+    BENCH_REQUIRE(ama_x25519_keypair(pk_a, sk_a));
+    BENCH_REQUIRE(ama_x25519_keypair(pk_b, sk_b));
 
     for (int i = 0; i < warmup; i++)
-        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        BENCH_REQUIRE(ama_x25519_key_exchange(shared, sk_a, pk_b));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        ama_error_t rc = ama_x25519_key_exchange(shared, sk_a, pk_b);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_x25519_key_exchange");
     }
     return compute_stats("X25519 DH Exchange", g_samples, iters);
 }
@@ -176,41 +284,40 @@ static bench_result_t bench_x25519_dh(int iters, int warmup) {
  * resumption clusters, mass key-derivation pipelines). */
 static bench_result_t bench_x25519_dh_batch(size_t batch_n, int iters, int warmup) {
     uint8_t pk_a[32], sk_a[32];
-    ama_x25519_keypair(pk_a, sk_a);
+    BENCH_REQUIRE(ama_x25519_keypair(pk_a, sk_a));
 
     uint8_t (*scs)[32]   = (uint8_t (*)[32])malloc(batch_n * 32);
     uint8_t (*pts)[32]   = (uint8_t (*)[32])malloc(batch_n * 32);
     uint8_t (*outs)[32]  = (uint8_t (*)[32])malloc(batch_n * 32);
     if (!scs || !pts || !outs) {
         free(scs); free(pts); free(outs);
-        bench_result_t r = {0}; r.name = "(alloc failed)"; return r;
+        BENCH_FATAL("allocation failed");
     }
     for (size_t k = 0; k < batch_n; k++) {
         uint8_t pk_k[32], sk_k[32];
-        ama_x25519_keypair(pk_k, sk_k);
+        BENCH_REQUIRE(ama_x25519_keypair(pk_k, sk_k));
         memcpy(scs[k], sk_a, 32);
         memcpy(pts[k], pk_k, 32);
     }
 
     for (int i = 0; i < warmup; i++)
-        ama_x25519_scalarmult_batch(outs,
-                                     (const uint8_t (*)[32])scs,
-                                     (const uint8_t (*)[32])pts,
-                                     batch_n);
+        BENCH_REQUIRE(ama_x25519_scalarmult_batch(outs,
+                                                  (const uint8_t (*)[32])scs,
+                                                  (const uint8_t (*)[32])pts,
+                                                  batch_n));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_x25519_scalarmult_batch(outs,
-                                     (const uint8_t (*)[32])scs,
-                                     (const uint8_t (*)[32])pts,
-                                     batch_n);
+        ama_error_t rc = ama_x25519_scalarmult_batch(outs,
+                                                     (const uint8_t (*)[32])scs,
+                                                     (const uint8_t (*)[32])pts,
+                                                     batch_n);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_x25519_scalarmult_batch");
     }
 
-    static char name_buf[8][64];  /* small static cache so labels live for the report */
-    static int  name_idx = 0;
-    char *name = name_buf[name_idx++ & 7];
-    snprintf(name, 64, "X25519 DH Batch×%zu", batch_n);
+    char name[BENCH_NAME_MAX];
+    snprintf(name, sizeof(name), "X25519 DH Batch×%zu", batch_n);
 
     free(scs); free(pts); free(outs);
     return compute_stats(name, g_samples, iters);
@@ -224,30 +331,25 @@ static bench_result_t bench_aes_gcm_encrypt(size_t data_size, int iters, int war
 
     uint8_t *pt = (uint8_t *)malloc(data_size);
     uint8_t *ct = (uint8_t *)malloc(data_size);
-    if (!pt || !ct) { free(pt); free(ct); bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!pt || !ct) { free(pt); free(ct); BENCH_FATAL("allocation failed"); }
     fill_random(pt, data_size);
 
     for (int i = 0; i < warmup; i++)
-        ama_aes256_gcm_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
+        BENCH_REQUIRE(ama_aes256_gcm_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_aes256_gcm_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
+        ama_error_t rc = ama_aes256_gcm_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_aes256_gcm_encrypt");
     }
 
-    char label[64];
+    char label[BENCH_NAME_MAX];
     snprintf(label, sizeof(label), "AES-256-GCM Enc %zuKB", data_size / 1024);
-    /* Static label storage — we keep a few around */
-    static char labels[8][64];
-    static int label_idx = 0;
-    int li = label_idx++ % 8;
-    strncpy(labels[li], label, 63);
-    labels[li][63] = '\0';
 
     free(pt);
     free(ct);
-    return compute_stats(labels[li], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 static bench_result_t bench_aes_gcm_decrypt(size_t data_size, int iters, int warmup) {
@@ -258,32 +360,28 @@ static bench_result_t bench_aes_gcm_decrypt(size_t data_size, int iters, int war
     uint8_t *pt = (uint8_t *)malloc(data_size);
     uint8_t *ct = (uint8_t *)malloc(data_size);
     uint8_t *dec = (uint8_t *)malloc(data_size);
-    if (!pt || !ct || !dec) { free(pt); free(ct); free(dec); bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!pt || !ct || !dec) { free(pt); free(ct); free(dec); BENCH_FATAL("allocation failed"); }
     fill_random(pt, data_size);
 
-    ama_aes256_gcm_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
+    BENCH_REQUIRE(ama_aes256_gcm_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag));
 
     for (int i = 0; i < warmup; i++)
-        ama_aes256_gcm_decrypt(key, nonce, ct, data_size, NULL, 0, tag, dec);
+        BENCH_REQUIRE(ama_aes256_gcm_decrypt(key, nonce, ct, data_size, NULL, 0, tag, dec));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_aes256_gcm_decrypt(key, nonce, ct, data_size, NULL, 0, tag, dec);
+        ama_error_t rc = ama_aes256_gcm_decrypt(key, nonce, ct, data_size, NULL, 0, tag, dec);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_aes256_gcm_decrypt");
     }
 
-    char label[64];
+    char label[BENCH_NAME_MAX];
     snprintf(label, sizeof(label), "AES-256-GCM Dec %zuKB", data_size / 1024);
-    static char labels[8][64];
-    static int label_idx = 0;
-    int li = label_idx++ % 8;
-    strncpy(labels[li], label, 63);
-    labels[li][63] = '\0';
 
     free(pt);
     free(ct);
     free(dec);
-    return compute_stats(labels[li], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 /* --- Ed25519 --- */
@@ -292,14 +390,15 @@ static bench_result_t bench_ed25519_keygen(int iters, int warmup) {
 
     for (int i = 0; i < warmup; i++) {
         fill_random(sk, 32);
-        ama_ed25519_keypair(pk, sk);
+        BENCH_REQUIRE(ama_ed25519_keypair(pk, sk));
     }
 
     for (int i = 0; i < iters; i++) {
         fill_random(sk, 32);
         double t0 = now_ns();
-        ama_ed25519_keypair(pk, sk);
+        ama_error_t rc = ama_ed25519_keypair(pk, sk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_ed25519_keypair");
     }
     return compute_stats("Ed25519 KeyGen", g_samples, iters);
 }
@@ -310,15 +409,16 @@ static bench_result_t bench_ed25519_sign(int iters, int warmup) {
     size_t msg_len = sizeof(msg) - 1;
 
     fill_random(sk, 32);
-    ama_ed25519_keypair(pk, sk);
+    BENCH_REQUIRE(ama_ed25519_keypair(pk, sk));
 
     for (int i = 0; i < warmup; i++)
-        ama_ed25519_sign(sig, msg, msg_len, sk);
+        BENCH_REQUIRE(ama_ed25519_sign(sig, msg, msg_len, sk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_ed25519_sign(sig, msg, msg_len, sk);
+        ama_error_t rc = ama_ed25519_sign(sig, msg, msg_len, sk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_ed25519_sign");
     }
     return compute_stats("Ed25519 Sign", g_samples, iters);
 }
@@ -343,16 +443,17 @@ static bench_result_t bench_ed25519_verify(int iters, int warmup) {
     size_t msg_len = sizeof(msg) - 1;
 
     fill_random(sk, 32);
-    ama_ed25519_keypair(pk, sk);
-    ama_ed25519_sign(sig, msg, msg_len, sk);
+    BENCH_REQUIRE(ama_ed25519_keypair(pk, sk));
+    BENCH_REQUIRE(ama_ed25519_sign(sig, msg, msg_len, sk));
 
     for (int i = 0; i < warmup; i++)
-        ama_ed25519_verify(sig, msg, msg_len, pk);
+        BENCH_REQUIRE(ama_ed25519_verify(sig, msg, msg_len, pk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_ed25519_verify(sig, msg, msg_len, pk);
+        ama_error_t rc = ama_ed25519_verify(sig, msg, msg_len, pk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_ed25519_verify");
     }
     return compute_stats("Ed25519 Verify", g_samples, iters);
 }
@@ -384,10 +485,10 @@ static bench_result_t bench_ed25519_double_scalarmult(int iters, int warmup) {
     size_t msg_len = sizeof(msg) - 1;
 
     fill_random(sk1, 32);
-    ama_ed25519_keypair(pk1, sk1);
+    BENCH_REQUIRE(ama_ed25519_keypair(pk1, sk1));
     fill_random(sk2, 32);
-    ama_ed25519_keypair(pk2, sk2);
-    ama_ed25519_sign(sig, msg, msg_len, sk1);
+    BENCH_REQUIRE(ama_ed25519_keypair(pk2, sk2));
+    BENCH_REQUIRE(ama_ed25519_sign(sig, msg, msg_len, sk1));
 
     /* Build a verify-shaped second scalar: h = SHA-512(R || A || M)
      * reduced mod l, exactly what ama_ed25519_verify computes
@@ -409,12 +510,13 @@ static bench_result_t bench_ed25519_double_scalarmult(int iters, int warmup) {
 
     uint8_t out[32];
     for (int i = 0; i < warmup; i++)
-        ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2);
+        BENCH_REQUIRE(ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2);
+        ama_error_t rc = ama_ed25519_double_scalarmult_public(out, s1, pk1, s2, pk2);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_ed25519_double_scalarmult_public");
     }
     return compute_stats("Ed25519 Double-ScalarMult", g_samples, iters);
 }
@@ -425,12 +527,13 @@ static bench_result_t bench_dilithium_keygen(int iters, int warmup) {
     uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
 
     for (int i = 0; i < warmup; i++)
-        ama_dilithium_keypair(pk, sk);
+        BENCH_REQUIRE(ama_dilithium_keypair(pk, sk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_dilithium_keypair(pk, sk);
+        ama_error_t rc = ama_dilithium_keypair(pk, sk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_dilithium_keypair");
     }
     return compute_stats("ML-DSA-65 KeyGen", g_samples, iters);
 }
@@ -443,16 +546,17 @@ static bench_result_t bench_dilithium_sign(int iters, int warmup) {
     const uint8_t msg[] = "ML-DSA-65 benchmark message for sign/verify operations";
     size_t msg_len = sizeof(msg) - 1;
 
-    ama_dilithium_keypair(pk, sk);
+    BENCH_REQUIRE(ama_dilithium_keypair(pk, sk));
 
     for (int i = 0; i < warmup; i++)
-        ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk);
+        BENCH_REQUIRE(ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk));
 
     for (int i = 0; i < iters; i++) {
         sig_len = sizeof(sig);
         double t0 = now_ns();
-        ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk);
+        ama_error_t rc = ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_dilithium_sign");
     }
     return compute_stats("ML-DSA-65 Sign", g_samples, iters);
 }
@@ -465,16 +569,17 @@ static bench_result_t bench_dilithium_verify(int iters, int warmup) {
     const uint8_t msg[] = "ML-DSA-65 benchmark message for sign/verify operations";
     size_t msg_len = sizeof(msg) - 1;
 
-    ama_dilithium_keypair(pk, sk);
-    ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk);
+    BENCH_REQUIRE(ama_dilithium_keypair(pk, sk));
+    BENCH_REQUIRE(ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk));
 
     for (int i = 0; i < warmup; i++)
-        ama_dilithium_verify(msg, msg_len, sig, sig_len, pk);
+        BENCH_REQUIRE(ama_dilithium_verify(msg, msg_len, sig, sig_len, pk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_dilithium_verify(msg, msg_len, sig, sig_len, pk);
+        ama_error_t rc = ama_dilithium_verify(msg, msg_len, sig, sig_len, pk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_dilithium_verify");
     }
     return compute_stats("ML-DSA-65 Verify", g_samples, iters);
 }
@@ -485,12 +590,13 @@ static bench_result_t bench_kyber_keygen(int iters, int warmup) {
     uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
 
     for (int i = 0; i < warmup; i++)
-        ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+        BENCH_REQUIRE(ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk)));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+        ama_error_t rc = ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_kyber_keypair");
     }
     return compute_stats("ML-KEM-1024 KeyGen", g_samples, iters);
 }
@@ -502,18 +608,19 @@ static bench_result_t bench_kyber_encaps(int iters, int warmup) {
     uint8_t ss[AMA_KYBER_1024_SHARED_SECRET_BYTES];
     size_t ct_len = sizeof(ct);
 
-    ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
+    BENCH_REQUIRE(ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk)));
 
     for (int i = 0; i < warmup; i++) {
         ct_len = sizeof(ct);
-        ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss));
+        BENCH_REQUIRE(ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss)));
     }
 
     for (int i = 0; i < iters; i++) {
         ct_len = sizeof(ct);
         double t0 = now_ns();
-        ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss));
+        ama_error_t rc = ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss));
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_kyber_encapsulate");
     }
     return compute_stats("ML-KEM-1024 Encaps", g_samples, iters);
 }
@@ -526,16 +633,17 @@ static bench_result_t bench_kyber_decaps(int iters, int warmup) {
     uint8_t ss2[AMA_KYBER_1024_SHARED_SECRET_BYTES];
     size_t ct_len = sizeof(ct);
 
-    ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk));
-    ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss));
+    BENCH_REQUIRE(ama_kyber_keypair(pk, sizeof(pk), sk, sizeof(sk)));
+    BENCH_REQUIRE(ama_kyber_encapsulate(pk, sizeof(pk), ct, &ct_len, ss, sizeof(ss)));
 
     for (int i = 0; i < warmup; i++)
-        ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss2, sizeof(ss2));
+        BENCH_REQUIRE(ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss2, sizeof(ss2)));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss2, sizeof(ss2));
+        ama_error_t rc = ama_kyber_decapsulate(ct, ct_len, sk, sizeof(sk), ss2, sizeof(ss2));
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_kyber_decapsulate");
     }
     return compute_stats("ML-KEM-1024 Decaps", g_samples, iters);
 }
@@ -612,11 +720,11 @@ static bench_result_t bench_kyber_poly_add(int iters, int warmup, int use_dispat
         for (int j = 0; j < BENCH_INNER_LOOP; j++) fn(r, a, b);
         g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
     }
-    static char labels[2][48];
-    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+    char label[BENCH_NAME_MAX];
+    snprintf(label, sizeof(label),
              "ML-KEM-1024 poly_add (%s)",
              use_dispatch ? "dispatch" : "scalar");
-    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 static bench_result_t bench_kyber_poly_sub(int iters, int warmup, int use_dispatch) {
@@ -635,11 +743,11 @@ static bench_result_t bench_kyber_poly_sub(int iters, int warmup, int use_dispat
         for (int j = 0; j < BENCH_INNER_LOOP; j++) fn(r, a, b);
         g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
     }
-    static char labels[2][48];
-    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+    char label[BENCH_NAME_MAX];
+    snprintf(label, sizeof(label),
              "ML-KEM-1024 poly_sub (%s)",
              use_dispatch ? "dispatch" : "scalar");
-    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 static bench_result_t bench_kyber_poly_reduce(int iters, int warmup, int use_dispatch) {
@@ -680,66 +788,58 @@ static bench_result_t bench_kyber_poly_reduce(int iters, int warmup, int use_dis
          * than "reduce of a poly in the natural post-add range". */
         for (int j = 0; j < BENCH_INNER_LOOP; j++) fill_random_poly(ring[j]);
     }
-    static char labels[2][48];
-    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+    char label[BENCH_NAME_MAX];
+    snprintf(label, sizeof(label),
              "ML-KEM-1024 poly_reduce (%s)",
              use_dispatch ? "dispatch" : "scalar");
-    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 /* --- SHA3-256 / SHA3-512 --- */
 static bench_result_t bench_sha3_256(size_t data_size, int iters, int warmup) {
     uint8_t *data = (uint8_t *)malloc(data_size);
     uint8_t hash[32];
-    if (!data) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!data) { BENCH_FATAL("allocation failed"); }
     fill_random(data, data_size);
 
     for (int i = 0; i < warmup; i++)
-        ama_sha3_256(data, data_size, hash);
+        BENCH_REQUIRE(ama_sha3_256(data, data_size, hash));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_sha3_256(data, data_size, hash);
+        ama_error_t rc = ama_sha3_256(data, data_size, hash);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_sha3_256");
     }
 
-    char label[64];
+    char label[BENCH_NAME_MAX];
     snprintf(label, sizeof(label), "SHA3-256 (%zuB)", data_size);
-    static char labels[4][64];
-    static int label_idx = 0;
-    int li = label_idx++ % 4;
-    strncpy(labels[li], label, 63);
-    labels[li][63] = '\0';
 
     free(data);
-    return compute_stats(labels[li], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 static bench_result_t bench_sha3_512(size_t data_size, int iters, int warmup) {
     uint8_t *data = (uint8_t *)malloc(data_size);
     uint8_t hash[64];
-    if (!data) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!data) { BENCH_FATAL("allocation failed"); }
     fill_random(data, data_size);
 
     for (int i = 0; i < warmup; i++)
-        ama_sha3_512(data, data_size, hash);
+        BENCH_REQUIRE(ama_sha3_512(data, data_size, hash));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_sha3_512(data, data_size, hash);
+        ama_error_t rc = ama_sha3_512(data, data_size, hash);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_sha3_512");
     }
 
-    char label[64];
+    char label[BENCH_NAME_MAX];
     snprintf(label, sizeof(label), "SHA3-512 (%zuB)", data_size);
-    static char labels[4][64];
-    static int label_idx = 0;
-    int li = label_idx++ % 4;
-    strncpy(labels[li], label, 63);
-    labels[li][63] = '\0';
 
     free(data);
-    return compute_stats(labels[li], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 /* --- HMAC-SHA3-256 --- */
@@ -747,28 +847,24 @@ static bench_result_t bench_hmac_sha3(size_t msg_size, int iters, int warmup) {
     uint8_t key[32], out[32];
     fill_random(key, 32);
     uint8_t *msg = (uint8_t *)malloc(msg_size);
-    if (!msg) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!msg) { BENCH_FATAL("allocation failed"); }
     fill_random(msg, msg_size);
 
     for (int i = 0; i < warmup; i++)
-        ama_hmac_sha3_256(key, 32, msg, msg_size, out);
+        BENCH_REQUIRE(ama_hmac_sha3_256(key, 32, msg, msg_size, out));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_hmac_sha3_256(key, 32, msg, msg_size, out);
+        ama_error_t rc = ama_hmac_sha3_256(key, 32, msg, msg_size, out);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_hmac_sha3_256");
     }
 
-    char label[64];
+    char label[BENCH_NAME_MAX];
     snprintf(label, sizeof(label), "HMAC-SHA3-256 (%zuB)", msg_size);
-    static char labels[4][64];
-    static int label_idx = 0;
-    int li = label_idx++ % 4;
-    strncpy(labels[li], label, 63);
-    labels[li][63] = '\0';
 
     free(msg);
-    return compute_stats(labels[li], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 /* --- ChaCha20-Poly1305 AEAD (exercises AVX2 8-way for >= 512 B) --- */
@@ -779,32 +875,28 @@ static bench_result_t bench_chacha20poly1305_encrypt(size_t data_size, int iters
 
     uint8_t *pt = (uint8_t *)malloc(data_size);
     uint8_t *ct = (uint8_t *)malloc(data_size);
-    if (!pt || !ct) { free(pt); free(ct); bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!pt || !ct) { free(pt); free(ct); BENCH_FATAL("allocation failed"); }
     fill_random(pt, data_size);
 
     for (int i = 0; i < warmup; i++)
-        ama_chacha20poly1305_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
+        BENCH_REQUIRE(ama_chacha20poly1305_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_chacha20poly1305_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
+        ama_error_t rc = ama_chacha20poly1305_encrypt(key, nonce, pt, data_size, NULL, 0, ct, tag);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_chacha20poly1305_encrypt");
     }
 
-    char label[64];
+    char label[BENCH_NAME_MAX];
     if (data_size >= 1024)
         snprintf(label, sizeof(label), "ChaCha20-Poly1305 Enc %zuKB", data_size / 1024);
     else
         snprintf(label, sizeof(label), "ChaCha20-Poly1305 Enc %zuB", data_size);
-    static char labels[8][64];
-    static int label_idx = 0;
-    int li = label_idx++ % 8;
-    strncpy(labels[li], label, 63);
-    labels[li][63] = '\0';
 
     free(pt);
     free(ct);
-    return compute_stats(labels[li], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 /* --- Argon2id (exercises AVX2 BlaMka G) --- */
@@ -819,28 +911,24 @@ static bench_result_t bench_argon2id(uint32_t m_cost, int iters, int warmup) {
     uint8_t tag[32];
 
     for (int i = 0; i < warmup; i++)
-        ama_argon2id(password, sizeof(password) - 1, salt, 16,
-                     1, m_cost, 1, tag, 32);
+        BENCH_REQUIRE(ama_argon2id(password, sizeof(password) - 1, salt, 16,
+                                   1, m_cost, 1, tag, 32));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_argon2id(password, sizeof(password) - 1, salt, 16,
-                     1, m_cost, 1, tag, 32);
+        ama_error_t rc = ama_argon2id(password, sizeof(password) - 1, salt, 16,
+                                      1, m_cost, 1, tag, 32);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_argon2id");
     }
 
-    char label[64];
+    char label[BENCH_NAME_MAX];
     if (m_cost >= 1024)
         snprintf(label, sizeof(label), "Argon2id (m=%uMiB,t=1)", m_cost / 1024);
     else
         snprintf(label, sizeof(label), "Argon2id (m=%uKiB,t=1)", m_cost);
-    static char labels[4][64];
-    static int label_idx = 0;
-    int li = label_idx++ % 4;
-    strncpy(labels[li], label, 63);
-    labels[li][63] = '\0';
 
-    return compute_stats(labels[li], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 /* --- HKDF --- */
@@ -851,12 +939,13 @@ static bench_result_t bench_hkdf(int iters, int warmup) {
     fill_random(ikm, 32);
 
     for (int i = 0; i < warmup; i++)
-        ama_hkdf(salt, 32, ikm, 32, info, sizeof(info) - 1, okm, 96);
+        BENCH_REQUIRE(ama_hkdf(salt, 32, ikm, 32, info, sizeof(info) - 1, okm, 96));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_hkdf(salt, 32, ikm, 32, info, sizeof(info) - 1, okm, 96);
+        ama_error_t rc = ama_hkdf(salt, 32, ikm, 32, info, sizeof(info) - 1, okm, 96);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_hkdf");
     }
     return compute_stats("HKDF-SHA3-256 (96B)", g_samples, iters);
 }
@@ -898,18 +987,19 @@ static bench_result_t bench_hkdf(int iters, int warmup) {
  * default production policy. */
 static bench_result_t bench_x25519_dh_mulx_off(int iters, int warmup) {
     uint8_t pk_a[32], sk_a[32], pk_b[32], sk_b[32], shared[32];
-    ama_x25519_keypair(pk_a, sk_a);
-    ama_x25519_keypair(pk_b, sk_b);
+    BENCH_REQUIRE(ama_x25519_keypair(pk_a, sk_a));
+    BENCH_REQUIRE(ama_x25519_keypair(pk_b, sk_b));
 
     ama_x25519_set_mulx_override(0);    /* pin pure-C fe64 */
 
     for (int i = 0; i < warmup; i++)
-        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        BENCH_REQUIRE(ama_x25519_key_exchange(shared, sk_a, pk_b));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        ama_error_t rc = ama_x25519_key_exchange(shared, sk_a, pk_b);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_x25519_key_exchange");
     }
 
     ama_x25519_set_mulx_override(-1);   /* restore auto */
@@ -918,20 +1008,21 @@ static bench_result_t bench_x25519_dh_mulx_off(int iters, int warmup) {
 
 static bench_result_t bench_x25519_dh_mulx_on(int iters, int warmup) {
     uint8_t pk_a[32], sk_a[32], pk_b[32], sk_b[32], shared[32];
-    ama_x25519_keypair(pk_a, sk_a);
-    ama_x25519_keypair(pk_b, sk_b);
+    BENCH_REQUIRE(ama_x25519_keypair(pk_a, sk_a));
+    BENCH_REQUIRE(ama_x25519_keypair(pk_b, sk_b));
 
     ama_x25519_set_mulx_override(1);    /* pin MULX+ADX kernel (no-op
                                          * on hosts without BMI2+ADX
                                          * or without the kernel TU) */
 
     for (int i = 0; i < warmup; i++)
-        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        BENCH_REQUIRE(ama_x25519_key_exchange(shared, sk_a, pk_b));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_x25519_key_exchange(shared, sk_a, pk_b);
+        ama_error_t rc = ama_x25519_key_exchange(shared, sk_a, pk_b);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_x25519_key_exchange");
     }
 
     ama_x25519_set_mulx_override(-1);   /* restore auto */
@@ -1016,11 +1107,11 @@ static bench_result_t bench_dilithium_ntt(int iters, int warmup, int use_dispatc
         g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
     }
 
-    static char labels[2][48];
-    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+    char label[BENCH_NAME_MAX];
+    snprintf(label, sizeof(label),
              "ML-DSA-65 NTT (%s)",
              use_dispatch ? "dispatch" : "scalar");
-    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 static bench_result_t bench_dilithium_invntt(int iters, int warmup, int use_dispatch) {
@@ -1041,11 +1132,11 @@ static bench_result_t bench_dilithium_invntt(int iters, int warmup, int use_disp
         g_samples[i] = (now_ns() - t0) / (double)BENCH_INNER_LOOP;
     }
 
-    static char labels[2][48];
-    snprintf(labels[use_dispatch ? 1 : 0], sizeof(labels[0]),
+    char label[BENCH_NAME_MAX];
+    snprintf(label, sizeof(label),
              "ML-DSA-65 invNTT (%s)",
              use_dispatch ? "dispatch" : "scalar");
-    return compute_stats(labels[use_dispatch ? 1 : 0], g_samples, iters);
+    return compute_stats(label, g_samples, iters);
 }
 
 /* --- SLH-DSA SHAKE-128s (FIPS 205, NIST L1) ---
@@ -1059,9 +1150,10 @@ static bench_result_t bench_dilithium_invntt(int iters, int warmup, int use_disp
  * (seconds-scale — three to four orders of magnitude beyond the
  * `iters_vslow` 1 ms+ tier), Verify ~1.15 ms. Call sites therefore
  * use `iters_slh_sign` (5) for the sign row and `iters_slow` (200)
- * for keygen / verify so the family stays inside the ~60 s subprocess
+ * for keygen / verify so the family stays inside the 600 s subprocess
  * timeout the downstream `benchmarks/comparative_benchmark.py` runner
- * enforces (see its `timeout=60` argument on the raw-C subprocess).
+ * enforces (see its `timeout=600` argument on the raw-C subprocess;
+ * the full harness run measures ~109 s on this sandbox).
  *
  * Warmup is capped *locally* per call (see SLH_KEYGEN_WARMUP_MAX /
  * SLH_SIGN_WARMUP_MAX / SLH_VERIFY_WARMUP_MAX below) so that the
@@ -1078,12 +1170,13 @@ static bench_result_t bench_slhdsa_shake128s_keygen(int iters, int warmup) {
 
     if (warmup > SLH_KEYGEN_WARMUP_MAX) warmup = SLH_KEYGEN_WARMUP_MAX;
     for (int i = 0; i < warmup; i++)
-        ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
+        BENCH_REQUIRE(ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
+        ama_error_t rc = ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_slhdsa_keygen");
     }
     return compute_stats("SLH-DSA-SHAKE-128s KeyGen", g_samples, iters);
 }
@@ -1092,26 +1185,27 @@ static bench_result_t bench_slhdsa_shake128s_sign(int iters, int warmup) {
     uint8_t pk[AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES];
     uint8_t *sig = (uint8_t *)malloc(AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES);
-    if (!sig) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!sig) { BENCH_FATAL("allocation failed"); }
     size_t sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
     const uint8_t msg[] = "SLH-DSA SHAKE-128s benchmark message";
     size_t msg_len = sizeof(msg) - 1;
 
-    ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
+    BENCH_REQUIRE(ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk));
 
     if (warmup > SLH_SIGN_WARMUP_MAX) warmup = SLH_SIGN_WARMUP_MAX;
     for (int i = 0; i < warmup; i++) {
         sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
-        ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
-                        msg, msg_len, NULL, 0, sk);
+        BENCH_REQUIRE(ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
+                                      msg, msg_len, NULL, 0, sk));
     }
 
     for (int i = 0; i < iters; i++) {
         sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
         double t0 = now_ns();
-        ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
-                        msg, msg_len, NULL, 0, sk);
+        ama_error_t rc = ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
+                                         msg, msg_len, NULL, 0, sk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_slhdsa_sign");
     }
 
     free(sig);
@@ -1122,25 +1216,26 @@ static bench_result_t bench_slhdsa_shake128s_verify(int iters, int warmup) {
     uint8_t pk[AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES];
     uint8_t *sig = (uint8_t *)malloc(AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES);
-    if (!sig) { bench_result_t r = {0}; r.name = "(alloc failed)"; return r; }
+    if (!sig) { BENCH_FATAL("allocation failed"); }
     size_t sig_len = AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES;
     const uint8_t msg[] = "SLH-DSA SHAKE-128s benchmark message";
     size_t msg_len = sizeof(msg) - 1;
 
-    ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk);
-    ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
-                    msg, msg_len, NULL, 0, sk);
+    BENCH_REQUIRE(ama_slhdsa_keygen(AMA_SLHDSA_SHAKE_128S, pk, sk));
+    BENCH_REQUIRE(ama_slhdsa_sign(AMA_SLHDSA_SHAKE_128S, sig, &sig_len,
+                                  msg, msg_len, NULL, 0, sk));
 
     if (warmup > SLH_VERIFY_WARMUP_MAX) warmup = SLH_VERIFY_WARMUP_MAX;
     for (int i = 0; i < warmup; i++)
-        ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, sig, sig_len,
-                          msg, msg_len, NULL, 0, pk);
+        BENCH_REQUIRE(ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, sig, sig_len,
+                                        msg, msg_len, NULL, 0, pk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, sig, sig_len,
-                          msg, msg_len, NULL, 0, pk);
+        ama_error_t rc = ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, sig, sig_len,
+                                           msg, msg_len, NULL, 0, pk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_slhdsa_verify");
     }
 
     free(sig);
@@ -1164,12 +1259,13 @@ static bench_result_t bench_secp256k1_pubkey(int iters, int warmup) {
     for (int i = 0; i < 32; i++) privkey[i] = (uint8_t)(i + 1);
 
     for (int i = 0; i < warmup; i++)
-        ama_secp256k1_pubkey_from_privkey(privkey, pubkey);
+        BENCH_REQUIRE(ama_secp256k1_pubkey_from_privkey(privkey, pubkey));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_secp256k1_pubkey_from_privkey(privkey, pubkey);
+        ama_error_t rc = ama_secp256k1_pubkey_from_privkey(privkey, pubkey);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_secp256k1_pubkey_from_privkey");
     }
     return compute_stats("secp256k1 pubkey", g_samples, iters);
 }
@@ -1192,12 +1288,13 @@ static bench_result_t bench_secp256k1_ecdsa_sign(int iters, int warmup) {
     }
 
     for (int i = 0; i < warmup; i++)
-        ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey);
+        BENCH_REQUIRE(ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey);
+        ama_error_t rc = ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_secp256k1_ecdsa_sign");
     }
     return compute_stats("secp256k1 ecdsa sign", g_samples, iters);
 }
@@ -1227,18 +1324,19 @@ static bench_result_t bench_secp256k1_ecdsa_verify(int iters, int warmup) {
     }
     /* Derive the 64-byte uncompressed public key (X||Y) and one signature to
      * verify repeatedly. */
-    ama_secp256k1_point_mul(privkey, Gx, Gy, qx, qy);
+    BENCH_REQUIRE(ama_secp256k1_point_mul(privkey, Gx, Gy, qx, qy));
     memcpy(pub64, qx, 32);
     memcpy(pub64 + 32, qy, 32);
-    ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey);
+    BENCH_REQUIRE(ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey));
 
     for (int i = 0; i < warmup; i++)
-        ama_secp256k1_ecdsa_verify(sig, sig_len, digest, pub64);
+        BENCH_REQUIRE(ama_secp256k1_ecdsa_verify(sig, sig_len, digest, pub64));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_secp256k1_ecdsa_verify(sig, sig_len, digest, pub64);
+        ama_error_t rc = ama_secp256k1_ecdsa_verify(sig, sig_len, digest, pub64);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_secp256k1_ecdsa_verify");
     }
     return compute_stats("secp256k1 ecdsa verify", g_samples, iters);
 }
@@ -1255,7 +1353,7 @@ static bench_result_t bench_frost_round1_commit(int iters, int warmup) {
     uint8_t group_pk[32];
     uint8_t shares[3 * AMA_FROST_SHARE_BYTES];
     if (ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL) != AMA_SUCCESS) {
-        bench_result_t r = {0}; r.name = "(FROST keygen failed)"; return r;
+        BENCH_FATAL("FROST trusted-dealer keygen failed");
     }
 
     uint8_t nonce_pair[AMA_FROST_NONCE_BYTES];
@@ -1263,12 +1361,13 @@ static bench_result_t bench_frost_round1_commit(int iters, int warmup) {
     const uint8_t *share1 = shares + 0 * AMA_FROST_SHARE_BYTES;
 
     for (int i = 0; i < warmup; i++)
-        ama_frost_round1_commit(nonce_pair, commitment, share1);
+        BENCH_REQUIRE(ama_frost_round1_commit(nonce_pair, commitment, share1));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_frost_round1_commit(nonce_pair, commitment, share1);
+        ama_error_t rc = ama_frost_round1_commit(nonce_pair, commitment, share1);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_frost_round1_commit");
     }
     return compute_stats("FROST round1 commit", g_samples, iters);
 }
@@ -1277,7 +1376,7 @@ static bench_result_t bench_frost_round2_sign(int iters, int warmup) {
     uint8_t group_pk[32];
     uint8_t shares[3 * AMA_FROST_SHARE_BYTES];
     if (ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL) != AMA_SUCCESS) {
-        bench_result_t r = {0}; r.name = "(FROST keygen failed)"; return r;
+        BENCH_FATAL("FROST trusted-dealer keygen failed");
     }
 
     /* Two signers (indices 1 and 2). Each generates its round1
@@ -1287,9 +1386,9 @@ static bench_result_t bench_frost_round2_sign(int iters, int warmup) {
     uint8_t commitments[2 * AMA_FROST_COMMITMENT_BYTES];
     uint8_t signer_indices[2] = { 1, 2 };
     for (int s = 0; s < 2; s++) {
-        ama_frost_round1_commit(nonce_pairs[s],
-                                commitments + s * AMA_FROST_COMMITMENT_BYTES,
-                                shares + s * AMA_FROST_SHARE_BYTES);
+        BENCH_REQUIRE(ama_frost_round1_commit(nonce_pairs[s],
+                                              commitments + s * AMA_FROST_COMMITMENT_BYTES,
+                                              shares + s * AMA_FROST_SHARE_BYTES));
     }
 
     const uint8_t msg[] = "FROST 2-of-3 benchmark message";
@@ -1297,18 +1396,19 @@ static bench_result_t bench_frost_round2_sign(int iters, int warmup) {
     uint8_t sig_share[AMA_FROST_SIG_SHARE_BYTES];
 
     for (int i = 0; i < warmup; i++)
-        ama_frost_round2_sign(sig_share, msg, msg_len,
-                              shares + 0 * AMA_FROST_SHARE_BYTES, 1,
-                              nonce_pairs[0],
-                              commitments, signer_indices, 2, group_pk);
+        BENCH_REQUIRE(ama_frost_round2_sign(sig_share, msg, msg_len,
+                                            shares + 0 * AMA_FROST_SHARE_BYTES, 1,
+                                            nonce_pairs[0],
+                                            commitments, signer_indices, 2, group_pk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_frost_round2_sign(sig_share, msg, msg_len,
-                              shares + 0 * AMA_FROST_SHARE_BYTES, 1,
-                              nonce_pairs[0],
-                              commitments, signer_indices, 2, group_pk);
+        ama_error_t rc = ama_frost_round2_sign(sig_share, msg, msg_len,
+                                               shares + 0 * AMA_FROST_SHARE_BYTES, 1,
+                                               nonce_pairs[0],
+                                               commitments, signer_indices, 2, group_pk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_frost_round2_sign");
     }
     return compute_stats("FROST round2 sign", g_samples, iters);
 }
@@ -1317,41 +1417,42 @@ static bench_result_t bench_frost_aggregate(int iters, int warmup) {
     uint8_t group_pk[32];
     uint8_t shares[3 * AMA_FROST_SHARE_BYTES];
     if (ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL) != AMA_SUCCESS) {
-        bench_result_t r = {0}; r.name = "(FROST keygen failed)"; return r;
+        BENCH_FATAL("FROST trusted-dealer keygen failed");
     }
 
     uint8_t nonce_pairs[2][AMA_FROST_NONCE_BYTES];
     uint8_t commitments[2 * AMA_FROST_COMMITMENT_BYTES];
     uint8_t signer_indices[2] = { 1, 2 };
     for (int s = 0; s < 2; s++) {
-        ama_frost_round1_commit(nonce_pairs[s],
-                                commitments + s * AMA_FROST_COMMITMENT_BYTES,
-                                shares + s * AMA_FROST_SHARE_BYTES);
+        BENCH_REQUIRE(ama_frost_round1_commit(nonce_pairs[s],
+                                              commitments + s * AMA_FROST_COMMITMENT_BYTES,
+                                              shares + s * AMA_FROST_SHARE_BYTES));
     }
 
     const uint8_t msg[] = "FROST 2-of-3 benchmark message";
     size_t msg_len = sizeof(msg) - 1;
     uint8_t sig_shares[2 * AMA_FROST_SIG_SHARE_BYTES];
     for (int s = 0; s < 2; s++) {
-        ama_frost_round2_sign(sig_shares + s * AMA_FROST_SIG_SHARE_BYTES,
-                              msg, msg_len,
-                              shares + s * AMA_FROST_SHARE_BYTES,
-                              signer_indices[s],
-                              nonce_pairs[s],
-                              commitments, signer_indices, 2, group_pk);
+        BENCH_REQUIRE(ama_frost_round2_sign(sig_shares + s * AMA_FROST_SIG_SHARE_BYTES,
+                                            msg, msg_len,
+                                            shares + s * AMA_FROST_SHARE_BYTES,
+                                            signer_indices[s],
+                                            nonce_pairs[s],
+                                            commitments, signer_indices, 2, group_pk));
     }
 
     uint8_t signature[64];
 
     for (int i = 0; i < warmup; i++)
-        ama_frost_aggregate(signature, sig_shares, commitments,
-                            signer_indices, 2, msg, msg_len, group_pk);
+        BENCH_REQUIRE(ama_frost_aggregate(signature, sig_shares, commitments,
+                                          signer_indices, 2, msg, msg_len, group_pk));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
-        ama_frost_aggregate(signature, sig_shares, commitments,
-                            signer_indices, 2, msg, msg_len, group_pk);
+        ama_error_t rc = ama_frost_aggregate(signature, sig_shares, commitments,
+                                             signer_indices, 2, msg, msg_len, group_pk);
         g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_frost_aggregate");
     }
     return compute_stats("FROST aggregate", g_samples, iters);
 }
@@ -1500,27 +1601,27 @@ int main(int argc, char **argv) {
     /* Seed fallback RNG */
     srand((unsigned)time(NULL));
 
-    /* Warmup and iteration counts */
-    const int warmup = 50;
-    const int iters_fast  = 5000;   /* < 1us ops */
-    const int iters_med   = 1000;   /* 1-100us ops */
-    const int iters_slow  = 200;    /* 100us+ ops */
-    const int iters_vslow = 50;     /* 1ms+ ops */
-    /* SLH-DSA-SHAKE-128s sign is ~1.25 s / op on a modern x86-64 core —
-     * three to four orders of magnitude beyond `iters_vslow`'s intended
-     * 1 ms+ band. Use a dedicated, much smaller iteration count so the
-     * sign row stays inside the ~60 s wall-clock ceiling that downstream
-     * runners enforce (see `benchmarks/comparative_benchmark.py` line
-     * ~231: `timeout=60` on the raw-C harness subprocess). At 5 iters
-     * the sign row is ~6 s — within budget, and the harness emits min
-     * / median / max / stddev so a 5-sample median still surfaces a
-     * gross regression even if it is not statistically tight. */
-    const int iters_slh_sign = 5;   /* seconds-scale ops (SLH-DSA Sign only) */
+    /* Warmup and iteration counts.  The values, their rationale and the
+     * _Static_asserts that bind them to MAX_SAMPLES live beside g_samples. */
+    const int warmup = BENCH_WARMUP;
+    const int iters_fast  = ITERS_FAST;
+    const int iters_med   = ITERS_MED;
+    const int iters_slow  = ITERS_SLOW;
+    const int iters_vslow = ITERS_VSLOW;
+    const int iters_slh_sign = ITERS_SLH_SIGN;
 
-    /* Collect all results */
+    /* Collect all results.  BENCH_ROW() is used instead of a bare
+     * `results[n++] = ...` so that adding a row past MAX_RESULTS ends the run
+     * with a diagnostic instead of writing past the end of a stack array —
+     * the array has been grown by hand twice and nothing checked it. */
     #define MAX_RESULTS 80
     bench_result_t results[MAX_RESULTS];
     int n = 0;
+    #define BENCH_ROW(call)                                                   \
+        do {                                                                  \
+            if (n >= MAX_RESULTS) BENCH_FATAL("MAX_RESULTS exceeded");        \
+            results[n++] = (call);                                            \
+        } while (0)
 
     if (!csv_mode && !json_mode) {
         printf("AMA Cryptography — Raw C Benchmark Harness\n");
@@ -1539,50 +1640,50 @@ int main(int argc, char **argv) {
     }
 
     /* --- Hash functions --- */
-    results[n++] = bench_sha3_256(32, iters_fast, warmup);
-    results[n++] = bench_sha3_256(1024, iters_fast, warmup);
-    results[n++] = bench_sha3_512(32, iters_fast, warmup);
-    results[n++] = bench_sha3_512(1024, iters_fast, warmup);
+    BENCH_ROW(bench_sha3_256(32, iters_fast, warmup));
+    BENCH_ROW(bench_sha3_256(1024, iters_fast, warmup));
+    BENCH_ROW(bench_sha3_512(32, iters_fast, warmup));
+    BENCH_ROW(bench_sha3_512(1024, iters_fast, warmup));
 
     /* --- HMAC --- */
-    results[n++] = bench_hmac_sha3(32, iters_fast, warmup);
-    results[n++] = bench_hmac_sha3(1024, iters_fast, warmup);
+    BENCH_ROW(bench_hmac_sha3(32, iters_fast, warmup));
+    BENCH_ROW(bench_hmac_sha3(1024, iters_fast, warmup));
 
     /* --- HKDF --- */
-    results[n++] = bench_hkdf(iters_fast, warmup);
+    BENCH_ROW(bench_hkdf(iters_fast, warmup));
 
     /* --- Ed25519 --- */
-    results[n++] = bench_ed25519_keygen(iters_med, warmup);
-    results[n++] = bench_ed25519_sign(iters_med, warmup);
-    results[n++] = bench_ed25519_verify(iters_med, warmup);
-    results[n++] = bench_ed25519_double_scalarmult(iters_med, warmup);
+    BENCH_ROW(bench_ed25519_keygen(iters_med, warmup));
+    BENCH_ROW(bench_ed25519_sign(iters_med, warmup));
+    BENCH_ROW(bench_ed25519_verify(iters_med, warmup));
+    BENCH_ROW(bench_ed25519_double_scalarmult(iters_med, warmup));
 
     /* --- X25519 --- */
-    results[n++] = bench_x25519_keygen(iters_med, warmup);
-    results[n++] = bench_x25519_dh(iters_med, warmup);
-    results[n++] = bench_x25519_dh_batch(1,  iters_med, warmup);
-    results[n++] = bench_x25519_dh_batch(4,  iters_med, warmup);
-    results[n++] = bench_x25519_dh_batch(8,  iters_med, warmup);
-    results[n++] = bench_x25519_dh_batch(16, iters_med, warmup);
+    BENCH_ROW(bench_x25519_keygen(iters_med, warmup));
+    BENCH_ROW(bench_x25519_dh(iters_med, warmup));
+    BENCH_ROW(bench_x25519_dh_batch(1,  iters_med, warmup));
+    BENCH_ROW(bench_x25519_dh_batch(4,  iters_med, warmup));
+    BENCH_ROW(bench_x25519_dh_batch(8,  iters_med, warmup));
+    BENCH_ROW(bench_x25519_dh_batch(16, iters_med, warmup));
 
     /* --- X25519 MULX/ADX kernel on-vs-off ---
      * Surfaces the BMI2+ADX speedup quoted in
      * `wiki/Performance-Benchmarks.md` directly in the harness output.
      * On hosts without the kernel (CPUID gate or build flag), the two
      * rows match — informative in its own right. */
-    results[n++] = bench_x25519_dh_mulx_off(iters_med, warmup);
-    results[n++] = bench_x25519_dh_mulx_on(iters_med, warmup);
+    BENCH_ROW(bench_x25519_dh_mulx_off(iters_med, warmup));
+    BENCH_ROW(bench_x25519_dh_mulx_on(iters_med, warmup));
 
     /* --- secp256k1 (constant-time; fixed-base comb for pubkey and the
      * signing nonce, Shamir's trick for the variable-time verify) --- */
-    results[n++] = bench_secp256k1_pubkey(iters_med, warmup);
-    results[n++] = bench_secp256k1_ecdsa_sign(iters_med, warmup);
-    results[n++] = bench_secp256k1_ecdsa_verify(iters_med, warmup);
+    BENCH_ROW(bench_secp256k1_pubkey(iters_med, warmup));
+    BENCH_ROW(bench_secp256k1_ecdsa_sign(iters_med, warmup));
+    BENCH_ROW(bench_secp256k1_ecdsa_verify(iters_med, warmup));
 
     /* --- FROST 2-of-3 (RFC 9591) --- */
-    results[n++] = bench_frost_round1_commit(iters_med, warmup);
-    results[n++] = bench_frost_round2_sign(iters_med, warmup);
-    results[n++] = bench_frost_aggregate(iters_med, warmup);
+    BENCH_ROW(bench_frost_round1_commit(iters_med, warmup));
+    BENCH_ROW(bench_frost_round2_sign(iters_med, warmup));
+    BENCH_ROW(bench_frost_aggregate(iters_med, warmup));
 
     /* --- AES-256-GCM ---
      * 1 KB / 4 KB / 16 KB / 64 KB rows.  PR A (2026-04) added the 16 KB
@@ -1591,53 +1692,54 @@ int main(int argc, char **argv) {
      * overhead is amortized, but the working set still fits in L1d, so
      * the throughput plateau here is the cleanest signal of the kernel
      * choice rather than memory-bandwidth saturation. */
-    results[n++] = bench_aes_gcm_encrypt(1024, iters_med, warmup);
-    results[n++] = bench_aes_gcm_decrypt(1024, iters_med, warmup);
-    results[n++] = bench_aes_gcm_encrypt(4096, iters_slow, warmup);
-    results[n++] = bench_aes_gcm_decrypt(4096, iters_slow, warmup);
-    results[n++] = bench_aes_gcm_encrypt(16384, iters_slow, warmup);
-    results[n++] = bench_aes_gcm_decrypt(16384, iters_slow, warmup);
-    results[n++] = bench_aes_gcm_encrypt(65536, iters_vslow, warmup);
-    results[n++] = bench_aes_gcm_decrypt(65536, iters_vslow, warmup);
+    BENCH_ROW(bench_aes_gcm_encrypt(1024, iters_med, warmup));
+    BENCH_ROW(bench_aes_gcm_decrypt(1024, iters_med, warmup));
+    BENCH_ROW(bench_aes_gcm_encrypt(4096, iters_slow, warmup));
+    BENCH_ROW(bench_aes_gcm_decrypt(4096, iters_slow, warmup));
+    BENCH_ROW(bench_aes_gcm_encrypt(16384, iters_slow, warmup));
+    BENCH_ROW(bench_aes_gcm_decrypt(16384, iters_slow, warmup));
+    BENCH_ROW(bench_aes_gcm_encrypt(65536, iters_vslow, warmup));
+    BENCH_ROW(bench_aes_gcm_decrypt(65536, iters_vslow, warmup));
 
     /* --- ChaCha20-Poly1305 (AVX2 8-way kicks in at >=512 B) --- */
-    results[n++] = bench_chacha20poly1305_encrypt(256,   iters_med,   warmup);
-    results[n++] = bench_chacha20poly1305_encrypt(1024,  iters_med,   warmup);
-    results[n++] = bench_chacha20poly1305_encrypt(4096,  iters_slow,  warmup);
-    results[n++] = bench_chacha20poly1305_encrypt(65536, iters_vslow, warmup);
+    BENCH_ROW(bench_chacha20poly1305_encrypt(256,   iters_med,   warmup));
+    BENCH_ROW(bench_chacha20poly1305_encrypt(1024,  iters_med,   warmup));
+    BENCH_ROW(bench_chacha20poly1305_encrypt(4096,  iters_slow,  warmup));
+    BENCH_ROW(bench_chacha20poly1305_encrypt(65536, iters_vslow, warmup));
 
     /* --- Argon2id (exercises AVX2 BlaMka G) --- */
-    results[n++] = bench_argon2id(64,   iters_slow,  warmup);  /*  64 KiB */
-    results[n++] = bench_argon2id(1024, iters_vslow, warmup);  /*   1 MiB */
+    BENCH_ROW(bench_argon2id(64,   iters_slow,  warmup));  /*  64 KiB */
+    BENCH_ROW(bench_argon2id(1024, iters_vslow, warmup));  /*   1 MiB */
 
     /* --- ML-DSA-65 --- */
-    results[n++] = bench_dilithium_keygen(iters_slow, warmup);
-    results[n++] = bench_dilithium_sign(iters_slow, warmup);
-    results[n++] = bench_dilithium_verify(iters_slow, warmup);
+    BENCH_ROW(bench_dilithium_keygen(iters_slow, warmup));
+    BENCH_ROW(bench_dilithium_sign(iters_slow, warmup));
+    BENCH_ROW(bench_dilithium_verify(iters_slow, warmup));
 
     /* --- ML-DSA-65 NTT kernel isolation (scalar vs dispatched) ---
      * Isolates the NTT cost from the surrounding ML-DSA flow so a
      * future SIMD-NTT win shows up here as a scalar-vs-dispatch
      * delta even when end-to-end sign/verify is dominated by
      * sampling and rejection. */
-    results[n++] = bench_dilithium_ntt(iters_fast,    warmup, 0);
-    results[n++] = bench_dilithium_ntt(iters_fast,    warmup, 1);
-    results[n++] = bench_dilithium_invntt(iters_fast, warmup, 0);
-    results[n++] = bench_dilithium_invntt(iters_fast, warmup, 1);
+    BENCH_ROW(bench_dilithium_ntt(iters_fast,    warmup, 0));
+    BENCH_ROW(bench_dilithium_ntt(iters_fast,    warmup, 1));
+    BENCH_ROW(bench_dilithium_invntt(iters_fast, warmup, 0));
+    BENCH_ROW(bench_dilithium_invntt(iters_fast, warmup, 1));
 
     /* --- SLH-DSA SHAKE-128s (FIPS 205, NIST L1) ---
      * KeyGen ~164 ms, Sign ~1.25 s, Verify ~1.15 ms on this sandbox.
      * Sign uses the dedicated `iters_slh_sign` (5) tier so the row
-     * lands at ~6 s and stays inside the 60 s subprocess timeout that
+     * lands at ~6 s, keeping the full run (~109 s measured) inside
+     * the 600 s subprocess timeout that
      * `benchmarks/comparative_benchmark.py` enforces on the harness. */
-    results[n++] = bench_slhdsa_shake128s_keygen(iters_slow,     warmup);
-    results[n++] = bench_slhdsa_shake128s_sign(iters_slh_sign,   warmup);
-    results[n++] = bench_slhdsa_shake128s_verify(iters_slow,     warmup);
+    BENCH_ROW(bench_slhdsa_shake128s_keygen(iters_slow,     warmup));
+    BENCH_ROW(bench_slhdsa_shake128s_sign(iters_slh_sign,   warmup));
+    BENCH_ROW(bench_slhdsa_shake128s_verify(iters_slow,     warmup));
 
     /* --- ML-KEM-1024 --- */
-    results[n++] = bench_kyber_keygen(iters_slow, warmup);
-    results[n++] = bench_kyber_encaps(iters_slow, warmup);
-    results[n++] = bench_kyber_decaps(iters_slow, warmup);
+    BENCH_ROW(bench_kyber_keygen(iters_slow, warmup));
+    BENCH_ROW(bench_kyber_encaps(iters_slow, warmup));
+    BENCH_ROW(bench_kyber_decaps(iters_slow, warmup));
 
     /* --- ML-KEM-1024 poly helpers (scalar vs dispatched) ---
      * Surfaces the SVE2 kyber_poly_{add,sub,reduce} win (if any) on
@@ -1647,12 +1749,12 @@ int main(int argc, char **argv) {
      * each sample averages BENCH_INNER_LOOP=256 helper calls (the
      * single helper is sub-nanosecond on a modern core, well below
      * clock_gettime resolution). */
-    results[n++] = bench_kyber_poly_add(iters_fast, warmup, 0);
-    results[n++] = bench_kyber_poly_add(iters_fast, warmup, 1);
-    results[n++] = bench_kyber_poly_sub(iters_fast, warmup, 0);
-    results[n++] = bench_kyber_poly_sub(iters_fast, warmup, 1);
-    results[n++] = bench_kyber_poly_reduce(iters_fast, warmup, 0);
-    results[n++] = bench_kyber_poly_reduce(iters_fast, warmup, 1);
+    BENCH_ROW(bench_kyber_poly_add(iters_fast, warmup, 0));
+    BENCH_ROW(bench_kyber_poly_add(iters_fast, warmup, 1));
+    BENCH_ROW(bench_kyber_poly_sub(iters_fast, warmup, 0));
+    BENCH_ROW(bench_kyber_poly_sub(iters_fast, warmup, 1));
+    BENCH_ROW(bench_kyber_poly_reduce(iters_fast, warmup, 0));
+    BENCH_ROW(bench_kyber_poly_reduce(iters_fast, warmup, 1));
 
     /* --- Output --- */
     if (json_mode) {

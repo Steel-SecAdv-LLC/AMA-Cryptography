@@ -26,9 +26,12 @@ on:
   # (Copilot review #322).
   workflow_dispatch:
 
+# security-events: write is granted on the codeql job alone, not here — a
+# workflow-level grant hands SARIF-upload rights to every job in the file
+# when exactly one needs it (least privilege, same rule as the other
+# workflows' contents: read default).
 permissions:
   contents: read
-  security-events: write  # Required for CodeQL SARIF upload
 
 # Collapse overlapping runs on the same ref; main and scheduled runs
 # (the weekly extended sanitizer matrix) are preserved.
@@ -48,20 +51,78 @@ jobs:
       - name: Install cppcheck
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cppcheck
+          .github/scripts/apt-install.sh cppcheck
 
       - name: Run cppcheck on C sources
+        # `shell: bash` is load-bearing: it adds `-o pipefail`, which the
+        # default `bash -e {0}` does NOT set.  Without it the pipeline's status
+        # is `tee`'s (always 0), so `--error-exitcode=1` was inert and this gate
+        # could not fail on a finding — the same defect the clang-tidy job below
+        # documents and guards against.
+        shell: bash
         run: |
+          # Scope and suppressions, all four established by running the gate for
+          # the first time (with pipefail it reported 121 findings, none of them
+          # a defect — see below).  A gate that is permanently red is as useless
+          # as one that cannot fail, so the configuration below is the set that
+          # makes a NEW finding meaningful:
+          #
+          # `style` is dropped.  Its 78 findings here are opinions —
+          # variableScope ("this local could be declared inside the loop"),
+          # unusedStructMember, constParameterPointer — not defects, and this
+          # repository already runs clang-tidy (fail-closed), the clang static
+          # analyzer, CodeQL, and -Wall -Wextra -Wpedantic as errors, which is
+          # where substantive C analysis actually happens.  Keeping `style` at
+          # --error-exitcode=1 is what made this gate un-turn-on-able.
+          #
+          # shiftTooManyBitsSigned: the `x >> 31` / `x >> 63` sign-broadcast
+          # mask, which is how every branchless comparison in this codebase is
+          # written (ama_dilithium.c, ama_secp256k1.c, ama_cpuid.c, and the
+          # pq-crystals reference these follow).  C leaves it
+          # implementation-defined; every supported target implements it as an
+          # arithmetic shift, and the unsigned-cast rewrite would obscure the
+          # constant-time intent at 12 sites for no behavioural change.
+          #
+          # uninitvar: false positives on out-parameters.  cppcheck cannot see
+          # through the helpers that fill them.  Five sites (six reports: `src/c/ama_kyber.c:572` is emitted once per
+          # configuration `--force` invents), listed WITH their
+          # line numbers and their reasons in .cppcheck-suppressions.
+          #
+          # They used to be three file-wide `--suppress=uninitvar:<file>`
+          # entries, and "Scoped per file so the check stays live elsewhere"
+          # undersold what that cost: a genuinely uninitialised read introduced
+          # later anywhere in ama_nistp.c — 1,100 lines of P-256/P-384/P-521
+          # field arithmetic — was reported and discarded.  Measured by
+          # injecting one:
+          #
+          #   file-wide suppression : 0 reports
+          #   per-site suppressions : src/c/ama_nistp.c:469:31: error:
+          #                           Uninitialized variable: ama_probe_uninit
+          #
+          # arrayIndexOutOfBounds: NOT suppressed any more, because it was
+          # never a cppcheck limitation.  With --force, cppcheck invents a
+          # configuration where PATH_MAX is defined but unknown, evaluates
+          # `char dir[AMA_DISPATCH_PATH_MAX]` as `dir[1]`, and reports the
+          # writes into it.  Passing the real value with -DPATH_MAX=4096 makes
+          # both findings disappear AND leaves the bounds check live on every
+          # `char[AMA_DISPATCH_PATH_MAX]` buffer in the file — which, being a
+          # file full of them, is the one place the suppression cost most.
+          #
+          # unknownMacro: a vendored donna header (mul64x64_128); -i excludes
+          # vendor files from being CHECKED but not from being #included.
           cppcheck \
-            --enable=warning,style,performance,portability \
+            --enable=warning,performance,portability \
             --suppress=missingIncludeSystem \
             --suppress=unusedFunction \
+            --suppress=shiftTooManyBitsSigned \
+            --suppressions-list=.cppcheck-suppressions \
+            --suppress=unknownMacro:src/c/vendor/* \
             --error-exitcode=1 \
             --inline-suppr \
             --std=c11 \
             -I include/ \
             -DAMA_USE_NATIVE_PQC \
+            -DPATH_MAX=4096 \
             --force \
             -i src/c/vendor/ \
             src/c/ 2>&1 | tee cppcheck-report.txt
@@ -85,8 +146,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang clang-tools
+          .github/scripts/apt-install.sh cmake clang clang-tools
 
       - name: Run scan-build
         run: |
@@ -100,6 +160,7 @@ jobs:
             -enable-checker alpha.security.ReturnPtrRange \
             -enable-checker alpha.security.taint.TaintPropagation \
             cmake .. \
+              -DCMAKE_BUILD_TYPE=None \
               -DCMAKE_C_COMPILER=clang \
               -DAMA_USE_NATIVE_PQC=ON \
               -DAMA_BUILD_TESTS=OFF \
@@ -126,6 +187,11 @@ jobs:
     name: CodeQL Security Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The one job that uploads SARIF carries the one write grant the
+    # workflow used to hand to all of its jobs.
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -139,7 +205,11 @@ jobs:
 
       - name: Build C library for CodeQL
         run: |
+          # None: CodeQL and the clang static analyzer read the source the
+          # compiler is given, not the code it emits, so the optimizer plays no
+          # part.  Stated rather than defaulted.
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=None \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -147,14 +217,20 @@ jobs:
           cmake --build build -j$(nproc)
 
       - name: Perform CodeQL Analysis
+        # No explicit category: this job initializes TWO languages, and the
+        # action derives a distinct per-language category for each SARIF it
+        # uploads when none is pinned.  The previous
+        # `category: "/language:c-cpp"` stamped the python run's upload with
+        # the c-cpp label as well, so both languages' alerts filed under one
+        # analysis identity.
         uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
-        with:
-          category: "/language:c-cpp"
 
   compiler-warnings:
     name: Strict Compiler Warnings
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Two full builds per compiler now (unoptimized and Release+LTO), so the
+    # 10-minute budget that covered one no longer fits.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -166,8 +242,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake ${{ matrix.compiler }}
+          .github/scripts/apt-install.sh cmake ${{ matrix.compiler }}
 
       # This step was named "Build with strict warnings (Werror)" and did not
       # pass -Werror. Nor did CMakeLists.txt. It compiled with an expanded
@@ -176,17 +251,9 @@ jobs:
       # which is the same shape as every other gate defect this release fixed.
       #
       # -Werror over the whole set is not achievable here and pretending
-      # otherwise would just produce a permanently-disabled job. -Wpedantic is
-      # dominated by `__uint128_t` in src/c/fe51.h and fe64.h — a required
-      # extension, not a defect — and by src/c/vendor/ed25519-donna/, which
-      # INVARIANT-1's vendoring policy keeps byte-for-byte unmodified.
-      # -Wconversion and clang's -Wimplicit-int-conversion are concentrated in
-      # the Kyber arithmetic and the same vendored tree; blanket-casting
-      # reduction arithmetic to silence a warning is how a modular-arithmetic
-      # bug gets introduced, so it is not attempted next to a release.
-      #
-      # So the categories that ARE achievable are made fatal, and they were
-      # first driven to zero at source rather than suppressed:
+      # otherwise would just produce a permanently-disabled job. So the
+      # categories that ARE achievable are made fatal, and they were first
+      # driven to zero at source rather than suppressed:
       #
       #   -Werror=missing-prototypes  Every one of these was a symbol declared
       #                               by `extern` in each consumer separately —
@@ -207,11 +274,70 @@ jobs:
       #                               every sibling and every fe51.h
       #                               counterpart is `static inline`.
       #
-      # The remaining categories still compile and still print. Making one of
-      # them fatal is a follow-up with its own diff, not a flag flipped here.
-      - name: Build with strict warnings
+      # An earlier revision of this comment said -Wconversion and clang's
+      # -Wimplicit-int-conversion were "concentrated in the Kyber arithmetic"
+      # and left un-attempted next to a release. That inventory has since
+      # been driven to zero at source with per-site range proofs, not blanket
+      # casts: barrett_reduce (ama_kyber.c and the avx2 scalar twin) keeps all
+      # intermediates in int32 with the quotient exhaustively verified in
+      # [-10, 9] over every int16_t input, and the d=4/d=5 packers plus the
+      # d=11 unpacker carry the same explicit casts the d=10 branch always
+      # had (the FIPS 203 KATs pin the serialization bit-for-bit).
+      #
+      # What legitimately remains outside src/c/vendor/ is exactly two
+      # documented language-extension classes, both required by construction:
+      #   fe51.h / fe64.h            "ISO C does not support '__int128'"
+      #                              (-Wpedantic, gcc) — the 128-bit limbs the
+      #                              field arithmetic is built on.
+      #   x86/ama_nistp_mont_mulx.c  overlength string literal (-Woverlength-
+      #                              strings, clang) — one atomic asm() block;
+      #                              splitting the Montgomery kernel into
+      #                              several asm statements would forfeit the
+      #                              register-state guarantees the kernel
+      #                              depends on, and the warning measures the
+      #                              concatenated literal anyway.
+      # The "Enforce the frozen warning allowlist" step below fails this job
+      # if ANY other warning appears outside src/c/vendor/, so the clean
+      # state is now a gate, not a snapshot.
+      #
+      # TWO configurations are built, because one of them could not see an
+      # entire class of diagnostic.  The original step passed no
+      # CMAKE_BUILD_TYPE at all, so it compiled at -O0 — and
+      # -Wmaybe-uninitialized, -Wstringop-truncation, -Wstringop-overflow,
+      # -Wrestrict and everything _FORTIFY_SOURCE derives are computed from
+      # dataflow the optimizer builds and are simply not emitted there.
+      # Measured when this second lane was added: the same tree that produced
+      # ZERO warnings at -O0 produced seven -Wstringop-truncation in
+      # benchmarks/benchmark_c_raw.c at Release, and one
+      # "'pk_k' may be used uninitialized" with LTO on — the configuration
+      # `make c` and the release wheels actually use.  A gate whose green
+      # describes a configuration nobody ships is a snapshot again.
+      - name: Build with strict warnings (unoptimized)
+        shell: bash
+        # pipefail is load-bearing: without it the pipeline's status is
+        # tee's (always 0) and a compile error could not fail this step —
+        # the same defect the cppcheck job above documents.
+        env:
+          # GCC quotes identifiers in diagnostics with U+2018/U+2019 when the
+          # locale is UTF-8 (which GitHub runners set: LANG=C.UTF-8) and with
+          # ASCII apostrophes otherwise.  The allowlist matches on that text,
+          # so the text must not depend on the runner's locale.  Pinning
+          # LC_ALL here makes the diagnostics byte-reproducible between a
+          # developer's shell and CI; the allowlist patterns in
+          # tools/check_compiler_warnings.py are *also* quote-agnostic so a
+          # future locale change cannot silently break the gate the way it did
+          # at 94e4bd6.
+          LC_ALL: C
         run: |
+          set -o pipefail
+          # CMAKE_BUILD_TYPE=None states what this configure means: the
+          # UNOPTIMIZED half of the pair (the step below is the Release+LTO
+          # half), which is what makes the two logs a two-configuration
+          # warning sweep.  Stated explicitly because "no build type" and
+          # "forgot the build type" are otherwise the same text, and this
+          # project defaults neither.
           cmake -B build-strict \
+            -DCMAKE_BUILD_TYPE=None \
             -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
             -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
                              -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
@@ -219,10 +345,130 @@ jobs:
             -DAMA_BUILD_TESTS=ON \
             -DAMA_BUILD_EXAMPLES=OFF \
             -DAMA_ENABLE_LTO=OFF
-          cmake --build build-strict -j$(nproc)
+          # -Otarget: without it, two compiler processes under -j N share one
+          # pipe and their stderr can interleave INSIDE a single line — observed
+          # in a clean parallel build of this tree, where two identical
+          # -Woverlength-strings diagnostics merged into one unparseable line.
+          # An allowlisted warning that no longer matches its pattern turns this
+          # gate red for a reason unrelated to the code.  Make serialises
+          # per-target output with -Otarget; Ninja already buffers per edge.
+          cmake --build build-strict -j$(nproc) -- -Otarget 2>&1 | tee build-warnings.log
+
+      - name: Build with strict warnings (Release + LTO, the shipped configuration)
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -o pipefail
+          # AMA_ENABLE_NATIVE_ARCH stays OFF explicitly: -march=native would
+          # make the diagnostic set depend on whichever runner SKU picked up
+          # the job, which is the opposite of a frozen allowlist.
+          cmake -B build-strict-release \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_NATIVE_ARCH=OFF \
+            -DAMA_ENABLE_LTO=ON
+          cmake --build build-strict-release -j$(nproc) -- -Otarget 2>&1 | tee build-warnings-release.log
+
+      - name: Enforce the frozen warning allowlist
+        # The allowlist itself now lives in tools/check_compiler_warnings.py
+        # rather than in a chain of `grep -v` here, for one reason: it has to
+        # be applied to more than one log.  Three build configurations across
+        # two jobs (unoptimized, Release+LTO, and the AArch64 cross-build
+        # below) each need the identical decision, and three transcriptions of
+        # an allowlist is how a gate ends up enforcing three different things.
+        # The script is covered by tests/test_compiler_warning_gate.py, which
+        # pins that it fails on a real out-of-allowlist warning and that a
+        # missing or empty log is fatal rather than vacuously clean.
+        shell: bash
+        run: |
+          python3 tools/check_compiler_warnings.py \
+            build-warnings.log build-warnings-release.log
 
       - name: Run tests
         run: cd build-strict && ctest --output-on-failure
+
+  compiler-warnings-aarch64:
+    name: Strict Compiler Warnings (AArch64 cross, NEON + SVE2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The x86-64 job above cannot see src/c/neon/** or src/c/sve2/** at all:
+    # on x86 both collapse to a placeholder typedef in their `#else` branch.
+    # When this job was first run against the branch it reported 36
+    # -Wmissing-prototypes — a class the strict flag set makes FATAL — because
+    # every NEON and SVE2 kernel was defined with no visible declaration while
+    # src/c/dispatch/ama_dispatch.c, src/c/ama_sha256.c and
+    # tests/c/test_sha256_neon_kat.c each re-transcribed the signatures by
+    # hand.  Those are raw buffer signatures whose addresses land in a
+    # function-pointer table, so drift between a transcription and its
+    # definition is undefined behaviour at the indirect call, not a compile
+    # error.  Fixed at source by src/c/neon/ama_neon_internal.h and
+    # src/c/sve2/ama_sve2_internal.h; this job is what keeps it fixed.
+    #
+    # SVE2 is built in the same job because AMA_ENABLE_SVE2 defaults OFF, so
+    # those eleven kernels are doubly invisible: wrong architecture AND off by
+    # default.  No tests are run here — correctness on AArch64 is
+    # arm-qemu.yml's job; this one is about the diagnostics.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build with strict warnings (AArch64, NEON)
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -o pipefail
+          cmake -S . -B build-strict-arm -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_NATIVE_ARCH=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build-strict-arm -j$(nproc) 2>&1 | tee build-warnings-arm.log
+
+      - name: Build with strict warnings (AArch64, SVE2 kernels enabled)
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -o pipefail
+          cmake -S . -B build-strict-arm-sve2 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SVE2=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_NATIVE_ARCH=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build-strict-arm-sve2 -j$(nproc) 2>&1 | tee build-warnings-arm-sve2.log
+
+      - name: Enforce the frozen warning allowlist
+        shell: bash
+        run: |
+          python3 tools/check_compiler_warnings.py \
+            build-warnings-arm.log build-warnings-arm-sve2.log
 
   version-consistency:
     # Enforces audit 5a: every file that declares the library version must
@@ -242,7 +488,21 @@ jobs:
   address-sanitizer:
     name: AddressSanitizer + UBSan
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15.  This job runs `ctest --output-on-failure` over the WHOLE C
+    # suite under ASan+UBSan, which is the same command `memory-sanitizer`
+    # below runs under a HEAVIER sanitizer with a 25-minute budget — the two
+    # disagreeing about the cost of an identical workload was the defect, the
+    # same way the three dudect jobs disagreeing (300/600/900 s) was.
+    #
+    # It was not theoretical: on 2456cdd this job was cancelled at its cap,
+    # 15m13s in, still actively running ctest inside `test_sphincs_simd_equiv`
+    # — SLH-DSA equivalence, which is expensive natively and much more so under
+    # ASan.  Nothing hung; the budget simply could not cover the work.  A
+    # cancelled dependency is not a success, so `Static Analysis Gate` went red
+    # on a commit where cppcheck, clang-tidy, scan-build, all three
+    # strict-warning jobs, version-consistency, the MSan KAT lane and the
+    # reproducible-build check had every one passed.
+    timeout-minutes: 25
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -250,14 +510,20 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang
+          .github/scripts/apt-install.sh cmake clang
 
       - name: Build with ASan + UBSan
+        # -O1 matches the MemorySanitizer, ThreadSanitizer and Valgrind jobs in
+        # this file, and it is the root cause of the timeout this job hit at
+        # 15m13s inside test_sphincs_simd_equiv.  This project sets no default
+        # CMAKE_BUILD_TYPE, so without an -O flag in CMAKE_C_FLAGS the library
+        # compiled unoptimized while MSan ran the IDENTICAL ctest at -O1 under a
+        # heavier sanitizer.  Raising the cap treated the symptom; the two jobs
+        # were not running the same workload.
         run: |
           cmake -B build-asan \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=ON \
@@ -300,8 +566,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang-18 libc++-18-dev libc++abi-18-dev
+          .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev
 
       - name: Build with MSan
         run: |
@@ -349,8 +614,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang
+          .github/scripts/apt-install.sh cmake clang
 
       - name: Build with TSan
         run: |
@@ -370,14 +634,36 @@ jobs:
           TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
         run: cd build-tsan && ctest --output-on-failure
 
+      # Non-vacuity, the same shape the Valgrind lane above uses for its
+      # target count.  TSan reports a race only when two threads touch the
+      # same location at the same time, so this lane is worth exactly as much
+      # as the concurrency in the suite it runs.  For most of this project's
+      # history that concurrency was zero: of all the C tests exactly one
+      # created a thread, and it joined on the next statement, so the job
+      # instrumented a single-threaded program and could not report the class
+      # its own comment above names.  A live race in the shipped library
+      # (nistp_mulx_gate, src/c/ama_nistp.c) sat under this green lane.
+      # tests/c/test_concurrent_init.c is what the lane observes; if it stops
+      # running, the lane is decorative again and must fail rather than pass.
+      - name: Assert the lane had concurrency to observe
+        run: |
+          cd build-tsan
+          if ! ctest -N | grep -q 'Test *#[0-9]*: *test_concurrent_init'; then
+            echo "::error::test_concurrent_init is not registered — the TSan lane"
+            echo "::error::has no concurrent test to observe and cannot fail on a race."
+            exit 1
+          fi
+          echo "OK  test_concurrent_init is registered; the lane is non-vacuous"
+
   valgrind-memcheck:
     name: Valgrind memcheck (defense-in-depth)
     # Complements ASan with a different leak/uninit reader.  Slow —
-    # ~5x runtime — so scheduled only.  The test suite that runs here
-    # is the same one ctest runs in the ASan job; Valgrind's strength
-    # is that it catches uninit reads that ASan misses (different
-    # implementation strategy) and gives us a second opinion on the
-    # ASan reports for free.
+    # ~5x runtime — so scheduled only.  This lane runs a FOCUSED subset
+    # (the six most coverage-rich binaries listed in the run step), not the
+    # full ctest suite the ASan job runs — Valgrind over the whole suite would
+    # exceed the runner timeout.  Its strength is catching uninit reads ASan
+    # misses (different implementation strategy) and giving a second opinion on
+    # the ASan reports for free.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -388,8 +674,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang valgrind
+          .github/scripts/apt-install.sh cmake clang valgrind
 
       - name: Build (no sanitizers, just symbols + no LTO)
         run: |
@@ -406,12 +691,16 @@ jobs:
 
       - name: Run a focused subset under Valgrind memcheck
         run: |
+          set -euo pipefail
           cd build-valgrind
           # Run the most coverage-rich subset under Valgrind — the
           # PQC primitives and AEAD tests exercise the largest stack
           # / heap surface.  Running the full ctest suite under
           # Valgrind would exceed the runner timeout.
-          for test in bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3; do
+          tests="bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3"
+          expected=6
+          ran=0
+          for test in $tests; do
             if [ -x "$test" ]; then
               echo "=== valgrind: $test ==="
               valgrind \
@@ -421,8 +710,19 @@ jobs:
                 --errors-for-leak-kinds=definite \
                 --track-origins=yes \
                 "$test"
+              ran=$((ran + 1))
+            else
+              echo "::error::Valgrind target not found or not executable: $test"
             fi
           done
+          # Non-vacuity floor: a renamed target or a moved bin/ would otherwise
+          # let this lane pass with zero invocations while the row still read
+          # "6/6" (audit Low).  Require every expected binary to have run.
+          if [ "$ran" -ne "$expected" ]; then
+            echo "::error::Valgrind ran $ran/$expected targets — refusing to report success on a partial run."
+            exit 1
+          fi
+          echo "Valgrind memcheck clean across all $ran/$expected targets."
 
   clang-tidy:
     name: clang-tidy (security + correctness, fail-closed)
@@ -446,12 +746,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang clang-tidy
+          .github/scripts/apt-install.sh cmake clang clang-tidy
 
       - name: Configure and generate compile_commands.json
         run: |
+          # None: clang-tidy consumes compile_commands.json, which records the
+          # compiler invocation and not its output.
           cmake -B build-tidy \
+            -DCMAKE_BUILD_TYPE=None \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DAMA_USE_NATIVE_PQC=ON \
@@ -946,11 +1248,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      # This step is where the apt-hang problem was first diagnosed (868c354),
+      # and it carried the only copy of the fix.  The retry policy now lives
+      # in .github/scripts/apt-install.sh so every apt call in every workflow
+      # gets it — the three jobs cancelled on a later push were three steps
+      # that this inline version could not reach.  The rationale it used to
+      # carry is in that script's header.
       - name: Install dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang-18 libc++-18-dev libc++abi-18-dev
+          .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev
 
       - name: Configure with MSan (KAT-only, SIMD off, const-time AES)
         run: |
@@ -990,6 +1296,7 @@ jobs:
       - clang-analyzer
       - codeql
       - compiler-warnings
+      - compiler-warnings-aarch64
       - version-consistency
       - address-sanitizer
       - memory-sanitizer
@@ -1002,7 +1309,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Fail unless every job reached the state this trigger requires
-        # A gate that demanded `success` from all twelve jobs would be red on
+        # A gate that demanded `success` from all thirteen jobs would be red on
         # every pull request, because memory-sanitizer / thread-sanitizer /
         # valgrind-memcheck are schedule/dispatch-only and skip on PRs by
         # design, and clang-tidy / reproducible-build skip on a non-PR push. A
@@ -1027,6 +1334,7 @@ jobs:
           R_CLANG_ANALYZER: ${{ needs.clang-analyzer.result }}
           R_CODEQL: ${{ needs.codeql.result }}
           R_WARNINGS: ${{ needs.compiler-warnings.result }}
+          R_WARNINGS_ARM: ${{ needs.compiler-warnings-aarch64.result }}
           R_VERSION: ${{ needs.version-consistency.result }}
           R_ASAN: ${{ needs.address-sanitizer.result }}
           R_MSAN: ${{ needs.memory-sanitizer.result }}
@@ -1075,6 +1383,7 @@ jobs:
           check clang-analyzer       "${R_CLANG_ANALYZER}" success
           check codeql               "${R_CODEQL}"         success
           check compiler-warnings    "${R_WARNINGS}"       success
+          check compiler-warnings-aarch64 "${R_WARNINGS_ARM}" success
           check version-consistency  "${R_VERSION}"        success
           check address-sanitizer    "${R_ASAN}"           success
           check memory-sanitizer-kat "${R_MSAN_KAT}"       success

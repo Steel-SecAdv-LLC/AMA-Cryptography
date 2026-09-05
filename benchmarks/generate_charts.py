@@ -21,6 +21,7 @@ import copy
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 # -- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).parent.parent
@@ -37,9 +38,17 @@ BENCH_FILE = ROOT / "benchmark_results.json"
 #                             (Python/ctypes path; median latencies)
 #   KEM_OPS                 : `build/bin/benchmark_c_raw --json`
 #                             (raw C path; phase0 has no KEM entries)
-#   CRYPTO_OPS / C_VS_PYTHON: ctypes values from phase0_baseline_results.json;
+#   C_VS_PYTHON             : ctypes values from phase0_baseline_results.json;
 #                             raw-C values from `build/bin/benchmark_c_raw`
 #                             (rerun after a cmake -B build build)
+#
+# A CRYPTO_OPS table was listed here too, and was the one table of the ten in
+# this file that nothing read: not copied in generate_charts(), not merged with
+# live data, not plotted, not in generate_text_summary().  Its SHA3-256 and
+# HKDF figures are the same ones C_VS_PYTHON carries and does plot.  A
+# documented data source that nothing reads is a claim about this file that is
+# not true of it, so the table and its entry here are gone rather than wired to
+# a chart nobody asked for.
 #   FOUR_LAYER_BREAKDOWN    : derived from SIGNATURE_OPS + SHA3 + HMAC + HKDF
 #                             ctypes medians (pipeline latency, serial add)
 #
@@ -47,14 +56,6 @@ BENCH_FILE = ROOT / "benchmark_results.json"
 # is build-time-only. Re-derive whenever either source artifact changes;
 # the live-data branch below will override individual entries when
 # benchmark_results.json exists.
-CRYPTO_OPS = {
-    "SHA3-256 (C, 32B)": {"ops_sec": 1_540_955, "category": "hash"},
-    "SHA3-256 (C, 1KB)": {"ops_sec": 232_458, "category": "hash"},
-    "SHA3-256 (Py ctypes, 1KB)": {"ops_sec": 18_395, "category": "hash"},
-    "HMAC-SHA3-256 (C, 1KB)": {"ops_sec": 154_699, "category": "mac"},
-    "HKDF-SHA3-256 (C, 96B)": {"ops_sec": 100_756, "category": "kdf"},
-}
-
 SIGNATURE_OPS = {
     "Ed25519 Sign": {"ops_sec": 5_335, "latency_ms": 0.187},
     "Ed25519 Verify": {"ops_sec": 2_785, "latency_ms": 0.359},
@@ -153,15 +154,37 @@ FOUR_LAYER_BREAKDOWN = [
 ]
 
 
-def load_live_data():
-    """Load live benchmark data if available."""
-    if BENCH_FILE.exists():
-        try:
-            with open(BENCH_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return None
+def load_live_data() -> Any:
+    """Live benchmark measurements, or ``None`` when none have been produced.
+
+    An *absent* ``benchmark_results.json`` means no benchmark has run, and the
+    caller legitimately charts the hardcoded baseline tables instead.  A file
+    that exists but cannot be read or parsed is a different state entirely,
+    and returning ``None`` for it made the two indistinguishable: a damaged
+    results file drew every chart from the baselines and published them as
+    though they had been measured.  Nothing in the output says which source
+    was used, so that substitution is invisible — it fails loudly instead.
+
+    The handler was also wrong in both directions.  ``json.load`` cannot raise
+    ``KeyError``, so that arm was unreachable; ``OSError`` — the failure that
+    genuinely occurs between ``exists()`` and ``open()``, and on a path that
+    is not a regular file — was not caught at all.  ``json.JSONDecodeError``
+    and ``UnicodeDecodeError`` are both ``ValueError``, which is why the read
+    is now pinned to UTF-8 rather than decoded against the host locale.
+    """
+    if not BENCH_FILE.exists():
+        return None
+    try:
+        with open(BENCH_FILE, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(
+            f"{BENCH_FILE} exists but could not be read as JSON ({exc}). "
+            f"Charting would fall back to the hardcoded baseline constants "
+            f"and present them as measurements. Re-run the benchmarks to "
+            f"regenerate it, or remove the file to chart the baselines "
+            f"deliberately."
+        ) from exc
 
 
 # -- Professional dark theme -------------------------------------------------
@@ -171,7 +194,7 @@ TEXT_COLOR = "#e0e0e0"
 GRID_COLOR = "#2a2a4a"
 
 
-def apply_theme(plt):
+def apply_theme(plt: Any) -> None:
     """Apply professional dark theme to all charts."""
     plt.rcParams.update(
         {
@@ -212,11 +235,15 @@ def generate_charts(output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
     bench = load_live_data()
 
-    # Update data from live benchmarks if available
-    sig_ops = dict(SIGNATURE_OPS)
-    kem_ops = dict(KEM_OPS)
-    c_vs_py = dict(C_VS_PYTHON)
-    scaling = dict(SCALING)
+    # Update data from live benchmarks if available.  deepcopy, not dict():
+    # a shallow copy shares the nested per-row dicts, so the live-data
+    # override below wrote through into the module-level anchored tables —
+    # the exact aliasing hazard the deepcopy at the bottom of this file
+    # already guards against for the same tables.
+    sig_ops = copy.deepcopy(SIGNATURE_OPS)
+    kem_ops = copy.deepcopy(KEM_OPS)
+    c_vs_py = copy.deepcopy(C_VS_PYTHON)
+    scaling = copy.deepcopy(SCALING)
 
     if bench:
         ops = bench.get("cryptographic_operations", {})
@@ -662,7 +689,7 @@ def generate_charts(output_dir: str) -> None:
         style="italic",
     )
 
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.tight_layout(rect=(0, 0, 1, 0.97))
     plt.savefig(os.path.join(output_dir, "pqc_benchmark_overview.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/pqc_benchmark_overview.svg (2x2 collage)")
@@ -678,7 +705,9 @@ def generate_text_summary() -> None:
 
     print("\nSignature Operations:")
     for name, data in SIGNATURE_OPS.items():
-        bar = "#" * min(50, data["ops_sec"] // 400)
+        # int(): the row values are int and float together, so the mapping
+        # infers as float and `"#" * <float>` is not a repetition.
+        bar = "#" * int(min(50, data["ops_sec"] // 400))
         print(f"  {name:20s} {bar} {data['ops_sec']:>8,} ops/sec")
 
     print("\nC vs Python:")

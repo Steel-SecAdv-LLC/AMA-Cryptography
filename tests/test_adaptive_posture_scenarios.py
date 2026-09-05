@@ -11,6 +11,7 @@ threshold-based escalation, default threat level, and score decay.
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 import pytest
@@ -44,7 +45,26 @@ def _make_report(
     }
 
 
-def _timing_alert(severity: str = "critical", deviation: float = 10.0) -> dict[str, Any]:
+#: Monotonic source for the synthetic alert timestamps below.
+#:
+#: These helpers used to emit alerts with NO ``timestamp`` key, and
+#: ``_alerts_not_yet_scored`` treated a missing timestamp as unconditionally
+#: new.  The whole scenario suite therefore ran on the always-new path and
+#: pinned none of the alert de-duplication the cursor exists to provide — every
+#: alert was re-scored on every evaluation, which is also what let a single
+#: alert fill the Lyapunov deviation history with 50 copies of itself.  Real
+#: alerts carry ``time.time()``: ``monitoring.py`` stamps every
+#: ``self.alerts.append``.  A deterministic counter rather than a clock, so the
+#: scenarios stay reproducible and ties are constructed on purpose, not by
+#: accident of clock granularity.
+_ALERT_CLOCK = itertools.count(1.0, 1.0)
+
+
+def _timing_alert(
+    severity: str = "critical",
+    deviation: float = 10.0,
+    timestamp: float | None = None,
+) -> dict[str, Any]:
     """Create a fake timing alert entry."""
 
     class _FakeAnomaly:
@@ -52,14 +72,23 @@ def _timing_alert(severity: str = "critical", deviation: float = 10.0) -> dict[s
             self.severity = sev
             self.deviation_sigma = dev
 
-    return {"type": "timing", "anomaly": _FakeAnomaly(severity, deviation)}
+    return {
+        "type": "timing",
+        "anomaly": _FakeAnomaly(severity, deviation),
+        "timestamp": next(_ALERT_CLOCK) if timestamp is None else timestamp,
+    }
 
 
-def _pattern_alert(severity: str = "critical", z_score: float = 10.0) -> dict[str, Any]:
+def _pattern_alert(
+    severity: str = "critical",
+    z_score: float = 10.0,
+    timestamp: float | None = None,
+) -> dict[str, Any]:
     """Create a fake pattern alert entry."""
     return {
         "type": "pattern",
         "anomaly": {"severity": severity, "z_score": z_score},
+        "timestamp": next(_ALERT_CLOCK) if timestamp is None else timestamp,
     }
 
 
