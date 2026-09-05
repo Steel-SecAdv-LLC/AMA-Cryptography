@@ -114,6 +114,9 @@ class TestTsaNetworkFailsClosed:
                     try:
                         conn.recv(16)
                     except OSError:
+                        # The peer may already have reset; the drop is the
+                        # point of this server, so a failed read is not an
+                        # error and the connection is closed either way.
                         pass
                     conn.close()
                     return

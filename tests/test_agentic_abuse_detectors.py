@@ -338,13 +338,6 @@ undetected checkpoint behind. Lessons learned: relay first.""",
 
 
 _CORPUS_SUFFIXES = (".md", ".py", ".c", ".h", ".json", ".yml", ".pyx")
-# ``verification`` is the v5-audit workspace — adversarial attack analysis,
-# ledgers, and logs, NOT the library's own prose/source.  It is threat-DESCRIBING
-# by construction (the subsystem memos dissect successor-note tradecraft), so it
-# is no more a "benign-traffic stand-in" than build/ or dist/ are, and it is
-# excluded from the corpus for the same reason those are: it is not library
-# content.  The detector's thresholds, markers, and the note-vs-corpus margin are
-# unchanged; only non-library evidence files are kept out of the calibration.
 _CORPUS_SKIP_TOP = {
     ".git",
     "build",
@@ -352,7 +345,6 @@ _CORPUS_SKIP_TOP = {
     "dist",
     ".eggs",
     ".pytest_cache",
-    "verification",
 }
 
 

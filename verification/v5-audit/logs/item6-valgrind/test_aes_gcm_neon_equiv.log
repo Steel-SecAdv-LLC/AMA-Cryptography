@@ -1,7 +1,0 @@
-==================================================
-NEON AES-256-GCM vs generic-C reference equivalence
-==================================================
-
-  SKIP: NEON sources not compiled in (non-AArch64 build,
-        or AMA_ENABLE_NEON=OFF).  Generic C AES-GCM is
-        already covered by test_kat and ACVP.

@@ -72,20 +72,6 @@ _ALLOWED_PREFIXES: tuple[tuple[str, str], ...] = (
         "src/c/vendor/",
         "vendored public-domain ed25519-donna reference tables (public constants)",
     ),
-    (
-        "verification/v5-audit/logs/",
-        "committed output logs of the v5 pre-merge audit's OWN secret scanners "
-        "(gitleaks/trufflehog) and their negative controls: by construction "
-        "these logs quote the credential-shaped strings the scanners matched — "
-        "historical public-fixture PEM headers under tests/kat/ (removed at "
-        "HEAD) and synthetic planted keys/tokens in a throwaway scratch clone. "
-        "Same rationale the scanner's own detection suite "
-        "(tests/test_secret_scanner.py) is allowlisted for: an audit's scan "
-        "output must reproduce verbatim for the operator spot-audit "
-        "(rerun-and-compare-hash), so it cannot be obfuscated past the scanner. "
-        "Not shipped code; every hit here is a scanner report, never a live "
-        "credential.",
-    ),
 )
 
 # Individual files that legitimately carry public key material.

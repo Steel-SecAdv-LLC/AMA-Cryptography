@@ -1,8 +1,0 @@
-ops=20 warmup=180.0s windows=2x240.0s
-  warmup (discarded): iters=103611 samples=518 slope=534693 B/min rss_start=53816KiB rss_end=55672KiB
-  window 1: iters=137811 samples=689 slope=137520 B/min rss_start=55672KiB rss_end=56140KiB
-  window 2: iters=137936 samples=689 slope=36658 B/min rss_start=56140KiB rss_end=56312KiB
-
-window1=137520 B/min  window2=36658 B/min
-VERDICT: slope DECAYS between equal consecutive windows -> plateauing (arena/bounded fill), not a constant-rate leak
-EXIT=0

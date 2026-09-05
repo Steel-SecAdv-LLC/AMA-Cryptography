@@ -663,9 +663,7 @@ jobs:
           --linecoverage-report .mypy-coverage \
           ama_cryptography/ tests/ tools/ benchmarks/ examples/ \
           fuzz/python/ nist_vectors/ schemas/ wycheproof_vectors/ \
-          docs/conf.py setup.py ama_cryptography_monitor.py \
-          verification/v5-audit/refleak_soak.py \
-          verification/v5-audit/diff_fuzz.py
+          docs/conf.py setup.py ama_cryptography_monitor.py
 
     - name: "Type-check scope: every tracked .py file was actually checked"
       run: |

@@ -1,7 +1,0 @@
-==================================================
-NEON Argon2 BlaMka G vs scalar reference equivalence
-==================================================
-
-  SKIP: NEON sources not compiled in (non-AArch64 build,
-        or AMA_ENABLE_NEON=OFF).  Scalar BlaMka G is
-        already covered by test_argon2id + RFC 9106 KAT.

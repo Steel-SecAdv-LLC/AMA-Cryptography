@@ -59,6 +59,8 @@ class TestNonceBound:
         try:
             ts.tst_info_nonce(tst)
         except ts.TimestampError:
+            # The contracted exception; the branch below is the one that
+            # must never be taken.
             pass
         except ValueError as exc:  # pragma: no cover - the bug we fixed
             pytest.fail(f"raw ValueError escaped the TimestampError contract: {exc!r}")

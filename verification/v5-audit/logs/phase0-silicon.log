@@ -1,4 +1,0 @@
-PRESENT: avx512f
-PRESENT: avx512vl
-ABSENT:  vaes
-ABSENT:  vpclmulqdq
