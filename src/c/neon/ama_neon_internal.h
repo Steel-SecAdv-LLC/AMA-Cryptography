@@ -56,8 +56,7 @@ extern "C" {
 /* Every kernel below exists only on AArch64; on other targets the defining
  * translation units collapse to a placeholder typedef and the dispatcher
  * never references these names.  Declaring them unconditionally would be
- * harmless but misleading, and `fe51_neon` genuinely needs <arm_neon.h>'s
- * target to be meaningful. */
+ * harmless but misleading. */
 #if defined(__aarch64__) || defined(_M_ARM64)
 
 /* The NEON tier is little-endian only, and this guard makes that fail

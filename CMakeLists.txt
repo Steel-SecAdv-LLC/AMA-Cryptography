@@ -603,7 +603,6 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
             src/c/neon/ama_dilithium_neon.c
             src/c/neon/ama_sphincs_neon.c
             src/c/neon/ama_aes_gcm_neon.c
-            src/c/neon/ama_ed25519_neon.c
             src/c/neon/ama_chacha20poly1305_neon.c
             src/c/neon/ama_argon2_neon.c
         )
@@ -1022,7 +1021,6 @@ if(AMA_BUILD_SHARED)
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
     target_compile_definitions(ama_cryptography_shared PRIVATE
-        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
     )
 
     if(AMA_USE_NATIVE_PQC)
@@ -1088,7 +1086,6 @@ if(AMA_BUILD_STATIC)
     )
     target_compile_definitions(ama_cryptography_static PRIVATE AMA_BUILDING_STATIC)
     target_compile_definitions(ama_cryptography_static PRIVATE
-        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
     )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
@@ -1181,7 +1178,6 @@ if(AMA_BUILD_TESTS)
     )
     target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)
     target_compile_definitions(ama_cryptography_test PRIVATE
-        $<$<CONFIG:Debug>:AMA_DISPATCH_DEBUG>
     )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_USE_NATIVE_PQC)

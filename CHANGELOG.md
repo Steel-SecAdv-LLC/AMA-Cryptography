@@ -53,7 +53,7 @@ every workflow, Makefile, hook and documented operator command; workflows and
 packaging against what actually runs; docs and assets against every link;
 tests against every fixture request.  Everything below had zero callers, zero
 build inputs or zero readers, and each removal was re-verified at its site
-before it left.  Forty-three code and configuration files change (+22 / −2,371 lines) and seven files are deleted; the rest of the diff is the two baseline ledgers, the metrics report, the re-rendered chart and this entry.  Nothing a document, a test or a user-facing extra
+before it left.  Forty-six code and configuration files change (+26 / −2,404 lines) and seven files are deleted; the rest of the diff is the two baseline ledgers, the metrics report, the re-rendered chart and this entry.  Nothing a document, a test or a user-facing extra
 still named as supported was removed without that name being corrected in the
 same edit.
 
@@ -64,8 +64,8 @@ same edit.
   binding never bound (it binds `ama_hmac_sha256_2`); the
   `ama_slhdsa_randombytes_hook` test seam (the KATs drive
   `ama_sphincs_randombytes_hook`); the `chacha20_block_x8` force / restore
-  test hooks no C test calls; `ama_blake2b_compress_neon` (Argon2's NEON path
-  uses its own static G function); all of `src/c/neon/ama_ed25519_neon.c` and
+  test hooks no C test calls; `ama_blake2b_compress_neon` and the two static
+  tables only it read (Argon2's NEON path uses its own static G function); all of `src/c/neon/ama_ed25519_neon.c` and
   its prototypes — four two-lane field primitives the header itself described
   as what "a future NEON Ed25519 ladder would be built from", compiled into
   every AArch64 build with no caller; two forward `typedef struct`
@@ -75,9 +75,11 @@ same edit.
   ed25519-donna test-driver files (`test.c`, `test-internals.c`,
   `test-ticks.h` and the 2.7 MB `regression.h`) that no build compiles and the
   shim's include closure never reaches, which `graft src/c` had been shipping
-  in every sdist.  The x86-64 library rebuilt and ctest passed; the six
-  instruction-count invariance targets CI runs against the testing-mode
-  library pass on the result.
+  in every sdist.  The x86-64 library rebuilt and ctest passed; both AArch64
+  lanes (the strict-warnings cross build with `-Werror=unused-function
+  -Werror=missing-prototypes`, and the no-crypto-extensions build) compile
+  clean with the cross toolchain; the six instruction-count invariance
+  targets CI runs against the testing-mode library pass on the result.
 - **Python (shipped package).**  Gone: `ml_kem_sizes` / `ml_dsa_sizes` (the
   tests read the size tables directly), `ResonanceTimingMonitor._prune_history`
   (a documented no-op), `RefactoringAnalyzer.MONITOR_MODULE`,

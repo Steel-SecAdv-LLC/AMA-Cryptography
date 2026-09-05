@@ -191,8 +191,6 @@ typedef enum {
  * ============================================================================ */
 
 typedef struct ama_context_t ama_context_t;
-typedef struct ama_keypair_t ama_keypair_t;
-typedef struct ama_signature_t ama_signature_t;
 
 /* ============================================================================
  * CONTEXT MANAGEMENT
