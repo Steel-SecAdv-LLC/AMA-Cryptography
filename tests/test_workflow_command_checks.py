@@ -41,46 +41,28 @@ import pytest
 import yaml
 
 import tools.check_workflow_commands as wf
-from tools.check_workflow_commands import (
-    MIN_WORKFLOWS,
-    RELEASE_ACTIONS,
-    RETIRED_LABELS,
-    SUPPORTED_LABELS,
-    Report,
-    check_cmake_build_type,
-    check_expression_syntax,
-    check_gate_jobs_run_their_payload,
-    check_inline_python,
-    check_pytest_prerequisites,
-    check_release_publishing,
-    check_runner_labels,
-    check_shell_parseable,
-    check_windows_quoting,
-    main,
-    sweep,
-)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def run_checks(source: str, name: str = "test.yml") -> Report:
+def run_checks(source: str, name: str = "test.yml") -> wf.Report:
     """Parse a workflow fragment and run every check over it."""
     document = yaml.safe_load(textwrap.dedent(source))
-    report = Report()
+    report = wf.Report()
     path = Path(name)
-    check_runner_labels(path, document, report)
-    check_inline_python(path, document, report)
-    check_windows_quoting(path, document, report)
-    check_shell_parseable(path, document, report)
-    check_release_publishing(path, document, report)
-    check_expression_syntax(path, document, report)
-    check_cmake_build_type(path, document, report)
-    check_pytest_prerequisites(path, document, report)
-    check_gate_jobs_run_their_payload(path, document, report)
+    wf.check_runner_labels(path, document, report)
+    wf.check_inline_python(path, document, report)
+    wf.check_windows_quoting(path, document, report)
+    wf.check_shell_parseable(path, document, report)
+    wf.check_release_publishing(path, document, report)
+    wf.check_expression_syntax(path, document, report)
+    wf.check_cmake_build_type(path, document, report)
+    wf.check_pytest_prerequisites(path, document, report)
+    wf.check_gate_jobs_run_their_payload(path, document, report)
     return report
 
 
-def messages(report: Report) -> str:
+def messages(report: wf.Report) -> str:
     return "\n".join(f"{f.message} :: {f.remedy}" for f in report.findings)
 
 
@@ -169,7 +151,7 @@ class TestRunnerLabels:
         assert report.labels_unresolved and "inputs.runner" in report.labels_unresolved[0]
 
     def test_supported_and_retired_sets_are_disjoint(self) -> None:
-        assert not (SUPPORTED_LABELS & set(RETIRED_LABELS))
+        assert not (wf.SUPPORTED_LABELS & set(wf.RETIRED_LABELS))
 
 
 class TestInlinePythonPayloads:
@@ -490,7 +472,7 @@ class TestReleasePublishing:
         assert "resets a hand-edited release title" in messages(report)
 
     def test_every_listed_release_action_is_matched(self) -> None:
-        for action in RELEASE_ACTIONS:
+        for action in wf.RELEASE_ACTIONS:
             report = run_checks(
                 "name: Release\n"
                 "on: [push]\n"
@@ -657,7 +639,7 @@ class TestExpressionSyntax:
 
     def test_the_check_inspects_something(self) -> None:
         """A silent no-op would pass every workflow in the tree."""
-        report = sweep(REPO_ROOT / ".github" / "workflows")
+        report = wf.sweep(REPO_ROOT / ".github" / "workflows")
         assert report.expressions_checked > 0
 
     def test_the_real_arm_workflow_parses_and_has_both_vector_lengths(self) -> None:
@@ -668,8 +650,8 @@ class TestExpressionSyntax:
         matrix = document["jobs"]["arm-qemu-sve2"]["strategy"]["matrix"]
         assert "include" in matrix, "the vector length must be carried, not computed"
         assert {entry["vl_bits"] for entry in matrix["include"]} == {128, 256}
-        report = Report()
-        check_expression_syntax(
+        report = wf.Report()
+        wf.check_expression_syntax(
             REPO_ROOT / ".github" / "workflows" / "arm-qemu.yml", document, report
         )
         assert report.ok, messages(report)
@@ -1160,10 +1142,10 @@ class TestMalformedWorkflow:
         # Fill to the floor with valid files so the parse error is the sole
         # finding — otherwise the non-vacuity floor (below) would also fire and
         # this test would be asserting two unrelated things at once.
-        for i in range(MIN_WORKFLOWS):
+        for i in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"ok-{i}.yml").write_text(_valid_workflow(i), encoding="utf-8")
         (tmp_path / "broken.yml").write_text("jobs: [unclosed\n", encoding="utf-8")
-        report = sweep(tmp_path)
+        report = wf.sweep(tmp_path)
         parse_errors = [f for f in report.findings if "could not be parsed" in f.message]
         assert len(parse_errors) == 1, messages(report)
         assert parse_errors[0].workflow == "broken.yml"
@@ -1172,16 +1154,16 @@ class TestMalformedWorkflow:
         # H7: an empty (or wrong-path) workflow set must FAIL, not pass over
         # nothing.  Before the floor this returned ok — the vacuity the floor
         # exists to remove.
-        report = sweep(tmp_path)
+        report = wf.sweep(tmp_path)
         assert not report.ok
         assert any("floor" in f.message for f in report.findings), messages(report)
 
     def test_a_workflow_set_at_the_floor_does_not_trip_it(self, tmp_path: Path) -> None:
         # The floor must fire on too-few files and not on enough — a floor that
         # always fired would be as useless as one that never did.
-        for i in range(MIN_WORKFLOWS):
+        for i in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"ok-{i}.yml").write_text(_valid_workflow(i), encoding="utf-8")
-        report = sweep(tmp_path)
+        report = wf.sweep(tmp_path)
         assert not any("floor" in f.message for f in report.findings), messages(report)
 
 
@@ -1189,18 +1171,18 @@ class TestRepositoryWorkflows:
     """The gate must pass on this repository — and must be doing real work."""
 
     @pytest.fixture(scope="class")
-    def report(self) -> Report:
-        return sweep(REPO_ROOT / ".github" / "workflows")
+    def report(self) -> wf.Report:
+        return wf.sweep(REPO_ROOT / ".github" / "workflows")
 
-    def test_repository_workflows_pass(self, report: Report) -> None:
+    def test_repository_workflows_pass(self, report: wf.Report) -> None:
         assert report.ok, messages(report)
 
-    def test_every_runner_label_resolved(self, report: Report) -> None:
+    def test_every_runner_label_resolved(self, report: wf.Report) -> None:
         # An unresolved label is an unchecked label.  If one appears, either
         # teach the resolver about it or accept a real blind spot knowingly.
         assert report.labels_unresolved == []
 
-    def test_gate_actually_inspected_something(self, report: Report) -> None:
+    def test_gate_actually_inspected_something(self, report: wf.Report) -> None:
         # Guards against the checker silently becoming a no-op (a renamed
         # workflow directory, a glob that stops matching).
         assert report.labels_checked > 0
@@ -1233,7 +1215,7 @@ class TestRepositoryWorkflows:
             ), f"{job_id} must build the library it measures with optimization enabled"
 
     def test_main_exits_zero_on_this_repository(self) -> None:
-        assert main([]) == 0
+        assert wf.main([]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1264,24 +1246,24 @@ class TestEveryRunnerLabelInTheTablesIsEnforced:
     def _job(label: str) -> str:
         return f"jobs:\n  build:\n    runs-on: {label}\n    steps:\n      - run: echo hi\n"
 
-    @pytest.mark.parametrize("label", sorted(SUPPORTED_LABELS))
+    @pytest.mark.parametrize("label", sorted(wf.SUPPORTED_LABELS))
     def test_a_supported_label_is_accepted(self, label: str) -> None:
         report = run_checks(self._job(label))
         assert report.findings == [], messages(report)
 
-    @pytest.mark.parametrize("label", sorted(RETIRED_LABELS))
+    @pytest.mark.parametrize("label", sorted(wf.RETIRED_LABELS))
     def test_a_retired_label_is_reported_with_its_replacement(self, label: str) -> None:
         report = run_checks(self._job(label))
         assert len(report.findings) == 1, messages(report)
         finding = report.findings[0]
         assert label in finding.message
         assert "retired" in finding.message
-        assert RETIRED_LABELS[label] in finding.remedy
+        assert wf.RETIRED_LABELS[label] in finding.remedy
 
     def test_the_two_tables_stay_disjoint(self) -> None:
         """A label may be supported or retired, never both: an overlap would
         make the supported arm win and silently un-retire an image."""
-        assert not (SUPPORTED_LABELS & set(RETIRED_LABELS))
+        assert not (wf.SUPPORTED_LABELS & set(wf.RETIRED_LABELS))
 
     def test_an_unknown_label_is_reported_as_a_typo(self) -> None:
         report = run_checks(self._job("ubuntu-lastest"))
@@ -1800,9 +1782,9 @@ class TestCmakeConfigureExtraction:
 
 class TestBuildTypeReporting:
     @staticmethod
-    def _run(command: str) -> Report:
-        report = Report()
-        check_cmake_build_type(
+    def _run(command: str) -> wf.Report:
+        report = wf.Report()
+        wf.check_cmake_build_type(
             Path("test.yml"),
             {"jobs": {"b": {"runs-on": "ubuntu-latest", "steps": [{"run": command}]}}},
             report,
@@ -1833,8 +1815,8 @@ class TestBuildTypeReporting:
         assert message.endswith("cmake -B build")
 
     def test_a_second_offending_step_is_also_reported(self) -> None:
-        report = Report()
-        check_cmake_build_type(
+        report = wf.Report()
+        wf.check_cmake_build_type(
             Path("test.yml"),
             {
                 "jobs": {
@@ -1917,35 +1899,35 @@ class TestSweepOverADirectory:
             "jobs:\n  b:\n    runs-on: macos-13\n    steps:\n      - run: echo hi\n",
             encoding="utf-8",
         )
-        report = sweep(tmp_path)
+        report = wf.sweep(tmp_path)
         assert any("could not be parsed as YAML" in f.message for f in report.findings)
         assert any("has been retired" in f.message for f in report.findings)
 
     def test_a_directory_below_the_floor_is_reported(self, tmp_path: Path) -> None:
         (tmp_path / "one.yml").write_text("jobs: {}\n", encoding="utf-8")
-        report = sweep(tmp_path)
-        assert any(f"floor {MIN_WORKFLOWS}" in f.message for f in report.findings)
+        report = wf.sweep(tmp_path)
+        assert any(f"floor {wf.MIN_WORKFLOWS}" in f.message for f in report.findings)
 
     def test_the_repositorys_own_workflow_set_meets_the_floor(self) -> None:
         workflows = REPO_ROOT / ".github" / "workflows"
         count = len(list(workflows.glob("*.yml"))) + len(list(workflows.glob("*.yaml")))
-        assert count >= MIN_WORKFLOWS
+        assert count >= wf.MIN_WORKFLOWS
 
 
 class TestTheCommandLineContract:
     def test_a_clean_directory_exits_zero_and_says_so(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        for index in range(MIN_WORKFLOWS):
+        for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
                 "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
             )
-        assert main(["--workflows-dir", str(tmp_path)]) == 0
+        assert wf.main(["--workflows-dir", str(tmp_path)]) == 0
         assert "WORKFLOW COMMAND CHECK PASSED" in capsys.readouterr().out
 
     def test_a_directory_with_a_defect_exits_one(self, tmp_path: Path) -> None:
-        for index in range(MIN_WORKFLOWS):
+        for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
                 "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
@@ -1954,12 +1936,12 @@ class TestTheCommandLineContract:
             "jobs:\n  b:\n    runs-on: macos-13\n    steps:\n      - run: echo hi\n",
             encoding="utf-8",
         )
-        assert main(["--workflows-dir", str(tmp_path)]) == 1
+        assert wf.main(["--workflows-dir", str(tmp_path)]) == 1
 
     def test_unresolved_labels_are_listed_rather_than_assumed_fine(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        for index in range(MIN_WORKFLOWS):
+        for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
                 "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
@@ -1968,7 +1950,7 @@ class TestTheCommandLineContract:
             "jobs:\n  b:\n    runs-on: ${{ inputs.runner }}\n    steps:\n      - run: echo hi\n",
             encoding="utf-8",
         )
-        main(["--workflows-dir", str(tmp_path)])
+        wf.main(["--workflows-dir", str(tmp_path)])
         assert "could not resolve" in capsys.readouterr().out.lower()
 
 
@@ -1994,7 +1976,7 @@ class TestTheCommandLineContract:
 
 class TestTheCuratedTablesAreWhatTheySay:
     def test_the_supported_runner_labels(self) -> None:
-        assert SUPPORTED_LABELS == frozenset(
+        assert wf.SUPPORTED_LABELS == frozenset(
             {
                 "ubuntu-latest",
                 "ubuntu-24.04",
@@ -2015,7 +1997,7 @@ class TestTheCuratedTablesAreWhatTheySay:
 
     def test_the_retired_runner_labels_and_their_replacements(self) -> None:
         macos = "macos-15-intel (Intel x86_64) or macos-15 (Apple Silicon arm64)"
-        assert RETIRED_LABELS == {
+        assert wf.RETIRED_LABELS == {
             "macos-13": macos,
             "macos-12": macos,
             "macos-11": macos,
@@ -2028,9 +2010,9 @@ class TestTheCuratedTablesAreWhatTheySay:
     def test_every_replacement_names_a_supported_label(self) -> None:
         """The remedy has to be actionable: a replacement naming an image that
         is itself retired would send the reader in a circle."""
-        for retired, replacement in RETIRED_LABELS.items():
+        for retired, replacement in wf.RETIRED_LABELS.items():
             assert replacement.strip(), retired
-            assert any(label in replacement for label in SUPPORTED_LABELS), retired
+            assert any(label in replacement for label in wf.SUPPORTED_LABELS), retired
 
     def test_the_windows_command_keys(self) -> None:
         assert wf.WINDOWS_COMMAND_KEYS == (
@@ -2042,7 +2024,7 @@ class TestTheCuratedTablesAreWhatTheySay:
         )
 
     def test_the_release_actions(self) -> None:
-        assert RELEASE_ACTIONS == (
+        assert wf.RELEASE_ACTIONS == (
             "softprops/action-gh-release",
             "step-security/action-gh-release",
         )
@@ -2095,7 +2077,7 @@ class TestGatedBinaryCheckingCannotBeSilentlyDisabled:
         }
 
     def test_running_an_unbuilt_gated_binary_is_reported(self, tmp_path: Path) -> None:
-        report = Report()
+        report = wf.Report()
         wf.check_cmake_gated_binaries(
             self._tree(tmp_path),
             self._job("cmake -B build -DCMAKE_BUILD_TYPE=Release", "./build/bin/test_dudect"),
@@ -2106,7 +2088,7 @@ class TestGatedBinaryCheckingCannotBeSilentlyDisabled:
         assert report.gated_binaries_checked == 1
 
     def test_enabling_the_flag_clears_it(self, tmp_path: Path) -> None:
-        report = Report()
+        report = wf.Report()
         wf.check_cmake_gated_binaries(
             self._tree(tmp_path),
             self._job("cmake -B build -DAMA_ENABLE_DUDECT=ON", "./build/bin/test_dudect"),
@@ -2118,7 +2100,7 @@ class TestGatedBinaryCheckingCannotBeSilentlyDisabled:
     def test_a_target_behind_an_on_by_default_guard_needs_no_flag(self, tmp_path: Path) -> None:
         """Demanding the flag for an ON-by-default option would be noise, and a
         rule that matched any default value would demand it for every target."""
-        report = Report()
+        report = wf.Report()
         wf.check_cmake_gated_binaries(
             self._tree(tmp_path),
             self._job("cmake -B build -DCMAKE_BUILD_TYPE=Release", "./build/bin/test_avx"),
@@ -2129,7 +2111,7 @@ class TestGatedBinaryCheckingCannotBeSilentlyDisabled:
     def test_the_run_text_of_every_step_is_considered_together(self, tmp_path: Path) -> None:
         """The configure and the invocation are usually different steps; a
         check that saw only one step at a time would report every job."""
-        report = Report()
+        report = wf.Report()
         wf.check_cmake_gated_binaries(
             self._tree(tmp_path),
             self._job("cmake -B build -DAMA_ENABLE_DUDECT=ON", "./build/bin/test_dudect"),
@@ -2138,7 +2120,7 @@ class TestGatedBinaryCheckingCannotBeSilentlyDisabled:
         assert report.findings == [], messages(report)
 
     def test_a_job_with_no_run_steps_does_not_end_the_scan(self, tmp_path: Path) -> None:
-        report = Report()
+        report = wf.Report()
         document = {
             "jobs": {
                 "empty": {"runs-on": "ubuntu-latest", "steps": [{"uses": "actions/checkout@v5"}]},
@@ -2165,7 +2147,7 @@ class TestGatedBinaryCheckingCannotBeSilentlyDisabled:
             "    add_executable(test_dudect a.c)\n  endif()\nendif()\n",
             encoding="utf-8",
         )
-        report = Report()
+        report = wf.Report()
         wf.check_cmake_gated_binaries(
             tmp_path / ".github" / "workflows" / "test.yml",
             self._job("cmake -B build", "./build/bin/test_dudect"),
@@ -2182,7 +2164,7 @@ class TestCountersStartAtZero:
     done by exactly that much on every run."""
 
     def test_a_fresh_report_has_counted_nothing(self) -> None:
-        report = Report()
+        report = wf.Report()
         for field in (
             "labels_checked",
             "windows_commands_checked",
@@ -2368,10 +2350,10 @@ class TestReportedDetailIsUsable:
     def test_a_configure_at_the_truncation_boundary_is_not_elided(self) -> None:
         """110 characters is the boundary: at or below it the command is quoted
         whole, above it the ellipsis says the text was cut."""
-        report = Report()
+        report = wf.Report()
         command = "cmake -B build " + "-DX=1 " * 15
         command = command[:110].rstrip()
-        check_cmake_build_type(
+        wf.check_cmake_build_type(
             Path("t.yml"),
             {"jobs": {"b": {"runs-on": "ubuntu-latest", "steps": [{"run": command}]}}},
             report,
@@ -2423,11 +2405,11 @@ class TestReportedDetailIsUsable:
             "jobs:\n  b:\n    runs-on: macos-13\n    steps:\n      - run: echo hi\n",
             "jobs:\n  b:\n    runs-on: ubuntu-lastest\n    steps:\n      - run: echo hi\n",
             "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
-            "      - run: cmake -B build -S .\n",
+            + "      - run: cmake -B build -S .\n",
             'jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo "unbalanced\n',
             "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest tests/\n",
             "jobs:\n  b:\n    runs-on: ubuntu-latest\n"
-            "    if: steps.x.outcome = 'failure'\n    steps:\n      - run: echo hi\n",
+            + "    if: steps.x.outcome = 'failure'\n    steps:\n      - run: echo hi\n",
         ],
     )
     def test_every_finding_tells_the_reader_what_to_do(self, workflow: str) -> None:
@@ -2445,7 +2427,7 @@ class TestReportedDetailIsUsable:
 class TestTheSweepReportsWhatItCouldNotRead:
     def test_an_unparseable_file_finding_names_the_file_and_the_stake(self, tmp_path: Path) -> None:
         (tmp_path / "broken.yml").write_text("jobs: [unclosed\n", encoding="utf-8")
-        report = sweep(tmp_path)
+        report = wf.sweep(tmp_path)
         parse = [f for f in report.findings if "could not be parsed" in f.message]
         assert len(parse) == 1
         assert parse[0].workflow == "broken.yml"
@@ -2454,7 +2436,7 @@ class TestTheSweepReportsWhatItCouldNotRead:
 
     def test_the_floor_finding_names_the_directory(self, tmp_path: Path) -> None:
         (tmp_path / "one.yml").write_text("jobs: {}\n", encoding="utf-8")
-        floor = [f for f in sweep(tmp_path).findings if "floor" in f.message]
+        floor = [f for f in wf.sweep(tmp_path).findings if "floor" in f.message]
         assert len(floor) == 1
         assert floor[0].workflow.strip()
         assert str(tmp_path) in floor[0].location
@@ -2564,8 +2546,8 @@ class TestASkippedJobOrStepNeverEndsAWalk:
         assert report.findings, messages(report)
 
     def test_a_named_build_type_does_not_end_the_configure_scan(self) -> None:
-        report = Report()
-        check_cmake_build_type(
+        report = wf.Report()
+        wf.check_cmake_build_type(
             Path("t.yml"),
             {
                 "jobs": {
@@ -2582,8 +2564,8 @@ class TestASkippedJobOrStepNeverEndsAWalk:
         assert len(report.findings) == 1, messages(report)
 
     def test_an_explicit_optimisation_flag_does_not_end_the_configure_scan(self) -> None:
-        report = Report()
-        check_cmake_build_type(
+        report = wf.Report()
+        wf.check_cmake_build_type(
             Path("t.yml"),
             {
                 "jobs": {
@@ -2600,8 +2582,8 @@ class TestASkippedJobOrStepNeverEndsAWalk:
     def test_a_run_block_that_is_not_a_string_is_skipped_not_crashed_on(self) -> None:
         """A `run:` written as a YAML sequence is malformed, not a reason to
         raise: the checker must skip it and keep going."""
-        report = Report()
-        check_cmake_build_type(
+        report = wf.Report()
+        wf.check_cmake_build_type(
             Path("t.yml"),
             {
                 "jobs": {
@@ -2811,9 +2793,9 @@ class TestFindingsNameTheThingTheyFound:
         assert "Run the KAT" in report.findings[0].location
 
     def test_a_configure_one_character_over_the_limit_is_elided(self) -> None:
-        report = Report()
+        report = wf.Report()
         command = "cmake -B build " + "-DX=" + "1" * (111 - 19)
-        check_cmake_build_type(
+        wf.check_cmake_build_type(
             Path("t.yml"), {"jobs": {"b": {"steps": [{"run": command}]}}}, report
         )
         assert len(command) == 111
@@ -2822,9 +2804,9 @@ class TestFindingsNameTheThingTheyFound:
         assert command not in message
 
     def test_a_configure_exactly_at_the_limit_is_quoted_whole(self) -> None:
-        report = Report()
+        report = wf.Report()
         command = "cmake -B build " + "-DX=" + "1" * (110 - 19)
-        check_cmake_build_type(
+        wf.check_cmake_build_type(
             Path("t.yml"), {"jobs": {"b": {"steps": [{"run": command}]}}}, report
         )
         assert len(command) == 110
@@ -2871,7 +2853,7 @@ class TestSmallDetectorContracts:
         """Concatenating two steps' run text would let a flag split across the
         boundary read as one flag, clearing a job that never set it."""
         repo = Path(__file__).resolve().parent.parent
-        report = Report()
+        report = wf.Report()
         document = {
             "jobs": {
                 "harness": {
