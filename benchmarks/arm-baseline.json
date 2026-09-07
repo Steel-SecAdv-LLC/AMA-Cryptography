@@ -198,6 +198,11 @@
         "date": "2026-09-07",
         "release": "5.0.0",
         "change": "ED25519 FLOORS RE-MEASURED UPWARD on the in-house backend. The vendored ed25519-donna backend was removed in PR #394's twenty-first maintenance pass and replaced by the in-house radix-2^51 backend, which the benchmark-regression job on the canonical runner class for this file (ubuntu-24.04-arm (aarch64)) measures faster on every Ed25519 row at head c6020ac: ed25519_keygen 10099 -> 14595 ops/sec, ed25519_sign 45539 -> 58452 ops/sec, ed25519_verify 18199 -> 31259 ops/sec. baseline_value is the measurement from that job (the file's convention: baseline_value IS the measured value on the canonical runner); tolerance_percent is unchanged and absorbs run-to-run variance. This is a single canonical CI measurement on c6020ac, not a five-run recalibration; the coarse tolerance is why that is sufficient here. calibration_evidence still names the 2026-08-14 multi-run calibration for the non-Ed25519 floors, which did not move; the Ed25519 code that changed since that calibration is itemised in floor_drift_acknowledged."
+      },
+      {
+        "date": "2026-09-07",
+        "release": "5.0.0",
+        "change": "ED25519 FLOORS RE-BASED TO FOUR-RUN MEDIANS on the canonical runner class for this file (ubuntu-24.04-arm (aarch64)). The preceding entry set the three Ed25519 floors from ONE benchmark-regression job at head c6020ac. The four jobs that followed on byte-identical Ed25519 code (heads f2ac1d8, 4a45408, 755cd22 and 447cdf0 change no Ed25519 source; run/job 34070019745/101585569584, 34082980156/101621669852, 34084425292/101625629991, 34084821515/101626784335) measured ed25519_keygen 14649 / 14708 / 14706 / 14547; ed25519_sign 58389 / 58735 / 58789 / 58795; ed25519_verify 31351 / 31473 / 31021 / 31188 ops/sec. baseline_value is now the median of those four (even count: mean of the middle two, rounded to the nearest integer; computed by script from the job logs, not by hand): ed25519_keygen 14595 -> 14678 ops/sec, ed25519_sign 58452 -> 58762 ops/sec, ed25519_verify 31259 -> 31270 ops/sec. tolerance_percent stays 15. This fleet is homogeneous (run-to-run spread 1.5% or less on these rows), so the medians land within 0.6% of the single-run values. No other floor moves; calibration_evidence and floor_drift_acknowledged are unchanged."
       }
     ],
     "runner_cpu_class": "aarch64",
@@ -848,7 +853,7 @@
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 14595,
+      "baseline_value": 14678,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "microbenchmark"
@@ -856,7 +861,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 58452,
+      "baseline_value": 58762,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "microbenchmark"
@@ -864,7 +869,7 @@
     "ed25519_verify": {
       "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 31259,
+      "baseline_value": 31270,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "microbenchmark"

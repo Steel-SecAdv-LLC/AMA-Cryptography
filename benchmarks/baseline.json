@@ -123,6 +123,11 @@
         "date": "2026-09-07",
         "release": "5.0.0",
         "change": "ED25519 FLOORS RE-MEASURED UPWARD on the in-house backend. The vendored ed25519-donna backend was removed in PR #394's twenty-first maintenance pass and replaced by the in-house radix-2^51 backend, which the benchmark-regression job on the canonical runner class for this file (ubuntu-latest (x86_64)) measures faster on every Ed25519 row at head c6020ac: ed25519_keygen 10822 -> 16751 ops/sec, ed25519_sign 53885 -> 77991 ops/sec, ed25519_verify 19181 -> 32019 ops/sec. baseline_value is the measurement from that job (the file's convention: baseline_value IS the measured value on the canonical runner); tolerance_percent is unchanged and absorbs run-to-run variance. This is a single canonical CI measurement on c6020ac, not a five-run recalibration; the coarse tolerance is why that is sufficient here. calibration_evidence still names the 2026-08-14 multi-run calibration for the non-Ed25519 floors, which did not move; the Ed25519 code that changed since that calibration is itemised in floor_drift_acknowledged."
+      },
+      {
+        "date": "2026-09-07",
+        "release": "5.0.0",
+        "change": "ED25519 FLOORS RE-BASED TO FOUR-RUN MEDIANS on the canonical runner class for this file (ubuntu-latest (x86_64)). The preceding entry set the three Ed25519 floors from ONE benchmark-regression job at head c6020ac. The four jobs that followed on byte-identical Ed25519 code (heads f2ac1d8, 4a45408, 755cd22 and 447cdf0 change no Ed25519 source; run/job 34070019745/101585569464, 34082980156/101621669890, 34084425292/101625629987, 34084821515/101626784285) measured ed25519_keygen 16622 / 14436 / 16304 / 14349; ed25519_sign 73660 / 67625 / 73366 / 67521; ed25519_verify 33234 / 28003 / 32777 / 28306 ops/sec. baseline_value is now the median of those four (even count: mean of the middle two, rounded to the nearest integer; computed by script from the job logs, not by hand): ed25519_keygen 16751 -> 15370 ops/sec, ed25519_sign 77991 -> 70496 ops/sec, ed25519_verify 32019 -> 30542 ops/sec. tolerance_percent stays 45. The ubuntu-latest fleet is two-class and the c6020ac sample was a fast-class one. With the tolerance unchanged the effective minimum (floor x 55/100) moves 9213 -> 8454, 42895 -> 38773, 17610 -> 16798 ops/sec; the slowest of the four runs sits 6.6% / 4.2% / 8.3% below the new floors and clears the new minimums by 70% / 74% / 67%, and it is still above the removed ed25519-donna backend's last measurement on this runner class (11855 / 59847 / 21322 ops/sec) on every row. No other floor moves; calibration_evidence and floor_drift_acknowledged are unchanged."
       }
     ],
     "calibration_evidence": {
@@ -771,7 +776,7 @@
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 16751,
+      "baseline_value": 15370,
       "unit": "ops/sec",
       "tolerance_percent": 45,
       "tier": "microbenchmark"
@@ -779,7 +784,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 77991,
+      "baseline_value": 70496,
       "unit": "ops/sec",
       "tolerance_percent": 45,
       "tier": "microbenchmark"
@@ -787,7 +792,7 @@
     "ed25519_verify": {
       "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 32019,
+      "baseline_value": 30542,
       "unit": "ops/sec",
       "tolerance_percent": 45,
       "tier": "microbenchmark"

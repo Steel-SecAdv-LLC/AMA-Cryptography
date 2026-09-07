@@ -319,9 +319,9 @@ _Headline source: `benchmarks/benchmark-results.json` (run 2026-08-30 on Linux-6
 |-----------|---------------------:|---------------------------:|----------:|------|
 | Ama Sha3 256 Hash | 372,509 | 327,222 | ±45% | microbenchmark |
 | Hmac Sha3 256 | 243,639 | 215,299 | ±45% | microbenchmark |
-| Ed25519 Keygen | 12,182 | 16,751 | ±45% | microbenchmark |
-| Ed25519 Sign | 59,554 | 77,991 | ±45% | microbenchmark |
-| Ed25519 Verify | 22,462 | 32,019 | ±45% | microbenchmark |
+| Ed25519 Keygen | 12,182 | 15,370 | ±45% | microbenchmark |
+| Ed25519 Sign | 59,554 | 70,496 | ±45% | microbenchmark |
+| Ed25519 Verify | 22,462 | 30,542 | ±45% | microbenchmark |
 | Hkdf Derive | 147,244 | 131,341 | ±45% | microbenchmark |
 | Full Package Create | 1,960.9 | 1,983 | ±45% | complex_operation |
 | Full Package Verify | 2,776.3 | 3,442 | ±45% | complex_operation |

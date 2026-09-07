@@ -367,7 +367,7 @@ Additional C sources:
 
 - **Wallet Security**: ML-DSA-65 quantum-resistant signatures for wallet transaction authentication.
 - **Smart Contract Signing**: Quantum-resistant signatures for long-lived contracts.
-- **Transaction Throughput**: Sub-millisecond Ed25519 verification (~21k ops/sec via ctypes on canonical bench, 2026-04-26); ML-DSA-65 adds quantum resistance at higher latency (~336µs sign, ~132µs verify — Python API via ctypes, canonical bench host; see Performance Metrics section for methodology).
+- **Transaction Throughput**: Sub-millisecond Ed25519 verification (30,542 ops/sec, four-run median via ctypes on the `ubuntu-latest` x86_64 CI runner, 5.0.0 in-house backend, 2026-09-07; the 4.x canonical-host figure was ~21k); ML-DSA-65 adds quantum resistance at higher latency (~336µs sign, ~132µs verify — Python API via ctypes, canonical bench host; see Performance Metrics section for methodology).
 - **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
 - **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
 - **Timestamp Binding**: RFC 3161 tokens bound to content by the §2.4.2 message imprint. AMA does not verify the TSA's signature or certificate chain, so the token's issuer must be trusted through a separate control.
@@ -378,14 +378,41 @@ Additional C sources:
 
 ## Performance Metrics
 
-> **Reading the numbers below.** All ops/sec figures in the tables that follow are from the **canonical bench host** (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ; Sapphire Rapids / Zen 4 class), measured 2026-04-25 to 2026-04-27 with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json`. They describe **that host**, not a runner you are likely to have; reproduce them on equivalent silicon.
+> **Reading the numbers below.** All ops/sec figures in the collapsible tables below are from the **canonical bench host** (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ; Sapphire Rapids / Zen 4 class), measured 2026-04-25 to 2026-04-27 with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json`. They describe **that host**, not a runner you are likely to have; reproduce them on equivalent silicon.
 >
 > **What 5.0.0 changed, stated rather than implied.** The canonical-host figures below were measured against the 4.x code. 5.0.0 rewrote the Python one-shot AEAD wrappers (a hand-written multi-buffer borrow plus an all-`bytes` fast path, replacing four `@contextlib.contextmanager` borrows per call), so the **AES-256-GCM and ChaCha20-Poly1305 rows describe a code path this release replaced** and understate it. Measured on the `ubuntu-24.04-arm` CI runner across the change: AES-256-GCM one-shot 132k → 234k ops/sec; ChaCha20-Poly1305 195k, against 207k before it also gained the wipeable-key contract it alone lacked — the ~6% being the shared fast-path scaffolding, stated rather than hidden. The keygen rows are affected in the other direction and are **optimistic**: 5.0.0 runs a FIPS 140-3 pairwise consistency test on every asymmetric keygen (INVARIANT-41), so each of those rows now pays a sign and a verify it did not pay when it was measured — using this table's own figures, that is roughly 3.7x the Ed25519 keygen cost itself. Every row also pays the ~37 ns `check_crypto_permitted()` guard 5.0.0 added to each gated native entry point (INVARIANT-39), which is measurable only on the shortest operations. Read the AEAD rows as understating this release, the keygen rows as overstating it, and no row as a 5.0.0 measurement.
 >
-> **Every canonical-host row below is a 4.x-era measurement**, dated 2026-04 per row (Core Cryptographic Primitives table) or per table caption (the three tables above it). No 5.0.0 measurement on AVX-512 + VAES + VPCLMULQDQ silicon exists: the canonical bench host is not reachable from CI or from the environment this release was engineered in, and this repository does not publish numbers it did not measure. An earlier revision of this paragraph said the canonical rows are "re-measured on the canonical host at release time" — the date labels on every row contradicted it, and the sentence is withdrawn. Re-measuring on canonical silicon is a release-time action on hardware (tracked in the release PR's *Remaining actions*); until it happens, read every row as a measurement of the 4.x code, adjusted by the paragraph above for the paths 5.0.0 changed.
+> **Every canonical-host row below is a 4.x-era measurement**, dated 2026-04 per row (Core Cryptographic Primitives table) or per table caption (the three tables above it). No 5.0.0 measurement on AVX-512 + VAES + VPCLMULQDQ silicon exists: the canonical bench host is not reachable from CI or from the environment this release was engineered in, and this repository does not publish numbers it did not measure. An earlier revision of this paragraph said the canonical rows are "re-measured on the canonical host at release time" — the date labels on every row contradicted it, and the sentence is withdrawn. Re-measuring on canonical silicon is a release-time action on hardware (tracked in the release PR's *Remaining actions*); until it happens, read every row as a measurement of the 4.x code, adjusted by the paragraph above for the paths 5.0.0 changed The 5.0.0 measurements that do exist are on the two CI runner classes, in the table immediately below this note.
 >
 > **Where the current, per-runner numbers live.** `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` carry **measured medians** on their named CI runners with a single derived tolerance each — they are regression *floors*, and since 5.0.0 they are no longer pre-discounted guesses (`x86` uses the slow-class median of a measurably two-class `ubuntu-latest` fleet with a uniform 45% tolerance; `aarch64`, a homogeneous fleet with spreads ≤3%, uses 15% — 25% for the two rejection-averaged composites). `benchmark-report.md` is regenerated from a run of the suite and records the exact commit, host, command, repeat count and aggregation. A floor and a canonical-host figure are different numbers on purpose; neither is an estimate of the other.
 
+### 5.0.0 on the canonical CI runners — four-run medians (2026-09-07)
+
+These are the only 5.0.0 throughput measurements this repository publishes, and they are on the CI runner classes the regression floors are defined against, not on the canonical bench host. Each figure is the median of four `benchmark-regression` jobs (`python benchmarks/benchmark_runner.py`, Python API via ctypes) at the branch heads `f2ac1d8`, `4a45408`, `755cd22` and `447cdf0`, whose diffs touch no primitive source; workflow runs 34070019745, 34082980156, 34084425292 and 34084821515. Medians of an even count are the mean of the middle two, rounded. The `ubuntu-latest` x86_64 fleet is two-class (about 8–15% between classes), so its min–max spans are wide; `ubuntu-24.04-arm` is homogeneous. The three Ed25519 rows are the in-house backend that replaced ed25519-donna in the twenty-first maintenance pass; its slowest x86_64 run (14,349 / 67,521 / 28,003 ops/sec for keygen / sign / verify) is above donna's last measurement on the same runner class (11,855 / 59,847 / 21,322).
+
+| Benchmark | `ubuntu-latest` x86_64 — ops/sec, median (min–max) | `ubuntu-24.04-arm` aarch64 — ops/sec, median (min–max) |
+|---|---|---|
+| `ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 378,016 (356,429–416,067) | 436,136 (436,018–436,698) |
+| `hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes) | 260,704 (246,064–286,568) | 303,692 (303,251–303,870) |
+| `ed25519_keygen` — Ed25519 key pair generation (native C) | 15,370 (14,349–16,622) | 14,678 (14,547–14,708) |
+| `ed25519_sign` — Ed25519 signature generation (native C, expanded key) | 70,496 (67,521–73,660) | 58,762 (58,389–58,795) |
+| `ed25519_verify` — Ed25519 signature verification (native C) | 30,542 (28,003–33,234) | 31,270 (31,021–31,473) |
+| `hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys) | 174,757 (165,505–189,877) | 208,931 (208,005–209,262) |
+| `full_package_create` — Complete crypto package creation (with PQC) | 2,232 (2,119–2,393) | 2,604 (2,564–2,626) |
+| `full_package_verify` — Complete crypto package verification (with PQC) | 3,974 (3,524–4,561) | 4,668 (4,476–4,724) |
+| `secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce) | 9,447 (9,118–10,114) | 10,778 (10,775–10,781) |
+| `secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy) | 3,886 (3,706–4,200) | 4,524 (4,499–4,530) |
+| `dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C) | 1,528 (1,460–1,702) | 1,684 (1,656–1,694) |
+| `dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C) | 3,004 (2,898–3,263) | 3,642 (3,474–3,720) |
+| `dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C) | 10,242 (9,517–11,258) | 11,827 (11,823–11,831) |
+| `kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C) | 3,272 (2,960–3,648) | 3,820 (3,775–3,830) |
+| `kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C) | 15,370 (13,491–17,690) | 21,025 (21,001–21,073) |
+| `aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C) | 249,912 (235,595–271,573) | 236,762 (235,111–237,158) |
+| `chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C) | 249,874 (240,738–260,469) | 197,995 (196,512–198,457) |
+| `x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch) | 20,005 (19,177–21,366) | 25,451 (25,446–25,460) |
+| `x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate | 4,800 (4,612–5,118) | 6,061 (6,054–6,072) |
+
+*The Ed25519 medians in both columns are the `baseline_value` floors in `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` as of 2026-09-07. The other sixteen rows keep their 2026-08-14 calibration floors, which all four runs passed on both runner classes. Tolerances: 45% on x86_64, 15% on aarch64 (25% for the two rejection-averaged composites).*
 <details>
 <summary><strong>Cryptographic Operation Benchmarks</strong></summary>
 

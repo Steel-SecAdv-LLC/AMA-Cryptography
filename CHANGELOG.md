@@ -130,6 +130,239 @@ narrowing the exclusion from the whole tree to the three files that need it).
   said four checks were dropped after this pass reduced that to three, and
   records these corrections here.
 
+- **Ed25519 floors re-based to four-run medians, and the README gains the
+  5.0.0 CI-runner table.** `6892863` had set the three Ed25519 floors in
+  `benchmarks/baseline.json` from a single benchmark-regression job on
+  `ubuntu-latest` (x86_64). The four jobs that followed on identical Ed25519
+  code (heads `f2ac1d8`, `4a45408`, `755cd22`, `447cdf0`; runs 34070019745,
+  34082980156, 34084425292, 34084821515) showed that sample to be a fast-class
+  one on a two-class fleet: keygen ranged 14,349–16,622 ops/sec across them.
+  Each `baseline_value` is now the median of those four runs, computed by
+  script from the job logs: `ed25519_keygen` 16,751 → 15,370, `ed25519_sign`
+  77,991 → 70,496, `ed25519_verify` 32,019 → 30,542 ops/sec on x86_64; on
+  `ubuntu-24.04-arm` (aarch64, homogeneous, spread ≤ 1.5%) 14,595 → 14,678,
+  58,452 → 58,762, 31,259 → 31,270. Tolerances are unchanged (45 / 15), so
+  the x86_64 effective minimums (floor × 0.55) move 9,213 → 8,454, 42,895 →
+  38,773 and 17,610 → 16,798 ops/sec — stated rather than hidden; it is the
+  convention every other x86_64 row already follows, applied to a measured
+  median instead of one fast sample. The slowest of the four runs clears the
+  new minimums by 67–74% and is above the removed donna backend's last
+  measurement on the same runner class (11,855 / 59,847 / 21,322) on every
+  row. Both `baseline_change_log`s carry the run and job IDs and the method;
+  the other sixteen floors, `calibration_evidence` and
+  `floor_drift_acknowledged` are untouched, and `docs/BENCHMARK_HISTORY.md`
+  records the re-base. `README.md`'s *Performance Metrics* section gains a
+  19-row table of the same four-run medians for both runner classes — the
+  first 5.0.0 throughput figures the README publishes, labelled as CI-runner
+  measurements and placed above the 4.x canonical-host tables, which keep
+  their historical labels — and the *Blockchain* use-case line that quoted the
+  4.x Ed25519 verify rate now quotes the 5.0.0 measurement.
+
+- **Ledger completion.** A substance audit of every file this branch changed
+  against this section — each file traced to its commits, each commit's
+  content searched for here by concept rather than by filename — found the
+  eighteen commits recorded under *Ledger completion* below with no entry.
+  They are recorded there from their diffs and commit records.
+
+### Ledger completion (2026-09-07) — eighteen commits on this branch this section did not describe
+
+Method: the 54 files in this branch's diff against `main` whose paths this
+section never names were traced to the commits that changed them, and each
+commit's substance was searched for here by concept, not by filename. Forty of
+the files turned out to be described under other words or by the glance
+table. The commits below are the remainder, recorded from their diffs and
+commit records, oldest first; figures in them are as of the commit's date.
+
+- `2466fdf` (2026-08-13), beyond glance rows 3 and 22. `ci-build-test.yml`'s
+  C build step computed `rc=$?` after `if cmake --build …; then exit 0; fi`,
+  which in bash is always 0, so a failed compile or link went green unless
+  ctest noticed independently. `static-analysis.yml`'s cppcheck step piped
+  into `tee` without pipefail, so `--error-exitcode=1` was inert; `shell:
+  bash` restores it. `equations.py`'s σ_quadratic "enforcement" rescaled the
+  state, which cannot change a Rayleigh quotient (measured 0.1 before and
+  after, against a 0.96 threshold); it now rotates toward the dominant
+  eigenvector (power iteration, then a bisection for the minimal blend) and
+  reports an unreachable threshold instead of perturbing to no purpose.
+  `monitoring.py` prunes alerts in place under the lock and every append site
+  holds it; `RecursionPatternMonitor._key_alerts` becomes a bounded ring and
+  `_key_usage_rates` is capped. The `--atheris` fuzz lane wrote (target, data)
+  pairs to disk and had never run, and both `fuzz_ed25519` seeds were below
+  the harness's 33-byte minimum; fixed and regenerated.
+- `2dcc282` (2026-08-13), beyond glance rows 16 and 17. `verify_crypto_package`
+  records `False` for an add-on layer that is present but unverifiable (a
+  SPHINCS+ signature whose public key was stripped, a KEM ciphertext without
+  its shared secret), where it used to drop the layer from `results` and let
+  `all_valid` stay `True` (`_verify_addon_layers`). `legacy_compat`'s
+  `signature_format_version` / `hash_version` selectors raise on unknown
+  values instead of resolving them through an `else` to the weaker V1
+  construction. `AmaContext.keypair_generate` refuses a declared capacity
+  larger than the ctypes buffer behind it — a 100-byte array with
+  `public_key_len=1952` was a heap overwrite reachable from Python. The NEON
+  AES-256 key schedule (`aes_key_assist_neon` / `aes_key_assist2_neon`,
+  `src/c/neon/ama_aes_gcm_neon.c`) scrubs the round keys it staged in stack
+  arrays, and the GHASH accumulator, whose final value is `tag ^ enc_j0`,
+  joins the scrub set in all three SIMD GCM kernels
+  (`src/c/avx2/ama_aes_gcm_avx2.c`, `src/c/avx2/ama_aes_gcm_vaes_avx2.c`,
+  `src/c/neon/ama_aes_gcm_neon.c`).
+- `1025a18` (2026-08-16). `logging` discards a record whose text its handler
+  cannot encode, and `FileHandler` defaults to the locale encoding — cp1252
+  on Windows. The posture-triggered key-rotation and algorithm-switch audit
+  records carried `→` (U+2192) and were therefore exactly the two records a
+  Windows file handler silently dropped. An AST sweep found 29 such literals
+  in emitted text across `adaptive_posture.py`, `double_helix_engine.py`,
+  `equations.py` and `key_management.py`; all are rewritten to
+  cp1252-encodable text (`->`, `[OK]`, `[FAIL]`, `>=`, `sigma`, `x0`/`xn`).
+  `tools/check_log_message_encodability.py` (INVARIANT-43) keeps it so,
+  wired into `ci.yml`'s Security Checks and pinned by
+  `tests/test_log_message_encodability_gate.py`; the rule is
+  cp1252-encodable rather than ASCII, and binds emitted text only.
+- `a4cbf55` (2026-08-17). The three SIMD AES-GCM encrypt paths (AVX2, VAES,
+  NEON) staged the trailing partial block's plaintext — up to 15 caller bytes
+  — in a stack buffer and left it there, while their decrypt twins already
+  scrubbed the same buffer; one barriered `ama_secure_memzero` per call, on
+  the partial-block path only. `ama_aes_gcm_neon.c`'s decrypt header, which
+  described a zero-the-output, skip-CTR-on-mismatch contract the function
+  does not have, now describes the masked control flow it ships. The
+  pre-import binding gate's refusal message recommended `integrity --update
+  --sign`, which imports the package and lands back in the same gate; it now
+  gives the remove-the-stale-artefact-then-re-sign recipe that runs.
+- `bb9b35c` (2026-08-17). `HSMKeyStorage.PKCS11_PATHS["softhsm"]` gains the
+  Debian multiarch spellings (`/usr/lib/<triplet>/softhsm/libsofthsm2.so`)
+  the test suite's availability probe already accepted, so a multiarch host
+  no longer lifts the real-token lane's skip only to fail in
+  `_resolve_library_path`, and the shipped class finds a
+  distribution-installed SoftHSM2. `tests/test_hsm_integration.py` pins that
+  every path the probe accepts is one the resolver can return.
+- `d14ad84` and `99fdf8b` (2026-08-18). The SHA-2 core and PBKDF2 surfaced to
+  Python. `hashlib` resolves to OpenSSL on a libcrypto build, so every
+  production `hashlib` call was an external vendor performing a primitive
+  inside the process. The in-tree SHA-512/384 core
+  (`src/c/internal/ama_sha2.h`, already under Ed25519, SLH-DSA-SHA2,
+  HKDF-SHA-512 and HMAC-SHA-384) gains one-shot exports `ama_sha512` /
+  `ama_sha384` (`src/c/ama_sha512.c`; the header statics are renamed
+  `*_oneshot`, which touches `src/c/ama_hmac_sha384.c`, `src/c/ama_slhdsa.c`
+  and `src/c/ama_ed25519.c` mechanically), `ama_sha3_384` (FIPS 202, rate
+  104 — the one SHA-3 width the export surface lacked, in `src/c/ama_sha3.c`)
+  and `ama_pbkdf2_hmac_sha256` / `ama_pbkdf2_hmac_sha512`
+  (`src/c/ama_pbkdf2.c`, SP 800-132 / RFC 8018, with the HMAC key schedule
+  hoisted out of the iteration loop so each iteration costs two compression
+  passes, not four). Python: `native_sha512`, `native_sha384`,
+  `native_sha3_384`, `native_pbkdf2_hmac_sha256`, `native_pbkdf2_hmac_sha512`,
+  gated by `check_crypto_permitted()` and added to `test_post_failclosed`'s
+  indirect-operations list. Verified against the FIPS 180-4 / FIPS 202
+  vectors, RFC 7914 §11 (including the 80,000-iteration case), the BIP39
+  TREZOR vector and a differential sweep against `hashlib` at every block
+  boundary of all three rates (`tests/test_sha2_pbkdf2_native.py`). `99fdf8b`
+  classified the two new translation units in the SBOM, acknowledged the five
+  paths in `floor_drift_acknowledged` (two new units nothing benchmarked
+  calls; three files whose only change is a static rename, which does not
+  affect codegen) and pinned local `black` to CI's version. `hashlib` remains
+  in exactly one place: the pre-load digest check, which cannot hash the
+  library with the library it has not yet decided to load.
+- `4eb9107` (2026-08-18). `key_management.py` derived the BIP39 master seed
+  and the key-encryption keys through `hashlib.pbkdf2_hmac`; all three sites
+  now run on the native PBKDF2 — master seed: HMAC-SHA-512, c = 2048, salt
+  `"mnemonic"`; KEK derivation and rotation: HMAC-SHA-256 at the same
+  iteration policy; the key fingerprints: `native_sha3_256`. BIP39 fixes the
+  algorithm, not the vendor, so every existing wallet derives the same keys,
+  verified byte-identical against `hashlib` on the official vector. The
+  module no longer imports `hashlib`.
+- `2371184` (2026-08-18). Four sites inside the FIPS machinery still hashed
+  through `hashlib`: the pairwise-consistency test in `native_nistp_keypair`
+  (now `native_sha256/384/512` per the curve's FIPS 186-5 pairing),
+  `key_management`'s secp256k1 PCT (`native_sha256`), the continuous-RNG
+  health digest in `_module_state.secure_token_bytes` — computed over a
+  sample that for `n == 32` is the very buffer the caller receives — and
+  `_self_test`'s continuous-RNG seed, which must agree with it. None has a
+  `hashlib` fallback; without the native backend the seed is skipped, and the
+  module never reaches OPERATIONAL in that state.
+- `4033c39` and `191befb` (2026-08-18). The `_module_state` → `pqc_backends`
+  import cycle (CodeQL 628) is removed by injection:
+  `_module_state.register_health_digest()` installs the SHA-256 kernel and
+  `pqc_backends` calls it as soon as `native_sha256` is bound, so
+  `_module_state` imports nothing from `pqc_backends`. `191befb` then fixed
+  two defects an executed adversarial review found in this branch's own
+  code: the signer-identity argv scan treated any element beginning with
+  `-m` as the `-m` target, so `python -W -mama_cryptography._build_sign
+  app.py` granted signing scope to `app.py` — the scan now steps over the
+  values of `-W`, `-X` and `--check-hash-based-pycs`; and the injected
+  kernel was lost for the process lifetime after an `importlib.reload` of
+  `_module_state`, so `secure_token_bytes` recovers it through a
+  `sys.modules` lookup (a dict read, not an import edge) and, when it is
+  genuinely unresolvable, refuses without latching the ERROR state, which
+  this file reserves for a test that ran and failed.
+- `4eeaacc` (2026-08-19). `fuzz_ascon` was the only registered harness with
+  no seed corpus, and both the fuzzing workflow and `oss-fuzz/build.sh` guard
+  corpus loading with `if [ -d … ]`, so nothing noticed.
+  `tools/build_ascon_seed_corpus.py` generates 19 deterministic seeds (rate
+  boundaries for hash and AEAD, the three split regimes, forged-tag
+  positions), its `--check` pins the committed bytes to the generator, and
+  `tools/check_fuzz_target_registration.py` (INVARIANT-33) now fails any
+  registered harness without a non-empty corpus.
+- `0ef61ab` (2026-08-22), behind glance row 18. The
+  `ama_sha3_256_{avx2,neon,sve2}` wrappers whose only caller was the removed
+  dispatch slot are deleted (`src/c/avx2/ama_sha3_avx2.c`,
+  `src/c/neon/ama_sha3_neon.c`, `src/c/sve2/ama_sha3_sve2.c` and their
+  internal headers), together with the auto-tune lockstep revert that existed
+  to keep the slot in step with `keccak_f1600`. The 4.4–4.7x gap the commit
+  measured against the public entry point was, as `4c3dcfa` established, the
+  Phase-3 auto-tune revert the hard-linked wrappers bypassed, not a batching
+  mismatch; the AVX2 and NEON wrappers also rejected `(NULL, 0)` where the
+  public entry point accepts it.
+- `e38d363` (2026-08-23), beyond the `tests/c/test_field_bench.c` wiring
+  already recorded. POST had stopped re-reading the mapped native library: it
+  preferred the recorded pre-load digest, which is of the mapped bytes only on
+  the Linux/procfs branch of `_try_load_library`, so a file swapped between
+  the hash and the `dlopen` on Windows or macOS was reported verified.
+  `preload_digest_is_of_mapped_bytes` is set on the procfs branch alone and
+  POST re-reads otherwise. `native_backend_refused_on_digest()` could inherit
+  a previous run's refusal over an empty error list and now requires this
+  run's errors. Four regressions the bounded posture accumulator introduced
+  are fixed: the Lyapunov history was never drained (a permanent 0.15 floor
+  pinned the evaluator at ELEVATED), consecutive-evaluation counters were
+  keyed to the exact candidate level (a sawtooth never filled one), the alert
+  cursor's strict `>` dropped timestamp ties, and an untimestamped alert was
+  re-scored every cycle. `DEFAULT_ANOMALY_PROFILES` gains `hmac_verify`,
+  `hmac_auth` and `sha3_256_hash` at the fallback's values, and
+  `tests/test_monitoring_profile_coverage.py` enumerates every emitted name
+  in both directions.
+- `0bf9ce6` (2026-08-24). `vmulq_s16` / `vmulq_s32` are `__a * __b` on a
+  signed vector type, so the NEON Kyber and Dilithium low-half Montgomery and
+  Barrett steps, whose products exceed the lane width by design, were
+  signed-overflow undefined behaviour: 29 of 68 ctest cases aborted under
+  `-fsanitize=undefined`. The low half is now computed on unsigned lanes
+  (`mullo_s16` / `mullo_s32`, five sites in `src/c/neon/ama_kyber_neon.c` and
+  `src/c/neon/ama_dilithium_neon.c`), which emits the same `MUL` and is
+  bit-identical. Every sanitizer job ran on x86-64, where the NEON and SVE2
+  units compile out, so a new `arm-qemu-ubsan` lane in `arm-qemu.yml`
+  cross-compiles with `-fsanitize=undefined -fno-sanitize-recover=all` (SVE2
+  on) and runs the full ctest under QEMU: 68/68.
+- `b7e9fa1` (2026-08-24). `src/c/sve2/ama_dilithium_sve2.c` stages secret
+  coefficients (s1, s2 and the signing mask y) through `int32_t` scratch
+  arrays exactly as the Kyber SVE2 kernel does, and only the Kyber file
+  scrubbed them (audit M5). The buffers are hoisted to function scope and
+  erased once per public entry point via `AMA_DILITHIUM_SVE2_SCRUB`; the
+  forward and inverse NTT remain byte-identical to the scalar reference over
+  256 trials under QEMU.
+- `ff06009` (2026-08-24). Seven Low audit findings in CI: the ARM
+  secret-division check runs against `build-arm-sve2` as well as the NEON
+  build; Bandit and Semgrep scan `setup.py` and `tools/`, the build and
+  release code CI trusts; the Docker job carries a boolean
+  `DOCKERHUB_CONFIGURED` instead of the secrets in job env; the Valgrind loop
+  counts its targets and fails below the expected six; the Semgrep
+  bare-memset rule is documented as unrunnable on this C tree (its property
+  is enforced by `tools/check_c_secret_zeroization.py`); the dudect path
+  filter also triggers on the constant-time gate scripts; and `release.yml`
+  forwards only `AMA_INTEGRITY_SIGNING_SEED_HEX` to the anchor-check workflow
+  instead of `secrets: inherit`.
+- `41a3586` (2026-08-24). `tools/check_release_state.py` (audit M12): a
+  v-tag push now fails `release.yml`'s preflight while `CHANGELOG.md`,
+  `README.md`, `SECURITY.md` or `docs/index.rst` still carry an unreleased
+  marker. Tag-state markers are enforced unconditionally; PyPI-publish-state
+  markers only under `--require-published`, which the workflow passes exactly
+  when `AMA_PUBLISH_TO_PYPI == 'true'`. `tests/test_release_state.py` pins
+  both modes and version-scopes the CHANGELOG heading check.
+
 ### Maintenance pass, twenty-first (2026-09-06) — the in-house Ed25519 overtakes the vendored backend, and the vendored backend leaves
 
 Since #290 the x86-64 wheels have shipped Ed25519 through a vendored copy of

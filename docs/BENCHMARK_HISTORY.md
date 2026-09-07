@@ -389,3 +389,44 @@ reference implementations vectorise rejection sampling, CBD, compression and
 the full NTT chain, where AMA vectorises a subset. Closing it is a
 vectorisation project measured in weeks, not a configuration change, and
 nothing here should be read as implying a quick fix exists.
+
+## 2026-09-07: Ed25519 floors on the in-house backend — a single-run floor replaced by four-run medians
+
+PR #394's twenty-first maintenance pass replaced the vendored ed25519-donna
+backend with the in-house backend (radix-2^51 and, on BMI2+ADX hosts,
+radix-2^64 field arithmetic), and commit `6892863` raised the three Ed25519
+floors in both baseline files to the benchmark-regression jobs' measurement of
+it at head `c6020ac`: 16,751 / 77,991 / 32,019 ops/sec (keygen / sign /
+verify) on `ubuntu-latest` x86_64 and 14,595 / 58,452 / 31,259 on
+`ubuntu-24.04-arm`. One run each.
+
+The four benchmark-regression runs that followed on identical Ed25519 code
+(heads `f2ac1d8`, `4a45408`, `755cd22`, `447cdf0`; workflow runs 34070019745,
+34082980156, 34084425292, 34084821515) showed the x86_64 sample to be a
+fast-class one: keygen 16,622 / 14,436 / 16,304 / 14,349, sign 73,660 /
+67,625 / 73,366 / 67,521, verify 33,234 / 28,003 / 32,777 / 28,306 ops/sec —
+the two-class `ubuntu-latest` fleet the 2026-08-14 recalibration already
+documents. The aarch64 runs sat within 1.5% of each other.
+
+Per "The guard" above, the floors are re-based to the median of those four
+runs (even count: mean of the middle two, rounded), computed by script from
+the job logs:
+
+| Primitive | x86_64 before → after | aarch64 before → after |
+|---|---|---|
+| `ed25519_keygen` | 16,751 → 15,370 | 14,595 → 14,678 |
+| `ed25519_sign` | 77,991 → 70,496 | 58,452 → 58,762 |
+| `ed25519_verify` | 32,019 → 30,542 | 31,259 → 31,270 |
+
+Tolerances are unchanged (45% x86_64, 15% aarch64). The x86_64 effective
+minimums (floor × 0.55) fall with the floors — 9,213 → 8,454, 42,895 → 38,773,
+17,610 → 16,798 ops/sec — which is stated rather than hidden: it is the same
+convention every other x86_64 row uses (the floor is the measured median, the
+tolerance is the fleet's spread), applied to a measured median instead of one
+fast sample. Every one of the four runs clears the new minimums by 67–74%, and
+the slowest of them is above the removed donna backend's last measurement on
+the same runner class (11,855 / 59,847 / 21,322) on every row. The other
+sixteen floors, `calibration_evidence` and `floor_drift_acknowledged` are
+untouched; both `baseline_change_log`s carry the run and job IDs. `README.md`
+publishes the same four runs' medians for all nineteen benchmarks on both
+runner classes.
