@@ -61,7 +61,7 @@ jobs:
         # documents and guards against.
         shell: bash
         run: |
-          # Scope and suppressions, all four established by running the gate for
+          # Scope and the two run-wide suppressions, settled by running the gate for
           # the first time (with pipefail it reported 121 findings, none of them
           # a defect — see below).  A gate that is permanently red is as useless
           # as one that cannot fail, so the configuration below is the set that

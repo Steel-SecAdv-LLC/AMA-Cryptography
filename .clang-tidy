@@ -15,7 +15,7 @@
 # promoted to error via `WarningsAsErrors: '*'` below; the corresponding
 # CI job (`.github/workflows/static-analysis.yml::clang-tidy`) no
 # longer carries `continue-on-error: true` or an `exit 0` trailer.  A
-# new finding fails the workflow.  Four checks that the audit
+# new finding fails the workflow.  Three checks that the audit
 # Issue 9 close-out walk surfaced as genuinely incompatible with the
 # project's cryptographic-C style or as known false-positive sources
 # are explicitly dropped from the `Checks:` list with a one-line
@@ -72,7 +72,7 @@ Checks: >
   -clang-analyzer-deadcode.DeadStores,
   -concurrency-mt-unsafe
 
-# Four checks dropped from `Checks:` above with rationale (audit
+# Three checks dropped from `Checks:` above with rationale (audit
 # Issue 9 close-out walk — surfaced ~50 false-positive-class findings
 # that no inline NOLINT could honestly justify):
 #
@@ -108,9 +108,11 @@ Checks: >
 # clang-analyzer-core.UndefinedBinaryOperatorResult is NO LONGER dropped
 # here.  It was, tree-wide, which left it dead on the ~40 C sources where
 # it works.  It is now enabled globally and reports "garbage value" on
-# exactly four reads, in exactly three files: ama_dilithium.c:460 (pointwise
-# Montgomery), ama_kyber.c:2635/2697 (basemul, poly_sub) and ama_nistp.c:357
-# (limb packing).  Each is an interprocedural false positive with one root:
+# exactly four reads, in exactly three files: ama_dilithium.c
+# (dil_poly_pointwise_montgomery_cached), ama_kyber.c (basemul and poly_sub)
+# and ama_nistp.c (nistp_to_bytes) -- named by function, not line, so this
+# note does not rot the way a line-pinned suppression did.  Each is an
+# interprocedural false positive with one root:
 # the path-sensitive engine explores a call chain in which a fill loop
 # (e.g. nistp_select's `for (i = 0; i < nl; i++)`) runs ZERO times — which
 # requires a runtime limb count of nl == 0, impossible by construction for

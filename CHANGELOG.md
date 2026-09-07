@@ -61,8 +61,10 @@ narrowing the exclusion from the whole tree to the three files that need it).
     `0 - ((uint64_t)x >> n)` and `-(int64_t)((uint64_t)x >> n)`, which is
     bit-identical on every two's-complement target — in
     `src/c/internal/ama_fe25519_safegcd.h` (6 sites), `src/c/ama_dilithium.c`
-    (6), `src/c/ama_secp256k1.c` (5) and `src/c/ama_cpuid.c` (1). No
-    implementation-defined behaviour remains for the check to report.
+    (6) and `src/c/ama_secp256k1.c` (5); `src/c/ama_cpuid.c`'s single site is
+    a bit extract rather than a mask and takes the plain
+    `((unsigned)info[1] >> 31) & 1`. No implementation-defined behaviour
+    remains for the check to report.
   - The out-parameter `uninitvar` false positives — where `cppcheck` cannot
     follow the helper that fills a struct passed by address — were removed by
     zero-initialising the output aggregate at its declaration: the
@@ -89,8 +91,10 @@ narrowing the exclusion from the whole tree to the three files that need it).
   per-file exclusion for the three files where it cannot be satisfied.** The
   dropped `clang-analyzer-core.UndefinedBinaryOperatorResult` was dead on the
   ~40 C sources where it works. It raises an irreducible interprocedural false
-  positive on exactly four reads in three files — `ama_dilithium.c:460`,
-  `ama_kyber.c:2635`/`2697`, `ama_nistp.c:357` — with one root cause: the
+  positive on exactly four reads in three files — `ama_dilithium.c:460`
+  (`dil_poly_pointwise_montgomery_cached`), `ama_kyber.c:2635`/`2697`
+  (`basemul`, `poly_sub`), `ama_nistp.c:357` (`nistp_to_bytes`) — with one
+  root cause: the
   path-sensitive engine explores a call chain in which a fill loop (e.g.
   `nistp_select`'s `for (i = 0; i < nl; i++)`) runs zero times, which requires
   a runtime limb count of `nl == 0`, impossible by construction for every
@@ -111,6 +115,20 @@ narrowing the exclusion from the whole tree to the three files that need it).
   byte-identical and add no drift); `docs/METRICS_REPORT.md`, `ARCHITECTURE.md`
   and `README.md` counts were re-measured with `tools/update_docs.py --counts`.
   No `ama_cryptography/*.py` file changed, so no integrity re-sign was needed.
+
+- **Corrections within this pass.** Two follow-up commits fixed defects this
+  pass itself introduced, both caught by CI on the pushed head rather than
+  locally. `755cd22` regenerated `assets/test_coverage.png` and
+  `assets/visuals_manifest.json` and re-measured `docs/METRICS_REPORT.md`: the
+  counts had been written before `black` reformatted the two edited test files,
+  so three tree-vs-doc gates were red on every Test lane. `447cdf0` replaced
+  the `uint32_t` cast in `src/c/ama_cpuid.c` with the builtin `unsigned`: that
+  translation unit never includes `<stdint.h>`, the type resolved on GCC/Clang
+  only through a transitive include, and every MSVC lane failed at compile
+  time (`error C2065`). Neither commit changes behaviour. A final
+  comments-and-ledger commit corrects the `.clang-tidy` header, which still
+  said four checks were dropped after this pass reduced that to three, and
+  records these corrections here.
 
 ### Maintenance pass, twenty-first (2026-09-06) — the in-house Ed25519 overtakes the vendored backend, and the vendored backend leaves
 
