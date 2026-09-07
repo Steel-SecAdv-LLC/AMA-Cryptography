@@ -229,23 +229,23 @@ static void secp256k1_fe_normalize(secp256k1_fe *a) {
         int64_t borrow;
 
         s0 = t0 - SECP256K1_FE_P.v[0];
-        borrow = (int64_t)s0 >> 63;
+        borrow = -(int64_t)(s0 >> 63);
         s0 &= SECP256K1_LIMB_MASK;
 
         s1 = t1 - SECP256K1_FE_P.v[1] + (uint64_t)borrow;
-        borrow = (int64_t)s1 >> 63;
+        borrow = -(int64_t)(s1 >> 63);
         s1 &= SECP256K1_LIMB_MASK;
 
         s2 = t2 - SECP256K1_FE_P.v[2] + (uint64_t)borrow;
-        borrow = (int64_t)s2 >> 63;
+        borrow = -(int64_t)(s2 >> 63);
         s2 &= SECP256K1_LIMB_MASK;
 
         s3 = t3 - SECP256K1_FE_P.v[3] + (uint64_t)borrow;
-        borrow = (int64_t)s3 >> 63;
+        borrow = -(int64_t)(s3 >> 63);
         s3 &= SECP256K1_LIMB_MASK;
 
         s4 = t4 - SECP256K1_FE_P.v[4] + (uint64_t)borrow;
-        borrow = (int64_t)s4 >> 63;
+        borrow = -(int64_t)(s4 >> 63);
         s4 &= 0xFFFFFFFFFFFFULL;
 
         /* mask = all-ones if borrow (a < p, keep original), 0 if no borrow (a >= p).

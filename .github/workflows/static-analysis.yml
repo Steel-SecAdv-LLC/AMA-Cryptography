@@ -75,29 +75,26 @@ jobs:
           # where substantive C analysis actually happens.  Keeping `style` at
           # --error-exitcode=1 is what made this gate un-turn-on-able.
           #
-          # shiftTooManyBitsSigned: the `x >> 31` / `x >> 63` sign-broadcast
-          # mask, which is how every branchless comparison in this codebase is
-          # written (ama_dilithium.c, ama_secp256k1.c, ama_cpuid.c, and the
-          # pq-crystals reference these follow).  C leaves it
-          # implementation-defined; every supported target implements it as an
-          # arithmetic shift, and the unsigned-cast rewrite would obscure the
-          # constant-time intent at 12 sites for no behavioural change.
+          # shiftTooManyBitsSigned and uninitvar: both were once suppressed
+          # here — the first as a run-wide `--suppress`, the second as per-site
+          # entries in .cppcheck-suppressions — and both are now RESOLVED AT
+          # SOURCE, so neither suppression exists any more:
           #
-          # uninitvar: false positives on out-parameters.  cppcheck cannot see
-          # through the helpers that fill them.  Five sites (six reports: `src/c/ama_kyber.c:572` is emitted once per
-          # configuration `--force` invents), listed WITH their
-          # line numbers and their reasons in .cppcheck-suppressions.
-          #
-          # They used to be three file-wide `--suppress=uninitvar:<file>`
-          # entries, and "Scoped per file so the check stays live elsewhere"
-          # undersold what that cost: a genuinely uninitialised read introduced
-          # later anywhere in ama_nistp.c — 1,100 lines of P-256/P-384/P-521
-          # field arithmetic — was reported and discarded.  Measured by
-          # injecting one:
-          #
-          #   file-wide suppression : 0 reports
-          #   per-site suppressions : src/c/ama_nistp.c:469:31: error:
-          #                           Uninitialized variable: ama_probe_uninit
+          #   * The `x >> 31` / `x >> 63` sign-broadcast masks (ama_dilithium.c,
+          #     ama_secp256k1.c, ama_cpuid.c, internal/ama_fe25519_safegcd.h)
+          #     were rewritten to the fully-defined unsigned form
+          #     `0 - ((uint64_t)x >> n)` / `-(int64_t)((uint64_t)x >> n)`, which
+          #     is bit-identical on every two's-complement target and carries
+          #     no implementation-defined behaviour for cppcheck to report.
+          #     ACVP/KAT byte-equality confirms the outputs are unchanged.
+          #   * The out-parameter uninitvar false positives (the group-
+          #     arithmetic template internal/ama_ed25519_ge.h, ama_nistp.c,
+          #     ama_dilithium.c) were removed by zero-initialising each output
+          #     aggregate at its declaration; ama_kyber.c's matrix out-parameter,
+          #     which the function cannot initialise locally, gets a leading
+          #     memset dwarfed by the XOF sampling that follows.  cppcheck now
+          #     reports nothing under --force, so .cppcheck-suppressions is gone
+          #     with the --suppressions-list flag that pointed at it.
           #
           # arrayIndexOutOfBounds: NOT suppressed any more, because it was
           # never a cppcheck limitation.  With --force, cppcheck invents a
@@ -111,8 +108,6 @@ jobs:
             --enable=warning,performance,portability \
             --suppress=missingIncludeSystem \
             --suppress=unusedFunction \
-            --suppress=shiftTooManyBitsSigned \
-            --suppressions-list=.cppcheck-suppressions \
             --error-exitcode=1 \
             --inline-suppr \
             --std=c11 \
@@ -795,7 +790,20 @@ jobs:
           : > clang-tidy-findings.txt
           rc=0
           while IFS= read -r f; do
-            if ! clang-tidy -p build-tidy --quiet "$f" 2>&1 | tee -a clang-tidy-findings.txt; then
+            # clang-analyzer-core.UndefinedBinaryOperatorResult raises an
+            # irreducible interprocedural false positive on exactly these
+            # three polynomial/field files (the path engine assumes a
+            # zero-length fill loop, i.e. a runtime limb count of 0, which
+            # is impossible by construction).  It is excluded PER FILE here,
+            # not dropped tree-wide, so the check runs fail-closed on every
+            # other source.  Full rationale in .clang-tidy; the excluded set
+            # is pinned by tests/test_compiler_warning_gate.py.
+            extra=()
+            case "$f" in
+              src/c/ama_dilithium.c|src/c/ama_kyber.c|src/c/ama_nistp.c)
+                extra=(--checks=-clang-analyzer-core.UndefinedBinaryOperatorResult) ;;
+            esac
+            if ! clang-tidy -p build-tidy --quiet "${extra[@]}" "$f" 2>&1 | tee -a clang-tidy-findings.txt; then
               rc=1
             fi
           done <<< "$files"

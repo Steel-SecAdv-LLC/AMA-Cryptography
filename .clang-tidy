@@ -70,8 +70,7 @@ Checks: >
   -cert-dcl51-cpp,
   -readability-redundant-declaration,
   -clang-analyzer-deadcode.DeadStores,
-  -concurrency-mt-unsafe,
-  -clang-analyzer-core.UndefinedBinaryOperatorResult
+  -concurrency-mt-unsafe
 
 # Four checks dropped from `Checks:` above with rationale (audit
 # Issue 9 close-out walk — surfaced ~50 false-positive-class findings
@@ -106,18 +105,28 @@ Checks: >
 #     no-op refactor (e.g., a project-side `safe_getenv` wrapper)
 #     that adds zero safety.
 #
-#   clang-analyzer-core.UndefinedBinaryOperatorResult — the interprocedural
-#     analyzer reports "garbage value" on the Montgomery-reduce reads from
-#     caller-initialised coefficient arrays in the polynomial backends
-#     (ama_dilithium.c pointwise Montgomery, ama_kyber.c basemul and
-#     ama_nistp.c limb packing): it cannot follow the array fill across the
-#     call boundary and treats the operand as uninitialised.  These are false
-#     positives on code the KAT suites exercise exhaustively; the finding was
-#     first seen from the since-removed vendored Ed25519 shim and still fires
-#     on the first-party NTT code, so the check stays dropped.  (No NOLINT
-#     exists anywhere under src/c/: inline suppressions there are forbidden
-#     and enforced by tools/check_suppression_hygiene.py — see the header of
-#     this file.)
+# clang-analyzer-core.UndefinedBinaryOperatorResult is NO LONGER dropped
+# here.  It was, tree-wide, which left it dead on the ~40 C sources where
+# it works.  It is now enabled globally and reports "garbage value" on
+# exactly four reads, in exactly three files: ama_dilithium.c:460 (pointwise
+# Montgomery), ama_kyber.c:2635/2697 (basemul, poly_sub) and ama_nistp.c:357
+# (limb packing).  Each is an interprocedural false positive with one root:
+# the path-sensitive engine explores a call chain in which a fill loop
+# (e.g. nistp_select's `for (i = 0; i < nl; i++)`) runs ZERO times — which
+# requires a runtime limb count of nl == 0, impossible by construction for
+# every shipped curve — and so concludes the output buffer was "returned
+# without writing".  The only source "fix" is to zero-initialise a large set
+# of hot ECDSA/NTT output buffers purely to satisfy the false path, with no
+# safety gain (the ACVP/KAT suites exercise these exhaustively) — the
+# performance theatre the project forbids.  So instead of dropping the whole
+# category, the CI job (static-analysis.yml::clang-tidy) appends a per-FILE
+# `--checks=-clang-analyzer-core.UndefinedBinaryOperatorResult` for exactly
+# those three files and runs the check fail-closed on every other source.
+# The exclusion is named in one visible place (the CI loop), not per-site
+# inline (INVARIANT-13 forbids NOLINT under src/c/, enforced by
+# tools/check_suppression_hygiene.py), and tests/test_compiler_warning_gate.py
+# pins the excluded set so a fourth file — or a fix that makes one of these
+# three pass — fails the gate until the list is corrected.
 
 # WarningsAsErrors flips every enabled check above to an ERROR.  See
 # the header for the audit Issue 9 close-out rationale.  PRs that

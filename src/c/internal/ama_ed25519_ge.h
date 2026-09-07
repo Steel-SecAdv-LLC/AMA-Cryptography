@@ -502,7 +502,7 @@ GE_OP_INLINE void GE_SYM(ge_pnielssub)(ge_p1p1 *r, const ge_p3 *p, const ge_pnie
 /* Canonical 32-byte encoding of (X : Y : Z): y, with the sign of x in bit
  * 255.  T is never read, so a p3 whose T is stale is a valid input. */
 static void GE_SYM(ge_xyz_tobytes)(uint8_t *s, const GE_FE X, const GE_FE Y, const GE_FE Z) {
-    GE_FE recip, x, y;
+    GE_FE recip = {0}, x, y;
     GE_SYM(fe_invert_ct)(recip, Z);
     GE_FE_MUL(x, X, recip);
     GE_FE_MUL(y, Y, recip);
@@ -587,7 +587,7 @@ static int GE_SYM(ge_decode_finish)(ge_p3 *h, const uint8_t *s, const GE_FE u, c
 }
 
 static int GE_SYM(ge_frombytes)(ge_p3 *h, const uint8_t *s) {
-    GE_FE u, v, v3;
+    GE_FE u = {0}, v = {0}, v3 = {0};
     if (GE_SYM(ge_decode_prepare)(h, s, u, v, v3) != 0) {
         return -1;
     }
@@ -598,7 +598,7 @@ static int GE_SYM(ge_frombytes)(ge_p3 *h, const uint8_t *s) {
 /* Two points, one pass through the exponentiation.  -1 if either encoding
  * is refused (both are checked before any exponentiation is spent). */
 static int GE_SYM(ge_frombytes_x2)(ge_p3 *h1, const uint8_t *s1, ge_p3 *h2, const uint8_t *s2) {
-    GE_FE u1, v1, w1, u2, v2, w2;
+    GE_FE u1 = {0}, v1 = {0}, w1 = {0}, u2 = {0}, v2 = {0}, w2 = {0};
     if (GE_SYM(ge_decode_prepare)(h1, s1, u1, v1, w1) != 0 ||
         GE_SYM(ge_decode_prepare)(h2, s2, u2, v2, w2) != 0) {
         return -1;

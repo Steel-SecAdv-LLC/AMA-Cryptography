@@ -564,6 +564,13 @@ static void kyber_gen_matrix(polyvec *mat, const uint8_t seed[32],
         return;
     }
 
+    /* Every mat[i].vec[j] for i,j < k is written below, but the writes go
+     * through the polys[] pointer batch, which static analysis cannot trace
+     * back to mat.  Zeroing the k rows first makes mat provably initialised
+     * (defence-in-depth against any future bound-logic change) at negligible
+     * cost: the per-row XOF rejection sampling that follows dwarfs it. */
+    memset(mat, 0, (size_t)P->k * sizeof(polyvec));
+
     for (i = 0; i < P->k; i++) {
         for (j = 0; j < P->k; j++) {
             uint8_t x = transposed ? (uint8_t)i : (uint8_t)j;

@@ -259,7 +259,7 @@ static int32_t dil_reduce32(int32_t a) {
  * If a is negative, add q
  */
 static int32_t dil_caddq(int32_t a) {
-    a += (a >> 31) & DIL_Q;
+    a += (-(int32_t)((uint32_t)a >> 31)) & DIL_Q;
     return a;
 }
 
@@ -543,7 +543,7 @@ static int dil_poly_chknorm(const dil_poly *a, int32_t B) {
     }
 
     for (i = 0; i < DIL_N; ++i) {
-        t = a->coeffs[i] >> 31;
+        t = -(int32_t)((uint32_t)a->coeffs[i] >> 31);
         t = a->coeffs[i] - (t & 2 * a->coeffs[i]);  /* absolute value */
         if (t >= B) {
             return 1;
@@ -587,11 +587,11 @@ static int32_t dil_decompose(int32_t *a0, int32_t a, const dil_params *P) {
         a1 &= 15;
     } else {
         a1 = (a1 * 11275 + (1 << 23)) >> 24;
-        a1 ^= ((43 - a1) >> 31) & a1;   /* clamp a1 == 44 back to 0 */
+        a1 ^= (-(int32_t)((uint32_t)(43 - a1) >> 31)) & a1;   /* clamp a1 == 44 back to 0 */
     }
 
     *a0 = a - a1 * 2 * P->gamma2;
-    *a0 -= (((DIL_Q - 1) / 2 - *a0) >> 31) & DIL_Q;
+    *a0 -= (-(int32_t)((uint32_t)((DIL_Q - 1) / 2 - *a0) >> 31)) & DIL_Q;
     return a1;
 }
 
@@ -726,8 +726,8 @@ static int dil_polyeta_unpack(dil_poly *r, const uint8_t *a, const dil_params *P
     {
         int32_t bad = 0;
         for (i = 0; i < DIL_N; ++i) {
-            bad |= (P->eta - r->coeffs[i]) >> 31;              /* c >  eta */
-            bad |= (r->coeffs[i] + (int32_t)P->eta) >> 31;     /* c < -eta */
+            bad |= -(int32_t)((uint32_t)(P->eta - r->coeffs[i]) >> 31);              /* c >  eta */
+            bad |= -(int32_t)((uint32_t)(r->coeffs[i] + (int32_t)P->eta) >> 31);     /* c < -eta */
         }
         return bad ? -1 : 0;
     }
@@ -2350,7 +2350,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Pack w1 and compute challenge hash */
         {
-            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
+            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX] = {0};
             uint8_t challenge_seed[DIL_CRHBYTES +
                                    DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
             const size_t w1_len = (size_t)P->k * P->polyw1_packedbytes;

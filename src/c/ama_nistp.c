@@ -662,7 +662,7 @@ static void nistp_jac_double(nistp_jac *r, const nistp_jac *p, const nistp_curve
     uint64_t delta[AMA_NISTP_MAX_LIMBS], gamma[AMA_NISTP_MAX_LIMBS];
     uint64_t beta[AMA_NISTP_MAX_LIMBS], alpha[AMA_NISTP_MAX_LIMBS];
     uint64_t t0[AMA_NISTP_MAX_LIMBS], t1[AMA_NISTP_MAX_LIMBS];
-    nistp_jac out;
+    nistp_jac out = {0};
 
     nistp_mont_sqr(delta, p->Z, m, m0, nl);          /* delta = Z1^2 */
     nistp_mont_sqr(gamma, p->Y, m, m0, nl);          /* gamma = Y1^2 */
@@ -728,7 +728,7 @@ static void nistp_jac_add(nistp_jac *r, const nistp_jac *p, const nistp_jac *q,
     uint64_t h[AMA_NISTP_MAX_LIMBS], rr[AMA_NISTP_MAX_LIMBS];
     uint64_t ii[AMA_NISTP_MAX_LIMBS], jj[AMA_NISTP_MAX_LIMBS];
     uint64_t vv[AMA_NISTP_MAX_LIMBS], t0[AMA_NISTP_MAX_LIMBS];
-    nistp_jac out, doubled, inf;
+    nistp_jac out = {0}, doubled, inf;
     uint64_t mask_h, mask_r, mask_p, mask_q;
     unsigned k;
 
@@ -1111,7 +1111,7 @@ static void nistp_jac_add_affine_vartime(nistp_jac *r, const nistp_jac *p,
     uint64_t hh[AMA_NISTP_MAX_LIMBS], ii[AMA_NISTP_MAX_LIMBS];
     uint64_t jj[AMA_NISTP_MAX_LIMBS], rr[AMA_NISTP_MAX_LIMBS];
     uint64_t vv[AMA_NISTP_MAX_LIMBS], t0[AMA_NISTP_MAX_LIMBS];
-    nistp_jac out;
+    nistp_jac out = {0};
 
     /* P at infinity: the sum is Q, lifted back to Jacobian with Z = 1. */
     if (nistp_jac_is_infinity(p, nl)) {

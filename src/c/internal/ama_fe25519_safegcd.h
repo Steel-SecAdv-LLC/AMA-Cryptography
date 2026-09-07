@@ -121,7 +121,7 @@ static inline int64_t ama_s62_divsteps_59(int64_t zeta, uint64_t f0, uint64_t g0
     int i;
 
     for (i = 3; i < 62; ++i) {
-        c1 = (uint64_t)(zeta >> 63);       /* all ones iff zeta < 0 */
+        c1 = 0 - ((uint64_t)zeta >> 63);   /* all ones iff zeta < 0 */
         c2 = 0 - (g & 1);                  /* all ones iff g odd */
         x = (f ^ c1) - c1;                 /* +-f */
         y = (u ^ c1) - c1;
@@ -178,8 +178,8 @@ static inline void ama_s62_update_fg(ama_s62 *f, ama_s62 *g, const ama_s62_trans
  * terms keep d and e inside (-2p, p) across batches. */
 static inline void ama_s62_update_de(ama_s62 *d, ama_s62 *e, const ama_s62_trans *t) {
     const int64_t u = t->u, v = t->v, q = t->q, r = t->r;
-    const int64_t sd = d->v[4] >> 63;   /* all ones iff d < 0 */
-    const int64_t se = e->v[4] >> 63;
+    const int64_t sd = -(int64_t)((uint64_t)d->v[4] >> 63);   /* all ones iff d < 0 */
+    const int64_t se = -(int64_t)((uint64_t)e->v[4] >> 63);
     int64_t md = (u & sd) + (v & se);
     int64_t me = (q & sd) + (r & se);
     int64_t di, ei;
@@ -217,14 +217,14 @@ static inline void ama_s62_normalize(ama_s62 *r, int64_t sign_f) {
     int64_t cond_add, cond_negate;
 
     /* Add p if r is negative: r in (-p, p). */
-    cond_add = r4 >> 63;
+    cond_add = -(int64_t)((uint64_t)r4 >> 63);
     r0 += ama_s62_p.v[0] & cond_add;
     r1 += ama_s62_p.v[1] & cond_add;
     r2 += ama_s62_p.v[2] & cond_add;
     r3 += ama_s62_p.v[3] & cond_add;
     r4 += ama_s62_p.v[4] & cond_add;
     /* Negate if f was negative, then add p again if the result is negative. */
-    cond_negate = sign_f >> 63;
+    cond_negate = -(int64_t)((uint64_t)sign_f >> 63);
     r0 = (r0 ^ cond_negate) - cond_negate;
     r1 = (r1 ^ cond_negate) - cond_negate;
     r2 = (r2 ^ cond_negate) - cond_negate;
@@ -235,7 +235,7 @@ static inline void ama_s62_normalize(ama_s62 *r, int64_t sign_f) {
     r2 += r1 >> 62; r1 &= AMA_S62_M62;
     r3 += r2 >> 62; r2 &= AMA_S62_M62;
     r4 += r3 >> 62; r3 &= AMA_S62_M62;
-    cond_add = r4 >> 63;
+    cond_add = -(int64_t)((uint64_t)r4 >> 63);
     r0 += ama_s62_p.v[0] & cond_add;
     r1 += ama_s62_p.v[1] & cond_add;
     r2 += ama_s62_p.v[2] & cond_add;

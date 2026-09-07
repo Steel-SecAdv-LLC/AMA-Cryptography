@@ -381,3 +381,65 @@ class TestInterleavedParallelOutput:
                 ), f"{build_dir} is a Ninja build; -Otarget is a Make flag: {line.strip()}"
                 continue
             assert "-Otarget" in line, f"unsynchronised parallel Make build: {line.strip()}"
+
+
+class TestClangTidyUndefinedBinaryOpExclusionIsPinned:
+    """clang-analyzer-core.UndefinedBinaryOperatorResult is enforced tree-wide
+    EXCEPT on three named files.
+
+    The check raises an irreducible interprocedural false positive on exactly
+    ama_dilithium.c, ama_kyber.c and ama_nistp.c (the path engine assumes a
+    zero-length fill loop, i.e. a runtime limb count of 0, impossible by
+    construction).  Rather than drop the whole category — which left it dead on
+    the ~40 other C sources — .clang-tidy enables it and the static-analysis
+    workflow appends a per-FILE `--checks=-...` for exactly those three.
+
+    This pins both halves: (1) the category is NOT globally disabled in
+    .clang-tidy, and (2) the workflow excludes exactly the three files.  If a
+    fourth file ever needs the exclusion, or one of these three is fixed so it
+    no longer needs it, this test fails until the set is corrected — the same
+    drift protection the deleted per-site cppcheck pins used to provide.
+    """
+
+    _CHECK = "clang-analyzer-core.UndefinedBinaryOperatorResult"
+    _EXPECTED_FILES = frozenset({"src/c/ama_dilithium.c", "src/c/ama_kyber.c", "src/c/ama_nistp.c"})
+
+    def test_check_is_not_globally_disabled(self) -> None:
+        clang_tidy = (REPO_ROOT / ".clang-tidy").read_text(encoding="utf-8")
+        # A global drop is a `-<check>` token in the YAML `Checks:` block; a
+        # `#`-comment mention of the name is prose, not a disable.
+        checks_disabled = [
+            line.strip().rstrip(",")
+            for line in clang_tidy.splitlines()
+            if not line.lstrip().startswith("#") and line.strip().rstrip(",") == f"-{self._CHECK}"
+        ]
+        assert not checks_disabled, (
+            f"{self._CHECK} is globally disabled in .clang-tidy again; it is "
+            "meant to run fail-closed on every C source except the three named "
+            "files, which are excluded per-file in the workflow instead."
+        )
+
+    def test_workflow_excludes_exactly_the_three_known_false_positive_files(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "static-analysis.yml").read_text(
+            encoding="utf-8"
+        )
+        assert f"--checks=-{self._CHECK}" in workflow, (
+            "the workflow no longer excludes the check for any file; if the false "
+            "positives were resolved at source, remove this test too."
+        )
+        # The exclusion targets a shell `case` whose pattern names the files
+        # with `|` separators; pull the pattern that guards the exclusion.
+        excluded: set[str] = set()
+        for line in workflow.splitlines():
+            stripped = line.strip()
+            if stripped.endswith(")") and "src/c/ama_" in stripped and "|" in stripped:
+                pattern = stripped[:-1]  # drop trailing ')'
+                excluded = {tok.strip() for tok in pattern.split("|") if tok.strip()}
+                break
+        assert excluded == set(self._EXPECTED_FILES), (
+            "the per-file clang-tidy exclusion set drifted from the three files "
+            f"that genuinely raise {self._CHECK}. Found {sorted(excluded)}, "
+            f"expected {sorted(self._EXPECTED_FILES)}. A fourth file means a new "
+            "false positive to document here; a shrunken set means one was fixed "
+            "and its exclusion (and this pin) should be removed."
+        )
