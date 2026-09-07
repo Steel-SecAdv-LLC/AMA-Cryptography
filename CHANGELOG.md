@@ -42,6 +42,76 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > was removed from this branch in the eighteenth pass below and remains in the
 > branch's commit history.
 
+### Maintenance pass, twenty-second (2026-09-07) — static-analysis findings resolved at source, not suppressed
+
+The twenty-first pass left two static-analysis findings *documented* rather
+than *resolved*: a set of per-site `cppcheck` suppressions in a
+`.cppcheck-suppressions` file plus a run-wide `--suppress=shiftTooManyBitsSigned`
+on the command line, and a tree-wide drop of the `clang-tidy`
+`clang-analyzer-core.UndefinedBinaryOperatorResult` check in `.clang-tidy`. A
+suppression and a dropped check are not fixes; this pass removes both by
+fixing the code (or, for one genuinely irreducible tool limitation, by
+narrowing the exclusion from the whole tree to the three files that need it).
+
+- **`cppcheck` — every suppression resolved at source; the suppressions file
+  and the blanket suppression are gone.**
+  - The `x >> 31` / `x >> 63` sign-broadcast masks that `cppcheck` reports as
+    `shiftTooManyBitsSigned` / `shiftNegativeLHS` (implementation-defined
+    signed shifts) were rewritten to the fully-defined unsigned form
+    `0 - ((uint64_t)x >> n)` and `-(int64_t)((uint64_t)x >> n)`, which is
+    bit-identical on every two's-complement target — in
+    `src/c/internal/ama_fe25519_safegcd.h` (6 sites), `src/c/ama_dilithium.c`
+    (6), `src/c/ama_secp256k1.c` (5) and `src/c/ama_cpuid.c` (1). No
+    implementation-defined behaviour remains for the check to report.
+  - The out-parameter `uninitvar` false positives — where `cppcheck` cannot
+    follow the helper that fills a struct passed by address — were removed by
+    zero-initialising the output aggregate at its declaration: the
+    group-arithmetic template `src/c/internal/ama_ed25519_ge.h` (`recip`, and
+    the decode locals `u/v/v3` and `u1..w2`), `src/c/ama_nistp.c` (the `out`
+    Jacobian points) and `src/c/ama_dilithium.c` (`w1_packed`).
+    `src/c/ama_kyber.c`'s matrix is a caller-owned out-parameter the function
+    cannot initialise locally, so it takes a leading `memset` of the `k` rows
+    it fills — a cost dwarfed by the per-row XOF rejection sampling that
+    follows. `arrayIndexOutOfBounds` continues to need no suppression because
+    `-DPATH_MAX=4096` removes it and leaves the bounds check live.
+  - With every finding resolved, `cppcheck` runs clean over `src/c` under the
+    exact CI invocation with only the two run-wide environment suppressions
+    (`missingIncludeSystem`, `unusedFunction`); `.cppcheck-suppressions` and
+    the `--suppressions-list` / `--suppress=shiftTooManyBitsSigned` flags are
+    deleted. `tests/test_suppression_hygiene_gate.py` is inverted to enforce
+    the new invariant — no suppressions file, no file- or class-wide
+    command-line suppression, and a clean `cppcheck` run — replacing the
+    per-site line-pinning it enforced when suppressions still existed.
+  - The rewrites are value-preserving by construction and confirmed unchanged
+    by the ACVP/KAT C suites and the reproducible-build byte-equality gate.
+
+- **`clang-tidy` — the check is enforced tree-wide instead of dropped, with a
+  per-file exclusion for the three files where it cannot be satisfied.** The
+  dropped `clang-analyzer-core.UndefinedBinaryOperatorResult` was dead on the
+  ~40 C sources where it works. It raises an irreducible interprocedural false
+  positive on exactly four reads in three files — `ama_dilithium.c:460`,
+  `ama_kyber.c:2635`/`2697`, `ama_nistp.c:357` — with one root cause: the
+  path-sensitive engine explores a call chain in which a fill loop (e.g.
+  `nistp_select`'s `for (i = 0; i < nl; i++)`) runs zero times, which requires
+  a runtime limb count of `nl == 0`, impossible by construction for every
+  shipped curve. The only source "fix" is to zero-initialise a large set of
+  hot ECDSA/NTT output buffers purely to satisfy the false path, for no safety
+  gain (the ACVP/KAT suites exercise these exhaustively) — the performance
+  theatre the project forbids. So the check is re-enabled in `.clang-tidy` and
+  the `static-analysis.yml` `clang-tidy` step appends a per-file
+  `--checks=-clang-analyzer-core.UndefinedBinaryOperatorResult` for exactly
+  those three files, running fail-closed on every other source.
+  `tests/test_compiler_warning_gate.py` pins both halves: the check is not
+  globally disabled, and the excluded set is exactly those three files, so a
+  fourth false positive — or a fix that lets one of the three pass — fails the
+  gate until the set is corrected.
+
+- **Bookkeeping.** All seven changed C files already carry
+  `floor_drift_acknowledged` entries from the twenty-first pass (the edits are
+  byte-identical and add no drift); `docs/METRICS_REPORT.md`, `ARCHITECTURE.md`
+  and `README.md` counts were re-measured with `tools/update_docs.py --counts`.
+  No `ama_cryptography/*.py` file changed, so no integrity re-sign was needed.
+
 ### Maintenance pass, twenty-first (2026-09-06) — the in-house Ed25519 overtakes the vendored backend, and the vendored backend leaves
 
 Since #290 the x86-64 wheels have shipped Ed25519 through a vendored copy of
