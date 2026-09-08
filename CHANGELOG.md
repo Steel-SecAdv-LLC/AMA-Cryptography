@@ -92,12 +92,29 @@ is what clears them, and nothing here was measuring whether it did. Each
 16-byte half is now searched independently; for AES-256 either half is 128 bits
 of key, so a hit on one is a disclosure on its own.
 
-**4 — only ASan was excluded, so MemorySanitizer ran the probe.** Reading dead
-stack the AEAD frame never wrote is a use-of-uninitialised-value by
-construction, and the MSan lane duly reported
-`test_aead_stack_residue (Subprocess aborted)`. The exclusion now covers both
-sanitizers that instrument this read, under a macro named for the property
-rather than for one product.
+**4 — only ASan was excluded, so MemorySanitizer and ThreadSanitizer ran the
+probe.** Reading dead stack the AEAD frame never wrote is a
+use-of-uninitialised-value by construction, and the MSan lane duly reported
+`test_aead_stack_residue (Subprocess aborted)`.
+
+TSan is the more interesting one, and it was **the control that caught it**:
+
+```
+FAIL: probe control: a value left on the stack IS detected
+  control (sentinel deliberately left): 0 hit(s)
+14 checks, 1 failures
+```
+
+TSan neither faults nor aborts — it relocates locals off the real frame, so the
+probe stops seeing them and the run goes *vacuous* rather than loud. Every AEAD
+verdict "passed" in that same run, on a window that could not see a value
+deliberately planted in it. Reporting those as evidence of no residue is the
+vacuous pass this test exists to refuse, so the lane declines instead.
+
+The exclusion now names all three with the observation that established each.
+What stands behind the list is the control itself: an unanticipated sanitizer
+that breaks the probe's premise fails loudly rather than passing quietly, and
+the fix is to add it with its evidence — never to relax the control.
 
 The four together are why the gate could not fail. **Measured, both
 directions:** with the fixes, 14/14 checks pass under gcc 13 and clang 18 and

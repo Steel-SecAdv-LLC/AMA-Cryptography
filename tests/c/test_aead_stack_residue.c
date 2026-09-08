@@ -37,28 +37,47 @@
 
 #include "ama_cryptography.h"
 
-/* Sanitizers that instrument the very read this test performs.
+/* Sanitizers under which this probe cannot measure what it claims to.
  *
- * Both AddressSanitizer and MemorySanitizer are correct to object to reading
- * dead stack below the current frame, and for different reasons, so both have
- * to be named:
+ * The premise of the whole file is that a function's locals live in ITS stack
+ * frame, at a predictable depth below the caller's.  Every sanitizer here
+ * breaks that premise or the read that tests it, each in its own way, so each
+ * is named with the observation that established it:
  *
- *   - ASan reports "stack-buffer-underflow ... 'anchor' ... underflows this
- *     variable" -- the probe reads past a one-byte object into its redzone.
- *   - MSan reports use-of-uninitialised-value -- dead stack the AEAD frame did
- *     not write is exactly that.  This is not hypothetical: the MemorySanitizer
- *     lane reported `test_aead_stack_residue (Subprocess aborted)`, and only
- *     ASan was named here, so MSan fell through and ran the probe.
+ *   - AddressSanitizer reports "stack-buffer-underflow ... 'anchor' ...
+ *     underflows this variable" -- the probe reads past a one-byte object into
+ *     its redzone, which is precisely what a redzone is for.
+ *   - MemorySanitizer reports use-of-uninitialised-value -- dead stack the AEAD
+ *     frame never wrote is exactly that.  Measured: the MSan lane reported
+ *     `test_aead_stack_residue (Subprocess aborted)` while only ASan was named
+ *     here, so MSan fell through and ran the probe.
+ *   - ThreadSanitizer neither faults nor aborts.  It relocates locals off the
+ *     real frame, so the probe simply stops seeing them, and the run is
+ *     vacuous rather than loud.  The CONTROL is what caught it, which is why
+ *     the control exists:
  *
- * Naming each sanitizer is a shape that fails again on the next one added, so
- * the negative case is pinned: no sanitizer that instruments memory reads may
- * run this probe, and the two that exist are listed. */
+ *         FAIL: probe control: a value left on the stack IS detected
+ *           control (sentinel deliberately left): 0 hit(s)
+ *         14 checks, 1 failures
+ *
+ *     Every AEAD verdict "passed" in that same run -- on a window that could
+ *     not see a value deliberately planted in it.  Reporting those as evidence
+ *     of no residue is the vacuous pass this test is built to refuse, so the
+ *     lane declines instead.
+ *
+ * Enumerating sanitizers is a shape that fails again on the next one added,
+ * and this file has now been caught by that twice.  What stands behind the
+ * list is the control: an unanticipated sanitizer that breaks the premise
+ * fails the control loudly rather than passing quietly, and the fix is to add
+ * it here with its observation, never to relax the control. */
 #if defined(__has_feature)
-#  if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer)
+#  if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) \
+      || __has_feature(thread_sanitizer)
 #    define AMA_PROBE_IS_INSTRUMENTED 1
 #  endif
 #endif
-#if !defined(AMA_PROBE_IS_INSTRUMENTED) && (defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_MEMORY__))
+#if !defined(AMA_PROBE_IS_INSTRUMENTED) && (defined(__SANITIZE_ADDRESS__) \
+    || defined(__SANITIZE_MEMORY__) || defined(__SANITIZE_THREAD__))
 #  define AMA_PROBE_IS_INSTRUMENTED 1
 #endif
 #if !defined(AMA_PROBE_IS_INSTRUMENTED)
@@ -252,7 +271,8 @@ int main(void) {
      * than real residue.  So these lanes decline the test rather than
      * weakening it; the uninstrumented lanes run it, and they are where the
      * finding is gated.  See the AMA_PROBE_IS_INSTRUMENTED block above. */
-    printf("SKIP: dead-stack residue cannot be measured under a memory sanitizer\n");
+    printf("SKIP: dead-stack residue cannot be measured under a sanitizer "
+           "that relocates locals or instruments the read\n");
     return 77;
 #else
     static uint8_t ct[MSG_BYTES], pt[MSG_BYTES];
