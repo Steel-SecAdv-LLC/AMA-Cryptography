@@ -42,6 +42,265 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > was removed from this branch in the eighteenth pass below and remains in the
 > branch's commit history.
 
+### Maintenance pass, twenty-fifth (2026-09-08) — the pass that verified the twenty-fourth, and disproved two of its findings
+
+The twenty-fourth pass repaired a break that only clang, MSVC and macOS could
+see, and then shipped a new one of exactly that shape. This pass closes every
+remaining red lane, and two of the things it closed were not defects in the
+library at all — they were defects in the instruments reporting them. Both are
+recorded here in full, because a false finding that is quietly deleted looks
+identical to one that was never found.
+
+#### `test_aead_stack_residue` was reporting its own control as an AEAD leak
+
+The clang lanes failed at
+`test_aead_stack_residue.c:195` — "AES-256-GCM encrypt leaves no raw key on the
+dead stack" — while gcc passed. Read at face value this says clang leaves the
+raw AES-256 key on the dead stack, which would be a live key-disclosure defect.
+It does not.
+
+Three defects, in the harness, compounding. None is in the library.
+
+**1 — `poison_stack()` did nothing under clang.** Its `volatile uint8_t
+pad[32768]` never escapes and is dead at return, so the 32 KiB `memset` is a
+dead store. clang 18.1.3 emitted the entire function as three instructions
+writing **one byte** — `movb $0x5a,-0x8(%rsp)` / `movzbl -0x8(%rsp),%eax` /
+`ret`, the 32 KiB frame never even allocated — while gcc 13.3.0 emitted the
+real stack probe and memset. That is the whole of the compiler split. With no
+poison, "a hit is residue rather than a leftover" is simply false. Fixed with
+the escape-and-clobber barrier `ama_secure_stack_wipe()` already uses for the
+same reason; the rebuilt clang object now shows `sub $0x8000,%rsp` and a
+`memset` of 32768 bytes.
+
+**2 — the control planted the key.** `probe_control()` planted **`g_key`
+itself**, contaminating the window with the very needle every later check
+searches for. With the poison dead (1), that copy — at anchor-391 — was still
+there when the AES-GCM check ran, inside the address range the encrypt frame
+occupies, and was reported as AEAD residue. Established, not inferred: planting
+a distinct sentinel instead, changing nothing else, takes the AES-GCM checks to
+**zero hits** under `clang 18 -O2 -flto=thin`, the exact failing configuration.
+The control now plants `g_sentinel`, and a **baseline check** is added — the
+window must hold no copy of the key before any AEAD runs, which is the check
+that would have caught this.
+
+**3 — the needle could not see the defect class the test exists for.** The
+probe searched for a contiguous 32-byte key. The shipped AVX2 kernel does not
+spill one: disassembled from the built library, it stores `key[0:16]` with
+`movdqa %xmm2,(%rsp)` and `key[16:32]` with `movdqa %xmm4,0x70(%rsp)` — 112
+bytes apart, in slots its own exit scrub does not cover. `ama_secure_stack_wipe()`
+is what clears them, and nothing here was measuring whether it did. Each
+16-byte half is now searched independently; for AES-256 either half is 128 bits
+of key, so a hit on one is a disclosure on its own.
+
+**4 — only ASan was excluded, so MemorySanitizer ran the probe.** Reading dead
+stack the AEAD frame never wrote is a use-of-uninitialised-value by
+construction, and the MSan lane duly reported
+`test_aead_stack_residue (Subprocess aborted)`. The exclusion now covers both
+sanitizers that instrument this read, under a macro named for the property
+rather than for one product.
+
+The four together are why the gate could not fail. **Measured, both
+directions:** with the fixes, 14/14 checks pass under gcc 13 and clang 18 and
+the test correctly skips (77) under a sanitizer; and disabling
+`ama_secure_stack_wipe()` — the primitive this test exists to justify — **now
+fails the gate on both compilers, two checks each, where before this pass it
+passed clean on both.** The gate was not weakened to go green; it was
+previously incapable of going red, and now is not.
+
+#### The reproducible-build gate never ran its own check
+
+`Reproducible Build` was green on `e8b9c8c` and red on `1f43143`, and the
+twenty-fourth pass's new "the prefix map must actually have stripped the build
+path" step was assumed to be firing on a real path leak. It was not firing at
+all. Three defects, none of them a leak:
+
+- **The step died on a shell parse error before examining a single object.**
+  A `container:` job does not get bash: the runner execs the step with
+  `sh -e {0}`, and in `manylinux_2_28` `/bin/sh` is bash 4.4 in POSIX mode,
+  which disables process substitution. `done < <(find …)` is a *parse* error
+  there, not a runtime failure. `defaults.run.shell: bash` is now declared at
+  job level so a future step cannot re-acquire the trap.
+- **`grep -Eq` under `set -o pipefail` inverted the verdict.** `-q` exits at
+  the first match and SIGPIPEs `strings`; `pipefail` promotes the 141 into the
+  pipeline status, so the `if` read *false* on exactly the objects that DO
+  leak. Measured on a deliberately unmapped build: `PIPESTATUS=(141 0)`, leak
+  reported clean.
+- **`-name '*.so'` skipped the versioned names.** The wheel ships
+  `libama_cryptography.so`, `.so.5` and `.so.5.0.0`; the glob enumerated 7 of
+  9 shipped objects.
+
+The two builds' native artefacts were in fact byte-identical and no absolute
+build path survived in any of them, measured on the wheels the failing run
+itself uploaded. The assertion is kept and repaired, not relaxed.
+
+#### Windows: an illegal alignment and an attribute in the wrong position
+
+Every Windows lane failed to compile. `AMA_DISPATCH_SEAL_PAGE` was 65536 and
+MSVC caps `__declspec(align())` at 8192 (`error C2345: align(65536): illegal
+alignment value`), and the attribute was written as a *suffix*, which MSVC — for
+which `__declspec` is a declaration specifier — answers with `error C2054:
+expected '(' to follow 'dispatch_storage'`. The constant is now 8192 under
+`_MSC_VER` (Windows' `dwPageSize` is 4096 on x64 and ARM64, so the storage still
+owns whole pages) and 65536 elsewhere, and the attribute is emitted through a
+PRE/POST macro pair so each compiler receives it in the only position it
+accepts. `dispatch_seal()` still validates both properties against the runtime
+page size and declines rather than sealing wrongly.
+
+#### macOS-Intel: a hardening flag probed for the wrong target
+
+Every `macos-15-intel` lane failed to build the Cython extensions with
+`error: option 'cf-protection=return' cannot be specified on this target`.
+`setup.py` selected the CFI flag from `platform.machine()` — the *host* — and
+`_compiler_accepts()` probed without the `-arch` flags the real compile carries.
+On an Intel runner building universal2 (`-arch arm64 -arch x86_64`),
+`-fcf-protection=full` probed clean against the native x86_64 target and was
+then rejected outright by the arm64 slice.
+
+The probe now carries the build's `-arch` flags, so it asks the question the
+build will ask; and the flag is selected **per slice** via `-Xarch_<arch>`, so a
+universal build gets CET on the x86_64 half *and* BTI+PAC-RET on the arm64 half
+rather than losing the marking on both to keep the build alive. Pinned by
+`tests/test_binding_control_flow_integrity.py`, host-independently: reverting to
+per-host selection fails three of them.
+
+#### Sanitizer lanes: the seal test tested for the wrong thing
+
+`test_dispatch_seal` failed under MemorySanitizer and ThreadSanitizer. It tested
+*how the child died* — death by `SIGSEGV` — and special-cased AddressSanitizer
+by name; MSan and TSan fell through to the signal-only branch, and their
+handlers `_exit()` rather than letting the signal land, so the test reported
+"the table is writable". Enumerating sanitizers fails again on the next one
+added, so the test is inverted instead: the child reaches `_exit(0)` only by
+completing the write, so a clean exit is the failure and anything else is the
+fault. A pipe marker closes the one hole in that inversion — a child that dies
+*before* the write now skips rather than passing.
+
+#### `AMA_USE_NATIVE_PQC=OFF` — three unguarded targets, not one
+
+`tests/c/CMakeLists.txt` registered three targets outside any
+`if(AMA_USE_NATIVE_PQC)` block whose translation units reference symbols the OFF
+configuration does not build: `test_ml_kem_acvp_encaps`
+(`ama_kyber_test_encapsulate_derand`), `test_hybrid_sig` (`ama_dilithium_sign` /
+`_verify` / `_verify_ctx`) and `test_aead_stack_residue`
+(`ama_chacha20poly1305_encrypt` / `_decrypt`). All three were added by the
+twenty-third pass and none received the guard. The gate goes on the target
+rather than on `add_test`, because the failure is a link failure. Verified in
+both directions: 46/46 in the OFF configuration, and the three tests are still
+registered in the default ON configuration.
+
+#### ARM QEMU: a test that reported "not tested" as "failed"
+
+All four AArch64 jobs were red, and — like `baseline-guard` — this was believed
+older than it is. The lane was **green on `2b62e26`** and went red on
+`e8b9c8c`, the pass that added `tests/c/test_dispatch_cache_hostile.c`.
+
+That test runs each scenario in a fresh process image, because the dispatch
+table initialises once per image and a `fork()`ed child inherits "already
+initialised" and never re-enters the cache code. The re-exec is therefore
+load-bearing — but it execs `argv[0]`, and in the cross-architecture lane
+`argv[0]` is an aarch64 ELF. `cmake/toolchains/aarch64-linux-gnu.cmake` sets
+`CMAKE_CROSSCOMPILING_EMULATOR` to `qemu-aarch64-static`, so ctest starts the
+test through the emulator, but the emulator is invisible to the guest: the
+child's `execl` reaches the host kernel with a foreign binary and fails.
+The child answered `_exit(127)` and the parent read that as a scenario
+failure, so the lane reported "the cache reader accepted a FIFO" when in fact
+nothing had been tested. Reproduced exactly: all four scenarios `child exited
+127` under `qemu-aarch64-static`.
+
+An exec failure now has its own exit code and the test skips (77) rather than
+failing — it has not falsified anything, and saying so is not the same as
+passing. The property is kernel and libc behaviour rather than architectural,
+and every native lane still exercises it for real: verified, x86-64 gcc and
+clang both still report `OK: hostile cache paths ... are refused`, and the
+full AArch64 suite under QEMU goes from 86/87 to **87/87**.
+
+#### Sphinx
+
+Both remaining warnings were one reStructuredText defect: the trailing
+`Standard: / Security: / Vectors:` block of `HDKeyDerivation` was a definition
+list with no blank line before its continuation, giving "Definition list ends
+without a blank line" and "Unexpected indentation". Fixed in the docstring;
+`sphinx-build -W --keep-going` is clean, and reverting the docstring reproduces
+exactly those two.
+
+#### CodeQL — both resolved at source, per this repository's stated policy
+
+- `tests/test_binding_control_flow_integrity.py` — `expected` read as
+  possibly-unbound because only `pytest.skip()` raising kept the `if`/`elif`
+  chain from falling through, which is an interprocedural fact about pytest. A
+  lookup table binds it on every reaching path in the source itself.
+- `tests/test_monitoring_ledger_and_bounds.py` — `os.chmod(ledger, 0o644)`.
+  Replaced by a parametrised fixture that composes the starting mode from
+  `stat` constants and applies it with `Path.chmod`, the idiom already used for
+  this in `tests/test_apt_retry_gate.py`. The test is **stronger**, not merely
+  quieter: five starting modes (group read, world read, world write, `0o677`,
+  owner-execute) instead of one, which is what the production narrowing
+  actually keys on — any bit outside `0o600`. Stated plainly: the alert clears
+  because CodeQL's query evaluates only constant integer literals, so the
+  parametrised form is outside its reach; `0o640` would have been flagged too.
+  The justification for the change is the added coverage, not the silence.
+
+#### `baseline-guard` — this branch's, not pre-existing
+
+The failure was believed pre-existing because it also failed on `e8b9c8c`. It
+is not: `e8b9c8c` **is** the cause. That commit added
+`_text_justifies_change()`, which strengthened the guard over the whole
+`base..HEAD` net diff, and did not backfill the justification the new rule
+demands of numbers that had already landed in `37d8b3bb` (2026-08-14).
+`baseline-guard` was green on `2b62e26` and on every head before it; the first
+red run is on `e8b9c8c`.
+
+The gate is right and is not weakened. Net of `main` this branch really does
+raise sixteen x86 `tolerance_percent` entries (lowering sixteen effective trip
+points) and cut two absolute floors. `37d8b3bb`'s calibration record is
+restated in the PR body in the form the guard requires — the same numbers, the
+same CI run ids — because the guard requires one single text to carry the line
+item, the measurement, the runner and the run id, and that commit's message
+predates the rule.
+
+#### The signed artefact returns to its source-tree shape
+
+Re-signing after the `.py` edits (`AMA_BUILD_PIPELINE=1 python -m
+ama_cryptography.integrity --update --sign`, which the CI gate requires) also
+empties `INTEGRITY_BINDING_DIGESTS_HEX`. That is not a loss: `{}` is the
+source-tree state *by design* — `tests/test_post_failclosed.py` says so in as
+many words, `setup.py` documents the same, and `main` carries `{}` today. This
+branch had drifted, committing six `cpython-311-x86_64-linux` binding digests
+from somebody's local build; a checkout on any other interpreter or platform
+could never match them. `setup.py`'s signer and the release job re-sign with
+the real extensions at build time, which is where those digests belong. The
+committed `.py` digest — the only field CI validates, and the only one that is
+platform-independent — is current.
+
+#### Verification
+
+- 89/89 ctest under gcc 13 and clang 18 (Release, AVX2, the shipped flags).
+- 46/46 under `AMA_USE_NATIVE_PQC=OFF`, and the three guarded tests confirmed
+  still registered in the default `ON` configuration.
+- **87/87 aarch64 under `qemu-aarch64-static`**, cross-built with the repo's
+  own toolchain file — the lane that has been red since `e8b9c8c`.
+- gcc AddressSanitizer+UBSan: `test_dispatch_seal` 4/4 (the sanitizer catches
+  the fault and the inverted check reads it correctly — the same shape that
+  broke MSan and TSan), `test_aead_stack_residue` skips 77 as intended.
+- `sphinx-build -W --keep-going` clean; `check_baseline_justification.py`
+  clean against the PR body; 1,574 gate tests pass; `black`, `ruff` and
+  `mypy --strict` clean on every changed file; documented counts, visual
+  assets and the integrity digest regenerated to fixpoint.
+
+Each repair is mutation-tested rather than asserted. Reverting the fix fails
+the check in every case: the residue gate (disabling `ama_secure_stack_wipe()`
+now fails it on both compilers), the per-slice CFI selection (three tests), the
+Sphinx docstring (exactly the two original warnings), the no-PQC guards (three
+link failures, with the symbols confirmed absent from the `OFF` library), and
+the hostile-cache skip (native lanes still test the property for real).
+
+Not verifiable on this host, and named as such rather than claimed: MSVC,
+macOS, MemorySanitizer, ThreadSanitizer, and the SVE2 vector lengths. The MSVC
+repair is reasoned from the two compiler diagnostics it answers; the MSan and
+TSan repairs are reasoned from the sanitizer signal contract and corroborated
+by the ASan lane exercising the identical code path. CI is their first
+execution.
+
 ### Maintenance pass, twenty-fourth (2026-09-08) — the pass that verified the twenty-third
 
 The twenty-third pass was verified with `gcc` alone and pushed. CI answered

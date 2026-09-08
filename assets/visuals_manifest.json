@@ -10,7 +10,7 @@
   },
   "test_coverage": {
     "counts": {
-      "Core Crypto\n& NIST KATs": 845,
+      "Core Crypto\n& NIST KATs": 850,
       "Key Management\n& Rotation": 265,
       "Memory Security\n& Fuzzing": 337,
       "Other": 2623,
@@ -18,7 +18,7 @@
       "Performance\n& Monitoring": 376
     },
     "n_files": 227,
-    "total_tests": 5218,
+    "total_tests": 5223,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
