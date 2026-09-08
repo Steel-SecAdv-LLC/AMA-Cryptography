@@ -133,18 +133,39 @@ The two builds' native artefacts were in fact byte-identical and no absolute
 build path survived in any of them, measured on the wheels the failing run
 itself uploaded. The assertion is kept and repaired, not relaxed.
 
-#### Windows: an illegal alignment and an attribute in the wrong position
+#### Windows: three limits, one stage apart each
 
-Every Windows lane failed to compile. `AMA_DISPATCH_SEAL_PAGE` was 65536 and
-MSVC caps `__declspec(align())` at 8192 (`error C2345: align(65536): illegal
-alignment value`), and the attribute was written as a *suffix*, which MSVC — for
-which `__declspec` is a declaration specifier — answers with `error C2054:
-expected '(' to follow 'dispatch_storage'`. The constant is now 8192 under
-`_MSC_VER` (Windows' `dwPageSize` is 4096 on x64 and ARM64, so the storage still
-owns whole pages) and 65536 elsewhere, and the attribute is emitted through a
-PRE/POST macro pair so each compiler receives it in the only position it
-accepts. `dispatch_seal()` still validates both properties against the runtime
-page size and declines rather than sealing wrongly.
+Every Windows lane failed. `AMA_DISPATCH_SEAL_PAGE` was 65536, and the
+attribute was written as a *suffix*:
+
+```
+error C2345: align(65536): illegal alignment value
+error C2054: expected '(' to follow 'dispatch_storage'
+```
+
+`__declspec` is a declaration specifier and must precede the declaration, and
+MSVC caps it at 8192. The attribute is now emitted through a PRE/POST macro
+pair so each compiler receives it in the only position it accepts.
+
+Capping the constant at 8192 cleared the compiler and then hit the **linker**:
+
+```
+fatal error LNK1164: section 0x6E1 alignment (8192) greater than /ALIGN value
+```
+
+The default image section alignment is 4096, so 8192 is rejected there too.
+Raising it with `/ALIGN` relayouts the whole image and, on a DLL, produces one
+Windows will not load without further flags — not the trade to make for a
+defence-in-depth measure. 4096 is the largest value both stages accept and is
+exactly what the storage needs: Windows' `dwPageSize` is 4096 on x64 and ARM64
+and the table is 144 bytes, so a 4 KiB object aligned to 4 KiB owns precisely
+one whole page. GCC/Clang keep 65536 for the 64 KiB-page aarch64 case.
+
+Verified rather than reasoned, after two rounds of reasoning got it wrong: the
+Windows constant was forced on gcc, which can run the result, and the seal test
+passes 4/4 with it — sealed, still dispatching, and a write faults.
+`dispatch_seal()` still validates both properties against the runtime page size
+and declines rather than sealing wrongly.
 
 #### macOS-Intel: a hardening flag probed for the wrong target
 
@@ -207,12 +228,30 @@ failure, so the lane reported "the cache reader accepted a FIFO" when in fact
 nothing had been tested. Reproduced exactly: all four scenarios `child exited
 127` under `qemu-aarch64-static`.
 
-An exec failure now has its own exit code and the test skips (77) rather than
-failing — it has not falsified anything, and saying so is not the same as
-passing. The property is kernel and libc behaviour rather than architectural,
-and every native lane still exercises it for real: verified, x86-64 gcc and
-clang both still report `OK: hostile cache paths ... are refused`, and the
-full AArch64 suite under QEMU goes from 86/87 to **87/87**.
+There are two distinct failures behind that, and only one was visible without
+binfmt_misc registered:
+
+- **`execl` fails outright** where the host has no binfmt handler at all. The
+  child answered `_exit(127)` and the parent read it as a scenario failure. It
+  now carries its own exit code and the test skips (77): it has not falsified
+  anything, and saying so is not the same as passing.
+- **`execl` succeeds and the child dies anyway** — which is what CI actually
+  hits, and what the skip above does *not* cover:
+  `aarch64-binfmt-P: Could not open '/lib/ld-linux-aarch64.so.1'`, `child
+  exited 255`. binfmt invokes qemu with no `-L`, so the child cannot find the
+  guest loader that the parent was given.
+
+The second is fixed rather than skipped, so the lane tests the property instead
+of declining it: `QEMU_LD_PREFIX` — which qemu-user reads for the same sysroot,
+and which *is* inherited across exec — is exported for every test in the
+directory, taken from the emulator command itself so it cannot drift from the
+`-L` the parent gets.
+
+Reproduced exactly before fixing, by registering the aarch64 binfmt handler
+locally and clearing `QEMU_LD_PREFIX`: all four scenarios `child exited 255`,
+matching CI byte for byte. Verified after: x86-64 gcc and clang both still
+report `OK: hostile cache paths ... are refused`, and the full AArch64 suite
+under QEMU goes from 86/87 to **87/87** in that same environment.
 
 #### Sphinx
 
