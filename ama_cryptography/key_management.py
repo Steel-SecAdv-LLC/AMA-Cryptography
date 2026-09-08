@@ -293,10 +293,15 @@ class HDKeyDerivation:
         m/44'/0'/0'/0/0 - First address of first account
         m/44'/0'/0'/1/0 - First change address
 
-    Standard: the child KDF follows BIP32 (Bitcoin Improvement Proposal 32)
+    Standard:
+        the child KDF follows BIP32 (Bitcoin Improvement Proposal 32)
         section "Private parent key -> private child key"; the root does not.
-    Security: uses the secp256k1 curve order for modular addition
-    Vectors: ``tests/test_hd_key_derivation_vectors.py`` pins the AMA-specific
+
+    Security:
+        uses the secp256k1 curve order for modular addition
+
+    Vectors:
+        ``tests/test_hd_key_derivation_vectors.py`` pins the AMA-specific
         master and per-path known answers, which is what makes the modular
         arithmetic and the key/chain-code split regression-tested.
     """
