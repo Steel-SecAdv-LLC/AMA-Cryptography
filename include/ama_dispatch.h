@@ -105,7 +105,8 @@ typedef void (*ama_keccak_f1600_x4_fn)(uint64_t states[4][25]);
 /** Kyber NTT forward transform */
 typedef void (*ama_kyber_ntt_fn)(int16_t poly[256], const int16_t zetas[128]);
 
-/** Kyber polynomial pointwise multiply (basemul in Z_q[X]/(X^2-zeta)) */
+/** Kyber polynomial pointwise multiply (basemul in Z_q[X]/(X^2-zeta)).
+ *  Slot is reserved; no tier wires it (see the table field below). */
 typedef void (*ama_kyber_pointwise_fn)(int16_t r[256],
                                        const int16_t a[256],
                                        const int16_t b[256],
@@ -159,7 +160,14 @@ typedef void (*ama_kyber_poly_sub_fn)(int16_t r[256],
  *  equivalence test had been loosened to a mod-q comparator on the
  *  strength of it.  A kernel that wants a different convention is a
  *  change to what the dispatch table may substitute for what, and
- *  belongs here as a deliberate widening. */
+ *  belongs here as a deliberate widening.
+ *
+ *  Input domain: the full int16 range.  Production does not confine the
+ *  input to [-(2q-2), 2q-2] (the range an earlier revision of this
+ *  contract implied): polyvec_basemul_acc in src/c/ama_kyber.c reduces
+ *  sums of up to four basemul outputs, magnitudes up to about 4 * 3554,
+ *  and tests/c/test_kyber_poly_equiv.c draws the equivalence inputs from
+ *  the whole int16 domain accordingly. */
 typedef void (*ama_kyber_poly_reduce_fn)(int16_t poly[256]);
 
 /** Kyber CBD2 noise sampler: 128-byte uniform stream -> 256 coefficients
@@ -255,7 +263,7 @@ typedef struct {
     ama_keccak_f1600_x4_fn    keccak_f1600_x4;     /**< Always non-NULL after init; 4-way batched permutation */
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
-    ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
+    ama_kyber_pointwise_fn    kyber_pointwise;      /**< Always NULL today: no tier ships a vectorised basemul (the compiled AVX2/NEON/SVE2 "pointwise" kernels are scalar and slower than the auto-vectorised inline basemul, so the dispatcher does not install them — see ama_dispatch.c).  Callers MUST NULL-check. */
     ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when AVX2 detected (AVX2-only today; NEON/SVE2 wiring TBD); callers MUST NULL-check */
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
@@ -333,9 +341,15 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  * microbench writes its regressed/kept verdict for each SIMD slot to
  * <path>, and subsequent processes with the same env var (and matching
  * CPU-feature fingerprint) skip the microbench entirely and apply the
- * cached verdict.  Removes the ~10K-Keccak-iteration startup latency
- * on warm hosts without sacrificing the per-host accuracy of the
- * regression heuristic.
+ * cached verdict.  The microbench is not small: measured under callgrind
+ * it retires ~1.5 billion instructions (six slots, each 200 warm-up plus
+ * 5 x 2000 iterations of both a SIMD and a scalar kernel, doubled on a
+ * slot whose first round reads "regressed"), roughly 170 ms of wall-clock
+ * at the first cryptographic call of every process that does not carry a
+ * cache hit.  The cache removes that latency on warm hosts without
+ * sacrificing the per-host accuracy of the regression heuristic; the
+ * `AMA_DISPATCH_NO_AUTOTUNE=1` knob removes it unconditionally and keeps
+ * the CPUID-selected default wiring.
  *
  * Cache key — a deterministic string built from `arch_name`, the
  * per-slot impl level the dispatcher resolved this run (`sha3`,

@@ -28,21 +28,40 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CMAKELISTS = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 DISPATCH = (REPO_ROOT / "src" / "c" / "dispatch" / "ama_dispatch.c").read_text(encoding="utf-8")
+SVE2_HEADER = (REPO_ROOT / "src" / "c" / "sve2" / "ama_sve2_internal.h").read_text(encoding="utf-8")
 
-#: The ten SVE2 kernel symbols the dispatcher wires; every reference must be
-#: guarded so that with AMA_HAVE_SVE2_IMPL undefined none of them is emitted.
-SVE2_KERNEL_SYMBOLS = (
-    "ama_keccak_f1600_sve2",
-    "ama_kyber_ntt_sve2",
-    "ama_kyber_invntt_sve2",
-    "ama_kyber_poly_pointwise_sve2",
-    "ama_kyber_poly_add_sve2",
-    "ama_kyber_poly_sub_sve2",
-    "ama_kyber_poly_reduce_sve2",
-    "ama_dilithium_ntt_sve2",
-    "ama_dilithium_invntt_sve2",
-    "ama_dilithium_poly_pointwise_sve2",
-)
+#: Every SVE2 kernel the SVE2 internal header declares.  Discovered rather than
+#: hand-listed: a kernel added to the header without being added here would
+#: otherwise escape the linkage audit entirely.
+#:
+#: The header is the right source, not the dispatcher: the dispatcher also names
+#: non-kernel ``*_sve2`` tokens (tier and environment-variable strings such as
+#: ``ama_kyber_sve2`` and the ``ama_has_arm_sve2`` predicate), and discovering
+#: from it would make the symbol set follow whatever the dispatcher happens to
+#: reference — which is the very thing under test.
+SVE2_DECLARED_SYMBOLS = tuple(sorted(set(re.findall(r"\bama_[a-z0-9_]+_sve2\b", SVE2_HEADER))))
+
+#: A header declaring fewer kernels than this has been truncated, not shrunk;
+#: an empty discovery would make every assertion below vacuous.
+MIN_SVE2_KERNELS = 10
+
+#: Kernels the dispatcher deliberately does NOT wire, each with the reason.
+#: Hand-written on purpose: "not wired" is a decision, so a kernel that falls
+#: out of the dispatcher without an entry here is a regression, not a discovery.
+#: Their references must still be guarded — the equivalence tests link them.
+DELIBERATELY_UNWIRED: dict[str, str] = {
+    "ama_kyber_poly_pointwise_sve2": (
+        "the AVX2/NEON/SVE2 basemul kernels hold no vector instruction, and "
+        "under callgrind the AVX2 one retires about 35% more instructions per "
+        "call than the inline scalar basemul it displaces (which the compiler "
+        "auto-vectorises when the slot is NULL). The slot stays NULL on every "
+        "tier until a genuinely vectorised basemul exists; the kernels stay "
+        "compiled for their equivalence tests."
+    ),
+}
+
+#: The kernels the dispatcher is required to wire.
+SVE2_KERNEL_SYMBOLS = tuple(sym for sym in SVE2_DECLARED_SYMBOLS if sym not in DELIBERATELY_UNWIRED)
 
 
 def _cmake_block(source: str, opening: str) -> str:
@@ -132,13 +151,24 @@ class TestTheDispatcherGatesEverySve2Reference:
     """
 
     def test_every_sve2_symbol_reference_is_under_the_macro(self) -> None:
+        # Every DECLARED kernel, not only the wired ones: an unwired kernel that
+        # reappears outside the guard is the same unresolved external.
         without = _strip_ifdef_blocks(DISPATCH, "AMA_HAVE_SVE2_IMPL")
-        leaked = sorted(sym for sym in SVE2_KERNEL_SYMBOLS if sym in without)
+        leaked = sorted(sym for sym in SVE2_DECLARED_SYMBOLS if sym in without)
         assert not leaked, (
             f"these SVE2 kernel symbols are referenced OUTSIDE "
             f"#ifdef AMA_HAVE_SVE2_IMPL: {leaked}. With the macro undefined "
             f"(MSVC ARM64) they are unresolved externals regardless of the CMake "
             f"fix."
+        )
+
+    def test_the_declared_kernel_set_is_not_empty(self) -> None:
+        # Non-vacuity of the discovery itself: an empty or truncated header
+        # would make every assertion in this file pass over nothing.
+        assert len(SVE2_DECLARED_SYMBOLS) >= MIN_SVE2_KERNELS, (
+            f"discovered only {len(SVE2_DECLARED_SYMBOLS)} SVE2 kernel(s) in "
+            f"src/c/sve2/ama_sve2_internal.h (expected at least "
+            f"{MIN_SVE2_KERNELS}): {list(SVE2_DECLARED_SYMBOLS)}"
         )
 
     def test_the_symbols_really_are_referenced_when_the_macro_is_defined(self) -> None:
@@ -147,8 +177,28 @@ class TestTheDispatcherGatesEverySve2Reference:
         present = [sym for sym in SVE2_KERNEL_SYMBOLS if sym in DISPATCH]
         assert present == list(SVE2_KERNEL_SYMBOLS), (
             f"the dispatcher no longer references all SVE2 kernels; missing "
-            f"{sorted(set(SVE2_KERNEL_SYMBOLS) - set(present))}"
+            f"{sorted(set(SVE2_KERNEL_SYMBOLS) - set(present))}. If the slot was "
+            f"unwired on purpose, record it in DELIBERATELY_UNWIRED with the "
+            f"evidence; do not delete the symbol from the audit."
         )
+
+    def test_every_unwired_kernel_is_really_unwired(self) -> None:
+        """DELIBERATELY_UNWIRED must not become a place to park live slots.
+
+        Without this, an entry added to silence the test above would keep
+        silencing it after the slot came back — and the audit would no longer
+        describe the dispatcher.
+        """
+        for symbol, reason in DELIBERATELY_UNWIRED.items():
+            assert symbol in SVE2_DECLARED_SYMBOLS, (
+                f"{symbol} is listed as deliberately unwired but the SVE2 header "
+                f"no longer declares it; drop the entry"
+            )
+            assert f"= {symbol}" not in DISPATCH, (
+                f"{symbol} is listed as deliberately unwired but the dispatcher "
+                f"assigns it to a slot; remove the DELIBERATELY_UNWIRED entry"
+            )
+            assert reason.strip(), f"{symbol} has no recorded reason"
 
 
 def _strip_ifdef_blocks(source: str, macro: str) -> str:

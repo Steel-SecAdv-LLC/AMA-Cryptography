@@ -22,8 +22,12 @@
  * instructions appear only in symbols named for the kernel (`_mulx`).
  *
  * Contract of each function: inputs are any 4-limb values below 2^256,
- * output is in [0, 2p) — the same post-condition as fe64_reduce512 in
- * src/c/fe64.h, with fe64_tobytes doing the final canonicalisation.
+ * output is below 2^256 and congruent to the product mod p — the same
+ * post-condition as fe64_reduce512 in src/c/fe64.h.  Neither promises
+ * [0, 2p): after the two 38-folds a result can lie in [2p, 2^256)
+ * (hmx_mul(2^256 - 1, 0x6eb3e4...4530) = 2^256 - 16, and the pure-C
+ * fe64_mul returns the same value), which every consumer accepts and
+ * fe64_tobytes canonicalises.
  * Byte-identical to the pure-C fe64_mul / fe64_sq, pinned by
  * tests/c/test_x25519_fe64_mulx_equiv.c.
  *

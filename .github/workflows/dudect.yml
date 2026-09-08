@@ -605,7 +605,10 @@ jobs:
     # that does not depend on runner load.
     name: Scalar AES-GCM instruction-count invariance
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 covered the callgrind targets alone; the secret-taint lane (twelve
+    # Memcheck runs) and the shipped-shared-object lane (an LTO build plus
+    # eight more Memcheck runs) below roughly double the job.
+    timeout-minutes: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -735,6 +738,15 @@ jobs:
         run: |
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ed25519-sign
+
+      - name: Ed25519 signing under the SSE2 Niels-select fold must not depend on the key
+        # Every runner here has AVX2, so the ed25519-sign target above measures
+        # the AVX2 fold only.  A non-AVX2 x86-64 host runs the SSE2 fold on
+        # every keygen and sign; this forces it through the measurement knob
+        # ama_ed25519_set_avx2_fold_override(0) so both folds are measured.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ed25519-sign-sse2fold
 
       - name: Ascon-AEAD128 encryption instruction count must not depend on the key
         # The wall-clock lane `Ascon-AEAD128 encrypt (key-independent)` in
@@ -897,6 +909,59 @@ jobs:
         run: |
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ecdsa
+
+      # ---- Secret-taint lane ---------------------------------------------
+      # Instruction, data-reference and cache-miss counts cannot see a
+      # secret-indexed load that stays cache-resident, a conditional move on
+      # a secret, or a branch whose two arms retire the same count.  The
+      # taint mode marks the secret undefined under Valgrind Memcheck and
+      # reports every conditional jump, conditional move and memory address
+      # that depends on it (the ctgrind construction).  It found, and the
+      # tree then removed: the RFC 7748 all-zero output branch in
+      # ama_x25519_key_exchange and its batch counterpart, the safegcd
+      # product re-check branch in fe_invert_ct (taken on every Ed25519
+      # keygen and sign), the zero-scalar / infinity branches in
+      # ama_secp256k1_point_mul, and a -O2 conditional move gcc made of the
+      # AES-GCM verify mask.  The remaining branches on secret-derived
+      # values in ECDSA are values the API returns; each is declassified at
+      # its site with the argument stated (src/c/internal/ama_ct_declassify.h;
+      # `grep -rn AMA_CT_DECLASSIFY src/c` is the complete list).
+      - name: Secret-taint - no control flow or memory address depends on a secret
+        run: |
+          set -euo pipefail
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
+                        secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
+                        consttime ghash ascon-encrypt agent-binding aead-verify; do
+            python tools/check_ghash_constant_time.py \
+              --lib build/lib/libama_cryptography_test.a --target "$target" --taint
+          done
+
+      # ---- Shipped machine code ------------------------------------------
+      # Every gate above measures the AMA_TESTING_MODE archive with LTO off.
+      # The wheel ships libama_cryptography.so built with LTO on, and a
+      # driver linked against the archive re-optimises it at link time, so
+      # nothing above ever measured the exact bytes a user runs.  This lane
+      # builds the shared object the way the wheel does and runs the taint
+      # gate against it for every target whose driver uses only public
+      # symbols (ghash and aead-verify need the test-only scalar-forcing hook;
+      # ecdsa and nistp-ecdsa carry declassification points that are no-ops
+      # outside AMA_TESTING_MODE and would be reported here by design).
+      - name: Build the shipped shared library (LTO on, as the wheel ships it)
+        run: |
+          cmake -B build-shared -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-shared -j"$(nproc)" --target ama_cryptography_shared
+
+      - name: Secret-taint on the shipped shared object
+        run: |
+          set -euo pipefail
+          for target in x25519 x25519-batch ed25519-sign secp256k1-scalarmult \
+                        kyber-decaps consttime ascon-encrypt agent-binding; do
+            python tools/check_ghash_constant_time.py \
+              --lib build-shared/lib/libama_cryptography.so \
+              --optimized-witness build-shared/CMakeCache.txt \
+              --target "$target" --taint
+          done
 
       - name: secp256k1 scalar multiplication must not depend on the scalar
         # The blocking counterpart to the `secp256k1 scalar multiplication`

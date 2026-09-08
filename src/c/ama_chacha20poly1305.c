@@ -21,6 +21,7 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "../include/ama_uint128.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -144,6 +145,15 @@ static void chacha20_block(const uint8_t key[32], uint32_t counter,
     /* Add original state to working state and serialize */
     for (i = 0; i < 16; i++)
         store32_le(out + i * 4, working[i] + state[i]);
+
+    /* `state[4..11]` is the raw 256-bit key and `working` starts as a copy of
+     * it.  Every caller below scrubs its own buffers under an explicit
+     * INVARIANT-6 rationale; the one holding the key itself was omitted, and
+     * a stack-residue probe found the key after every AEAD call.  Both are
+     * scrubbed here, at the source, and ama_secure_stack_wipe() at the public
+     * entry points covers whatever the compiler copied. */
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(working, sizeof(working));
 }
 
 /**
@@ -783,6 +793,9 @@ ama_error_t ama_chacha20poly1305_encrypt(
                                  tag);
 
     ama_secure_memzero(poly_key, sizeof(poly_key));
+    /* chacha20_block scrubs its own state now; this covers the copies the
+     * compiler made of it (and of the NEON/AVX2 kernels' state). */
+    ama_secure_stack_wipe();
     return AMA_SUCCESS;
 }
 
@@ -873,7 +886,11 @@ ama_error_t ama_chacha20poly1305_decrypt(
 
     /* Step 4: Decrypt ciphertext with ChaCha20 (counter starts at 1),
      * bounded by the verify result. */
-    size_t bounded_len = ct_len & ((size_t)0 - (size_t)tag_match);
+    /* Laundered through the value barrier so the optimiser cannot turn
+     * `ct_len & mask` back into a conditional on tag_match (which derives
+     * from the key); see the same site in ama_aes_gcm.c. */
+    size_t match_mask = (size_t)ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)tag_match);
+    size_t bounded_len = ct_len & match_mask;
     if (bounded_len > 0)
         chacha20_xor(key, 1, nonce, ciphertext, plaintext, bounded_len);
 
@@ -895,5 +912,12 @@ ama_error_t ama_chacha20poly1305_decrypt(
      * not a secrecy fix. */
     _Static_assert(AMA_SUCCESS == 0,
                    "masked return-code selection relies on AMA_SUCCESS == 0");
-    return (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED & ((int)tag_match - 1));
+    {
+        ama_error_t rc = (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED &
+                                       (int)(int32_t)(uint32_t)~(uint64_t)match_mask);
+        /* Unconditional and identical on both classes — see the AES-GCM
+         * decrypt tail and the aead-verify gate. */
+        ama_secure_stack_wipe();
+        return rc;
+    }
 }

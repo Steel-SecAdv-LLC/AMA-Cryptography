@@ -106,11 +106,39 @@
 #define GE_CONST_D ama_ed25519_const_d_fe51
 #define GE_CONST_D2 ama_ed25519_const_d2_fe51
 #define GE_CONST_SQRTM1 ama_ed25519_const_sqrtm1_fe51
+/* Niels-table select fold.  On x86-64 the 15-entry constant-time select
+ * runs through the AVX2 kernel when the CPU has AVX2 and through the SSE2
+ * fold otherwise; both are mask folds over the whole row.  The override is a
+ * measurement knob only: the constant-time gates need to measure the SSE2
+ * fold on the AVX2 hosts every CI runner is (tools/check_ghash_constant_time.py
+ * --target ed25519-sign-sse2fold), and until it existed that fold was
+ * unmeasurable anywhere the gate runs.  Mirrors ama_ed25519_set_mulx_override:
+ * -1 = the CPU decides (default), 0 = SSE2 fold forced; single-threaded by
+ * contract, never a production policy. */
+static int ama_ed25519_fold_override = -1;
+
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+static int ed25519_have_avx2_fold(void) {
+    return ama_ed25519_fold_override != 0 && ama_has_avx2();
+}
 #define GE_NIELS_FOLD_AVX2 ama_ed25519_select15_avx2
-#define GE_HAVE_AVX2() ama_has_avx2()
+#define GE_HAVE_AVX2() ed25519_have_avx2_fold()
 #endif
 #include "internal/ama_ed25519_ge.h"
+
+AMA_API void ama_ed25519_set_avx2_fold_override(int mode) {
+    ama_ed25519_fold_override = (mode < 0) ? -1 : (mode != 0);
+}
+
+AMA_API const char *ama_ed25519_active_fold(void) {
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+    return ed25519_have_avx2_fold() ? "avx2" : "sse2";
+#elif defined(__x86_64__) || defined(_M_X64)
+    return "sse2";
+#else
+    return "portable";
+#endif
+}
 
 /* ============================================================================
  * BACKEND DISPATCH
@@ -977,9 +1005,9 @@ ama_error_t ama_ed25519_verify(
         ama_ed25519_half_reduce(v0, v1, &v1_negative, h);
         sc25519_muladd(v2, zero, v0, signature + 32);       /* v2 = v0 s mod l */
         memcpy(k0, v2, 16);
-        memset(k0 + 16, 0, 16);
+        memset(k0 + 16, 0, 16);  // PUBLIC-DATA: k0 — zero-extend the low 128-bit half of the public verification scalar v2
         memcpy(k1, v2 + 16, 16);
-        memset(k1 + 16, 0, 16);
+        memset(k1 + 16, 0, 16);  // PUBLIC-DATA: k1 — zero-extend the high 128-bit half of the public verification scalar v2
         top = ama_ed25519_wnaf_bytes(w_v0, AMA_ED25519_WNAF_SLOTS, v0, 5);
         t = ama_ed25519_wnaf_bytes(w_v1, AMA_ED25519_WNAF_SLOTS, v1, 5);
         if (t > top) top = t;

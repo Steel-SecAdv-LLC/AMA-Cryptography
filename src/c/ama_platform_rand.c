@@ -35,8 +35,9 @@
     #pragma comment(lib, "bcrypt.lib")
 #else
     /* BSD / generic POSIX fallback */
-    #include <fcntl.h>          /* open, O_RDONLY, O_CLOEXEC */
+    #include <fcntl.h>          /* open, O_RDONLY, O_CLOEXEC, O_NOFOLLOW */
     #include <unistd.h>         /* read, close */
+    #include <sys/stat.h>       /* fstat, S_ISCHR */
     #include <errno.h>
 #endif
 
@@ -131,9 +132,30 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     #ifndef O_CLOEXEC
     #define O_CLOEXEC 0
     #endif
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    #ifndef O_NOFOLLOW
+    #define O_NOFOLLOW 0
+    #endif
+    #ifndef O_NOCTTY
+    #define O_NOCTTY 0
+    #endif
+    /* O_NOFOLLOW|O_NOCTTY and an fstat(2) that the descriptor is a
+     * character device: on a host where /dev/urandom has been replaced by a
+     * symlink to a regular file, a FIFO, or a terminal, the previous
+     * open+read produced "random" bytes from whatever was there.  A
+     * device-node check is the cheapest fact the descriptor can prove about
+     * itself; the major/minor numbers are not portable across the BSDs this
+     * branch serves, so the check stops at "character device".  Any refusal
+     * fails closed: the caller receives AMA_ERROR_CRYPTO, never bytes. */
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY);
     if (fd < 0) {
         return AMA_ERROR_CRYPTO;
+    }
+    {
+        struct stat st;
+        if (fstat(fd, &st) != 0 || !S_ISCHR(st.st_mode)) {
+            close(fd);
+            return AMA_ERROR_CRYPTO;
+        }
     }
     size_t offset = 0;
     while (offset < len) {

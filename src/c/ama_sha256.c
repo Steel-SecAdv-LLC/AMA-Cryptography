@@ -204,6 +204,11 @@ void ama_sha256_init(ama_sha256_ctx *ctx) {
 }
 
 void ama_sha256_update(ama_sha256_ctx *ctx, const uint8_t *data, size_t len) {
+    /* Zero-length updates are a no-op (and may carry data == NULL, which
+     * must never reach memcpy — memcpy(dst, NULL, 0) is undefined). */
+    if (len == 0) {
+        return;
+    }
     ctx->total_len += len;
 
     /* Fill partial buffer first */
@@ -238,20 +243,19 @@ void ama_sha256_update(ama_sha256_ctx *ctx, const uint8_t *data, size_t len) {
 void ama_sha256_final(ama_sha256_ctx *ctx, uint8_t digest[32]) {
     uint64_t total_bits = ctx->total_len * 8;
 
-    /* Padding: append 1-bit, zeros, then 64-bit length (FIPS 180-4 Section 5.1.1) */
-    uint8_t pad = 0x80;
-    ama_sha256_update(ctx, &pad, 1);
-
-    /* Pad with zeros until buffer_len == 56 mod 64 */
-    uint8_t zero = 0x00;
-    while (ctx->buffer_len != 56) {
-        ama_sha256_update(ctx, &zero, 1);
-    }
-
-    /* Append 64-bit big-endian bit count */
-    uint8_t len_bytes[8];
-    store_be64(len_bytes, total_bits);
-    ama_sha256_update(ctx, len_bytes, 8);
+    /* Padding (FIPS 180-4 Section 5.1.1): a single 0x80 byte, then the
+     * fewest zero bytes that bring the buffered length to 56 mod 64, then
+     * the 64-bit big-endian bit count.  Built once and absorbed in one
+     * update — the byte-at-a-time loop this replaces issued up to 64
+     * separate update calls per finalisation, a measurable cost for
+     * callers such as SLH-DSA that finalise millions of short hashes. */
+    uint8_t pad[72];
+    size_t pad_len = (ctx->buffer_len < 56) ? (56 - ctx->buffer_len)
+                                            : (120 - ctx->buffer_len);
+    pad[0] = 0x80;
+    memset(pad + 1, 0, pad_len - 1);  /* PUBLIC-DATA: FIPS 180-4 padding zeros */
+    store_be64(pad + pad_len, total_bits);
+    ama_sha256_update(ctx, pad, pad_len + 8);
 
     /* Extract digest */
     for (int i = 0; i < 8; i++) {

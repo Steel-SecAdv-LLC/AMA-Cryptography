@@ -1773,6 +1773,53 @@ class TestJustificationMustAccountForTheChange:
             "the blend the attributed check exists to refuse"
         )
 
+    # ---- a LOWERED floor must be supported by the number it cites ----------
+    #
+    # Measured before these rules: "wip: ed25519_sign 999999 ops/sec on x86_64"
+    # justified a 10x cut.  Name, unit, runner token: all present, none of them
+    # bearing on the value written.
+
+    CUT_OK = (
+        "trim: ed25519_sign measured at 31,900 ops/sec on ubuntu-latest, "
+        "benchmark-regression run 34084425292"
+    )
+
+    def test_a_cut_whose_cited_number_does_not_bracket_the_floors_fails(
+        self, tmp_path: Path
+    ) -> None:
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 3300, "wip: ed25519_sign 999999 ops/sec on x86_64 run 34084425292")
+        assert self._run(repo) == 1
+
+    def test_a_cut_needs_a_ci_run_or_job_id(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 31000, "trim: ed25519_sign measured at 31,900 ops/sec on ubuntu-latest")
+        assert self._run(repo) == 1
+
+    def test_a_small_cut_with_a_bracketing_number_and_a_run_id_passes(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 31000, self.CUT_OK)
+        assert self._run(repo) == 0
+
+    def test_a_deep_cut_must_say_recalibration(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        deep = "ed25519_sign measured at 20,000 ops/sec on ubuntu-latest, run 34084425292"
+        self._commit(repo, 19000, deep)
+        assert self._run(repo) == 1
+        self._commit(repo, 18000, "RECALIBRATION: " + deep.replace("20,000", "18,500"))
+        # The last commit is the one that stands; it names the marker.
+        assert self._run(repo) == 0
+
+    def test_a_raised_floor_keeps_the_three_token_rule(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, self.JUSTIFIED)  # no run id: fine, the gate got stricter
+        assert self._run(repo) == 0
+
     def test_an_unchanged_baseline_still_needs_nothing(self, tmp_path: Path) -> None:
         """A commit that touches the file without moving a floor is not a claim."""
         repo = self._repo(tmp_path)

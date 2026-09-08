@@ -293,19 +293,44 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ref_names = refs[pin.sha]
             display = _display_ref(ref_names)
             print(f"OK    {pin.action:<46s} {pin.sha[:12]} -> {display}")
-            if args.strict and pin.comment:
-                claimed = pin.comment.lstrip("#").strip()
-                tags = {
-                    r.replace("refs/tags/", "").removesuffix("^{}")
-                    for r in ref_names
-                    if r.startswith("refs/tags/")
-                }
-                if claimed and tags and claimed not in tags:
+            tags = {
+                r.replace("refs/tags/", "").removesuffix("^{}")
+                for r in ref_names
+                if r.startswith("refs/tags/")
+            }
+            if args.strict:
+                # `git ls-remote` advertises refs/pull/N/head for EVERY pull
+                # request ever opened upstream, and every branch head.  "The
+                # SHA resolves upstream" was therefore satisfied by a pin to
+                # anybody's un-merged PR branch — the supply-chain shape
+                # INVARIANT-24 exists to refuse — so a pin must resolve to a
+                # RELEASE TAG, not merely to some ref.
+                if not tags:
+                    only_pull = ref_names and all(r.startswith("refs/pull/") for r in ref_names)
                     mislabelled.append(
                         f"{pin.workflow}:{pin.line_no}: {pin.action}@{pin.sha[:12]}\n"
-                        f"      comment claims {claimed!r} but the SHA is tagged "
-                        f"{sorted(tags)}"
+                        f"      resolves upstream but is NOT tagged"
+                        + (
+                            " — it is only a pull-request head "
+                            "(refs/pull/*), i.e. unreviewed upstream code"
+                            if only_pull
+                            else f" (refs: {sorted(ref_names)[:3]})"
+                        )
+                        + (
+                            f"; the comment claims {pin.comment.lstrip('#').strip()!r}, "
+                            "which no tag on this SHA supports"
+                            if pin.comment
+                            else ""
+                        )
                     )
+                elif pin.comment:
+                    claimed = pin.comment.lstrip("#").strip()
+                    if claimed and claimed not in tags:
+                        mislabelled.append(
+                            f"{pin.workflow}:{pin.line_no}: {pin.action}@{pin.sha[:12]}\n"
+                            f"      comment claims {claimed!r} but the SHA is tagged "
+                            f"{sorted(tags)}"
+                        )
         else:
             missing.append(
                 f"{pin.workflow}:{pin.line_no}: {pin.action}@{pin.sha}\n"

@@ -168,6 +168,13 @@ PARAM_SET_TOKENS: dict[str, str] = {
     "AMA_NIST_CURVE_P384": "P-384",
     "AMA_NIST_CURVE_P521": "P-521",
     # HMAC variants, keyed by the symbol suffix rather than an enumerator.
+    "ama_hmac_sha256": "HMAC-SHA-256",
+    # ``ama_hmac_sha256_2`` is an arity, not a parameter set: it takes the
+    # message as two buffers and is defined as HMAC-SHA-256 over their
+    # concatenation.  It is listed anyway rather than filtered out of the
+    # discovery regex, so that a genuinely new HMAC symbol still trips the
+    # gate instead of being swallowed by a suffix-stripping rule.
+    "ama_hmac_sha256_2": "HMAC-SHA-256",
     "ama_hmac_sha384": "HMAC-SHA-384",
     "ama_hmac_sha512": "HMAC-SHA-512",
     "ama_hmac_sha3_256": "HMAC-SHA3-256",
@@ -180,8 +187,8 @@ MIN_REGISTRY_ROWS = 30
 MIN_FAMILIES = 20
 
 #: Fewer parameter sets than this means the enum scan has broken.  Eleven
-#: enumerators plus three HMAC prototypes ship today.
-MIN_PARAM_SETS = 12
+#: enumerators plus five HMAC prototypes ship today.
+MIN_PARAM_SETS = 14
 
 
 def discovered_families(header: Path) -> set[str]:

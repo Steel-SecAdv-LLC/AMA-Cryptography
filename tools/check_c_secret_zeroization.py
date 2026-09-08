@@ -300,6 +300,12 @@ class Finding(NamedTuple):
     dst: str
     text: str
     expression: str = ""
+    #: ``"secret-named"`` — the destination matches the secret naming
+    #: convention (the original rule).  ``"unannotated"`` — a shipped-tree
+    #: memset-zero whose destination the convention does not recognise and
+    #: that carries no ``PUBLIC-DATA`` annotation (see
+    #: :func:`_has_public_data_annotation`).
+    kind: str = "secret-named"
 
     @property
     def target(self) -> str:
@@ -323,6 +329,16 @@ class Finding(NamedTuple):
             rel: Path | str = self.path.relative_to(REPO_ROOT)
         except ValueError:
             rel = self.path
+        if self.kind == "unannotated":
+            return (
+                f"{rel}:{self.line_no}: bare memset() zeroing {self.dst!r} with no "
+                f"PUBLIC-DATA annotation\n"
+                f"    {self.text.strip()}\n"
+                f"    If {self.target} never holds secret material, say so on the call: "
+                f"`// PUBLIC-DATA: {self.dst} — <why>`.  Otherwise use "
+                f"ama_secure_memzero({self.target}, LEN) — a plain memset may be "
+                f"elided by the optimizer (INVARIANT-6, CWE-226)."
+            )
         return (
             f"{rel}:{self.line_no}: bare memset() zeroing secret-named "
             f"buffer {self.dst!r}\n"
@@ -692,8 +708,122 @@ def _macro_call_findings(
     return findings
 
 
+#: The annotation that marks a bare memset-zero as deliberately NOT a secret
+#: scrub.  The shipped C tree already carried it on most of its memsets
+#: (``memset(&tmp, 0, sizeof(tmp));  // PUBLIC-DATA: tmp — ...``); what it
+#: lacked was a rule that REQUIRED it.
+_PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105 -- a C-comment annotation token the gate greps for, not a credential (ZERO-011)
+
+#: The second sanctioned form for a shipped zeroing memset: the destination
+#: DOES hold secret material, and the write is made non-elidable by an
+#: explicit compiler barrier on the following lines rather than by
+#: ``ama_secure_memzero``'s volatile stores.
+#:
+#: One site needs it and it is not an exemption: ``ama_secure_stack_wipe()``
+#: zeroes several kilobytes of dead stack after every AEAD call, and the
+#: volatile word loop ``ama_secure_memzero`` uses costs 90-127 ns there
+#: against 29 ns for ``memset`` plus a barrier — on a 16-byte AEAD call the
+#: difference between +50% and +17%.  ``memset`` keeps the wide-store path
+#: while the barrier supplies exactly the property the volatile stores exist
+#: for.
+#:
+#: The annotation is not taken on trust: :func:`_barrier_follows` requires a
+#: real barrier within :data:`_BARRIER_WINDOW_LINES` after the call, so
+#: deleting the barrier and keeping the comment fails the gate.
+_SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105 -- a C-comment annotation token the gate greps for, not a credential (ZERO-012)
+
+#: Compiler barriers that make a preceding plain store non-elidable.
+_BARRIER_RE = re.compile(
+    r"""__asm__\s*(?:__volatile__|volatile)?\s*\(\s*""\s*(?::[^)]*)?\)"""
+    r"""|_ReadWriteBarrier\s*\(\s*\)"""
+)
+
+#: How far after the memset the barrier may sit.  Small on purpose: the
+#: barrier belongs beside the write it protects, and a wide window would let
+#: an unrelated barrier elsewhere in a long function vouch for it.
+_BARRIER_WINDOW_LINES = 12
+
+
+def _in_shipped_tree(path: Path) -> bool:
+    """Whether ``path`` is under ``src/c`` — the tree whose bytes ship."""
+    try:
+        path.resolve().relative_to(C_ROOT.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _call_end_offset(blanked: str, start: int) -> int:
+    """Offset of the ``)`` that closes the call beginning at ``start``.
+
+    ``_MEMSET_RE`` stops after the zero argument, so the call's LAST line (the
+    one that most naturally carries a trailing annotation on a wrapped call)
+    is found by matching parentheses forward from the ``memset(`` instead.
+    """
+    opening = blanked.find("(", start)
+    if opening < 0:
+        return start
+    depth = 0
+    for index in range(opening, len(blanked)):
+        char = blanked[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return len(blanked) - 1
+
+
+def _has_public_data_annotation(lines: list[str], first_line: int, last_line: int) -> bool:
+    """Whether the call spanning ``first_line..last_line`` (1-based) is annotated.
+
+    The annotation is accepted on any line the call occupies, or on the line
+    immediately above it — the two places the existing sites put it.
+    """
+    lo = max(first_line - 1, 1)
+    hi = min(last_line, len(lines))
+    return any(_PUBLIC_DATA_TOKEN in lines[i - 1] for i in range(lo, hi + 1))
+
+
+def _barrier_follows(lines: list[str], last_line: int) -> bool:
+    """Whether a compiler barrier appears just after the call.
+
+    What makes ``SCRUB-BARRIER`` a claim the gate checks rather than a comment
+    it believes.
+    """
+    lo = max(last_line, 1)
+    hi = min(last_line + _BARRIER_WINDOW_LINES, len(lines))
+    return any(_BARRIER_RE.search(lines[i - 1]) for i in range(lo, hi + 1))
+
+
+def _has_scrub_barrier_annotation(lines: list[str], first_line: int, last_line: int) -> bool:
+    """Annotated ``SCRUB-BARRIER`` AND a real barrier after the call."""
+    lo = max(first_line - 1, 1)
+    hi = min(last_line, len(lines))
+    annotated = any(_SCRUB_BARRIER_TOKEN in lines[i - 1] for i in range(lo, hi + 1))
+    return annotated and _barrier_follows(lines, last_line)
+
+
 def scan_text(text: str, path: Path) -> list[Finding]:
     """Findings in one file's text.
+
+    Two rules, one regex:
+
+    1. A memset-zero whose destination is SECRET-NAMED (``_SECRET_NAME_RE``)
+       is a finding wherever it appears.
+    2. In the shipped tree (``src/c``), a memset-zero whose destination is
+       NOT secret-named is a finding unless it carries a ``PUBLIC-DATA``
+       annotation.  Rule 1 alone recognised about 7 % of the identifiers this
+       codebase scrubs as secrets — measured against the tree's own
+       ``ama_secure_memzero`` call sites, 17 of 244 distinct scrub targets
+       matched the convention — so ``memset(sk, 0, ...)``, ``memset(seed,
+       ...)``, ``memset(key, ...)`` and ``memset(kr, ...)`` all passed.  Naming
+       cannot be made exhaustive; the burden is inverted instead: every
+       remaining bare zeroing memset in shipped code must state, at the site,
+       that its destination is not a secret, and the reviewer of that line
+       decides whether the statement is true.  The test tree keeps rule 1 only
+       (a test's memsets are not shipped).
 
     The scan runs over the WHOLE file at once, not line by line.  ``memset``
     calls are routinely written across several lines:
@@ -719,14 +849,25 @@ def scan_text(text: str, path: Path) -> list[Finding]:
         line_starts.append(match.end())
 
     findings: list[Finding] = []
+    shipped = _in_shipped_tree(path)
     for match in _MEMSET_RE.finditer(blanked):
         dst = _destination_name(match.group("dst"))
-        if not dst or not _SECRET_NAME_RE.match(dst):
+        if not dst:
             continue
         line_no = bisect_right(line_starts, match.start())
         raw = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
         expression = ("&" if match.group("amp") else "") + match.group("dst")
-        findings.append(Finding(path, line_no, dst, raw, expression))
+        end_line = bisect_right(line_starts, _call_end_offset(blanked, match.start()))
+        if _has_scrub_barrier_annotation(lines, line_no, end_line):
+            # Secret destination, non-elidable by an explicit barrier that
+            # _barrier_follows() has just confirmed is there.
+            continue
+        if _SECRET_NAME_RE.match(dst):
+            findings.append(Finding(path, line_no, dst, raw, expression))
+            continue
+        if shipped:
+            if not _has_public_data_annotation(lines, line_no, end_line):
+                findings.append(Finding(path, line_no, dst, raw, expression, "unannotated"))
 
     # Call sites of macros that wrap a bare memset — invisible to the regex
     # above because they carry no `memset` token.  See _MACRO_DEFINE_RE.
@@ -775,18 +916,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     findings = audit(targets)
     if findings:
-        print(f"FAIL  bare memset() on secret-named buffers ({len(findings)} finding(s)):\n")
+        print(
+            f"FAIL  bare memset() on secret-named or unannotated buffers ({len(findings)} finding(s)):\n"
+        )
         for finding in findings:
             print(finding.render())
             print()
         print(
-            "Replace each with ama_secure_memzero() from src/c/ama_consttime.c.\n"
+            "Scrub secret material with ama_secure_memzero() from src/c/ama_consttime.c;\n"
+            "annotate a shipped memset-zero of non-secret data with `// PUBLIC-DATA: <name> — <why>`.\n"
             "INVARIANT-6: secret material must be scrubbed with a write the "
             "compiler is not free to remove."
         )
         return 1
 
-    print(f"OK    no bare memset() on secret-named buffers ({len(targets)} C file(s) checked)")
+    print(
+        f"OK    no bare memset() on secret-named buffers, and every shipped memset-zero "
+        f"is annotated ({len(targets)} C file(s) checked)"
+    )
     return 0
 
 

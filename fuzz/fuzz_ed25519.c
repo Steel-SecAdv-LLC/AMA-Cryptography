@@ -71,8 +71,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         const uint8_t *msg = payload + 64 + 32;
         size_t msg_len = payload_len - 64 - 32;
 
-        /* Should not crash regardless of input */
-        ama_ed25519_verify(sig, msg, msg_len, pk);
+/* A signature and public key drawn from fuzz data verify with
+         * probability far below 2^-100, so ANY success here is a broken
+         * verifier — the kind of defect "must not crash" cannot see.  A
+         * genuine forgery found by the fuzzer traps, which is the outcome
+         * this harness exists for. */
+        if (ama_ed25519_verify(sig, msg, msg_len, pk) == AMA_SUCCESS) {
+            __builtin_trap();
+        }
         break;
     }
     case 2: {

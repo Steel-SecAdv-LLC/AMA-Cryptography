@@ -102,7 +102,7 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 |-----------|------|-------------------|
 | ML-KEM-1024 | `ama_kyber_avx2.c` | Vectorized NTT butterfly (16 coefficients/cycle), Barrett reduction, CBD sampling |
 | ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT (q=8380417, 8 coefficients/YMM), rejection sampling, power2round |
-| SLH-DSA-SHA2-256f | `ama_sphincs_avx2.c` | 4-way parallel SHA-256 compression, vectorized WOTS+ chains, Merkle tree hashing |
+| SLH-DSA-SHA2-256f | — | No vector kernel is shipped: the SHA2 parameter sets run the scalar inner loop end to end. The SHAKE sets accelerate indirectly through the dispatched `keccak_f1600` slot. `src/c/avx2/ama_sphincs_avx2.c` is a placeholder TU; its header records what it used to hold and why that was removed. |
 | SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
 | AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
 | X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomery ladder (RFC 7748), radix-2^25.5 field arithmetic packed as 10 x `__m256i`. Opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and additive: only full 4-lane chunks of `ama_x25519_scalarmult_batch` reach it — `ama_x25519_key_exchange` and short batches stay on the scalar fe64/fe51 path. Ed25519 has no AVX2 translation unit at all; its fast path is the fe51 comb table in `src/c/ama_ed25519.c`. |

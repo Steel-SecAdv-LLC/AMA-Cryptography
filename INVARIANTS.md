@@ -2210,7 +2210,7 @@ internal modules do.  Each now calls `check_crypto_permitted()` first.
 The count is not written down here, because a number in prose is a number that
 goes stale: `tools/check_error_state_gating.py` enumerates the surface from the
 modules' own ASTs and fails when any entry point is ungated, and its output is
-the authoritative figure (94 native entry points across `pqc_backends`, `ascon`,
+the authoritative figure (105 native entry points across `pqc_backends`, `ascon`,
 `agent_binding` and `secure_memory`, plus 10 Cython binding entry points at the
 time of writing, with 4 documented exemptions, and a discovery step that fails
 if any other module reaches the native library while listed in neither the
@@ -2319,7 +2319,7 @@ test with a negative case, not a self-consistency roundtrip an always-accept
 verifier would pass — and that same verifier backs the integrity check.
 
 **The gate covers the Cython bindings and secret-key export too.** Output
-inhibition is not only about `pqc_backends`. The five Cython binding modules
+inhibition is not only about `pqc_backends`. The Cython binding modules
 (`ama_cryptography.ed25519_binding` …) are public submodules whose `cy_*`
 functions call the C kernel directly — a caller importing one reaches signing
 and key generation without passing through `pqc_backends`' gated wrappers, and
@@ -2329,11 +2329,13 @@ its module-level import of `check_crypto_permitted` forces POST to run even on
 a top-level binding import. Separately, `key_formats` serialises secret keys
 (`to_pkcs8` / `to_pem` / `to_jwk` / `to_cose`); those private-key output paths
 now refuse in the error state rather than emitting a secret-key block from a
-faulted module. (Compiled binding `.so` files and the vectors under
-`_post_kats/` remain outside the *tamper* coverage of the module digest, which
-hashes the `.py` files, `_post_kats/`, and the native library — extending it to
-the binding `.so` files is future work; the runtime guard closes the
-error-state bypass regardless.)
+faulted module. (The v3 integrity artefact's module digest covers the
+`.py` files, the vectors under `_post_kats/`, the native library **and** the
+six compiled binding extensions — see the [5.0.0] glance row on
+binding-extension digest signing. This paragraph previously said the binding
+`.so` files were outside that coverage and called extending it "future work";
+that stopped being true when the row landed, and the runtime guard closes the
+error-state bypass independently either way.)
 
 **Enforcement.** `tools/check_error_state_gating.py` parses the AST of
 `pqc_backends.py` and requires `check_crypto_permitted()` on every public

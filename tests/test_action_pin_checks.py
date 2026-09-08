@@ -193,13 +193,43 @@ class TestVerdict:
         refs = {GOOD_SHA: ["refs/tags/v5.0.1^{}"]}
         assert _run(tool, monkeypatch, [pin], refs, strict=True) == 0
 
-    def test_strict_tolerates_a_sha_carrying_no_tag(
+    def test_strict_refuses_a_sha_carrying_no_tag(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A branch-head pin has no tag to contradict the comment."""
+        """A pin must resolve to a RELEASE TAG, not merely to some ref.
+
+        ``git ls-remote`` advertises every branch head, so an untagged SHA
+        used to satisfy "resolves upstream" and — because the comment check
+        only fired when a tag existed to contradict it — a false ``# v7.0.1``
+        label sailed through as well. INVARIANT-24 says the trailing version
+        comment must name a tag the SHA really points at, which cannot hold
+        for a SHA that is not tagged at all.
+        """
         pin = tool.Pin("ci.yml", 3, "some/action", GOOD_SHA, "main")
         refs = {GOOD_SHA: ["refs/heads/main"]}
-        assert _run(tool, monkeypatch, [pin], refs, strict=True) == 0
+        assert _run(tool, monkeypatch, [pin], refs, strict=True) == 1
+
+    def test_strict_refuses_a_pin_to_an_upstream_pull_request_head(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The supply-chain shape the tag requirement exists to refuse.
+
+        GitHub advertises ``refs/pull/N/head`` for every pull request ever
+        opened upstream, merged or not, so a pin to anybody's un-reviewed
+        branch resolved and passed while claiming a release version.
+        """
+        pin = tool.Pin("ci.yml", 3, "some/action", GOOD_SHA, "v7.0.1")
+        refs = {GOOD_SHA: ["refs/pull/4242/head"]}
+        assert _run(tool, monkeypatch, [pin], refs, strict=True) == 1
+
+    def test_non_strict_still_accepts_an_untagged_sha(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tag requirement is a ``--strict`` rule; the default mode only
+        asks whether the SHA exists upstream at all."""
+        pin = tool.Pin("ci.yml", 3, "some/action", GOOD_SHA, "main")
+        refs = {GOOD_SHA: ["refs/heads/main"]}
+        assert _run(tool, monkeypatch, [pin], refs, strict=False) == 0
 
     def test_unreachable_upstream_is_inconclusive_not_a_pass(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch

@@ -245,7 +245,7 @@ static void hs_to_bytes(uint8_t out[32], const uint64_t x[HS_LIMBS]) {
 
 static void hs_from_bytes(uint64_t out[HS_LIMBS], const uint8_t in[32]) {
     int i;
-    memset(out, 0, HS_LIMBS * sizeof out[0]);
+    memset(out, 0, HS_LIMBS * sizeof out[0]);  // PUBLIC-DATA: out — pre-use zero of public verification limbs
     for (i = 0; i < 32; i++) {
         out[i >> 3] |= (uint64_t)in[i] << (8 * (i & 7));
     }
@@ -412,7 +412,7 @@ static int ama_ed25519_wnaf_bytes(int8_t *w, int slots, const uint8_t in[32], in
     int pos = 0, top = -1;
 
     hs_from_bytes(x, in);
-    memset(w, 0, (size_t)slots);
+    memset(w, 0, (size_t)slots);  // PUBLIC-DATA: w — wNAF digits of a public verification scalar
     while (pos < slots && !hs_is_zero(x)) {
         if (x[0] & 1) {
             int64_t d = (int64_t)(x[0] & mask);

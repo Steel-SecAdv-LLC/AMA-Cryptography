@@ -625,6 +625,10 @@ class TestCalibration:
             "kyber-decaps",
             "sha3-256",
             "ed25519-sign",
+            # Same subject with the SSE2 Niels-select fold forced: every CI
+            # runner has AVX2, so without it the fold a non-AVX2 x86-64 host
+            # runs on every keygen and sign was measured nowhere.
+            "ed25519-sign-sse2fold",
             "nistp-ecdsa",
             "x25519",
             "x25519-batch",

@@ -242,7 +242,7 @@ static AMA_SHA2_MAYBE_UNUSED void ama_sha512_ctx_final(ama_sha512_ctx *ctx,
     /* Bytes of {0x80, 0x00...} so that (rem + padlen) % 128 == 112, leaving
      * exactly the trailing 16 bytes for the length field. */
     padlen = (rem < 112) ? (112 - rem) : (240 - rem);
-    memset(pad, 0, padlen + 16);
+    memset(pad, 0, padlen + 16);  // PUBLIC-DATA: pad — the FIPS 180-4 padding block (0x80, zeros, message length)
     pad[0] = 0x80;
     ama_sha512_store64_be(pad + padlen, bits_hi);
     ama_sha512_store64_be(pad + padlen + 8, bits_lo);

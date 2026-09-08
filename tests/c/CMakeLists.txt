@@ -99,6 +99,13 @@ set_tests_properties(test_dispatch_only_x25519-avx2 PROPERTIES
 add_ama_test(test_dispatch_cache_file test_dispatch_cache_file.c)
 set_tests_properties(test_dispatch_cache_file PROPERTIES
     SKIP_RETURN_CODE 77)
+# The cache path against a hostile filesystem: a FIFO and /dev/zero must not
+# hang the one-time initialisation, and a symlink pre-planted at the writer's
+# predictable temp name must not be followed.  Runs each scenario in an
+# exec()ed child (pthread_once state does not survive exec, unlike fork).
+add_ama_test(test_dispatch_cache_hostile test_dispatch_cache_hostile.c)
+set_tests_properties(test_dispatch_cache_hostile PROPERTIES
+    SKIP_RETURN_CODE 77)
 
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
@@ -145,7 +152,23 @@ add_executable(test_lms test_lms.c)
 target_link_libraries(test_lms ama_cryptography_test)
 add_test(NAME test_lms COMMAND test_lms
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+# NIST ACVP ML-KEM encapsulation AFT replay through the AMA_TESTING_MODE
+# derandomised entry point; reads tests/kat/fips203/acvp/ from the source
+# tree like test_kat and test_lms.  The keyGen, decapsulation and key-check
+# groups of the same vendored vectors replay through the Python bindings in
+# tests/test_ml_kem_acvp_vectors.py.
+add_executable(test_ml_kem_acvp_encaps test_ml_kem_acvp_encaps.c)
+target_link_libraries(test_ml_kem_acvp_encaps ama_cryptography_test)
+add_test(NAME test_ml_kem_acvp_encaps COMMAND test_ml_kem_acvp_encaps
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_ama_test(test_ed25519 test_ed25519.c)
+add_ama_test(test_hybrid_sig test_hybrid_sig.c)
+# Dead-stack key residue.  -O2 at minimum: the defect this pins (the compiler
+# hoisting round keys into unscrubbed spill slots) only exists in optimized
+# code, and the probe's own frame arithmetic assumes a normal prologue.
+add_ama_test(test_aead_stack_residue test_aead_stack_residue.c)
+target_compile_options(test_aead_stack_residue PRIVATE
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
 
 # The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
 # "exactly 32 / 64 readable bytes" — and nothing about alignment, so an
@@ -392,6 +415,11 @@ if(AMA_USE_NATIVE_PQC)
     # unconditional; the argument for the reciprocal multiply otherwise lives
     # only in a comment.
     add_ama_test(test_kyber_compress test_kyber_compress.c)
+    # FIPS 203 Sec 7.3 decapsulation input check 3 (the hash check) is
+    # performed by every decapsulation entry point, for all three parameter
+    # sets; implicit rejection and a dk_PKE-only mutation stay on the
+    # silent path.  Fails 14 checks on a tree without the check in decaps.
+    add_ama_test(test_ml_kem_decaps_hash_check test_ml_kem_decaps_hash_check.c)
     # FIPS 203 Algorithm 7 (SampleNTT) squeezes the XOF *until* 256
     # coefficients are accepted.  The sampler used to stop at a fixed
     # four-block window and leave the rest of the polynomial at whatever the

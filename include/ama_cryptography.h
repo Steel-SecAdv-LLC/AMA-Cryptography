@@ -55,7 +55,12 @@ typedef enum {
     AMA_ALG_KYBER_1024 = 1,   /**< CRYSTALS-Kyber (Kyber-1024) */
     AMA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
     AMA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
-    AMA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_HYBRID = 4        /**< Hybrid: Ed25519 + ML-DSA-65, both components
+                                   over the message bound to AMA_HYBRID_SIG_DOMAIN
+                                   (format v2, byte-compatible with the Python
+                                   HybridSignatureProvider).  Keys and signatures
+                                   are the Ed25519 part followed by the ML-DSA-65
+                                   part; see AMA_HYBRID_*_BYTES. */
 } ama_algorithm_t;
 
 /* ============================================================================
@@ -185,6 +190,25 @@ typedef enum {
 #define AMA_ED25519_PUBLIC_KEY_BYTES 32
 #define AMA_ED25519_SECRET_KEY_BYTES 64
 #define AMA_ED25519_SIGNATURE_BYTES 64
+
+/* ----------------------------------------------------------------------------
+ * Hybrid signature (AMA_ALG_HYBRID): Ed25519 + ML-DSA-65, format v2.
+ *
+ * Both components sign the message bound to one domain string, so neither
+ * half is a valid standalone signature over the raw message and no standalone
+ * signature can be spliced in under key reuse.  Ed25519 (RFC 8032 pure, no
+ * context parameter) signs 0x00 || len(domain) || domain || M explicitly;
+ * ML-DSA-65 carries the same domain as its FIPS 204 Sec 5.2 context string,
+ * which applies the identical wrapper internally.  The Python
+ * HybridSignatureProvider (ama_cryptography/crypto_api.py) uses the same
+ * string and wrapper, and tests/test_hybrid_c_interop.py verifies signatures
+ * across the two.  The string is part of the signature format: changing it
+ * invalidates every existing hybrid signature.
+ * ------------------------------------------------------------------------- */
+#define AMA_HYBRID_SIG_DOMAIN "AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65"
+#define AMA_HYBRID_PUBLIC_KEY_BYTES (AMA_ED25519_PUBLIC_KEY_BYTES + AMA_ML_DSA_65_PUBLIC_KEY_BYTES)
+#define AMA_HYBRID_SECRET_KEY_BYTES (AMA_ED25519_SECRET_KEY_BYTES + AMA_ML_DSA_65_SECRET_KEY_BYTES)
+#define AMA_HYBRID_SIGNATURE_BYTES  (AMA_ED25519_SIGNATURE_BYTES + AMA_ML_DSA_65_SIGNATURE_BYTES)
 
 /* ============================================================================
  * OPAQUE TYPES
@@ -365,8 +389,69 @@ AMA_API int ama_consttime_memcmp(const void* a, const void* b, size_t len);
  */
 AMA_API void ama_secure_memzero(void* ptr, size_t len);
 
+/** Bytes of dead stack `ama_secure_stack_wipe()` clears. */
+#define AMA_STACK_WIPE_BYTES 4096u
+
 /**
- * @brief Lock memory pages to prevent swapping to disk.
+ * @brief Zero the dead stack a just-returned primitive left behind.
+ *
+ * `ama_secure_memzero()` scrubs the buffers a function names; it cannot reach
+ * the copies an optimizing compiler spills of them.  The shipped AES-GCM
+ * hardware kernels are the measured case: they scrub their `rk[15]` key
+ * schedule at exit, and gcc had already hoisted the round keys into separate
+ * unscrubbed stack slots — including the two that, for AES-256, are the raw
+ * key.  This function extends the stack over that region and zeroes
+ * `AMA_STACK_WIPE_BYTES` of it.
+ *
+ * Call it from the frame that called the primitive, immediately after it
+ * returns, so the wipe lands where the primitive's frame was.  Every AEAD
+ * entry point in this library does.  It is a backstop for compiler-made
+ * copies, not a substitute for scrubbing named buffers, and it clears only
+ * what is BELOW the current frame — never the caller's own locals.
+ */
+AMA_API void ama_secure_stack_wipe(void);
+
+/**
+ * @brief HMAC-SHA-256 (RFC 2104 / FIPS 198-1) over one message.
+ *
+ * Declared here because the Python layer resolves it through ctypes, so it
+ * is part of the shipped ABI whether or not it was ever written down — and
+ * the export map now localises every other internal `ama_*` symbol, which
+ * would have taken this one with it.  A zero-length key is permitted (RFC
+ * 2104); `key` may then be NULL.
+ *
+ * @param key      HMAC key (may be NULL when @p key_len is 0)
+ * @param key_len  Key length in bytes
+ * @param data     Message (may be NULL when @p data_len is 0)
+ * @param data_len Message length in bytes
+ * @param out      Output: 32-byte tag
+ */
+AMA_API void ama_hmac_sha256(const uint8_t *key, size_t key_len,
+                             const uint8_t *data, size_t data_len,
+                             uint8_t out[32]);
+
+/**
+ * @brief HMAC-SHA-256 over the concatenation of two buffers.
+ *
+ * Equivalent to :c:func:`ama_hmac_sha256` over `data1 || data2` without
+ * materialising the concatenation.  Same ABI note as above.
+ */
+AMA_API void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
+                               const uint8_t *data1, size_t data1_len,
+                               const uint8_t *data2, size_t data2_len,
+                               uint8_t out[32]);
+
+/**
+ * @brief Lock memory pages to prevent swapping to disk, and mark them
+ *        non-dumpable (MADV_DONTDUMP where the platform has it).
+ *
+ * The kernel locks and unlocks whole pages: this call and
+ * ama_secure_munlock() act on every page that [ptr, ptr+len) touches,
+ * including bytes belonging to neighbouring allocations on a shared page.
+ * Buffers from ama_secure_alloc() own their pages and are not affected by
+ * anyone else's unlock; for caller-provided memory that shares pages, an
+ * unlock of one region unlocks the others on those pages.
+ *
  * @param ptr Pointer to memory region
  * @param len Length of memory region
  * @return AMA_SUCCESS or AMA_ERROR_MEMORY
@@ -382,16 +467,28 @@ AMA_API ama_error_t ama_secure_mlock(void* ptr, size_t len);
 AMA_API ama_error_t ama_secure_munlock(void* ptr, size_t len);
 
 /**
- * @brief Allocate a secure buffer with mlock and DONTDUMP.
- * @param size Number of bytes to allocate
- * @return Pointer to locked, zeroed memory, or NULL on failure
+ * @brief Allocate a zeroed buffer in a private page-aligned mapping, and
+ *        attempt to lock it into RAM with no-core-dump advice.
+ *
+ * The buffer owns whole pages (one anonymous mapping per allocation), so
+ * locking, the MADV_DONTDUMP advice and ama_secure_free() act on this
+ * allocation's pages only and never on a neighbour's.
+ *
+ * @warning Locking is best-effort and NOT guaranteed: mlock() fails when
+ * the allocation would exceed RLIMIT_MEMLOCK (often 64 KiB by default) and
+ * this function still returns a usable, zeroed, swappable buffer rather
+ * than NULL.  When the locked property is load-bearing, call
+ * ama_secure_mlock() on the returned buffer and act on its return value.
+ *
+ * @param size Number of bytes to allocate (rounded up to whole pages)
+ * @return Pointer to zeroed memory, or NULL on failure
  */
 AMA_API void* ama_secure_alloc(size_t size);
 
 /**
- * @brief Free a secure buffer with guaranteed zeroization and munlock.
+ * @brief Free a secure buffer with guaranteed zeroization, munlock and unmap.
  * @param ptr Pointer from ama_secure_alloc
- * @param size Size of the allocation
+ * @param size The size passed to ama_secure_alloc
  */
 AMA_API void ama_secure_free(void* ptr, size_t size);
 
@@ -1410,6 +1507,30 @@ AMA_API const char *ama_ed25519_active_backend(void);
  * in effect.
  */
 AMA_API void ama_ed25519_set_mulx_override(int mode);
+
+/**
+ * @brief Name the Niels-table select fold the next Ed25519 call runs on.
+ * @return "avx2" (x86-64 with AVX2, the default there), "sse2" (x86-64
+ *         without AVX2, or with `ama_ed25519_set_avx2_fold_override(0)`), or
+ *         "portable" elsewhere.  Introspection only; the three folds are
+ *         mask selects over the whole table row and produce identical
+ *         results (tests/c/test_ed25519_comb_equiv.c drives them).
+ */
+AMA_API const char *ama_ed25519_active_fold(void);
+
+/**
+ * @brief Benchmark/test-only selector for the Ed25519 Niels-select fold.
+ *
+ * -1 = the CPU decides (default), 0 = force the SSE2 fold on an AVX2 host,
+ * any other value = default.  Exists so the deterministic constant-time
+ * gates can measure the SSE2 fold on the AVX2 hosts every CI runner is
+ * (tools/check_ghash_constant_time.py --target ed25519-sign-sse2fold);
+ * until it existed that fold was unmeasurable anywhere the gate runs.
+ * **NOT a production policy knob**; single-threaded by contract, like
+ * `ama_ed25519_set_mulx_override()`.  A no-op on builds without the AVX2
+ * unit.  `ama_ed25519_active_fold()` reports the selection in effect.
+ */
+AMA_API void ama_ed25519_set_avx2_fold_override(int mode);
 
 /* ----------------------------------------------------------------------------
  * Ed25519 Group Primitives (for FROST / Threshold Signatures)
@@ -2534,16 +2655,20 @@ AMA_API int ama_dilithium_invntt_dispatch_slot_wired(void);
  * Memory-hard KDF with resistance to GPU/ASIC attacks.
  * Single-threaded execution (parallelism affects block layout only).
  *
+ * Parameters outside the RFC 9106 Sec 3.1 domain are rejected with
+ * ``AMA_ERROR_INVALID_PARAM`` — never silently clamped — so a tag is only
+ * ever derived under exactly the parameters the caller supplied.
+ *
  * @param password    Password bytes
  * @param pwd_len     Password length
- * @param salt        Salt (16+ bytes recommended)
- * @param salt_len    Salt length
+ * @param salt        Salt (>= 8 bytes required, 16 recommended)
+ * @param salt_len    Salt length (>= 8)
  * @param t_cost      Time cost (iterations, >= 1)
  * @param m_cost      Memory cost in KiB (>= 8 * parallelism)
- * @param parallelism Degree of parallelism (lanes)
+ * @param parallelism Degree of parallelism (lanes, 1..255)
  * @param output      Output tag buffer
- * @param out_len     Desired output length (>= 4)
- * @return AMA_SUCCESS or error code
+ * @param out_len     Desired output length (4..AMA_ARGON2ID_MAX_TAG_LEN)
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM for any out-of-domain input
  */
 AMA_API ama_error_t ama_argon2id(
     const uint8_t *password, size_t pwd_len,
@@ -3152,6 +3277,11 @@ AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
  * `tests/c/test_pq_parser_stack.c` runs each on a painted, caller-supplied
  * thread stack and holds it under a stated budget.
  */
+/* INTERNAL INTERFACE (FIPS 204 Algorithm 7): mu = H(tr || M), no context
+ * wrapper.  Sec 5.2 restricts this to testing and to protocols supplying their
+ * own domain separation — the ACVP internal-interface vectors replay through
+ * it.  For an interoperable ML-DSA-65 signature use ama_dilithium_sign(), or
+ * ama_ml_dsa_sign_ctx() for another parameter set. */
 AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
                                     uint8_t *signature, size_t *signature_len,
                                     const uint8_t *message, size_t message_len,
@@ -3181,6 +3311,35 @@ AMA_API ama_error_t ama_ml_dsa_verify_ctx(ama_ml_dsa_param_set_t ps,
                                           const uint8_t *ctx, size_t ctx_len,
                                           const uint8_t *signature, size_t signature_len,
                                           const uint8_t *public_key);
+
+/**
+ * @brief ML-DSA signing, HEDGED variant (FIPS 204 Algorithm 2, `rnd` fresh).
+ *
+ * Identical to :c:func:`ama_ml_dsa_sign_ctx` except that the 32-byte `rnd`
+ * field of Algorithm 7 line 3 is drawn from the platform CSPRNG per signature
+ * instead of being fixed at 0^256.  FIPS 204 §3.4 makes this the default
+ * variant and cautions that the deterministic one is more exposed to
+ * fault-injection and side-channel analysis, precisely because every timing
+ * observation on a fixed (key, message) is then exactly repeatable.
+ *
+ * The deterministic variant remains what every other signer in this library
+ * uses, because reproducibility is what the ACVP known-answer gates and the
+ * hybrid signature format rely on; this is the entry point for a caller that
+ * wants the hedged posture, and its output is NOT reproducible.  Both verify
+ * under the same verifier — `rnd` is not transmitted.
+ *
+ * Fails closed: if the CSPRNG cannot supply `rnd`, the call returns that
+ * error rather than falling back to the deterministic form.
+ *
+ * `src/c/PROVENANCE.md` used to describe the shipped signer as hedged while
+ * no hedged path existed anywhere in C or Python; this is that path, and the
+ * document now says which variant each entry point is.
+ */
+AMA_API ama_error_t ama_ml_dsa_sign_hedged(ama_ml_dsa_param_set_t ps,
+                                           uint8_t *signature, size_t *signature_len,
+                                           const uint8_t *message, size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *secret_key);
 
 /* ============================================================================
  * ML-KEM (FIPS 203) — parameter-driven public API

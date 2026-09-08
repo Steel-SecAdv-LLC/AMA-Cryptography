@@ -5,8 +5,8 @@
       "sha256": "035859e9c2a2fbc861aed6c78f8e09d0b322b988f96313fd394a7ec45f0cb391"
     },
     "ama_cryptography/_post_kats/ml_kem_1024_kat.json": {
-      "bytes": 13235,
-      "sha256": "4c5a9fe9b2b0072f31293769005c5011cb43578536337d918f60ea7f9ba5db71"
+      "bytes": 13316,
+      "sha256": "dd1a35560dacbd25105f2c30399762e32465eee6ce0127622f28c3ad3604b7bf"
     },
     "ama_cryptography/_post_kats/slh_dsa_sha2_256f_kat.json": {
       "bytes": 101650,
@@ -31,6 +31,14 @@
     "tests/kat/ascon/ascon_hash256.kat": {
       "bytes": 1141768,
       "sha256": "b7d6fbc51362f0d62bc7e57b21f3e83242983434a7c92320a4956d915749df17"
+    },
+    "tests/kat/fips203/acvp/acvp_encapsulation_aft.kat": {
+      "bytes": 361808,
+      "sha256": "2a34891a53d3b1ba4a3fccfdefff400166b0839a4264255d70caa411a5f89a32"
+    },
+    "tests/kat/fips203/acvp/ml_kem_acvp_v1.1.0.42.json": {
+      "bytes": 1219542,
+      "sha256": "fe99b6d9810e31e210c4f9fe7c9b97a52fb3755be999f41760304d1427093387"
     },
     "tests/kat/fips203/ml_kem_1024.kat": {
       "bytes": 1290400,

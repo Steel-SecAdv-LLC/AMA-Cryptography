@@ -569,7 +569,7 @@ static void kyber_gen_matrix(polyvec *mat, const uint8_t seed[32],
      * back to mat.  Zeroing the k rows first makes mat provably initialised
      * (defence-in-depth against any future bound-logic change) at negligible
      * cost: the per-row XOF rejection sampling that follows dwarfs it. */
-    memset(mat, 0, (size_t)P->k * sizeof(polyvec));
+    memset(mat, 0, (size_t)P->k * sizeof(polyvec));  // PUBLIC-DATA: mat — the public matrix A, expanded from the public seed rho
 
     for (i = 0; i < P->k; i++) {
         for (j = 0; j < P->k; j++) {
@@ -771,6 +771,18 @@ static void kyber_cbd_poly(poly* r, const uint8_t seed[32], uint8_t nonce, unsig
 }
 
 #ifdef AMA_TESTING_MODE
+/**
+ * Derandomised ML-KEM encapsulation for the ACVP encapsulation AFT group
+ * (FIPS 203 Algorithm 17, ML-KEM.Encaps_internal, with the caller's m).
+ * Test builds only: production encapsulation always draws m from the CSPRNG.
+ * Declared in src/c/internal/ama_testing_exports.h.
+ */
+ama_error_t ama_kyber_test_encapsulate_derand(ama_ml_kem_param_set_t ps,
+                                              const uint8_t *pk, size_t pk_len,
+                                              const uint8_t m[32],
+                                              uint8_t *ct, size_t *ct_len,
+                                              uint8_t *ss, size_t ss_len);
+
 /**
  * Random bytes hook for KAT testing.
  * When non-NULL, all random byte generation uses this function instead of
@@ -1172,11 +1184,33 @@ static ama_error_t kyber_decapsulate_internal(
         unsigned int i;
         int fail;
 
-        /* Parse secret key: s || pk || H(pk) || z */
-        polyvec_frombytes(&skpv, secret_key, P->k);
         pk = secret_key + KYBER_T_BYTES(P);
         h_pk = pk + P->pk_bytes;
         z = h_pk + 32;
+
+        /* FIPS 203 Sec 7.3, decapsulation input check 3 (hash check):
+         * H(dk[384k : 768k+32]) must equal dk[768k+32 : 768k+64], i.e. the
+         * embedded encapsulation key must hash to the digest stored beside
+         * it.  The standard requires every decapsulation key to have passed
+         * this check before ML-KEM.Decaps runs; it allows the check to be
+         * done elsewhere, but this function takes the key as raw bytes from
+         * any caller, so nothing upstream can be assumed to have done it.
+         * Both operands are public (ek is the public key, h its published
+         * digest), so the branch on the verdict is on public data and does
+         * not touch the constant-time argument for the FO path below.  A
+         * key that fails is refused as an invalid input, not silently
+         * decapsulated into an implicit-rejection secret the peer never
+         * derived. */
+        {
+            uint8_t h_computed[32];
+            ama_sha3_256(pk, P->pk_bytes, h_computed);
+            if (ama_consttime_memcmp(h_computed, h_pk, 32) != 0) {
+                return AMA_ERROR_INVALID_PARAM;
+            }
+        }
+
+        /* Parse secret key: s || pk || H(pk) || z */
+        polyvec_frombytes(&skpv, secret_key, P->k);
 
         /* Decompress ciphertext */
         polyvec_decompress(&bp, ciphertext, P);
@@ -2330,6 +2364,18 @@ AMA_API ama_error_t ama_ml_kem_encapsulate(ama_ml_kem_param_set_t ps,
     if (!P) return AMA_ERROR_INVALID_PARAM;
     return kyber_encapsulate_internal(P, pk, pk_len, NULL, ct, ct_len, ss, ss_len);
 }
+
+#ifdef AMA_TESTING_MODE
+ama_error_t ama_kyber_test_encapsulate_derand(ama_ml_kem_param_set_t ps,
+                                              const uint8_t *pk, size_t pk_len,
+                                              const uint8_t m[32],
+                                              uint8_t *ct, size_t *ct_len,
+                                              uint8_t *ss, size_t ss_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P || !m) return AMA_ERROR_INVALID_PARAM;
+    return kyber_encapsulate_internal(P, pk, pk_len, m, ct, ct_len, ss, ss_len);
+}
+#endif
 
 AMA_API ama_error_t ama_ml_kem_decapsulate(ama_ml_kem_param_set_t ps,
                                            const uint8_t *ct, size_t ct_len,

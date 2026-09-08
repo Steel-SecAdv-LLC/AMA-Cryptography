@@ -42,6 +42,227 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > was removed from this branch in the eighteenth pass below and remains in the
 > branch's commit history.
 
+### Maintenance pass, twenty-third (2026-09-08) — key material off the dead stack, secret-dependent branches removed, gates that could not fail made able to
+
+A twenty-dimension adversarial review of this branch produced 73 findings.
+Each was re-verified here before anything was changed, and the ones that
+survived are fixed at source below. Three classes recur and are worth naming:
+**secret material the compiler put somewhere the source never named**,
+**branches on secret-derived values that instruction counting cannot see**,
+and **gates whose green light was wired to nothing**.
+
+#### BREAKING
+
+- **`dilithium_sign` / `dilithium_verify` (and `crypto_api.sign` / `.verify`
+  for ML-DSA-65) are now the FIPS 204 §5.2 EXTERNAL interface with the empty
+  context.** They called `ML-DSA.Sign_internal` (Algorithm 7, `mu = H(tr ||
+  M)`, no domain separator), which §5.2 restricts to testing and to protocols
+  supplying their own domain separation. A signature made that way is
+  rejected by every conforming ML-DSA-65 verifier — liboqs, BoringSSL, Go,
+  Bouncy Castle — and vice versa. Signatures produced by 4.x do not verify
+  under 5.0.0. The internal interface is still reachable by name for the ACVP
+  internal-interface vectors: `ama_ml_dsa_sign()` / `native_ml_dsa_sign(ctx=None)`.
+- **Hybrid signatures are domain-separated (format v2).** `HybridSignatureProvider`
+  concatenated an Ed25519 and an ML-DSA-65 signature, each over the raw
+  message, so either half was a valid standalone signature over that message
+  and either could be spliced in from a standalone signer under key reuse.
+  Both components now sign the message bound to
+  `AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65`: Ed25519 over the
+  explicit `0x00 || len || domain || M` wrapper, ML-DSA-65 with the same
+  string as its FIPS 204 context. v1 signatures do not verify under v2.
+- **`AMA_ALG_HYBRID` in the C API is Ed25519 + ML-DSA-65**, the same format,
+  Ed25519 part first (`AMA_HYBRID_PUBLIC_KEY_BYTES` = 1,984,
+  `AMA_HYBRID_SECRET_KEY_BYTES` = 4,096, `AMA_HYBRID_SIGNATURE_BYTES` = 3,373).
+  It was an alias for ML-DSA-65 alone while the header promised
+  "classical + PQC". `tests/test_hybrid_c_interop.py` verifies signatures
+  across the C and Python implementations in both directions.
+- **Argon2id rejects out-of-domain parameters instead of clamping them.**
+  `ama_argon2id_core()` silently rewrote `p = 0`, `p > 255`, `t = 0`,
+  `m < 8p` and accepted an empty salt, then derived a tag under the
+  substituted values — a tag no conforming implementation reproduces under
+  the caller's parameters, returned as `AMA_SUCCESS`. `p >= 256` was reachable
+  through the validated Python API and came back as the `p = 255` tag.
+- **`ama_secure_alloc()` is page-granular** (mmap / VirtualAlloc). Releasing
+  one buffer used to `munlock` every other live buffer sharing its pages while
+  `SecureBuffer.locked` kept reporting `True`.
+- **The shared library exports 212 symbols, not 241.** Every remaining export
+  is declared in a public header. The AES-GCM SIMD kernels in particular
+  deliberately omit the NULL checks and the SP 800-38D length limits the public
+  entry point enforces once, and the VAES kernel is not CPUID-gated at its own
+  entry, so a consumer resolving them by name got neither the guard nor the
+  SIGILL protection.
+
+#### Key material on the dead stack (INVARIANT-6)
+
+- **The AES-256 key schedule survived every hardware AES-GCM call.** Both x86
+  kernels expand the key into a local `rk[15]` and scrub it at exit, exactly as
+  the source says; gcc 13 `-O3` had already hoisted the loop-invariant round
+  keys into separate stack slots used as `aesenc` memory operands, and nothing
+  scrubbed those. A residue probe found all fifteen round keys after every
+  encrypt and decrypt — `rk[0]` and `rk[1]` among them, which for AES-256 *are*
+  the raw 32-byte key.
+- **ChaCha20-Poly1305 left its raw key likewise**: `chacha20_block()` never
+  scrubbed `state` (whose words 4..11 are the key) or `working`, while the code
+  around it scrubbed six other buffers under an explicit INVARIANT-6 rationale.
+- Fixed at source where there was a source-level cause (the ChaCha scrub), and
+  by `ama_secure_stack_wipe()` — a new public primitive that zeroes the dead
+  stack a just-returned callee used — where the copies have no names. All four
+  AEAD entry points call it. `memset` plus a compiler barrier, measured: the
+  volatile word loop `ama_secure_memzero` uses costs 90-127 ns there against
+  29 ns, which on a 16-byte AEAD call is the difference between +50% and +17%;
+  at 1 KiB and above neither is measurable.
+- `tests/c/test_aead_stack_residue.c` pins it, with a positive control that
+  fails if the probe cannot see a key that IS left behind. It fails on the
+  pre-fix library (3 failures) and passes on this one.
+
+#### Secret-dependent control flow
+
+A Memcheck secret-taint mode (`tools/check_ghash_constant_time.py --taint`,
+the ctgrind construction) was added because the callgrind instruction, data-
+reference and cache-miss counts cannot see a cache-resident secret-indexed
+load, a conditional move, or a branch whose arms retire the same count —
+planted defects of each kind passed every existing metric. It found, and this
+pass removed:
+
+- the RFC 7748 all-zero-output branch in `ama_x25519_key_exchange()` and its
+  batch counterpart (now a mask over the outputs and a masked return code);
+- the safegcd product re-check in `fe_invert_ct()`, a branch on a value derived
+  from the projective Z of a secret-scalar point, taken on every Ed25519 keygen
+  and sign. The divstep bound and `tests/c/test_ed25519_safegcd.c` carry the
+  correctness argument the branch was there to re-establish;
+- the zero-scalar and point-at-infinity branches in
+  `ama_secp256k1_point_mul()`;
+- a conditional move gcc made of the AES-GCM verify mask at `-O2` (the mask now
+  passes through `ama_ct_value_barrier_u64`, as ChaCha20-Poly1305 already did);
+- the early exits in ML-DSA's `||z||`, `||r0||` and `||ct0||` norm checks and in
+  `make_hint`, which made a rejected signing attempt's cost a function of the
+  index of the first out-of-range coefficient — a function of the private key,
+  and exactly repeatable because signing is deterministic. `dil_polyeta_unpack`
+  in the same file had been rewritten branchless for this reason and the
+  signer's own checks had not.
+
+The branches that remain on secret-derived values are ECDSA verdicts the API
+returns anyway (a key outside `[1, n-1]`, `r == 0`, `s == 0`, a fixed-base
+multiple at infinity, the RFC 6979 candidate rejection). Each is declassified
+at its site with a stated argument — `src/c/internal/ama_ct_declassify.h`, the
+libsecp256k1 / BoringSSL construction — and `grep -rn AMA_CT_DECLASSIFY src/c`
+is the complete list. All twelve taint targets pass, on the LTO-off archive and
+on the shipped shared object.
+
+#### Gates that could not fail
+
+- **CodeQL could not fail.** `codeql-action/analyze` exits 0 whatever it finds
+  and nothing read the results, so `static-analysis-gate`'s `check codeql
+  success` proved only that the scan completed. `tools/check_codeql_severity.py`
+  now applies the policy to the SARIF, fail-closed on a missing report.
+- **Three gate contexts could not be required status checks.** `dudect.yml`,
+  `arm-qemu.yml` and `corpus-provenance.yml` are path-filtered with no
+  `paths-ignore` twin, and GitHub creates no check run for a skipped workflow —
+  so the KyberSlash divide gate, the AVX/ISA scoping gate, the dudect lanes,
+  GHASH scalar invariance and the AArch64 lanes could all go red without
+  blocking a merge, each under a comment telling the operator to require them.
+  Each now has a no-op twin, and `tools/check_gate_coverage.py` requires one
+  and holds the two path lists complementary.
+- **MemorySanitizer and ThreadSanitizer never ran on the merge path.** They
+  were schedule/dispatch-only, the nightly fires on the default branch alone,
+  and the aggregating gate REQUIRED them to report `skipped` on a pull request.
+  Both now run on every trigger.
+- **`fuzz_sphincs` ran in no mechanism at all**, and the registration gate
+  reported it registered: it accepted any commented-out matrix entry as a
+  "documented exclusion", so deleting a harness from CI was one `#` away from
+  invisible — in the gate written because "a harness nobody runs is
+  indistinguishable from one that finds nothing". Its stated compensating
+  control, OSS-Fuzz, is not onboarded. It now runs, and the exclusion rule
+  needs an allowlist entry naming the job that does run the target.
+- **The action-pin gate accepted a pin to any upstream PR or branch head.**
+  `git ls-remote` advertises `refs/pull/N/head` for every pull request ever
+  opened upstream, and the version-comment check was skipped whenever the SHA
+  carried no tag — so a false `# v7.0.1` on somebody's unreviewed branch passed
+  `--strict`. A pin must now resolve to a release tag.
+- **Six fuzz harnesses asserted only "no crash".** An ML-KEM with implicit
+  rejection removed, and an AES-GCM releasing plaintext on tag failure, both
+  fuzzed clean. The harnesses now assert the contracts: implicit rejection
+  yields a different, reproducible shared secret; a failed AEAD verify leaves
+  the caller's buffer untouched; a signature verify over fuzzed input that
+  succeeds is a forgery.
+- **The INVARIANT-6 zeroization gate could be escaped by a refactor**, and the
+  error-state gate lost coverage to one: moving a native call into a private
+  helper made two public functions look like they touched nothing. Both gates
+  now follow module-local private helpers.
+
+#### Vectors and provenance
+
+- `tests/kat/fips203/ml_kem_1024.kat` was attributed to NIST ACVP-Server
+  v1.1.0.42 in four places. It is not: re-deriving the NIST AES-256-CTR DRBG
+  stream reproduces all 100 records' `d`, `z` and `m`, so it is the
+  pq-crystals `ref/nistkat` corpus (`standard` @ `d5b791c`), which this pass
+  regenerated and matched 100/100 on `pk`, `sk`, `ct` and `ss`. No `d` in the
+  file appears anywhere in ACVP. The attribution is corrected, and the genuine
+  ACVP keyGen, encapsulation-AFT, decapsulation and key-check groups for all
+  three parameter sets are vendored under `tests/kat/fips203/acvp/` with the
+  upstream digests recorded, replayed by `tests/test_ml_kem_acvp_vectors.py`
+  and `tests/c/test_ml_kem_acvp_encaps.c`.
+- The HMAC-SHA3-256 POST vector claimed SP 800-198 provenance and matched no
+  NIST published example; it is now the CSRC `keylen=blocklen` example.
+- `src/c/PROVENANCE.md` described ML-DSA signing as hedged. It was
+  deterministic-only, with no hedged entry point in C or Python — so the
+  side-channel mitigation the document cited was not shipped. The document is
+  corrected AND `ama_ml_dsa_sign_hedged()` / `native_ml_dsa_sign_hedged()`
+  now exist (FIPS 204 Algorithm 2, fresh `rnd`, fail-closed on RNG failure).
+  The rejection-loop bound it gave as 2^16 is 1,000.
+
+#### Measurement honesty
+
+- `benchmark_c_raw` derived ops/sec from the mean, not the median it also
+  prints, which ran 10-14% low on the Ed25519 rows.
+- The `ed25519_keygen` row times a CSPRNG draw, keygen and the FIPS pairwise
+  consistency sign+verify; native keygen is about a sixth of it. Relabelled
+  everywhere rather than left reading as keygen throughput.
+- `check_baseline_justification.py` accepted any floor cut whose commit message
+  named the primitive, any number with a unit and a runner token — `wip:
+  ed25519_sign 999999 ops/sec on x86_64` justified a 10x cut. A lowered floor
+  must now cite an ops/sec figure between the new floor and the old one, carry
+  the CI run or job id it came from, and say `RECALIBRATION` past 25%.
+- Benchmark provenance records the dispatcher's own wiring report, auto-tune
+  verdicts included: which kernel each slot resolved to is the second most
+  load-bearing variable behind a figure, after the binary itself.
+- The unmeasured "18-37x" Cython ratio is withdrawn from README and three wiki
+  pages. No benchmark, results file or history entry in the tree produces it.
+
+#### Dispatch, SIMD and attack surface
+
+- The single-state AVX2 Keccak is no longer installed: it retired about three
+  times the instructions of the BMI2 scalar kernel and every measured host's
+  auto-tune reverted it, so the constant-time gates were measuring a kernel
+  production never runs. The 4-way kernel is unaffected.
+- `kyber_pointwise` is no longer wired on any tier. The "AVX2", NEON and SVE2
+  basemul kernels are scalar code — no vector instruction in their object code
+  — and the AVX2 one retires about 35% more instructions per call than the
+  auto-vectorised inline basemul it displaced, in a slot the auto-tune never
+  benchmarked.
+- `src/c/avx2/ama_sphincs_avx2.c` is a placeholder TU. Its exported symbol was
+  scalar C that did not compute FIPS 205 `F` (no `pub_seed`, no compressed
+  ADRS, no padding), no production path called it, and its "SIMD equivalence"
+  test compared it against a transcription of the same algorithm — a gate that
+  executed zero vector instructions and would have passed for any
+  implementation. Same disposition as the SVE2 TU in an earlier pass.
+- The dispatch cache writer opened its PID-named temp file without `O_EXCL` or
+  `O_NOFOLLOW`; a pre-planted symlink truncated and overwrote any victim-
+  writable file, and the reader hung forever on a FIFO or `/dev/zero`. Both
+  fixed, with an exec-based hostile test.
+- Six `AMA_DISPATCH_*` knobs were honoured in setuid processes.
+
+#### Documentation corrected against the code
+
+INVARIANT-39 on binding-extension tamper coverage; THREAT_MODEL T2.2 (named a
+function and a comb geometry that no longer exist); `secure_memzero()`
+described as multi-pass when the native kernel is one volatile pass plus a
+barrier; the fe51 lazy-reduction margin (6.5%, not "~16%"), its `sub_2p`
+precondition (a sum of two products wraps), and the MULX kernel's output bound;
+the `poly_reduce` input domain (the full int16 range, not `[-(2q-2), 2q-2]`).
+`tests/test_fe51_lazy_reduction_bounds.py` derives the field-layer margins
+mechanically so the numbers in the comments are checked rather than asserted.
+
 ### Maintenance pass, twenty-second (2026-09-07) — static-analysis findings resolved at source, not suppressed
 
 The twenty-first pass left two static-analysis findings *documented* rather
@@ -506,7 +727,7 @@ instantiation it can switch to at run time.
 - **Tests.**  Five C suites added since the twentieth pass
   (`test_ed25519_static_tables`, `test_ed25519_frozen_oracle`,
   `test_ed25519_fe51_mulx_equiv`, `test_ed25519_safegcd`,
-  `test_ed25519_half_reduce`; the C suite is 72 files / 74 translation
+  `test_ed25519_half_reduce`; the C suite is 77 files / 79 translation
   units), the half-size reduction checked against an independent long
   division on every output, the static-table test extended to the
   2^128-shifted table, `tests/test_vendor_isolation_gate.py` extended to
@@ -5719,7 +5940,7 @@ unchanged but the work, the timing, or the failure mode is not.
 
 | # | Kind | Change | Migration |
 |---|---|---|---|
-| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — 94 native entry points across `pqc_backends`, `ascon`, `agent_binding` and `secure_memory`, the ten Cython binding entry points, `AmaContext`, Ascon, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
+| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — 105 native entry points across `pqc_backends`, `ascon`, `agent_binding` and `secure_memory`, the ten Cython binding entry points, `AmaContext`, Ascon, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
 | 2 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
 | 3 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm it cannot rank, which 4.x silently mapped onto the weakest rung (INVARIANT-35). Strength ladders are now per algorithm family: `KYBER_1024` and `HYBRID_KEM` rank on a KEM ladder (they previously ranked nowhere), and a posture escalation can no longer cross families and answer a KEM escalation with a signature scheme. `AES_256_GCM` remains unrankable — an AEAD with nothing stronger to escalate to | pass a name from `ALGORITHM_FAMILIES`; the error lists them by family |
 | 4 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
@@ -6478,7 +6699,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 72 suite files / 74 translation units (65 / 68 when the twelfth pass measured it; the 2026-08-31 v5 pre-merge audit added `tests/c/test_secure_memory_dontdump.c` and `tests/c/test_secure_free_scrub.c`; the twentieth pass removed the never-built `tests/c/bench_ed25519.c`; the twenty-first pass added five Ed25519 suites: `test_ed25519_static_tables.c`, `test_ed25519_frozen_oracle.c`, `test_ed25519_fe51_mulx_equiv.c`, `test_ed25519_safegcd.c` and `test_ed25519_half_reduce.c`), not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
+C suite is 77 suite files / 79 translation units (65 / 68 when the twelfth pass measured it; the 2026-08-31 v5 pre-merge audit added `tests/c/test_secure_memory_dontdump.c` and `tests/c/test_secure_free_scrub.c`; the twentieth pass removed the never-built `tests/c/bench_ed25519.c`; the twenty-first pass added five Ed25519 suites: `test_ed25519_static_tables.c`, `test_ed25519_frozen_oracle.c`, `test_ed25519_fe51_mulx_equiv.c`, `test_ed25519_safegcd.c` and `test_ed25519_half_reduce.c`; the twenty-third pass added five more: `test_ml_kem_decaps_hash_check.c`, `test_dispatch_cache_hostile.c`, `test_ml_kem_acvp_encaps.c`, `test_hybrid_sig.c` and `test_aead_stack_residue.c`), not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD

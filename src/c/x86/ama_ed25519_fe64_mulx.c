@@ -88,8 +88,8 @@ void ed25519_fe64_sq_mulx(fe64 h, const fe64 f) {
  * uses, keep their single fold: measured in one process against the
  * pre-change library, a second fold there cost the latency-bound X25519
  * ladder 12-14% — its 2,500 dependent additions per exchange pay for every
- * cycle — and the X25519 rows may not regress.  The window is documented
- * there.) */
+ * cycle — and the X25519 rows may not regress.  The window is stated at
+ * fe64_add in fe64.h.) */
 static inline __attribute__((always_inline))
 void ed25519_fe64_add_mulx(fe64 h, const fe64 f, const fe64 g) {
     unsigned long long t0, t1, t2, t3;

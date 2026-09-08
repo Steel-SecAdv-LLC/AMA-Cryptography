@@ -1358,6 +1358,45 @@ def _native_backend_summary() -> str:
         return "unavailable"
 
 
+def _dispatch_wiring_summary() -> str:
+    """The native dispatcher's own account of what these numbers measured.
+
+    Which kernel each slot resolved to, and what the Phase-3 auto-tune decided
+    about it, is the second most load-bearing variable behind a figure after
+    the binary itself: the same library on the same host runs the Kyber NTT
+    pair through AVX2 or through the scalar path depending on that verdict,
+    and until this row existed nothing in either published record said which.
+    Captured from a fresh interpreter with ``AMA_DISPATCH_VERBOSE=1`` (the
+    dispatcher reports once, at initialisation, on stderr), so the row
+    reflects this host and this build rather than a hand-maintained claim.
+    Never raises: a host that cannot produce the report gets a marker.
+    """
+    try:
+        env = dict(os.environ, AMA_DISPATCH_VERBOSE="1")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import ama_cryptography.pqc_backends as pb; pb.native_sha3_256(b'provenance')",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        lines = [
+            line.strip().replace("[AMA Dispatch] ", "", 1)
+            for line in proc.stderr.splitlines()
+            if "[AMA Dispatch]" in line
+        ]
+        if not lines:
+            return "no [AMA Dispatch] report captured"
+        return "; ".join(lines)
+    except Exception:  # pragma: no cover - provenance must never raise
+        return "unavailable"
+
+
 def _provenance() -> "list[tuple[str, str]]":
     """Everything needed to reproduce or discard this report.
 
@@ -1398,6 +1437,9 @@ def _provenance() -> "list[tuple[str, str]]":
         ("Python", f"{platform.python_version()} ({platform.python_implementation()})"),
         # Which native binary produced the numbers — the digest pins the build.
         ("Native backend", _native_backend_summary()),
+        # Which kernels that binary actually ran, per the dispatcher's own
+        # report, auto-tune verdicts included.
+        ("Dispatch", _dispatch_wiring_summary()),
         ("Command", f"`{_invocation()}`"),
         (
             "Sampling",

@@ -23,5 +23,60 @@
         # export.  An exact name overrides the `ama_*` wildcard above (audit
         # Low).
         ama_ascon_permutation_for_test;
+
+        # ------------------------------------------------------------------
+        # Internal symbols that the `ama_*` wildcard above would otherwise
+        # publish.  Each is defined with external linkage because a SIBLING
+        # TRANSLATION UNIT calls it (the dispatch table, the HMAC layer, an
+        # equivalence test through the static archive) — not because any
+        # consumer should.  Exporting them made the guard-bypass surface real:
+        # the AES-GCM SIMD kernels deliberately omit the NULL checks and the
+        # SP 800-38D 2^36-32 / 2^61 length limits that the public entry point
+        # enforces once ("the SIMD kernels do not re-check the limit"), and
+        # the VAES kernel is not CPUID-gated at its own entry, so a consumer
+        # resolving `ama_aes256_gcm_encrypt_vaes_avx2` by name got neither the
+        # guard nor the SIGILL protection.  Every name below is absent from
+        # include/ama_cryptography.h, include/ama_dispatch.h and
+        # include/ama_cpuid.h, so localising them promises nothing that was
+        # ever documented.  The C tests link the static archive
+        # (libama_cryptography_test.a), where visibility does not apply.
+        #
+        # `ama_hmac_sha256` and `ama_hmac_sha256_2` are NOT here: the Python
+        # layer resolves them through ctypes, so they are declared in the
+        # public header instead (see there).
+        # SIMD kernels that deliberately omit the public entry points' guards.
+        ama_aes256_gcm_encrypt_avx2;
+        ama_aes256_gcm_decrypt_avx2;
+        ama_aes256_gcm_encrypt_vaes_avx2;
+        ama_aes256_gcm_decrypt_vaes_avx2;
+        ama_aes256_expand_key_avx2;
+        ama_chacha20_block_x8_avx2;
+        ama_argon2_g_avx2;
+        ama_x25519_scalarmult_x4_avx2;
+        ama_sha256_compress_x86_shani;
+        ama_nistp_mont_mul4_mulx;
+        # PQC transform kernels reached only through the dispatch table.
+        ama_kyber_ntt_avx2;
+        ama_kyber_invntt_avx2;
+        ama_kyber_poly_pointwise_avx2;
+        ama_kyber_cbd2_avx2;
+        ama_dilithium_ntt_avx2;
+        ama_dilithium_invntt_avx2;
+        ama_dilithium_poly_pointwise_avx2;
+        ama_dilithium_rej_uniform_avx2;
+        # Keccak permutation variants and their round constants.
+        ama_keccak_f1600_avx2;
+        ama_keccak_f1600_generic;
+        ama_keccak_round_constants;
+        ama_shake128_x4_absorb_once;
+        ama_shake128_x4_squeezeblocks;
+        ama_shake256_x4_absorb_once;
+        ama_shake256_x4_squeezeblocks;
+        # SHA-256 streaming API — internal to this library's HMAC/PBKDF2/SLH-DSA.
+        ama_sha256_init;
+        ama_sha256_update;
+        ama_sha256_final;
+        # Platform CSPRNG wrapper — internal; callers use the algorithm APIs.
+        ama_randombytes;
         *;
 };

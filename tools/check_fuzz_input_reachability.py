@@ -118,9 +118,17 @@ _DEFINE_RE = re.compile(r"^\s*#\s*define\s+(?P<name>[A-Za-z_]\w*)\s+(?P<value>\d
 #: resolve as unbalanced).  Deeper nesting does not match at all — the
 #: completeness check in required_max_len turns that into an `unresolved`
 #: entry rather than a silent skip.
+#: A comparison that closes an ``if``/``while`` condition (``)``) or that is
+#: the LEADING CONJUNCT of one (``&&``).
+#:
+#: The ``&&`` arm is sound and not a relaxation: ``A && B`` is reachable only
+#: when ``A`` holds, so ``A``'s length floor is a floor for the whole guard.
+#: ``||`` is deliberately absent — ``A || B`` is reachable with ``A`` false, so
+#: ``A``'s floor is not the guard's, and a ``||`` comparison the gate cannot
+#: otherwise parse still fails closed through the completeness scan below.
 _GUARD_RE = re.compile(
     r"\b(?P<var>[A-Za-z_]\w*)\s*(?P<op><=|>=|==|<|>)\s*"
-    r"(?P<expr>(?:[A-Za-z_0-9 +*]|\([A-Za-z_0-9 +*]*\))+?)\s*\)"
+    r"(?P<expr>(?:[A-Za-z_0-9 +*]|\([A-Za-z_0-9 +*]*\))+?)\s*(?:\)|&&)"
 )
 #: Every comparison operator occurrence, shifts included so they can be
 #: recognised and skipped; used to prove _GUARD_RE missed nothing on a

@@ -100,11 +100,24 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         size_t ct_len = payload_len - 16;
         if (ct_len > 2048) ct_len = 2048;
 
-        uint8_t *pt = (uint8_t *)malloc(ct_len > 0 ? ct_len : 1);
+        size_t buf_len = ct_len > 0 ? ct_len : 1;
+        uint8_t *pt = (uint8_t *)malloc(buf_len);
         if (!pt) break;
 
-        ama_chacha20poly1305_decrypt(key, nonce, ct, ct_len,
-                                      NULL, 0, tag, pt);
+        /* A random tag over random ciphertext verifies with probability
+         * 2^-128, and on the rejection path the caller's buffer must be
+         * untouched (fail-closed).  Neither was asserted. */
+        memset(pt, 0xA5, buf_len);
+        ama_error_t frc = ama_chacha20poly1305_decrypt(key, nonce, ct, ct_len,
+                                                       NULL, 0, tag, pt);
+        if (frc == AMA_SUCCESS) {
+            __builtin_trap();  /* forged tag accepted */
+        }
+        for (size_t i = 0; i < ct_len; i++) {
+            if (pt[i] != 0xA5) {
+                __builtin_trap();  /* plaintext released on a failed verify */
+            }
+        }
         free(pt);
         break;
     }

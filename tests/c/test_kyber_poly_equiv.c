@@ -292,17 +292,15 @@ int main(void) {
         any_lane_exercised = 1;
         for (int trial = 0; trial < N_TRIALS; trial++) {
             for (int i = 0; i < KYBER_N; i++) {
-                /* Production `poly_reduce` is only ever called on
-                 * outputs of `poly_add` / `poly_sub`, whose inputs
-                 * are already in [-q+1, q-1] — so the post-add/sub
-                 * input range to `poly_reduce` is bounded by
-                 * [-(2q-2), 2q-2].  The truncating Barrett every
-                 * kernel now shares only guarantees [-q+1, q-1]
-                 * output on inputs within that range, so drawing
-                 * inputs from it is what keeps the scalar reference
-                 * honest rather than generous. */
-                int v = (int)(xs_next() % (uint64_t)(2 * (2 * KYBER_Q - 2) + 1))
-                         - (2 * KYBER_Q - 2);
+                /* The whole int16 domain, not [-(2q-2), 2q-2].  That
+                 * narrower range was the documented production input
+                 * range, and it was wrong: polyvec_basemul_acc in
+                 * src/c/ama_kyber.c hands `poly_reduce` sums of up to
+                 * four basemul outputs, magnitudes up to about 4 * 3554.
+                 * The kernels must agree byte-for-byte with the reference
+                 * on every int16, and [0] above has already enumerated
+                 * the reference's image over that domain. */
+                int v = (int)(xs_next() & 0xFFFFu) - 32768;
                 poly_s[i] = poly_v[i] = (int16_t)v;
             }
             scalar_poly_reduce(poly_s);

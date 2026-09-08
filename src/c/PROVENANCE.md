@@ -112,11 +112,18 @@ initial ACVP TG 3 failures documented in
 [`CSRC_ALIGN_REPORT.md §2.2`](../../docs/compliance/CSRC_ALIGN_REPORT.md) — the internal
 verify function was correct all along; only the wrapper was missing.
 
-**Randomness:** KeyGen consumes 32 bytes through `ama_platform_rand.c`;
-Sign uses the hedged-randomness mode (ξ || rnd, where rnd is fresh per
-signature) per FIPS 204 §5.3. The deterministic API
-`ama_dilithium_keypair_from_seed(xi, …)` bypasses the RNG for KAT
+**Randomness:** KeyGen consumes 32 bytes through `ama_platform_rand.c`.
+Signing is **deterministic** by default: every signer except
+`ama_ml_dsa_sign_hedged()` fixes FIPS 204 Algorithm 7 line 3's `rnd` at
+0^256. `ama_ml_dsa_sign_hedged()` draws `rnd` from the platform CSPRNG per
+signature (Algorithm 2) and fails closed if it cannot. The deterministic
+API `ama_dilithium_keypair_from_seed(xi, …)` bypasses the RNG for KAT
 validation as required by ACVP.
+
+> Until the twenty-third maintenance pass this paragraph said signing used
+> the hedged mode. It did not, and no hedged entry point existed in C or
+> Python — the mitigation cited under *Side-channel posture* below was
+> therefore not shipped. Both are corrected here rather than restated.
 
 **SIMD:** The NTT / invNTT in `src/c/avx2/` and `src/c/neon/` are
 hand-written and were developed in-house. The SVE2 path in
@@ -126,15 +133,29 @@ implementation was publicly available at the time of writing).
 **Known divergences from the FIPS 204 pseudocode:** None in the
 algorithmic sense. All 25 KeyGen and 15 SigVer TG 3 vectors pass
 byte-exact. Non-normative differences:
-- `Sign_internal`'s rejection-sampling loop is bounded (maximum attempts
-  = 2^16); a correct implementation will never hit the bound. This
-  avoids a theoretical infinite loop on broken RNG.
+- `Sign_internal`'s rejection-sampling loop is bounded
+  (`MAX_SIGN_ATTEMPTS` = 1000 in `src/c/ama_dilithium.c`; this paragraph
+  previously said 2^16, which no constant in the file has ever equalled).
+  The expected attempt count is 4-5, so a correct implementation will never
+  approach the bound; it avoids a theoretical infinite loop on a broken RNG.
 - Public key hash `tr = H(ρ || t₁)` is computed once at KeyGen and
   stored in the secret key bytes, matching FIPS 204 §5.1.
 
-**Side-channel posture:** Rejection-sampling rate depends on the secret
-vector `s1`, which is a published vulnerability class for Dilithium;
-AMA mitigates via hedged randomness (the `rnd` byte per FIPS 204 §5.3).
+**Side-channel posture:** The rejection-sampling rate depends on the
+secret vector `s1`, a published vulnerability class for Dilithium. Two
+things are true and were previously conflated:
+
+- The *number* of attempts is a function of `s1` and is not hidden. It is
+  observable from the wall clock on any implementation, hedged or not.
+  A caller who needs the observation not to be repeatable per
+  (key, message) should sign through `ama_ml_dsa_sign_hedged()`; the
+  default deterministic signer makes it exactly repeatable.
+- The *cost of one rejected attempt* used to depend on the INDEX of the
+  first out-of-range coefficient, because the `||z||`, `||r0||` and
+  `||ct0||` norm checks and `make_hint` all returned early. Those scans
+  now run to completion and accumulate a mask (`dil_poly_chknorm`,
+  `dil_polyveck_make_hint`), so the per-attempt cost no longer carries
+  that index.
 
 ---
 

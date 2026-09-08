@@ -69,6 +69,54 @@ int ama_consttime_memcmp(const void* a, const void* b, size_t len) {
  * @param ptr Memory to zero
  * @param len Number of bytes to zero
  */
+/**
+ * @brief Zero the stack the last call left behind (INVARIANT-6, dead frames).
+ *
+ * `ama_secure_memzero` scrubs the buffers a function NAMES.  It cannot reach
+ * the copies an optimizing compiler makes of them.  Measured on the shipped
+ * build (gcc 13 -O3, LTO): the AES-GCM AES-NI and VAES kernels expand the key
+ * into a local `rk[15]`, scrub that array at exit as the source says — and
+ * gcc has already hoisted the loop-invariant round keys into separate stack
+ * slots that the AES rounds use as memory operands (`aesenc 0x10(%rsp)` …)
+ * and that nothing scrubs.  A residue probe found all fifteen round keys
+ * after every encrypt and decrypt, `rk[0]` and `rk[1]` among them — and for
+ * AES-256 those two ARE the raw 32-byte key.  ChaCha20-Poly1305 left its key
+ * likewise (that one was also a missing scrub, fixed at source).
+ *
+ * The compiler's copies have no names, so the only way to reach them is by
+ * address: this function extends the stack over the region a just-returned
+ * callee used and zeroes it.  Called from a public entry point right after
+ * the primitive returns, its frame lands exactly where the primitive's frame
+ * was.
+ *
+ * `AMA_STACK_WIPE_BYTES` (4096) comfortably covers the deepest AEAD kernel
+ * frame measured here (0x680 = 1664 bytes); the residue probe found nothing
+ * below 2,167 bytes of the caller's own anchor.  `memset` plus a compiler
+ * barrier is deliberate and measured: the barrier makes the write observable
+ * so it cannot be elided, while `memset` keeps the fast wide-store path — the
+ * volatile-word loop `ama_secure_memzero` uses cost 90-127 ns per call here
+ * against 29 ns for this form, which on a 16-byte AEAD call is the difference
+ * between +50% and +17%; at 1 KiB and above it is not measurable.
+ *
+ * This is a backstop, not a substitute for scrubbing named buffers.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline, no_sanitize_address))
+#elif defined(_MSC_VER)
+__declspec(noinline)
+#endif
+AMA_API void ama_secure_stack_wipe(void) {
+    unsigned char frame[AMA_STACK_WIPE_BYTES];
+    memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame — dead stack, possibly secret; the barrier below makes the write non-elidable, and memset keeps the wide-store path (29 ns here against 90-127 ns for the volatile word loop)
+    /* Make the write observable so it survives dead-store elimination, and
+     * keep the array's address escaping so the frame is really allocated. */
+#ifdef _MSC_VER
+    _ReadWriteBarrier();
+#else
+    __asm__ __volatile__("" : : "r"(frame) : "memory");
+#endif
+}
+
 void ama_secure_memzero(void* ptr, size_t len) {
     volatile uint8_t* vptr = (volatile uint8_t*)ptr;
     size_t i = 0;

@@ -56,7 +56,7 @@
  * The _POSIX_C_SOURCE define above puts Apple libc into strict-POSIX
  * mode, which hides ``issetugid()`` — Apple Clang then fails the build
  * with `-Werror=implicit-function-declaration` (default-on) at the
- * dispatch_cache_env_is_safe() call site below.  This is the root
+ * dispatch_env_is_safe() call site below.  This is the root
  * cause of the `C Library (macos-latest, clang)` lane failing on every
  * commit since `58e7a2d` introduced the dispatch cache.  Defining
  * _DARWIN_C_SOURCE re-exposes the BSD surface without removing the
@@ -159,6 +159,9 @@ extern void ama_dilithium_invntt_generic_ref(int32_t poly[256], const int32_t ze
 /* ============================================================================
  * Static dispatch state
  * ============================================================================ */
+
+extern const char *ama_ed25519_active_backend(void);
+extern const char *ama_ed25519_active_fold(void);
 
 static ama_dispatch_info_t dispatch_info;
 static ama_dispatch_table_t dispatch_table;
@@ -331,11 +334,35 @@ extern void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]);
 #endif
 
 
+#if !defined(_WIN32)
+/* Defined with the cache code below (inside the same !_WIN32 region). */
+static int dispatch_env_is_safe(void);
+#endif
+
+/* Every AMA_DISPATCH_* environment knob goes through here, never through a
+ * bare getenv().  In a secure-execution context (setuid/setgid binary,
+ * AT_SECURE, issetugid) the environment belongs to an unprivileged caller,
+ * and glibc's getenv() -- unlike secure_getenv() -- still returns it.  Until
+ * this helper existed only AMA_DISPATCH_CACHE_FILE was gated; the other six
+ * knobs were honoured in exactly the process class they must not be, so an
+ * unprivileged caller could pin a privileged binary's AES-256-GCM to the
+ * bitsliced software path with AMA_DISPATCH_ONLY (measured ~620x slower) or
+ * switch off the auto-tune.  None of the knobs selects a non-constant-time
+ * kernel, so the exposure was availability, not confidentiality -- but a
+ * privileged process must not be steerable by its caller's environment at
+ * all.  Returns NULL, i.e. "unset", whenever the environment is untrusted. */
+static const char *dispatch_getenv(const char *name) {
+#if !defined(_WIN32)
+    if (!dispatch_env_is_safe()) return NULL;
+#endif
+    return getenv(name);
+}
+
 /* Check if AMA_DISPATCH_VERBOSE=1 is set at runtime. */
 static int dispatch_verbose(void) {
     static int v = -1;
     if (v < 0) {
-        const char *env = getenv("AMA_DISPATCH_VERBOSE");
+        const char *env = dispatch_getenv("AMA_DISPATCH_VERBOSE");
         v = (env && env[0] == '1') ? 1 : 0;
     }
     return v;
@@ -472,7 +499,7 @@ static apply_dispatch_only_result_t apply_dispatch_only(
         if (ama_has_avx2()) {
             dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
             dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;
-            dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx2;
+            /* kyber_pointwise stays NULL: see the default wiring below. */
             dispatch_table.kyber_cbd2      = ama_kyber_cbd2_avx2;
             *resolved_label_out = "kyber-ntt-avx2";
             return AMA_DISPATCH_ONLY_HONORED;
@@ -627,7 +654,7 @@ static apply_dispatch_only_result_t apply_dispatch_only(
         if (ama_has_arm_neon()) {
             dispatch_table.kyber_ntt       = ama_kyber_ntt_neon;
             dispatch_table.kyber_invntt    = ama_kyber_invntt_neon;
-            dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_neon;
+            /* kyber_pointwise stays NULL: see the default wiring below. */
             *resolved_label_out = "kyber-ntt-neon";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -757,6 +784,32 @@ typedef struct {
 static int bench_slot_regressed(int64_t simd_best_ns, int64_t generic_best_ns) {
     if (simd_best_ns < 0 || generic_best_ns < 0) return 0;
     return simd_best_ns > (generic_best_ns + generic_best_ns / 10);
+}
+
+/* A demotion must REPRODUCE before it is applied.
+ *
+ * Every bench above measures the scalar loop first and the SIMD loop second
+ * in each trial, and takes the best of five.  Best-of-N is robust against a
+ * single preemption, but not against sustained contention: measured on this
+ * host with a concurrent CPU-bound load, 7 of 12 process starts demoted an
+ * NTT slot that 12 of 12 idle starts kept -- and with AMA_DISPATCH_CACHE_FILE
+ * set, the first such start writes that load-time verdict for every later
+ * process to replay.  A wrong "kept" costs nothing (the slot is measured
+ * again next start); a wrong "demoted" costs 30-40 % on every NTT for the
+ * life of the process, silently.
+ *
+ * So the asymmetric outcome gets an asymmetric burden of proof: a slot whose
+ * first round reads "regressed" is benched a second time with the two loops
+ * in the OPPOSITE order, and is demoted only if the second round agrees.
+ * Independent rounds halve a transient's chance of sticking; the swapped
+ * order removes any systematic disadvantage of running second (turbo
+ * ramp, the other tenant's timeslice).  A slot that really is slower reads
+ * slower in both orders and is still demoted; the extra cost is paid only on
+ * the path that was about to demote. */
+static int bench_confirms_regression(int64_t simd_first_ns, int64_t generic_first_ns,
+                                     int64_t simd_second_ns, int64_t generic_second_ns) {
+    return bench_slot_regressed(simd_first_ns, generic_first_ns)
+        && bench_slot_regressed(simd_second_ns, generic_second_ns);
 }
 
 #if !defined(_WIN32)
@@ -971,7 +1024,7 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  *            to <path> using a tmp-file + rename for atomicity.
  *
  * Security model — the env var is honoured ONLY for non-tainted
- * processes (see dispatch_cache_env_is_safe).  When a setuid / setgid
+ * processes (see dispatch_env_is_safe).  When a setuid / setgid
  * binary launches with `AMA_DISPATCH_CACHE_FILE` set, the env var is
  * ignored entirely (no read, no write) so a lower-privileged caller
  * cannot point a privileged process at an attacker-controlled path.
@@ -1043,7 +1096,7 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  * which no configuration could ever select, and the paragraph above said
  * "MSVC builds" while that guard said Windows.  Both are gone; the arms
  * below are the only ones that were ever reachable. */
-static int dispatch_cache_env_is_safe(void) {
+static int dispatch_env_is_safe(void) {
     /* Prefer issetugid() where available (BSDs / Apple / musl). */
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
@@ -1214,28 +1267,75 @@ static void rstrip(char *s) {
 static int dispatch_cache_load_at(int dfd, const char *basename,
                                   const char *fingerprint,
                                   dispatch_autotune_verdicts_t *v) {
-    int fd = openat(dfd, basename, O_RDONLY | O_CLOEXEC);
+    /* This runs inside the one-time dispatch initialisation, under the
+     * once-lock every thread's first cryptographic call waits on.  The
+     * previous open(O_RDONLY) + fdopen/fgets loop had no bound of any kind:
+     * a FIFO at the named path blocked in open(2) until a writer appeared,
+     * and an endless file (/dev/zero) made fgets() return 511 NULs forever --
+     * both measured to hang the process, and a Python `import
+     * ama_cryptography` with it, indefinitely.  The path sanitizer cannot
+     * see either (both are syntactically ordinary paths), and must not have
+     * to: the descriptor is what carries the facts.
+     *
+     *   O_NONBLOCK  open(2) on a FIFO returns immediately instead of waiting
+     *               for a writer; on a regular file it is a no-op.
+     *   O_NOFOLLOW  the cache file itself is never a symlink (the writer
+     *               creates a regular file and renames it into place).
+     *   fstat       only a regular file of a bounded size is parsed.
+     *   read(2)     into a fixed buffer with a hard cap -- no stdio, no
+     *               unbounded line loop, so the time spent here is bounded
+     *               by the buffer size whatever the file does.
+     *
+     * A refusal costs only the cache: the process re-benches. */
+    int fd = openat(dfd, basename, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
 #if defined(AMA_DISPATCH_NEED_FD_CLOEXEC_FALLBACK)
     int flags = fcntl(fd, F_GETFD, 0);
     if (flags >= 0) (void)fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
 #endif
+    enum { AMA_DISPATCH_CACHE_MAX_BYTES = 8192 };
+    {
+        struct stat st;
+        if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)
+            || st.st_size < 0 || st.st_size > (off_t)AMA_DISPATCH_CACHE_MAX_BYTES) {
+            close(fd);
+            return -1;
+        }
+    }
+    static char cache_buf[AMA_DISPATCH_CACHE_MAX_BYTES + 1];
+    size_t total = 0;
+    for (;;) {
+        ssize_t n = read(fd, cache_buf + total, AMA_DISPATCH_CACHE_MAX_BYTES - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            close(fd);
+            return -1;
+        }
+        if (n == 0) break;
+        total += (size_t)n;
+        if (total >= AMA_DISPATCH_CACHE_MAX_BYTES) break;  /* cap reached: parse what we have */
+    }
+    close(fd);
+    cache_buf[total] = '\0';
+
     /* Per-slot regression flags are written as literal "0" or "1";
      * parse via strtol with full endpoint + errno validation rather
      * than atoi() (CERT ERR34-C).  Timing fields round-trip for
      * diagnostic verbose logs only; they never drive security state. */
-    FILE *fp = fdopen(fd, "r");
-    if (!fp) {
-        close(fd);
-        return -1;
-    }
-
-    char line[512];
     int fp_matched = 0;
     dispatch_autotune_verdicts_t tmp;
     memset(&tmp, 0, sizeof(tmp));  // PUBLIC-DATA: tmp — zero-init cache parsing scratch (PUBLIC)
 
-    while (fgets(line, sizeof(line), fp)) {
+    char *cursor = cache_buf;
+    while (*cursor != '\0') {
+        char *line = cursor;
+        char *nl = strchr(cursor, '\n');
+        if (nl) {
+            *nl = '\0';
+            cursor = nl + 1;
+        } else {
+            cursor = line + strlen(line);
+        }
         rstrip(line);
         if (line[0] == '\0' || line[0] == '#') continue;
         char *eq = strchr(line, '=');
@@ -1298,16 +1398,19 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
             tmp.dilithium_invntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
         }
     }
-    fclose(fp);
 
     if (!fp_matched) return -2;
     *v = tmp;
     return 0;
 }
 
-static void dispatch_cache_save_at(int dfd, const char *basename,
-                                   const char *fingerprint,
-                                   const dispatch_autotune_verdicts_t *v) {
+/* Returns 0 when the verdict file is in place, -1 when it is not (every
+ * refusal above is deliberate and quiet; the caller only decides what the
+ * verbose log says, so "cached to" is never printed for a write that did not
+ * happen). */
+static int dispatch_cache_save_at(int dfd, const char *basename,
+                                  const char *fingerprint,
+                                  const dispatch_autotune_verdicts_t *v) {
     char tmpbase[256];
     int wrote = snprintf(tmpbase, sizeof(tmpbase), "%s.tmp.%ld",
                          basename, (long)getpid());
@@ -1317,11 +1420,25 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
                 "[AMA Dispatch] cache write SKIPPED: tmp basename would "
                 "exceed %zu bytes\n", sizeof(tmpbase));
         }
-        return;
+        return -1;
     }
 
+    /* O_EXCL|O_NOFOLLOW, and a post-open fstat, not O_TRUNC.
+     *
+     * The temp name is predictable (`<base>.tmp.<pid>`), and this directory
+     * is one the environment named, so an attacker who can write to it can
+     * pre-plant a symlink at that name.  O_CREAT|O_TRUNC follows the link:
+     * the target is truncated, the verdict text is written into it, and the
+     * symlink is then renamed over the cache name.  Measured against this
+     * function before the change: a planted `cache.tmp.<pid> -> victim.txt`
+     * left victim.txt replaced by the cache text.  With O_EXCL the open fails
+     * (EEXIST) on any pre-existing name, symlink or not; O_NOFOLLOW is
+     * belt-and-braces for a kernel that does not honour O_EXCL on symlinks;
+     * and the fstat proves the descriptor is a fresh regular file of ours
+     * before a byte is written.  A refusal here only costs the cache -- the
+     * next process re-benches -- so every branch fails quietly closed. */
     int fd = openat(dfd, tmpbase,
-                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
                     S_IRUSR | S_IWUSR);
     if (fd < 0) {
         if (dispatch_verbose()) {
@@ -1329,7 +1446,21 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
                 "[AMA Dispatch] cache write FAILED (openat '%s' errno=%d)\n",
                 tmpbase, errno);
         }
-        return;
+        return -1;
+    }
+    {
+        struct stat st;
+        if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_nlink != 1
+            || st.st_uid != geteuid()) {
+            if (dispatch_verbose()) {
+                fprintf(stderr,
+                    "[AMA Dispatch] cache write REFUSED ('%s' is not a fresh "
+                    "regular file owned by this process)\n", tmpbase);
+            }
+            close(fd);
+            (void)unlinkat(dfd, tmpbase, 0);
+            return -1;
+        }
     }
     FILE *fp = fdopen(fd, "w");
     if (!fp) {
@@ -1340,7 +1471,7 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
         }
         close(fd);
         (void)unlinkat(dfd, tmpbase, 0);
-        return;
+        return -1;
     }
     fprintf(fp, "# AMA Cryptography dispatch auto-tune cache v2\n");
     fprintf(fp, "# Generated automatically; safe to delete (a future "
@@ -1369,7 +1500,7 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
     fprintf(fp, "dilithium_invntt_generic_ns=%lld\n", (long long)v->dilithium_invntt_generic_ns);
     if (fclose(fp) != 0) {
         (void)unlinkat(dfd, tmpbase, 0);
-        return;
+        return -1;
     }
     if (renameat(dfd, tmpbase, dfd, basename) != 0) {
         if (dispatch_verbose()) {
@@ -1378,8 +1509,9 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
                 tmpbase, basename, errno);
         }
         (void)unlinkat(dfd, tmpbase, 0);
-        return;
+        return -1;
     }
+    return 0;
 }
 #else  /* _WIN32 — no POSIX *at family, no microbench, no cache. */
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
@@ -1391,10 +1523,11 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
     (void)dfd; (void)basename; (void)fingerprint; (void)v;
     return -1;
 }
-static void dispatch_cache_save_at(int dfd, const char *basename,
-                                   const char *fingerprint,
-                                   const dispatch_autotune_verdicts_t *v) {
+static int dispatch_cache_save_at(int dfd, const char *basename,
+                                  const char *fingerprint,
+                                  const dispatch_autotune_verdicts_t *v) {
     (void)dfd; (void)basename; (void)fingerprint; (void)v;
+    return -1;
 }
 #endif /* !_WIN32 */
 
@@ -1596,7 +1729,26 @@ static void dispatch_init_internal(void) {
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
-        dispatch_table.keccak_f1600    = ama_keccak_f1600_avx2;
+        /* The single-state slot deliberately STAYS on the scalar baseline.
+         *
+         * `ama_keccak_f1600_avx2` (src/c/avx2/ama_sha3_avx2.c) is a
+         * single-state permutation held in YMM lanes, and on every x86-64
+         * host it has been measured on it is slower than the BMI1/BMI2
+         * scalar kernel by a wide margin: 4.4-4.8x wall-clock on three
+         * different hosts (see the note above ama_dispatch_init and the
+         * dispatch_bench_keccak_single verdicts recorded in CHANGELOG.md),
+         * and 2.9x in retired instructions under callgrind (111,778 vs
+         * 38,097 per SHA3-256 of 1 KiB).  Wiring it here and relying on the
+         * Phase-3 auto-tune to take it back out again cost every process a
+         * ~20 ms wall-clock benchmark at its first cryptographic call, made
+         * the answer depend on that benchmark's noise, and -- because the
+         * deterministic constant-time gates pin the auto-tune off to keep
+         * their counts reproducible -- left those gates measuring a Keccak
+         * that no shipped x86-64 process ever ran.  The kernel stays
+         * compiled and byte-for-byte tested (tests/c/test_keccak_equiv.c);
+         * it is simply not the default for a slot it never wins.  The 4-way
+         * kernel below is a different implementation with its own verdict
+         * and is unaffected. */
         dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx2;
     }
 #endif
@@ -1687,7 +1839,18 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.kyber >= AMA_IMPL_AVX2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
         dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;
-        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx2;
+        /* kyber_pointwise is deliberately NOT wired on any tier.  The
+         * "AVX2" / NEON / SVE2 basemul kernels are scalar code (no vector
+         * instruction in their object code), the Phase-3 auto-tune never
+         * benchmarks the slot, and under callgrind the AVX2 one retires
+         * about 35% more instructions per call than the inline scalar
+         * basemul it displaces — which the compiler auto-vectorises (SSE2 /
+         * NEON) when the slot is NULL.  Wiring it was a regression that the
+         * per-kernel gate could not see.  A real vectorised basemul
+         * (interleaved even/odd coefficients, vpmullw/vpmulhw Montgomery
+         * products) belongs here together with an auto-tune slot; until one
+         * exists the slot stays NULL and the kernels stay compiled only for
+         * their equivalence tests. */
         dispatch_table.kyber_cbd2      = ama_kyber_cbd2_avx2;
     }
     if (dispatch_info.dilithium >= AMA_IMPL_AVX2) {
@@ -1699,12 +1862,12 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
         /* Env override honored for A/B benchmarking and smoke-testing
          * the scalar fallback in production builds without a rebuild. */
-        const char *no_chacha = getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
+        const char *no_chacha = dispatch_getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
         if (!(no_chacha && no_chacha[0] == '1'))
             dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_avx2;
     }
     if (dispatch_info.argon2 >= AMA_IMPL_AVX2) {
-        const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
+        const char *no_argon = dispatch_getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
         if (!(no_argon && no_argon[0] == '1'))
             dispatch_table.argon2_g = ama_argon2_g_avx2;
     }
@@ -1729,7 +1892,7 @@ static void dispatch_init_internal(void) {
          * or gf16 and the 4-way may break even, (d) eventual port
          * to AVX-512 IFMA / VPMADD52 which closes the gap.  Opt in
          * with `AMA_DISPATCH_USE_X25519_AVX2=1` to exercise it. */
-        const char *use_x25519 = getenv("AMA_DISPATCH_USE_X25519_AVX2");
+        const char *use_x25519 = dispatch_getenv("AMA_DISPATCH_USE_X25519_AVX2");
         if (use_x25519 && use_x25519[0] == '1')
             dispatch_table.x25519_x4 = ama_x25519_scalarmult_x4_avx2;
     }
@@ -1742,7 +1905,7 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.kyber >= AMA_IMPL_NEON) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_neon;
         dispatch_table.kyber_invntt    = ama_kyber_invntt_neon;
-        dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_neon;
+        /* kyber_pointwise stays NULL on every tier — see the AVX2 wiring. */
     }
     if (dispatch_info.dilithium >= AMA_IMPL_NEON) {
         dispatch_table.dilithium_ntt       = ama_dilithium_ntt_neon;
@@ -1791,12 +1954,12 @@ static void dispatch_init_internal(void) {
     }
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_NEON) {
         /* Match the AVX2 env opt-out for parity across architectures. */
-        const char *no_chacha = getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
+        const char *no_chacha = dispatch_getenv("AMA_DISPATCH_NO_CHACHA_AVX2");
         if (!(no_chacha && no_chacha[0] == '1'))
             dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_neon;
     }
     if (dispatch_info.argon2 >= AMA_IMPL_NEON) {
-        const char *no_argon = getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
+        const char *no_argon = dispatch_getenv("AMA_DISPATCH_NO_ARGON2_AVX2");
         if (!(no_argon && no_argon[0] == '1'))
             dispatch_table.argon2_g = ama_argon2_g_neon;
     }
@@ -1825,7 +1988,7 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
         dispatch_table.kyber_ntt        = ama_kyber_ntt_sve2;
         dispatch_table.kyber_invntt     = ama_kyber_invntt_sve2;
-        dispatch_table.kyber_pointwise  = ama_kyber_poly_pointwise_sve2;
+        /* kyber_pointwise stays NULL on every tier — see the AVX2 wiring. */
         /* Promoted from compiled-but-unwired in this PR.  All three
          * are algorithmically straightforward (svadd_s16_x,
          * svsub_s16_x, and the Barrett reduction reused from the
@@ -1932,7 +2095,7 @@ static void dispatch_init_internal(void) {
      * MSVC skips the whole phase (no POSIX clock_gettime).
      * ==================================================================== */
 #if !defined(_WIN32)
-    const char *no_autotune = getenv("AMA_DISPATCH_NO_AUTOTUNE");
+    const char *no_autotune = dispatch_getenv("AMA_DISPATCH_NO_AUTOTUNE");
     int autotune_disabled = (no_autotune && no_autotune[0] == '1');
 
     /* Per-slot regression verdicts.  Default = "SIMD kept".  Each bench
@@ -1978,16 +2141,20 @@ static void dispatch_init_internal(void) {
      * path; an unprivileged process must not be steered via path
      * traversal or control-character injection.  Two sanitizers
      * compose:
-     *   1. dispatch_cache_env_is_safe() rejects tainted-exec contexts
+     *   1. dispatch_env_is_safe() rejects tainted-exec contexts
      *      entirely (issetugid / AT_SECURE / uid-gid compare).
      *   2. dispatch_cache_path_split() rejects empty / oversized /
-     *      ASCII-control / `..`-containing path strings, terminating
-     *      the tainted-data flow that CodeQL tracks from getenv to
-     *      openat.
+     *      ASCII-control path strings and a `.` / `..` BASENAME, and
+     *      canonicalises the directory part through realpath() -- a `..`
+     *      inside the directory part is resolved, not rejected, which is
+     *      the correct behaviour for a user-owned opt-in path (the
+     *      authority boundary is the directory descriptor opened from the
+     *      canonical form).  That terminates the tainted-data flow CodeQL
+     *      tracks from getenv to openat.
      * Either rejection leaves `cache_dfd < 0`, which the surrounding logic treats as "env var unset". */
-    const char *cache_path_env = getenv("AMA_DISPATCH_CACHE_FILE");
+    const char *cache_path_env = dispatch_getenv("AMA_DISPATCH_CACHE_FILE");
     int env_safe = (cache_path_env && cache_path_env[0]
-                    && dispatch_cache_env_is_safe());
+                    && dispatch_env_is_safe());
     char cache_dir[AMA_DISPATCH_PATH_MAX];
     char cache_base[AMA_DISPATCH_PATH_MAX];
     char cache_display[AMA_DISPATCH_PATH_MAX];
@@ -2053,6 +2220,23 @@ static void dispatch_init_internal(void) {
                 /*warmup=*/200, /*trials=*/5, /*iters=*/2000,
                 &generic_best, &simd_best);
             v.keccak_regressed = bench_slot_regressed(simd_best, generic_best);
+            if (v.keccak_regressed) {
+                /* Confirmation round, SIMD loop first (see
+                 * bench_confirms_regression). */
+                int64_t simd_second = -1, generic_second = -1;
+                memset(state, 0x42, sizeof(state));  // PUBLIC-DATA: state — bench scratch (PUBLIC)
+                dispatch_bench_keccak_single(
+                    dispatch_table.keccak_f1600, keccak_scalar_baseline,
+                    state,
+                    /*warmup=*/200, /*trials=*/5, /*iters=*/2000,
+                    &simd_second, &generic_second);
+                v.keccak_regressed = bench_confirms_regression(
+                    simd_best, generic_best, simd_second, generic_second);
+                if (!v.keccak_regressed) {
+                    simd_best = simd_second;
+                    generic_best = generic_second;
+                }
+            }
             v.keccak_simd_ns    = simd_best;
             v.keccak_generic_ns = generic_best;
 
@@ -2132,6 +2316,26 @@ static void dispatch_init_internal(void) {
                 /*warmup=*/100, /*trials=*/5, /*iters=*/500,
                 &generic_best, &simd_best);
             v.keccak_x4_regressed = bench_slot_regressed(simd_best, generic_best);
+            if (v.keccak_x4_regressed) {
+                /* Confirmation round.  The x4 bench compares a 4-way kernel
+                 * against four single-state calls, so the loop order cannot
+                 * be swapped; an independent second round still has to
+                 * agree before the slot is demoted. */
+                int64_t simd_second = -1, generic_second = -1;
+                memset(states, 0x42, sizeof(states));  // PUBLIC-DATA: states — bench scratch (PUBLIC)
+                dispatch_bench_keccak_x4(
+                    dispatch_table.keccak_f1600_x4,
+                    x4_fallback_single,
+                    states,
+                    /*warmup=*/100, /*trials=*/5, /*iters=*/500,
+                    &generic_second, &simd_second);
+                v.keccak_x4_regressed = bench_confirms_regression(
+                    simd_best, generic_best, simd_second, generic_second);
+                if (!v.keccak_x4_regressed) {
+                    simd_best = simd_second;
+                    generic_best = generic_second;
+                }
+            }
             v.keccak_x4_simd_ns    = simd_best;
             v.keccak_x4_generic_ns = generic_best;
         }
@@ -2160,6 +2364,19 @@ static void dispatch_init_internal(void) {
                 ama_kyber_ntt_generic_ref, dispatch_table.kyber_ntt,
                 poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.kyber_ntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            if (v.kyber_ntt_regressed) {
+                /* Confirmation round, SIMD loop first. */
+                int64_t simd_second = -1, generic_second = -1;
+                dispatch_bench_kyber_ntt(
+                    dispatch_table.kyber_ntt, ama_kyber_ntt_generic_ref,
+                    poly_seed, poly_scratch, zetas_bench, &simd_second, &generic_second);
+                v.kyber_ntt_regressed = bench_confirms_regression(
+                    simd_best, generic_best, simd_second, generic_second);
+                if (!v.kyber_ntt_regressed) {
+                    simd_best = simd_second;
+                    generic_best = generic_second;
+                }
+            }
             v.kyber_ntt_simd_ns    = simd_best;
             v.kyber_ntt_generic_ns = generic_best;
         }
@@ -2177,6 +2394,19 @@ static void dispatch_init_internal(void) {
                 ama_kyber_invntt_generic_ref, dispatch_table.kyber_invntt,
                 poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.kyber_invntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            if (v.kyber_invntt_regressed) {
+                /* Confirmation round, SIMD loop first. */
+                int64_t simd_second = -1, generic_second = -1;
+                dispatch_bench_kyber_ntt(
+                    dispatch_table.kyber_invntt, ama_kyber_invntt_generic_ref,
+                    poly_seed, poly_scratch, zetas_bench, &simd_second, &generic_second);
+                v.kyber_invntt_regressed = bench_confirms_regression(
+                    simd_best, generic_best, simd_second, generic_second);
+                if (!v.kyber_invntt_regressed) {
+                    simd_best = simd_second;
+                    generic_best = generic_second;
+                }
+            }
             v.kyber_invntt_simd_ns    = simd_best;
             v.kyber_invntt_generic_ns = generic_best;
         }
@@ -2196,6 +2426,19 @@ static void dispatch_init_internal(void) {
                 ama_dilithium_ntt_generic_ref, dispatch_table.dilithium_ntt,
                 poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.dilithium_ntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            if (v.dilithium_ntt_regressed) {
+                /* Confirmation round, SIMD loop first. */
+                int64_t simd_second = -1, generic_second = -1;
+                dispatch_bench_dilithium_ntt(
+                    dispatch_table.dilithium_ntt, ama_dilithium_ntt_generic_ref,
+                    poly_seed, poly_scratch, zetas_bench, &simd_second, &generic_second);
+                v.dilithium_ntt_regressed = bench_confirms_regression(
+                    simd_best, generic_best, simd_second, generic_second);
+                if (!v.dilithium_ntt_regressed) {
+                    simd_best = simd_second;
+                    generic_best = generic_second;
+                }
+            }
             v.dilithium_ntt_simd_ns    = simd_best;
             v.dilithium_ntt_generic_ns = generic_best;
         }
@@ -2215,6 +2458,19 @@ static void dispatch_init_internal(void) {
                 ama_dilithium_invntt_generic_ref, dispatch_table.dilithium_invntt,
                 poly_seed, poly_scratch, zetas_bench, &generic_best, &simd_best);
             v.dilithium_invntt_regressed = bench_slot_regressed(simd_best, generic_best);
+            if (v.dilithium_invntt_regressed) {
+                /* Confirmation round, SIMD loop first. */
+                int64_t simd_second = -1, generic_second = -1;
+                dispatch_bench_dilithium_ntt(
+                    dispatch_table.dilithium_invntt, ama_dilithium_invntt_generic_ref,
+                    poly_seed, poly_scratch, zetas_bench, &simd_second, &generic_second);
+                v.dilithium_invntt_regressed = bench_confirms_regression(
+                    simd_best, generic_best, simd_second, generic_second);
+                if (!v.dilithium_invntt_regressed) {
+                    simd_best = simd_second;
+                    generic_best = generic_second;
+                }
+            }
             v.dilithium_invntt_simd_ns    = simd_best;
             v.dilithium_invntt_generic_ns = generic_best;
         }
@@ -2288,13 +2544,18 @@ static void dispatch_init_internal(void) {
         /* Save the verdict to the cache file (opt-in, miss-only).  Skip
          * on cache hit so a re-init doesn't keep rewriting the same
          * bytes; skip if AMA_DISPATCH_CACHE_FILE is unset or refused
-         * by dispatch_cache_env_is_safe() (privileged process);
+         * by dispatch_env_is_safe() (privileged process);
          * `cache_dfd >= 0` already encodes both checks. */
         if (!cache_hit && cache_dfd >= 0) {
-            dispatch_cache_save_at(cache_dfd, cache_base, fingerprint, &v);
-            if (dispatch_verbose())
-                fprintf(stderr, "[AMA Dispatch] Auto-tune verdict cached to '%s'\n",
+            if (dispatch_cache_save_at(cache_dfd, cache_base, fingerprint, &v) == 0) {
+                if (dispatch_verbose())
+                    fprintf(stderr, "[AMA Dispatch] Auto-tune verdict cached to '%s'\n",
+                            cache_display);
+            } else if (dispatch_verbose()) {
+                fprintf(stderr, "[AMA Dispatch] Auto-tune verdict NOT cached to '%s' "
+                                "(refused or failed; the next process re-benches)\n",
                         cache_display);
+            }
         }
     } else if (autotune_disabled && dispatch_verbose()) {
         fprintf(stderr,
@@ -2326,7 +2587,13 @@ static void dispatch_init_internal(void) {
                 dispatch_table.argon2_g ? "SIMD" : "scalar");
         fprintf(stderr, "[AMA Dispatch] x25519_x4    -> %s\n",
                 dispatch_table.x25519_x4 ? "SIMD (AVX2 4-way)" : "scalar (4× sequential)");
-        fprintf(stderr, "[AMA Dispatch] ed25519      -> scalar (no SIMD wired; backend chosen at build time)\n");
+        /* Ed25519 is not a dispatch-table slot: the field backend is a
+         * build/override choice and the Niels-select fold is decided in
+         * the group code from the CPU.  Report what those two say, so the
+         * wiring line is true rather than "no SIMD" while the AVX2 fold
+         * runs on every AVX2 host. */
+        fprintf(stderr, "[AMA Dispatch] ed25519      -> %s field backend, %s niels-select fold\n",
+                ama_ed25519_active_backend(), ama_ed25519_active_fold());
     }
 
     /* AMA_DISPATCH_ONLY filtering (audit Issue 3 close-out).  Runs
@@ -2338,7 +2605,7 @@ static void dispatch_init_internal(void) {
      *     to the actually-active slot rather than to a pre-filter
      *     state the test process never observed. */
     {
-        const char *only = getenv("AMA_DISPATCH_ONLY");
+        const char *only = dispatch_getenv("AMA_DISPATCH_ONLY");
         if (only && only[0]) {
             /* Status-enum return + out-parameter for the resolved
              * label.  Lets the caller emit exactly one diagnostic

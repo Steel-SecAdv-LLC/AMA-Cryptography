@@ -812,18 +812,24 @@ AMA_API ama_error_t ama_x25519_key_exchange(
 
     x25519_scalarmult(shared_secret, our_secret_key, their_public_key);
 
-    uint8_t zero_check = 0;
+    /* RFC 7748 Sec 6.1 all-zero output check, written without a branch on
+     * the output.  The output is a function of the secret scalar, so a
+     * branch here is a secret-dependent branch as far as any taint or
+     * instruction-trace gate can tell — even though, for a clamped scalar,
+     * "output is all-zero" is decided by the peer's point alone.  The
+     * all-zero case needs no wipe (the buffer already holds zeros), so the
+     * only thing the branch ever selected was the return code; select it
+     * with a mask instead. */
+    uint32_t zero_or = 0;
     int i;
     for (i = 0; i < 32; i++) {
-        zero_check |= shared_secret[i];
+        zero_or |= shared_secret[i];
     }
-
-    if (zero_check == 0) {
-        ama_secure_memzero(shared_secret, 32);
-        return AMA_ERROR_CRYPTO;
-    }
-
-    return AMA_SUCCESS;
+    /* is_zero_mask = 0xFFFFFFFF iff zero_or == 0 (zero_or < 256). */
+    uint32_t is_zero_mask = 0u - ((zero_or - 1u) >> 31);
+    int32_t rc = (int32_t)(((uint32_t)AMA_SUCCESS & ~is_zero_mask) |
+                           ((uint32_t)AMA_ERROR_CRYPTO & is_zero_mask));
+    return (ama_error_t)rc;
 }
 
 /* ============================================================================
@@ -918,18 +924,30 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
         uint8_t lane_zero_mask = (uint8_t)((((uint32_t)lane_or) - 1u) >> 8) & 0xFFu;
         batch_zero_mask |= lane_zero_mask;
     }
-    if (batch_zero_mask) {
-        /* RFC 7748 §6.1: implementations MAY reject all-zero shared
-         * secrets.  AMA does — and per the single-shot contract,
-         * scrub the whole batch so a caller that ignores the error
-         * code can't leak partial results. */
+    /* RFC 7748 Sec 6.1: implementations MAY reject all-zero shared
+     * secrets.  AMA does — and per the single-shot contract, scrubs the
+     * whole batch so a caller that ignores the error code can't leak
+     * partial results.  Both the scrub and the return code are applied
+     * through the mask, never through a branch on it: the mask is a
+     * function of the lane scalars, so a branch here is a secret-
+     * dependent branch to every taint or trace gate, even though for
+     * clamped scalars the outcome is decided by the peer points alone.
+     * ANDing every lane with ~mask is a no-op when nothing is rejected
+     * and a wipe when something is. */
+    {
+        uint8_t keep = (uint8_t)~batch_zero_mask;
+        uint32_t reject_mask = 0u - (uint32_t)(batch_zero_mask & 1u);
+        int32_t rc;
         for (i = 0; i < count; i++) {
-            ama_secure_memzero(out[i], 32);
+            size_t j;
+            for (j = 0; j < 32; j++) {
+                out[i][j] &= keep;
+            }
         }
-        return AMA_ERROR_CRYPTO;
+        rc = (int32_t)(((uint32_t)AMA_SUCCESS & ~reject_mask) |
+                       ((uint32_t)AMA_ERROR_CRYPTO & reject_mask));
+        return (ama_error_t)rc;
     }
-
-    return AMA_SUCCESS;
 }
 
 /**

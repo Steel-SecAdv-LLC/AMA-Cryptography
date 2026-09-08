@@ -313,7 +313,7 @@ int main(void) {
      * to that prefix so the test is hermetic.
      *
      * MUST-REJECT inputs — every one closes a documented attack class:
-     *   `..` segments (path traversal / CodeQL #535/#537)
+     *   a `.` / `..` BASENAME (the only dot segment the splitter refuses)
      *   embedded ASCII control chars (log-injection via verbose log line)
      *   empty (degenerate)
      *   oversized (DoS / stack overflow defence)
@@ -324,12 +324,23 @@ int main(void) {
      *   high-bit UTF-8 (valid filenames on every Unix filesystem)
      *   parentheses, dashes, dots-not-followed-by-dot
      */
+    /* `..` INSIDE THE DIRECTORY PART IS NOT A REJECT CASE.  Three rows here
+     * used to claim it was ("/tmp/foo/../etc/passwd", "/tmp/foo/..",
+     * "/tmp/a/../b") and passed on every CI host -- but only because
+     * /tmp/foo and /tmp/a do not exist there, so realpath() failed with
+     * ENOENT.  Create /tmp/a on the runner and the "mid-segment" row fails
+     * with no code change: the splitter resolves a `..` in the directory
+     * part through realpath() and accepts the canonical result, which is
+     * the right behaviour for a user-owned opt-in path (the authority
+     * boundary is the descriptor opened from the canonical directory).  A
+     * test whose verdict depends on which directories happen to be absent
+     * is not a test of the sanitizer.  The rows are gone; the positive
+     * canonicalisation contract for a `..` segment is pinned below against
+     * a directory this test creates, and the basename rule keeps its row. */
     static const sanitizer_case_t cases[] = {
         /* --- MUST-REJECT --- */
-        { "embedded `..`",         "/tmp/foo/../etc/passwd",         0 },
-        { "leading `..`",          "../etc/passwd",                  0 },
-        { "trailing `..`",         "/tmp/foo/..",                    0 },
-        { "`..` mid-segment",      "/tmp/a/../b",                    0 },
+        { "`..` as the basename",  "/tmp/..",                        0 },
+        { "`.` as the basename",   "/tmp/.",                         0 },
         { "empty",                 "",                               0 },
         { "newline injection",     "/tmp/x\nFAKE=value",             0 },
         { "carriage return",       "/tmp/x\r",                       0 },
@@ -389,6 +400,44 @@ int main(void) {
                     cases[i].description, got);
                 sanitizer_failures++;
             }
+        }
+    }
+
+    /* `..` in the directory part resolves through realpath() rather than
+     * being refused: `<dir>/a/../b.cache` must canonicalise to
+     * `<dir>/b.cache` for a directory that exists.  Built here, not
+     * assumed, so the verdict cannot depend on the host's /tmp layout. */
+    {
+        char base[128], sub[160], input[192], expect[160];
+        snprintf(base, sizeof(base), "/tmp/ama-dotdot-%ld", (long)getpid());
+        snprintf(sub, sizeof(sub), "%s/a", base);
+        snprintf(input, sizeof(input), "%s/a/../b.cache", base);
+        if (mkdir(base, 0700) != 0 || mkdir(sub, 0700) != 0) {
+            fprintf(stderr, "FAIL: could not create %s for the `..` probe\n", sub);
+            sanitizer_failures++;
+        } else {
+            char canon_base[4096];
+            const char *got = dispatch_cache_path_sanitize_for_tests(input);
+            if (realpath(base, canon_base) == NULL) {
+                fprintf(stderr, "FAIL: realpath(%s) failed\n", base);
+                sanitizer_failures++;
+            } else {
+                snprintf(expect, sizeof(expect), "%s/b.cache", canon_base);
+                if (got == NULL) {
+                    fprintf(stderr,
+                        "FAIL: `..` inside an existing directory part was "
+                        "REJECTED ('%s'); the splitter must canonicalise it\n",
+                        input);
+                    sanitizer_failures++;
+                } else if (strcmp(got, expect) != 0) {
+                    fprintf(stderr,
+                        "FAIL: '%s' canonicalised to '%s', expected '%s'\n",
+                        input, got, expect);
+                    sanitizer_failures++;
+                }
+            }
+            (void)rmdir(sub);
+            (void)rmdir(base);
         }
     }
 

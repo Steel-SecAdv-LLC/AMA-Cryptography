@@ -108,4 +108,19 @@ for target in "${FUZZ_TARGETS[@]}"; do
     fi
 done
 
-echo "OSS-Fuzz build complete. Targets built: ${#FUZZ_TARGETS[@]}"
+# Count what is actually in $OUT, not the length of the list we intended to
+# build: a target whose source is missing hits the `continue` above, and
+# reporting the array length regardless turned a skipped harness into a
+# success line.
+built=0
+for target in "${FUZZ_TARGETS[@]}"; do
+    if [ -x "$OUT/${target}" ]; then
+        built=$((built + 1))
+    else
+        echo "ERROR: ${target} is not present in \$OUT after the build"
+    fi
+done
+echo "OSS-Fuzz build complete. Targets built: ${built} of ${#FUZZ_TARGETS[@]}"
+if [ "${built}" -ne "${#FUZZ_TARGETS[@]}" ]; then
+    exit 1
+fi

@@ -231,8 +231,17 @@ jobs:
           - fuzz_argon2
           - fuzz_secp256k1
           - fuzz_frost
-        # SPHINCS+ is too slow for CI fuzzing — run manually
-        # - fuzz_sphincs
+          # SLH-DSA verification is the slowest execution in the suite
+          # (~0.17 s each at -O2), so a 60-second run is hundreds of
+          # executions rather than millions.  That is still coverage over the
+          # seeded corpus, which reaches both verify branches, and it is what
+          # the registration gate's "a harness nobody runs is
+          # indistinguishable from one that finds nothing" was written for.
+          # It ran nowhere at all until this pass: the commented-out entry it
+          # carried was accepted by the gate as a "documented exclusion", and
+          # the compensating control that justified it (OSS-Fuzz) is not
+          # onboarded.
+          - fuzz_sphincs
 
     steps:
       - name: Checkout code

@@ -214,6 +214,21 @@ jobs:
         # the c-cpp label as well, so both languages' alerts filed under one
         # analysis identity.
         uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
+        with:
+          # Also write the SARIF locally so the severity gate below can read
+          # it.  `upload: always` keeps the alerts going to code scanning as
+          # before; the local copy is what makes the finding actionable in
+          # THIS run rather than only in a dashboard.
+          output: codeql-sarif
+          upload: always
+
+      - name: Fail on CodeQL results at or above error severity
+        # `codeql-action/analyze` exits 0 whatever it finds, and nothing read
+        # the results — so `static-analysis-gate`'s `check codeql success`
+        # proved only that the scan had completed and an error-level finding
+        # left the merge-blocking gate green.  This applies the policy to the
+        # SARIF, the same construction as check_semgrep_severity.py.
+        run: python tools/check_codeql_severity.py codeql-sarif
 
   compiler-warnings:
     name: Strict Compiler Warnings
@@ -546,7 +561,16 @@ jobs:
     # uninitialized-read class is invisible to ASan and the
     # constant-time codebase has hot spots (lookup masks, conditional
     # selects) that an uninit-read can mask without symptom.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Also on pull requests: these were schedule/dispatch only, the nightly
+    # fires on the default branch alone, and the Static Analysis Gate REQUIRED
+    # them to be `skipped` on a pull request — so on the merge-critical path
+    # nothing could fail on an uninitialised read.  The suite finishes in
+    # 1-4 minutes under both sanitizers, which is well inside the job budget.
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'pull_request'
+      || github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -594,7 +618,16 @@ jobs:
     # called with NULL function pointers from one thread while another
     # is still initialising; TSan is the only sanitiser that detects
     # this class.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Also on pull requests: these were schedule/dispatch only, the nightly
+    # fires on the default branch alone, and the Static Analysis Gate REQUIRED
+    # them to be `skipped` on a pull request — so on the merge-critical path
+    # nothing could fail on an data race.  The suite finishes in
+    # 1-4 minutes under both sanitizers, which is well inside the job budget.
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'pull_request'
+      || github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -687,7 +720,7 @@ jobs:
           # PQC primitives and AEAD tests exercise the largest stack
           # / heap surface.  Running the full ctest suite under
           # Valgrind would exceed the runner timeout.
-          tests="bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3"
+          tests="bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3 bin/test_kat"
           expected=6
           ran=0
           for test in $tests; do
@@ -1325,9 +1358,19 @@ jobs:
         #   should skip -> result MUST be `skipped`  (a run is `if:` drift)
         #
         # The conditions below MUST mirror the job-level `if:` on each job:
-        #   sanitizer deep-lanes : schedule || workflow_dispatch
+        #   valgrind-memcheck    : schedule || workflow_dispatch
+        #   memory/thread-san    : schedule || workflow_dispatch
+        #                          || pull_request || push
         #   clang-tidy / repro   : schedule || workflow_dispatch || pull_request
         #   everything else      : unconditional
+        #
+        # memory-sanitizer and thread-sanitizer moved onto the merge-critical
+        # path deliberately: while they were deep-lanes only, this gate
+        # REQUIRED them to report `skipped` on a pull request, so no
+        # uninitialised read and no data race could fail anything a merge
+        # depended on — and the nightly that was supposed to compensate fires
+        # on the default branch, never on a feature branch. They finish in
+        # 1-4 minutes.
         # GitHub Actions cannot reference another job's condition, so this
         # duplication is the cost of checking it at all.
         env:
@@ -1349,12 +1392,14 @@ jobs:
           set -euo pipefail
           rc=0
 
-          # Sanitizer deep-lanes: schedule or manual dispatch only.
+          # valgrind-memcheck: schedule or manual dispatch only.
           if [ "${EVENT}" = "schedule" ] || [ "${EVENT}" = "workflow_dispatch" ]; then
             sanitizer_expected="success"
           else
             sanitizer_expected="skipped"
           fi
+          # memory-sanitizer / thread-sanitizer: every trigger.
+          msan_tsan_expected="success"
           # clang-tidy + reproducible-build: also on pull_request.
           if [ "${EVENT}" = "schedule" ] || [ "${EVENT}" = "workflow_dispatch" ] \
              || [ "${EVENT}" = "pull_request" ]; then
@@ -1389,8 +1434,8 @@ jobs:
           check version-consistency  "${R_VERSION}"        success
           check address-sanitizer    "${R_ASAN}"           success
           check memory-sanitizer-kat "${R_MSAN_KAT}"       success
-          check memory-sanitizer     "${R_MSAN}"           "${sanitizer_expected}"
-          check thread-sanitizer     "${R_TSAN}"           "${sanitizer_expected}"
+          check memory-sanitizer     "${R_MSAN}"           "${msan_tsan_expected}"
+          check thread-sanitizer     "${R_TSAN}"           "${msan_tsan_expected}"
           check valgrind-memcheck    "${R_VALGRIND}"       "${sanitizer_expected}"
           check clang-tidy           "${R_CLANG_TIDY}"     "${prlane_expected}"
           check reproducible-build   "${R_REPRO}"          "${prlane_expected}"

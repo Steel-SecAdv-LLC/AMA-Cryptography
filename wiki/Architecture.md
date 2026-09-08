@@ -75,7 +75,7 @@ flowchart TD
     end
 
     subgraph cython["Cython Optimization Layer"]
-        math["math_engine.pyx\n18-37x speedup\nNTT, matrix ops"]:::gray
+        math["math_engine.pyx\nNTT, matrix ops"]:::gray
     end
 
     subgraph native["Native C Library (src/c/)"]
@@ -107,7 +107,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 Implements all cryptographic primitives in C11 with zero external dependencies. Specification-conformant implementations (NIST FIPS/SP where the algorithm is a NIST standard, IETF RFC otherwise) for ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f, SHA3-256, HKDF, Ed25519, AES-256-GCM, and more.  Not FIPS-validated: no CAVP/CMVP certificate has been issued (see CSRC_STANDARDS.md).
 
 **Cython Layer:**
-Optional acceleration for mathematical operations (18–37x vs pure Python). Provides NumPy integration for the 3R monitoring engine.
+Optional acceleration for mathematical operations; the ratio is host-specific and unpublished (see README). Provides NumPy integration for the 3R monitoring engine.
 
 **Python API (`ama_cryptography/`):**
 High-level, algorithm-agnostic interface. Primary production API for integration.

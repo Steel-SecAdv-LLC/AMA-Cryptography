@@ -825,6 +825,34 @@
       {
         "path": "src/c/vendor/ed25519-donna/modm-donna-64bit.h",
         "reason": "Deleted in the twenty-first maintenance pass together with the vendored ed25519-donna backend it belonged to; the in-house backend (src/c/ama_ed25519.c over src/c/internal/ama_ed25519_ge.h) is the only Ed25519 implementation and is measured faster on every benchmarked Ed25519 row (see the src/c/ama_ed25519.c entry). The vendored backend was x86-64-only and never compiled for AArch64, so its deletion changes no AArch64 instruction."
+      },
+      {
+        "path": "src/c/ama_hkdf.c",
+        "reason": "One SCRUB-BARRIER/PUBLIC-DATA annotation added beside the RFC 5869 §2.2 HashLen-zero default-salt memset, so the secret-zeroization gate can tell a public-constant write from an unbarriered secret scrub. Measured rather than asserted: the translation unit is OBJECT-IDENTICAL before and after -- .text byte-identical and all 23 defined symbols identical under x86-64 cc -O3 -DNDEBUG -std=c11 -fvisibility=hidden. A comment cannot move a floor."
+      },
+      {
+        "path": "src/c/ama_platform_rand.c",
+        "reason": "The BSD/generic-POSIX /dev/urandom arm gained O_NOFOLLOW|O_NOCTTY and an fstat(2) character-device check, so a replaced /dev/urandom fails closed instead of returning bytes from a regular file, FIFO or terminal. Measured rather than asserted: that arm sits behind #else and Linux compiles the getrandom(2) arm, so the translation unit is OBJECT-IDENTICAL on the benchmarked host -- .text byte-identical and its 1 defined symbol identical under x86-64 cc -O3 -DNDEBUG -std=c11 -fvisibility=hidden. No floored row reaches the edited arm."
+      },
+      {
+        "path": "src/c/fe64.h",
+        "reason": "Comment only: the single-fold completeness window for fe64_add/sub/neg is now stated where the operations are, replacing a cross-reference that pointed here without a note. Measured rather than asserted by isolating the header -- compiling the working tree with ONLY fe64.h swapped back to the calibration version leaves src/c/ama_x25519.c (11 symbols) and src/c/x86/ama_ed25519_fe64_mulx.c (33 symbols) .text byte-identical, so neither x25519_scalarmult nor the ed25519 rows can have moved."
+      },
+      {
+        "path": "src/c/internal/ama_ct_declassify.h",
+        "reason": "New header holding AMA_CT_DECLASSIFY, which marks the points where a value stops being secret for the Memcheck secret-taint gate. In a production build it expands to ((void)(ptr), (void)(len)); only under AMA_TESTING_MODE does it become VALGRIND_MAKE_MEM_DEFINED. Measured rather than asserted by isolating the header -- compiling the two including translation units against a stand-in that defines only the no-op expansion leaves src/c/ama_nistp.c (55 symbols) and src/c/ama_secp256k1.c (35 symbols) .text byte-identical, so the secp256k1 floored rows are untouched."
+      },
+      {
+        "path": "src/c/ama_hmac_sha256.c",
+        "reason": "ama_hmac_sha256 and ama_hmac_sha256_2 now skip the K' memcpy when key_len is 0; memcpy(dst, NULL, 0) is undefined behaviour and an ASan/UBSan trap, and RFC 2104 permits a zero-length key. The only floored row that reaches this file is secp256k1_ecdsa_sign, through the RFC 6979 nonce derivation. Measured rather than asserted: relinking the shipped Release static archive before and after into the same 200-signature driver produces BYTE-IDENTICAL executables under the build's own -O3 -flto=auto configuration -- GCC clones the function per call site (ama_hmac_sha256.constprop.1/.2) with key_len constant 32, so the new test folds away entirely. Callgrind agrees: 243,866,193 Ir on both, a delta of exactly 0 over 200 signatures."
+      },
+      {
+        "path": "src/c/avx2/ama_sphincs_avx2.c",
+        "reason": "Reduced to a placeholder translation unit: the kernels it held were scalar code behind an AVX2 name, wired to nothing. Measured rather than asserted: the dispatcher references zero sphincs AVX2 symbols both at the calibration commit and now (grep count 0 in src/c/dispatch/ama_dispatch.c on both trees), and neither benchmarks/baseline.json nor benchmarks/arm-baseline.json carries a SPHINCS+ row. Code on no dispatched path and under no floored row cannot move a floor."
+      },
+      {
+        "path": "ama_cryptography/_post_kats/ml_kem_1024_kat.json",
+        "reason": "Regenerated POST Known-Answer vector data after the ML-KEM decapsulation FIPS 203 §7.3 hash check landed. Data, not code: the file holds no executable text, and _self_test loads it once at package import (ama_cryptography/__init__.py imports _run_self_tests at module level), which is before benchmark_operation's warmup, let alone its timed batches. No floored row's timed region reads it."
       }
     ]
   },
@@ -851,7 +879,7 @@
       "tier": "microbenchmark"
     },
     "ed25519_keygen": {
-      "description": "Ed25519 key pair generation (native C)",
+      "description": "Ed25519 key pair generation through the Python API: one CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify that keypair() runs on every key (native keygen alone is about a sixth of the timed operation). Not comparable with the 4.x native-keygen-only row.",
       "metric": "operations_per_second",
       "baseline_value": 14678,
       "unit": "ops/sec",

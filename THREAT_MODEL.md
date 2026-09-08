@@ -136,7 +136,7 @@ concrete instance of this pattern. See M3.5.
 | T2.1 | Constant-time AES S-box (full-table scan) | **IMPLEMENTED** | `ama_aes_bitsliced.c`, `-DAMA_AES_CONSTTIME=ON` |
 | T2.1 | Hardware AES-NI / VAES / ARMv8-CE (no table access) | **IMPLEMENTED** | `src/c/avx2/ama_aes_gcm_avx2.c`, `ama_aes_gcm_vaes_avx2.c`, `neon/ama_aes_gcm_neon.c`; selected by CPUID/HWCAP dispatch |
 | T2.2 | Ed25519 verify uses public scalar (non-secret) | **BY DESIGN** | Verification scalar = H(R,A,M), public |
-| T2.2 | Ed25519 sign uses constant-time scalar mul | **IMPLEMENTED** | `ama_ed25519.c`, `ge25519_scalarmult_base_comb_signed()` — 32-table signed 4-bit-window base-point comb, masked full-table reads |
+| T2.2 | Ed25519 sign uses constant-time scalar mul | **IMPLEMENTED** | `src/c/internal/ama_ed25519_ge.h`, `ge_scalarmult_base()` — signed 5-bit-window base-point comb over 26 tables of 16 entries (`src/c/internal/ama_ed25519_tables.h`), each read through the masked `ge_niels_select()`. Pinned by the `ed25519-sign` and `ed25519-sign-sse2fold` instruction-count gates and by the `ed25519-sign` secret-taint gate. (This row named `ge25519_scalarmult_base_comb_signed()` and a 32-table 4-bit comb — the vendored backend replaced in the twenty-first pass.) |
 | T2.3 | Secure memory zeroing on all sensitive buffers | **IMPLEMENTED** | `ama_secure_memzero()`, volatile+barrier |
 | T2.3 | Cleanup on all exit paths (including error) | **IMPLEMENTED** | Audited: all `free()` preceded by zeroing |
 | T2.4 | Static analysis (cppcheck, clang-analyzer, CodeQL) | **IMPLEMENTED** | `.github/workflows/static-analysis.yml` |

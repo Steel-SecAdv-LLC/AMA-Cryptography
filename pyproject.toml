@@ -309,6 +309,13 @@ ignore = [
     "N801", "N806",
     "E722",
 ]
+# test_fe51_lazy_reduction_bounds.py: N803 — the helper parameters carry the
+# ref10 / RFC 8032 coordinate names verbatim (E, H, G, F for a p1p1 completed
+# point; X, Y, Z, T for an extended point; P, Q for the operands).  The file
+# exists to mirror src/c/internal/ama_ed25519_ge.h line for line while bounding
+# each limb, and lowercasing the coordinates would break the correspondence the
+# test is checking.  N806 (the same names as locals) is already covered above.
+"tests/test_fe51_lazy_reduction_bounds.py" = ["N803"]
 # test_fuzzing.py: E402 is architecturally required — Hypothesis settings profiles
 # must be registered and loaded BEFORE importing the test subjects, or the @given
 # decorator picks up the wrong profile.  Moving these imports to the top of the

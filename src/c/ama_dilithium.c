@@ -537,19 +537,29 @@ static void dil_poly_invntt(dil_poly *a) {
 static int dil_poly_chknorm(const dil_poly *a, int32_t B) {
     unsigned int i;
     int32_t t;
+    uint32_t bad = 0;
 
     if (B > (DIL_Q - 1) / 8) {
-        return 1;
+        return 1;   /* B is a public parameter, not a coefficient. */
     }
 
+    /* Every coefficient is scanned.  The reference implementation returns at
+     * the first out-of-range value, which makes a rejected attempt's cost a
+     * function of the INDEX of that value — and the index is a function of
+     * z = y + c*s1 (or of w0 - c*s2, or of c*t0), i.e. of the private key.
+     * Signing here is deterministic, so that measurement is exactly
+     * repeatable per (key, message).  dil_polyeta_unpack in this file was
+     * rewritten branchless for the same reason, with the comment "a loop
+     * that exits at the first out-of-range value leaks its index"; the
+     * signer's own norm checks had not been.  `bad` accumulates instead:
+     * (B - 1 - t) >> 31 is 1 exactly when t >= B, for every t in the
+     * representable range of a reduced coefficient. */
     for (i = 0; i < DIL_N; ++i) {
         t = -(int32_t)((uint32_t)a->coeffs[i] >> 31);
         t = a->coeffs[i] - (t & 2 * a->coeffs[i]);  /* absolute value */
-        if (t >= B) {
-            return 1;
-        }
+        bad |= (uint32_t)(B - 1 - t) >> 31;
     }
-    return 0;
+    return (int)bad;
 }
 
 /* ============================================================================
@@ -1350,14 +1360,14 @@ static void dil_polyvecl_ntt(dil_polyvecl *v, unsigned int l) {
     }
 }
 
+/* OR over every polynomial — no early return; see dil_poly_chknorm. */
 static int dil_polyvecl_chknorm(const dil_polyvecl *v, int32_t bound, unsigned int l) {
     unsigned int i;
+    int bad = 0;
     for (i = 0; i < l; ++i) {
-        if (dil_poly_chknorm(&v->vec[i], bound)) {
-            return 1;
-        }
+        bad |= dil_poly_chknorm(&v->vec[i], bound);
     }
-    return 0;
+    return bad;
 }
 
 static void dil_polyveck_ntt(dil_polyveck *v, unsigned int k) {
@@ -1404,14 +1414,14 @@ static void dil_polyveck_caddq(dil_polyveck *v, unsigned int k) {
     }
 }
 
+/* OR over every polynomial — no early return; see dil_poly_chknorm. */
 static int dil_polyveck_chknorm(const dil_polyveck *v, int32_t bound, unsigned int k) {
     unsigned int i;
+    int bad = 0;
     for (i = 0; i < k; ++i) {
-        if (dil_poly_chknorm(&v->vec[i], bound)) {
-            return 1;
-        }
+        bad |= dil_poly_chknorm(&v->vec[i], bound);
     }
-    return 0;
+    return bad;
 }
 
 /**
@@ -1472,16 +1482,30 @@ static unsigned int dil_polyveck_make_hint(uint8_t *hint,
                                             const dil_params *P) {
     unsigned int i, j, s = 0;
 
+    /* The scan always runs to completion.  Returning at the first hint past
+     * omega made a rejected attempt's cost a function of WHERE the overflow
+     * happened, which is a function of w0 - c*s2 + c*t0 and therefore of the
+     * private key — the same class dil_poly_chknorm above was fixed for.
+     * The count keeps rising past omega so the caller can still reject
+     * (`n > P->omega`); only the WRITE is clamped, and the clamp is on the
+     * running count rather than on a return.
+     *
+     * Writing hint[s] at a secret-derived index is not the same class and is
+     * inherent: on an ACCEPTED attempt those positions are the emitted
+     * signature, hence public.  A rejected attempt is discarded. */
     for (i = 0; i < P->k; ++i) {
         for (j = 0; j < DIL_N; ++j) {
-            if (dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P)) {
-                if (s >= P->omega) {
-                    return (unsigned int)P->omega + 1;  /* Too many hints */
-                }
-                hint[s++] = (uint8_t)j;
+            unsigned int h =
+                dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P) ? 1u : 0u;
+            if (h && s < (unsigned int)P->omega) {
+                hint[s] = (uint8_t)j;
             }
+            s += h;
         }
-        hint[P->omega + i] = (uint8_t)s;
+        /* Cumulative count, clamped so the buffer's tail stays well-formed
+         * on an attempt that will be rejected anyway. */
+        hint[P->omega + i] =
+            (uint8_t)(s <= (unsigned int)P->omega ? s : (unsigned int)P->omega);
     }
     return s;
 }
@@ -2194,10 +2218,14 @@ static ama_error_t dil_build_ctx_prefix(const uint8_t *ctx, size_t ctx_len,
         ama_secure_memzero(hashbuf, sizeof(hashbuf));                          \
     } while (0)
 
+/* @param rnd  FIPS 204 Algorithm 7 line 3's `rnd`: NULL selects the
+ *             deterministic variant (rnd = 0^256); a 32-byte buffer selects
+ *             the hedged variant.  See ama_ml_dsa_sign_hedged(). */
 static ama_error_t dil_sign_internal(const dil_params *P,
                                      uint8_t *signature, size_t *signature_len,
                                      const uint8_t *prefix, size_t prefix_len,
                                      const uint8_t *message, size_t message_len,
+                                     const uint8_t *rnd,
                                      const uint8_t *secret_key) {
     uint8_t *rho, *key, *tr;
     uint8_t mu[DIL_CRHBYTES];
@@ -2305,7 +2333,14 @@ static ama_error_t dil_sign_internal(const dil_params *P,
      * together with the FIPS 204/205 KAT pin.
      */
     memcpy(hashbuf, key, DIL_SEEDBYTES);
-    memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */  // PUBLIC-DATA: rnd portion — FIPS 204 deterministic-signer fills rnd field with zeros (public spec'd constant)
+    if (rnd) {
+        /* Hedged variant (FIPS 204 Algorithm 2 line 5): rnd is fresh per
+         * signature.  It is secret-adjacent — it feeds rhoprime and hence y —
+         * so it is scrubbed with the rest of hashbuf at every exit. */
+        memcpy(hashbuf + DIL_SEEDBYTES, rnd, DIL_RNDBYTES);
+    } else {
+        memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */  // PUBLIC-DATA: rnd portion — FIPS 204 deterministic-signer fills rnd field with zeros (public spec'd constant)
+    }
     memcpy(hashbuf + DIL_SEEDBYTES + DIL_RNDBYTES, mu, DIL_CRHBYTES);
     ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
                  rhoprime, DIL_CRHBYTES);
@@ -2702,7 +2737,7 @@ AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
     return dil_sign_internal(P, signature, signature_len, NULL, 0,
-                             message, message_len, secret_key);
+                             message, message_len, NULL, secret_key);
 }
 
 AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
@@ -2715,10 +2750,13 @@ AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
                                signature, signature_len, public_key);
 }
 
-AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
+/* Shared body of the two external-interface signers; `rnd` selects the
+ * variant (NULL = deterministic, 32 bytes = hedged). */
+static ama_error_t dil_sign_ctx_variant(ama_ml_dsa_param_set_t ps,
                                         uint8_t *signature, size_t *signature_len,
                                         const uint8_t *message, size_t message_len,
                                         const uint8_t *ctx, size_t ctx_len,
+                                        const uint8_t *rnd,
                                         const uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     uint8_t prefix[DIL_CTX_PREFIX_MAX];
@@ -2733,8 +2771,38 @@ AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
         return rc;
     }
     rc = dil_sign_internal(P, signature, signature_len, prefix, prefix_len,
-                           message, message_len, secret_key);
+                           message, message_len, rnd, secret_key);
     ama_secure_memzero(prefix, sizeof(prefix));
+    return rc;
+}
+
+AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
+                                        uint8_t *signature, size_t *signature_len,
+                                        const uint8_t *message, size_t message_len,
+                                        const uint8_t *ctx, size_t ctx_len,
+                                        const uint8_t *secret_key) {
+    return dil_sign_ctx_variant(ps, signature, signature_len, message, message_len,
+                                ctx, ctx_len, NULL, secret_key);
+}
+
+AMA_API ama_error_t ama_ml_dsa_sign_hedged(ama_ml_dsa_param_set_t ps,
+                                           uint8_t *signature, size_t *signature_len,
+                                           const uint8_t *message, size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *secret_key) {
+    uint8_t rnd[DIL_RNDBYTES];
+    ama_error_t rc = dil_randombytes(rnd, sizeof rnd);
+
+    /* Fail closed.  FIPS 204 Algorithm 2 line 5 says a signer that cannot
+     * obtain rnd returns an error; silently falling back to zeros would
+     * hand the caller the deterministic variant under the hedged name. */
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(rnd, sizeof rnd);
+        return rc;
+    }
+    rc = dil_sign_ctx_variant(ps, signature, signature_len, message, message_len,
+                              ctx, ctx_len, rnd, secret_key);
+    ama_secure_memzero(rnd, sizeof rnd);
     return rc;
 }
 
@@ -2785,18 +2853,32 @@ AMA_API ama_error_t ama_dilithium_keypair_from_seed(const uint8_t xi[32],
     return ama_ml_dsa_keypair_from_seed(AMA_ML_DSA_65, xi, public_key, secret_key);
 }
 
+/* BREAKING in 5.0.0.  These two are the library's flagship ML-DSA-65
+ * signer/verifier (the Python `dilithium_sign`/`dilithium_verify` and
+ * `crypto_api.sign` route here), and they used to call ML-DSA.Sign_internal
+ * (FIPS 204 Algorithm 7) — mu = H(tr || M), with no domain separator.  FIPS
+ * 204 Sec 5.2 restricts that interface to testing and to protocols that do
+ * their own domain separation; the application interface is ML-DSA.Sign
+ * (Algorithm 2), which prepends 0x00 || len(ctx) || ctx.  A signature made
+ * the old way is rejected by every conforming verifier, and vice versa.
+ * They now use the external interface with the empty context, which is what
+ * "ML-DSA-65 signature" means everywhere else.
+ *
+ * The internal interface is still reachable, deliberately and by name:
+ * ama_ml_dsa_sign()/ama_ml_dsa_verify() are Algorithm 7/8 and the ACVP
+ * internal-interface vectors replay through them. */
 AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                        const uint8_t *message, size_t message_len,
                                        const uint8_t *secret_key) {
-    return ama_ml_dsa_sign(AMA_ML_DSA_65, signature, signature_len,
-                           message, message_len, secret_key);
+    return ama_ml_dsa_sign_ctx(AMA_ML_DSA_65, signature, signature_len,
+                               message, message_len, NULL, 0, secret_key);
 }
 
 AMA_API ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
                                          const uint8_t *signature, size_t signature_len,
                                          const uint8_t *public_key) {
-    return ama_ml_dsa_verify(AMA_ML_DSA_65, message, message_len,
-                             signature, signature_len, public_key);
+    return ama_ml_dsa_verify_ctx(AMA_ML_DSA_65, message, message_len, NULL, 0,
+                                 signature, signature_len, public_key);
 }
 
 #ifdef AMA_TESTING_MODE

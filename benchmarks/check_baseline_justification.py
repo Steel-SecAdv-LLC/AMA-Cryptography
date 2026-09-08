@@ -47,7 +47,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, TypeGuard
 
 BASELINE_PATH = "benchmarks/baseline.json"
 
@@ -213,6 +213,86 @@ def _changes_introduced_by(sha: str) -> Set[str]:
     } | {key for before in befores for key in before if key not in after}
 
 
+# A GitHub Actions run id (11 digits today) or job id (12 digits): the token
+# that lets a reviewer open the CI log the cited number came from.  Nine
+# digits is the floor so older run ids still match.
+_RUN_ID_RE = re.compile(r"\b\d{9,12}\b")
+
+# ops/sec figures only (the latency units in _MEASUREMENT_RE cannot be compared
+# with a floor without a conversion nobody states).
+_OPS_RE = re.compile(r"\b(\d[\d,_]*(?:\.\d+)?)\s*ops\s*/\s*(?:sec|s)\b", re.IGNORECASE)
+
+#: A floor cut larger than this fraction is a recalibration, not a trim, and
+#: must say so with the literal marker below in the same text.
+_RECALIBRATION_CUT_FRACTION = 0.25
+_RECALIBRATION_MARKER = "RECALIBRATION"
+
+
+def _cited_ops_per_sec(text: str) -> List[float]:
+    values: List[float] = []
+    for raw in _OPS_RE.findall(text):
+        try:
+            values.append(float(raw.replace(",", "").replace("_", "")))
+        except ValueError:
+            continue
+    return values
+
+
+def _is_number(value: object) -> TypeGuard[float]:
+    """True for a real JSON number, ``bool`` excluded.
+
+    A :class:`TypeGuard` rather than a plain ``bool`` so the two call sites
+    that compare and then convert a floor get the narrowing they rely on;
+    without it the comparison operates on ``object`` and only the absence of
+    a type checker made it look sound.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _text_justifies_change(text: str, primitive: str, before: object, after: object) -> bool:
+    """``_text_justifies`` plus the rules a LOWERED floor must also meet.
+
+    The three-token rule proves the text *talks about* the primitive; it
+    does not prove the cited number supports the new floor.  Measured: a
+    commit reading ``wip: ed25519_sign 999999 ops/sec on x86_64`` justified a
+    10x cut of ``ed25519_sign`` — a name, a number with a unit and a runner
+    token, none of them bearing on the value written.  For a cut (a lower
+    ``baseline_value``, or a raised ``tolerance_percent``, which lowers the
+    effective floor the same way) the text must therefore also
+
+    1. cite an ops/sec figure that lies between the new floor and the old
+       one — the measurement that motivated the cut, which by construction
+       is below the floor it replaces and at or above the floor it sets;
+    2. carry a CI run or job id (``_RUN_ID_RE``) so that figure is traceable
+       to the log it came from; and
+    3. for a cut deeper than ``_RECALIBRATION_CUT_FRACTION``, say
+       ``RECALIBRATION`` outright: a quarter of the floor is not a trim.
+
+    Raised floors, added and removed entries keep the three-token rule: a
+    higher floor can only make the gate stricter.
+    """
+    if not _text_justifies(text, primitive):
+        return False
+    is_tolerance = primitive.endswith(" tolerance_percent")
+    if not (_is_number(before) and _is_number(after)):
+        return True
+    lowered = (after > before) if is_tolerance else (after < before)
+    if not lowered:
+        return True
+    if _RUN_ID_RE.search(text) is None:
+        return False
+    if is_tolerance:
+        # No floor pair to bracket a measurement with; the marker carries the
+        # admission that the effective floor dropped.
+        return _RECALIBRATION_MARKER in text
+    lo, hi = float(after), float(before)
+    if not any(lo <= value <= hi for value in _cited_ops_per_sec(text)):
+        return False
+    if hi > 0 and (hi - lo) / hi > _RECALIBRATION_CUT_FRACTION:
+        return _RECALIBRATION_MARKER in text
+    return True
+
+
 def _text_justifies(text: str, primitive: str) -> bool:
     """One text is a line-item justification for one primitive.
 
@@ -288,10 +368,10 @@ def _check_justification_attributed(
 
     for path, name, before, after in net_changes:
         key = f"{path}::{name}"
-        if _text_justifies(pr_body, name):
+        if _text_justifies_change(pr_body, name, before, after):
             continue
         source = attributed.get(key)
-        if source is not None and _text_justifies(source[1], name):
+        if source is not None and _text_justifies_change(source[1], name, before, after):
             continue
         if source is None:
             failures.append(
@@ -306,7 +386,10 @@ def _check_justification_attributed(
             f"{source[0][:8]}, and "
             f"neither that commit's message nor the PR body is a line-item "
             f"justification for it -- one single text must name `{name}`, cite "
-            f"a measured number, AND identify the runner. Justification "
+            f"a measured number, AND identify the runner; a LOWERED floor must "
+            f"also cite an ops/sec figure between the new floor and the old one, "
+            f"carry the CI run or job id it came from, and say RECALIBRATION "
+            f"when the cut exceeds 25%. Justification "
             f"scattered across other commits on this branch does not count: "
             f"the guard used to concatenate every commit message on the branch, "
             f"which on a long branch made the requirement unfalsifiable."

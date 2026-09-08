@@ -182,7 +182,19 @@ GE_INLINE int GE_SYM(fe_iszero)(const GE_FE f) {
     return acc == 0;
 }
 
-/* z^(p-2): Fermat inversion, the ref10 addition chain (254 S + 11 M). */
+/* z^(p-2): Fermat inversion, the ref10 addition chain (254 S + 11 M).
+ *
+ * The only route on a build without a 128-bit integer type (MSVC), where
+ * fe_invert_ct below calls it.  With safegcd available nothing calls it —
+ * fe_invert_ct used to fall back to it on a product re-check that was a
+ * branch on a secret-derived value and has been removed — so it is
+ * deliberately kept, unused, as the reference the safegcd inverse is
+ * differentially tested against (tests/c/test_ed25519_safegcd.c builds its
+ * own Fermat chain over the bits of p-2, and this one is the in-tree
+ * addition-chain form). */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
 static void GE_SYM(fe_invert)(GE_FE out, const GE_FE z) {
     GE_FE t0, t1, t2, t3;
     int i;
@@ -224,36 +236,33 @@ static void GE_SYM(fe_invert)(GE_FE out, const GE_FE z) {
  *
  * With a 128-bit integer type this is Bernstein-Yang safegcd on the
  * canonical encoding (ama_fe25519_safegcd.h: 590 branch-free divsteps, about
- * half the latency of the Fermat chain, the same cost for every input),
- * followed by a constant-time check that the product with z encodes 1.  The
- * check fails for no input under the proven divstep bound, so the Fermat
- * fallback below is a public, never-taken branch: it turns a hypothetical
- * bound violation into a slower inversion rather than a wrong encoding.
- * z = 0 inverts to 0 on both routes.  Without a 128-bit type (MSVC) the
- * Fermat chain is the only route. */
+ * half the latency of the Fermat chain, the same cost for every input).
+ * 590 divsteps are sufficient for every input below 2^256 under the
+ * Bernstein-Yang bound as sharpened for this divstep variant (the analysis
+ * libsecp256k1 ships in doc/safegcd_implementation.md; 2^255 - 19 < 2^256),
+ * and tests/c/test_ed25519_safegcd.c checks the product with the input
+ * encodes 1 across the edge cases and 20,000 random inputs.
+ *
+ * An earlier revision re-checked that product here and fell back to the
+ * Fermat chain on mismatch.  That check was a conditional branch on a value
+ * derived from z, which is a secret-derived projective coordinate on every
+ * caller (R = rB when signing, A = sB when deriving a key): the Memcheck
+ * secret-taint gate reports it, and a branch that is "never taken" is still
+ * a branch a trace can see.  The proof and the test carry the correctness
+ * argument; the shipped path carries no branch.  z = 0 inverts to 0 on
+ * both routes.  Without a 128-bit type (MSVC) the Fermat chain is the only
+ * route. */
 static void GE_SYM(fe_invert_ct)(GE_FE out, const GE_FE z) {
 #if defined(AMA_FE25519_SAFEGCD_AVAILABLE)
-    uint8_t zb[32], ib[32], pb[32];
-    GE_FE inv, prod;
-    uint32_t not_one, not_zero;
-    int i;
+    uint8_t zb[32], ib[32];
 
     GE_FE_TOBYTES(zb, z);
     ama_fe25519_invert_safegcd(ib, zb);
-    GE_FE_FROMBYTES(inv, ib);
-    GE_FE_MUL(prod, inv, z);
-    GE_FE_TOBYTES(pb, prod);
-    not_one = (uint32_t)(pb[0] ^ 1u);
-    not_zero = zb[0];
-    for (i = 1; i < 32; i++) {
-        not_one |= pb[i];
-        not_zero |= zb[i];
-    }
-    if ((not_one != 0) & (not_zero != 0)) {
-        GE_SYM(fe_invert)(out, z);
-        return;
-    }
-    GE_FE_COPY(out, inv);
+    GE_FE_FROMBYTES(out, ib);
+    /* z is a projective coordinate of a secret-derived point; both byte
+     * images are functions of it.  INVARIANT-6. */
+    ama_secure_memzero(zb, sizeof zb);
+    ama_secure_memzero(ib, sizeof ib);
 #else
     GE_SYM(fe_invert)(out, z);
 #endif
@@ -508,6 +517,14 @@ static void GE_SYM(ge_xyz_tobytes)(uint8_t *s, const GE_FE X, const GE_FE Y, con
     GE_FE_MUL(y, Y, recip);
     GE_FE_TOBYTES(s, y);
     s[31] ^= (uint8_t)(GE_SYM(fe_isnegative)(x) << 7);
+    /* The projective Z (and hence 1/Z) is not public: two encodings of the
+     * same point differ only by the scalar-multiplication path that produced
+     * them, so 1/Z leaks that path.  x and y are the affine coordinates —
+     * public once s is emitted — but they sit on the stack next to recip;
+     * scrub all three.  INVARIANT-6. */
+    ama_secure_memzero(recip, sizeof recip);
+    ama_secure_memzero(x, sizeof x);
+    ama_secure_memzero(y, sizeof y);
 }
 
 GE_INLINE void GE_SYM(ge_p3_tobytes)(uint8_t *s, const ge_p3 *h) {
@@ -715,7 +732,7 @@ static void GE_SYM(ge_niels_select)(ge_niels *r, const ge_niels *row, int8_t dig
         }
     }
 #else
-    memset(r, 0, sizeof *r);
+    memset(r, 0, sizeof *r);  // PUBLIC-DATA: r — pre-use zero of the masked-select accumulator (init, not a scrub)
     for (k = 1; k <= AMA_ED25519_COMB_ENTRIES; k++) {
         uint32_t diff = mag ^ (uint32_t)k;
         uint32_t eq = 1u ^ ((diff | (0u - diff)) >> 31);

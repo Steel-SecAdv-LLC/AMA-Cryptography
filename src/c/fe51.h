@@ -314,8 +314,11 @@ static inline void fe51_sub(fe51 h, const fe51 f, const fe51 g) {
  * r0 += c4 * 19 in 64-bit arithmetic, so 19*c4 must stay below 2^64, i.e.
  * L must stay below ~2^54.2 (and every accumulator below 2^115, the width
  * fe51_wide_shr51 narrows to; see the note above).  All GE_FE_SUB_S call
- * sites are inside that bound (the tightest, ge_dbl's E*F, reaches only
- * ~2^54 with ~16%% margin on the 19*c4 fold).
+ * sites are inside that bound: an interval model over every group-law
+ * site (tests/test_fe51_lazy_reduction_bounds.py) puts the tightest,
+ * ge_dbl's E*F, at 19*c4 = 0xF0780000000164B2 in the per-limb worst case,
+ * 6.5%% below 2^64.  (An earlier revision of this comment said "~16%%";
+ * that figure was not derived from the limb bounds.)
  * So a subtraction whose result feeds a multiply only needs to avoid
  * underflow, which a bias of k*p (k*p ≡ 0 mod p) provides, and can leave the
  * carry to the multiplier's own reduction.  That turns a ~15-cycle dependent
@@ -325,9 +328,15 @@ static inline void fe51_sub(fe51 h, const fe51 f, const fe51 g) {
  * The two biases are chosen by the bound on the subtrahend g, which the
  * caller states at each use in src/c/internal/ama_ed25519_ge.h:
  *
- *   fe51_sub_2p:  every g limb <= 2^52 - 38.  Holds for a fe51_mul / fe51_sq
- *                 output (limbs 0, 2, 3, 4 below 2^51; limb 1 below
- *                 2^51 + 2^13) and for a fe51_add of two such outputs.
+ *   fe51_sub_2p:  every g limb <= 2^52 - 38.  Holds for a single fe51_mul /
+ *                 fe51_sq output (limbs 0, 2, 3, 4 below 2^51; limb 1 below
+ *                 2^51 + 2^13).  It does NOT hold for a fe51_add of two such
+ *                 outputs: limb 0 of the sum reaches 2^52 - 2 and limb 1
+ *                 reaches 2^52 + 2^14, both past the bias, so a sum-of-two-
+ *                 products subtrahend underflows and wraps — such a
+ *                 subtrahend must go through fe51_sub_8p.  Every
+ *                 GE_FE_SUB_M site in ama_ed25519_ge.h subtracts a single
+ *                 product; the sums use GE_FE_SUB_S.
  *                 Result limbs are below f's limbs + 2^52.
  *   fe51_sub_8p:  every g limb <= 2^54 - 152.  Holds for any result of
  *                 fe51_sub_2p on those inputs (below 2^53) and any sum of

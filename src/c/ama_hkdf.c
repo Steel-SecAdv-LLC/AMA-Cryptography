@@ -422,7 +422,7 @@ static ama_error_t ama_hkdf_sha2_generic(
     /* Extract: PRK = HMAC-Hash(salt, IKM).  Absent/empty salt -> HashLen zeros
      * (RFC 5869 §2.2). */
     if (!salt || salt_len == 0) {
-        memset(default_salt, 0, hashlen);
+        memset(default_salt, 0, hashlen);  // PUBLIC-DATA: default_salt — RFC 5869 §2.2 HashLen-zero default salt (PUBLIC)
         salt = default_salt;
         salt_len = hashlen;
     }

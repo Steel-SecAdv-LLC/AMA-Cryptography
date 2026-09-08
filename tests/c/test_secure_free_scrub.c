@@ -191,6 +191,14 @@ static long scan_for_sentinel(void) {
         if (h > 0) hits += h;
     }
     close(mem);
+    /* The inspector's own window buffer is anonymous rw memory too, and the
+     * last window it read stays in it.  ama_secure_alloc() now hands out a
+     * private mapping high in the address space, so on the pre-release scan
+     * the sentinel's window is among the last read and its bytes are still
+     * sitting in `buf` when the post-release scan reaches .bss -- a copy the
+     * inspector itself made, reported as a survivor.  Scrub the window
+     * after every scan so the only copies counted are the process's own. */
+    memset(buf, 0, sizeof buf);
     return hits;
 }
 
@@ -203,8 +211,15 @@ int main(int argc, char **argv) {
     static char stdout_buf[1 << 12];
     setvbuf(stdout, stdout_buf, _IOFBF, sizeof stdout_buf);
 
-    unsigned char *buf = (unsigned char *)ama_secure_alloc(size);
-    if (!buf) { printf("FAIL: ama_secure_alloc\n"); return 1; }
+    /* Positive mode plants in a real ama_secure_alloc() buffer.  Negative
+     * mode plants in a plain malloc() chunk: the control has to release
+     * WITHOUT scrubbing and prove the inspector sees what is left, and the
+     * only way to leave a chunk's bytes in place is libc free() on a libc
+     * chunk.  (ama_secure_alloc() buffers are private page mappings, which
+     * free() cannot release at all.) */
+    unsigned char *buf = negative ? (unsigned char *)malloc(size)
+                                  : (unsigned char *)ama_secure_alloc(size);
+    if (!buf) { printf("FAIL: %s\n", negative ? "malloc" : "ama_secure_alloc"); return 1; }
 
     /* Plant the sentinel at both ends of the buffer. */
     memcpy(buf, SENTINEL, sizeof SENTINEL);

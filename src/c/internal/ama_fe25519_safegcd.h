@@ -309,6 +309,13 @@ static inline void ama_fe25519_invert_safegcd(uint8_t out[32], const uint8_t in[
     /* Now f = +-1 (or, for in = 0, +p with d = 0) and d = +-inverse. */
     ama_s62_normalize(&d, f.v[4]);
     ama_s62_to_bytes(out, &d);
+    /* d, e, f, g and the last transition matrix are all functions of the
+     * secret input; zeta is a public-bounded counter.  INVARIANT-6. */
+    ama_secure_memzero(&d, sizeof d);
+    ama_secure_memzero(&e, sizeof e);
+    ama_secure_memzero(&f, sizeof f);
+    ama_secure_memzero(&g, sizeof g);
+    ama_secure_memzero(&t, sizeof t);
 }
 
 #endif /* __SIZEOF_INT128__ */

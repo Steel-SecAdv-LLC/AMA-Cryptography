@@ -20,8 +20,21 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone the repository
-RUN git clone --depth 1 https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git /src/ama-cryptography
+# Clone the repository.
+#
+# AMA_REF selects what is built.  It defaults to the default branch, which is
+# what OSS-Fuzz itself wants; tools/test_oss_fuzz_build.sh overrides it so a
+# developer verifying the build locally verifies THEIR tree rather than
+# whatever `main` happens to be — the doc presented that script as the way to
+# "verify the build works locally before submitting", and it could only ever
+# validate `main`.
+ARG AMA_REF=""
+RUN git clone --depth 1 https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git /src/ama-cryptography \
+    && if [ -n "$AMA_REF" ]; then \
+         cd /src/ama-cryptography \
+         && git fetch --depth 1 origin "$AMA_REF" \
+         && git checkout FETCH_HEAD; \
+       fi
 
 WORKDIR /src/ama-cryptography
 

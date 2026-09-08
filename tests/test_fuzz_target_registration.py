@@ -78,18 +78,31 @@ def test_ascon_is_registered_everywhere() -> None:
     assert "fuzz_ascon" in _workflow_targets(REPO_ROOT)
 
 
-def test_documented_exclusions_are_recognised() -> None:
-    """A commented-out matrix entry is a deliberate, recorded exclusion.
+def test_sphincs_actually_runs_in_the_per_pr_lane() -> None:
+    """``fuzz_sphincs`` ran in no mechanism at all, and this gate said it did.
 
-    ``fuzz_sphincs`` is excluded from the per-PR lane because SPHINCS+ is too
-    slow for CI, with the reason recorded beside it.  It must still be
-    registered in both build lanes so OSS-Fuzz keeps running it.
+    It was commented out of the matrix, and the checker accepted ANY
+    commented-out entry as a "documented exclusion" — so deleting a harness
+    from CI was one ``#`` away from invisible, in the one gate written
+    because "a harness nobody runs is indistinguishable from one that finds
+    nothing".  The justification recorded beside it (OSS-Fuzz keeps running
+    such targets) does not hold: the project is not onboarded.
     """
-    excluded = _workflow_documented_exclusions(REPO_ROOT)
-    assert "fuzz_sphincs" in excluded
-    assert "fuzz_sphincs" not in _workflow_targets(REPO_ROOT)
+    assert "fuzz_sphincs" in _workflow_targets(REPO_ROOT)
     assert "fuzz_sphincs" in _cmake_targets(REPO_ROOT)
     assert "fuzz_sphincs" in _ossfuzz_targets(REPO_ROOT)
+
+
+def test_a_bare_commented_out_entry_is_not_a_documented_exclusion() -> None:
+    """The rule that replaced it: a commented-out entry counts only when the
+    allowlist names it AND names a job that exists."""
+    from tools.check_fuzz_target_registration import WORKFLOW_EXCLUSION_ALLOWLIST
+
+    assert WORKFLOW_EXCLUSION_ALLOWLIST == {}, (
+        "every harness runs in the per-PR matrix today; an entry here needs a "
+        "job that actually runs the harness, checked below"
+    )
+    assert _workflow_documented_exclusions(REPO_ROOT) == set()
 
 
 def test_cmake_comments_containing_parentheses_do_not_truncate_the_block() -> None:

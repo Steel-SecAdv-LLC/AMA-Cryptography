@@ -158,6 +158,21 @@ static void test_scalar_tag_tamper(void) {
     rc = ama_aes256_gcm_decrypt(key, iv, ct, 32, NULL, 0, bad_tag, pt_back);
     CHECK(rc == AMA_ERROR_VERIFY_FAILED,
           "scalar decrypt rejects tampered tag");
+
+    /* Fail-closed: on a tag mismatch the caller's plaintext buffer must be
+     * untouched.  The sentinel above was written and never inspected, so a
+     * decrypt that released unauthenticated plaintext passed this test AND
+     * every fuzz harness — the property is asserted in the ChaCha20-Poly1305
+     * and Ascon tests and was asserted nowhere for AES-GCM, on any of its
+     * three kernels. */
+    {
+        int untouched = 1;
+        for (size_t i = 0; i < 32; i++) {
+            if (pt_back[i] != 0xA5) { untouched = 0; break; }
+        }
+        CHECK(untouched,
+              "scalar decrypt releases no plaintext when the tag is rejected");
+    }
 }
 
 /* If a SIMD AES-GCM kernel is wired in this build, encrypt the same

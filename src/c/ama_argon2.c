@@ -38,6 +38,7 @@
 #define ARGON2_VERSION          0x13  /* Version 1.3 */
 #define ARGON2_TYPE_ID          2     /* Argon2id */
 #define ARGON2_MAX_PARALLELISM  255
+#define ARGON2_MIN_SALT_LENGTH  8    /* reference impl ARGON2_MIN_SALT_LENGTH */
 #define ARGON2_PREHASH_DIGEST_LENGTH 64
 #define ARGON2_PREHASH_SEED_LENGTH   72  /* 64 + 4 + 4 */
 
@@ -606,7 +607,7 @@ static ama_error_t ama_argon2id_core(
         use_legacy_blake2b_long ? blake2b_long_legacy : blake2b_long;
 
     /* ----------------------------------------------------------------
-     * Parameter validation and clamping
+     * Parameter validation (reject, never clamp)
      * ---------------------------------------------------------------- */
     if (!output || out_len < 4) {
         return AMA_ERROR_INVALID_PARAM;
@@ -635,10 +636,30 @@ static ama_error_t ama_argon2id_core(
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    if (parallelism == 0) parallelism = 1;
-    if (parallelism > ARGON2_MAX_PARALLELISM) parallelism = ARGON2_MAX_PARALLELISM;
-    if (t_cost < 1) t_cost = 1;
-    if (m_cost < 8 * parallelism) m_cost = 8 * parallelism;
+    /* RFC 9106 Sec 3.1 parameter domain.  Out-of-range values are REJECTED,
+     * never silently clamped: a clamp would derive a tag for parameters the
+     * caller did not ask for, which no conforming implementation reproduces
+     * under the caller's parameters (an interoperability defect) and which
+     * lets a mis-configured deployment believe it is running p=0 / t=0 /
+     * m=1 "successfully".  Bounds match the reference implementation
+     * (ARGON2_MIN_SALT_LENGTH = 8, ARGON2_MIN_TIME = 1,
+     * ARGON2_MIN_MEMORY = 2 * SYNC_POINTS * lanes) and this implementation's
+     * documented lane ceiling ARGON2_MAX_PARALLELISM (255).  The Python
+     * wrappers in ama_cryptography/pqc_backends.py enforce the same domain
+     * up front; this is the authoritative check for every C caller. */
+    if (salt_len < ARGON2_MIN_SALT_LENGTH) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (parallelism < 1 || parallelism > ARGON2_MAX_PARALLELISM) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (t_cost < 1) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* 8 * parallelism cannot overflow: parallelism <= 255 here. */
+    if (m_cost < 2 * ARGON2_SYNC_POINTS * parallelism) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     uint32_t lanes = parallelism;
     uint32_t segment_length = m_cost / (lanes * ARGON2_SYNC_POINTS);

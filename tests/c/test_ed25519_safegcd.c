@@ -10,9 +10,10 @@
  *   1. the safegcd result equals z^(p-2) computed by plain left-to-right
  *      binary exponentiation over the bits of p - 2 (not the ref10 addition
  *      chain the library ships, so the two routes share no code);
- *   2. the product of the result with the input encodes 1 (0 for z = 0), the
- *      condition fe_invert_ct in ama_ed25519_ge.h checks before it would
- *      fall back to the Fermat chain — so the fallback is never needed on
+ *   2. the product of the result with the input encodes 1 (0 for z = 0).
+ *      fe_invert_ct in ama_ed25519_ge.h ships no runtime re-check (a branch
+ *      on that product would be a secret-dependent branch); this test and
+ *      the divstep bound carry that guarantee, so a Fermat fallback is not needed on
  *      this corpus;
  *   3. g reaches zero within the ten 59-divstep batches, observed through the
  *      AMA_S62_TRACE hook the header exposes for exactly this purpose; the
@@ -25,6 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ama_cryptography.h"  /* ama_secure_memzero, used by the safegcd header */
 #include "../../src/c/fe51.h"
 
 static void trace_hook(int batch, const void *g);

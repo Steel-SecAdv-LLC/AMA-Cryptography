@@ -11,7 +11,7 @@ only the Python standard library.
 
 Features:
 
-- Secure zeroing — multi-pass overwrite implementation
+- Secure zeroing — one volatile-store pass plus a compiler barrier (native)
 - Constant-time comparison — AMA's native C library, and nothing else: the
   pure-Python XOR accumulator this module used to fall back to was not
   constant-time in fact (INVARIANT-7), so ``constant_time_compare`` now raises
@@ -47,7 +47,7 @@ Usage::
 
     # Manual operations
     secret = bytearray(b"sensitive data")
-    secure_memzero(secret)  # Securely wipe (multi-pass)
+    secure_memzero(secret)  # Securely wipe (volatile pass + barrier)
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
@@ -56,11 +56,14 @@ Author/Inventor: Andrew E. A.
 import ctypes
 import ctypes.util
 import logging
+import mmap
 import os
 import sys
+import threading
+import weakref
 from contextlib import contextmanager
 from types import TracebackType
-from typing import Any, Callable, Dict, Generator, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Type, Union
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +97,14 @@ def _load_native_consttime() -> Optional[Callable[..., Any]]:
         lib = _find_verified_native_library()
         if lib is None:
             return None
+        # void pointers, not c_char_p: c_char_p accepts only ``bytes``, so a
+        # ``bytearray`` -- the mutable type INVARIANT-6 mandates for secret
+        # storage -- or a memoryview raised ctypes.ArgumentError before the
+        # comparison ran.  _borrow_readable() hands each operand's own buffer
+        # over without copying it.
         lib.ama_consttime_memcmp.argtypes = [
-            ctypes.c_char_p,
-            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
             ctypes.c_size_t,
         ]
         lib.ama_consttime_memcmp.restype = ctypes.c_int
@@ -205,7 +213,12 @@ def _byte_length(data: "Union[bytes, bytearray, memoryview]") -> int:
 
 def secure_memzero(data: Union[bytearray, memoryview]) -> None:
     """
-    Securely zero memory using a multi-pass overwrite.
+    Securely zero memory.
+
+    The native kernel (``src/c/ama_consttime.c``) writes zeros once through
+    ``volatile`` stores and then issues a compiler barrier; that barrier, not
+    a repeat count, is what stops dead-store elimination. Only the opt-in
+    pure-Python fallback (``AMA_ALLOW_PYTHON_MEMZERO``) loops.
 
     Overwrites the buffer with zeros, then ones, then zeros again
     to reduce the chance of the operation being optimized away.
@@ -447,6 +460,170 @@ def _memzero(data: Union[bytearray, memoryview]) -> None:
     _memzero_fn(data)
 
 
+def _borrow_readable(obj: Union[bytes, bytearray, memoryview], name: str) -> Tuple[Any, int]:
+    """Return ``(ctypes object, length)`` addressing ``obj``'s own storage.
+
+    ``bytes`` and mutable buffers are passed by reference through the buffer
+    protocol; nothing is copied, so a secret in a ``bytearray`` is compared
+    where it lives and can still be wiped by its owner.  A *read-only*
+    memoryview has no writable buffer for ``from_buffer`` to borrow; the one
+    portable route is a ``tobytes()`` copy, which is taken and documented
+    rather than refused, because rejecting the type would push callers into
+    making that copy themselves anyway.  The returned holder must be kept
+    alive for the duration of the native call.
+    """
+    if isinstance(obj, bytes):
+        return ctypes.c_char_p(obj), len(obj)
+    if isinstance(obj, bytearray):
+        n = len(obj)
+        if n == 0:
+            return ctypes.c_char_p(b""), 0
+        return (ctypes.c_char * n).from_buffer(obj), n
+    if isinstance(obj, memoryview):
+        if not obj.c_contiguous:
+            raise TypeError(f"{name}: memoryview must be C-contiguous")
+        n = obj.nbytes
+        if n == 0:
+            return ctypes.c_char_p(b""), 0
+        if obj.readonly:
+            return ctypes.c_char_p(obj.tobytes()), n
+        return (ctypes.c_char * n).from_buffer(obj), n
+    raise TypeError(f"{name} must be bytes, bytearray or memoryview, not {type(obj).__name__}")
+
+
+# ---------------------------------------------------------------------------
+# Page-lock reference counting
+# ---------------------------------------------------------------------------
+#
+# mlock(2)/munlock(2) act on whole pages.  A ``bytearray`` lives wherever the
+# allocator put it, which is routinely a page shared with other objects --
+# including other locked buffers.  Unlocking one buffer therefore unlocked
+# every other buffer on its pages, while each of them still reported
+# ``locked == True``: measured with 64 SecureBuffer(48) instances, exiting one
+# cleared the kernel's VM_LOCKED flag on a page a live sibling occupied.  The
+# registry below counts, per page, how many locked regions cover it, and
+# releases a page only when the last of them is unlocked.  Pages nobody
+# registered (locked by some other route) are released as before.
+_PAGE_SIZE: int = mmap.PAGESIZE
+_LOCKED_PAGE_REFS: Dict[int, int] = {}
+_LOCKED_PAGE_GUARD = threading.Lock()
+
+
+def _pages_covering(addr: int, size: int) -> range:
+    first = addr & ~(_PAGE_SIZE - 1)
+    last = (addr + size - 1) & ~(_PAGE_SIZE - 1)
+    return range(first, last + _PAGE_SIZE, _PAGE_SIZE)
+
+
+def _register_locked_pages(addr: int, size: int) -> None:
+    with _LOCKED_PAGE_GUARD:
+        for page in _pages_covering(addr, size):
+            _LOCKED_PAGE_REFS[page] = _LOCKED_PAGE_REFS.get(page, 0) + 1
+
+
+def _release_locked_pages(addr: int, size: int) -> List[Tuple[int, int]]:
+    """Drop one reference per page and return the page ranges to munlock.
+
+    Contiguous pages whose count reached zero (or that were never registered)
+    are merged into ``(address, length)`` ranges so the caller issues one
+    munlock per run rather than one per page.
+    """
+    to_unlock: List[int] = []
+    with _LOCKED_PAGE_GUARD:
+        for page in _pages_covering(addr, size):
+            count = _LOCKED_PAGE_REFS.get(page, 0)
+            if count <= 1:
+                _LOCKED_PAGE_REFS.pop(page, None)
+                to_unlock.append(page)
+            else:
+                _LOCKED_PAGE_REFS[page] = count - 1
+    ranges: List[Tuple[int, int]] = []
+    for page in to_unlock:
+        if ranges and ranges[-1][0] + ranges[-1][1] == page:
+            ranges[-1] = (ranges[-1][0], ranges[-1][1] + _PAGE_SIZE)
+        else:
+            ranges.append((page, _PAGE_SIZE))
+    return ranges
+
+
+def _buffer_address(data: Union[bytes, bytearray, memoryview], what: str) -> Tuple[int, int]:
+    """Address and length of ``data``'s storage, without copying it."""
+    size = _byte_length(data)
+    if size == 0:
+        return 0, 0
+    if isinstance(data, (bytearray, memoryview)):
+        ptr = (ctypes.c_char * size).from_buffer(data)
+        return ctypes.addressof(ptr), size
+    # bytes: immutable, use id-based address (CPython implementation detail)
+    # offset past PyBytesObject header to the ob_sval buffer
+    if sys.implementation.name != "cpython":
+        raise NotImplementedError(
+            f"{what} on bytes objects requires CPython (id-based address layout). "
+            f"Current implementation: {sys.implementation.name}"
+        )
+    addr = id(data) + bytes.__basicsize__ - 1
+    # Runtime layout assertion: if CPython changes the PyBytesObject layout
+    # (or a build uses a non-standard struct), the computed address will no
+    # longer point at ob_sval[0].  Catch that here rather than silently
+    # locking unrelated memory.
+    probe = ctypes.string_at(addr, 1)
+    # Layout-probe comparison: 1-byte sanity check, not a secret comparison.
+    if (
+        probe != data[:1]
+    ):  # nosemgrep: non-constant-time-comparison -- 1-byte PyBytesObject layout probe, not secret comparison (SM-001)
+        raise NotImplementedError(
+            f"{what}: PyBytesObject layout probe failed — "
+            f"computed address does not point to bytes payload "
+            f"(probe={probe!r} expected={data[:1]!r}). Refusing to act on "
+            "arbitrary memory. Pass a bytearray for mutable buffers."
+        )
+    return addr, size
+
+
+def _backend_lock_call(name: str, addr: int, size: int) -> None:
+    """Run ``ama_secure_mlock``/``ama_secure_munlock`` (or the libc call) on a range."""
+    try:
+        from ama_cryptography.pqc_backends import _native_lib
+
+        native = f"ama_secure_{name}"
+        if _native_lib is not None and hasattr(_native_lib, native):
+            fn = getattr(_native_lib, native)
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            fn.restype = ctypes.c_int
+            ret = fn(ctypes.c_void_p(addr), size)
+            if ret != 0:
+                raise SecureMemoryError(f"{native} failed with error code {ret}")
+            return
+    except (ImportError, AttributeError):
+        # Native backend unavailable — fall through to POSIX fallback
+        logger.debug("Native %s unavailable, trying POSIX fallback", name)
+
+    # POSIX fallback
+    try:
+        libc_name = ctypes.util.find_library("c")
+        if libc_name:
+            libc = ctypes.CDLL(libc_name, use_errno=True)
+            if hasattr(libc, name):
+                fn = getattr(libc, name)
+                fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+                fn.restype = ctypes.c_int
+                ret = fn(ctypes.c_void_p(addr), size)
+                if ret != 0:
+                    errno = ctypes.get_errno()
+                    raise SecureMemoryError(
+                        f"{name} failed with errno {errno}: {os.strerror(errno)}"
+                    )
+                return
+    except SecureMemoryError:
+        raise
+    except (OSError, AttributeError) as exc:
+        raise NotImplementedError(
+            f"secure_{name} requires the AMA native C library or a POSIX system."
+        ) from exc
+
+    raise NotImplementedError(f"secure_{name} requires the AMA native C library or a POSIX system.")
+
+
 def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
     """
     Lock memory region to prevent swapping to disk.
@@ -465,77 +642,13 @@ def secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None:
             the ``nbytes`` bytes at its address, so it would pin the wrong
             pages and leave the caller's swappable.
     """
-    size = _byte_length(data)
+    addr, size = _buffer_address(data, "secure_mlock")
     if size == 0:
         return
-
-    # Get a ctypes pointer to the actual buffer (no copy).
-    # Both bytearray and writable memoryview support from_buffer directly.
-    if isinstance(data, (bytearray, memoryview)):
-        ptr = (ctypes.c_char * size).from_buffer(data)
-        addr = ctypes.addressof(ptr)
-    else:
-        # bytes: immutable, use id-based address (CPython implementation detail)
-        # offset past PyBytesObject header to the ob_sval buffer
-        if sys.implementation.name != "cpython":
-            raise NotImplementedError(
-                "secure_mlock on bytes objects requires CPython (id-based address layout). "
-                f"Current implementation: {sys.implementation.name}"
-            )
-        addr = id(data) + bytes.__basicsize__ - 1
-        # Runtime layout assertion: if CPython changes the PyBytesObject
-        # layout (or a build uses a non-standard struct), the computed
-        # address will no longer point at ob_sval[0]. Catch that here
-        # rather than silently mlocking unrelated memory.
-        probe = ctypes.string_at(addr, 1)
-        # Layout-probe comparison: 1-byte sanity check, not a secret comparison.
-        if (
-            size > 0 and probe != data[:1]
-        ):  # nosemgrep: non-constant-time-comparison -- 1-byte PyBytesObject layout probe, not secret comparison (SM-001)
-            raise NotImplementedError(
-                "secure_mlock: PyBytesObject layout probe failed — "
-                f"computed address does not point to bytes payload "
-                f"(probe={probe!r} expected={data[:1]!r}). Refusing to mlock "
-                "arbitrary memory. Pass a bytearray for mutable buffers."
-            )
-
-    try:
-        from ama_cryptography.pqc_backends import _native_lib
-
-        if _native_lib is not None and hasattr(_native_lib, "ama_secure_mlock"):
-            _native_lib.ama_secure_mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            _native_lib.ama_secure_mlock.restype = ctypes.c_int
-            ret = _native_lib.ama_secure_mlock(ctypes.c_void_p(addr), size)
-            if ret != 0:
-                raise SecureMemoryError(f"ama_secure_mlock failed with error code {ret}")
-            return
-    except (ImportError, AttributeError):
-        # Native backend unavailable — fall through to POSIX fallback
-        logger.debug("Native mlock unavailable, trying POSIX fallback")
-
-    # POSIX fallback
-    try:
-        libc_name = ctypes.util.find_library("c")
-        if libc_name:
-            libc = ctypes.CDLL(libc_name, use_errno=True)
-            if hasattr(libc, "mlock"):
-                libc.mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-                libc.mlock.restype = ctypes.c_int
-                ret = libc.mlock(ctypes.c_void_p(addr), size)
-                if ret != 0:
-                    errno = ctypes.get_errno()
-                    raise SecureMemoryError(
-                        f"mlock failed with errno {errno}: {os.strerror(errno)}"
-                    )
-                return
-    except SecureMemoryError:
-        raise
-    except (OSError, AttributeError) as exc:
-        raise NotImplementedError(
-            "secure_mlock requires the AMA native C library or a POSIX system."
-        ) from exc
-
-    raise NotImplementedError("secure_mlock requires the AMA native C library or a POSIX system.")
+    _backend_lock_call("mlock", addr, size)
+    # Registered only after the lock succeeded, so a failed lock leaves no
+    # phantom reference that would keep a neighbour's page pinned.
+    _register_locked_pages(addr, size)
 
 
 def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
@@ -554,75 +667,19 @@ def secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None:
             address+length call and a strided view's bytes are not the
             ``nbytes`` bytes at its address.
     """
-    size = _byte_length(data)
+    addr, size = _buffer_address(data, "secure_munlock")
     if size == 0:
         return
-
-    # Get a ctypes pointer to the actual buffer (no copy).
-    # Both bytearray and writable memoryview support from_buffer directly.
-    if isinstance(data, (bytearray, memoryview)):
-        ptr = (ctypes.c_char * size).from_buffer(data)
-        addr = ctypes.addressof(ptr)
-    else:
-        # bytes: immutable, use id-based address (CPython implementation detail)
-        if sys.implementation.name != "cpython":
-            raise NotImplementedError(
-                "secure_munlock on bytes objects requires CPython (id-based address layout). "
-                f"Current implementation: {sys.implementation.name}"
-            )
-        addr = id(data) + bytes.__basicsize__ - 1
-        # Layout probe — see secure_mlock() for rationale.
-        probe = ctypes.string_at(addr, 1)
-        # Layout-probe comparison: 1-byte sanity check, not a secret comparison.
-        if (
-            size > 0 and probe != data[:1]
-        ):  # nosemgrep: non-constant-time-comparison -- 1-byte PyBytesObject layout probe, not secret comparison (SM-002)
-            raise NotImplementedError(
-                "secure_munlock: PyBytesObject layout probe failed — "
-                f"computed address does not point to bytes payload "
-                f"(probe={probe!r} expected={data[:1]!r})."
-            )
-
-    try:
-        from ama_cryptography.pqc_backends import _native_lib
-
-        if _native_lib is not None and hasattr(_native_lib, "ama_secure_munlock"):
-            _native_lib.ama_secure_munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            _native_lib.ama_secure_munlock.restype = ctypes.c_int
-            ret = _native_lib.ama_secure_munlock(ctypes.c_void_p(addr), size)
-            if ret != 0:
-                raise SecureMemoryError(f"ama_secure_munlock failed with error code {ret}")
-            return
-    except (ImportError, AttributeError):
-        # Native backend unavailable — fall through to POSIX fallback
-        logger.debug("Native munlock unavailable, trying POSIX fallback")
-
-    # POSIX fallback
-    try:
-        libc_name = ctypes.util.find_library("c")
-        if libc_name:
-            libc = ctypes.CDLL(libc_name, use_errno=True)
-            if hasattr(libc, "munlock"):
-                libc.munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-                libc.munlock.restype = ctypes.c_int
-                ret = libc.munlock(ctypes.c_void_p(addr), size)
-                if ret != 0:
-                    errno = ctypes.get_errno()
-                    raise SecureMemoryError(
-                        f"munlock failed with errno {errno}: {os.strerror(errno)}"
-                    )
-                return
-    except SecureMemoryError:
-        raise
-    except (OSError, AttributeError) as exc:
-        raise NotImplementedError(
-            "secure_munlock requires the AMA native C library or a POSIX system."
-        ) from exc
-
-    raise NotImplementedError("secure_munlock requires the AMA native C library or a POSIX system.")
+    # Release only the pages no other registered lock still covers.  A page
+    # shared with a live locked buffer keeps its lock; the kernel would
+    # otherwise drop it for everyone on that page.
+    for page_addr, page_len in _release_locked_pages(addr, size):
+        _backend_lock_call("munlock", page_addr, page_len)
 
 
-def constant_time_compare(a: bytes, b: bytes) -> bool:
+def constant_time_compare(
+    a: Union[bytes, bytearray, memoryview], b: Union[bytes, bytearray, memoryview]
+) -> bool:
     """
     Compare two byte sequences in constant time.
 
@@ -719,15 +776,21 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
             "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
         )
 
+    # Every buffer type the package stores secrets in is accepted: bytes,
+    # the bytearray INVARIANT-6 mandates for wipeable storage, and
+    # memoryviews over either.  Each operand is handed over by reference
+    # (see _borrow_readable), so nothing here copies a secret.
+    a_holder, a_len = _borrow_readable(a, "a")
+    b_holder, b_len = _borrow_readable(b, "b")
     # Both terms always execute: the content scan is not skipped when the
     # lengths differ, and the length term is not skipped when they match.
-    length_diff = len(a) ^ len(b)
-    common = min(len(a), len(b))
+    length_diff = a_len ^ b_len
+    common = min(a_len, b_len)
     # ctypes passes a pointer to each object's own buffer, so `common` bounds
     # the read without slicing either operand.  n == 0 (both empty, or one
     # empty) is well defined: the native loop does not execute and returns 0,
     # leaving `length_diff` to decide.
-    content_diff: int = _native_consttime_memcmp(a, b, common) if common else 0
+    content_diff: int = _native_consttime_memcmp(a_holder, b_holder, common) if common else 0
     return (length_diff | content_diff) == 0
 
 
@@ -854,6 +917,7 @@ class SecureBuffer:
         self._entered = False
         self._lock_requested = lock
         self._locked = False
+        self._finalizer: Optional[weakref.finalize[[bytearray, bool], SecureBuffer]] = None
 
     @property
     def size(self) -> int:
@@ -877,6 +941,28 @@ class SecureBuffer:
             raise RuntimeError("SecureBuffer must be used within 'with' statement")
         return self._data
 
+    @staticmethod
+    def _finalize_abandoned(data: bytearray, locked: bool) -> None:
+        """Wipe (and unlock) a buffer whose ``__exit__`` never ran.
+
+        Reached only when the SecureBuffer is garbage-collected, or at
+        interpreter shutdown, with the context still open: a ``with`` block
+        whose generator was abandoned, an ``__enter__`` called by hand, an
+        exception that unwound past the owner.  Until this finalizer existed
+        such a buffer kept its secret for the life of the process -- the
+        context manager wiped only on the happy path.  Best-effort by nature
+        (a finalizer cannot raise usefully), so failures are logged.
+        """
+        try:
+            secure_memzero(data)
+        except Exception as exc:  # noqa: BLE001 -- a finalizer cannot raise usefully (MEM-014)
+            logger.warning("SecureBuffer: finalizer wipe failed: %s", exc)
+        if locked:
+            try:
+                secure_munlock(data)
+            except Exception as exc:  # noqa: BLE001 -- a finalizer cannot raise usefully (MEM-014)
+                logger.warning("SecureBuffer: finalizer munlock failed: %s", exc)
+
     def __enter__(self) -> bytearray:
         """Enter context, allocate buffer, and (optionally) page-lock it."""
         self._data = bytearray(self._size)
@@ -891,6 +977,11 @@ class SecureBuffer:
                 # pages may page to swap — so the caller is warned, not failed.
                 logger.warning("SecureBuffer: mlock failed (%s); proceeding without page-lock", exc)
                 self._locked = False
+        # Armed now, detached in __exit__: whichever of the two runs first
+        # owns the wipe, so the buffer is erased on every path out.
+        self._finalizer = weakref.finalize(
+            self, SecureBuffer._finalize_abandoned, self._data, self._locked
+        )
         return self._data
 
     def __exit__(
@@ -935,6 +1026,11 @@ class SecureBuffer:
             # ``finally`` implicit re-raise so callers still learn the
             # wipe failed (the documented contract above).
             data = self._data
+            if self._finalizer is not None:
+                # __exit__ is doing the wipe; the finalizer must not do it a
+                # second time on a buffer the caller may have reused.
+                self._finalizer.detach()
+                self._finalizer = None
             try:
                 secure_memzero(data)
             finally:

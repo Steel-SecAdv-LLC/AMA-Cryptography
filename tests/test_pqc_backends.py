@@ -646,6 +646,16 @@ class TestInvariant5Argon2idNegativePaths:
         with pytest.raises(ValueError, match="parallelism must be in"):
             native_argon2id(b"password", b"\x00" * 16, parallelism=-1)
 
+    def test_rejects_parallelism_above_lane_ceiling(self) -> None:
+        # The C core caps lanes at 255 (ARGON2_MAX_PARALLELISM) and rejects,
+        # never clamps, anything above it; the wrapper mirrors that domain.
+        with pytest.raises(ValueError, match=r"parallelism must be in \[1, 255\]"):
+            native_argon2id(b"password", b"\x00" * 16, parallelism=256)
+
+    def test_accepts_parallelism_at_lane_ceiling(self) -> None:
+        out = native_argon2id(b"password", b"\x00" * 16, t_cost=1, m_cost=8 * 255, parallelism=255)
+        assert len(out) == 32
+
     def test_rejects_m_cost_below_minimum(self) -> None:
         with pytest.raises(ValueError, match="m_cost must be in"):
             native_argon2id(b"password", b"\x00" * 16, m_cost=31, parallelism=4)

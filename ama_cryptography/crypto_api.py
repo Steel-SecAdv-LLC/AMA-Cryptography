@@ -94,7 +94,9 @@ from ama_cryptography.pqc_backends import (
     SphincsUnavailableError,
     _native_lib,
     dilithium_sign,
+    dilithium_sign_ctx,
     dilithium_verify,
+    dilithium_verify_ctx,
     generate_dilithium_keypair,
     generate_kyber_keypair,
     generate_sphincs_keypair,
@@ -1586,9 +1588,39 @@ class HybridKEMProvider(KEMProvider):
         return combined_ss
 
 
+#: Domain-separation label of the hybrid (Ed25519 + ML-DSA-65) signature
+#: scheme, format version 2.  Both components sign a message bound to this
+#: composite algorithm, so a component signature cannot be lifted out of a
+#: hybrid signature and presented as a standalone Ed25519 or ML-DSA-65
+#: signature over the same message — or spliced in from one — when a key is
+#: reused across the two contexts.  ML-DSA-65 carries the label as its FIPS
+#: 204 Sec 5.2 context string; Ed25519 (RFC 8032 pure, no context parameter)
+#: signs the same ``0x00 || len(label) || label || M`` wrapper explicitly, so
+#: the two components bind the identical prefix.  Changing this string (or
+#: the wrapper) changes every hybrid signature: it is part of the format.
+HYBRID_SIG_DOMAIN: bytes = b"AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65"
+
+
+def hybrid_classical_input(message: bytes) -> bytes:
+    """The bytes the Ed25519 component of a hybrid signature signs.
+
+    ``0x00 || len(HYBRID_SIG_DOMAIN) || HYBRID_SIG_DOMAIN || message`` — the
+    FIPS 204 Sec 5.2 pure-mode wrapper shape, applied to Ed25519 by hand so
+    both halves of the hybrid sign the same domain-bound input.
+    """
+    return b"\x00" + bytes([len(HYBRID_SIG_DOMAIN)]) + HYBRID_SIG_DOMAIN + bytes(message)
+
+
 class HybridSignatureProvider(CryptoProvider):
     """
     Hybrid signature provider (Ed25519 + ML-DSA-65).
+
+    Format v2: each component signs the message bound to
+    :data:`HYBRID_SIG_DOMAIN` (Ed25519 over :func:`hybrid_classical_input`,
+    ML-DSA-65 with the label as its FIPS 204 context), so neither half is a
+    valid standalone signature over the raw message and no standalone
+    signature can be spliced in.  Signatures made by the v1 format (both
+    components over the raw message) do not verify under v2.
 
     Provides dual-signature scheme combining classical Ed25519 with
     post-quantum ML-DSA-65 (Dilithium). Both signatures must verify
@@ -1705,14 +1737,17 @@ class HybridSignatureProvider(CryptoProvider):
         # Compute hash once and pass to both providers
         msg_hash = precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
 
-        # Create both signatures using native backends, passing precomputed hash
+        # Both components sign the domain-bound message (see HYBRID_SIG_DOMAIN):
+        # Ed25519 over the explicit wrapper, ML-DSA-65 with the label as its
+        # FIPS 204 context.  ``message_hash`` stays the hash of the caller's
+        # message; it is metadata, not signed input.
         classical_sig = self.classical_provider.sign(
-            message, classical_sk_bytes, precomputed_hash=msg_hash
+            hybrid_classical_input(message), classical_sk_bytes, precomputed_hash=msg_hash
         )
-        pqc_sig = self.pqc_provider.sign(message, pqc_sk, precomputed_hash=msg_hash)
+        pqc_sig_bytes = dilithium_sign_ctx(message, pqc_sk, HYBRID_SIG_DOMAIN)
 
         # Combine signatures (Ed25519 first, then Dilithium)
-        combined_sig = classical_sig.signature + pqc_sig.signature
+        combined_sig = classical_sig.signature + pqc_sig_bytes
 
         return Signature(
             signature=combined_sig,
@@ -1720,7 +1755,8 @@ class HybridSignatureProvider(CryptoProvider):
             message_hash=msg_hash,
             metadata={
                 "classical_sig_size": len(classical_sig.signature),
-                "pqc_sig_size": len(pqc_sig.signature),
+                "pqc_sig_size": len(pqc_sig_bytes),
+                "domain": HYBRID_SIG_DOMAIN.decode("ascii"),
             },
         )
 
@@ -1767,10 +1803,13 @@ class HybridSignatureProvider(CryptoProvider):
             # The GIL is released during native C calls, so true parallelism
             # is achieved for the C-level verification work.
             classical_future = self._verify_pool.submit(
-                self.classical_provider.verify, message, classical_sig, classical_pk_bytes
+                self.classical_provider.verify,
+                hybrid_classical_input(message),
+                classical_sig,
+                classical_pk_bytes,
             )
             pqc_future = self._verify_pool.submit(
-                self.pqc_provider.verify, message, pqc_sig, pqc_pk
+                dilithium_verify_ctx, message, pqc_sig, pqc_pk, HYBRID_SIG_DOMAIN
             )
 
             # Both futures must complete; collect results
@@ -1779,9 +1818,9 @@ class HybridSignatureProvider(CryptoProvider):
         else:
             # Sequential fallback for debugging/testing
             classical_valid = self.classical_provider.verify(
-                message, classical_sig, classical_pk_bytes
+                hybrid_classical_input(message), classical_sig, classical_pk_bytes
             )
-            pqc_valid = self.pqc_provider.verify(message, pqc_sig, pqc_pk)
+            pqc_valid = dilithium_verify_ctx(message, pqc_sig, pqc_pk, HYBRID_SIG_DOMAIN)
 
         return classical_valid and pqc_valid
 

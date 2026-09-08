@@ -200,7 +200,7 @@ AMA Cryptography: SHA3-256 Security Hash
 
 ## Optional: Build with Cython Acceleration
 
-Cython provides 18–37x speedup for mathematical operations:
+Cython accelerates the 3R mathematical operations (ratio host-specific and unpublished — see README):
 
 ```bash
 # Install Cython first

@@ -1996,12 +1996,21 @@ def _kat_sha3_256() -> Tuple[Optional[bool], str]:
 
 
 def _kat_hmac_sha3_256() -> Tuple[Optional[bool], str]:
-    """HMAC-SHA3-256 KAT using native backend against hardcoded NIST-style vector.
+    """HMAC-SHA3-256 KAT against the NIST CSRC published example.
 
-    Vector: NIST SP 800-198 / ACVP-derived
-      key = 000102...1f (32 bytes)
-      msg = "Sample message for keylen=blocklen"
-      expected = b83bfd563059c9f54e75cb509af83aa3db5b6eda4ce07afe03063998dac54f3b
+    Vector: NIST CSRC "Examples with Intermediate Values", HMAC_SHA3-256,
+    Sample #2 (keylen = blocklen):
+      key      = 00 01 02 ... 87 (136 bytes, exactly the SHA3-256 rate)
+      msg      = "Sample message for keylen=blocklen"
+      expected = 68b94e2e538a9be4103bebb5aa016d47961d4d1aa906061313b557f8af2c3faa
+
+    The previous vector used a 32-byte key with the same message text and
+    labelled itself "NIST SP 800-198 / keylen=blocklen": a 32-byte key is
+    keylen < blocklen for SHA3-256 (rate 136), and the expected value
+    matched no NIST-published example -- it was only reproducible by
+    computing HMAC-SHA3-256 with this library, which makes it a self-
+    consistency check, not a known answer.  A KAT is only evidence when its
+    answer comes from outside the implementation under test.
     """
     try:
         from ama_cryptography.pqc_backends import (
@@ -2012,9 +2021,9 @@ def _kat_hmac_sha3_256() -> Tuple[Optional[bool], str]:
         if not _HMAC_SHA3_256_NATIVE_AVAILABLE:
             return None, "HMAC-SHA3-256 KAT skipped (native unavailable)"
 
-        key = bytes.fromhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+        key = bytes(range(136))  # 00..87: keylen == SHA3-256 block size (rate)
         data = bytes.fromhex("53616d706c65206d65737361676520666f72206b65796c656e3d626c6f636b6c656e")
-        expected = bytes.fromhex("b83bfd563059c9f54e75cb509af83aa3db5b6eda4ce07afe03063998dac54f3b")
+        expected = bytes.fromhex("68b94e2e538a9be4103bebb5aa016d47961d4d1aa906061313b557f8af2c3faa")
         result = native_hmac_sha3_256(key, data)
         if result != expected:
             return False, (
@@ -2022,7 +2031,7 @@ def _kat_hmac_sha3_256() -> Tuple[Optional[bool], str]:
             )
         if len(result) != 32:
             return False, f"HMAC-SHA3-256 KAT: expected 32 bytes, got {len(result)}"
-        return True, "HMAC-SHA3-256 KAT passed (NIST SP 800-198 vector)"
+        return True, "HMAC-SHA3-256 KAT passed (NIST CSRC HMAC_SHA3-256 Sample #2)"
     except Exception as exc:
         return False, f"HMAC-SHA3-256 KAT exception: {exc}"
 

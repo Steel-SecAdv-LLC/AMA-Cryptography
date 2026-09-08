@@ -1020,3 +1020,159 @@ class TestPatternIsLinear:
     )
     def test_destination_name_extraction(self, expression: str, expected: str) -> None:
         assert gate._destination_name(expression) == expected
+
+
+class TestShippedTreeAnnotationRule:
+    """Every bare memset-zero under src/c must say it is not a secret scrub.
+
+    The naming convention recognised about 7 % of the identifiers the tree
+    itself scrubs as secrets (17 of 244 distinct ``ama_secure_memzero``
+    targets), so ``memset(sk, 0, ...)``, ``memset(seed, ...)``,
+    ``memset(key, ...)``, ``memset(kr, ...)`` and ``memset(secret, ...)`` all
+    passed the gate that is the sole enforcement of INVARIANT-6.  Names
+    cannot be made exhaustive; the burden is inverted instead — a shipped
+    memset-zero that is NOT a scrub must carry a ``PUBLIC-DATA`` annotation
+    at the site.  The test tree keeps the naming rule only.
+    """
+
+    @staticmethod
+    def _shipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> Path:
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        monkeypatch.setattr(gate, "C_ROOT", root)
+        return _write(root, body)
+
+    @pytest.mark.parametrize("name", ["sk", "seed", "key", "kr", "secret", "seedbuf", "rhoprime"])
+    def test_the_names_the_convention_missed_are_now_flagged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        path = self._shipped(tmp_path, monkeypatch, f"void f(void) {{ memset({name}, 0, 32); }}\n")
+        findings = gate.scan_text(path.read_text(), path)
+        assert [(f.dst, f.kind) for f in findings] == [(name, "unannotated")]
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "memset(sel, 0, 32);  // PUBLIC-DATA: sel — pre-use init\n",
+            "/* PUBLIC-DATA: sel — pre-use init */\nmemset(sel, 0, 32);\n",
+            "memset(sel,\n       0,\n       32);  // PUBLIC-DATA: sel — pre-use init\n",
+        ],
+    )
+    def test_an_annotated_shipped_memset_is_clean(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str
+    ) -> None:
+        path = self._shipped(tmp_path, monkeypatch, body)
+        assert gate.scan_text(path.read_text(), path) == []
+
+    def test_an_annotation_two_lines_above_does_not_count(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = self._shipped(
+            tmp_path, monkeypatch, "/* PUBLIC-DATA: sel */\nint x;\nmemset(sel, 0, 32);\n"
+        )
+        assert [f.kind for f in gate.scan_text(path.read_text(), path)] == ["unannotated"]
+
+    def test_a_secret_named_destination_is_flagged_despite_an_annotation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = self._shipped(
+            tmp_path, monkeypatch, "memset(secret_key, 0, 32);  // PUBLIC-DATA: secret_key\n"
+        )
+        assert [f.kind for f in gate.scan_text(path.read_text(), path)] == ["secret-named"]
+
+    def test_the_test_tree_keeps_the_naming_rule_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(gate, "C_ROOT", tmp_path / "src" / "c")
+        tests_root = tmp_path / "tests" / "c"
+        tests_root.mkdir(parents=True)
+        path = _write(tests_root, "memset(sk, 0, 32);\nmemset(secret_key, 0, 32);\n")
+        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
+            ("secret_key", "secret-named")
+        ]
+
+    def test_non_zero_fills_need_no_annotation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = self._shipped(
+            tmp_path, monkeypatch, "memset(k_ipad, 0x36, 136);\nmemset(V, 0x01, 32);\n"
+        )
+        assert gate.scan_text(path.read_text(), path) == []
+
+    def test_the_unannotated_hint_names_both_remedies(self) -> None:
+        finding = gate.Finding(_INLINE, 1, "sk", "memset(sk, 0, 32);", "sk", "unannotated")
+        rendered = finding.render()
+        assert "PUBLIC-DATA: sk" in rendered
+        assert "ama_secure_memzero(sk, LEN)" in rendered
+
+
+class TestScrubBarrierForm:
+    """The second sanctioned shipped form: ``memset`` plus a real barrier.
+
+    ``ama_secure_stack_wipe()`` zeroes kilobytes of dead stack after every AEAD
+    call, where ``ama_secure_memzero``'s volatile word loop measured 90-127 ns
+    against 29 ns for ``memset`` plus a compiler barrier.  The annotation that
+    permits it is checked, not believed: the barrier must actually be there.
+    """
+
+    SRC_OK = """
+void wipe(void) {
+    unsigned char frame[4096];
+    memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame — dead stack
+    __asm__ __volatile__("" : : "r"(frame) : "memory");
+}
+"""
+    SRC_NO_BARRIER = """
+void wipe(void) {
+    unsigned char frame[4096];
+    memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame — dead stack
+    (void)frame;
+}
+"""
+    SRC_MSVC = """
+void wipe(void) {
+    unsigned char frame[4096];
+    memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame — dead stack
+    _ReadWriteBarrier();
+}
+"""
+    SRC_SECRET_NAMED = """
+void wipe(const unsigned char *in) {
+    unsigned char secret_key[32];
+    memcpy(secret_key, in, 32);
+    memset(secret_key, 0, sizeof secret_key);  // SCRUB-BARRIER: secret_key
+    __asm__ __volatile__("" : : "r"(secret_key) : "memory");
+}
+"""
+
+    @staticmethod
+    def _shipped(text: str) -> list[gate.Finding]:
+        """Scan ``text`` as though it were a shipped src/c file."""
+        return gate.scan_text(text, gate.C_ROOT / "synthetic_scrub_barrier.c")
+
+    def test_annotated_with_a_real_barrier_passes(self) -> None:
+        assert self._shipped(self.SRC_OK) == []
+
+    def test_the_msvc_barrier_also_counts(self) -> None:
+        assert self._shipped(self.SRC_MSVC) == []
+
+    def test_the_annotation_without_a_barrier_is_refused(self) -> None:
+        """Non-vacuity: deleting the barrier and keeping the comment must fail,
+        or the annotation is a magic word rather than a checked claim."""
+        findings = self._shipped(self.SRC_NO_BARRIER)
+        assert findings, "SCRUB-BARRIER with no barrier must be a finding"
+        assert findings[0].dst == "frame"
+
+    def test_a_secret_named_buffer_may_use_the_form_too(self) -> None:
+        """The form is about HOW the write is made non-elidable, not about
+        whether the destination is secret — it exists precisely because the
+        destination may be."""
+        assert self._shipped(self.SRC_SECRET_NAMED) == []
+
+    def test_a_barrier_far_below_does_not_vouch_for_the_write(self) -> None:
+        filler = "\n".join(f"    int pad{i} = {i};" for i in range(20))
+        src = self.SRC_NO_BARRIER.replace(
+            "    (void)frame;",
+            filler + '\n    __asm__ __volatile__("" : : "r"(frame) : "memory");',
+        )
+        assert self._shipped(src), "the barrier must sit beside the write"

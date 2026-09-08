@@ -127,12 +127,40 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             ct[payload[0] % ct_len] ^= 0x01;
         }
 
-        /* Decapsulate with corrupted ciphertext — must not crash
-         * (implicit rejection returns a pseudorandom SS, not an error) */
-        ama_kyber_decapsulate(
+        /* Decapsulate the corrupted ciphertext.  "Must not crash" was the
+         * whole assertion here, and it certifies nothing: a KEM that skipped
+         * the Fujisaki-Okamoto re-encryption check and returned K derived
+         * from m' for ANY ciphertext would fuzz clean forever.  The contract
+         * is that implicit rejection produces a DIFFERENT shared secret —
+         * K = J(z || c) — never an error and never the real one. */
+        rc = ama_kyber_decapsulate(
             ct, ct_len,
             cached_sk, sizeof(cached_sk),
             ss_dec, sizeof(ss_dec));
+        if (rc != AMA_SUCCESS) {
+            __builtin_trap();  /* implicit rejection is silent, not an error */
+        }
+        if (memcmp(ss_dec, ss_enc, sizeof(ss_enc)) == 0) {
+            /* Only reachable if the corruption was a no-op (mask 0), which
+             * the position/mask layout above allows. */
+            if (payload_len > 2 && payload[2] != 0) {
+                __builtin_trap();  /* FO check did not reject */
+            }
+        }
+
+        /* Implicit rejection is deterministic in (z, c): decapsulating the
+         * same corrupted ciphertext twice must agree.  A rejection value
+         * drawn from the RNG instead of J(z || c) fails here. */
+        {
+            uint8_t ss_again[AMA_KYBER_1024_SHARED_SECRET_BYTES];
+            if (ama_kyber_decapsulate(ct, ct_len, cached_sk, sizeof(cached_sk),
+                                      ss_again, sizeof(ss_again)) != AMA_SUCCESS) {
+                __builtin_trap();
+            }
+            if (memcmp(ss_again, ss_dec, sizeof(ss_dec)) != 0) {
+                __builtin_trap();  /* rejection value is not a function of (z, c) */
+            }
+        }
         break;
     }
     case 2: {

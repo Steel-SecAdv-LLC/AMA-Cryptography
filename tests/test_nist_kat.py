@@ -46,6 +46,7 @@ import pytest
 
 # Import PQC backends for testing
 try:
+    from ama_cryptography import pqc_backends as pb
     from ama_cryptography.pqc_backends import (
         DILITHIUM_AVAILABLE,
         KYBER_AVAILABLE,
@@ -676,20 +677,23 @@ class TestMLDSAKATValidation:
         """
         Verify FIPS 204 ML-DSA-65 KAT signatures against KAT public keys.
 
-        The KAT vectors use the external signing interface (Algorithm 2)
-        which prepends 0x00 || len(ctx) || ctx to the message before
-        passing to the internal sign function (Algorithm 7). Our C backend
-        implements internal verify (Algorithm 8), so we reconstruct the
-        internal message format before calling dilithium_verify.
+        The vectors carry a context, so they are external-interface
+        (Algorithm 2) signatures and the context-taking verifier is what
+        checks them directly.
+
+        This used to hand-build M' = 0x00 || len(ctx) || ctx || msg and pass
+        it to ``dilithium_verify``, which was then the INTERNAL verifier
+        (Algorithm 8).  Since 5.0.0 ``dilithium_verify`` applies the external
+        wrapper itself with the empty context, so that route would wrap
+        twice; using the real entry point removes the hand-built prefix from
+        the test altogether, which is also what makes the test able to catch
+        a wrong prefix rather than reproduce it.
         """
         vectors = load_fips204_kat_vectors(FIPS204_DIR / "ml_dsa_65.kat", max_vectors=10)
         assert len(vectors) >= 5, "Need at least 5 FIPS 204 KAT vectors"
 
         for i, kat in enumerate(vectors):
-            # FIPS 204 external interface: M' = 0x00 || len(ctx) || ctx || msg
-            internal_msg = bytes([0x00, kat.ctx_len]) + kat.ctx + kat.msg
-
-            is_valid = dilithium_verify(internal_msg, kat.sig, kat.pk)
+            is_valid = pb.native_ml_dsa_verify(pb.ML_DSA_65, kat.msg, kat.sig, kat.pk, ctx=kat.ctx)
             assert is_valid, (
                 f"Vector {i}: FIPS 204 ML-DSA-65 KAT signature verification "
                 f"failed (msg_len={kat.mlen}, ctx_len={kat.ctx_len})"
@@ -757,17 +761,20 @@ class TestMLDSAKATValidation:
         Sign/verify wrappers apply the *identical* M' = 0x00||len(ctx)||ctx||M
         construction. Therefore a signature produced by ``dilithium_sign_ctx``
         on (M, ctx) must equal a signature produced by the underlying
-        ``dilithium_sign`` on the manually-prefixed wrapped message.
+        internal signer on the manually-prefixed wrapped message.
 
         This locks the C-side wrapper symmetry that closes the FIPS 204 §5.2
-        ACVP sigGen vectors with non-empty contexts.
+        ACVP sigGen vectors with non-empty contexts.  The manual side must be
+        the INTERNAL signer — ``native_ml_dsa_sign(..., ctx=None)`` — because
+        since 5.0.0 ``dilithium_sign`` applies the external wrapper itself
+        and would prefix the already-prefixed message a second time.
         """
         keypair = generate_dilithium_keypair()
         message = b"wrapper equivalence"
         for ctx in (b"", b"AMA", bytes(range(50)), bytes(range(255))):
             wrapped = bytes([0x00, len(ctx)]) + ctx + message
             sig_via_wrapper = dilithium_sign_ctx(message, keypair.secret_key, ctx)
-            sig_via_manual = dilithium_sign(wrapped, keypair.secret_key)
+            sig_via_manual = pb.native_ml_dsa_sign(pb.ML_DSA_65, wrapped, bytes(keypair.secret_key))
             assert (
                 sig_via_wrapper == sig_via_manual
             ), f"sign_ctx output diverges from manual M' wrapping at ctx_len={len(ctx)}"

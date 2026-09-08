@@ -2171,6 +2171,19 @@ def _setup_ml_dsa_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_ml_dsa_sign_ctx.restype = ctypes.c_int
 
+        # Hedged variant: same shape, fresh FIPS 204 `rnd` per signature.
+        lib.ama_ml_dsa_sign_hedged.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_ml_dsa_sign_hedged.restype = ctypes.c_int
+
         lib.ama_ml_dsa_verify_ctx.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -2527,6 +2540,10 @@ _ARGON2_NATIVE_AVAILABLE = False
 # ``ama_argon2id_legacy_verify``'s ``calloc(tag_len, 1)`` path.  Kept in
 # sync with ``AMA_ARGON2ID_MAX_TAG_LEN`` in ``include/ama_cryptography.h``.
 _ARGON2ID_MAX_TAG_LEN = 1024
+# Lane ceiling of the C implementation (``ARGON2_MAX_PARALLELISM`` in
+# ``src/c/ama_argon2.c``).  The C core rejects, never clamps, anything
+# above it; mirrored here so the Python boundary raises the same domain.
+_ARGON2ID_MAX_PARALLELISM = 255
 
 
 def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
@@ -3342,14 +3359,21 @@ class AmaContext:
     #: Exact per-algorithm key sizes — mirrors ``get_key_sizes()`` in
     #: ``ama_core.c``.  The caller's buffer arguments are capacities (the C
     #: side accepts anything large enough), so the pairwise test slices the
-    #: actual key lengths rather than trusting the capacities.  ALG_HYBRID
-    #: generates and signs with ML-DSA-65 in the current C implementation.
+    #: actual key lengths rather than trusting the capacities.
+    #:
+    #: ALG_HYBRID is Ed25519 + ML-DSA-65 concatenated, Ed25519 part first
+    #: (``AMA_HYBRID_*_BYTES`` in the public header).  Until 5.0.0 it was an
+    #: alias for ML-DSA-65 alone while the header promised "classical + PQC";
+    #: these entries mirror the C `get_key_sizes()` that now implements it.
     _KEY_SIZES = {
         ALG_ML_DSA_65: (DILITHIUM_PUBLIC_KEY_BYTES, DILITHIUM_SECRET_KEY_BYTES),
         ALG_KYBER_1024: (KYBER_PUBLIC_KEY_BYTES, KYBER_SECRET_KEY_BYTES),
         ALG_SPHINCS_256F: (SPHINCS_PUBLIC_KEY_BYTES, SPHINCS_SECRET_KEY_BYTES),
         ALG_ED25519: (ED25519_PUBLIC_KEY_BYTES, ED25519_SECRET_KEY_BYTES),
-        ALG_HYBRID: (DILITHIUM_PUBLIC_KEY_BYTES, DILITHIUM_SECRET_KEY_BYTES),
+        ALG_HYBRID: (
+            ED25519_PUBLIC_KEY_BYTES + DILITHIUM_PUBLIC_KEY_BYTES,
+            ED25519_SECRET_KEY_BYTES + DILITHIUM_SECRET_KEY_BYTES,
+        ),
     }
 
     #: Maximum signature size per algorithm — sized exactly so the Ed25519
@@ -3359,7 +3383,7 @@ class AmaContext:
         ALG_ML_DSA_65: DILITHIUM_SIGNATURE_BYTES,
         ALG_SPHINCS_256F: SPHINCS_SIGNATURE_BYTES,
         ALG_ED25519: ED25519_SIGNATURE_BYTES,
-        ALG_HYBRID: DILITHIUM_SIGNATURE_BYTES,
+        ALG_HYBRID: ED25519_SIGNATURE_BYTES + DILITHIUM_SIGNATURE_BYTES,
     }
 
     def _keypair_pairwise_test(self, public_key: ctypes.Array, secret_key: ctypes.Array) -> None:
@@ -3844,7 +3868,19 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
 
 def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
-    Sign message with CRYSTALS-Dilithium (ML-DSA-65).
+    Sign message with ML-DSA-65 (FIPS 204), external interface, empty context.
+
+    **Signature format changed in 5.0.0.** This used to call the FIPS 204
+    *internal* interface (Algorithm 7, ``mu = H(tr || M)``, no domain
+    separator), whose signatures no conforming ML-DSA-65 verifier accepts.
+    It now applies the Sec 5.2 pure/external wrapper with the empty context,
+    which is what "an ML-DSA-65 signature" means to every other
+    implementation. Signatures produced by 4.x do not verify here and vice
+    versa.
+
+    The internal interface is still reachable by name, for the ACVP
+    internal-interface vectors and for protocols supplying their own domain
+    separation: :func:`native_ml_dsa_sign` with ``ctx=None``.
 
     Args:
         message: Data to sign
@@ -4212,6 +4248,17 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
             ss_buf,
             ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
         )
+        if rc == -1:
+            # AMA_ERROR_INVALID_PARAM after the Python length checks above can
+            # only be FIPS 203 Sec 7.3 input check 3: the decapsulation key's
+            # embedded H(ek) does not match its embedded ek.  That is a
+            # malformed KEY, not an attacker-chosen ciphertext, so it is an
+            # error rather than an implicit-rejection secret.
+            raise ValueError(
+                "Kyber-1024 decapsulation key is internally inconsistent: the "
+                "embedded H(ek) does not match the embedded encapsulation key "
+                "(FIPS 203 Sec 7.3 hash check)"
+            )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
         return bytes(ss_buf)
@@ -6859,9 +6906,14 @@ def native_ml_kem_decapsulate(
     A malformed ciphertext does NOT raise: FIPS 203 mandates implicit
     rejection, so decapsulation returns a deterministic pseudorandom secret
     that differs from the sender's. Treating a mismatch as an error here would
-    reintroduce the very oracle implicit rejection exists to close. Only a
-    wrong *length* is an error, because that is a caller bug rather than an
-    attacker-supplied ciphertext.
+    reintroduce the very oracle implicit rejection exists to close. A wrong
+    *length* is an error, because that is a caller bug rather than an
+    attacker-supplied ciphertext, and so is a decapsulation key whose stored
+    ``H(ek)`` does not match its embedded ``ek`` (FIPS 203 Sec 7.3, input
+    check 3): the standard requires every key to have passed that check
+    before decapsulation runs, and the native library performs it on every
+    call, so an inconsistent key raises ``ValueError`` instead of silently
+    decapsulating to a secret the peer never derived.
     """
     check_crypto_permitted()
     pid = _ml_kem_id(ps)
@@ -6887,6 +6939,14 @@ def native_ml_kem_decapsulate(
             ss,
             ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES),
         )
+        if rc == -1:
+            # See kyber_decapsulate: after the length checks above, -1 is the
+            # FIPS 203 Sec 7.3 hash check refusing an inconsistent key.
+            raise ValueError(
+                f"ML-KEM-{pid} decapsulation key is internally inconsistent: the "
+                "embedded H(ek) does not match the embedded encapsulation key "
+                "(FIPS 203 Sec 7.3 hash check)"
+            )
         if rc != 0:
             raise RuntimeError(f"ML-KEM decapsulation failed (rc={rc})")
         return bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
@@ -7091,6 +7151,68 @@ def native_ml_dsa_sign(
     if rc != 0:
         raise RuntimeError(f"ML-DSA signing failed (rc={rc})")
     return bytes(sig.raw[: sig_len.value])
+
+
+def native_ml_dsa_sign_hedged(
+    ps: Union[int, str],
+    message: bytes,
+    secret_key: Union[bytes, bytearray],
+    *,
+    ctx: bytes = b"",
+) -> bytes:
+    """
+    Sign with ML-DSA (FIPS 204), HEDGED variant — ``rnd`` fresh per signature.
+
+    Identical to :func:`native_ml_dsa_sign` with a context, except that FIPS
+    204 Algorithm 7 line 3's 32-byte ``rnd`` field is drawn from the platform
+    CSPRNG instead of being fixed at ``0^256``. FIPS 204 Sec 3.4 makes this
+    the default variant and cautions that the deterministic one is more
+    exposed to fault-injection and side-channel analysis, because every
+    timing observation on a fixed (key, message) is then exactly repeatable.
+
+    The output is NOT reproducible: two calls on the same inputs return
+    different signatures, both valid under the same verifier (``rnd`` is not
+    transmitted). Every other signer in this package is deterministic, which
+    is what the known-answer gates and the hybrid signature format rely on.
+
+    Fails closed: a CSPRNG failure raises rather than silently producing the
+    deterministic signature.
+
+    Args:
+        ps: Parameter set (44, 65 or 87, or the string form).
+        message: Data to sign.
+        secret_key: ML-DSA secret key for ``ps``.
+        ctx: FIPS 204 Sec 5.2 context string, at most 255 bytes. The default
+            ``b""`` is the empty-context external form.
+
+    Returns:
+        Signature bytes.
+    """
+    check_crypto_permitted()
+    pid = _ml_dsa_id(ps)
+    sz = ML_DSA_SIZES[pid]
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    if len(ctx) > 255:
+        raise ValueError(f"ML-DSA context must be at most 255 bytes, got {len(ctx)}")
+    _ml_dsa_require_native()
+    out = ctypes.create_string_buffer(sz["signature"])
+    out_len = ctypes.c_size_t(sz["signature"])
+    rc = _native_lib.ama_ml_dsa_sign_hedged(
+        pid,
+        out,
+        ctypes.byref(out_len),
+        message,
+        len(message),
+        ctx if ctx else None,
+        len(ctx),
+        bytes(secret_key),
+    )
+    if rc != 0:
+        raise RuntimeError(f"ML-DSA-{pid} hedged signing failed (rc={rc})")
+    return out.raw[: out_len.value]
 
 
 def native_ml_dsa_verify(
@@ -8105,8 +8227,11 @@ def native_argon2id(
         )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
-    if parallelism < 1 or parallelism > _UINT32_MAX:
-        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if parallelism < 1 or parallelism > _ARGON2ID_MAX_PARALLELISM:
+        raise ValueError(
+            f"Argon2id parallelism must be in [1, {_ARGON2ID_MAX_PARALLELISM}], "
+            f"got {parallelism}"
+        )
     if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
         raise ValueError(
             f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB "
@@ -8158,7 +8283,7 @@ def native_argon2id_legacy(
         salt:        Salt bytes (≥ 8-byte minimum).
         t_cost:      Time cost (iterations, ≥ 1).
         m_cost:      Memory cost (KiB, ≥ 8 * parallelism).
-        parallelism: Parallelism (lanes, ≥ 1).
+        parallelism: Parallelism (lanes, 1..255).
         out_len:     Output tag length (≥ 4 bytes).
 
     Returns:
@@ -8195,8 +8320,11 @@ def native_argon2id_legacy(
         )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
-    if parallelism < 1 or parallelism > _UINT32_MAX:
-        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if parallelism < 1 or parallelism > _ARGON2ID_MAX_PARALLELISM:
+        raise ValueError(
+            f"Argon2id parallelism must be in [1, {_ARGON2ID_MAX_PARALLELISM}], "
+            f"got {parallelism}"
+        )
     if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
         raise ValueError(
             f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"
@@ -8307,8 +8435,11 @@ def native_argon2id_legacy_verify(
         )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
-    if parallelism < 1 or parallelism > _UINT32_MAX:
-        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if parallelism < 1 or parallelism > _ARGON2ID_MAX_PARALLELISM:
+        raise ValueError(
+            f"Argon2id parallelism must be in [1, {_ARGON2ID_MAX_PARALLELISM}], "
+            f"got {parallelism}"
+        )
     if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
         raise ValueError(
             f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"

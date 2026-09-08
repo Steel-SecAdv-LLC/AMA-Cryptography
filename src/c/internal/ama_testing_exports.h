@@ -77,6 +77,17 @@ int ama_ed25519_test_table_geometry(int backend, int *tables, int *entries,
                                     int *stride_bits, int *odd_count, int *odd_shift);
 
 /* --- src/c/ama_kyber.c -------------------------------------------------- */
+
+/* Derandomised ML-KEM encapsulation: FIPS 203 Algorithm 17
+ * (ML-KEM.Encaps_internal) with the caller's 32-byte m instead of a CSPRNG
+ * draw.  Exists so tests/c/test_ml_kem_acvp_encaps.c can replay the NIST
+ * ACVP encapsulation AFT group (tests/kat/fips203/acvp/); production
+ * encapsulation has no such entry point.  Defined under AMA_TESTING_MODE. */
+ama_error_t ama_kyber_test_encapsulate_derand(ama_ml_kem_param_set_t ps,
+                                              const uint8_t *pk, size_t pk_len,
+                                              const uint8_t m[32],
+                                              uint8_t *ct, size_t *ct_len,
+                                              uint8_t *ss, size_t ss_len);
 /* Defined under AMA_KYBER_BUILD_DIAGNOSTICS — a switch separate from
  * AMA_TESTING_MODE, and likewise kept out of the production .so. */
 

@@ -178,7 +178,12 @@ static bench_result_t compute_stats(const char *name, double *samples, int n) {
     }
     r.stddev_ns = sqrt(var / n);
 
-    r.ops_per_sec = (r.mean_ns > 0.0) ? 1e9 / r.mean_ns : 0.0;
+    /* Throughput is derived from the MEDIAN, not the mean.  The mean is
+     * inflated by scheduler preemption and cache-cold outliers that no
+     * caller experiences as steady-state throughput; on this harness the
+     * mean-derived rate ran 10-14% below the median-derived rate on the
+     * Ed25519 rows.  The mean is still reported alongside for spread. */
+    r.ops_per_sec = (r.median_ns > 0.0) ? 1e9 / r.median_ns : 0.0;
 
     return r;
 }
@@ -1473,6 +1478,7 @@ static void print_table_row(const bench_result_t *r) {
 }
 
 static void print_csv_header(void) {
+    /* ops_per_sec is 1e9 / median (see compute_stats). */
     printf("operation,mean_us,median_us,stddev_us,min_us,max_us,ops_per_sec,iterations\n");
 }
 
@@ -1501,6 +1507,7 @@ static void print_json_start(void) {
     char ts[64];
     strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &t);
     printf("  \"timestamp\": \"%s\",\n", ts);
+    printf("  \"ops_per_sec_basis\": \"median\",\n");
     printf("  \"results\": [\n");
 }
 

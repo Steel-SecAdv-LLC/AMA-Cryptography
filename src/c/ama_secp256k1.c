@@ -32,6 +32,7 @@
 #include "../include/ama_cryptography.h"
 #include "internal/ama_once.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_ct_declassify.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -1358,7 +1359,7 @@ static void secp256k1_point_mul_generator(secp256k1_jac *result,
 
         /* Full linear scan: exactly one mask is all-ones, so the OR-accumulate
          * selects T[digit] without the index reaching the memory subsystem. */
-        memset(&sel, 0, sizeof(sel));
+        memset(&sel, 0, sizeof(sel));  // PUBLIC-DATA: sel — pre-use zero of the masked-select accumulator (init, not a scrub)
         for (i = 0; i < SECP256K1_COMB_SIZE; i++) {
             uint64_t diff = (uint64_t)i ^ digit;
             /* is_zero == 1 iff diff == 0; same idiom as secp256k1_jac_is_infinity. */
@@ -1451,41 +1452,58 @@ ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Check for zero scalar */
-    if (secp256k1_scalar_is_zero(scalar)) {
-        return AMA_ERROR_INVALID_PARAM;
-    }
-
     /* Deserialize AND validate the caller's point.  This entry point takes
      * the one secret scalar in the file's public API, so an unvalidated
      * point here was the invalid-curve surface: every other caller-supplied
-     * point in this file was already checked. */
+     * point in this file was already checked.  The point is public, so a
+     * branch on it is fine. */
     if (!secp256k1_aff_from_bytes_checked(&P, point_x, point_y)) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
+    /* The two rejections that depend on the scalar — a zero scalar, and a
+     * ladder result at infinity — are computed as masks and applied to the
+     * outputs and the return code without a branch.  A branch on either is a
+     * secret-dependent branch (the Memcheck secret-taint gate reports it),
+     * so the ladder always runs, the affine conversion always runs (Z = 0
+     * inverts to 0 through the Fermat chain, so infinity serialises as
+     * (0, 0) with no special case), and the masks then wipe the outputs and
+     * select the return code. */
+    uint32_t zero_mask = 0u - (uint32_t)secp256k1_scalar_is_zero(scalar);
+
     /* Perform scalar multiplication using Montgomery ladder */
     secp256k1_point_mul_ladder(&R, scalar, &P);
 
-    /* Check for point at infinity (shouldn't happen with valid inputs) */
-    if (secp256k1_jac_is_infinity(&R)) {
-        ama_secure_memzero(out_x, 32);
-        ama_secure_memzero(out_y, 32);
-        ama_secure_memzero(&R, sizeof(R));
-        return AMA_ERROR_CRYPTO;
-    }
+    uint32_t inf_mask = 0u - (uint32_t)secp256k1_jac_is_infinity(&R);
 
     /* Convert to affine and serialize */
     secp256k1_jac_to_affine(&result_aff, &R);
     secp256k1_fe_to_bytes(out_x, &result_aff.x);
     secp256k1_fe_to_bytes(out_y, &result_aff.y);
 
+    {
+        uint8_t keep = (uint8_t)~(uint8_t)(zero_mask | inf_mask);
+        int i;
+        for (i = 0; i < 32; i++) {
+            out_x[i] &= keep;
+            out_y[i] &= keep;
+        }
+    }
+
     /* Clear sensitive intermediates */
     ama_secure_memzero(&P, sizeof(P));
     ama_secure_memzero(&R, sizeof(R));
     ama_secure_memzero(&result_aff, sizeof(result_aff));
 
-    return AMA_SUCCESS;
+    /* zero scalar -> INVALID_PARAM; infinity (only reachable with a scalar
+     * that is a multiple of n, since P was validated) -> CRYPTO; else
+     * SUCCESS.  zero_mask takes precedence. */
+    {
+        uint32_t rc_u = (uint32_t)AMA_SUCCESS;
+        rc_u = (rc_u & ~inf_mask) | ((uint32_t)AMA_ERROR_CRYPTO & inf_mask);
+        rc_u = (rc_u & ~zero_mask) | ((uint32_t)AMA_ERROR_INVALID_PARAM & zero_mask);
+        return (ama_error_t)(int32_t)rc_u;
+    }
 }
 
 /**
@@ -1523,8 +1541,16 @@ ama_error_t ama_secp256k1_pubkey_from_privkey(const uint8_t privkey[32],
      * Reached from the key-file parser (`load_pkcs8` of an EC key), so the input
      * is chosen by whoever supplies the file.  Found by
      * fuzz/python/fuzz_key_formats.py. */
-    if (secp256k1_scalar_is_zero(privkey) || !secp256k1_scalar_below_n(privkey)) {
-        return AMA_ERROR_INVALID_PARAM;
+    {
+        /* Both predicates always run (no short-circuit on the key).  The
+         * verdict is public by contract: the return code tells the caller
+         * whether the key was in range, so branching on it reveals nothing
+         * more.  Declassified for the secret-taint gate. */
+        int bad = secp256k1_scalar_is_zero(privkey) | (1 ^ secp256k1_scalar_below_n(privkey));
+        AMA_CT_DECLASSIFY(&bad, sizeof bad);
+        if (bad) {
+            return AMA_ERROR_INVALID_PARAM;
+        }
     }
 
     /* Compute public key: pubkey = privkey * G.  Fixed base, secret scalar:
@@ -1536,7 +1562,12 @@ ama_error_t ama_secp256k1_pubkey_from_privkey(const uint8_t privkey[32],
         secp256k1_aff Raff;
 
         secp256k1_point_mul_generator(&R, privkey);
-        if (secp256k1_jac_is_infinity(&R)) {
+        /* d in [1, n-1] and G has prime order n, so d*G is never infinity;
+         * the guard is defensive.  Its verdict is declassified: the branch
+         * cannot fire on any valid input and its outcome is returned. */
+        int at_infinity = secp256k1_jac_is_infinity(&R);
+        AMA_CT_DECLASSIFY(&at_infinity, sizeof at_infinity);
+        if (at_infinity) {
             ama_secure_memzero(&R, sizeof(R));
             err = AMA_ERROR_CRYPTO;
         } else {
@@ -1694,7 +1725,7 @@ static const uint64_t SC_HALF_N[SC_LIMBS] = {
 };
 
 static void sc_zero(secp256k1_sc *r) {
-    memset(r->v, 0, sizeof(r->v));
+    memset(r->v, 0, sizeof(r->v));  // PUBLIC-DATA: r->v — constructs the scalar constant 0 (callers: the public constant `one`); not a scrub
 }
 
 static int sc_is_zero(const secp256k1_sc *a) {
@@ -1772,7 +1803,7 @@ static void sc_mont_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_
     uint64_t t[SC_LIMBS + 2];
     int i, j;
 
-    memset(t, 0, sizeof(t));
+    memset(t, 0, sizeof(t));  // PUBLIC-DATA: t — pre-use init of the scalar product accumulator (init, not a scrub)
     for (i = 0; i < SC_LIMBS; i++) {
         uint64_t carry = 0, m;
         for (j = 0; j < SC_LIMBS; j++) {
@@ -2039,7 +2070,7 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
     }
 
     memset(V, 0x01, sizeof(V));
-    memset(K, 0x00, sizeof(K));
+    memset(K, 0x00, sizeof(K));  // PUBLIC-DATA: K — RFC 6979 §3.2 step b: HMAC-DRBG key starts as HashLen zero bytes (init, not a scrub)
 
     /* K = HMAC_K(V || 0x00 || int2octets(x) || bits2octets(h1)) */
     memcpy(buf, V, 32);
@@ -2063,7 +2094,13 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
     for (attempt = 0; attempt < 1024; attempt++) {
         secp256k1_sc cand;
         ama_hmac_sha256(K, 32, V, 32, V);
-        if (sc_from_bytes(&cand, V) && !sc_is_zero(&cand)) {
+        /* RFC 6979 Sec 3.2 step h.3: accept iff the candidate is in
+         * [1, n-1].  The verdict is declassified: every conforming signer
+         * shares this branch, and it exposes only that one discarded DRBG
+         * block fell outside the range (probability ~2^-128 here). */
+        int cand_ok = sc_from_bytes(&cand, V) & (1 ^ sc_is_zero(&cand));
+        AMA_CT_DECLASSIFY(&cand_ok, sizeof cand_ok);
+        if (cand_ok) {
             memcpy(k_out, V, 32);
             ama_secure_memzero(&cand, sizeof(cand));
             break;
@@ -2117,7 +2154,7 @@ static int der_parse_integer(const uint8_t *buf, size_t len, size_t *off, uint8_
     if (ilen > 33) return 0;
     if (ilen == 33 && p[0] != 0x00) return 0;
 
-    memset(out, 0, 32);
+    memset(out, 0, 32);  // PUBLIC-DATA: out — pre-use zero-pad of the int2octets output (init, not a scrub)
     if (ilen > 32) {
         /* 33 bytes with a leading zero: the value still fits in 32. */
         for (i = 0; i < 32; i++)
@@ -2205,36 +2242,65 @@ static ama_error_t secp256k1_ecdsa_sign_scalars(uint8_t r_bytes[32], uint8_t s_b
     if (!message || !private_key)
         goto done;
 
-    /* d must be in [1, n-1]. */
-    if (!sc_from_bytes(&d, private_key) || sc_is_zero(&d))
-        goto done;
+    /* d must be in [1, n-1].  Verdict public by contract (returned);
+     * declassified for the secret-taint gate. */
+    {
+        int bad_d = (1 ^ sc_from_bytes(&d, private_key)) | sc_is_zero(&d);
+        AMA_CT_DECLASSIFY(&bad_d, sizeof bad_d);
+        if (bad_d)
+            goto done;
+    }
 
     /* z = the leftmost 256 bits of the digest, reduced mod n.  For
      * SHA-256 the digest is exactly 256 bits, so this is a reduction only. */
     (void)sc_from_bytes(&z, message);
 
     rfc6979_nonce(k_bytes, private_key, message);
-    if (!sc_from_bytes(&k, k_bytes) || sc_is_zero(&k))
-        goto done;
+    {
+        /* rfc6979_nonce only returns a candidate in [1, n-1]; this re-check
+         * is defensive and cannot fire.  Declassified. */
+        int bad_k = (1 ^ sc_from_bytes(&k, k_bytes)) | sc_is_zero(&k);
+        AMA_CT_DECLASSIFY(&bad_k, sizeof bad_k);
+        if (bad_k)
+            goto done;
+    }
 
     /* R = k*G;  r = R.x mod n.  Fixed base, secret scalar: the constant-time
      * comb, not the generic ladder (see secp256k1_point_mul_generator). */
     secp256k1_point_mul_generator(&R, k_bytes);
-    if (secp256k1_jac_is_infinity(&R))
-        goto done;
+    {
+        /* k in [1, n-1] on a prime-order generator: never infinity.
+         * Declassified defensive guard. */
+        int at_infinity = secp256k1_jac_is_infinity(&R);
+        AMA_CT_DECLASSIFY(&at_infinity, sizeof at_infinity);
+        if (at_infinity)
+            goto done;
+    }
     secp256k1_jac_to_affine(&Raff, &R);
     secp256k1_fe_to_bytes(x_bytes, &Raff.x);
     (void)sc_from_bytes(&r_sc, x_bytes);
-    if (sc_is_zero(&r_sc))
-        goto done;
+    {
+        /* r is the first half of the emitted signature: public.  FIPS
+         * 186-5 / RFC 6979 require r != 0 (probability ~2^-256). */
+        int r_zero = sc_is_zero(&r_sc);
+        AMA_CT_DECLASSIFY(&r_zero, sizeof r_zero);
+        if (r_zero)
+            goto done;
+    }
 
     /* s = k^-1 (z + r*d) mod n */
     sc_inv(&kinv, &k);
     sc_mul(&tmp, &r_sc, &d);
     sc_add(&tmp, &tmp, &z);
     sc_mul(&s_sc, &kinv, &tmp);
-    if (sc_is_zero(&s_sc))
-        goto done;
+    {
+        /* s is the second half of the emitted signature: public.  s != 0
+         * is required by the standard (probability ~2^-256). */
+        int s_zero = sc_is_zero(&s_sc);
+        AMA_CT_DECLASSIFY(&s_zero, sizeof s_zero);
+        if (s_zero)
+            goto done;
+    }
 
     /* Low-s normalization: emit the canonical representative.  Selected
      * rather than branched — whether `s` needed negating is a bit about `k`

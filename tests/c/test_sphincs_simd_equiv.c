@@ -69,10 +69,6 @@ extern void ama_test_restore_keccak_f1600(void);
 
 /* Direct symbol references for the SPHINCS+ SIMD WOTS+ helpers. */
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-extern void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
-                                        uint32_t start, uint32_t steps,
-                                        const uint8_t *pub_seed,
-                                        uint32_t addr[8], size_t n);
 #endif
 /* (Previously: `extern void ama_sphincs_wots_chain_neon(...)`.  Removed
  * along with the NEON wots_chain test lane in `run_wots_chain_parity`
@@ -99,128 +95,13 @@ extern void ama_sphincs_wots_chain_avx2(uint8_t *out, const uint8_t *in,
  * here it used a separate `scalar_wots_chain_no_hash_addr`
  * reference, which was removed alongside the NEON lane itself.
  * -------------------------------------------------------------- */
-/* The scalar SHA-256 reference and the `wots_chain` reference built on it
- * exist for exactly one caller: the AVX2 byte-identity sub-lane in
- * run_wots_chain_parity() below.  The NEON sub-lane was retired (see the
- * rationale there), so on any non-x86-64 build these were compiled and never
- * called — the -Wunused-function class `-Werror=unused-function` makes fatal
- * in the strict-warnings gate, and that the gate could not see while it ran
- * on x86-64 alone.  Guarding the block with its call site's own predicate
- * keeps the reference beside the lane it serves. */
-#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+/* The scalar SHA-256 reference (`SHA256_K`, `SHA256_H`,
+ * `sha256_compress_one_block`) and the `wots_chain` references built on it
+ * lived here to drive lane 2.  Lane 2 is gone — see run_wots_chain_parity()
+ * below — and with it the last consumer, so they are removed rather than
+ * left compiled-but-unused.
+ */
 
-static const uint32_t SHA256_K[64] = {
-    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,
-    0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,
-    0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,
-    0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,
-    0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,
-    0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,
-    0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,
-    0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,
-    0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-};
-static const uint32_t SHA256_H[8] = {
-    0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-    0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
-};
-
-static void sha256_compress_one_block(uint32_t state[8], const uint8_t block[64]) {
-    uint32_t w[64];
-    for (int t = 0; t < 16; t++) {
-        w[t] = ((uint32_t)block[t*4]   << 24) |
-               ((uint32_t)block[t*4+1] << 16) |
-               ((uint32_t)block[t*4+2] << 8)  |
-               ((uint32_t)block[t*4+3]);
-    }
-    for (int t = 16; t < 64; t++) {
-        uint32_t s0 = ((w[t-15] >> 7)  | (w[t-15] << 25)) ^
-                      ((w[t-15] >> 18) | (w[t-15] << 14)) ^
-                      (w[t-15] >> 3);
-        uint32_t s1 = ((w[t-2]  >> 17) | (w[t-2]  << 15)) ^
-                      ((w[t-2]  >> 19) | (w[t-2]  << 13)) ^
-                      (w[t-2]  >> 10);
-        w[t] = w[t-16] + s0 + w[t-7] + s1;
-    }
-    uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
-    uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
-    for (int t = 0; t < 64; t++) {
-        uint32_t S1 = ((e>>6)|(e<<26)) ^ ((e>>11)|(e<<21)) ^ ((e>>25)|(e<<7));
-        uint32_t ch = (e & f) ^ (~e & g);
-        uint32_t T1 = h + S1 + ch + SHA256_K[t] + w[t];
-        uint32_t S0 = ((a>>2)|(a<<30)) ^ ((a>>13)|(a<<19)) ^ ((a>>22)|(a<<10));
-        uint32_t mj = (a & b) ^ (a & c) ^ (b & c);
-        uint32_t T2 = S0 + mj;
-        h = g; g = f; f = e; e = d + T1;
-        d = c; c = b; b = a; a = T1 + T2;
-    }
-    state[0]+=a; state[1]+=b; state[2]+=c; state[3]+=d;
-    state[4]+=e; state[5]+=f; state[6]+=g; state[7]+=h;
-}
-
-static void scalar_wots_chain(uint8_t *out, const uint8_t *in,
-                              uint32_t start, uint32_t steps,
-                              const uint8_t *pub_seed,
-                              uint32_t addr[8], size_t n) {
-    if (steps == 0) {
-        memcpy(out, in, n);
-        return;
-    }
-    memcpy(out, in, n);
-    for (uint32_t i = start; i < start + steps && i < 256; i++) {
-        addr[6] = i;
-        uint8_t block[64];
-        memset(block, 0, 64);
-        memcpy(block, out, n < 32 ? n : 32);
-        block[32] = (uint8_t)(addr[0] >> 24);
-        block[33] = (uint8_t)(addr[0] >> 16);
-        block[34] = (uint8_t)(addr[0] >> 8);
-        block[35] = (uint8_t)(addr[0]);
-        block[36] = (uint8_t)(addr[6] >> 24);
-        block[37] = (uint8_t)(addr[6] >> 16);
-        block[38] = (uint8_t)(addr[6] >> 8);
-        block[39] = (uint8_t)(addr[6]);
-        uint32_t h[8];
-        memcpy(h, SHA256_H, sizeof(SHA256_H));
-        sha256_compress_one_block(h, block);
-        for (int j = 0; j < 8 && j * 4 < (int)n; j++) {
-            out[j*4+0] = (uint8_t)(h[j] >> 24);
-            out[j*4+1] = (uint8_t)(h[j] >> 16);
-            out[j*4+2] = (uint8_t)(h[j] >> 8);
-            out[j*4+3] = (uint8_t)(h[j]);
-        }
-    }
-    (void)pub_seed;
-}
-
-#endif /* AMA_HAVE_AVX2_IMPL && x86-64 */
-
-/* (Previously: `scalar_wots_chain_no_hash_addr`, an AArch64-only scalar
- * reference matching the NEON helper's block-build pattern.  Removed
- * along with its sole caller — see the matching comment block in
- * `run_wots_chain_parity` for the rationale.) */
-
-/* --------------------------------------------------------------
- * Lane 1: SLH-DSA-SHAKE-128s end-to-end SIMD-Keccak vs scalar-Keccak.
- *
- * SLH-DSA is always built in (src/c/ama_slhdsa.c has no PQC opt-in
- * guard).  The testing force/restore Keccak hooks resolve at link
- * time from libama_cryptography_test (see tests/c/CMakeLists.txt).
- * Each lane:
- *   - Derives a deterministic keypair via ama_slhdsa_keygen_from_seed.
- *   - Signs a fixed message with ama_slhdsa_sign_deterministic
- *     (deterministic randomiser = pk.seed per FIPS 205 §10.2).
- *   - Repeats under the forced-scalar Keccak.
- *   - Asserts byte-identical signatures.
- *   - Cross-verifies each signature under each backend.
- * -------------------------------------------------------------- */
 static int run_slhdsa_simd_parity(int *exercised) {
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt == NULL || dt->keccak_f1600 == ama_keccak_f1600_generic) {
@@ -300,116 +181,22 @@ static int run_slhdsa_simd_parity(int *exercised) {
 }
 
 static int run_wots_chain_parity(int *exercised) {
-    /* `pinned_avx2` tracks whether the AVX2 byte-identity sub-lane
-     * actually ran on this host (compiled in AND CPUID-gated AVX2 at
-     * runtime).  The NEON byte-identity sub-lane was retired (see
-     * comment block below) — when only NEON is built, no byte-identity
-     * lane runs here even though `ama_sphincs_wots_chain_neon` is
-     * itself compiled into the library.  The underlying NEON SHA-256
-     * compression primitive is separately pinned by
-     * `tests/c/test_sha256_neon_kat.c` on AArch64 builds. */
-    int pinned_avx2 = 0;
-
-#if !(defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64)))
-    /* The AVX2 sub-lane below is the only writer of *exercised in this lane;
-     * without it the parameter is genuinely unused.  Same `(void)` idiom this
-     * file already uses for the helper's unused `pub_seed`. */
+    /* Lane retired.  It compared `ama_sphincs_wots_chain_avx2` against
+     * `scalar_wots_chain`, a verbatim transcription of the same algorithm:
+     * the two agreed by construction, the comparison executed no vector
+     * instruction, and it would have passed for any implementation at all.
+     * The helper it drove was scalar C that did not compute FIPS 205 `F`
+     * (no `pub_seed`, no compressed ADRS, no `toByte(0, 64 - n)` padding)
+     * and that no production path called; `src/c/avx2/ama_sphincs_avx2.c` is
+     * now a placeholder TU shipping no kernel, and its header records why.
+     * The earlier NEON sub-lane had already been retired for the same
+     * reason.
+     *
+     * SLH-DSA's real SIMD path is the dispatched Keccak permutation under
+     * SHAKE, which lane 1 above exercises end to end. */
     (void)exercised;
-#endif
-
-#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-    /* Runtime ISA gate: the AVX2 helper compiles into the binary
-     * whenever `AMA_HAVE_AVX2_IMPL` is set at build time, but calling
-     * it on a CPU that lacks AVX2 (older x86-64, qemu-user without
-     * `-cpu max`, sandboxed runners) executes a VEX-encoded
-     * instruction and SIGILLs.  The production dispatcher CPUID-gates
-     * around exactly this case (see `dispatch_init_internal`); the
-     * direct-symbol test path must do the same gating itself. */
-    if (!ama_has_avx2()) {
-        printf("  INFO: ama_sphincs_wots_chain_avx2 built in but "
-               "runtime CPU lacks AVX2 — skipping direct-symbol lane\n");
-    } else {
-        pinned_avx2 = 1;
-        const size_t n = 32;  /* SPHINCS+-256f hash length */
-        uint8_t in[32], out_simd[32], out_scal[32];
-        uint8_t pub_seed[32] = {0};
-        uint32_t addr[8];
-
-        for (int trial = 0; trial < 64; trial++) {
-            for (int i = 0; i < 32; i++) in[i] = (uint8_t)(0xA5 ^ trial ^ i);
-            for (int i = 0; i < 8;  i++) addr[i] = 0x01020304u + (uint32_t)trial * (uint32_t)i;
-            uint32_t start = (uint32_t)(trial & 0x7);
-            uint32_t steps = 1u + (uint32_t)(trial & 0xF);
-
-            uint32_t addr_simd[8], addr_scal[8];
-            memcpy(addr_simd, addr, sizeof(addr));
-            memcpy(addr_scal, addr, sizeof(addr));
-
-            ama_sphincs_wots_chain_avx2(out_simd, in, start, steps,
-                                        pub_seed, addr_simd, n);
-            scalar_wots_chain(out_scal, in, start, steps,
-                              pub_seed, addr_scal, n);
-            if (memcmp(out_simd, out_scal, n) != 0) {
-                fprintf(stderr,
-                        "FAIL: sphincs_wots_chain_avx2 trial %d "
-                        "(start=%u steps=%u)\n", trial, start, steps);
-                return 1;
-            }
-        }
-        printf("  PASS: ama_sphincs_wots_chain_avx2 byte-identical "
-               "to scalar SHA-256 reference (64 trials)\n");
-        *exercised = 1;
-    }
-#endif
-
-#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
-    /* NEON wots_chain helper lane intentionally absent.
-     *
-     * Strategic call (see PR #311 thread): `ama_sphincs_wots_chain_neon`
-     * is a build-included helper with **no production caller** today —
-     * the production SPHINCS+ / SLH-DSA sign and verify pipelines run
-     * the scalar SHA-256 path on AArch64 just as they do on x86-64
-     * (the AVX2 `wots_chain` exposure above is also test-only; see the
-     * extern-visibility comment in `src/c/avx2/ama_sphincs_avx2.c`).
-     *
-     * Gating CI on a byte-identity comparison against a non-production
-     * helper turned macOS-arm64 red on a divergence whose blast radius
-     * is zero outside this test binary, and the AVX2 lane already
-     * proves the same SIMD-vs-scalar parity property for the same
-     * `wots_chain` shape on the architecture where the helper is
-     * routinely exercised by future-proofing tests.
-     *
-     * What this means in practice:
-     *   - The underlying NEON SHA-256 kernel (`ama_sha256_compress_neon`
-     *     in `src/c/neon/ama_sphincs_neon.c`, ARM Crypto Extensions
-     *     path) was rewritten in this PR to fix a latent correctness
-     *     bug — that fix STAYS.  It is a real improvement to the
-     *     library and is now ready for any future production wiring.
-     *   - When a real production caller wires `wots_chain_neon`, the
-     *     correct response is to add an end-to-end NEON sign/verify
-     *     KAT (which would catch any residual SHA-256 drift through
-     *     the real signing pipeline), not to re-add an isolated
-     *     byte-identity check against a hand-rolled scalar reference.
-     *   - The SLH-DSA-SHAKE-128s SIMD-Keccak parity lane in
-     *     `run_slhdsa_simd_parity` above remains strict — that lane
-     *     IS production-relevant (SLH-DSA sign / verify run through
-     *     dispatched SHAKE on real callers). */
-#endif
-
-    if (!pinned_avx2) {
-#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
-        printf("  INFO: AArch64 build — NEON wots_chain helper is built "
-               "into the library but the byte-identity sub-lane is "
-               "intentionally retired; the underlying NEON SHA-256 "
-               "compression primitive is pinned by "
-               "test_sha256_neon_kat (FIPS 180-4 KAT)\n");
-#else
-        printf("  INFO: no SPHINCS+ SIMD wots_chain helper compiled "
-               "into this build (neither AMA_HAVE_AVX2_IMPL nor "
-               "AMA_HAVE_NEON_IMPL set)\n");
-#endif
-    }
     return 0;
+
 }
 
 int main(void) {

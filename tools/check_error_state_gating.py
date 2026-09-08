@@ -171,10 +171,11 @@ MODULES = (
     # auditable public native surface, so they are audited rather than exempted.
     # ``agent_binding`` reaches ``_native_lib.ama_*`` in five public methods
     # (derive_key, signing_context, authorize, …), each guarded with
-    # check_crypto_permitted().  ``secure_memory`` reaches native in
-    # secure_mlock/secure_munlock — page locking that emits no key material, so
-    # both are in EXEMPT below — and auditing the module means a future public
-    # function there that DOES emit cryptographic output is caught by default.
+    # check_crypto_permitted().  ``secure_memory`` reaches native in ``_backend_lock_call``
+    # — the single page-lock helper both secure_mlock and secure_munlock now
+    # route through, which emits no key material, so it is in EXEMPT below —
+    # and auditing the module means a future public function there that DOES
+    # emit cryptographic output is caught by default.
     "ama_cryptography/agent_binding.py",
     "ama_cryptography/secure_memory.py",
 )
@@ -196,16 +197,19 @@ EXEMPT: dict[str, str] = {
         "It produces no cryptographic output."
     ),
     "secure_mlock": (
-        "page locking: calls ama_secure_mlock to pin a page in RAM and returns a "
-        "status int. It emits no key material and produces no cryptographic "
-        "output, so it is outside INVARIANT-39's output-inhibition scope (audit "
-        "M16). The module's actual entropy surface, secure_random_bytes, routes "
-        "through secure_token_bytes and is gated."
+        "page locking: reaches ama_secure_mlock through the module-local "
+        "_backend_lock_call helper (tracked since the private-helper "
+        "propagation below) to pin pages in RAM. It emits no key material and "
+        "produces no cryptographic output, so it is outside INVARIANT-39's "
+        "output-inhibition scope (audit M16). The module's actual entropy "
+        "surface, secure_random_bytes, routes through secure_token_bytes and "
+        "is gated."
     ),
     "secure_munlock": (
-        "page unlocking: the ama_secure_munlock counterpart to secure_mlock; "
-        "must succeed in the ERROR state so a faulted module still releases the "
-        "locked pages, and it emits no key material."
+        "page unlocking: the ama_secure_munlock counterpart to secure_mlock, "
+        "reached through the same helper; must succeed in the ERROR state so a "
+        "faulted module still releases the locked pages, and it emits no key "
+        "material."
     ),
 }
 
@@ -355,7 +359,54 @@ def _binds_native_symbol(value: ast.expr) -> bool:
     return False
 
 
-def _native_call_lines(node: ast.AST) -> list[int]:
+def native_reaching_private_helpers(tree: ast.Module) -> set[str]:
+    """Module-local private functions that reach the native library.
+
+    A public entry point that calls one of these reaches the C kernel just as
+    surely as one that calls ``_native_lib.ama_x`` itself, so
+    :func:`_native_call_lines` counts a call to one as a native call.
+
+    Without this the gate had a standing escape hatch, and a refactor walked
+    straight into it: ``secure_mlock`` / ``secure_munlock`` used to call
+    ``ama_secure_mlock`` in their own bodies and were audited (and exempted,
+    with a reason).  Moving the call into a private ``_backend_lock_call``
+    helper — a page-refcounting fix that had nothing to do with this gate —
+    made both public functions look like they touched nothing, the audit
+    skipped them, and the only visible symptom was that their exemptions had
+    become "stale".  A gate whose coverage a routine refactor can silently
+    remove is not a gate; the propagation below is what closes it.
+
+    Fixed point over the module's own private functions, so a chain
+    (public -> ``_a`` -> ``_b`` -> native) is followed to the end.  Only
+    module-local names are propagated: a call to an imported helper is that
+    module's business, and every package module that reaches the library is
+    itself audited or exempted by name (see :func:`discover_native_reaching_modules`).
+    """
+    private: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("_")
+    }
+    reaching = {name for name, node in private.items() if _native_call_lines(node)}
+    changed = True
+    while changed:
+        changed = False
+        for name, node in private.items():
+            if name in reaching:
+                continue
+            for sub in ast.walk(node):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Name)
+                    and sub.func.id in reaching
+                ):
+                    reaching.add(name)
+                    changed = True
+                    break
+    return reaching
+
+
+def _native_call_lines(node: ast.AST, helpers: frozenset[str] = frozenset()) -> list[int]:
     """Line numbers of every native call in the body, by any route.
 
     Matches an ``ast.Call`` whose function is:
@@ -382,7 +433,11 @@ def _native_call_lines(node: ast.AST) -> list[int]:
         if not isinstance(sub, ast.Call):
             continue
         fn = sub.func
-        if isinstance(fn, ast.Attribute) and fn.attr.startswith("ama_"):
+        if isinstance(fn, ast.Name) and fn.id in helpers:
+            # A module-local private helper that reaches native — see
+            # native_reaching_private_helpers().
+            lines.append(sub.lineno)
+        elif isinstance(fn, ast.Attribute) and fn.attr.startswith("ama_"):
             lines.append(sub.lineno)
         elif isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):
             lines.append(sub.lineno)
@@ -401,9 +456,15 @@ def _native_call_lines(node: ast.AST) -> list[int]:
     return lines
 
 
-def _calls_native(node: ast.AST) -> bool:
-    """True when the body makes a native call by any route."""
-    return bool(_native_call_lines(node))
+def _calls_native(node: ast.AST, helpers: frozenset[str] = frozenset()) -> bool:
+    """True when the body makes a native call by any route.
+
+    ``helpers`` is the module's native-reaching private functions (see
+    :func:`native_reaching_private_helpers`); pass it or a public function
+    that reaches the library only through one of them reads as reaching
+    nothing.
+    """
+    return bool(_native_call_lines(node, helpers))
 
 
 def _calls_guard(node: ast.AST, delegating: Optional[set[str]] = None) -> bool:
@@ -599,13 +660,14 @@ def audit(
         exempt = EXEMPT
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     delegating = guard_delegating_helpers(tree)
+    helpers = frozenset(native_reaching_private_helpers(tree))
 
     ungated: list[tuple[str, int]] = []
     seen: set[str] = set()
     checked = 0
 
     for display, node in _iter_public_functions(tree):
-        native_lines = _native_call_lines(node)
+        native_lines = _native_call_lines(node, helpers)
         if not native_lines:
             continue
         seen.add(display)
@@ -735,8 +797,11 @@ def main() -> int:
         # Track which exemptions matched somewhere so staleness is computed
         # across the union of scanned modules, not per file.
         tree = ast.parse(mod_path.read_text(encoding="utf-8"), filename=str(mod_path))
+        # Same private-helper propagation audit() uses, or an exemption for a
+        # function that reaches native only through a helper reads as stale.
+        helpers = frozenset(native_reaching_private_helpers(tree))
         for display, node in _iter_public_functions(tree):
-            if _calls_native(node) and display in EXEMPT:
+            if _calls_native(node, helpers) and display in EXEMPT:
                 seen_exempt.add(display)
 
     # Cython binding modules (line-based, not AST).

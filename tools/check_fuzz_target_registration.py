@@ -232,20 +232,39 @@ def _workflow_targets(root: Path) -> set[str]:
     return {match.group(1) for match in re.finditer(r"^\s*-\s+(fuzz_[a-z0-9_]+)\s*$", text, re.M)}
 
 
-def _workflow_documented_exclusions(root: Path) -> set[str]:
-    """Matrix entries commented out on purpose: `        # - fuzz_sphincs`.
+#: Harnesses allowed to be absent from the per-PR matrix, each naming the job
+#: that DOES run them.  Empty, deliberately: every harness runs somewhere.
+#:
+#: This replaces a rule that accepted ANY commented-out matrix entry as a
+#: "documented exclusion".  Under it, deleting a harness from CI was one `#`
+#: away from invisible — and that is exactly what had happened to
+#: ``fuzz_sphincs``, which ran in no mechanism at all (the workflow_dispatch
+#: trigger only changes the duration) while this gate reported it registered.
+#: The justification recorded beside it, that OSS-Fuzz keeps running such
+#: targets, does not hold: the project is not onboarded (README calls it
+#: "onboarding preparation").  A gate written because "a harness nobody runs
+#: is indistinguishable from one that finds nothing" cannot itself accept a
+#: comment as evidence that somebody runs it.
+WORKFLOW_EXCLUSION_ALLOWLIST: dict[str, str] = {}
 
-    Not every harness belongs in the per-PR lane.  ``fuzz_sphincs`` is
-    excluded because SPHINCS+ is too slow for CI, and that decision is
-    recorded in the workflow next to the entry.  A commented-out entry is a
-    *documented* exclusion and is accepted here; a harness that appears
-    nowhere at all is silent drift and is not.  Such a target must still be
-    registered in the two build lanes, so OSS-Fuzz keeps running it.
+
+def _workflow_documented_exclusions(root: Path) -> set[str]:
+    """Commented-out matrix entries that the allowlist above accounts for.
+
+    A commented-out entry counts as registered ONLY when
+    :data:`WORKFLOW_EXCLUSION_ALLOWLIST` names it and the job it points at
+    exists in the workflow.  Anything else is silent drift.
     """
     text = (root / WORKFLOW_PATH).read_text(encoding="utf-8")
-    return {
+    commented = {
         match.group(1) for match in re.finditer(r"^\s*#\s*-\s+(fuzz_[a-z0-9_]+)\s*$", text, re.M)
     }
+    accounted: set[str] = set()
+    for target in commented:
+        job = WORKFLOW_EXCLUSION_ALLOWLIST.get(target)
+        if job and re.search(rf"^\s*{re.escape(job)}:\s*$", text, re.M):
+            accounted.add(target)
+    return accounted
 
 
 def _ossfuzz_targets(root: Path) -> set[str]:

@@ -379,15 +379,90 @@ def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
     return failures
 
 
+def check_path_filtered_gates(parsed: dict[str, dict[Any, Any]]) -> list[str]:
+    """Every path-filtered gate workflow needs a complementary no-op twin.
+
+    GitHub creates no check run for a workflow that path filtering skipped, so
+    a required context coming from one leaves every non-matching pull request
+    on "Expected — waiting for status" forever.  The context therefore cannot
+    be required at all, and a red gate does not block a merge — which is what
+    ``dudect.yml`` (the KyberSlash secret-division gate, the AVX/ISA scoping
+    gate, the dudect lanes, GHASH scalar invariance, the secret-taint lanes,
+    AEAD verify invariance), ``arm-qemu.yml`` and ``corpus-provenance.yml``
+    were in, each while carrying a comment telling the operator to require its
+    gate context.
+
+    GitHub's documented remedy is a twin workflow with the same ``name:``, a
+    job with the same ``name:``, and the complementary ``paths-ignore:`` list,
+    so exactly one of the pair reports the context on any pull request.  This
+    check requires the twin to exist and holds the two lists complementary —
+    a path added to the real workflow and not to the twin would make BOTH run
+    on a pull request touching it, which is confusing but safe; a path added
+    to the twin's ignore list and not to the real one leaves the context
+    unreported, which is the failure this exists to prevent.
+    """
+    failures: list[str] = []
+    for name, workflow in sorted(parsed.items()):
+        jobs = workflow.get("jobs") or {}
+        gate_ids = {job_id for job_id in jobs if job_id.endswith(GATE_SUFFIX)}
+        if not gate_ids:
+            continue
+        pull_request = _triggers(workflow).get("pull_request") or {}
+        if not isinstance(pull_request, dict) or not pull_request.get("paths"):
+            continue  # unfiltered: the context is reported on every PR already
+        paths = set(pull_request["paths"])
+        twin = None
+        for other_name, other in parsed.items():
+            if other_name == name or other.get("name") != workflow.get("name"):
+                continue
+            other_pr = _triggers(other).get("pull_request") or {}
+            if isinstance(other_pr, dict) and other_pr.get("paths-ignore"):
+                twin = (other_name, other, set(other_pr["paths-ignore"]))
+                break
+        if twin is None:
+            failures.append(
+                f"{name}: gate job(s) {sorted(gate_ids)} run under a path-filtered "
+                f"`pull_request` trigger, so GitHub reports no check for a pull "
+                f"request that touches none of those paths and the gate context "
+                f"cannot be a required status check. Add a no-op twin workflow "
+                f"with the same `name:`, the same gate job `name:`, and the "
+                f"complementary `paths-ignore:` list."
+            )
+            continue
+        twin_name, twin_wf, ignored = twin
+        missing = paths - ignored
+        if missing:
+            failures.append(
+                f"{twin_name}: does not ignore {sorted(missing)}, which "
+                f"{name} watches — both workflows would run on a pull request "
+                f"touching them."
+            )
+        gate_names = {(jobs[j] or {}).get("name") or j for j in gate_ids}
+        twin_names = {
+            (job or {}).get("name") or job_id for job_id, job in (twin_wf.get("jobs") or {}).items()
+        }
+        if not gate_names & twin_names:
+            failures.append(
+                f"{twin_name}: none of its job names {sorted(twin_names)} matches "
+                f"{name}'s gate context(s) {sorted(gate_names)}, so the twin "
+                f"reports a DIFFERENT context and the required one still never "
+                f"arrives."
+            )
+    return failures
+
+
 def audit(workflow_dir: Path = WORKFLOW_DIR) -> tuple[list[str], int]:
     """Check every workflow. Returns (failures, number of files examined)."""
     paths = sorted(list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml")))
     failures: list[str] = []
     total_jobs = 0
+    parsed: dict[str, dict[Any, Any]] = {}
     for path in paths:
         workflow = _load(path)
+        parsed[path.name] = workflow
         total_jobs += len(workflow.get("jobs") or {})
         failures.extend(check_parsed(path.name, workflow))
+    failures.extend(check_path_filtered_gates(parsed))
 
     # Non-vacuity floors (H7).  Proven two ways: `rm .github/workflows/*.yml`
     # left `examined` 0 and the run PASS, and a partial deletion would shrink the

@@ -167,7 +167,17 @@ _INSN_RE = re.compile(r"^\s+[0-9a-f]+:\s+(?P<mnemonic>[a-z][a-z0-9.]*)")
 #: anywhere in this library, so an ``fdiv`` appearing at all is worth failing
 #: on; measured on this tree, both the x86-64 and the AArch64 shared objects
 #: contain zero.
-_DIVIDE_RE = re.compile(r"^(i?div[a-z]*|udiv|sdiv|fdiv[a-z]*)$")
+#:
+#: VEX-encoded forms too.  GCC emits ``vdivss`` / ``vdivsd`` / ``vdivps`` /
+#: ``vdivpd`` rather than the legacy-SSE spellings in any translation unit
+#: compiled with ``-mavx``/``-mavx2`` (every kernel under src/c/avx2/, and every
+#: TU under ``-DAMA_ENABLE_NATIVE_ARCH=ON``), and the earlier pattern did not
+#: match them — verified by feeding the inventory a block containing
+#: ``vdivss``/``vdivpd`` and watching it count only the legacy forms.  Square
+#: roots are the other operand-dependent-latency arithmetic on both
+#: architectures and are covered for the same reason; like ``fdiv`` they have
+#: no legitimate use in this library at all.
+_DIVIDE_RE = re.compile(r"^(v?i?div[a-z]*|udiv|sdiv|v?fdiv[a-z]*|v?sqrt[a-z]*|fsqrt[a-z]*)$")
 
 
 #: Disassemblers to try, in order.  Every one of them is tried until one

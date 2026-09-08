@@ -118,12 +118,12 @@ The following operations are implemented in constant time:
 |-----------|---------------|--------|
 | HMAC / tag comparison | `ama_consttime_memcmp()` (C); Python `constant_time_compare()` calls it via ctypes and raises if the native backend is unavailable — no pure-Python fallback | ✓ Constant-time |
 | Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` (secret scalar) | ✓ Constant-time |
-| Ed25519 verification | `ge25519_double_scalarmult_vartime` wNAF over **public** inputs (public key, signature, message) | Variable-time by design — inputs are public, so timing carries no secret (INVARIANT-12) |
+| Ed25519 verification | Half-size four-scalar wNAF ladder (`src/c/internal/ama_ed25519_halfsize.h`) over **public** inputs (public key, signature, message) | Variable-time by design — inputs are public, so timing carries no secret (INVARIANT-12) |
 | AES-256-GCM (default) | Bitsliced S-box (`AMA_AES_CONSTTIME=ON`) | ✓ Constant-time |
 | AES-256-GCM (opt-out) | Table-based S-box (`-DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON`) | ⚠ NOT constant-time |
 | ML-DSA-65 | NTT and polynomial arithmetic are constant-time; **signing** additionally uses rejection sampling | ◐ Arithmetic constant-time; sign has intentional timing variation by design (FIPS 204 rejection sampling), leaking no private-key material |
 | ML-KEM-1024 | NTT + Fujisaki-Okamoto | ✓ Constant-time |
-| Key zeroing | `secure_memzero()` multi-pass | ✓ Compiler-resistant |
+| Key zeroing | `secure_memzero()` — one pass of volatile stores plus a compiler barrier (native kernel) | ✓ Compiler-resistant |
 
 ### AES Cache-Timing Warning
 
@@ -141,7 +141,8 @@ cmake --build build
 Sensitive material handling:
 - All key material is stored as `bytearray` for in-place zeroing
 - `SecureBuffer` context manager ensures zeroing even on exception
-- `secure_memzero()` performs multi-pass overwrite to resist compiler optimization
+- `secure_memzero()` writes zeros once through `volatile` 64-bit stores and then issues a compiler barrier, which is what resists dead-store elimination; a second pass would not add to that. The multi-pass description belonged to the opt-in pure-Python fallback (`AMA_ALLOW_PYTHON_MEMZERO`), never to the shipped native kernel (`src/c/ama_consttime.c`)
+- `ama_secure_stack_wipe()` complements it by zeroing the dead stack a just-returned primitive used, which is where an optimizing compiler's unnamed copies of a key schedule live
 - Optional `secure_mlock()` prevents key material from reaching swap
 - `SecureKeyStorage` uses AES-256-GCM encryption at rest
 
