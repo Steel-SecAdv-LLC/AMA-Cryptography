@@ -90,6 +90,10 @@ class TestForgetKeyIsTheReclaimPath:
         assert tracker.forget_key(b"retired") == 1
         assert tracker.check_and_record(b"live", b"\x01" * 12) is None
 
+    @pytest.mark.skipif(
+        not hasattr(os, "getuid"),
+        reason="POSIX mode bits carry no meaning here; see TestTheLedgerIsOwnerOnly",
+    )
     def test_forget_key_rewrites_the_ledger_and_keeps_the_mode(
         self, tmp_path: pathlib.Path
     ) -> None:
@@ -120,6 +124,10 @@ class TestForgetKeyIsTheReclaimPath:
         assert tracker.forget_key(b"never-seen") == 0
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "getuid"),
+    reason="POSIX mode bits carry no meaning here; the ledger relies on the directory ACL",
+)
 class TestTheLedgerIsOwnerOnly:
     def test_a_new_ledger_is_created_0600(self, tmp_path: pathlib.Path) -> None:
         ledger = tmp_path / "ledger.dat"

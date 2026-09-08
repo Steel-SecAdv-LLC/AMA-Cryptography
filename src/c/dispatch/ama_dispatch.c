@@ -218,8 +218,9 @@ static ama_dispatch_info_t dispatch_info;
  * configured for it; Apple silicon uses 16 KiB), so the storage owns whole
  * pages on every host those toolchains target.
  *
- * 4 KiB on MSVC.  Two separate limits, each of which failed a Windows lane in
- * turn, so both are recorded:
+ * 4 KiB on Windows -- for EVERY toolchain, because the constraint belongs to
+ * the PE/COFF object format rather than to a compiler.  Two separate MSVC
+ * limits were measured, each of which failed a Windows lane in turn:
  *
  *   error C2345: align(65536): illegal alignment value
  *     -- the compiler caps __declspec(align()) at 8192 and rejects more.
@@ -235,13 +236,22 @@ static ama_dispatch_info_t dispatch_info;
  * 4096 is the largest value both stages accept, and it is exactly what this
  * storage needs: Windows' dwPageSize is 4096 on x64 and on ARM64, so a
  * 4 KiB object aligned to 4 KiB owns precisely one whole page and the seal
- * works unchanged.  clang-cl defines _MSC_VER, targets the same platform and
- * links through the same constraint, so it takes the same value.
+ * works unchanged.
+ *
+ * The guard is _WIN32 and not _MSC_VER because the ceiling is the object
+ * format's.  A GNU-family compiler targeting PE -- MinGW-w64 gcc, which is
+ * what CMake picks up for the nested sub-builds in
+ * tests/test_aesni_is_not_gated_on_avx2.py -- takes the __GNUC__ arm above
+ * but writes the same PE object, and its back end caps an object's alignment
+ * at 8192 bytes (gcc's MAX_OFILE_ALIGNMENT for cygming), so 65536 is refused
+ * there as well.  Selecting on the compiler left that toolchain asking for a
+ * 64 KiB alignment the format cannot express; selecting on the target does
+ * not.  clang-cl defines both _MSC_VER and _WIN32 and lands here too.
  *
  * Neither value is trusted: dispatch_seal() re-checks alignment and length
  * against the RUNTIME page size and declines if either fails, so a host that
  * ever reported a larger page stays unhardened rather than sealing wrongly. */
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     #define AMA_DISPATCH_SEAL_PAGE 4096
 #else
     #define AMA_DISPATCH_SEAL_PAGE 65536

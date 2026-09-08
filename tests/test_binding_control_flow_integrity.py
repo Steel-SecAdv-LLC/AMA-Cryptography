@@ -99,11 +99,19 @@ class TestTheProbeTargetsWhatTheBuildTargets:
         assert accepts("-O2") is False  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="MSVC branch returns /guard:cf and never reaches the per-slice selection",
+)
 class TestAUniversalBuildGetsPerSliceFlags:
     """Neither slice may receive the other's flag.
 
-    Host-independent: it asserts the *shape* of the emitted flags, so it pins
-    the regression on Linux CI as well as on macOS.
+    Host-independent across every toolchain that can produce a universal
+    binary: it asserts the *shape* of the emitted flags, so it pins the
+    regression on Linux CI as well as on macOS.  Windows is the one exception
+    -- ``get_compiler_flags()`` takes the MSVC branch there and returns
+    ``/guard:cf`` without consulting the target architectures at all, so the
+    property under test does not exist rather than being violated.
     """
 
     @staticmethod

@@ -46,9 +46,12 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import pytest
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import subprocess
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CMAKELISTS = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -445,6 +448,23 @@ class _Probe(NamedTuple):
 _STATIC_LIB_NAMES = frozenset({"libama_cryptography_static.a", "ama_cryptography_static.lib"})
 
 
+def _diagnostic(result: subprocess.CompletedProcess[str]) -> str:
+    """Both streams of a failed sub-build, tail first.
+
+    ``stderr`` alone is not enough: Ninja prints a failing compile's ``FAILED:``
+    block and the compiler's diagnostics on STDOUT, and CMake does the same for
+    a configure error.  A message built from ``stderr`` was therefore empty for
+    exactly the failures worth reading, and the windows-latest run that first
+    hit one reported only ``ninja: build stopped: subcommand failed`` with the
+    cause nowhere in the log.
+    """
+    return (
+        f"exit {result.returncode}\n"
+        f"--- stdout (tail) ---\n{result.stdout[-6000:]}\n"
+        f"--- stderr (tail) ---\n{result.stderr[-4000:]}"
+    )
+
+
 def _single_config_generator(os_name: str | None = None) -> list[str] | None:
     """CMake generator flags that honour ``CMAKE_BUILD_TYPE``, or ``None``.
 
@@ -642,14 +662,14 @@ class TestTheBackendAcrossBuildConfigurations:
             text=True,
             timeout=900,
         )
-        assert configure.returncode == 0, configure.stderr[-2000:]
+        assert configure.returncode == 0, _diagnostic(configure)
         build = subprocess.run(
             [cmake, "--build", str(build_dir), "--target", "ama_cryptography_static", "-j", "4"],
             capture_output=True,
             text=True,
             timeout=3600,
         )
-        assert build.returncode == 0, build.stderr[-2000:]
+        assert build.returncode == 0, _diagnostic(build)
 
         static_lib = _find_static_library(build_dir)
         if static_lib is None:
@@ -698,7 +718,7 @@ class TestTheBackendAcrossBuildConfigurations:
             text=True,
             timeout=300,
         )
-        assert link.returncode == 0, link.stderr[-2000:]
+        assert link.returncode == 0, _diagnostic(link)
         # MinGW's gcc appends `.exe` when `-o` names a file without one, so the
         # path handed to `-o` is not necessarily the path that now exists.
         produced = probe_bin if probe_bin.is_file() else probe_bin.with_suffix(".exe")
@@ -706,7 +726,7 @@ class TestTheBackendAcrossBuildConfigurations:
             produced.is_file()
         ), f"the probe linked but produced neither {probe_bin} nor {produced}"
         run = subprocess.run([str(produced)], capture_output=True, text=True, timeout=300)
-        assert run.returncode == 0, run.stderr[-2000:]
+        assert run.returncode == 0, _diagnostic(run)
         fields = dict(line.split("=", 1) for line in run.stdout.splitlines() if "=" in line)
         assert set(fields) == {"HOST_AES_NI", "BACKEND"}, run.stdout
         return _Probe(host_has_aes_ni=fields["HOST_AES_NI"] == "1", backend=fields["BACKEND"]), (

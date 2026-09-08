@@ -184,6 +184,92 @@ passes 4/4 with it — sealed, still dispatching, and a write faults.
 `dispatch_seal()` still validates both properties against the runtime page size
 and declines rather than sealing wrongly.
 
+#### Windows, second round: what the first successful build revealed
+
+The 4096 cap cleared the link and the Windows Python suite ran for the first
+time on this branch: **33 failed, 7,333 passed, 94 skipped**. Thirty-one of
+those failures had been latent behind the build error since `e8b9c8c` — the
+compile never got far enough to reach them, so no lane had ever reported them.
+Four distinct causes.
+
+**An unsequenced write and read cost the secp256k1 signer its correctness.**
+Removing the secret-dependent branch from the private-key range check turned
+
+```c
+if (!sc_from_bytes(&d, private_key) || sc_is_zero(&d))
+```
+
+into
+
+```c
+int bad_d = (1 ^ sc_from_bytes(&d, private_key)) | sc_is_zero(&d);
+```
+
+`||` sequences its left operand before its right. `|` does not, and the two
+calls are only *indeterminately* sequenced with respect to each other
+(C11 6.5.2.2p10): a conforming compiler may run `sc_is_zero(&d)` before
+`sc_from_bytes` has written `d`. gcc and clang evaluate left to right. MSVC
+evaluates right to left, so `sc_is_zero` inspected either indeterminate stack
+bytes or the zeroed slot this function's own exit scrub left behind from an
+earlier call. Measured on `windows-latest`:
+
+- `ama_secp256k1_ecdsa_sign` rejected valid private keys with
+  `AMA_ERROR_INVALID_PARAM` (eight tests, `rc=-1`); and
+- it **signed successfully under an all-zero private key**
+  (`test_zero_private_key_is_rejected` — "DID NOT RAISE").
+
+Four sites carried the shape: `secp256k1_ecdsa_sign_scalars` (the key and the
+RFC 6979 nonce), `rfc6979_nonce`'s candidate acceptance, and the two
+`nistp_scalar_load` range checks in `ama_nistp.c`. Each load now stands in its
+own statement, which restores the sequence point and leaves the predicate
+branch-free — the constant-time posture is unchanged.
+
+No compiler warns about this and no sanitizer sees it on a left-to-right
+toolchain, so the property is pinned at the source level:
+`tests/test_unsequenced_predicate_gate.py` resolves every callee under `src/c`
+to its parameter list and fails when a call that writes an object through a
+non-const pointer shares a `|` or `&` expression with a call that names the
+same object. Reverting any one of the four fixes fails it; the field arithmetic
+(`load32_le(m) | load32_le(m + 4)`, `LO64(acc) | HI64(acc)`, `nistp_lt(k, n) &
+(1 ^ nistp_is_zero(k))`) is not flagged, and four constructed cases pin both
+edges.
+
+**The nonce ledger called `os.getuid()`.** MON-004b's owner-only ledger is a
+POSIX permission control, and both of its primitives — `os.getuid` for the
+ownership test and `os.fchmod` for the temporary — are absent on Windows. Every
+persisted nonce raised `RuntimeError: ... module 'os' has no attribute
+'getuid'` (twenty tests across `test_monitoring_ledger_and_bounds.py` and
+`test_priority_integration.py`), which is a fail-closed refusal of the whole
+`NonceTracker` on that platform. Where the mode bits carry no meaning the
+narrowing is now skipped rather than faked, under a named capability constant,
+and the tests that assert on modes skip with it. On Windows the ledger's
+confidentiality rests on the ACL of the directory it is created in; that is
+stated at the constant rather than left implied.
+
+**The seal's 64 KiB alignment is a PE limit, not an MSVC one.** The nested
+CMake sub-builds in `tests/test_aesni_is_not_gated_on_avx2.py` are configured
+by whichever compiler CMake finds, which on `windows-latest` is MinGW-w64 gcc —
+a GNU-family compiler that takes the `__GNUC__` arm above and asks for
+`__attribute__((aligned(65536)))` while emitting a PE object, whose back end
+caps object alignment at 8192 bytes. Selecting the constant on `_MSC_VER`
+addressed the compiler; the constraint belongs to the target. It is now
+selected on `_WIN32`, which covers MSVC, clang-cl and MinGW alike.
+
+That sub-build failure is also the one finding in this pass that CI reported
+without evidence, and the reason is a defect in the test rather than in the
+library: Ninja prints a failing compile's `FAILED:` block and the compiler's
+diagnostics on **stdout**, and the assertion quoted `stderr`, which was empty.
+The log therefore carried `ninja: build stopped: subcommand failed` and nothing
+else. All four sub-process assertions in that file now report both streams.
+
+**Two of this pass's own tests asserted a property the MSVC branch does not
+have.** `TestAUniversalBuildGetsPerSliceFlags` checks that a universal2 build
+emits each control-flow flag behind its own `-Xarch_`. On Windows
+`get_compiler_flags()` returns `['/O2', '/W3', '/guard:cf']` from the MSVC
+branch without consulting the target architectures at all, so the property does
+not exist there rather than being violated. The class now carries the same
+`win32` skip its pre-existing sibling in that file already had.
+
 #### macOS-Intel: a hardening flag probed for the wrong target
 
 Every `macos-15-intel` lane failed to build the Cython extensions with
@@ -350,12 +436,23 @@ Sphinx docstring (exactly the two original warnings), the no-PQC guards (three
 link failures, with the symbols confirmed absent from the `OFF` library), and
 the hostile-cache skip (native lanes still test the property for real).
 
-Not verifiable on this host, and named as such rather than claimed: MSVC,
-macOS, MemorySanitizer, ThreadSanitizer, and the SVE2 vector lengths. The MSVC
-repair is reasoned from the two compiler diagnostics it answers; the MSan and
+CI then executed the lanes this host cannot, and closed the rest: the ARM QEMU
+gate, `C Library (macos-latest, clang)` and the macOS Python matrices are
+green, and Windows built for the first time — which is what surfaced the four
+causes in "Windows, second round" above. Of the fixes for those, three are
+verified here (the sequencing repair: 89/89 ctest and the full Python suite,
+with the new gate failing on each reverted site; the ledger's platform guard;
+the two test skips), and one is not: the MinGW `_WIN32` seal constant is
+reasoned from the PE object format's alignment ceiling rather than measured, no
+MinGW toolchain being present on this host. That sub-build is also the one
+place CI reported a failure without a cause, and the reason — the assertion
+quoted `stderr` while Ninja writes diagnostics to `stdout` — is fixed in the
+same change, so the next run either passes or says exactly what it hit.
+
+Still not verifiable on this host, and named as such rather than claimed: MSVC,
+MemorySanitizer, ThreadSanitizer, and the SVE2 vector lengths. The MSan and
 TSan repairs are reasoned from the sanitizer signal contract and corroborated
-by the ASan lane exercising the identical code path. CI is their first
-execution.
+by the ASan lane exercising the identical code path.
 
 ### Maintenance pass, twenty-fourth (2026-09-08) — the pass that verified the twenty-third
 

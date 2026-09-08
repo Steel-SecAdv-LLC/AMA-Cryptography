@@ -904,6 +904,21 @@ class ImportHijackViolation:
     actual_path: str
 
 
+#: Whether this platform gives the ledger's mode bits any meaning.
+#:
+#: The owner-only ledger (MON-004b) is a POSIX permission control: it needs a
+#: uid to compare the file's owner against, and a descriptor-based chmod to
+#: narrow a temporary before it is published under the ledger's name.  Windows
+#: has neither -- ``os.getuid`` and ``os.fchmod`` do not exist there, and
+#: ``os.chmod`` only toggles the read-only attribute -- so calling them
+#: unguarded turned every persisted nonce into ``RuntimeError: module 'os' has
+#: no attribute 'getuid'`` and took the whole Windows nonce ledger down with
+#: it.  Where the bits mean nothing the narrowing is skipped, not faked; on
+#: Windows the ledger's confidentiality rests on the ACL of the directory it
+#: is created in.
+_LEDGER_MODES_ARE_MEANINGFUL = hasattr(os, "getuid") and hasattr(os, "fchmod")
+
+
 class NonceTracker:
     """
     Tracks (key_id_hash, nonce) tuples to detect nonce reuse.
@@ -1129,8 +1144,11 @@ class NonceTracker:
         (0644 on a default account), and ``O_CREAT`` does not change the mode
         of a file that already exists.  Only a regular file we own is
         touched: chmod through a symlink or on someone else's file is not
-        this class's business.
+        this class's business, and on a platform whose mode bits carry no
+        such meaning (see ``_LEDGER_MODES_ARE_MEANINGFUL``) nothing is.
         """
+        if not _LEDGER_MODES_ARE_MEANINGFUL:
+            return
         try:
             st = os.lstat(self._persist_path)
         except OSError:
@@ -1175,7 +1193,8 @@ class NonceTracker:
         directory = self._persist_path.parent
         fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=".nonce_tracker.")
         try:
-            os.fchmod(fd, self._LEDGER_MODE)
+            if _LEDGER_MODES_ARE_MEANINGFUL:
+                os.fchmod(fd, self._LEDGER_MODE)
             with os.fdopen(fd, "w") as f:
                 for key_hash, nonce_hex in sorted(self._seen):
                     f.write(f"{key_hash},{nonce_hex}\n")

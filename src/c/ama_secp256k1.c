@@ -2098,7 +2098,10 @@ static void rfc6979_nonce(uint8_t k_out[32], const uint8_t privkey[32], const ui
          * [1, n-1].  The verdict is declassified: every conforming signer
          * shares this branch, and it exposes only that one discarded DRBG
          * block fell outside the range (probability ~2^-128 here). */
-        int cand_ok = sc_from_bytes(&cand, V) & (1 ^ sc_is_zero(&cand));
+        /* Loaded in its own statement: see the sequencing note above
+         * secp256k1_ecdsa_sign_scalars. */
+        const int cand_in_range = sc_from_bytes(&cand, V);
+        int cand_ok = cand_in_range & (1 ^ sc_is_zero(&cand));
         AMA_CT_DECLASSIFY(&cand_ok, sizeof cand_ok);
         if (cand_ok) {
             memcpy(k_out, V, 32);
@@ -2216,6 +2219,30 @@ static size_t der_encode_signature(uint8_t out[AMA_SECP256K1_ECDSA_MAX_SIG_LEN],
  * PUBLIC API
  * ============================================================================ */
 
+/* Sequencing note (INVARIANT-6 sibling; the Windows ECDSA break).
+ *
+ * A predicate of the form
+ *
+ *     bad = (1 ^ load(&v, src)) | is_zero(&v);
+ *
+ * is NOT correct C.  The two function calls are only INDETERMINATELY
+ * sequenced with respect to each other (C11 6.5.2.2p10): `|` and `&` impose
+ * no ordering on their operands, so a conforming compiler may run
+ * `is_zero(&v)` BEFORE `load()` has written `v`.  gcc and clang happen to
+ * evaluate left to right; MSVC evaluates right to left, and read `v` before
+ * it was loaded -- getting either indeterminate stack bytes or, after any
+ * earlier call, the zeroed slot this function's own scrub left behind.
+ *
+ * Measured on windows-latest: `ama_secp256k1_ecdsa_sign` rejected valid
+ * private keys with AMA_ERROR_INVALID_PARAM and, worse, SIGNED SUCCESSFULLY
+ * under an all-zero private key, because the zero test read the wrong bytes.
+ * The short-circuit `||` this replaced carried a sequence point; removing the
+ * secret-dependent branch dropped it.
+ *
+ * The fix is to keep the load in its own statement.  The `;` is a sequence
+ * point, and the composed predicate stays branch-free, so nothing about the
+ * constant-time posture changes.
+ */
 /* The signing arithmetic, emitting the two fixed-width scalars.
  *
  * Split out of ama_secp256k1_ecdsa_sign so that the DER encoder is not the
@@ -2245,7 +2272,8 @@ static ama_error_t secp256k1_ecdsa_sign_scalars(uint8_t r_bytes[32], uint8_t s_b
     /* d must be in [1, n-1].  Verdict public by contract (returned);
      * declassified for the secret-taint gate. */
     {
-        int bad_d = (1 ^ sc_from_bytes(&d, private_key)) | sc_is_zero(&d);
+        const int d_in_range = sc_from_bytes(&d, private_key);
+        int bad_d = (1 ^ d_in_range) | sc_is_zero(&d);
         AMA_CT_DECLASSIFY(&bad_d, sizeof bad_d);
         if (bad_d)
             goto done;
@@ -2259,7 +2287,8 @@ static ama_error_t secp256k1_ecdsa_sign_scalars(uint8_t r_bytes[32], uint8_t s_b
     {
         /* rfc6979_nonce only returns a candidate in [1, n-1]; this re-check
          * is defensive and cannot fire.  Declassified. */
-        int bad_k = (1 ^ sc_from_bytes(&k, k_bytes)) | sc_is_zero(&k);
+        const int k_in_range = sc_from_bytes(&k, k_bytes);
+        int bad_k = (1 ^ k_in_range) | sc_is_zero(&k);
         AMA_CT_DECLASSIFY(&bad_k, sizeof bad_k);
         if (bad_k)
             goto done;

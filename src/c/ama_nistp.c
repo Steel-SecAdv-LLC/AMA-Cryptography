@@ -1663,8 +1663,11 @@ AMA_API ama_error_t ama_nistp_pubkey_from_privkey(ama_nist_curve_t curve,
         return AMA_ERROR_INVALID_PARAM;
     {
         /* Verdict public by contract (returned); declassified for the
-         * secret-taint gate.  Both predicates always run. */
-        int bad = (1 ^ nistp_scalar_load(d, private_key, c)) | nistp_is_zero(d, c->nlimbs);
+         * secret-taint gate.  Both predicates always run.  The load is a
+         * separate statement because `nistp_is_zero` reads what it writes:
+         * see the sequencing note in ama_secp256k1.c. */
+        const int d_in_range = nistp_scalar_load(d, private_key, c);
+        int bad = (1 ^ d_in_range) | nistp_is_zero(d, c->nlimbs);
         AMA_CT_DECLASSIFY(&bad, sizeof bad);
         if (bad)
             return AMA_ERROR_INVALID_PARAM;
@@ -1967,8 +1970,10 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
     ama_error_t rc = AMA_ERROR_INVALID_PARAM;
 
     {
-        /* Verdict public by contract (returned); declassified. */
-        int bad_d = (1 ^ nistp_scalar_load(d, private_key, c)) | nistp_is_zero(d, nl);
+        /* Verdict public by contract (returned); declassified.  Load
+         * sequenced before the zero test -- see ama_secp256k1.c. */
+        const int d_in_range = nistp_scalar_load(d, private_key, c);
+        int bad_d = (1 ^ d_in_range) | nistp_is_zero(d, nl);
         AMA_CT_DECLASSIFY(&bad_d, sizeof bad_d);
         if (bad_d)
             goto done;
