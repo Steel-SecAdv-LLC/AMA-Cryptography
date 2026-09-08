@@ -755,3 +755,45 @@ if(NOT WIN32)
         -U__linux__ -U__APPLE__)
     add_test(NAME test_platform_rand_generic COMMAND test_platform_rand_generic)
 endif()
+
+# ---------------------------------------------------------------------------
+# Cross-architecture lanes: give a re-exec'ed CHILD the sysroot the emulator
+# gives the parent.
+#
+# `CMAKE_CROSSCOMPILING_EMULATOR` is `qemu-aarch64-static;-L;<sysroot>`, and
+# ctest applies it to the test binary it starts.  A test that re-execs ITSELF
+# does not inherit it: the child is started by the kernel through
+# binfmt_misc, which invokes qemu with no `-L`, and qemu then cannot find the
+# guest loader --
+#
+#   aarch64-binfmt-P: Could not open '/lib/ld-linux-aarch64.so.1'
+#   FAIL [fifo]: child exited 255
+#
+# -- which is what held the ARM QEMU lane red.  `test_dispatch_cache_hostile`
+# has to re-exec, because the dispatch table initialises once per process
+# image and a fork()ed child never re-enters the cache code.
+#
+# qemu-user reads the same sysroot from `QEMU_LD_PREFIX`, and an environment
+# variable IS inherited across exec.  Exporting it for every test in this
+# directory closes the gap for the whole suite rather than for the one test
+# that happens to re-exec today, and it is harmless everywhere else: nothing
+# but qemu-user reads it.  The value is taken from the emulator command
+# itself, so it cannot drift from the `-L` the parent is given.
+#
+# APPEND, because several tests above set their own ENVIRONMENT.
+if(CMAKE_CROSSCOMPILING_EMULATOR)
+    list(FIND CMAKE_CROSSCOMPILING_EMULATOR "-L" _ama_emul_dash_l)
+    if(_ama_emul_dash_l GREATER -1)
+        math(EXPR _ama_emul_sysroot_idx "${_ama_emul_dash_l} + 1")
+        list(LENGTH CMAKE_CROSSCOMPILING_EMULATOR _ama_emul_len)
+        if(_ama_emul_sysroot_idx LESS _ama_emul_len)
+            list(GET CMAKE_CROSSCOMPILING_EMULATOR
+                 ${_ama_emul_sysroot_idx} _ama_emul_sysroot)
+            get_property(_ama_registered_tests DIRECTORY PROPERTY TESTS)
+            foreach(_ama_test IN LISTS _ama_registered_tests)
+                set_property(TEST ${_ama_test} APPEND PROPERTY
+                             ENVIRONMENT "QEMU_LD_PREFIX=${_ama_emul_sysroot}")
+            endforeach()
+        endif()
+    endif()
+endif()
