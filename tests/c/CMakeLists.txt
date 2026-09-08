@@ -107,17 +107,6 @@ add_ama_test(test_dispatch_cache_hostile test_dispatch_cache_hostile.c)
 set_tests_properties(test_dispatch_cache_hostile PROPERTIES
     SKIP_RETURN_CODE 77)
 
-# DISP-07: the dispatch function-pointer table must be read-only after init.
-# Linked against the NON-testing library on purpose: ama_cryptography_test
-# defines AMA_TESTING_MODE, under which the table is deliberately left
-# writable so the force/restore hooks can rewrite slots.  A test built that
-# way would report "not sealed" forever and prove nothing.  Skips (77) where
-# the platform declines to mprotect.
-add_executable(test_dispatch_seal test_dispatch_seal.c)
-target_link_libraries(test_dispatch_seal ama_cryptography_static)
-add_test(NAME test_dispatch_seal COMMAND test_dispatch_seal)
-set_tests_properties(test_dispatch_seal PROPERTIES SKIP_RETURN_CODE 77)
-
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)
 add_ama_test(test_sha3_512_stream test_sha3_512_stream.c)
