@@ -126,13 +126,39 @@ class TestTheLedgerIsOwnerOnly:
         NonceTracker(persist_path=str(ledger)).check_and_record(b"k", b"\x00" * 12)
         assert stat.S_IMODE(ledger.stat().st_mode) == 0o600
 
+    @pytest.mark.parametrize(
+        "stale_bits",
+        [
+            pytest.param(stat.S_IRGRP, id="group-read"),
+            pytest.param(stat.S_IRGRP | stat.S_IROTH, id="world-read-0644"),
+            pytest.param(stat.S_IWGRP | stat.S_IWOTH, id="world-write"),
+            pytest.param(stat.S_IRWXG | stat.S_IRWXO, id="0677"),
+            pytest.param(stat.S_IXUSR, id="owner-execute-only"),
+        ],
+    )
     def test_a_permissive_ledger_from_an_earlier_release_is_narrowed(
-        self, tmp_path: pathlib.Path
+        self, tmp_path: pathlib.Path, stale_bits: int
     ) -> None:
-        """O_CREAT does not change the mode of a file that already exists."""
+        """O_CREAT does not change the mode of a file that already exists.
+
+        Parametrised over every shape of stale bit rather than the single
+        ``0o644`` an earlier release actually left, because the production
+        narrowing keys on ``S_IMODE(st_mode) & ~_LEDGER_MODE`` — *any* bit
+        outside ``0o600``, the owner-execute bit included. One starting mode
+        exercised one row of that mask; these five cover group, world, read,
+        write, execute and the owner-only case, so a narrowing rewritten to
+        strip, say, only the world bits fails here instead of shipping.
+
+        The starting mode is composed from ``stat`` constants and applied with
+        ``Path.chmod`` — the idiom already used for this in
+        ``tests/test_apt_retry_gate.py`` and ``tests/test_choco_retry_gate.py``
+        — so each case names the bits under test instead of encoding them in an
+        octal literal.
+        """
         ledger = tmp_path / "ledger.dat"
         ledger.write_text("")
-        os.chmod(ledger, 0o644)
+        ledger.chmod(stat.S_IRUSR | stat.S_IWUSR | stale_bits)
+        assert stat.S_IMODE(ledger.stat().st_mode) != 0o600, "fixture is vacuous"
         NonceTracker(persist_path=str(ledger)).check_and_record(b"k", b"\x00" * 12)
         assert stat.S_IMODE(ledger.stat().st_mode) == 0o600
 
