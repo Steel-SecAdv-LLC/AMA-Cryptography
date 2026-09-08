@@ -157,21 +157,50 @@ add_test(NAME test_lms COMMAND test_lms
 # tree like test_kat and test_lms.  The keyGen, decapsulation and key-check
 # groups of the same vendored vectors replay through the Python bindings in
 # tests/test_ml_kem_acvp_vectors.py.
-add_executable(test_ml_kem_acvp_encaps test_ml_kem_acvp_encaps.c)
-target_link_libraries(test_ml_kem_acvp_encaps ama_cryptography_test)
-add_test(NAME test_ml_kem_acvp_encaps COMMAND test_ml_kem_acvp_encaps
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+#
+# Unlike test_ascon and test_lms above, ML-KEM is NOT in the unconditional
+# source list: src/c/ama_kyber.c is compiled only under AMA_USE_NATIVE_PQC,
+# so ama_kyber_test_encapsulate_derand() is absent from the library in the
+# OFF configuration and the link fails with an undefined reference.  The
+# gate goes on the TARGET rather than on add_test alone — an executable that
+# cannot link breaks the build outright, long before ctest would get to
+# decide whether to run it.
+if(AMA_USE_NATIVE_PQC)
+    add_executable(test_ml_kem_acvp_encaps test_ml_kem_acvp_encaps.c)
+    target_link_libraries(test_ml_kem_acvp_encaps ama_cryptography_test)
+    add_test(NAME test_ml_kem_acvp_encaps COMMAND test_ml_kem_acvp_encaps
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
 add_ama_test(test_ed25519 test_ed25519.c)
-add_ama_test(test_hybrid_sig test_hybrid_sig.c)
-# Dead-stack key residue.  -O2 at minimum: the defect this pins (the compiler
-# hoisting round keys into unscrubbed spill slots) only exists in optimized
-# code, and the probe's own frame arithmetic assumes a normal prologue.
-add_ama_test(test_aead_stack_residue test_aead_stack_residue.c)
-# Skips (77) under AddressSanitizer: the probe reads dead stack below its
-# own frame, which is exactly what ASan's redzones exist to catch.
-set_tests_properties(test_aead_stack_residue PROPERTIES SKIP_RETURN_CODE 77)
-target_compile_options(test_aead_stack_residue PRIVATE
-    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+
+# The next two targets each reach a symbol that lives under
+# AMA_USE_NATIVE_PQC in the top-level source list, so both are built only
+# when it is on — same reasoning as test_ml_kem_acvp_encaps above: the gate
+# is on the targets, because the failure is a link failure, not a test
+# failure.
+#   test_hybrid_sig          AMA_ALG_HYBRID is Ed25519 + ML-DSA-65, so it
+#                            needs ama_dilithium_sign / _verify / _verify_ctx
+#                            from src/c/ama_dilithium.c.
+#   test_aead_stack_residue  probes both AEAD entry points, and the
+#                            ChaCha20-Poly1305 half needs
+#                            ama_chacha20poly1305_encrypt / _decrypt from
+#                            src/c/ama_chacha20poly1305.c.  Its AES-GCM half
+#                            would link on its own, but keeping that half in
+#                            the OFF lane is a change to the test source, not
+#                            to this file.
+if(AMA_USE_NATIVE_PQC)
+    add_ama_test(test_hybrid_sig test_hybrid_sig.c)
+    # Dead-stack key residue.  -O2 at minimum: the defect this pins (the
+    # compiler hoisting round keys into unscrubbed spill slots) only exists in
+    # optimized code, and the probe's own frame arithmetic assumes a normal
+    # prologue.
+    add_ama_test(test_aead_stack_residue test_aead_stack_residue.c)
+    # Skips (77) under AddressSanitizer: the probe reads dead stack below its
+    # own frame, which is exactly what ASan's redzones exist to catch.
+    set_tests_properties(test_aead_stack_residue PROPERTIES SKIP_RETURN_CODE 77)
+    target_compile_options(test_aead_stack_residue PRIVATE
+        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+endif()
 
 # The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
 # "exactly 32 / 64 readable bytes" — and nothing about alignment, so an
