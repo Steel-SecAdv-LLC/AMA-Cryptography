@@ -203,11 +203,13 @@ static ama_dispatch_info_t dispatch_info;
  *
  * The fix is to make the object page-owning rather than page-aligned: a
  * union padded out to AMA_DISPATCH_SEAL_PAGE and aligned to it, so no other
- * object can share a page with it.  AMA_DISPATCH_SEAL_PAGE is 64 KiB, the
- * largest page size in common use (aarch64 can be configured for it; Apple
- * silicon uses 16 KiB), so the padding covers every host this ships to
- * rather than only the 4 KiB case.  It costs 64 KiB of BSS, which is
- * untouched pages the kernel never has to back.
+ * object can share a page with it.  The table itself is 144 bytes; the rest
+ * is padding, and it is untouched BSS the kernel never has to back.
+ *
+ * AMA_DISPATCH_SEAL_PAGE is per-toolchain rather than one number, because the
+ * largest page a host may report and the largest alignment a toolchain will
+ * accept are different constraints -- see its definition below for the two
+ * MSVC limits that decide the Windows value.
  *
  * dispatch_seal() then verifies BOTH conditions against the RUNTIME page
  * size before touching anything, and declines otherwise.
@@ -216,22 +218,31 @@ static ama_dispatch_info_t dispatch_info;
  * configured for it; Apple silicon uses 16 KiB), so the storage owns whole
  * pages on every host those toolchains target.
  *
- * 8 KiB on MSVC, which caps __declspec(align()) at 8192 and rejects anything
- * larger outright:
+ * 4 KiB on MSVC.  Two separate limits, each of which failed a Windows lane in
+ * turn, so both are recorded:
  *
  *   error C2345: align(65536): illegal alignment value
+ *     -- the compiler caps __declspec(align()) at 8192 and rejects more.
  *
- * That is not a warning to work around -- it failed the compile, and with it
- * every Windows lane, when this hardening first landed.  MSVC targets Windows,
- * whose dwPageSize is 4096 on x64 and on ARM64, so 8 KiB still owns whole
- * pages there and the seal keeps working.  clang-cl defines _MSC_VER too and
- * lands on the same 8 KiB for the same target, by the same reasoning.
+ *   fatal error LNK1164: section 0x6E1 alignment (8192) greater than
+ *   /ALIGN value
+ *     -- and the LINKER then rejects 8192, because the default image section
+ *        alignment is 4096.  Raising it with /ALIGN is not the trade to make:
+ *        it relayouts the whole image and, on a DLL, produces one Windows
+ *        will not load without further flags.  Clearing the compiler's limit
+ *        only moved the failure one stage later.
+ *
+ * 4096 is the largest value both stages accept, and it is exactly what this
+ * storage needs: Windows' dwPageSize is 4096 on x64 and on ARM64, so a
+ * 4 KiB object aligned to 4 KiB owns precisely one whole page and the seal
+ * works unchanged.  clang-cl defines _MSC_VER, targets the same platform and
+ * links through the same constraint, so it takes the same value.
  *
  * Neither value is trusted: dispatch_seal() re-checks alignment and length
  * against the RUNTIME page size and declines if either fails, so a host that
  * ever reported a larger page stays unhardened rather than sealing wrongly. */
 #if defined(_MSC_VER)
-    #define AMA_DISPATCH_SEAL_PAGE 8192
+    #define AMA_DISPATCH_SEAL_PAGE 4096
 #else
     #define AMA_DISPATCH_SEAL_PAGE 65536
 #endif
