@@ -926,6 +926,45 @@ jobs:
       # #323 follow-up (CI failure on first run).
       image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1
     timeout-minutes: 30
+    defaults:
+      run:
+        # `shell: bash` is load-bearing for THIS job specifically, and the
+        # reason is the `container:` block above.  Every other job in this
+        # workflow runs on the runner host, where a `run:` step with no
+        # `shell:` key gets `bash -e {0}`.  A CONTAINER job does not: the
+        # runner execs the step script with `sh -e {0}` instead (the job log
+        # prints `shell: sh -e {0}` in the step's Run group), and in
+        # manylinux_2_28 `/bin/sh` is a symlink to bash 4.4.20, which
+        # therefore starts in POSIX mode.  Bash 4.4 DISABLES process
+        # substitution in POSIX mode (it was re-allowed in bash 5.1), so
+        # `done < <(find ...)` and `diff <(...) <(...)` — both used below —
+        # are parse errors, not runtime failures: the step dies with
+        # "syntax error near unexpected token `<'" and exit 2 before it
+        # examines a single object.
+        #
+        # That is exactly what happened when the prefix-map assertion was
+        # added: the step reported a hard failure and the wheels were fine.
+        # The two builds' native artefacts were byte-identical and no
+        # absolute build path survived in any of them — measured on the
+        # wheels the failing run itself uploaded.
+        #
+        # The diagnostic block of "Diff native artefacts (STRICT)" carries
+        # the same construct and had been silently exempt: with byte-equal
+        # artefacts that step exits at its OK branch before bash ever parses
+        # the `diff <(objdump ...)` line, so the defect only surfaces on the
+        # run that has a real divergence to report — the one run where the
+        # per-file diagnostic matters.  Reproduced both ways in the pinned
+        # image; under `sh` the diagnostic is replaced by a line-40 syntax
+        # error, under `bash` it prints the size delta, `cmp` offset and ELF
+        # section-header diff as designed.
+        #
+        # Declaring the shell at JOB level rather than per step so a future
+        # step added to this job cannot re-acquire the trap.  It resolves to
+        # `bash --noprofile --norc -eo pipefail {0}`; the two steps that set
+        # their own `set -e` / `set -euo pipefail` keep doing so, and every
+        # pipeline in this job either sits in an `if` condition or already
+        # ends in `|| true`, so the added `pipefail` changes no outcome.
+        shell: bash
     # AR_FLAGS=Drcs was set here in the audit Issue 10 close-out
     # commit but turned out to be a no-op: CMake's archive creation
     # invokes `<CMAKE_AR> qc <TARGET> ...` directly and does NOT
@@ -1059,18 +1098,49 @@ jobs:
         # Without this, the map can go back to being dead config and the
         # byte-equality diff will not notice: two passes at the same
         # unmapped path are identical to each other and both leak the path.
+        #
+        # Runs under `bash` via this job's `defaults.run.shell` — the
+        # `done < <(find ...)` below is a process substitution, and it is
+        # the construct that keeps the assertion honest: piping `find` into
+        # the loop would run the loop body in a subshell, where `leaked=1`
+        # is set and then discarded on the subshell's exit, so a leaking
+        # object would print its error and the step would still pass.  See
+        # the job-level `shell:` note for why a container job does not get
+        # bash by default.
+        #
+        # The glob is `*.so*`, not `*.so`: the wheel ships the native
+        # library under all three of libama_cryptography.so,
+        # libama_cryptography.so.5 and libama_cryptography.so.5.0.0, and
+        # `-name '*.so'` enumerated 7 of the 9 shipped objects, skipping the
+        # two versioned names.  Today all three are byte-identical copies,
+        # so nothing was actually unexamined — but that is a property of how
+        # CMake's output lands in the wheel, not something this gate should
+        # depend on.
         run: |
           set -euo pipefail
           rm -rf _prefixcheck && mkdir _prefixcheck
           python -m zipfile -e dist1/*.whl _prefixcheck/
           leaked=0
           while IFS= read -r obj; do
-            if strings -a "$obj" | grep -Eq '(^|[^A-Za-z0-9_])/(__w|home/runner|project)/'; then
-              echo "::error::$obj still embeds an absolute build path:"
-              strings -a "$obj" | grep -Eo '/(__w|home/runner|project)/[^ ]*' | sort -u | head -5
+            # `grep -E`, NOT `grep -Eq`.  `-q` exits at the first match and
+            # SIGPIPEs `strings`; the `set -o pipefail` two lines above then
+            # promotes that 141 into the pipeline's status, so the `if` read
+            # FALSE on exactly the objects that DO leak.  Measured on a
+            # deliberately unmapped build of this tree, on an object whose
+            # DW_AT_comp_dir is /__w/AMA-Cryptography/AMA-Cryptography:
+            # PIPESTATUS=(141 0), pipeline status 141, leak reported as
+            # clean.  Without -q, grep drains stdin, `strings` exits 0, and
+            # the verdict is the captured text rather than a status the
+            # pipeline mangles.  The detection pattern is unchanged.
+            hits=$(strings -a "$obj" \
+              | grep -E '(^|[^A-Za-z0-9_])/(__w|home/runner|project)/' || true)
+            if [ -n "$hits" ]; then
               leaked=1
+              echo "::error::$obj still embeds an absolute build path:"
+              printf '%s\n' "$hits" \
+                | grep -Eo '/(__w|home/runner|project)/[^ ]*' | sort -u | head -5 || true
             fi
-          done < <(find _prefixcheck -name '*.so' -o -name '*.pyd')
+          done < <(find _prefixcheck -type f \( -name '*.so*' -o -name '*.pyd' \))
           if [ "$leaked" -ne 0 ]; then
             echo "::error::-ffile-prefix-map/-fdebug-prefix-map did not take effect."
             exit 1
