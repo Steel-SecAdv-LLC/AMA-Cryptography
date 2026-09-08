@@ -97,6 +97,34 @@ static int run_child(const char *mode, const char *cache_path, const char *victi
 }
 
 /* ---- parent ----------------------------------------------------------- */
+
+/* The child's exit code when `execl` itself failed, distinct from every code
+ * `run_child` can return (0-4).
+ *
+ * This distinction is the difference between a red lane and a true one.  The
+ * re-exec is load-bearing -- `pthread_once` state does not survive exec, and
+ * resetting it is the whole reason each scenario runs in a fresh image -- but
+ * it re-execs `argv[0]`, and in a CROSS-ARCHITECTURE lane `argv[0]` is a guest
+ * ELF the host kernel cannot exec.  `cmake/toolchains/aarch64-linux-gnu.cmake`
+ * sets CMAKE_CROSSCOMPILING_EMULATOR to `qemu-aarch64-static`, so ctest starts
+ * the test through the emulator, but the emulator is invisible to the guest:
+ * the child's `execl` reaches the host kernel with an aarch64 binary and fails
+ * unless binfmt_misc happens to be registered.
+ *
+ * The old code answered that with `_exit(127)`, which the parent read as a
+ * scenario failure -- reporting "the cache reader accepted a FIFO" when in
+ * fact nothing had been tested.  Measured: all four scenarios reported
+ * `child exited 127` under `qemu-aarch64-static`, and that is what has held
+ * the ARM QEMU Gate red since this test landed.
+ *
+ * An environment that cannot start the child has not falsified anything, so
+ * it is reported as a skip, not a pass and not a failure.  The property is a
+ * kernel/libc behaviour rather than an architectural one, and every native
+ * lane still exercises it for real. */
+#define AMA_CHILD_EXEC_FAILED 126
+
+/* Returns 0 pass, -1 fail, AMA_CHILD_EXEC_FAILED when the child could not be
+ * started at all. */
 static int spawn_and_wait(const char *self, const char *mode, const char *cache_path,
                           const char *victim, const char *label) {
     pid_t pid = fork();
@@ -106,7 +134,7 @@ static int spawn_and_wait(const char *self, const char *mode, const char *cache_
     }
     if (pid == 0) {
         execl(self, self, "child", mode, cache_path, victim ? victim : "", (char *)NULL);
-        _exit(127);
+        _exit(AMA_CHILD_EXEC_FAILED);
     }
     int status = 0;
     if (waitpid(pid, &status, 0) != pid) {
@@ -119,12 +147,29 @@ static int spawn_and_wait(const char *self, const char *mode, const char *cache_
                 label, WTERMSIG(status));
         return -1;
     }
+    if (WIFEXITED(status) && WEXITSTATUS(status) == AMA_CHILD_EXEC_FAILED) {
+        return AMA_CHILD_EXEC_FAILED;
+    }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         fprintf(stderr, "FAIL [%s]: child exited %d\n", label,
                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
         return -1;
     }
     return 0;
+}
+
+/* Set once any scenario reports that the child could not be exec'd. */
+static int exec_unavailable;
+
+/* `spawn_and_wait` with the exec-failure case folded into a single flag, so
+ * each call site keeps reading as pass/fail. */
+static int spawn_checked(const char *self, const char *mode, const char *cache_path,
+                         const char *victim, const char *label) {
+    const int rc = spawn_and_wait(self, mode, cache_path, victim, label);
+    if (rc == AMA_CHILD_EXEC_FAILED) {
+        exec_unavailable = 1;
+    }
+    return rc;
 }
 
 int main(int argc, char **argv) {
@@ -146,7 +191,7 @@ int main(int argc, char **argv) {
         if (mkfifo(fifo, 0600) != 0) {
             fprintf(stderr, "FAIL: mkfifo: %s\n", strerror(errno));
             failures++;
-        } else if (spawn_and_wait(argv[0], "fifo", fifo, NULL, "fifo") != 0) {
+        } else if (spawn_checked(argv[0], "fifo", fifo, NULL, "fifo") != 0) {
             failures++;
         } else {
             printf("  fifo: init returned (did not block)\n");
@@ -155,7 +200,7 @@ int main(int argc, char **argv) {
     }
 
     /* 2. /dev/zero: must not spin. */
-    if (spawn_and_wait(argv[0], "devzero", "/dev/zero", NULL, "devzero") != 0) {
+    if (spawn_checked(argv[0], "devzero", "/dev/zero", NULL, "devzero") != 0) {
         failures++;
     } else {
         printf("  /dev/zero: init returned (did not spin)\n");
@@ -172,7 +217,7 @@ int main(int argc, char **argv) {
         if (!f || fputs(original, f) == EOF || fclose(f) != 0) {
             fprintf(stderr, "FAIL: could not write %s\n", victim);
             failures++;
-        } else if (spawn_and_wait(argv[0], "symlink", cache, victim, "symlink") != 0) {
+        } else if (spawn_checked(argv[0], "symlink", cache, victim, "symlink") != 0) {
             failures++;
         } else {
             if (read_all(victim, contents, sizeof(contents)) < 0 ||
@@ -206,12 +251,12 @@ int main(int argc, char **argv) {
         char cache[192];
         struct stat st;
         snprintf(cache, sizeof(cache), "%s/control", dir);
-        if (spawn_and_wait(argv[0], "plain", cache, NULL, "control-write") != 0) {
+        if (spawn_checked(argv[0], "plain", cache, NULL, "control-write") != 0) {
             failures++;
         } else if (stat(cache, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size == 0) {
             fprintf(stderr, "FAIL [control]: no regular cache file was written\n");
             failures++;
-        } else if (spawn_and_wait(argv[0], "plain", cache, NULL, "control-read") != 0) {
+        } else if (spawn_checked(argv[0], "plain", cache, NULL, "control-read") != 0) {
             failures++;
         } else {
             printf("  control: regular cache file written and re-read\n");
@@ -226,6 +271,16 @@ int main(int argc, char **argv) {
         if (system(cmd) != 0) {
             /* best-effort cleanup of a scratch directory */
         }
+    }
+
+    /* Checked BEFORE `failures`: when the child could not be started, every
+     * scenario "failed" without testing anything, and reporting that as a
+     * defect is worse than reporting nothing.  See AMA_CHILD_EXEC_FAILED. */
+    if (exec_unavailable) {
+        printf("SKIP: this environment cannot exec the test binary as a child "
+               "(cross-architecture emulation without binfmt_misc); the hostile "
+               "cache scenarios need a fresh process image and were not run\n");
+        return 77;
     }
 
     if (failures) {
