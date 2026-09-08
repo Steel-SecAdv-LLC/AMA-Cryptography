@@ -82,6 +82,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+/* mprotect(2), for sealing the dispatch table read-only after init. */
+#include <sys/mman.h>
 /* <limits.h> brings in PATH_MAX on glibc / musl / Apple libc / *BSD —
  * needed for the realpath()-canonicalised cache path buffer.  Where the
  * platform leaves PATH_MAX undefined (some musl configs), the
@@ -164,8 +166,210 @@ extern const char *ama_ed25519_active_backend(void);
 extern const char *ama_ed25519_active_fold(void);
 
 static ama_dispatch_info_t dispatch_info;
-static ama_dispatch_table_t dispatch_table;
+
+/* The dispatch table is sealed read-only after initialisation.
+ *
+ * Every SHA-3/SHAKE, ML-KEM, ML-DSA, AES-GCM, ChaCha20, Argon2 and batch
+ * X25519 operation is an indirect call through this table, so while it sits
+ * in ordinary writable .bss any memory-write primitive anywhere else in the
+ * process can retarget the whole cryptographic surface at once -- eighteen
+ * entry points from one write.  ama_get_dispatch_table() returning a
+ * `const` pointer constrained callers, not attackers.
+ *
+ * The table is therefore given its own page-aligned section, and
+ * dispatch_seal() calls mprotect(PROT_READ) (VirtualProtect on Windows) on
+ * it at the end of dispatch_init_internal().  After that a write faults.
+ * This is defence in depth, not a boundary: code that can call mprotect can
+ * unseal it again.  What it removes is the cheap, silent one-write pivot.
+ *
+ * AMA_TESTING_MODE keeps the table writable, because the test hooks
+ * (ama_test_force_*_scalar / ama_test_restore_*_avx2) rewrite slots by
+ * design; the sealing itself is covered by tests/c/test_dispatch_seal.c,
+ * which is built without that define.
+ *
+ * The alignment is a compile-time page-size guess (4 KiB is the minimum on
+ * every platform this ships to); dispatch_seal() rounds to the runtime page
+ * size and fails soft, so a host with larger pages, a hardened allocator, or
+ * an mprotect the sandbox refuses simply keeps the previous behaviour.
+ */
+/* The sealed region must OWN its pages.
+ *
+ * The first attempt placed the table in a page-aligned section and called
+ * mprotect on it.  Measured on the built object: `.ama_dispatch` was 0x90
+ * bytes at 0xea000 and `.bss` began at 0xea0a0 -- the same 4 KiB page.  So
+ * the mprotect froze the head of `.bss` too, and ama_dispatch_init() itself
+ * segfaulted on the next write to any static.  A hardening step that bricks
+ * the library on first use is not a hardening step.
+ *
+ * The fix is to make the object page-owning rather than page-aligned: a
+ * union padded out to AMA_DISPATCH_SEAL_PAGE and aligned to it, so no other
+ * object can share a page with it.  AMA_DISPATCH_SEAL_PAGE is 64 KiB, the
+ * largest page size in common use (aarch64 can be configured for it; Apple
+ * silicon uses 16 KiB), so the padding covers every host this ships to
+ * rather than only the 4 KiB case.  It costs 64 KiB of BSS, which is
+ * untouched pages the kernel never has to back.
+ *
+ * dispatch_seal() then verifies BOTH conditions against the RUNTIME page
+ * size before touching anything, and declines otherwise.
+ */
+/* 64 KiB on GCC/Clang: the largest page size in common use (aarch64 can be
+ * configured for it; Apple silicon uses 16 KiB), so the storage owns whole
+ * pages on every host those toolchains target.
+ *
+ * 8 KiB on MSVC, which caps __declspec(align()) at 8192 and rejects anything
+ * larger outright:
+ *
+ *   error C2345: align(65536): illegal alignment value
+ *
+ * That is not a warning to work around -- it failed the compile, and with it
+ * every Windows lane, when this hardening first landed.  MSVC targets Windows,
+ * whose dwPageSize is 4096 on x64 and on ARM64, so 8 KiB still owns whole
+ * pages there and the seal keeps working.  clang-cl defines _MSC_VER too and
+ * lands on the same 8 KiB for the same target, by the same reasoning.
+ *
+ * Neither value is trusted: dispatch_seal() re-checks alignment and length
+ * against the RUNTIME page size and declines if either fails, so a host that
+ * ever reported a larger page stays unhardened rather than sealing wrongly. */
+#if defined(_MSC_VER)
+    #define AMA_DISPATCH_SEAL_PAGE 8192
+#else
+    #define AMA_DISPATCH_SEAL_PAGE 65536
+#endif
+
+typedef union {
+    ama_dispatch_table_t table;
+    unsigned char owned_pages[AMA_DISPATCH_SEAL_PAGE];
+} ama_dispatch_sealed_storage_t;
+
+/* Position matters, and differs by compiler.  MSVC's __declspec(align()) is a
+ * declaration specifier and must PRECEDE the declaration; GCC's
+ * __attribute__((aligned)) is accepted on either side and is written as a
+ * suffix here to match the rest of this file.  Writing one where the other
+ * belongs is a syntax error, not a style difference -- MSVC answered the
+ * suffix form with
+ *
+ *   error C2054: expected '(' to follow 'dispatch_storage'
+ *
+ * and then cascaded into three more errors on the following declaration.  So
+ * the attribute is emitted through a PRE/POST pair and each compiler gets it
+ * in the only position it accepts. */
+#if defined(AMA_TESTING_MODE)
+    /* Writable: the force/restore hooks rewrite slots by design. */
+    #define AMA_DISPATCH_SEAL_PRE
+    #define AMA_DISPATCH_SEAL_POST
+#elif defined(__GNUC__) || defined(__clang__)
+    #define AMA_DISPATCH_SEAL_PRE
+    #define AMA_DISPATCH_SEAL_POST __attribute__((aligned(AMA_DISPATCH_SEAL_PAGE)))
+#elif defined(_MSC_VER)
+    #define AMA_DISPATCH_SEAL_PRE __declspec(align(AMA_DISPATCH_SEAL_PAGE))
+    #define AMA_DISPATCH_SEAL_POST
+#else
+    #define AMA_DISPATCH_SEAL_PRE
+    #define AMA_DISPATCH_SEAL_POST
+#endif
+
+static AMA_DISPATCH_SEAL_PRE ama_dispatch_sealed_storage_t dispatch_storage
+    AMA_DISPATCH_SEAL_POST;
+
+/* Every existing use of `dispatch_table` keeps working unchanged. */
+#define dispatch_table (dispatch_storage.table)
+
 static AMA_ONCE_FLAG dispatch_once_flag = AMA_ONCE_FLAG_INIT;
+
+/* Non-zero once dispatch_seal() has made the table read-only.  Deliberately
+ * OUTSIDE the sealed storage: it is written after the mprotect, and in the
+ * first attempt it shared the frozen page, which is what turned a failed
+ * hardening into a crash. */
+static int dispatch_table_sealed;
+
+/* Make the dispatch table read-only.  Fails soft by design.
+ *
+ * Called once, at the end of dispatch_init_internal(), after every slot has
+ * been wired and the auto-tune verdict applied.
+ *
+ * Two conditions are checked against the RUNTIME page size before anything
+ * is protected, because getting this wrong crashes the process rather than
+ * merely failing to harden it (measured: the first attempt froze the head of
+ * .bss and segfaulted inside init):
+ *
+ *   1. the storage must START on a page boundary, and
+ *   2. it must be at least one whole page long,
+ *
+ * so the range handed to mprotect lies entirely inside storage this
+ * translation unit owns.  Anything else declines.  A host with pages larger
+ * than AMA_DISPATCH_SEAL_PAGE would fail (1) or (2) and simply stay
+ * unhardened.
+ *
+ * Soft failure is deliberate elsewhere too: mprotect can be refused by a
+ * sandbox or an SELinux policy, and a cryptography library that refuses to
+ * start because a hardening step was declined is worse than one that starts
+ * unhardened.  dispatch_table_sealed records which happened, and
+ * tests/c/test_dispatch_seal.c asserts the sealing DOES take effect on the
+ * platforms CI runs, so a silent regression to "always declined" is caught.
+ */
+static void dispatch_seal(void) {
+    dispatch_table_sealed = 0;
+/* Under AMA_TESTING_MODE the table stays writable -- the force/restore hooks
+ * rewrite slots by design -- so the whole body is compiled out rather than
+ * short-circuited with a `return`, which clang-tidy reads as a redundant
+ * control-flow statement (readability-redundant-control-flow). */
+#if !defined(AMA_TESTING_MODE)
+    {
+        uintptr_t base = (uintptr_t)&dispatch_storage;
+        size_t span = sizeof dispatch_storage;
+        size_t page;
+
+    #if defined(_WIN32)
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        page = (size_t)si.dwPageSize;
+    #else
+        {
+            long probed = sysconf(_SC_PAGESIZE);
+            if (probed <= 0) {
+                return;
+            }
+            page = (size_t)probed;
+        }
+    #endif
+
+        /* Own whole pages, or decline.
+         *
+         * Masks, not `%`: a page size is a power of two, so `base & (page-1)`
+         * and `span & ~(page-1)` are exact and carry no divide.  That matters
+         * beyond speed here -- tools/check_secret_division.py reads every
+         * divide instruction in the shipped object and requires each to be on
+         * a public operand, and two `%` on a runtime page size put
+         * dispatch_init_internal on that list for no reason.  The
+         * power-of-two property is checked rather than assumed; a platform
+         * that reported otherwise would decline to seal, not seal wrongly. */
+        if (page == 0 || (page & (page - 1u)) != 0) {
+            return;
+        }
+        if ((base & (uintptr_t)(page - 1u)) != 0 || span < page) {
+            return;
+        }
+        span &= ~(size_t)(page - 1u);   /* whole pages only */
+
+    #if defined(_WIN32)
+        {
+            DWORD previous = 0;
+            dispatch_table_sealed =
+                VirtualProtect((LPVOID)base, (SIZE_T)span, PAGE_READONLY, &previous) ? 1 : 0;
+        }
+    #elif defined(__unix__) || defined(__APPLE__)
+        dispatch_table_sealed = (mprotect((void *)base, span, PROT_READ) == 0) ? 1 : 0;
+    #endif
+    }
+#endif
+}
+
+/* True when the dispatch table is currently read-only.  Test-visible so the
+ * hardening can be asserted rather than assumed. */
+AMA_API int ama_dispatch_table_is_sealed(void) {
+    ama_dispatch_init();
+    return dispatch_table_sealed;
+}
 
 /* AMA_DISPATCH_ONLY-resolved slot label (audit Issue 3 close-out).
  * Set to a string literal by apply_dispatch_only() when an AMA_DISPATCH_ONLY
@@ -2665,6 +2869,8 @@ static void dispatch_init_internal(void) {
      * state rather than blindly re-enabling AVX2. */
     dispatch_table_post_init = dispatch_table;
 #endif
+
+    dispatch_seal();
 }
 
 /* ============================================================================

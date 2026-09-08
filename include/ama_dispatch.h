@@ -460,6 +460,34 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  */
 AMA_API const char *ama_dispatch_active_slot(void);
 
+/**
+ * @brief Non-zero when the dispatch function-pointer table is read-only.
+ *
+ * Every SHA-3/SHAKE, ML-KEM, ML-DSA, AES-GCM, ChaCha20, Argon2 and batch
+ * X25519 operation is an indirect call through one table.  While that table
+ * sits in ordinary writable `.bss`, a single memory-write primitive anywhere
+ * in the process retargets all of them at once; `ama_get_dispatch_table()`
+ * returning a `const` pointer constrains callers, not attackers.  So the
+ * table is given its own page-aligned section and made `PROT_READ`
+ * (`PAGE_READONLY` on Windows) once initialisation has wired every slot.
+ *
+ * This is defence in depth, not a security boundary: code that can call
+ * `mprotect` can unseal it again.  What it removes is the cheap, silent
+ * one-write pivot.
+ *
+ * Returns 0, without failing anything, where the platform declined: a
+ * sandbox or SELinux policy that refuses `mprotect`, a build with
+ * `AMA_TESTING_MODE` (whose hooks rewrite slots by design), or a toolchain
+ * with no section attribute.  A library that refused to start because a
+ * hardening step was declined would be worse than one that starts
+ * unhardened, so the reporting is explicit rather than the failure.
+ *
+ * Calls `ama_dispatch_init()` first, so it is safe before any other call.
+ *
+ * @return non-zero if the table is sealed read-only, 0 otherwise.
+ */
+AMA_API int ama_dispatch_table_is_sealed(void);
+
 #ifdef __cplusplus
 }
 #endif
