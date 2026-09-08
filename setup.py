@@ -322,23 +322,60 @@ def _compiler_accepts(flag: str) -> bool:
     point: an old or exotic toolchain must still produce a wheel, just one
     without the marking, and the release job's ``readelf -nW`` check is what
     notices that it did.
+
+    The probe carries the same ``-arch`` flags the real compile will, because
+    on a universal build the answer differs per architecture and a probe that
+    omits them asks a different question than the build.  Measured: on the
+    ``macos-15-intel`` runner, which builds ``-arch arm64 -arch x86_64``,
+    ``-fcf-protection=full`` probed clean against the native x86_64 target and
+    then failed the build outright --
+
+        error: option 'cf-protection=return' cannot be specified on this target
+
+    -- because the flag is x86-only and the arm64 slice rejects it.  ``flag``
+    is split on whitespace so a two-token ``-Xarch_<arch> <flag>`` pair can be
+    probed as the single thing it is.
     """
     compiler = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
     compiler = compiler.split()[0]
     source = "int main(void) { return 0; }\n"
+    argv = [compiler]
+    for arch in _target_arches():
+        argv.extend(["-arch", arch])
+    argv.extend(flag.split())
     with tempfile.TemporaryDirectory() as tmp:
         src = os.path.join(tmp, "probe.c")
         with open(src, "w", encoding="utf-8") as handle:
             handle.write(source)
         try:
             completed = subprocess.run(
-                [compiler, flag, "-c", src, "-o", os.path.join(tmp, "probe.o")],
+                [*argv, "-c", src, "-o", os.path.join(tmp, "probe.o")],
                 capture_output=True,
                 timeout=60,
             )
         except (OSError, subprocess.SubprocessError):
             return False
     return completed.returncode == 0
+
+
+def _target_arches() -> list[str]:
+    """The architectures the real compile will target, in order.
+
+    Empty on a single-architecture build, which is every Linux and Windows
+    wheel.  On macOS the interpreter's own ``CFLAGS`` (or ``ARCHFLAGS``, which
+    cibuildwheel sets) routinely asks for a universal binary --
+    ``-arch arm64 -arch x86_64`` -- and those flags reach the compiler from
+    sysconfig rather than from this file, so nothing here saw them.
+    """
+    raw = os.environ.get("ARCHFLAGS")
+    if raw is None:
+        raw = sysconfig.get_config_var("CFLAGS") or ""
+    parts = raw.split()
+    arches: list[str] = []
+    for index, part in enumerate(parts):
+        if part == "-arch" and index + 1 < len(parts) and parts[index + 1] not in arches:
+            arches.append(parts[index + 1])
+    return arches
 
 
 def get_compiler_flags() -> tuple[list[str], list[str]]:
@@ -390,15 +427,36 @@ def get_compiler_flags() -> tuple[list[str], list[str]]:
         # decodes as a multi-byte NOP on pre-CET x86, and bti/paciasp/autiasp
         # sit in the AArch64 hint (NOP) space -- so this costs no portability.
         # Probed, not assumed: a toolchain that rejects the flag still builds.
-        _machine = platform.machine().lower()
-        if _machine in ("aarch64", "arm64"):
-            _cfi = "-mbranch-protection=standard"
-        elif _machine in ("x86_64", "amd64", "i386", "i686", "x86"):
-            _cfi = "-fcf-protection=full"
+        #
+        # Selected per TARGET architecture rather than per host.  A macOS wheel
+        # is routinely built universal2, and the two slices need different
+        # flags: `-fcf-protection` is x86-only and clang rejects it outright
+        # for the arm64 slice, which is what took every `macos-15-intel` lane
+        # down when this hardening first landed.  `-Xarch_<arch>` applies a
+        # flag to one slice, so a universal build gets CET on the x86_64 half
+        # AND BTI+PAC-RET on the arm64 half, instead of the whole wheel losing
+        # the marking to keep the build alive.
+        _cfi_by_arch = {
+            "aarch64": "-mbranch-protection=standard",
+            "arm64": "-mbranch-protection=standard",
+            "x86_64": "-fcf-protection=full",
+            "amd64": "-fcf-protection=full",
+            "i386": "-fcf-protection=full",
+            "i686": "-fcf-protection=full",
+            "x86": "-fcf-protection=full",
+        }
+        _arches = _target_arches()
+        if len(_arches) > 1:
+            for _arch in _arches:
+                _cfi = _cfi_by_arch.get(_arch.lower(), "")
+                # Kept adjacent: `-Xarch_<arch>` applies to the NEXT argument.
+                if _cfi and _compiler_accepts(f"-Xarch_{_arch} {_cfi}"):
+                    flags.extend([f"-Xarch_{_arch}", _cfi])
         else:
-            _cfi = ""
-        if _cfi and _compiler_accepts(_cfi):
-            flags.append(_cfi)
+            _machine = (_arches[0] if _arches else platform.machine()).lower()
+            _cfi = _cfi_by_arch.get(_machine, "")
+            if _cfi and _compiler_accepts(_cfi):
+                flags.append(_cfi)
 
         # ELF link hardening, matching the library (see CMakeLists.txt): full
         # RELRO closes GOT-overwrite, and an explicit non-executable stack does
