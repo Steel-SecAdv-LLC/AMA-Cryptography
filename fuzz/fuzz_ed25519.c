@@ -18,6 +18,7 @@
 #include "ama_cryptography.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
@@ -59,6 +60,25 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             if (rc == AMA_SUCCESS) {
                 __builtin_trap();  /* Corrupted signature must not verify */
             }
+            sig[0] ^= 0x01;  /* restore */
+        }
+
+        /* Message binding.  Sound HERE and only here: the keypair comes from
+         * ama_ed25519_keypair, so A is a full-order point and the signature
+         * is genuinely bound to this message.  A verifier that ignored the
+         * message would pass every check above and fail this one. */
+        if (msg_len > 0) {
+            uint8_t *other = (uint8_t *)malloc(msg_len);
+            if (other != NULL) {
+                memcpy(other, msg, msg_len);
+                other[0] ^= 0x01u;
+                const int still =
+                    ama_ed25519_verify(sig, other, msg_len, pk) == AMA_SUCCESS;
+                free(other);
+                if (still) {
+                    __builtin_trap();  /* signature is not bound to the message */
+                }
+            }
         }
         break;
     }
@@ -71,14 +91,34 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         const uint8_t *msg = payload + 64 + 32;
         size_t msg_len = payload_len - 64 - 32;
 
-/* A signature and public key drawn from fuzz data verify with
-         * probability far below 2^-100, so ANY success here is a broken
-         * verifier — the kind of defect "must not crash" cannot see.  A
-         * genuine forgery found by the fuzzer traps, which is the outcome
-         * this harness exists for. */
-        if (ama_ed25519_verify(sig, msg, msg_len, pk) == AMA_SUCCESS) {
-            __builtin_trap();
-        }
+        /* Attacker-controlled (sig, pk, msg): exercised for memory safety.
+         *
+         * No acceptance assertion can live here, and two attempts measured
+         * why:
+         *
+         *   - "fuzz bytes must never verify" is false.  The seed corpus
+         *     carries genuine (sig, pk, msg) triples and the selector byte
+         *     lets a mutation route one into this case, so the trap fired on
+         *     a CORRECT verification (crash-6593403c..., 142 bytes).
+         *   - "an accepted signature must stop verifying when the message
+         *     changes" is false for a LOW-ORDER public key.  Measured: the
+         *     all-zero encoding (pk = R = S = 0) decodes to a point of order
+         *     4, and the group equation then holds for many messages, so the
+         *     same signature verifies for both 0x00.. and 0x01.. -- a
+         *     property of the scheme under a degenerate key, not a defect in
+         *     this verifier.  Establishing full order here would need the
+         *     complete small-order set, which does not belong in a harness.
+         *
+         * The binding and corruption assertions therefore live in case 0,
+         * which owns the keypair and so knows A is full order.
+         *
+         * NOTE: that low-order acceptance is a real, separately-reportable
+         * property of ama_ed25519_verify -- RFC 8032 does not require
+         * rejecting a small-order A, and neither the frozen oracle (904
+         * verify records, 0 with a low-order key) nor Wycheproof's
+         * ed25519_test.json (0 such groups) pins it either way.
+         */
+        (void)ama_ed25519_verify(sig, msg, msg_len, pk);
         break;
     }
     case 2: {

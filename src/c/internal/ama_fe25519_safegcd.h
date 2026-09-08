@@ -79,6 +79,12 @@
 
 #include <stdint.h>
 #include <string.h>
+/* ama_secure_memzero() is used for the INVARIANT-6 scrubs at the end of
+ * the inversion.  Declared here rather than left to whatever translation
+ * unit includes this header: clang-tidy analyses a header standalone and
+ * reported an implicit function declaration, which under C99 is an error
+ * and not merely untidy. */
+#include "ama_cryptography.h"
 
 #define AMA_FE25519_SAFEGCD_AVAILABLE 1
 

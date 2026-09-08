@@ -1652,7 +1652,13 @@ static void dil_sample_uniform_n(dil_poly *out,
 static void dil_expand_matrix(dil_poly *mat,
                                const uint8_t rho[DIL_SEEDBYTES],
                                const dil_params *P) {
-    uint16_t nonces[DIL_K_MAX * DIL_L_MAX];
+    /* Zero-initialised: the loop below writes exactly `total` entries and
+     * nothing reads past them, but cppcheck 2.17's uninitvar analysis
+     * cannot follow the k*l bound through P and reports the array as
+     * uninitialised at the call.  A 112-byte memset outside the sampling
+     * loop is cheaper than a suppression, which INVARIANT-13 forbids
+     * under src/c anyway. */
+    uint16_t nonces[DIL_K_MAX * DIL_L_MAX] = {0};
     const unsigned int total = P->k * P->l;
     unsigned int f;
 
@@ -1684,7 +1690,10 @@ static void dil_expand_matrix_row(dil_poly *row,
                                    const uint8_t rho[DIL_SEEDBYTES],
                                    unsigned int i,
                                    const dil_params *P) {
-    uint16_t nonces[DIL_L_MAX];
+    /* Zero-initialised for the same reason as dil_expand_matrix's array:
+     * the loop fills P->l entries and nothing reads past them, but
+     * cppcheck 2.17 cannot follow the bound. */
+    uint16_t nonces[DIL_L_MAX] = {0};
     unsigned int j;
 
     for (j = 0; j < P->l; ++j) {
@@ -2495,7 +2504,10 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     uint8_t c_tilde[DIL_CTILDEBYTES_MAX];
     uint8_t c_tilde2[DIL_CTILDEBYTES_MAX];
     dil_polyvecl z;
-    dil_polyveck t1, w1prime, h_vec;
+    /* h_vec is filled element-by-element in the loop below before it is
+     * read; zero-initialised so cppcheck 2.17 can see that, since it
+     * cannot follow the P->k bound. */
+    dil_polyveck t1, w1prime, h_vec = {0};
     dil_poly cp;
     uint8_t hint[DIL_OMEGA_MAX + DIL_K_MAX];
     uint8_t tr[DIL_TRBYTES];

@@ -35,11 +35,24 @@
 #ifndef AMA_CT_DECLASSIFY_H
 #define AMA_CT_DECLASSIFY_H
 
-#if defined(AMA_TESTING_MODE) && defined(__has_include)
-#  if __has_include(<valgrind/memcheck.h>)
-#    include <valgrind/memcheck.h>
-#    define AMA_CT_DECLASSIFY(ptr, len) ((void)VALGRIND_MAKE_MEM_DEFINED((ptr), (len)))
-#  endif
+/* No __has_include here.
+ *
+ * The natural spelling is `#if defined(__has_include) && __has_include(...)`,
+ * but cppcheck's preprocessor does not implement __has_include in any form --
+ * joined or nested -- and rejects the directive outright
+ * ("failed to evaluate #if condition, division/modulo by zero"), failing the
+ * static-analysis gate.  INVARIANT-13 forbids an inline suppression under
+ * src/c, and rightly: the construct is the problem, not the message.
+ *
+ * So availability is decided by the build system, which is where it belongs.
+ * CMake probes for the header with check_include_file() and defines
+ * AMA_HAVE_VALGRIND_MEMCHECK on the AMA_TESTING_MODE target only.  A
+ * standalone compile that defines neither macro gets the production no-op,
+ * which is the correct default for anything that is not the taint lane.
+ */
+#if defined(AMA_TESTING_MODE) && defined(AMA_HAVE_VALGRIND_MEMCHECK)
+#  include <valgrind/memcheck.h>
+#  define AMA_CT_DECLASSIFY(ptr, len) ((void)VALGRIND_MAKE_MEM_DEFINED((ptr), (len)))
 #endif
 
 #ifndef AMA_CT_DECLASSIFY

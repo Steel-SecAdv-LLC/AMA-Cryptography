@@ -33,7 +33,14 @@
  * assertions below would all fail spuriously).
  */
 
-#define _POSIX_C_SOURCE 200809L
+/* _XOPEN_SOURCE 700, not _POSIX_C_SOURCE alone: realpath(3) sits behind
+ * glibc's __USE_XOPEN_EXTENDED / __USE_XOPEN2K8, and under -std=c11
+ * (which defines __STRICT_ANSI__) _POSIX_C_SOURCE=200809L does not turn
+ * those on.  Measured on this toolchain: with _POSIX_C_SOURCE alone both
+ * gcc and clang report `call to undeclared function 'realpath'`; with
+ * _XOPEN_SOURCE 700 both compile clean.  700 implies POSIX.1-2008, so it
+ * is a superset of the line it replaces. */
+#define _XOPEN_SOURCE 700
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -408,7 +415,12 @@ int main(void) {
      * `<dir>/b.cache` for a directory that exists.  Built here, not
      * assumed, so the verdict cannot depend on the host's /tmp layout. */
     {
-        char base[128], sub[160], input[192], expect[160];
+        /* `expect` holds canon_base (up to PATH_MAX) plus "/b.cache", so it
+         * is sized from canon_base rather than from `base`: at 160 bytes gcc
+         * rejects the snprintf below with -Wformat-truncation, and it is
+         * right to -- realpath() can return a path far longer than the one
+         * handed to it. */
+        char base[128], sub[160], input[192], expect[4096 + 16];
         snprintf(base, sizeof(base), "/tmp/ama-dotdot-%ld", (long)getpid());
         snprintf(sub, sizeof(sub), "%s/a", base);
         snprintf(input, sizeof(input), "%s/a/../b.cache", base);

@@ -144,6 +144,9 @@ def test_xmm_is_not_counted() -> None:
 #: so the gate itself carries no test fixture.
 FAMILY_SAMPLE_INSN = {
     "AVX/AVX2/AVX-512 (YMM/ZMM)": "vpxor %ymm0,%ymm1,%ymm2",
+    # VEX.128: requires AVX and raises #UD without it, despite the XMM width.
+    "VEX-encoded XMM (AVX.128)": "vpxor %xmm0,%xmm1,%xmm2",
+    "ABM/POPCNT": "popcnt %rax,%rbx",
     "AES-NI": "aesenc %xmm1,%xmm0",
     "PCLMULQDQ": "pclmullqlqdq %xmm1,%xmm0",
     "SHA-NI (Intel SHA Extensions)": "sha256rnds2 %xmm0,%xmm1,%xmm2",
@@ -325,3 +328,126 @@ def test_main_fails_closed_below_the_floor(monkeypatch: pytest.MonkeyPatch, tmp_
 
 def test_main_fails_closed_on_a_missing_object(tmp_path: Path) -> None:
     assert gate.main(["--lib", str(tmp_path / "does-not-exist.so")]) == 2
+
+
+# --------------------------------------------------------------------------
+# BSA-4: the three pattern gaps
+# --------------------------------------------------------------------------
+
+
+VEX_FAMILY = "VEX-encoded XMM (AVX.128)"
+
+
+def _install_disassembly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, text: str) -> Path:
+    """Point the gate at a synthetic object whose disassembly is ``text``."""
+    lib = tmp_path / "libama_cryptography.so"
+    lib.write_bytes(b"\x7fELF")  # only is_file() is consulted; disassemble is stubbed
+    monkeypatch.setattr(gate, "disassemble", lambda _lib: text)
+    return lib
+
+
+def _family(name: str) -> gate.IsaFamily:
+    for fam in gate.ISA_FAMILIES:
+        if fam.name == name:
+            return fam
+    raise AssertionError(f"no family named {name!r}")
+
+
+class TestVexEncodedXmmIsNotBaseline:
+    """``vpxor %xmm0,%xmm0,%xmm0`` is VEX.128 and #UDs without AVX.
+
+    The AVX family keys on ``[yz]mm``, so every VEX.128 encoding was invisible
+    to the gate; the docstring's "XMM operands are excluded, 128-bit SSE2 is
+    baseline" is true only for LEGACY encodings.  Measured on the shipped
+    x86-64 object at the time: 1,993 such instructions across 17 symbols.
+    """
+
+    @pytest.mark.parametrize(
+        "insn",
+        [
+            "vpxor %xmm0,%xmm1,%xmm2",
+            "vmovdqu %xmm3,(%rdi)",
+            "vmovq %rax,%xmm0",
+            "vpsrlq $26,%xmm1,%xmm2",
+            "vaesenc %xmm1,%xmm0,%xmm0",
+        ],
+    )
+    def test_a_vex128_instruction_is_matched(self, insn: str) -> None:
+        assert _family(VEX_FAMILY).pattern.search(insn), insn
+
+    @pytest.mark.parametrize(
+        "insn",
+        [
+            "pxor %xmm0,%xmm1",  # legacy SSE2 encoding: baseline, not VEX
+            "movdqa %xmm0,%xmm1",
+            "aesenc %xmm1,%xmm0",  # legacy AES-NI: its own family
+            "mov %rax,%rbx",
+        ],
+    )
+    def test_a_legacy_sse_instruction_is_not(self, insn: str) -> None:
+        assert not _family(VEX_FAMILY).pattern.search(insn), insn
+
+    def test_a_ymm_instruction_belongs_to_the_avx_family_not_this_one(self) -> None:
+        """No double counting: the AVX family already owns YMM/ZMM."""
+        assert not _family(VEX_FAMILY).pattern.search("vpxor %ymm0,%ymm1,%ymm2")
+        assert not _family(VEX_FAMILY).pattern.search("vpaddq %xmm0,%ymm1,%ymm2")
+
+    def test_a_vex128_leak_outside_a_kernel_fails_the_gate(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        text = _clean_object() + _disassembly(
+            ("some_portable_helper", ["vpxor %xmm0,%xmm1,%xmm2", "ret"])
+        )
+        _install_disassembly(monkeypatch, tmp_path, text)
+        assert gate.main(["--lib", str(tmp_path / "libama_cryptography.so")]) == 1
+
+
+class TestPopcntAndLzcntAreScoped:
+    """``-mavx2`` implies ``-mpopcnt``, so the scoping IS this build's."""
+
+    @pytest.mark.parametrize("insn", ["popcnt %rax,%rbx", "lzcnt %eax,%ebx"])
+    def test_matched(self, insn: str) -> None:
+        assert _family("ABM/POPCNT").pattern.search(insn), insn
+
+    def test_tzcnt_stays_excluded(self) -> None:
+        """It decodes as ``bsf`` without BMI1: wrong, never a fault."""
+        assert not _family("ABM/POPCNT").pattern.search("tzcnt %rax,%rbx")
+
+    def test_a_popcnt_outside_a_kernel_fails_the_gate(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        text = _clean_object() + _disassembly(("some_portable_helper", ["popcnt %rax,%rbx", "ret"]))
+        _install_disassembly(monkeypatch, tmp_path, text)
+        assert gate.main(["--lib", str(tmp_path / "libama_cryptography.so")]) == 1
+
+
+class TestTheDocstringMatchesTheRules:
+    """The stated rationale was itself part of the defect."""
+
+    def test_it_no_longer_claims_popcnt_is_unscoped(self) -> None:
+        doc = gate.__doc__ or ""
+        assert "lzcnt``/``popcnt`` sit behind ABM/POPCNT rather than" not in doc
+
+    def test_it_distinguishes_legacy_xmm_from_vex_xmm(self) -> None:
+        doc = gate.__doc__ or ""
+        assert "VEX" in doc and "#UD" in doc
+
+
+class TestTheSse41SetCoversTheMissingMnemonics:
+    @pytest.mark.parametrize(
+        "insn",
+        [
+            "pinsrb $3,%eax,%xmm0",
+            "pextrb $3,%xmm0,%eax",
+            "insertps $16,%xmm1,%xmm0",
+            "extractps $2,%xmm0,%eax",
+            "blendps $12,%xmm1,%xmm0",
+            "blendpd $2,%xmm1,%xmm0",
+            "dpps $255,%xmm1,%xmm0",
+            "mpsadbw $0,%xmm1,%xmm0",
+            "phminposuw %xmm1,%xmm0",
+            "movntdqa (%rdi),%xmm0",
+        ],
+    )
+    def test_it_is_matched(self, insn: str) -> None:
+        assert _family("SSE4.1").pattern.search(insn), insn

@@ -43,6 +43,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+/* The prototypes below use ama_error_t and ama_ml_kem_param_set_t.  This
+ * header is analysed standalone by clang-tidy, so it must bring its own
+ * types rather than relying on include order at each consumer. */
+#include "ama_cryptography.h"
 
 /* --- src/c/ama_frost.c -------------------------------------------------- */
 

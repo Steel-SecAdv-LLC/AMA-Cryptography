@@ -397,11 +397,20 @@ unsigned int ama_kyber_test_rej_uniform_from_stream(int16_t coeffs[256],
                                                    const uint8_t *stream,
                                                    size_t stream_len) {
     /* `poly` is a struct whose sole member is `int16_t coeffs[KYBER_N]`, so
-     * the cast below is the identity on layout; going through the real
-     * function keeps the test on the shipped rejection loop rather than a
-     * copy of it. */
-    return kyber_rej_uniform_from_stream((poly *)(void *)coeffs, ctr,
-                                         stream, stream_len);
+     * a pointer to that member and a pointer to the struct address the same
+     * bytes; going through the real function keeps the test on the shipped
+     * rejection loop rather than a copy of it.
+     *
+     * Reached through a union rather than `(poly *)(void *)coeffs`:
+     * clang-tidy's bugprone-casting-through-void rejects that spelling, and
+     * it is right that the double cast hides what is happening.  The union
+     * states the aliasing instead of laundering it. */
+    union {
+        int16_t (*coeffs)[KYBER_N];
+        poly *p;
+    } alias;
+    alias.coeffs = (int16_t (*)[KYBER_N])coeffs;
+    return kyber_rej_uniform_from_stream(alias.p, ctr, stream, stream_len);
 }
 #define KYBER_SAMPLE_INITIAL_BLOCKS ((size_t)kyber_sample_initial_blocks)
 #else

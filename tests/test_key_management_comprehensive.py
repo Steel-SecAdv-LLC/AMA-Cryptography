@@ -9,7 +9,7 @@ Professional-grade test coverage for the key_management module.
 Targets 95%+ code coverage with edge cases, error paths, and security validations.
 
 Test Categories:
-- HDKeyDerivation: BIP32-compliant key derivation
+- HDKeyDerivation: BIP32-style CKD over an AMA-specific root (not BIP32-interoperable)
 - KeyRotationManager: Key lifecycle management
 - SecureKeyStorage: Encrypted key storage with AES-256-GCM
 - KeyMetadata: Data structure validation

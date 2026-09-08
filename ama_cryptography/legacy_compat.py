@@ -936,14 +936,14 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     content_hash = canonical_hash_code(codes, helix_params)
     if monitor:
         duration_ms = (time.time() - start_time) * 1000
-        monitor.monitor_crypto_operation("sha3_256_hash", duration_ms)
+        monitor.monitor_crypto_operation("sha3_256_hash", duration_ms, input_size=len(content_hash))
 
     # 2. Generate HMAC authentication tag
     start_time = time.time()
     hmac_tag = hmac_authenticate(content_hash, kms.hmac_key)
     if monitor:
         duration_ms = (time.time() - start_time) * 1000
-        monitor.monitor_crypto_operation("hmac_auth", duration_ms)
+        monitor.monitor_crypto_operation("hmac_auth", duration_ms, input_size=len(content_hash))
 
     # 3. Compute ethical hash BEFORE signing
     ethical_vector_copy = kms.ethical_vector.copy()
@@ -961,7 +961,9 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     ed25519_sig = ed25519_sign(signature_message, kms.ed25519_keypair.private_key)
     if monitor:
         duration_ms = (time.time() - start_time) * 1000
-        monitor.monitor_crypto_operation("ed25519_sign", duration_ms)
+        monitor.monitor_crypto_operation(
+            "ed25519_sign", duration_ms, input_size=len(signature_message)
+        )
 
     # 6. Sign with Dilithium (if available)
     dilithium_sig = None
@@ -981,7 +983,9 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
             )
         if monitor and dilithium_sig is not None:
             duration_ms = (time.time() - start_time) * 1000
-            monitor.monitor_crypto_operation("dilithium_sign", duration_ms)
+            monitor.monitor_crypto_operation(
+                "dilithium_sign", duration_ms, input_size=len(signature_message)
+            )
 
     # 7. Generate timestamp
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -1077,7 +1081,9 @@ def _verify_dilithium_with_policy(
 
     if monitor and start_time is not None:
         duration_ms = (time.time() - start_time) * 1000
-        monitor.monitor_crypto_operation("dilithium_verify", duration_ms)
+        monitor.monitor_crypto_operation(
+            "dilithium_verify", duration_ms, input_size=len(signature_message)
+        )
 
     if require_quantum_signatures and result is False:
         raise QuantumSignatureRequiredError(
@@ -1324,7 +1330,11 @@ def verify_crypto_package(
         start_time = time.time() if monitor else None
         results["hmac"] = hmac_verify(computed_hash, bytes.fromhex(package.hmac_tag), hmac_key)
         if monitor and start_time is not None:
-            monitor.monitor_crypto_operation("hmac_verify", (time.time() - start_time) * 1000)
+            monitor.monitor_crypto_operation(
+                "hmac_verify",
+                (time.time() - start_time) * 1000,
+                input_size=len(computed_hash),
+            )
 
         sig_format = getattr(package, "signature_format_version", SIGNATURE_FORMAT_V1)
         if sig_format not in (SIGNATURE_FORMAT_V1, SIGNATURE_FORMAT_V2):
@@ -1355,7 +1365,11 @@ def verify_crypto_package(
             bytes.fromhex(package.ed25519_pubkey),
         )
         if monitor and start_time is not None:
-            monitor.monitor_crypto_operation("ed25519_verify", (time.time() - start_time) * 1000)
+            monitor.monitor_crypto_operation(
+                "ed25519_verify",
+                (time.time() - start_time) * 1000,
+                input_size=len(signature_message),
+            )
 
         results["dilithium"] = _verify_dilithium_with_policy(
             signature_message, package, monitor, require_quantum_signatures

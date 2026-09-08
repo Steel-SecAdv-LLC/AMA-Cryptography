@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import secrets
+import stat
 import tempfile
 import warnings
 from dataclasses import dataclass
@@ -267,12 +268,23 @@ class KeyMetadata:
 
 
 class HDKeyDerivation:
-    """
-    Hierarchical Deterministic Key Derivation (BIP32-compliant)
+    """BIP32-style child key derivation over an AMA-specific root.
 
-    Derives child keys from a master seed using HMAC-SHA512.
-    Supports hardened and non-hardened derivation with proper
-    modular arithmetic using the secp256k1 curve order.
+    **This is not BIP32, and it is not interoperable with a BIP32 wallet.**
+    The child key derivation function follows BIP32's formulae exactly --
+    HMAC-SHA512 keyed by the parent chain code, ``0x00 || ser256(k_par) ||
+    ser32(i)`` for a hardened index and ``serP(point(k_par)) || ser32(i)``
+    otherwise, then ``k_i = (parse256(I_L) + k_par) mod n`` over the
+    secp256k1 order -- but the MASTER key is generated with the HMAC key
+    ``b"AMA Cryptography Master Key"`` where BIP32 specifies
+    ``b"Bitcoin seed"``.  Every key in the tree therefore descends from a
+    different root, so no BIP32 test vector can pass here and no BIP32
+    wallet or library derives the same keys from the same seed.
+
+    The wording is corrected rather than the derivation: changing the
+    master HMAC key would silently move every key any existing deployment
+    has derived.  A caller that needs true BIP32 interoperability needs a
+    BIP32 implementation, not this class.
 
     Derivation Path Format:
         m/purpose'/coin_type'/account'/change/address_index
@@ -281,8 +293,12 @@ class HDKeyDerivation:
         m/44'/0'/0'/0/0 - First address of first account
         m/44'/0'/0'/1/0 - First change address
 
-    Standard: BIP32 (Bitcoin Improvement Proposal 32)
-    Security: Uses secp256k1 curve order for modular addition
+    Standard: the child KDF follows BIP32 (Bitcoin Improvement Proposal 32)
+        section "Private parent key -> private child key"; the root does not.
+    Security: uses the secp256k1 curve order for modular addition
+    Vectors: ``tests/test_hd_key_derivation_vectors.py`` pins the AMA-specific
+        master and per-path known answers, which is what makes the modular
+        arithmetic and the key/chain-code split regression-tested.
     """
 
     HARDENED_OFFSET = 2**31
@@ -331,7 +347,13 @@ class HDKeyDerivation:
         self.master_key, self.master_chain_code = self._generate_master_key()
 
     def _generate_master_key(self) -> Tuple[bytes, bytes]:
-        """Generate master key and chain code from seed"""
+        """Generate the master key and chain code from the seed.
+
+        AMA-specific: BIP32 specifies the HMAC key ``b"Bitcoin seed"`` here.
+        This root is deliberately different and is NOT interoperable; see the
+        class docstring.  The split of the 64-byte HMAC output into
+        ``key = I[:32]`` and ``chain_code = I[32:]`` follows BIP32.
+        """
         hmac_result = _hmac_sha512(b"AMA Cryptography Master Key", self.master_seed)
 
         master_key = hmac_result[:32]
@@ -425,10 +447,12 @@ class HDKeyDerivation:
         self, parent_key: bytes, parent_chain: bytes, index: int
     ) -> Tuple[bytes, bytes]:
         """
-        Child Key Derivation (Private) - BIP32 Compliant
+        Child Key Derivation (Private), following the BIP32 formulae.
 
-        Implements proper BIP32 child key derivation using modular
-        arithmetic with the secp256k1 curve order (N).
+        The CKD function itself is BIP32's; the tree it operates on is not,
+        because the master key it descends from uses an AMA-specific HMAC
+        key (see the class docstring).  Modular arithmetic is over the
+        secp256k1 curve order (N), as BIP32 specifies.
 
         Args:
             parent_key: Parent private key (32 bytes)
@@ -1558,16 +1582,46 @@ class SecureKeyStorage:
         self._validate_key_id(key_id)
 
         key_file = self.storage_path / f"{key_id}.json"
-        if key_file.exists():
+        # Open the descriptor first, refusing to follow a symlink, and do the
+        # overwrite through THAT descriptor.  The traversal guard above only
+        # constrains the name: it cannot stop `<key_id>.json` from being a
+        # symlink planted inside the storage directory, and the previous
+        # `open(key_file, "wb")` followed it -- overwriting the target with
+        # 1 KiB of random bytes and then unlinking the link.  O_NOFOLLOW makes
+        # that an ELOOP rather than a write, and the S_ISREG check refuses a
+        # FIFO or device node, which O_NOFOLLOW does not cover.
+        #
+        # O_NONBLOCK is required, not decorative: opening the WRITE end of a
+        # FIFO with no reader BLOCKS INDEFINITELY without it, so a FIFO
+        # planted in the store would hang delete_key rather than being
+        # refused by the S_ISREG check below -- the check never runs, because
+        # the open never returns.  With O_NONBLOCK that open fails ENXIO.  On
+        # a regular file the flag has no effect.
+        flags = os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            fd = os.open(key_file, flags)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise ValueError(
+                f"Refusing to delete key {key_id!r}: its file is not a regular "
+                f"file this process may open directly ({exc.strerror})"
+            ) from exc
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(
+                    f"Refusing to delete key {key_id!r}: {key_file} is not a regular file"
+                )
             # Best-effort overwrite before unlinking (see note below on the
             # limits of this on journaling/CoW/SSD filesystems).
-            with open(key_file, "wb") as f:
-                f.write(secrets.token_bytes(1024))
-                f.flush()
-                os.fsync(f.fileno())
-            key_file.unlink()
-            return True
-        return False
+            os.ftruncate(fd, 0)
+            os.write(fd, secrets.token_bytes(1024))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        key_file.unlink()
+        return True
 
     def list_keys(self) -> List[str]:
         """

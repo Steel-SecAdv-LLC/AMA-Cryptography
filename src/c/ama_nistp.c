@@ -1371,7 +1371,9 @@ static void nistp_bits2int_mod_n(uint64_t *out, const uint8_t *in, size_t inlen,
 
 /** 1 when s > (n-1)/2 (the non-canonical "high" representative). */
 static int nistp_scalar_is_high(const uint64_t *s, const nistp_curve *c) {
-    uint64_t half[AMA_NISTP_MAX_LIMBS];
+    /* Zero-initialised: the loop below writes all nl limbs, but cppcheck
+     * 2.17 cannot follow the runtime nl bound and reports uninitvar. */
+    uint64_t half[AMA_NISTP_MAX_LIMBS] = {0};
     unsigned nl = c->nlimbs, i;
     int high;
 

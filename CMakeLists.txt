@@ -1065,6 +1065,17 @@ if(AMA_BUILD_TESTS)
         OUTPUT_NAME "ama_cryptography_test"
     )
     target_compile_definitions(ama_cryptography_test PRIVATE AMA_TESTING_MODE)
+    # The Memcheck secret-taint lane needs VALGRIND_MAKE_MEM_DEFINED at the
+    # declassification points (src/c/internal/ama_ct_declassify.h).  Probed
+    # here rather than with __has_include in the header, because cppcheck's
+    # preprocessor cannot evaluate __has_include and fails the static-analysis
+    # gate on it.  Absent the header the macro stays the production no-op and
+    # the taint lane simply reports more, never less.
+    include(CheckIncludeFile)
+    check_include_file("valgrind/memcheck.h" AMA_HAVE_VALGRIND_MEMCHECK_H)
+    if(AMA_HAVE_VALGRIND_MEMCHECK_H)
+        target_compile_definitions(ama_cryptography_test PRIVATE AMA_HAVE_VALGRIND_MEMCHECK)
+    endif()
     target_compile_definitions(ama_cryptography_test PRIVATE
     )
     if(AMA_USE_NATIVE_PQC)

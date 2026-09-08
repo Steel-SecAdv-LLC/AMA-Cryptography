@@ -30,6 +30,20 @@
 
 #include "ama_cryptography.h"
 
+/* ASan detection: clang exposes __has_feature, gcc defines the macro. */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define AMA_UNDER_ASAN 1
+#  endif
+#endif
+#if !defined(AMA_UNDER_ASAN) && defined(__SANITIZE_ADDRESS__)
+#  define AMA_UNDER_ASAN 1
+#endif
+#if !defined(AMA_UNDER_ASAN)
+#  define AMA_UNDER_ASAN 0
+#endif
+
+
 #define SCAN_BYTES 32768u
 #define MSG_BYTES  256u
 
@@ -65,7 +79,16 @@ __attribute__((noinline))
 #endif
 static int residue_count(const uint8_t *needle, size_t len) {
     volatile uint8_t anchor = 0;
-    const uint8_t *base = (const uint8_t *)&anchor - SCAN_BYTES;
+    /* Reach BELOW the anchor through uintptr_t rather than by subtracting
+     * from `&anchor`.  Pointer arithmetic on a one-byte object is what the
+     * probe means, but it is also, formally, out of that object's bounds,
+     * and gcc says so: "array subscript -32768 is outside array bounds of
+     * volatile uint8_t[1]" (-Warray-bounds).  The warning is correct about
+     * the C, and reading dead stack IS the measurement, so the address is
+     * computed as an integer -- which is exactly the operation intended --
+     * instead of the diagnostic being suppressed. */
+    const uintptr_t anchor_addr = (uintptr_t)(const void *)&anchor;
+    const uint8_t *base = (const uint8_t *)(anchor_addr - (uintptr_t)SCAN_BYTES);
     size_t i;
     int hits = 0;
     for (i = 0; i + len <= SCAN_BYTES; i++) {
@@ -128,6 +151,19 @@ static void run_chacha_decrypt(const uint8_t *ct, const uint8_t *tag, uint8_t *p
 }
 
 int main(void) {
+#if AMA_UNDER_ASAN
+    /* Skipped, not suppressed.  This probe measures dead stack BELOW its own
+     * frame -- that read IS the measurement, and it is exactly what
+     * AddressSanitizer's stack redzones exist to catch (it reports
+     * "stack-buffer-underflow ... 'anchor' ... underflows this variable",
+     * which correctly describes the C).  Keeping the measurement and
+     * satisfying ASan are mutually exclusive: with the frame exempted the
+     * probe would read poisoned redzone bytes instead of real residue.  So
+     * this lane declines the test rather than weakening it; the
+     * non-sanitized lanes run it, and they are where the finding is gated. */
+    printf("SKIP: dead-stack residue cannot be measured under AddressSanitizer\n");
+    return 77;
+#else
     static uint8_t ct[MSG_BYTES], pt[MSG_BYTES];
     uint8_t tag[16];
     unsigned i;
@@ -196,4 +232,5 @@ int main(void) {
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
+#endif
 }

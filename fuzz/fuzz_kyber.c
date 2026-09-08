@@ -240,10 +240,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
          *
          * Exercises the secret-key parse (polyvec_frombytes over arbitrary
          * bytes, and the pk / H(pk) / z slices taken from inside it) on the
-         * path a malformed imported key file reaches.  The same return-code
-         * contract applies: at the exact secret-key length the answer is
-         * AMA_SUCCESS whatever the bytes decode to, because the FO verdict
-         * must not be visible in the code.
+         * path a malformed imported key file reaches.
+         *
+         * The contract has TWO verdicts now, and they are different in kind:
+         *
+         *   - The FO verdict must stay invisible.  Implicit rejection returns
+         *     a pseudorandom shared secret, never an error, so a key that
+         *     parses must not reveal through the return code whether the
+         *     re-encryption matched.
+         *   - The FIPS 203 Sec 7.3 key check IS visible, by standard.  A
+         *     decapsulation key whose embedded H(ek) does not equal
+         *     SHA3-256(ek) is an invalid input and is refused outright.
+         *
+         * So the harness computes H(ek) itself and asserts the matching
+         * verdict, rather than accepting either.  Before the Sec 7.3 check
+         * landed this case asserted "AMA_SUCCESS whatever the bytes decode
+         * to", which a fuzzed 3,168-byte key now falsifies on essentially
+         * every input -- the assertion described the old library.
          */
         ensure_keys();
         if (!keys_initialized) break;
@@ -263,8 +276,28 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             ct, ct_len, payload, payload_len, ss_dec, sizeof(ss_dec));
 
         if (payload_len == AMA_KYBER_1024_SECRET_KEY_BYTES) {
-            if (rc != AMA_SUCCESS) {
-                __builtin_trap();
+            /* dk = dk_PKE || ek || H(ek) || z, so ek starts where the last
+             * (public key + 32 + 32) bytes begin. */
+            const size_t ek_off = AMA_KYBER_1024_SECRET_KEY_BYTES -
+                                  AMA_KYBER_1024_PUBLIC_KEY_BYTES - 64u;
+            uint8_t h_computed[32];
+            ama_sha3_256(payload + ek_off, AMA_KYBER_1024_PUBLIC_KEY_BYTES, h_computed);
+            const int h_matches =
+                memcmp(h_computed,
+                       payload + ek_off + AMA_KYBER_1024_PUBLIC_KEY_BYTES, 32) == 0;
+
+            if (h_matches) {
+                /* A well-formed key: the FO verdict must not surface. */
+                if (rc != AMA_SUCCESS) {
+                    __builtin_trap();
+                }
+            } else {
+                /* FIPS 203 Sec 7.3: refused as an invalid input, and with
+                 * that specific code -- not a generic failure, and never a
+                 * silent success into a shared secret the peer never had. */
+                if (rc != AMA_ERROR_INVALID_PARAM) {
+                    __builtin_trap();
+                }
             }
         } else if (rc == AMA_SUCCESS) {
             __builtin_trap();

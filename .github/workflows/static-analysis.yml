@@ -1003,16 +1003,26 @@ jobs:
           # `MAKEFLAGS=-j1` and `CMAKE_BUILD_PARALLEL_LEVEL=1` force
           # sequential compilation so parallel-build write-order
           # variation cannot leak into the .so.
-          # Use ${{ github.workspace }} (expanded by Actions) rather than the
-          # POSIX ${GITHUB_WORKSPACE}, which is NOT expanded inside an env: map
-          # and would reach the compiler as a literal string that never matches
-          # the checkout path — silently disabling all three prefix-map flags.
-          CFLAGS: "-fdebug-prefix-map=${{ github.workspace }}=. -ffile-prefix-map=${{ github.workspace }}=. -fmacro-prefix-map=${{ github.workspace }}=."
+          # CFLAGS is NOT set here.  This job runs in a container, and
+          # ${{ github.workspace }} expands to the HOST path
+          # (/home/runner/work/AMA-Cryptography/AMA-Cryptography) while the
+          # checkout inside the container is at /__w/... — so the prefix never
+          # matched anything and all three flags were dead configuration.
+          # Both passes shared the same unmapped path, so the strict diff went
+          # on passing and nothing noticed.  The flags are exported from the
+          # in-container path inside `run:` below instead, where $PWD and the
+          # remapped $GITHUB_WORKSPACE are both correct.
           LDFLAGS: "-Wl,--build-id=sha1"
           MAKEFLAGS: "-j1"
           CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build dist
+          # Prefix-map from the IN-CONTAINER path.  $PWD is the checkout as
+          # this shell sees it and $GITHUB_WORKSPACE is remapped for container
+          # jobs; both are exported so the map holds however the build step
+          # reaches the sources.
+          export CFLAGS="-fdebug-prefix-map=$PWD=. -ffile-prefix-map=$PWD=. -fmacro-prefix-map=$PWD=. -fdebug-prefix-map=$GITHUB_WORKSPACE=. -ffile-prefix-map=$GITHUB_WORKSPACE=. -fmacro-prefix-map=$GITHUB_WORKSPACE=."
+          echo "CFLAGS=$CFLAGS"
           # `--no-isolation`: see Install step's WHY paragraph.  The
           # build deps are pre-installed into the container Python in
           # the previous step, so the wheel build can run against
@@ -1026,18 +1036,46 @@ jobs:
           SOURCE_DATE_EPOCH: "1700000000"
           PYTHONHASHSEED: "0"
           PYTHONDONTWRITEBYTECODE: "1"
-          # Use ${{ github.workspace }} (expanded by Actions) rather than the
-          # POSIX ${GITHUB_WORKSPACE}, which is NOT expanded inside an env: map
-          # and would reach the compiler as a literal string that never matches
-          # the checkout path — silently disabling all three prefix-map flags.
-          CFLAGS: "-fdebug-prefix-map=${{ github.workspace }}=. -ffile-prefix-map=${{ github.workspace }}=. -fmacro-prefix-map=${{ github.workspace }}=."
+          # CFLAGS is NOT set here.  This job runs in a container, and
+          # ${{ github.workspace }} expands to the HOST path
+          # (/home/runner/work/AMA-Cryptography/AMA-Cryptography) while the
+          # checkout inside the container is at /__w/... — so the prefix never
+          # matched anything and all three flags were dead configuration.
+          # Both passes shared the same unmapped path, so the strict diff went
+          # on passing and nothing noticed.  The flags are exported from the
+          # in-container path inside `run:` below instead, where $PWD and the
+          # remapped $GITHUB_WORKSPACE are both correct.
           LDFLAGS: "-Wl,--build-id=sha1"
           MAKEFLAGS: "-j1"
           CMAKE_BUILD_PARALLEL_LEVEL: "1"
         run: |
           rm -rf build
+          export CFLAGS="-fdebug-prefix-map=$PWD=. -ffile-prefix-map=$PWD=. -fmacro-prefix-map=$PWD=. -fdebug-prefix-map=$GITHUB_WORKSPACE=. -ffile-prefix-map=$GITHUB_WORKSPACE=. -fmacro-prefix-map=$GITHUB_WORKSPACE=."
+          echo "CFLAGS=$CFLAGS"
           python -m build --wheel --no-isolation --outdir dist2/
           ls -lh dist2/
+
+      - name: The prefix map must actually have stripped the build path
+        # Without this, the map can go back to being dead config and the
+        # byte-equality diff will not notice: two passes at the same
+        # unmapped path are identical to each other and both leak the path.
+        run: |
+          set -euo pipefail
+          rm -rf _prefixcheck && mkdir _prefixcheck
+          python -m zipfile -e dist1/*.whl _prefixcheck/
+          leaked=0
+          while IFS= read -r obj; do
+            if strings -a "$obj" | grep -Eq '(^|[^A-Za-z0-9_])/(__w|home/runner|project)/'; then
+              echo "::error::$obj still embeds an absolute build path:"
+              strings -a "$obj" | grep -Eo '/(__w|home/runner|project)/[^ ]*' | sort -u | head -5
+              leaked=1
+            fi
+          done < <(find _prefixcheck -name '*.so' -o -name '*.pyd')
+          if [ "$leaked" -ne 0 ]; then
+            echo "::error::-ffile-prefix-map/-fdebug-prefix-map did not take effect."
+            exit 1
+          fi
+          echo "OK: no absolute build path survives in any shipped object."
 
       - name: Compare integrity digest + .py content across builds
         run: |

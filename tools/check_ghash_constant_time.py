@@ -2042,10 +2042,57 @@ _TAINT_REPORT_RE = re.compile(
 )
 
 
-def _run_taint(driver: Path, workdir: Path) -> Optional[tuple[int, str]]:
-    """Run the taint driver under Memcheck; return (report count, stderr)."""
+#: Dispatch slot to pin for this run, or None to let the dispatcher choose.
+#:
+#: KCT-3.  Every deterministic lane measured whatever the dispatcher selected
+#: on the runner, which on x86 CI is the AVX2 Keccak and the AVX2 Kyber NTT.
+#: The SCALAR implementations -- the ones a pre-AVX2 host, a container with
+#: AVX2 masked off, or an AMA_DISPATCH_NO_*_AVX2 opt-out actually runs -- were
+#: never measured by these gates at all, and the BMI/MULX tier could not be
+#: selected from here either.  `--dispatch-only <slot>` pins the tier through
+#: the dispatcher's own AMA_DISPATCH_ONLY contract, so a lane can state which
+#: implementation its numbers describe instead of inheriting the host's.
+_DISPATCH_ONLY: Optional[str] = None
+
+
+#: The dispatcher's own refusal line for an unrecognised AMA_DISPATCH_ONLY.
+#: Matched rather than parsed: it is the dispatcher that decides which names
+#: exist, and duplicating that list here would go stale.
+_DISPATCH_ONLY_REFUSED = "ERROR: AMA_DISPATCH_ONLY="
+
+
+def _dispatch_pin_was_honoured(wiring: list[str]) -> Optional[str]:
+    """None when the pin took, else the dispatcher's refusal line.
+
+    Without this the flag was decorative in the worst way: an unrecognised
+    slot name left EVERY kernel at its scalar fallback and the gate reported
+    a clean PASS, so a lane could claim to measure a tier it never selected.
+    """
+    if _DISPATCH_ONLY is None:
+        return None
+    for line in wiring:
+        if _DISPATCH_ONLY_REFUSED in line:
+            return line
+    return None
+
+
+def _driver_env() -> dict[str, str]:
+    """The environment every driver invocation runs under.
+
+    One place, so the auto-tune opt-out and any --dispatch-only pin cannot
+    drift between the callgrind path, the taint path and the wiring probe --
+    which is how the AVX2-only coverage went unnoticed.
+    """
     env = dict(os.environ)
     env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
+    if _DISPATCH_ONLY is not None:
+        env["AMA_DISPATCH_ONLY"] = _DISPATCH_ONLY
+    return env
+
+
+def _run_taint(driver: Path, workdir: Path) -> Optional[tuple[int, str]]:
+    """Run the taint driver under Memcheck; return (report count, stderr)."""
+    env = _driver_env()
     proc = subprocess.run(
         [
             "valgrind",
@@ -2213,8 +2260,7 @@ def _dispatch_wiring(driver: Path) -> list[str]:
     measurement, so a failure here returns nothing rather than failing the
     check.  The counts themselves are what the verdict rests on.
     """
-    env = dict(os.environ)
-    env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
+    env = _driver_env()
     env["AMA_DISPATCH_VERBOSE"] = "1"
     try:
         proc = subprocess.run(
@@ -2348,8 +2394,7 @@ def _measure(driver: Path, key_class: str, workdir: Path) -> Optional[dict[str, 
     pins other slots, and the scalar AES-GCM invariance job in dudect.yml
     covers that fallback directly.
     """
-    env = dict(os.environ)
-    env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
+    env = _driver_env()
     proc = subprocess.run(
         [
             "valgrind",
@@ -2412,6 +2457,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Override the per-target default in THRESHOLDS.",
     )
     parser.add_argument(
+        "--dispatch-only",
+        default=None,
+        metavar="SLOT",
+        help="Pin the dispatcher to SLOT for this run via AMA_DISPATCH_ONLY "
+        "(a SIMD slot name such as sha3-avx512x4 or kyber-ntt-avx2; the "
+        "dispatcher lists the valid names when given a bad one, and every "
+        "OTHER slot is left at its scalar fallback, which is how a scalar "
+        "tier gets measured). Without this the numbers describe whatever the "
+        "host happened to select, so the implementations a pre-AVX2 host runs "
+        "were never measured by these gates at all (KCT-3). The run FAILS "
+        "if the dispatcher does not report the pin as honoured.",
+    )
+    parser.add_argument(
         "--taint",
         action="store_true",
         help="Run the target's TAINT driver under Memcheck instead of the "
@@ -2429,6 +2487,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "optimizing CMAKE_BUILD_TYPE; the report names it as the witness.",
     )
     args = parser.parse_args(argv)
+
+    # Apply the tier pin before any driver runs, so the callgrind path, the
+    # taint path and the wiring probe all measure the same implementation.
+    global _DISPATCH_ONLY
+    _DISPATCH_ONLY = args.dispatch_only
+
     if args.taint and args.target not in _TAINT_DRIVERS:
         print(
             f"CONSTANT-TIME CHECK INCONCLUSIVE — no taint driver exists for "
@@ -2543,6 +2607,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # driver still exists — the report below runs after this temporary
         # directory is gone.
         wiring = _dispatch_wiring(driver)
+
+        refusal = _dispatch_pin_was_honoured(wiring)
+        if refusal is not None:
+            print(
+                f"CONSTANT-TIME CHECK INCONCLUSIVE — the dispatcher refused "
+                f"--dispatch-only={_DISPATCH_ONLY!r}, so this run would have "
+                f"measured the default wiring while claiming to measure that "
+                f"tier.\n  {refusal}",
+                file=sys.stderr,
+            )
+            return 2
 
         if args.taint:
             taint = _run_taint(driver, workdir)

@@ -28,6 +28,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import sysconfig
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -312,6 +314,33 @@ PY_CMAKE_BUILD_DIR = Path("build") / "python-cmake"
 long_description = (Path(__file__).resolve().parent / "README.md").read_text(encoding="utf-8")
 
 
+def _compiler_accepts(flag: str) -> bool:
+    """True when the C compiler builds a trivial program with ``flag``.
+
+    The equivalent of CMake's ``check_c_compiler_flag``, which
+    ``CMakeLists.txt`` uses for exactly these two flags.  Failing soft is the
+    point: an old or exotic toolchain must still produce a wheel, just one
+    without the marking, and the release job's ``readelf -nW`` check is what
+    notices that it did.
+    """
+    compiler = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
+    compiler = compiler.split()[0]
+    source = "int main(void) { return 0; }\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "probe.c")
+        with open(src, "w", encoding="utf-8") as handle:
+            handle.write(source)
+        try:
+            completed = subprocess.run(
+                [compiler, flag, "-c", src, "-o", os.path.join(tmp, "probe.o")],
+                capture_output=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return completed.returncode == 0
+
+
 def get_compiler_flags() -> tuple[list[str], list[str]]:
     """Get compiler flags based on platform and configuration."""
     flags = []
@@ -346,6 +375,30 @@ def get_compiler_flags() -> tuple[list[str], list[str]]:
             # not enable it by default, so these extensions shipped without the
             # fortified string/memory checks the C library has had all along.
             flags.extend(["-O3", "-DNDEBUG", "-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=2"])
+
+        # Control-flow integrity, matching the library (CMakeLists.txt lines
+        # 171-233) rather than being left to the toolchain default.  The
+        # Windows branch above has carried /guard:cf; the ELF extensions had
+        # nothing, so on x86-64 they got CET only where the distribution
+        # patches GCC to enable it (Ubuntu does; the manylinux_2_28
+        # gcc-toolset the release and reproducible-build jobs use does not),
+        # and on AArch64 they got no BTI or PAC-RET at all.  These extensions
+        # marshal keys and plaintexts across the C boundary, so they were the
+        # least hardened artefacts in the wheel.
+        #
+        # Both flags are backwards-compatible by construction -- ENDBR64
+        # decodes as a multi-byte NOP on pre-CET x86, and bti/paciasp/autiasp
+        # sit in the AArch64 hint (NOP) space -- so this costs no portability.
+        # Probed, not assumed: a toolchain that rejects the flag still builds.
+        _machine = platform.machine().lower()
+        if _machine in ("aarch64", "arm64"):
+            _cfi = "-mbranch-protection=standard"
+        elif _machine in ("x86_64", "amd64", "i386", "i686", "x86"):
+            _cfi = "-fcf-protection=full"
+        else:
+            _cfi = ""
+        if _cfi and _compiler_accepts(_cfi):
+            flags.append(_cfi)
 
         # ELF link hardening, matching the library (see CMakeLists.txt): full
         # RELRO closes GOT-overwrite, and an explicit non-executable stack does

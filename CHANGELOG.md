@@ -42,6 +42,155 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > was removed from this branch in the eighteenth pass below and remains in the
 > branch's commit history.
 
+### Maintenance pass, twenty-fourth (2026-09-08) — the pass that verified the twenty-third
+
+The twenty-third pass was verified with `gcc` alone and pushed. CI answered
+with 35 red checks, and the cause was one line: a `realpath()` call added to
+`tests/c/test_dispatch_cache_file.c` with no feature-test macro that reaches
+it. gcc warns; clang makes an implicit function declaration an error under
+C99, and every strict, Windows and macOS-clang lane builds the C test suite.
+This pass fixes that, and then reproduces the lanes locally that would have
+caught it, which is the part that was missing rather than the fix.
+
+**Measured, not assumed:** `_POSIX_C_SOURCE 200809L` does NOT expose
+`realpath` under `-std=c11` on this toolchain — both compilers report the
+same undeclared-function error. `_XOPEN_SOURCE 700` does, on both, and
+implies POSIX.1-2008. gcc then found a second defect clang misses in the same
+block: `expect[160]` cannot hold a `realpath()` result plus `"/b.cache"`
+(`-Wformat-truncation`), so the buffer is sized from `PATH_MAX`.
+
+BREAKING
+--------
+None.
+
+Verification that now happens before a push
+-------------------------------------------
+All four strict builds (gcc and clang, unoptimized and Release+LTO) with the
+frozen warning allowlist; ctest under both the ordinary and the
+AddressSanitizer+UBSan configurations; cppcheck and clang-tidy under CI's own
+invocations; both previously-red fuzz targets under CI's seed corpus,
+dictionary and derived `-max_len`; and the full callgrind and secret-taint
+sweeps.
+
+Dispatch table sealed read-only (DISP-07)
+-----------------------------------------
+Every SHA-3, ML-KEM, ML-DSA, AES-GCM, ChaCha20, Argon2 and batch-X25519
+operation is an indirect call through one table that sat in writable `.bss`,
+so a single memory-write primitive retargeted eighteen entry points at once.
+It is now `mprotect(PROT_READ)` after initialisation.
+
+The first attempt at this **crashed the library on first use** and is worth
+recording: a page-*aligned* section is not a page-*owning* one. Measured on
+the built object, `.ama_dispatch` was 0x90 bytes at 0xea000 while `.bss`
+began at 0xea0a0 — the same 4 KiB page — so the seal froze the head of `.bss`
+and `ama_dispatch_init()` segfaulted. The storage is now a union padded to
+64 KiB (the largest page size in common use) and aligned to it, and
+`dispatch_seal()` verifies page-alignment and length against the *runtime*
+page size before protecting anything, declining otherwise.
+`ama_dispatch_table_is_sealed()` reports which happened, and
+`tests/c/test_dispatch_seal.c` — linked against the non-testing library,
+because `AMA_TESTING_MODE` leaves the table writable by design — asserts that
+a write to it faults.
+
+Constant-time gates can now name the tier they measured (KCT-3)
+---------------------------------------------------------------
+`check_ghash_constant_time.py --dispatch-only <slot>` pins the implementation
+through the dispatcher's own `AMA_DISPATCH_ONLY` contract; the three places
+that built the driver environment are now one. The half that makes it worth
+having is the refusal: an unrecognised or unavailable slot leaves every kernel
+at its scalar fallback, so without a check the gate would print a clean PASS
+while claiming a tier it never selected. It now exits INCONCLUSIVE and quotes
+the dispatcher's own line. Verified both ways on this host —
+`chacha20-avx2x8` and `kyber-ntt-avx2` honoured, `sha3-scalar` (not a slot
+name) and `sha3-avx512x4` (kernel absent) both refused.
+
+Two fuzz assertions that were wrong (FZ-01 follow-up)
+-----------------------------------------------------
+The twenty-third pass replaced "must not crash" with real contracts. Two of
+them were unsound, and the fuzzer proved it rather than a reviewer:
+
+* `fuzz_kyber` asserted that any 3,168-byte secret key decapsulates. The
+  FIPS 203 §7.3 check added in the same pass refuses a key whose embedded
+  `H(ek)` does not match, which a fuzzed key never has — the assertion
+  described the pre-§7.3 library. It now computes `H(ek)` itself and asserts
+  the matching verdict: success when consistent, `AMA_ERROR_INVALID_PARAM`
+  when not.
+* `fuzz_ed25519` asserted that attacker-supplied bytes never verify. The seed
+  corpus carries genuine triples and the selector byte routes one into that
+  case, so the trap fired on a **correct** verification. A replacement
+  message-binding assertion was also unsound: under a low-order public key a
+  signature legitimately verifies for many messages. Both assertions moved to
+  the case that owns its keypair, where `A` is full order; that case now also
+  checks message binding, and a verifier mutated to ignore the message is
+  caught by it.
+
+**Recorded, not fixed:** `ama_ed25519_verify` accepts the all-zero signature
+under the all-zero public key (a point of order 4) for arbitrary messages.
+RFC 8032 does not require rejecting a small-order `A`, and neither the frozen
+oracle (904 verify records, none with a low-order key) nor Wycheproof's
+`ed25519_test.json` (no such groups) pins it either way. Rejecting them is
+defensible and consistent with the RFC 7748 low-order rejection this library
+already does for X25519, but it is a breaking change to verification
+semantics and belongs in a pass that can carry the complete small-order set
+and its own vectors.
+
+Findings closed at source
+-------------------------
+* **MON-004** — the nonce tracker is keyed by `(key_id_hash, nonce)`, so the
+  per-key 2^32 limit bounded nothing: memory and the on-disk ledger grew
+  without limit across distinct key ids, and the ledger naming key digests
+  and their nonces was created at the process umask (0644 on a default
+  account). Capacity is now bounded by a **refusal**, never an eviction — an
+  evicted entry is a nonce the tracker would later call fresh — with
+  `forget_key()` as the deliberate reclaim path. The ledger is created 0600
+  with `O_NOFOLLOW`, and an existing wider one is narrowed.
+* **MON-005** — `monitor_crypto_operation` threaded `input_size` correctly and
+  no shipped call site passed one, so every `normalize_by_size` profile was
+  dead configuration. All twelve now supply it; an AST-walking test fails if
+  any stops.
+* **KM-STORE-003** — `delete_key`'s traversal guard constrained the *name*,
+  not what the path *was*, so `<key_id>.json` replaced by a symlink had its
+  target overwritten with random bytes and the link then unlinked. Now opened
+  `O_NOFOLLOW|O_NONBLOCK` with an `S_ISREG` check. `O_NONBLOCK` is
+  load-bearing: the write-side open of a reader-less FIFO blocks forever
+  without it, which the FIFO test found by hanging.
+* **KM-HD-001** — `HDKeyDerivation` was documented "BIP32-compliant" while its
+  master key uses the HMAC key `"AMA Cryptography Master Key"` where BIP32
+  specifies `"Bitcoin seed"`, so no BIP32 wallet derives these keys. The
+  wording is corrected rather than the derivation, because changing the root
+  would silently move every key an existing deployment has derived. The file
+  named `test_hd_key_derivation_vectors.py` held no vector: measured, it
+  passes unchanged under both an XOR-for-modular-add mutation and a swapped
+  key/chain-code split. AMA-specific known answers are now pinned, and the
+  new file catches both mutations the old one misses.
+* **BSA-2** — the Cython extensions were built without
+  `-fcf-protection=full` / `-mbranch-protection=standard`, which
+  `CMakeLists.txt` gives the library precisely because an unpatched toolchain
+  "produces the same sources with no CET at all". Probed and added, plus a
+  release smoke-test step that reads the GNU property note out of every
+  shipped object — a selected flag the toolchain drops is still no hardening.
+* **BSA-4** — three blind spots in the ISA-scoping gate. VEX-encoded XMM was
+  treated as baseline SSE2; that is true for legacy encodings and false for
+  VEX, which #UDs without AVX. Measured on the shipped object: 1,993 such
+  instructions across 17 symbols, two outside any kernel. `popcnt`/`lzcnt`
+  were excused as "behind ABM/POPCNT rather than any flag this build scopes",
+  but `-mavx2` implies `-mpopcnt`. Ten SSE4.1 mnemonics were missing.
+* **BSA-1** — the reproducible-build prefix-map flags were built from
+  `${{ github.workspace }}`, which inside a container job is the *host* path,
+  so the map never matched and both passes shared the same unmapped path —
+  the strict diff passed anyway. Now exported from the in-container path,
+  with a step that fails if an absolute build path survives in a shipped
+  object.
+* **EDPERF-6** — the committed benchmark snapshot was generated at 611a41f and
+  described a backend that no longer exists. Regenerated on this head, and a
+  new test requires its floor column to equal the ledger's, which is the check
+  that was missing. The wiki no longer claims these files anchor the CI gate;
+  `baseline.json` does.
+* **cppcheck 2.17** reports four `uninitvar` cases the pinned CI version does
+  not, on both this branch and its base. Resolved at source by
+  zero-initialising the out-parameters rather than by a suppression, which
+  INVARIANT-13 forbids under `src/c` anyway.
+
 ### Maintenance pass, twenty-third (2026-09-08) — key material off the dead stack, secret-dependent branches removed, gates that could not fail made able to
 
 A twenty-dimension adversarial review of this branch produced 73 findings.
@@ -6699,7 +6848,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 77 suite files / 79 translation units (65 / 68 when the twelfth pass measured it; the 2026-08-31 v5 pre-merge audit added `tests/c/test_secure_memory_dontdump.c` and `tests/c/test_secure_free_scrub.c`; the twentieth pass removed the never-built `tests/c/bench_ed25519.c`; the twenty-first pass added five Ed25519 suites: `test_ed25519_static_tables.c`, `test_ed25519_frozen_oracle.c`, `test_ed25519_fe51_mulx_equiv.c`, `test_ed25519_safegcd.c` and `test_ed25519_half_reduce.c`; the twenty-third pass added five more: `test_ml_kem_decaps_hash_check.c`, `test_dispatch_cache_hostile.c`, `test_ml_kem_acvp_encaps.c`, `test_hybrid_sig.c` and `test_aead_stack_residue.c`), not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
+C suite is 78 suite files / 80 translation units (65 / 68 when the twelfth pass measured it; the 2026-08-31 v5 pre-merge audit added `tests/c/test_secure_memory_dontdump.c` and `tests/c/test_secure_free_scrub.c`; the twentieth pass removed the never-built `tests/c/bench_ed25519.c`; the twenty-first pass added five Ed25519 suites: `test_ed25519_static_tables.c`, `test_ed25519_frozen_oracle.c`, `test_ed25519_fe51_mulx_equiv.c`, `test_ed25519_safegcd.c` and `test_ed25519_half_reduce.c`; the twenty-third pass added six more: `test_ml_kem_decaps_hash_check.c`, `test_dispatch_cache_hostile.c`, `test_ml_kem_acvp_encaps.c`, `test_hybrid_sig.c`, `test_aead_stack_residue.c` and `test_dispatch_seal.c`), not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD

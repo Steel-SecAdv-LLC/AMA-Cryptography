@@ -62,14 +62,20 @@ check.
 
 Deliberately NOT checked
 ------------------------
-``tzcnt``, ``lzcnt`` and ``popcnt``.  ``tzcnt`` is encoded as ``rep bsf`` and
-executes as ``bsf`` on a CPU without BMI1 -- wrong for a zero input, but never
-a fault -- so flagging it would report a portability hazard that does not
-exist.  ``lzcnt``/``popcnt`` sit behind ABM/POPCNT rather than behind any flag
-this build scopes per file.  XMM operands are likewise excluded: 128-bit SSE2
-is baseline x86-64.  The SSSE3 and SSE4.1 families ARE checked, because
-``-mssse3``/``-msse4.1`` are per-file flags here and neither is baseline
-(``-march=x86-64`` is SSE2).
+``tzcnt`` only.  It is encoded as ``rep bsf`` and executes as ``bsf`` on a CPU
+without BMI1 -- wrong for a zero input, but never a fault -- so flagging it
+would report a portability hazard that does not exist.
+
+``lzcnt`` and ``popcnt`` ARE checked, in the ABM/POPCNT family: the previous
+rationale ("they sit behind ABM/POPCNT rather than behind any flag this build
+scopes per file") was wrong, because GCC's per-file ``-mavx2`` implies
+``-mpopcnt`` and the shipped kernels already contain one.
+
+LEGACY-encoded XMM operands are excluded, because 128-bit SSE2 is baseline
+x86-64.  VEX-encoded XMM is NOT: ``vpxor %xmm0,%xmm0,%xmm0`` requires AVX and
+raises #UD without it, so it has its own family.  The SSSE3 and SSE4.1
+families are checked too, because ``-mssse3``/``-msse4.1`` are per-file flags
+here and neither is baseline (``-march=x86-64`` is SSE2).
 
 Exit status
 -----------
@@ -132,6 +138,7 @@ REQUIRED_VECTOR_SYMBOLS = (
 ALLOWED_NON_SUFFIXED = {
     "fe_mul_x4": "4-way field multiply, static in src/c/avx2/ama_x25519_avx2.c",
     "fe25519_10_contract": "field contraction, static in src/c/avx2/ama_x25519_avx2.c",
+    "fe25519_10_expand": "field expansion, static in src/c/avx2/ama_x25519_avx2.c",
 }
 
 #: Kernel-name marker.  Matches ``ama_kyber_ntt_avx2`` and the compiler's
@@ -191,6 +198,54 @@ ISA_FAMILIES: tuple[IsaFamily, ...] = (
         remedy=(
             "AVX2/AVX-512 code must live in src/c/avx2 or src/c/avx512, compiled under "
             "per-file -mavx2/-mavx512"
+        ),
+    ),
+    IsaFamily(
+        name="VEX-encoded XMM (AVX.128)",
+        flags="-mavx2 (VEX encoding requires AVX)",
+        # A ``v``-prefixed mnemonic with an XMM operand and no YMM/ZMM one.
+        # The AVX family above keys on [yz]mm, so these were invisible to it,
+        # and the "XMM is baseline SSE2" exclusion it inherited is true only
+        # for LEGACY encodings: ``vpxor %xmm0,%xmm0,%xmm0`` is VEX.128 and
+        # raises #UD on a CPU without AVX, exactly like a YMM instruction.
+        # Measured on the shipped x86-64 object before this family existed:
+        # 1,993 such instructions across 17 symbols, two of which
+        # (fe25519_10_expand, fe25519_10_contract) sit outside a suffixed
+        # kernel and are allowlisted above as statics of an -mavx2 file.
+        #
+        # Matched against the mnemonic+operand column, like every family here.
+        pattern=re.compile(r"^v[a-z0-9]+\b(?![^;]*\b[yz]mm\d)[^;]*\bxmm\d"),
+        markers=(_AVX_MARKER, _SHANI_MARKER),
+        allowed=ALLOWED_NON_SUFFIXED,
+        # No required symbol: which kernels the compiler chooses to give a
+        # VEX.128 encoding is a codegen decision, so pinning one would break
+        # on a compiler that chose otherwise.  The AVX family's own required
+        # symbols establish that the gate read a real AVX2 build.
+        required=(),
+        remedy=(
+            "VEX-encoded instructions require AVX even at 128 bits (#UD without it); "
+            "they must stay in the per-file -mavx2 translation units"
+        ),
+    ),
+    IsaFamily(
+        name="ABM/POPCNT",
+        flags="-mavx2 implies -mpopcnt; -mbmi/-mlzcnt for lzcnt",
+        # popcnt and lzcnt are NOT baseline x86-64.  The module docstring used
+        # to excuse them as sitting "behind ABM/POPCNT rather than behind any
+        # flag this build scopes per file" -- but GCC's per-file ``-mavx2``
+        # implies ``-mpopcnt``, so the scoping IS this build's, and a popcnt
+        # that escaped a kernel would #UD on a pre-Nehalem CPU.
+        #
+        # tzcnt stays excluded on its own merits: it is encoded as ``rep bsf``
+        # and executes as ``bsf`` without BMI1 -- wrong for a zero input,
+        # never a fault.
+        pattern=re.compile(r"\b(?:popcnt|lzcnt)\b"),
+        markers=(_AVX_MARKER, _SHANI_MARKER, _GPR_ISA_MARKER),
+        allowed=ALLOWED_NON_SUFFIXED,
+        required=(),
+        remedy=(
+            "popcnt/lzcnt are not baseline x86-64 and -mavx2 implies -mpopcnt; keep "
+            "them inside the per-file scoped kernels"
         ),
     ),
     IsaFamily(
@@ -275,8 +330,10 @@ ISA_FAMILIES: tuple[IsaFamily, ...] = (
         name="SSE4.1",
         flags="-msse4.1",
         pattern=re.compile(
-            r"\b(?:pblendvb|pblendw|blendvps|blendvpd|pextrd|pextrq|pinsrd|pinsrq|pmulld"
+            r"\b(?:pblendvb|pblendw|blendps|blendpd|blendvps|blendvpd|pextrb|pextrd"
+            r"|pextrq|pinsrb|pinsrd|pinsrq|insertps|extractps|pmulld"
             r"|pmuldq|ptest|pcmpeqq|packusdw|roundps|roundpd|roundss|roundsd"
+            r"|dpps|dppd|mpsadbw|phminposuw|movntdqa"
             r"|pmovzx[bwd][wdq]|pmovsx[bwd][wdq]|pminu[dw]|pmaxu[dw]|pminsb|pmaxsb"
             r"|pminsd|pmaxsd)\b"
         ),

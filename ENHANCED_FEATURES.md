@@ -266,7 +266,7 @@ Automatic best-implementation selection at initialization:
 - Private key: 32 bytes
 - Public key: 33 bytes (compressed) / 65 bytes (uncompressed)
 - Security: 128-bit classical (NOT quantum-resistant)
-- BIP32-compliant hierarchical deterministic key derivation
+- BIP32-style hierarchical deterministic key derivation over an AMA-specific root (the child KDF follows BIP32; the master HMAC key does not, so the tree is not interoperable with a BIP32 wallet)
 
 ---
 

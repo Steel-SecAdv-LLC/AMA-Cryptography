@@ -54,7 +54,10 @@ failing check named on stderr.
 
 from __future__ import annotations
 
+import platform
 import re
+import shutil
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -393,6 +396,62 @@ def check_chacha20_poly1305() -> None:
         )
 
 
+def check_control_flow_integrity() -> None:
+    """Every shipped ELF object must carry the architecture's CFI marking.
+
+    CMakeLists.txt compiles the library with ``-fcf-protection=full`` (x86:
+    IBT + shadow stack) or ``-mbranch-protection=standard`` (AArch64: BTI +
+    PAC-RET), and setup.py now gives the binding extensions the same flags.
+    Both are probed, both fail soft, and a wheel built by a toolchain that
+    silently dropped them is indistinguishable from a correct one -- unless
+    something reads the built object.  That is this check.
+
+    Only what the platform can actually carry is required: the GNU property
+    note is an ELF construct, so this is a no-op on macOS and Windows.
+    """
+    if not sys.platform.startswith("linux"):
+        print("  SKIP  control-flow integrity (GNU property notes are ELF-only)")
+        return
+    readelf = shutil.which("readelf") or shutil.which("llvm-readelf")
+    if readelf is None:
+        print("  SKIP  control-flow integrity (no readelf on PATH)")
+        return
+
+    machine = platform.machine().lower()
+    wanted: tuple[str, ...]
+    if machine in ("x86_64", "amd64"):
+        wanted, label = ("IBT", "SHSTK"), "x86 CET (IBT + SHSTK)"
+    elif machine in ("aarch64", "arm64"):
+        wanted, label = ("BTI",), "AArch64 BTI"
+    else:
+        print(f"  SKIP  control-flow integrity (no CFI marking defined for {machine})")
+        return
+
+    package_dir = Path(ama_cryptography.__file__).parent
+    objects = sorted(package_dir.glob("*.so")) + sorted(package_dir.glob("*.so.*"))
+    objects = [obj for obj in objects if not obj.is_symlink()]
+    check(
+        "control-flow integrity: there are ELF objects to inspect",
+        bool(objects),
+        f"{package_dir} contains no .so files",
+    )
+    for obj in objects:
+        try:
+            out = subprocess.run(
+                [readelf, "-nW", str(obj)], capture_output=True, text=True, timeout=120
+            ).stdout
+        except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
+            check(f"control-flow integrity: {obj.name} readable", False, str(exc))
+            continue
+        missing = [token for token in wanted if token not in out]
+        check(
+            f"control-flow integrity: {obj.name} carries {label}",
+            not missing,
+            f"missing {missing} from the GNU property note; the toolchain dropped "
+            f"the CFI flag for this object",
+        )
+
+
 def main() -> int:
     print("=" * 70)
     print("AMA Cryptography — release wheel smoke test")
@@ -417,6 +476,7 @@ def main() -> int:
         check_signatures,
         check_aes_gcm,
         check_chacha20_poly1305,
+        check_control_flow_integrity,
     ):
         try:
             group()

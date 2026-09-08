@@ -404,7 +404,7 @@ Argon2id provides memory-hard password hashing, combining data-dependent and dat
 
 ### secp256k1 (Elliptic Curve Operations)
 
-secp256k1 provides elliptic curve operations supporting BIP32-compliant hierarchical deterministic (HD) key derivation.
+secp256k1 provides the elliptic curve operations under BIP32-style hierarchical deterministic (HD) key derivation. The child KDF follows BIP32; the master key is derived with an AMA-specific HMAC key rather than BIP32's `"Bitcoin seed"`, so the derived tree is deliberately not interoperable with a BIP32 wallet.
 
 **Parameters:**
 - Private Key: 32 bytes (scalar)

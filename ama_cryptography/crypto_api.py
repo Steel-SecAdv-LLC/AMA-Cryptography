@@ -2825,7 +2825,7 @@ def create_crypto_package(
     _t0 = time.perf_counter_ns()
     primary_signature = primary_crypto.sign(content, _signing_secret)
     _sign_ns = time.perf_counter_ns() - _t0
-    _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000)
+    _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000, input_size=len(content))
     # INVARIANT-30 companion signal.  Wired at the sites that are already
     # instrumented rather than pushed down into the providers, so no new call
     # path acquires a lock and the hot primitives stay untouched.  The
@@ -2852,7 +2852,9 @@ def create_crypto_package(
             content, sphincs_keypair.secret_key, precomputed_hash=_precomputed_hash
         )
         _sphincs_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation("sphincs_sign", _sphincs_ns / 1_000_000)
+        _monitor.monitor_crypto_operation(
+            "sphincs_sign", _sphincs_ns / 1_000_000, input_size=len(content)
+        )
         _monitor.record_operation_event(
             "sphincs_sign",
             key_fingerprint=_public_key_fingerprint(sphincs_keypair.public_key),
@@ -2901,7 +2903,9 @@ def create_crypto_package(
         _t0 = time.perf_counter_ns()
         encapsulated = kyber_provider.encapsulate(kyber_keypair.public_key)
         _encaps_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation("encrypt", _encaps_ns / 1_000_000)
+        _monitor.monitor_crypto_operation(
+            "encrypt", _encaps_ns / 1_000_000, input_size=len(kyber_keypair.public_key)
+        )
         _monitor.record_operation_event(
             "kyber_encaps",
             key_fingerprint=_public_key_fingerprint(kyber_keypair.public_key),
@@ -3017,7 +3021,7 @@ def _verify_package_signature(
             embedded_pk,
         )
         _verify_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
+        _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000, input_size=len(content))
     except Exception as exc:
         logger.error("Layer 3 signature verification error: %s", exc)
         return False, key_pinned
@@ -3101,7 +3105,9 @@ def _verify_addon_layers(
                 package.keypairs["KYBER_1024"].secret_key,
             )
             _decaps_ns = time.perf_counter_ns() - _t0
-            _monitor.monitor_crypto_operation("decrypt", _decaps_ns / 1_000_000)
+            _monitor.monitor_crypto_operation(
+                "decrypt", _decaps_ns / 1_000_000, input_size=len(package.kem_ciphertext)
+            )
             from ama_cryptography.secure_memory import constant_time_compare as _ct2
 
             results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)

@@ -40,6 +40,8 @@ import cmath
 import logging
 import math
 import os
+import stat
+import tempfile
 import threading
 import time
 from collections import deque
@@ -907,14 +909,40 @@ class NonceTracker:
     Tracks (key_id_hash, nonce) tuples to detect nonce reuse.
 
     Uses a rolling hash set (NOT a bloom filter — false negatives are
-    dangerous for nonce reuse detection). Space is bounded by the 2^32
-    nonce safety limit per key.
+    dangerous for nonce reuse detection).
 
-    Persists the nonce set to disk (append-only file) so it survives
-    process restarts.
+    **Capacity is bounded, and the bound fails closed.**  The per-key 2^32
+    safety limit bounds nothing on its own: the set is keyed by
+    ``(key_id_hash, nonce)``, so a process that sees many distinct key ids
+    grows the in-memory set and the on-disk ledger without limit — an
+    unbounded allocation driven by whatever chooses key ids.  Evicting the
+    oldest entries would bound it, and would also be the one thing this
+    class must never do: a forgotten nonce is a false negative, which is
+    exactly the failure the docstring above rules out.
+
+    So the bound is a refusal, not an eviction.  At
+    :data:`_MAX_TRACKED_ENTRIES` the tracker stops accepting new entries and
+    reports ``tracker_capacity_exceeded`` (severity critical) instead of
+    recording; the caller learns that reuse detection is no longer covering
+    it rather than being told a reused nonce is fresh.  A caller retiring a
+    key reclaims its share deliberately with :meth:`forget_key`.
+
+    Persists the nonce set to disk (append-only file, mode 0600) so it
+    survives process restarts.  The ledger names key-id digests and the
+    nonces used with them; before this it was created at the process umask,
+    which is 0644 on a default Linux account.
     """
 
     _NONCE_SAFETY_LIMIT: int = 2**32
+
+    #: Hard ceiling on distinct ``(key_id_hash, nonce)`` entries held at once.
+    #: 2**20 entries is roughly 150 MB of Python set at 32-byte hex key and
+    #: nonce strings, and about 100 MB of ledger; past that the process is
+    #: being driven, not used.
+    _MAX_TRACKED_ENTRIES: int = 2**20
+
+    #: The ledger holds key-id digests and their nonces: owner-only.
+    _LEDGER_MODE: int = 0o600
 
     def __init__(self, persist_path: Optional[str] = None, ephemeral: bool = False) -> None:
         """
@@ -1000,10 +1028,18 @@ class NonceTracker:
         if self._ephemeral:
             return
         try:
-            with open(self._persist_path, "a") as f:
+            # O_NOFOLLOW: the ledger path is attacker-relevant (it is named by
+            # the caller, and the default lives under $HOME), and appending
+            # through a planted symlink would write key-id digests into
+            # whatever it points at.  0600 at creation rather than the process
+            # umask, which is 0644 on a default account.
+            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self._persist_path, flags, self._LEDGER_MODE)
+            with os.fdopen(fd, "a") as f:
                 f.write(f"{key_id_hash},{nonce_hex}\n")
                 f.flush()
                 os.fsync(f.fileno())
+            self._tighten_ledger_mode()
         except Exception as e:
             raise RuntimeError(
                 f"Failed to persist nonce entry to {self._persist_path}: {e}. "
@@ -1061,10 +1097,97 @@ class NonceTracker:
                     "timestamp": time.time(),
                 }
 
+            if len(self._seen) >= self._MAX_TRACKED_ENTRIES:
+                # Refuse rather than evict: an evicted entry is a nonce this
+                # tracker would later call fresh.  The caller is told its
+                # coverage stopped, and forget_key() is how space is reclaimed.
+                return {
+                    "type": "tracker_capacity_exceeded",
+                    "severity": "critical",
+                    "key_id_hash": key_hash,
+                    "nonce": nonce_hex,
+                    "tracked": len(self._seen),
+                    "limit": self._MAX_TRACKED_ENTRIES,
+                    "message": (
+                        "CRITICAL: nonce tracker is full "
+                        f"({self._MAX_TRACKED_ENTRIES} entries); this (key, nonce) was "
+                        "NOT recorded and reuse of it will not be detected. Retire "
+                        "finished keys with forget_key() or start a fresh ledger."
+                    ),
+                    "timestamp": time.time(),
+                }
+
             self._seen.add(entry)
             self._counters[key_hash] = count + 1
             self._persist_entry(key_hash, nonce_hex)
             return None
+
+    def _tighten_ledger_mode(self) -> None:
+        """Narrow an existing ledger to 0600 if it is wider.
+
+        A ledger written by an earlier release exists at the process umask
+        (0644 on a default account), and ``O_CREAT`` does not change the mode
+        of a file that already exists.  Only a regular file we own is
+        touched: chmod through a symlink or on someone else's file is not
+        this class's business.
+        """
+        try:
+            st = os.lstat(self._persist_path)
+        except OSError:
+            return
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            return
+        if stat.S_IMODE(st.st_mode) & ~self._LEDGER_MODE:
+            try:
+                os.chmod(self._persist_path, self._LEDGER_MODE)
+            except OSError:  # pragma: no cover - racing removal
+                pass
+
+    def forget_key(self, key_id: bytes) -> int:
+        """Drop every recorded nonce for ``key_id``; return how many.
+
+        The deliberate counterpart to the capacity refusal: a caller that has
+        retired a key states so, and its entries stop consuming the bound.
+        Nothing here forgets a nonce for a key still in use, which is why it
+        is an explicit call and not an eviction policy.
+
+        The on-disk ledger is rewritten without those entries, through a
+        replace of a 0600 temporary in the same directory, so a crash leaves
+        either the old ledger or the new one and never a truncated file.
+        """
+        from ama_cryptography.pqc_backends import (
+            native_sha256,
+        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+
+        key_hash = native_sha256(key_id).hex()
+        with self._lock:
+            dropped = {entry for entry in self._seen if entry[0] == key_hash}
+            if not dropped:
+                return 0
+            self._seen -= dropped
+            self._counters.pop(key_hash, None)
+            if not self._ephemeral:
+                self._rewrite_ledger()
+            return len(dropped)
+
+    def _rewrite_ledger(self) -> None:
+        """Rewrite the ledger from ``self._seen`` atomically at 0600."""
+        directory = self._persist_path.parent
+        fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=".nonce_tracker.")
+        try:
+            os.fchmod(fd, self._LEDGER_MODE)
+            with os.fdopen(fd, "w") as f:
+                for key_hash, nonce_hex in sorted(self._seen):
+                    f.write(f"{key_hash},{nonce_hex}\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_name, self._persist_path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:  # pragma: no cover - already gone
+                pass
+            raise
 
     def get_counter(self, key_id: bytes) -> int:
         """Get current nonce count for a key."""
