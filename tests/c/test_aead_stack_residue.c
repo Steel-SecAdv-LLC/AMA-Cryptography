@@ -20,8 +20,15 @@
  *
  * CONTROL.  A vacuous version of this test — one whose scan window misses the
  * frame — passes for the wrong reason, so `probe_control()` deliberately
- * leaves the key in its own frame and the test FAILS if the probe cannot see
- * that.  Both directions are checked before any AEAD verdict is trusted.
+ * leaves a 32-byte SENTINEL in its own frame and the test FAILS if the probe
+ * cannot see that.  A BASELINE check then asserts the window holds no copy of
+ * the key before any AEAD runs.  Both directions are checked before any AEAD
+ * verdict is trusted.
+ *
+ * The sentinel is not a detail: the control planted the KEY until this pass,
+ * which contaminated the window with the very needle every later check
+ * searches for, and turned the control into a false positive for the AEAD
+ * verdicts under any frame layout that did not clear it.  See `g_sentinel`.
  */
 #include <stdio.h>
 #include <string.h>
@@ -30,17 +37,32 @@
 
 #include "ama_cryptography.h"
 
-/* ASan detection: clang exposes __has_feature, gcc defines the macro. */
+/* Sanitizers that instrument the very read this test performs.
+ *
+ * Both AddressSanitizer and MemorySanitizer are correct to object to reading
+ * dead stack below the current frame, and for different reasons, so both have
+ * to be named:
+ *
+ *   - ASan reports "stack-buffer-underflow ... 'anchor' ... underflows this
+ *     variable" -- the probe reads past a one-byte object into its redzone.
+ *   - MSan reports use-of-uninitialised-value -- dead stack the AEAD frame did
+ *     not write is exactly that.  This is not hypothetical: the MemorySanitizer
+ *     lane reported `test_aead_stack_residue (Subprocess aborted)`, and only
+ *     ASan was named here, so MSan fell through and ran the probe.
+ *
+ * Naming each sanitizer is a shape that fails again on the next one added, so
+ * the negative case is pinned: no sanitizer that instruments memory reads may
+ * run this probe, and the two that exist are listed. */
 #if defined(__has_feature)
-#  if __has_feature(address_sanitizer)
-#    define AMA_UNDER_ASAN 1
+#  if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer)
+#    define AMA_PROBE_IS_INSTRUMENTED 1
 #  endif
 #endif
-#if !defined(AMA_UNDER_ASAN) && defined(__SANITIZE_ADDRESS__)
-#  define AMA_UNDER_ASAN 1
+#if !defined(AMA_PROBE_IS_INSTRUMENTED) && (defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_MEMORY__))
+#  define AMA_PROBE_IS_INSTRUMENTED 1
 #endif
-#if !defined(AMA_UNDER_ASAN)
-#  define AMA_UNDER_ASAN 0
+#if !defined(AMA_PROBE_IS_INSTRUMENTED)
+#  define AMA_PROBE_IS_INSTRUMENTED 0
 #endif
 
 
@@ -62,15 +84,57 @@ static uint8_t g_key[32];
 static uint8_t g_nonce[12];
 static uint8_t g_msg[MSG_BYTES];
 
+/* What `probe_control()` plants, and what the control searches for.
+ *
+ * NEVER the key.  The control used to plant `g_key` itself, which made it
+ * manufacture a false positive for every check that ran after it: the planted
+ * copy landed 391 bytes below the probe's anchor, the `poison_stack()` before
+ * the next check did not clear it, and the AES-256-GCM check then found the
+ * CONTROL's key and reported it as an AEAD leak.  gcc's frame layout happened
+ * to place the two out of each other's way and clang's did not, so the lane
+ * split by compiler rather than by library behaviour -- exactly the shape of
+ * a harness bug wearing a finding's clothes.  Proven by planting this
+ * distinct value instead and re-running unchanged: the AEAD checks go to zero
+ * hits under clang 18 -O2 -flto=thin, the configuration that failed.
+ *
+ * A control only has to establish that the scan window covers a frame at this
+ * depth.  Any 32-byte value does that, and one that is not the secret cannot
+ * be mistaken for it. */
+static uint8_t g_sentinel[32];
+
 /* Poison the region a later call will use, so a hit is residue rather than a
- * leftover from process start. */
+ * leftover from process start.
+ *
+ * The barrier below is load-bearing, not decoration.  `pad` is local, never
+ * escapes and is dead at return, so the `memset` is a dead store and clang
+ * deletes the whole 32 KiB of it: measured on the shipped flags, clang 18.1.3
+ * emitted this entire function as
+ *
+ *     movb   $0x5a,-0x8(%rsp)      ; ONE byte
+ *     movzbl -0x8(%rsp),%eax       ; satisfying the volatile read
+ *     ret
+ *
+ * -- the 32 KiB frame is never even allocated -- while gcc 13.3.0 emitted the
+ * real stack probe and memset.  That is the whole of the compiler split this
+ * test showed: with no poison, whatever was on the stack from an earlier call
+ * survives into the next scan, and "a hit is residue rather than a leftover"
+ * is simply false.  It is also why the control's planted key used to reappear
+ * in the AES-GCM verdict.
+ *
+ * The `"r"(pad)` operand makes the address escape and the `"memory"` clobber
+ * makes the stores observable, so the memset must happen -- the same
+ * construction `ama_secure_stack_wipe()` uses for the same reason. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #endif
 static void poison_stack(void) {
     volatile uint8_t pad[SCAN_BYTES];
     memset((void *)pad, 0x5A, sizeof pad);
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ __volatile__("" : : "r"(pad) : "memory");
+#else
     (void)pad[0];
+#endif
 }
 
 /* Occurrences of `needle` in the SCAN_BYTES below this frame. */
@@ -99,14 +163,42 @@ static int residue_count(const uint8_t *needle, size_t len) {
     return hits;
 }
 
-/* Positive control: leaves the key in a frame the probe must be able to see. */
+/* Any AES-256 key half left behind, not only a contiguous 32-byte copy.
+ *
+ * A compiler does not have to spill a key as one object, and the shipped one
+ * does not.  Disassembled from the built library, the AVX2 kernel stores
+ * key[0:16] with `movdqa %xmm2,(%rsp)` and key[16:32] with
+ * `movdqa %xmm4,0x70(%rsp)` -- 112 bytes apart, in slots its own exit scrub
+ * does not cover.  A contiguous 32-byte needle cannot see that shape at all,
+ * so the probe was blind to the exact defect class it exists for; what saves
+ * the library there is `ama_secure_stack_wipe()`, and nothing here was
+ * measuring whether it did.
+ *
+ * Each 16-byte half is therefore searched independently.  For AES-256 either
+ * half is 128 bits of the key, so a hit on one is a disclosure on its own. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static int key_residue_count(void) {
+    const int whole = residue_count(g_key, sizeof g_key);
+    const int low = residue_count(g_key, 16);
+    const int high = residue_count(g_key + 16, 16);
+    /* The halves subsume the contiguous case (a whole-key copy contains
+     * both), so the halves alone are the verdict; `whole` is kept for the
+     * printed diagnostic. */
+    (void)whole;
+    return low + high;
+}
+
+/* Positive control: leaves the SENTINEL in a frame the probe must be able to
+ * see.  See `g_sentinel` for why this must not be the key. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #endif
 static void probe_control(void) {
     volatile uint8_t copy[512];
     memset((void *)copy, 0, sizeof copy);
-    memcpy((void *)(copy + 128), g_key, sizeof g_key);
+    memcpy((void *)(copy + 128), g_sentinel, sizeof g_sentinel);
     /* Keep the copy alive to the end of the frame, then return without a
      * scrub — the exact shape the AEAD kernels used to exhibit. */
 #if defined(__GNUC__) || defined(__clang__)
@@ -151,17 +243,16 @@ static void run_chacha_decrypt(const uint8_t *ct, const uint8_t *tag, uint8_t *p
 }
 
 int main(void) {
-#if AMA_UNDER_ASAN
+#if AMA_PROBE_IS_INSTRUMENTED
     /* Skipped, not suppressed.  This probe measures dead stack BELOW its own
-     * frame -- that read IS the measurement, and it is exactly what
-     * AddressSanitizer's stack redzones exist to catch (it reports
-     * "stack-buffer-underflow ... 'anchor' ... underflows this variable",
-     * which correctly describes the C).  Keeping the measurement and
-     * satisfying ASan are mutually exclusive: with the frame exempted the
-     * probe would read poisoned redzone bytes instead of real residue.  So
-     * this lane declines the test rather than weakening it; the
-     * non-sanitized lanes run it, and they are where the finding is gated. */
-    printf("SKIP: dead-stack residue cannot be measured under AddressSanitizer\n");
+     * frame -- that read IS the measurement, and it is precisely what an
+     * ASan redzone and an MSan shadow exist to object to.  Keeping the
+     * measurement and satisfying either is mutually exclusive: with the frame
+     * exempted the probe would read redzone or shadow-poisoned bytes rather
+     * than real residue.  So these lanes decline the test rather than
+     * weakening it; the uninstrumented lanes run it, and they are where the
+     * finding is gated.  See the AMA_PROBE_IS_INSTRUMENTED block above. */
+    printf("SKIP: dead-stack residue cannot be measured under a memory sanitizer\n");
     return 77;
 #else
     static uint8_t ct[MSG_BYTES], pt[MSG_BYTES];
@@ -171,6 +262,8 @@ int main(void) {
 
     for (i = 0; i < sizeof g_key; i++) {
         g_key[i] = (uint8_t)(0xC3u ^ (i * 7u + 11u));
+        /* Distinct from the key in every byte, and from the 0x5A poison. */
+        g_sentinel[i] = (uint8_t)(0xA7u ^ (i * 13u + 3u));
     }
     memset(g_nonce, 0x24, sizeof g_nonce);
     memset(g_msg, 0x11, sizeof g_msg);
@@ -178,42 +271,59 @@ int main(void) {
     printf("AEAD dead-stack key residue (INVARIANT-6)\n");
     printf("=========================================\n");
 
-    /* --- control: the probe must be able to see a key that IS left behind. */
+    /* --- control: the probe must be able to see a secret that IS left behind. */
     poison_stack();
     probe_control();
-    control_hits = residue_count(g_key, sizeof g_key);
-    printf("  control (key deliberately left): %d hit(s)\n", control_hits);
+    control_hits = residue_count(g_sentinel, sizeof g_sentinel);
+    printf("  control (sentinel deliberately left): %d hit(s)\n", control_hits);
     CHECK(control_hits > 0,
-          "probe control: a key left on the stack IS detected "
+          "probe control: a value left on the stack IS detected "
           "(a zero here means the scan window missed the frame and every "
           "verdict below would be vacuous)");
+
+    /* --- baseline: and it must hold NO copy of the key yet.
+     *
+     * The counterpart to the control, and the check that would have caught
+     * the harness bug the control itself used to cause.  Every verdict below
+     * reads `key_residue_count()`; if the window already holds the key, or
+     * either half of it, before any AEAD has run, those verdicts are measuring
+     * the harness rather than the library.  Assert the window is clean of the
+     * needle first. */
+    poison_stack();
+    CHECK(key_residue_count() == 0,
+          "probe baseline: no copy of the key is in the scan window before "
+          "any AEAD call (a hit here means the harness contaminated the "
+          "window and every verdict below would be measuring itself)");
 
     /* --- AES-256-GCM, both directions. */
     poison_stack();
     run_gcm_encrypt(ct, tag);
-    CHECK(residue_count(g_key, sizeof g_key) == 0,
+    CHECK(key_residue_count() == 0,
           "AES-256-GCM encrypt leaves no raw key on the dead stack");
 
     poison_stack();
     run_gcm_decrypt(ct, tag, pt);
-    CHECK(residue_count(g_key, sizeof g_key) == 0,
+    CHECK(key_residue_count() == 0,
           "AES-256-GCM decrypt leaves no raw key on the dead stack");
     CHECK(memcmp(pt, g_msg, MSG_BYTES) == 0, "AES-256-GCM round trip");
 
     /* Searching for the raw key is sufficient to cover the schedule: for
      * AES-256 the first two round keys ARE the key, so a build that leaks any
      * of the fifteen leaks these two — the pre-fix library failed exactly
-     * here, with all fifteen present. */
+     * here, with all fifteen present.  `key_residue_count()` searches each
+     * 16-byte half separately as well as the whole, because the shipped AVX2
+     * kernel spills those two round keys 112 bytes apart rather than
+     * contiguously; see its comment. */
 
     /* --- ChaCha20-Poly1305, both directions. */
     poison_stack();
     run_chacha_encrypt(ct, tag);
-    CHECK(residue_count(g_key, sizeof g_key) == 0,
+    CHECK(key_residue_count() == 0,
           "ChaCha20-Poly1305 encrypt leaves no raw key on the dead stack");
 
     poison_stack();
     run_chacha_decrypt(ct, tag, pt);
-    CHECK(residue_count(g_key, sizeof g_key) == 0,
+    CHECK(key_residue_count() == 0,
           "ChaCha20-Poly1305 decrypt leaves no raw key on the dead stack");
     CHECK(memcmp(pt, g_msg, MSG_BYTES) == 0, "ChaCha20-Poly1305 round trip");
 
@@ -226,7 +336,7 @@ int main(void) {
         CHECK(ama_chacha20poly1305_decrypt(g_key, g_nonce, ct, MSG_BYTES, NULL, 0,
                                            bad_tag, pt) == AMA_ERROR_VERIFY_FAILED,
               "ChaCha20-Poly1305 rejects a bad tag");
-        CHECK(residue_count(g_key, sizeof g_key) == 0,
+        CHECK(key_residue_count() == 0,
               "ChaCha20-Poly1305 reject path leaves no raw key");
     }
 
