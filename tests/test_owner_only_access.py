@@ -170,6 +170,13 @@ def _windows_apply_sddl(path: pathlib.Path, sddl: str) -> None:  # pragma: no co
     32-bit-default defect the gate below exists to prevent, and would fail on
     Win64 for a reason that has nothing to do with what the test is checking.
     """
+    import sys
+
+    # Not decoration: `ctypes.get_last_error` is Windows-only in typeshed, so
+    # this narrowing is what lets `mypy --strict` check the body at all off
+    # Windows. Dropping it is how CI's Code Quality job went red.
+    if sys.platform != "win32":
+        raise OSError("Windows only")
     import ctypes
 
     from ama_cryptography._owner_only import _BOOL, _PVOID, _win
