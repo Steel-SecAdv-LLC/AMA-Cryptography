@@ -30,6 +30,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
+from ama_cryptography import _owner_only
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import (
@@ -94,14 +95,13 @@ def _atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
     # Knowing precisely who owns the descriptor removes the need to guess.
     fd_is_ours = True
     try:
-        if hasattr(os, "fchmod"):
-            # Best-effort: mkstemp already creates the file 0o600 on POSIX, so a
-            # platform without fchmod (or a filesystem that refuses it) is not a
-            # failure — the restrictive creation mode still holds.
-            try:
-                os.fchmod(fd, mode)
-            except OSError as exc:  # pragma: no cover - platform dependent
-                logger.debug("fchmod(%s) unsupported here: %s", tmp_name, exc)
+        # Narrow the staging file BEFORE any bytes are written, and narrow it
+        # on Windows too: ``mkstemp``'s 0o600 is a POSIX guarantee, and on
+        # Windows the staging file otherwise inherits whatever the store's
+        # parent grants.  ``restrict_fd_to_owner`` uses ``fchmod`` where there
+        # is one and a protected DACL where there is not.
+        if not _owner_only.restrict_fd_to_owner(fd, tmp_name):  # pragma: no cover - platform
+            logger.debug("owner-only access could not be enforced on %s", tmp_name)
 
         handle = os.fdopen(fd, "wb")
         fd_is_ours = False  # ownership transferred to ``handle``
@@ -819,16 +819,20 @@ class SecureKeyStorage:
         """
         self.allow_legacy_kdf = allow_legacy_kdf
         self.storage_path = Path(storage_path)
-        # Create the key store 0o700 so key-id filenames are not enumerable and
-        # the encrypted key files are not world-traversable.  ``mkdir(mode=...)``
-        # is subject to umask and is a no-op when the directory already exists,
-        # so follow with a best-effort ``chmod`` to tighten a pre-existing dir.
+        # Create the key store owner-only so key-id filenames are not
+        # enumerable and the encrypted key files are not traversable by other
+        # local users.  ``mkdir(mode=...)`` is subject to umask, is a no-op
+        # when the directory already exists, and is ignored outright on
+        # Windows -- where a store under the profile root would otherwise
+        # inherit that root's ACEs.  So the mode argument is a first
+        # approximation and ``restrict_to_owner`` is the control: chmod 0700
+        # on POSIX, a protected owner-only DACL on Windows, applied whether
+        # the directory is new or pre-existing.
         self.storage_path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if hasattr(os, "chmod"):
-            try:
-                os.chmod(self.storage_path, 0o700)
-            except OSError:  # pragma: no cover - platform dependent
-                pass
+        if not _owner_only.restrict_to_owner(
+            self.storage_path, directory=True
+        ):  # pragma: no cover - platform dependent
+            logger.debug("owner-only access could not be enforced on %s", self.storage_path)
 
         # Key derivation parameters (versioned for future upgrades)
         self.KDF_VERSION = 3  # v3 = Argon2id, v2 = PBKDF2 600k, v1 = PBKDF2 100k
@@ -1097,7 +1101,7 @@ class SecureKeyStorage:
                 metadata["parallelism"] = self.ARGON2_PARALLELISM
             with open(self.metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
-            os.chmod(self.metadata_file, 0o600)
+            _owner_only.restrict_to_owner(self.metadata_file)
             iterations = self.KDF_ITERATIONS
 
         # Derive key using the appropriate algorithm

@@ -59,6 +59,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -396,6 +397,114 @@ def check_chacha20_poly1305() -> None:
         )
 
 
+def check_secp256k1() -> None:
+    """RFC 6979 determinism, a verifying signature, and the zero-key refusal.
+
+    The zero-key case is not a formality. Until this release the private-key
+    range check was written as
+
+        bad = (1 ^ sc_from_bytes(&d, key)) | sc_is_zero(&d);
+
+    whose two calls are only indeterminately sequenced (C11 6.5.2.2p10), so a
+    right-to-left evaluator read ``d`` before the key was loaded into it. On
+    MSVC that rejected valid keys AND signed successfully under an all-zero
+    key. No Linux or macOS lane could see it, because gcc and clang evaluate
+    left to right. A smoke test that only signs and verifies would have
+    shipped it, so the refusal is checked here explicitly.
+    """
+    print("secp256k1 ECDSA")
+    digest = pqc_backends.native_sha256(b"ama-cryptography release wheel smoke test")
+    privkey = pqc_backends.native_sha256(b"smoke-test private key seed")
+    signature = pqc_backends.native_secp256k1_ecdsa_sign(digest, privkey)
+    check(
+        "secp256k1: RFC 6979 signing is deterministic",
+        signature == pqc_backends.native_secp256k1_ecdsa_sign(digest, privkey),
+        "two signatures over the same (key, digest) differ",
+    )
+    pubkey = pqc_backends.native_secp256k1_pubkey_decompress(
+        pqc_backends.native_secp256k1_pubkey_from_privkey(privkey)
+    )
+    check(
+        "secp256k1: the signature verifies under its own public key",
+        pqc_backends.native_secp256k1_ecdsa_verify(signature, digest, pubkey),
+    )
+    try:
+        pqc_backends.native_secp256k1_ecdsa_sign(digest, b"\x00" * 32)
+    except (RuntimeError, ValueError):
+        check("secp256k1: an all-zero private key is refused", True)
+    else:
+        check(
+            "secp256k1: an all-zero private key is refused",
+            False,
+            "signing succeeded with d = 0 — the scalar range check is reading "
+            "the wrong bytes (see the sequencing note in src/c/ama_secp256k1.c)",
+        )
+
+
+def check_private_storage_is_owner_only() -> None:
+    """The key store and the nonce ledger must be owner-only in the WHEEL.
+
+    ``0o600`` is a POSIX sentence: on Windows ``os.chmod`` toggles the
+    read-only attribute and nothing else, ``mkdir(mode=...)`` is ignored, and
+    ``os.fchmod`` does not exist -- so a store created under a profile root
+    inherited that root's ACEs. ``ama_cryptography._owner_only`` states the
+    property once and enforces it per platform, and this reads the
+    enforcement back off files the installed package actually created, rather
+    than trusting that the source tree's unit tests covered the shipped
+    artefact.
+    """
+    print("private storage")
+    from ama_cryptography import _owner_only
+    from ama_cryptography.key_management import SecureKeyStorage
+    from ama_cryptography.monitoring import NonceTracker
+
+    check(
+        "owner-only access is enforceable on this platform",
+        _owner_only.is_enforceable(),
+        "the key store and nonce ledger would be left at whatever the parent " "directory grants",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+
+        store_dir = root / "keystore"
+        store = SecureKeyStorage(store_dir, "wheel smoke test passphrase")
+        store.store_key("smoke", b"\x01" * 32)
+        check(
+            "the key store retrieves what it stored",
+            store.retrieve_key("smoke") == b"\x01" * 32,
+        )
+        expected_dir = _owner_only.expected_owner_only_description(directory=True)
+        actual_dir = _owner_only.access_description(store_dir)
+        check(
+            "the key store directory is owner-only",
+            actual_dir == expected_dir,
+            f"access is {actual_dir}, expected {expected_dir}",
+        )
+
+        ledger = root / "nonces.dat"
+        tracker = NonceTracker(persist_path=str(ledger))
+        check(
+            "the nonce ledger records a fresh nonce",
+            tracker.check_and_record(b"smoke", b"\x00" * 12) is None,
+        )
+        check(
+            "the nonce ledger detects reuse",
+            tracker.check_and_record(b"smoke", b"\x00" * 12) is not None,
+        )
+        check(
+            "the nonce ledger survives a restart",
+            NonceTracker(persist_path=str(ledger)).check_and_record(b"smoke", b"\x00" * 12)
+            is not None,
+        )
+        expected_file = _owner_only.expected_owner_only_description()
+        actual_file = _owner_only.access_description(ledger)
+        check(
+            "the nonce ledger is owner-only",
+            actual_file == expected_file,
+            f"access is {actual_file}, expected {expected_file}",
+        )
+
+
 def check_control_flow_integrity() -> None:
     """Every shipped ELF object must carry the architecture's CFI marking.
 
@@ -476,6 +585,8 @@ def main() -> int:
         check_signatures,
         check_aes_gcm,
         check_chacha20_poly1305,
+        check_secp256k1,
+        check_private_storage_is_owner_only,
         check_control_flow_integrity,
     ):
         try:

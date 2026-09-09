@@ -234,17 +234,75 @@ same object. Reverting any one of the four fixes fails it; the field arithmetic
 (1 ^ nistp_is_zero(k))`) is not flagged, and four constructed cases pin both
 edges.
 
-**The nonce ledger called `os.getuid()`.** MON-004b's owner-only ledger is a
-POSIX permission control, and both of its primitives — `os.getuid` for the
-ownership test and `os.fchmod` for the temporary — are absent on Windows. Every
-persisted nonce raised `RuntimeError: ... module 'os' has no attribute
-'getuid'` (twenty tests across `test_monitoring_ledger_and_bounds.py` and
-`test_priority_integration.py`), which is a fail-closed refusal of the whole
-`NonceTracker` on that platform. Where the mode bits carry no meaning the
-narrowing is now skipped rather than faked, under a named capability constant,
-and the tests that assert on modes skip with it. On Windows the ledger's
-confidentiality rests on the ACL of the directory it is created in; that is
-stated at the constant rather than left implied.
+**The nonce ledger called `os.getuid()` — and behind that, owner-only access
+was a POSIX-only guarantee across the whole package.** MON-004b's owner-only
+ledger is a POSIX permission control, and both of its primitives — `os.getuid`
+for the ownership test and `os.fchmod` for the temporary — are absent on
+Windows. Every persisted nonce raised `RuntimeError: ... module 'os' has no
+attribute 'getuid'` (twenty tests across `test_monitoring_ledger_and_bounds.py`
+and `test_priority_integration.py`), a fail-closed refusal of the whole
+`NonceTracker` on that platform.
+
+Guarding the call would have fixed the crash and left the guarantee absent, so
+the guarantee was implemented instead. Pulling the thread found the same hole
+somewhere that matters more than the ledger: **`SecureKeyStorage` — the
+private-key store.** `Path.mkdir(mode=0o700)` is ignored on Windows,
+`os.chmod` there toggles the read-only attribute and nothing else, and
+`os.fchmod` does not exist, so the store, its encrypted key files, its salt and
+its KDF metadata took whatever the parent directory's inheritable ACEs granted
+— commonly `Users: Read` under a profile root. `tests/test_key_management_hardening.py::TestFilePermissions`
+carried `skipif(os.name == "nt", "POSIX permission semantics")`, so the control
+was never checked on the platform where it was weakest. The skip was not
+covering an absent property; it was hiding an unenforced one.
+
+`ama_cryptography/_owner_only.py` now states the property once and lets each
+platform enforce it: `chmod` on POSIX; on Windows a **protected** DACL
+(`SE_DACL_PROTECTED`, so nothing is inherited from the parent) whose single ACE
+grants `FILE_ALL_ACCESS` to the SID of the process token's user, applied with
+`SetNamedSecurityInfoW` through `ctypes` — no new dependency, the package keeps
+its zero runtime requirements. An Administrator can still take ownership, in
+the same way `root` defeats `0o600`; that is the limit of the analogy and it is
+stated at the module rather than implied. It is applied at every site that
+means owner-only: the ledger and its atomic rewrite, the key store directory,
+each key file's staging descriptor, and the KDF metadata.
+
+`access_description` reads the enforcement back — octal on POSIX, the DACL's
+SDDL on Windows — which is what lets one assertion mean the same thing on both
+platforms. So `TestFilePermissions`, `TestTheLedgerIsOwnerOnly` and the new
+`tests/test_owner_only_access.py` now *run and assert* on Windows instead of
+skipping, each with a non-vacuity control that widens the object first and
+checks the starting state differs. `test_this_platform_can_enforce_owner_only_access`
+fails outright on any platform where the control would degrade to a no-op —
+the answer there is to implement enforcement, not to add a skip. Mutating
+`restrict_to_owner` to a no-op fails 14 tests across the three files.
+
+The one case that remains POSIX-only is the parametrised sweep over stale
+mode-bit classes (group-read, world-write, `0o677`, owner-execute), which
+enumerates a POSIX alphabet by construction; the property it samples is covered
+on every platform by `test_a_ledger_from_an_earlier_release_is_narrowed`.
+
+`tools/wheel_smoke_test.py` — the release gate that runs against the built
+wheel rather than the source tree — gains the two checks this pass made
+load-bearing, so they are verified on the artefact that ships and on the
+platform it ships for: `check_secp256k1` (RFC 6979 determinism, a verifying
+signature, and the all-zero-key refusal, whose absence is what the sequencing
+defect above produced) and `check_private_storage_is_owner_only` (the installed
+package's own key store and nonce ledger, read back through
+`access_description`). Per the runbook, changing this file invalidates a
+recorded release dry run — already prerequisite 3 in this PR's description.
+
+**End-to-end, actually executed rather than assumed.** `pip install
+'.[all]'` into a clean virtualenv — all seven extras, the C library and the six
+Cython bindings built from source — then a twenty-step functional run from
+outside the source tree: POST OPERATIONAL and every self-test reporting;
+SHA3-256/SHA-512/SHA-256; ML-KEM-1024 encapsulate/decapsulate; ML-DSA-65,
+Ed25519 and hybrid sign/verify with their negative controls; X25519 agreement;
+secp256k1 determinism, verification and zero-key refusal; AES-256-GCM and
+ChaCha20-Poly1305 with tag tampering caught; `create_crypto_package` /
+`verify_crypto_package`; `batch_verify_ed25519` on a good and a corrupted
+batch; `SecureKeyStorage` and `NonceTracker` including their owner-only
+enforcement; PEM/SPKI/JWK/COSE round-trips; and every optional extra importing
+(`math`, `monitoring`, `legacy`, `hsm`, `benchmark`). 20/20.
 
 **The seal's 64 KiB alignment is a PE limit, not an MSVC one.** The nested
 CMake sub-builds in `tests/test_aesni_is_not_gated_on_avx2.py` are configured

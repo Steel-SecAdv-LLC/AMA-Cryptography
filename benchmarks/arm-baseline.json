@@ -853,6 +853,10 @@
       {
         "path": "ama_cryptography/_post_kats/ml_kem_1024_kat.json",
         "reason": "Regenerated POST Known-Answer vector data after the ML-KEM decapsulation FIPS 203 §7.3 hash check landed. Data, not code: the file holds no executable text, and _self_test loads it once at package import (ama_cryptography/__init__.py imports _run_self_tests at module level), which is before benchmark_operation's warmup, let alone its timed batches. No floored row's timed region reads it."
+      },
+      {
+        "path": "ama_cryptography/_owner_only.py",
+        "reason": "New module: the cross-platform owner-only access control (chmod on POSIX, a protected owner-only DACL on Windows) that SecureKeyStorage, its KDF metadata and the NonceTracker ledger now use instead of POSIX-only mode bits. Measured rather than asserted: with restrict_to_owner and restrict_fd_to_owner wrapped in a live call counter, all nineteen floored benchmarks -- ama_sha3_256_hash, hmac_sha3_256, ed25519_keygen/sign/verify, secp256k1_ecdsa_sign/verify, hkdf_derive, full_package_create/verify, dilithium_keygen/sign/verify, kyber_keygen/encapsulate, aes_256_gcm_encrypt, chacha20poly1305_encrypt, x25519_scalarmult and x25519_scalarmult_batch4 -- report ZERO calls into this module, so no floored path traverses it. The counter is not vacuous: the two paths that do use the control report non-zero on the same instrumentation (NonceTracker.check_and_record 1 call, SecureKeyStorage store 4). Neither of those is a floored benchmark."
       }
     ]
   },

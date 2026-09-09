@@ -26,7 +26,9 @@ from typing import Any
 
 import pytest
 
+from ama_cryptography import _owner_only
 from ama_cryptography.monitoring import NonceTracker
+from tests.test_owner_only_access import _widen
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -90,10 +92,6 @@ class TestForgetKeyIsTheReclaimPath:
         assert tracker.forget_key(b"retired") == 1
         assert tracker.check_and_record(b"live", b"\x01" * 12) is None
 
-    @pytest.mark.skipif(
-        not hasattr(os, "getuid"),
-        reason="POSIX mode bits carry no meaning here; see TestTheLedgerIsOwnerOnly",
-    )
     def test_forget_key_rewrites_the_ledger_and_keeps_the_mode(
         self, tmp_path: pathlib.Path
     ) -> None:
@@ -105,7 +103,9 @@ class TestForgetKeyIsTheReclaimPath:
 
         tracker.forget_key(b"retired")
         assert len(ledger.read_text().splitlines()) == 1
-        assert stat.S_IMODE(ledger.stat().st_mode) == NonceTracker._LEDGER_MODE
+        assert _owner_only.access_description(ledger) == (
+            _owner_only.expected_owner_only_description()
+        )
 
     def test_forget_key_survives_a_reload(self, tmp_path: pathlib.Path) -> None:
         ledger = tmp_path / "ledger.dat"
@@ -124,16 +124,51 @@ class TestForgetKeyIsTheReclaimPath:
         assert tracker.forget_key(b"never-seen") == 0
 
 
-@pytest.mark.skipif(
-    not hasattr(os, "getuid"),
-    reason="POSIX mode bits carry no meaning here; the ledger relies on the directory ACL",
-)
 class TestTheLedgerIsOwnerOnly:
-    def test_a_new_ledger_is_created_0600(self, tmp_path: pathlib.Path) -> None:
+    """MON-004b, on every platform rather than only on POSIX.
+
+    The ledger names key-id digests and the nonces used with them. It was
+    created at the process umask (0644 on a default account) and, on Windows,
+    at whatever the parent directory's inheritable ACEs granted — a
+    difference in mechanism, not in consequence. ``_owner_only`` states the
+    property once and each platform enforces it, so these assertions read the
+    enforcement back rather than comparing against an octal literal that
+    means nothing on half the runners.
+    """
+
+    def test_a_new_ledger_is_created_owner_only(self, tmp_path: pathlib.Path) -> None:
         ledger = tmp_path / "ledger.dat"
         NonceTracker(persist_path=str(ledger)).check_and_record(b"k", b"\x00" * 12)
-        assert stat.S_IMODE(ledger.stat().st_mode) == 0o600
+        assert _owner_only.access_description(ledger) == (
+            _owner_only.expected_owner_only_description()
+        )
 
+    def test_a_ledger_from_an_earlier_release_is_narrowed(self, tmp_path: pathlib.Path) -> None:
+        """The cross-platform half of the narrowing.
+
+        ``O_CREAT`` does not change the mode of a file that already exists,
+        and on Windows its mode argument barely means anything to begin with,
+        so a ledger left behind by an earlier release keeps whatever access it
+        had until something narrows it. The parametrised test below covers the
+        POSIX mode-bit classes specifically; this one covers the property on
+        whichever platform is running, including Windows.
+        """
+        ledger = tmp_path / "ledger.dat"
+        ledger.write_text("")
+        _widen(ledger)
+        assert _owner_only.access_description(ledger) != (
+            _owner_only.expected_owner_only_description()
+        ), "fixture is vacuous: the starting state is already owner-only"
+        NonceTracker(persist_path=str(ledger)).check_and_record(b"k", b"\x00" * 12)
+        assert _owner_only.access_description(ledger) == (
+            _owner_only.expected_owner_only_description()
+        )
+
+    @pytest.mark.skipif(
+        not hasattr(os, "getuid"),
+        reason="this case enumerates POSIX mode-bit classes; the cross-platform "
+        "property is covered by test_a_ledger_from_an_earlier_release_is_narrowed",
+    )
     @pytest.mark.parametrize(
         "stale_bits",
         [

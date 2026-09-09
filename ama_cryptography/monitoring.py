@@ -63,6 +63,8 @@ from typing import (
     Union,
 )
 
+from ama_cryptography import _owner_only
+
 logger = logging.getLogger(__name__)
 
 
@@ -904,21 +906,6 @@ class ImportHijackViolation:
     actual_path: str
 
 
-#: Whether this platform gives the ledger's mode bits any meaning.
-#:
-#: The owner-only ledger (MON-004b) is a POSIX permission control: it needs a
-#: uid to compare the file's owner against, and a descriptor-based chmod to
-#: narrow a temporary before it is published under the ledger's name.  Windows
-#: has neither -- ``os.getuid`` and ``os.fchmod`` do not exist there, and
-#: ``os.chmod`` only toggles the read-only attribute -- so calling them
-#: unguarded turned every persisted nonce into ``RuntimeError: module 'os' has
-#: no attribute 'getuid'`` and took the whole Windows nonce ledger down with
-#: it.  Where the bits mean nothing the narrowing is skipped, not faked; on
-#: Windows the ledger's confidentiality rests on the ACL of the directory it
-#: is created in.
-_LEDGER_MODES_ARE_MEANINGFUL = hasattr(os, "getuid") and hasattr(os, "fchmod")
-
-
 class NonceTracker:
     """
     Tracks (key_id_hash, nonce) tuples to detect nonce reuse.
@@ -1054,7 +1041,7 @@ class NonceTracker:
                 f.write(f"{key_id_hash},{nonce_hex}\n")
                 f.flush()
                 os.fsync(f.fileno())
-            self._tighten_ledger_mode()
+            self._restrict_ledger_to_owner()
         except Exception as e:
             raise RuntimeError(
                 f"Failed to persist nonce entry to {self._persist_path}: {e}. "
@@ -1137,29 +1124,34 @@ class NonceTracker:
             self._persist_entry(key_hash, nonce_hex)
             return None
 
-    def _tighten_ledger_mode(self) -> None:
-        """Narrow an existing ledger to 0600 if it is wider.
+    def _restrict_ledger_to_owner(self) -> None:
+        """Narrow an existing ledger to its owner if it is wider.
 
         A ledger written by an earlier release exists at the process umask
         (0644 on a default account), and ``O_CREAT`` does not change the mode
-        of a file that already exists.  Only a regular file we own is
-        touched: chmod through a symlink or on someone else's file is not
-        this class's business, and on a platform whose mode bits carry no
-        such meaning (see ``_LEDGER_MODES_ARE_MEANINGFUL``) nothing is.
+        of a file that already exists.  On Windows the equivalent history is
+        a ledger that inherited the profile root's ACEs -- commonly
+        ``Users: Read`` -- because ``O_CREAT``'s mode argument means almost
+        nothing there.  ``restrict_to_owner`` states the property once and
+        each platform enforces it its own way (see
+        ``ama_cryptography/_owner_only.py``).
+
+        Only a regular file is touched: narrowing through a symlink, or a
+        directory, or someone else's file is not this class's business.
+        Ownership is checked where the platform can answer it; on Windows the
+        protected DACL is applied to a regular file we opened by name in a
+        directory the caller chose, which is the same trust the path itself
+        already carries.
         """
-        if not _LEDGER_MODES_ARE_MEANINGFUL:
-            return
         try:
             st = os.lstat(self._persist_path)
         except OSError:
             return
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+        if not stat.S_ISREG(st.st_mode):
             return
-        if stat.S_IMODE(st.st_mode) & ~self._LEDGER_MODE:
-            try:
-                os.chmod(self._persist_path, self._LEDGER_MODE)
-            except OSError:  # pragma: no cover - racing removal
-                pass
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            return
+        _owner_only.restrict_to_owner(self._persist_path)
 
     def forget_key(self, key_id: bytes) -> int:
         """Drop every recorded nonce for ``key_id``; return how many.
@@ -1189,12 +1181,16 @@ class NonceTracker:
             return len(dropped)
 
     def _rewrite_ledger(self) -> None:
-        """Rewrite the ledger from ``self._seen`` atomically at 0600."""
+        """Rewrite the ledger from ``self._seen`` atomically, owner-only.
+
+        The staging file is narrowed BEFORE ``os.replace`` publishes it, so
+        the ledger is never briefly visible to anyone else under its real
+        name.
+        """
         directory = self._persist_path.parent
         fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=".nonce_tracker.")
         try:
-            if _LEDGER_MODES_ARE_MEANINGFUL:
-                os.fchmod(fd, self._LEDGER_MODE)
+            _owner_only.restrict_fd_to_owner(fd, tmp_name)
             with os.fdopen(fd, "w") as f:
                 for key_hash, nonce_hex in sorted(self._seen):
                     f.write(f"{key_hash},{nonce_hex}\n")
