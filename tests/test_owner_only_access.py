@@ -277,6 +277,47 @@ class TestTheDaclComparisonToleratesWindowsBookkeepingOnly:
         b = f"D:P(A;;FR;;;WD)(A;;FA;;;{self.SID})"
         assert _owner_only._normalise_dacl_sddl(a) == _owner_only._normalise_dacl_sddl(b)
 
+    def test_a_sid_alias_is_not_resolved_here(self) -> None:
+        """Why the expectation must round-trip through Windows.
+
+        ``ConvertSecurityDescriptorToStringSecurityDescriptorW`` emits a
+        well-known SID alias wherever one exists, so a DACL written for
+        ``S-1-5-21-...-500`` reads back as ``LA`` (the built-in Administrator,
+        which the windows-latest runner is). This normaliser deliberately does
+        NOT resolve aliases — there are dozens, and guessing the set is how the
+        comparison keeps breaking on hosts nobody tested. It stays a difference
+        here, which is exactly what makes
+        ``_windows_canonical_sddl`` load-bearing rather than decorative: both
+        sides are put into Windows' own spelling before they are compared.
+        """
+        assert _owner_only._normalise_dacl_sddl("D:P(A;;FA;;;LA)") != self.owner_only
+
+    def test_the_expectation_is_built_through_windows_own_converter(self) -> None:
+        """The round-trip must not be quietly dropped.
+
+        Source-level, so it holds on Linux: ``expected_owner_only_description``
+        has to hand its SDDL to ``_windows_canonical_sddl``. Without that the
+        test above becomes the failure mode instead of the guard against it.
+        """
+        import ast
+
+        tree = ast.parse(TestEveryWindowsCallHasADeclaredPrototype._module_source())
+        target = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "expected_owner_only_description"
+        )
+        called = {
+            node.func.id
+            for node in ast.walk(target)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "_windows_canonical_sddl" in called, (
+            "expected_owner_only_description no longer canonicalises through "
+            "Windows, so it will compare a DACL against a spelling Windows "
+            "does not use"
+        )
+
 
 class TestEveryWindowsCallHasADeclaredPrototype:
     """ctypes' defaults are 32-bit, and that silently broke every Windows lane.

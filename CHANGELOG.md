@@ -332,6 +332,37 @@ Linux: three bookkeeping variations must compare equal, and five real
 differences — a widened DACL, a lost `P`, an extra ACE granting Everyone, the
 directory inheritance form, a different principal — must not.
 
+Enumerating Windows' spellings turned out to be the wrong strategy, and CI said
+so: with the handle truncation fixed, the DACL was applied and read back
+correctly and ten tests still failed, comparing
+
+```
+applied:   D:P(A;;FA;;;S-1-5-21-1456194669-2875347699-3862154473-500)
+read back: D:P(A;;FA;;;LA)
+```
+
+`ConvertSecurityDescriptorToStringSecurityDescriptorW` emits a well-known SID
+**alias** wherever one exists; RID 500 is the built-in Administrator, which the
+`windows-latest` runner is, so the SID came back as `LA`. The DACL was exactly
+right — only its notation differed. There are dozens of such aliases on top of
+the mask and flag spellings, and guessing the set is how a comparison like this
+keeps breaking on hosts nobody tested. So the expectation is no longer
+constructed and hoped to match: `_windows_canonical_sddl` hands the SDDL to
+Windows and asks for it back (string → descriptor → string), putting both sides
+in whatever spelling this host uses before they are compared. Two further Linux
+tests keep that honest — `_normalise_dacl_sddl` must NOT resolve `LA` itself
+(so the round-trip is load-bearing rather than decorative), and an AST check
+fails if `expected_owner_only_description` ever stops calling the canonicaliser.
+Dropping the round-trip fails exactly that second test.
+
+The rest of the Windows surface passed on that run: `OpenProcessToken`,
+`GetTokenInformation`, `ConvertSidToStringSidW`,
+`ConvertStringSecurityDescriptorToSecurityDescriptorW`,
+`GetSecurityDescriptorDacl`, `SetNamedSecurityInfoW`, `GetNamedSecurityInfoW`,
+`LocalFree` and `CloseHandle` all worked, the protected DACL was applied to
+real files and directories, and the prototype gate, the enforceability control
+and the directory/file distinction all passed there.
+
 `tools/wheel_smoke_test.py` — the release gate that runs against the built
 wheel rather than the source tree — gains the two checks this pass made
 load-bearing, so they are verified on the artefact that ships and on the

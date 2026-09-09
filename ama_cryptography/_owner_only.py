@@ -248,6 +248,51 @@ def _windows_restrict(path: Path, *, directory: bool) -> None:
         _win("kernel32", "LocalFree")(descriptor)
 
 
+def _windows_canonical_sddl(sddl: str) -> str:
+    """``sddl`` as Windows itself spells it.
+
+    The read-back and the expectation must be in ONE normal form, and the only
+    authority on that form is Windows. Enumerating its spellings does not work:
+    ``ConvertSecurityDescriptorToStringSecurityDescriptorW`` emits a well-known
+    SID *alias* wherever one exists, so a DACL written for
+    ``S-1-5-21-...-500`` reads back as ``D:P(A;;FA;;;LA)`` — RID 500 is the
+    built-in Administrator, which the windows-latest runner happens to be.
+    Measured there: ten tests compared a correct DACL against its own
+    numerically-spelled SID and failed. There are dozens of such aliases, plus
+    mask and flag spellings, and guessing the set is how this comparison would
+    keep breaking on hosts nobody tested.
+
+    So the expectation is built by handing Windows the SDDL and asking for it
+    back: string -> descriptor -> string. Both sides then carry whatever
+    aliasing, ordering and mask spelling this host uses, and the comparison is
+    about the DACL rather than about its notation.
+    """
+    if sys.platform != "win32":  # pragma: no cover - every caller checks first
+        raise OSError("the Windows security API is not available on this platform")
+
+    descriptor = _PVOID()
+    if not _win("advapi32", "ConvertStringSecurityDescriptorToSecurityDescriptorW")(
+        sddl, _SDDL_REVISION_1, ctypes.byref(descriptor), None
+    ):
+        raise OSError(ctypes.get_last_error(), f"parsing {sddl!r} failed")
+    try:
+        text = _LPWSTR()
+        if not _win("advapi32", "ConvertSecurityDescriptorToStringSecurityDescriptorW")(
+            descriptor,
+            _SDDL_REVISION_1,
+            _DACL_SECURITY_INFORMATION,
+            ctypes.byref(text),
+            None,
+        ):
+            raise OSError(ctypes.get_last_error(), "re-rendering the descriptor failed")
+        try:
+            return str(text.value)
+        finally:
+            _win("kernel32", "LocalFree")(ctypes.cast(text, _PVOID))
+    finally:
+        _win("kernel32", "LocalFree")(descriptor)
+
+
 def _normalise_dacl_sddl(sddl: str) -> str:
     """A DACL's SDDL reduced to what it actually GRANTS.
 
@@ -387,5 +432,9 @@ def access_description(path: str | os.PathLike[str]) -> str:
 def expected_owner_only_description(*, directory: bool = False) -> str:
     """What ``access_description`` reads back from an owner-only object here."""
     if sys.platform == "win32":
-        return _normalise_dacl_sddl(windows_owner_only_sddl(directory=directory))
+        # Through Windows' own converter first, so the expectation and the
+        # read-back share one spelling -- see _windows_canonical_sddl.
+        return _normalise_dacl_sddl(
+            _windows_canonical_sddl(windows_owner_only_sddl(directory=directory))
+        )
     return format(OWNER_ONLY_DIR_MODE if directory else OWNER_ONLY_FILE_MODE, "04o")
