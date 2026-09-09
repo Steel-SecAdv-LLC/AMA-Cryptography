@@ -281,6 +281,57 @@ mode-bit classes (group-read, world-write, `0o677`, owner-execute), which
 enumerates a POSIX alphabet by construction; the property it samples is covered
 on every platform by `test_a_ledger_from_an_earlier_release_is_narrowed`.
 
+**The first Windows implementation was wrong, and CI said so.** Every Windows
+lane failed on its first execution with `OSError: [Errno 6] OpenProcessToken
+failed` — `ERROR_INVALID_HANDLE`, 11 failures across all five Python versions.
+Root cause: ctypes does not know a foreign function's signature. With no
+`restype` it assumes `c_int` (32 bits); with no `argtypes` it passes Python
+ints as 32-bit values. On 64-bit Windows a `HANDLE` is pointer-width, so
+`GetCurrentProcess()`'s `(HANDLE)-1` pseudo-handle was truncated before
+`OpenProcessToken` ever saw it.
+
+That is the same defect *shape* as the secp256k1 sequencing bug above — an
+implicit language default that is invisible until the platform changes — so it
+is closed the same way rather than patched at the one call that happened to
+fail. Every Windows entry point is now declared in one
+`_WINDOWS_PROTOTYPES` table with full `argtypes` and `restype`, reached only
+through `_win()`, and expressed in plain `ctypes` types (`HANDLE`/`PSID`/`PACL`
+are `c_void_p`, `DWORD` is `c_ulong`, `BOOL` is `c_int`) so the table is
+constructible off Windows — which is what lets `TestEveryWindowsCallHasADeclaredPrototype`
+check it **on Linux**. Five checks: every `_win()` call site resolves to a
+prototype; there are call sites to find (non-vacuity); no Windows entry point
+is reached by attribute access outside the table; handles and pointers are
+pointer-width, `GetCurrentProcess`'s `restype` named explicitly; and no
+prototype is dead. Both mutations fail exactly one test each — reverting the
+`restype` to `c_int` fails the width check, and adding a direct
+`advapi32.OpenProcessToken(...)` call fails the bypass check. Dropping
+`ctypes.wintypes` also resolved four CodeQL `py/import-and-import-from` alerts
+at source rather than by suppression.
+
+The test helper that widens an object had the identical undeclared-call defect
+and now routes through the same `_win()`, and `_restrict_or_explain` re-runs
+the platform primitive when `restrict_to_owner` reports failure, so a Windows
+error arrives as its own `OSError` instead of as a bare `assert False is True`
+— the same "a failure must name itself" correction applied to the Ninja
+sub-build above.
+
+One further Windows behaviour was closed by reading the API contract rather
+than by waiting for a second red lane: **Windows does not hand back the SDDL it
+was given.** `SetNamedSecurityInfoW` records its own control bits, so a DACL
+written as `D:P(...)` reads back as `D:PAI(...)` once inheritance has been
+processed; the ACE order is canonicalised; and an access mask is emitted as a
+hex literal whenever the converter declines the abbreviation. Comparing the raw
+strings would have failed on a DACL that is exactly correct — and the tempting
+"fix" for that is to loosen the assertion until it stops failing.
+`_normalise_dacl_sddl` compares the part that carries meaning instead: the `P`
+(protected — nothing inherited from the parent) flag and the sorted ACE set,
+with `FILE_ALL_ACCESS` spelled one way. `AI`/`AR` describe how the DACL got
+there, not who may open the file, and are dropped.
+`TestTheDaclComparisonToleratesWindowsBookkeepingOnly` pins both directions on
+Linux: three bookkeeping variations must compare equal, and five real
+differences — a widened DACL, a lost `P`, an extra ACE granting Everyone, the
+directory inheritance form, a different principal — must not.
+
 `tools/wheel_smoke_test.py` — the release gate that runs against the built
 wheel rather than the source tree — gains the two checks this pass made
 load-bearing, so they are verified on the artefact that ships and on the

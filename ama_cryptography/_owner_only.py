@@ -37,10 +37,13 @@ instead of skipping on whichever one it was not written for.
 
 from __future__ import annotations
 
+import ctypes
 import os
+import re
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "OWNER_ONLY_DIR_MODE",
@@ -65,40 +68,137 @@ _PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
 _ERROR_SUCCESS = 0
 
 
+#: Every Windows entry point this module calls, with its FULL prototype.
+#:
+#: ctypes does not know a foreign function's signature. With no ``restype`` it
+#: assumes ``c_int`` -- 32 bits -- and with no ``argtypes`` it passes Python
+#: ints as 32-bit values. On 64-bit Windows a ``HANDLE`` is a pointer, so
+#: ``GetCurrentProcess()``'s ``(HANDLE)-1`` pseudo-handle came back truncated
+#: and ``OpenProcessToken`` answered ``ERROR_INVALID_HANDLE`` (6). Measured on
+#: windows-latest across all five Python versions: 11 failures, every one of
+#: them this.
+#:
+#: The same defect shape as the C sequencing bug this release also fixed -- an
+#: implicit language default that is invisible until the platform changes --
+#: so it is closed the same way: state the contract explicitly, in one place a
+#: test can read on any platform (``TestEveryWindowsCallHasADeclaredPrototype``
+#: does exactly that, and runs on Linux).
+#:
+#: Plain ``ctypes`` types rather than ``ctypes.wintypes``: HANDLE/PSID/PACL/
+#: PSECURITY_DESCRIPTOR are all pointers (``c_void_p``, pointer-width on every
+#: target), DWORD is ``c_ulong``, BOOL is ``c_int``. That is exact, and it
+#: keeps the table constructible off Windows, which is what lets the gate
+#: check it here.
+_HANDLE = ctypes.c_void_p
+_DWORD = ctypes.c_ulong
+_BOOL = ctypes.c_int
+_LPWSTR = ctypes.c_wchar_p
+_PVOID = ctypes.c_void_p
+
+_WINDOWS_PROTOTYPES: dict[tuple[str, str], tuple[tuple[Any, ...], Any]] = {
+    ("kernel32", "GetCurrentProcess"): ((), _HANDLE),
+    ("kernel32", "CloseHandle"): ((_HANDLE,), _BOOL),
+    ("kernel32", "LocalFree"): ((_PVOID,), _PVOID),
+    ("advapi32", "OpenProcessToken"): (
+        (_HANDLE, _DWORD, ctypes.POINTER(_HANDLE)),
+        _BOOL,
+    ),
+    ("advapi32", "GetTokenInformation"): (
+        (_HANDLE, ctypes.c_int, _PVOID, _DWORD, ctypes.POINTER(_DWORD)),
+        _BOOL,
+    ),
+    ("advapi32", "ConvertSidToStringSidW"): (
+        (_PVOID, ctypes.POINTER(_LPWSTR)),
+        _BOOL,
+    ),
+    ("advapi32", "ConvertStringSecurityDescriptorToSecurityDescriptorW"): (
+        (_LPWSTR, _DWORD, ctypes.POINTER(_PVOID), ctypes.POINTER(ctypes.c_ulong)),
+        _BOOL,
+    ),
+    ("advapi32", "ConvertSecurityDescriptorToStringSecurityDescriptorW"): (
+        (_PVOID, _DWORD, _DWORD, ctypes.POINTER(_LPWSTR), ctypes.POINTER(ctypes.c_ulong)),
+        _BOOL,
+    ),
+    ("advapi32", "GetSecurityDescriptorDacl"): (
+        (_PVOID, ctypes.POINTER(_BOOL), ctypes.POINTER(_PVOID), ctypes.POINTER(_BOOL)),
+        _BOOL,
+    ),
+    ("advapi32", "SetNamedSecurityInfoW"): (
+        (_LPWSTR, ctypes.c_int, _DWORD, _PVOID, _PVOID, _PVOID, _PVOID),
+        _DWORD,
+    ),
+    ("advapi32", "GetNamedSecurityInfoW"): (
+        (
+            _LPWSTR,
+            ctypes.c_int,
+            _DWORD,
+            ctypes.POINTER(_PVOID),
+            ctypes.POINTER(_PVOID),
+            ctypes.POINTER(_PVOID),
+            ctypes.POINTER(_PVOID),
+            ctypes.POINTER(_PVOID),
+        ),
+        _DWORD,
+    ),
+}
+
+
+def _win(library: str, function: str) -> Any:
+    """One Windows entry point, with its prototype applied from the table.
+
+    Going through here is what makes the table load-bearing rather than
+    documentation: a call that skipped it would take ctypes' 32-bit defaults
+    again, and the gate below fails any call site that does.
+    """
+    if sys.platform != "win32":  # pragma: no cover - every caller checks first
+        raise OSError("the Windows security API is not available on this platform")
+    handle = _WINDOWS_LIBRARIES.get(library)
+    if handle is None:
+        handle = ctypes.WinDLL(library, use_last_error=True)
+        _WINDOWS_LIBRARIES[library] = handle
+    entry = getattr(handle, function)
+    argtypes, restype = _WINDOWS_PROTOTYPES[(library, function)]
+    entry.argtypes = list(argtypes)
+    entry.restype = restype
+    return entry
+
+
+_WINDOWS_LIBRARIES: dict[str, Any] = {}
+
+
 def _windows_user_sid() -> str:
     """The SDDL string form of the process token's user SID."""
     if sys.platform != "win32":  # pragma: no cover - every caller checks first
         raise OSError("the Windows security API is not available on this platform")
-    import ctypes
-    from ctypes import wintypes
 
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-    token = wintypes.HANDLE()
-    if not advapi32.OpenProcessToken(
-        kernel32.GetCurrentProcess(), _TOKEN_QUERY, ctypes.byref(token)
+    token = _HANDLE()
+    if not _win("advapi32", "OpenProcessToken")(
+        _win("kernel32", "GetCurrentProcess")(), _TOKEN_QUERY, ctypes.byref(token)
     ):
         raise OSError(ctypes.get_last_error(), "OpenProcessToken failed")
     try:
-        size = wintypes.DWORD(0)
+        size = _DWORD(0)
+        get_token_information = _win("advapi32", "GetTokenInformation")
         # First call sizes the buffer; it is expected to fail with
         # ERROR_INSUFFICIENT_BUFFER, which is why its return is ignored.
-        advapi32.GetTokenInformation(token, _TOKEN_USER, None, 0, ctypes.byref(size))
+        get_token_information(token, _TOKEN_USER, None, 0, ctypes.byref(size))
         buffer = ctypes.create_string_buffer(size.value)
-        if not advapi32.GetTokenInformation(token, _TOKEN_USER, buffer, size, ctypes.byref(size)):
+        if not get_token_information(
+            token, _TOKEN_USER, ctypes.cast(buffer, _PVOID), size, ctypes.byref(size)
+        ):
             raise OSError(ctypes.get_last_error(), "GetTokenInformation(TokenUser) failed")
-        # TOKEN_USER is { SID_AND_ATTRIBUTES { PSID Sid; DWORD Attributes; } }
-        sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p)).contents
-        text = ctypes.c_wchar_p()
-        if not advapi32.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+        # TOKEN_USER is { SID_AND_ATTRIBUTES { PSID Sid; DWORD Attributes; } },
+        # so the first pointer-sized field of the buffer is the PSID itself.
+        sid = ctypes.cast(buffer, ctypes.POINTER(_PVOID)).contents
+        text = _LPWSTR()
+        if not _win("advapi32", "ConvertSidToStringSidW")(sid, ctypes.byref(text)):
             raise OSError(ctypes.get_last_error(), "ConvertSidToStringSidW failed")
         try:
             return str(text.value)
         finally:
-            kernel32.LocalFree(text)
+            _win("kernel32", "LocalFree")(ctypes.cast(text, _PVOID))
     finally:
-        kernel32.CloseHandle(token)
+        _win("kernel32", "CloseHandle")(token)
 
 
 def windows_owner_only_sddl(*, directory: bool) -> str:
@@ -116,14 +216,9 @@ def windows_owner_only_sddl(*, directory: bool) -> str:
 def _windows_restrict(path: Path, *, directory: bool) -> None:
     if sys.platform != "win32":  # pragma: no cover - every caller checks first
         raise OSError("the Windows security API is not available on this platform")
-    import ctypes
-    from ctypes import wintypes
 
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-    descriptor = ctypes.c_void_p()
-    if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+    descriptor = _PVOID()
+    if not _win("advapi32", "ConvertStringSecurityDescriptorToSecurityDescriptorW")(
         windows_owner_only_sddl(directory=directory),
         _SDDL_REVISION_1,
         ctypes.byref(descriptor),
@@ -131,14 +226,14 @@ def _windows_restrict(path: Path, *, directory: bool) -> None:
     ):
         raise OSError(ctypes.get_last_error(), "building the owner-only descriptor failed")
     try:
-        present = wintypes.BOOL()
-        dacl = ctypes.c_void_p()
-        defaulted = wintypes.BOOL()
-        if not advapi32.GetSecurityDescriptorDacl(
+        present = _BOOL()
+        dacl = _PVOID()
+        defaulted = _BOOL()
+        if not _win("advapi32", "GetSecurityDescriptorDacl")(
             descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)
         ):
             raise OSError(ctypes.get_last_error(), "GetSecurityDescriptorDacl failed")
-        status = advapi32.SetNamedSecurityInfoW(
+        status = _win("advapi32", "SetNamedSecurityInfoW")(
             str(path),
             _SE_FILE_OBJECT,
             _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
@@ -150,21 +245,45 @@ def _windows_restrict(path: Path, *, directory: bool) -> None:
         if status != _ERROR_SUCCESS:
             raise OSError(status, f"SetNamedSecurityInfoW({path}) failed")
     finally:
-        kernel32.LocalFree(descriptor)
+        _win("kernel32", "LocalFree")(descriptor)
+
+
+def _normalise_dacl_sddl(sddl: str) -> str:
+    """A DACL's SDDL reduced to what it actually GRANTS.
+
+    Windows does not hand back the string it was given. ``SetNamedSecurityInfoW``
+    records its own control bits, so a DACL written as ``D:P(...)`` reads back
+    as ``D:PAI(...)`` once inheritance has been processed; the ACE order is
+    canonicalised; and an access mask is emitted as an abbreviation only when
+    it matches one exactly, as a hex literal otherwise. None of that changes
+    who may open the file, so comparing the raw strings would fail on a DACL
+    that is exactly right.
+
+    So the comparison is made on the part that carries the meaning: the ``P``
+    (protected — no inheritance from the parent) flag, and the sorted set of
+    ACEs with ``FILE_ALL_ACCESS`` spelled one way. ``AI``/``AR`` are Windows'
+    bookkeeping about how the DACL got there, not a statement about access,
+    and are dropped.
+    """
+    body = sddl.split("D:", 1)[1] if "D:" in sddl else sddl
+    split = body.find("(")
+    flags, rest = (body, "") if split < 0 else (body[:split], body[split:])
+    aces = re.findall(r"\(([^)]*)\)", rest)
+    #: FILE_ALL_ACCESS. Emitted as `FA` when it matches exactly and as this
+    #: hex literal when the converter declines the abbreviation.
+    aces = [ace.replace(";0x1f01ff;", ";FA;") for ace in aces]
+    protected = "P" if "P" in flags else ""
+    return f"D:{protected}" + "".join(f"({ace})" for ace in sorted(aces))
 
 
 def _windows_dacl_sddl(path: Path) -> str:
     """The DACL currently on ``path``, as SDDL. Read-back for the gate."""
     if sys.platform != "win32":  # pragma: no cover - every caller checks first
         raise OSError("the Windows security API is not available on this platform")
-    import ctypes
 
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-    descriptor = ctypes.c_void_p()
-    dacl = ctypes.c_void_p()
-    status = advapi32.GetNamedSecurityInfoW(
+    descriptor = _PVOID()
+    dacl = _PVOID()
+    status = _win("advapi32", "GetNamedSecurityInfoW")(
         str(path),
         _SE_FILE_OBJECT,
         _DACL_SECURITY_INFORMATION,
@@ -177,8 +296,8 @@ def _windows_dacl_sddl(path: Path) -> str:
     if status != _ERROR_SUCCESS:
         raise OSError(status, f"GetNamedSecurityInfoW({path}) failed")
     try:
-        text = ctypes.c_wchar_p()
-        if not advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        text = _LPWSTR()
+        if not _win("advapi32", "ConvertSecurityDescriptorToStringSecurityDescriptorW")(
             descriptor,
             _SDDL_REVISION_1,
             _DACL_SECURITY_INFORMATION,
@@ -189,9 +308,9 @@ def _windows_dacl_sddl(path: Path) -> str:
         try:
             return str(text.value)
         finally:
-            kernel32.LocalFree(text)
+            _win("kernel32", "LocalFree")(ctypes.cast(text, _PVOID))
     finally:
-        kernel32.LocalFree(descriptor)
+        _win("kernel32", "LocalFree")(descriptor)
 
 
 # --- the platform-independent surface ------------------------------------
@@ -261,12 +380,12 @@ def access_description(path: str | os.PathLike[str]) -> str:
     """
     target = Path(path)
     if sys.platform == "win32":
-        return _windows_dacl_sddl(target)
+        return _normalise_dacl_sddl(_windows_dacl_sddl(target))
     return format(stat.S_IMODE(target.stat().st_mode), "04o")
 
 
 def expected_owner_only_description(*, directory: bool = False) -> str:
     """What ``access_description`` reads back from an owner-only object here."""
     if sys.platform == "win32":
-        return windows_owner_only_sddl(directory=directory)
+        return _normalise_dacl_sddl(windows_owner_only_sddl(directory=directory))
     return format(OWNER_ONLY_DIR_MODE if directory else OWNER_ONLY_FILE_MODE, "04o")
