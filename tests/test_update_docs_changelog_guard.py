@@ -22,6 +22,7 @@ These pin the heading parser directly, on both dated and undated forms.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -123,13 +124,24 @@ class TestTheRealTree:
         duplicates = {v for v in seen if seen.count(v) > 1}
         assert not duplicates, f"CHANGELOG has more than one section for: {sorted(duplicates)}"
 
-    def test_the_prepared_release_section_is_not_dated(self) -> None:
-        """5.0.0 is prepared, not released — its heading must not claim a date.
+    def test_the_current_release_section_carries_a_lifecycle_suffix(self) -> None:
+        """The heading for the project version reads ``Unreleased`` or a date.
 
-        Under Keep a Changelog the date on a version heading is the release
-        date. Writing one before the tag exists states that the release
-        happened. It is filled in at tag time, after the mandatory release
-        dry run.
+        Under Keep a Changelog the suffix on a version heading is the release
+        date, so the tree carries exactly two legitimate states for it and
+        moves between them once:
+
+        * ``Unreleased`` while the version is prepared — a date here would
+          state that a release which has not happened did;
+        * ``YYYY-MM-DD`` from the release commit onward — ``Unreleased`` here
+          would ship a document contradicting the tag, which is what
+          ``tools/check_release_state.py`` refuses at preflight.
+
+        Pinning either state alone puts this test in opposition to that tool:
+        an assertion of ``Unreleased`` can only be satisfied by never
+        releasing. So both are accepted and everything else is refused — a
+        suffix that is neither is a malformed heading, which is the failure
+        this test can still see.
         """
         text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         version = update_docs._get_version()
@@ -137,11 +149,11 @@ class TestTheRealTree:
             match = update_docs._CHANGELOG_HEADING_RE.match(line)
             if match and match.group(1).strip() == version:
                 suffix = (match.group(2) or "").strip()
-                assert suffix.lower() == "unreleased", (
-                    f"CHANGELOG heading for the in-development version {version} "
-                    f"carries {suffix!r}. Under Keep a Changelog that is a release "
-                    f"date, and no v{version} tag exists yet. Replace it with the "
-                    f"real date at tag time."
+                dated = re.fullmatch(r"\d{4}-\d{2}-\d{2}", suffix) is not None
+                assert suffix.lower() == "unreleased" or dated, (
+                    f"CHANGELOG heading for {version} carries {suffix!r}. It must "
+                    f"read 'Unreleased' while the version is prepared, or an ISO "
+                    f"'YYYY-MM-DD' release date from the release commit onward."
                 )
                 return
         pytest.fail(f"no CHANGELOG section for the project version {version}")

@@ -23,7 +23,7 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 5.0.x | Yes | Active development and security updates (5.0.0 is prepared but **not yet tagged or published** — see CHANGELOG `[5.0.0]`) |
+| 5.0.x | Yes | Active development and security updates |
 | 4.0.x | No | Superseded by v5.0 (ten breaking changes — see CHANGELOG `[5.0.0]`) |
 | 3.5.x | No | Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |

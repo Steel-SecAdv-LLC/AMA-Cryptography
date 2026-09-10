@@ -19,17 +19,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [5.0.0] - Unreleased
-
-> **Not yet released.** The version is 5.0.0 throughout the tree, but no
-> `v5.0.0` tag exists and no wheels have been published. Under the
-> Keep-a-Changelog convention this heading carries the release *date*, and a
-> date here would state that the release happened. It is replaced with the
-> real date at tag time, after the mandatory `release.yml` dry run succeeds —
-> the same way `[Unreleased]` became `[3.5.0]`.
->
-> Compare `[4.0.0]` below, which is dated because it *is* released: tag
-> `v4.0.0`, published 2026-08-02.
+## [5.0.0] - 2026-09-10
 
 > **Dated figures are dated.** Counts, line numbers and measurements quoted
 > inside a dated pass entry below describe the tree as it stood on that

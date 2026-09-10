@@ -562,14 +562,6 @@ The primary channel, and the one to use if you want zero third-party
 intermediaries. Pin to a **tag**, never a branch, so the install is
 reproducible:
 
-> **`v5.0.0` is not tagged yet.** This tree is 5.0.0 in preparation; the tag is
-> created at release time (see `CHANGELOG.md`, whose 5.0.0 heading is
-> deliberately dated `Unreleased`). Until then the commands below resolve only
-> for tags that exist — `v4.0.0` is the newest published one. The version is
-> written here rather than left as a placeholder so that these commands are
-> correct the moment the tag is pushed, and wrong in a way you can see rather
-> than silently installing something else.
-
 ```bash
 # Replace the tag with the release you want; any published tag works.
 # Tags: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/tags
