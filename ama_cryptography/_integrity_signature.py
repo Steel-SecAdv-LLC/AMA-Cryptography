@@ -36,17 +36,17 @@ INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {
     "ed25519_binding.cpython-311-x86_64-linux-gnu.so": "59ef2684a48266949d84e835ec22ad3185560abded8eab47c1d3bea6b9832da2",
     "hkdf_binding.cpython-311-x86_64-linux-gnu.so": "e6fc78915932cf45fad0d21f30302deb9bef276ff97d2fdffff07e792698e920",
     "hmac_binding.cpython-311-x86_64-linux-gnu.so": "8f4e2fa441e5079e1fced2663749b6311ed92ba0c4200edf780adb61301bd779",
-    "math_engine.cpython-311-x86_64-linux-gnu.so": "6a02b47f757cd6cf1f9ee975315218c236345349e4dbb00a7923a3b44fe3e86f",
+    "math_engine.cpython-311-x86_64-linux-gnu.so": "a007d66e816d6244efcd36dbc08d160f76d018794b2f7c03ce9e5927d23da562",
     "sha3_binding.cpython-311-x86_64-linux-gnu.so": "dcca9bfcd07848b4ed085de687bc633e3673b5d2ee97450697d10065f2c24fd2",
 }
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "a0cb5c4facdfa42e23582f0524377195d16977078687747ccdfb988300189f38"
+INTEGRITY_PUBKEY_HEX = "1ccc58a3eaeff50b19e0eb16a104708bc2b23d43ccf55b9ad0ef828deef383ef"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "0c72bd0e6921b9bc4657df704353b6ce1e40531d50629a239da9f3d44155428965e17a1777cdd6d2b84efcefcccfd467b558a292f944374a1c50e9d2f1d70306"
+INTEGRITY_SIGNATURE_HEX = "f90ed624fcaedf811f217c37ee794a7bf3bc7599a8cc8d0e70d20d0e8ef10edd28892c237707aae2f964ba0e0bcd9197da8e5443549c6648a2bbf07774abb00e"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"

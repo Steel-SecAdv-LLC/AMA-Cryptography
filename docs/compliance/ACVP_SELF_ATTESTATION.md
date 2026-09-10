@@ -5,12 +5,22 @@
 | Organization | Steel Security Advisors LLC |
 | Library | AMA Cryptography |
 | Document ID | ACVP-SELF-ATTEST-2026-001 |
-| Version | 3.0.0 |
-| Date | 2026-04-25 |
+| Library version attested | 3.0.0 |
+| Date attestation was generated | 2026-04-25 |
 | Classification | Public |
 | Attestation Type | **Self-Attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3)** |
 | Source Report | [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) |
 | Machine-readable | [`acvp_attestation.json`](acvp_attestation.json) |
+
+> **The version above is deliberately not the current release.** It is a dated
+> record of the library version these ACVP vectors were actually run against,
+> bound to the immutable upstream ref `ACVP-Server v1.1.0.42`. Advancing it to
+> match a newer release would assert validation that was never performed, which
+> INVARIANT-16 (Honest Compliance and Audit Claims) prohibits — so
+> `tools/check_version_consistency.py` deliberately exempts `docs/compliance/**`
+> from the release-version sweep that keeps every other document current.
+> Refreshing an attestation means re-running the vectors, not editing this row;
+> the procedure is in `acvp_attestation.json::acvp_ref_note`.
 
 ---
 
