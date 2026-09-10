@@ -376,6 +376,21 @@ if(AMA_USE_NATIVE_PQC)
 
     add_ama_test(test_chacha20poly1305 test_chacha20poly1305.c)
     add_ama_test(test_argon2id test_argon2id.c)
+    # RFC 9106 Sec 5.3 Argon2id known-answer test: the published answer key,
+    # replayed through the AMA_TESTING_MODE hook that supplies the optional K
+    # and X inputs the public API does not take (see the file header).
+    #
+    # Gated with `test_argon2id` rather than registered beside test_ascon /
+    # test_lms above, because `src/c/ama_argon2.c` is appended to AMA_SOURCES
+    # inside the top-level `if(AMA_USE_NATIVE_PQC)` block -- Argon2 is NOT in
+    # the unconditional source list, so in the OFF configuration both
+    # `ama_argon2id` and the KAT hook are absent and the link fails outright.
+    # Verified in both directions rather than assumed: the first revision of
+    # this entry registered it unconditionally and broke the OFF build with
+    # `undefined reference to ama_argon2id_kat_for_test`, which is the same
+    # class of defect CHANGELOG [5.0.0] records as "three unguarded targets,
+    # not one".
+    add_ama_test(test_argon2_rfc9106 test_argon2_rfc9106.c)
     # secp256k1 and FROST are also gated on AMA_USE_NATIVE_PQC (they live in
     # src/c/ama_secp256k1.c and src/c/ama_frost.c, which are only compiled
     # when native PQC is enabled — see the top-level CMakeLists.txt).

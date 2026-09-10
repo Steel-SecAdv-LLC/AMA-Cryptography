@@ -256,4 +256,44 @@ void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 void ama_dilithium_test_invntt_bound_reset(void);
 int32_t ama_dilithium_test_invntt_bound_get(void);
 
+/* --- src/c/ama_argon2.c ------------------------------------------------- */
+
+/**
+ * Test-only Argon2id with the two OPTIONAL RFC 9106 §3.1 inputs the public
+ * API does not take: K (secret) and X (associated data).
+ *
+ * `ama_argon2id()` derives from P and S alone, which is the right public
+ * surface — every deployment in scope uses it that way, and a keyed variant
+ * nobody asks for is API that has to be kept correct forever.  But RFC 9106's
+ * §5.3 Argon2id test vector — the only Argon2id answer key the RFC publishes
+ * — supplies K[8] and X[12], and §3.2 binds both into H0.  Without them the
+ * vector cannot be reproduced by any implementation, so the shipped one had
+ * no published KAT at all: `tests/test_new_primitives.py` asserted output
+ * length, determinism and that different passwords differ, all of which a
+ * wrong-but-deterministic Argon2 satisfies.
+ *
+ * So the parameters exist in the static core (where they cost two `blake2b`
+ * updates in the prehash and nothing anywhere else — K and X enter Argon2 in
+ * exactly one place) and are reachable only from here.  The shipped libraries
+ * do not contain this function: it is compiled under `AMA_TESTING_MODE`,
+ * which CMake sets PRIVATE on `ama_cryptography_test`, the same construction
+ * `ama_ascon_permutation_for_test` uses and for the same reason — absence by
+ * construction rather than by export control, so the ELF version script and
+ * the Mach-O exported-symbols list cannot disagree about it.
+ *
+ * @param h0_out  Optional 64-byte buffer receiving the §3.2 pre-hashing
+ *                digest H0.  The RFC prints it beside the tag, and asserting
+ *                it separately localises a failure: a wrong H0 means the
+ *                parameter encoding is wrong; a right H0 with a wrong tag
+ *                means the fill or the final H' is.  Pass NULL to skip.
+ */
+ama_error_t ama_argon2id_kat_for_test(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *secret, size_t secret_len,
+    const uint8_t *ad, size_t ad_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len,
+    uint8_t *h0_out);
+
 #endif /* AMA_TESTING_EXPORTS_H */

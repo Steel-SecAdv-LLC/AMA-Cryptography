@@ -596,9 +596,12 @@ static void blake2b_update_u32le(blake2b_state *S, uint32_t val)
 static ama_error_t ama_argon2id_core(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
+    const uint8_t *secret, size_t secret_len,
+    const uint8_t *ad, size_t ad_len,
     uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
     uint8_t *output, size_t out_len,
-    int use_legacy_blake2b_long)
+    int use_legacy_blake2b_long,
+    uint8_t *h0_out)
 {
     /* `blake2b_long_fn` selects the RFC 9106 §3.2 H' (default) or the
      * pre-2.1.5 buggy variant (legacy) used only by
@@ -626,6 +629,17 @@ static ama_error_t ama_argon2id_core(
     if (!salt && salt_len > 0) {
         return AMA_ERROR_INVALID_PARAM;
     }
+    /* K (secret) and X (associated data) are OPTIONAL per RFC 9106 §3.1 and
+     * absent from every public entry point below, which pass NULL/0.  They
+     * exist here because §3.2 binds both into H0, so the §5.3 test vector
+     * cannot be reproduced without them — see the AMA_TESTING_MODE hook at
+     * the end of this file.  Same NULL/length contract as password and salt. */
+    if (!secret && secret_len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!ad && ad_len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
     /* RFC 9106 §3.1 bounds P and S at 2^32-1 bytes, and H0 binds each length
      * as a little-endian uint32 (§3.2) — the same truncation hazard the
      * out_len guard above rejects.  On 32-bit size_t these comparisons fold
@@ -633,6 +647,11 @@ static ama_error_t ama_argon2id_core(
      * otherwise absorb the full byte stream while binding a truncated length,
      * producing a tag no conforming implementation can reproduce. */
     if ((uint64_t)pwd_len > UINT32_MAX || (uint64_t)salt_len > UINT32_MAX) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* K and X are bound into H0 as little-endian uint32 lengths by the same
+     * §3.2 construction, so they carry the same truncation hazard. */
+    if ((uint64_t)secret_len > UINT32_MAX || (uint64_t)ad_len > UINT32_MAX) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
@@ -673,9 +692,12 @@ static ama_error_t ama_argon2id_core(
      *   LE32(v) || LE32(type) ||
      *   LE32(pwd_len) || password ||
      *   LE32(salt_len) || salt ||
-     *   LE32(key_len=0) ||
-     *   LE32(X_len=0)
+     *   LE32(secret_len) || secret ||
+     *   LE32(ad_len) || ad
      * )
+     *
+     * secret (K) and ad (X) are NULL/0 for every shipped entry point, which
+     * reproduces the previous `LE32(0) || LE32(0)` tail byte for byte.
      * ---------------------------------------------------------------- */
     uint8_t H0[ARGON2_PREHASH_DIGEST_LENGTH];
     {
@@ -695,10 +717,25 @@ static ama_error_t ama_argon2id_core(
         if (salt_len > 0) {
             blake2b_update(&S, salt, salt_len);
         }
-        blake2b_update_u32le(&S, 0);  /* key length = 0 */
-        blake2b_update_u32le(&S, 0);  /* associated data length = 0 */
+        blake2b_update_u32le(&S, (uint32_t)secret_len);
+        if (secret_len > 0) {
+            blake2b_update(&S, secret, secret_len);
+        }
+        blake2b_update_u32le(&S, (uint32_t)ad_len);
+        if (ad_len > 0) {
+            blake2b_update(&S, ad, ad_len);
+        }
         blake2b_final(&S, H0);
         ama_secure_memzero(&S, sizeof(S));
+    }
+
+    /* Publish H0 to a caller that asked for it (AMA_TESTING_MODE only).  The
+     * RFC prints the prehash digest alongside the tag, and checking it
+     * separately localises a failure: H0 wrong means the §3.2 parameter
+     * encoding is wrong, H0 right with the tag wrong means the fill or the
+     * final H' is.  A single tag assertion cannot tell those apart. */
+    if (h0_out) {
+        memcpy(h0_out, H0, ARGON2_PREHASH_DIGEST_LENGTH);
     }
 
     /* ----------------------------------------------------------------
@@ -894,8 +931,10 @@ AMA_API ama_error_t ama_argon2id(
     uint8_t *output, size_t out_len)
 {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
+                             /*secret=*/NULL, 0, /*ad=*/NULL, 0,
                              t_cost, m_cost, parallelism,
-                             output, out_len, /*use_legacy_blake2b_long=*/0);
+                             output, out_len, /*use_legacy_blake2b_long=*/0,
+                             /*h0_out=*/NULL);
 }
 
 AMA_API ama_error_t ama_argon2id_legacy(
@@ -905,8 +944,10 @@ AMA_API ama_error_t ama_argon2id_legacy(
     uint8_t *output, size_t out_len)
 {
     return ama_argon2id_core(password, pwd_len, salt, salt_len,
+                             /*secret=*/NULL, 0, /*ad=*/NULL, 0,
                              t_cost, m_cost, parallelism,
-                             output, out_len, /*use_legacy_blake2b_long=*/1);
+                             output, out_len, /*use_legacy_blake2b_long=*/1,
+                             /*h0_out=*/NULL);
 }
 
 AMA_API ama_error_t ama_argon2id_legacy_verify(
@@ -937,8 +978,10 @@ AMA_API ama_error_t ama_argon2id_legacy_verify(
     }
 
     ama_error_t rc = ama_argon2id_core(password, pwd_len, salt, salt_len,
+                                        /*secret=*/NULL, 0, /*ad=*/NULL, 0,
                                         t_cost, m_cost, parallelism,
-                                        computed, tag_len, /*use_legacy_blake2b_long=*/1);
+                                        computed, tag_len, /*use_legacy_blake2b_long=*/1,
+                                        /*h0_out=*/NULL);
     if (rc != AMA_SUCCESS) {
         ama_secure_memzero(computed, tag_len);
         free(computed);
@@ -951,3 +994,31 @@ AMA_API ama_error_t ama_argon2id_legacy_verify(
     free(computed);
     return (diff == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
+
+/* ============================================================================
+ * TEST-ONLY: RFC 9106 §5.3 replay entry point
+ * ============================================================================
+ * Rationale, and why K/X are not public API, in
+ * src/c/internal/ama_testing_exports.h.  Compiled only into the
+ * AMA_TESTING_MODE archive, so no shipped library contains it.
+ * ============================================================================ */
+
+#ifdef AMA_TESTING_MODE
+#include "internal/ama_testing_exports.h"
+
+ama_error_t ama_argon2id_kat_for_test(
+    const uint8_t *password, size_t pwd_len,
+    const uint8_t *salt, size_t salt_len,
+    const uint8_t *secret, size_t secret_len,
+    const uint8_t *ad, size_t ad_len,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len,
+    uint8_t *h0_out)
+{
+    return ama_argon2id_core(password, pwd_len, salt, salt_len,
+                             secret, secret_len, ad, ad_len,
+                             t_cost, m_cost, parallelism,
+                             output, out_len, /*use_legacy_blake2b_long=*/0,
+                             h0_out);
+}
+#endif /* AMA_TESTING_MODE */
