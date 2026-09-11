@@ -294,6 +294,97 @@ def test_ml_kem_missing_from_the_object_fails(
 
 
 # --------------------------------------------------------------------------
+# Compiler clones
+# --------------------------------------------------------------------------
+#
+# GCC renames a function it specialises: `ama_argon2id_core` became
+# `ama_argon2id_core.constprop.0` when the core gained two parameters, and the
+# gate — matching ALLOWED by the raw emitted name — called a symbol it had a
+# recorded, reasoned entry for "not allowlisted". It failed on x86-64 and
+# aarch64 for a change that altered no arithmetic and moved no secret.
+#
+# The direction was safe: a clone fails closed. The hazard is human. A gate
+# that goes red on a rename trains people to edit the allowlist until red goes
+# away, and the next edit is the one that waves a real finding through. So a
+# clone now resolves to its base entry, and these pin that it resolves to the
+# RIGHT one and no further.
+
+
+def test_a_clone_resolves_to_its_base_allowlist_entry(
+    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = tmp_path / "lib.so"
+    library.write_bytes(b"\x7fELF")
+    recorded = gate.ALLOWED["ama_argon2id_core"][0]
+    blocks = [(f"filler_{i}", ["mov"] * 300) for i in range(gate.MIN_SYMBOLS)]
+    blocks.append(("ama_argon2id_core.constprop.0", ["div"] * recorded))
+    for symbol in gate.REQUIRED_CLEAN:
+        blocks.append((symbol, ["mov", "ret"]))
+    monkeypatch.setattr(gate, "disassemble", lambda _p: _disassembly(*blocks))
+    assert gate.main(["--lib", str(library)]) == 0
+
+
+def test_a_clone_is_still_held_to_its_bases_recorded_count(
+    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolving the name must not relax the ceiling."""
+    library = tmp_path / "lib.so"
+    library.write_bytes(b"\x7fELF")
+    recorded = gate.ALLOWED["ama_argon2id_core"][0]
+    blocks = [(f"filler_{i}", ["mov"] * 300) for i in range(gate.MIN_SYMBOLS)]
+    blocks.append(("ama_argon2id_core.constprop.0", ["div"] * (recorded + 1)))
+    for symbol in gate.REQUIRED_CLEAN:
+        blocks.append((symbol, ["mov", "ret"]))
+    monkeypatch.setattr(gate, "disassemble", lambda _p: _disassembly(*blocks))
+    assert gate.main(["--lib", str(library)]) == 1
+
+
+def test_a_clone_of_an_unlisted_symbol_still_fails(
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The suffix must not become a way to smuggle a divide past the gate."""
+    library = tmp_path / "lib.so"
+    library.write_bytes(b"\x7fELF")
+    blocks = [(f"filler_{i}", ["mov"] * 300) for i in range(gate.MIN_SYMBOLS)]
+    blocks.append(("some_new_secret_path.constprop.0", ["div"]))
+    for symbol in gate.REQUIRED_CLEAN:
+        blocks.append((symbol, ["mov", "ret"]))
+    monkeypatch.setattr(gate, "disassemble", lambda _p: _disassembly(*blocks))
+    assert gate.main(["--lib", str(library)]) == 1
+    assert "KyberSlash" in capsys.readouterr().err
+
+
+def test_a_divide_in_a_clone_of_ml_kem_is_not_hidden(
+    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REQUIRED_CLEAN's claim is about the code, not about one emitted name."""
+    library = tmp_path / "lib.so"
+    library.write_bytes(b"\x7fELF")
+    blocks = [(f"filler_{i}", ["mov"] * 300) for i in range(gate.MIN_SYMBOLS)]
+    blocks.append(("kyber_decapsulate_internal.constprop.0", ["div"]))
+    blocks.append(("ama_kyber_decapsulate", ["mov", "ret"]))
+    blocks.append(("ama_kyber_encapsulate", ["mov", "ret"]))
+    monkeypatch.setattr(gate, "disassemble", lambda _p: _disassembly(*blocks))
+    assert gate.main(["--lib", str(library)]) == 1
+
+
+def test_only_real_compiler_suffixes_are_stripped(gate: ModuleType) -> None:
+    """Over-stripping would silently merge two unrelated symbols."""
+    assert gate.base_symbol("ama_argon2id_core.constprop.0") == "ama_argon2id_core"
+    assert gate.base_symbol("f.isra.3") == "f"
+    assert gate.base_symbol("g.part.1") == "g"
+    assert gate.base_symbol("h.cold") == "h"
+    assert gate.base_symbol("k.constprop.0.isra.2") == "k"
+    assert gate.base_symbol("x.llvm.12345") == "x"
+    # A dotted name that is not a clone suffix must survive intact.
+    assert gate.base_symbol("not.a.clone.5") == "not.a.clone.5"
+    assert gate.base_symbol("ama_kyber_encapsulate") == "ama_kyber_encapsulate"
+
+
+# --------------------------------------------------------------------------
 # The allowlist itself
 # --------------------------------------------------------------------------
 

@@ -155,6 +155,33 @@ REQUIRED_CLEAN = (
     "ama_kyber_encapsulate",
 )
 
+#: Compiler-generated clone suffixes.  GCC emits ``.constprop.N`` when it
+#: specialises a function for constant arguments, ``.isra.N`` when it removes
+#: or replaces parameters, ``.part.N`` when it splits one out, plus ``.cold``,
+#: ``.localalias`` and ``.lto_priv.N``; clang emits ``.llvm.N``.  A clone is
+#: the SAME source function with a different emitted name, so its divides
+#: belong to the base symbol's allowlist entry.
+#:
+#: Matching ``ALLOWED`` by the raw name meant a refactor that merely caused a
+#: clone turned a correctly-recorded symbol into "not allowlisted".  That is
+#: how `ama_argon2id_core` — allowlisted at 6 divides with its reasoning —
+#: became `ama_argon2id_core.constprop.0` and failed this gate on x86-64 AND
+#: aarch64, on a change that altered no arithmetic and moved no secret.
+#:
+#: The failure direction was safe (a clone fails closed, it never passes an
+#: unrecorded divide), so this is brittleness rather than a hole — but a gate
+#: that goes red on a rename teaches people to edit the allowlist to make red
+#: go away, which is exactly how a real finding would get waved through.
+_CLONE_SUFFIX_RE = re.compile(
+    r"(?:\.(?:constprop|isra|part|lto_priv|llvm)\.\d+|\.cold|\.localalias)+$"
+)
+
+
+def base_symbol(name: str) -> str:
+    """The source-level symbol a (possibly cloned) emitted name belongs to."""
+    return _CLONE_SUFFIX_RE.sub("", name)
+
+
 _SYMBOL_RE = re.compile(r"^[0-9a-f]+ <(?P<name>[^>]+)>:$")
 _INSN_RE = re.compile(r"^\s+[0-9a-f]+:\s+(?P<mnemonic>[a-z][a-z0-9.]*)")
 #: Divide mnemonics across the two architectures this library ships.
@@ -278,8 +305,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     problems: list[str] = []
+    present_bases = {base_symbol(s) for s in symbols}
     for symbol in REQUIRED_CLEAN:
-        if symbol not in symbols:
+        if symbol not in present_bases:
             problems.append(
                 f"{symbol} is not in the object. This gate's whole subject is that "
                 f"ML-KEM contains no divide; it cannot report that about code that "
@@ -287,10 +315,12 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     for symbol, count in sorted(divides.items()):
-        allowed = ALLOWED.get(symbol)
+        base = base_symbol(symbol)
+        allowed = ALLOWED.get(base)
+        via = "" if base == symbol else f" (compiler clone of {base})"
         if allowed is None:
             problems.append(
-                f"{symbol}: {count} divide instruction(s), and this symbol is not "
+                f"{symbol}{via}: {count} divide instruction(s), and this symbol is not "
                 f"allowlisted. If its operands are public, add it to ALLOWED with "
                 f"the reasoning. If they are not, this is the KyberSlash defect "
                 f"class and the division must be replaced with a reciprocal "
@@ -306,15 +336,25 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"{'symbol':<34}{'divides':>9}  operands")
     for symbol, count in sorted(divides.items()):
-        note = "ALLOWLISTED" if symbol in ALLOWED else "*** NOT ALLOWLISTED ***"
+        base = base_symbol(symbol)
+        if base not in ALLOWED:
+            note = "*** NOT ALLOWLISTED ***"
+        elif base == symbol:
+            note = "ALLOWLISTED"
+        else:
+            note = f"ALLOWLISTED (clone of {base})"
         print(f"{symbol:<34}{count:>9}  {note}")
     print(
         f"\nread {len(symbols):,} symbol(s), {instructions:,} instruction(s); "
         f"{sum(divides.values())} divide(s) in {len(divides)} symbol(s)"
     )
     for symbol in REQUIRED_CLEAN:
-        if symbol in symbols:
-            print(f"  {symbol}: {divides.get(symbol, 0)} divide(s)")
+        if symbol in present_bases:
+            # Sum across every emitted body that resolves to this symbol: the
+            # claim is that ML-KEM decapsulation contains no divide, and a
+            # clone carrying one would be exactly the thing being denied.
+            total = sum(c for s, c in divides.items() if base_symbol(s) == symbol)
+            print(f"  {symbol}: {total} divide(s)")
 
     if problems:
         print("\nSECRET-DIVISION CHECK FAILED:", file=sys.stderr)
