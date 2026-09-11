@@ -229,13 +229,34 @@ jobs:
   python-package:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    # The 4-core Intel macOS runners need ~19-26 minutes end to end
-    # (measured: the 3.12 lane finished at 19.5, the 3.10 and 3.11 lanes
-    # were killed by the former flat 20 with the suite mid-run), so that
-    # architecture gets headroom while every faster lane keeps the
-    # tighter bound.  A timeout is an infrastructure ceiling, not a
-    # gate: the tests themselves still have to pass identically.
-    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 35 || 20 }}
+    # The 4-core Intel macOS runners are SLOW and, more importantly, they
+    # are INCONSISTENT.  A timeout is an infrastructure ceiling, not a gate:
+    # the tests themselves still have to pass identically, so the number has
+    # to cover the pool's spread rather than its median.
+    #
+    # 35 was the second value here (the first was a flat 20, which killed the
+    # 3.10 and 3.11 lanes with the suite mid-run).  It was set from a median
+    # and under-provisioned the same way.  Five legs of ONE run, same commit,
+    # same runner class:
+    #
+    #     Python 3.10   21m05s     Python 3.14   22m48s
+    #     Python 3.11   21m55s     Python 3.12   34m45s  <- cancelled at 35
+    #     Python 3.13   22m41s
+    #
+    # a 1.65x spread with no code difference between them.  The 3.12 leg is
+    # the case worth reading: every one of its 41 steps SUCCEEDED, `Run
+    # tests` included, finishing at 05:54:57 — and the job was still marked
+    # `cancelled`, because the 05:55:10 deadline arrived before the runner
+    # finalised it.  A passing test run reported as a failed job is the
+    # timeout measuring the runner pool, not the code.  The immediately
+    # preceding head lost a different leg (3.13) the same way.
+    #
+    # 50 is ~2.3x the ~22-minute median, so a genuine hang is still caught
+    # well before the 6-hour platform ceiling, while the observed variance
+    # stops turning a green suite red.  Raise it again only with the same
+    # kind of evidence: the per-leg durations of one run, not a single
+    # sample.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 20 }}
     strategy:
       fail-fast: false
       matrix:
