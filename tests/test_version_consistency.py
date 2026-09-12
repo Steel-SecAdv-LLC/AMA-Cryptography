@@ -57,6 +57,216 @@ def test_github_invariants_file_is_pointer() -> None:
     )
 
 
+class TestSonameLiterals:
+    """The SONAME sweep must count what it checked, or it can go vacuous.
+
+    The sweep's loop only ever appended failures: zero matches produced zero
+    output and no OK line, so rewording setup.py's docstring to say
+    ``.so.<major>`` everywhere silently removed the check — while the
+    git-tag-pin sweep added in the same commit asserts a floor
+    (``pins_checked < 2``).  Extracted to ``scan_soname_literals`` and
+    floored the same way.
+    """
+
+    def test_the_real_tree_carries_at_least_two_literals(self, tool_module: ModuleType) -> None:
+        repo = TOOL_PATH.resolve().parent.parent
+        problems, checked = tool_module.scan_soname_literals(repo, "5.0.0")
+        assert problems == [], problems
+        assert checked >= 2, f"the SONAME sweep found only {checked} literals"
+
+    def test_a_stale_literal_is_reported(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        (tmp_path / "setup.py").write_text(
+            "# We preserve the SONAME chain libama_cryptography.so.3 here\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "Makefile").write_text("# ships .so.5 today\n", encoding="utf-8")
+        problems, checked = tool_module.scan_soname_literals(tmp_path, "5.0.0")
+        assert checked == 2
+        assert len(problems) == 1 and ".so.3" in problems[0] and "setup.py" in problems[0]
+
+    def test_a_reword_that_removes_every_literal_yields_a_zero_count(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """The vacuity case: main() floors this count at 2 and fails below it."""
+        (tmp_path / "setup.py").write_text(
+            "# We preserve the SONAME chain .so.<major> everywhere\n", encoding="utf-8"
+        )
+        (tmp_path / "Makefile").write_text("# no literal here either\n", encoding="utf-8")
+        problems, checked = tool_module.scan_soname_literals(tmp_path, "5.0.0")
+        assert problems == []
+        assert checked == 0
+
+
+class TestTagPins:
+    """README's own install commands must name the canonical version (M11).
+
+    The predecessor swept docs/**/*.rst only, so README's `@vX.Y.Z` install
+    pins — which are .md — went unchecked while the comment claimed to cover
+    them (INVARIANT-32).
+    """
+
+    def test_the_real_tree_covers_the_readme_and_landing_page_pins(
+        self, tool_module: ModuleType
+    ) -> None:
+        repo = TOOL_PATH.resolve().parent.parent
+        problems, checked = tool_module.scan_tag_pins(repo, "5.0.0")
+        assert problems == [], problems
+        # README ships two install pins and docs/index.rst one; a sweep that
+        # finds fewer has stopped seeing them — the vacuity M11 was about.
+        assert checked >= 3, f"the tag-pin sweep found only {checked} pins"
+
+    def test_a_stale_readme_style_md_pin_is_reported(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        (tmp_path / "README.md").write_text(
+            'pip install "git+https://github.com/Steel-SecAdv-LLC/'
+            'AMA-Cryptography.git@v4.0.0"\n',
+            encoding="utf-8",
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert checked == 1
+        assert problems and "@v4.0.0" in problems[0] and "README.md" in problems[0]
+
+    def test_a_matching_md_pin_passes(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        # The requirements-style pin README also carries.
+        (tmp_path / "README.md").write_text(
+            "ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/"
+            "AMA-Cryptography.git@v5.0.0\n",
+            encoding="utf-8",
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert problems == [] and checked == 1
+
+    def test_a_third_party_action_pin_is_not_a_package_pin(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """INVARIANTS.md pins slsa-github-generator@v2.1.0 — a different repo,
+        not the AMA package, so it must not be read as a stale version."""
+        (tmp_path / "INVARIANTS.md").write_text(
+            "uses: slsa-framework/slsa-github-generator/"
+            ".github/workflows/generator_generic_slsa3.yml@v2.1.0\n",
+            encoding="utf-8",
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert problems == [] and checked == 0
+
+    def test_changelog_and_compliance_pins_are_excluded(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """A CHANGELOG entry or a dated attestation may pin an old tag."""
+        (tmp_path / "CHANGELOG.md").write_text(
+            "In v4.0.0, install with AMA-Cryptography.git@v4.0.0\n", encoding="utf-8"
+        )
+        compliance = tmp_path / "docs" / "compliance"
+        compliance.mkdir(parents=True)
+        (compliance / "OLD_ATTESTATION.md").write_text(
+            "Generated against AMA-Cryptography.git@v3.0.0\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert problems == [] and checked == 0
+
+
+class TestInvariantRangeClaims:
+    """ "INVARIANT-1 through INVARIANT-N" is a count in prose, and it went stale.
+
+    The branch that took the register from 38 to 42 corrected three of the four
+    documents naming the old range. By the time the register reached 43,
+    `.github/copilot-instructions.md` still said 42 — a canonical-register
+    extent that disagreed with the register, in the file that tells an
+    assistant what the register is.
+    """
+
+    def test_the_real_tree_agrees_with_the_register(self, tool_module: ModuleType) -> None:
+        repo = TOOL_PATH.resolve().parent.parent
+        highest, register_problems = tool_module.invariant_register_extent(repo / "INVARIANTS.md")
+        assert register_problems == [], register_problems
+        problems, checked = tool_module.scan_invariant_range_claims(repo, highest)
+        assert problems == [], problems
+        assert checked >= 4, "the range claims stopped being found — the check is vacuous"
+
+    def test_a_stale_range_is_reported(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        (tmp_path / "doc.md").write_text(
+            "See INVARIANTS.md (INVARIANT-1 through INVARIANT-42).\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 1
+        assert len(problems) == 1
+        assert "INVARIANT-43" in problems[0] and "doc.md:1" in problems[0]
+
+    @pytest.mark.parametrize("joiner", ["through", "to", "-", "\u2013", "\u2014"])
+    def test_every_range_spelling_is_recognised(
+        self, tool_module: ModuleType, tmp_path: Path, joiner: str
+    ) -> None:
+        (tmp_path / "doc.md").write_text(f"INVARIANT-1 {joiner} INVARIANT-9\n", encoding="utf-8")
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 1, joiner
+        assert len(problems) == 1, joiner
+
+    def test_a_range_that_does_not_start_at_one_is_left_alone(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """CHANGELOG.md's "INVARIANT-39 through INVARIANT-42" describes one
+        release's scope. Forcing it to the register's maximum would rewrite
+        release history into something false."""
+        (tmp_path / "doc.md").write_text(
+            "Security (INVARIANT-39 through INVARIANT-42)\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 0
+        assert problems == []
+
+    def test_a_wrapped_claim_is_caught_and_reported_on_one_line(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """A claim that wraps must not escape, and must not be quoted back with
+        a newline in it."""
+        (tmp_path / "doc.md").write_text(
+            "See INVARIANTS.md, INVARIANT-1\n  through INVARIANT-42.\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 1
+        assert len(problems) == 1
+        assert "INVARIANT-1 through INVARIANT-42" in problems[0]
+        assert "\n" not in problems[0]
+
+    def test_the_message_says_how_to_write_a_historical_quotation(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """The check reads prose and cannot tell a quotation from a claim, so
+        the message has to name the escape rather than leave a writer stuck."""
+        (tmp_path / "doc.md").write_text("INVARIANT-1 through INVARIANT-42\n", encoding="utf-8")
+        problems, _checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert "ending at INVARIANT-N" in problems[0]
+
+    def test_a_gap_in_the_register_is_reported(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """ "1 through N" only describes a set with no holes in it."""
+        register = tmp_path / "INVARIANTS.md"
+        register.write_text("## INVARIANT-1 - a\n\n## INVARIANT-3 - c\n", encoding="utf-8")
+        highest, problems = tool_module.invariant_register_extent(register)
+        assert highest == 3
+        assert any("not contiguous" in row and "INVARIANT-2" in row for row in problems)
+
+    def test_a_duplicate_heading_is_reported(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        register = tmp_path / "INVARIANTS.md"
+        register.write_text(
+            "## INVARIANT-1 - a\n\n## INVARIANT-2 - b\n\n## INVARIANT-2 - b again\n",
+            encoding="utf-8",
+        )
+        _highest, problems = tool_module.invariant_register_extent(register)
+        assert any("duplicate" in row for row in problems)
+
+    def test_an_unreadable_register_fails_rather_than_passes(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        register = tmp_path / "INVARIANTS.md"
+        register.write_text("# no headings here\n", encoding="utf-8")
+        highest, problems = tool_module.invariant_register_extent(register)
+        assert highest == 0
+        assert problems, "a register with nothing in it must not read as clean"
+
+
 def _match_header(tool_module: ModuleType, text: str) -> tuple[str, str] | None:
     """First (version, trailing-qualifier) pair any doc-header pattern finds."""
     for pat in tool_module.DOC_HEADER_PATTERNS:

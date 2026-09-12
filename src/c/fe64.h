@@ -144,6 +144,19 @@ static inline void fe64_tobytes(uint8_t *s, const fe64 h) {
     }
 }
 
+/* Single-fold window (add, sub, neg below).  Each operation folds the carry
+ * or borrow across 2^256 == 38 exactly once, which is complete for every
+ * operand pair except when the fold itself carries again: fe64_add needs
+ * BOTH operands in [2^256 - 38, 2^256), fe64_sub needs g in that window with
+ * f below 38, and fe64_neg needs f in that window.  Every operand here is a
+ * fe64_mul / fe64_sq / fe64_reduce512 output, which lands in that 38-value
+ * window with probability about 2^-250 per output and in the paired
+ * condition with probability about 2^-500 per operation; the operands are
+ * ladder intermediates of the secret scalar, so no attacker steers them
+ * there.  The Ed25519 MULX instantiation folds twice and is total
+ * (src/c/x86/ama_ed25519_fe64_mulx.c); the X25519 ladder keeps the single
+ * fold because the second one measured 12-14% on its latency-bound chain.
+ * This note replaces a cross-reference that pointed here without a note. */
 static inline void fe64_add(fe64 h, const fe64 f, const fe64 g) {
     uint128_t c;
     c = (uint128_t)f[0] + g[0]; h[0] = (uint64_t)c; c >>= 64;

@@ -64,7 +64,7 @@ def test_wycheproof_tc88_matches_the_reduced_interpretation(
 ) -> None:
     """tc88's u-coordinate is p + 3. The shared secret must be the one
     for u = 3 — which is what every reference implementation (ref10,
-    curve25519-donna, libsodium) computes."""
+    Andrew Moon's curve25519, libsodium) computes."""
     tc = vectors[88]
     public = bytes.fromhex(str(tc["public"]))
     private = bytes.fromhex(str(tc["private"]))

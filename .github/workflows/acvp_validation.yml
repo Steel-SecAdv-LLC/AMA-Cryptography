@@ -115,8 +115,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build native C library
         run: |

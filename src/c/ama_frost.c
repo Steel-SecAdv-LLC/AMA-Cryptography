@@ -2,8 +2,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_frost.c
- * @brief FROST Threshold Ed25519 Signatures — RFC 9591
- * @version 4.0.0
+ * @brief FROST Threshold Ed25519 Signatures — RFC 9591-style
+ * @version 5.0.0
  * @date 2026-04-17
  *
  * Production-ready implementation of FROST (Flexible Round-Optimized
@@ -17,7 +17,18 @@
  * - Two-round signing protocol with binding commitments
  * - Standard Ed25519 verification on aggregated signature
  *
- * Standards: RFC 9591 (FROST), RFC 8032 (Ed25519)
+ * Standards: RFC 9591-STYLE, not ciphersuite-conformant — stated here
+ * because the two claims differ where it matters, interoperability.  The
+ * protocol structure (two-round sign, binding factors, Lagrange
+ * aggregation) follows RFC 9591, and the AGGREGATED signature verifies
+ * under standard RFC 8032 Ed25519 everywhere.  But this implementation's
+ * hash derivations do not prefix the RFC's "FROST-ED25519-SHA512-v1"
+ * contextString and do not use its per-role H1/H2/H3/H4/H5 domain
+ * separation (see the note above AMA_FROST_LABEL_HIDING and
+ * compute_binding_factor / compute_challenge), so PARTIAL signatures and
+ * commitments are NOT interoperable with an RFC 9591 ciphersuite
+ * implementation: every participant in a ceremony must run this library.
+ * RFC 8032 (Ed25519) conformance of the final signature is unconditional.
  * Group order: l = 2^252 + 27742317777372353535851937790883648493
  */
 
@@ -311,6 +322,10 @@ static void poly_eval(uint8_t *result, const uint8_t coeffs[][32],
         uint8_t tmp[32];
         scalar_mul(tmp, result, x_scalar);
         scalar_add(result, tmp, coeffs[i]);
+        /* Horner intermediate: share-equivalent material (a partial
+         * evaluation of the secret polynomial), scrubbed per iteration to
+         * the same standard the file's other scalar temporaries meet. */
+        ama_secure_memzero(tmp, sizeof(tmp));
     }
 }
 
@@ -353,9 +368,12 @@ static void compute_lagrange_coeff(uint8_t lambda[32], uint8_t participant_idx,
 }
 
 /* ======================================================================
- * BINDING FACTOR AND CHALLENGE COMPUTATION (RFC 9591)
+ * BINDING FACTOR AND CHALLENGE COMPUTATION (RFC 9591-style)
  *
- * Uses SHA-512 per the FROST(Ed25519, SHA-512) ciphersuite (RFC 9591).
+ * SHA-512, the FROST(Ed25519, SHA-512) ciphersuite's hash — but NOT the
+ * ciphersuite's derivations: no "FROST-ED25519-SHA512-v1" contextString,
+ * no per-role H1/H2 domain separation (see the file header's Standards
+ * note).  Partial signatures are library-internal, not RFC-interoperable.
  * ====================================================================== */
 
 static ama_error_t compute_binding_factor(uint8_t rho[32],

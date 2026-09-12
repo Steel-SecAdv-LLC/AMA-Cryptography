@@ -17,7 +17,8 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import List
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -34,7 +35,7 @@ class BenchmarkResult:
     unit: str
     timestamp: str = datetime.now().isoformat()
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
@@ -45,7 +46,9 @@ class PerformanceBenchmark:
         self.iterations = iterations
         self.results: List[BenchmarkResult] = []
 
-    def run_benchmark(self, name: str, func, *args, unit: str = "ops/sec"):
+    def run_benchmark(
+        self, name: str, func: Callable[..., object], *args: Any, unit: str = "ops/sec"
+    ) -> BenchmarkResult:
         """Run a single benchmark"""
         print(f"\nRunning: {name}")
         print(f"  Iterations: {self.iterations}")
@@ -82,8 +85,14 @@ class PerformanceBenchmark:
         return result
 
     def compare_implementations(
-        self, name: str, impl1_name: str, impl1_func, impl2_name: str, impl2_func, *args
-    ):
+        self,
+        name: str,
+        impl1_name: str,
+        impl1_func: Callable[..., object],
+        impl2_name: str,
+        impl2_func: Callable[..., object],
+        *args: Any,
+    ) -> float:
         """Compare two implementations"""
         print(f"\n{'=' * 70}")
         print(f"COMPARISON: {name}")
@@ -98,7 +107,7 @@ class PerformanceBenchmark:
 
         return speedup
 
-    def save_results(self, filename: str = "benchmark_results.json"):
+    def save_results(self, filename: str = "benchmark_results.json") -> None:
         """Save results to JSON"""
         data = {
             "timestamp": datetime.now().isoformat(),
@@ -116,12 +125,12 @@ class PerformanceBenchmark:
         print(f"\nResults saved to {filename}")
 
 
-def benchmark_lyapunov_functions():
+def benchmark_lyapunov_functions() -> PerformanceBenchmark:
     """Benchmark Lyapunov function implementations"""
     state = np.random.randn(1000)
     target = np.ones(1000)
 
-    def pure_python_lyapunov(s, t):
+    def pure_python_lyapunov(s: Any, t: Any) -> float:
         return float(np.sum((s - t) ** 2))
 
     bench = PerformanceBenchmark(iterations=10000)
@@ -146,13 +155,13 @@ def benchmark_lyapunov_functions():
     return bench
 
 
-def benchmark_matrix_operations():
+def benchmark_matrix_operations() -> PerformanceBenchmark:
     """Benchmark matrix operations"""
     size = 500
     matrix = np.random.randn(size, size)
     vector = np.random.randn(size)
 
-    def numpy_matvec(m, v):
+    def numpy_matvec(m: Any, v: Any) -> Any:
         return m @ v
 
     bench = PerformanceBenchmark(iterations=1000)
@@ -179,7 +188,7 @@ def benchmark_matrix_operations():
     return bench
 
 
-def benchmark_helix_evolution():
+def benchmark_helix_evolution() -> PerformanceBenchmark:
     """Benchmark double-helix evolution"""
     from ama_cryptography.double_helix_engine import AmaEquationEngine
 
@@ -188,7 +197,7 @@ def benchmark_helix_evolution():
 
     state = ama_random.randn(100) * 0.5
 
-    def run_step(eng, s):
+    def run_step(eng: Any, s: Any) -> Any:
         return eng.step(s, 0)
 
     bench = PerformanceBenchmark(iterations=1000)
@@ -197,7 +206,7 @@ def benchmark_helix_evolution():
     return bench
 
 
-def benchmark_constant_time_ops():
+def benchmark_constant_time_ops() -> Optional[PerformanceBenchmark]:
     """Benchmark constant-time operations"""
     try:
         # Try to import C library
@@ -214,8 +223,8 @@ def benchmark_constant_time_ops():
         pa = ctypes.c_char_p(a)
         pb = ctypes.c_char_p(b)
 
-        def c_memcmp():
-            return lib.ama_consttime_memcmp(pa, pb, 1024)
+        def c_memcmp() -> int:
+            return int(lib.ama_consttime_memcmp(pa, pb, 1024))
 
         bench = PerformanceBenchmark(iterations=100000)
         bench.run_benchmark("Constant-Time Memcmp (C)", c_memcmp)
@@ -227,7 +236,7 @@ def benchmark_constant_time_ops():
         return None
 
 
-def main():
+def main() -> None:
     """Run all benchmarks"""
     print("=" * 70)
     print("AMA Cryptography Performance Benchmark Suite")

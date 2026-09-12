@@ -4,19 +4,23 @@
  * @file ama_kyber_sve2.c
  * @brief ARM SVE2-optimized ML-KEM-1024 (Kyber) NTT / invNTT
  *
- * SVE2 scalable-vector intrinsics for Kyber polynomial arithmetic.
- * Vector length adapts to hardware; processes more coefficients on
- * wider implementations (256-bit, 512-bit, 1024-bit, 2048-bit).
+ * SVE2 scalable-vector intrinsics for Kyber polynomial arithmetic.  Two
+ * things scale with vector length and one deliberately does not; the split
+ * matters, so state it plainly rather than as a blanket "SIMD" claim:
  *
- * All butterfly loops use VL-agnostic predicated iteration via
- * svwhilelt / svcnth so the same binary runs correctly on any
- * SVE2-capable core regardless of vector width.
+ *   VECTOR (scales with VL): coefficient load/store and add/sub, i.e.
+ *   svld1_s16 / svst1_s16 / svadd_s16_x / svsub_s16_x over
+ *   svwhilelt_b16-predicated ranges stepped by svcnth().  The loops are
+ *   VL-agnostic, so a wider core processes more coefficients per iteration
+ *   and the same binary runs on any width (256 / 512 / 1024 / 2048-bit).
  *
- * Montgomery reduction uses scalar reduce within vectorized load/store
- * loops.  SVE2's svmulh_s16 computes (a*b)>>16 but Kyber Montgomery
- * needs the full 32-bit product (a*b), then (a*b - u*q)>>16.  Using
- * scalar reduction avoids the svmul/svmulh signed-borrow pitfall
- * entirely and is provably equivalent to the generic C reference.
+ *   SCALAR (does NOT scale with VL): the Montgomery and Barrett reductions.
+ *   Both are done extract-reduce-reload over a stack buffer — see
+ *   barrett_reduce_sve2() and the montgomery_reduce_scalar loops inside the
+ *   butterflies below.  SVE2's svmulh_s16 gives only (a*b)>>16, but Kyber
+ *   Montgomery needs the full 32-bit product (a*b) then (a*b - u*q)>>16;
+ *   reducing scalar sidesteps the svmul/svmulh signed-borrow pitfall
+ *   entirely and is provably equivalent to the generic C reference.
  *
  * Wired surface (matches the SVE2 block in src/c/dispatch/ama_dispatch.c):
  *   - `ama_kyber_ntt_sve2`
@@ -61,6 +65,36 @@
 
 #if defined(__ARM_FEATURE_SVE2)
 #include <arm_sve.h>
+#include "ama_sve2_internal.h"
+#include "../../../include/ama_cryptography.h"
+
+/* SECRET SCRATCH — INVARIANT-6/12 applied to this file.
+ *
+ * Every kernel below stages coefficients through int16_t stack arrays,
+ * because SVE2's svmulh_s16 cannot produce the full 32-bit product Kyber's
+ * Montgomery reduction needs, so the reduction is done element-wise between a
+ * store and a reload.  Those coefficients are secret on two of the three
+ * paths: keygen NTTs the secret vector `s` and encaps NTTs the secret noise
+ * `sp`, both reaching here through poly_ntt -> dt->kyber_ntt.
+ *
+ * The file previously contained no ama_secure_memzero call at all, while the
+ * PR that added it scrubbed exactly this class of staging buffer in the AES
+ * kernels and cited INVARIANT-6/12 for doing so.
+ *
+ * The buffers are hoisted to function scope rather than scrubbed where they
+ * were declared, and that is the point of the restructuring: declared inside
+ * the butterfly loop, a scrub would place one compiler barrier per vector
+ * iteration in the hottest loop in the kernel — the trade
+ * src/c/neon/ama_aes_gcm_neon.c measured and rejected for key expansion.
+ * Hoisted, one scrub per public call erases every coefficient any iteration
+ * staged, because each iteration overwrites the same storage.  Cost is one
+ * barrier and three-to-four 256-byte clears per NTT of 256 coefficients.
+ *
+ * Not applied to ama_kyber_poly_{add,sub}_sve2 or
+ * ama_kyber_poly_pointwise_sve2: those hold no stack staging buffer — they
+ * operate register-to-memory on the caller's polynomials — and the stronger
+ * guarantee is not writing a secret down, not erasing it afterwards. */
+#define AMA_KYBER_SVE2_SCRUB(buf) ama_secure_memzero((buf), sizeof(buf))
 
 #define KYBER_Q  3329
 #define KYBER_N  256
@@ -74,15 +108,33 @@
 /* ============================================================================
  * Scalar Barrett reduction (matches generic C reference exactly)
  *
- * Reduces a to [-q+1, q-1] range.
+ * Reduces a to [0, q] — measured by enumerating all 65,536 int16 inputs, not
+ * the [-q+1, q-1] this line used to claim: the truncating form below never
+ * returns a negative value, and it does return q itself for the nine inputs
+ * that are exact negative multiples of q from -3329 to -29961.
  * NOTE: The pqcrystals reference uses v=20159 with >>26, NOT >>16.
  * SVE2 svmulh_s16 gives >>16, which is wrong for this parameter set.
  * We use scalar Barrett to guarantee correctness.
  * ============================================================================ */
 static inline int16_t barrett_reduce_scalar(int16_t a) {
-    int16_t t = (int16_t)(((int32_t)KYBER_BARRETT_V * a + (1 << 25)) >> 26);
+    /* Truncating form — NO `+ (1 << 25)` rounding addend.
+     *
+     * This must be the same function as `barrett_reduce` in src/c/ama_kyber.c
+     * (which computes `((int32_t)v * a) >> 26`) and as `barrett_reduce_neon`
+     * (vqdmulhq >>15 followed by >>11, also unrounded), because the dispatch
+     * table substitutes these kernels for one another and
+     * tests/c/test_kyber_ntt_equiv.c demands byte-identity between them.
+     *
+     * This file previously added the rounded variant's `+ (1 << 25)`.  Both
+     * forms are valid reductions and agree mod q, but they select different
+     * representatives near the rounding boundary, so the SVE2 kernel returned
+     * coefficients differing from every other backend by exactly one q.  The
+     * comment above claimed it "matches generic C reference exactly"; it did
+     * not, and nothing noticed because AMA_ENABLE_SVE2 was off in every CI
+     * configuration, so this code had never run under the test that pins it. */
+    int32_t t = ((int32_t)KYBER_BARRETT_V * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* ============================================================================
@@ -92,14 +144,21 @@ static inline int16_t barrett_reduce_scalar(int16_t a) {
  * Barrett reduction.  The load/store and loop control are vectorized;
  * the reduction itself uses the proven scalar formula.
  * ============================================================================ */
-static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a) {
-    int16_t buf[128];  /* Max VL = 2048 bits → 128 int16_t lanes */
-    svst1_s16(pg, buf, a);
+/* `scratch` is supplied by the caller rather than declared here, and that is
+ * a secret-hygiene requirement, not a style choice — see the SECRET SCRATCH
+ * note in this file's header.  The coefficients staged through it are the
+ * secret vector `s` during keygen and the secret noise `sp` during encaps, and
+ * an inline function's local cannot be scrubbed by the caller that ends up
+ * owning its stack slot.  Hoisting it to the caller makes exactly one scrub
+ * per public entry point erase every staged coefficient. */
+static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a,
+                                            int16_t scratch[128]) {
+    svst1_s16(pg, scratch, a);
     uint64_t active = svcntp_b16(pg, pg);
     for (uint64_t e = 0; e < active; e++) {
-        buf[e] = barrett_reduce_scalar(buf[e]);
+        scratch[e] = barrett_reduce_scalar(scratch[e]);
     }
-    return svld1_s16(pg, buf);
+    return svld1_s16(pg, scratch);
 }
 
 /* ============================================================================
@@ -167,6 +226,9 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
     unsigned int len, start, j, k;
     int16_t zeta, t;
     const uint64_t vl_h = svcnth();  /* Number of int16_t lanes */
+    /* Function-scope so one scrub at the bottom covers every iteration.  Max
+     * VL = 2048 bits -> 128 int16_t lanes. */
+    int16_t hi_buf[128], t_buf[128], scratch[128];
 
     k = 1;
     for (len = 128; len >= 2; len >>= 1) {
@@ -186,7 +248,6 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
                     svint16_t hi = svld1_s16(pg, poly + start + len + i);
 
                     /* Montgomery reduce zeta * hi[e] for each active lane */
-                    int16_t hi_buf[128], t_buf[128];
                     svst1_s16(pg, hi_buf, hi);
                     for (uint64_t e = 0; e < active; e++) {
                         t_buf[e] = montgomery_reduce_scalar(
@@ -212,6 +273,43 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
             }
         }
     }
+
+    /* Canonicalising Barrett sweep.
+     *
+     * The butterflies apply only montgomery_reduce and never a Barrett, so
+     * the magnitude grows layer by layer well past q: over 3,000 random
+     * polynomials with coefficients drawn from [0, q) the pre-sweep range is
+     * [-9344, +12863], i.e. -2.8q to +3.9q.  This sweep normalises that to
+     * [0, q] — the truncating `a - (((20159*a) >> 26) * q)` form, whose image
+     * over all 65,536 int16 inputs is exactly [0, 3329], q included.  The
+     * AVX2 (`_mm256_mulhi_epi16` then `srai 10`) and NEON (`vqdmulhq_s16`
+     * then `vshrq_n_s16 11`) kernels compute the identical `(a*v) >> 26` and
+     * land in the same place, which is what lets the dispatch layer swap
+     * these three implementations for one another.
+     *
+     * This comment used to say the butterflies leave [-q, q) and the sweep
+     * normalises to [-q/2, q/2].  Both halves were wrong: the centred
+     * representative is what the ROUNDED pq-crystals form yields, and this
+     * one deliberately has no `+ (1<<25)` addend.  A bounds argument derived
+     * from the old wording understates the worst case by 4x and assumes a
+     * sign the kernel never produces.  Without it the SVE2 path returned a different (though
+     * congruent) representative from every other backend, which
+     * tests/c/test_kyber_ntt_equiv.c reports as a lane mismatch — it was never
+     * caught because AMA_ENABLE_SVE2 was off in every CI configuration, so
+     * this kernel had never been executed by the test that pins it. */
+    {
+        size_t i = 0;
+        while (i < KYBER_N) {
+            svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+            svint16_t v = svld1_s16(pg, poly + i);
+            svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, v, scratch));
+            i += svcnth();
+        }
+    }
+
+    AMA_KYBER_SVE2_SCRUB(hi_buf);
+    AMA_KYBER_SVE2_SCRUB(t_buf);
+    AMA_KYBER_SVE2_SCRUB(scratch);
 }
 
 /* ============================================================================
@@ -228,6 +326,8 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
     int16_t t_scalar, zeta;
     const int16_t f = 1441;  /* f = 128^{-1} mod q, in Montgomery form */
     const uint64_t vl_h = svcnth();
+    /* Function-scope for the same reason as the forward NTT above. */
+    int16_t diff_buf[128], hi_out_buf[128], scratch[128], buf[128];
 
     k = 127;
     for (len = 2; len <= 128; len <<= 1) {
@@ -250,10 +350,9 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
                     svint16_t diff = svsub_s16_x(pg, hi, lo);
 
                     /* Barrett reduction of sum */
-                    svint16_t lo_out = barrett_reduce_sve2(pg, sum);
+                    svint16_t lo_out = barrett_reduce_sve2(pg, sum, scratch);
 
                     /* Montgomery reduction of zeta * diff */
-                    int16_t diff_buf[128], hi_out_buf[128];
                     svst1_s16(pg, diff_buf, diff);
                     for (uint64_t e = 0; e < active; e++) {
                         hi_out_buf[e] = montgomery_reduce_scalar(
@@ -286,18 +385,27 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
             svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
             uint64_t active = svcntp_b16(pg, pg);
 
-            int16_t buf[128];
             svint16_t va = svld1_s16(pg, poly + i);
             svst1_s16(pg, buf, va);
 
             for (uint64_t e = 0; e < active; e++) {
-                buf[e] = montgomery_reduce_scalar((int32_t)f * buf[e]);
+                /* montgomery_mul by f, then the canonicalising Barrett the
+                 * AVX2 and NEON inverse kernels also emit here — see the note
+                 * on the forward NTT's sweep for why the post-condition has to
+                 * match across backends. */
+                buf[e] = barrett_reduce_scalar(
+                    montgomery_reduce_scalar((int32_t)f * buf[e]));
             }
 
             svst1_s16(pg, poly + i, svld1_s16(pg, buf));
             i += svcnth();
         }
     }
+
+    AMA_KYBER_SVE2_SCRUB(diff_buf);
+    AMA_KYBER_SVE2_SCRUB(hi_out_buf);
+    AMA_KYBER_SVE2_SCRUB(scratch);
+    AMA_KYBER_SVE2_SCRUB(buf);
 }
 
 /* ============================================================================
@@ -335,12 +443,14 @@ void ama_kyber_poly_pointwise_sve2(int16_t r[KYBER_N],
  * ============================================================================ */
 void ama_kyber_poly_reduce_sve2(int16_t poly[KYBER_N]) {
     size_t i = 0;
+    int16_t scratch[128];
     while (i < KYBER_N) {
         svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
         svint16_t va = svld1_s16(pg, poly + i);
-        svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, va));
+        svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, va, scratch));
         i += svcnth();
     }
+    AMA_KYBER_SVE2_SCRUB(scratch);
 }
 
 #else

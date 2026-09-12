@@ -9,6 +9,7 @@ import os
 import statistics
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -86,8 +87,10 @@ except AttributeError:
     DILITHIUM_AVAILABLE = False
 
 
-def benchmark(func, iterations=500, warmup=50):
-    """Run benchmark returning (ops_per_sec, per_call_us, raw_times)."""
+def benchmark(
+    func: Callable[[], object], iterations: int = 500, warmup: int = 50
+) -> dict[str, float]:
+    """Run benchmark returning the timing summary for ``func``."""
     for _ in range(warmup):
         func()
 
@@ -112,73 +115,73 @@ def benchmark(func, iterations=500, warmup=50):
     }
 
 
-def bench_sha3_256():
+def bench_sha3_256() -> dict[str, float]:
     data = b"A" * 1024
     out = ctypes.create_string_buffer(32)
 
-    def op():
+    def op() -> None:
         lib.ama_sha3_256(data, 1024, out)
 
     return benchmark(op, iterations=1000, warmup=100)
 
 
-def bench_sha3_256_short():
+def bench_sha3_256_short() -> dict[str, float]:
     data = b"A" * 64
     out = ctypes.create_string_buffer(32)
 
-    def op():
+    def op() -> None:
         lib.ama_sha3_256(data, 64, out)
 
     return benchmark(op, iterations=1000, warmup=100)
 
 
-def bench_hmac_sha3_256():
+def bench_hmac_sha3_256() -> dict[str, float]:
     key = os.urandom(32)
     msg = b"A" * 1024
     out = ctypes.create_string_buffer(32)
 
-    def op():
+    def op() -> None:
         lib.ama_hmac_sha3_256(key, 32, msg, 1024, out)
 
     return benchmark(op, iterations=500, warmup=50)
 
 
-def bench_hkdf():
+def bench_hkdf() -> dict[str, float]:
     ikm = os.urandom(32)
     salt = os.urandom(32)
     info = b"benchmark"
     out = ctypes.create_string_buffer(96)
 
-    def op():
+    def op() -> None:
         lib.ama_hkdf(salt, 32, ikm, 32, info, 9, out, 96)
 
     return benchmark(op, iterations=500, warmup=50)
 
 
-def bench_ed25519_keygen():
+def bench_ed25519_keygen() -> dict[str, float]:
     pk = ctypes.create_string_buffer(32)
     sk = ctypes.create_string_buffer(64)
 
-    def op():
+    def op() -> None:
         lib.ama_ed25519_keypair(pk, sk)
 
     return benchmark(op, iterations=200, warmup=20)
 
 
-def bench_ed25519_sign():
+def bench_ed25519_sign() -> dict[str, float]:
     pk = ctypes.create_string_buffer(32)
     sk = ctypes.create_string_buffer(64)
     lib.ama_ed25519_keypair(pk, sk)
     msg = b"Test message for benchmarking" * 8
     sig = ctypes.create_string_buffer(64)
 
-    def op():
+    def op() -> None:
         lib.ama_ed25519_sign(sig, msg, len(msg), sk)
 
     return benchmark(op, iterations=200, warmup=20)
 
 
-def bench_ed25519_verify():
+def bench_ed25519_verify() -> dict[str, float]:
     pk = ctypes.create_string_buffer(32)
     sk = ctypes.create_string_buffer(64)
     lib.ama_ed25519_keypair(pk, sk)
@@ -186,23 +189,23 @@ def bench_ed25519_verify():
     sig = ctypes.create_string_buffer(64)
     lib.ama_ed25519_sign(sig, msg, len(msg), sk)
 
-    def op():
+    def op() -> None:
         lib.ama_ed25519_verify(sig, msg, len(msg), pk)
 
     return benchmark(op, iterations=200, warmup=20)
 
 
-def bench_dilithium_keygen():
+def bench_dilithium_keygen() -> dict[str, float]:
     pk = ctypes.create_string_buffer(1952)
     sk = ctypes.create_string_buffer(4032)
 
-    def op():
+    def op() -> None:
         lib.ama_dilithium_keypair(pk, sk)
 
     return benchmark(op, iterations=100, warmup=10)
 
 
-def bench_dilithium_sign():
+def bench_dilithium_sign() -> dict[str, float]:
     pk = ctypes.create_string_buffer(1952)
     sk = ctypes.create_string_buffer(4032)
     lib.ama_dilithium_keypair(pk, sk)
@@ -210,13 +213,13 @@ def bench_dilithium_sign():
     sig = ctypes.create_string_buffer(3309)
     siglen = ctypes.c_size_t(3309)
 
-    def op():
+    def op() -> None:
         lib.ama_dilithium_sign(sig, ctypes.byref(siglen), msg, len(msg), sk)
 
     return benchmark(op, iterations=100, warmup=10)
 
 
-def bench_dilithium_verify():
+def bench_dilithium_verify() -> dict[str, float]:
     pk = ctypes.create_string_buffer(1952)
     sk = ctypes.create_string_buffer(4032)
     lib.ama_dilithium_keypair(pk, sk)
@@ -225,38 +228,38 @@ def bench_dilithium_verify():
     siglen = ctypes.c_size_t(3309)
     lib.ama_dilithium_sign(sig, ctypes.byref(siglen), msg, len(msg), sk)
 
-    def op():
+    def op() -> None:
         lib.ama_dilithium_verify(msg, len(msg), sig, siglen.value, pk)
 
     return benchmark(op, iterations=100, warmup=10)
 
 
 # Also measure Python-level overhead (ctypes vs Cython for HMAC)
-def bench_hmac_python_api():
+def bench_hmac_python_api() -> dict[str, float]:
     from ama_cryptography.pqc_backends import native_hmac_sha3_256
 
     key = os.urandom(32)
     msg = b"A" * 1024
 
-    def op():
+    def op() -> None:
         native_hmac_sha3_256(key, msg)
 
     return benchmark(op, iterations=500, warmup=50)
 
 
-def bench_sha3_python_api():
+def bench_sha3_python_api() -> dict[str, float]:
     from ama_cryptography.pqc_backends import native_sha3_256
 
     data = b"A" * 1024
 
-    def op():
+    def op() -> None:
         native_sha3_256(data)
 
     return benchmark(op, iterations=1000, warmup=100)
 
 
 # Package create/verify
-def bench_package_create():
+def bench_package_create() -> dict[str, float]:
     from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
@@ -266,7 +269,7 @@ def bench_package_create():
     codes = "TEST_OMNI_CODE_12345"
     helix_params = [(1.0, 2.0)]
 
-    def op():
+    def op() -> None:
         create_crypto_package(
             codes=codes,
             helix_params=helix_params,
@@ -278,7 +281,7 @@ def bench_package_create():
     return benchmark(op, iterations=50, warmup=5)
 
 
-def bench_package_verify():
+def bench_package_verify() -> dict[str, float]:
     from ama_cryptography.legacy_compat import (
         create_crypto_package,
         generate_key_management_system,
@@ -296,7 +299,7 @@ def bench_package_verify():
         use_rfc3161=False,
     )
 
-    def op():
+    def op() -> None:
         verify_crypto_package(
             codes=codes,
             helix_params=helix_params,
@@ -308,13 +311,16 @@ def bench_package_verify():
     return benchmark(op, iterations=50, warmup=5)
 
 
-def main():
+def main() -> dict[str, dict[str, float | str]]:
     print("=" * 72)
     print("AMA CRYPTOGRAPHY — PHASE 0 BASELINE PROFILING")
     print("=" * 72)
     print()
 
-    results = {}
+    # float for a measured row, str for the error message when one raises: the
+    # JSON this writes carries both shapes and downstream readers branch on
+    # the "error" key.
+    results: dict[str, dict[str, float | str]] = {}
 
     benchmarks = [
         ("SHA3-256 (1KB)", bench_sha3_256),
@@ -345,7 +351,12 @@ def main():
     for name, func in benchmarks:
         try:
             r = func()
-            results[name] = r
+            # dict(r), not r: the row is stored in a mapping whose values are
+            # `float | str` (an errored row carries a message), and a
+            # `dict[str, float]` is not a subtype of that — dict is invariant
+            # in its value type, so aliasing the same object under both would
+            # let a later write of a str corrupt r's declared type.
+            results[name] = dict(r)
             print(
                 f"{name:<35} {r['ops_per_sec']:>12,.0f} {r['median_us']:>12.1f} {r['p95_ns']/1000:>12.1f} {r['stdev_ns']/1000:>12.1f}"
             )

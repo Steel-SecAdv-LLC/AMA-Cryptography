@@ -102,7 +102,10 @@ def _build_ml_kem_1024() -> dict[str, Any]:
         "parameter_set": 1024,
         "provenance": {
             "source": src.relative_to(REPO_ROOT).as_posix(),
-            "upstream": "NIST ACVP-Server ML-KEM-keyGen/encapDecap-FIPS203 v1.1.0.42",
+            "upstream": (
+                "pq-crystals/kyber standard@d5b791c ref/nistkat PQCgenKAT_kem "
+                "(NIST AES-256-CTR DRBG), ML-KEM-1024 count 0; re-derived and matched 2026-09-07"
+            ),
             "record": 0,
             "fingerprint": _source_fingerprint(src, "record[0]", fields),
         },

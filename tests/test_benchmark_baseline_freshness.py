@@ -59,9 +59,24 @@ def _package_version() -> tuple[int, int, int]:
 
 
 def _parse_release(value: str) -> tuple[int, int, int]:
-    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value.strip())
-    assert m is not None, f"malformed release string: {value!r}"
-    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+    """Parse ``"X.Y.Z"``, splitting rather than matching.
+
+    This carried the same ``re.fullmatch(r"(\\d+)\\.(\\d+)\\.(\\d+)")`` that
+    ``benchmarks/check_baseline_justification.py`` did — three unbounded
+    quantifiers separated by literals, the shape CodeQL reports as a polynomial
+    ReDoS, measured at 4.2x per doubling. Only the copy in the guard was a *new*
+    alert, but leaving the identical pattern here would have kept the defect in
+    the tree and let the two implementations drift.
+
+    ``str.isdigit`` is true for non-ASCII digits, which ``int()`` accepts, so
+    the ASCII check is load-bearing: a release string is defined over ASCII.
+    """
+    parts = value.strip().split(".")
+    assert len(parts) == 3, f"malformed release string: {value!r}"
+    assert all(
+        0 < len(p) <= 4 and p.isascii() and p.isdigit() for p in parts
+    ), f"malformed release string: {value!r}"
+    return int(parts[0]), int(parts[1]), int(parts[2])
 
 
 @pytest.mark.parametrize("path", BASELINES, ids=lambda p: p.name)

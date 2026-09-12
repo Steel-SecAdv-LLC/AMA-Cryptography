@@ -70,6 +70,8 @@
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_once.h"
+#include "internal/ama_ct_barrier.h"
+#include "internal/ama_ct_declassify.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -238,9 +240,22 @@ static const nistp_curve *nistp_lookup(ama_nist_curve_t curve) {
  * *values*; `nl` itself is a public curve parameter.
  * ============================================================================ */
 
-/** Mask of all ones when `c != 0`, all zeros when `c == 0`. */
+/** Mask of all ones when `c != 0`, all zeros when `c == 0`.
+ *
+ * Every mask in this file is produced here, so this is the one place the
+ * value barrier has to be applied.  Without it the optimizer knows the result
+ * is 0 or ~0, which licenses it to replace a masked select with a branch on
+ * the predicate — and the predicates here are the Montgomery extra-reduction
+ * carry, the group law's exceptional-case flags, and the comb digit, i.e.
+ * the ECDSA nonce and the long-term key.  Measured before this barrier
+ * existed, with clang 18 at -O3 over four P-256 signatures with a fixed
+ * digest: 1,251 retired instructions of key-dependent spread inside
+ * `nistp_mont_mul` alone, deterministic under callgrind.  That is the
+ * Montgomery extra-reduction distinguisher of Walter & Thompson (CT-RSA
+ * 2001) reintroduced by codegen, on the same scalar path secp256k1 carried
+ * it on.  See internal/ama_ct_barrier.h. */
 static inline uint64_t nistp_mask64(uint64_t c) {
-    return (uint64_t)0 - (uint64_t)((c | (~c + 1u)) >> 63);
+    return ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)((c | (~c + 1u)) >> 63));
 }
 
 /** 1 when every limb is zero, else 0.  Constant time. */
@@ -327,7 +342,7 @@ static void nistp_cond_sub_mod(uint64_t *r, const uint64_t *a, uint64_t carry,
 /** Big-endian octets -> limbs.  `nbytes` must be a multiple-of-8 offset grid. */
 static void nistp_from_bytes(uint64_t *r, const uint8_t *in, unsigned nbytes, unsigned nl) {
     unsigned i;
-    memset(r, 0, sizeof(uint64_t) * AMA_NISTP_MAX_LIMBS);
+    memset(r, 0, sizeof(uint64_t) * AMA_NISTP_MAX_LIMBS);  // PUBLIC-DATA: r — pre-use init of the output limbs before decoding (init, not a scrub)
     (void)nl;
     for (i = 0; i < nbytes; i++) {
         unsigned bitpos = (nbytes - 1u - i) * 8u;
@@ -373,17 +388,49 @@ extern void ama_nistp_mont_mul4_mulx(uint64_t r[4], const uint64_t a[4],
  * `ama_has_bmi2()` and `ama_has_adx()` are each a load-and-branch after
  * their shared one-shot probe, but this predicate is consulted on the order
  * of ten thousand times per verification, so it is worth collapsing to a
- * single relaxed load.  The write is idempotent — every thread computes the
- * same value from the same cached CPUID result — and a torn read is not
- * possible for an aligned int, so no synchronisation is needed beyond the
- * once-guard already inside the CPUID getters. */
-static int nistp_mulx_gate = -1;
+ * single relaxed load.
+ *
+ * `_Atomic int`, not a plain `int`.  An earlier revision of this comment
+ * argued that "the write is idempotent ... so no synchronisation is needed
+ * beyond the once-guard already inside the CPUID getters", and both halves
+ * were wrong.  An idempotent value does not stop concurrent unsynchronised
+ * read and write from being a data race — C11 5.1.2.4p25 makes it undefined
+ * behaviour regardless of what the store does at the architecture level — and
+ * the CPUID getters' once orders nothing about *this* object.  It was exactly
+ * the "lockless flag + plain variable" shape that INVARIANT-15 and
+ * `src/c/internal/ama_once.h` prohibit outright, in a file whose other
+ * one-time state (NISTP_COMB_ONCE) already goes through AMA_CALL_ONCE.
+ *
+ * It was also live rather than theoretical, and its invisibility was an
+ * accident of which entry point ran first: on the keygen/sign/verify paths
+ * the first write happens inside `nistp_comb_build()` under NISTP_COMB_ONCE,
+ * so nothing races.  `ama_nistp_point_decode` and `ama_nistp_pubkey_validate`
+ * — both attacker-input paths — reach this gate through `nistp_load_point`
+ * with no once in the way, and ThreadSanitizer reports the race there.
+ * `tests/c/test_concurrent_init.c` drives exactly that shape from eight
+ * threads released together, and is what turned the finding into a
+ * reproduction.
+ *
+ * `memory_order_relaxed` is the correct order and is what finally makes the
+ * paragraph above true: the gate publishes no other data, so no reader needs
+ * to observe anything that happened before the write, and the value is
+ * idempotent so a reader that misses it simply recomputes the same answer.
+ * The hot path does not pay for this — on x86-64 a relaxed load of an aligned
+ * int is the same instruction a plain load compiles to.
+ *
+ * No portability fallback is needed here.  This block is inside
+ * AMA_HAVE_NISTP_MONT_MULX_IMPL, which CMakeLists.txt defines only for
+ * x86-64 GCC/Clang (`if(... x86_64 ... AND NOT MSVC)`), and both provide C11
+ * <stdatomic.h>. */
+#include <stdatomic.h>
+
+static _Atomic int nistp_mulx_gate = -1;
 
 static inline int nistp_use_mulx4(void) {
-    int g = nistp_mulx_gate;
+    int g = atomic_load_explicit(&nistp_mulx_gate, memory_order_relaxed);
     if (g < 0) {
         g = (ama_has_bmi2() && ama_has_adx()) ? 1 : 0;
-        nistp_mulx_gate = g;
+        atomic_store_explicit(&nistp_mulx_gate, g, memory_order_relaxed);
     }
     return g;
 }
@@ -417,7 +464,7 @@ void nistp_mont_mul_body(uint64_t *r, const uint64_t *a, const uint64_t *b,
     uint64_t t[AMA_NISTP_MAX_LIMBS + 2];
     unsigned i, j;
 
-    memset(t, 0, sizeof(t));
+    memset(t, 0, sizeof(t));  // PUBLIC-DATA: t — pre-use init of the Montgomery product accumulator (init, not a scrub)
 
     for (i = 0; i < nl; i++) {
         uint64_t carry = 0, lo, hi, mu, s;
@@ -473,7 +520,16 @@ static void nistp_mont_sqr(uint64_t *r, const uint64_t *a,
 /** r = (a + b) mod m, for a, b < m. */
 static void nistp_mod_add(uint64_t *r, const uint64_t *a, const uint64_t *b,
                           const uint64_t *m, unsigned nl) {
-    uint64_t sum[AMA_NISTP_MAX_LIMBS];
+    /* Zero-initialised, not merely written: `nistp_add` fills `nl` limbs of a
+     * buffer sized for the widest curve, so limbs `nl..AMA_NISTP_MAX_LIMBS-1`
+     * are never assigned.  Every reader is bounded by the same `nl` and the
+     * tail is unreachable, but gcc 13 at -O3 cannot prove that across the
+     * inlining it performs once `nistp_mask64` carries a value barrier, and
+     * emits -Wmaybe-uninitialized on the call below.  Initialising the array
+     * is the fix at source: it costs a handful of stores against a modular
+     * addition, and it keeps uninitialised stack out of a buffer that feeds
+     * the constant-time conditional subtract. */
+    uint64_t sum[AMA_NISTP_MAX_LIMBS] = {0};
     uint64_t carry = nistp_add(sum, a, b, nl);
     nistp_cond_sub_mod(r, sum, carry, m, nl);
 }
@@ -497,7 +553,7 @@ static void nistp_to_mont(uint64_t *r, const uint64_t *a, const uint64_t *rr,
 static void nistp_from_mont(uint64_t *r, const uint64_t *a,
                             const uint64_t *m, uint64_t m0inv, unsigned nl) {
     uint64_t one[AMA_NISTP_MAX_LIMBS];
-    memset(one, 0, sizeof(one));
+    memset(one, 0, sizeof(one));  // PUBLIC-DATA: one — the public constant 1
     one[0] = 1;
     nistp_mont_mul(r, a, one, m, m0inv, nl);
 }
@@ -506,7 +562,7 @@ static void nistp_from_mont(uint64_t *r, const uint64_t *a,
 static void nistp_mont_one(uint64_t *r, const uint64_t *rr,
                            const uint64_t *m, uint64_t m0inv, unsigned nl) {
     uint64_t one[AMA_NISTP_MAX_LIMBS];
-    memset(one, 0, sizeof(one));
+    memset(one, 0, sizeof(one));  // PUBLIC-DATA: one — the public constant 1
     one[0] = 1;
     nistp_mont_mul(r, one, rr, m, m0inv, nl);
 }
@@ -538,7 +594,7 @@ static void nistp_mont_pow(uint64_t *r, const uint64_t *a,
 /** e = m - 2 (both m and the result are public curve data). */
 static void nistp_exp_minus2(uint64_t *e, const uint64_t *m, unsigned nl) {
     uint64_t two[AMA_NISTP_MAX_LIMBS];
-    memset(two, 0, sizeof(two));
+    memset(two, 0, sizeof(two));  // PUBLIC-DATA: two — the public constant 2
     two[0] = 2;
     (void)nistp_sub(e, m, two, nl);
 }
@@ -581,7 +637,7 @@ static int nistp_jac_is_infinity(const nistp_jac *p, unsigned nl) {
  * `nistp_jac_add` constructs an infinity on every single call.
  */
 static void nistp_jac_set_infinity(nistp_jac *p) {
-    memset(p, 0, sizeof(*p));
+    memset(p, 0, sizeof(*p));  // PUBLIC-DATA: p — the public point at infinity (X=1, Y=1, Z=0)
     p->X[0] = 1;
     p->Y[0] = 1;
 }
@@ -607,7 +663,7 @@ static void nistp_jac_double(nistp_jac *r, const nistp_jac *p, const nistp_curve
     uint64_t delta[AMA_NISTP_MAX_LIMBS], gamma[AMA_NISTP_MAX_LIMBS];
     uint64_t beta[AMA_NISTP_MAX_LIMBS], alpha[AMA_NISTP_MAX_LIMBS];
     uint64_t t0[AMA_NISTP_MAX_LIMBS], t1[AMA_NISTP_MAX_LIMBS];
-    nistp_jac out;
+    nistp_jac out = {0};
 
     nistp_mont_sqr(delta, p->Z, m, m0, nl);          /* delta = Z1^2 */
     nistp_mont_sqr(gamma, p->Y, m, m0, nl);          /* gamma = Y1^2 */
@@ -673,7 +729,7 @@ static void nistp_jac_add(nistp_jac *r, const nistp_jac *p, const nistp_jac *q,
     uint64_t h[AMA_NISTP_MAX_LIMBS], rr[AMA_NISTP_MAX_LIMBS];
     uint64_t ii[AMA_NISTP_MAX_LIMBS], jj[AMA_NISTP_MAX_LIMBS];
     uint64_t vv[AMA_NISTP_MAX_LIMBS], t0[AMA_NISTP_MAX_LIMBS];
-    nistp_jac out, doubled, inf;
+    nistp_jac out = {0}, doubled, inf;
     uint64_t mask_h, mask_r, mask_p, mask_q;
     unsigned k;
 
@@ -749,15 +805,20 @@ static void nistp_jac_add(nistp_jac *r, const nistp_jac *p, const nistp_jac *q,
 
 /**
  * Jacobian -> affine (Montgomery form in, Montgomery form out).
- * Returns 0 when the input is the point at infinity (outputs untouched).
+ * Returns 0 when the input is the point at infinity; the outputs then hold
+ * (0, 0), because the conversion runs unconditionally (see below).
  */
 static int nistp_jac_to_affine(uint64_t *x, uint64_t *y, const nistp_jac *p,
                                const nistp_curve *c) {
     uint64_t zi[AMA_NISTP_MAX_LIMBS], zi2[AMA_NISTP_MAX_LIMBS], zi3[AMA_NISTP_MAX_LIMBS];
     unsigned nl = c->nlimbs;
 
-    if (nistp_jac_is_infinity(p, nl))
-        return 0;
+    /* The conversion always runs: Z = 0 inverts to 0 through the
+     * exponentiation, so infinity serialises as (0, 0) and the caller gets
+     * the flag.  A branch here would be a secret-dependent branch for every
+     * caller whose point derives from a private scalar; those callers
+     * declassify the flag (see ama_ct_declassify.h) instead. */
+    int at_infinity = nistp_jac_is_infinity(p, nl);
 
     nistp_mont_inv(zi, p->Z, c->rr_p, c->p, c->pbits, c->p0inv, nl);
     nistp_mont_sqr(zi2, zi, c->p, c->p0inv, nl);
@@ -765,7 +826,7 @@ static int nistp_jac_to_affine(uint64_t *x, uint64_t *y, const nistp_jac *p,
     nistp_mont_mul(x, p->X, zi2, c->p, c->p0inv, nl);
     nistp_mont_mul(y, p->Y, zi3, c->p, c->p0inv, nl);
 
-    return 1;
+    return 1 ^ at_infinity;
 }
 
 /* ============================================================================
@@ -816,7 +877,7 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
             nistp_jac_double(&acc, &acc, c);
         }
 
-        memset(&sel, 0, sizeof(sel));
+        memset(&sel, 0, sizeof(sel));  // PUBLIC-DATA: sel — pre-use zero of the masked-select accumulator (init, not a scrub)
         for (i = 0; i < NISTP_TABLE_SIZE; i++) {
             uint64_t mask = nistp_mask64((uint64_t)i ^ digit);  /* 0 when equal */
             mask = ~mask;                                        /* all-ones when equal */
@@ -933,6 +994,12 @@ static void nistp_comb_build(nistp_comb *comb, const nistp_curve *c) {
     nistp_jac base[NISTP_COMB_BLOCKS];
     unsigned e, i, j, b;
 
+    /* Limbs above nlimbs are never read for their value, but they are
+     * copied by the struct assignments below and Memcheck's origin tracking
+     * then attributes later reports to this frame; defined from the start
+     * so the taint gate's reports name their real origin. */
+    memset(base, 0, sizeof(base));  // PUBLIC-DATA: base — generator multiples, all public
+
     /* `e` covers the scalar's full width: a scalar is `nbytes` octets and the
      * caller is not required to have reduced it, so the comb must span every
      * bit those octets can hold, not just `qbits`. */
@@ -1004,7 +1071,7 @@ static void nistp_scalar_mul_generator(nistp_jac *out, const uint8_t *k,
             digit |= bit << i;
         }
 
-        memset(&sel, 0, sizeof(sel));
+        memset(&sel, 0, sizeof(sel));  // PUBLIC-DATA: sel — pre-use zero of the masked-select accumulator (init, not a scrub)
         for (i = 0; i < NISTP_COMB_SIZE; i++) {
             uint64_t mask = nistp_mask64((uint64_t)i ^ digit);  /* 0 when equal */
             mask = ~mask;                                        /* all-ones when equal */
@@ -1056,7 +1123,7 @@ static void nistp_jac_add_affine_vartime(nistp_jac *r, const nistp_jac *p,
     uint64_t hh[AMA_NISTP_MAX_LIMBS], ii[AMA_NISTP_MAX_LIMBS];
     uint64_t jj[AMA_NISTP_MAX_LIMBS], rr[AMA_NISTP_MAX_LIMBS];
     uint64_t vv[AMA_NISTP_MAX_LIMBS], t0[AMA_NISTP_MAX_LIMBS];
-    nistp_jac out;
+    nistp_jac out = {0};
 
     /* P at infinity: the sum is Q, lifted back to Jacobian with Z = 1. */
     if (nistp_jac_is_infinity(p, nl)) {
@@ -1265,7 +1332,7 @@ static void nistp_bits2int(uint64_t *out, const uint8_t *in, size_t inlen,
     size_t i;
     unsigned shift, wordshift, bitshift;
 
-    memset(wide, 0, sizeof(wide));
+    memset(wide, 0, sizeof(wide));  // PUBLIC-DATA: wide — pre-use zero-pad of the bits2int input staging (init, not a scrub)
     if (inlen > sizeof(wide))
         inlen = sizeof(wide);          /* unreachable for every caller here */
     for (i = 0; i < inlen; i++) {
@@ -1304,7 +1371,9 @@ static void nistp_bits2int_mod_n(uint64_t *out, const uint8_t *in, size_t inlen,
 
 /** 1 when s > (n-1)/2 (the non-canonical "high" representative). */
 static int nistp_scalar_is_high(const uint64_t *s, const nistp_curve *c) {
-    uint64_t half[AMA_NISTP_MAX_LIMBS];
+    /* Zero-initialised: the loop below writes all nl limbs, but cppcheck
+     * 2.17 cannot follow the runtime nl bound and reports uninitvar. */
+    uint64_t half[AMA_NISTP_MAX_LIMBS] = {0};
     unsigned nl = c->nlimbs, i;
     int high;
 
@@ -1376,7 +1445,7 @@ static int nistp_rfc6979_nonce(uint64_t *k_out, uint8_t *k_bytes,
     nistp_to_bytes(h1oct, h1int, nb);
 
     memset(V, 0x01, hlen);
-    memset(K, 0x00, hlen);
+    memset(K, 0x00, hlen);  // PUBLIC-DATA: K — RFC 6979 §3.2 step b: HMAC-DRBG key starts as HashLen zero bytes (init, not a scrub)
 
     seedlen = (size_t)hlen + 1u + nb + nb + extra_len;
     memcpy(seed, V, hlen);
@@ -1409,7 +1478,9 @@ static int nistp_rfc6979_nonce(uint64_t *k_out, uint8_t *k_bytes,
          * RFC 6979 accepts and every conformant signer shares: it fires with
          * probability below 2^-32 on these curves, and when it does the only
          * fact it exposes is that one discarded DRBG block landed above n. */
-        if (nistp_lt(k_out, c->n, c->nlimbs) && !nistp_is_zero(k_out, c->nlimbs)) {
+        int cand_ok = nistp_lt(k_out, c->n, c->nlimbs) & (1 ^ nistp_is_zero(k_out, c->nlimbs));
+        AMA_CT_DECLASSIFY(&cand_ok, sizeof cand_ok);  /* see ama_ct_declassify.h */
+        if (cand_ok) {
             nistp_to_bytes(k_bytes, k_out, nb);
             ok = 1;
             break;
@@ -1468,7 +1539,7 @@ static int nistp_der_parse_int(const uint8_t *buf, size_t len, size_t *off,
     if (ilen > (size_t)nb + 1u) return 0;
     if (ilen == (size_t)nb + 1u && p[0] != 0x00) return 0;
 
-    memset(out, 0, nb);
+    memset(out, 0, nb);  // PUBLIC-DATA: out — pre-use zero-pad of the int2octets output (init, not a scrub)
     if (ilen > nb) {
         for (i = 0; i < nb; i++)
             out[i] = p[1 + i];
@@ -1590,15 +1661,30 @@ AMA_API ama_error_t ama_nistp_pubkey_from_privkey(ama_nist_curve_t curve,
 
     if (!c || !private_key || !public_key)
         return AMA_ERROR_INVALID_PARAM;
-    if (!nistp_scalar_load(d, private_key, c) || nistp_is_zero(d, c->nlimbs))
-        return AMA_ERROR_INVALID_PARAM;
+    {
+        /* Verdict public by contract (returned); declassified for the
+         * secret-taint gate.  Both predicates always run.  The load is a
+         * separate statement because `nistp_is_zero` reads what it writes:
+         * see the sequencing note in ama_secp256k1.c. */
+        const int d_in_range = nistp_scalar_load(d, private_key, c);
+        int bad = (1 ^ d_in_range) | nistp_is_zero(d, c->nlimbs);
+        AMA_CT_DECLASSIFY(&bad, sizeof bad);
+        if (bad)
+            return AMA_ERROR_INVALID_PARAM;
+    }
 
     /* Fixed base: the comb skips the doublings entirely (see
      * nistp_scalar_mul_generator).  Same result, same constant-time posture. */
     nistp_scalar_mul_generator(&Q, private_key, c);
-    if (!nistp_jac_to_affine(x, y, &Q, c)) {
-        rc = AMA_ERROR_CRYPTO;
-        goto done;
+    {
+        /* d in [1, n-1] on a prime-order generator: never infinity.
+         * Declassified defensive guard; its outcome is returned. */
+        int ok = nistp_jac_to_affine(x, y, &Q, c);
+        AMA_CT_DECLASSIFY(&ok, sizeof ok);
+        if (!ok) {
+            rc = AMA_ERROR_CRYPTO;
+            goto done;
+        }
     }
     nistp_from_mont(xs, x, c->p, c->p0inv, c->nlimbs);
     nistp_from_mont(ys, y, c->p, c->p0inv, c->nlimbs);
@@ -1749,7 +1835,7 @@ AMA_API ama_error_t ama_nistp_point_decode(ama_nist_curve_t curve,
     {
         uint64_t one[AMA_NISTP_MAX_LIMBS];
         uint64_t carry;
-        memset(one, 0, sizeof(one));
+        memset(one, 0, sizeof(one));  // PUBLIC-DATA: one — the public constant 1
         one[0] = 1;
         carry = nistp_add(e, c->p, one, nl);
         (void)carry;   /* p+1 never overflows nl limbs for these curves */
@@ -1769,7 +1855,7 @@ AMA_API ama_error_t ama_nistp_point_decode(ama_nist_curve_t curve,
     nistp_from_mont(ys, yv, c->p, c->p0inv, nl);
     /* Select the root whose least significant bit matches the sign octet. */
     if ((unsigned)(ys[0] & 1u) != (unsigned)(in[0] & 1u)) {
-        memset(neg, 0, sizeof(neg));
+        memset(neg, 0, sizeof(neg));  // PUBLIC-DATA: neg — pre-use zero before negating a public decompressed y (init)
         nistp_mod_sub(neg, neg, ys, c->p, nl);
         memcpy(ys, neg, sizeof(uint64_t) * nl);
     }
@@ -1883,8 +1969,15 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
     nistp_jac R;
     ama_error_t rc = AMA_ERROR_INVALID_PARAM;
 
-    if (!nistp_scalar_load(d, private_key, c) || nistp_is_zero(d, nl))
-        goto done;
+    {
+        /* Verdict public by contract (returned); declassified.  Load
+         * sequenced before the zero test -- see ama_secp256k1.c. */
+        const int d_in_range = nistp_scalar_load(d, private_key, c);
+        int bad_d = (1 ^ d_in_range) | nistp_is_zero(d, nl);
+        AMA_CT_DECLASSIFY(&bad_d, sizeof bad_d);
+        if (bad_d)
+            goto done;
+    }
 
     nistp_bits2int_mod_n(z, digest, digest_len, c);
 
@@ -1896,9 +1989,14 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
 
     /* R = k*G on the fixed generator — the comb path. */
     nistp_scalar_mul_generator(&R, k_bytes, c);
-    if (!nistp_jac_to_affine(x, y, &R, c)) {
-        rc = AMA_ERROR_CRYPTO;
-        goto done;
+    {
+        /* k in [1, n-1]: never infinity.  Declassified defensive guard. */
+        int ok = nistp_jac_to_affine(x, y, &R, c);
+        AMA_CT_DECLASSIFY(&ok, sizeof ok);
+        if (!ok) {
+            rc = AMA_ERROR_CRYPTO;
+            goto done;
+        }
     }
     nistp_from_mont(xs, x, c->p, c->p0inv, nl);
     nistp_to_bytes(x_bytes, xs, c->nbytes);
@@ -1907,9 +2005,14 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
      * conditional subtraction is a complete reduction. */
     nistp_from_bytes(rs, x_bytes, c->nbytes, nl);
     nistp_cond_sub_mod(rs, rs, 0, c->n, nl);
-    if (nistp_is_zero(rs, nl)) {
-        rc = AMA_ERROR_CRYPTO;
-        goto done;
+    {
+        /* r is emitted: public.  r != 0 is required (probability ~2^-256). */
+        int r_zero = nistp_is_zero(rs, nl);
+        AMA_CT_DECLASSIFY(&r_zero, sizeof r_zero);
+        if (r_zero) {
+            rc = AMA_ERROR_CRYPTO;
+            goto done;
+        }
     }
 
     /* s = k^-1 * (z + r*d) mod n, all in Montgomery form mod n. */
@@ -1924,9 +2027,14 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
     nistp_mont_mul(sm, sm, tm, c->n, c->n0inv, nl);
     nistp_from_mont(ss, sm, c->n, c->n0inv, nl);
 
-    if (nistp_is_zero(ss, nl)) {
-        rc = AMA_ERROR_CRYPTO;
-        goto done;
+    {
+        /* s is emitted: public.  s != 0 is required (probability ~2^-256). */
+        int s_zero = nistp_is_zero(ss, nl);
+        AMA_CT_DECLASSIFY(&s_zero, sizeof s_zero);
+        if (s_zero) {
+            rc = AMA_ERROR_CRYPTO;
+            goto done;
+        }
     }
 
     /* Low-`s` normalisation is OPT-IN (INVARIANT-34).
@@ -1949,7 +2057,7 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
     if (low_s) {
         uint64_t zero[AMA_NISTP_MAX_LIMBS], neg[AMA_NISTP_MAX_LIMBS];
         const uint64_t take = nistp_mask64((uint64_t)nistp_scalar_is_high(ss, c));
-        memset(zero, 0, sizeof(zero));
+        memset(zero, 0, sizeof(zero));  // PUBLIC-DATA: zero — the public constant 0 for the low-s negation
         nistp_mod_sub(neg, zero, ss, c->n, nl);
         nistp_select(ss, neg, ss, take, nl);
         ama_secure_memzero(zero, sizeof(zero));

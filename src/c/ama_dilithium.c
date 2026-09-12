@@ -231,7 +231,21 @@ static int32_t dil_montgomery_reduce(int64_t a) {
 
 /**
  * Barrett reduction mod q
- * Reduces a to range [0, q)
+ *
+ * Returns the CENTRED representative of a mod q, not a value in [0, q): the
+ * result is negative for roughly half of all inputs, which is what makes the
+ * `dil_caddq` in `dil_freeze` below necessary rather than decorative.  This
+ * header used to claim [0, q), and every bound derived from that claim would
+ * have been wrong by a factor of two in the wrong direction.
+ *
+ * Image, enumerated rather than quoted: over |a| <= 7q — which covers every
+ * value this file passes it, the widest being the l-fold accumulator bounded
+ * by l*q with l = 7 on ML-DSA-87 — the result lies in [-4243450, 4243449],
+ * i.e. |t| <= 0.507q.  (An earlier revision enumerated |a| <= 6q, giving
+ * [-4235259, 4235258], and claimed that band covered every caller; it did
+ * not cover ML-DSA-87's seven-fold accumulator.)  Over the whole int32
+ * domain it widens to [-6283009, 6283008], |t| <= 0.750q.  The inverse-NTT
+ * precondition argued at the keygen call site rests on the 7q-band figure.
  */
 static int32_t dil_reduce32(int32_t a) {
     int32_t t;
@@ -245,7 +259,7 @@ static int32_t dil_reduce32(int32_t a) {
  * If a is negative, add q
  */
 static int32_t dil_caddq(int32_t a) {
-    a += (a >> 31) & DIL_Q;
+    a += (-(int32_t)((uint32_t)a >> 31)) & DIL_Q;
     return a;
 }
 
@@ -350,7 +364,71 @@ static void dil_ntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
  * Inverse NTT for Dilithium.
  * Accepts a cached dispatch table pointer to avoid repeated ama_get_dispatch_table() calls.
  */
+#ifdef AMA_TESTING_MODE
+#include "internal/ama_testing_exports.h"
+
+/* Largest |coefficient| seen at ANY inverse-NTT entry since the last reset.
+ *
+ * The inverse NTT's input precondition (|coeff| < q — see the bound note at
+ * the keygen call site) is what keeps its unreduced additive butterfly inside
+ * int32, and it is a precondition of the CALL SITES rather than something the
+ * transform can enforce on itself.  A future edit that drops one of the three
+ * `reduce`-before-`invntt` calls would reintroduce an l*q input silently: the
+ * signatures would still verify, every KAT would still pass, and only the
+ * overflow margin would change.  This counter is what makes that observable,
+ * and `tests/c/test_dilithium_invntt_bound.c` is what reads it.
+ *
+ * Instrumented here, at the dispatch wrapper, rather than inside
+ * `dil_invntt_scalar` — so the measurement covers the SIMD kernels too, which
+ * carry the same precondition and are what actually runs on a host with AVX2
+ * or NEON.
+ *
+ * `AMA_TESTING_MODE` is PRIVATE to the `ama_cryptography_test` CMake target,
+ * so the shipped shared and static libraries contain neither the counter nor
+ * the loop that maintains it. */
+static _Thread_local int32_t dil_test_invntt_max_input = 0;
+
+/* OFF until a test asks for it, and that is not tidiness.
+ *
+ * `ama_cryptography_test` is the archive `tests/c/test_dudect.c` links, and
+ * dudect has an `ML-DSA-65 sign` lane — so this accumulator sits inside a
+ * measured constant-time path.  Its inner comparison branches on the
+ * coefficient magnitude, which is secret-derived: left unconditional it would
+ * put a data-dependent branch into the very lane that exists to prove there
+ * is none, either producing a false verdict or masking a real one.  Gated on a
+ * flag no dudect binary ever sets, the loop does not execute there at all and
+ * the only residue is one perfectly-predicted test against a value that is
+ * constant for the life of the process — identical in both dudect classes by
+ * construction, and therefore invisible to the statistic.
+ *
+ * `ama_dilithium_test_invntt_bound_reset()` is what arms it, so a test that
+ * reads the bound necessarily enabled it first and one that does not never
+ * pays for it. */
+static _Thread_local int dil_test_invntt_bound_armed = 0;
+
+void ama_dilithium_test_invntt_bound_reset(void) {
+    dil_test_invntt_max_input = 0;
+    dil_test_invntt_bound_armed = 1;
+}
+
+int32_t ama_dilithium_test_invntt_bound_get(void) {
+    return dil_test_invntt_max_input;
+}
+
+static void dil_test_note_invntt_input(const int32_t a[DIL_N]) {
+    unsigned int i;
+    if (!dil_test_invntt_bound_armed) return;
+    for (i = 0; i < DIL_N; ++i) {
+        int32_t v = a[i] < 0 ? -a[i] : a[i];
+        if (v > dil_test_invntt_max_input) dil_test_invntt_max_input = v;
+    }
+}
+#endif /* AMA_TESTING_MODE */
+
 static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
+#ifdef AMA_TESTING_MODE
+    dil_test_note_invntt_input(a);
+#endif
     /* Dispatch to SIMD implementation when available (INVARIANT-4: graceful fallback) */
     if (dt->dilithium_invntt) {
         dt->dilithium_invntt(a, dil_zetas);
@@ -459,19 +537,29 @@ static void dil_poly_invntt(dil_poly *a) {
 static int dil_poly_chknorm(const dil_poly *a, int32_t B) {
     unsigned int i;
     int32_t t;
+    uint32_t bad = 0;
 
     if (B > (DIL_Q - 1) / 8) {
-        return 1;
+        return 1;   /* B is a public parameter, not a coefficient. */
     }
 
+    /* Every coefficient is scanned.  The reference implementation returns at
+     * the first out-of-range value, which makes a rejected attempt's cost a
+     * function of the INDEX of that value — and the index is a function of
+     * z = y + c*s1 (or of w0 - c*s2, or of c*t0), i.e. of the private key.
+     * Signing here is deterministic, so that measurement is exactly
+     * repeatable per (key, message).  dil_polyeta_unpack in this file was
+     * rewritten branchless for the same reason, with the comment "a loop
+     * that exits at the first out-of-range value leaks its index"; the
+     * signer's own norm checks had not been.  `bad` accumulates instead:
+     * (B - 1 - t) >> 31 is 1 exactly when t >= B, for every t in the
+     * representable range of a reduced coefficient. */
     for (i = 0; i < DIL_N; ++i) {
-        t = a->coeffs[i] >> 31;
+        t = -(int32_t)((uint32_t)a->coeffs[i] >> 31);
         t = a->coeffs[i] - (t & 2 * a->coeffs[i]);  /* absolute value */
-        if (t >= B) {
-            return 1;
-        }
+        bad |= (uint32_t)(B - 1 - t) >> 31;
     }
-    return 0;
+    return (int)bad;
 }
 
 /* ============================================================================
@@ -509,11 +597,11 @@ static int32_t dil_decompose(int32_t *a0, int32_t a, const dil_params *P) {
         a1 &= 15;
     } else {
         a1 = (a1 * 11275 + (1 << 23)) >> 24;
-        a1 ^= ((43 - a1) >> 31) & a1;   /* clamp a1 == 44 back to 0 */
+        a1 ^= (-(int32_t)((uint32_t)(43 - a1) >> 31)) & a1;   /* clamp a1 == 44 back to 0 */
     }
 
     *a0 = a - a1 * 2 * P->gamma2;
-    *a0 -= (((DIL_Q - 1) / 2 - *a0) >> 31) & DIL_Q;
+    *a0 -= (-(int32_t)((uint32_t)((DIL_Q - 1) / 2 - *a0) >> 31)) & DIL_Q;
     return a1;
 }
 
@@ -648,8 +736,8 @@ static int dil_polyeta_unpack(dil_poly *r, const uint8_t *a, const dil_params *P
     {
         int32_t bad = 0;
         for (i = 0; i < DIL_N; ++i) {
-            bad |= (P->eta - r->coeffs[i]) >> 31;              /* c >  eta */
-            bad |= (r->coeffs[i] + (int32_t)P->eta) >> 31;     /* c < -eta */
+            bad |= -(int32_t)((uint32_t)(P->eta - r->coeffs[i]) >> 31);              /* c >  eta */
+            bad |= -(int32_t)((uint32_t)(r->coeffs[i] + (int32_t)P->eta) >> 31);     /* c < -eta */
         }
         return bad ? -1 : 0;
     }
@@ -1111,9 +1199,11 @@ static void dil_polyvec_uniform_eta(dil_poly *polys, unsigned int count,
 
         /* `streams` is the RejBoundedPoly input for s1/s2 and `bufs` carries
          * rhoprime — both secret-derived, neither previously scrubbed
-         * (INVARIANT-12). */
+         * (INVARIANT-12).  The x4 sponge state absorbed rhoprime||nonce and is
+         * equally recoverable until re-permuted — scrub it in the same class. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        ama_secure_memzero(&ctx, sizeof(ctx));
         idx += 4;
     }
 
@@ -1200,9 +1290,11 @@ static void dil_polyvecl_uniform_gamma1(dil_polyvecl *y,
          * the single most sensitive ephemeral in ML-DSA: y together with the
          * emitted z = y + c*s1 and the public c yields c*s1 and hence s1.
          * `dil_sign_internal` scrubs its own copy of y; this one was missed
-         * (INVARIANT-12). */
+         * (INVARIANT-12).  The x4 sponge absorbed rhoprime||kappa and is
+         * recoverable until re-permuted — scrub it in the same class. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        ama_secure_memzero(&ctx, sizeof(ctx));
         idx += 4;
     }
 
@@ -1268,14 +1360,14 @@ static void dil_polyvecl_ntt(dil_polyvecl *v, unsigned int l) {
     }
 }
 
+/* OR over every polynomial — no early return; see dil_poly_chknorm. */
 static int dil_polyvecl_chknorm(const dil_polyvecl *v, int32_t bound, unsigned int l) {
     unsigned int i;
+    int bad = 0;
     for (i = 0; i < l; ++i) {
-        if (dil_poly_chknorm(&v->vec[i], bound)) {
-            return 1;
-        }
+        bad |= dil_poly_chknorm(&v->vec[i], bound);
     }
-    return 0;
+    return bad;
 }
 
 static void dil_polyveck_ntt(dil_polyveck *v, unsigned int k) {
@@ -1322,14 +1414,14 @@ static void dil_polyveck_caddq(dil_polyveck *v, unsigned int k) {
     }
 }
 
+/* OR over every polynomial — no early return; see dil_poly_chknorm. */
 static int dil_polyveck_chknorm(const dil_polyveck *v, int32_t bound, unsigned int k) {
     unsigned int i;
+    int bad = 0;
     for (i = 0; i < k; ++i) {
-        if (dil_poly_chknorm(&v->vec[i], bound)) {
-            return 1;
-        }
+        bad |= dil_poly_chknorm(&v->vec[i], bound);
     }
-    return 0;
+    return bad;
 }
 
 /**
@@ -1390,16 +1482,30 @@ static unsigned int dil_polyveck_make_hint(uint8_t *hint,
                                             const dil_params *P) {
     unsigned int i, j, s = 0;
 
+    /* The scan always runs to completion.  Returning at the first hint past
+     * omega made a rejected attempt's cost a function of WHERE the overflow
+     * happened, which is a function of w0 - c*s2 + c*t0 and therefore of the
+     * private key — the same class dil_poly_chknorm above was fixed for.
+     * The count keeps rising past omega so the caller can still reject
+     * (`n > P->omega`); only the WRITE is clamped, and the clamp is on the
+     * running count rather than on a return.
+     *
+     * Writing hint[s] at a secret-derived index is not the same class and is
+     * inherent: on an ACCEPTED attempt those positions are the emitted
+     * signature, hence public.  A rejected attempt is discarded. */
     for (i = 0; i < P->k; ++i) {
         for (j = 0; j < DIL_N; ++j) {
-            if (dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P)) {
-                if (s >= P->omega) {
-                    return (unsigned int)P->omega + 1;  /* Too many hints */
-                }
-                hint[s++] = (uint8_t)j;
+            unsigned int h =
+                dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P) ? 1u : 0u;
+            if (h && s < (unsigned int)P->omega) {
+                hint[s] = (uint8_t)j;
             }
+            s += h;
         }
-        hint[P->omega + i] = (uint8_t)s;
+        /* Cumulative count, clamped so the buffer's tail stays well-formed
+         * on an attempt that will be rejected anyway. */
+        hint[P->omega + i] =
+            (uint8_t)(s <= (unsigned int)P->omega ? s : (unsigned int)P->omega);
     }
     return s;
 }
@@ -1546,7 +1652,13 @@ static void dil_sample_uniform_n(dil_poly *out,
 static void dil_expand_matrix(dil_poly *mat,
                                const uint8_t rho[DIL_SEEDBYTES],
                                const dil_params *P) {
-    uint16_t nonces[DIL_K_MAX * DIL_L_MAX];
+    /* Zero-initialised: the loop below writes exactly `total` entries and
+     * nothing reads past them, but cppcheck 2.17's uninitvar analysis
+     * cannot follow the k*l bound through P and reports the array as
+     * uninitialised at the call.  A 112-byte memset outside the sampling
+     * loop is cheaper than a suppression, which INVARIANT-13 forbids
+     * under src/c anyway. */
+    uint16_t nonces[DIL_K_MAX * DIL_L_MAX] = {0};
     const unsigned int total = P->k * P->l;
     unsigned int f;
 
@@ -1578,7 +1690,10 @@ static void dil_expand_matrix_row(dil_poly *row,
                                    const uint8_t rho[DIL_SEEDBYTES],
                                    unsigned int i,
                                    const dil_params *P) {
-    uint16_t nonces[DIL_L_MAX];
+    /* Zero-initialised for the same reason as dil_expand_matrix's array:
+     * the loop fills P->l entries and nothing reads past them, but
+     * cppcheck 2.17 cannot follow the bound. */
+    uint16_t nonces[DIL_L_MAX] = {0};
     unsigned int j;
 
     for (j = 0; j < P->l; ++j) {
@@ -1710,6 +1825,59 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     s1hat = s1;
     dil_polyvecl_ntt(&s1hat, P->l);
     dil_matrix_pointwise_rowwise(&t, rho, &s1hat, P);
+    /* Reduce BEFORE the inverse NTT, not only after it.
+     *
+     * `dil_invntt_scalar` and every SIMD counterpart carry an implicit input
+     * precondition that the FIPS 204 reference states explicitly for
+     * `poly_invntt_tomont` ("input coefficients need to be less than Q in
+     * absolute value"), and it is load-bearing rather than decorative.  The
+     * inverse transform performs no modular reduction on the additive half of
+     * its butterfly: at each of the 8 levels `a[j] = a[j] + a[j + len]` adds
+     * two values that were themselves sums at the level below, so the bound on
+     * the accumulating position doubles per level and the structural worst case
+     * is 2^8 = 256x the input bound.  With |input| < q that is 256q =
+     * 2,145,386,752, which fits int32 with 0.1% to spare — the reference's
+     * precondition is exactly the margin.
+     *
+     * The producer here is a sum of l Montgomery products.  Each is in (-q, q)
+     * by `dil_montgomery_reduce`'s own bound, and `dil_poly_add` does not
+     * reduce, so the accumulator is bounded by l*q — 5q for ML-DSA-65 — and by
+     * nothing tighter.  256 * 5q = 10,726,933,760 overflows int32 by ~5x, and
+     * signed overflow is undefined behaviour, not a wrap this code could rely
+     * on.  Measured over 36,990 invNTT calls from 400 keygen/sign/verify
+     * cycles, entry reached 2.415q and intermediates 0.167 * INT32_MAX; the
+     * 6x observed headroom is sign cancellation in the sampled data, not a
+     * bound, and this project does not rest a memory-safety property on it.
+     *
+     * `dil_reduce32`'s image was enumerated rather than quoted: over
+     * |a| <= 7q — the widest input any caller produces, ML-DSA-87's l = 7
+     * accumulator — it lands in [-4243450, 4243449], so after this call the
+     * worst case is 256 * 4243450 = 1,086,323,200 — inside int32 with a
+     * 1.98x margin, and provable rather than probabilistic.  (Its image over
+     * the whole int32 domain is wider, |t| <= 6283009, which still gives
+     * 256 * 6283009 = 1,608,450,304 and a 1.33x margin; the tighter figure
+     * is the one that applies here.)
+     *
+     * The three single-pointwise-product sites in signing need no such call:
+     * a lone `dil_montgomery_reduce` output is already in (-q, q), and 256 *
+     * (q-1) = 2,145,386,496 is under INT32_MAX by 0.1% — the reference's own
+     * tight case, and the reason its precondition is stated in exactly those
+     * terms.
+     *
+     * Mathematically transparent: reduction is the identity modulo q, the
+     * inverse NTT is linear over Z_q, and the result is reduced and caddq'd
+     * downstream regardless.  Verified byte-identical rather than argued —
+     * the SHA3-256 digest over the public and secret keys of 64 distinct
+     * seeds is unchanged with and without these three calls, sign/verify
+     * round-trips 64/64 either way, and the C suite passes either way.
+     *
+     * The verify path below already does this (see `dil_polyveck_reduce`
+     * immediately before the invNTT in `ama_dilithium_verify`), as do the
+     * three single-pointwise-product sites in signing whose inputs are already
+     * < q by construction.  These three call sites — keygen, the secret-key
+     * consistency check, and w = A*NTT(y) in signing — were the only ones that
+     * fed an l-fold accumulator straight in. */
+    dil_polyveck_reduce(&t, P->k);
     dil_polyveck_invntt(&t, P->k);
     dil_polyveck_add(&t, &t, &s2, P->k);
     dil_polyveck_reduce(&t, P->k);
@@ -1748,12 +1916,17 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
                         &t0.vec[i]);
     }
 
-    /* Scrub sensitive data */
+    /* Scrub sensitive data.  `t` too: t1 is public (it is packed into the
+     * public key) but t = A*s1 + s2 in full, and t0 = t - t1*2^d is the
+     * secret half the sk carries — a dead frame holding t hands t0 to
+     * anyone who can read the stack, which is exactly why t0 itself is on
+     * this list (INVARIANT-12). */
     ama_secure_memzero(seedbuf, sizeof(seedbuf));
     ama_secure_memzero(&s1, sizeof(s1));
     ama_secure_memzero(&s1hat, sizeof(s1hat));
     ama_secure_memzero(&s2, sizeof(s2));
     ama_secure_memzero(&t0, sizeof(t0));
+    ama_secure_memzero(&t, sizeof(t));
 
     return AMA_SUCCESS;
 }
@@ -1896,6 +2069,10 @@ static ama_error_t dil_pubkey_from_sk(const dil_params *P,
             dil_poly_pointwise_montgomery(&tmp, &mat_row[j], &s1hat.vec[j]);
             dil_poly_add(&acc, &acc, &tmp);
         }
+        /* Same l-fold accumulator, same precondition — see the bound note in
+         * the keygen path above.  `acc` is a sum of l Montgomery products and
+         * is therefore bounded only by l*q on entry. */
+        dil_poly_reduce(&acc);
         dil_poly_invntt(&acc);
 
         sk_bad |= dil_polyeta_unpack(&tmp,
@@ -2050,10 +2227,14 @@ static ama_error_t dil_build_ctx_prefix(const uint8_t *ctx, size_t ctx_len,
         ama_secure_memzero(hashbuf, sizeof(hashbuf));                          \
     } while (0)
 
+/* @param rnd  FIPS 204 Algorithm 7 line 3's `rnd`: NULL selects the
+ *             deterministic variant (rnd = 0^256); a 32-byte buffer selects
+ *             the hedged variant.  See ama_ml_dsa_sign_hedged(). */
 static ama_error_t dil_sign_internal(const dil_params *P,
                                      uint8_t *signature, size_t *signature_len,
                                      const uint8_t *prefix, size_t prefix_len,
                                      const uint8_t *message, size_t message_len,
+                                     const uint8_t *rnd,
                                      const uint8_t *secret_key) {
     uint8_t *rho, *key, *tr;
     uint8_t mu[DIL_CRHBYTES];
@@ -2161,7 +2342,14 @@ static ama_error_t dil_sign_internal(const dil_params *P,
      * together with the FIPS 204/205 KAT pin.
      */
     memcpy(hashbuf, key, DIL_SEEDBYTES);
-    memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */  // PUBLIC-DATA: rnd portion — FIPS 204 deterministic-signer fills rnd field with zeros (public spec'd constant)
+    if (rnd) {
+        /* Hedged variant (FIPS 204 Algorithm 2 line 5): rnd is fresh per
+         * signature.  It is secret-adjacent — it feeds rhoprime and hence y —
+         * so it is scrubbed with the rest of hashbuf at every exit. */
+        memcpy(hashbuf + DIL_SEEDBYTES, rnd, DIL_RNDBYTES);
+    } else {
+        memset(hashbuf + DIL_SEEDBYTES, 0, DIL_RNDBYTES);  /* rnd = 0^256 (deterministic) */  // PUBLIC-DATA: rnd portion — FIPS 204 deterministic-signer fills rnd field with zeros (public spec'd constant)
+    }
     memcpy(hashbuf + DIL_SEEDBYTES + DIL_RNDBYTES, mu, DIL_CRHBYTES);
     ama_shake256(hashbuf, DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES,
                  rhoprime, DIL_CRHBYTES);
@@ -2193,6 +2381,10 @@ static ama_error_t dil_sign_internal(const dil_params *P,
         yhat = y;
         dil_polyvecl_ntt(&yhat, P->l);
         dil_polyvec_matrix_pointwise(&w1, mat, &yhat, P);
+        /* Same l-fold accumulator, same precondition — see the bound note in
+         * the keygen path above.  This one runs once per rejection-sampling
+         * attempt, so it is the hottest of the three. */
+        dil_polyveck_reduce(&w1, P->k);
         dil_polyveck_invntt(&w1, P->k);
         dil_polyveck_reduce(&w1, P->k);
         dil_polyveck_caddq(&w1, P->k);
@@ -2202,7 +2394,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Pack w1 and compute challenge hash */
         {
-            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
+            uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX] = {0};
             uint8_t challenge_seed[DIL_CRHBYTES +
                                    DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
             const size_t w1_len = (size_t)P->k * P->polyw1_packedbytes;
@@ -2312,7 +2504,10 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     uint8_t c_tilde[DIL_CTILDEBYTES_MAX];
     uint8_t c_tilde2[DIL_CTILDEBYTES_MAX];
     dil_polyvecl z;
-    dil_polyveck t1, w1prime, h_vec;
+    /* h_vec is filled element-by-element in the loop below before it is
+     * read; zero-initialised so cppcheck 2.17 can see that, since it
+     * cannot follow the P->k bound. */
+    dil_polyveck t1, w1prime, h_vec = {0};
     dil_poly cp;
     uint8_t hint[DIL_OMEGA_MAX + DIL_K_MAX];
     uint8_t tr[DIL_TRBYTES];
@@ -2554,7 +2749,7 @@ AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
     return dil_sign_internal(P, signature, signature_len, NULL, 0,
-                             message, message_len, secret_key);
+                             message, message_len, NULL, secret_key);
 }
 
 AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
@@ -2567,10 +2762,13 @@ AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
                                signature, signature_len, public_key);
 }
 
-AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
+/* Shared body of the two external-interface signers; `rnd` selects the
+ * variant (NULL = deterministic, 32 bytes = hedged). */
+static ama_error_t dil_sign_ctx_variant(ama_ml_dsa_param_set_t ps,
                                         uint8_t *signature, size_t *signature_len,
                                         const uint8_t *message, size_t message_len,
                                         const uint8_t *ctx, size_t ctx_len,
+                                        const uint8_t *rnd,
                                         const uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     uint8_t prefix[DIL_CTX_PREFIX_MAX];
@@ -2585,8 +2783,38 @@ AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
         return rc;
     }
     rc = dil_sign_internal(P, signature, signature_len, prefix, prefix_len,
-                           message, message_len, secret_key);
+                           message, message_len, rnd, secret_key);
     ama_secure_memzero(prefix, sizeof(prefix));
+    return rc;
+}
+
+AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
+                                        uint8_t *signature, size_t *signature_len,
+                                        const uint8_t *message, size_t message_len,
+                                        const uint8_t *ctx, size_t ctx_len,
+                                        const uint8_t *secret_key) {
+    return dil_sign_ctx_variant(ps, signature, signature_len, message, message_len,
+                                ctx, ctx_len, NULL, secret_key);
+}
+
+AMA_API ama_error_t ama_ml_dsa_sign_hedged(ama_ml_dsa_param_set_t ps,
+                                           uint8_t *signature, size_t *signature_len,
+                                           const uint8_t *message, size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *secret_key) {
+    uint8_t rnd[DIL_RNDBYTES];
+    ama_error_t rc = dil_randombytes(rnd, sizeof rnd);
+
+    /* Fail closed.  FIPS 204 Algorithm 2 line 5 says a signer that cannot
+     * obtain rnd returns an error; silently falling back to zeros would
+     * hand the caller the deterministic variant under the hedged name. */
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(rnd, sizeof rnd);
+        return rc;
+    }
+    rc = dil_sign_ctx_variant(ps, signature, signature_len, message, message_len,
+                              ctx, ctx_len, rnd, secret_key);
+    ama_secure_memzero(rnd, sizeof rnd);
     return rc;
 }
 
@@ -2637,18 +2865,32 @@ AMA_API ama_error_t ama_dilithium_keypair_from_seed(const uint8_t xi[32],
     return ama_ml_dsa_keypair_from_seed(AMA_ML_DSA_65, xi, public_key, secret_key);
 }
 
+/* BREAKING in 5.0.0.  These two are the library's flagship ML-DSA-65
+ * signer/verifier (the Python `dilithium_sign`/`dilithium_verify` and
+ * `crypto_api.sign` route here), and they used to call ML-DSA.Sign_internal
+ * (FIPS 204 Algorithm 7) — mu = H(tr || M), with no domain separator.  FIPS
+ * 204 Sec 5.2 restricts that interface to testing and to protocols that do
+ * their own domain separation; the application interface is ML-DSA.Sign
+ * (Algorithm 2), which prepends 0x00 || len(ctx) || ctx.  A signature made
+ * the old way is rejected by every conforming verifier, and vice versa.
+ * They now use the external interface with the empty context, which is what
+ * "ML-DSA-65 signature" means everywhere else.
+ *
+ * The internal interface is still reachable, deliberately and by name:
+ * ama_ml_dsa_sign()/ama_ml_dsa_verify() are Algorithm 7/8 and the ACVP
+ * internal-interface vectors replay through them. */
 AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                        const uint8_t *message, size_t message_len,
                                        const uint8_t *secret_key) {
-    return ama_ml_dsa_sign(AMA_ML_DSA_65, signature, signature_len,
-                           message, message_len, secret_key);
+    return ama_ml_dsa_sign_ctx(AMA_ML_DSA_65, signature, signature_len,
+                               message, message_len, NULL, 0, secret_key);
 }
 
 AMA_API ama_error_t ama_dilithium_verify(const uint8_t *message, size_t message_len,
                                          const uint8_t *signature, size_t signature_len,
                                          const uint8_t *public_key) {
-    return ama_ml_dsa_verify(AMA_ML_DSA_65, message, message_len,
-                             signature, signature_len, public_key);
+    return ama_ml_dsa_verify_ctx(AMA_ML_DSA_65, message, message_len, NULL, 0,
+                                 signature, signature_len, public_key);
 }
 
 #ifdef AMA_TESTING_MODE

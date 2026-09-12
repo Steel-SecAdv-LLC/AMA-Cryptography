@@ -174,11 +174,21 @@ int main(void) {
 #else
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->argon2_g != ama_argon2_g_neon) {
+        /* `(void *)dt->argon2_g` is a function-pointer-to-object-pointer
+         * conversion, which ISO C forbids and -Wpedantic reports; it was the
+         * only such cast in the tree and it only ever fed a diagnostic
+         * printf.  Copying the pointer's object representation into an
+         * unsigned integer is defined behaviour and keeps the diagnostic
+         * (which kernel did the dispatcher install?) intact. */
+        uintmax_t installed = 0;
+        memcpy(&installed, &dt->argon2_g,
+               sizeof(dt->argon2_g) < sizeof(installed) ? sizeof(dt->argon2_g)
+                                                        : sizeof(installed));
         printf("  SKIP: dispatcher did not select the NEON Argon2 G\n"
-               "        kernel (argon2_g=%p, env opt-out, or future\n"
+               "        kernel (argon2_g=0x%jx, env opt-out, or future\n"
                "        ISA wiring landed first).  Nothing to compare\n"
                "        against the scalar reference.\n",
-               (void *)dt->argon2_g);
+               installed);
         return 77;
     }
 

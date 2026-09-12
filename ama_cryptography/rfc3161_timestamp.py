@@ -53,11 +53,8 @@ Use Cases:
   (the ``hmac`` layer of a crypto package, a signed transport, a trusted store)
 """
 
-import hashlib
 import http.client
 import logging
-import os as _os_mod
-import secrets
 import struct
 import threading
 import time
@@ -67,6 +64,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Dict, Generator, Literal, Mapping, NoReturn, Optional
 from urllib.parse import urlparse
+
+from ama_cryptography import pqc_backends
 
 _logger = logging.getLogger(__name__)
 
@@ -93,6 +92,7 @@ from ama_cryptography._asn1 import (
     der_sequence,
     oid_from_string,
 )
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import AmaCryptographyError
 
 # ---------------------------------------------------------------------------
@@ -308,13 +308,19 @@ _OID_CT_TSTINFO = "1.2.840.113549.1.9.16.1.4"
 #: Reverse of :data:`TSA_HASH_OIDS`, for reading a token's messageImprint.
 _HASH_BY_OID = {oid: name for name, oid in TSA_HASH_OIDS.items()}
 
-_HASH_FUNCS: Dict[str, Callable[[bytes], "hashlib._Hash"]] = {
-    "sha256": hashlib.sha256,
-    "sha384": hashlib.sha384,
-    "sha512": hashlib.sha512,
-    "sha3-256": hashlib.sha3_256,
-    "sha3-384": hashlib.sha3_384,
-    "sha3-512": hashlib.sha3_512,
+# Native one-shot digests (bytes -> digest bytes) for every algorithm
+# TSA_HASH_OIDS names.  These are this module's own FIPS 180-4 / FIPS 202
+# kernels; the previous table mapped to stdlib hashlib constructors, whose
+# every entry resolves to OpenSSL — an unauthorized vendor computing the
+# messageImprint this API exists to bind (INVARIANT-1).  ama_sha3_384 was
+# exported for exactly this table, so all six names stay supported.
+_HASH_FUNCS: Dict[str, Callable[[bytes], bytes]] = {
+    "sha256": pqc_backends.native_sha256,
+    "sha384": pqc_backends.native_sha384,
+    "sha512": pqc_backends.native_sha512,
+    "sha3-256": pqc_backends.native_sha3_256,
+    "sha3-384": pqc_backends.native_sha3_384,
+    "sha3-512": pqc_backends.native_sha3_512,
 }
 
 
@@ -646,8 +652,25 @@ def tst_info_nonce(tst_info: bytes) -> Optional[int]:
         if info.peek_tag() == 0x01:  # ordering BOOLEAN
             info.skip_any()
         if info.peek_tag() == 0x02:  # nonce
-            return int(info.read_integer())
+            nonce = int(info.read_integer())
+            # A hostile/compromised TSA can return a well-formed, GRANTED token
+            # whose nonce INTEGER is thousands of bytes.  The value is only ever
+            # equality-compared against the client's 64-bit request nonce, so an
+            # oversized one is definitionally a mismatch — but converting it with
+            # str() (as the mismatch-report path does) trips CPython's
+            # int_max_str_digits (4300) and raises a RAW ValueError that escapes
+            # the documented TimestampError-only contract.  Refuse an
+            # implausibly-large nonce here as malformed (fail-closed): 512 bits
+            # is ~8x the largest nonce any real TSA emits.
+            if nonce.bit_length() > 512:
+                raise TimestampError(
+                    "TSTInfo nonce is implausibly large "
+                    f"({nonce.bit_length()} bits); refusing a malformed token"
+                )
+            return nonce
         return None
+    except TimestampError:
+        raise
     except Exception as exc:
         raise TimestampError(f"malformed TSTInfo in RFC 3161 token: {exc}") from None
 
@@ -700,7 +723,7 @@ def verify_token_binding(data: bytes, token: bytes) -> bool:
             f"token's messageImprint uses hash OID {digest_oid}, which AMA does not "
             "implement; the binding cannot be checked"
         )
-    computed = _HASH_FUNCS[name](data).digest()
+    computed = _HASH_FUNCS[name](data)
     if len(computed) != len(hashed):
         return False
     # Constant-time: the comparison operand is attacker-supplied, and a length
@@ -974,7 +997,16 @@ class MockTSA:
         algo_bytes = hash_algorithm.encode("utf-8")
         algo_len = struct.pack(">I", len(algo_bytes))
         ts = struct.pack(">d", time.time())
-        nonce = _os_mod.urandom(32)
+        # Through the health-tested draw, like the real TSA nonce at the bottom
+        # of this file.  It is an HMAC KEY — `_hmac_sha256(nonce, payload)` is
+        # the token's integrity tag — so a stuck DRBG makes every mock token
+        # forgeable by anyone who has seen one.  Written as `_os_mod.urandom`,
+        # it was also the one bare draw in the shipped package that
+        # tests/test_invariant41_rng_sweep.py could not see: the sweep matched
+        # the dotted SPELLING `os.urandom`, and this module imported `os as
+        # _os_mod`.  That import is gone with its last use, and the sweep now
+        # resolves BINDINGS, so neither half of the miss can recur.
+        nonce = secure_token_bytes(32)
 
         payload = _MOCK_MAGIC + algo_len + algo_bytes + ts + data_hash
         # S3 fix: Use HMAC instead of raw SHA-256(nonce || payload) to
@@ -1146,13 +1178,13 @@ def get_timestamp(
 
     # ---- Compute data hash (needed for all modes) ----
     if hash_algorithm == "sha256":
-        data_hash = hashlib.sha256(data).digest()
+        data_hash = pqc_backends.native_sha256(data)
     elif hash_algorithm == "sha3-256":
-        data_hash = hashlib.sha3_256(data).digest()
+        data_hash = pqc_backends.native_sha3_256(data)
     elif hash_algorithm == "sha512":
-        data_hash = hashlib.sha512(data).digest()
+        data_hash = pqc_backends.native_sha512(data)
     elif hash_algorithm == "sha3-512":
-        data_hash = hashlib.sha3_512(data).digest()
+        data_hash = pqc_backends.native_sha3_512(data)
     else:
         raise ValueError(
             f"Unsupported hash algorithm: {hash_algorithm}. "
@@ -1210,7 +1242,15 @@ def get_timestamp(
     # A fresh 64-bit nonce per request, echoed back by the TSA into the TSTInfo.
     # RFC 3161 §2.4.2 makes the echo the client's only way to tell a fresh
     # response from a replayed one; `request_timestamp_token` checks it.
-    nonce = secrets.randbits(64)
+    #
+    # Drawn through secure_token_bytes, not secrets.randbits.  INVARIANT-41
+    # routes every draw in the shipped package through the continuous RNG
+    # health test, and this one had escaped it — not by exemption but because
+    # the sweep that enumerates "every bare draw" did not recognise
+    # `secrets.randbits` as a draw at all.  A replay nonce is exactly the kind
+    # of value a stuck generator ruins silently: repeat it and a replayed
+    # response passes the only freshness check the client has.
+    nonce = int.from_bytes(secure_token_bytes(8), "big")
     token = request_timestamp_token(data_hash, hash_algorithm, tsa_url, nonce=nonce, cert_req=True)
     return TimestampResult(
         token=token,
@@ -1233,7 +1273,7 @@ def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
     func = _HASH_FUNCS.get(algorithm)
     if func is None:
         return None
-    return func(data).digest()
+    return func(data)
 
 
 def verify_timestamp_binding(

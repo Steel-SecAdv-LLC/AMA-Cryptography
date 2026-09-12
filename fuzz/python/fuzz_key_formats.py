@@ -75,13 +75,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.key_formats as kf  # noqa: E402 -- follows the sys.path insert above
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same
-from ama_cryptography._asn1 import (  # noqa: E402 -- same
+import ama_cryptography.key_formats as kf  # noqa: E402 -- follows the sys.path insert above (FKF-001)
+import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (FKF-001)
+from ama_cryptography._asn1 import (  # noqa: E402 -- same (FKF-001)
     cbor_decode_canonical,
     cbor_encode_canonical,
 )
-from ama_cryptography.exceptions import (  # noqa: E402 -- same
+from ama_cryptography.exceptions import (  # noqa: E402 -- same (FKF-001)
     KeyFormatError,
     UnsupportedKeyFormatError,
 )
@@ -198,6 +198,43 @@ def _strip_pkcs8_attributes(data: bytes) -> bytes:
     return header + bytes(kept)
 
 
+def _pkcs8_der_is_an_encoder_output(der: bytes, key: kf.PrivateKey, label: str) -> None:
+    """The shared canonicality contract: DER the parser accepted must be one
+    of its own encoder's outputs for the decoded key (modulo the dropped
+    [0] attributes).  Factored out so the PEM path checks the SAME property
+    on the extracted body instead of exempting PEM-wrapped keys — the first
+    revision's pkcs8 target deferred to pem_private, and pem_private checked
+    nothing beyond exception hygiene."""
+    forms: list[bytes] = []
+    alg = kf.ALGORITHMS[key.algorithm]
+    arms = ("expandedKey", "both", "seed") if alg.kind == "pq" else ("auto",)
+    for include in (False, True):
+        for arm in arms:
+            try:
+                forms.append(key.to_pkcs8(include_public_key=include, pq_format=arm))
+            except ALLOWED:
+                continue  # e.g. a seed arm asked for on a key with no seed
+    if not forms:
+        raise FindingError(
+            f"{label}: accepted an input whose key cannot be re-encoded at all",
+            der,
+            label,
+        )
+    try:
+        candidate = _strip_pkcs8_attributes(der)
+    except (IndexError, ValueError):
+        candidate = der
+    if candidate not in forms:
+        raise FindingError(
+            f"{label}: accepted an encoding its own encoder never emits — "
+            f"{len(der)} bytes accepted, none of the {len(forms)} legitimate "
+            f"forms ({sorted({len(f) for f in forms})} bytes) match it, even "
+            "after removing the [0] attributes this module documents as dropped",
+            der,
+            label,
+        )
+
+
 def target_pkcs8(data: bytes) -> None:
     """PKCS#8, where canonicality has to be stated against the *option space*.
 
@@ -218,38 +255,12 @@ def target_pkcs8(data: bytes) -> None:
     key = kf.load_pkcs8(data)
     if data.startswith(PEM_PREFIX):
         # PEM handed in as bytes — canonical form is the PEM (see PEM_PREFIX).
-        # The DER inside it is checked when the same bytes reach this target
-        # through the pem_private path.
+        # The DER inside it is checked by _pkcs8_der_is_an_encoder_output via
+        # the pem_private target (which extracts the base64 body), so PEM
+        # inputs are not exempt from the canonicality contract on any path.
         return
 
-    forms: list[bytes] = []
-    alg = kf.ALGORITHMS[key.algorithm]
-    arms = ("expandedKey", "both", "seed") if alg.kind == "pq" else ("auto",)
-    for include in (False, True):
-        for arm in arms:
-            try:
-                forms.append(key.to_pkcs8(include_public_key=include, pq_format=arm))
-            except ALLOWED:
-                continue  # e.g. a seed arm asked for on a key with no seed
-    if not forms:
-        raise FindingError(
-            "load_pkcs8: accepted an input whose key cannot be re-encoded at all",
-            data,
-            "load_pkcs8",
-        )
-    try:
-        candidate = _strip_pkcs8_attributes(data)
-    except (IndexError, ValueError):
-        candidate = data
-    if candidate not in forms:
-        raise FindingError(
-            "load_pkcs8: accepted an encoding its own encoder never emits — "
-            f"{len(data)} bytes accepted, none of the {len(forms)} legitimate "
-            f"forms ({sorted({len(f) for f in forms})} bytes) match it, even "
-            "after removing the [0] attributes this module documents as dropped",
-            data,
-            "load_pkcs8",
-        )
+    _pkcs8_der_is_an_encoder_output(data, key, "load_pkcs8")
     # And the accepted bytes must survive a second pass unchanged.
     if kf.load_pkcs8(data).key != key.key:
         raise FindingError("load_pkcs8: not idempotent", data, "load_pkcs8")
@@ -265,7 +276,28 @@ def target_pem_public(data: bytes) -> None:
 
 
 def target_pem_private(data: bytes) -> None:
-    kf.load_pkcs8(data.decode("utf-8", "replace"))
+    text = data.decode("utf-8", "replace")
+    key = kf.load_pkcs8(text)
+    # Same canonicality contract as target_pkcs8, applied to the DER body the
+    # PEM carries: extract the base64 between the markers the way RFC 7468
+    # lays it out.  Extraction is best-effort — if the accepted text does not
+    # yield a decodable body here, the acceptance itself was through the
+    # loader's own tolerant path and exception hygiene remains the check.
+    import base64
+    import re as _re
+
+    match = _re.search(
+        r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(.*?)-----END",
+        text,
+        _re.S,
+    )
+    if match is None:
+        return
+    try:
+        der = base64.b64decode("".join(match.group(1).split()), validate=True)
+    except (ValueError, TypeError):
+        return
+    _pkcs8_der_is_an_encoder_output(der, key, "load_pkcs8(pem)")
 
 
 #: The COSE_Key labels this module emits: kty(1), crv(-1), x(-2), y(-3), d(-4).
@@ -598,7 +630,7 @@ def _write_artifact(directory: Path, finding: FindingError) -> Path:
 
 
 def run_campaign(seconds: float, seed: int, artifact_dir: Path, corpus_dir: Path | None) -> int:
-    rng = random.Random(seed)  # noqa: S311 -- deterministic fuzz-input generation, not key material
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311,E501 -- deterministic fuzz-input generation, not key material (FKF-002)
     seeds = build_seed_corpus(corpus_dir)
     pool = [data for _, data in seeds]
     print(f"seed={seed} corpus={len(seeds)} targets={len(TARGETS)} budget={seconds}s")
@@ -683,10 +715,24 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
     # run started cold, which is exactly the failure the module docstring says
     # the seed corpus exists to prevent ("a fuzzer from an empty corpus spends
     # its whole budget rediscovering that a key file begins with 0x30").
+    #
+    # Two things the seeds must get right, and neither was:
+    #
+    # `build_seed_corpus` returns (target_name, data) PAIRS, so writing each
+    # element straight out raised `TypeError: memoryview: a bytes-like object is
+    # required, not 'tuple'` — the --atheris lane died before Setup on every
+    # invocation.
+    #
+    # And `one()` above spends raw[0] as a target selector, so a seed file must
+    # carry that byte or every seed is dispatched to an arbitrary target with
+    # its own first byte eaten (a DER seed starting 0x30 always lands on
+    # index 48 % len(targets), and arrives truncated).  Prefix the selector that
+    # reproduces the pairing the corpus was built with.
     seed_dir = Path(tempfile.mkdtemp(prefix="ama-fuzz-seeds-"))
     seeds = build_seed_corpus(None)
-    for index, blob in enumerate(seeds):
-        (seed_dir / f"seed-{index:04d}").write_bytes(blob)
+    for index, (target_name, blob) in enumerate(seeds):
+        selector = targets.index(target_name)
+        (seed_dir / f"seed-{index:04d}").write_bytes(bytes([selector]) + blob)
     print(f"seeded with {len(seeds)} inputs in {seed_dir}")
 
     # argv[0] is the program name by libFuzzer/sys.argv convention and Setup
@@ -697,8 +743,18 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
     forwarded.extend(a for a in argv if a != "--atheris")
     forwarded.append(str(seed_dir))
 
-    with atheris.instrument_imports():
-        atheris.Setup(forwarded, one)
+    # instrument_all(), not instrument_imports(): the parsers under test
+    # (key_formats, _asn1, pqc_backends, exceptions) were imported at module
+    # scope long before this function runs, and instrument_imports()
+    # instruments only modules imported INSIDE its block — already-loaded
+    # entries in sys.modules are untouched.  So the previous form gave the
+    # engine zero coverage feedback from the code being fuzzed: the seeds
+    # loaded, and every mutation after them was blind search sold as
+    # coverage guidance.  instrument_all() rewrites everything already
+    # imported (Atheris's documented remedy for exactly this layout); it
+    # costs seconds at startup on a lane that is opt-in to begin with.
+    atheris.instrument_all()
+    atheris.Setup(forwarded, one)
     atheris.Fuzz()
     return 0
 

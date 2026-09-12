@@ -255,10 +255,16 @@ class TestModuleIntegrity:
         cached_mod = sys.modules.pop("ama_cryptography._integrity_signature", None)
         cached_attr = getattr(pkg, "_integrity_signature", None)
         if cached_attr is not None:
-            try:
-                delattr(pkg, "_integrity_signature")
-            except AttributeError:
-                pass
+            # No `except AttributeError` guard: it could never fire.  The
+            # package's module-level `__getattr__` raises for every name
+            # outside `_CRYPTO_API_EXPORTS`/`_KEY_FORMAT_EXPORTS`, and
+            # `_integrity_signature` is in neither — so `getattr` answering
+            # non-None proves the import system put it in `pkg.__dict__`,
+            # which is precisely when `delattr` succeeds.  A swallowed
+            # AttributeError here would have hidden the attribute surviving
+            # into the forced-ImportError window, which is the one thing this
+            # setup exists to prevent.
+            delattr(pkg, "_integrity_signature")
         if sig_path.exists():
             sig_path.rename(backup)
         try:

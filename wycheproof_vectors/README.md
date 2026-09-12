@@ -92,6 +92,9 @@ byte-identical to upstream so the recorded digests remain checkable);
 | `aes_gcm_test.json` | 316 |
 | `chacha20_poly1305_test.json` | 325 |
 | `ecdsa_secp256k1_sha256_test.json` | 476 |
+| `ecdsa_secp256r1_sha256_test.json` | 484 |
+| `ecdsa_secp384r1_sha384_test.json` | 504 |
+| `ecdsa_secp521r1_sha512_test.json` | 542 |
 | `ed25519_test.json` | 150 |
 | `hkdf_sha256_test.json` | 86 |
 | `hkdf_sha384_test.json` | 83 |
@@ -101,7 +104,14 @@ byte-identical to upstream so the recorded digests remain checkable);
 | `hmac_sha3_256_test.json` | 174 |
 | `hmac_sha512_test.json` | 174 |
 | `x25519_test.json` | 518 |
-| **Total** | **2,733** |
+| **Total** | **4,263** |
+
+The three NIST P-curve ECDSA files were vendored at 451ffea (2026-07-28) and
+this table was not updated, so it claimed 2,733 vectors over a corpus of
+4,263 — under-reporting by 1,530, every one of which the harness was in fact
+running. Recounted from the harness's own per-file output rather than by hand:
+
+    python wycheproof_vectors/run_wycheproof.py
 
 Wycheproof publishes no ML-KEM, ML-DSA or SLH-DSA vectors, so the
 post-quantum surface is not covered here; that remains ACVP's job

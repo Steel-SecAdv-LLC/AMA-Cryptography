@@ -261,7 +261,7 @@ class TestBatchVerifyEdgeCases:
         assert results[0] is False
 
     def test_batch_verify_max_size(self) -> None:
-        """64 entries (max batch size for donna) should work."""
+        """64 entries (the historical maximum batch size) should work."""
         from ama_cryptography.pqc_backends import native_ed25519_batch_verify
 
         entries = [_generate_random_entry(i) for i in range(64)]
@@ -271,11 +271,11 @@ class TestBatchVerifyEdgeCases:
         assert all(results), "All 64 valid entries should verify"
 
     def test_batch_verify_over_max_handled(self) -> None:
-        """65+ entries should be handled gracefully (donna processes in chunks)."""
+        """65+ entries should be handled gracefully."""
         from ama_cryptography.pqc_backends import native_ed25519_batch_verify
 
-        # donna internally processes in chunks of max_batch_size (64),
-        # so 65+ entries should still work via multiple batches
+        # The historical backend processed chunks of 64; the per-entry loop
+        # has no such boundary, and 65+ entries must still work
         entries = [_generate_random_entry(i) for i in range(65)]
         results = native_ed25519_batch_verify(entries)
 
@@ -430,9 +430,8 @@ def _load_ed25519_wycheproof_cases() -> list[_Ed25519Case]:
 
 class TestBatchVerifyWycheproofFullCorpus:
     """Drive the entire vendored C2SP/Wycheproof ``ed25519_test.json`` (150
-    vectors across 77 groups) through ``ama_ed25519_batch_verify`` — the donna
-    Bos-Carter multi-scalar routine plus the per-entry canonical-S override in
-    ``ed25519_donna_shim.c`` — not only the RFC 8032 + canonical-S subset the
+    vectors across 77 groups) through ``ama_ed25519_batch_verify`` — a per-entry
+    loop over the single verifier — not only the RFC 8032 + canonical-S subset the
     rest of this file covers. The single-signature path already runs this corpus
     in ``wycheproof_vectors/run_wycheproof.py``; these tests hold the batch path
     to the same verdicts.
@@ -506,9 +505,9 @@ class TestBatchVerifyWycheproofFullCorpus:
 
     def test_signature_malleability_cases_rejected_in_batch(self) -> None:
         """The non-canonical-S (`SignatureMalleability`) vectors must be rejected
-        on the batch path too — the guarantee is only real if the donna batch
-        wrapper re-applies the canonical-S check its own `ed25519_sign_open`
-        does not (ed25519_donna_shim.c)."""
+        on the batch path too — historically the vendored backend's batch
+        wrapper had to re-apply a canonical-S check its own routine skipped;
+        the per-entry loop inherits it from the single verifier."""
         from ama_cryptography.pqc_backends import native_ed25519_batch_verify
 
         mal = [

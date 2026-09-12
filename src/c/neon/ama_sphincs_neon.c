@@ -26,6 +26,11 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
+
+/* Defined in ama_consttime.c; forward-declared to avoid pulling the full
+ * public header into this kernel TU (mirrors src/c/ama_sha256.c). */
+extern void ama_secure_memzero(void *ptr, size_t len);
 
 /* SHA-256 round constants */
 static const uint32_t K256[64] = {
@@ -192,6 +197,13 @@ void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
 
     state[0]+=a; state[1]+=b; state[2]+=c; state[3]+=d;
     state[4]+=e; state[5]+=f; state[6]+=g; state[7]+=h;
+
+    /* w[0..15] is the verbatim input block — HMAC K^ipad / K^opad when this
+     * fallback is reached through ama_sha256.c's runtime dispatch (the CPU
+     * can report SHA2 support at runtime while this TU was compiled without
+     * +sha2).  Scrub the schedule before the frame dies, exactly as
+     * sha256_compress_scalar in ama_sha256.c does (INVARIANT-6/12). */
+    ama_secure_memzero(w, sizeof(w));
 }
 #endif /* __ARM_FEATURE_SHA2 */
 

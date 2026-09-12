@@ -15,7 +15,7 @@
 # promoted to error via `WarningsAsErrors: '*'` below; the corresponding
 # CI job (`.github/workflows/static-analysis.yml::clang-tidy`) no
 # longer carries `continue-on-error: true` or an `exit 0` trailer.  A
-# new finding fails the workflow.  Four checks that the audit
+# new finding fails the workflow.  Three checks that the audit
 # Issue 9 close-out walk surfaced as genuinely incompatible with the
 # project's cryptographic-C style or as known false-positive sources
 # are explicitly dropped from the `Checks:` list with a one-line
@@ -24,15 +24,23 @@
 # doesn't belong on the list, drop it explicitly, do not pretend it's
 # enforced).
 #
-# Inline `// NOLINT(check-name)` comments are subject to INVARIANT-13
-# (justification + tracking ID required) — same hygiene policy as
-# ruff `# noqa` / bandit `# nosec` markers.  As of the audit Issue 9
-# close-out the codebase carries exactly one NOLINT (in
-# `src/c/ed25519_donna_shim.c::ama_ed25519_point_from_scalar`,
-# suppressing a clang-analyzer false positive on vendor donna code).
-# Adding a new NOLINT to silence a category-wide noise pattern is the
-# wrong answer; either fix the code, or drop the category from
-# `Checks:` here with a rationale.
+# Inline suppression comments are FORBIDDEN in the trees this config
+# governs.  INVARIANT-13 words it as "absolutely forbidden ... regardless
+# of justification" for `src/c/` and `include/`, which is every file this
+# job runs over, and as of 5.0.0 `tools/check_suppression_hygiene.py`
+# enforces it: a second pass scans every non-vendored `.c`/`.h` under
+# those roots and fails on any suppression marker, with no justification
+# escape hatch.  (Until then that pass did not exist — the checker
+# collected Python files only, so the forbidden-directory branch was
+# unreachable and the tree carried one live suppression while the gate
+# printed "all suppressions are properly justified" and exited 0.)
+#
+# So the answer to a finding is to fix the code, or to drop the category
+# from `Checks:` below with a rationale.  The one suppression this
+# codebase used to carry — three clang-analyzer uninitialised-read checks
+# in the shim of the since-removed vendored Ed25519 backend — was resolved
+# the first way (zero-initialising the two locals at declaration), and the
+# shim itself is gone with the backend.
 
 Checks: >
   -*,
@@ -62,10 +70,9 @@ Checks: >
   -cert-dcl51-cpp,
   -readability-redundant-declaration,
   -clang-analyzer-deadcode.DeadStores,
-  -concurrency-mt-unsafe,
-  -clang-analyzer-core.UndefinedBinaryOperatorResult
+  -concurrency-mt-unsafe
 
-# Four checks dropped from `Checks:` above with rationale (audit
+# Three checks dropped from `Checks:` above with rationale (audit
 # Issue 9 close-out walk — surfaced ~50 false-positive-class findings
 # that no inline NOLINT could honestly justify):
 #
@@ -98,18 +105,30 @@ Checks: >
 #     no-op refactor (e.g., a project-side `safe_getenv` wrapper)
 #     that adds zero safety.
 #
-#   clang-analyzer-core.UndefinedBinaryOperatorResult — fires once,
-#     from `src/c/ed25519_donna_shim.c::ama_ed25519_point_from_scalar`
-#     calling into `src/c/vendor/ed25519-donna/curve25519-donna-64bit.h:85`.
-#     The interprocedural pass loses track of the vendor donna macro
-#     that initialises the field-element argument and flags the read
-#     as "garbage".  The kernel is KAT-verified and vendor code gets
-#     no project-side modifications.  Dropping ONLY this one check
-#     keeps the rest of `clang-analyzer-*` (the security-bearing
-#     family) enforced.  Note: a NOLINT on the calling line in
-#     ed25519_donna_shim.c is preserved for the older clang-tidy
-#     releases that report the warning at the call site rather than
-#     at the vendor source location.
+# clang-analyzer-core.UndefinedBinaryOperatorResult is NO LONGER dropped
+# here.  It was, tree-wide, which left it dead on the ~40 C sources where
+# it works.  It is now enabled globally and reports "garbage value" on
+# exactly four reads, in exactly three files: ama_dilithium.c
+# (dil_poly_pointwise_montgomery_cached), ama_kyber.c (basemul and poly_sub)
+# and ama_nistp.c (nistp_to_bytes) -- named by function, not line, so this
+# note does not rot the way a line-pinned suppression did.  Each is an
+# interprocedural false positive with one root:
+# the path-sensitive engine explores a call chain in which a fill loop
+# (e.g. nistp_select's `for (i = 0; i < nl; i++)`) runs ZERO times — which
+# requires a runtime limb count of nl == 0, impossible by construction for
+# every shipped curve — and so concludes the output buffer was "returned
+# without writing".  The only source "fix" is to zero-initialise a large set
+# of hot ECDSA/NTT output buffers purely to satisfy the false path, with no
+# safety gain (the ACVP/KAT suites exercise these exhaustively) — the
+# performance theatre the project forbids.  So instead of dropping the whole
+# category, the CI job (static-analysis.yml::clang-tidy) appends a per-FILE
+# `--checks=-clang-analyzer-core.UndefinedBinaryOperatorResult` for exactly
+# those three files and runs the check fail-closed on every other source.
+# The exclusion is named in one visible place (the CI loop), not per-site
+# inline (INVARIANT-13 forbids NOLINT under src/c/, enforced by
+# tools/check_suppression_hygiene.py), and tests/test_compiler_warning_gate.py
+# pins the excluded set so a fourth file — or a fix that makes one of these
+# three pass — fails the gate until the list is corrected.
 
 # WarningsAsErrors flips every enabled check above to an ERROR.  See
 # the header for the audit Issue 9 close-out rationale.  PRs that
@@ -119,11 +138,23 @@ Checks: >
 WarningsAsErrors: '*'
 
 # Header filter:
-#   We only check our own headers (src/c/, include/).  Vendored sources
-#   under src/c/vendor/ and third-party headers under /usr/include are
-#   excluded — clang-tidy would otherwise drown the output in third-
-#   party-noise.
-HeaderFilterRegex: '^(.*/)?(src/c|include)/(?!vendor/).*\.h$'
+#   We only check our own headers (src/c/, include/); system headers
+#   under /usr/include are excluded — clang-tidy would otherwise drown
+#   the output in third-party noise.
+#
+#   POSITIVE alternation over the real header directories, in POSIX ERE.
+#   The previous spelling excluded vendor/ with a lookahead —
+#   '(?!vendor/)' — which llvm::Regex does not support: the pattern
+#   compiled invalid, Regex::match() answered false for EVERYTHING, no
+#   error was printed, and clang-tidy silently suppressed every
+#   diagnostic originating in the project's own headers.  Reproduced with
+#   clang-tidy 18.1.3: a bugprone-assignment-in-if-condition planted in a
+#   src/c header was reported 0 times under the lookahead filter and
+#   reported under this one — so the fail-closed `WarningsAsErrors: '*'`
+#   gate below covered no header code at all.  Enumerating the permitted
+#   subdirectories also means a NEW subdirectory gets a deliberate
+#   decision here instead of the default.
+HeaderFilterRegex: '^(.*/)?(include/.*\.h|src/c/[^/]+\.h|src/c/(avx2|internal|neon|sve2)/[^/]+\.h)$'
 
 # Format style — match the project's clang-format config.
 FormatStyle: file

@@ -4,8 +4,10 @@
  * @file fe51.h
  * @brief GF(2^255 - 19) field arithmetic — radix 2^51 representation
  *
- * 5-limb representation using uint64_t limbs and __uint128_t intermediates.
- * Each limb holds at most 51 bits in reduced form.
+ * 5-limb representation using uint64_t limbs and 128-bit intermediates —
+ * the native unsigned __int128 on GCC/Clang, a two-word accumulator on
+ * _umul128 / __umulh on MSVC (see fe51_wide below).  Each limb holds at most
+ * 51 bits in reduced form.
  *
  * This representation is optimized for 64-bit platforms: field multiplication
  * requires only 25 cross-products (vs 100 in radix 2^25.5 with 10 limbs).
@@ -15,20 +17,91 @@
 #ifndef AMA_FE51_H
 #define AMA_FE51_H
 
-/* fe51 requires a native 128-bit integer type. GCC/Clang on 64-bit
- * targets define `__SIZEOF_INT128__ == 16`; MSVC (including clang-cl)
- * and 32-bit targets typically do not. Callers should check
- * `AMA_FE51_AVAILABLE` before referencing any fe51_* symbol. */
-#if defined(__SIZEOF_INT128__)
+/* fe51 needs a 64 x 64 -> 128-bit product.  GCC/Clang on 64-bit targets
+ * provide unsigned __int128 (`__SIZEOF_INT128__ == 16`); MSVC on x64 and
+ * ARM64 provides the _umul128 / __umulh intrinsics instead, and the
+ * accumulator below is written once over a small "wide" type that is the
+ * native 128-bit integer on the former and a two-word struct on the latter,
+ * so both toolchains compile the same arithmetic text and produce the same
+ * bytes.  32-bit targets have neither; callers check `AMA_FE51_AVAILABLE`
+ * before referencing any fe51_* symbol. */
+#if defined(__SIZEOF_INT128__) || (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64)))
 
 #define AMA_FE51_AVAILABLE 1
 
 #include <stdint.h>
 #include <string.h>
 
+#if defined(__GNUC__) || defined(__clang__)
+#define FE51_INLINE static inline __attribute__((hot, always_inline))
+#define FE51_MAYBE_UNUSED static __attribute__((hot, unused))
+#else
+#define FE51_INLINE static __forceinline
+#define FE51_MAYBE_UNUSED static
+#endif
+
 typedef uint64_t fe51[5];
 
 #define FE51_MASK51 ((uint64_t)0x7ffffffffffff)  /* (1 << 51) - 1 */
+
+/* ---- 128-bit accumulator ---------------------------------------------------
+ * fe51_wide_mul(a, b)      the full 128-bit product a * b
+ * fe51_wide_add(x, y)      x + y (no overflow for the sums below: < 2^115)
+ * fe51_wide_add_u64(x, c)  x + c
+ * fe51_wide_low(x)         the low 64 bits
+ * fe51_wide_shr51(x)       (x >> 51) as 64 bits (x < 2^115, so it fits)
+ * On GCC/Clang every one of these is the native operation and the compiler
+ * emits exactly what it emitted for the inline __int128 expressions. */
+#if defined(__SIZEOF_INT128__)
+
+__extension__ typedef unsigned __int128 fe51_wide;
+
+FE51_INLINE fe51_wide fe51_wide_mul(uint64_t a, uint64_t b) { return (fe51_wide)a * b; }
+FE51_INLINE fe51_wide fe51_wide_add(fe51_wide x, fe51_wide y) { return x + y; }
+FE51_INLINE fe51_wide fe51_wide_add_u64(fe51_wide x, uint64_t c) { return x + c; }
+FE51_INLINE uint64_t fe51_wide_low(fe51_wide x) { return (uint64_t)x; }
+FE51_INLINE uint64_t fe51_wide_shr51(fe51_wide x) { return (uint64_t)(x >> 51); }
+
+#else /* MSVC x64 / ARM64 */
+
+#include <intrin.h>
+
+typedef struct {
+    uint64_t lo, hi;
+} fe51_wide;
+
+FE51_INLINE fe51_wide fe51_wide_mul(uint64_t a, uint64_t b) {
+    fe51_wide r;
+#if defined(_M_X64)
+    r.lo = _umul128(a, b, &r.hi);
+#else
+    r.lo = a * b;
+    r.hi = __umulh(a, b);
+#endif
+    return r;
+}
+FE51_INLINE fe51_wide fe51_wide_add(fe51_wide x, fe51_wide y) {
+    fe51_wide r;
+    r.lo = x.lo + y.lo;
+    r.hi = x.hi + y.hi + (r.lo < x.lo);
+    return r;
+}
+FE51_INLINE fe51_wide fe51_wide_add_u64(fe51_wide x, uint64_t c) {
+    fe51_wide r;
+    r.lo = x.lo + c;
+    r.hi = x.hi + (r.lo < c);
+    return r;
+}
+FE51_INLINE uint64_t fe51_wide_low(fe51_wide x) { return x.lo; }
+FE51_INLINE uint64_t fe51_wide_shr51(fe51_wide x) {
+#if defined(_M_X64)
+    return __shiftright128(x.lo, x.hi, 51);
+#else
+    return (x.lo >> 51) | (x.hi << 13);
+#endif
+}
+
+#endif /* 128-bit accumulator */
 
 static inline void fe51_0(fe51 h) {
     memset(h, 0, 5 * sizeof(uint64_t));  // PUBLIC-DATA: h — fe51_0 sets the radix-2^51 field element to the additive identity 0; the zero value IS the load-bearing semantics (used as the ladder's initial X1 / Z0 identity), not a placeholder to be overwritten — the post-init read of h is exactly the read of 0
@@ -185,20 +258,20 @@ static inline void fe51_cswap(fe51 p, fe51 q, uint64_t b) {
  * using 128-bit intermediates before reducing.
  */
 static inline void fe51_mul_121665(fe51 h, const fe51 f) {
-    typedef unsigned __int128 uint128_t;
-    uint128_t c;
+    fe51_wide c;
     uint64_t carry;
+    uint64_t r0, r1, r2, r3, r4;
 
-    c = (uint128_t)f[0] * 121665;
-    uint64_t r0 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
-    c = (uint128_t)f[1] * 121665 + carry;
-    uint64_t r1 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
-    c = (uint128_t)f[2] * 121665 + carry;
-    uint64_t r2 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
-    c = (uint128_t)f[3] * 121665 + carry;
-    uint64_t r3 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
-    c = (uint128_t)f[4] * 121665 + carry;
-    uint64_t r4 = (uint64_t)c & FE51_MASK51; carry = (uint64_t)(c >> 51);
+    c = fe51_wide_mul(f[0], 121665);
+    r0 = fe51_wide_low(c) & FE51_MASK51; carry = fe51_wide_shr51(c);
+    c = fe51_wide_add_u64(fe51_wide_mul(f[1], 121665), carry);
+    r1 = fe51_wide_low(c) & FE51_MASK51; carry = fe51_wide_shr51(c);
+    c = fe51_wide_add_u64(fe51_wide_mul(f[2], 121665), carry);
+    r2 = fe51_wide_low(c) & FE51_MASK51; carry = fe51_wide_shr51(c);
+    c = fe51_wide_add_u64(fe51_wide_mul(f[3], 121665), carry);
+    r3 = fe51_wide_low(c) & FE51_MASK51; carry = fe51_wide_shr51(c);
+    c = fe51_wide_add_u64(fe51_wide_mul(f[4], 121665), carry);
+    r4 = fe51_wide_low(c) & FE51_MASK51; carry = fe51_wide_shr51(c);
 
     r0 += carry * 19;
     carry = r0 >> 51; r0 &= FE51_MASK51; r1 += carry;
@@ -213,7 +286,7 @@ static inline void fe51_sub(fe51 h, const fe51 f, const fe51 g) {
      * sub can be input to another sub. Without reduction, limbs grow past
      * 2^53 and exceed the bias, causing uint64_t underflow. Adding a carry
      * chain after the biased subtraction keeps limbs in [0, ~2^52) and
-     * prevents cascading overflow. This matches donna64's sub_reduce. */
+     * prevents cascading overflow (the classic radix-2^51 sub_reduce). */
     uint64_t t0, t1, t2, t3, t4, c;
     t0 = (f[0] + 0x1FFFFFFFFFFFB4ULL) - g[0];  /* 4p0 = 2^53 - 76 */
     t1 = (f[1] + 0x1FFFFFFFFFFFFCULL) - g[1];  /* 4p1 = 2^53 - 4  */
@@ -227,6 +300,70 @@ static inline void fe51_sub(fe51 h, const fe51 f, const fe51 g) {
     c = t3 >> 51; t4 += c; t3 &= FE51_MASK51;
     c = t4 >> 51; t0 += c * 19; t4 &= FE51_MASK51;
     h[0] = t0; h[1] = t1; h[2] = t2; h[3] = t3; h[4] = t4;
+}
+
+/*
+ * Carry-free subtractions for the group law.
+ *
+ * fe51_sub above ends with a carry chain, which is a dependent sequence of
+ * about fifteen instructions on a path that otherwise consists of independent
+ * limb operations.  In the Edwards formulas nearly every subtraction result
+ * is consumed by a multiplication, and fe51_mul / fe51_sq accept limbs
+ * wider than 51 bits.  The binding limit is the unscaled column h4 =
+ * f0g4+..+f4g0 <= 5L^2: the final reduction folds c4 = h4 >> 51 back as
+ * r0 += c4 * 19 in 64-bit arithmetic, so 19*c4 must stay below 2^64, i.e.
+ * L must stay below ~2^54.2 (and every accumulator below 2^115, the width
+ * fe51_wide_shr51 narrows to; see the note above).  All GE_FE_SUB_S call
+ * sites are inside that bound: an interval model over every group-law
+ * site (tests/test_fe51_lazy_reduction_bounds.py) puts the tightest,
+ * ge_dbl's E*F, at 19*c4 = 0xF0780000000164B2 in the per-limb worst case,
+ * 6.5%% below 2^64.  (An earlier revision of this comment said "~16%%";
+ * that figure was not derived from the limb bounds.)
+ * So a subtraction whose result feeds a multiply only needs to avoid
+ * underflow, which a bias of k*p (k*p ≡ 0 mod p) provides, and can leave the
+ * carry to the multiplier's own reduction.  That turns a ~15-cycle dependent
+ * chain into five independent one-cycle operations on the ladder's critical
+ * path.
+ *
+ * The two biases are chosen by the bound on the subtrahend g, which the
+ * caller states at each use in src/c/internal/ama_ed25519_ge.h:
+ *
+ *   fe51_sub_2p:  every g limb <= 2^52 - 38.  Holds for a single fe51_mul /
+ *                 fe51_sq output (limbs 0, 2, 3, 4 below 2^51; limb 1 below
+ *                 2^51 + 2^13).  It does NOT hold for a fe51_add of two such
+ *                 outputs: limb 0 of the sum reaches 2^52 - 2 and limb 1
+ *                 reaches 2^52 + 2^14, both past the bias, so a sum-of-two-
+ *                 products subtrahend underflows and wraps — such a
+ *                 subtrahend must go through fe51_sub_8p.  Every
+ *                 GE_FE_SUB_M site in ama_ed25519_ge.h subtracts a single
+ *                 product; the sums use GE_FE_SUB_S.
+ *                 Result limbs are below f's limbs + 2^52.
+ *   fe51_sub_8p:  every g limb <= 2^54 - 152.  Holds for any result of
+ *                 fe51_sub_2p on those inputs (below 2^53) and any sum of
+ *                 two such values.  Result limbs are below f's limbs + 2^54.
+ *
+ * The exact limb values of 2p and 8p in this radix:
+ *   2p = (2^52 - 38, 2^52 - 2, 2^52 - 2, 2^52 - 2, 2^52 - 2)
+ *   8p = (2^54 - 152, 2^54 - 8, 2^54 - 8, 2^54 - 8, 2^54 - 8)
+ * Each is exactly k * (2^255 - 19) read as a five-limb radix-2^51 number, so
+ * the result is congruent to f - g and never underflows under the stated
+ * bound.  Outputs are consumed only by fe51_mul / fe51_sq, whose reduction
+ * brings limbs back below 2^52, or by fe51_tobytes, which carries fully.
+ */
+static inline void fe51_sub_2p(fe51 h, const fe51 f, const fe51 g) {
+    h[0] = (f[0] + 0xFFFFFFFFFFFDAULL) - g[0];
+    h[1] = (f[1] + 0xFFFFFFFFFFFFEULL) - g[1];
+    h[2] = (f[2] + 0xFFFFFFFFFFFFEULL) - g[2];
+    h[3] = (f[3] + 0xFFFFFFFFFFFFEULL) - g[3];
+    h[4] = (f[4] + 0xFFFFFFFFFFFFEULL) - g[4];
+}
+
+static inline void fe51_sub_8p(fe51 h, const fe51 f, const fe51 g) {
+    h[0] = (f[0] + 0x3FFFFFFFFFFF68ULL) - g[0];
+    h[1] = (f[1] + 0x3FFFFFFFFFFFF8ULL) - g[1];
+    h[2] = (f[2] + 0x3FFFFFFFFFFFF8ULL) - g[2];
+    h[3] = (f[3] + 0x3FFFFFFFFFFFF8ULL) - g[3];
+    h[4] = (f[4] + 0x3FFFFFFFFFFFF8ULL) - g[4];
 }
 
 static inline void fe51_neg(fe51 h, const fe51 f) {
@@ -250,13 +387,11 @@ static inline void fe51_carry(fe51 h) {
 /**
  * Field multiplication: h = f * g mod (2^255 - 19)
  *
- * Uses __uint128_t for 128-bit intermediate products.
+ * Uses 128-bit intermediate products (fe51_wide).
  * 25 multiplications (5x5 schoolbook) with reduction via 2^255 ≡ 19.
  * Products involving limbs that overflow 2^255 are multiplied by 19.
  */
-static inline __attribute__((hot, always_inline)) void fe51_mul(fe51 h, const fe51 f, const fe51 g) {
-    typedef unsigned __int128 uint128_t;
-
+FE51_INLINE void fe51_mul(fe51 h, const fe51 f, const fe51 g) {
     uint64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
     uint64_t g0 = g[0], g1 = g[1], g2 = g[2], g3 = g[3], g4 = g[4];
 
@@ -265,40 +400,52 @@ static inline __attribute__((hot, always_inline)) void fe51_mul(fe51 h, const fe
     uint64_t g2_19 = g2 * 19;
     uint64_t g3_19 = g3 * 19;
     uint64_t g4_19 = g4 * 19;
+    fe51_wide h0, h1, h2, h3, h4;
+    uint64_t r0, r1, r2, r3, r4, c;
 
-    uint128_t h0 = (uint128_t)f0 * g0 + (uint128_t)f1 * g4_19
-                 + (uint128_t)f2 * g3_19 + (uint128_t)f3 * g2_19
-                 + (uint128_t)f4 * g1_19;
+    h0 = fe51_wide_mul(f0, g0);
+    h0 = fe51_wide_add(h0, fe51_wide_mul(f1, g4_19));
+    h0 = fe51_wide_add(h0, fe51_wide_mul(f2, g3_19));
+    h0 = fe51_wide_add(h0, fe51_wide_mul(f3, g2_19));
+    h0 = fe51_wide_add(h0, fe51_wide_mul(f4, g1_19));
 
-    uint128_t h1 = (uint128_t)f0 * g1 + (uint128_t)f1 * g0
-                 + (uint128_t)f2 * g4_19 + (uint128_t)f3 * g3_19
-                 + (uint128_t)f4 * g2_19;
+    h1 = fe51_wide_mul(f0, g1);
+    h1 = fe51_wide_add(h1, fe51_wide_mul(f1, g0));
+    h1 = fe51_wide_add(h1, fe51_wide_mul(f2, g4_19));
+    h1 = fe51_wide_add(h1, fe51_wide_mul(f3, g3_19));
+    h1 = fe51_wide_add(h1, fe51_wide_mul(f4, g2_19));
 
-    uint128_t h2 = (uint128_t)f0 * g2 + (uint128_t)f1 * g1
-                 + (uint128_t)f2 * g0 + (uint128_t)f3 * g4_19
-                 + (uint128_t)f4 * g3_19;
+    h2 = fe51_wide_mul(f0, g2);
+    h2 = fe51_wide_add(h2, fe51_wide_mul(f1, g1));
+    h2 = fe51_wide_add(h2, fe51_wide_mul(f2, g0));
+    h2 = fe51_wide_add(h2, fe51_wide_mul(f3, g4_19));
+    h2 = fe51_wide_add(h2, fe51_wide_mul(f4, g3_19));
 
-    uint128_t h3 = (uint128_t)f0 * g3 + (uint128_t)f1 * g2
-                 + (uint128_t)f2 * g1 + (uint128_t)f3 * g0
-                 + (uint128_t)f4 * g4_19;
+    h3 = fe51_wide_mul(f0, g3);
+    h3 = fe51_wide_add(h3, fe51_wide_mul(f1, g2));
+    h3 = fe51_wide_add(h3, fe51_wide_mul(f2, g1));
+    h3 = fe51_wide_add(h3, fe51_wide_mul(f3, g0));
+    h3 = fe51_wide_add(h3, fe51_wide_mul(f4, g4_19));
 
-    uint128_t h4 = (uint128_t)f0 * g4 + (uint128_t)f1 * g3
-                 + (uint128_t)f2 * g2 + (uint128_t)f3 * g1
-                 + (uint128_t)f4 * g0;
+    h4 = fe51_wide_mul(f0, g4);
+    h4 = fe51_wide_add(h4, fe51_wide_mul(f1, g3));
+    h4 = fe51_wide_add(h4, fe51_wide_mul(f2, g2));
+    h4 = fe51_wide_add(h4, fe51_wide_mul(f3, g1));
+    h4 = fe51_wide_add(h4, fe51_wide_mul(f4, g0));
 
     /* Carry chain */
-    uint64_t c;
-    c = (uint64_t)(h0 >> 51); h1 += c; h[0] = (uint64_t)h0 & FE51_MASK51;
-    c = (uint64_t)(h1 >> 51); h2 += c; h[1] = (uint64_t)h1 & FE51_MASK51;
-    c = (uint64_t)(h2 >> 51); h3 += c; h[2] = (uint64_t)h2 & FE51_MASK51;
-    c = (uint64_t)(h3 >> 51); h4 += c; h[3] = (uint64_t)h3 & FE51_MASK51;
-    c = (uint64_t)(h4 >> 51);           h[4] = (uint64_t)h4 & FE51_MASK51;
-    h[0] += c * 19;
-    /* Second carry from h[0] to h[1] to keep h[0] bounded at ~51 bits.
-     * Without this, chained mul/sq cause h[0] to grow beyond 2^63,
+    c = fe51_wide_shr51(h0); h1 = fe51_wide_add_u64(h1, c); r0 = fe51_wide_low(h0) & FE51_MASK51;
+    c = fe51_wide_shr51(h1); h2 = fe51_wide_add_u64(h2, c); r1 = fe51_wide_low(h1) & FE51_MASK51;
+    c = fe51_wide_shr51(h2); h3 = fe51_wide_add_u64(h3, c); r2 = fe51_wide_low(h2) & FE51_MASK51;
+    c = fe51_wide_shr51(h3); h4 = fe51_wide_add_u64(h4, c); r3 = fe51_wide_low(h3) & FE51_MASK51;
+    c = fe51_wide_shr51(h4);                                 r4 = fe51_wide_low(h4) & FE51_MASK51;
+    r0 += c * 19;
+    /* Second carry from limb 0 to limb 1 to keep limb 0 bounded at ~51
+     * bits.  Without this, chained mul/sq cause limb 0 to grow beyond 2^63,
      * overflowing uint64_t precomputations (f0*2, g1*19, etc.). */
-    c = h[0] >> 51; h[0] &= FE51_MASK51;
-    h[1] += c;
+    c = r0 >> 51; r0 &= FE51_MASK51;
+    r1 += c;
+    h[0] = r0; h[1] = r1; h[2] = r2; h[3] = r3; h[4] = r4;
 }
 
 /**
@@ -307,9 +454,7 @@ static inline __attribute__((hot, always_inline)) void fe51_mul(fe51 h, const fe
  * Exploits symmetry: f[i]*f[j] = f[j]*f[i], so we compute once and double.
  * 15 multiplications (vs 25 for generic mul).
  */
-static inline __attribute__((hot, always_inline)) void fe51_sq(fe51 h, const fe51 f) {
-    typedef unsigned __int128 uint128_t;
-
+FE51_INLINE void fe51_sq(fe51 h, const fe51 f) {
     uint64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
 
     uint64_t f0_2 = f0 * 2;
@@ -318,39 +463,47 @@ static inline __attribute__((hot, always_inline)) void fe51_sq(fe51 h, const fe5
 
     uint64_t f1_38 = f1 * 38;
     uint64_t f2_19 = f2 * 19;
+    uint64_t f2_38 = f2 * 38;
     uint64_t f3_19 = f3 * 19;
     uint64_t f3_38 = f3 * 38;
     uint64_t f4_19 = f4 * 19;
+    fe51_wide h0, h1, h2, h3, h4;
+    uint64_t r0, r1, r2, r3, r4, c;
 
-    uint128_t h0 = (uint128_t)f0 * f0     + (uint128_t)f1_38 * f4
-                 + (uint128_t)f2_19 * f3_2;
+    h0 = fe51_wide_mul(f0, f0);
+    h0 = fe51_wide_add(h0, fe51_wide_mul(f1_38, f4));
+    h0 = fe51_wide_add(h0, fe51_wide_mul(f2_19, f3_2));
 
-    uint128_t h1 = (uint128_t)f0_2 * f1   + (uint128_t)f2_19 * f4 * 2
-                 + (uint128_t)f3_19 * f3;
+    h1 = fe51_wide_mul(f0_2, f1);
+    h1 = fe51_wide_add(h1, fe51_wide_mul(f2_38, f4));
+    h1 = fe51_wide_add(h1, fe51_wide_mul(f3_19, f3));
 
-    uint128_t h2 = (uint128_t)f0_2 * f2   + (uint128_t)f1 * f1
-                 + (uint128_t)f3_38 * f4;
+    h2 = fe51_wide_mul(f0_2, f2);
+    h2 = fe51_wide_add(h2, fe51_wide_mul(f1, f1));
+    h2 = fe51_wide_add(h2, fe51_wide_mul(f3_38, f4));
 
-    uint128_t h3 = (uint128_t)f0_2 * f3   + (uint128_t)f1_2 * f2
-                 + (uint128_t)f4_19 * f4;
+    h3 = fe51_wide_mul(f0_2, f3);
+    h3 = fe51_wide_add(h3, fe51_wide_mul(f1_2, f2));
+    h3 = fe51_wide_add(h3, fe51_wide_mul(f4_19, f4));
 
-    uint128_t h4 = (uint128_t)f0_2 * f4   + (uint128_t)f1_2 * f3
-                 + (uint128_t)f2 * f2;
+    h4 = fe51_wide_mul(f0_2, f4);
+    h4 = fe51_wide_add(h4, fe51_wide_mul(f1_2, f3));
+    h4 = fe51_wide_add(h4, fe51_wide_mul(f2, f2));
 
     /* Carry chain */
-    uint64_t c;
-    c = (uint64_t)(h0 >> 51); h1 += c; h[0] = (uint64_t)h0 & FE51_MASK51;
-    c = (uint64_t)(h1 >> 51); h2 += c; h[1] = (uint64_t)h1 & FE51_MASK51;
-    c = (uint64_t)(h2 >> 51); h3 += c; h[2] = (uint64_t)h2 & FE51_MASK51;
-    c = (uint64_t)(h3 >> 51); h4 += c; h[3] = (uint64_t)h3 & FE51_MASK51;
-    c = (uint64_t)(h4 >> 51);           h[4] = (uint64_t)h4 & FE51_MASK51;
-    h[0] += c * 19;
-    c = h[0] >> 51; h[0] &= FE51_MASK51;
-    h[1] += c;
+    c = fe51_wide_shr51(h0); h1 = fe51_wide_add_u64(h1, c); r0 = fe51_wide_low(h0) & FE51_MASK51;
+    c = fe51_wide_shr51(h1); h2 = fe51_wide_add_u64(h2, c); r1 = fe51_wide_low(h1) & FE51_MASK51;
+    c = fe51_wide_shr51(h2); h3 = fe51_wide_add_u64(h3, c); r2 = fe51_wide_low(h2) & FE51_MASK51;
+    c = fe51_wide_shr51(h3); h4 = fe51_wide_add_u64(h4, c); r3 = fe51_wide_low(h3) & FE51_MASK51;
+    c = fe51_wide_shr51(h4);                                 r4 = fe51_wide_low(h4) & FE51_MASK51;
+    r0 += c * 19;
+    c = r0 >> 51; r0 &= FE51_MASK51;
+    r1 += c;
+    h[0] = r0; h[1] = r1; h[2] = r2; h[3] = r3; h[4] = r4;
 }
 
 /** Inversion via Fermat's little theorem: a^(-1) = a^(p-2) mod p */
-static __attribute__((hot, unused)) void fe51_invert(fe51 out, const fe51 z) {
+FE51_MAYBE_UNUSED void fe51_invert(fe51 out, const fe51 z) {
     fe51 t0, t1, t2, t3;
     int i;
 
@@ -388,7 +541,7 @@ static __attribute__((hot, unused)) void fe51_invert(fe51 out, const fe51 z) {
 }
 
 /** Compute z^(2^252 - 3), used for point decompression (sqrt of u/v). */
-static __attribute__((hot, unused)) void fe51_pow22523(fe51 out, const fe51 z) {
+FE51_MAYBE_UNUSED void fe51_pow22523(fe51 out, const fe51 z) {
     fe51 t0, t1, t2, t3;
     int i;
 
@@ -425,20 +578,11 @@ static __attribute__((hot, unused)) void fe51_pow22523(fe51 out, const fe51 z) {
     fe51_mul(out, t1, z);   /* z^(2^252-3) */
 }
 
-static __attribute__((unused)) int fe51_isnegative(const fe51 f) {
-    uint8_t s[32];
-    fe51_tobytes(s, f);
-    return s[0] & 1;
-}
+/* fe51_isnegative / fe51_iszero were removed here: the group template
+ * (ama_ed25519_ge.h) defines its own fe_isnegative / fe_iszero and nothing
+ * in the tree called these.  They also carried a bare __attribute__((unused))
+ * that does not compile under MSVC, which this header must now build on. */
 
-static __attribute__((unused)) int fe51_iszero(const fe51 f) {
-    uint8_t s[32];
-    fe51_tobytes(s, f);
-    int ret = 0;
-    for (int i = 0; i < 32; i++) ret |= s[i];
-    return ret == 0;
-}
-
-#endif /* defined(__SIZEOF_INT128__) */
+#endif /* AMA_FE51_AVAILABLE: __int128 or MSVC x64 / ARM64 */
 
 #endif /* AMA_FE51_H */

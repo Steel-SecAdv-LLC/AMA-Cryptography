@@ -117,7 +117,7 @@ The complete set of extras declared in `pyproject.toml`:
 # Cython + NumPy build/runtime support for the math layer
 pip install -e ".[math]"
 
-# Full monitoring stack (NumPy + SciPy for 3R engine)
+# Full monitoring stack (NumPy for 3R engine)
 pip install -e ".[monitoring]"
 
 # Legacy classical cryptography fallback
@@ -200,7 +200,7 @@ AMA Cryptography: SHA3-256 Security Hash
 
 ## Optional: Build with Cython Acceleration
 
-Cython provides 18–37x speedup for mathematical operations:
+Cython accelerates the 3R mathematical operations (ratio host-specific and unpublished — see README):
 
 ```bash
 # Install Cython first

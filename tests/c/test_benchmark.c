@@ -30,7 +30,8 @@ static double benchmark_operation(void (*op)(void), const char* name) {
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
 
-    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    double elapsed = (double)(end.tv_sec - start.tv_sec)
+                     + (double)(end.tv_nsec - start.tv_nsec) / 1e9;
     double ops_per_sec = ITERATIONS / elapsed;
     double us_per_op = (elapsed / ITERATIONS) * 1e6;
 

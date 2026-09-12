@@ -68,6 +68,51 @@ class TestSecureMemzero:
         assert data[0] == 0
 
 
+class TestPythonFallbackByteSemantics:
+    """The opt-in fallback wiper must operate on BYTES, like every native backend.
+
+    ``_byte_length()`` was added because ``len()`` on a memoryview counts
+    ITEMS — and it was threaded through the three native backends and
+    mlock/munlock while ``_python_fallback_memzero`` kept item-wise writes:
+    on a signed-char view the ``0xFF`` pass raised a raw ``ValueError``
+    mid-wipe, and on a float view all three passes "succeeded" and the
+    ``acc |=`` dead-store barrier then raised ``TypeError``.  The fallback
+    now runs its passes and its verification over a ``cast("B")`` view.
+    These call the fallback directly, so they hold on every build whatever
+    backend ``secure_memzero`` selected.
+    """
+
+    def test_signed_char_view_wipes_without_a_mid_wipe_error(self) -> None:
+        from array import array
+
+        from ama_cryptography.secure_memory import _python_fallback_memzero
+
+        buf = array("b", [-1, 42, -128, 127] * 16)
+        _python_fallback_memzero(memoryview(buf))
+        assert all(item == 0 for item in buf)
+
+    def test_wide_item_view_wipes_every_byte_and_verifies(self) -> None:
+        from array import array
+
+        from ama_cryptography.secure_memory import _python_fallback_memzero
+
+        doubles = array("d", [3.14159, -2.71828] * 8)
+        _python_fallback_memzero(memoryview(doubles))
+        assert bytes(memoryview(doubles).cast("B")) == b"\x00" * (8 * len(doubles))
+
+    def test_unsigned_int_view_wipes_all_bytes_not_all_items(self) -> None:
+        """The _byte_length defect's own witness shape, on the fallback."""
+        from array import array
+
+        from ama_cryptography.secure_memory import _python_fallback_memzero
+
+        words = array("I", [0xDEADBEEF] * 8)
+        _python_fallback_memzero(memoryview(words))
+        assert all(
+            w == 0 for w in words
+        ), "the fallback wiped items, not bytes — part of the secret survived"
+
+
 class TestSecureBuffer:
     def test_context_manager_zeros_on_exit(self) -> None:
         with SecureBuffer(32) as buf:

@@ -13,11 +13,9 @@ Vector sourcing rules:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
-import urllib.request
 from pathlib import Path
 from typing import Any, cast
 
@@ -38,6 +36,12 @@ VECTORS_DIR = Path(__file__).parent
 # .github/workflows/acvp_validation.yml; that workflow also cross-checks
 # the ref against docs/compliance/acvp_attestation.json::acvp_ref so the
 # attestation artifact and the CI run cannot silently drift apart.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
 DEFAULT_ACVP_REF = "v1.1.0.42"
 
 
@@ -66,19 +70,32 @@ ACVP_FETCH_LIST: list[tuple[str, str]] = [
 
 
 def fetch_acvp_file(algo_dir: str, filename: str) -> dict[str, Any]:
-    """Download a JSON file from the ACVP-Server repository."""
+    """Download a JSON file from the ACVP-Server repository.
+
+    Ten of these are issued back to back and raw.githubusercontent.com answers a
+    burst by resetting some of it, so the transport is bounded and retried by
+    tools/http_fetch.py — the same policy the Wycheproof corpus fetch uses, and
+    the same module, because two copies of a retry policy is how the second site
+    goes unfixed.
+    """
     url = f"{ACVP_BASE}/{algo_dir}/{filename}"
     print(f"  Fetching {url}")
-    req = urllib.request.Request(  # noqa: S310
-        url, headers={"User-Agent": "AMA-Crypto-Vectors/1.0"}
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
-        data = resp.read()
+    data = http_fetch.fetch_bytes(url, user_agent="AMA-Crypto-Vectors/1.0")
     return cast(dict[str, Any], json.loads(data))
 
 
-def fetch_acvp_vectors() -> None:
-    """Fetch all ACVP internalProjection.json files."""
+def fetch_acvp_vectors() -> list[str]:
+    """Fetch all ACVP internalProjection.json files.
+
+    Returns the algorithms that could not be fetched.  It returns them rather
+    than swallowing them: this function used to print `[ERROR]` and continue,
+    and `main()` returned 0 unconditionally, so a fetch that acquired NOTHING
+    reported success.  The failure then surfaced two steps later as
+    `nist_vectors/results.json missing — harness crashed`, which names the wrong
+    component and sends the reader to the wrong file.  A step whose whole job is
+    to acquire the vectors must fail when it has not acquired them.
+    """
+    failures: list[str] = []
     for out_name, algo_dir in ACVP_FETCH_LIST:
         out_path = VECTORS_DIR / out_name
         if out_path.exists():
@@ -91,6 +108,8 @@ def fetch_acvp_vectors() -> None:
             print(f"  -> Saved {out_name}")
         except Exception as e:
             print(f"  [ERROR] Failed to fetch {algo_dir}: {e}")
+            failures.append(algo_dir)
+    return failures
 
 
 def create_sha256_vectors() -> None:
@@ -100,6 +119,25 @@ def create_sha256_vectors() -> None:
         print("  [SKIP] SHA-256-FIPS180-4.json already exists")
         return
 
+    # Every digest below is TRANSCRIBED from the publication named in
+    # ``source``, not computed here.
+    #
+    # They used to be ``hashlib.sha256(...).hexdigest()`` calls evaluated at
+    # generation time.  On any libcrypto-linked CPython — every manylinux wheel
+    # and every mainstream distribution Python, as
+    # ``tools/check_stdlib_hash_boundary.py``'s own docstring states —
+    # ``hashlib.sha256`` IS OpenSSL, so regenerating this file replaced the
+    # NIST vectors with OpenSSL's output wearing a NIST label, and
+    # ``nist_vectors/run_vectors.py`` then validated AMA's SHA-256 against
+    # them.  That is a differential test against another implementation
+    # presented as conformance to a specification, and it is the exact pattern
+    # ``tools/check_corpus_originality.py`` exists to forbid: "AMA is checked
+    # against specifications and its own reference encoder, not against another
+    # implementation."  It is also the vendor boundary INVARIANT-1 draws —
+    # OpenSSL may be a benchmark comparator and never a source of truth.
+    #
+    # The committed values were already correct; what was wrong was where the
+    # next regeneration would have got them.
     vectors = {
         "source": "FIPS 180-4 Section B.1",
         "url": "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
@@ -112,8 +150,10 @@ def create_sha256_vectors() -> None:
                     {
                         "tcId": 1,
                         "msg": "616263",
-                        "md": hashlib.sha256(b"abc").hexdigest(),
-                        "note": 'Input: "abc"',
+                        # Transcribed from FIPS 180-4 Appendix B.1, not
+                        # computed.  See the note above the dict.
+                        "md": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                        "note": 'Input: "abc" (FIPS 180-4 Appendix B.1)',
                     },
                     {
                         "tcId": 2,
@@ -122,16 +162,18 @@ def create_sha256_vectors() -> None:
                             "666768696768696a68696a6b696a6b6c6a6b6c6d"
                             "6b6c6d6e6c6d6e6f6d6e6f706e6f7071"
                         ),
-                        "md": hashlib.sha256(
-                            b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
-                        ).hexdigest(),
-                        "note": "Input: 448-bit message",
+                        # FIPS 180-4 Appendix B.2.
+                        "md": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+                        "note": "Input: 448-bit message (FIPS 180-4 Appendix B.2)",
                     },
                     {
                         "tcId": 3,
                         "msg": "",
-                        "md": hashlib.sha256(b"").hexdigest(),
-                        "note": "Input: empty string",
+                        # SHA-256 of the empty string.  Not in Appendix B
+                        # (which starts at "abc"), so it is cited to its own
+                        # source: NIST CAVP SHA-256 ShortMsg, Len = 0.
+                        "md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "note": "Input: empty string (NIST CAVP SHAVS ShortMsg, Len=0)",
                     },
                 ],
             }
@@ -226,13 +268,26 @@ def main() -> int:
     print("=== NIST Vector Fetching ===\n")
 
     print("1. Fetching ACVP-Server vectors...")
-    fetch_acvp_vectors()
+    failures = fetch_acvp_vectors()
 
     print("\n2. Creating SHA-256 (FIPS 180-4) vectors...")
     create_sha256_vectors()
 
     print("\n3. Creating AES-256-GCM (SP 800-38D) vectors...")
     create_aes256gcm_vectors()
+
+    if failures:
+        print(
+            f"\n=== FAILED === could not fetch {len(failures)} algorithm(s): "
+            f"{', '.join(failures)}",
+            file=sys.stderr,
+        )
+        print(
+            "Refusing to report success with vectors missing: the validation "
+            "step would fail on the absent file and blame the harness.",
+            file=sys.stderr,
+        )
+        return 1
 
     print("\n=== Done ===")
     return 0

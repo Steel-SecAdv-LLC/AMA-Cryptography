@@ -74,15 +74,50 @@ RESULTS: list[AlgorithmResult] = []
 # Library loading
 # ---------------------------------------------------------------------------
 def load_library() -> ctypes.CDLL:
-    """Load the AMA Cryptography shared library."""
-    lib_names = ["libama_cryptography.so", "libama_cryptography.so.2"]
-    for name in lib_names:
-        path = LIB_DIR / name
-        if path.is_file():
+    """Load the AMA Cryptography shared library.
+
+    The versioned fallback used to be the literal ``libama_cryptography.so.2``.
+    CMake derives ``SOVERSION`` from the project major (``CMakeLists.txt``), so
+    that name went stale at 3.0.0 and has been wrong for three majors: on a
+    layout carrying only the versioned object — an installed prefix, or a
+    packaged sysroot — this harness would report "cannot find library" while
+    the library sat beside it under its current SONAME.  It has not bitten
+    because CI builds in-tree, where the unversioned symlink exists and is
+    tried first.  A validation harness that cannot find the library it
+    validates reports a build failure, not a vector failure, so the mislead is
+    worth removing rather than re-pinning to 5.
+
+    Discover the major instead of naming it: unversioned first (it is the
+    build-tree symlink and the developer's intent), then the highest versioned
+    object present, so this keeps working across every future major without
+    another edit.
+    """
+    unversioned = LIB_DIR / "libama_cryptography.so"
+    if unversioned.is_file():
+        lib = ctypes.CDLL(str(unversioned))
+        _setup_ctypes(lib)
+        return lib
+
+    def _major(path: Path) -> tuple[int, ...]:
+        # "libama_cryptography.so.5.0.0" -> (5, 0, 0); unparseable -> (-1,)
+        suffix = path.name.split(".so.", 1)[-1]
+        try:
+            return tuple(int(part) for part in suffix.split("."))
+        except ValueError:
+            return (-1,)
+
+    versioned = sorted(LIB_DIR.glob("libama_cryptography.so.*"), key=_major, reverse=True)
+    for path in versioned:
+        if path.is_file() and _major(path) != (-1,):
             lib = ctypes.CDLL(str(path))
             _setup_ctypes(lib)
             return lib
-    raise RuntimeError(f"Cannot find library in {LIB_DIR}")
+
+    raise RuntimeError(
+        f"Cannot find libama_cryptography.so (or a versioned libama_cryptography.so.N) "
+        f"in {LIB_DIR}. Build it first: "
+        f"cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+    )
 
 
 def _setup_ctypes(lib: ctypes.CDLL) -> None:

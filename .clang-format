@@ -2,8 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 ---
 # AMA Cryptography C code style
-# Apply with: clang-format -i src/c/*.c include/*.h
-Language: C
+#
+# SCOPE — read before running this over anything.
+#
+# This file is a style REFERENCE for new and edited C, not a formatter you can
+# run across the tree.  The existing sources are hand-formatted (aligned
+# continuation lines, aligned comment blocks, and a mix of `void* p` and
+# `void *p` that no single PointerAlignment setting reproduces), so a
+# whole-tree `clang-format -i` rewrites 9,571 lines across 31 files.  Measured
+# on 2026-08-17 with clang-format 18; `PointerAlignment: Left` was worse
+# (10,316).  Nothing in CI runs clang-format, and nothing should start doing
+# so without that reformat being a deliberate, separate change.
+#
+# Language: Cpp — NOT `C`.
+#
+# `Language: C` was rejected outright by every clang-format before LLVM 20,
+# including the clang-18 this project pins in CI and ships in its container
+# images: `unknown enumerated scalar` → `Error reading .clang-format: Invalid
+# argument`.  The file could not be loaded at all, which meant the command
+# this comment used to advertise errored out, and an editor with format-on-save
+# silently fell back to LLVM defaults (2-space indent, 80 columns) — the
+# opposite of what this file exists to specify.  `Cpp` is the language kind
+# clang-format has always used for C sources and is valid in every version,
+# including 20+.
+Language: Cpp
 BasedOnStyle: LLVM
 
 # Indentation

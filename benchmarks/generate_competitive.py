@@ -17,11 +17,15 @@ Renders `benchmarks/competitive.html` from the two measurement artefacts:
 
 Why a generator and not a static page
 -------------------------------------
-Every number on the page comes from JSON produced by a run. Nothing is typed in
-by hand, so the page cannot drift from the measurement the way a committed
-table does. The one hand-maintained structure is COVERAGE, and each of its
-cells is backed by a runtime capability probe rather than recollection — the
-probe source is quoted in the page's methodology section.
+Every number on the page comes from JSON produced by a run, so the numeric
+content cannot drift from the measurement the way a committed table does.
+Three structures in this file are hand-maintained and say so on the page:
+COVERAGE (each cell records the result of a runtime capability probe or a
+benchmark row taken at measurement time — the probe source is quoted in the
+methodology section — but the matrix itself is a transcription), VERSIONS
+(eight of the nine entries are pinned string literals, because the harness
+does not record peer versions), and NOTES (engineering prose, which must be
+reconciled against the rendered numbers whenever the JSON changes).
 
 Design rules (see the project's data-viz guidance)
 --------------------------------------------------
@@ -55,28 +59,70 @@ BENCH = REPO / "benchmarks"
 
 
 # Library versions on the measurement host. Read from the JSON where the
-# harness records them; pinned here for the ones it does not carry.  The
-# AMA version is never pinned — it is read from the package at render
-# time (same as generate_dashboard.py), so a release bump cannot leave a
-# stale stamp baked into the artefact (the 3.5.0 release found exactly
-# that: a hand-pinned "3.4.0" here survived the bump).  The corollary:
-# REGENERATE ONLY ALONGSIDE A MEASUREMENT RUN ON THE HOST — the stamp
-# asserts the version of the build that was measured, so an offline
-# re-render against old result JSONs would claim a build that was never
-# benchmarked (the committed artefact keeps the run's true version).
+# harness records them; pinned here for the ones it does not carry.
+#
+# The AMA version is read from the RESULT DATA, not from the working tree.
+# It used to be read from `ama_cryptography/__init__.py` at render time, with
+# a comment that named the hazard exactly — "REGENERATE ONLY ALONGSIDE A
+# MEASUREMENT RUN ON THE HOST ... an offline re-render against old result
+# JSONs would claim a build that was never benchmarked" — and relied on
+# whoever ran the generator to honour it.
+#
+# They did not, and the page said so: benchmarks/competitive.html was
+# regenerated at fe8b8ab (2026-08-21) and stamped "AMA 5.0.0", while both
+# source JSONs were last produced at 66d2073 (2026-07-29), where
+# __version__ was "3.4.0", and neither was touched by the work in between.
+# The page's own closing paragraph says every figure is read from those two
+# files and nothing is hand-entered — true of every number, and false of the
+# only label that says which build produced them.
+#
+# A convention a comment asks for is not a control. Reading the version from
+# the data makes an offline re-render harmless: it re-renders the version the
+# data was measured at. A re-measurement updates the JSON, and the stamp
+# follows it.
 def _ama_version() -> str:
-    import re
+    provenance = _source_provenance()
+    version = provenance.get("ama_version")
+    if not isinstance(version, str) or not version.strip():
+        # Raise rather than fall back to the working tree: falling back IS the
+        # defect this function was rewritten to remove.
+        raise RuntimeError(
+            "benchmarks/multi_library_results.json carries no "
+            "provenance.ama_version, so the version of the build these "
+            "measurements came from is unknown. Refusing to stamp the report "
+            "with the working tree's version — that is how a page measured on "
+            "3.4.0 came to be labelled 5.0.0. Re-run the harness (which "
+            "records it) or add the provenance block by hand from "
+            "`git log -1 -- benchmarks/multi_library_results.json`."
+        )
+    return version
 
-    return re.search(
-        r'__version__\s*=\s*"([^"]+)"',
-        (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-    ).group(1)
+
+def _source_provenance() -> dict[str, Any]:
+    """The provenance block of the primary result file.
+
+    Both result files carry one and they must agree: they are rendered onto
+    one page under one version stamp, so a page built from two different
+    builds' measurements has no honest label at all.
+    """
+    primary = json.loads((BENCH / "multi_library_results.json").read_text(encoding="utf-8"))
+    secondary = json.loads((BENCH / "pqc_results.json").read_text(encoding="utf-8"))
+    p1 = primary.get("provenance") or {}
+    p2 = secondary.get("provenance") or {}
+    if p1.get("ama_commit") != p2.get("ama_commit"):
+        raise RuntimeError(
+            "multi_library_results.json and pqc_results.json were measured at "
+            f"different commits ({p1.get('ama_commit')!r} vs "
+            f"{p2.get('ama_commit')!r}); one page cannot carry one honest "
+            "version stamp over two builds. Re-measure both."
+        )
+    return p1
 
 
 VERSIONS = {
     "AMA": _ama_version(),
     "OpenSSL": "3.0.13",
-    "OpenSSL 4.0.1": "4.0.1 (via cryptography 49.0.0)",
+    "OpenSSL 4.0.1": "(via cryptography 49.0.0)",
     "libsodium": "1.0.18",
     "wolfSSL": "5.6.6",
     "Botan": "2.19.3",
@@ -109,44 +155,66 @@ PRIM_ORDER = [
     "ML-KEM-1024 decaps",
 ]
 
-# Stack-coverage matrix. Every cell is the result of a runtime capability probe
-# or a benchmark row, never recollection:
+
+# Stack-coverage matrix. Every cell records the result of a runtime capability
+# probe or a benchmark row established at measurement time (the matrix itself
+# is a transcription of those results, not a render-time re-probe):
 #   * a benchmark row for that (primitive, library) pair proves YES;
 #   * `EVP_KDF_fetch` / `EVP_KEM_fetch` / `EVP_SIGNATURE_fetch` / EC_GROUP
 #     lookup for OpenSSL; `Botan::*::create` for Botan; curve-info lookup for
 #     mbedTLS; `wolfssl/options.h` build flags for wolfSSL.
 # "-" means the library does not implement it on this host and build.
+def _coverage_row(*flags: int) -> dict[str, bool]:
+    """One COVERAGE row, written as the readable 0/1 matrix above.
+
+    Two things a bare ``_coverage_row(...)`` did not do.  It produced
+    ``dict[str, int]`` under a ``dict[str, bool]`` annotation, so the declared
+    type was not the type; and ``zip`` stops at the shorter operand, so a row
+    with seven entries silently dropped mbedTLS and rendered it as "not
+    implemented" — a coverage claim about a library, made by a typo.  The
+    length is now checked.
+    """
+    if len(flags) != len(ORDER):
+        raise ValueError(
+            f"coverage row has {len(flags)} entries, expected {len(ORDER)} "
+            f"(one per library in ORDER: {', '.join(ORDER)})"
+        )
+    return {library: bool(flag) for library, flag in zip(ORDER, flags)}
+
+
 COVERAGE: dict[str, dict[str, bool]] = {
     #                      AMA   OSSL   sodium wolf   Botan  Nettle gcrypt mbed
-    "SHA3-256": dict(zip(ORDER, [1, 1, 0, 1, 1, 1, 1, 0])),
-    "HMAC-SHA3-256": dict(zip(ORDER, [1, 1, 0, 1, 1, 0, 1, 0])),
-    "HKDF": dict(zip(ORDER, [1, 1, 0, 1, 1, 1, 0, 1])),
-    "AES-256-GCM": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 1])),
-    "ChaCha20-Poly1305": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 1])),
-    "Ascon-128 AEAD": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "Argon2id": dict(zip(ORDER, [1, 0, 1, 0, 1, 0, 0, 0])),
-    "Ed25519": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 0])),
-    "X25519": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 1])),
-    "NIST P-256": dict(zip(ORDER, [1, 1, 0, 1, 1, 1, 1, 1])),
-    "secp256k1": dict(zip(ORDER, [1, 1, 0, 0, 1, 0, 1, 1])),
-    "ML-KEM (FIPS 203)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "ML-DSA (FIPS 204)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "SLH-DSA (FIPS 205)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "LMS (SP 800-208)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "FROST threshold": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
+    "SHA3-256": _coverage_row(1, 1, 0, 1, 1, 1, 1, 0),
+    "HMAC-SHA3-256": _coverage_row(1, 1, 0, 1, 1, 0, 1, 0),
+    "HKDF": _coverage_row(1, 1, 0, 1, 1, 1, 0, 1),
+    "AES-256-GCM": _coverage_row(1, 1, 1, 1, 1, 1, 1, 1),
+    "ChaCha20-Poly1305": _coverage_row(1, 1, 1, 1, 1, 1, 1, 1),
+    "Ascon-128 AEAD": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "Argon2id": _coverage_row(1, 0, 1, 0, 1, 0, 0, 0),
+    "Ed25519": _coverage_row(1, 1, 1, 1, 1, 1, 1, 0),
+    "X25519": _coverage_row(1, 1, 1, 1, 1, 1, 1, 1),
+    "NIST P-256": _coverage_row(1, 1, 0, 1, 1, 1, 1, 1),
+    "secp256k1": _coverage_row(1, 1, 0, 0, 1, 0, 1, 1),
+    "ML-KEM (FIPS 203)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "ML-DSA (FIPS 204)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "SLH-DSA (FIPS 205)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "LMS (SP 800-208)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "FROST threshold": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
 }
 
-# Engineering account of each result AMA does not lead. Written per primitive
-# because "we are slower" is not a finding — the reason is the finding, and in
-# two cases the reason is a property the project chose on purpose.
+# Engineering account per primitive, reconciled against the numbers rendered
+# beside it (the ranks and ratios below are recomputed from
+# multi_library_results.json whenever the note is edited — an earlier
+# revision of this dict contradicted the badges in its own rows).  "We are
+# slower" is not a finding — the reason is the finding, and in two cases the
+# reason is a property the project chose on purpose.
 NOTES = {
     "AES-256-GCM": (
-        "AMA defaults to constant-time bitsliced AES (INVARIANT-20), which never "
-        "indexes a table with key-dependent data. OpenSSL, libgcrypt and Nettle "
-        "use AES-NI/VAES, which is a hardware instruction for exactly this and "
-        "cannot be matched by a bitsliced software path. The cost is the "
-        "property. AMA still places 5th of 8 — ahead of Botan, mbedTLS and "
-        "wolfSSL, all of which use table or software AES on this build."
+        "AMA defaults to constant-time AES (INVARIANT-20), which never indexes "
+        "a table with key-dependent data. OpenSSL and libgcrypt lead through "
+        "AES-NI pipelines tuned end-to-end for this one construction. AMA "
+        "places 3rd of 8, ahead of Nettle, libsodium, Botan, mbedTLS and "
+        "wolfSSL on this build."
     ),
     "ChaCha20-Poly1305": (
         "OpenSSL runs an AVX-512 vectorised ChaCha20 core. AMA's is SIMD but "
@@ -154,14 +222,14 @@ NOTES = {
     ),
     "SHA3-256": (
         "libgcrypt and OpenSSL carry hand-optimised Keccak permutations. AMA's "
-        "x4 AVX2 path is wired and dispatching, but the scalar fallback "
-        "dominates at this message size. Last of six — the widest single gap on "
-        "the symmetric surface and the clearest optimisation target."
+        "single-stream scalar permutation places first of six, 0.7% ahead of "
+        "libgcrypt — a photo finish, not a durable lead (the x4 AVX2 path "
+        "batches four independent hashes and does not apply to one stream)."
     ),
-    "HMAC-SHA3-256": "Inherits the SHA3-256 permutation gap above; same cause, same fix.",
+    "HMAC-SHA3-256": "Tracks the SHA3-256 permutation result above; first of four here.",
     "X25519 scalar-mult": (
         "OpenSSL and libsodium use dedicated field arithmetic with a fused "
-        "multiply path. AMA is within 1.5x of both. Fourth of five."
+        "multiply path. AMA is within 1.5x of both. Third of five."
     ),
     "P-256 ECDSA sign": (
         "OpenSSL ships `ecp_nistz256`, a hand-written assembly implementation "
@@ -170,8 +238,9 @@ NOTES = {
     ),
     "P-256 ECDSA verify": "Same generic-versus-curve-specific split as P-256 signing.",
     "secp256k1 ECDSA verify": (
-        "Within 7% of Botan and 1.16x faster than OpenSSL. The signing side "
-        "leads outright after this branch's fixed-base comb landed."
+        "Fastest of three: 14.9% ahead of Botan and 1.48x ahead of OpenSSL. "
+        "The signing side also leads outright, after the fixed-base comb "
+        "landed (#379)."
     ),
     "ML-KEM-1024 encaps": (
         "The known lattice gap. AMA's ML-KEM is SIMD-accelerated (1.28x over "
@@ -367,23 +436,32 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     # ── coverage matrix ──
     crows = []
     for prim, cells in COVERAGE.items():
-        tds = "".join(
+        # Not `tds`: that name is a list of cells in the benchmark-matrix loop
+        # above, and rebinding it to a joined string here made one name hold
+        # two types in one function.
+        cell_html = "".join(
             f'<td class="{"y" if cells[lib] else "x"}">{"●" if cells[lib] else "—"}</td>'
             for lib in ORDER
         )
         n = sum(cells[lib] for lib in ORDER)
         uniq = ' class="uniq"' if n == 1 and cells["AMA"] else ""
-        crows.append(f'<tr{uniq}><td class="p">{esc(prim)}</td>{tds}<td class="n">{n}/8</td></tr>')
+        crows.append(
+            f'<tr{uniq}><td class="p">{esc(prim)}</td>{cell_html}'
+            f'<td class="n">{n}/{len(ORDER)}</td></tr>'
+        )
     cov_rows = "\n".join(crows)
     cov_head = "".join(f"<th>{esc(lib)}</th>" for lib in ORDER)
 
+    # The key already carries the version for the PQC-oracle entry, so its
+    # VALUE is only the parenthetical — the old value repeated "4.0.1" and
+    # the page rendered "OpenSSL 4.0.1 4.0.1 (via cryptography 49.0.0)".
     vers = " · ".join(
         f"{esc(k)} {esc(v)}" for k, v in VERSIONS.items() if k in libs_in or "4.0.1" in k
     )
 
     ama_only = sum(1 for p, c_ in COVERAGE.items() if sum(c_.values()) == 1 and c_["AMA"])
 
-    # Fields and this mapping are a verified 1:1 bijection (18/18). Substitute
+    # Fields and this mapping are a verified 1:1 bijection (21/21). Substitute
     # with format_map(mapping) — the direct dict idiom — rather than
     # format(**kwargs): it renders byte-identically and keeps the call
     # unambiguous, with no keyword arguments to reconcile against the escaped
@@ -391,6 +469,12 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     return TEMPLATE.format_map(
         {
             "gen": esc(gen),
+            # Read from the result files' provenance, never from the working
+            # tree — see _ama_version() for the page this distinction was
+            # written on top of.
+            "src_commit": esc(str(_source_provenance().get("ama_commit", "unknown"))),
+            "src_version": esc(str(_source_provenance().get("ama_version", "unknown"))),
+            "src_measured": esc(str(_source_provenance().get("measured_at", "unknown"))),
             "freq": f"{freq:.3f}",
             "host_line": host_line,
             "msg": f"{msg:,}",
@@ -540,7 +624,9 @@ same weight as the results it wins, and an engineering account of each gap.</p>
 <h2><span class="num">1</span>Stack coverage — what each library implements</h2>
 <p class="lede">Speed is only half the comparison. This is the other half: of
 {n_cov} primitive families in AMA's public surface, how many each peer offers at all.
-Every cell is a runtime capability probe or a benchmark row, not recollection.</p>
+Every cell records a runtime capability probe or a benchmark row from the
+measurement run; the matrix is transcribed into the generator, not re-probed at
+render time.</p>
 <div class="scroll"><table>
 <thead><tr><th>Primitive family</th>{cov_head}<th>Libs</th></tr></thead>
 <tbody>
@@ -630,10 +716,16 @@ python benchmarks/generate_competitive.py   # -> this page</pre>
 
 <p class="meta">
 Generated {gen} · message size {msg} bytes · measured clock {freq} GHz<br>
+Measured at commit <code>{src_commit}</code> ({src_measured}), AMA {src_version}<br>
 Host: {host_line}<br>
 {vers}<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>
-and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered.
+and <code>benchmarks/pqc_results.json</code>, including the AMA version above, which comes
+from those files' provenance rather than from the working tree. The PEER LIBRARY
+versions on the line above are pinned in <code>benchmarks/generate_competitive.py</code>,
+because the harness does not record them — eight of the nine entries there are
+string literals. Regenerating this page without re-running the harness re-renders
+the same measurements under the same stamp; it cannot relabel them.
 </p>
 
 </div></body></html>
@@ -643,7 +735,7 @@ and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered.
 def main() -> int:
     c, q = load()
     out = BENCH / "competitive.html"
-    out.write_text(render(c, q), encoding="utf-8")
+    out.write_text(render(c, q), encoding="utf-8", newline="")
     print(f"wrote {out} ({out.stat().st_size:,} bytes)")
     return 0
 

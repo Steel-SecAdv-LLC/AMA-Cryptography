@@ -54,6 +54,7 @@ except ImportError:
     not (HAS_AMA_NATIVE and HAS_PYCRYPTODOME),
     reason="Requires AMA C library and pycryptodome for cross-validation",
 )
+@pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
 class TestAESGCMDifferential:
     """Differential tests: AMA AES-GCM vs pycryptodome."""
 
@@ -91,6 +92,7 @@ class TestAESGCMDifferential:
     not (HAS_AMA_NATIVE and HAS_PYNACL),
     reason="Requires AMA C library and pynacl for cross-validation",
 )
+@pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
 class TestEd25519Differential:
     """Differential tests: AMA Ed25519 vs pynacl/libsodium."""
 

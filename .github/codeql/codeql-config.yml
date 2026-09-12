@@ -5,58 +5,13 @@ name: "AMA Cryptography CodeQL"
 # CodeQL settings for the static-analysis CodeQL Security Analysis job.
 # Wired up via `config-file:` on github/codeql-action/init.
 #
-# paths-ignore: third-party vendored code is intentionally not analyzed.
-#   - src/c/vendor/ed25519-donna/ : public-domain ed25519-donna by
-#     Andrew Moon. The upstream donna sources are kept unmodified
-#     (only renamed — see ama_donna_unit.h for the rationale); AMA
-#     adds one project-local aggregator header in this directory
-#     (ama_donna_unit.h) for build/analysis integration only.
-#     We compile donna as a single translation unit through
-#     src/c/ed25519_donna_shim.c (donna's own -DED25519_REFHASH /
-#     -DED25519_CUSTOMRANDOM single-unit pattern) and gate cross-
-#     checks via the AMA_ED25519_ASSEMBLY build flag.
-#     CodeQL's `cpp/unused-static-variable` may still surface on
-#     curve25519-donna-64bit.h's reduce_mask_40 / reduce_mask_56
-#     constants (defined by donna's 64-bit backend but only read from
-#     the emulated-multiply path AMA's native-__int128 build compiles
-#     out). paths-ignore does not stop this (CodeQL's path filtering is
-#     only fully reliable for interpreted languages; for C/C++ the
-#     extractor traces through included files), so these are resolved
-#     at the source with a genuine reference in ed25519_donna_shim.c —
-#     NOT dismissed in the Security UI. See the "resolved at source"
-#     block below.
-
-paths-ignore:
-  - "src/c/vendor/**"
-
-# Note on `cpp/include-non-header`:
-#   The donna single-translation-unit pattern uses `#include` on what
-#   was upstream `ed25519.c`. We resolved the finding *without* a
-#   project-wide rule disable by renaming the included file locally to
-#   `ed25519_unit.h` — see src/c/vendor/ed25519-donna/ama_donna_unit.h
-#   for the full rationale. The rule remains active for first-party C
-#   code so accidental `#include "foo.c"` patterns continue to surface.
-
-# ─────────────────────────────────────────────────────────────────────
-# reduce_mask_40 / reduce_mask_56 (#500 / #499) — resolved at source
-# ─────────────────────────────────────────────────────────────────────
-# cpp/unused-static-variable fired on donna's reduce_mask_40 / reduce_mask_56
-# (src/c/vendor/ed25519-donna/curve25519-donna-64bit.h): the 64-bit backend
-# defines them at file scope but only reads them from the emulated-multiply
-# path guarded by `#if !defined(HAVE_NATIVE_UINT128)`, which AMA's native-
-# __int128 targets (x86-64, aarch64) compile out — so CodeQL saw them as
-# unused, and paths-ignore does not stop it (the C/C++ extractor inlines the
-# vendored header into the analysed first-party translation unit).
+# Every C source in the tree is first-party (the vendored Ed25519 backend
+# and its shim were removed in the twenty-first maintenance pass; see
+# CHANGELOG), so nothing is excluded from analysis and no rule is disabled
+# for third-party noise.  `cpp/include-non-header` stays active so an
+# accidental `#include "foo.c"` pattern surfaces; the generated table header
+# src/c/internal/ama_ed25519_tables.h is a header and is included as one.
 #
-# These are NOT dismissed. They are resolved at the source: the project-local
-# shim src/c/ed25519_donna_shim.c anchors a genuine, hidden-visibility,
-# zero-runtime reference to both masks (compiled only under ED25519_64BIT),
-# so the constants are legitimately used and the rule stays fully enforced.
-# Upstream donna is unmodified. See the "CodeQL cpp/unused-static-variable
-# resolution" block in ed25519_donna_shim.c.
-#
-# Policy for any FUTURE analogous vendor-cosmetic cpp/unused-static-variable
-# that leaks past paths-ignore: prefer the same source-level anchor in the
-# project-local shim over a Security-UI dismissal, so the rule stays a live
-# detector for first-party code. Do not disable the rule or broaden the
-# paths-ignore beyond src/c/vendor/**.
+# Policy for a future vendor-cosmetic finding: there is no vendored tree to
+# blame it on, so it is a first-party finding — resolve it at the source,
+# never with a Security-UI dismissal, and never by adding a paths-ignore.

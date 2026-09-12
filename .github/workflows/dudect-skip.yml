@@ -1,0 +1,61 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# NO-OP TWIN of `.github/workflows/dudect.yml` — GitHub's documented pattern for a
+# path-filtered workflow whose gate context must be a REQUIRED status check.
+#
+# GitHub never creates a check run for a workflow that path filtering skipped.
+# A required context from such a workflow therefore leaves every PR that does
+# not touch those paths stuck on "Expected — waiting for status", so the
+# context cannot be required at all — and `.github/workflows/dudect.yml`'s own
+# gate carried the comment "Branch protection should require ONLY this
+# context" while nothing could. The consequence was that the KyberSlash secret-division gate, the AVX/ISA scoping gate, the dudect lanes, GHASH scalar invariance, the secret-taint lanes and AEAD verify invariance
+# could go red without blocking a merge.
+#
+# This file has the SAME workflow `name:` and the SAME job `name:` as the gate
+# it twins, and the COMPLEMENTARY `paths-ignore:` list, so exactly one of the
+# two produces the `Constant-Time Gate` context on any given pull request: the
+# real one when the paths match, this one — trivially green — when they do not.
+# tools/check_gate_coverage.py holds the two lists complementary.
+name: CI - dudect Constant-Time Verification
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'src/c/**'
+      - 'include/**'
+      - 'ama_cryptography/**'
+      - 'tests/c/test_dudect.c'
+      - 'tests/c/dudect/**'
+      - 'tests/c/CMakeLists.txt'
+      - 'CMakeLists.txt'
+      - 'tools/check_ghash_constant_time.py'
+      - 'tools/check_secret_division.py'
+      - 'tools/check_avx_scoping.py'
+      - 'tools/constant_time/**'
+      - '.github/workflows/dudect.yml'
+      - '.github/workflows/dudect-skip.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dudect-skip-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dudect-gate:
+    name: Constant-Time Gate
+    # No dependencies, so `always()` changes nothing here — it is present
+    # because tools/check_gate_coverage.py requires every `*-gate` job to
+    # carry it, and a rule with an exception is a rule that erodes.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Nothing to verify for this change
+        run: |
+          echo "No path this gate watches was touched by this pull request."
+          echo "The real lanes live in .github/workflows/dudect.yml; this twin exists so the"
+          echo "'Constant-Time Gate' context is reported on every pull request and can"
+          echo "therefore be a required status check."

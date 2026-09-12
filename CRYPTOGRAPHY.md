@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 4.0.0 |
-| Last Updated | 2026-07-25 |
+| Document Version | 5.0.0 |
+| Last Updated | 2026-08-14 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -118,12 +118,16 @@ see [`CSRC_ALIGN_REPORT.md §2.3–§2.5`](docs/compliance/CSRC_ALIGN_REPORT.md)
 provenance statements and known divergences from the reference pseudocode,
 see [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md).
 
-Ed25519 is **vendored** rather than clean-room: the radix-2^51 field
-arithmetic and base-point tables come from the public-domain
-[ed25519-donna](https://github.com/floodyberry/ed25519-donna) project under
-`src/c/vendor/ed25519-donna/`, with the upstream LICENSE preserved. The
-AMA-specific wrapper (API contract, FROST integration, expanded-key fast
-path) is in-house.
+Ed25519 is **in-house** on every platform: the radix-2^51 field arithmetic,
+the group arithmetic (`src/c/internal/ama_ed25519_ge.h`) and the static
+base-point tables (generated in-tree by `tools/gen_ed25519_tables.py` into
+`src/c/internal/ama_ed25519_tables.h`) are written against RFC 8032, with no
+upstream code copied. Earlier revisions described a vendored public-domain
+x86-64 backend; it was removed in the twenty-first maintenance pass (see
+CHANGELOG), and its recorded behaviour is replayed against the in-house code
+by the frozen oracle `tests/oracle/ed25519_frozen_oracle.txt`. The AMA API
+wrapper (API contract, FROST integration, expanded-key fast path) is likewise
+in-house.
 
 ## Classical Cryptography
 
@@ -143,11 +147,11 @@ Ed25519 provides classical digital signatures for hybrid mode (Ed25519 + ML-DSA-
 
 **Standard:** RFC 8032
 
-**Implementation (v2.0):** Native C (`ama_ed25519.c`) with:
-- Dedicated `fe25519_sq()` field squaring (~55 muls vs ~100, based on SUPERCOP ref10)
-- C11 `_Atomic` with `memory_order_acquire`/`memory_order_release` for thread-safe initialization
-- Sign/verify roundtrip validated against RFC 8032 Test Vector 1 (12 tests)
-- Fallback to volatile for pre-C11 compilers (MSVC compatibility)
+**Implementation:** Native C (`ama_ed25519.c` with the group-arithmetic template `src/c/internal/ama_ed25519_ge.h`) with:
+- Dedicated `fe51_sq()` field squaring (15 cross-products against 25 for a general multiply) on radix 2^51, with a byte-identical radix-2^64 MULX+ADX instantiation on x86-64 GCC/Clang
+- Static precomputed base-point tables (`tools/gen_ed25519_tables.py`), so there is no run-time initialization, no `_Atomic` and no lock on the Ed25519 path
+- Sign/verify roundtrip validated against the RFC 8032 §7.1 vectors, the 2,022-record frozen oracle and the Wycheproof corpus
+- The same arithmetic on MSVC through `_umul128` / `__umulh` (x64 / ARM64)
 
 **Usage:** Classical signatures and hybrid signatures (Ed25519 + ML-DSA-65).
 
@@ -167,7 +171,7 @@ AES-256-GCM provides authenticated encryption with associated data (AEAD).
 
 **Standard:** NIST SP 800-38D
 
-**Implementation:** Native C (`ama_aes_gcm.c`). Uses 256-byte lookup table S-box — **not** constant-time with respect to cache-timing in shared-tenant environments. For such deployments, hardware AES-NI or bitsliced implementations are recommended.
+**Implementation:** Native C (`ama_aes_gcm.c`). The default build (`AMA_AES_CONSTTIME=ON`) uses the constant-time bitsliced S-box (`ama_aes_bitsliced.c`), and the runtime dispatcher promotes to a hardware AES kernel where available (VAES+AVX2, AES-NI+PCLMULQDQ, or ARMv8 AES+PMULL). The cache-timing-unsafe 256-byte lookup table S-box is built only when explicitly opted in via `-DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON`; the active backend is reported at runtime by `ama_aes_gcm_active_backend()`.
 
 ### SHA3-256
 
@@ -377,7 +381,7 @@ ChaCha20-Poly1305 provides authenticated encryption as an alternative to AES-256
 
 **Standard:** RFC 8439
 
-**Implementation:** Native C (`ama_chacha20poly1305.c`). Software-only, constant-time — recommended for shared-tenant environments where AES cache-timing is a concern.
+**Implementation:** Native C (`ama_chacha20poly1305.c`). Software-only, constant-time — preferred over AES-GCM in environments without hardware AES acceleration, or in builds where `AMA_AES_CONSTTIME` has been explicitly disabled.
 
 ### Argon2id (Password Hashing)
 
@@ -400,7 +404,7 @@ Argon2id provides memory-hard password hashing, combining data-dependent and dat
 
 ### secp256k1 (Elliptic Curve Operations)
 
-secp256k1 provides elliptic curve operations supporting BIP32-compliant hierarchical deterministic (HD) key derivation.
+secp256k1 provides the elliptic curve operations under BIP32-style hierarchical deterministic (HD) key derivation. The child KDF follows BIP32; the master key is derived with an AMA-specific HMAC key rather than BIP32's `"Bitcoin seed"`, so the derived tree is deliberately not interoperable with a BIP32 wallet.
 
 **Parameters:**
 - Private Key: 32 bytes (scalar)

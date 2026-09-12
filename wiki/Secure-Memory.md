@@ -129,11 +129,26 @@ else:
 
 A naive comparison (`expected == received`) returns `False` as soon as it finds the first differing byte. An attacker making many requests can measure small timing differences to determine byte-by-byte what the correct HMAC tag is (a timing oracle attack).
 
-`constant_time_compare()` always processes all bytes in equal time, preventing this.
+`constant_time_compare()` never short-circuits on the first differing byte, preventing this.
 
 ### Implementation
 
-Uses `ama_consttime_memcmp()` from AMA's native C library when available, with a fallback to a pure-Python XOR accumulator that pads both inputs to equal length and never short-circuits.
+Uses `ama_consttime_memcmp()` from AMA's native C library, and **refuses to
+operate without it** — there is no pure-Python fallback. Earlier releases fell
+back to an XOR accumulator and documented it as constant-time; INVARIANT-7
+forbids exactly that substitution for a secret-dependent operation, and the
+loop was constant-time only in shape (`ljust` allocates, `zip` builds tuples,
+and CPython's small-int cache makes `result |= x ^ y` data-dependent). A
+fallback documented as constant-time that is not is worse than no fallback.
+
+Cost is bounded by the **shorter** operand: `min(len(a), len(b))` bytes are
+compared in place, and any length difference is OR-ed into the verdict rather
+than short-circuiting the scan. Lengths are public metadata here (tags, public
+keys and KEM shared secrets each have one published size). The previous
+implementation padded both operands to `max(len(a), len(b))`, which let an
+unauthenticated package declaring an 8 MiB tag force 16 MiB of allocation to
+reject a 32-byte value. Use `lengths_match()` for an explicit, deliberately
+non-constant-time length pre-check.
 
 ---
 
@@ -150,7 +165,7 @@ encryption_key = bytearray(os.urandom(32))
 with SecureKeyStorage(encryption_key) as storage:
     # Store key material (encrypted with AES-256-GCM)
     storage.store("signing-key-v1", os.urandom(32))
-    
+
     # Retrieve key material (decrypted on access)
     key = storage.retrieve("signing-key-v1")
 
@@ -219,7 +234,12 @@ When the AMA native C library is available (built via CMake), the secure memory 
 - `secure_mlock()` / `secure_munlock()` via `ama_secure_mlock()` / `ama_secure_munlock()`
 - `constant_time_compare()` via `ama_consttime_memcmp()`
 
-Without the native C library, POSIX `mlock()`/`munlock()` and a pure-Python XOR accumulator are used as fallbacks.
+Without the native C library, `secure_mlock()`/`secure_munlock()` fall back to
+POSIX `mlock()`/`munlock()` via ctypes (and raise on non-POSIX hosts).
+`constant_time_compare()` has **no fallback** — it refuses to operate without
+the native library, for the reasons in the Implementation section above: the
+old pure-Python XOR accumulator was constant-time only in shape, and a
+fallback documented as constant-time that is not is worse than no fallback.
 
 ---
 

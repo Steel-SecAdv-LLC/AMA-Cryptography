@@ -17,6 +17,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 #define CHACHA_C0 0x61707865
 #define CHACHA_C1 0x3320646e
@@ -109,17 +110,29 @@ void ama_chacha20_block_x4_neon(const uint8_t key[32],
 
     /* Extract 4 instances — store each vector to a temp array and
      * scatter-read from the correct lane. vgetq_lane_u32 requires a
-     * compile-time constant lane index, so we cannot use a variable. */
+     * compile-time constant lane index, so we cannot use a variable.
+     *
+     * Serialization is explicit little-endian byte stores, matching the
+     * portable reference's store32_le() (src/c/ama_chacha20poly1305.c).
+     * This used to memcpy host-order uint32_t words, which is the same
+     * bytes only on a little-endian host: on aarch64_be every 4 keystream
+     * bytes came out reversed relative to RFC 8439 — and relative to this
+     * library's own scalar path, which handles every chunk under 512
+     * bytes, so one key/nonce produced two different ciphertexts depending
+     * on message length. */
     uint32x4_t rows[16] = {s0,s1,s2,s3,s4,s5,s6,s7,
                            s8,s9,s10,s11,s12,s13,s14,s15};
     uint32_t tmp[4];
     for (int inst = 0; inst < 4; inst++) {
-        uint32_t block[16];
         for (int row = 0; row < 16; row++) {
+            uint32_t w;
             vst1q_u32(tmp, rows[row]);
-            block[row] = tmp[inst];
+            w = tmp[inst];
+            out[inst * 64 + row * 4 + 0] = (uint8_t)(w);
+            out[inst * 64 + row * 4 + 1] = (uint8_t)(w >> 8);
+            out[inst * 64 + row * 4 + 2] = (uint8_t)(w >> 16);
+            out[inst * 64 + row * 4 + 3] = (uint8_t)(w >> 24);
         }
-        memcpy(out + inst * 64, block, 64);
     }
 }
 

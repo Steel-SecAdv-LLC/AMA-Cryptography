@@ -25,6 +25,9 @@ jobs:
   security-audit:
     name: Python Security Audit
     runs-on: ubuntu-latest
+    # Bounded like every other gate job: without this a hang on a network
+    # fetch runs to the 360-minute default while the Security Gate waits.
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -93,8 +96,10 @@ jobs:
     # error it printed named a condition that did not exist.  See the
     # module docstring of tools/check_bandit_severity.py.
     - name: Run Bandit security linter (unfiltered JSON report)
+      # Includes setup.py and tools/ (the build/release code CI trusts), not
+      # just the runtime package — same scope as the ci.yml gate (audit Low).
       run: |
-        bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+        bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
 
     - name: Bandit severity gate (fail-closed)
       run: python3 tools/check_bandit_severity.py bandit-report.json
@@ -113,6 +118,7 @@ jobs:
   sbom:
     name: SBOM Generation (CycloneDX)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -232,6 +238,8 @@ jobs:
   secret-scanning:
     name: Secret Scanning
     runs-on: ubuntu-latest
+    # 20, not 15: the full-history TruffleHog scan grows with the repo.
+    timeout-minutes: 20
 
     steps:
     - name: Checkout code

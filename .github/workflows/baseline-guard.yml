@@ -27,6 +27,9 @@ on:
     paths:
       - "benchmarks/baseline.json"
       - "benchmarks/arm-baseline.json"
+      # The script that adjudicates those two files.  Without it, a change that
+      # weakens the justification check runs against nothing.
+      - "benchmarks/check_baseline_justification.py"
 
 permissions:
   contents: read

@@ -20,17 +20,16 @@ infrastructure that the channel protocol operates on.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 4.0.0
+Version: 5.0.0
 """
 
 import logging
-import secrets
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted, secure_token_bytes
 from ama_cryptography.exceptions import AmaCryptographyError
 
 logger = logging.getLogger(__name__)
@@ -92,6 +91,17 @@ class ReplayWindow:
     window_size: int = REPLAY_WINDOW_SIZE
     base: int = 0
     _seen: set[int] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        # Fail closed on a nonsensical window.  A negative ``window_size`` makes
+        # the slide's ``min(self._seen)`` raise mid-accept (after a seq has
+        # already entered ``_seen``, leaving the window in a torn state), and 0
+        # degenerates to a window that can track nothing.  Not reachable through
+        # SessionStore/SessionState (both use the fixed default), but
+        # ReplayWindow is a public constructor and must reject the value at
+        # construction rather than at the first slide.
+        if self.window_size < 1:
+            raise ValueError(f"window_size must be >= 1, got {self.window_size}")
 
     def check_and_accept(self, seq: int) -> None:
         """Check a sequence number and accept it if valid.
@@ -177,7 +187,21 @@ class SessionState:
         return msgs_since_rekey >= DEFAULT_REKEY_INTERVAL
 
     def next_send_seq(self) -> int:
-        """Get next send sequence number and increment counter."""
+        """Get next send sequence number and increment counter.
+
+        Raises:
+            SessionExpiredError: If the session has expired.
+            SessionError: If the session has been closed.
+        """
+        # Gate the send path on liveness, exactly as ``accept_recv_seq`` gates
+        # the receive path.  A dead (expired or closed) session that keeps
+        # minting sequence numbers and bumping ``last_activity`` misleads any
+        # caller that reads those to infer the session is alive; fail closed so
+        # "the session issued a seq" cannot mean "on a session that is gone".
+        if self.is_expired:
+            raise SessionExpiredError(f"Session {self.session_id.hex()[:16]} expired")
+        if self._closed:
+            raise SessionError("Session is closed")
         seq = self.send_seq
         self.send_seq += 1
         self.messages_sent += 1
@@ -204,7 +228,18 @@ class SessionState:
         self.last_activity = time.monotonic()
 
     def record_rekey(self) -> None:
-        """Record that a rekey has been performed."""
+        """Record that a rekey has been performed.
+
+        Raises:
+            SessionExpiredError: If the session has expired.
+            SessionError: If the session has been closed.
+        """
+        # Same liveness gate as the send path: a rekey recorded against a dead
+        # session is bookkeeping on something that is gone.
+        if self.is_expired:
+            raise SessionExpiredError(f"Session {self.session_id.hex()[:16]} expired")
+        if self._closed:
+            raise SessionError("Session is closed")
         self.rekey_count += 1
         self.last_activity = time.monotonic()
 
@@ -285,7 +320,23 @@ class SessionStore:
             if len(self._sessions) >= self.max_sessions:
                 raise SessionLimitError(f"Maximum sessions ({self.max_sessions}) reached")
 
-            session_id = secrets.token_bytes(SESSION_ID_BYTES)
+            # Drawn through ``secure_token_bytes``, not ``secrets`` (INVARIANT-41):
+            # a session ID is a bearer token, and the continuous repeated-output
+            # health test that draw carries is the only control in the module
+            # that can notice a stuck DRBG minting the same one twice.  Gating on
+            # check_crypto_permitted() above while drawing outside the health-
+            # tested path cited a fault detector the call then bypassed.
+            session_id = secure_token_bytes(SESSION_ID_BYTES)
+            if session_id in self._sessions:
+                # Unreachable with a healthy 256-bit draw; reached only if the
+                # RNG repeats, which is exactly when silently replacing a live
+                # session — handing two callers state keyed by one bearer token
+                # — is worst.  Fail closed instead of overwriting.
+                raise AmaCryptographyError(
+                    "session ID collision on a fresh 256-bit draw — refusing to "
+                    "replace the live session; the RNG is not producing unique "
+                    "output"
+                )
             session = SessionState(
                 session_id=session_id,
                 ttl_seconds=ttl_seconds if ttl_seconds is not None else self.default_ttl,
@@ -307,6 +358,7 @@ class SessionStore:
         Raises:
             SessionNotFoundError: If session ID is not in the store
             SessionExpiredError: If the session has expired
+            SessionError: If the session has been closed in place
         """
         with self._lock:
             session = self._sessions.get(session_id)
@@ -315,6 +367,13 @@ class SessionStore:
             if session.is_expired:
                 del self._sessions[session_id]
                 raise SessionExpiredError(f"Session {session_id.hex()[:16]} expired")
+            # close() pops the session, so an in-store session is normally open;
+            # but a caller holding the SessionState can close it in place, and
+            # handing back a closed session (whose send/recv paths now fail
+            # closed) as if it were live is misleading.  Drop and refuse it.
+            if session.is_closed:
+                del self._sessions[session_id]
+                raise SessionError(f"Session {session_id.hex()[:16]} is closed")
             return session
 
     def close(self, session_id: bytes) -> None:

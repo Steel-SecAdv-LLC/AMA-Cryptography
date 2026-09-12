@@ -42,6 +42,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import statistics
 import sys
@@ -53,8 +54,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.key_formats as kf  # noqa: E402 -- follows the sys.path insert
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same
+import ama_cryptography.key_formats as kf  # noqa: E402 -- follows the sys.path insert (KFI-001)
+import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (KFI-001)
 
 
 def _time(fn: Callable[[], Any], repeats: int) -> float:
@@ -126,8 +127,14 @@ def measure(repeats: int) -> list[dict[str, Any]]:
         forms = ["expandedKey", "seed", "both"] if alg.kind == "pq" else ["auto"]
         for form in forms:
             encoded = private.to_pkcs8(pq_format=form)
-            checked = _time(lambda e=encoded: kf.load_pkcs8(e), repeats)
-            parse = _time(lambda e=encoded: kf.load_pkcs8(e, verify_pq_consistency=False), repeats)
+            # functools.partial rather than `lambda e=encoded:` — both bind the
+            # current loop value, but a lambda with a default parameter has no
+            # inferable type as a `Callable[[], Any]` argument and is callable
+            # with an argument, which is not what a timing thunk is.
+            checked = _time(functools.partial(kf.load_pkcs8, encoded), repeats)
+            parse = _time(
+                functools.partial(kf.load_pkcs8, encoded, verify_pq_consistency=False), repeats
+            )
             rows.append(
                 {
                     "algorithm": name,

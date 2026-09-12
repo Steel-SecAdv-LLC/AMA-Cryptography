@@ -35,13 +35,15 @@ own ZMM/EVEX kernel.
 
 Five reasons, in priority order:
 
-1. **INVARIANT-1 vendor-crypto surface.** The repo already carves out exactly
-   one external crypto dependency — `src/c/vendor/ed25519-donna/`, kept under
-   the INVARIANT-1 carve-out for ed25519's hand-tuned amd64 scalarmult.
-   Adding a second carve-out (`src/c/vendor/XKCP/`) widens the audit surface
-   permanently for a single permutation. The in-house option costs us a
-   one-time review of 228 lines of intrinsics; the vendor option costs us a
-   running carve-out plus periodic upstream tracking.
+1. **INVARIANT-1 vendor-crypto surface.** At the time of this decision the
+   repo carved out exactly one external crypto dependency — the formerly
+   vendored public-domain Ed25519 x86-64 backend, kept under the INVARIANT-1
+   carve-out for its hand-tuned amd64 scalarmult (since removed in the
+   twenty-first maintenance pass; see CHANGELOG — the tree now has no such
+   carve-out at all). Adding a second carve-out for XKCP would have widened
+   the audit surface permanently for a single permutation. The in-house
+   option costs us a one-time review of 228 lines of intrinsics; the vendor
+   option costs us a running carve-out plus periodic upstream tracking.
 
 2. **The wins that matter are single-instruction wins.** Branch B's kernel is
    228 lines of auditable AVX-512VL intrinsics emitted at YMM width — exactly
@@ -157,7 +159,7 @@ Five reasons, in priority order:
 
 | INVARIANT | Effect |
 |-----------|--------|
-| INVARIANT-1  | **Held.** No new vendor crypto dependency. Existing carve-out (`src/c/vendor/ed25519-donna/`) remains the only one. |
+| INVARIANT-1  | **Held.** No new vendor crypto dependency. The one carve-out that existed at the time (the formerly vendored Ed25519 x86-64 backend) was not widened, and has since been removed in the twenty-first maintenance pass, leaving none. |
 | INVARIANT-2  | **Held.** `test-avx512` CI job's build/test body never uses `continue-on-error`; the only conditional is the `/proc/cpuinfo`-driven skip on the steps themselves. |
 | INVARIANT-3  | **Held.** KAT skip surfaces as CTest exit code 77 (observable "Skipped"), not a silent pass. |
 | INVARIANT-12 | **Held.** Keccak-f is data-independent; new kernel mirrors AVX2 4-way structure exactly. |

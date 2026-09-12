@@ -47,14 +47,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import ssl
 import sys
-import urllib.request
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Executed directly as a script, so `tools/` lands on sys.path but the repo root
+# does not; the shared fetch policy lives in the root's `tools` package.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
+REPO_ROOT = _REPO_ROOT
 VECTORS_DIR = REPO_ROOT / "wycheproof_vectors"
 MANIFEST_PATH = VECTORS_DIR / "manifest.json"
 FILES_SUBDIR = "vectors"
@@ -111,25 +117,19 @@ def upstream_url(manifest: dict[str, Any], filename: str, commit: str) -> str:
 def fetch_bytes(url: str) -> bytes:
     """Download raw bytes over HTTPS, honouring proxy + CA env vars.
 
-    The scheme is checked rather than assumed.  ``urllib`` also opens ``file:``
-    and ``ftp:``, so a URL reaching here from a manifest — the manifest being
-    the thing this tool exists to *re-derive*, not a trusted input — could
-    otherwise read a local path and have its contents vendored as "upstream".
-    An https-only guard is what makes the S310 suppression below a statement of
-    fact instead of a promise.
+    The bounded retry, the HTTPS-only guard and the transport/permanent-error
+    distinction all live in `tools/http_fetch.py` now.  They were written here
+    first, in response to raw.githubusercontent.com resetting three of the
+    fifteen requests `--verify` issues back to back — and then
+    `nist_vectors/fetch_vectors.py` failed the same way against the same host
+    within the hour, because it had its own unretried `urlopen`.  Two copies of
+    a retry policy is how the second site goes unfixed, so there is one.
+
+    What the retry cannot do is unchanged and is the property that matters: it
+    never sees a digest.  Bytes that arrive intact but WRONG are compared once,
+    in `verify_upstream` below, and still fail there.
     """
-    if not url.startswith("https://"):
-        raise ValueError(f"refusing a non-HTTPS corpus URL: {url!r}")
-    ctx = ssl.create_default_context()
-    req = urllib.request.Request(  # noqa: S310 -- https enforced directly above (WYC-001)
-        url, headers={"User-Agent": _USER_AGENT}
-    )
-    # The suppression anchors on the physical line ruff reports, which for a
-    # wrapped call is the one carrying the callee — not the closing `as resp:`.
-    with urllib.request.urlopen(  # noqa: S310 -- https enforced directly above (WYC-001)
-        req, timeout=_HTTP_TIMEOUT, context=ctx
-    ) as resp:
-        return bytes(resp.read())
+    return http_fetch.fetch_bytes(url, user_agent=_USER_AGENT, timeout=_HTTP_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +223,9 @@ def refresh(manifest: dict[str, Any], commit: str) -> int:
         },
     }
     MANIFEST_PATH.write_text(
-        json.dumps(new_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(new_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="",
     )
 
     print(f"\nRewrote {len(new_files)} files; totalVectors = {total}; commit pinned to {commit}.")

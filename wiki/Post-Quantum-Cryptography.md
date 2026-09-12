@@ -62,7 +62,10 @@ Features:
 - NTT-based polynomial multiplication over the ring Zq[X]/(X^256 + 1), q = 8,380,417
 - Rejection sampling for uniform distribution
 - Deterministic signing (no per-signature randomness required)
-- Full NIST KAT validation: 10/10 known-answer tests pass
+- NIST KAT validation: 10/10 exercised known-answer vectors pass (the
+  harnesses read the first 10 records of each 100-vector vendored corpus —
+  see the `kat_tested < 10` cap in `tests/c/test_kat.c` and `max_vectors`
+  in `tests/test_nist_kat.py`)
 - Zero external dependencies
 
 ### Python API
@@ -152,7 +155,10 @@ ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared s
 Features:
 - Full NTT-based polynomial arithmetic over Zq[X]/(X^256 + 1), q = 3,329
 - Complete Fujisaki-Okamoto transform for IND-CCA2 security
-- Full NIST KAT validation: 10/10 known-answer tests pass
+- NIST KAT validation: 10/10 exercised known-answer vectors pass (the
+  harnesses read the first 10 records of each 100-vector vendored corpus —
+  see the `kat_tested < 10` cap in `tests/c/test_kat.c` and `max_vectors`
+  in `tests/test_nist_kat.py`)
 - Zero external dependencies (all required PRFs natively implemented)
 
 ### Python API

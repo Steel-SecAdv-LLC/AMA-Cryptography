@@ -68,10 +68,6 @@ _ALLOWED_PREFIXES: tuple[tuple[str, str], ...] = (
         "ama_cryptography/_post_kats/",
         "FIPS 140-3 power-on self-test vectors — published test data",
     ),
-    (
-        "src/c/vendor/",
-        "vendored public-domain ed25519-donna reference tables (public constants)",
-    ),
 )
 
 # Individual files that legitimately carry public key material.

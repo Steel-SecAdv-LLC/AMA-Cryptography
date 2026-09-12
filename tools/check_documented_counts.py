@@ -23,13 +23,23 @@ are *checked*.
 
 What is checked
 ---------------
-Three claim shapes, recognised anywhere under ``docs/``, ``tests/`` and the
+Five claim shapes, recognised anywhere under ``docs/``, ``tests/`` and the
 repository root:
 
 1. ``tests/<name>.py`` — N tests``  → pytest's own collection count.
 2. ``<name>.json`` — N records``    → the corpus file's ``records`` array.
 3. ``wycheproof_vectors/`` — N vectors across `a`, `b`, `c``
                                     → the manifest's per-file ``actualTests``.
+4. ``N native entry points`` / ``N Cython binding entry points``
+                                    → ``tools/check_error_state_gating.py``,
+                                      which those documents already name as
+                                      authoritative while carrying a figure
+                                      that had drifted away from it.
+5. ``N C test suites (M translation units)``
+                                    → ``tests/c/**/test_*.c`` and
+                                      ``tests/c/**/*.c``.  Adding a C test used
+                                      to move both numbers with nothing
+                                      watching.
 
 A claim naming a file that does not exist is a failure too: a count for a
 deleted corpus is the most misleading kind.
@@ -46,6 +56,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -211,9 +222,17 @@ def check_wycheproof_counts(repo: Path) -> list[str]:
 #: releases' worth (3,057/127 against a tree with 3,099/130) while this gate
 #: passed — it only ever verified per-file claims. The report even publishes
 #: the reproduction command; this just runs it.
+#: Every quantifier here is bounded.  Unbounded ``[\d,]+`` / ``\s+`` made
+#: ``search`` re-run the quantifier from every start offset — quadratic on a
+#: long run of digits (measured 4.0x per doubling, 368 ms at 6,000 chars),
+#: the polynomial-ReDoS shape CodeQL reports.  The inputs are Markdown files
+#: in this repository rather than anything remote, but a count like "3,534"
+#: is never more than a handful of characters and the whitespace between two
+#: words is never a kilobyte, so the bounds cost nothing and remove the shape.
 _AGGREGATE_RE = re.compile(
-    r"([\d,]+)\s+(?:static\s+)?(?:Python\s+)?test functions across\s+([\d,]+)\s+"
-    r"(?:Python\s+)?(?:test\s+)?files?"
+    r"([\d,]{1,15})\s{1,8}(?:static\s{1,8})?(?:Python\s{1,8})?"
+    r"test functions across\s{1,8}([\d,]{1,15})\s{1,8}"
+    r"(?:Python\s{1,8})?(?:test\s{1,8})?files?"
 )
 
 #: Same two numbers, as they appear in the METRICS_REPORT table rows.
@@ -237,52 +256,216 @@ _HISTORY_ROW_RE = re.compile(r"^\|\s*\d+\.\d+\.\d+[^|]*\|\s*20\d\d-\d\d-\d\d\s*\
 _DEF_TEST_RE = re.compile(r"^\s*def test_", re.MULTILINE)
 
 
-#: The "Files" column of the Lines of Code table in docs/METRICS_REPORT.md.
+#: The Lines of Code table in docs/METRICS_REPORT.md — BOTH columns.
 #:
-#: These went unchecked while the *other* file count in the same document —
-#: "Python test files under `tests/` matching the static regex" — was gated,
-#: and the two are different measures that happened to print the same number.
-#: They diverged silently the moment a test file was added that the raw glob
-#: counts and the regex does not (``conftest.py``, ``ref_keyformat.py``), and
-#: the row that was gated is the one that stayed right. A row whose neighbour
-#: is checked reads as checked.
+#: History of this gate, kept because each stage failed differently. First
+#: nothing was gated, and both columns drifted. Then the Files column was
+#: gated (4.0.0) while the line totals were left out on the argument that
+#: "``wc -l`` moves on every commit and a gate that fails on every commit is
+#: one that gets disabled" — and the totals drifted again, silently, within
+#: two days of being re-measured (measured at 8d72b8c: four of seven totals
+#: stale). The argument identified a real operational cost but drew the
+#: wrong conclusion: the fix for "the gate fails whenever the tree changes"
+#: is a one-command regenerator, not an ungated number. ``python
+#: tools/update_docs.py --loc`` rewrites every gated figure from the same
+#: measurement functions this checker verifies with, so keeping the gate
+#: green after a change is one command, and a figure that was not
+#: re-measured cannot survive review.
 #:
-#: Each entry maps the row's scope label to the exact reproduction command the
-#: report publishes for it, expressed as ``(roots, suffixes)``. Only the file
-#: counts are gated, not the line totals: ``wc -l`` moves on every commit and a
-#: gate that fails on every commit is one that gets disabled, whereas a file
-#: count moves only when the tree's shape does — which is exactly when the
-#: prose around it needs re-reading.
-_LOC_ROW_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "Library Python (`ama_cryptography/*.py`)": (("ama_cryptography",), (".py",)),
-    "Native C (`src/c/**/*.c`, `include/**/*.h`)": (("src/c", "include"), (".c", ".h")),
-    "Library total (Python + C + headers)": (
-        ("ama_cryptography", "src/c", "include"),
-        (".py", ".c", ".h"),
-    ),
-    "Tests (`tests/**/*.py`)": (("tests",), (".py",)),
+#: Counting rules, stated exactly (the report publishes the matching
+#: reproduction commands): files are enumerated with ``git ls-files`` —
+#: tracked files only, so virtualenvs, build directories and generated
+#: ``src/cython/*.c`` can never leak into a measurement — and lines are
+#: counted as ``\n`` bytes per file (exact ``wc -l`` semantics,
+#: locale-independent; trailing-newline-free files under-count by one).
+#: For a directory that is not a git checkout (this gate's own test
+#: fixtures) the enumeration falls back to a sorted filesystem walk
+#: excluding ``.git``; the real repository always takes the git path.
+_LOC_WHOLE_SUFFIX_RE = re.compile(r"\.(py|c|h|pyx|pxd|md|yml|yaml|toml|json|cmake)$")
+
+
+def _loc_is_library_python(path: str) -> bool:
+    return path.startswith("ama_cryptography/") and path.endswith(".py")
+
+
+def _loc_is_native_c(path: str) -> bool:
+    return (path.startswith("src/c/") or path.startswith("include/")) and path.endswith(
+        (".c", ".h")
+    )
+
+
+def _loc_is_top_level_python(path: str) -> bool:
+    return "/" not in path and path.endswith(".py")
+
+
+def _loc_is_tests_python(path: str) -> bool:
+    return path.startswith("tests/") and path.endswith(".py")
+
+
+def _loc_is_cython(path: str) -> bool:
+    return path.endswith((".pyx", ".pxd"))
+
+
+def _loc_is_whole_project(path: str) -> bool:
+    if path.startswith("src/cython/") and path.endswith(".c"):
+        return False  # cythonize output; .gitignore excludes it, belt-and-braces
+    basename = path.rsplit("/", 1)[-1]
+    return (
+        bool(_LOC_WHOLE_SUFFIX_RE.search(path))
+        or basename == "CMakeLists.txt"
+        or basename == "Makefile"
+    )
+
+
+#: Row label -> path predicate, in table order. Every row is gated on both
+#: columns.
+_LOC_TABLE_ROWS: dict[str, Callable[[str], bool]] = {
+    "Library Python (`ama_cryptography/*.py`)": _loc_is_library_python,
+    "Native C (`src/c/**/*.c`, `include/**/*.h`)": _loc_is_native_c,
+    "Library total (Python + C + headers)": lambda p: _loc_is_library_python(p)
+    or _loc_is_native_c(p),
+    "Top-level Python (monitors, benchmarks, demos)": _loc_is_top_level_python,
+    "Tests (`tests/**/*.py`)": _loc_is_tests_python,
+    "Cython (`*.pyx`, `*.pxd`)": _loc_is_cython,
+    "**Whole project** (source + docs + config)": _loc_is_whole_project,
 }
 
 
+#: Tracked files the BUILD rewrites in place, excluded from every LoC row.
+#:
+#: Line counts are read from the working tree, and CI runs the suite after
+#: ``pip install -e .`` has re-signed the integrity artefact.  The re-signed
+#: ``_integrity_signature.py`` is not the committed one: its binding-digest
+#: dict is ``{}`` in a tree that has not built the binding extensions and one
+#: line per bound extension afterwards — six on a CI editable install — so
+#: the same commit measured 38,195 lines for `ama_cryptography/*.py` before
+#: the build and 38,202 after it.  That difference is what failed
+#: ``test_the_real_tree_matches_every_claim`` on every Windows lane at
+#: 7432e0d (job 97221692001: "says 38,195 ... measured 38202") while the
+#: same gate passed on a fresh checkout: a number that depends on whether a
+#: build has run is not a property of the commit, and no static count can
+#: pin it.  The file's own accuracy is enforced by a stronger instrument
+#: than a line count — it is the Ed25519-signed integrity artefact the
+#: import-time verifier checks byte-for-byte.
+_LOC_BUILD_REWRITTEN = frozenset(
+    {
+        "ama_cryptography/_integrity_signature.py",
+        "ama_cryptography/_integrity_digest.txt",
+    }
+)
+
+
+def _loc_tracked_files(repo: Path) -> list[str]:
+    """Tracked files as repo-relative POSIX paths.
+
+    ``git ls-files`` is authoritative; the sorted filesystem walk exists only
+    for non-git fixture directories in this gate's own tests and excludes
+    nothing beyond ``.git`` (fixtures are clean by construction).  Files the
+    build rewrites in place (``_LOC_BUILD_REWRITTEN``) are excluded in both
+    modes, for the reason documented on the constant.
+    """
+    if (repo / ".git").exists():
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+        )
+        tracked = [p.decode("utf-8") for p in proc.stdout.split(b"\0") if p]
+    else:
+        tracked = sorted(
+            p.relative_to(repo).as_posix()
+            for p in repo.rglob("*")
+            if p.is_file() and ".git" not in p.parts
+        )
+    return [p for p in tracked if p not in _LOC_BUILD_REWRITTEN]
+
+
+def measure_loc_table(repo: Path) -> dict[str, tuple[int, int]]:
+    """``{row label: (file_count, line_count)}`` for every gated row."""
+    counts: dict[str, tuple[int, int]] = {}
+    tracked = _loc_tracked_files(repo)
+    lines_cache: dict[str, int] = {}
+
+    def _lines(rel: str) -> int:
+        if rel not in lines_cache:
+            lines_cache[rel] = (repo / rel).read_bytes().count(b"\n")
+        return lines_cache[rel]
+
+    for label, predicate in _LOC_TABLE_ROWS.items():
+        selected = [p for p in tracked if predicate(p)]
+        counts[label] = (len(selected), sum(_lines(p) for p in selected))
+    return counts
+
+
+def measure_scope_composition(repo: Path) -> dict[str, tuple[int, str]]:
+    """``{composition row label: (line_count, percent_string)}``.
+
+    The remainder row is derived by subtraction, so the composition always
+    sums to the whole-project total by construction.
+    """
+    table = measure_loc_table(repo)
+    whole = table["**Whole project** (source + docs + config)"][1]
+    library = table["Library total (Python + C + headers)"][1]
+    tests_lines = table["Tests (`tests/**/*.py`)"][1]
+    top = table["Top-level Python (monitors, benchmarks, demos)"][1]
+    cython = table["Cython (`*.pyx`, `*.pxd`)"][1]
+    remainder = whole - library - tests_lines - top - cython
+
+    def _pct(x: int) -> str:
+        return f"{x / whole * 100:.1f}%" if whole else "0.0%"
+
+    return {
+        "Library (Python + C + headers)": (library, _pct(library)),
+        "Tests": (tests_lines, _pct(tests_lines)),
+        "Top-level Python": (top, _pct(top)),
+        "Cython": (cython, _pct(cython)),
+        "Everything else (remainder)": (remainder, _pct(remainder)),
+        "**Whole-project total**": (whole, "100%"),
+    }
+
+
+def measure_tracked_json_lines(repo: Path) -> int:
+    """Lines across tracked ``*.json`` — the corpus-dominance figure the
+    Scope Composition prose quotes."""
+    return sum(
+        (repo / p).read_bytes().count(b"\n")
+        for p in _loc_tracked_files(repo)
+        if p.endswith(".json")
+    )
+
+
 def _loc_row_re(label: str) -> re.Pattern[str]:
-    return re.compile(rf"\|\s*{re.escape(label)}\s*\|\s*(\d[\d,]*)\s*\|")
+    # Cells may be bold (``**86,620**``); a legacy Files cell may be ``—``
+    # (the 4.0.0 table left three rows uncounted — the checker treats that
+    # as a failure and the regenerator fills the real count).
+    return re.compile(
+        rf"\|\s*{re.escape(label)}\s*\|\s*\**\s*(\d[\d,]*|—)\s*\**\s*\|\s*\**\s*(\d[\d,]*)\s*\**\s*\|"
+    )
+
+
+def _composition_row_re(label: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"\|\s*{re.escape(label)}\s*\|\s*\**\s*(\d[\d,]*)\s*\**\s*\|\s*\**\s*([\d.]+%)\s*\**\s*\|"
+    )
+
+
+def _num(raw: str) -> int:
+    return int(raw.replace(",", ""))
 
 
 def check_loc_table_file_counts(repo: Path) -> list[str]:
-    """Every gated row of the LoC table must state the file count it measures."""
+    """Every row of the LoC table must state the file AND line counts it
+    measures, and the Scope Composition table must agree with the same
+    measurement (function name kept from the Files-only 4.0.0 gate; it now
+    gates both columns)."""
     problems: list[str] = []
     report = repo / "docs" / "METRICS_REPORT.md"
     if not report.is_file():
         return [f"{report} is missing; the LoC table cannot be checked"]
     text = report.read_text(encoding="utf-8")
 
-    for label, (roots, suffixes) in _LOC_ROW_SCOPES.items():
-        measured = 0
-        for root in roots:
-            base = repo / root
-            if not base.is_dir():
-                continue
-            measured += sum(1 for p in base.rglob("*") if p.is_file() and p.suffix in suffixes)
+    table = measure_loc_table(repo)
+    for label, (files_measured, lines_measured) in table.items():
         matches = _loc_row_re(label).findall(text)
         if not matches:
             problems.append(
@@ -290,13 +473,53 @@ def check_loc_table_file_counts(repo: Path) -> list[str]:
                 "the row was renamed or removed and this check stopped checking it"
             )
             continue
-        for claimed in matches:
-            if int(claimed.replace(",", "")) != measured:
+        for claimed_files, claimed_lines in matches:
+            if claimed_files == "—" or _num(claimed_files) != files_measured:
                 problems.append(
-                    f"docs/METRICS_REPORT.md: LoC table says {claimed} files for "
-                    f"{label}; measured {measured}"
+                    f"docs/METRICS_REPORT.md: LoC table says {claimed_files} files for "
+                    f"{label}; measured {files_measured}"
                 )
+            if _num(claimed_lines) != lines_measured:
+                problems.append(
+                    f"docs/METRICS_REPORT.md: LoC table says {claimed_lines} lines for "
+                    f"{label}; measured {lines_measured} "
+                    "(re-measure with: python tools/update_docs.py --loc)"
+                )
+
+    composition = measure_scope_composition(repo)
+    for label, (lines_measured, pct) in composition.items():
+        matches2 = _composition_row_re(label).findall(text)
+        if not matches2:
+            problems.append(f"docs/METRICS_REPORT.md: no Scope Composition row found for {label!r}")
+            continue
+        for claimed_lines, claimed_pct in matches2:
+            if _num(claimed_lines) != lines_measured:
+                problems.append(
+                    f"docs/METRICS_REPORT.md: Scope Composition says {claimed_lines} "
+                    f"lines for {label}; measured {lines_measured}"
+                )
+            if claimed_pct != pct:
+                problems.append(
+                    f"docs/METRICS_REPORT.md: Scope Composition says {claimed_pct} "
+                    f"for {label}; measured {pct}"
+                )
+
+    json_lines = measure_tracked_json_lines(repo)
+    for claimed in re.findall(r"\((\d[\d,]*) lines of\s*`\*\.json`", text):
+        if _num(claimed) != json_lines:
+            problems.append(
+                f"docs/METRICS_REPORT.md: prose says {claimed} lines of *.json; "
+                f"measured {json_lines}"
+            )
     return problems
+
+
+#: Named on every count this gate can fail on, because a gate that reports a
+#: number without the command that fixes it is a gate people work around.  The
+#: LoC half already carried ``--loc``; the static test counts had to be found
+#: and hand-edited across three documents, which is the asymmetry
+#: ``update_docs.update_static_test_counts`` closes.
+_REMEASURE_HINT = "re-measure with: python tools/update_docs.py --counts"
 
 
 def measure_static_test_counts(repo: Path) -> tuple[int, int]:
@@ -334,19 +557,25 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
             if _num(claimed_funcs) != functions:
                 problems.append(
                     f"{rel}: claims {claimed_funcs} test functions; "
-                    f"`grep -rE '^\\s*def test_' tests/` finds {functions}"
+                    f"`grep -rE '^\\s*def test_' tests/` finds {functions} "
+                    f"({_REMEASURE_HINT})"
                 )
             if _num(claimed_files) != files:
                 problems.append(
-                    f"{rel}: claims {claimed_files} test files; {files} contain a test function"
+                    f"{rel}: claims {claimed_files} test files; {files} contain a "
+                    f"test function ({_REMEASURE_HINT})"
                 )
         for claimed in _METRICS_FILES_RE.findall(live):
             if _num(claimed) != files:
-                problems.append(f"{rel}: table says {claimed} test files; measured {files}")
+                problems.append(
+                    f"{rel}: table says {claimed} test files; measured {files} "
+                    f"({_REMEASURE_HINT})"
+                )
         for claimed in _METRICS_FUNCS_RE.findall(live):
             if _num(claimed) != functions:
                 problems.append(
-                    f"{rel}: table says {claimed} `def test_` matches; measured {functions}"
+                    f"{rel}: table says {claimed} `def test_` matches; measured "
+                    f"{functions} ({_REMEASURE_HINT})"
                 )
     return problems
 
@@ -371,10 +600,318 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
 # document may legitimately state either, so only the entry-point figure — the
 # one that says how many fuzzers actually run — is gated; the source-file count
 # is left to the prose.
+#: Bounded for the same reason as _AGGREGATE_RE above: ``\d+``, ``[\w-]*``
+#: and ``\s+`` were all unbounded (4.1x per doubling, 363 ms at 6,000 chars).
+#: Two adjectives of at most 40 characters each is the shape this is for
+#: ("15 libFuzzer entry points", "16 fuzz targets").
 _FUZZ_COUNT_RE = re.compile(
-    r"(\d+)\s+(?:[A-Za-z][\w-]*\s+){0,2}(?:targets?|harnesses?)\b",
+    r"(\d{1,9})\s{1,8}(?:[A-Za-z][\w-]{0,40}\s{1,8}){0,2}(?:targets?|harnesses?)\b",
     re.IGNORECASE,
 )
+
+
+#: "85 native entry points" / "10 Cython binding entry points" — the figures
+#: INVARIANTS.md and the CHANGELOG publish for the error-state gating surface,
+#: naming `tools/check_error_state_gating.py` as authoritative while carrying a
+#: number that had drifted away from it (85 published, 86 reported).
+_NATIVE_ENTRY_RE = re.compile(r"(\d[\d,]*) native (?:plus \d+ Cython )?entry points")
+_CYTHON_ENTRY_RE = re.compile(r"(\d[\d,]*) Cython (?:binding )?entry points")
+
+#: "59 C test suites (62 translation units)" and the bare "59 C test suites".
+_C_SUITE_PAREN_RE = re.compile(r"(\d[\d,]*) C test suites \((\d[\d,]*) translation units\)")
+_C_SUITE_BARE_RE = re.compile(r"(\d[\d,]*) C test suites")
+
+#: The OTHER spellings of the same claim.  The two patterns above match the
+#: phrasing README.md happens to use; three live documents said the same thing
+#: differently and none of them was checked:
+#:
+#:   docs/METRICS_REPORT.md  | `test_*.c` files under `tests/c/` ... | 59 |
+#:   ARCHITECTURE.md         59 `test_*.c` registered via ctest in `tests/c/`
+#:   CHANGELOG.md            the C suite is 59 files / 62 translation units
+#:
+#: against a tree with 60 and 63 — and docs/METRICS_REPORT.md is the document
+#: README calls authoritative, whose own preamble says "if a documented count
+#: and this report disagree, the count is the bug".  Here the report was.
+_C_SUITE_TABLE_RE = re.compile(
+    r"`test_\*\.c`\s+files\s+under\s+`tests/c/`[^|\n]*\|\s*(\d[\d,]*)\s*\|"
+)
+_C_SUITE_CTEST_RE = re.compile(r"(\d[\d,]*)\s+`test_\*\.c`\s+registered\s+via\s+ctest")
+#: "suite files", not "files": a "suite" is a ``tests/c/test_*.c`` and a
+#: "translation unit" is any ``.c`` under ``tests/c``, so the second number is
+#: the file count and calling the first one "files" made the sentence read as
+#: "60 files / 63 files".  The optional group keeps the older spelling
+#: matching, so a document that has not been reworded is still checked rather
+#: than silently skipped.
+_C_SUITE_FILES_UNITS_RE = re.compile(
+    r"C suite is (\d[\d,]*) (?:suite )?files / (\d[\d,]*) translation units"
+)
+
+#: README's version-stamped C library inventory.  Two counts, neither checked:
+#: "Top-level `src/c/*.c` — 27 translation units" against a tree with 29 (both
+#: ama_pbkdf2.c and ama_sha512.c were added on this branch and compiled
+#: unconditionally), and "25 modules + `__init__` + `__main__`" against 27.  An
+#: inventory presented with a version number should be measured, not
+#: transcribed.
+_SRC_C_UNITS_RE = re.compile(r"Top-level `src/c/\*\.c`\s*[—-]\s*(\d[\d,]*) translation units")
+_PACKAGE_MODULES_RE = re.compile(
+    r"`ama_cryptography/`,\s*(\d[\d,]*) modules \+ `__init__` \+ `__main__`"
+)
+
+#: README's `src/c/internal/` line, which states both halves of that directory.
+#: It said "5 `.h`" against a tree holding eight, one row from inventories that
+#: ARE gated — the shape the 2026-08-01 METRICS_REPORT entry named: "a row whose
+#: neighbour is checked reads as checked".
+_SRC_C_INTERNAL_RE = re.compile(
+    r"`src/c/internal/`\s*[—-]\s*(\d[\d,]*) `\.c`.*?;\s*(\d[\d,]*) `\.h`"
+)
+
+
+def count_error_state_entry_points() -> tuple[int, int]:
+    """The authoritative gated-surface counts, from the gate that owns them.
+
+    Imported rather than re-derived, for the reason this module exists: a fact
+    is declared once and every other mention is checked against it.
+    """
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from tools import check_error_state_gating as gating
+
+    return gating.entry_point_counts()
+
+
+def measure_c_suite_counts(repo: Path) -> tuple[int, int]:
+    """(C test suites, C translation units) under ``tests/c``.
+
+    A "suite" is a ``tests/c/test_*.c`` — one executable per file.  A
+    "translation unit" is any ``.c`` under ``tests/c``, which additionally
+    counts the bench and equivalence helpers that are compiled but are not
+    themselves suites.  Both figures appear in README.md, and neither was
+    checked by anything: adding a C test moved them and no gate noticed.
+    """
+    suites = sum(1 for p in (repo / "tests" / "c").rglob("test_*.c"))
+    units = sum(1 for p in (repo / "tests" / "c").rglob("*.c"))
+    return suites, units
+
+
+#: The CHANGELOG is excluded from ``_markdown_files`` as "historical by
+#: definition", which is right for released sections and wrong for the one at
+#: the top: ``## [X.Y.Z] - Unreleased`` describes the release being built, and
+#: a wrong figure there is a wrong figure in the release notes, not a record of
+#: what was once true.  Both drifted counts this pair of checks was written for
+#: had an occurrence in exactly that section.
+_UNRELEASED_HEADING_RE = re.compile(r"^##\s*\[[^\]]+\]\s*-\s*Unreleased\s*$", re.I)
+_ANY_VERSION_HEADING_RE = re.compile(r"^##\s*\[")
+
+
+def changelog_unreleased_section(repo: Path) -> str:
+    """The text of the CHANGELOG's ``- Unreleased`` section, or ``""``.
+
+    Returns empty when there is no such section — which is the state right
+    after a release is dated — so the checks below simply find nothing rather
+    than failing on a file shape they did not expect.
+    """
+    path = repo / "CHANGELOG.md"
+    if not path.is_file():
+        return ""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        if _UNRELEASED_HEADING_RE.match(line):
+            inside = True
+            continue
+        if inside and _ANY_VERSION_HEADING_RE.match(line):
+            break
+        if inside:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _live_documents(repo: Path) -> list[tuple[str, str]]:
+    """(display name, text) for every document these checks read.
+
+    Markdown under the documented roots, with history rows filtered, plus the
+    CHANGELOG's unreleased section.
+    """
+    docs: list[tuple[str, str]] = []
+    for path in _markdown_files(repo):
+        text = path.read_text(encoding="utf-8")
+        live = "\n".join(line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line))
+        docs.append((str(path.relative_to(repo)), live))
+    unreleased = changelog_unreleased_section(repo)
+    if unreleased:
+        docs.append(("CHANGELOG.md [Unreleased]", unreleased))
+    return docs
+
+
+def check_entry_point_counts(repo: Path) -> list[str]:
+    problems: list[str] = []
+    try:
+        native, cython = count_error_state_entry_points()
+    except Exception as exc:  # gate absent or renamed — fail loud, never skip
+        return [f"cannot resolve the authoritative entry-point counts: {exc}"]
+
+    def _num(raw: str) -> int:
+        return int(raw.replace(",", ""))
+
+    for rel, live in _live_documents(repo):
+        for claimed in _NATIVE_ENTRY_RE.findall(live):
+            if _num(claimed) != native:
+                problems.append(
+                    f"{rel}: says {claimed} native entry points; "
+                    f"tools/check_error_state_gating.py reports {native}"
+                )
+        for claimed in _CYTHON_ENTRY_RE.findall(live):
+            if _num(claimed) != cython:
+                problems.append(
+                    f"{rel}: says {claimed} Cython binding entry points; "
+                    f"tools/check_error_state_gating.py reports {cython}"
+                )
+    return problems
+
+
+def check_c_suite_counts(repo: Path) -> list[str]:
+    problems: list[str] = []
+    suites, units = measure_c_suite_counts(repo)
+
+    def _num(raw: str) -> int:
+        return int(raw.replace(",", ""))
+
+    for rel, live in _live_documents(repo):
+        for claimed_suites, claimed_units in _C_SUITE_PAREN_RE.findall(live):
+            if _num(claimed_suites) != suites:
+                problems.append(
+                    f"{rel}: says {claimed_suites} C test suites; "
+                    f"`tests/c/**/test_*.c` counts {suites}"
+                )
+            if _num(claimed_units) != units:
+                problems.append(
+                    f"{rel}: says {claimed_units} C translation units; "
+                    f"`tests/c/**/*.c` counts {units}"
+                )
+        # The bare form, minus the ones the parenthesised pattern already saw.
+        paren_hits = {m[0] for m in _C_SUITE_PAREN_RE.findall(live)}
+        for claimed in _C_SUITE_BARE_RE.findall(live):
+            if claimed in paren_hits:
+                continue
+            if _num(claimed) != suites:
+                problems.append(
+                    f"{rel}: says {claimed} C test suites; "
+                    f"`tests/c/**/test_*.c` counts {suites}"
+                )
+        # The three spellings the patterns above cannot see.
+        for claimed in _C_SUITE_TABLE_RE.findall(live) + _C_SUITE_CTEST_RE.findall(live):
+            if _num(claimed) != suites:
+                problems.append(
+                    f"{rel}: says {claimed} `test_*.c` files under tests/c/; "
+                    f"the tree has {suites}"
+                )
+        for claimed_suites, claimed_units in _C_SUITE_FILES_UNITS_RE.findall(live):
+            if _num(claimed_suites) != suites:
+                problems.append(
+                    f"{rel}: says the C suite is {claimed_suites} files; " f"the tree has {suites}"
+                )
+            if _num(claimed_units) != units:
+                problems.append(
+                    f"{rel}: says the C suite is {claimed_units} translation units; "
+                    f"the tree has {units}"
+                )
+    return problems
+
+
+def _git_tracked(repo: Path, pattern: str) -> Optional[list[str]]:
+    """Paths git tracks matching ``pattern``, or None when git cannot answer."""
+    try:
+        proc = subprocess.run(
+            # `:(glob)` pathspec magic: without it git's wildmatch lets `*`
+            # cross a `/`, so `src/c/*.c` also matched src/c/avx2/*.c and
+            # friends -- 61 files where the directory holds 29.  The gate
+            # caught it on the first run, which is what it is for.
+            ["git", "-C", str(repo), "ls-files", f":(glob){pattern}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _tracked_or_globbed(repo: Path, pattern: str) -> list[str]:
+    tracked = _git_tracked(repo, pattern)
+    if tracked is not None:
+        return tracked
+    return [p.as_posix() for p in sorted(repo.glob(pattern))]
+
+
+def _tracked_or_globbed_names(repo: Path, pattern: str) -> list[str]:
+    return [Path(p).name for p in _tracked_or_globbed(repo, pattern)]
+
+
+def measure_source_inventory(repo: Path) -> tuple[int, int]:
+    """(top-level ``src/c/*.c`` count, package module count).
+
+    The module count excludes ``__init__.py`` and ``__main__.py``, matching the
+    README's own "N modules + ``__init__`` + ``__main__``" phrasing, and reads
+    the TRACKED set so a stray scratch file in a working tree is not counted.
+
+    That last sentence was here while the code globbed the filesystem, which is
+    the opposite: an untracked ``ama_cryptography/scratch.py`` moved the module
+    count and failed the gate against a README that was correct.  It now really
+    does ask git, and falls back to the glob only where git cannot answer — a
+    source tarball with no repository — because refusing to count at all there
+    would fail the gate for a reason that has nothing to do with the docs.
+    """
+    units = _tracked_or_globbed(repo, "src/c/*.c")
+    modules = [
+        name
+        for name in _tracked_or_globbed_names(repo, "ama_cryptography/*.py")
+        if name not in {"__init__.py", "__main__.py"}
+    ]
+    return len(units), len(modules)
+
+
+def measure_internal_sources(repo: Path) -> tuple[int, int]:
+    """(``src/c/internal/*.c`` count, ``src/c/internal/*.h`` count)."""
+    return (
+        len(_tracked_or_globbed(repo, "src/c/internal/*.c")),
+        len(_tracked_or_globbed(repo, "src/c/internal/*.h")),
+    )
+
+
+def check_source_inventory_counts(repo: Path) -> list[str]:
+    """README's version-stamped C and Python inventories, measured."""
+    problems: list[str] = []
+    units, modules = measure_source_inventory(repo)
+    internal_c, internal_h = measure_internal_sources(repo)
+
+    def _num(raw: str) -> int:
+        return int(raw.replace(",", ""))
+
+    for rel, live in _live_documents(repo):
+        for claimed in _SRC_C_UNITS_RE.findall(live):
+            if _num(claimed) != units:
+                problems.append(
+                    f"{rel}: says {claimed} top-level src/c translation units; "
+                    f"`src/c/*.c` counts {units}"
+                )
+        for claimed in _PACKAGE_MODULES_RE.findall(live):
+            if _num(claimed) != modules:
+                problems.append(
+                    f"{rel}: says {claimed} package modules besides __init__ and "
+                    f"__main__; `ama_cryptography/*.py` counts {modules}"
+                )
+        for claimed_c, claimed_h in _SRC_C_INTERNAL_RE.findall(live):
+            if (_num(claimed_c), _num(claimed_h)) != (internal_c, internal_h):
+                problems.append(
+                    f"{rel}: says src/c/internal/ holds {claimed_c} .c and "
+                    f"{claimed_h} .h; the tree holds {internal_c} and {internal_h}"
+                )
+    return problems
 
 
 def count_libfuzzer_entry_points(repo: Path) -> int:
@@ -386,10 +923,10 @@ def count_libfuzzer_entry_points(repo: Path) -> int:
     *defines* ``LLVMFuzzerTestOneInput``" detection here would be the exact
     duplication it exists to police.
     """
-    tools_dir = str(Path(__file__).resolve().parent)
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    import check_fuzz_target_registration as registration
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from tools import check_fuzz_target_registration as registration
 
     return len(registration._sources(repo))
 
@@ -435,9 +972,14 @@ _WORD_NUMBERS = {
         "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
     )
 }
+#: Bounded for the same reason as the two patterns above; this one was the
+#: worst of the three (4.0x per doubling, 842 ms at 6,000 chars), because
+#: ``[^)\n]*?`` rescans the tail from every start offset.  The claim it
+#: matches — "(4 breaking changes ... CHANGELOG 4.0.0)" — fits comfortably
+#: inside 300 characters.
 _BREAKING_CLAIM_RE = re.compile(
-    r"\(?\s*(\d+|[A-Za-z]+)\s+breaking\s+changes?\b[^)\n]*?"
-    r"CHANGELOG\s*`?\[?(\d+\.\d+\.\d+)\]?`?",
+    r"\(?\s{0,8}(\d{1,9}|[A-Za-z]{1,20})\s{1,8}breaking\s{1,8}changes?\b[^)\n]{0,300}?"
+    r"CHANGELOG\s{0,8}`?\[?(\d{1,9}\.\d{1,9}\.\d{1,9})\]?`?",
     re.IGNORECASE,
 )
 _CHANGELOG_BREAKING_ROW_RE = re.compile(r"^\|\s*\d+\s*\|\s*\*{0,2}Breaking\*{0,2}\s*\|", re.M)
@@ -492,31 +1034,63 @@ def check_breaking_change_counts(repo: Path) -> list[str]:
     return problems
 
 
-def audit(repo: Path = REPO) -> tuple[list[str], int]:
-    """Returns ``(problems, claims_checked)``.
+def count_claim_families(repo: Path = REPO) -> dict[str, int]:
+    """How many documented-count claims each family's pattern matches.
 
-    The second value is the non-vacuity guard: if the claim patterns stop
-    matching — because a document was reformatted, say — the checker would
-    otherwise pass by finding nothing to check.
+    The non-vacuity guard, per family.  A single aggregate counter (the old
+    ``checked`` int) could not tell "42 metrics-table rows still match, so the
+    total is healthy" from "the six test-count claims were reworded to em-dashes
+    and now match nothing" — the family that went silent hid behind the families
+    that did not, and a flatly false test count would then pass because the
+    pattern that would have caught it no longer fired (audit M15).  Keyed by
+    family so :data:`CLAIM_FAMILY_FLOORS` can floor each one independently.
     """
-    problems: list[str] = []
-    checked = 0
+    counts: dict[str, int] = dict.fromkeys(CLAIM_FAMILY_FLOORS, 0)
     for path in _markdown_files(repo):
         text = path.read_text(encoding="utf-8")
-        checked += len(_TEST_COUNT_RE.findall(text))
-        checked += len(_RECORD_COUNT_RE.findall(text))
-        checked += len(_WYCHEPROOF_RE.findall(text))
-        checked += len(_AGGREGATE_RE.findall(text))
-        checked += len(_METRICS_FILES_RE.findall(text))
-        checked += len(_METRICS_FUNCS_RE.findall(text))
+        counts["test_count"] += len(_TEST_COUNT_RE.findall(text))
+        counts["record_count"] += len(_RECORD_COUNT_RE.findall(text))
+        counts["wycheproof"] += len(_WYCHEPROOF_RE.findall(text))
+        counts["aggregate"] += len(_AGGREGATE_RE.findall(text))
+        counts["metrics_files"] += len(_METRICS_FILES_RE.findall(text))
+        counts["metrics_funcs"] += len(_METRICS_FUNCS_RE.findall(text))
+        counts["native_entry"] += len(_NATIVE_ENTRY_RE.findall(text))
+        counts["cython_entry"] += len(_CYTHON_ENTRY_RE.findall(text))
+        counts["c_suite_bare"] += len(_C_SUITE_BARE_RE.findall(text))
         live_lines = [line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line)]
         for line in live_lines:
             if "fuzz" in line.lower():
-                checked += len(_FUZZ_COUNT_RE.findall(line))
-        checked += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
+                counts["fuzz"] += len(_FUZZ_COUNT_RE.findall(line))
+        counts["breaking"] += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
         if path.name == "METRICS_REPORT.md":
-            for label in _LOC_ROW_SCOPES:
-                checked += len(_loc_row_re(label).findall(text))
+            # Each LoC-table row contributes two gated claims (Files, Lines);
+            # each Scope Composition row contributes two (Lines, %); the
+            # *.json prose figure contributes one.
+            for label in _LOC_TABLE_ROWS:
+                counts["loc_rows"] += 2 * len(_loc_row_re(label).findall(text))
+            for comp_label in (
+                "Library (Python + C + headers)",
+                "Tests",
+                "Top-level Python",
+                "Cython",
+                "Everything else (remainder)",
+                "**Whole-project total**",
+            ):
+                counts["comp_rows"] += 2 * len(_composition_row_re(comp_label).findall(text))
+            counts["json_lines"] += len(re.findall(r"\((\d[\d,]*) lines of\s*`\*\.json`", text))
+    return counts
+
+
+def audit(repo: Path = REPO) -> tuple[list[str], dict[str, int]]:
+    """Returns ``(problems, family_counts)``.
+
+    ``family_counts`` is the non-vacuity guard, per claim family: if any
+    family's pattern stops matching — because a document was reformatted, a count
+    reworded to prose, or a backtick moved — :func:`main` fails it against
+    :data:`CLAIM_FAMILY_FLOORS` even while other families keep the total high.
+    """
+    problems: list[str] = []
+    family_counts = count_claim_families(repo)
     problems += check_record_counts(repo)
     problems += check_wycheproof_counts(repo)
     problems += check_test_counts(repo)
@@ -529,30 +1103,83 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
     else:
         problems += check_fuzz_target_counts(repo, fuzz_authoritative)
     problems += check_breaking_change_counts(repo)
-    return problems, checked
+    problems += check_entry_point_counts(repo)
+    problems += check_c_suite_counts(repo)
+    problems += check_source_inventory_counts(repo)
+    return problems, family_counts
 
 
-#: Non-vacuity floor. Eight claims resolve today across KEY_FORMATS.md,
-#: NIST_PRIME_CURVES.md and the corpus README.
-MIN_CLAIMS = 5
+#: Per-family non-vacuity floors (audit M15).  Each is the minimum number of
+#: claims that family's pattern must match across the scanned documents.  A
+#: single aggregate floor could not notice one family going silent while the
+#: metrics tables kept the total near 42; these floor each family so a reworded
+#: test-count claim, a moved backtick, or a line-wrap that splits "entry points"
+#: across two lines fails the gate instead of quietly leaving a claim unchecked.
+#:
+#: The values are pinned to the counts the current tree carries — they are
+#: MINIMUMS, so adding a claim never trips them; only removing or rewording one
+#: below the floor does, which is the deliberate, visible act pinning is for.
+#: Lower a floor only when a claim is genuinely retired, the same discipline
+#: ``tools/check_stdlib_hash_boundary.py`` uses for its per-file pinned counts.
+CLAIM_FAMILY_FLOORS: dict[str, int] = {
+    "test_count": 6,
+    "record_count": 7,
+    "wycheproof": 1,
+    "aggregate": 4,
+    "metrics_files": 1,
+    "metrics_funcs": 1,
+    "native_entry": 1,
+    "cython_entry": 1,
+    "c_suite_bare": 2,
+    "fuzz": 11,
+    "breaking": 4,
+    "loc_rows": 14,
+    "comp_rows": 12,
+    "json_lines": 1,
+}
+
+#: Kept as the aggregate floor's derived value so external references (and the
+#: OK line) have a single "total claims expected" number.  Per-family flooring
+#: below subsumes it, but a mismatch between the sum and this constant would mean
+#: a family was added to one and not the other.
+MIN_CLAIMS = sum(CLAIM_FAMILY_FLOORS.values())
+
+
+def families_below_floor(family_counts: dict[str, int]) -> list[tuple[str, int, int]]:
+    """``[(family, count, floor), …]`` for every family under its floor.
+
+    Includes a family absent from ``family_counts`` (treated as 0), so a family
+    whose pattern was deleted outright is caught rather than skipped.
+    """
+    below: list[tuple[str, int, int]] = []
+    for family, floor in CLAIM_FAMILY_FLOORS.items():
+        count = family_counts.get(family, 0)
+        if count < floor:
+            below.append((family, count, floor))
+    return below
 
 
 def main() -> int:
-    problems, checked = audit()
+    problems, family_counts = audit()
     if problems:
         print(f"FAIL: {len(problems)} documented count(s) have drifted:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
-    if checked < MIN_CLAIMS:
+    below = families_below_floor(family_counts)
+    if below:
         print(
-            f"FAIL: only {checked} documented count(s) matched the claim patterns, "
-            f"below the floor of {MIN_CLAIMS}. A checker that finds nothing to "
-            "check passes vacuously.",
+            f"FAIL: {len(below)} claim family(ies) matched fewer documented counts "
+            "than their non-vacuity floor — a claim was reworded, moved, or "
+            "wrapped so its pattern no longer fires, and a checker that finds "
+            "nothing to check passes vacuously:",
             file=sys.stderr,
         )
+        for family, count, floor in below:
+            print(f"  - {family}: matched {count}, floor {floor}", file=sys.stderr)
         return 1
-    print(f"OK    documented counts ({checked} checked)")
+    total = sum(family_counts.values())
+    print(f"OK    documented counts ({total} checked across {len(family_counts)} families)")
     return 0
 
 

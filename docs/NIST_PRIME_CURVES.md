@@ -232,7 +232,7 @@ than elided. What remains, with an honest note on each:
 |---|---|
 | `wycheproof_vectors/` — 1530 vectors across `ecdsa_secp256r1_sha256`, `ecdsa_secp384r1_sha384`, `ecdsa_secp521r1_sha512` | adversarial verification: encoding abuse, edge-case signatures, invalid points. **0 failures, 0 policy exceptions** |
 | `tests/kat/rfc6979/ecdsa_prime_curves.kat` | all 18 in-scope vectors from RFC 6979 Appendix A.2.5/A.2.6/A.2.7 — the specification's own answer key, replayed including its printed public keys |
-| `tests/test_nistp_curves.py` — 94 tests | signing agrees byte-for-byte with a pure-Python reference derived **from the specification only**, under both signing policies; the four-way low-`s` truth table; nonce non-repetition; ECDH against the reference; invalid-curve rejection; the full negative space; the curve/hash pairing `nistp_default_hash` publishes |
+| `tests/test_nistp_curves.py` — 97 tests | signing agrees byte-for-byte with a pure-Python reference derived **from the specification only**, under both signing policies; the four-way low-`s` truth table; nonce non-repetition; ECDH against the reference; invalid-curve rejection; the full negative space, including coordinates that are non-canonical *and* reduce onto a real curve point, which is the only form that tells rejection apart from silent reduction; the curve/hash pairing `nistp_default_hash` publishes |
 | `tests/test_selector_strictness.py` — 41 tests | INVARIANT-35: every selector refuses every unrecognised value rather than resolving a neighbour |
 | `tests/c/test_nistp.c` | the hardcoded Montgomery constants re-derived from `p` and `n` alone; the windowed scalar multiplier against a naive double-and-add reference over the boundary lattice |
 

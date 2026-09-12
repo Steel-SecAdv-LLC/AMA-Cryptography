@@ -431,3 +431,48 @@ class TestTheHarnessReadsWhatTheProgramWrote:
                 "explicit encoding=; it would decode the example's UTF-8 output "
                 "with the parent's locale codec, which is cp1252 on Windows"
             )
+
+
+class TestFlaskIntegrationSurface:
+    """Attack-surface pins for the Flask demo (2026-08-31 v5 audit, item 20).
+
+    The demo listens on a socket, so it is reviewed as an attack surface.
+    ``/api/verify`` used ``request.get_json()`` in ``all(k in data ...)`` with
+    no None/dict guard: a JSON ``null`` (or non-object) body raised TypeError
+    and surfaced as an unhandled HTTP 500, while ``/api/sign`` returned a clean
+    400 for the same input.  These pins assert every malformed body fails
+    clean (400) and a valid request still verifies — the first fails against
+    the pre-fix code.
+    """
+
+    def _client(self):  # type: ignore[no-untyped-def]  # dynamic (module, Flask test client) tuple; typing the import adds no value in a skip-guarded helper (VAUDIT-001)
+        flask = pytest.importorskip("flask")
+        _ = flask
+        sys.path.insert(0, str(EXAMPLES.parent.parent))
+        import importlib
+
+        mod = importlib.import_module("examples.python.flask_integration")
+        return mod, mod.app.test_client()
+
+    @pytest.mark.parametrize("body", ["null", "[]", '"str"', "123", "{}"])
+    def test_verify_rejects_malformed_body_as_400_not_500(self, body: str) -> None:
+        _mod, client = self._client()
+        resp = client.post("/api/verify", data=body, content_type="application/json")
+        assert resp.status_code == 400, (
+            f"malformed /api/verify body {body!r} returned {resp.status_code}; "
+            "a non-object JSON body must fail clean (400), never crash to 500"
+        )
+
+    def test_verify_accepts_a_valid_signature(self) -> None:
+        mod, client = self._client()
+        sig = mod.CRYPTO.sign(b"audit", mod.KEYPAIR.secret_key)
+        resp = client.post(
+            "/api/verify",
+            json={
+                "data": "audit",
+                "signature": sig.signature.hex(),
+                "public_key": mod.KEYPAIR.public_key.hex(),
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["valid"] is True

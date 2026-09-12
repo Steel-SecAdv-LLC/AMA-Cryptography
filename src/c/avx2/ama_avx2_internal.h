@@ -83,8 +83,6 @@ extern "C" {
  * ============================================================================ */
 void         ama_keccak_f1600_avx2(uint64_t state[25]);
 void         ama_keccak_f1600_x4_avx2(uint64_t states[4][25]);
-ama_error_t  ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
-                                uint8_t output[32]);
 
 /* ============================================================================
  * Kyber (ML-KEM) — dispatch-facing entry points

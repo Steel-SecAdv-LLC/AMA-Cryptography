@@ -51,6 +51,14 @@ extern void ama_keccak_f1600_generic(uint64_t state[25]);
 extern void ama_keccak_f1600_bmi(uint64_t state[25]);
 #endif
 
+/* Everything from here to the end of this block is used only by the
+ * equivalence passes below, which compile only when the BMI kernel is in the
+ * build.  Defining them unconditionally left three unused symbols on every
+ * non-x86 target — a -Wunused-function / -Wunused-const-variable class that
+ * `-Werror=unused-function` in the strict-warnings gate makes fatal, and that
+ * nothing reported because that gate runs on x86-64 only. */
+#ifdef AMA_TEST_HAVE_KECCAK_BMI
+
 static uint64_t xs_state = 0x9E3779B97F4A7C15ULL;
 static uint64_t xs_next(void) {
     uint64_t x = xs_state;
@@ -94,6 +102,8 @@ static const uint64_t keccak_f1600_of_zero[25] = {
     0x1841F924A2C509E4ULL, 0x16F53526E70465C2ULL, 0x75F644E97F30A13BULL,
     0xEAF1FF7B5CECA249ULL
 };
+
+#endif /* AMA_TEST_HAVE_KECCAK_BMI */
 
 int main(void) {
     printf("Keccak-f[1600] BMI-build vs portable-build equivalence\n");

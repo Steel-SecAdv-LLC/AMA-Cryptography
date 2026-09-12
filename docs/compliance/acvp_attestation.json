@@ -144,18 +144,18 @@
     "total_vectors_passed": 1215,
     "total_vectors_failed": 0,
     "total_vectors_skipped": 5789,
-    "total_vectors_skipped_aft_filtered": 4757,
-    "total_vectors_skipped_non_aft": 1032,
-    "total_vectors_skipped_note": "total_vectors_skipped = total_vectors_skipped_aft_filtered + total_vectors_skipped_non_aft. The AFT-filtered bucket (run_vectors.py::results.summary.total_skipped, aggregated from per-algorithm vectors_skipped) counts individual vectors filtered out within AFT test groups: non-byte-aligned inputs, non-target parameter sets, ML-KEM encapsulation (AMA does not expose the randomness parameter m), and ML-DSA/SLH-DSA internal/pre-hash test groups. The non-AFT bucket counts entire test groups with testType != 'AFT' that are skipped wholesale (LDT + VOT in the current coverage; MCT moved OUT of this bucket in v3.0.0 when the four SHA-3 MCT runners were added, dropping the count from 1036 to 1032). These are tracked per-algorithm in run_vectors.py under the legacy field name 'mct_skipped' (the field name predates MCT coverage and is now semantically a misnomer \u2014 it counts non-AFT test groups generally) and surfaced in validation_summary.json as total_non_aft_skipped (with mct_skipped kept alongside as a backwards-compatible alias for the raw harness field).",
+    "total_vectors_skipped_aft_filtered": 4667,
+    "total_vectors_skipped_non_aft": 1122,
+    "total_vectors_skipped_note": "total_vectors_skipped = total_vectors_skipped_aft_filtered + total_vectors_skipped_non_aft (5789 = 4667 + 1122). The AFT-filtered bucket (run_vectors.py::results.summary.total_skipped, aggregated from per-algorithm vectors_skipped) counts individual vectors filtered out within AFT test groups: non-byte-aligned inputs, non-target parameter sets, and ML-DSA/SLH-DSA internal/pre-hash test groups. The non-AFT bucket counts entire test groups with testType != 'AFT' that are skipped wholesale (LDT + VOT + the ML-KEM-1024 EncapDecap groups in the current coverage; MCT moved OUT of this bucket in v3.0.0 when the four SHA-3 MCT runners were added, dropping the SHA-3 contribution but not the total). These are tracked per-algorithm in run_vectors.py under the legacy field name 'mct_skipped' (the field name predates MCT coverage and is now semantically a misnomer \u2014 it counts non-AFT test groups generally); the ML-KEM-1024 EncapDecap groups (encapsulation randomness parameter m not exposed by AMA) are counted there, i.e. as non-AFT, which is why they belong in this bucket and not the AFT-filtered one.",
     "skip_categories_aft_filtered": [
         "Non-byte-aligned inputs (bitLength % 8 != 0)",
         "Non-target parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA non-SHA2-256f)",
-        "ML-KEM encapsulation (randomness parameter m not exposed by AMA API)",
         "ML-DSA/SLH-DSA internal and pre-hash test groups"
     ],
     "skip_categories_non_aft": [
         "Large Data Test (LDT) groups \u2014 multi-gigabyte inputs outside the CI harness scope (8 SHA-3 tcIds)",
         "Variable Output Test (VOT) groups \u2014 output-length coverage is already exercised by AFT vectors in the same upstream vector files (1024 SHAKE tcIds)",
+        "ML-KEM-1024 EncapDecap groups (90 tcIds \u2014 testType != 'AFT'; encapsulation randomness parameter m not exposed by AMA, so the groups are skipped wholesale)",
         "Any other testType != 'AFT' test group encountered upstream"
     ],
     "coverage_changelog": [
@@ -167,6 +167,10 @@
         {
             "date": "2026-07-27",
             "change": "Added `additional_validated_coverage`: the parameter sets and curves validated in CI that are NOT part of the immutable 1,215-vector ACVP self-attestation, each with its real source and the reason it is not attested. The attestation totals are unchanged, deliberately \u2014 the point is to stop the document under-describing coverage without over-claiming it."
+        },
+        {
+            "date": "2026-08-24",
+            "change": "Corrected the skip-bucket split. total_vectors_skipped_aft_filtered: 4757 -> 4667; total_vectors_skipped_non_aft: 1032 -> 1122. The 90 ML-KEM-1024 EncapDecap groups were described here as AFT-filtered, but the harness counts them as non-AFT (run_vectors.py records them under the per-algorithm mct_skipped field). Re-derived by running nist_vectors/run_vectors.py at the release head: results.json summary.total_skipped = 4667 and the sum of per-algorithm mct_skipped = 1122 (SHA3-256 4 + SHA3-512 4 + SHAKE-128 512 + SHAKE-256 512 + ML-KEM-1024 EncapDecap 90). The total (5789), total_vectors_tested (1215), passed (1215) and failed (0) are unchanged. Moved the ML-KEM encapsulation entry from skip_categories_aft_filtered to skip_categories_non_aft accordingly."
         }
     ],
     "test_environment": {

@@ -1,4 +1,10 @@
 {
+  "provenance": {
+    "ama_commit": "66d207396c3bb5645486f28ffa084dda0c12799f",
+    "ama_version": "3.4.0",
+    "measured_at": "2026-07-29T19:09:37-05:00",
+    "note": "The commit at which these measurements were taken, and the ama_cryptography __version__ declared by that commit. Added retrospectively, from `git log -1 -- benchmarks/pqc_results.json` and `git show <commit>:ama_cryptography/__init__.py`, because the file carried no version at all \u2014 which is what let benchmarks/competitive.html be re-rendered at a later commit and stamped 'AMA 5.0.0' over data measured on the 3.4.0 tree. generate_competitive.py now reads the AMA version from HERE rather than from the working tree, so a re-render without a re-measurement cannot relabel the data."
+  },
   "rounds": 200,
   "results": [
     {

@@ -60,7 +60,14 @@ int main(void) {
     if (dt == NULL || dt->dilithium_rej_uniform == NULL) {
         printf("SKIP: dispatched rej_uniform unavailable on this build/CPU\n");
         printf("============================================================\n");
-        return 0;
+        /* 77, not 0.  dispatch_table.dilithium_rej_uniform is assigned in
+         * exactly one place (the AVX2 block in ama_dispatch.c), so on every
+         * AArch64 build this branch is taken permanently — and returning 0
+         * made CTest report "Passed" for a test that executed no checks at
+         * all, on every ARM lane.  Paired with SKIP_RETURN_CODE 77 in
+         * tests/c/CMakeLists.txt, exactly as the sibling
+         * test_dilithium_ntt_equiv already does. */
+        return 77;
     }
 
     const int TRIALS = 256;

@@ -105,7 +105,29 @@ def main() -> int:
             import runpy
 
             saved_argv = sys.argv
-            sys.argv = ["ama_cryptography._build_sign"]
+            # --bind-extensions is not optional here, and leaving it off was
+            # not a policy choice that happened to be invisible.  This exact
+            # command is what _self_test._check_binding_extensions prints as
+            # the remedy for "present but not covered by the signed
+            # artefact"; without the flag _build_sign takes the
+            # `if args.bind_extensions else {}` branch and writes
+            # INTEGRITY_BINDING_DIGESTS_HEX = {}, so running the documented
+            # repair changed the artefact hash, printed "bindings = 0
+            # extension(s) bound", and reproduced the identical warnings on
+            # the next import.  The one instruction the failure message gives
+            # could not clear the condition it was given for.
+            #
+            # Binding here is also the correct scope.  A repair artefact is
+            # local by construction — it is re-signed with this machine's key
+            # and replaces whatever release signature the tree carried — so
+            # "an artefact that binds one tree's extensions would report a
+            # MISMATCH on every other machine" describes copying a repaired
+            # tree elsewhere, where a mismatch is the accurate verdict and
+            # carries this same repair hint.  It matches how the native
+            # library is already treated: rebuild it without repairing and
+            # import fails closed, because the artefact names bytes that are
+            # no longer there.
+            sys.argv = ["ama_cryptography._build_sign", "--bind-extensions"]
             try:
                 # Use runpy so __name__ == "__main__" inside _build_sign
                 # and its sys.exit() path is honoured via the

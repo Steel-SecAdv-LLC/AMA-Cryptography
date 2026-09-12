@@ -169,7 +169,8 @@ def evaluate(
             "--confidence-level and let this tool apply the thresholds."
         )
 
-    blocking, below = [], []
+    blocking: list[dict[str, Any]] = []
+    below: list[dict[str, Any]] = []
     for result in at_severity:
         target = (
             blocking

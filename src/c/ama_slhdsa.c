@@ -222,7 +222,7 @@ static void sha2_mgf1_sha512(uint8_t *out, size_t outlen,
         hashbuf[seedlen + 1] = (uint8_t)(i >> 16);
         hashbuf[seedlen + 2] = (uint8_t)(i >> 8);
         hashbuf[seedlen + 3] = (uint8_t)i;
-        ama_sha512(hashbuf, seedlen + 4, buf);
+        ama_sha512_oneshot(hashbuf, seedlen + 4, buf);
         tocopy = (outlen - i * 64 < 64) ? outlen - i * 64 : 64;
         memcpy(out + i * 64, buf, tocopy);
     }
@@ -298,7 +298,7 @@ static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
     /* toByte(0, 128-n) is left as zeros from the memset above. */
     memcpy(buf + 128, addr_c, 22);
     if (msglen > 0) memcpy(buf + 150, m, msglen);
-    ama_sha512(buf, total, hash);
+    ama_sha512_oneshot(buf, total, hash);
     memcpy(out, hash, p->n);
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(buf, total);
@@ -1001,16 +1001,7 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
  * Top-level keygen / sign / verify (parameter-driven, exposed C API)
  * ============================================================================ */
 
-#ifdef AMA_TESTING_MODE
-ama_error_t (*ama_slhdsa_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
 static ama_error_t slh_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_slhdsa_randombytes_hook) {
-        return ama_slhdsa_randombytes_hook(buf, len);
-    }
-#endif
     return ama_randombytes(buf, len);
 }
 
@@ -1350,8 +1341,7 @@ AMA_API ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
 
 /* Deterministic-randomness hook for KAT testing (test-only), preserved from
  * the original ama_sphincs.c so tests/c/test_kat.c keeps linking and driving
- * the SPHINCS+ vectors deterministically. Kept distinct from
- * ama_slhdsa_randombytes_hook. */
+ * the SPHINCS+ vectors deterministically. */
 #ifdef AMA_TESTING_MODE
 ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
 #endif

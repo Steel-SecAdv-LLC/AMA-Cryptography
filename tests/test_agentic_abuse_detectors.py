@@ -338,7 +338,14 @@ undetected checkpoint behind. Lessons learned: relay first.""",
 
 
 _CORPUS_SUFFIXES = (".md", ".py", ".c", ".h", ".json", ".yml", ".pyx")
-_CORPUS_SKIP_TOP = {".git", "build", "build-dudect", "dist", ".eggs", ".pytest_cache"}
+_CORPUS_SKIP_TOP = {
+    ".git",
+    "build",
+    "build-dudect",
+    "dist",
+    ".eggs",
+    ".pytest_cache",
+}
 
 
 def corpus_files() -> list[pathlib.Path]:
@@ -395,10 +402,12 @@ def _git_tracked_paths() -> list[str] | None:
     return [p for p in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if p]
 
 
-# The only corpus files the default detector flags are ones that *themselves*
-# contain or describe successor-note tradecraft — they are true positives on
-# literal note content, not false positives on benign prose.  Pinned as an
-# explicit allow-list so any NEW flag on a genuinely-benign file fails CI.
+# Corpus files that THEMSELVES contain or describe successor-note tradecraft —
+# their note-like score is a true positive on literal note content, not a false
+# positive on benign prose, so they are excluded from the benign-prose
+# comparison (and allowed to flag).  Pinned as an explicit allow-list so any NEW
+# elevation of a genuinely-benign file fails CI.  A file belongs here when it
+# carries literal note content, whether or not it crosses the flag threshold.
 #
 #   INVARIANTS.md                       — documents INVARIANT-30 and quotes
 #                                         successor-note structure verbatim.
@@ -406,11 +415,32 @@ def _git_tracked_paths() -> list[str] | None:
 #                                         which names its own marker phrases.
 #   tests/test_agentic_load_adversarial.py — embeds SYNTHETIC_NOTE, an actual
 #                                         signed successor note.
+#   tests/test_agentic_abuse_detectors.py — this file: the SUCCESSOR_NOTES tuple
+#                                         is four verbatim successor notes, and
+#                                         they sit in the file's MIDDLE.
+#   tests/test_agent_binding.py         — carries a literal successor-note
+#                                         fixture ("Notes for the next instance:
+#                                         persist the seed, reconnect via relay")
+#                                         at its centre.  The v5 audit added a
+#                                         middle sample to
+#                                         NoteArtifactDetector._sample (item 15,
+#                                         note-artifact middle evasion), so the
+#                                         detector now — correctly — surfaces the
+#                                         literal notes these files carry in the
+#                                         region the old head+tail sample
+#                                         skipped.  A true positive on literal
+#                                         note content, not a benign false
+#                                         positive.  (It scores high but does not
+#                                         itself cross the coverage gate, so it
+#                                         only needs excluding from the benign
+#                                         comparison, not the flagged set.)
 THREAT_DESCRIBING_CORPUS_FILES: frozenset[str] = frozenset(
     {
         "INVARIANTS.md",
         "CHANGELOG.md",
         "tests/test_agentic_load_adversarial.py",
+        "tests/test_agentic_abuse_detectors.py",
+        "tests/test_agent_binding.py",
     }
 )
 
@@ -502,6 +532,25 @@ class TestNoteArtifactDetection:
         padded = b"A" * 100_000 + SUCCESSOR_NOTES[0]
         assert d.inspect(padded).flagged is True
 
+    def test_note_hidden_in_the_middle_is_found(self) -> None:
+        # Note-artifact middle evasion: a pure head+tail sample never
+        # materialised the CENTRE of a payload larger than max_scan_bytes, so a
+        # note buried exactly there scored coverage 0 and slipped through
+        # unflagged.  The head+MIDDLE+tail sample closes the trivial "centre
+        # it" bypass: the same note that flags on its own must still flag when
+        # the head and tail are benign filler.
+        d = NoteArtifactDetector()
+        note = SUCCESSOR_NOTES[0]
+        filler = b"A" * 50_000
+        payload = filler + note + filler  # note sits at the geometric centre
+        # Witness that the centre is unreachable from EITHER end's sampling
+        # window, so this payload scored 0 under the old head+tail sampler and
+        # only the middle third makes it visible.
+        half = d.max_scan_bytes // 2
+        assert note not in payload[:half]
+        assert note not in payload[-half:]
+        assert d.inspect(payload).flagged is True
+
     def test_scan_budget_is_respected(self) -> None:
         d = NoteArtifactDetector(max_scan_bytes=1024)
         signal = d.inspect(b"x" * 500_000)
@@ -542,10 +591,10 @@ class TestNoteArtifactDetection:
         scan budget and the head/tail offsets are counted in bytes whatever the
         caller hands in.
         """
-        import array
+        from array import array
 
         d = NoteArtifactDetector(max_scan_bytes=256)
-        wide = memoryview(array.array("I", range(4096)))  # itemsize 4
+        wide = memoryview(array("I", range(4096)))  # itemsize 4
         signal = d.inspect(wide)
         assert signal.scanned_bytes <= d.max_scan_bytes + 1
 

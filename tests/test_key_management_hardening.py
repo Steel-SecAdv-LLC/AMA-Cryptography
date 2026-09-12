@@ -21,13 +21,14 @@ silently regress:
 from __future__ import annotations
 
 import os
-import stat
 from pathlib import Path
 from typing import Any, Optional
 
 import pytest
 
+from ama_cryptography import _owner_only
 from ama_cryptography.key_management import SecureKeyStorage, _atomic_write_bytes
+from tests.test_owner_only_access import _widen
 
 PASSWORD = "correct horse battery staple 123!"
 _KEYS = {"alpha": b"A" * 32, "beta": b"B" * 32, "gamma": b"C" * 32}
@@ -67,19 +68,58 @@ class TestKeyIdTraversalGuard:
         assert store.delete_key("does-not-exist") is False
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
 class TestFilePermissions:
-    def test_store_dir_is_0700(self, tmp_path: Path) -> None:
+    """The store is owner-only — on Windows too.
+
+    This class carried ``skipif(os.name == "nt", "POSIX permission
+    semantics")``, so the private-key store's access control was never
+    checked on the platform where it was weakest: ``mkdir(mode=0o700)`` is
+    ignored on Windows, ``os.chmod`` there only toggles the read-only
+    attribute, and ``os.fchmod`` does not exist — so the store inherited
+    whatever the profile root granted, commonly ``Users: Read``. The skip was
+    not covering an absent property; it was hiding an unenforced one.
+
+    ``_owner_only`` now enforces it on both (chmod on POSIX, a protected
+    owner-only DACL on Windows), and these assertions read the enforcement
+    back rather than comparing an octal literal that means nothing on half
+    the runners.
+    """
+
+    def test_store_dir_is_owner_only(self, tmp_path: Path) -> None:
         store_dir = tmp_path / "keys"
         _make_store(store_dir)
-        assert stat.S_IMODE(os.stat(store_dir).st_mode) == 0o700
+        assert _owner_only.access_description(store_dir) == (
+            _owner_only.expected_owner_only_description(directory=True)
+        )
 
-    def test_key_and_salt_files_are_0600(self, tmp_path: Path) -> None:
+    def test_key_and_salt_files_are_owner_only(self, tmp_path: Path) -> None:
+        expected = _owner_only.expected_owner_only_description()
         store = _make_store(tmp_path)
         for key_id in _KEYS:
-            mode = stat.S_IMODE(os.stat(tmp_path / f"{key_id}.json").st_mode)
-            assert mode == 0o600, f"{key_id}.json is {oct(mode)}"
-        assert stat.S_IMODE(os.stat(store.salt_file).st_mode) == 0o600
+            path = tmp_path / f"{key_id}.json"
+            assert (
+                _owner_only.access_description(path) == expected
+            ), f"{key_id}.json is {_owner_only.access_description(path)}"
+        assert _owner_only.access_description(store.salt_file) == expected
+
+    def test_a_pre_existing_wide_store_is_narrowed(self, tmp_path: Path) -> None:
+        """Opening an existing store tightens it, rather than trusting it.
+
+        ``mkdir(exist_ok=True)`` does nothing to a directory that is already
+        there, so a store created by an earlier release — or by a user with a
+        permissive umask, or under a Windows profile root that grants
+        ``Users: Read`` — keeps that access until something narrows it.
+        """
+        store_dir = tmp_path / "keys"
+        store_dir.mkdir()
+        _widen(store_dir, directory=True)
+        assert _owner_only.access_description(store_dir) != (
+            _owner_only.expected_owner_only_description(directory=True)
+        ), "fixture is vacuous: the starting state is already owner-only"
+        _make_store(store_dir)
+        assert _owner_only.access_description(store_dir) == (
+            _owner_only.expected_owner_only_description(directory=True)
+        )
 
 
 class TestAtomicWriteFdOwnership:

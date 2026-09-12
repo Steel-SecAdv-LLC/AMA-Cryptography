@@ -20,6 +20,15 @@
  *      restored via ama_test_restore_aes_gcm() so subsequent tests
  *      in the same process observe the production dispatch choice.
  *
+ * The AMA_HAVE_NEON_CRYPTO_EXT_IMPL half of each guard below is what makes
+ * the third skip condition real.  This file takes
+ * ama_aes256_gcm_encrypt_neon / _decrypt_neon by address, and those exist
+ * only where the ARM Crypto Extensions were available to the compiler, so on
+ * an AArch64 build without them the binary did not LINK — and a binary that
+ * does not link never reaches a return code, however many SKIP_RETURN_CODEs
+ * are configured.  Reproduced with an aarch64 build at -march=armv8-a: four
+ * "undefined reference to `ama_aes256_gcm_encrypt_neon'" from this file.
+ *
  * SKIP conditions (return 77 — CTest "Skipped"):
  *   - Non-AArch64 build OR AArch64 host without ARM Crypto Extensions:
  *     the dispatcher leaves aes_gcm_encrypt / aes_gcm_decrypt NULL, so
@@ -42,7 +51,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+#if defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL) \
+    && defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 /* Forward decls of the NEON kernels — the dispatch table installs
  * these by name when the runtime gate passes. */
 extern void ama_aes256_gcm_encrypt_neon(const uint8_t *plaintext, size_t plaintext_len,
@@ -62,7 +72,8 @@ extern void ama_test_restore_aes_gcm(void);
 
 #define MAX_LEN (65536u + 64u)
 
-#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+#if defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL) \
+    && defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 static uint64_t prng_state;
 static uint64_t prng_next(void) {
     uint64_t z = (prng_state += 0x9E3779B97F4A7C15ULL);
@@ -80,7 +91,8 @@ int main(void) {
     printf("NEON AES-256-GCM vs generic-C reference equivalence\n");
     printf("==================================================\n\n");
 
-#if !defined(AMA_HAVE_NEON_IMPL) || (!defined(__aarch64__) && !defined(_M_ARM64))
+#if !defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL) \
+    || !defined(AMA_HAVE_NEON_IMPL) || (!defined(__aarch64__) && !defined(_M_ARM64))
     printf("  SKIP: NEON sources not compiled in (non-AArch64 build,\n"
            "        or AMA_ENABLE_NEON=OFF).  Generic C AES-GCM is\n"
            "        already covered by test_kat and ACVP.\n");

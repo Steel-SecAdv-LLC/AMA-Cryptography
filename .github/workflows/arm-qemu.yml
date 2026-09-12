@@ -23,6 +23,13 @@ on:
       - "tests/c/**"
       - "CMakeLists.txt"
       - "cmake/toolchains/**"
+      # The linker version script shapes the .so this workflow objdumps and
+      # symbol-checks; an export-map change must re-run these gates.
+      - "cmake/ama_exports.map"
+      # This workflow is the ONLY place check_secret_division.py runs against
+      # an AArch64 object; a change to the gate must re-run the lane that uses
+      # it, or the change ships unexercised.
+      - "tools/check_secret_division.py"
       - ".github/workflows/arm-qemu.yml"
   pull_request:
     paths:
@@ -31,6 +38,13 @@ on:
       - "tests/c/**"
       - "CMakeLists.txt"
       - "cmake/toolchains/**"
+      # The linker version script shapes the .so this workflow objdumps and
+      # symbol-checks; an export-map change must re-run these gates.
+      - "cmake/ama_exports.map"
+      # This workflow is the ONLY place check_secret_division.py runs against
+      # an AArch64 object; a change to the gate must re-run the lane that uses
+      # it, or the change ships unexercised.
+      - "tools/check_secret_division.py"
       - ".github/workflows/arm-qemu.yml"
   workflow_dispatch:
 
@@ -48,11 +62,7 @@ jobs:
       - name: Install AArch64 cross toolchain + QEMU
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
-            qemu-user-static
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
 
       - name: Configure (aarch64 toolchain)
         run: |
@@ -72,6 +82,284 @@ jobs:
       - name: Test (ctest under QEMU user-mode)
         run: ctest --test-dir build-arm --output-on-failure -j"$(nproc)"
 
+      - name: No divide instruction may take a secret operand (KyberSlash, AArch64)
+        # The same gate `dudect.yml` runs against the x86-64 shared object,
+        # against the OTHER architecture this library ships kernels for.  It
+        # had never run here, and not because nobody wired it: the gate picked
+        # its disassembler by presence — `which("objdump")` — and the
+        # host's GNU objdump is built for x86-64 only, so it answered an
+        # AArch64 object with `can't disassemble for architecture UNKNOWN!`
+        # and the gate (correctly failing closed) returned 2.  It now tries
+        # each disassembler until one succeeds, and this job already has one
+        # that can: `aarch64-linux-gnu-objdump`, installed as a dependency of
+        # the `gcc-aarch64-linux-gnu` the step above pulls in.  Nothing extra
+        # is added to the job for this, and it does not depend on
+        # `llvm-objdump` happening to be on the runner image.
+        #
+        # Worth having on this architecture specifically: ML-KEM has NEON
+        # kernels that x86-64 never compiles, and the KyberSlash class is about
+        # which instructions the OBJECT ends up containing.  This build has
+        # SVE2 OFF (the default), so it covers the NEON kernels; the SVE2 ML-KEM
+        # kernels are checked in the SVE2 job below, against build-arm-sve2.
+        run: |
+          python3 tools/check_secret_division.py \
+            --lib build-arm/lib/libama_cryptography.so
+
+  arm-qemu-no-crypto-ext:
+    name: AArch64 without ARM Crypto Extensions (the MSVC ARM64 condition)
+    runs-on: ubuntu-latest
+    # Bounded like its siblings: without this a hang runs to the 360-minute
+    # default and leaves the ARM QEMU Gate pending for six hours.
+    timeout-minutes: 30
+    # Every MSVC ARM64 build failed to link, and no lane could see it.
+    #
+    # src/c/neon/ama_aes_gcm_neon.c puts its whole body behind
+    # `#if defined(__ARM_FEATURE_AES)` — a GCC/Clang ACLE macro that MSVC
+    # never defines and that CMakeLists.txt only turns on via
+    # `-march=armv8-a+crypto`, a flag it explicitly skips `if(NOT MSVC)`.
+    # Meanwhile AMA_HAVE_NEON_IMPL is set for CMAKE_SYSTEM_PROCESSOR ARM64
+    # including MSVC, and the dispatcher took the two kernels' addresses
+    # under it.  Result: LNK2019, on the one platform no CI lane builds.
+    #
+    # AMA_FORCE_NO_ARM_CRYPTO reproduces exactly that state with the GCC
+    # cross-toolchain — AMA_HAVE_NEON_IMPL set, the crypto feature macros
+    # undefined — so the condition is now built and RUN on every push
+    # instead of being reasoned about.  It also covers any aarch64 distro
+    # targeting baseline armv8-a, which was equally broken.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain + QEMU
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+
+      - name: Configure (aarch64, Crypto Extensions forced off)
+        run: |
+          cmake -S . -B build-arm-nocrypto -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_FORCE_NO_ARM_CRYPTO=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_LTO=OFF
+
+      - name: Build (this is the step that used to fail to link)
+        run: cmake --build build-arm-nocrypto -j"$(nproc)"
+
+      - name: Test (ctest under QEMU user-mode)
+        run: ctest --test-dir build-arm-nocrypto --output-on-failure -j"$(nproc)"
+
+      - name: "The NEON AES-GCM equivalence test must SKIP, not vanish"
+        # Its own header has always claimed it surfaces this configuration as
+        # Skipped.  It could not: it takes the kernels by address, so it did
+        # not link.  Assert the claim rather than trusting it.
+        shell: bash
+        run: |
+          ctest --test-dir build-arm-nocrypto -R '^test_aes_gcm_neon_equiv$' 2>&1 | tee /tmp/neon_aes.txt
+          if ! grep -q "Skipped" /tmp/neon_aes.txt; then
+            echo "::error::test_aes_gcm_neon_equiv did not report Skipped on a build without the ARM Crypto Extensions"
+            exit 1
+          fi
+
+      - name: "The dispatcher must not announce a selection it did not make"
+        # `dispatch_info.aes_gcm >= AMA_IMPL_NEON && ama_cpuid_has_arm_aes()`
+        # is TRUE on this lane — QEMU's CPU reports ARM AES — while the build
+        # has no Crypto Extension kernel to install.  With only the two
+        # assignments inside `#ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL`, the branch
+        # was taken, nothing was wired, and the diagnostic still printed
+        # "NEON + ARMv8 Crypto Ext (AES + PMULL) selected".  This is the lane
+        # that reaches it, so this is where the claim gets checked.
+        shell: bash
+        run: |
+          cat > /tmp/di.c <<'EOF'
+          extern void ama_print_dispatch_info(void);
+          int main(void) { ama_print_dispatch_info(); return 0; }
+          EOF
+          aarch64-linux-gnu-gcc -O1 /tmp/di.c -o /tmp/di_arm \
+            -Lbuild-arm-nocrypto/lib -lama_cryptography
+          QEMU_CPU=max AMA_DISPATCH_VERBOSE=1 qemu-aarch64-static \
+            -L /usr/aarch64-linux-gnu \
+            -E LD_LIBRARY_PATH="$PWD/build-arm-nocrypto/lib" \
+            /tmp/di_arm 2>&1 | tee /tmp/di.txt
+          if grep -q "Crypto Ext (AES + PMULL) selected" /tmp/di.txt; then
+            echo "::error::the dispatcher announced an ARM Crypto Extension selection on a build that has no such kernel"
+            exit 1
+          fi
+          if ! grep -q "no Crypto Extension kernel" /tmp/di.txt; then
+            echo "::error::the dispatcher printed neither the selection message nor the no-kernel message; the branch may have moved"
+            exit 1
+          fi
+
+  arm-qemu-sve2:
+    name: AArch64 SVE2 kernels (VL=128 and VL=256)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # AMA_ENABLE_SVE2 defaults OFF and no workflow turned it on, so the SVE2
+    # kernels were never compiled in CI, let alone run — the equivalence and
+    # KAT tests that are documented as pinning them could not reach them, and
+    # the dudect matrix's sve2 lanes skipped unconditionally.  That is how a
+    # theta step that assumed >=5 64-bit lanes per vector shipped: it is correct
+    # only at VL>=320, and QEMU's default `max` CPU (2048-bit) is the one
+    # environment where it was ever exercised.
+    #
+    # Both vector lengths that real SVE2 silicon implements are run: VL=128
+    # (Neoverse N2/V2/V3, Cortex-X2..X4, A710/A715/A720, Graviton 4) and
+    # VL=256.  sve-max-vq is in units of 128 bits, so vq=1 -> VL=128.
+    strategy:
+      fail-fast: false
+      matrix:
+        # vl_bits is carried explicitly rather than computed.  GitHub Actions
+        # expressions have no arithmetic operators — the grammar admits only
+        # `!`, the comparisons, `&&` and `||` — so `${{ matrix.sve_vq * 128 }}`
+        # is a PARSE ERROR, not a wrong value.  A workflow file that does not
+        # parse never runs and never reports: this whole workflow, the SVE2
+        # lanes it was added for and the aggregating `ARM QEMU Gate` alike,
+        # produced no check on any pull request that referenced it.  A gate that
+        # cannot fail is the failure this branch exists to remove; a gate that
+        # cannot start is the same failure one step earlier.
+        # tools/check_workflow_commands.py now rejects the shape.
+        include:
+          - sve_vq: 1
+            vl_bits: 128
+          - sve_vq: 2
+            vl_bits: 256
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain + QEMU
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+
+      - name: Configure (aarch64 toolchain, SVE2 kernels enabled)
+        run: |
+          cmake -S . -B build-arm-sve2 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SVE2=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_LTO=OFF
+
+      - name: Build (aarch64, SVE2)
+        run: cmake --build build-arm-sve2 -j"$(nproc)"
+
+      - name: No secret-dependent division in the SVE2 kernels
+        # The build-arm job runs check_secret_division against the NEON-only
+        # object; the SVE2 ML-KEM kernels (the KyberSlash class) exist only in
+        # this SVE2-enabled object, so cover them here.  Static objdump on the
+        # .so — it inspects which instructions the object contains and needs no
+        # SVE2 at runtime, so it is independent of the QEMU vector length.
+        run: |
+          python3 tools/check_secret_division.py \
+            --lib build-arm-sve2/lib/libama_cryptography.so
+
+      - name: Test at VL=${{ matrix.vl_bits }} bits
+        # QEMU_CPU reaches qemu-aarch64-static through binfmt, so every test
+        # binary ctest launches inherits the vector length.
+        env:
+          QEMU_CPU: max,sve-max-vq=${{ matrix.sve_vq }}
+        run: ctest --test-dir build-arm-sve2 --output-on-failure -j"$(nproc)"
+
+      - name: SVE2 dispatch wiring must run, not silently Skip (M4)
+        # The plain ctest above reports test_dispatch_only_{kyber,sha3}-sve2 as
+        # Skipped (SKIP_RETURN_CODE 77) if the dispatcher does not wire the SVE2
+        # slot — a regression, or the case this lane exists for: the phase-3
+        # auto-tune finding every SVE2 kernel regressed under QEMU and reverting
+        # it. ctest treats Skipped as a non-failure, so the SVE2 dispatch WIRING
+        # (as distinct from the direct-symbol equivalence lanes, which cover
+        # correctness) would go unverified behind a green job (audit M4). Those
+        # two tests carry AMA_DISPATCH_NO_AUTOTUNE=1 in their CTest ENVIRONMENT,
+        # so under QEMU_CPU=max (SVE2 present) they MUST report Passed; on a
+        # non-SVE2 host they Skip (verified both ways at VL=128/256 under QEMU).
+        # Assert Passed for both, and fail on any Skipped.
+        env:
+          QEMU_CPU: max,sve-max-vq=${{ matrix.sve_vq }}
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-arm-sve2 \
+            -R '^test_dispatch_only_(kyber|sha3)-sve2$' \
+            --output-on-failure --no-tests=error | tee /tmp/sve2_wiring.txt
+          for slot in kyber sha3; do
+            grep -Eq "test_dispatch_only_${slot}-sve2 .*Passed" /tmp/sve2_wiring.txt \
+              || { echo "::error::${slot}-sve2 dispatch wiring not exercised (not Passed) — SVE2 dispatch regressed or auto-tune reverted it (M4)"; exit 1; }
+          done
+          if grep -qi 'Skipped' /tmp/sve2_wiring.txt; then
+            echo "::error::an SVE2 dispatch test reported Skipped — the SVE2 dispatch wiring was not exercised (M4)"
+            exit 1
+          fi
+
+  arm-qemu-ubsan:
+    name: AArch64 UBSan (ARM SIMD kernels sanitized under QEMU)
+    runs-on: ubuntu-latest
+    # UBSan-instrumented ctest under QEMU is slow: the full 68-case suite
+    # measured ~17.5 min locally (SPHINCS-256f KATs dominate), plus the
+    # cross-build.  45 leaves headroom on a cold runner without masking a hang.
+    timeout-minutes: 45
+    # WHY THIS JOB EXISTS
+    #
+    # Every sanitizer job in static-analysis.yml runs on ubuntu-latest — x86-64,
+    # where src/c/neon/*.c and src/c/sve2/*.c compile to a bare
+    # `typedef int ama_..._not_available;` and are linked out entirely.  So the
+    # hand-written ARM SIMD kernels had ZERO ASan/UBSan/MSan coverage on any
+    # lane (audit H16).  That is not hypothetical: GCC compiles vmulq_s16 /
+    # vmulq_s32 as `__a * __b` on a signed vector type, so the NEON Kyber and
+    # Dilithium Montgomery/Barrett steps — low-half multiplies whose products
+    # exceed the lane width by design — were signed integer overflow, undefined
+    # behaviour that shipped unseen (audit H15): 29 of 68 ctest cases aborted
+    # under UBSan, all on the identical `arm_neon.h` diagnostic.
+    #
+    # This lane cross-compiles the tree for aarch64 with
+    # -fsanitize=undefined -fno-sanitize-recover=all and runs the full ctest
+    # under QEMU, so any UB on the ARM path aborts the test and fails the build.
+    # SVE2 is enabled so those TUs are instrumented too, and QEMU_CPU=max
+    # presents the widest vector so any SVE2 code a test reaches is sanitized;
+    # the SVE2 dispatch wiring itself is covered by arm-qemu-sve2 above.
+    #
+    # Verified against the real defect: reverting the mullo_s16 / mullo_s32 fix
+    # reproduces `arm_neon.h: runtime error: signed integer overflow: 91 * 640
+    # cannot be represented in type 'short int'` on test_kyber_ntt_equiv and
+    # test_dilithium_ntt_equiv here and fails the job; with the fix the full
+    # ctest is UBSan-clean.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain + QEMU
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+
+      - name: Configure (aarch64, UBSan, NEON + SVE2 instrumented)
+        run: |
+          cmake -S . -B build-arm-ubsan -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SVE2=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined"
+
+      - name: Build (aarch64, UBSan)
+        run: cmake --build build-arm-ubsan -j"$(nproc)"
+
+      - name: Test (ctest under QEMU; UBSan fails closed)
+        env:
+          QEMU_CPU: max
+          UBSAN_OPTIONS: halt_on_error=1:abort_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build-arm-ubsan --output-on-failure -j"$(nproc)"
+
   arm-qemu-gate:
     name: ARM QEMU Gate
     # Single aggregating status check for this workflow (see the matching gate
@@ -80,17 +368,20 @@ jobs:
     if: always()
     needs:
       - arm-qemu-ctest
+      - arm-qemu-sve2
+      - arm-qemu-no-crypto-ext
+      - arm-qemu-ubsan
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Fail unless the AArch64 job succeeded
+      - name: Fail unless every AArch64 job succeeded
         # STRICT. skipped/cancelled also fail: on this workflow they can only
         # mean the dependency failed or a future if: drifted so it silently
         # stopped running.
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
         run: |
-          echo "::error::ARM QEMU Gate failed — the AArch64 cross-test job did not succeed."
+          echo "::error::ARM QEMU Gate failed — an AArch64 cross-test job did not succeed (baseline ctest, the SVE2 kernels at VL=128/256, or the UBSan sanitizer lane)."
           echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
           exit 1
-      - name: AArch64 cross-test succeeded
-        run: echo "ARM QEMU Gate passed — AArch64 ctest is green under QEMU."
+      - name: AArch64 cross-tests succeeded
+        run: echo "ARM QEMU Gate passed — AArch64 ctest is green under QEMU, including the SVE2 kernels at VL=128 and VL=256."
