@@ -1,4 +1,19 @@
 {
+  "derived": {
+    "tests/kat/fips203/acvp/ml_kem_acvp_v1.1.0.42.json": {
+      "source_block": "source",
+      "sources": [
+        {
+          "digest_field": "keyGen_internalProjection_sha256",
+          "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/v1.1.0.42/gen-val/json-files/ML-KEM-keyGen-FIPS203/internalProjection.json"
+        },
+        {
+          "digest_field": "encapDecap_internalProjection_sha256",
+          "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/v1.1.0.42/gen-val/json-files/ML-KEM-encapDecap-FIPS203/internalProjection.json"
+        }
+      ]
+    }
+  },
   "files": {
     "ama_cryptography/_post_kats/ml_dsa_65_kat.json": {
       "bytes": 19214,
@@ -134,5 +149,82 @@
     "ama_cryptography/_post_kats": "FIPS 140-3 power-on self-test vectors",
     "nist_vectors": "NIST reference vectors for the classical primitives",
     "tests/kat": "NIST and Ascon known-answer vectors, as published"
+  },
+  "unverifiable": {
+    "nist_vectors/AES-256-GCM-SP800-38D.json": "transcribed from SP 800-38D Appendix B TC13-TC16; same reason as SHA-256-FIPS180-4.json.",
+    "nist_vectors/SHA-256-FIPS180-4.json": "TRANSCRIBED from FIPS 180-4 Section B.1, deliberately: nist_vectors/fetch_vectors.py records that these digests were once computed with hashlib \u2014 which IS OpenSSL on a manylinux CPython \u2014 so regenerating them replaced NIST's vectors with OpenSSL's output wearing a NIST label. A fetch cannot re-derive a prose transcription.",
+    "tests/kat/fips203/acvp/acvp_encapsulation_aft.kat": "the encapsulation AFT group extracted from the same ACVP-Server encapDecap projection and reshaped for the C replay; the projection itself is verified through ml_kem_acvp_v1.1.0.42.json's source block.",
+    "tests/kat/fips203/ml_kem_1024.kat": "re-derived by RUNNING pq-crystals/kyber's ref/nistkat/PQCgenKAT_kem generator (NIST AES-256-CTR DRBG, counts 0-99); reproducing it needs that C generator built and run, not an HTTPS fetch.",
+    "tests/kat/fips203/ml_kem_512.kat": "converted from C2SP/wycheproof testvectors_v1/mlkem_512_test.json into this repository's .kat record format; the conversion is not reversible by fetching. wycheproof_vectors/ carries its own upstream check.",
+    "tests/kat/fips203/ml_kem_768.kat": "converted from C2SP/wycheproof testvectors_v1/mlkem_768_test.json; same reason as ml_kem_512.kat.",
+    "tests/kat/fips204/ml_dsa_44.kat": "trimmed from ACVP-Server's MUTABLE master branch (@ 2026-07-27), so there is no immutable ref to fetch. docs/compliance/acvp_attestation.json records this as not ACVP-attested for the same reason.",
+    "tests/kat/fips204/ml_dsa_65.kat": "trimmed from ACVP-Server v1.1.0.42 ML-DSA-{keyGen,sigGen}-FIPS204 internalProjection.json; the trim records no per-source digest, so there is nothing to compare a fetch against. Adding a `source` block like fips203/acvp's would promote this row to `derived`.",
+    "tests/kat/fips204/ml_dsa_87.kat": "same mutable master ref as ml_dsa_44.kat.",
+    "tests/kat/fips205/SLH-DSA-SHA2-256f-sigGen-FIPS205.json": "trimmed to one parameter set from ACVP-Server v1.1.0.42 SLH-DSA-sigGen-FIPS205/internalProjection.json (420 KB from 38 MB) and carries no source block recording the upstream digest, so a fetch has nothing to compare against. Adding a source block like fips203/acvp's would promote this to `derived`.",
+    "tests/kat/fips205/SLH-DSA-SHAKE-128s-sigGen-FIPS205.json": "same trim of the same upstream projection, same missing source block.",
+    "tests/kat/ml_dsa/dilithium2.rsp": "Round-3 CRYSTALS reference KAT, pre-FIPS-204, kept for historical comparison and explicitly NOT the conformance gate (see tests/kat/README.md). No upstream ref was recorded when it was vendored.",
+    "tests/kat/ml_dsa/dilithium3.rsp": "Round-3 CRYSTALS reference KAT, pre-FIPS-204, kept for historical comparison and explicitly NOT the conformance gate (see tests/kat/README.md). No upstream ref was recorded when it was vendored.",
+    "tests/kat/ml_dsa/dilithium5.rsp": "Round-3 CRYSTALS reference KAT, pre-FIPS-204, kept for historical comparison and explicitly NOT the conformance gate (see tests/kat/README.md). No upstream ref was recorded when it was vendored.",
+    "tests/kat/ml_kem/kyber1024.rsp": "Round-3 CRYSTALS reference KAT, pre-FIPS-203; same status as the ml_dsa/*.rsp files.",
+    "tests/kat/ml_kem/kyber512.rsp": "Round-3 CRYSTALS reference KAT, pre-FIPS-203; same status as the ml_dsa/*.rsp files.",
+    "tests/kat/ml_kem/kyber768.rsp": "Round-3 CRYSTALS reference KAT, pre-FIPS-203; same status as the ml_dsa/*.rsp files.",
+    "tests/kat/rfc6979/ecdsa_prime_curves.kat": "transcribed from RFC 6979 Appendix A.2.5/A.2.6/A.2.7 prose tables. The RFC is immutable and fetchable, but the transcription is a reformatting no fetch reproduces; re-extracting it needs a parser for the RFC's printed layout, which is the shape tools/build_keyformat_corpus.py --verify-upstream already takes for the key-format corpus."
+  },
+  "upstream_note": "Machine-checkable provenance for the vendored vectors, read by tools/check_vector_provenance.py --verify-upstream. The `files` digests above prove only that these bytes have not CHANGED since they were vendored; they cannot prove the bytes were ever what upstream published. That is what this block adds. Every tracked vector must appear in `verbatim`, `derived` or `unverifiable` \u2014 a vector in none of them fails the check, so a new corpus cannot be added without deciding how its provenance is established.",
+  "verbatim": {
+    "tests/kat/ascon/ascon_aead128.kat": {
+      "upstream": "ascon/ascon-c @ 446347f2 crypto_aead/asconaead128/LWC_AEAD_KAT_128_128.txt",
+      "url": "https://raw.githubusercontent.com/ascon/ascon-c/446347f21b209f3921c65ece70027c366cbe1693/crypto_aead/asconaead128/LWC_AEAD_KAT_128_128.txt"
+    },
+    "tests/kat/ascon/ascon_hash256.kat": {
+      "upstream": "ascon/ascon-c @ 446347f2 crypto_hash/asconhash256/LWC_HASH_KAT_128_256.txt",
+      "url": "https://raw.githubusercontent.com/ascon/ascon-c/446347f21b209f3921c65ece70027c366cbe1693/crypto_hash/asconhash256/LWC_HASH_KAT_128_256.txt"
+    },
+    "tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json": {
+      "upstream": "NIST ACVP-Server @ v1.1.0.42 SLH-DSA-sigVer-FIPS205/internalProjection.json",
+      "url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/v1.1.0.42/gen-val/json-files/SLH-DSA-sigVer-FIPS205/internalProjection.json"
+    }
+  },
+  "verified_elsewhere": {
+    "ama_cryptography/_post_kats/ml_dsa_65_kat.json": {
+      "by": "tools/build_post_kats.py --check",
+      "what": "the FIPS 140-3 power-on self-test vectors are EXTRACTED from the vendored KAT corpora above, not fetched; --check re-extracts and asserts the pinned files still match, so their provenance is whatever the source corpus's is."
+    },
+    "ama_cryptography/_post_kats/ml_kem_1024_kat.json": {
+      "by": "tools/build_post_kats.py --check",
+      "what": "the FIPS 140-3 power-on self-test vectors are EXTRACTED from the vendored KAT corpora above, not fetched; --check re-extracts and asserts the pinned files still match, so their provenance is whatever the source corpus's is."
+    },
+    "ama_cryptography/_post_kats/slh_dsa_sha2_256f_kat.json": {
+      "by": "tools/build_post_kats.py --check",
+      "what": "the FIPS 140-3 power-on self-test vectors are EXTRACTED from the vendored KAT corpora above, not fetched; --check re-extracts and asserts the pinned files still match, so their provenance is whatever the source corpus's is."
+    },
+    "ama_cryptography/_post_kats/slh_dsa_shake_128s_sigver.json": {
+      "by": "tools/build_post_kats.py --check",
+      "what": "the FIPS 140-3 power-on self-test vectors are EXTRACTED from the vendored KAT corpora above, not fetched; --check re-extracts and asserts the pinned files still match, so their provenance is whatever the source corpus's is."
+    },
+    "tests/kat/keyformats/jose_cose.json": {
+      "by": "tools/build_keyformat_corpus.py --verify-upstream",
+      "what": "re-extracts every record from the RFC / draft each file names in its own source block and requires a record-for-record match; run in corpus-provenance.yml's keyformat-provenance job."
+    },
+    "tests/kat/keyformats/lamps_ml_kem.json": {
+      "by": "tools/build_keyformat_corpus.py --verify-upstream",
+      "what": "re-extracts every record from the RFC / draft each file names in its own source block and requires a record-for-record match; run in corpus-provenance.yml's keyformat-provenance job."
+    },
+    "tests/kat/keyformats/rfc8410_okp.json": {
+      "by": "tools/build_keyformat_corpus.py --verify-upstream",
+      "what": "re-extracts every record from the RFC / draft each file names in its own source block and requires a record-for-record match; run in corpus-provenance.yml's keyformat-provenance job."
+    },
+    "tests/kat/keyformats/rfc8554_hss_lms.json": {
+      "by": "tools/build_keyformat_corpus.py --verify-upstream",
+      "what": "re-extracts every record from the RFC / draft each file names in its own source block and requires a record-for-record match; run in corpus-provenance.yml's keyformat-provenance job."
+    },
+    "tests/kat/keyformats/rfc9500_ec.json": {
+      "by": "tools/build_keyformat_corpus.py --verify-upstream",
+      "what": "re-extracts every record from the RFC / draft each file names in its own source block and requires a record-for-record match; run in corpus-provenance.yml's keyformat-provenance job."
+    },
+    "tests/kat/keyformats/rfc9881_ml_dsa.json": {
+      "by": "tools/build_keyformat_corpus.py --verify-upstream",
+      "what": "re-extracts every record from the RFC / draft each file names in its own source block and requires a record-for-record match; run in corpus-provenance.yml's keyformat-provenance job."
+    }
   }
 }

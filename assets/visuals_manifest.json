@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 851,
       "Key Management\n& Rotation": 266,
       "Memory Security\n& Fuzzing": 337,
-      "Other": 2660,
+      "Other": 2671,
       "PQC Backends\n& Integration": 772,
       "Performance\n& Monitoring": 376
     },
-    "n_files": 230,
-    "total_tests": 5262,
+    "n_files": 231,
+    "total_tests": 5273,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -139,6 +139,7 @@
       "test_update_docs_changelog_guard.py",
       "test_vector_provenance_gate.py",
       "test_vector_provenance_scope.py",
+      "test_vector_upstream_provenance.py",
       "test_vendor_isolation_gate.py",
       "test_verification_claim_honesty_gate.py",
       "test_verify_install_oob.py",

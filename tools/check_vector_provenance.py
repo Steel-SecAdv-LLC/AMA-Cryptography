@@ -230,6 +230,174 @@ def build() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Upstream verification
+# ---------------------------------------------------------------------------
+#
+# The digests in `files` prove the vendored bytes have not CHANGED since they
+# were vendored.  They cannot prove those bytes were ever what upstream
+# published: a corpus that never matched NIST verifies clean forever, and the
+# ANCHOR digests in tests/test_vector_provenance_gate.py do not help, because
+# they were computed from the same vendored bytes.
+#
+# `--verify-upstream` closes that for the vectors where it is possible, and is
+# explicit about the ones where it is not.  Four buckets, and the coverage rule
+# below requires every pinned file to be in exactly one:
+#
+#   verbatim           a byte-for-byte copy of an upstream file at an immutable
+#                      ref.  Fetched and compared.
+#   derived            a documented transformation of upstream that records the
+#                      SHA-256 of each input in its own `source` block.  The
+#                      transformation cannot be replayed from a fetch, but the
+#                      INPUTS are fetched and compared, so the derivative cannot
+#                      quietly change which upstream it claims to come from.
+#   verified_elsewhere another tool already performs the upstream check, named
+#                      per entry.  Listed so the rule stays total and nobody
+#                      adds a second, drifting copy of the same check.
+#   unverifiable       upstream exists but cannot be established by fetching —
+#                      a generator that must be RUN, a prose transcription, a
+#                      trim with no recorded source digest, a mutable ref.  The
+#                      reason is recorded per file.
+#
+# A pinned file in none of the four is a failure, not a skip: that is how a new
+# corpus gets added without anyone deciding how its provenance is established.
+
+_UPSTREAM_BUCKETS = ("verbatim", "derived", "verified_elsewhere", "unverifiable")
+
+
+def _fetch(url: str) -> bytes:
+    # This module is run as a script (`python tools/check_vector_provenance.py`),
+    # so the repository root is not on sys.path and `from tools import ...` fails
+    # with ModuleNotFoundError. nist_vectors/fetch_vectors.py inserts the root for
+    # the same reason; do the same rather than duplicating the retry policy, which
+    # FETCH-003 requires every HTTPS fetch in this repository to share.
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from tools import http_fetch
+
+    return http_fetch.fetch_bytes(url, user_agent="ama-cryptography-vector-provenance")
+
+
+def verify_upstream() -> int:
+    """Prove the vendored vectors are what upstream published, where possible."""
+    if not MANIFEST_PATH.is_file():
+        print(f"FATAL: {MANIFEST_PATH} is missing.", file=sys.stderr)
+        return 2
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+    pinned = set(manifest.get("files", {}))
+    if not pinned:
+        print("FATAL: the manifest pins no files; nothing to verify.", file=sys.stderr)
+        return 2
+
+    buckets = {name: manifest.get(name, {}) for name in _UPSTREAM_BUCKETS}
+    problems: list[str] = []
+
+    # Coverage first: a file in no bucket, or in two, is a defect in the map.
+    for relative in sorted(pinned):
+        holding = [name for name in _UPSTREAM_BUCKETS if relative in buckets[name]]
+        if not holding:
+            problems.append(
+                f"{relative} is pinned but appears in none of {', '.join(_UPSTREAM_BUCKETS)}. "
+                f"Every vector must state how its provenance is established, even if "
+                f"the answer is that it cannot be fetched."
+            )
+        elif len(holding) > 1:
+            problems.append(f"{relative} appears in more than one bucket: {holding}.")
+    for name in _UPSTREAM_BUCKETS:
+        for relative in sorted(buckets[name]):
+            if relative not in pinned:
+                problems.append(f"{name} names {relative}, which the manifest does not pin.")
+
+    verified = 0
+
+    for relative, entry in sorted(buckets["verbatim"].items()):
+        path = REPO_ROOT / relative
+        if not path.is_file():
+            problems.append(f"{relative}: pinned as verbatim but missing from the tree.")
+            continue
+        try:
+            upstream = _fetch(entry["url"])
+        except Exception as exc:
+            problems.append(f"{relative}: could not fetch {entry['url']}: {exc}")
+            continue
+        local = path.read_bytes()
+        if hashlib.sha256(upstream).hexdigest() != hashlib.sha256(local).hexdigest():
+            problems.append(
+                f"{relative}: does NOT match {entry['url']} "
+                f"(upstream {hashlib.sha256(upstream).hexdigest()[:16]}, "
+                f"vendored {hashlib.sha256(local).hexdigest()[:16]}). The vendored "
+                f"vector is not what upstream published."
+            )
+        else:
+            verified += 1
+            print(f"  verbatim   OK  {relative}")
+
+    for relative, entry in sorted(buckets["derived"].items()):
+        path = REPO_ROOT / relative
+        if not path.is_file():
+            problems.append(f"{relative}: pinned as derived but missing from the tree.")
+            continue
+        try:
+            block = json.loads(path.read_text(encoding="utf-8"))[entry["source_block"]]
+        except Exception as exc:
+            problems.append(
+                f"{relative}: could not read its {entry['source_block']!r} block: {exc}"
+            )
+            continue
+        for source in entry["sources"]:
+            recorded = block.get(source["digest_field"])
+            if not recorded:
+                problems.append(
+                    f"{relative}: its source block has no {source['digest_field']!r}, so "
+                    f"there is nothing to compare {source['url']} against."
+                )
+                continue
+            try:
+                upstream = _fetch(source["url"])
+            except Exception as exc:
+                problems.append(f"{relative}: could not fetch {source['url']}: {exc}")
+                continue
+            actual = hashlib.sha256(upstream).hexdigest()
+            if actual != recorded:
+                problems.append(
+                    f"{relative}: records {source['digest_field']} = {recorded[:16]}... "
+                    f"for {source['url']}, but that file now hashes to {actual[:16]}.... "
+                    f"The derivative names an upstream it did not come from."
+                )
+            else:
+                verified += 1
+                print(f"  derived    OK  {relative} <- {source['digest_field']}")
+
+    for relative, entry in sorted(buckets["verified_elsewhere"].items()):
+        print(f"  elsewhere  --  {relative} ({entry['by']})")
+    for relative in sorted(buckets["unverifiable"]):
+        print(f"  unfetchable--  {relative}")
+
+    print(
+        f"\n{verified} upstream comparison(s) made; "
+        f"{len(buckets['verified_elsewhere'])} file(s) verified by another tool; "
+        f"{len(buckets['unverifiable'])} file(s) recorded as not establishable by fetch."
+    )
+
+    if problems:
+        print("\nUPSTREAM PROVENANCE CHECK FAILED:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    if verified == 0:
+        print(
+            "FATAL: no upstream comparison was actually performed. A run that "
+            "fetched nothing must not report upstream provenance as established.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print("OK: every fetchable vector still matches what upstream published.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -237,7 +405,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="rewrite the manifest from the current tree (never run in CI)",
     )
+    parser.add_argument(
+        "--verify-upstream",
+        action="store_true",
+        help=(
+            "fetch each vector's recorded upstream and prove the vendored bytes "
+            "are what upstream published (needs network; the offline digest "
+            "check proves only that they have not changed since vendoring)"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.verify_upstream:
+        return verify_upstream()
 
     try:
         current = build()
