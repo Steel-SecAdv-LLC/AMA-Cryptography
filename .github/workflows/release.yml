@@ -721,6 +721,95 @@ jobs:
   # we compute that here so the provenance job is matrix-free and the
   # attestation file is one .intoto.jsonl rather than one per OS.
   # =========================================================================
+  # ==========================================================================
+  # INVARIANT-8 at the point of release.
+  # ==========================================================================
+  # `static-analysis.yml`'s `reproducible-build` job proves determinism
+  # honestly — and then throws the build away.  It is gated
+  # `schedule || workflow_dispatch || pull_request`, and this workflow never
+  # called it, so every artefact sigstore signs, SLSA attests and PyPI serves
+  # was verified on a DIFFERENT build than the one shipped.  The property was
+  # demonstrated on one wheel and claimed for another.
+  #
+  # This job closes that by rebuilding the Linux x86-64 wheels from the tagged
+  # commit and comparing them, member by member, against the wheels
+  # `build-wheels` actually uploaded.  `publish-pypi` and `github-release`
+  # both depend on it, so a wheel that does not reproduce cannot be published.
+  #
+  # Scope, stated rather than implied: ubuntu-latest (manylinux x86-64) only.
+  # The other four rows of the `build-wheels` matrix are NOT covered — macOS
+  # and Windows have no pinned-container equivalent, and claiming more than
+  # one platform's worth of evidence is the exact failure this gate exists to
+  # correct.  Extending it means adding rows here, not widening the wording.
+  verify-reproducible-wheel:
+    name: Release reproducibility (shipped wheels vs. independent rebuild)
+    needs: [preflight, build-wheels]
+    if: >-
+      !cancelled()
+      && needs.preflight.result == 'success'
+      && needs['build-wheels'].result == 'success'
+    runs-on: ubuntu-latest
+    # The rebuild is a second full cibuildwheel pass over five interpreters,
+    # so it costs roughly what build-wheels costs on this row.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Download the wheels this release actually built
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: wheels-ubuntu-latest
+          path: shipped
+
+      - name: Rebuild the same commit with the same toolchain
+        # EVERY variable that reaches the compiler is mirrored from
+        # `build-wheels` above, deliberately and including the trust anchor:
+        # an anchored build compiles AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
+        # INTO the native library, so a rebuild without it would produce a
+        # legitimately different `.so` and this gate would report a false
+        # difference on every anchored release.  Keep the two blocks in step.
+        #
+        # The one deliberate divergence is CIBW_TEST_COMMAND: the smoke test
+        # runs after a wheel is built and cannot change its contents, so
+        # skipping it here halves the wall clock without weakening the
+        # comparison.  `build-wheels` still runs it on the wheels that ship.
+        uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c  # v4.1.1
+        env:
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+          CIBW_SKIP: "pp* *_i686 *_ppc64le *_s390x *-musllinux_*"
+          CIBW_ARCHS_LINUX: "auto64"
+          CIBW_ENVIRONMENT: >-
+            AMA_BUILD_PIPELINE=1
+            CMAKE_BUILD_PARALLEL_LEVEL=4
+          CIBW_ENVIRONMENT_PASS_LINUX: >-
+            AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
+            AMA_INTEGRITY_SIGNING_SEED_HEX
+            AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR
+          AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
+          AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != '' && '1' || '' }}
+          CIBW_TEST_SKIP: "*"
+
+      - name: The shipped wheels must be the wheels this source produces
+        run: |
+          python tools/verify_wheel_reproducible.py \
+            --shipped shipped \
+            --rebuilt wheelhouse
+
+      - name: Upload the rebuild for comparison if it did not match
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: reproducibility-rebuild
+          path: wheelhouse/*.whl
+          retention-days: 14
+
   hash-artefacts:
     name: Hash artefacts for SLSA subject set
     needs: [build-wheels, build-sdist]
@@ -859,7 +948,7 @@ jobs:
   # =========================================================================
   publish-pypi:
     name: Publish to PyPI (Trusted Publishing)
-    needs: [preflight, sign, provenance]
+    needs: [preflight, sign, provenance, verify-reproducible-wheel]
     # Publish ONLY on tag pushes.  A manually-dispatched run from an
     # arbitrary branch ref bypasses the preflight tag-vs-pyproject
     # version check (which only fires under `github.event_name ==
@@ -932,7 +1021,7 @@ jobs:
     # GitHub Release with body text "Published to PyPI" — false
     # advertising and a credibility hit.  Sequencing via `needs` makes
     # the release announcement strictly downstream of the PyPI upload.
-    needs: [preflight, sign, provenance, publish-pypi]
+    needs: [preflight, sign, provenance, publish-pypi, verify-reproducible-wheel]
     #
     # The original guard was a bare `needs: [... publish-pypi]`, which is
     # correct about the hazard (never announce a PyPI upload that failed) but
