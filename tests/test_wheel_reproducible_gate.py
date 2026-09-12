@@ -64,7 +64,9 @@ def _write_wheel(path: Path, members: dict[str, bytes]) -> None:
             z.writestr(name, data)
 
 
-def _pair(tmp_path: Path, shipped: dict[str, bytes], rebuilt: dict[str, bytes]) -> tuple[Path, Path]:
+def _pair(
+    tmp_path: Path, shipped: dict[str, bytes], rebuilt: dict[str, bytes]
+) -> tuple[Path, Path]:
     a, b = tmp_path / "shipped", tmp_path / "rebuilt"
     _write_wheel(a / WHEEL, shipped)
     _write_wheel(b / WHEEL, rebuilt)
@@ -154,7 +156,8 @@ def test_a_wheel_the_rebuild_did_not_produce_fails(
 ) -> None:
     a, b = tmp_path / "shipped", tmp_path / "rebuilt"
     _write_wheel(a / WHEEL, dict(BASE_MEMBERS))
-    _write_wheel(b / "ama_cryptography-5.0.0-cp313-cp313-manylinux_2_28_x86_64.whl", dict(BASE_MEMBERS))
+    other = "ama_cryptography-5.0.0-cp313-cp313-manylinux_2_28_x86_64.whl"
+    _write_wheel(b / other, dict(BASE_MEMBERS))
     assert _run(gate, a, b) == 1
     assert "the rebuild produced no wheel of this name" in capsys.readouterr().err
 
