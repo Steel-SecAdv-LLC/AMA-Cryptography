@@ -949,6 +949,12 @@ jobs:
             --baseline base.json --measured head.json --tolerance-percent 2 \
             --acknowledgements benchmarks/instruction-count-acknowledgements.json
 
+      # tests/test_instruction_count_gate.py is deliberately NOT run here.
+      # ci.yml's `python -m pytest tests/` already covers it in a job that
+      # installs the package, and this job installs only build tools — a
+      # pytest step here fails with "No module named pytest", which is exactly
+      # how the first run of this lane ended.
+
       - name: Dispatch auto-tune startup cost
         # The dispatcher microbenchmarks its SIMD kernels against scalar at the
         # first call that touches one. Measured on an AVX-512 host that costs
@@ -959,23 +965,6 @@ jobs:
         run: |
           python3 benchmarks/measure_instruction_counts.py \
             --driver ./ic_driver_head --measure-startup --output startup.json
-
-      - name: Verify the recorded baseline is still well-formed
-        # The committed baseline is the documented reference for what each
-        # operation costs. It is not what the A/B comparison uses, so a drifted
-        # one would otherwise rot unnoticed.
-        #
-        # This job builds the static library for the driver but never installs
-        # the Python package, so tests/conftest.py's import of ama_cryptography
-        # would fail its POST and take pytest down with INTERNALERROR before
-        # collecting anything. These tests exercise JSON shapes and file
-        # contents and perform no cryptography, so the diagnostic import is the
-        # right answer here: the module completes its import in the ERROR state
-        # and every cryptographic operation stays refused.
-        env:
-          AMA_POST_DIAGNOSTIC_IMPORT: "1"
-        run: |
-          python3 -m pytest tests/test_instruction_count_gate.py -q
 
       - name: Upload measurements
         if: always()
