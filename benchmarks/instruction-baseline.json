@@ -1,0 +1,56 @@
+{
+  "_comment": "Retired instructions per cryptographic operation. Unlike benchmarks/baseline.json these are a property of the binary and its input rather than of the runner: the same operations measured bit-identical idle and under 150% CPU oversubscription, where the wall-clock lane swung 2.1x on the same binary. Gated by tools/check_instruction_counts.py at 2%, against 45% for wall-clock. Regenerate with benchmarks/measure_instruction_counts.py.",
+  "method": "(Ir(2N) - Ir(N)) / N under callgrind",
+  "iterations": 10,
+  "dispatch_env": {
+    "AMA_DISPATCH_NO_AUTOTUNE": "1"
+  },
+  "jitter_budget_percent": 0.1,
+  "tolerance_percent": 2.0,
+  "profiles": {
+    "arch=x86-64 sha3=AVX2 kyber=AVX2 dilithium=AVX2 sphincs=AVX2 aes_gcm=AVX2 ed25519=Generic C chacha20poly1305=AVX2 argon2=AVX2 x25519=AVX2": {
+      "measured_utc": "2026-09-13T16:35:46Z",
+      "measured_on": "containerised x86-64; avx512f/bw/cd/dq/ifma/vbmi/vl, vaes, vpclmulqdq, sha_ni; 4 cores; gcc -O2; static library",
+      "operations": {
+        "aes_256_gcm_encrypt": 4540,
+        "chacha20poly1305_encrypt": 11483,
+        "dilithium_keygen": 1503470,
+        "dilithium_sign": 8290768,
+        "dilithium_verify": 1540668,
+        "ed25519_keygen": 129252,
+        "ed25519_sign": 206910,
+        "ed25519_verify": 433411,
+        "hkdf_derive": 39867,
+        "hmac_sha3_256": 53028,
+        "kyber_decapsulate": 963121,
+        "kyber_encapsulate": 804598,
+        "kyber_keygen": 744872,
+        "secp256k1_ecdsa_sign": 1214901,
+        "sha3_256": 38072,
+        "sha3_512": 70941,
+        "sha512": 37097,
+        "x25519_scalarmult": 1099472
+      },
+      "observed_spread_ir": {
+        "aes_256_gcm_encrypt": 0,
+        "chacha20poly1305_encrypt": 0,
+        "dilithium_keygen": 0,
+        "dilithium_sign": 0,
+        "dilithium_verify": 0,
+        "ed25519_keygen": 0,
+        "ed25519_sign": 0,
+        "ed25519_verify": 0,
+        "hkdf_derive": 0,
+        "hmac_sha3_256": 0,
+        "kyber_decapsulate": 0,
+        "kyber_encapsulate": 0,
+        "kyber_keygen": 0,
+        "secp256k1_ecdsa_sign": 0,
+        "sha3_256": 0,
+        "sha3_512": 0,
+        "sha512": 0,
+        "x25519_scalarmult": 0
+      }
+    }
+  }
+}

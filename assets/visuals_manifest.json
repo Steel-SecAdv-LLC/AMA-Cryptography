@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 851,
       "Key Management\n& Rotation": 266,
       "Memory Security\n& Fuzzing": 337,
-      "Other": 2671,
+      "Other": 2693,
       "PQC Backends\n& Integration": 772,
       "Performance\n& Monitoring": 376
     },
-    "n_files": 231,
-    "total_tests": 5273,
+    "n_files": 232,
+    "total_tests": 5295,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -77,6 +77,7 @@
       "test_headers.py",
       "test_hybrid_c_interop.py",
       "test_hybrid_signature_domain_separation.py",
+      "test_instruction_count_gate.py",
       "test_invariant41_rng_sweep.py",
       "test_invariant7_uniform_enforcement.py",
       "test_invariant7_uniform_enforcement_legacy.py",

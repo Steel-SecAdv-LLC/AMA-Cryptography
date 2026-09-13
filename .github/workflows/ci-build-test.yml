@@ -830,6 +830,95 @@ jobs:
   # If you find yourself wanting to re-add continue-on-error here,
   # diagnose the underlying flake instead — silencing this gate masks
   # exactly the class of regression it exists to catch.
+  instruction-count-regression:
+    name: Instruction Count Regression (A/B)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [c-library]
+    # Retired instruction count is a property of the binary and its input, not
+    # of the runner. The wall-clock lane in `benchmark-regression` cannot be:
+    # benchmarks/benchmark_runner.py records one UNCHANGED binary measuring
+    # 917, 1845 and 3086 ops/sec, and the x86 tolerances were widened to 45%
+    # so it would stop flapping — a band that cannot detect a 30% regression.
+    #
+    # Measured while building this job, one binary, all inputs fixed:
+    #   wall clock        idle 200,150-209,714 ops/sec
+    #                     under load 99,478-125,248 ops/sec   (2.1x swing)
+    #   instruction count idle and under load BIT-IDENTICAL   (zero variance)
+    #
+    # So this lane runs at 2% where the wall-clock lane needs 45%.
+    #
+    # A/B rather than a stored baseline: ubuntu-latest spans two CPU classes
+    # about 1.45x apart, and a recorded baseline would fail closed on whichever
+    # class did not record it. Both builds are measured on THIS runner in THIS
+    # job, so the machine cancels out entirely.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0   # the merge-base build is the reference
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential cmake ninja-build valgrind
+
+      - name: Build head and measure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-head -DCMAKE_BUILD_TYPE=Release \
+                -DAMA_USE_NATIVE_PQC=ON -G Ninja
+          ninja -C build-head libama_cryptography_static.a
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -Iinclude \
+              -o ic_driver_head benchmarks/ic_driver.c \
+              build-head/lib/libama_cryptography_static.a -lm
+          python3 benchmarks/measure_instruction_counts.py \
+            --driver ./ic_driver_head --iterations 10 --output head.json
+
+      - name: Build merge-base and measure
+        run: |
+          set -euo pipefail
+          BASE=$(git merge-base origin/${{ github.base_ref || 'main' }} HEAD)
+          echo "merge-base: $BASE"
+          git worktree add ../base-tree "$BASE"
+          cmake -S ../base-tree -B build-base -DCMAKE_BUILD_TYPE=Release \
+                -DAMA_USE_NATIVE_PQC=ON -G Ninja
+          ninja -C build-base libama_cryptography_static.a
+          # The driver is taken from HEAD in both cases: it is the measuring
+          # instrument, not the thing measured, and a base commit that predates
+          # it has no driver at all. Only the LIBRARY differs between the two.
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -I../base-tree/include \
+              -o ic_driver_base benchmarks/ic_driver.c \
+              build-base/lib/libama_cryptography_static.a -lm
+          python3 benchmarks/measure_instruction_counts.py \
+            --driver ./ic_driver_base --iterations 10 --output base.json
+
+      - name: Compare head against merge-base
+        run: |
+          python3 tools/check_instruction_counts.py \
+            --baseline base.json --measured head.json --tolerance-percent 2
+
+      - name: Verify the recorded baseline is still well-formed
+        # The committed baseline is the documented reference for what each
+        # operation costs. It is not what the A/B comparison uses, so a drifted
+        # one would otherwise rot unnoticed.
+        run: |
+          python3 -m pytest tests/test_instruction_count_gate.py -q
+
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: instruction-counts
+          path: |
+            head.json
+            base.json
+          retention-days: 14
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -983,6 +1072,7 @@ jobs:
       - lint
       - security
       - benchmark-regression
+      - instruction-count-regression
       - docker
     runs-on: ubuntu-latest
     timeout-minutes: 3
