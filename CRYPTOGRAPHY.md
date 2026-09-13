@@ -414,7 +414,8 @@ secp256k1 provides the elliptic curve operations under BIP32-style hierarchical 
 **Security Properties:**
 - 128-bit classical security
 - NOT quantum-resistant
-- Used for HD key derivation (BIP32 compliance)
+- Used for BIP32-style HD key derivation (AMA-specific root; NOT BIP32
+  interoperable — see the derivation note above)
 
 **Standard:** SEC 2 (Standards for Efficient Cryptography)
 

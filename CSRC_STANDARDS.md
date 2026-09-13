@@ -58,7 +58,7 @@ FIPS or SP publications. They are included for completeness.
 | X25519 | RFC 7748 | Curve25519, 256-bit keys | Diffie-Hellman key exchange; not a NIST publication |
 | Argon2id | RFC 9106 | Configurable: t_cost, m_cost, parallelism, tag length | Memory-hard KDF; not a NIST publication |
 | HKDF (with SHA3-256) | RFC 5869 | Extract-then-Expand with HMAC-SHA3-256, max output 8160 B | KDF construction; not a NIST publication. Uses SHA3-256 as the underlying hash |
-| secp256k1 | SEC 2 v2 / BIP-32 | 256-bit prime field, compressed SEC1 public keys (33 B) | Certicom/Bitcoin curve; not a NIST publication. Used for BIP-32 HD key derivation |
+| secp256k1 | SEC 2 v2 | 256-bit prime field, compressed SEC1 public keys (33 B) | Certicom/Bitcoin curve; not a NIST publication. Used for BIP-32-**style** HD key derivation: the child KDF follows BIP-32, but the master key uses the HMAC key `"AMA Cryptography Master Key"` where BIP-32 specifies `"Bitcoin seed"`, so the tree is deliberately NOT interoperable with a BIP-32 wallet and no BIP-32 test vector applies |
 | FROST(Ed25519, SHA-512) | RFC 9591-style | t-of-n threshold Ed25519, Shamir secret sharing over Ed25519 scalar field | Flexible Round-Optimized Schnorr Threshold signatures; not a NIST publication. Protocol structure per RFC 9591, but the hash derivations omit the ciphersuite's "FROST-ED25519-SHA512-v1" contextString and per-role H1/H2 domain separation (`src/c/ama_frost.c`, Standards note), so partial signatures are not interoperable with RFC 9591 ciphersuite implementations; the aggregated signature is standard RFC 8032 Ed25519 |
 
 ---

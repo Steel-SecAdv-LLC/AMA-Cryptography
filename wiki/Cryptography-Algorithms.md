@@ -394,7 +394,9 @@ full conformance / sweep matrix
 
 ### secp256k1
 
-**Elliptic curve operations** for BIP32-compatible HD key derivation.
+**Elliptic curve operations** for BIP32-style HD key derivation over an
+AMA-specific root — the child KDF follows BIP32, the master HMAC key does
+not, so the tree is deliberately not interoperable with a BIP32 wallet.
 
 | Property | Value |
 |----------|-------|

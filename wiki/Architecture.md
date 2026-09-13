@@ -287,7 +287,7 @@ flowchart TD
     hkdf --> dil_seed["Dilithium Seed"]:::blue
     hkdf --> subkeys["Derived Subkeys (by path)"]:::blue
 
-    subkeys --> path["HD Path: m / purpose' / account' / change' / index'\nBIP32-compatible, hardened-only"]:::black
+    subkeys --> path["HD Path: m / purpose' / account' / change' / index'\nBIP32-style paths, hardened-only"]:::black
 
 classDef gold fill:#B4B124,stroke:#000000,color:#000000;
 classDef blue fill:#11AEED,stroke:#000000,color:#000000;

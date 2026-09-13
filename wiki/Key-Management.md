@@ -8,7 +8,7 @@ Comprehensive documentation for the AMA Cryptography key management system, incl
 
 The key management system provides enterprise-grade capabilities:
 
-- **HD Key Derivation** — BIP32-compatible hierarchical deterministic keys
+- **HD Key Derivation** — BIP32-style hierarchical deterministic keys (AMA-specific root; not interoperable with BIP32 wallets)
 - **Key Lifecycle** — Active → Rotating → Deprecated → Revoked → Compromised
 - **Zero-Downtime Rotation** — Seamless key rotation with versioned metadata
 - **Secure Storage** — Encrypted key storage at rest
@@ -108,8 +108,15 @@ and call `derive_key(...)` — see the next section.
 
 ### Overview
 
-AMA Cryptography implements BIP32-compatible hierarchical deterministic
-key derivation. The PRF is **HMAC-SHA-512** (BIP32-standard, delegated to
+AMA Cryptography implements BIP32-**style** hierarchical deterministic key
+derivation. The child KDF follows BIP32's formulae exactly, but the MASTER
+key is derived with the HMAC key `"AMA Cryptography Master Key"` where BIP32
+specifies `"Bitcoin seed"`. Every key therefore descends from a different
+root: **no BIP32 test vector passes here and no BIP32 wallet or library
+derives the same keys from the same seed.** A caller that needs true BIP32
+interoperability needs a BIP32 implementation, not this class.
+
+The PRF is **HMAC-SHA-512** (BIP32-standard, delegated to
 the native C backend via `ama_cryptography.pqc_backends.native_hmac_sha512`
 to satisfy INVARIANT-1 — no stdlib `hmac`). Non-hardened child derivation
 uses the native secp256k1 public-key computation.

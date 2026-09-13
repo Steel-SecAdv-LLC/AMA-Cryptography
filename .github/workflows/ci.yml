@@ -1222,6 +1222,20 @@ jobs:
       run: |
         python tools/check_verification_claim_honesty.py
 
+    - name: "INVARIANT-16: HD derivation is BIP32-style, not BIP32-compatible"
+      # key_management.py derives its master key with the HMAC key
+      # b"AMA Cryptography Master Key" where BIP32 specifies b"Bitcoin seed".
+      # The CHILD KDF follows BIP32 exactly; the tree does not, so no BIP32
+      # wallet derives the same keys from the same seed.
+      #
+      # This was already corrected once — CHANGELOG.md records it as
+      # KM-HD-001 — and shipped with no gate behind it, after which six sites
+      # across wiki/, CRYPTOGRAPHY.md and CSRC_STANDARDS.md still carried the
+      # false claim. A correction without a gate is a correction that comes
+      # back.
+      run: |
+        python tools/check_hd_interop_honesty.py
+
     - name: "Verify the vendored key-format conformance corpus"
       # tests/kat/keyformats/ is the only evidence that AMA's key encodings
       # match the specifications rather than merely themselves, and
