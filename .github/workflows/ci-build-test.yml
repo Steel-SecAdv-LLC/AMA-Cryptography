@@ -882,8 +882,25 @@ jobs:
       - name: Build merge-base and measure
         run: |
           set -euo pipefail
-          BASE=$(git merge-base origin/${{ github.base_ref || 'main' }} HEAD)
+          # Prefer the PR's own base sha, as baseline-guard.yml does: it needs
+          # no origin/<branch> ref to exist locally and it is correct when the
+          # PR targets something other than main. On a push event there is no
+          # pull_request payload, so fall back to fetching the default branch.
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then
+            git fetch --no-tags origin "${{ github.event.repository.default_branch }}"
+            BASE=$(git merge-base FETCH_HEAD HEAD)
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::could not determine a merge-base to compare against." >&2
+            exit 1
+          fi
           echo "merge-base: $BASE"
+          if [ "$BASE" = "$(git rev-parse HEAD)" ]; then
+            echo "HEAD is the merge-base; nothing to compare. Skipping."
+            cp head.json base.json
+            exit 0
+          fi
           git worktree add ../base-tree "$BASE"
           cmake -S ../base-tree -B build-base -DCMAKE_BUILD_TYPE=Release \
                 -DAMA_USE_NATIVE_PQC=ON -G Ninja
