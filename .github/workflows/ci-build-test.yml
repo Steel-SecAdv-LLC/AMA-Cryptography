@@ -902,6 +902,17 @@ jobs:
           python3 tools/check_instruction_counts.py \
             --baseline base.json --measured head.json --tolerance-percent 2
 
+      - name: Dispatch auto-tune startup cost
+        # The dispatcher microbenchmarks its SIMD kernels against scalar at the
+        # first call that touches one. Measured on an AVX-512 host that costs
+        # 2,602,494,880 retired instructions and takes the first cryptographic
+        # operation from 4-5 ms to 130-170 ms of wall time — invisible in a
+        # long-lived server, dominant in a CLI or a serverless cold start.
+        # This does not change the design; it stops the cost growing unnoticed.
+        run: |
+          python3 benchmarks/measure_instruction_counts.py \
+            --driver ./ic_driver_head --measure-startup --output startup.json
+
       - name: Verify the recorded baseline is still well-formed
         # The committed baseline is the documented reference for what each
         # operation costs. It is not what the A/B comparison uses, so a drifted
@@ -917,6 +928,7 @@ jobs:
           path: |
             head.json
             base.json
+            startup.json
           retention-days: 14
 
   docker:

@@ -314,6 +314,82 @@ def test_the_driver_and_measurement_tool_are_present() -> None:
     assert MEASURE_PATH.is_file(), "benchmarks/measure_instruction_counts.py is missing"
 
 
+# --------------------------------------------------------------------------
+# The dispatch auto-tune's startup cost
+# --------------------------------------------------------------------------
+
+
+def _load_measure() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("measure_instruction_counts", MEASURE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_autotune_startup_cost_has_a_ceiling() -> None:
+    """Measured: 2,602,494,880 instructions before any application work.
+
+    The dispatcher microbenchmarks its SIMD kernels against scalar at the
+    first call that touches one. On an AVX-512 host that takes the first
+    cryptographic operation from 4-5 ms to 130-170 ms of wall time — amortised
+    to nothing in a long-lived server, dominant in a CLI or a serverless cold
+    start. The ceiling stops it growing further unnoticed; it is not an
+    endorsement of the current figure.
+    """
+    measure = _load_measure()
+    assert (
+        measure.STARTUP_INSTRUCTION_CEILING >= 2_602_494_880
+    ), "the ceiling is below the measured cost, so the gate cannot pass"
+    assert (
+        measure.STARTUP_INSTRUCTION_CEILING <= 4_000_000_000
+    ), "a ceiling far above the measured cost would let it grow silently"
+
+
+def test_exceeding_the_startup_ceiling_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Negative control: the ceiling must actually reject."""
+    measure = _load_measure()
+    monkeypatch.setattr(measure, "dispatch_fingerprint", lambda driver: FINGERPRINT)
+    monkeypatch.setattr(measure, "list_operations", lambda driver: ["sha3_256"])
+    monkeypatch.setattr(
+        measure,
+        "measure_startup",
+        lambda driver, operation="sha3_256": {
+            "init_autotuned": 9_000_000_000,
+            "init_pinned": 12_000_000,
+            "autotune_cost": measure.STARTUP_INSTRUCTION_CEILING + 1,
+        },
+    )
+    monkeypatch.setattr(measure.shutil, "which", lambda name: "/usr/bin/valgrind")
+    driver = tmp_path / "ic_driver"
+    driver.write_text("#!/bin/sh\n")
+    driver.chmod(0o755)
+    assert measure.main(["--driver", str(driver), "--measure-startup"]) == 1
+
+
+def test_the_startup_probe_uses_zero_iterations() -> None:
+    """Guard against a subtly wrong probe that measures one hash instead.
+
+    The driver performs its Ed25519/ML-KEM/ML-DSA key setup BEFORE the loop,
+    so dispatch is already initialised by the time iteration 1 runs. An
+    ``Ir(1) - Ir(0)`` probe therefore measures a single hash — 38,068 Ir — and
+    reports it as the tuning cost, understating the real figure by four orders
+    of magnitude. The probe must compare two ZERO-iteration runs that differ
+    only in whether the auto-tune ran.
+    """
+    source = MEASURE_PATH.read_text(encoding="utf-8")
+    start = source.index("def measure_startup(")
+    end = source.index("def list_operations(")
+    body = source[start:end]
+    assert '"0",' in body, "the startup probe no longer runs the driver at 0 iterations"
+    assert (
+        "AMA_DISPATCH_NO_AUTOTUNE" in body
+    ), "the startup probe must compare auto-tune live against auto-tune pinned"
+
+
 def test_the_driver_pins_autotune_off() -> None:
     """Auto-tune live means the process executes different code between runs.
 

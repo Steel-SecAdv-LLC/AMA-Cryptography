@@ -106,6 +106,18 @@ DEFAULT_JITTER_BUDGET_PERCENT = 0.1
 SAMPLES_PER_OPERATION = 3
 
 
+#: The dispatcher's auto-tune runs once per process, at the first call that
+#: touches a dispatched kernel.  Measured on an AVX-512 host it adds
+#: 2,600,710,540 retired instructions and takes the first cryptographic
+#: operation from 4-5 ms to 130-170 ms of wall time.  That is amortised to
+#: nothing in a long-lived server and dominates everything in a CLI, a
+#: serverless cold start or a short script.
+#:
+#: This ceiling exists so the cost cannot grow further unnoticed.  It is not
+#: an endorsement of the current figure.
+STARTUP_INSTRUCTION_CEILING = 3_000_000_000
+
+
 class MeasurementError(RuntimeError):
     """The measurement could not be performed at all."""
 
@@ -181,6 +193,57 @@ def dispatch_fingerprint(driver: Path) -> str:
     return fingerprint
 
 
+def measure_startup(driver: Path, operation: str = "sha3_256") -> dict[str, int]:
+    """The one-time dispatch initialisation cost, isolated.
+
+    The probe is the driver at ZERO iterations, run once with the auto-tune
+    live and once with it pinned off.  At zero iterations the driver still
+    performs its fixed key setup — Ed25519, ML-KEM and ML-DSA — which is what
+    brings every dispatched kernel up, so the whole tuning sweep lands in the
+    measurement.  Nothing else differs between the two runs, so the difference
+    is the auto-tune and only the auto-tune.
+
+    ``Ir(1) - Ir(0)`` does NOT work here and the distinction is easy to get
+    wrong: the setup already triggered dispatch initialisation before the loop
+    is reached, so that difference measures one hash, not the tuning.
+    """
+    counts: dict[str, int] = {}
+    for label, pin_autotune in (("autotuned", False), ("pinned", True)):
+        env = dict(os.environ)
+        if pin_autotune:
+            env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
+        else:
+            env.pop("AMA_DISPATCH_NO_AUTOTUNE", None)
+        command = [
+            "valgrind",
+            "--tool=callgrind",
+            "--callgrind-out-file=/dev/null",
+            str(driver),
+            operation,
+            "0",
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
+        if completed.returncode != 0:
+            raise MeasurementError(
+                f"startup probe ({label}) exited {completed.returncode}:\n"
+                f"{completed.stderr[-1000:]}"
+            )
+        match = _REFS_RE.search(completed.stderr)
+        if not match:
+            raise MeasurementError(f"startup probe ({label}) produced no callgrind total")
+        counts[f"init_{label}"] = int(match.group(1).replace(",", ""))
+
+    autotune_cost = counts["init_autotuned"] - counts["init_pinned"]
+    if autotune_cost < 0:
+        raise MeasurementError(
+            f"the auto-tuned run retired FEWER instructions than the pinned one "
+            f"({counts['init_autotuned']:,} vs {counts['init_pinned']:,}). The "
+            f"probe is not measuring what it claims to."
+        )
+    counts["autotune_cost"] = autotune_cost
+    return counts
+
+
 def list_operations(driver: Path) -> list[str]:
     completed = subprocess.run([str(driver), "--list"], capture_output=True, text=True, check=False)
     if completed.returncode != 0:
@@ -212,6 +275,15 @@ def main(argv: list[str] | None = None) -> int:
         help="operations to measure (default: everything the driver lists)",
     )
     parser.add_argument("--output", type=Path, help="write measurements here as JSON")
+    parser.add_argument(
+        "--measure-startup",
+        action="store_true",
+        help=(
+            "measure the one-time dispatch initialisation cost instead of "
+            "per-operation costs, and fail if the auto-tune exceeds "
+            f"{STARTUP_INSTRUCTION_CEILING:,} instructions"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if shutil.which("valgrind") is None:
@@ -234,6 +306,53 @@ def main(argv: list[str] | None = None) -> int:
     except MeasurementError as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
+
+    if args.measure_startup:
+        try:
+            startup = measure_startup(args.driver)
+        except MeasurementError as exc:
+            print(f"FATAL: {exc}", file=sys.stderr)
+            return 2
+        print(f"Dispatch: {fingerprint}\n")
+        print(f"  init, auto-tune live          {startup['init_autotuned']:>15,} Ir")
+        print(f"  init, auto-tune pinned        {startup['init_pinned']:>15,} Ir")
+        print(f"  attributable to the auto-tune {startup['autotune_cost']:>15,} Ir")
+        if args.output:
+            args.output.write_text(
+                json.dumps(
+                    {
+                        "_comment": (
+                            "One-time dispatch initialisation cost. The auto-tune "
+                            "microbenchmarks SIMD kernels against scalar at first "
+                            "use; this is what that costs before any application "
+                            "work happens."
+                        ),
+                        "measured_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "fingerprint": fingerprint,
+                        "ceiling": STARTUP_INSTRUCTION_CEILING,
+                        "startup": startup,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            print(f"\nWrote startup measurement to {args.output}")
+        if startup["autotune_cost"] > STARTUP_INSTRUCTION_CEILING:
+            print(
+                f"\nFAIL: dispatch auto-tune costs "
+                f"{startup['autotune_cost']:,} instructions before any "
+                f"application work, over the {STARTUP_INSTRUCTION_CEILING:,} "
+                f"ceiling. Every process pays this at its first cryptographic "
+                f"call.",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"\nOK: auto-tune cost is within the "
+            f"{STARTUP_INSTRUCTION_CEILING:,} instruction ceiling."
+        )
+        return 0
     if not operations:
         print("FATAL: no operations to measure.", file=sys.stderr)
         return 2
