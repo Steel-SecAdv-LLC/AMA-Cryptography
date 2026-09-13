@@ -867,17 +867,21 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           .github/scripts/apt-install.sh build-essential cmake ninja-build valgrind
 
-      - name: Build head and measure
+      - name: Build head
         run: |
           set -euo pipefail
           cmake -S . -B build-head -DCMAKE_BUILD_TYPE=Release \
                 -DAMA_USE_NATIVE_PQC=ON -G Ninja
           ninja -C build-head libama_cryptography_static.a
-          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -Iinclude \
+          # ic_symbol_flags.py emits -DAMA_IC_HAVE_<FEATURE>=0 for anything the
+          # library does not export. For the head build that is normally
+          # nothing; it is run anyway so both sides use the identical command.
+          HEAD_FLAGS=$(python3 benchmarks/ic_symbol_flags.py \
+                         build-head/lib/libama_cryptography_static.a)
+          echo "head flags: ${HEAD_FLAGS:-none}"
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -Iinclude $HEAD_FLAGS \
               -o ic_driver_head benchmarks/ic_driver.c \
               build-head/lib/libama_cryptography_static.a -lm
-          python3 benchmarks/measure_instruction_counts.py \
-            --driver ./ic_driver_head --iterations 10 --output head.json
 
       - name: Build merge-base and measure
         run: |
@@ -908,16 +912,42 @@ jobs:
           # The driver is taken from HEAD in both cases: it is the measuring
           # instrument, not the thing measured, and a base commit that predates
           # it has no driver at all. Only the LIBRARY differs between the two.
-          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -I../base-tree/include \
+          #
+          # A base that predates a primitive does not export it, and the link
+          # fails outright -- measured: main at 2dcef5c has no `ama_sha512`,
+          # which this branch added. ic_symbol_flags.py reads the base library
+          # with nm and compiles those primitives out, so the base driver
+          # builds and the comparison runs on the INTERSECTION. A primitive
+          # that exists only on the head has nothing to be compared against,
+          # which is correct: it is new, and its first measurement is its
+          # baseline.
+          BASE_FLAGS=$(python3 benchmarks/ic_symbol_flags.py \
+                         build-base/lib/libama_cryptography_static.a)
+          echo "base flags: ${BASE_FLAGS:-none}"
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -Iinclude $BASE_FLAGS \
               -o ic_driver_base benchmarks/ic_driver.c \
               build-base/lib/libama_cryptography_static.a -lm
+
+          # Both measurements cover exactly what the BASE driver supports.
+          COMMON=$(./ic_driver_base --list | tr '\n' ' ')
+          echo "comparing $(echo $COMMON | wc -w) operation(s)"
           python3 benchmarks/measure_instruction_counts.py \
-            --driver ./ic_driver_base --iterations 10 --output base.json
+            --driver ./ic_driver_base --iterations 10 \
+            --operations $COMMON --output base.json
+          python3 benchmarks/measure_instruction_counts.py \
+            --driver ./ic_driver_head --iterations 10 \
+            --operations $COMMON --output head.json
 
       - name: Compare head against merge-base
         run: |
+          # An out-of-tolerance operation passes only if
+          # benchmarks/instruction-count-acknowledgements.json records it with
+          # matching measured values and a reason. A stale entry, or one whose
+          # operation has moved again since, fails — so the file cannot become
+          # a blanket exemption.
           python3 tools/check_instruction_counts.py \
-            --baseline base.json --measured head.json --tolerance-percent 2
+            --baseline base.json --measured head.json --tolerance-percent 2 \
+            --acknowledgements benchmarks/instruction-count-acknowledgements.json
 
       - name: Dispatch auto-tune startup cost
         # The dispatcher microbenchmarks its SIMD kernels against scalar at the

@@ -215,6 +215,160 @@ def test_a_missing_file_fails_closed(gate: ModuleType, tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# Acknowledged changes: a branch that means to move a count says so
+# --------------------------------------------------------------------------
+
+
+ACK_PATH = REPO_ROOT / "benchmarks" / "instruction-count-acknowledgements.json"
+
+LONG_REASON = (
+    "Keccak gains the AVX2 kernel on this branch, which is why every "
+    "Keccak-driven row moves by the same proportion."
+)
+
+
+def _acks(tmp_path: Path, entries: dict[str, dict[str, object]]) -> Path:
+    return _write(tmp_path / "acks.json", {"acknowledgements": entries})
+
+
+def test_an_acknowledged_change_passes(gate: ModuleType, tmp_path: Path) -> None:
+    moved = dict(BASE_OPS)
+    moved["sha3_256"] = 12_000  # -68%
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 12_000, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _baseline(tmp_path),
+        _measured(tmp_path, moved),
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 0
+
+
+def test_an_unacknowledged_change_still_fails(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The acknowledgement file must not become a blanket exemption."""
+    moved = dict(BASE_OPS)
+    moved["ed25519_sign"] = 300_000
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 38_072, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _baseline(tmp_path),
+        _measured(tmp_path, moved),
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 1
+    assert "not acknowledged" in capsys.readouterr().err
+
+
+def test_an_operation_that_moved_again_fails(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An acknowledgement covers ONE measured change, not all future drift."""
+    moved = dict(BASE_OPS)
+    moved["sha3_256"] = 9_000  # acknowledged at 12,000
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 12_000, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _baseline(tmp_path),
+        _measured(tmp_path, moved),
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 1
+    assert "moved again" in capsys.readouterr().err
+
+
+def test_a_stale_acknowledgement_fails(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file of entries that no longer apply hides the ones that do."""
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 12_000, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _baseline(tmp_path),
+        _measured(tmp_path),  # nothing moved
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 1
+    assert "stale" in capsys.readouterr().err
+
+
+def test_an_acknowledgement_without_a_reason_is_rejected(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    acks = _acks(tmp_path, {"sha3_256": {"from": 1, "to": 2, "reason": "faster"}})
+    result = _run(
+        gate,
+        _baseline(tmp_path),
+        _measured(tmp_path),
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 2
+    assert "no real reason" in capsys.readouterr().err
+
+
+def test_an_acknowledgement_without_measured_values_is_rejected(
+    gate: ModuleType, tmp_path: Path
+) -> None:
+    """Values are what let the gate check the entry against reality."""
+    acks = _acks(tmp_path, {"sha3_256": {"reason": LONG_REASON}})
+    result = _run(
+        gate,
+        _baseline(tmp_path),
+        _measured(tmp_path),
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 2
+
+
+def test_the_shipped_acknowledgements_are_well_formed() -> None:
+    document = json.loads(ACK_PATH.read_text(encoding="utf-8"))
+    entries = document["acknowledgements"]
+    assert entries, "an empty acknowledgements file gates nothing"
+    for operation, entry in entries.items():
+        assert entry["from"] > 0 and entry["to"] > 0, operation
+        assert len(entry["reason"]) >= 40, f"{operation} gives no real reason"
+        assert entry.get("commits"), f"{operation} names no commit"
+
+
+def test_the_ml_dsa_signing_change_is_acknowledged_as_breaking() -> None:
+    """The largest change on this branch is a declared interoperability break.
+
+    `ama_dilithium_sign` moved from ML-DSA.Sign_internal (FIPS 204 Algorithm 7)
+    to the Sec 5.2 external interface, which changes mu and therefore every
+    rejection-sampling decision. Measured: the same seed gives an identical
+    public key on both sides but different signatures, and each side rejects
+    the other's. Anyone reading this file must find that, not "+146%, faster
+    NTT".
+    """
+    document = json.loads(ACK_PATH.read_text(encoding="utf-8"))
+    entry = document["acknowledgements"]["dilithium_sign"]
+    reason = entry["reason"].lower()
+    assert "breaking" in reason, "the reason does not say this is breaking"
+    assert (
+        "do not verify" in reason or "not verify" in reason
+    ), "the reason does not state that 4.x signatures stop verifying"
+
+
+# --------------------------------------------------------------------------
 # A/B mode: two measurements on one runner, no stored baseline
 # --------------------------------------------------------------------------
 

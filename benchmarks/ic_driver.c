@@ -80,6 +80,59 @@
 #include "ama_cryptography.h"
 #include "ama_dispatch.h"
 
+/* ------------------------------------------------------------------
+ * Per-primitive availability.
+ *
+ * The A/B comparison in ci-build-test.yml builds this ONE driver source
+ * against two libraries: the head build and the merge-base build. A base
+ * that predates a primitive does not export it, and the link fails --
+ * measured: `main` at 2dcef5c has no `ama_sha512`, which this branch
+ * added, so the base driver would not build at all and the whole A/B lane
+ * would be dead on arrival.
+ *
+ * benchmarks/ic_symbol_flags.py reads the target library with `nm` and
+ * emits -DAMA_IC_HAVE_<FEATURE>=0 for whatever is absent. Everything
+ * defaults to present, so a normal build needs no flags and a missing
+ * primitive is opted OUT explicitly rather than silently skipped.
+ * ------------------------------------------------------------------ */
+#ifndef AMA_IC_HAVE_AES_GCM
+#define AMA_IC_HAVE_AES_GCM 1
+#endif
+#ifndef AMA_IC_HAVE_CHACHA
+#define AMA_IC_HAVE_CHACHA 1
+#endif
+#ifndef AMA_IC_HAVE_DILITHIUM
+#define AMA_IC_HAVE_DILITHIUM 1
+#endif
+#ifndef AMA_IC_HAVE_ED25519
+#define AMA_IC_HAVE_ED25519 1
+#endif
+#ifndef AMA_IC_HAVE_HKDF
+#define AMA_IC_HAVE_HKDF 1
+#endif
+#ifndef AMA_IC_HAVE_HMAC_SHA3_256
+#define AMA_IC_HAVE_HMAC_SHA3_256 1
+#endif
+#ifndef AMA_IC_HAVE_KYBER
+#define AMA_IC_HAVE_KYBER 1
+#endif
+#ifndef AMA_IC_HAVE_SECP256K1
+#define AMA_IC_HAVE_SECP256K1 1
+#endif
+#ifndef AMA_IC_HAVE_SHA3_256
+#define AMA_IC_HAVE_SHA3_256 1
+#endif
+#ifndef AMA_IC_HAVE_SHA3_512
+#define AMA_IC_HAVE_SHA3_512 1
+#endif
+#ifndef AMA_IC_HAVE_SHA512
+#define AMA_IC_HAVE_SHA512 1
+#endif
+#ifndef AMA_IC_HAVE_X25519
+#define AMA_IC_HAVE_X25519 1
+#endif
+
+
 /* Deterministic filler: a fixed affine pattern, never a PRNG. */
 #define FIXED_FILL(buf, tag)                                                  \
     do {                                                                      \
@@ -93,13 +146,60 @@
 #define MSG_BYTES 1024
 
 static const char *const OPERATIONS[] = {
-    "sha3_256", "sha3_512", "sha512", "hmac_sha3_256", "hkdf_derive",
-    "ed25519_keygen", "ed25519_sign", "ed25519_verify",
+#if AMA_IC_HAVE_SHA3_256
+    "sha3_256",
+#endif
+#if AMA_IC_HAVE_SHA3_512
+    "sha3_512",
+#endif
+#if AMA_IC_HAVE_SHA512
+    "sha512",
+#endif
+#if AMA_IC_HAVE_HMAC_SHA3_256
+    "hmac_sha3_256",
+#endif
+#if AMA_IC_HAVE_HKDF
+    "hkdf_derive",
+#endif
+#if AMA_IC_HAVE_ED25519
+    "ed25519_keygen",
+#endif
+#if AMA_IC_HAVE_ED25519
+    "ed25519_sign",
+#endif
+#if AMA_IC_HAVE_ED25519
+    "ed25519_verify",
+#endif
+#if AMA_IC_HAVE_X25519
     "x25519_scalarmult",
-    "aes_256_gcm_encrypt", "chacha20poly1305_encrypt",
+#endif
+#if AMA_IC_HAVE_AES_GCM
+    "aes_256_gcm_encrypt",
+#endif
+#if AMA_IC_HAVE_CHACHA
+    "chacha20poly1305_encrypt",
+#endif
+#if AMA_IC_HAVE_SECP256K1
     "secp256k1_ecdsa_sign",
-    "kyber_keygen", "kyber_encapsulate", "kyber_decapsulate",
-    "dilithium_keygen", "dilithium_sign", "dilithium_verify",
+#endif
+#if AMA_IC_HAVE_KYBER
+    "kyber_keygen",
+#endif
+#if AMA_IC_HAVE_KYBER
+    "kyber_encapsulate",
+#endif
+#if AMA_IC_HAVE_KYBER
+    "kyber_decapsulate",
+#endif
+#if AMA_IC_HAVE_DILITHIUM
+    "dilithium_keygen",
+#endif
+#if AMA_IC_HAVE_DILITHIUM
+    "dilithium_sign",
+#endif
+#if AMA_IC_HAVE_DILITHIUM
+    "dilithium_verify",
+#endif
     NULL
 };
 
@@ -187,15 +287,21 @@ int main(int argc, char **argv) {
     size_t d_sig_len = sizeof d_sig;
 
     /* ---- setup, outside the measured loop so it cancels in the difference */
+#if AMA_IC_HAVE_ED25519
     if (ama_ed25519_keypair(ed_pk, ed_sk) != AMA_SUCCESS) return 1;
     if (ama_ed25519_sign(ed_sig, message, sizeof message, ed_sk) != AMA_SUCCESS) return 1;
+#endif
+#if AMA_IC_HAVE_KYBER
     if (ama_kyber_keypair_from_seed(seed_d, seed_z, k_pk, k_sk) != AMA_SUCCESS) return 1;
     if (ama_kyber_encapsulate(k_pk, sizeof k_pk, k_ct, &k_ct_len,
                               k_ss, sizeof k_ss) != AMA_SUCCESS) return 1;
+#endif
+#if AMA_IC_HAVE_DILITHIUM
     if (ama_dilithium_keypair_from_seed(seed_xi, d_pk, d_sk) != AMA_SUCCESS) return 1;
     if (ama_dilithium_sign(d_sig, &d_sig_len, message, sizeof message, d_sk) != AMA_SUCCESS) {
         return 1;
     }
+#endif
 
     /* Resolve the operation once; a strcmp chain inside the loop would be
      * measured as part of the operation. */
@@ -207,26 +313,63 @@ int main(int argc, char **argv) {
         OP_DIL_KEYGEN, OP_DIL_SIGN, OP_DIL_VERIFY, OP_UNKNOWN
     } which = OP_UNKNOWN;
 
-    if      (!strcmp(op, "sha3_256"))                 which = OP_SHA3_256;
-    else if (!strcmp(op, "sha3_512"))                 which = OP_SHA3_512;
-    else if (!strcmp(op, "sha512"))                   which = OP_SHA512;
-    else if (!strcmp(op, "hmac_sha3_256"))            which = OP_HMAC_SHA3_256;
-    else if (!strcmp(op, "hkdf_derive"))              which = OP_HKDF;
-    else if (!strcmp(op, "ed25519_keygen"))           which = OP_ED_KEYGEN;
-    else if (!strcmp(op, "ed25519_sign"))             which = OP_ED_SIGN;
-    else if (!strcmp(op, "ed25519_verify"))           which = OP_ED_VERIFY;
-    else if (!strcmp(op, "x25519_scalarmult"))        which = OP_X25519;
-    else if (!strcmp(op, "aes_256_gcm_encrypt"))      which = OP_AES_GCM;
-    else if (!strcmp(op, "chacha20poly1305_encrypt")) which = OP_CHACHA;
-    else if (!strcmp(op, "secp256k1_ecdsa_sign"))     which = OP_ECDSA_SIGN;
-    else if (!strcmp(op, "kyber_keygen"))             which = OP_KYBER_KEYGEN;
-    else if (!strcmp(op, "kyber_encapsulate"))        which = OP_KYBER_ENCAP;
-    else if (!strcmp(op, "kyber_decapsulate"))        which = OP_KYBER_DECAP;
-    else if (!strcmp(op, "dilithium_keygen"))         which = OP_DIL_KEYGEN;
-    else if (!strcmp(op, "dilithium_sign"))           which = OP_DIL_SIGN;
-    else if (!strcmp(op, "dilithium_verify"))         which = OP_DIL_VERIFY;
-    else {
-        fprintf(stderr, "unknown operation: %s (try --list)\n", op);
+#if AMA_IC_HAVE_SHA3_256
+    if (!strcmp(op, "sha3_256")) which = OP_SHA3_256;
+#endif
+#if AMA_IC_HAVE_SHA3_512
+    if (!strcmp(op, "sha3_512")) which = OP_SHA3_512;
+#endif
+#if AMA_IC_HAVE_SHA512
+    if (!strcmp(op, "sha512")) which = OP_SHA512;
+#endif
+#if AMA_IC_HAVE_HMAC_SHA3_256
+    if (!strcmp(op, "hmac_sha3_256")) which = OP_HMAC_SHA3_256;
+#endif
+#if AMA_IC_HAVE_HKDF
+    if (!strcmp(op, "hkdf_derive")) which = OP_HKDF;
+#endif
+#if AMA_IC_HAVE_ED25519
+    if (!strcmp(op, "ed25519_keygen")) which = OP_ED_KEYGEN;
+#endif
+#if AMA_IC_HAVE_ED25519
+    if (!strcmp(op, "ed25519_sign")) which = OP_ED_SIGN;
+#endif
+#if AMA_IC_HAVE_ED25519
+    if (!strcmp(op, "ed25519_verify")) which = OP_ED_VERIFY;
+#endif
+#if AMA_IC_HAVE_X25519
+    if (!strcmp(op, "x25519_scalarmult")) which = OP_X25519;
+#endif
+#if AMA_IC_HAVE_AES_GCM
+    if (!strcmp(op, "aes_256_gcm_encrypt")) which = OP_AES_GCM;
+#endif
+#if AMA_IC_HAVE_CHACHA
+    if (!strcmp(op, "chacha20poly1305_encrypt")) which = OP_CHACHA;
+#endif
+#if AMA_IC_HAVE_SECP256K1
+    if (!strcmp(op, "secp256k1_ecdsa_sign")) which = OP_ECDSA_SIGN;
+#endif
+#if AMA_IC_HAVE_KYBER
+    if (!strcmp(op, "kyber_keygen")) which = OP_KYBER_KEYGEN;
+#endif
+#if AMA_IC_HAVE_KYBER
+    if (!strcmp(op, "kyber_encapsulate")) which = OP_KYBER_ENCAP;
+#endif
+#if AMA_IC_HAVE_KYBER
+    if (!strcmp(op, "kyber_decapsulate")) which = OP_KYBER_DECAP;
+#endif
+#if AMA_IC_HAVE_DILITHIUM
+    if (!strcmp(op, "dilithium_keygen")) which = OP_DIL_KEYGEN;
+#endif
+#if AMA_IC_HAVE_DILITHIUM
+    if (!strcmp(op, "dilithium_sign")) which = OP_DIL_SIGN;
+#endif
+#if AMA_IC_HAVE_DILITHIUM
+    if (!strcmp(op, "dilithium_verify")) which = OP_DIL_VERIFY;
+#endif
+    if (which == OP_UNKNOWN) {
+        fprintf(stderr,
+                "operation not available in this build: %s (try --list)\n", op);
         return 2;
     }
 
@@ -238,64 +381,100 @@ int main(int argc, char **argv) {
         size_t ecl = sizeof ec_sig;
 
         switch (which) {
+#if AMA_IC_HAVE_SHA3_256
         case OP_SHA3_256:
             ama_sha3_256(message, sizeof message, digest32);
             sink ^= digest32[0]; break;
+#endif
+#if AMA_IC_HAVE_SHA3_512
         case OP_SHA3_512:
             ama_sha3_512(message, sizeof message, digest64);
             sink ^= digest64[0]; break;
+#endif
+#if AMA_IC_HAVE_SHA512
         case OP_SHA512:
             ama_sha512(message, sizeof message, digest64);
             sink ^= digest64[0]; break;
+#endif
+#if AMA_IC_HAVE_HMAC_SHA3_256
         case OP_HMAC_SHA3_256:
             ama_hmac_sha3_256(key32, sizeof key32, message, sizeof message, digest32);
             sink ^= digest32[0]; break;
+#endif
+#if AMA_IC_HAVE_HKDF
         case OP_HKDF:
             ama_hkdf(salt32, sizeof salt32, key32, sizeof key32,
                      info16, sizeof info16, okm32, sizeof okm32);
             sink ^= okm32[0]; break;
+#endif
+#if AMA_IC_HAVE_ED25519
         case OP_ED_KEYGEN:
             ama_ed25519_keypair(ed_pk, ed_sk);
             sink ^= ed_pk[0]; break;
+#endif
+#if AMA_IC_HAVE_ED25519
         case OP_ED_SIGN:
             ama_ed25519_sign(ed_sig, message, sizeof message, ed_sk);
             sink ^= ed_sig[0]; break;
+#endif
+#if AMA_IC_HAVE_ED25519
         case OP_ED_VERIFY:
             ama_ed25519_verify(ed_sig, message, sizeof message, ed_pk);
             sink ^= ed_sig[0]; break;
+#endif
+#if AMA_IC_HAVE_X25519
         case OP_X25519:
             ama_x25519_key_exchange(x_shared, x_ours, x_theirs);
             sink ^= x_shared[0]; break;
+#endif
+#if AMA_IC_HAVE_AES_GCM
         case OP_AES_GCM:
             ama_aes256_gcm_encrypt(key32, nonce12, message, sizeof message,
                                    NULL, 0, ciphertext, tag16);
             sink ^= tag16[0]; break;
+#endif
+#if AMA_IC_HAVE_CHACHA
         case OP_CHACHA:
             ama_chacha20poly1305_encrypt(key32, nonce12, message, sizeof message,
                                          NULL, 0, ciphertext, tag16);
             sink ^= tag16[0]; break;
+#endif
+#if AMA_IC_HAVE_SECP256K1
         case OP_ECDSA_SIGN:
             ama_secp256k1_ecdsa_sign(ec_sig, &ecl, ec_hash, ec_priv);
             sink ^= ec_sig[0]; break;
+#endif
+#if AMA_IC_HAVE_KYBER
         case OP_KYBER_KEYGEN:
             ama_kyber_keypair_from_seed(seed_d, seed_z, k_pk, k_sk);
             sink ^= k_pk[0]; break;
+#endif
+#if AMA_IC_HAVE_KYBER
         case OP_KYBER_ENCAP:
             ama_kyber_encapsulate(k_pk, sizeof k_pk, k_ct, &ct_len, k_ss, sizeof k_ss);
             sink ^= k_ss[0]; break;
+#endif
+#if AMA_IC_HAVE_KYBER
         case OP_KYBER_DECAP:
             ama_kyber_decapsulate(k_ct, sizeof k_ct, k_sk, sizeof k_sk,
                                   k_ss, sizeof k_ss);
             sink ^= k_ss[0]; break;
+#endif
+#if AMA_IC_HAVE_DILITHIUM
         case OP_DIL_KEYGEN:
             ama_dilithium_keypair_from_seed(seed_xi, d_pk, d_sk);
             sink ^= d_pk[0]; break;
+#endif
+#if AMA_IC_HAVE_DILITHIUM
         case OP_DIL_SIGN:
             ama_dilithium_sign(d_sig, &sig_len, message, sizeof message, d_sk);
             sink ^= d_sig[0]; break;
+#endif
+#if AMA_IC_HAVE_DILITHIUM
         case OP_DIL_VERIFY:
             ama_dilithium_verify(message, sizeof message, d_sig, d_sig_len, d_pk);
             sink ^= d_sig[0]; break;
+#endif
         case OP_UNKNOWN:
         default:
             return 2;

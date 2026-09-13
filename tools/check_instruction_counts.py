@@ -64,6 +64,24 @@ ChaCha20-Poly1305 off its AVX2 kernel moved it from 11,483 to 28,265 Ir and the
 gate failed it at +146.15%.  Had the fingerprint tracked wired kernels, that
 same change would have looked up a different profile and reported nothing.
 
+Acknowledged changes
+--------------------
+A branch that deliberately changes what the library computes will move these
+counts, and it should: this one moves 14 of 17 — Keccak gains an AVX2 kernel
+(-66%), Ed25519 is rewritten (-9 to -22%), and ML-DSA signing moves to the
+FIPS 204 external interface, which changes the rejection path (+146%).
+
+Refusing to gate because the numbers move is how the wall-clock lane ended up
+at 45%. Instead, an out-of-tolerance change passes only when
+``benchmarks/instruction-count-acknowledgements.json`` records it WITH ITS
+MEASURED VALUES and a reason, the same shape as
+``benchmarks/check_baseline_justification.py`` requires of the wall-clock
+floors. An acknowledgement is checked against the measurement, so it cannot
+be written once and left to cover later drift: if the operation moves again,
+the recorded ``to`` no longer matches and the gate fails. A stale
+acknowledgement — one whose operation is back within tolerance — also fails,
+so the file cannot accumulate entries that explain nothing.
+
 Fail-closed behaviour
 ---------------------
 None of these is ever reported as a pass:
@@ -158,13 +176,48 @@ def select_profile(baseline: dict[str, Any], fingerprint: str) -> dict[str, int]
     return {str(k): int(v) for k, v in operations.items()}
 
 
+def load_acknowledgements(path: Path | None) -> dict[str, dict[str, Any]]:
+    if path is None:
+        return {}
+    document = load_json(path, "acknowledgements")
+    entries = document.get("acknowledgements")
+    if not isinstance(entries, dict):
+        raise GateError(f"{path} has no 'acknowledgements' object.")
+    for operation, entry in entries.items():
+        if not isinstance(entry, dict):
+            raise GateError(f"acknowledgement for {operation} is not an object.")
+        for field in ("from", "to", "reason"):
+            if field not in entry:
+                raise GateError(
+                    f"acknowledgement for {operation} has no {field!r}. An "
+                    f"acknowledgement without its measured values cannot be "
+                    f"checked against the measurement, and one without a "
+                    f"reason explains nothing."
+                )
+        reason = str(entry["reason"])
+        if len(reason) < 40:
+            raise GateError(
+                f"acknowledgement for {operation} gives no real reason "
+                f"({reason!r}). Name what changed and why the cost moved."
+            )
+    return {str(k): v for k, v in entries.items()}
+
+
+def _within(actual: int, expected: int, tolerance_percent: float) -> bool:
+    if expected <= 0:
+        return False
+    return abs(actual - expected) / expected * 100.0 <= tolerance_percent
+
+
 def compare(
     baseline_ops: dict[str, int],
     measured_ops: dict[str, int],
     tolerance_percent: float,
     allow_subset: bool = False,
+    acknowledgements: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[str], list[tuple[str, int, int, float]], int]:
     """Returns (problems, rows, compared)."""
+    acknowledged = acknowledgements or {}
     problems: list[str] = []
     rows: list[tuple[str, int, int, float]] = []
 
@@ -193,13 +246,40 @@ def compare(
         delta_percent = (actual - expected) / expected * 100.0
         rows.append((operation, expected, actual, delta_percent))
         compared += 1
+        entry = acknowledged.get(operation)
         if abs(delta_percent) > tolerance_percent:
             direction = "REGRESSED" if delta_percent > 0 else "IMPROVED"
+            if entry is None:
+                problems.append(
+                    f"{operation} {direction}: baseline {expected:,} Ir, "
+                    f"measured {actual:,} Ir ({delta_percent:+.2f}%, "
+                    f"tolerance +/-{tolerance_percent}%) — not acknowledged. "
+                    f"Record it in the acknowledgements file with its measured "
+                    f"values and a reason, or fix the regression."
+                )
+            elif not _within(expected, int(entry["from"]), tolerance_percent):
+                problems.append(
+                    f"{operation} is acknowledged from {int(entry['from']):,} Ir "
+                    f"but the reference measures {expected:,} Ir. The "
+                    f"acknowledgement describes a different comparison."
+                )
+            elif not _within(actual, int(entry["to"]), tolerance_percent):
+                problems.append(
+                    f"{operation} is acknowledged at {int(entry['to']):,} Ir but "
+                    f"measures {actual:,} Ir. It moved again after being "
+                    f"acknowledged; re-measure and re-acknowledge."
+                )
+        elif entry is not None:
             problems.append(
-                f"{operation} {direction}: baseline {expected:,} Ir, "
-                f"measured {actual:,} Ir ({delta_percent:+.2f}%, "
-                f"tolerance +/-{tolerance_percent}%)"
+                f"{operation} carries an acknowledgement but is within "
+                f"tolerance ({delta_percent:+.2f}%). Remove the stale entry — "
+                f"a file of acknowledgements that no longer apply explains "
+                f"nothing and hides the ones that do."
             )
+    for operation in sorted(set(acknowledged) - set(baseline_ops) - set(measured_ops)):
+        problems.append(
+            f"{operation} is acknowledged but is not an operation in either " f"measurement."
+        )
     return problems, rows, compared
 
 
@@ -213,6 +293,15 @@ def main(argv: list[str] | None = None) -> int:
         help="output of benchmarks/measure_instruction_counts.py --output",
     )
     parser.add_argument("--tolerance-percent", type=float, default=DEFAULT_TOLERANCE_PERCENT)
+    parser.add_argument(
+        "--acknowledgements",
+        type=Path,
+        help=(
+            "JSON file recording intended instruction-count changes. An "
+            "out-of-tolerance operation passes only if it is recorded there "
+            "with matching measured values and a reason."
+        ),
+    )
     parser.add_argument(
         "--allow-subset",
         action="store_true",
@@ -257,8 +346,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
 
+    try:
+        acknowledgements = load_acknowledgements(args.acknowledgements)
+    except GateError as exc:
+        print(f"FATAL: {exc}", file=sys.stderr)
+        return 2
+
     problems, rows, compared = compare(
-        baseline_ops, measured_ops, args.tolerance_percent, args.allow_subset
+        baseline_ops,
+        measured_ops,
+        args.tolerance_percent,
+        args.allow_subset,
+        acknowledgements,
     )
 
     print(f"Dispatch: {fingerprint}")
@@ -270,7 +369,12 @@ def main(argv: list[str] | None = None) -> int:
     print()
     width = max((len(r[0]) for r in rows), default=10)
     for operation, expected, actual, delta in rows:
-        flag = " " if abs(delta) <= args.tolerance_percent else "!"
+        if abs(delta) <= args.tolerance_percent:
+            flag = " "
+        elif operation in acknowledgements:
+            flag = "A"
+        else:
+            flag = "!"
         print(
             f" {flag} {operation:<{width}}  {expected:>12,} -> {actual:>12,} " f"({delta:+6.2f}%)"
         )

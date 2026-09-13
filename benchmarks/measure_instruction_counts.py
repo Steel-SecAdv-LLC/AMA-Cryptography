@@ -296,6 +296,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.driver.is_file():
         print(f"FATAL: driver {args.driver} does not exist.", file=sys.stderr)
         return 2
+    # Path("./ic_driver") normalises to Path("ic_driver"), and subprocess does
+    # not use a shell, so a bare name is looked up on PATH rather than in the
+    # working directory -- FileNotFoundError for a binary sitting right there.
+    # The workflow passes exactly that form.
+    args.driver = args.driver.resolve()
     if args.iterations < 1:
         print("FATAL: --iterations must be >= 1.", file=sys.stderr)
         return 2
