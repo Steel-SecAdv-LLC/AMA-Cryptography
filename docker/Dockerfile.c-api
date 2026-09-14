@@ -9,20 +9,39 @@
 #   docker run -v $(pwd)/output:/output ama-cryptography-c-api:latest
 #
 # The built libraries will be copied to the mounted /output directory.
+#
+# Base image: pinned by digest, not by tag alone. A tag is a mutable pointer,
+# so a tag-only FROM makes the build unreproducible and gives an upstream
+# account takeover a path straight into this image -- the same supply-chain
+# reasoning behind pinning every GitHub Action to a commit SHA
+# (tools/check_action_pins.py), applied to the other half of the build inputs.
+# The tag is kept alongside the digest so the line stays readable; Docker
+# verifies the digest and ignores the tag. ubuntu:22.04 is an LTS release
+# supported to 2027-04; refreshing the digest is a deliberate edit.
+#
+# base-eol: 2027-04-30
+# ^ read by tools/check_docker_pins.py, which fails 60 days out so the
+#   base can be moved while it is still receiving fixes.
 
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS builder
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install build dependencies
+#
+# INVARIANT-1: libssl-dev is NOT installed.  AMA's C sources link no OpenSSL —
+# CMakeLists.txt says the library is "deliberately NOT probed" and there is no
+# find_package(OpenSSL) anywhere in the tree — so it was a build-time
+# dependency that nothing consumed, in an image whose sibling Dockerfiles
+# document the exclusion by name.  The same rule keeps libssl3 out of the
+# output stage below.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     ninja-build \
     git \
     pkg-config \
-    libssl-dev \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -41,16 +60,23 @@ RUN mkdir -p build && cd build && \
     make -j$(nproc)
 
 # Create output stage
-FROM ubuntu:22.04 AS output
+FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS output
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+# No runtime packages are installed.
+#
+# INVARIANT-1: libssl3 is NOT installed — the shipped .so needs only libc
+# (`readelf -d` lists libc.so.6 and nothing else), so OpenSSL in this stage was
+# a CVE-prone library on disk that nothing could load.  Ubuntu's base image
+# already carries libc.
 
-# Copy AMA Cryptography libraries and headers
+# Copy AMA Cryptography libraries and headers.  Both public headers must be
+# shipped: CMake installs ama_cryptography.h AND ama_dispatch.h as PUBLIC_HEADER
+# (see the install() targets in CMakeLists.txt), and ama_cryptography.h's
+# dispatch declarations are only complete with ama_dispatch.h present — an image
+# carrying only the first ships an incomplete header set (audit Low).
 COPY --from=builder /ama-cryptography/build/lib* /usr/local/lib/
 COPY --from=builder /ama-cryptography/include/ama_cryptography.h /usr/local/include/
+COPY --from=builder /ama-cryptography/include/ama_dispatch.h /usr/local/include/
 
 # Update library cache
 RUN ldconfig
@@ -58,10 +84,17 @@ RUN ldconfig
 # Create output directory for extraction
 WORKDIR /output
 
-# Default command: copy built artifacts to mounted volume
+# Default command: copy built artifacts to mounted volume.
+# Both public headers, not one: a consumer compiling against
+# ama_cryptography.h with runtime dispatch introspection also includes
+# ama_dispatch.h — exporting half the header set reproduced, at /output,
+# the exact incomplete-install defect fixed at /usr/local/include.  And no
+# `|| true` on the lib copy: with sh's && / || precedence the old form made
+# the ENTIRE chain up to that point best-effort, so a build that produced
+# no library still printed the success banner and exited 0.
 CMD ["sh", "-c", "mkdir -p /output/lib /output/include && \
-    cp /usr/local/lib/libama_cryptography* /output/lib/ || true && \
-    cp /usr/local/include/ama_cryptography.h /output/include/ && \
+    cp /usr/local/lib/libama_cryptography* /output/lib/ && \
+    cp /usr/local/include/ama_cryptography.h /usr/local/include/ama_dispatch.h /output/include/ && \
     echo 'AMA Cryptography C API libraries exported to /output' && \
     echo 'Contents:' && \
     ls -la /output/lib/ /output/include/"]
@@ -69,6 +102,6 @@ CMD ["sh", "-c", "mkdir -p /output/lib /output/include && \
 # Labels
 LABEL org.opencontainers.image.title="AMA Cryptography C API"
 LABEL org.opencontainers.image.description="Reproducible C library build with native PQC (FIPS 203/204/205)"
-LABEL org.opencontainers.image.version="4.0.0"
+LABEL org.opencontainers.image.version="5.0.0"
 LABEL org.opencontainers.image.vendor="Steel Security Advisors LLC"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

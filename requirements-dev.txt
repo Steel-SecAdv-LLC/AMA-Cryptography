@@ -14,14 +14,10 @@ Cython>=3.2.8
 numpy>=1.24.0
 
 # SciPy for the monitoring extension (1.11+ supports the 3.10+ floor).
-scipy>=1.11.0
 
 # Testing
 pytest>=9.1.1
 pytest-cov>=4.0.0
-pytest-timeout>=2.1.0
-pytest-benchmark>=4.0.0
-pytest-xdist>=3.0.0
 hypothesis>=6.161.8
 
 # Code Quality
@@ -33,6 +29,12 @@ mypy>=2.3.0
 # that tool and its tests inside `mypy --strict` instead of behind an override.
 PyYAML>=6.0.3
 types-PyYAML>=6.0.12.20260724
+# Same case, same reason: setup.py is inside `mypy --strict` and setuptools
+# ships no `py.typed`, so without this stub the type-check fails with 5 errors.
+# It was added to pyproject's [dev] extra and to requirements-lock.txt and NOT
+# here, so this file — which README.md presents as the equivalent alternative
+# to `pip install -e ".[dev]"` — still could not run `make lint`.
+types-setuptools>=84.0.0.20260812
 
 # Security Scanning
 bandit>=1.7.0

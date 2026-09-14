@@ -1,5 +1,11 @@
 /* Copyright (C) 2025-2026 Steel Security Advisors LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
+/* clock_gettime / CLOCK_MONOTONIC are POSIX.1-2001 (POSIX.1b realtime).  The
+ * build compiles with -std=c11 rather than gnu11, so glibc hides them unless
+ * a feature-test macro asks for them.  Same declaration, same reason, as
+ * tests/c/test_benchmark.c. */
+#define _POSIX_C_SOURCE 199309L
+
 /**
  * Cross-validation and benchmark for field arithmetic implementations.
  *
@@ -356,7 +362,12 @@ static void bench_##NAME(void) { \
     uint64_t t1 = rdtsc(); \
     clock_gettime(CLOCK_MONOTONIC, &ts1); \
     bench_sink = c[0]; \
-    double elapsed = (ts1.tv_sec - ts0.tv_sec) + (ts1.tv_nsec - ts0.tv_nsec) / 1e9; \
+    /* Explicit long->double conversions, as in tests/c/test_benchmark.c: the
+     * differences are a benchmark's elapsed seconds and a sub-second
+     * nanosecond count, both far inside double's 53-bit mantissa, and
+     * -Wconversion (correctly) refuses to vouch for the implicit form. */ \
+    double elapsed = (double)(ts1.tv_sec - ts0.tv_sec) \
+                     + (double)(ts1.tv_nsec - ts0.tv_nsec) / 1e9; \
     double ops_per_sec = BENCH_ITERS / elapsed; \
     double cycles = (double)(t1 - t0) / BENCH_ITERS; \
     printf("  " #NAME ":  %12.0f ops/sec  %6.1f cycles/op  (%.3f s)\n", ops_per_sec, cycles, elapsed); \
@@ -378,7 +389,9 @@ static void bench_##NAME(void) { \
     uint64_t t1 = rdtsc(); \
     clock_gettime(CLOCK_MONOTONIC, &ts1); \
     bench_sink = c[0]; \
-    double elapsed = (ts1.tv_sec - ts0.tv_sec) + (ts1.tv_nsec - ts0.tv_nsec) / 1e9; \
+    /* Explicit long->double conversions; see BENCH_FE_MUL above. */ \
+    double elapsed = (double)(ts1.tv_sec - ts0.tv_sec) \
+                     + (double)(ts1.tv_nsec - ts0.tv_nsec) / 1e9; \
     double ops_per_sec = BENCH_ITERS / elapsed; \
     double cycles = (double)(t1 - t0) / BENCH_ITERS; \
     printf("  " #NAME ":   %12.0f ops/sec  %6.1f cycles/op  (%.3f s)\n", ops_per_sec, cycles, elapsed); \

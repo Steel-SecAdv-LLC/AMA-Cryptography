@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -99,6 +100,7 @@ static int buffer_is_zero(const uint8_t *p, size_t n) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     ama_agent_binding_t eph, sess, pers, tampered;
     uint8_t enc[AMA_AGENT_BINDING_ENCODED_BYTES];
     uint8_t enc2[AMA_AGENT_BINDING_ENCODED_BYTES];

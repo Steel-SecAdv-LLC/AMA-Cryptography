@@ -41,12 +41,14 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 
-/* Forward declaration of the helper under test.  The symbol has
- * external linkage (see src/c/neon/ama_sphincs_neon.c) but the
- * function is not exposed via include/ama_cryptography.h because it
- * is an internal SPHINCS+ building block. */
-extern void ama_sha256_compress_neon(uint32_t state[8],
-                                     const uint8_t block[64]);
+/* Declaration of the helper under test.  The symbol has external linkage
+ * (see src/c/neon/ama_sphincs_neon.c) but is not exposed via
+ * include/ama_cryptography.h because it is an internal SPHINCS+ building
+ * block, so it comes from the NEON kernels' private header — the same
+ * declaration the definition itself sees.  A test that re-types the
+ * signature it is pinning can pass against a signature the library no
+ * longer has. */
+#include "../../src/c/neon/ama_neon_internal.h"
 
 /* FIPS 180-4 §5.3.3 SHA-256 initial hash value (H(0)). */
 static const uint32_t H256_init[8] = {

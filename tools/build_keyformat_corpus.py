@@ -54,13 +54,24 @@ import argparse
 import base64
 import binascii
 import json
+from typing import Any
 import re
 import sys
-import urllib.request
 from pathlib import Path
 
+# Executed directly as a script, so `tools/` lands on sys.path but the repo root
+# does not; the shared fetch policy lives in the root's `tools` package.  The
+# same insert `tools/refresh_wycheproof_corpus.py` uses, for the same reason.
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
 CORPUS = REPO_ROOT / "tests" / "kat" / "keyformats"
+
+_HTTP_TIMEOUT = 120
+_USER_AGENT = "AMA-Crypto-KeyFormat-Corpus/1.0"
 
 # Every source document, with the exact revision the vendored bytes came from.
 SOURCES = {
@@ -100,16 +111,21 @@ def fetch(url: str) -> str:
     file's contents extracted into the corpus and then compared against itself.
     INVARIANT-36 requires every corpus source to be an IETF document; this is
     the half of that requirement which holds at fetch time.
+
+    The check below covers only the URL the caller supplied — the FIRST hop.
+    ``urllib.request``'s default redirect handler then follows any later
+    ``Location:`` hop, including one to ``http://`` or ``ftp://``, and this
+    function once used it bare, under a ``# nosec B310 -- https enforced``
+    that was true of one hop only.  So the transport is the shared one in
+    ``tools/http_fetch.py``, whose ``_HTTPSOnlyRedirectHandler`` re-applies the
+    rule to every redirect target — the same policy the Wycheproof and ACVP
+    fetchers already ride (FETCH-001), rather than a third private copy for the
+    next fetch-policy repair to miss.
     """
     if not url.startswith("https://"):
         raise ValueError(f"refusing a non-HTTPS corpus source URL: {url!r}")
-    # The suppression sits on the `urlopen` line, not on the closing `as
-    # response:` line — that is where ruff anchors S310, and a trailing
-    # comment on the wrong line of a wrapped call silently disarms it.
-    with urllib.request.urlopen(  # noqa: S310 -- https enforced directly above (KFC-001)
-        url, timeout=120
-    ) as response:
-        return response.read().decode("utf-8", "replace")
+    raw = http_fetch.fetch_bytes(url, user_agent=_USER_AGENT, timeout=_HTTP_TIMEOUT)
+    return raw.decode("utf-8", "replace")
 
 
 def strip_page_furniture(text: str) -> str:
@@ -130,11 +146,11 @@ def strip_page_furniture(text: str) -> str:
     return "\n".join(kept)
 
 
-def extract_pem_blocks(text: str) -> list[dict]:
+def extract_pem_blocks(text: str) -> list[dict[str, Any]]:
     """Pull every PEM block out of RFC running text, tagged with its section."""
     lines = strip_page_furniture(text).split("\n")
     section = ""
-    blocks: list[dict] = []
+    blocks: list[dict[str, Any]] = []
     i = 0
     while i < len(lines):
         raw = lines[i]
@@ -190,7 +206,7 @@ def classify_pq(section: str, label: str) -> tuple[str, str]:
     )
 
 
-def build_pq(filename: str) -> dict:
+def build_pq(filename: str) -> dict[str, Any]:
     meta = SOURCES[filename]
     blocks = extract_pem_blocks(fetch(meta["url"]))
     records = []
@@ -210,7 +226,7 @@ def build_pq(filename: str) -> dict:
     return {"source": meta, "records": records}
 
 
-def build_okp() -> dict:
+def build_okp() -> dict[str, Any]:
     """RFC 8410 §10: the two Ed25519 private-key forms and the public key.
 
     §10.3's second example is the valuable one — it carries a PKCS#8 attribute
@@ -320,7 +336,7 @@ JOSE_COSE = {
 RFC9500_EC_BY_LENGTH = {121: "P-256", 167: "P-384", 223: "P-521"}
 
 
-def build_rfc9500_ec() -> dict:
+def build_rfc9500_ec() -> dict[str, Any]:
     """RFC 9500 §2.3 — the IETF's own EC test keys.
 
     This is the answer key that was thought not to exist. RFC 5915 defines
@@ -392,7 +408,7 @@ EXPECTED_JSON = {
 }
 
 
-def _verify_hex_record(where: str, filename: str, record: dict) -> list[str]:
+def _verify_hex_record(where: str, filename: str, record: dict[str, Any]) -> list[str]:
     """Check a hex-valued corpus record (RFC 8554 Appendix F).
 
     The structural sizes are already known to this module — they are asserted
@@ -427,7 +443,7 @@ def _verify_hex_record(where: str, filename: str, record: dict) -> list[str]:
     return problems
 
 
-def _verify_jose_record(where: str, record: dict) -> list[str]:
+def _verify_jose_record(where: str, record: dict[str, Any]) -> list[str]:
     """Check a JWK/COSE corpus record (RFC 8037 / RFC 8152 worked examples)."""
     problems: list[str] = []
     fmt = record.get("format")
@@ -486,7 +502,7 @@ def verify_offline(corpus: Path = CORPUS) -> list[str]:
             )
             continue
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             problems.append(f"{filename}: not valid JSON: {exc}")
             continue
@@ -609,7 +625,7 @@ def _appendix_f_hex(lines: list[str]) -> str:
     return "".join(out)
 
 
-def build_rfc8554_hss_lms() -> dict:
+def build_rfc8554_hss_lms() -> dict[str, Any]:
     """RFC 8554 Appendix F — the HSS/LMS answer key.
 
     Vendored so that the reference for any future LMS work is a checked-in,
@@ -718,7 +734,7 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
         if not path.is_file():
             problems.append(f"{filename}: missing; cannot compare against upstream")
             continue
-        vendored = json.loads(path.read_text())
+        vendored = json.loads(path.read_text(encoding="utf-8"))
         try:
             fresh = builder()
         except Exception as exc:  # any fetch/parse failure is a finding, reported not raised
@@ -731,7 +747,7 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
                 f"{fresh['source']['revision']!r}"
             )
 
-        def _key(record: dict) -> tuple:
+        def _key(record: dict[str, Any]) -> tuple[Any, ...]:
             # RFC 8554's appendix publishes labelled hexadecimal rather than
             # PEM, so its records carry `hex`/`kind` where the others carry
             # `pem_b64`/`label`. One comparison covers both.
@@ -763,7 +779,7 @@ def report_offline(corpus: Path = CORPUS) -> int:
         path = corpus / filename
         if not path.is_file():
             continue
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         revision = data.get("source", {}).get("revision", "<unrecorded>")
         print(f"{filename}: {len(data.get('records', []))} records, source={revision}")
     for problem in problems:
@@ -793,18 +809,28 @@ def main() -> int:
         CORPUS.mkdir(parents=True, exist_ok=True)
         for filename in ("rfc9881_ml_dsa.json", "lamps_ml_kem.json"):
             data = build_pq(filename)
-            (CORPUS / filename).write_text(json.dumps(data, indent=1) + "\n")
+            (CORPUS / filename).write_text(
+                json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+            )
             print(f"wrote {filename}: {len(data['records'])} records")
         data = build_okp()
-        (CORPUS / "rfc8410_okp.json").write_text(json.dumps(data, indent=1) + "\n")
+        (CORPUS / "rfc8410_okp.json").write_text(
+            json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote rfc8410_okp.json: {len(data['records'])} records")
         data = build_rfc9500_ec()
-        (CORPUS / "rfc9500_ec.json").write_text(json.dumps(data, indent=1) + "\n")
+        (CORPUS / "rfc9500_ec.json").write_text(
+            json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote rfc9500_ec.json: {len(data['records'])} records")
         data = build_rfc8554_hss_lms()
-        (CORPUS / "rfc8554_hss_lms.json").write_text(json.dumps(data, indent=1) + "\n")
+        (CORPUS / "rfc8554_hss_lms.json").write_text(
+            json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote rfc8554_hss_lms.json: {len(data['records'])} records")
-        (CORPUS / "jose_cose.json").write_text(json.dumps(JOSE_COSE, indent=1) + "\n")
+        (CORPUS / "jose_cose.json").write_text(
+            json.dumps(JOSE_COSE, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote jose_cose.json: {len(JOSE_COSE['records'])} records")
 
     status = 0

@@ -45,12 +45,23 @@ against it.
 
 Scope
 -----
-``ama_cryptography/pqc_backends.py`` (the primary native surface, ~110
-symbols) plus the sibling ctypes consumers ``ascon.py``, ``agent_binding.py``
-and ``secure_memory.py``.  Completeness is enforced in both directions inside
-that scope: a symbol *called* on a library handle without a signature
-assignment is an error, and a signature assigned for a symbol the header does
-not declare is an error.
+Every module under ``ama_cryptography/`` that assigns ``argtypes`` or
+``restype`` — discovered by walking the package's ASTs, not from a
+hand-maintained list.  In practice that is ``pqc_backends.py`` (the primary
+native surface, ~110 symbols) plus ``ascon.py``, ``agent_binding.py``,
+``secure_memory.py``, ``hybrid_combiner.py``, ``_build_sign.py`` and
+``_self_test.py``.
+
+The list *was* hand-maintained, and had drifted: the last three above were
+missing from it, so INVARIANT-42 did not cover them.  That is the predictable
+end state for a list of files-that-use-a-feature, because adding the feature
+to a new file is not a change to the list, and nothing fails when the two
+disagree.  ``REQUIRED_MODULES`` now acts as a floor beneath discovery so an
+extractor bug cannot quietly empty the scope and report a pass.
+
+Completeness is enforced in both directions inside that scope: a symbol
+*called* on a library handle without a signature assignment is an error, and a
+signature assigned for a symbol the header does not declare is an error.
 
 Usage
 -----
@@ -84,13 +95,90 @@ EXTRA_HEADERS = (
     "src/c/ama_hmac_sha256.h",
 )
 
-#: The Python modules whose ctypes assignments are checked.
-MODULES = (
+#: The package whose ctypes assignments are checked.
+PACKAGE = "ama_cryptography"
+
+#: Modules that must always be in scope.
+#:
+#: The scope used to be this list *alone*, and it had drifted: three modules
+#: that declare ctypes signatures were absent from it (``hybrid_combiner.py``,
+#: ``_build_sign.py``, ``_self_test.py``), so INVARIANT-42 was unenforced for
+#: them.  Their transcriptions happened to match the header, but nothing was
+#: checking — and a hand-maintained list of files-that-use-a-feature drifts by
+#: construction, because adding the feature to a new file is not a change to
+#: the list.
+#:
+#: Scope is now discovered (see :func:`ctypes_modules`) and this tuple is the
+#: floor beneath it.  A discovery bug that returned nothing would otherwise
+#: turn the gate into a silent pass, which is the failure mode this repository
+#: treats as worse than no gate at all.
+REQUIRED_MODULES = (
     "ama_cryptography/pqc_backends.py",
     "ama_cryptography/ascon.py",
     "ama_cryptography/agent_binding.py",
     "ama_cryptography/secure_memory.py",
+    "ama_cryptography/hybrid_combiner.py",
+    "ama_cryptography/_build_sign.py",
+    "ama_cryptography/_self_test.py",
 )
+
+#: Marks a module as declaring a ctypes signature.
+_CTYPES_ATTRS = ("argtypes", "restype")
+
+
+def ctypes_modules_discovered(package_root: Path | None = None) -> tuple[str, ...]:
+    """Every module the AST scan actually FOUND, with no floor unioned in.
+
+    Split out from :func:`ctypes_modules` because the floor check in
+    :func:`main` has to be evaluated against discovery alone.  Comparing
+    ``REQUIRED_MODULES`` against a value that already contains
+    ``REQUIRED_MODULES`` by construction is a tautology: the check was
+    unreachable, and the comment on it — "Discovery lost a module the gate is
+    known to cover: that is a checker bug or a deleted module, never a clean
+    tree" — described a branch that could not be taken.
+
+    Detection is by AST attribute assignment rather than a text search, so a
+    mention inside a docstring or comment does not pull a module into scope.
+
+    ``package_root`` is read at call time rather than bound as a default so a
+    test can point the scan somewhere else; see the note on the same pattern in
+    ``tools/check_c_secret_zeroization.py``.
+    """
+    root = (REPO_ROOT / PACKAGE) if package_root is None else package_root
+    found: set[str] = set()
+    for path in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if any(
+                isinstance(target, ast.Attribute) and target.attr in _CTYPES_ATTRS
+                for target in node.targets
+            ):
+                # A scan pointed outside the repository (a test's temporary
+                # tree) has no repo-relative form; report the path as given
+                # rather than raising out of discovery.
+                try:
+                    found.add(path.relative_to(REPO_ROOT).as_posix())
+                except ValueError:
+                    found.add(path.as_posix())
+                break
+    return tuple(sorted(found))
+
+
+def ctypes_modules(package_root: Path | None = None) -> tuple[str, ...]:
+    """The scan scope: what discovery found, with ``REQUIRED_MODULES`` as a floor.
+
+    The floor is what keeps an extractor bug from turning the gate into a
+    silent pass over an empty scope.  It is applied HERE and not inside
+    discovery, so :func:`main` can still ask discovery what it saw on its own
+    and fail when the floor had to do the work.
+    """
+    return tuple(sorted(set(ctypes_modules_discovered(package_root)) | set(REQUIRED_MODULES)))
+
 
 #: ctypes type names that marshal as an integer-class argument.
 _INT_CTYPES = {
@@ -136,7 +224,7 @@ _INT_C_TOKENS = {
 class Signature:
     """A coarse ABI signature: per-parameter classes plus a return class."""
 
-    params: tuple  # tuple[str, ...] of "ptr" | "int"
+    params: tuple[str, ...]  # each entry "ptr" | "int"
     ret: str  # "ptr" | "int" | "void"
     origin: str  # "file:line" for diagnostics
 
@@ -179,12 +267,28 @@ def _classify_c_return(ret: str) -> str:
     return "int"
 
 
-def parse_header(header_text: str, origin: str = "header") -> dict:
+def parse_header(header_text: str, origin: str = "header") -> dict[str, Signature]:
     """Extract ``{symbol: Signature}`` for every ``AMA_API`` prototype."""
     text = _strip_c_comments(header_text)
-    prototypes: dict = {}
+    prototypes: dict[str, Signature] = {}
+    # The return-type segment must not be able to match whitespace that the
+    # neighbouring quantifiers can also match.  The original spelling —
+    # ``\s+(?P<ret>[\w\s]+?\**)\s*`` — put three overlapping whitespace
+    # matchers in a row (``\s+``, the ``\s`` inside ``[\w\s]``, and ``\s*``)
+    # with a nullable ``\**`` between them, so a run of N spaces could be
+    # divided among them in O(N^2) ways; with ``finditer`` retrying every start
+    # offset that is cubic.  Measured on ``"AMA_API" + " " * N + "!"``:
+    # 2.4 ms at N=100, 145 ms at 400, 8.6 s at 1,600 — 7.8x per doubling, and
+    # roughly 2.4 hours extrapolated to N=16,000.  Worse than every other
+    # pattern this branch has fixed, all of which were merely quadratic.
+    #
+    # ``[^;{()]`` cannot match the ``(`` that follows the function name, so the
+    # segment has exactly one way to end, and the bound keeps a pathological
+    # header linear rather than merely slower.  A real prototype's return type
+    # is a few dozen characters; 200 is generous.
     pattern = re.compile(
-        r"AMA_API\s+(?P<ret>[\w\s]+?\**)\s*(?P<name>ama_\w+)\s*\((?P<params>[^;{]*)\)\s*;",
+        r"AMA_API(?P<ret>[^;{()]{0,200}?)\b(?P<name>ama_\w+)\s{0,64}"
+        r"\((?P<params>[^;{]*)\)\s{0,64};",
         re.DOTALL,
     )
     for match in pattern.finditer(text):
@@ -242,7 +346,7 @@ def _classify_ctypes_restype(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _argtypes_classes(node: ast.AST) -> Optional[list]:
+def _argtypes_classes(node: ast.AST) -> Optional[list[str]]:
     """Classify a full ``argtypes`` value expression, or None if opaque.
 
     Handles the three literal shapes the tree uses: a plain list/tuple, a
@@ -274,7 +378,7 @@ def _argtypes_classes(node: ast.AST) -> Optional[list]:
     return None
 
 
-def _symbol_of_attribute_target(node: ast.AST) -> Optional[tuple]:
+def _symbol_of_attribute_target(node: ast.AST) -> Optional[tuple[str, str]]:
     """For a target ``<recv>.ama_x.argtypes`` return ``("ama_x", "argtypes")``."""
     if (
         isinstance(node, ast.Attribute)
@@ -286,7 +390,7 @@ def _symbol_of_attribute_target(node: ast.AST) -> Optional[tuple]:
     return None
 
 
-def _getattr_loop_symbols(loop: ast.For) -> list:
+def _getattr_loop_symbols(loop: ast.For) -> list[str]:
     """Symbol names a ``for name in (...)`` getattr-loop configures.
 
     Matches the tree's idiom::
@@ -311,17 +415,19 @@ def _getattr_loop_symbols(loop: ast.For) -> list:
     return symbols if len(symbols) == len(loop.iter.elts) else []
 
 
-def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
+def parse_python_signatures(
+    tree: ast.Module, origin: str
+) -> tuple[dict[str, dict[str, Any]], set[str], list[str]]:
     """Return ``(signatures, called, problems)`` for one module.
 
     ``signatures`` maps symbol -> dict with optional "params"/"ret" and the
     assignment line.  ``called`` is the set of ``ama_*`` symbols invoked via
     attribute access or via a getattr-loop signature group.
     """
-    signatures: dict = {}
-    aliases: list = []
-    called: set = set()
-    problems: list = []
+    signatures: dict[str, dict[str, Any]] = {}
+    aliases: list[tuple[str, str, int]] = []
+    called: set[str] = set()
+    problems: list[str] = []
 
     def record(symbol: str, field: str, value_node: ast.AST, lineno: int) -> None:
         entry = signatures.setdefault(symbol, {"origin": f"{origin}:{lineno}"})
@@ -345,7 +451,7 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
                 return
             entry["ret"] = cls
 
-    def _local_binding_symbol(node: ast.Assign) -> Optional[tuple]:
+    def _local_binding_symbol(node: ast.Assign) -> Optional[tuple[str, str]]:
         """Match the ``fn = lib.ama_x`` binding idiom: ``(local_name, symbol)``.
 
         This shape was the extractor's one blind spot (adversarial-review
@@ -383,7 +489,7 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 stack.extend(list(ast.iter_child_nodes(node))[::-1])
 
-    def _process_scope(scope: ast.AST, inherited: Optional[dict] = None) -> None:
+    def _process_scope(scope: ast.AST, inherited: Optional[dict[str, str]] = None) -> None:
         """Extract from one lexical scope, tracking its local ``fn`` bindings.
 
         Bindings are scoped per function so an ``fn`` in one function cannot
@@ -393,7 +499,7 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
         ``_zero_via_native`` calls the outer ``fn`` binding), and a child
         scope's own rebindings must not flow back up.
         """
-        local_bindings: dict = dict(inherited or {})
+        local_bindings: dict[str, str] = dict(inherited or {})
         for node in _walk_scope(scope):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 _process_scope(node, local_bindings)
@@ -456,13 +562,16 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
     return signatures, called, problems
 
 
-def check(header_protos: dict, modules: Sequence[tuple]) -> tuple:
+def check(
+    header_protos: dict[str, Signature],
+    modules: Sequence[tuple[str, dict[str, dict[str, Any]], set[str]]],
+) -> tuple[list[str], int]:
     """Cross-check parsed Python signatures against header prototypes.
 
     ``modules`` is a sequence of ``(origin, signatures, called)``.
     Returns ``(problems, checked_count)``.
     """
-    problems: list = []
+    problems: list[str] = []
     checked = 0
     for origin, signatures, called in modules:
         for symbol in sorted(called - set(signatures)):
@@ -522,9 +631,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # header only fills symbols the public one does not carry.
             header_protos.setdefault(symbol, proto)
 
+    # Evaluate the floor against DISCOVERY, not against the floored scope.
+    # `ctypes_modules()` unions REQUIRED_MODULES in, so asking it whether it
+    # contains REQUIRED_MODULES can only ever answer yes.
+    discovered = ctypes_modules_discovered()
+    modules = ctypes_modules()
+    missing = [m for m in REQUIRED_MODULES if m not in discovered]
+    if missing:
+        # Discovery lost a module the gate is known to cover: that is a
+        # checker bug or a deleted module, never a clean tree.  Reachable now:
+        # a module removed from the package, or an extractor change that stops
+        # recognising an `argtypes`/`restype` assignment, lands here instead of
+        # being covered up by the floor.
+        print(
+            f"ERROR: required module(s) absent from the discovered scope: " f"{', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 2
+
     parsed = []
-    parse_problems: list = []
-    for rel in MODULES:
+    parse_problems: list[str] = []
+    for rel in modules:
         path = REPO_ROOT / rel
         if not path.is_file():
             print(f"ERROR: {rel} not found", file=sys.stderr)
@@ -554,7 +681,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     total_symbols = sum(len(signatures) for _, signatures, _ in parsed)
     print(
-        f"OK: {checked} ctypes signature(s) across {len(MODULES)} module(s) "
+        f"OK: {checked} ctypes signature(s) across {len(modules)} module(s) "
         f"match their header prototypes ({total_symbols} symbols covered, "
         f"{len(header_protos)} prototypes in the header)."
     )

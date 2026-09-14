@@ -234,10 +234,16 @@ class TestKeyManagementDecryptPaths:
     @pytest.fixture
     def temp_storage(self, tmp_path: Any) -> Any:
         """Create a temporary storage directory."""
+        import secrets as _secrets
+
         from ama_cryptography.key_management import SecureKeyStorage
 
         storage_path = tmp_path / "test_keys"
-        storage = SecureKeyStorage(storage_path, master_password="test_password_123")
+        # Generated per fixture rather than a literal: the value is never
+        # asserted on and the store lives only inside `tmp_path`, so nothing
+        # needs it to be stable — and a literal is what CodeQL reports as
+        # py/hardcoded-credentials.
+        storage = SecureKeyStorage(storage_path, master_password=_secrets.token_urlsafe(32))
         return storage
 
     @skip_no_native_aes

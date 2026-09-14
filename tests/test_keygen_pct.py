@@ -141,7 +141,7 @@ class TestEveryKeygenPathIsWired:
             pb, "pairwise_test_kem", lambda e, d, pk, sk, name: recorded.append(name)
         )
         if not pb._CONTEXT_API_AVAILABLE:
-            pytest.skip("context API not available in this build")
+            pytest.skip("native context API not available in this build")
         for alg in (
             pb.AmaContext.ALG_ML_DSA_65,
             pb.AmaContext.ALG_KYBER_1024,
@@ -171,7 +171,7 @@ class TestEveryKeygenPathIsWired:
         and then slicing out of a too-small Python buffer.
         """
         if not pb._CONTEXT_API_AVAILABLE:
-            pytest.skip("context API not available in this build")
+            pytest.skip("native context API not available in this build")
         with pb.AmaContext(pb.AmaContext.ALG_HYBRID) as ctx:
             small_pk = ctypes.create_string_buffer(8)
             small_sk = ctypes.create_string_buffer(8)
@@ -259,7 +259,7 @@ class TestPctPositivePath:
 
     def test_frost_dealer_shares_verify_end_to_end(self) -> None:
         if not pb.FROST_AVAILABLE:
-            pytest.skip("FROST not available in this build")
+            pytest.skip("native FROST backend not available in this build")
         gpk, shares = pb.frost_keygen_trusted_dealer(2, 3)
         assert len(gpk) == 32 and len(shares) == 3
 

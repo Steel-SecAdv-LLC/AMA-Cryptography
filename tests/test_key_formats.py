@@ -55,10 +55,12 @@ here as first-class cases, not as an afterthought.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -612,7 +614,14 @@ def test_the_reference_encoder_is_independent_of_the_production_one() -> None:
     """
     import ast
 
-    source = (REPO_ROOT / "tests" / "ref_keyformat.py").read_text()
+    # Explicit encoding: ref_keyformat.py contains non-ASCII, and ci.yml's
+    # Windows lanes deliberately do not set PYTHONUTF8 (see the note in that
+    # workflow), so a bare read_text() decodes UTF-8 source through cp1252.
+    # That does not raise — cp1252 maps every byte — it silently yields
+    # mojibake, so this import scan would parse subtly wrong text and still
+    # report success.  Same root cause as the UnicodeDecodeError this commit
+    # fixes in test_conftest_backend_skip_scoping.py, one failure mode quieter.
+    source = (REPO_ROOT / "tests" / "ref_keyformat.py").read_text(encoding="utf-8")
     imported: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -1862,6 +1871,117 @@ def test_the_policy_context_manager_restores_the_previous_value() -> None:
     assert kf.get_pq_import_consistency() is True
 
 
+def test_the_setter_returns_the_previous_value_and_restores_it() -> None:
+    """``set_pq_import_consistency`` is documented to return the value it
+    replaced, which is what makes a save/restore pair possible at all."""
+    assert kf.get_pq_import_consistency() is True
+    previous = kf.set_pq_import_consistency(False)
+    try:
+        assert previous is True
+        assert kf.get_pq_import_consistency() is False
+        # A second call reports the value it is replacing, not the default.
+        assert kf.set_pq_import_consistency(False) is False
+        assert kf.get_pq_import_consistency() is False
+    finally:
+        restored_from = kf.set_pq_import_consistency(previous)
+    assert restored_from is False
+    assert kf.get_pq_import_consistency() is True
+
+
+def test_the_setter_is_scoped_to_the_calling_thread() -> None:
+    """One thread cannot disable the check for another.
+
+    The worker is started BEFORE the main thread disables the check and reads
+    the policy again after it has, so the assertion holds whether a new thread
+    starts from an empty context (CPython's default) or from a copy of its
+    parent's (the 3.14 free-threaded default): in neither case does a change
+    made afterwards in the main thread reach it, nor its own change reach the
+    main thread.
+    """
+    main_disabled = threading.Event()
+    observed: dict[str, bool] = {}
+
+    def _worker() -> None:
+        observed["before"] = kf.get_pq_import_consistency()
+        assert main_disabled.wait(timeout=30), "main thread never signalled"
+        observed["after_main_disabled"] = kf.get_pq_import_consistency()
+        observed["own_previous"] = kf.set_pq_import_consistency(False)
+        observed["own_after"] = kf.get_pq_import_consistency()
+
+    worker = threading.Thread(target=_worker, name="pq-policy-observer")
+    worker.start()
+    previous = kf.set_pq_import_consistency(False)
+    try:
+        main_disabled.set()
+        worker.join(timeout=30)
+        assert not worker.is_alive(), "worker did not finish"
+        assert kf.get_pq_import_consistency() is False, "the caller's own view changed"
+    finally:
+        kf.set_pq_import_consistency(previous)
+    assert observed == {
+        "before": True,
+        "after_main_disabled": True,
+        "own_previous": True,
+        "own_after": False,
+    }
+    # …and the worker disabling it for itself never reached this thread.
+    assert kf.get_pq_import_consistency() is True
+
+
+def test_the_setter_is_scoped_to_the_calling_asyncio_task() -> None:
+    """Within one thread, a task that disables the check does not disable it
+    for a sibling task or for the task that spawned both."""
+
+    async def _disabling_task(disabled: asyncio.Event, sibling_done: asyncio.Event) -> bool:
+        assert kf.set_pq_import_consistency(False) is True
+        disabled.set()
+        await sibling_done.wait()
+        return kf.get_pq_import_consistency()
+
+    async def _sibling_task(disabled: asyncio.Event, sibling_done: asyncio.Event) -> bool:
+        await disabled.wait()
+        value = kf.get_pq_import_consistency()
+        sibling_done.set()
+        return value
+
+    async def _parent() -> tuple[bool, bool, bool]:
+        disabled, sibling_done = asyncio.Event(), asyncio.Event()
+        disabling, sibling = await asyncio.gather(
+            _disabling_task(disabled, sibling_done),
+            _sibling_task(disabled, sibling_done),
+        )
+        return disabling, sibling, kf.get_pq_import_consistency()
+
+    disabling, sibling, parent = asyncio.run(_parent())
+    assert disabling is False, "the task's own view must reflect its own change"
+    assert sibling is True, "a sibling task saw the disabling task's change"
+    assert parent is True, "the parent task saw a child's change"
+    assert kf.get_pq_import_consistency() is True, "the event loop's thread saw it"
+
+
+def test_the_setter_governs_load_pkcs8_in_the_calling_context() -> None:
+    """The setter is not a bookkeeping flag: with it off, the RFC 9881 §8.2
+    mismatched-seed key imports; with it restored, the same bytes are refused.
+    Same key as the both-arm test above, driven through the setter instead of
+    the per-call argument."""
+    private = make_seeded_pq_key("ML-DSA-44", 0x10)
+    other = make_seeded_pq_key("ML-DSA-44", 0x90)
+    assert other.seed is not None
+    alg = kf.ALGORITHMS["ML-DSA-44"]
+    der = der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid)),
+        der_octet_string(der_sequence(der_octet_string(other.seed), der_octet_string(private.key))),
+    )
+    previous = kf.set_pq_import_consistency(False)
+    try:
+        assert kf.load_pkcs8(der).key == private.key
+    finally:
+        kf.set_pq_import_consistency(previous)
+    with pytest.raises(KeyFormatError, match="does not expand"):
+        kf.load_pkcs8(der)
+
+
 def test_the_environment_variable_is_parsed_strictly(monkeypatch: Any) -> None:
     """A misspelled flag must not silently pick a policy in either direction."""
     for value in ("1", "on", "TRUE", "Yes"):
@@ -2490,11 +2610,15 @@ def test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one() -> N
     ed_spki = public.to_spki()
     x_spki = kf.PublicKey("X25519", public.key).to_spki()
 
+    assert len(ed_spki) == len(x_spki), "the two SPKIs should be the same length"
     differing = [i for i in range(len(ed_spki)) if ed_spki[i] != x_spki[i]]
-    assert differing == [len(differing) - 1 + differing[0]] or len(differing) == 1, (
-        "the Ed25519 and X25519 SPKI encodings should differ in exactly the OID "
-        f"octet; they differ at {differing}"
+    # Both encodings open with the fixed DER prefix 30 2A 30 05 06 03 2B 65 xx,
+    # so the final OID arc (112 vs 110) sits at index 8.
+    assert differing == [8], (
+        "the Ed25519 and X25519 SPKI encodings should differ in exactly the final "
+        f"OID octet at index 8; they differ at {differing}"
     )
+    assert (ed_spki[8], x_spki[8]) == (0x70, 0x6E)
     assert kf.load_spki(x_spki).algorithm == "X25519"
     assert kf.load_spki(ed_spki).algorithm == "Ed25519"
     assert kf.load_spki(x_spki).key == public.key

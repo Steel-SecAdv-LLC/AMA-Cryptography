@@ -3,16 +3,16 @@
 /**
  * @file test_ed25519_verify_equiv.c
  * @brief Behavioral + byte-identity equivalence tests for the Ed25519
- *        verify path (both the Shamir/Straus joint layout and the
- *        legacy split layout).
+ *        verify path and the public joint scalar multiplication.
  *
- * AMA_ED25519_VERIFY_SHAMIR=1 (default) implements verify as
- *   ge25519_double_scalarmult_vartime(R_check, s, B, h, -A)
- * at width AMA_ED25519_VERIFY_WINDOW (default 5).  Setting it to 0
- * selects the legacy split layout: [s]B via comb + [h](-A) via wNAF +
- * one final ge25519_add.  The two paths are mathematically required to
- * compute the same group element; this test pins that contract on five
- * independent layers:
+ * ama_ed25519_double_scalarmult_public runs a Shamir/Straus joint pass
+ * (width-5 wNAF on both points); the split composition
+ * ama_ed25519_scalarmult_public + ama_ed25519_point_add computes the same
+ * group element through different code, and verify itself runs a third
+ * formulation (the half-size-scalar check of
+ * src/c/internal/ama_ed25519_halfsize.h).  All three are mathematically
+ * required to agree; this test pins that contract on five independent
+ * layers:
  *
  *   (A) Behavioral accept/reject parity:
  *       1. 256 randomized (msg, sk) pairs signed with ama_ed25519_sign.
@@ -144,12 +144,19 @@ static const uint8_t rfc8032_sig[64] = {
  *
  * For arbitrary 32-byte test inputs we feed both paths the
  * sc25519_reduce'd form of each scalar so the comparison is made using
- * canonical representatives modulo the Ed25519 group order l.  Neither
- * scalarmult has a hard <2^253 precondition — both consume all 256 bits
- * — but reducing first keeps the byte-identity check strictly "mod l"
- * and guarantees the joint and split constructions are exercised on the
- * same scalar values (any `s` and `s + k*l` are group-equivalent but
- * hit different wNAF expansions, which we do not want to compare here).
+ * canonical representatives modulo the Ed25519 group order l.
+ *
+ * The reduction here is redundant, not load-bearing: sc25519_to_wnaf
+ * reduces mod l itself, so `s` and `s + k*l` now hit the SAME wNAF
+ * expansion.  Both statements this comment used to make were false.  It
+ * claimed "neither scalarmult has a hard <2^253 precondition — both
+ * consume all 256 bits": sc25519_to_wnaf emitted 256 digits from eight
+ * 32-bit limbs, so a negative digit near the top carried out of limb 7,
+ * the carry was discarded, and the recoding silently represented
+ * s - 2^256 for ~17% of uniform 32-byte scalars.  Reducing every input
+ * before comparing is precisely why this file never saw that.  See
+ * tests/c/test_ed25519_scalarmult_contract.c, which drives the same two
+ * entry points on unreduced scalars through the public API.
  * ============================================================================ */
 static int test_byte_identity_one(const uint8_t s1[32], const uint8_t P1[32],
                                   const uint8_t s2[32], const uint8_t P2[32],
@@ -504,8 +511,8 @@ int main(void) {
          * the genuine scalar plus the group order, which *satisfies*
          * the group equation and is caught only by the range check.
          * That case, and the L-1 / L / L+1 boundaries, live in
-         * tests/c/test_ed25519_canonical_s.c — which is built against
-         * both backends and the batch path, unlike this file. */
+         * tests/c/test_ed25519_canonical_s.c — which also drives the
+         * batch path, unlike this file. */
         {
             uint8_t bad_sig[64];
             memcpy(bad_sig, sig, 64);

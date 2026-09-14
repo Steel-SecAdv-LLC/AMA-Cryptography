@@ -35,7 +35,9 @@
     #pragma comment(lib, "bcrypt.lib")
 #else
     /* BSD / generic POSIX fallback */
-    #include <stdio.h>
+    #include <fcntl.h>          /* open, O_RDONLY, O_CLOEXEC, O_NOFOLLOW */
+    #include <unistd.h>         /* read, close */
+    #include <sys/stat.h>       /* fstat, S_ISCHR */
     #include <errno.h>
 #endif
 
@@ -93,32 +95,86 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     /*
      * BCryptGenRandom: Windows Vista+ CSPRNG.
      * BCRYPT_USE_SYSTEM_PREFERRED_RNG avoids needing an algorithm handle.
+     *
+     * cbBuffer is a ULONG (32-bit).  A bare (ULONG)len cast silently truncates
+     * any request larger than 2^32-1 bytes, filling only the low bits' worth
+     * and returning success — the caller would then treat the untouched tail
+     * as random.  Chunk the draw so every byte is covered regardless of len's
+     * width (size_t is 64-bit on x64 Windows).
      */
-    NTSTATUS status = BCryptGenRandom(
-        NULL, buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG
-    );
-    return (status == 0) ? AMA_SUCCESS : AMA_ERROR_CRYPTO;
+    size_t offset = 0;
+    while (offset < len) {
+        size_t remaining = len - offset;
+        ULONG chunk = (remaining > 0x40000000UL) ? 0x40000000UL /* 1 GiB */
+                                                  : (ULONG)remaining;
+        NTSTATUS status = BCryptGenRandom(
+            NULL, buf + offset, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG
+        );
+        if (status != 0) {
+            return AMA_ERROR_CRYPTO;
+        }
+        offset += chunk;
+    }
+    return AMA_SUCCESS;
 
 #else
     /*
      * Generic POSIX fallback: /dev/urandom.
      * Used for BSDs and other POSIX systems without getentropy/getrandom.
+     *
+     * Raw open/read, deliberately not stdio: fread() stages every draw
+     * through FILE's internal heap buffer, which is freed unzeroized at
+     * fclose() — a copy of RNG output (frequently key material seed bytes)
+     * left on the heap outside every wipe path.  O_CLOEXEC keeps the
+     * descriptor from leaking across exec into child processes.  EINTR is
+     * retried: a signal during the read is routine, not an entropy failure.
      */
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (f == NULL) {
+    #ifndef O_CLOEXEC
+    #define O_CLOEXEC 0
+    #endif
+    #ifndef O_NOFOLLOW
+    #define O_NOFOLLOW 0
+    #endif
+    #ifndef O_NOCTTY
+    #define O_NOCTTY 0
+    #endif
+    /* O_NOFOLLOW|O_NOCTTY and an fstat(2) that the descriptor is a
+     * character device: on a host where /dev/urandom has been replaced by a
+     * symlink to a regular file, a FIFO, or a terminal, the previous
+     * open+read produced "random" bytes from whatever was there.  A
+     * device-node check is the cheapest fact the descriptor can prove about
+     * itself; the major/minor numbers are not portable across the BSDs this
+     * branch serves, so the check stops at "character device".  Any refusal
+     * fails closed: the caller receives AMA_ERROR_CRYPTO, never bytes. */
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY);
+    if (fd < 0) {
         return AMA_ERROR_CRYPTO;
+    }
+    {
+        struct stat st;
+        if (fstat(fd, &st) != 0 || !S_ISCHR(st.st_mode)) {
+            close(fd);
+            return AMA_ERROR_CRYPTO;
+        }
     }
     size_t offset = 0;
     while (offset < len) {
-        size_t nread = fread(buf + offset, 1, len - offset, f);
-        if (nread == 0) {
-            /* EOF or error — cannot recover */
-            fclose(f);
+        ssize_t nread = read(fd, buf + offset, len - offset);
+        if (nread < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            close(fd);
             return AMA_ERROR_CRYPTO;
         }
-        offset += nread;
+        if (nread == 0) {
+            /* EOF from /dev/urandom — cannot recover */
+            close(fd);
+            return AMA_ERROR_CRYPTO;
+        }
+        offset += (size_t)nread;
     }
-    fclose(f);
+    close(fd);
     return AMA_SUCCESS;
 
 #endif

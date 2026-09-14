@@ -38,7 +38,10 @@ LIB_DIR = REPO_ROOT / "build" / "lib"
 # URLs a reader sees in `results.json` / `validation_summary.json`
 # resolve to the exact bytes the harness actually ran against. The
 # attestation cross-check in `.github/workflows/acvp_validation.yml`
-# enforces that this ref matches `acvp_attestation.json::acvp_ref`.
+# enforces that this ref matches `acvp_attestation.json::acvp_ref`, and
+# `docs/compliance/acvp_vector_digests.json` pins the bytes of every
+# fetched projection at it — `_load_vector_file` verifies each one before
+# reading it, and `main` refuses a ref the pin was not taken at.
 _DEFAULT_ACVP_REF = "v1.1.0.42"
 
 
@@ -47,6 +50,21 @@ def _acvp_ref() -> str:
 
 
 ACVP_BASE_URL = f"https://github.com/usnistgov/ACVP-Server/tree/{_acvp_ref()}/gen-val/json-files"
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools import acvp_vector_pin as acvp_manifest  # noqa: E402 -- path insert above (ACVP-001)
+
+_MANIFEST: acvp_manifest.Manifest | None = None
+
+
+def _manifest() -> acvp_manifest.Manifest:
+    """The digest pin for the fetched projections, read once."""
+    global _MANIFEST
+    if _MANIFEST is None:
+        _MANIFEST = acvp_manifest.load_manifest()
+    return _MANIFEST
 
 
 # ---------------------------------------------------------------------------
@@ -74,15 +92,50 @@ RESULTS: list[AlgorithmResult] = []
 # Library loading
 # ---------------------------------------------------------------------------
 def load_library() -> ctypes.CDLL:
-    """Load the AMA Cryptography shared library."""
-    lib_names = ["libama_cryptography.so", "libama_cryptography.so.2"]
-    for name in lib_names:
-        path = LIB_DIR / name
-        if path.is_file():
+    """Load the AMA Cryptography shared library.
+
+    The versioned fallback used to be the literal ``libama_cryptography.so.2``.
+    CMake derives ``SOVERSION`` from the project major (``CMakeLists.txt``), so
+    that name went stale at 3.0.0 and has been wrong for three majors: on a
+    layout carrying only the versioned object — an installed prefix, or a
+    packaged sysroot — this harness would report "cannot find library" while
+    the library sat beside it under its current SONAME.  It has not bitten
+    because CI builds in-tree, where the unversioned symlink exists and is
+    tried first.  A validation harness that cannot find the library it
+    validates reports a build failure, not a vector failure, so the mislead is
+    worth removing rather than re-pinning to 5.
+
+    Discover the major instead of naming it: unversioned first (it is the
+    build-tree symlink and the developer's intent), then the highest versioned
+    object present, so this keeps working across every future major without
+    another edit.
+    """
+    unversioned = LIB_DIR / "libama_cryptography.so"
+    if unversioned.is_file():
+        lib = ctypes.CDLL(str(unversioned))
+        _setup_ctypes(lib)
+        return lib
+
+    def _major(path: Path) -> tuple[int, ...]:
+        # "libama_cryptography.so.5.0.0" -> (5, 0, 0); unparseable -> (-1,)
+        suffix = path.name.split(".so.", 1)[-1]
+        try:
+            return tuple(int(part) for part in suffix.split("."))
+        except ValueError:
+            return (-1,)
+
+    versioned = sorted(LIB_DIR.glob("libama_cryptography.so.*"), key=_major, reverse=True)
+    for path in versioned:
+        if path.is_file() and _major(path) != (-1,):
             lib = ctypes.CDLL(str(path))
             _setup_ctypes(lib)
             return lib
-    raise RuntimeError(f"Cannot find library in {LIB_DIR}")
+
+    raise RuntimeError(
+        f"Cannot find libama_cryptography.so (or a versioned libama_cryptography.so.N) "
+        f"in {LIB_DIR}. Build it first: "
+        f"cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+    )
 
 
 def _setup_ctypes(lib: ctypes.CDLL) -> None:
@@ -184,9 +237,21 @@ def _setup_ctypes(lib: ctypes.CDLL) -> None:
 # Test functions
 # ---------------------------------------------------------------------------
 def _load_vector_file(path: Path) -> dict[str, Any] | None:
-    """Load a vector JSON file, returning None if it does not exist."""
+    """Load a vector JSON file, returning None if it does not exist.
+
+    A file the digest manifest pins is verified against its SHA-256 and length
+    first and refused on a mismatch.  The fetcher checks what it writes, but
+    this is a separate process running later: the file may have been edited,
+    truncated or replaced in between, and a harness that validates against
+    whatever it finds on disk is exactly what the pin exists to end.  The
+    refusal propagates as the algorithm's harness error, which the verdict
+    already treats as a failed run rather than a skipped one.
+    """
     if not path.is_file():
         return None
+    entry = _manifest().entries.get(path.name)
+    if entry is not None:
+        acvp_manifest.verify_file(entry, path)
     return cast(dict[str, Any], json.loads(path.read_text()))
 
 
@@ -1222,6 +1287,21 @@ def main() -> int:
     print("=" * 70)
     print("NIST ACVP Vector Validation — AMA Cryptography")
     print("=" * 70)
+
+    # The pin must be for the ref this run resolves: digests taken at one tag
+    # say nothing about another.  fetch_vectors.py refused on the same
+    # mismatch; this is the harness refusing independently, so a run that
+    # skipped the fetch step cannot proceed on a stale or foreign pin.
+    try:
+        manifest = _manifest()
+        acvp_manifest.check_ref(manifest, _acvp_ref())
+    except acvp_manifest.AcvpVectorIntegrityError as exc:
+        print(f"FATAL: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"\nVector pin: {acvp_manifest.MANIFEST_PATH.name} at {manifest.acvp_ref} "
+        f"({len(manifest.entries)} fetched projections verified on load)"
+    )
 
     print("\nLoading native library...")
     lib = load_library()

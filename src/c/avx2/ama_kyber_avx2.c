@@ -8,7 +8,6 @@
  * ML-KEM-1024 (FIPS 203):
  *   - Vectorized NTT butterfly operations (16 coefficients at once)
  *   - Barrett reduction across 256-bit vectors
- *   - Polynomial pointwise multiplication via NTT
  *   - Vectorized CBD (Centered Binomial Distribution) sampling
  *   - Vectorized encode/decode for compression
  *
@@ -54,15 +53,26 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
 /* ============================================================================
  * Scalar Barrett reduction (for sub-register fallback paths)
  *
- * Reduces a mod q for values in [-q, 2q).
- * Matches the generic C implementation in ama_kyber.c.
+ * Domain is the whole int16_t range, not [-q, 2q) as this block used to say:
+ * the routine is byte-identical to ama_kyber.c's barrett_reduce, which is
+ * exhaustively verified over all 65,536 inputs, and the invNTT layers below
+ * call it on sums that are not pre-restricted to that window.
  * ============================================================================ */
 static inline int16_t barrett_reduce_scalar(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = ((int32_t)v * a) >> 26;
+    /* Same int32-accumulator form as ama_kyber.c's barrett_reduce, and the
+     * same measured bounds: t lies in [-10, 9] and the result in [0, q] over
+     * the full int16_t domain — exhaustively verified, so the narrowing cast
+     * is value-preserving.  q itself is attained, at the nine inputs that are
+     * exact negative multiples of q from -3329 to -29961; negative outputs
+     * are not, because the truncating shift floors toward -infinity and
+     * always undershoots the quotient.  (This comment used to bound the
+     * result at (-2q, 2q) — true, but 4x loose and admitting a sign the
+     * formula cannot produce.  ama_kyber.c's copy was tightened and these
+     * two were left behind.) */
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* ============================================================================
@@ -211,40 +221,6 @@ void ama_kyber_invntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
 }
 
 /* ============================================================================
- * Scalar basemul helper for AVX2 fallback
- *
- * Multiplication in Z_q[X]/(X^2 - zeta):
- *   r[0] = mont(mont(a[1]*b[1]) * zeta) + mont(a[0]*b[0])
- *   r[1] = mont(a[0]*b[1]) + mont(a[1]*b[0])
- * Two Montgomery reductions on the a[1]*b[1]*zeta path (matching generic).
- * ============================================================================ */
-static inline void basemul_avx2_scalar(int16_t r[2], const int16_t a[2],
-                                        const int16_t b[2], int16_t zeta) {
-    int16_t tmp = montgomery_reduce_scalar((int32_t)a[1] * b[1]);
-    r[0] = montgomery_reduce_scalar((int32_t)tmp * zeta);
-    r[0] += montgomery_reduce_scalar((int32_t)a[0] * b[0]);
-    r[1] = montgomery_reduce_scalar((int32_t)a[0] * b[1]);
-    r[1] += montgomery_reduce_scalar((int32_t)a[1] * b[0]);
-}
-
-/* ============================================================================
- * Pointwise multiplication of two NTT-domain polynomials (basemul)
- *
- * Implements polynomial multiplication in Z_q[X]/(X^2 - zeta) for each
- * of the 64 degree-2 components, matching the generic C basemul exactly.
- * Uses zetas[64+i] for the i-th component pair.
- * ============================================================================ */
-void ama_kyber_poly_pointwise_avx2(int16_t r[KYBER_N],
-                                    const int16_t a[KYBER_N],
-                                    const int16_t b[KYBER_N],
-                                    const int16_t zetas[128]) {
-    for (int i = 0; i < 64; i++) {
-        basemul_avx2_scalar(&r[4*i],     &a[4*i],     &b[4*i],      zetas[64 + i]);
-        basemul_avx2_scalar(&r[4*i + 2], &a[4*i + 2], &b[4*i + 2], -zetas[64 + i]);
-    }
-}
-
-/* ============================================================================
  * Vectorized CBD2 sampling (Centered Binomial Distribution, eta=2)
  *
  * Samples a polynomial from a 128-byte uniform stream using CBD with
@@ -292,34 +268,6 @@ void ama_kyber_cbd2_avx2(int16_t poly[KYBER_N], const uint8_t buf[128]) {
                 poly[base + k] = a - b;
             }
         }
-    }
-}
-
-/* ============================================================================
- * Vectorized polynomial addition
- * ============================================================================ */
-static AMA_MAYBE_UNUSED void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 16; i++) {
-        __m256i va = _mm256_loadu_si256((const __m256i *)(a + i * 16));
-        __m256i vb = _mm256_loadu_si256((const __m256i *)(b + i * 16));
-        __m256i vr = _mm256_add_epi16(va, vb);
-        _mm256_storeu_si256((__m256i *)(r + i * 16), vr);
-    }
-}
-
-/* ============================================================================
- * Vectorized polynomial subtraction
- * ============================================================================ */
-static AMA_MAYBE_UNUSED void ama_kyber_poly_sub_avx2(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 16; i++) {
-        __m256i va = _mm256_loadu_si256((const __m256i *)(a + i * 16));
-        __m256i vb = _mm256_loadu_si256((const __m256i *)(b + i * 16));
-        __m256i vr = _mm256_sub_epi16(va, vb);
-        _mm256_storeu_si256((__m256i *)(r + i * 16), vr);
     }
 }
 

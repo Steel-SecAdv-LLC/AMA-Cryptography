@@ -247,7 +247,7 @@ class TestArgon2id:
 
 
 @pytest.mark.skipif(
-    not _CHACHA20_POLY1305_NATIVE_AVAILABLE, reason="ChaCha20-Poly1305 not available"
+    not _CHACHA20_POLY1305_NATIVE_AVAILABLE, reason="native ChaCha20-Poly1305 backend not available"
 )
 class TestChaCha20Poly1305:
     """Tests for ChaCha20-Poly1305 AEAD (RFC 8439)."""
@@ -361,7 +361,7 @@ class TestChaCha20Poly1305:
 
 
 @pytest.mark.skipif(
-    not _DETERMINISTIC_KEYGEN_AVAILABLE, reason="Deterministic keygen not available"
+    not _DETERMINISTIC_KEYGEN_AVAILABLE, reason="native deterministic keygen backend not available"
 )
 class TestDeterministicKeygen:
     """Tests for deterministic key generation from seed."""

@@ -60,7 +60,7 @@ monitor_signals = {
 
 evaluation = evaluator.evaluate(monitor_signals)
 print(f"Threat level: {evaluation.threat_level}")
-print(f"Recommended action: {evaluation.recommended_action}")
+print(f"Recommended action: {evaluation.action}")
 print(f"Confidence: {evaluation.confidence}")
 ```
 
@@ -196,6 +196,7 @@ import time
 from ama_cryptography.adaptive_posture import (
     PostureEvaluator,
     CryptoPostureController,
+    PostureAction,
     ThreatLevel,
 )
 
@@ -207,19 +208,22 @@ def monitoring_loop(crypto_api, key_manager, interval_seconds=60):
     while True:
         # Collect monitoring signals
         signals = collect_monitoring_signals()
-        
+
         # Evaluate threat level
         evaluation = evaluator.evaluate(signals)
-        
-        # Log current posture
+
+        # Log current posture.  The field is `action`; there is no
+        # `.recommended_action` — see the API note earlier on this page.
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
               f"Threat: {evaluation.threat_level.name} | "
-              f"Action: {evaluation.recommended_action.name}")
-        
-        # Execute actions if needed
-        if evaluation.recommended_action != PostureAction.NONE:
-            controller.execute_action(evaluation, crypto_api, key_manager)
-        
+              f"Action: {evaluation.action.name}")
+
+        # Execute actions if needed.  There is no public
+        # `execute_action(evaluation, ...)`; `evaluate_and_respond()` is the
+        # entry point, and it evaluates and dispatches in one call.
+        if evaluation.action != PostureAction.NONE:
+            controller.evaluate_and_respond()
+
         time.sleep(interval_seconds)
 ```
 

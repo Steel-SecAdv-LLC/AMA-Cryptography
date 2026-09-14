@@ -26,6 +26,9 @@
 
 static const char *const KNOWN_SLOTS[] = {
     "sha3-avx512x4",
+    "sha3-avx2x4",
+    "aes-gcm-aesni",
+    "aes-gcm-vaes",
     "kyber-ntt-avx2",
     "dilithium-ntt-avx2",
     "chacha20-avx2x8",
@@ -33,8 +36,12 @@ static const char *const KNOWN_SLOTS[] = {
     "aes-gcm-neon",
     "chacha20-neon",
     "sha3-neon",
+    "kyber-ntt-neon",
+    "dilithium-ntt-neon",
+    "argon2-g-neon",
     "kyber-sve2",
     "sha3-sve2",
+    "dilithium-ntt-sve2",
     "x25519-avx2",
     NULL,
 };

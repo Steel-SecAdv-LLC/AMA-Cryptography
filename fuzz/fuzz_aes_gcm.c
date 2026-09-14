@@ -87,10 +87,22 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         /* Corrupt tag */
         tag[0] ^= 0x01;
 
+        /* Fail-closed contract: on a tag mismatch the caller's plaintext
+         * buffer must be untouched.  Checking only the return code let a
+         * decrypt that released unauthenticated plaintext fuzz clean; the
+         * Ascon harness has always checked the sentinel and this one had
+         * not.  ama_aes256_gcm_decrypt's header states the guarantee. */
+        memset(rt, 0xA5, pt_len);
+
         rc = ama_aes256_gcm_decrypt(key, nonce, ct, pt_len,
                                      NULL, 0, tag, rt);
         if (rc != AMA_ERROR_VERIFY_FAILED) {
             __builtin_trap();  /* Corrupted tag must be rejected */
+        }
+        for (size_t i = 0; i < pt_len; i++) {
+            if (rt[i] != 0xA5) {
+                __builtin_trap();  /* plaintext released on a failed verify */
+            }
         }
 
         free(ct);
@@ -106,12 +118,25 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         size_t ct_len = payload_len - 16;
         if (ct_len > 2048) ct_len = 2048;
 
-        uint8_t *pt = (uint8_t *)malloc(ct_len > 0 ? ct_len : 1);
+        size_t buf_len = ct_len > 0 ? ct_len : 1;
+        uint8_t *pt = (uint8_t *)malloc(buf_len);
         if (!pt) break;
 
-        /* Should not crash regardless of input */
-        ama_aes256_gcm_decrypt(key, nonce, ct, ct_len,
-                                NULL, 0, tag, pt);
+        /* A random 16-byte tag over random ciphertext verifies with
+         * probability 2^-128, so any success here is a broken verifier —
+         * and on the (overwhelming) rejection path the buffer must be
+         * untouched.  "Should not crash" was the only assertion. */
+        memset(pt, 0xA5, buf_len);
+        ama_error_t frc = ama_aes256_gcm_decrypt(key, nonce, ct, ct_len,
+                                                 NULL, 0, tag, pt);
+        if (frc == AMA_SUCCESS) {
+            __builtin_trap();  /* forged tag accepted */
+        }
+        for (size_t i = 0; i < ct_len; i++) {
+            if (pt[i] != 0xA5) {
+                __builtin_trap();  /* plaintext released on a failed verify */
+            }
+        }
 
         free(pt);
         break;

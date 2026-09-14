@@ -7,9 +7,8 @@
  * SVE2 Ed25519 acceleration is not currently shipped.  As documented
  * at `src/c/dispatch/ama_dispatch.c` lines 354-357, the dispatcher
  * reports `dispatch_info.ed25519 = AMA_IMPL_GENERIC` on every AArch64
- * host: the concrete non-vector backend (scalar `fe51` radix-2^51, or
- * the donna shim when `AMA_ED25519_ASSEMBLY` is enabled) is selected
- * by the build configuration, not at runtime, because:
+ * host: the in-house backend runs its scalar radix-2^51 instantiation
+ * there, with no vector path, because:
  *
  *   1. Ed25519 single-shot signatures are dominated by SHA-512 and a
  *      single-point scalar multiplication.  Vectorizing the field

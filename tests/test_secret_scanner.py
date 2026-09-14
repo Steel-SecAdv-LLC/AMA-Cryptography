@@ -237,3 +237,28 @@ class TestRepositoryIsClean:
         for path in _tracked_files(REPO_ROOT, staged_only=False):
             findings.extend(scan_file(path, REPO_ROOT))
         assert findings == [], "\n".join(f.render() for f in findings)
+
+
+class TestNothingScannedIsNotClean:
+    """A path the scanner cannot scan is an error, not a clean run.
+
+    `--paths /nonexistent.py` and a path outside the checkout used to be
+    dropped silently and the run printed "Secret scan clean: 0 file(s)".
+    """
+
+    def test_a_nonexistent_explicit_path_is_an_error(self, tmp_path: Path) -> None:
+        from tools.check_secrets import main
+
+        assert main(["--paths", str(tmp_path / "does-not-exist.py")]) == 2
+
+    def test_an_explicit_path_outside_the_repository_is_an_error(self, tmp_path: Path) -> None:
+        from tools.check_secrets import main
+
+        outside = tmp_path / "leak.py"
+        outside.write_text("x = 1\n", encoding="utf-8")
+        assert main(["--paths", str(outside)]) == 2
+
+    def test_a_real_tracked_file_still_scans(self) -> None:
+        from tools.check_secrets import main
+
+        assert main(["--paths", str(REPO_ROOT / "tools" / "check_secrets.py")]) == 0

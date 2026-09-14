@@ -18,7 +18,6 @@
  */
 
 #include "../include/ama_cpuid.h"
-#include <stdio.h>
 
 /* ============================================================================
  * Platform once-primitive abstraction (INVARIANT-15)
@@ -113,6 +112,20 @@ static int has_adx_cached = 0;
  * x86 SHA-256 compression kernel (src/c/ama_sha256_ni.c).  Shares cpuid_once
  * with the fields above (INVARIANT-15 unchanged). */
 static int has_sha_ni_cached = 0;
+/* CPUID leaf 1 ECX baseline bits the scoped kernels ALSO depend on.  A
+ * kernel compiled with -maes/-mpclmul/-msha/-mavx2 is licensed by GCC to use
+ * SSSE3 (pshufb/palignr), SSE4.1 (pblendvb/pinsr*), SSE4.2, POPCNT and AVX
+ * (VEX 128-bit encodings), and the shipped objects do (measured: the AES-NI
+ * GCM kernel carries 41 SSSE3 + 8 SSE4.1 opcodes, the SHA-NI kernel 18 + 2,
+ * the AVX2 ML-DSA rejection sampler one POPCNT).  Every real CPU that has
+ * the headline feature has these too, but a hypervisor can mask any CPUID
+ * bit independently, and a gate that checks only the headline bit is a gate
+ * that trusts the hypervisor's consistency.  Checked explicitly instead. */
+static int has_ssse3_cached = 0;
+static int has_sse41_cached = 0;
+static int has_sse42_cached = 0;
+static int has_popcnt_cached = 0;
+static int has_avx_cached = 0;
 
 /* Read XCR0 via XGETBV and confirm the OS has enabled SSE + AVX state.
  *
@@ -143,10 +156,17 @@ static int xcr0_has_avx_state(void) {
      *     legacy harnesses (tools/constant_time/Makefile) compile with
      *     plain `-O2` and would link-fail on the builtin.
      *
-     * Strategy: use the intrinsic when __XSAVE__ is defined (CMake
-     * AVX2 build sets this transitively via -mavx2), otherwise the raw
-     * .byte sequence — same XGETBV opcode, no compile-time feature
-     * dependency, so the legacy dudect Makefile keeps building. */
+     * Strategy: use the intrinsic when __XSAVE__ is defined, otherwise the
+     * raw .byte sequence — same XGETBV opcode, no compile-time feature
+     * dependency, so the legacy dudect Makefile keeps building.
+     *
+     * In first-party builds __XSAVE__ is normally UNSET for this TU: 5.0.0
+     * removed the global -mavx2 that used to define it transitively (SIMD
+     * flags are per-file now, and ama_cpuid.c is a baseline TU with none), so
+     * the .byte fallback below is the branch these builds compile.  The
+     * intrinsic branch is taken only when this TU is built with -mxsave /
+     * -march=native — e.g. an AMA_ENABLE_NATIVE_ARCH=ON host-tuned build, or
+     * an external consumer's own flags. */
     unsigned long long xcr0;
 #if defined(_MSC_VER)
     xcr0 = _xgetbv(0);
@@ -201,9 +221,22 @@ static int xcr0_has_avx512_state(void) {
 static void detect_x86_features(void) {
 #ifdef _MSC_VER
     int info[4];
+    /* Maximum basic leaf FIRST.  Intel documents that querying a leaf above
+     * the maximum returns the data of the highest basic leaf, so reading
+     * leaf 7 on a CPU whose maximum is below 7 would decode AVX2/BMI/ADX/
+     * SHA/VAES bits out of unrelated data.  The GCC/Clang path is safe by
+     * construction (__get_cpuid_count returns 0 below the maximum); this
+     * branch had no equivalent guard. */
+    __cpuid(info, 0);
+    const int max_basic_leaf = info[0];
     __cpuid(info, 1);
     has_aes_ni_cached = (info[2] >> 25) & 1;
     has_pclmulqdq_cached = (info[2] >> 1) & 1;
+    has_ssse3_cached  = (info[2] >> 9)  & 1;
+    has_sse41_cached  = (info[2] >> 19) & 1;
+    has_sse42_cached  = (info[2] >> 20) & 1;
+    has_popcnt_cached = (info[2] >> 23) & 1;
+    has_avx_cached    = (info[2] >> 28) & 1;
     int osxsave = (info[2] >> 27) & 1;
     /* Leaf 7, sub-leaf 0:
      *   EBX bit 3  — BMI1         (ANDN — Keccak-f[1600] chi step)
@@ -214,13 +247,17 @@ static void detect_x86_features(void) {
      *   EBX bit 31 — AVX-512VL  (PR C — required for vprolq / vpternlogq on YMM)
      *   ECX bit 9  — VAES         (PR A — independent of AVX-512)
      *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512) */
-    __cpuidex(info, 7, 0);
+    if (max_basic_leaf >= 7) {
+        __cpuidex(info, 7, 0);
+    } else {
+        info[0] = info[1] = info[2] = info[3] = 0;
+    }
     has_avx2_cached       = (info[1] >> 5)  & 1;
     has_bmi1_cached       = (info[1] >> 3)  & 1;
     has_bmi2_cached       = (info[1] >> 8)  & 1;
     has_avx512f_cached    = (info[1] >> 16) & 1;
     has_adx_cached        = (info[1] >> 19) & 1;
-    has_avx512vl_cached   = (info[1] >> 31) & 1;
+    has_avx512vl_cached   = ((unsigned)info[1] >> 31) & 1;
     has_vaes_cached       = (info[2] >> 9)  & 1;
     has_vpclmulqdq_cached = (info[2] >> 10) & 1;
     has_sha_ni_cached     = (info[1] >> 29) & 1;  /* EBX bit 29 — SHA-NI */
@@ -236,6 +273,11 @@ static void detect_x86_features(void) {
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
         has_aes_ni_cached    = (ecx >> 25) & 1;
         has_pclmulqdq_cached = (ecx >> 1)  & 1;
+        has_ssse3_cached     = (ecx >> 9)  & 1;
+        has_sse41_cached     = (ecx >> 19) & 1;
+        has_sse42_cached     = (ecx >> 20) & 1;
+        has_popcnt_cached    = (ecx >> 23) & 1;
+        has_avx_cached       = (ecx >> 28) & 1;
         osxsave              = (ecx >> 27) & 1;
     }
     /* CPUID leaf 7, sub-leaf 0:
@@ -267,12 +309,15 @@ static void detect_x86_features(void) {
 
 int ama_has_aes_ni(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
-    return has_aes_ni_cached;
+    /* The AES-NI GCM kernel is compiled -maes -mpclmul -mssse3 -msse4.1 and
+     * emits pshufb / pblendvb alongside AESENC: those bits are part of what
+     * "this kernel can run here" means. */
+    return has_aes_ni_cached && has_ssse3_cached && has_sse41_cached;
 }
 
 int ama_has_pclmulqdq(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
-    return has_pclmulqdq_cached;
+    return has_pclmulqdq_cached && has_ssse3_cached && has_sse41_cached;
 }
 
 int ama_has_avx2(void) {
@@ -288,7 +333,13 @@ int ama_has_avx2(void) {
      * the caller with SIGILL — Copilot review #3136110805.  Matching
      * the already-gated semantics of ama_has_vaes() /
      * ama_has_vpclmulqdq() localises the correctness argument here. */
-    return has_avx2_cached && has_avx_osxsave_cached;
+    /* -mavx2 licenses AVX (VEX-128), SSE4.2/4.1, SSSE3 and POPCNT in the
+     * same object, and the shipped AVX2 kernels use them (a POPCNT in the
+     * ML-DSA rejection sampler, pshufb everywhere).  Require the bits the
+     * object can contain, not only the one it is named after. */
+    return has_avx2_cached && has_avx_osxsave_cached && has_avx_cached
+        && has_ssse3_cached && has_sse41_cached && has_sse42_cached
+        && has_popcnt_cached;
 }
 
 int ama_has_avx512f(void) {
@@ -414,7 +465,9 @@ int ama_has_sha_ni(void) {
     /* SHA-NI operates on XMM registers with legacy SSE encoding; the SSE
      * XCR0 state bit is architecturally always enabled on any OS that runs
      * 64-bit code, so no additional XGETBV gate is required. */
-    return has_sha_ni_cached;
+    /* The SHA-NI kernel is compiled -msha -msse4.1 and carries pshufb /
+     * palignr (SSSE3) and pblendw (SSE4.1) around the SHA256RNDS2 core. */
+    return has_sha_ni_cached && has_ssse3_cached && has_sse41_cached;
 }
 
 /* SHA-256 ARM Crypto Extension probe — always 0 on x86. */
@@ -552,10 +605,23 @@ static void detect_arm_features(void) {
 
 #else
 static void detect_arm_features(void) {
+    /* An AArch64 target with neither getauxval nor sysctl — FreeBSD, a
+     * Windows-on-ARM build, a bare-metal toolchain.  The OPTIONAL features
+     * cannot be probed here, so they answer 0 and the dispatcher declines
+     * their kernels, which is the correct fail-closed direction.
+     *
+     * NEON is not optional.  AdvSIMD is part of the AArch64 base
+     * architecture and of the standard procedure call standard: every
+     * conforming AArch64 implementation has it, and the compiler is already
+     * free to emit it without any runtime check.  Reporting 0 here was
+     * therefore not conservative, it was wrong — and it cost the NEON kernels
+     * on every platform outside Linux and Apple, silently, because the only
+     * symptom is a slower dispatch tier.  This is the same reasoning the two
+     * arms above already apply; they simply never reached this one. */
     has_arm_aes_cached = 0;
     has_arm_pmull_cached = 0;
     has_arm_sha2_cached = 0;
-    has_arm_neon_cached = 0;
+    has_arm_neon_cached = 1;
     has_arm_sve2_cached = 0;
 }
 #endif
@@ -643,50 +709,3 @@ int ama_cpuid_has_arm_aes(void) { return 0; }
 
 #endif
 
-/* ============================================================================
- * AEAD Backend Selection (Runtime Dispatch)
- *
- * Thread safety: ama_select_aead_init() runs exactly once via the platform
- * once-primitive.  All shared state (selected_backend) is written inside the
- * init function and is fully visible to every thread after the once-call
- * returns — guaranteed by the memory ordering semantics of pthread_once /
- * InitOnceExecuteOnce.
- * ============================================================================ */
-
-static AMA_ONCE_FLAG dispatch_once = AMA_ONCE_FLAG_INIT;
-static ama_aead_backend_t selected_backend = AMA_AEAD_CHACHA20_POLY1305;
-
-static void ama_select_aead_init(void) {
-    if ((ama_has_aes_ni() && ama_has_pclmulqdq()) ||
-        (ama_has_arm_aes() && ama_has_arm_pmull())) {
-        selected_backend = AMA_AEAD_HW_AES_GCM;
-    } else {
-        /* No hardware AES — use ChaCha20-Poly1305 (constant-time by design).
-         * Never use software table-based AES-GCM on secret data at runtime. */
-        selected_backend = AMA_AEAD_CHACHA20_POLY1305;
-    }
-
-    /* Log selection once */
-    fprintf(stderr, "[AMA Cryptography] AEAD backend selected: %s (AES-NI=%d, PCLMULQDQ=%d, ARM-AES=%d, ARM-PMULL=%d)\n",
-            ama_aead_backend_name(selected_backend),
-            ama_has_aes_ni(), ama_has_pclmulqdq(),
-            ama_has_arm_aes(), ama_has_arm_pmull());
-}
-
-ama_aead_backend_t ama_select_aead(void) {
-    AMA_CALL_ONCE(dispatch_once, ama_select_aead_init);
-    return selected_backend;
-}
-
-const char *ama_aead_backend_name(ama_aead_backend_t backend) {
-    switch (backend) {
-        case AMA_AEAD_HW_AES_GCM:
-            return "Hardware AES-256-GCM (AES-NI/ARMv8-CE)";
-        case AMA_AEAD_CHACHA20_POLY1305:
-            return "ChaCha20-Poly1305 (constant-time)";
-        case AMA_AEAD_SW_AES_GCM:
-            return "Software AES-256-GCM (bitsliced constant-time)";
-        default:
-            return "Unknown";
-    }
-}

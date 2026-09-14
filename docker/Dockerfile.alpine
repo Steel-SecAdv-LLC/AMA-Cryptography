@@ -3,8 +3,28 @@
 #
 # Alpine Linux build for AMA Cryptography - minimal container size
 # ~50MB vs ~200MB for Ubuntu-based image
+#
+# Base image: pinned by digest, not by tag alone.
+#
+# A tag is a mutable pointer. `alpine:3.23` resolves to different bytes over
+# the release's lifetime, so a tag-only FROM makes the build unreproducible
+# and gives an upstream account takeover a path straight into this image --
+# the same supply-chain reasoning behind pinning every GitHub Action to a
+# commit SHA (tools/check_action_pins.py), applied to the other half of the
+# build inputs. The tag is kept alongside the digest so the line stays
+# readable; Docker verifies the digest and ignores the tag.
+#
+# The version was `alpine:3.18`, whose support ended 2025-05-09 -- fifteen
+# months of unpatched base-image CVEs in a published cryptography container.
+# 3.23 is supported through 2027-11-01 (alpinelinux.org/releases.json).
+# Refreshing the digest is a deliberate edit, and the release must be checked
+# against that file rather than assumed current.
+#
+# base-eol: 2027-11-01
+# ^ read by tools/check_docker_pins.py, which fails 60 days out so the
+#   base can be moved while it is still receiving fixes.
 
-FROM alpine:3.18 AS builder
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS builder
 
 # openssl-dev is deliberately absent (INVARIANT-1): AMA's C sources link no
 # OpenSSL, and requirements.txt / requirements-dev.txt pull no package that
@@ -21,8 +41,19 @@ RUN apk add --no-cache \
 WORKDIR /build
 COPY . .
 
-# Install both runtime and dev dependencies for Cython/PQC builds
-RUN pip3 install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+# Install both runtime and dev dependencies for Cython/PQC builds.
+#
+# `--break-system-packages` is required from Alpine 3.19 onward, not just on
+# the upgrade step below. Alpine 3.18 shipped a pip that predates PEP 668
+# enforcement, so installing into the system interpreter was simply allowed
+# and only the explicit `--upgrade` of system-managed packages needed the
+# override. 3.23 ships pip 25.1.1 against an EXTERNALLY-MANAGED interpreter,
+# which refuses every system-wide install — this line failed the image build
+# with `error: externally-managed-environment` on the first CI run after the
+# base bump. The override is contained to this builder stage and never reaches
+# the runtime image.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        -r requirements.txt -r requirements-dev.txt
 
 RUN mkdir build && cd build && \
     cmake .. \
@@ -32,12 +63,15 @@ RUN mkdir build && cd build && \
     cmake --build . -j$(nproc)
 
 # Upgrade setuptools / wheel above the floor enforced by setup.py's
-# D-9 preflight (PR #277, 2026-04-27 audit) — Alpine 3.18 ships
-# py3-setuptools 67.7.2 / py3-wheel 0.40.x system-wide, both below the
-# enforced minimums (setuptools>=70 to dodge Debian's install_layout
-# regression + the GHSA-cx63-2mw6-8hw5 / PYSEC-2025-49 advisories;
-# wheel>=0.47.0 for GHSA-8rrh-rw8j-w5fx; cmake>=4.3.2 Dependabot
-# supply-chain floor).  We `--break-system-packages`
+# D-9 preflight (PR #277, 2026-04-27 audit).  Alpine 3.23 ships
+# py3-setuptools 80.9.0 (now above the floor), but py3-wheel 0.46.3 and
+# cmake 4.1.3 are both still below theirs, so this step is still load-bearing
+# (setuptools>=78.1.1 to dodge Debian's install_layout regression + the
+# GHSA-cx63-2mw6-8hw5 / PYSEC-2025-49 advisories; wheel>=0.47.0 for
+# GHSA-8rrh-rw8j-w5fx; cmake>=4.3.2 Dependabot supply-chain floor).
+# The versions above are from the v3.23 APKINDEX; on a base-image bump,
+# re-check them rather than assuming this step is still needed for the same
+# packages.  We `--break-system-packages`
 # because Alpine's PEP 668 `EXTERNALLY-MANAGED` marker would otherwise
 # reject the upgrade — the override is contained to this builder stage,
 # never reaches the runtime image, and the upgraded versions are exactly
@@ -54,14 +88,28 @@ RUN pip3 install --no-cache-dir --upgrade --break-system-packages \
 # the system setuptools meets every floor the D-9 preflight enforces.
 RUN python3 setup.py bdist_wheel
 
-FROM alpine:3.18
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System (Alpine)"
-LABEL version="4.0.0"
+LABEL version="5.0.0"
 
+# INVARIANT-1: libssl3 is not installed EXPLICITLY, and AMA's own .so does not
+# need it.  This file's builder stage already says "openssl-dev is deliberately
+# absent (INVARIANT-1): AMA's C sources link no OpenSSL" — and the runtime stage
+# used to install the runtime half of it anyway.  That line is gone; the shipped
+# .so needs only musl libc, which the vendor-isolation gate checks by reading
+# its dynamic symbol table rather than by reading this comment.
+#
+# libssl3 and libcrypto3 are STILL IN THE IMAGE, transitively.  The `python3`
+# package below depends on both — CPython's `_ssl` and `_hashlib` link OpenSSL
+# — so Alpine pulls them in regardless (verified against the v3.23 main/x86_64
+# package index: python3 lists `libssl3`, `libcrypto3`, `so:libssl.so.3` and
+# `so:libcrypto.so.3`).  Removing the explicit line changes which apk pulls
+# them, not whether they are present.  That is outside INVARIANT-1's scope,
+# which is about what AMA LINKS, and the earlier wording — "libssl3 is NOT
+# installed" — claimed otherwise about the published image.
 RUN apk add --no-cache \
-    libssl3 \
     python3 \
     py3-pip
 
@@ -71,8 +119,11 @@ COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 
 # Install Python package (core has zero runtime dependencies;
-# numpy/scipy are only needed for the optional [monitoring] extra)
-RUN pip3 install --no-cache-dir /tmp/*.whl && \
+# numpy/scipy are only needed for the optional [monitoring] extra).
+# `--break-system-packages` for the same PEP 668 reason as the builder stage:
+# this is the runtime image's system interpreter, and it is the only Python in
+# the image, so a venv would buy nothing but indirection.
+RUN pip3 install --no-cache-dir --break-system-packages /tmp/*.whl && \
     rm -rf /tmp/*.whl
 
 # Re-sign the module-integrity artefact for the native library this image loads.

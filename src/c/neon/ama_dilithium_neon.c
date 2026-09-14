@@ -18,22 +18,45 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 #define DILITHIUM_Q     8380417
 #define DILITHIUM_N     256
 #define DILITHIUM_D     13
 #define DILITHIUM_QINV  58728449  /* q^{-1} mod 2^32 */
 
-/* ============================================================================
- * NEON Barrett reduction for Dilithium (q = 8380417)
- * ============================================================================ */
-static inline int32x4_t barrett_reduce_dil_neon(int32x4_t a) {
-    const int32x4_t q = vdupq_n_s32(DILITHIUM_Q);
-    /* t = round(a / q) approximated via arithmetic shift */
-    int32x4_t t = vshrq_n_s32(a, 23);
-    t = vmulq_s32(t, q);
-    return vsubq_s32(a, t);
+/* Low 32 bits of a signed 32x32 lane multiply, computed on unsigned lanes.
+ *
+ * GCC/Clang implement vmulq_s32 as `__a * __b` on a signed vector type
+ * (arm_neon.h), so a low-half-only multiply whose product exceeds int32 — the
+ * Barrett step and the Montgomery `mod 2^32` step below both do — is signed
+ * integer overflow.  That is undefined behaviour that `-fsanitize=undefined`
+ * aborts on (audit H15).  The unsigned multiply emits the SAME MUL instruction
+ * and has defined wraparound, so the low 32 bits are bit-for-bit identical. */
+static inline int32x4_t mullo_s32(int32x4_t a, int32x4_t b) {
+    return vreinterpretq_s32_u32(vmulq_u32(vreinterpretq_u32_s32(a), vreinterpretq_u32_s32(b)));
 }
+
+/* There is deliberately no NEON Barrett reduction here.
+ *
+ * A `barrett_reduce_dil_neon` used to sit at this point, unreferenced by any
+ * translation unit in the repository — `static inline` with no caller, which
+ * is the one shape neither gcc nor clang warns about, so nothing surfaced it.
+ * It was also wrong: it computed `t = a >> 23; return a - t*q`, omitting the
+ * `+ (1 << 22)` rounding term that `dil_reduce32` in src/c/ama_dilithium.c
+ * carries.  Measured against that scalar reference over 400,000 values drawn
+ * from [-5q, 5q], it disagreed on 50.0% of them and returned |result| >= q on
+ * 0.1% — up to 1.004q.  A routine that can return a value at or above q is
+ * not a reduction, and dead-but-plausible arithmetic is worse than none: the
+ * next author to need a vector reduction here would have wired it.
+ *
+ * The NEON ML-DSA kernels below need no Barrett step.  They reduce through
+ * `montgomery_reduce_dil_neon`, exactly as the scalar and AVX2 ML-DSA paths
+ * do, and the canonicalisation the callers need is `dil_poly_reduce` /
+ * `dil_polyveck_reduce` on the scalar side.  If a vector Barrett is ever
+ * wanted, it must be written to match `dil_reduce32` and pinned by an
+ * equivalence test, the way `tests/c/test_dilithium_ntt_equiv.c` pins the NTT.
+ */
 
 /* ============================================================================
  * Conditional add q (reduce to [0, q))
@@ -67,7 +90,7 @@ static inline int32x4_t montgomery_mul_dil_neon(int32x4_t a, int32x4_t b) {
     int32x4_t prod_lo32 = vuzp1q_s32(vreinterpretq_s32_s64(prod_lo),
                                        vreinterpretq_s32_s64(prod_hi));
     /* t = (prod_lo32 * qinv) mod 2^32 */
-    int32x4_t t = vmulq_s32(prod_lo32, qinv);
+    int32x4_t t = mullo_s32(prod_lo32, qinv);
 
     /* t * q (need high 32 bits) */
     int64x2_t tq_lo = vmull_s32(vget_low_s32(t), vget_low_s32(q));
@@ -134,6 +157,14 @@ void ama_dilithium_ntt_neon(int32_t poly[DILITHIUM_N],
     for (int i = 0; i < 64; i++) {
         vst1q_s32(poly + i * 4, f[i]);
     }
+
+    /* SECRET SCRATCH (INVARIANT-6/12): f staged the complete polynomial —
+     * s1/s2 and the signing mask y on the ML-DSA signing path.  1 KiB is
+     * twice the AArch64 vector register file, so most of it lives in the
+     * frame; erase it before returning, exactly as the SVE2 twin
+     * (src/c/sve2/ama_dilithium_sve2.c) erases its staging buffers.  One
+     * barrier per public call, same cost argument as there. */
+    ama_secure_memzero(f, sizeof(f));
 
     /* Layers len=2, len=1: intra-register, use scalar */
     for (int len = 2; len > 0; len >>= 1) {
@@ -206,30 +237,17 @@ void ama_dilithium_invntt_neon(int32_t poly[DILITHIUM_N],
     for (int i = 0; i < 64; i++) {
         vst1q_s32(poly + i * 4, f[i]);
     }
+
+    /* SECRET SCRATCH (INVARIANT-6/12): same staging buffer as the forward
+     * NTT above — erase before returning. */
+    ama_secure_memzero(f, sizeof(f));
 }
 
-/* ============================================================================
- * Polynomial arithmetic (NEON)
- * ============================================================================ */
-void ama_dilithium_poly_add_neon(int32_t r[DILITHIUM_N],
-                                  const int32_t a[DILITHIUM_N],
-                                  const int32_t b[DILITHIUM_N]) {
-    for (int i = 0; i < 64; i++) {
-        int32x4_t va = vld1q_s32(a + i * 4);
-        int32x4_t vb = vld1q_s32(b + i * 4);
-        vst1q_s32(r + i * 4, vaddq_s32(va, vb));
-    }
-}
-
-void ama_dilithium_poly_sub_neon(int32_t r[DILITHIUM_N],
-                                  const int32_t a[DILITHIUM_N],
-                                  const int32_t b[DILITHIUM_N]) {
-    for (int i = 0; i < 64; i++) {
-        int32x4_t va = vld1q_s32(a + i * 4);
-        int32x4_t vb = vld1q_s32(b + i * 4);
-        vst1q_s32(r + i * 4, vsubq_s32(va, vb));
-    }
-}
+/* ama_dilithium_poly_add_neon / ama_dilithium_poly_sub_neon were removed:
+ * unwired, untested, uncalled (the header's "kept for a future dispatch-graph
+ * extension" note went with them).  Removed alongside the buggy
+ * power2round below rather than shipped unexercised (audit Low); git history
+ * carries them for a future PR that wires and tests a NEON slot. */
 
 /* ============================================================================
  * Polynomial pointwise multiplication (NTT domain, NEON)
@@ -247,25 +265,15 @@ void ama_dilithium_poly_pointwise_neon(int32_t r[DILITHIUM_N],
     }
 }
 
-/* ============================================================================
- * Vectorized power2round (NEON)
- * ============================================================================ */
-void ama_dilithium_power2round_neon(int32_t a1[DILITHIUM_N],
-                                     int32_t a0[DILITHIUM_N],
-                                     const int32_t a[DILITHIUM_N]) {
-    const int32x4_t d_mask = vdupq_n_s32((1 << DILITHIUM_D) - 1);
-    const int32x4_t half_d = vdupq_n_s32(1 << (DILITHIUM_D - 1));
-
-    for (int i = 0; i < 64; i++) {
-        int32x4_t va = vld1q_s32(a + i * 4);
-        int32x4_t va0 = vandq_s32(va, d_mask);
-        va0 = vsubq_s32(va0, half_d);
-        int32x4_t va1 = vsubq_s32(va, va0);
-        va1 = vshrq_n_s32(va1, DILITHIUM_D);
-        vst1q_s32(a0 + i * 4, va0);
-        vst1q_s32(a1 + i * 4, va1);
-    }
-}
+/* ama_dilithium_power2round_neon was removed: it was dead code (no caller, no
+ * test, no benchmark) AND incorrect — it computed a0 = (a mod 2^d) - 2^(d-1)
+ * and a1 = (a - a0) >> d, which does NOT satisfy the FIPS 204 Power2Round
+ * reconstruction a == a1*2^d + a0 (it yields a - 2^(d-1)) and does not match
+ * the production scalar dil_power2round in src/c/ama_dilithium.c.  Wiring it
+ * would have produced wrong ML-DSA public keys.  "Kept for a future extension"
+ * cannot justify retaining a broken kernel, so it is dropped rather than
+ * shipped unexercised (audit Low); a future NEON slot must be written correctly
+ * against dil_power2round and tested. */
 
 #else
 typedef int ama_dilithium_neon_not_available;

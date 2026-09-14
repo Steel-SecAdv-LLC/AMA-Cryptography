@@ -14,7 +14,8 @@ skipping it.
 
 | Directory | Files | Upstream | Ref |
 |---|---|---|---|
-| `fips203/` | `ml_kem_1024.kat` | NIST ACVP-Server, ML-KEM-keyGen/encapDecap-FIPS203 | `v1.1.0.42` |
+| `fips203/` | `ml_kem_1024.kat` | [pq-crystals/kyber](https://github.com/pq-crystals/kyber) `standard` branch, `ref/nistkat/PQCgenKAT_kem` for ML-KEM-1024 (NIST AES-256-CTR DRBG, counts 0–99), with each count's `d`, `z` and `m` expanded from the DRBG stream. Re-derived from that generator on 2026-09-07 and matched 100/100 on `pk`, `sk`, `ct`, `ss`; an earlier revision of this row said ACVP-Server, which the vectors never were (no `d` in the file appears in the ACVP keyGen set) | `d5b791c` (2024-08-21) |
+| `fips203/acvp/` | `ml_kem_acvp_v1.1.0.42.json`, `acvp_encapsulation_aft.kat` | [NIST ACVP-Server](https://github.com/usnistgov/ACVP-Server) `gen-val/json-files/ML-KEM-{keyGen,encapDecap}-FIPS203/internalProjection.json`, trimmed to the replayed fields (keyGen; encapsulation AFT; decapsulation VAL; encapsulation/decapsulation key-check groups), all three parameter sets; upstream file digests inside the JSON `source` block | `v1.1.0.42` |
 | `fips203/` | `ml_kem_512.kat`, `ml_kem_768.kat` | [C2SP/wycheproof](https://github.com/C2SP/wycheproof) `testvectors_v1/mlkem_{512,768}_test.json` | `b61843a9a5115bb758134b6a1f5d5e502d445342` |
 | `fips204/` | `ml_dsa_65.kat` | NIST ACVP-Server, ML-DSA-keyGen/sigGen-FIPS204 | `v1.1.0.42` |
 | `fips204/` | `ml_dsa_44.kat`, `ml_dsa_87.kat` | [NIST ACVP-Server](https://github.com/usnistgov/ACVP-Server) `gen-val/json-files/ML-DSA-{keyGen,sigGen}-FIPS204/internalProjection.json` | `master` @ 2026-07-27 |

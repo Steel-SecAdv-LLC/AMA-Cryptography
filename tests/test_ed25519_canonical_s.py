@@ -18,8 +18,9 @@ Wycheproof ``eddsa_verify_schema_v1`` found it:
 
 Both must be rejected; both verified as VALID.
 
-* The vendored **ed25519-donna** path (the x86-64 default) tested only
-  ``RS[63] & 224`` — i.e. it rejected ``S >= 2**253``.  ``L`` sits just above
+* The vendored x86-64 path the tree then carried (removed in the twenty-first
+  maintenance pass) tested only ``RS[63] & 224`` — i.e. it rejected
+  ``S >= 2**253``.  ``L`` sits just above
   ``2**252``, so the whole band ``L <= S < 2**253`` slipped through, and that
   band is exactly where ``S + L`` lands for most signatures.
 * The portable **fe51** path (``ama_ed25519.c``) performed no range check at
@@ -127,9 +128,9 @@ class TestCanonicalSEnforcement:
 class TestBatchAgreesWithSingle:
     """Batch verification must accept exactly what single verification does.
 
-    donna's batch routine calls its own ``ed25519_sign_open`` internally rather
-    than ``ama_ed25519_verify``, so the canonical check had to be applied in
-    the batch wrapper as well.  Before that second patch, batch verification
+    The vendored backend's batch routine called its own verifier internally
+    rather than ``ama_ed25519_verify``, so the canonical check had to be applied
+    in the batch wrapper as well.  Before that second patch, batch verification
     accepted the malleable signatures that single verification rejected — two
     APIs documented to agree, disagreeing on which signatures are valid.
     """

@@ -1,0 +1,47 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# NO-OP TWIN of `.github/workflows/integrity-anchor-check.yml` — GitHub's
+# documented pattern for a path-filtered workflow whose context must be a
+# REQUIRED status check.
+#
+# GitHub never creates a check run for a workflow that path filtering skipped,
+# so the `Verify signing seed matches the trust anchor` context could not be
+# required: a pull request that broke the anchor plumbing would show the guard
+# red, and nothing would stop the merge.
+#
+# This file has the SAME workflow `name:` and the SAME job `name:` as the
+# guard it twins, and the COMPLEMENTARY `paths-ignore:` list, so exactly one
+# of the two produces that context on any given pull request: the real one
+# when the paths match, this one — trivially green — when they do not.
+# tools/check_gate_coverage.py holds the two lists complementary.
+name: Integrity anchor check
+
+on:
+  pull_request:
+    paths-ignore:
+      - '.github/workflows/integrity-anchor-check.yml'
+      - '.github/workflows/integrity-anchor-check-skip.yml'
+      - '.github/workflows/release.yml'
+      - 'ama_cryptography/_build_sign.py'
+      - 'CMakeLists.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integrity-anchor-check-skip-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-anchor:
+    name: Verify signing seed matches the trust anchor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Nothing to verify for this change
+        run: |
+          echo "This pull request touches none of the anchor plumbing."
+          echo "The real check lives in .github/workflows/integrity-anchor-check.yml; this twin exists"
+          echo "so the 'Verify signing seed matches the trust anchor' context is reported on every pull"
+          echo "request and can therefore be a required status check."

@@ -41,8 +41,13 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
         /* Key longer than block size: K' = SHA-256(key), zero-padded */
         ama_sha256(k_prime, key, key_len);
     } else {
-        /* Key fits in block: K' = key, zero-padded */
-        memcpy(k_prime, key, key_len);
+        /* Key fits in block: K' = key, zero-padded.  A zero-length key
+         * (RFC 2104 permits it; callers may pass NULL for it) must not
+         * reach memcpy: memcpy(dst, NULL, 0) is undefined behaviour and
+         * a UBSan/ASan trap. */
+        if (key_len > 0) {
+            memcpy(k_prime, key, key_len);
+        }
     }
 
     /* Step 2: Compute ipad and opad */
@@ -85,7 +90,7 @@ void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
     ama_secure_memzero(k_prime, AMA_SHA256_BLOCK_SIZE);
     if (key_len > AMA_SHA256_BLOCK_SIZE) {
         ama_sha256(k_prime, key, key_len);
-    } else {
+    } else if (key_len > 0) {
         memcpy(k_prime, key, key_len);
     }
 

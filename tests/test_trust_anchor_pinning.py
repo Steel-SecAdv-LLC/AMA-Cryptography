@@ -318,3 +318,436 @@ class TestAnchoredBuildRefusesDigestOnlyFallback:
         # The refusal must carry the reason it could not verify, or the
         # operator is told only that something is wrong.
         assert "verifier unavailable" in detail
+
+
+class TestSignerProcessAnchoredClassification:
+    """The one legitimate holder of an anchored, artefact-less tree.
+
+    ``tools/resign_wheel.py`` deletes the stale pre-repair artefact and then
+    launches ``python -m ama_cryptography._build_sign`` inside the unpacked
+    wheel — so the signer subprocess imports an anchored tree with no
+    artefact, which is byte-for-byte the state the anchored refusal above
+    calls tampering.  The first exercised release dry run failed exactly
+    there on both Linux cibuildwheel jobs while macOS and Windows (no
+    re-sign chain) passed.
+
+    The rule these tests pin: the stage FAILS either way; only the
+    *classification* differs.  A signer-identified process records a stale
+    binding, which is what lets ``__init__``'s ``AMA_BUILD_PIPELINE`` escape
+    complete the import in the ERROR state.  Everyone else keeps the
+    tampering verdict, and a positively invalid signature stays tampering
+    even for the signer — re-signing over a bad signature would launder it.
+    """
+
+    ANCHOR = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+    def _run_anchored_missing_artefact(
+        self, monkeypatch: pytest.MonkeyPatch, *, signer: bool
+    ) -> tuple[bool, str]:
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_verify_signed_integrity",
+            lambda digest_hex: (None, "no signed-integrity artefact (digest-only fallback)"),
+        )
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: (self.ANCHOR, None))
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: signer)
+        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
+        return _self_test.verify_module_integrity()
+
+    def test_signer_process_fails_repairably_not_as_tampering(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        ok, detail = self._run_anchored_missing_artefact(monkeypatch, signer=True)
+        assert ok is False, "the stage must FAIL for the signer too - only the class changes"
+        assert "integrity signer" in detail
+        assert _self_test.integrity_failure_was_stale_binding(), (
+            "the signer's anchored missing-artefact failure must classify as a stale "
+            "binding so the AMA_BUILD_PIPELINE import escape can admit the signing run"
+        )
+
+    def test_non_signer_process_keeps_the_tampering_verdict(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        ok, detail = self._run_anchored_missing_artefact(monkeypatch, signer=False)
+        assert ok is False
+        assert "compiled trust anchor" in detail
+        assert not _self_test.integrity_failure_was_stale_binding(), (
+            "a non-signer process holding an anchored artefact-less tree is the "
+            "attack this branch exists to stop; it must classify as tampering"
+        )
+
+    def test_invalid_signature_is_tampering_even_for_the_signer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A present-but-wrong artefact never reaches the signer carve-out."""
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_verify_signed_integrity",
+            lambda digest_hex: (False, "Ed25519 signature did NOT verify - module tampered"),
+        )
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: (self.ANCHOR, None))
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: True)
+        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
+
+        ok, detail = _self_test.verify_module_integrity()
+        assert ok is False
+        assert "did NOT verify" in detail
+        assert not _self_test.integrity_failure_was_stale_binding(), (
+            "re-signing over an invalid signature would launder it; the signer "
+            "identity must not soften a positive tampering verdict"
+        )
+
+
+class TestEnvRequiredAnchorButUnanchoredLibrary:
+    """The signer carve-out on the *environment-required* refusal (audit M13).
+
+    ``verify_module_integrity`` has two "no signed artefact" refusals.  The
+    first fires when the native library reports a compiled anchor
+    (``anchor_hex is not None``) and already carries the signer carve-out
+    (``TestSignerProcessAnchoredClassification`` above).  The second is reached
+    when the library is NOT anchored (``_load_integrity_trust_anchor`` returns
+    ``(None, None)``) but ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`` is set — the
+    "anchor arrives via the environment, not compiled into the object"
+    configuration.
+
+    ``tools/resign_wheel.py`` deletes ``_integrity_signature.py`` and then
+    launches ``python -m ama_cryptography._build_sign`` with the release
+    environment (``AMA_BUILD_PIPELINE=1`` plus the inherited
+    ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR``) inherited untouched.  Without the
+    carve-out this branch classified the signer's own import as tampering and
+    hard-failed it, so the signer could never mint the replacement artefact and
+    post-repair re-signing deadlocked.  These tests pin the same rule as its
+    sibling: the stage FAILS either way, only the classification differs, and a
+    non-signer process keeps the tampering verdict.
+    """
+
+    def _run_env_required_unanchored(
+        self, monkeypatch: pytest.MonkeyPatch, *, signer: bool
+    ) -> tuple[bool, str]:
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_verify_signed_integrity",
+            lambda digest_hex: (None, "no signed-integrity artefact (digest-only fallback)"),
+        )
+        # Unanchored native library: the requirement can only come from the env.
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: (None, None))
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: signer)
+        monkeypatch.setenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", "1")
+        return _self_test.verify_module_integrity()
+
+    def test_signer_process_fails_repairably_not_as_tampering(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        ok, detail = self._run_env_required_unanchored(monkeypatch, signer=True)
+        assert ok is False, "the stage must FAIL for the signer too - only the class changes"
+        assert "integrity signer" in detail
+        assert _self_test.integrity_failure_was_stale_binding(), (
+            "the signer's env-required, unanchored, artefact-less failure must classify as "
+            "a stale binding so the AMA_BUILD_PIPELINE import escape can admit the signing "
+            "run — otherwise resign_wheel.py deadlocks (M13)"
+        )
+
+    def test_non_signer_process_keeps_the_tampering_verdict(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        ok, detail = self._run_env_required_unanchored(monkeypatch, signer=False)
+        assert ok is False
+        assert "forbids digest-only" in detail
+        assert not _self_test.integrity_failure_was_stale_binding(), (
+            "a non-signer process reaching this branch with the requirement set is not a "
+            "signing run; the carve-out must not soften its tampering verdict"
+        )
+
+    def test_without_the_env_flag_the_same_inputs_fall_through_to_digest_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-vacuity: the env flag is what gates this branch.
+
+        With the requirement unset, an unanchored, artefact-less tree is the
+        documented developer/source-checkout path and must still verify by
+        digest only — proving these tests exercise the env-flag branch rather
+        than a check that refuses everything.
+        """
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_verify_signed_integrity",
+            lambda digest_hex: (None, "no signed-integrity artefact (digest-only fallback)"),
+        )
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: (None, None))
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: True)
+        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
+
+        ok, detail = _self_test.verify_module_integrity()
+        assert ok is True
+        assert "digest-only fallback" in detail
+
+
+class TestAttestationExposesAnchoring:
+    """``module_attestation`` surfaces integrity_strength and anchored (audit M2).
+
+    ``_INTEGRITY_STRENGTH`` is a function of ``(native_ok, bindings_exact)``
+    only, so a release wheel signed under the long-lived anchor key and a
+    developer build signed with a per-build ephemeral key both report
+    ``"signed"`` and ``fully_verified: True``.  The one distinction that
+    separates a release artefact from a developer one lived solely in the prose
+    of the detail string and never left the verifier.  These tests pin that the
+    attestation now exposes it as machine-readable keys, and that the anchored
+    flag actually tracks whether the signing key matched the compiled anchor.
+    """
+
+    def test_attestation_exposes_the_new_keys(self) -> None:
+        from ama_cryptography import _self_test
+
+        att = _self_test.module_attestation()
+        assert "integrity_strength" in att, att
+        assert "anchored" in att, att
+        assert att["integrity_strength"] is None or isinstance(att["integrity_strength"], str)
+        assert att["anchored"] is None or isinstance(att["anchored"], bool)
+
+    def test_developer_build_is_fully_verified_yet_not_anchored(self) -> None:
+        """The exact M2 gap, now observable.
+
+        A signed developer build reports ``fully_verified: True`` — but it was
+        signed with a per-build ephemeral key, not the compiled trust anchor.
+        Before this the two were indistinguishable through the API; ``anchored``
+        is the key that tells them apart.
+        """
+        from ama_cryptography import _self_test
+
+        ok, _ = _self_test.verify_module_integrity()
+        assert ok is True, "the committed developer artefact must verify"
+        att = _self_test.module_attestation()
+        assert att["fully_verified"] is True
+        assert att["integrity_strength"] == "signed"
+        assert att["anchored"] is False, (
+            "the committed artefact is dev-signed with a per-build ephemeral key; "
+            "attestation must not report it as anchored"
+        )
+
+    def test_anchored_flips_true_through_the_real_verify_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the signing key matches the compiled anchor, anchored is True.
+
+        Driven through the real ``verify_module_integrity`` — only the anchor
+        source is mocked, to the committed artefact's own public key, which is
+        exactly the identity a release build's compiled anchor asserts.
+        """
+        from ama_cryptography import _integrity_signature, _self_test
+
+        pubkey = _integrity_signature.INTEGRITY_PUBKEY_HEX.strip().lower()
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: (pubkey, None))
+
+        ok, detail = _self_test.verify_module_integrity()
+        assert ok is True, detail
+        att = _self_test.module_attestation()
+        assert att["anchored"] is True, "a signature matching the anchor must read anchored"
+        assert att["integrity_strength"] == "signed"
+        assert "trusted build pubkey" in detail
+
+    def test_anchored_is_reset_between_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The flag is per-run state, not a latch: an anchored run must not leave
+        a later unanchored run reading anchored."""
+        from ama_cryptography import _integrity_signature, _self_test
+
+        pubkey = _integrity_signature.INTEGRITY_PUBKEY_HEX.strip().lower()
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: (pubkey, None))
+        _self_test.verify_module_integrity()
+        assert _self_test.module_attestation()["anchored"] is True
+        monkeypatch.undo()
+        _self_test.verify_module_integrity()
+        assert _self_test.module_attestation()["anchored"] is False
+
+
+class TestSignerIdentityRunpyWindow:
+    """``_process_is_the_integrity_signer`` during runpy's parent import.
+
+    ``python -m ama_cryptography._build_sign`` imports this package before
+    runpy binds the target module into ``__main__``, so during POST the
+    ``__main__.__spec__`` check cannot identify anyone.  ``sys.orig_argv``
+    — the interpreter's immutable record of its own command line — covers
+    that window.  These pin the recognised spellings and, more importantly,
+    the shapes that must NOT be recognised.
+    """
+
+    def _identity(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        argv: list[str],
+        *,
+        env: str | None = "1",
+    ) -> bool:
+        import sys
+
+        from ama_cryptography import pqc_backends
+
+        if env is None:
+            monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+        else:
+            monkeypatch.setenv("AMA_BUILD_PIPELINE", env)
+        monkeypatch.setattr(sys, "orig_argv", argv)
+        return pqc_backends._process_is_the_integrity_signer()
+
+    def test_dash_m_separate_token_is_recognised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        argv = ["/usr/bin/python3", "-m", "ama_cryptography._build_sign", "--package-dir", "x"]
+        assert self._identity(monkeypatch, argv) is True
+
+    def test_dash_m_concatenated_form_is_recognised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``-mmod`` must parse exactly as ``-m mod`` — in BOTH directions.
+
+        This test previously asserted that ``-mama_cryptography.integrity
+        --verify`` conferred signer identity, which encoded the fail-open
+        that identity alone answered for a mixed-mode CLI: ``--verify`` and
+        ``--show`` write nothing, so granting them the pre-load digest escape
+        let a build-pipeline environment map an unverified shared object
+        during the documented *verification* command.  The joined spelling is
+        still what this test is for, so it is now driven with a subcommand
+        that legitimately confers scope, and the refused direction is
+        asserted alongside it rather than dropped.
+        """
+        writing = ["/usr/bin/python3", "-mama_cryptography.integrity", "--update"]
+        assert self._identity(monkeypatch, writing) is True
+
+        read_only = ["/usr/bin/python3", "-mama_cryptography.integrity", "--verify"]
+        assert self._identity(monkeypatch, read_only) is False
+
+    def test_the_signing_module_needs_no_subcommand(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``_build_sign`` has no read-only mode, so identity is the whole test.
+
+        Pinned separately because the release path depends on it: the wheel
+        re-signer launches it with no ``--update``, during the parent import
+        where POST runs.
+        """
+        argv = ["/usr/bin/python3", "-mama_cryptography._build_sign"]
+        assert self._identity(monkeypatch, argv) is True
+
+    def test_env_flag_is_still_required(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        argv = ["/usr/bin/python3", "-m", "ama_cryptography._build_sign"]
+        assert self._identity(monkeypatch, argv, env=None) is False
+
+    def test_other_modules_are_not_the_signer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        argv = ["/usr/bin/python3", "-m", "pytest", "tests/"]
+        assert self._identity(monkeypatch, argv) is False
+
+    def test_a_script_mentioning_the_module_is_not_the_signer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scan must stop at the first positional: an argv token AFTER a
+        script path is that script's argument, not an interpreter option."""
+        argv = ["/usr/bin/python3", "attack.py", "-m", "ama_cryptography._build_sign"]
+        assert self._identity(monkeypatch, argv) is False
+
+    def test_dash_c_ends_the_scan(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        argv = ["/usr/bin/python3", "-c", "print(1)", "-m", "ama_cryptography._build_sign"]
+        assert self._identity(monkeypatch, argv) is False
+
+    def test_stdin_script_ends_the_scan(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        argv = ["/usr/bin/python3", "-", "-m", "ama_cryptography._build_sign"]
+        assert self._identity(monkeypatch, argv) is False
+
+    def test_empty_orig_argv_is_not_the_signer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._identity(monkeypatch, []) is False
+
+
+class TestSignerAnchorMismatchCarveOut:
+    """The documented pre-signing state must not hard-fail the signer.
+
+    Every wheel build starts from (freshly built anchored library + committed
+    dev-signed artefact): the anchor comparison on that artefact can only
+    mismatch, and the signer exists to replace it.  The first head where the
+    signer identity legitimately mapped the library exposed this — all five
+    cibuildwheel platforms failed the BUILD phase on "integrity trust anchor
+    mismatch" (previously the unreadable anchor made the branch unreachable
+    at build time, an accident of blindness, not a design).  These drive the
+    REAL _verify_signed_integrity against the repository's real artefact.
+    """
+
+    @staticmethod
+    def _artefact_digest_hex() -> str:
+        from ama_cryptography import _integrity_signature as sig
+
+        return str(sig.INTEGRITY_DIGEST_HEX)
+
+    def test_signer_with_coherent_foreign_artefact_fails_repairably(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_validate_trust_anchor",
+            lambda pubkey_hex: (None, "integrity trust anchor mismatch: synthetic"),
+        )
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: True)
+
+        ok, detail = _self_test._verify_signed_integrity(self._artefact_digest_hex())
+        assert ok is False, "the stage must FAIL for the signer too"
+        assert "integrity signer" in detail
+        assert _self_test.integrity_failure_was_stale_binding(), (
+            "a coherent-but-foreign artefact in the signer process is the "
+            "documented pre-signing state and must classify repairable"
+        )
+
+    def test_non_signer_anchor_mismatch_stays_a_hard_refusal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_validate_trust_anchor",
+            lambda pubkey_hex: (None, "integrity trust anchor mismatch: synthetic"),
+        )
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: False)
+
+        ok, detail = _self_test._verify_signed_integrity(self._artefact_digest_hex())
+        assert ok is False
+        assert "trust anchor mismatch" in detail
+        assert not _self_test.integrity_failure_was_stale_binding(), (
+            "for every non-signer process an anchor mismatch is the re-signed-"
+            "tree attack; the caller finalises it to tampering"
+        )
+
+    def test_signer_with_an_invalid_signature_stays_tampering(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The carve-out requires coherence: a signature that does not verify
+        under its own embedded key is a tampering event even for the signer —
+        re-signing over it would launder it."""
+        from ama_cryptography import _self_test, pqc_backends
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_validate_trust_anchor",
+            lambda pubkey_hex: (None, "integrity trust anchor mismatch: synthetic"),
+        )
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: True)
+        monkeypatch.setattr(pqc_backends, "native_ed25519_verify", lambda sig, msg, pk: False)
+
+        ok, detail = _self_test._verify_signed_integrity(self._artefact_digest_hex())
+        assert ok is False
+        assert "did NOT verify" in detail
+        assert not _self_test.integrity_failure_was_stale_binding()

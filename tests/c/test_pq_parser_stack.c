@@ -73,8 +73,13 @@ int main(void) {
 }
 #else
 
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* The stated ceiling for either parser-reachable validation entry point,
  * measured over the whole call chain. Chosen with headroom over the measured
@@ -149,36 +154,84 @@ static void *run_job(void *arg) {
             job->rc = AMA_SUCCESS;
             break;
     }
+
     return NULL;
 }
 
-/* Returns the high-water mark in bytes, or SIZE_MAX on a harness failure. */
+/* Two mappings of ONE shared object: the thread runs on `stack_map`, and the
+ * paint is read back through `read_map`.
+ *
+ * The obvious single-mapping arrangements are both unusable under a memory
+ * checker, for the same underlying reason — Valgrind models a thread stack and
+ * refuses reads it believes are out of bounds:
+ *
+ *   - scanning from the PARENT after pthread_join() reads a region Valgrind
+ *     marks unaddressable the moment the thread exits (32 invalid reads across
+ *     6 contexts), even though POSIX hands the region back to the caller;
+ *   - scanning from inside the THREAD reads far below its own stack pointer,
+ *     which Valgrind also refuses (32 invalid reads, 1 context).
+ *
+ * A second mapping of the same pages is neither: `read_map` is an ordinary
+ * shared mapping that no thread has ever run on, so the checker has nothing to
+ * object to, while the bytes it reads are the same bytes the thread wrote.  No
+ * suppression file and no client-request annotation — the reads become
+ * genuinely unremarkable rather than merely excused.
+ *
+ * shm_open + ftruncate + two mmaps is the POSIX spelling; the anonymous
+ * mapping the previous version used cannot be aliased.  A harness that cannot
+ * set this up returns SIZE_MAX, which main() reports as a SKIP.
+ *
+ * Returns the high-water mark in bytes, or SIZE_MAX on a harness failure. */
 static size_t measure(job_t *job) {
-    void *region;
+    void *stack_map = MAP_FAILED, *read_map = MAP_FAILED;
     pthread_attr_t attr;
     pthread_t tid;
     uint64_t *words;
+    const uint64_t *paint;
     size_t count, i;
+    char shm_name[64];
+    int fd;
 
-    region = mmap(NULL, REGION_BYTES, PROT_READ | PROT_WRITE,
-                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (region == MAP_FAILED) {
+    snprintf(shm_name, sizeof(shm_name), "/ama-pqstack-%ld-%u",
+             (long)getpid(), (unsigned)job->kind);
+    shm_unlink(shm_name); /* stale object from a crashed earlier run */
+    fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
         return (size_t)-1;
     }
-    words = (uint64_t *)region;
+    /* Unlink immediately: the two mappings keep the object alive, and nothing
+     * is left behind if this process dies. */
+    shm_unlink(shm_name);
+    if (ftruncate(fd, (off_t)REGION_BYTES) != 0) {
+        close(fd);
+        return (size_t)-1;
+    }
+    stack_map = mmap(NULL, REGION_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    read_map = mmap(NULL, REGION_BYTES, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (stack_map == MAP_FAILED || read_map == MAP_FAILED) {
+        if (stack_map != MAP_FAILED) munmap(stack_map, REGION_BYTES);
+        if (read_map != MAP_FAILED) munmap(read_map, REGION_BYTES);
+        return (size_t)-1;
+    }
+
+    words = (uint64_t *)stack_map;
+    paint = (const uint64_t *)read_map;
     count = REGION_BYTES / sizeof(uint64_t);
     for (i = 0; i < count; i++) {
         words[i] = PAINT;
     }
 
     if (pthread_attr_init(&attr) != 0) {
-        munmap(region, REGION_BYTES);
+        munmap(stack_map, REGION_BYTES);
+        munmap(read_map, REGION_BYTES);
         return (size_t)-1;
     }
-    if (pthread_attr_setstack(&attr, region, REGION_BYTES) != 0 ||
+    if (pthread_attr_setstack(&attr, stack_map, REGION_BYTES) != 0 ||
         pthread_create(&tid, &attr, run_job, job) != 0) {
         pthread_attr_destroy(&attr);
-        munmap(region, REGION_BYTES);
+        munmap(stack_map, REGION_BYTES);
+        munmap(read_map, REGION_BYTES);
         return (size_t)-1;
     }
     pthread_join(tid, NULL);
@@ -186,13 +239,14 @@ static size_t measure(job_t *job) {
 
     /* The stack grows down from the top of the region on every platform this
      * builds for, so the first disturbed word from the bottom is the deepest
-     * point reached. */
+     * point reached.  Read through the alias, never through the stack. */
     for (i = 0; i < count; i++) {
-        if (words[i] != PAINT) {
+        if (paint[i] != PAINT) {
             break;
         }
     }
-    munmap(region, REGION_BYTES);
+    munmap(stack_map, REGION_BYTES);
+    munmap(read_map, REGION_BYTES);
     if (i == count) {
         return 0;
     }
@@ -204,7 +258,98 @@ static int fail(const char *msg) {
     return 1;
 }
 
-int main(void) {
+/* ASan's fake stack relocates the frames this test exists to measure
+ * -------------------------------------------------------------------------
+ * With `detect_stack_use_after_return=1` — which
+ * `.github/workflows/static-analysis.yml` sets for the whole ASan ctest run —
+ * AddressSanitizer moves function frames off the real stack into a heap
+ * "fake stack" so it can detect a returned frame being used.  Frames larger
+ * than the runtime's largest fake-stack size class (clang: kMaxStackMallocSize,
+ * 1 << 16 = 64 KiB) stay on the real stack; everything smaller moves.
+ *
+ * That splits this test's subjects exactly in half.  Measured here under
+ * gcc 13 ASan, which does not relocate them: ML-DSA keygen 60,336-61,904 B,
+ * verify 57,264-58,832 B, the parser entry points at most 32,816 B — all
+ * under 64 KiB — and ML-DSA sign 152,048-153,616 B, over it.  Under clang's
+ * ASan in CI the first group reported 200-584 B while sign still reported
+ * 149,640 B: the small frames had been moved to the heap and the painted
+ * region never saw them, while the one frame too large to move measured
+ * intact.  The non-vacuity guards below caught it, which is what they are
+ * for, but the measurement was gone.
+ *
+ * So the test takes control of the one option that breaks its instrument and
+ * re-executes itself once with it off.  Every other ASan and UBSan check is
+ * untouched — this is not a sanitizer opt-out, it is the removal of a
+ * relocation that makes a stack measurement measure a different stack.  The
+ * use-after-return check itself is not lost to the suite: the other 62 tests
+ * in the ctest run keep it, and they cover the same library code.
+ *
+ * If the re-exec cannot happen the test does NOT skip: it runs, and the
+ * non-vacuity guards fail the run with the diagnosis, because a stack budget
+ * that cannot be measured must not report as met.
+ */
+/* gcc defines __SANITIZE_ADDRESS__; clang answers __has_feature.  The two
+ * cannot be tested in one expression: gcc has no __has_feature, and a
+ * `defined(__has_feature) && __has_feature(...)` conjunction still expands
+ * the second operand there, which is a preprocessor error rather than a
+ * false. */
+#if defined(__SANITIZE_ADDRESS__)
+#define AMA_PQ_STACK_UNDER_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define AMA_PQ_STACK_UNDER_ASAN 1
+#endif
+#endif
+
+#ifdef AMA_PQ_STACK_UNDER_ASAN
+/* Returns 0 if no re-exec was needed or it already happened, non-zero if the
+ * re-exec was attempted and failed. */
+static int asan_reexec_without_fake_stack(int argc, char **argv) {
+    const char *guard = getenv("AMA_PQ_STACK_ASAN_REEXEC");
+    const char *existing;
+    char opts[1024];
+    char self[PATH_MAX];
+    ssize_t n;
+    const char *image;
+
+    if (guard != NULL && guard[0] == '1') {
+        return 0; /* already re-executed once; do not loop */
+    }
+    if (argc < 1 || argv == NULL || argv[0] == NULL) {
+        return 1;
+    }
+
+    existing = getenv("ASAN_OPTIONS");
+    /* Appended, not replaced: detect_leaks and anything else the caller set
+     * must survive.  The last occurrence of a key is the one ASan honours. */
+    if (existing != NULL && existing[0] != '\0') {
+        if ((size_t)snprintf(opts, sizeof(opts),
+                             "%s:detect_stack_use_after_return=0",
+                             existing) >= sizeof(opts)) {
+            return 1;
+        }
+    } else {
+        snprintf(opts, sizeof(opts), "detect_stack_use_after_return=0");
+    }
+    if (setenv("ASAN_OPTIONS", opts, 1) != 0 ||
+        setenv("AMA_PQ_STACK_ASAN_REEXEC", "1", 1) != 0) {
+        return 1;
+    }
+
+    /* /proc/self/exe is exact where it exists; argv[0] is the portable
+     * fallback and is a path (not a PATH lookup) under ctest. */
+    image = argv[0];
+    n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (n > 0) {
+        self[n] = '\0';
+        image = self;
+    }
+    execv(image, argv);
+    return 1; /* execv only returns on failure */
+}
+#endif /* AMA_PQ_STACK_UNDER_ASAN */
+
+int main(int argc, char **argv) {
     static uint8_t dsa_pk[AMA_ML_DSA_MAX_PUBLIC_KEY_BYTES];
     static uint8_t dsa_sk[AMA_ML_DSA_MAX_SECRET_KEY_BYTES];
     static uint8_t kem_pk[AMA_ML_KEM_MAX_PUBLIC_KEY_BYTES];
@@ -220,6 +365,21 @@ int main(void) {
     job_t baseline_job;
     size_t baseline, worst = 0;
     unsigned int i;
+    int asan_fake_stack_may_be_active = 0;
+
+#ifdef AMA_PQ_STACK_UNDER_ASAN
+    /* Does not return when the re-exec succeeds. */
+    asan_fake_stack_may_be_active = asan_reexec_without_fake_stack(argc, argv);
+    if (asan_fake_stack_may_be_active) {
+        printf("NOTE: running under AddressSanitizer and could not re-exec "
+               "with detect_stack_use_after_return=0; if ASan's fake stack is "
+               "active the measurements below are of the wrong stack and the "
+               "non-vacuity guards will say so.\n");
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
 
     for (i = 0; i < 32; i++) {
         seed[i] = (uint8_t)(0x40 + i);
@@ -407,6 +567,12 @@ int main(void) {
         if (op_worst < 4096 || sign_worst < 4096) {
             printf("FAIL: an ML-DSA operation measured implausibly small — the "
                    "measurement is not measuring anything\n");
+            if (asan_fake_stack_may_be_active) {
+                printf("       AddressSanitizer's fake stack is the known "
+                       "cause: it relocates every frame under 64 KiB off the "
+                       "real stack, which is where this test looks. Re-run "
+                       "with ASAN_OPTIONS=detect_stack_use_after_return=0.\n");
+            }
             return 1;
         }
         /* Signing genuinely is the largest of the three; if it ever stops
@@ -430,6 +596,12 @@ int main(void) {
     if (worst < 4096) {
         printf("FAIL: measured %zu bytes, which is implausibly small — the "
                "measurement is not measuring anything\n", worst);
+        if (asan_fake_stack_may_be_active) {
+            printf("      AddressSanitizer's fake stack is the known cause: "
+                   "it relocates every frame under 64 KiB off the real stack, "
+                   "which is where this test looks. Re-run with "
+                   "ASAN_OPTIONS=detect_stack_use_after_return=0.\n");
+        }
         return 1;
     }
     printf("PASS\n");

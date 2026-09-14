@@ -39,6 +39,7 @@ spelling fails loudly (``AttributeError``) instead of passing silently.
 
 import logging
 import secrets
+import sys
 import threading
 from typing import Any, Callable, Dict, Optional
 
@@ -184,12 +185,55 @@ def check_crypto_permitted() -> None:
 
 _RNG_HEALTH_SIZE = 32  # Fixed size for continuous health comparison
 
+# Serializes the continuous RNG test's compare-and-store.
+#
+# The test is a read-compare-write on shared state, and without a lock it is a
+# check-then-act race: with a stuck DRBG returning V, two threads can both read
+# the same stale ``previous`` (!= V), both compare their identical V against
+# it, both pass, and both store V.  Two consecutive identical CSPRNG outputs —
+# the one fault §4.9.2 requires this control to detect — would be issued as key
+# material with the control silently satisfied, and it would happen precisely
+# when the module is busiest.  The interleaving also loses updates in the
+# benign case, so the values being compared are not reliably consecutive.
+_rng_lock = threading.Lock()
+
 # Mutable container for continuous RNG health state (FIPS 140-3 Section 4.9.2).
 # Using a dict avoids the ``global`` keyword, which silences CodeQL's
 # "unused global variable" false-positive while preserving identical semantics.
 # ``_self_test._run_rng_stage`` seeds ``previous`` at POST time through this
 # shared reference.
 _rng_state: Dict[str, Optional[bytes]] = {"previous": None}
+
+
+#: The SHA-256 kernel used for the continuous-RNG health digest.
+#:
+#: Injected by ``pqc_backends`` at ITS import time rather than imported from
+#: here, because the dependency runs the wrong way for an import: this module
+#: is the leaf that ``pqc_backends`` imports at module scope, so importing
+#: ``pqc_backends`` back out of it — even function-locally — is a genuine
+#: import cycle (CodeQL "Cyclic import").  The previous form deferred the
+#: import to call time to keep the cycle from biting at import; that worked,
+#: but it left a real cycle in the graph and an alert that could only be
+#: argued down rather than closed.
+#:
+#: Injection removes the edge entirely.  ``hashlib`` is deliberately NOT a
+#: fallback: on a libcrypto build its constructors are OpenSSL, and the health
+#: sample IS potential key material (for ``n == 32`` it is byte-for-byte the
+#: buffer handed to the caller), so falling back would hand every RNG draw's
+#: health window to an unauthorized vendor — the INVARIANT-1 violation this
+#: whole path exists to remove.  Absent a registered kernel we fail closed.
+_health_digest: Optional[Callable[[bytes], bytes]] = None
+
+
+def register_health_digest(digest: Callable[[bytes], bytes]) -> None:
+    """Install the SHA-256 kernel the continuous RNG test hashes with.
+
+    Called once by ``ama_cryptography.pqc_backends`` at its own import time,
+    after ``native_sha256`` is defined.  Idempotent and last-write-wins; the
+    only caller is that module.
+    """
+    global _health_digest
+    _health_digest = digest
 
 
 def secure_token_bytes(n: int = 32) -> bytes:
@@ -220,11 +264,63 @@ def secure_token_bytes(n: int = 32) -> bytes:
     check_crypto_permitted()
     draw_size = max(n, _RNG_HEALTH_SIZE)
     buf = secrets.token_bytes(draw_size)
-    health_sample = buf[:_RNG_HEALTH_SIZE]
-    if _rng_state["previous"] is not None and health_sample == _rng_state["previous"]:
-        _set_error("Continuous RNG test failed: consecutive identical outputs")
-        raise CryptoModuleError("Module in error state: Continuous RNG test failed")
-    _rng_state["previous"] = health_sample
+    # Compare a DIGEST of the sample rather than the sample itself.  The test
+    # needs only equality, and for the common n == 32 draw ``buf[:32]`` is the
+    # same object CPython hands back to the caller — so retaining it would pin
+    # live key material (an Ed25519 seed, say) in module state until the next
+    # draw, visible to a heap dump or the GC for that whole window.
+    # The digest is computed by this module's own SHA-256 kernel, injected by
+    # pqc_backends at its import time (see ``register_health_digest``).  It is
+    # never hashlib: those constructors are OpenSSL on a libcrypto build, and
+    # the health sample IS potential key material (INVARIANT-1).
+    #
+    # Ordering: `check_crypto_permitted()` above runs BEFORE the kernel is
+    # resolved, which is what keeps a non-POST thread calling in mid-POST from
+    # reaching this code at all.  An earlier revision of this comment also
+    # claimed "OPERATIONAL without the native backend cannot occur
+    # (INVARIANT-7 fails the import)"; that is false — the documented
+    # docs-build override in `_self_test._run_backend_stage` returns success
+    # with no native library, and in that state this function raises
+    # `NativeBackendUnavailableError` from the kernel itself.
+    digest_fn = _health_digest
+    if digest_fn is None:
+        # Recovery path, NOT a fallback to another vendor.  Injection alone
+        # made this state unrecoverable: `_health_digest` is set once while
+        # `pqc_backends` executes its module body, so anything that re-runs
+        # THIS module's body while `pqc_backends` stays cached in sys.modules
+        # (importlib.reload, IPython %autoreload, a test popping the module,
+        # a second module identity on a vendored path) left the kernel None
+        # forever — and `reset_module()` cannot repair it, because its POST
+        # re-import is a no-op against the cached module.  The previous
+        # function-local `from ... import native_sha256` re-resolved on every
+        # call and so healed itself; losing that was a regression.
+        #
+        # Resolving through sys.modules restores the self-healing without
+        # restoring the import cycle: this is a dict lookup, not an import
+        # statement, so it adds no edge to the import graph.
+        module = sys.modules.get("ama_cryptography.pqc_backends")
+        digest_fn = getattr(module, "native_sha256", None) if module is not None else None
+    if digest_fn is None:
+        # Genuinely unavailable.  Refuse — hashlib is not an option here, its
+        # constructors are OpenSSL on a libcrypto build and the health sample
+        # IS potential key material (INVARIANT-1).  Deliberately NOT
+        # `_set_error`: this file reserves the ERROR state for a test that RAN
+        # and FAILED, and a missing kernel means the continuous test never
+        # ran.  Latching a permanent, process-wide, unrecoverable error for an
+        # initialisation-ordering fault would inhibit even verify-only paths
+        # that draw no randomness.
+        raise CryptoModuleError(
+            "Continuous RNG test unavailable: no health-digest kernel is registered "
+            "and ama_cryptography.pqc_backends.native_sha256 could not be resolved. "
+            "No random bytes were issued."
+        )
+    health_digest = digest_fn(buf[:_RNG_HEALTH_SIZE])
+    # Compare-and-store atomically: see the _rng_lock rationale above.
+    with _rng_lock:
+        if _rng_state["previous"] is not None and health_digest == _rng_state["previous"]:
+            _set_error("Continuous RNG test failed: consecutive identical outputs")
+            raise CryptoModuleError("Module in error state: Continuous RNG test failed")
+        _rng_state["previous"] = health_digest
     return buf[:n]
 
 
