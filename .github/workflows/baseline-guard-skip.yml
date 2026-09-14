@@ -1,0 +1,51 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# NO-OP TWIN of `.github/workflows/baseline-guard.yml` — GitHub's documented
+# pattern for a path-filtered workflow whose context must be a REQUIRED status
+# check.
+#
+# GitHub never creates a check run for a workflow that path filtering skipped.
+# A required context from such a workflow therefore leaves every PR that does
+# not touch those paths stuck on "Expected — waiting for status", so the
+# context cannot be required at all.  baseline-guard.yml's own header said as
+# much and told the operator NOT to require it — which meant the only thing
+# stopping an unjustified benchmark-baseline cut (docs/BENCHMARK_HISTORY.md)
+# could go red without blocking a merge.
+#
+# This file has the SAME workflow `name:` and the SAME job `name:` as the
+# guard it twins, and the COMPLEMENTARY `paths-ignore:` list, so exactly one
+# of the two produces the `Enforce baseline JSON justification` context on
+# any given pull request: the real one when the paths match, this one —
+# trivially green — when they do not.  tools/check_gate_coverage.py holds the
+# two lists complementary.
+name: Baseline Change Guard
+
+on:
+  pull_request:
+    paths-ignore:
+      - "benchmarks/baseline.json"
+      - "benchmarks/arm-baseline.json"
+      - "benchmarks/check_baseline_justification.py"
+      - ".github/workflows/baseline-guard.yml"
+      - ".github/workflows/baseline-guard-skip.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: baseline-guard-skip-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline-justification:
+    name: Enforce baseline JSON justification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Nothing to verify for this change
+        run: |
+          echo "This pull request touches no benchmark baseline JSON and not the guard itself."
+          echo "The real check lives in .github/workflows/baseline-guard.yml; this twin exists so the"
+          echo "'Enforce baseline JSON justification' context is reported on every pull request and"
+          echo "can therefore be a required status check."

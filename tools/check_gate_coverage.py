@@ -87,15 +87,21 @@ GATE_SUFFIX = "-gate"
 
 WORKFLOW_DIR = Path(".github/workflows")
 
-#: Non-vacuity floors (H7).  Current tree: 14 workflow files, 72 jobs.  These are
-#: pinned so deleting workflows or jobs cannot silently shrink what the
-#: aggregating-gate audit inspects down to nothing -- the two ways this
-#: meta-gate was proven vacuous (an empty .github/workflows left `examined` 0 and
-#: the run PASS; a planted always-failing lane bound into env: passed too).
-#: Matching the MIN_* floors the rest of the gates carry: a real reduction must
-#: lower these under review rather than pass silently.
-MIN_WORKFLOWS = 14
-MIN_JOBS_INSPECTED = 40
+#: Non-vacuity floors (H7).  These are pinned so deleting workflows or jobs
+#: cannot silently shrink what the aggregating-gate audit inspects down to
+#: nothing -- the two ways this meta-gate was proven vacuous (an empty
+#: .github/workflows left `examined` 0 and the run PASS; a planted
+#: always-failing lane bound into env: passed too).  Matching the MIN_* floors
+#: the rest of the gates carry: a real reduction must lower these under review
+#: rather than pass silently.
+#:
+#: Both floors equal the live counts, and tests/test_gate_coverage.py holds
+#: them there.  They used to trail the tree (14 files and 40 jobs against 18
+#: and 83), so four workflows could disappear without tripping anything --
+#: the drift the floor exists to catch.  Adding or removing a workflow or a job
+#: now means changing these two numbers in the same change, under review.
+MIN_WORKFLOWS = 20
+MIN_JOBS_INSPECTED = 85
 
 
 def _load(path: Path) -> dict[Any, Any]:
@@ -404,12 +410,21 @@ def check_path_filtered_gates(parsed: dict[str, dict[Any, Any]]) -> list[str]:
     failures: list[str] = []
     for name, workflow in sorted(parsed.items()):
         jobs = workflow.get("jobs") or {}
-        gate_ids = {job_id for job_id in jobs if job_id.endswith(GATE_SUFFIX)}
-        if not gate_ids:
-            continue
         pull_request = _triggers(workflow).get("pull_request") or {}
         if not isinstance(pull_request, dict) or not pull_request.get("paths"):
             continue  # unfiltered: the context is reported on every PR already
+        # A workflow with an aggregating gate reports the gate's context; one
+        # without a gate reports each job's context (check_parsed already
+        # requires such a workflow to be single-job on pull_request).  Either
+        # way the reported context has to arrive on every pull request, so the
+        # twin must carry it.  This used to consider only gate workflows,
+        # which left baseline-guard.yml and integrity-anchor-check.yml -- one
+        # job each, path-filtered -- with no twin and an unrequirable context
+        # while their headers said so and told the operator not to require them.
+        gate_ids = {job_id for job_id in jobs if job_id.endswith(GATE_SUFFIX)}
+        context_ids = gate_ids or set(jobs)
+        if not context_ids:
+            continue
         paths = set(pull_request["paths"])
         twin = None
         for other_name, other in parsed.items():
@@ -421,11 +436,11 @@ def check_path_filtered_gates(parsed: dict[str, dict[Any, Any]]) -> list[str]:
                 break
         if twin is None:
             failures.append(
-                f"{name}: gate job(s) {sorted(gate_ids)} run under a path-filtered "
+                f"{name}: job(s) {sorted(context_ids)} run under a path-filtered "
                 f"`pull_request` trigger, so GitHub reports no check for a pull "
-                f"request that touches none of those paths and the gate context "
+                f"request that touches none of those paths and the context "
                 f"cannot be a required status check. Add a no-op twin workflow "
-                f"with the same `name:`, the same gate job `name:`, and the "
+                f"with the same `name:`, the same job `name:`, and the "
                 f"complementary `paths-ignore:` list."
             )
             continue
@@ -437,16 +452,16 @@ def check_path_filtered_gates(parsed: dict[str, dict[Any, Any]]) -> list[str]:
                 f"{name} watches — both workflows would run on a pull request "
                 f"touching them."
             )
-        gate_names = {(jobs[j] or {}).get("name") or j for j in gate_ids}
+        gate_names = {(jobs[j] or {}).get("name") or j for j in context_ids}
         twin_names = {
             (job or {}).get("name") or job_id for job_id, job in (twin_wf.get("jobs") or {}).items()
         }
-        if not gate_names & twin_names:
+        unreported = gate_names - twin_names
+        if unreported:
             failures.append(
-                f"{twin_name}: none of its job names {sorted(twin_names)} matches "
-                f"{name}'s gate context(s) {sorted(gate_names)}, so the twin "
-                f"reports a DIFFERENT context and the required one still never "
-                f"arrives."
+                f"{twin_name}: its job names {sorted(twin_names)} do not include "
+                f"{name}'s context(s) {sorted(unreported)}, so the twin reports a "
+                f"DIFFERENT context and the required one still never arrives."
             )
     return failures
 

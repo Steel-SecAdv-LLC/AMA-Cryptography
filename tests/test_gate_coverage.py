@@ -41,7 +41,13 @@ from typing import Any
 
 import yaml
 
-from tools.check_gate_coverage import audit, check_parsed
+from tools.check_gate_coverage import (
+    MIN_JOBS_INSPECTED,
+    MIN_WORKFLOWS,
+    audit,
+    check_parsed,
+    check_path_filtered_gates,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -397,6 +403,121 @@ def test_env_bound_dependency_never_read_in_run_is_reported() -> None:
     assert len(failures) == 1, failures
     assert "planted" in failures[0] and "never evaluates" in failures[0]
     assert "watched," not in failures[0], "the read dependency was named as unevaluated"
+
+
+# --------------------------------------------------------------------------
+# Path-filtered workflows need a no-op twin, gate or no gate
+# --------------------------------------------------------------------------
+
+
+def _parsed(**sources: str) -> dict[str, Any]:
+    return {name: yaml.safe_load(textwrap.dedent(src)) for name, src in sources.items()}
+
+
+_GUARD = """
+    name: Baseline Change Guard
+    on:
+      pull_request:
+        paths: ['benchmarks/baseline.json', 'benchmarks/check_baseline_justification.py']
+    jobs:
+      baseline-justification:
+        name: Enforce baseline JSON justification
+        runs-on: ubuntu-latest
+    """
+
+
+def test_a_single_job_path_filtered_guard_without_a_twin_is_reported() -> None:
+    """baseline-guard.yml and integrity-anchor-check.yml were in exactly this
+    state: one job, path-filtered, no twin, so their context could never be a
+    required status check and a red guard did not block a merge.  The rule
+    used to inspect gate workflows only, so it never saw them."""
+    failures = check_path_filtered_gates(_parsed(**{"baseline-guard.yml": _GUARD}))
+    assert len(failures) == 1
+    assert "baseline-guard.yml" in failures[0]
+    assert "baseline-justification" in failures[0]
+    assert "no-op twin" in failures[0]
+
+
+def test_a_twin_with_the_same_context_and_complementary_paths_satisfies_it() -> None:
+    twin = """
+        name: Baseline Change Guard
+        on:
+          pull_request:
+            paths-ignore: ['benchmarks/baseline.json', 'benchmarks/check_baseline_justification.py']
+        jobs:
+          baseline-justification:
+            name: Enforce baseline JSON justification
+            runs-on: ubuntu-latest
+        """
+    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
+    assert check_path_filtered_gates(parsed) == []
+
+
+def test_a_twin_reporting_a_different_context_is_reported() -> None:
+    twin = """
+        name: Baseline Change Guard
+        on:
+          pull_request:
+            paths-ignore: ['benchmarks/baseline.json', 'benchmarks/check_baseline_justification.py']
+        jobs:
+          baseline-justification:
+            name: Baseline guard (skipped)
+            runs-on: ubuntu-latest
+        """
+    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
+    failures = check_path_filtered_gates(parsed)
+    assert len(failures) == 1
+    assert "Enforce baseline JSON justification" in failures[0]
+    assert "DIFFERENT context" in failures[0]
+
+
+def test_a_twin_that_ignores_fewer_paths_than_the_guard_watches_is_reported() -> None:
+    twin = """
+        name: Baseline Change Guard
+        on:
+          pull_request:
+            paths-ignore: ['benchmarks/baseline.json']
+        jobs:
+          baseline-justification:
+            name: Enforce baseline JSON justification
+            runs-on: ubuntu-latest
+        """
+    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
+    failures = check_path_filtered_gates(parsed)
+    assert len(failures) == 1
+    assert "check_baseline_justification.py" in failures[0]
+
+
+def test_the_two_guards_have_twins_in_the_repository() -> None:
+    """Regression pin for the two workflows the rule was widened for."""
+    workflows = REPO_ROOT / ".github" / "workflows"
+    for guard in ("baseline-guard", "integrity-anchor-check"):
+        real = yaml.safe_load((workflows / f"{guard}.yml").read_text(encoding="utf-8"))
+        twin = yaml.safe_load((workflows / f"{guard}-skip.yml").read_text(encoding="utf-8"))
+        assert real["name"] == twin["name"]
+        real_names = {job.get("name") for job in real["jobs"].values()}
+        twin_names = {job.get("name") for job in twin["jobs"].values()}
+        assert real_names <= twin_names, (guard, real_names, twin_names)
+
+
+def test_the_non_vacuity_floors_equal_the_live_counts() -> None:
+    """The floors trailed the tree (14 files / 40 jobs against 18 / 83), so
+    four workflows could vanish without tripping the meta-gate.  They are held
+    equal to the live counts: adding or removing a workflow or a job means
+    changing MIN_WORKFLOWS / MIN_JOBS_INSPECTED in the same change."""
+    workflows = REPO_ROOT / ".github" / "workflows"
+    paths = sorted(list(workflows.glob("*.yml")) + list(workflows.glob("*.yaml")))
+    jobs = sum(
+        len(yaml.safe_load(path.read_text(encoding="utf-8")).get("jobs") or {}) for path in paths
+    )
+    assert MIN_WORKFLOWS == len(paths), (
+        f"MIN_WORKFLOWS is {MIN_WORKFLOWS} but the tree has {len(paths)} workflow files; "
+        f"set it to {len(paths)} in tools/check_gate_coverage.py"
+    )
+    assert MIN_JOBS_INSPECTED == jobs, (
+        f"MIN_JOBS_INSPECTED is {MIN_JOBS_INSPECTED} but the tree defines {jobs} jobs; "
+        f"set it to {jobs} in tools/check_gate_coverage.py"
+    )
 
 
 def test_vacuity_floor_fails_on_an_empty_workflow_dir(tmp_path: Path) -> None:
