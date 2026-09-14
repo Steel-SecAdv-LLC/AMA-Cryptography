@@ -263,7 +263,7 @@ typedef struct {
     ama_keccak_f1600_x4_fn    keccak_f1600_x4;     /**< Always non-NULL after init; 4-way batched permutation */
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
-    ama_kyber_pointwise_fn    kyber_pointwise;      /**< Always NULL today: no tier ships a vectorised basemul (the compiled AVX2/NEON/SVE2 "pointwise" kernels are scalar and slower than the auto-vectorised inline basemul, so the dispatcher does not install them — see ama_dispatch.c).  Callers MUST NULL-check. */
+    ama_kyber_pointwise_fn    kyber_pointwise;      /**< Always NULL today: no tier ships a basemul kernel at all (the former AVX2/NEON/SVE2 "pointwise" kernels were scalar code, slower than the auto-vectorised inline basemul, never installed, and have been deleted — see ama_dispatch.c).  Callers MUST NULL-check. */
     ama_kyber_cbd2_fn         kyber_cbd2;           /**< Non-NULL when AVX2 detected (AVX2-only today; NEON/SVE2 wiring TBD); callers MUST NULL-check */
     ama_dilithium_ntt_fn      dilithium_ntt;        /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_dilithium_invntt_fn   dilithium_invntt;     /**< Non-NULL when SIMD detected; callers MUST NULL-check */
@@ -419,17 +419,17 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  *   "sha3-avx2x4"          — keccak_f1600_x4 -> AVX2 4-way
  *   "aes-gcm-aesni"        — aes_gcm_encrypt / decrypt -> x86 AES-NI + PCLMULQDQ
  *   "aes-gcm-vaes"         — aes_gcm_encrypt / decrypt -> x86 VAES + VPCLMULQDQ (YMM)
- *   "kyber-ntt-avx2"       — kyber_ntt / invntt / pointwise / cbd2 -> AVX2
+ *   "kyber-ntt-avx2"       — kyber_ntt / invntt / cbd2 -> AVX2 (kyber_pointwise stays NULL)
  *   "dilithium-ntt-avx2"   — dilithium_ntt / invntt / pointwise / rej_uniform -> AVX2
  *   "chacha20-avx2x8"      — chacha20_block_x8 -> AVX2 8-way
  *   "argon2-g-avx2"        — argon2_g -> AVX2 BlaMka
  *   "aes-gcm-neon"         — aes_gcm_encrypt / decrypt -> ARMv8 AES + PMULL
  *   "chacha20-neon"        — chacha20_block_x8 -> NEON
  *   "sha3-neon"            — keccak_f1600 -> NEON
- *   "kyber-ntt-neon"       — kyber_ntt / invntt / pointwise -> NEON
+ *   "kyber-ntt-neon"       — kyber_ntt / invntt -> NEON (kyber_pointwise stays NULL)
  *   "dilithium-ntt-neon"   — dilithium_ntt / invntt / pointwise -> NEON
  *   "argon2-g-neon"        — argon2_g -> NEON BlaMka
- *   "kyber-sve2"           — kyber_ntt / invntt / pointwise / poly_{add,sub,reduce} -> SVE2
+ *   "kyber-sve2"           — kyber_ntt / invntt / poly_{add,sub,reduce} -> SVE2 (kyber_pointwise stays NULL)
  *   "sha3-sve2"            — keccak_f1600 -> SVE2
  *   "dilithium-ntt-sve2"   — dilithium_ntt / invntt / pointwise -> SVE2
  *   "x25519-avx2"          — x25519_x4 -> AVX2 4-way ladder
