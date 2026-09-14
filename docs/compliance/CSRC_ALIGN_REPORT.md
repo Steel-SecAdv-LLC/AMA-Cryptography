@@ -271,9 +271,17 @@ Post-fix benchmark results (2026-03-21, native C backend, 4-core Linux):
 - SLH-DSA Sign: ~1.4 ops/sec (~741 ms) — consistent with SHA2-256f fast variant
 - SLH-DSA Verify: ~53 ops/sec (~19 ms)
 
-**Performance test status:** All `tests/test_performance.py` thresholds now pass
-with the Cython HMAC binding (262K > 100K threshold) and Ed25519 expanded-key
-optimization.
+**Performance test status:** The wall-clock ops/sec thresholds that used to
+live in a dedicated performance test module were retired in the
+twenty-seventh maintenance pass: every one of them was skipped in CI by design
+(shared runners do not keep a timing promise) and the fixed per-host numbers
+said nothing a run could act on.  Regression detection is the
+instruction-count ledger under `benchmarks/` (`baseline.json`,
+`arm-baseline.json`) and the guards that hold it to a calibration commit
+(`benchmarks/check_baseline_justification.py`,
+`tests/test_benchmark_baseline_infra.py`), which run on every CI lane.  The
+object-retention bound that module also carried lives on in
+`tests/test_memory_security.py`.  The measured numbers above stand as measured.
 
 ---
 

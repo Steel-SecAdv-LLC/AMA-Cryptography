@@ -839,7 +839,7 @@ docker run ama-cryptography:latest
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
 | C Unit Tests | Native library validation | All C functions | 80 `test_*.c` registered via ctest in `tests/c/` (+ 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
-| Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
+| Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
 | Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
 | Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
