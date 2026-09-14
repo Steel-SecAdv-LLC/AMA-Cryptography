@@ -213,24 +213,21 @@ def _enforce_invariant7() -> None:
         )
 
 
-# Import RFC 3161 timestamping
-try:
-    from ama_cryptography.rfc3161_timestamp import (
-        RFC3161_AVAILABLE,
-        TimestampError,
-        TimestampUnavailableError,
-        get_timestamp,
-    )
-except ImportError:
-    # Not "the optional dependency is missing" any more: RFC 3161 is a
-    # first-party module in this same package, implemented on AMA's own DER
-    # codec, and the third-party `rfc3161ng` client was removed under
-    # INVARIANT-1. Reaching this branch means the in-tree module failed to
-    # import, i.e. a broken installation — not a supported configuration.
-    RFC3161_AVAILABLE = False
-    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]  # in-tree RFC 3161 module failed to import, Exception fallback (CA-001)
-    TimestampError = Exception  # type: ignore[misc,assignment]  # in-tree RFC 3161 module failed to import, Exception fallback (CA-002)
-    get_timestamp = None  # type: ignore[assignment]  # in-tree RFC 3161 module failed to import, None stub (CA-003)
+# RFC 3161 timestamping is a first-party module of this package, implemented
+# on AMA's own DER codec (the third-party `rfc3161ng` client was removed under
+# INVARIANT-1).  This import used to sit in a try/except ImportError whose
+# fallback bound TimestampError and TimestampUnavailableError to `Exception`
+# and get_timestamp to None: a broken installation then kept importing, and
+# `except TimestampError` below became a bare `except Exception` that swallowed
+# CryptoModuleError and everything else on the timestamp path.  A first-party
+# module that fails to import is a broken installation, and the honest
+# behaviour is the ImportError.
+from ama_cryptography.rfc3161_timestamp import (
+    RFC3161_AVAILABLE,
+    TimestampError,
+    TimestampUnavailableError,
+    get_timestamp,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
