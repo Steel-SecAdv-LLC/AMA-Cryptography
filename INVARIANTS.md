@@ -2587,5 +2587,124 @@ gate could not see, are pinned by
 
 ---
 
+## INVARIANT-44 — A Fetched Conformance Corpus Is Pinned by Its Bytes, Not by a Name
+
+`nist_vectors/fetch_vectors.py` downloads ten ACVP-Server projections and
+`nist_vectors/run_vectors.py` validates the library against them; the
+attestation in `docs/compliance/` publishes the result. The download was
+pinned to a release tag and to nothing else. A tag names a snapshot; it does
+not fix its bytes — it is a movable ref served through a CDN. A projection
+already on disk was skipped and used as found, so an edited or truncated
+local copy validated without a word. And the fetcher re-serialised what it
+received, so nothing on disk could ever have been compared with upstream.
+The attestation could say `v1.1.0.42` while the harness ran against bytes
+nobody had identified.
+
+**The rule.** Every conformance vector that is fetched rather than vendored
+is pinned by SHA-256 and length in a committed manifest
+(`docs/compliance/acvp_vector_digests.json`), and every consumer verifies
+against it independently: the fetcher before it writes (and it refuses a
+local file that does not match rather than trusting it), the harness before
+it reads, and the workflow between the two. The bytes written are the bytes
+published. The pin is advanced only by a deliberate command
+(`fetch_vectors.py --refresh-manifest`) that refuses to run under GitHub
+Actions, in the same commit as the attestation it underwrites.
+
+**Enforcement.** `tools/acvp_vector_pin.py` is the verifier and the
+`--check` CLI; `.github/workflows/acvp_validation.yml` runs it between the
+fetch and the run and cross-checks the manifest's ref against the
+attestation's. `tests/test_acvp_vector_digests_gate.py` pins anchor digests
+in its own source (so a regenerated manifest alone cannot make a corrupted
+corpus verify), holds the manifest to the two independent records this tree
+already carries for three of the ten files (`tests/kat/PROVENANCE.json` and
+the ML-KEM derivative's source block), and drives every refusal with a
+negative control.
+
+**Measured cost.** One streamed SHA-256 per projection per run; the largest
+is 30 MB.
+
+---
+
+## INVARIANT-45 — Every SIMD Kernel Has a Pin, and the Published Vectors Run Under It
+
+`AMA_DISPATCH_ONLY=<slot>` leaves every dispatch kernel at its scalar
+fallback except one. `tests/c/test_dispatch_only_env.c` proved that the pin
+resolves; it executes no cryptography. No CTest case ran a published-vector
+KAT with a SIMD kernel pinned, so every AVX2, AVX-512, NEON and SVE2 kernel
+was checked against the standards' answers only when a host's default wiring
+happened to select it — and the auto-tune could, and on some hosts did,
+revert a kernel before the KAT ran. Four wired kernels had no pin name at
+all, and three of those (the AVX2 4-way Keccak that expands every ML-KEM and
+ML-DSA matrix, and both x86 AES-GCM hardware kernels) were switched *off* by
+every other pin. Both MemorySanitizer lanes built with `AMA_ENABLE_SIMD=OFF`,
+so no SIMD kernel had ever run under the one sanitizer that sees
+uninitialised reads.
+
+**The rule.** Every kernel the dispatch table can install has an
+`AMA_DISPATCH_ONLY` name, and the inventory is one list — in
+`src/c/dispatch/ama_dispatch.c`, `tests/c/test_dispatch_only_env.c`,
+`include/ama_dispatch.h`, `tests/c/CMakeLists.txt` and `dudect.yml`. For
+every slot, the published-vector KATs whose primitive routes through it run
+with the slot pinned and the auto-tune off, on every ctest lane including
+MemorySanitizer. A KAT cannot pass under a pin the host did not honour:
+`tests/c/kat_slot_guard.h`, the first statement of every swept executable's
+`main()`, exits 77 (Skipped) when the pin was refused — or 1 when the build's
+CI runner class mandates the slot, so a wiring regression is red rather than
+a skip. Which slots are mandated follows `dudect.yml`: AVX2 and
+AES-NI+PCLMULQDQ on every hosted x86-64 runner, NEON and the Crypto
+Extensions on AArch64; AVX-512, VAES and SVE2 may skip.
+
+**Enforcement.** The sweep is registered in `tests/c/CMakeLists.txt` with
+two negative-control cells that pass only on the guard's own verdict line
+(`PASS_REGULAR_EXPRESSION`), so deleting the guard fails them.
+`tests/test_kat_slot_sweep_gate.py` holds the five inventories to one list,
+requires a published-vector cell per slot, requires the guard to be the
+first statement of every swept `main()`, and requires both MSan lanes to
+build the SIMD kernels.
+
+**Measured cost.** The sweep adds 37 cells to ctest; on the x86-64 Release
+build they run in under two seconds in total, and the full suite under MSan
+with SIMD on takes 85 s against the lane's 25-minute budget.
+
+---
+
+## INVARIANT-46 — Fuzzing Must Be Able to Deepen
+
+Every run of the libFuzzer lane started from `fuzz/seed_corpus` and threw
+away what it found after 60 seconds. No run stood on the previous one, so
+the deep branches — the ML-DSA verify path at 5,262 bytes, SLH-DSA verify at
+49,921 — were reachable in principle and reached by nobody; libFuzzer grows
+its mutation length with executions, and measured 20-second runs of the
+slow targets never mutated at their derived ceiling. The `oss-fuzz/`
+submission files had never been built by anything.
+
+**The rule.** The corpus persists across runs (restored before fuzzing,
+merged to its coverage-adding units after, saved under a run-unique key so
+every run starts from the newest corpus and leaves a newer one), a scheduled
+campaign runs an order of magnitude longer than a pull-request run and saves
+what it finds on the default branch where every branch can restore it, and
+the OSS-Fuzz build integration is executed by OSS-Fuzz's own driver — build
+inside `base-builder` with the checkout mounted, then `check_build` — on
+every push, through the same script a developer runs. Continuous fuzzing on
+OSS-Fuzz's infrastructure runs nightly through ClusterFuzzLite from the same
+build integration, under three sanitizers, with the corpus kept between
+runs.
+
+**Enforcement.** `tests/test_fuzz_corpus_persistence_gate.py` pins the
+restore → fuzz → merge → save order and keys in both matrix jobs, the merge
+running after a crash, the growth numbers in the step summary, the nightly
+schedule and its budgets, the OSS-Fuzz job in the fuzzing gate, the script
+mounting the checkout, and the ClusterFuzzLite modes and pins.
+`tools/check_fuzz_target_registration.py` continues to hold
+`oss-fuzz/build.sh` to the harness set, and `.clusterfuzzlite/build.sh` execs
+it so there is one build integration.
+
+**Measured cost.** One cache restore and save per matrix cell (corpora are
+tens of KB to a few MB); a merge of a few seconds; the OSS-Fuzz job pulls
+`base-builder` and `base-runner` and builds fifteen fuzzers, roughly ten
+minutes in parallel with the other lanes.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-08-17_
+_Last updated: 2026-09-14_

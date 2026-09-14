@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-08-24 |
+| Last Updated | 2026-09-14 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -31,6 +31,190 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > at the release head and found 139 whose figure no longer holds; its ledger
 > was removed from this branch in the eighteenth pass below and remains in the
 > branch's commit history.
+
+### Maintenance pass, twenty-sixth (2026-09-14) — the three open audit findings closed: bytes pinned, kernels swept, fuzzing that accumulates
+
+PR #394's review campaign carried three findings that no pass had closed:
+the ACVP corpus was pinned by a git tag and nothing else; no test ran a
+published-vector KAT with a SIMD kernel pinned, and no SIMD kernel had ever
+run under MemorySanitizer; and the fuzzing lane could not deepen, because
+nothing persisted a corpus and the OSS-Fuzz integration had never been
+executed. This pass closes all three, each with a gate that was shown to
+fail on the thing it claims to catch. INVARIANT-44, INVARIANT-45 and
+INVARIANT-46 record the rules.
+
+#### The ACVP projections are pinned by their bytes (INVARIANT-44)
+
+`nist_vectors/fetch_vectors.py` downloaded ten `internalProjection.json`
+files from `usnistgov/ACVP-Server` at `v1.1.0.42` and accepted whatever
+arrived. Three things were wrong with that, none of them hypothetical:
+
+- A tag is a movable ref, and the fetch goes through a CDN. The attestation
+  named a snapshot; the harness ran against bytes nobody had identified.
+- A file already on disk was `[SKIP]`ped and used as found. An edited,
+  truncated or wrong-ref local copy validated without a word.
+- The fetcher wrote `json.dumps(json.loads(data), indent=2)`, so what landed
+  on disk was a re-serialisation that could never have been compared with
+  upstream — not by a gate, not by hand.
+
+`docs/compliance/acvp_vector_digests.json` now records the SHA-256 and
+length of every projection at the attested ref, beside the attestation whose
+numbers depend on them. `tools/acvp_vector_pin.py` is the verifier: the
+fetcher checks every download before writing it (and writes the bytes as
+published), verifies a pre-existing file instead of trusting it and replaces
+one that fails only with bytes that verify; `run_vectors.py` verifies each
+projection again before reading it and refuses a ref the pin was not taken
+at; `acvp_validation.yml` runs `--check` between the fetch and the run and
+cross-checks the manifest's `acvp_ref` against the attestation's, recording
+it in `validation_summary.json`. Advancing the pin is
+`fetch_vectors.py --refresh-manifest`, which refuses to run under GitHub
+Actions.
+
+The digests were established by fetching, and corroborated rather than
+trusted: three of the ten — ML-KEM keyGen, ML-KEM encapDecap and SLH-DSA
+sigVer — already had independent records in this tree (the source block of
+`tests/kat/fips203/acvp/ml_kem_acvp_v1.1.0.42.json` and the
+`tests/kat/PROVENANCE.json` entry for the vendored SLH-DSA projection, both
+verified against upstream by the twenty-first pass's provenance lane), and
+all three match. `tests/test_acvp_vector_digests_gate.py` holds the three
+records to agreement, pins four anchor digests in its own source so a
+regenerated manifest cannot make a corrupted corpus verify, and drives every
+refusal with a negative control: a download with the wrong digest is not
+written, a local file that does not match is not trusted, a foreign
+`ACVP_REF` fails before any fetch, the harness refuses a tampered
+projection, and the refresh is refused under CI. Run end to end here: the
+fetcher reports all ten present and verified, an edited local copy is
+re-fetched from upstream and replaced by the verified bytes, the harness
+passes 1,215/1,215, and the workflow's summary step, executed locally
+against that `results.json`, records `digest_manifest_ref` and goes red
+when the run's ref differs from the manifest's.
+
+The verifier lives under `tools/`, not `nist_vectors/`, because
+INVARIANT-36 keeps every digest implementation out of the vector generators'
+directory; the gate fired on the first placement and the module moved.
+
+#### Every SIMD kernel is pinned, and the published vectors run under each pin (INVARIANT-45)
+
+`test_dispatch_only_<slot>` proved that `AMA_DISPATCH_ONLY=<slot>` resolves.
+It executes no cryptography. Until this pass no CTest case ran a
+published-vector KAT with a SIMD kernel pinned: the kernels were checked
+against FIPS 202/203/204, SP 800-38D and the RFCs only when a host's default
+wiring selected them — and on this host the auto-tune reverted the AVX2
+4-way Keccak on three of three starts, so the default-dispatch KATs ran the
+generic kernel. An inventory of every ISA-specific kernel against every C
+test found four wired kernels with no pin name at all, three of which every
+other pin switched *off*: `apply_dispatch_only()` reset `keccak_f1600_x4` to
+generic and zeroed both AES-GCM slots before honouring any pin, so under
+every sweep cell the AVX2 4-way Keccak and the AES-NI and VAES AES-GCM
+kernels ran their scalar fallbacks, and in C the SP 800-38D vectors were
+only ever run with the slots forced scalar.
+
+- Four slots added to the dispatcher and its five mirrors: `sha3-avx2x4`,
+  `aes-gcm-aesni`, `aes-gcm-vaes`, `dilithium-ntt-sve2` (the SVE2 ML-DSA
+  NTT was wired but unnamed). The dudect sweep gains the same four cells;
+  `aes-gcm-vaes` and `dilithium-ntt-sve2` are optional for the silicon
+  reason `sha3-avx512x4` and the SVE2 cells already were, the other two are
+  mandatory on x86-64.
+- `tests/c/test_aes_gcm_kat.c`: SP 800-38D Appendix B Test Cases 13–16
+  through the public API with whichever AES-GCM kernel the dispatcher
+  installed, and under an AES-GCM pin the requirement that
+  `ama_aes_gcm_active_backend()` name the pinned kernel.
+- The per-slot KAT sweep in `tests/c/CMakeLists.txt`: 37 cells, one KAT
+  executable × one pinned slot each, every other slot at its scalar
+  fallback, the auto-tune off. `tests/c/kat_slot_guard.h`, the first
+  statement of every swept `main()`, refuses a pin the host did not honour:
+  77 (Skipped), or 1 where the build's CI runner class mandates the slot.
+  Two control cells pass only on the guard's verdict line; a build of
+  `test_sha3` with the guard removed exits 0 under the mandated foreign pin
+  with no verdict line, which is the failure they exist to catch.
+- CTest's own fixture mechanism was measured and rejected first: a
+  `FIXTURES_SETUP` test that exits 77 is reported Skipped and its
+  `FIXTURES_REQUIRED` dependents run and pass — the vacuous pass, in
+  ctest 3.28.3.
+- The RFC 8032 vectors now also replay through the Ed25519 fe64-MULX
+  instantiation on hosts that carry it; the differential test's header
+  claimed this and nothing did it.
+- The AES-GCM pins put a second `#ifdef AMA_HAVE_X86_AESNI_IMPL` block ahead
+  of the installer in `src/c/dispatch/ama_dispatch.c`. Two structural tests
+  in `tests/test_aesni_is_not_gated_on_avx2.py` read only the first such
+  block; measured with the installer's AVX2 gate removed, the committed VAES
+  test passed. Both now locate every `dispatch_table.aes_gcm_encrypt`
+  install site and check each against the block enclosing it; removing the
+  gate at either site fails the test.
+
+Each kernel's presence on the KAT path was established, not inferred: under
+callgrind, `test_kat` pinned to `kyber-ntt-avx2` executes
+`ama_kyber_ntt_avx2` 1,280 times, `test_argon2_rfc9106` pinned to
+`argon2-g-avx2` executes `ama_argon2_g_avx2` 1,372 times, and the same
+executables pinned to a different slot show the symbol absent.
+
+**MemorySanitizer.** Both MSan lanes configured `-DAMA_ENABLE_SIMD=OFF`
+from the day they were added. Measured before flipping it: with clang-18 and
+SIMD on, the full suite passes 90/90 in 84 s against the lane's 25-minute
+budget, every `avx2/*.o` and the AVX-512 x4 Keccak object carry `__msan_*`
+references, gdb breakpoints on the AVX2 and AVX-512 kernels hit hundreds to
+thousands of times inside the KATs, and MSan raised nothing. Both lanes now
+build with SIMD and AVX-512 on; the per-PR KAT lane runs `test_kat` under
+every pinned slot the runner honours, with `--no-tests=error`. On this host
+the full suite with the sweep passes 135/135 under MSan in 85 s, the
+AVX-512 4-way Keccak among them.
+
+#### Fuzzing that accumulates, and an OSS-Fuzz integration that is exercised (INVARIANT-46)
+
+Every run of `fuzzing.yml` started from `fuzz/seed_corpus` and discarded
+what it found after 60 seconds. Measured over 20-second runs of all fifteen
+targets: every target grows its corpus (fuzz_sha3 98 → 131 units,
+fuzz_dilithium 62 → 154, fuzz_frost 73 → 151), and libFuzzer's mutation
+length limit reaches the derived `-max_len` ceiling within the run for only
+six of them — for the slow targets (`lim: 45` on fuzz_frost after 2,000
+executions, against a 4,096 ceiling) a persisted corpus is the only thing
+that carries larger units across runs. `-merge=1` was measured too: the
+first directory receives only the coverage-adding units, the summary line
+`MERGE-OUTER: N new files with F new features added; C new coverage edges`
+is deterministic, and a second merge of the same inputs adds nothing.
+
+- Both matrix jobs restore the target's corpus from the Actions cache before
+  fuzzing (prefix restore-keys, the same harness source preferred, newest
+  first), fuzz from it, merge it down to its coverage-adding units after —
+  after a crash too, since the crash is in `artifacts/` and the coverage
+  found before it is worth keeping — and save it under a run-unique key.
+  The step summary reports restored / after run / merged / features / edges
+  per target. A pull request restores the default branch's corpus; the new
+  nightly schedule (900 s per target) on `main` is what deepens it. The run
+  and merge step bodies were executed locally against a restored corpus.
+- `oss-fuzz/{Dockerfile,build.sh,project.yaml}` had never been built by
+  anything. `tools/test_oss_fuzz_build.sh` now fetches google/oss-fuzz at a
+  pinned commit and runs `helper.py build_fuzzers` with the checkout mounted
+  over the Dockerfile's clone — its previous revision said it verified "your
+  tree" and built the default branch — then `check_build`, OSS-Fuzz's
+  bad-build check. `oss-fuzz/build.sh` writes its intermediates under
+  `$WORK` so the mounted checkout is left alone. The new `oss-fuzz-build`
+  job in `fuzzing.yml` runs the script on every push and pull request and
+  is in the fuzzing gate. `build.sh` was executed here under the exact
+  environment OSS-Fuzz's `compile` driver provides (clang, `-fsanitize=fuzzer-no-link,address`,
+  `LIB_FUZZING_ENGINE`): 15 of 15 targets built, seed corpora and
+  dictionaries packaged, and every binary ran its packaged seeds.
+- ClusterFuzzLite, scheduled and manual only: nightly batch fuzzing for an
+  hour under ASan, UBSan and MSan, weekly prune and coverage report, corpus
+  kept between runs as workflow artifacts. `.clusterfuzzlite/build.sh` execs
+  `oss-fuzz/build.sh`, so there is one build integration and the harness
+  registration gate covers both.
+
+`tests/test_fuzz_corpus_persistence_gate.py` pins all of it: the
+restore → fuzz → merge → save order and keys, the merge after a crash, the
+schedule and its budgets, the OSS-Fuzz job in the gate, the script mounting
+the checkout, the intermediates outside the tree, and the ClusterFuzzLite
+modes and pins.
+
+#### What this pass did not establish
+
+The `oss-fuzz-build` job, the nightly campaign's cache saves and the
+ClusterFuzzLite workflow run on GitHub-hosted infrastructure; the first
+execution of each is the first CI run after this push, and `build.sh` was
+executed here under an emulation of OSS-Fuzz's compile environment rather
+than inside `base-builder` itself. The NEON and SVE2 sweep cells skip on
+x86-64 and are exercised by the AArch64 and QEMU lanes, whose SVE2 wiring
+assertion now names `dilithium-ntt-sve2` too.
 
 ### Maintenance pass, twenty-fifth (2026-09-08) — the pass that verified the twenty-fourth, and disproved two of its findings
 
