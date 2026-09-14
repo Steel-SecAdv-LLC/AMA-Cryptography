@@ -33,7 +33,7 @@ import importlib.util
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -1168,39 +1168,100 @@ class TestEveryBackendSkipIsEscalatable:
     #: repo-wide on purpose: plenty of skips elsewhere are legitimately not
     #: about a backend (no network, no pwsh, no semgrep), and asserting over
     #: those would force keyword-stuffing, which is the opposite of the point.
-    BACKEND_ONLY_MODULES = ("test_artefact_cache_poisoning.py",)
+    #:
+    #: The list grew from one module to eight in the twenty-seventh pass.  A
+    #: survey of every skip reason in the tree found twelve that gate on a
+    #: native feature the CI build produces — ChaCha20-Poly1305, deterministic
+    #: keygen, the context API, FROST, the Cython 3R detector kernels, the
+    #: math_engine extension, the Cython binding extensions, mlock — and named
+    #: none of the nine keywords, so a build that silently dropped any of them
+    #: skipped those tests and reported green.  Measured on the f08daea runs:
+    #: none of the twelve skips fires in any lane today, which is exactly the
+    #: state in which the escalation has to be in place before it is needed.
+    BACKEND_ONLY_MODULES = (
+        "test_artefact_cache_poisoning.py",
+        "test_new_primitives.py",
+        "test_keygen_pct.py",
+        "test_agentic_abuse_detectors.py",
+        "test_smoke_import.py",
+        "test_pqc_backends_coverage.py",
+        "test_post_failclosed.py",
+        "test_secure_memory.py",
+    )
 
-    @pytest.mark.parametrize("module_name", BACKEND_ONLY_MODULES)
-    def test_every_literal_skip_reason_matches_a_backend_keyword(self, module_name: str) -> None:
-        import ast
+    #: Skip reasons in those modules that are about the host operating system,
+    #: not a backend, listed verbatim so the guard stays exact: a reason may be
+    #: exempt only by appearing here, and an entry that no longer matches any
+    #: skip fails the test below so the list cannot rot.
+    HOST_OS_SKIP_REASONS: ClassVar[dict[str, frozenset[str]]] = {
+        "test_pqc_backends_coverage.py": frozenset(
+            {"LD_LIBRARY_PATH is Unix-only", "DYLD_LIBRARY_PATH is Unix-only"}
+        ),
+    }
 
-        source_path = Path(__file__).resolve().parent / module_name
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    @staticmethod
+    def _skip_reasons(tree: ast.AST) -> list[tuple[int, str]]:
+        """Every literal reason a ``pytest.skip(...)`` call or a ``skipif``
+        marker in the module would record, with its line.
 
-        unescalatable: list[str] = []
+        Reasons are built from literals and f-strings; every literal fragment
+        is collected, which is what conftest's keyword match sees.  ``skipif``
+        markers are included because a class-level ``skipif`` silences every
+        test in the class through the same conftest path as an imperative
+        skip, and the first version of this guard only read the latter.
+        """
+
+        def literal_text(node: ast.AST) -> str:
+            return " ".join(
+                part.value
+                for part in ast.walk(node)
+                if isinstance(part, ast.Constant) and isinstance(part.value, str)
+            )
+
+        reasons: list[tuple[int, str]] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            if not (isinstance(func, ast.Attribute) and func.attr == "skip"):
+            if not isinstance(func, ast.Attribute):
                 continue
-            if not (isinstance(func.value, ast.Name) and func.value.id == "pytest"):
-                continue
-            if not node.args:
-                continue
-            # Reasons are built from literals and f-strings; collect every
-            # literal fragment, which is what conftest's keyword match sees.
-            text = " ".join(
-                part.value
-                for part in ast.walk(node.args[0])
-                if isinstance(part, ast.Constant) and isinstance(part.value, str)
-            )
-            if not any(keyword in text.lower() for keyword in conftest._BACKEND_SKIP_REASONS):
-                unescalatable.append(f"line {node.lineno}: {text[:90]!r}")
+            if (
+                func.attr == "skip"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "pytest"
+                and node.args
+            ):
+                reasons.append((node.lineno, literal_text(node.args[0])))
+            elif func.attr == "skipif":
+                reason = next((kw.value for kw in node.keywords if kw.arg == "reason"), None)
+                if reason is None and len(node.args) >= 2:
+                    reason = node.args[1]
+                if reason is not None:
+                    reasons.append((node.lineno, literal_text(reason)))
+        return reasons
 
+    @pytest.mark.parametrize("module_name", BACKEND_ONLY_MODULES)
+    def test_every_literal_skip_reason_matches_a_backend_keyword(self, module_name: str) -> None:
+        source_path = Path(__file__).resolve().parent / module_name
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        exempt = self.HOST_OS_SKIP_REASONS.get(module_name, frozenset())
+
+        reasons = self._skip_reasons(tree)
+        assert reasons, f"{module_name}: the scan found no skip at all; the pattern broke"
+        unescalatable = [
+            f"line {lineno}: {text[:90]!r}"
+            for lineno, text in reasons
+            if text not in exempt
+            and not any(keyword in text.lower() for keyword in conftest._BACKEND_SKIP_REASONS)
+        ]
         assert not unescalatable, (
-            f"{module_name} has pytest.skip() reasons that AMA_CI_REQUIRE_BACKENDS "
+            f"{module_name} has skip reasons that AMA_CI_REQUIRE_BACKENDS "
             f"cannot escalate, so a CI runner missing the backend would skip this "
             f"coverage and report green: {unescalatable}. Name what is missing "
             f"using one of {sorted(conftest._BACKEND_SKIP_REASONS)}."
+        )
+        unused_exemptions = sorted(exempt - {text for _, text in reasons})
+        assert not unused_exemptions, (
+            f"{module_name}: HOST_OS_SKIP_REASONS lists {unused_exemptions}, which no "
+            f"skip in the module records any more; delete the stale entry."
         )

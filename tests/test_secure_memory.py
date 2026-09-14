@@ -161,7 +161,7 @@ class TestSecureMlock:
     def test_mlock_succeeds_when_available(self) -> None:
         """secure_mlock succeeds when native/POSIX backend is available."""
         if not self._mlock_expected_available():
-            pytest.skip("mlock not available on this platform")
+            pytest.skip("native mlock backend not available on this platform")
         from ama_cryptography.secure_memory import SecureMemoryError, secure_mlock
 
         data = bytearray(4096)
@@ -186,7 +186,7 @@ class TestSecureMlock:
     def test_munlock_succeeds_when_available(self) -> None:
         """secure_munlock succeeds when native/POSIX backend is available."""
         if not self._mlock_expected_available():
-            pytest.skip("mlock not available on this platform")
+            pytest.skip("native mlock backend not available on this platform")
         from ama_cryptography.secure_memory import SecureMemoryError, secure_munlock
 
         data = bytearray(4096)

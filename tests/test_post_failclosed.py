@@ -218,7 +218,7 @@ def tree_with_bindings(tmp_path_factory: pytest.TempPathFactory) -> Path:
     missing = [stem for stem in _REQUIRED_BINDING_STEMS if stem not in present]
     if missing:
         pytest.skip(
-            "Cython binding extensions not built in this tree "
+            "native Cython binding extensions not built in this tree "
             f"(missing: {', '.join(missing)}); build with "
             "`python setup.py build_ext --inplace`"
         )

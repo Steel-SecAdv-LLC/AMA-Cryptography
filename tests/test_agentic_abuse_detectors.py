@@ -801,7 +801,9 @@ class TestNoteArtifactCalibration:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not CYTHON_DETECTOR_KERNELS, reason="compiled 3R detector kernels not built")
+@pytest.mark.skipif(
+    not CYTHON_DETECTOR_KERNELS, reason="native Cython 3R detector kernels (math_engine) not built"
+)
 class TestKernelEquivalence:
     """The Cython kernels must be indistinguishable from their Python twins."""
 

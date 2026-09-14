@@ -1108,7 +1108,7 @@ class TestAdditionalNativeFunctions:
         )
 
         if not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
-            pytest.skip("ChaCha20-Poly1305 not available")
+            pytest.skip("native ChaCha20-Poly1305 backend not available")
 
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)
