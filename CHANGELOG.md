@@ -267,6 +267,38 @@ one names both. `dudect.yml`'s note says the gate is requirable.
   unsupported; the import is unconditional and a broken installation fails
   at import.
 
+#### An unrelated commit moved X25519's instruction count under LTO
+
+The first complete run of the instruction-count A/B lane on this pass
+failed one operation: `x25519_scalarmult`, 1,104,518 Ir at the merge-base
+to 1,069,639 Ir at the head, -3.16% against a 2% band, unacknowledged. The
+same lane had measured the branch's earlier head f08daea at 1,105,559 Ir
+(+0.09%), and no X25519 source changed after it. Bisected by building each
+of this pass's C-touching commits with the lane's own configuration and
+measuring on a host that reproduces the runner's numbers to the
+instruction: the count moves at e9956d7, which touched only the two AVX2
+AES-GCM decrypt kernels (the value barrier on the tag-match mask), and it
+moves only under link-time optimisation. Built with `-DAMA_ENABLE_LTO=OFF`,
+f08daea and e9956d7 both measure 1,071,941 Ir; under LTO the linked
+`x25519_scalarmult` body is 304 bytes shorter after e9956d7 with the same
+set of callees. The mechanism is whole-program re-optimisation: with LTO
+on, which is the shipped configuration, the link compiles every function
+in the context of the whole unit, and a change in one translation unit can
+move an operation whose sources did not change. X25519's output is
+unchanged (RFC 7748 and Wycheproof vectors, the fe51-versus-MULX
+differential). The move is acknowledged in
+`benchmarks/instruction-count-acknowledgements.json` with its measured
+values, its cause and its commit, which is what the gate asks for and the
+form in which the next reader can check it; the band is not widened, and
+the lane keeps measuring the shipped configuration. The tolerance
+rationale in `tools/check_instruction_counts.py` and the lane's comment
+now name this second source of drift beside compiler-version drift. The
+recorded local reference, `benchmarks/instruction-baseline.json`, is
+re-measured on this head for its AVX2 profile (eighteen operations; two
+had moved since it was written: `x25519_scalarmult`, and `ed25519_keygen`
+by one instruction; ML-KEM encapsulation's recorded spread is the four
+instructions this run observed, inside its 0.1% budget).
+
 #### Corrected on the way
 
 Three claims made earlier in this pass were wrong and are corrected here

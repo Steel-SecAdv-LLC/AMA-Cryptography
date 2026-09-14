@@ -869,6 +869,14 @@ jobs:
     #
     # So this lane runs at 2% where the wall-clock lane needs 45%.
     #
+    # The 2% is for codegen drift, and with LTO on (the shipped configuration)
+    # that includes whole-program re-optimisation: a change in one translation
+    # unit can move an operation whose sources did not change. Measured:
+    # e9956d7, a barrier in the AVX2 AES-GCM decrypt kernels, moved
+    # x25519_scalarmult by -3.2% under LTO and by nothing without it. The
+    # acknowledgements file records such a move with its cause; the band is
+    # not widened for it.
+    #
     # A/B rather than a stored baseline: ubuntu-latest spans two CPU classes
     # about 1.45x apart, and a recorded baseline would fail closed on whichever
     # class did not record it. Both builds are measured on THIS runner in THIS

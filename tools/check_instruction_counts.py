@@ -108,9 +108,17 @@ from pathlib import Path
 from typing import Any
 
 #: Instruction counts are exactly reproducible, so this band exists only for
-#: legitimate codegen drift between compiler versions — not for host noise,
-#: which is zero here.  The wall-clock lane needs 45% for noise; this needs
-#: two orders of magnitude less.
+#: legitimate codegen drift — not for host noise, which is zero here.  The
+#: wall-clock lane needs 45% for noise; this needs two orders of magnitude
+#: less.  Drift has two sources.  One is a compiler version change.  The
+#: other is whole-program LTO, the shipped configuration: the link
+#: re-optimises every function in the context of the whole unit, so a change
+#: in one translation unit can move the count of an operation whose sources
+#: did not change.  Measured: e9956d7, a value barrier in the two AVX2
+#: AES-GCM decrypt kernels, moved x25519_scalarmult by -3.2% under LTO and
+#: by nothing with -DAMA_ENABLE_LTO=OFF (1,071,941 Ir on both sides).  Such
+#: a move is acknowledged with its cause like any other; it is not a reason
+#: to widen this band.
 DEFAULT_TOLERANCE_PERCENT = 2.0
 
 

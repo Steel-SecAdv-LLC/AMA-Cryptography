@@ -130,6 +130,15 @@
       "commits": [
         "b40e60f"
       ]
+    },
+    "x25519_scalarmult": {
+      "from": 1104518,
+      "to": 1069639,
+      "delta_percent": -3.16,
+      "reason": "Not an X25519 change. No X25519 source (ama_x25519.c, fe51.h, fe64.h, ama_x25519_fe64_mulx.c) differs between this branch's earlier head f08daea, which this lane measured at 1,105,559 Ir (+0.09% of the merge-base), and this head. Bisected to e9956d7, which touched only the two AVX2 AES-GCM decrypt kernels (a value barrier on the tag-match mask), and the move exists only under link-time optimisation: built with -DAMA_ENABLE_LTO=OFF, f08daea and e9956d7 both measure x25519_scalarmult at 1,071,941 Ir. Under LTO the link re-optimises every function in the context of the whole program, and the LTO-linked x25519_scalarmult body came out 304 bytes shorter (0x578b -> 0x565b) with an identical callee set. X25519 output is unchanged: the RFC 7748 and Wycheproof vectors and the fe51-vs-MULX differential pass on this head. Recorded as codegen drift, not as a change in the work done.",
+      "commits": [
+        "e9956d7"
+      ]
     }
   }
 }
