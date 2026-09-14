@@ -479,7 +479,15 @@ ama_error_t ama_verify(
             if (public_key_len < AMA_ED25519_PUBLIC_KEY_BYTES) {
                 return AMA_ERROR_INVALID_PARAM;
             }
-            if (signature_len < AMA_ED25519_SIGNATURE_BYTES) {
+            /* Exact, like every sibling branch (HYBRID below, ML-DSA and
+             * SLH-DSA in their own units).  This read `<`, so any buffer of
+             * 64 or more bytes whose first 64 were a valid signature
+             * verified: a signed blob with arbitrary bytes appended was a
+             * valid Ed25519 signature at the one entry point meant to give
+             * uniform semantics across algorithms.  Measured before the
+             * change: 65 and 80 bytes verified with rc 0 where ML-DSA-65
+             * returned AMA_ERROR_VERIFY_FAILED for one trailing byte. */
+            if (signature_len != AMA_ED25519_SIGNATURE_BYTES) {
                 return AMA_ERROR_VERIFY_FAILED;
             }
             return ama_ed25519_verify(signature, message, message_len,
