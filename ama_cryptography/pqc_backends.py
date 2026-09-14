@@ -109,6 +109,13 @@ __all__ = [
     "native_sha3_384",
     "native_pbkdf2_hmac_sha256",
     "native_pbkdf2_hmac_sha512",
+    # SLH-DSA (FIPS 205), parameter-driven: "SHAKE-128s" and "SHA2-256f"
+    "SPHINCS_AVAILABLE",
+    "SlhDsaKeyPair",
+    "generate_slhdsa_keypair",
+    "generate_slhdsa_keypair_from_seed",
+    "slhdsa_sign",
+    "slhdsa_verify",
 ]
 
 
@@ -4546,6 +4553,9 @@ def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
         SphincsUnavailableError: If the native SLH-DSA backend is not built.
         ValueError: On unsupported param_set.
         RuntimeError: On native key generation failure.
+
+    See :func:`generate_slhdsa_keypair_from_seed` for a keypair derived
+    deterministically from caller-supplied FIPS 205 §10.1 seeds.
     """
     check_crypto_permitted()
     enum_id, pk_len, sk_len, _, _ = _slhdsa_resolve(param_set)
