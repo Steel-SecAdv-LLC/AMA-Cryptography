@@ -297,7 +297,13 @@ dependency is not in the `[examples]` extra; the extra covers the example
 the suite drives. There is no `AMA_DISPATCH_ONLY` pin for the scalar
 AES-GCM path, so on an AES-NI host nothing fuzzes the bitsliced kernel
 itself; a lane that would add that coverage needs a dispatcher pin that
-does not exist yet. INVARIANT-13's C register carries one exemption; its
+does not exist yet. The generic context API (`ama_keypair_generate`, `ama_sign`, `ama_verify`)
+is gated on `AMA_USE_NATIVE_PQC` as a whole, Ed25519 included, and returns
+`AMA_ERROR_NOT_IMPLEMENTED` for every algorithm in a build without native
+PQC; the exact-length pin therefore runs on the native-PQC builds, and the
+configuration-guard build asserts the refusal instead (the first CI run of
+this pass found the pin failing there, which is how that gating came to be
+recorded). INVARIANT-13's C register carries one exemption; its
 reason is stated, and the gate will report it the moment the marker goes
 (an earlier CHANGELOG entry, CI-03, had stated in writing that the gate
 covered diagnostic pragmas; the code never did until now). The cost of the

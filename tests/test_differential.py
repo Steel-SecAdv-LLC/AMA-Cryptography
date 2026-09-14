@@ -119,9 +119,9 @@ class TestEd25519Differential:
         signing_key = nacl.signing.SigningKey.generate()
         sodium_signature = signing_key.sign(message).signature
         sodium_public = signing_key.verify_key.encode()
-        assert native_ed25519_verify(sodium_signature, message, sodium_public) is True, (
-            "AMA rejected a libsodium Ed25519 signature"
-        )
+        assert (
+            native_ed25519_verify(sodium_signature, message, sodium_public) is True
+        ), "AMA rejected a libsodium Ed25519 signature"
 
         # AMA -> libsodium
         ama_public, ama_secret = native_ed25519_keypair()
