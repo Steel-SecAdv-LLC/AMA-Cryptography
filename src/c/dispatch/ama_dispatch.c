@@ -1969,8 +1969,9 @@ static void dispatch_init_internal(void) {
      * It claimed the wrappers "duplicate the same scalar absorb and then
      * drive a permutation built for 4-way batching down a single lane".
      * Both halves were wrong: `ama_sha3_256_avx2` called
-     * `ama_keccak_f1600_avx2`, the SINGLE-state permutation, and never
-     * referenced the 4-way `ama_keccak_f1600_x4_avx2`; and the absorb is not
+     * `ama_keccak_f1600_avx2`, the SINGLE-state permutation (since deleted
+     * as well -- see the AVX2 block below), and never referenced the 4-way
+     * `ama_keccak_f1600_x4_avx2`; and the absorb is not
      * duplicated work either, since the public `ama_sha3_256` performs the
      * identical scalar 17-lane XOR.
      *
@@ -2022,11 +2023,12 @@ static void dispatch_init_internal(void) {
 
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
-        /* The single-state slot deliberately STAYS on the scalar baseline.
+        /* The single-state slot deliberately STAYS on the scalar baseline:
+         * there is no AVX2 single-state Keccak kernel any more.
          *
-         * `ama_keccak_f1600_avx2` (src/c/avx2/ama_sha3_avx2.c) is a
-         * single-state permutation held in YMM lanes, and on every x86-64
-         * host it has been measured on it is slower than the BMI1/BMI2
+         * `ama_keccak_f1600_avx2` (formerly in src/c/avx2/ama_sha3_avx2.c)
+         * was a single-state permutation held in YMM lanes, and on every
+         * x86-64 host it was measured on it was slower than the BMI1/BMI2
          * scalar kernel by a wide margin: 4.4-4.8x wall-clock on three
          * different hosts (see the note above ama_dispatch_init and the
          * dispatch_bench_keccak_single verdicts recorded in CHANGELOG.md),
@@ -2037,11 +2039,12 @@ static void dispatch_init_internal(void) {
          * the answer depend on that benchmark's noise, and -- because the
          * deterministic constant-time gates pin the auto-tune off to keep
          * their counts reproducible -- left those gates measuring a Keccak
-         * that no shipped x86-64 process ever ran.  The kernel stays
-         * compiled and byte-for-byte tested (tests/c/test_keccak_equiv.c);
-         * it is simply not the default for a slot it never wins.  The 4-way
-         * kernel below is a different implementation with its own verdict
-         * and is unaffected. */
+         * that no shipped x86-64 process ever ran.  For a while it stayed
+         * compiled into the production binaries with one lane of
+         * tests/c/test_keccak_equiv.c as its only caller; a kernel that is
+         * never dispatched is not a kernel, so it was deleted together with
+         * that lane.  The 4-way kernel below is a different implementation
+         * with its own verdict and is unaffected. */
         dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx2;
     }
 #endif
@@ -2132,18 +2135,20 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.kyber >= AMA_IMPL_AVX2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
         dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;
-        /* kyber_pointwise is deliberately NOT wired on any tier.  The
-         * "AVX2" / NEON / SVE2 basemul kernels are scalar code (no vector
-         * instruction in their object code), the Phase-3 auto-tune never
-         * benchmarks the slot, and under callgrind the AVX2 one retires
-         * about 35% more instructions per call than the inline scalar
-         * basemul it displaces — which the compiler auto-vectorises (SSE2 /
-         * NEON) when the slot is NULL.  Wiring it was a regression that the
-         * per-kernel gate could not see.  A real vectorised basemul
-         * (interleaved even/odd coefficients, vpmullw/vpmulhw Montgomery
-         * products) belongs here together with an auto-tune slot; until one
-         * exists the slot stays NULL and the kernels stay compiled only for
-         * their equivalence tests. */
+        /* kyber_pointwise is deliberately NOT wired on any tier, and no tier
+         * ships a kernel for it any more.  The former "AVX2" / NEON / SVE2
+         * basemul kernels were scalar code (no vector instruction in their
+         * object code), the Phase-3 auto-tune never benchmarks the slot, and
+         * under callgrind the AVX2 one retired about 35% more instructions
+         * per call than the inline scalar basemul it displaced — which the
+         * compiler auto-vectorises (SSE2 / NEON) when the slot is NULL.
+         * Wiring it was a regression that the per-kernel gate could not
+         * see.  Left unwired, the three kernels had no caller and no test
+         * (nothing under tests/c/ named them), so they were deleted rather
+         * than shipped dead.  A real vectorised basemul (interleaved
+         * even/odd coefficients, vpmullw/vpmulhw Montgomery products)
+         * belongs here together with an auto-tune slot and an equivalence
+         * test; until one exists the slot stays NULL. */
         dispatch_table.kyber_cbd2      = ama_kyber_cbd2_avx2;
     }
     if (dispatch_info.dilithium >= AMA_IMPL_AVX2) {
@@ -2299,8 +2304,8 @@ static void dispatch_init_internal(void) {
          * below (the SVE2 keccak proxy) will demote these three slots
          * back to NULL — production code in src/c/ama_kyber.c then
          * falls through to its inline scalar loop, which the compiler
-         * auto-vectorises on AArch64.  kyber_ntt / kyber_invntt /
-         * kyber_pointwise are NOT reverted in lockstep today (their
+         * auto-vectorises on AArch64.  kyber_ntt / kyber_invntt are NOT
+         * reverted in lockstep today (their
          * arithmetic intensity is high enough that the auto-tune
          * proxy is a worse fit for them than the empirical reality
          * on real silicon); only the three thin int16 helpers ride
@@ -2318,7 +2323,8 @@ static void dispatch_init_internal(void) {
     }
     /* SVE2 wired surface (canonical as of this PR):
      *   - keccak_f1600  (single-state Keccak permutation)
-     *   - kyber_ntt / kyber_invntt / kyber_pointwise
+     *   - kyber_ntt / kyber_invntt  (kyber_pointwise is NULL on every
+     *                                tier; no SVE2 basemul kernel exists)
      *   - kyber_poly_add / kyber_poly_sub / kyber_poly_reduce
      *                   (promoted from compiled-but-unwired in this
      *                    PR; pinned by test_kyber_poly_equiv.c)

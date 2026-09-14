@@ -25,10 +25,13 @@
  * Wired surface (matches the SVE2 block in src/c/dispatch/ama_dispatch.c):
  *   - `ama_kyber_ntt_sve2`
  *   - `ama_kyber_invntt_sve2`
- *   - `ama_kyber_poly_pointwise_sve2`
  *   - `ama_kyber_poly_add_sve2`
  *   - `ama_kyber_poly_sub_sve2`
  *   - `ama_kyber_poly_reduce_sve2`
+ *
+ * There is no `ama_kyber_poly_pointwise_sve2`: the dispatcher's
+ * kyber_pointwise slot is NULL on every tier, and the scalar basemul that
+ * used to sit here under an SVE2 name had no caller and no test.
  *
  * The three poly helpers were promoted from compiled-but-unwired in
  * the PR that landed `kyber_poly_{add,sub,reduce}` dispatch slots:
@@ -90,10 +93,10 @@
  * staged, because each iteration overwrites the same storage.  Cost is one
  * barrier and three-to-four 256-byte clears per NTT of 256 coefficients.
  *
- * Not applied to ama_kyber_poly_{add,sub}_sve2 or
- * ama_kyber_poly_pointwise_sve2: those hold no stack staging buffer — they
- * operate register-to-memory on the caller's polynomials — and the stronger
- * guarantee is not writing a secret down, not erasing it afterwards. */
+ * Not applied to ama_kyber_poly_{add,sub}_sve2: those hold no stack
+ * staging buffer — they operate register-to-memory on the caller's
+ * polynomials — and the stronger guarantee is not writing a secret down,
+ * not erasing it afterwards. */
 #define AMA_KYBER_SVE2_SCRUB(buf) ama_secure_memzero((buf), sizeof(buf))
 
 #define KYBER_Q  3329
@@ -406,35 +409,6 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
     AMA_KYBER_SVE2_SCRUB(hi_out_buf);
     AMA_KYBER_SVE2_SCRUB(scratch);
     AMA_KYBER_SVE2_SCRUB(buf);
-}
-
-/* ============================================================================
- * Scalar basemul helper for SVE2
- *
- * Multiplication in Z_q[X]/(X^2 - zeta):
- *   r[0] = mont(mont(a[1]*b[1]) * zeta) + mont(a[0]*b[0])
- *   r[1] = mont(a[0]*b[1]) + mont(a[1]*b[0])
- * ============================================================================ */
-static inline void basemul_sve2_scalar(int16_t r[2], const int16_t a[2],
-                                        const int16_t b[2], int16_t zeta) {
-    int16_t tmp = montgomery_reduce_scalar((int32_t)a[1] * b[1]);
-    r[0] = montgomery_reduce_scalar((int32_t)tmp * zeta);
-    r[0] += montgomery_reduce_scalar((int32_t)a[0] * b[0]);
-    r[1] = montgomery_reduce_scalar((int32_t)a[0] * b[1]);
-    r[1] += montgomery_reduce_scalar((int32_t)a[1] * b[0]);
-}
-
-/* ============================================================================
- * SVE2 pointwise multiplication (basemul algorithm)
- * ============================================================================ */
-void ama_kyber_poly_pointwise_sve2(int16_t r[KYBER_N],
-                                    const int16_t a[KYBER_N],
-                                    const int16_t b[KYBER_N],
-                                    const int16_t zetas[128]) {
-    for (int i = 0; i < 64; i++) {
-        basemul_sve2_scalar(&r[4*i],     &a[4*i],     &b[4*i],      zetas[64 + i]);
-        basemul_sve2_scalar(&r[4*i + 2], &a[4*i + 2], &b[4*i + 2], -zetas[64 + i]);
-    }
 }
 
 /* ============================================================================

@@ -8,7 +8,6 @@
  *   - Vectorized NTT butterfly operations (8 coefficients at once)
  *   - Montgomery reduction across 128-bit NEON vectors
  *   - Scalar fallback for sub-register layers (len < 8)
- *   - Polynomial pointwise multiplication
  *   - Vectorized CBD sampling
  *
  * Kyber uses q = 3329, 16-bit coefficients => 8 per NEON register.
@@ -249,46 +248,15 @@ void ama_kyber_invntt_neon(int16_t poly[KYBER_N], const int16_t zetas[128]) {
     }
 }
 
-/* ============================================================================
- * Scalar basemul helper for NEON fallback
- *
- * Multiplication in Z_q[X]/(X^2 - zeta):
- *   r[0] = mont(mont(a[1]*b[1]) * zeta) + mont(a[0]*b[0])
- *   r[1] = mont(a[0]*b[1]) + mont(a[1]*b[0])
- * Two Montgomery reductions on the a[1]*b[1]*zeta path (matching generic).
- * ============================================================================ */
-static inline void basemul_neon_scalar(int16_t r[2], const int16_t a[2],
-                                        const int16_t b[2], int16_t zeta) {
-    int16_t tmp = montgomery_reduce_scalar((int32_t)a[1] * b[1]);
-    r[0] = montgomery_reduce_scalar((int32_t)tmp * zeta);
-    r[0] += montgomery_reduce_scalar((int32_t)a[0] * b[0]);
-    r[1] = montgomery_reduce_scalar((int32_t)a[0] * b[1]);
-    r[1] += montgomery_reduce_scalar((int32_t)a[1] * b[0]);
-}
-
-/* ============================================================================
- * Pointwise multiplication of two NTT-domain polynomials (basemul, NEON)
- *
- * Implements polynomial multiplication in Z_q[X]/(X^2 - zeta) for each
- * of the 64 degree-2 components, matching the generic C basemul exactly.
- * Uses zetas[64+i] for the i-th component pair.
- * ============================================================================ */
-void ama_kyber_poly_pointwise_neon(int16_t r[KYBER_N],
-                                    const int16_t a[KYBER_N],
-                                    const int16_t b[KYBER_N],
-                                    const int16_t zetas[128]) {
-    for (int i = 0; i < 64; i++) {
-        basemul_neon_scalar(&r[4*i],     &a[4*i],     &b[4*i],      zetas[64 + i]);
-        basemul_neon_scalar(&r[4*i + 2], &a[4*i + 2], &b[4*i + 2], -zetas[64 + i]);
-    }
-}
-
 /* ama_kyber_poly_add_neon / ama_kyber_poly_sub_neon were removed: they had no
  * caller, no test and no benchmark, and the NEON tier already gets this
  * arithmetic from -O3 auto-vectorisation of the scalar int16 loops in
  * src/c/ama_kyber.c (only the SVE2 slots are dispatch-wired).  Shipping
  * unexercised kernels is the gap this drop closes (audit Low); git history
- * carries them if a future PR wires and tests a NEON kyber_poly_* slot. */
+ * carries them if a future PR wires and tests a NEON kyber_poly_* slot.
+ * ama_kyber_poly_pointwise_neon followed for the same reason: scalar code
+ * under a NEON name, never installed in dispatch_table.kyber_pointwise
+ * (NULL on every tier), no caller and no test. */
 
 #else
 typedef int ama_kyber_neon_not_available;

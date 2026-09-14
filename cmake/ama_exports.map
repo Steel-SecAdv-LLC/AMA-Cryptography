@@ -58,14 +58,12 @@
         # PQC transform kernels reached only through the dispatch table.
         ama_kyber_ntt_avx2;
         ama_kyber_invntt_avx2;
-        ama_kyber_poly_pointwise_avx2;
         ama_kyber_cbd2_avx2;
         ama_dilithium_ntt_avx2;
         ama_dilithium_invntt_avx2;
         ama_dilithium_poly_pointwise_avx2;
         ama_dilithium_rej_uniform_avx2;
         # Keccak permutation variants and their round constants.
-        ama_keccak_f1600_avx2;
         ama_keccak_f1600_generic;
         ama_keccak_round_constants;
         ama_shake128_x4_absorb_once;

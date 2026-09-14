@@ -8,7 +8,6 @@
  * ML-KEM-1024 (FIPS 203):
  *   - Vectorized NTT butterfly operations (16 coefficients at once)
  *   - Barrett reduction across 256-bit vectors
- *   - Polynomial pointwise multiplication via NTT
  *   - Vectorized CBD (Centered Binomial Distribution) sampling
  *   - Vectorized encode/decode for compression
  *
@@ -218,40 +217,6 @@ void ama_kyber_invntt_avx2(int16_t poly[KYBER_N], const int16_t zetas[128]) {
         v = montgomery_mul_avx2(v, finv);
         v = barrett_reduce_avx2(v);
         _mm256_storeu_si256((__m256i *)(poly + i), v);
-    }
-}
-
-/* ============================================================================
- * Scalar basemul helper for AVX2 fallback
- *
- * Multiplication in Z_q[X]/(X^2 - zeta):
- *   r[0] = mont(mont(a[1]*b[1]) * zeta) + mont(a[0]*b[0])
- *   r[1] = mont(a[0]*b[1]) + mont(a[1]*b[0])
- * Two Montgomery reductions on the a[1]*b[1]*zeta path (matching generic).
- * ============================================================================ */
-static inline void basemul_avx2_scalar(int16_t r[2], const int16_t a[2],
-                                        const int16_t b[2], int16_t zeta) {
-    int16_t tmp = montgomery_reduce_scalar((int32_t)a[1] * b[1]);
-    r[0] = montgomery_reduce_scalar((int32_t)tmp * zeta);
-    r[0] += montgomery_reduce_scalar((int32_t)a[0] * b[0]);
-    r[1] = montgomery_reduce_scalar((int32_t)a[0] * b[1]);
-    r[1] += montgomery_reduce_scalar((int32_t)a[1] * b[0]);
-}
-
-/* ============================================================================
- * Pointwise multiplication of two NTT-domain polynomials (basemul)
- *
- * Implements polynomial multiplication in Z_q[X]/(X^2 - zeta) for each
- * of the 64 degree-2 components, matching the generic C basemul exactly.
- * Uses zetas[64+i] for the i-th component pair.
- * ============================================================================ */
-void ama_kyber_poly_pointwise_avx2(int16_t r[KYBER_N],
-                                    const int16_t a[KYBER_N],
-                                    const int16_t b[KYBER_N],
-                                    const int16_t zetas[128]) {
-    for (int i = 0; i < 64; i++) {
-        basemul_avx2_scalar(&r[4*i],     &a[4*i],     &b[4*i],      zetas[64 + i]);
-        basemul_avx2_scalar(&r[4*i + 2], &a[4*i + 2], &b[4*i + 2], -zetas[64 + i]);
     }
 }
 

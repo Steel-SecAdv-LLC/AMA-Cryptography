@@ -83,19 +83,17 @@ void        ama_keccak_f1600_neon(uint64_t state[25]);
 /* ============================================================================
  * Kyber (ML-KEM)
  *
- * ntt / invntt / poly_pointwise are dispatch-facing.  There is no NEON
- * kyber_poly_add / kyber_poly_sub: the dispatch table's kyber_poly_* slots are
- * wired for SVE2 only (see src/c/dispatch/ama_dispatch.c), and the NEON tier
- * reaches the same arithmetic through the compiler's auto-vectorisation of the
- * scalar int16 loops in src/c/ama_kyber.c.  The unwired NEON helpers that used
- * to sit here were removed as unexercised dead code (audit Low).
+ * ntt / invntt are dispatch-facing.  There is no NEON kyber_poly_add /
+ * kyber_poly_sub: the dispatch table's kyber_poly_* slots are wired for SVE2
+ * only (see src/c/dispatch/ama_dispatch.c), and the NEON tier reaches the
+ * same arithmetic through the compiler's auto-vectorisation of the scalar
+ * int16 loops in src/c/ama_kyber.c.  The unwired NEON helpers that used to
+ * sit here were removed as unexercised dead code (audit Low); so was the
+ * kyber poly_pointwise, scalar code under a NEON name for a slot
+ * (dispatch_table.kyber_pointwise) that is NULL on every tier.
  * ============================================================================ */
 void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
 void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
-void ama_kyber_poly_pointwise_neon(int16_t r[256],
-                                   const int16_t a[256],
-                                   const int16_t b[256],
-                                   const int16_t zetas[128]);
 
 /* ============================================================================
  * Dilithium (ML-DSA)
@@ -161,13 +159,13 @@ void ama_argon2_g_neon(uint64_t out[128],
  * SHA-256 / SPHINCS+ (SLH-DSA)
  *
  * ama_sha256_compress_neon is consumed by src/c/ama_sha256.c and pinned by
- * tests/c/test_sha256_neon_kat.c; both used to re-declare it by hand.
+ * tests/c/test_sha256_neon_kat.c; both used to re-declare it by hand.  The
+ * ama_sphincs_wots_chain_neon helper once declared beside it is gone: no
+ * caller, no test, and a block layout (addr[0] only, never addr[6]) that
+ * matched neither FIPS 205 F nor the scalar reference in
+ * tests/c/test_sphincs_simd_equiv.c.
  * ============================================================================ */
 void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
-void ama_sphincs_wots_chain_neon(uint8_t *out, const uint8_t *in,
-                                 uint32_t start, uint32_t steps,
-                                 const uint8_t *pub_seed,
-                                 uint32_t addr[8], size_t n);
 
 
 #endif /* __aarch64__ || _M_ARM64 */

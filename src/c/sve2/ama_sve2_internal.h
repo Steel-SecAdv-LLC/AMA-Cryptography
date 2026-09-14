@@ -63,10 +63,6 @@ void        ama_keccak_f1600_sve2(uint64_t state[25]);
  * ============================================================================ */
 void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
 void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
-void ama_kyber_poly_pointwise_sve2(int16_t r[256],
-                                   const int16_t a[256],
-                                   const int16_t b[256],
-                                   const int16_t zetas[128]);
 void ama_kyber_poly_add_sve2(int16_t r[256],
                              const int16_t a[256],
                              const int16_t b[256]);

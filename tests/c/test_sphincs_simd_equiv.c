@@ -72,8 +72,10 @@ extern void ama_test_restore_keccak_f1600(void);
 #endif
 /* (Previously: `extern void ama_sphincs_wots_chain_neon(...)`.  Removed
  * along with the NEON wots_chain test lane in `run_wots_chain_parity`
- * — see the inline rationale there.  The NEON helper itself is still
- * built into the library; this test simply no longer pins it.) */
+ * — see the inline rationale there.  The NEON helper itself has since
+ * been deleted from src/c/neon/ama_sphincs_neon.c: no caller, no test,
+ * and a block layout that matched neither FIPS 205 F nor the scalar
+ * reference described below.) */
 
 /* --------------------------------------------------------------
  * Scalar reference for the SPHINCS+ AVX2 `wots_chain` helper.
@@ -88,12 +90,13 @@ extern void ama_test_restore_keccak_f1600(void);
  * `pub_seed` is unused, consistent with the helper; suppressed via
  * `(void)pub_seed`.
  *
- * Note: the NEON helper in `src/c/neon/ama_sphincs_neon.c` uses a
- * different block-build pattern (writes only `addr[0]` into the
- * block, never `addr[6]`).  This scalar reference does NOT mirror
- * the NEON pattern — when the NEON `wots_chain` lane was pinned
- * here it used a separate `scalar_wots_chain_no_hash_addr`
- * reference, which was removed alongside the NEON lane itself.
+ * Note: the NEON helper that used to live in
+ * `src/c/neon/ama_sphincs_neon.c` (now deleted) used a different
+ * block-build pattern (it wrote only `addr[0]` into the block, never
+ * `addr[6]`).  This scalar reference did NOT mirror the NEON pattern —
+ * when the NEON `wots_chain` lane was pinned here it used a separate
+ * `scalar_wots_chain_no_hash_addr` reference, which was removed
+ * alongside the NEON lane itself.
  * -------------------------------------------------------------- */
 /* The scalar SHA-256 reference (`SHA256_K`, `SHA256_H`,
  * `sha256_compress_one_block`) and the `wots_chain` references built on it

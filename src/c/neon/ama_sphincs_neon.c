@@ -9,20 +9,21 @@
  *     (`vsha256hq_u32`, `vsha256h2q_u32`, `vsha256su0q_u32`,
  *     `vsha256su1q_u32`) when `__ARM_FEATURE_SHA2` is defined;
  *     scalar fallback otherwise.
- *   - Per-call WOTS+ chain helper (currently dead code: production
- *     `slh_wots_chain` in src/c/ama_slhdsa.c uses the scalar SHA-256
- *     pipeline through `ama_sha256_init/update/final`).  The helpers
- *     remain because the SHA-256 compression primitive itself is
- *     pinned by `tests/c/test_sha256_neon_kat.c` (FIPS 180-4 KAT) on
- *     `__ARM_FEATURE_SHA2` hosts and represents real work any future
- *     dispatched-SHA-256 SVE2/NEON wiring will consume.
+ *
+ * The compression primitive is consumed by src/c/ama_sha256.c's runtime
+ * dispatch and pinned by `tests/c/test_sha256_neon_kat.c` (FIPS 180-4
+ * KAT) on `__ARM_FEATURE_SHA2` hosts.  The per-call WOTS+ chain helper
+ * that used to follow it (`ama_sphincs_wots_chain_neon`) was deleted:
+ * production `slh_wots_chain` in src/c/ama_slhdsa.c never called it, no
+ * test pinned it, and its block layout (addr[0] only, never addr[6], no
+ * pub_seed, no padding) matched neither FIPS 205 F nor the scalar
+ * reference in tests/c/test_sphincs_simd_equiv.c.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
 
 #include <stdint.h>
 #include <stddef.h>
-#include <string.h>
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
@@ -50,11 +51,6 @@ static const uint32_t K256[64] = {
     0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-};
-
-static const uint32_t H256[8] = {
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 };
 
 /* NEON rotate right for 32-bit lanes */
@@ -165,8 +161,9 @@ void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
  * without `__ARM_FEATURE_SHA2` (e.g., ARMv8 cores without the optional
  * Crypto Extensions, or compilers that don't set the feature macro).
  * No NEON intrinsics are used here; the function keeps its
- * `_neon`-suffixed name solely so the caller (`wots_chain_neon`) can
- * use a single symbol regardless of feature availability. */
+ * `_neon`-suffixed name so its caller (the runtime dispatch in
+ * src/c/ama_sha256.c) resolves one symbol regardless of feature
+ * availability. */
 void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
     uint32_t w[64];
     for (int i = 0; i < 16; i++) {
@@ -206,43 +203,6 @@ void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
     ama_secure_memzero(w, sizeof(w));
 }
 #endif /* __ARM_FEATURE_SHA2 */
-
-/* ============================================================================
- * WOTS+ chain computation (NEON-assisted)
- * ============================================================================ */
-void ama_sphincs_wots_chain_neon(uint8_t *out, const uint8_t *in,
-                                  uint32_t start, uint32_t steps,
-                                  const uint8_t *pub_seed,
-                                  uint32_t addr[8], size_t n) {
-    if (steps == 0) {
-        memcpy(out, in, n);
-        return;
-    }
-    memcpy(out, in, n);
-
-    for (uint32_t i = start; i < start + steps && i < 256; i++) {
-        addr[6] = i;
-        uint8_t block[64];
-        memset(block, 0, 64);  // PUBLIC-DATA: block — NEON SPHINCS+ SHA-256 batched input-block, pre-use init filled by chain-data memcpy
-        memcpy(block, out, n < 32 ? n : 32);
-        block[32] = (uint8_t)(addr[0] >> 24);
-        block[33] = (uint8_t)(addr[0] >> 16);
-        block[34] = (uint8_t)(addr[0] >> 8);
-        block[35] = (uint8_t)(addr[0]);
-
-        uint32_t h_state[8];
-        memcpy(h_state, H256, sizeof(H256));
-        ama_sha256_compress_neon(h_state, block);
-
-        for (int j = 0; j < 8 && j * 4 < (int)n; j++) {
-            out[j*4+0] = (uint8_t)(h_state[j] >> 24);
-            out[j*4+1] = (uint8_t)(h_state[j] >> 16);
-            out[j*4+2] = (uint8_t)(h_state[j] >> 8);
-            out[j*4+3] = (uint8_t)(h_state[j]);
-        }
-    }
-    (void)pub_seed;
-}
 
 #else
 typedef int ama_sphincs_neon_not_available;

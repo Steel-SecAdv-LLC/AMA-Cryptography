@@ -8,14 +8,14 @@ translation units inside ``if(NOT MSVC)``, but set
 for any ``CMAKE_SYSTEM_PROCESSOR`` matching ARM64 — MSVC included.  Every SVE2
 TU guards its whole body on ``__ARM_FEATURE_SVE2``, which only that skipped flag
 defines, so on MSVC ARM64 the SVE2 objects held zero defined symbols while
-``src/c/dispatch/ama_dispatch.c`` still referenced ten SVE2 kernel symbols under
+``src/c/dispatch/ama_dispatch.c`` still referenced nine SVE2 kernel symbols under
 ``AMA_HAVE_SVE2_IMPL``: LNK2019 unresolved externals — the exact break the NEON
 block was rewritten to prevent.
 
 Reproduced with the equivalent GCC condition (aarch64-linux-gnu-gcc, no +sve2):
 ``ama_kyber_sve2.o`` / ``ama_sha3_sve2.o`` / ``ama_dilithium_sve2.o`` each
 compile to an object with zero defined global symbols; with ``+sve2`` they
-define 6 / 1 / 3.  MSVC ARM64 is built by no CI lane, so this structural test is
+define 5 / 1 / 3.  MSVC ARM64 is built by no CI lane, so this structural test is
 the coverage: the macro must sit inside the NOT-MSVC block, and the dispatcher's
 SVE2 references must all sit under it.
 """
@@ -42,23 +42,23 @@ SVE2_HEADER = (REPO_ROOT / "src" / "c" / "sve2" / "ama_sve2_internal.h").read_te
 SVE2_DECLARED_SYMBOLS = tuple(sorted(set(re.findall(r"\bama_[a-z0-9_]+_sve2\b", SVE2_HEADER))))
 
 #: A header declaring fewer kernels than this has been truncated, not shrunk;
-#: an empty discovery would make every assertion below vacuous.
-MIN_SVE2_KERNELS = 10
+#: an empty discovery would make every assertion below vacuous.  Nine is the
+#: full declared set (kyber ntt/invntt/poly_add/poly_sub/poly_reduce, keccak,
+#: dilithium ntt/invntt/pointwise) after the never-wired
+#: ``ama_kyber_poly_pointwise_sve2`` was deleted with its AVX2/NEON twins.
+MIN_SVE2_KERNELS = 9
 
 #: Kernels the dispatcher deliberately does NOT wire, each with the reason.
 #: Hand-written on purpose: "not wired" is a decision, so a kernel that falls
 #: out of the dispatcher without an entry here is a regression, not a discovery.
 #: Their references must still be guarded — the equivalence tests link them.
-DELIBERATELY_UNWIRED: dict[str, str] = {
-    "ama_kyber_poly_pointwise_sve2": (
-        "the AVX2/NEON/SVE2 basemul kernels hold no vector instruction, and "
-        "under callgrind the AVX2 one retires about 35% more instructions per "
-        "call than the inline scalar basemul it displaces (which the compiler "
-        "auto-vectorises when the slot is NULL). The slot stays NULL on every "
-        "tier until a genuinely vectorised basemul exists; the kernels stay "
-        "compiled for their equivalence tests."
-    ),
-}
+#:
+#: Empty today.  The one former entry, ``ama_kyber_poly_pointwise_sve2``
+#: (scalar code under an SVE2 name for a slot that is NULL on every tier),
+#: turned out to have no caller and no test either, so it was deleted from
+#: the header rather than kept compiled; a kernel the dispatcher will never
+#: install and no test pins is not worth shipping.
+DELIBERATELY_UNWIRED: dict[str, str] = {}
 
 #: The kernels the dispatcher is required to wire.
 SVE2_KERNEL_SYMBOLS = tuple(sym for sym in SVE2_DECLARED_SYMBOLS if sym not in DELIBERATELY_UNWIRED)
@@ -124,7 +124,7 @@ class TestTheMacroIsInsideTheFlagGuard:
         assert "add_compile_definitions(AMA_HAVE_SVE2_IMPL)" in guarded, (
             "AMA_HAVE_SVE2_IMPL is not inside the SVE2 if(NOT MSVC) block. Outside "
             "it, the macro fires on MSVC ARM64 while the +sve2 flag does not, so "
-            "the dispatcher references ten SVE2 symbols the flag-less TUs never "
+            "the dispatcher references nine SVE2 symbols the flag-less TUs never "
             "define — LNK2019 (audit H5)."
         )
 
