@@ -494,8 +494,13 @@ def main() -> int:
                 print(f"    - {problem}", file=sys.stderr)
         return 1
     print(
-        "\nINVARIANT-36 holds: AMA is checked against specifications and its own "
-        "reference encoder, not against another implementation."
+        "\nINVARIANT-36 holds over what this gate can see: no third-party "
+        "cryptographic binary is spawned from ama_cryptography/, tests/ or tools/, "
+        "the vendored corpora carry their provenance, the reference encoder is "
+        "independent, and the vector generators compute nothing.  The two "
+        "recorded exceptions — benchmarks/ and the requires_interop_oracle tests, "
+        "which import PyCA / PyNaCl / pycryptodome as interoperability oracles — "
+        "are outside its scope by design; see INVARIANTS.md."
     )
     return 0
 

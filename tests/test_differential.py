@@ -97,20 +97,42 @@ class TestEd25519Differential:
     """Differential tests: AMA Ed25519 vs pynacl/libsodium."""
 
     def test_signature_verification_cross_library(self) -> None:
-        """Sign with pynacl, verify with AMA (basic compatibility check)."""
-        # This test verifies that our Ed25519 implementation produces
-        # signatures compatible with libsodium's Ed25519
-        signing_key = nacl.signing.SigningKey.generate()
+        """Sign with libsodium, verify with AMA; sign with AMA, verify with
+        libsodium; and a corrupted libsodium signature must fail AMA.
+
+        This test's docstring always said "verify with AMA".  Its body never
+        called AMA: it generated a libsodium keypair, signed, and asserted
+        that libsodium's own signature was 64 bytes and its key 32.  It was
+        counted among the interop-oracle checks the require-backends lane
+        exists to run, and it could not have failed on any Ed25519
+        incompatibility.
+        """
+        from ama_cryptography.pqc_backends import (
+            native_ed25519_keypair,
+            native_ed25519_sign,
+            native_ed25519_verify,
+        )
+
         message = secrets.token_bytes(100)
-        signed = signing_key.sign(message)
 
-        # The signature is the first 64 bytes
-        signature = signed.signature
-        verify_key_bytes = signing_key.verify_key.encode()
+        # libsodium -> AMA
+        signing_key = nacl.signing.SigningKey.generate()
+        sodium_signature = signing_key.sign(message).signature
+        sodium_public = signing_key.verify_key.encode()
+        assert native_ed25519_verify(sodium_signature, message, sodium_public) is True, (
+            "AMA rejected a libsodium Ed25519 signature"
+        )
 
-        # Verify the signature format is compatible
-        assert len(signature) == 64
-        assert len(verify_key_bytes) == 32
+        # AMA -> libsodium
+        ama_public, ama_secret = native_ed25519_keypair()
+        ama_signature = native_ed25519_sign(message, ama_secret)
+        nacl.signing.VerifyKey(ama_public).verify(message, ama_signature)
+
+        # A single corrupted byte in the libsodium signature must fail AMA:
+        # without this, a verifier that accepted everything would pass above.
+        corrupted = bytearray(sodium_signature)
+        corrupted[10] ^= 0x01
+        assert native_ed25519_verify(bytes(corrupted), message, sodium_public) is False
 
 
 @pytest.mark.skipif(
