@@ -913,8 +913,6 @@ if(AMA_BUILD_SHARED)
         POSITION_INDEPENDENT_CODE ON
     )
     target_compile_definitions(ama_cryptography_shared PRIVATE AMA_BUILDING_SHARED)
-    target_compile_definitions(ama_cryptography_shared PRIVATE
-    )
 
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_USE_NATIVE_PQC)
@@ -974,8 +972,6 @@ if(AMA_BUILD_STATIC)
         PUBLIC_HEADER "include/ama_cryptography.h;include/ama_dispatch.h"
     )
     target_compile_definitions(ama_cryptography_static PRIVATE AMA_BUILDING_STATIC)
-    target_compile_definitions(ama_cryptography_static PRIVATE
-    )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_static PRIVATE AMA_USE_NATIVE_PQC)
     endif()
@@ -1076,8 +1072,6 @@ if(AMA_BUILD_TESTS)
     if(AMA_HAVE_VALGRIND_MEMCHECK_H)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_HAVE_VALGRIND_MEMCHECK)
     endif()
-    target_compile_definitions(ama_cryptography_test PRIVATE
-    )
     if(AMA_USE_NATIVE_PQC)
         target_compile_definitions(ama_cryptography_test PRIVATE AMA_USE_NATIVE_PQC)
     endif()
