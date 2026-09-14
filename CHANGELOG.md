@@ -210,10 +210,15 @@ modes and pins.
 
 The `oss-fuzz-build` job, the nightly campaign's cache saves and the
 ClusterFuzzLite workflow run on GitHub-hosted infrastructure; the first
-execution of each is the first CI run after this push, and `build.sh` was
-executed here under an emulation of OSS-Fuzz's compile environment rather
-than inside `base-builder` itself. The NEON and SVE2 sweep cells skip on
-x86-64 and are exercised by the AArch64 and QEMU lanes, whose SVE2 wiring
+execution of each is the first CI run after this push. ClusterFuzzLite has
+no pull-request trigger, and a `workflow_dispatch` of a workflow file that
+is not yet on the default branch is refused (measured: 404 from the API
+against this branch), so its first run waits for the merge. `build.sh` was
+executed here inside `base-builder` through OSS-Fuzz's own `helper.py`:
+`build_fuzzers` with this checkout mounted over the Dockerfile's clone, then
+`check_build`, 15 of 15 fuzzers, under libFuzzer with ASan, MSan and UBSan
+and under AFL++ and honggfuzz with ASan. The NEON and SVE2 sweep cells skip
+on x86-64 and are exercised by the AArch64 and QEMU lanes, whose SVE2 wiring
 assertion now names `dilithium-ntt-sve2` too.
 
 ### Maintenance pass, twenty-fifth (2026-09-08) — the pass that verified the twenty-fourth, and disproved two of its findings

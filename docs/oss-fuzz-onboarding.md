@@ -76,7 +76,11 @@ OSS-Fuzz's infrastructure inside GitHub Actions
 batch fuzzing under ASan, UBSan and MSan, with the corpus kept between runs
 as workflow artifacts, a weekly prune and a weekly coverage report.
 `.clusterfuzzlite/build.sh` execs `oss-fuzz/build.sh`, so there is one build
-integration, not two.
+integration, not two. The workflow has no pull-request trigger, and GitHub
+refuses a `workflow_dispatch` of a workflow file that is not yet on the
+default branch, so its first run happens only after the workflow lands on
+`main`; the per-push `oss-fuzz-build` job in `fuzzing.yml` is what checks
+the build integration before that.
 
 ### Manual Test
 
