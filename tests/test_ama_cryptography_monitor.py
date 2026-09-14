@@ -1359,3 +1359,119 @@ class TestTheVolumeAllowListIsRealConfiguration:
         assert all(s is None for s in spikes)
         assert detector.tracked_operations == 0
         assert detector.filtered_operations == 512
+
+
+# ===========================================================================
+# AmaCryptographyMonitor.analyze_codebase (MONITORING.md "Key Methods")
+# ===========================================================================
+
+
+class TestAnalyzeCodebase:
+    """``analyze_codebase(directory)`` is documented as a read-only walk of every
+    Python file under ``directory`` that returns per-file analyses plus
+    aggregate complexity statistics.  It had no test."""
+
+    @staticmethod
+    def _tree(tmp_path: Any) -> dict[str, Any]:
+        from pathlib import Path
+
+        root = Path(tmp_path) / "project"
+        (root / "pkg" / "sub").mkdir(parents=True)
+        simple = root / "simple.py"
+        simple.write_text(
+            "def one(x):\n    return x + 1\n\n\n"
+            "def two(a, b):\n    if a:\n        return b\n    return a\n",
+            encoding="utf-8",
+        )
+        # 11 decision points -> complexity 12, above the ">10" high-complexity bar.
+        branches = "".join(f"    if x == {i}:\n        return {i}\n" for i in range(11))
+        complex_py = root / "pkg" / "sub" / "knotted.py"
+        complex_py.write_text(
+            f"class Holder:\n    pass\n\n\ndef knotted(x):\n{branches}    return -1\n",
+            encoding="utf-8",
+        )
+        (root / "pkg" / "notes.txt").write_text("not python\n", encoding="utf-8")
+        (root / "pkg" / "data.json").write_text("{}\n", encoding="utf-8")
+        return {"root": root, "simple": simple, "complex": complex_py}
+
+    def test_returns_one_analysis_per_python_file_and_the_aggregate(self, tmp_path: Any) -> None:
+        tree = self._tree(tmp_path)
+        monitor = AmaCryptographyMonitor(nonce_persist_path=str(tmp_path / "nonces.dat"))
+
+        report = monitor.analyze_codebase(tree["root"])
+
+        assert report["status"] == "analyzed"
+        by_path = {entry["filepath"]: entry["analysis"] for entry in report["files_analyzed"]}
+        # Every .py file, nested ones included; nothing that is not Python.
+        assert set(by_path) == {str(tree["simple"]), str(tree["complex"])}
+        simple = by_path[str(tree["simple"])]
+        knotted = by_path[str(tree["complex"])]
+        assert [f["name"] for f in simple["functions"]] == ["one", "two"]
+        assert [f["complexity"] for f in simple["functions"]] == [1, 2]
+        assert simple["total_classes"] == 0
+        assert [f["name"] for f in knotted["functions"]] == ["knotted"]
+        assert knotted["functions"][0]["complexity"] == 12
+        assert knotted["total_classes"] == 1
+        for analysis in by_path.values():
+            assert set(analysis) >= {
+                "total_functions",
+                "total_classes",
+                "total_lines",
+                "functions",
+                "complexity_summary",
+                "content_hash",
+            }
+        assert report["aggregate_metrics"] == {
+            "total_functions": 3,
+            "mean_complexity": pytest.approx((1 + 2 + 12) / 3),
+            "max_complexity": 12,
+            "high_complexity_count": 1,
+        }
+
+    def test_is_read_only(self, tmp_path: Any) -> None:
+        """ "Does NOT modify any files": bytes, mtimes and the set of paths are
+        unchanged by the walk, and nothing new appears under the tree."""
+        from pathlib import Path
+
+        tree = self._tree(tmp_path)
+        root: Path = tree["root"]
+        before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file()}
+        monitor = AmaCryptographyMonitor(nonce_persist_path=str(tmp_path / "nonces.dat"))
+
+        monitor.analyze_codebase(root)
+
+        after = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file()}
+        assert after == before
+
+    def test_an_unparseable_file_is_reported_not_fatal(self, tmp_path: Any) -> None:
+        from pathlib import Path
+
+        tree = self._tree(tmp_path)
+        broken = Path(tree["root"]) / "broken.py"
+        broken.write_text("def oops(:\n", encoding="utf-8")
+        monitor = AmaCryptographyMonitor(nonce_persist_path=str(tmp_path / "nonces.dat"))
+
+        report = monitor.analyze_codebase(tree["root"])
+
+        by_path = {entry["filepath"]: entry["analysis"] for entry in report["files_analyzed"]}
+        assert "error" in by_path[str(broken)]
+        assert by_path[str(broken)]["filepath"] == str(broken)
+        # The parseable files still count; the broken one adds no functions.
+        assert report["aggregate_metrics"]["total_functions"] == 3
+
+    def test_an_empty_tree_yields_no_aggregate(self, tmp_path: Any) -> None:
+        from pathlib import Path
+
+        empty = Path(tmp_path) / "empty"
+        empty.mkdir()
+        monitor = AmaCryptographyMonitor(nonce_persist_path=str(tmp_path / "nonces.dat"))
+
+        report = monitor.analyze_codebase(empty)
+
+        assert report == {"status": "analyzed", "files_analyzed": [], "aggregate_metrics": {}}
+
+    def test_a_disabled_monitor_declines(self, tmp_path: Any) -> None:
+        tree = self._tree(tmp_path)
+        monitor = AmaCryptographyMonitor(enabled=False)
+
+        assert monitor.analyze_codebase(tree["root"]) == {"status": "monitoring_disabled"}

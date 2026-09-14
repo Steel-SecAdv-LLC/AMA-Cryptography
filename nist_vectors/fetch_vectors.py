@@ -91,7 +91,7 @@ def fetch_acvp_file(algo_dir: str, filename: str) -> bytes:
     used to `json.dumps(json.loads(...), indent=2)` on the way through, which
     left nothing on disk that could ever have been compared with upstream.)
     """
-    url = f"{ACVP_BASE}/{algo_dir}/{filename}"
+    url = acvp_manifest.projection_url(ACVP_BASE, algo_dir, filename)
     print(f"  Fetching {url}")
     return http_fetch.fetch_bytes(url, user_agent="AMA-Crypto-Vectors/1.0")
 
@@ -159,7 +159,7 @@ def fetch_acvp_vectors() -> list[str]:
 
         print(f"Fetching {algo_dir} vectors...")
         try:
-            data = fetch_acvp_file(algo_dir, "internalProjection.json")
+            data = fetch_acvp_file(algo_dir, acvp_manifest.PROJECTION_FILENAME)
             acvp_manifest.verify_bytes(entry, data, origin=f"the download of {entry.url_path}")
             # A digest match on bytes that are not JSON would mean the pin itself
             # was taken from something that is not a projection.  Parse to prove
@@ -201,7 +201,7 @@ def refresh_manifest() -> int:
 
     entries: dict[str, acvp_manifest.Entry] = {}
     for out_name, algo_dir in ACVP_FETCH_LIST:
-        data = fetch_acvp_file(algo_dir, "internalProjection.json")
+        data = fetch_acvp_file(algo_dir, acvp_manifest.PROJECTION_FILENAME)
         json.loads(data)
         entry = acvp_manifest.Entry(
             name=out_name,

@@ -583,6 +583,63 @@ class TestDeleteKey:
 
 
 # ===========================================================================
+# Tests: destroy_key (the documented alias of delete_key)
+# ===========================================================================
+
+
+class TestDestroyKey:
+    """``destroy_key`` is documented as an alias of ``delete_key``: it must
+    destroy the same PKCS#11 object and report the same verdicts."""
+
+    def test_destroy_key_destroys_the_object_and_returns_true(self) -> None:
+        mock = _make_mock_pkcs11()
+        session = mock.PyKCS11Lib.return_value.openSession.return_value
+        hsm = _build_hsm(mock)
+
+        assert hsm.destroy_key((10).to_bytes(8, "big")) is True
+        session.destroyObject.assert_called_once_with(10)
+
+    def test_destroy_key_resolves_a_mapped_handle_and_forgets_it(self) -> None:
+        """A handle the storage minted itself maps to the HSM's object handle;
+        destroying it goes through that map and removes the entry, exactly as
+        ``delete_key`` does."""
+        mock = _make_mock_pkcs11()
+        session = mock.PyKCS11Lib.return_value.openSession.return_value
+        hsm = _build_hsm(mock)
+        minted = b"\x00\x00\x00\x00\x00\x00\x00\x2a"
+        hsm._handle_map[minted] = 777
+
+        assert hsm.destroy_key(minted) is True
+        session.destroyObject.assert_called_once_with(777)
+        assert minted not in hsm._handle_map
+
+    def test_destroy_key_not_found(self) -> None:
+        """destroy_key returns False when destroyObject raises PyKCS11Error."""
+        mock = _make_mock_pkcs11()
+        session = mock.PyKCS11Lib.return_value.openSession.return_value
+        session.destroyObject.side_effect = mock.PyKCS11Error("CKR_OBJECT_HANDLE_INVALID")
+
+        hsm = _build_hsm(mock)
+        assert hsm.destroy_key((999).to_bytes(8, "big")) is False
+        session.destroyObject.assert_called_once_with(999)
+
+    def test_destroy_key_is_the_delete_key_alias(self) -> None:
+        """Whatever delete_key decides, destroy_key reports — including when a
+        subclass overrides delete_key."""
+        mock = _make_mock_pkcs11()
+        hsm = _build_hsm(mock)
+        seen: list[bytes] = []
+
+        def _delete(key_handle: bytes) -> bool:
+            seen.append(key_handle)
+            return False
+
+        with patch.object(hsm, "delete_key", side_effect=_delete):
+            assert hsm.destroy_key(b"\x00" * 8) is False
+        assert seen == [b"\x00" * 8]
+
+
+# ===========================================================================
 # Tests: context manager (__enter__ / __exit__)
 # ===========================================================================
 

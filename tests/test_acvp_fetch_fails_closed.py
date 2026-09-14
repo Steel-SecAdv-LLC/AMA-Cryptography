@@ -84,6 +84,47 @@ def test_main_succeeds_when_everything_was_fetched(
     assert tool.main() == 0
 
 
+def test_the_fetch_requests_exactly_the_url_the_pin_describes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One URL builder, not one per module.
+
+    ``Manifest.url_for`` says which upstream file each digest was taken from;
+    the fetcher used to rebuild that URL inline, so the two could name
+    different files and every downstream check would still be green.  Every
+    projection in the fetch list must be requested at the manifest's own URL,
+    and the file name must be spelled in the pin tool alone.
+    """
+    from tools import acvp_vector_pin
+
+    requested: list[str] = []
+
+    def capture(url: str, **_: Any) -> bytes:
+        requested.append(url)
+        return b"{}"
+
+    monkeypatch.setattr(tool.http_fetch, "fetch_bytes", capture)
+    manifest = acvp_vector_pin.load_manifest()
+    assert (
+        tool.ACVP_BASE == manifest.base_url
+    ), "the fetcher's base URL is not the manifest's (is ACVP_REF pointing elsewhere?)"
+    for out_name, algo_dir in tool.ACVP_FETCH_LIST:
+        entry = manifest.entries[out_name]
+        assert tool.fetch_acvp_file(algo_dir, acvp_vector_pin.PROJECTION_FILENAME) == b"{}"
+        assert requested[-1] == manifest.url_for(entry), out_name
+        assert requested[-1].endswith(f"/{entry.url_path}")
+    assert len(requested) == len(tool.ACVP_FETCH_LIST)
+
+    # The docstring may DESCRIBE the file; only code may not spell it, since a
+    # re-inlined URL needs the quoted literal.
+    body = TOOL_PATH.read_text(encoding="utf-8")
+    assert '"internalProjection.json"' not in body and "'internalProjection.json'" not in body, (
+        "fetch_vectors.py spells the projection file name as a literal again; it must "
+        "come from tools/acvp_vector_pin.py so the pin and the fetch cannot drift"
+    )
+    assert "acvp_manifest.projection_url(" in body, "the fetcher bypasses the shared URL builder"
+
+
 def test_the_fetch_goes_through_the_shared_retry_policy() -> None:
     """One retry policy, not one per fetcher.
 

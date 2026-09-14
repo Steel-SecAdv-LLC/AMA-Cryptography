@@ -102,7 +102,7 @@ class Entry:
 
     @property
     def url_path(self) -> str:
-        return f"{self.algo_dir}/internalProjection.json"
+        return f"{self.algo_dir}/{PROJECTION_FILENAME}"
 
 
 @dataclass(frozen=True)
@@ -112,12 +112,27 @@ class Manifest:
     entries: dict[str, Entry]
 
     def url_for(self, entry: Entry) -> str:
-        return f"{self.base_url}/{entry.url_path}"
+        return projection_url(self.base_url, entry.algo_dir)
+
+
+#: The one file the pin covers in each ACVP-Server algorithm directory.
+PROJECTION_FILENAME = "internalProjection.json"
 
 
 def base_url_for_ref(ref: str) -> str:
     """The raw-content root of ``gen-val/json-files`` at ``ref``."""
     return f"https://raw.githubusercontent.com/usnistgov/ACVP-Server/{ref}/gen-val/json-files"
+
+
+def projection_url(base_url: str, algo_dir: str, filename: str = PROJECTION_FILENAME) -> str:
+    """The URL of ``filename`` in ``algo_dir`` under ``base_url``.
+
+    The ONE place that path is spelled.  ``Manifest.url_for`` (what the pin
+    describes) and ``nist_vectors/fetch_vectors.py`` (what is actually
+    downloaded) both come here, so the two cannot drift into naming different
+    files — the fetcher used to rebuild the same string inline.
+    """
+    return f"{base_url}/{algo_dir}/{filename}"
 
 
 def sha256_hex(data: bytes) -> str:
