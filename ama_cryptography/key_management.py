@@ -65,7 +65,7 @@ def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
     """Atomically write ``data`` to ``path`` with restrictive permissions.
 
     Two properties matter for on-disk key material:
@@ -1099,9 +1099,11 @@ class SecureKeyStorage:
                 metadata["t_cost"] = self.ARGON2_T_COST
                 metadata["m_cost"] = self.ARGON2_M_COST
                 metadata["parallelism"] = self.ARGON2_PARALLELISM
-            with open(self.metadata_file, "w") as f:
-                json.dump(metadata, f, indent=2)
-            _owner_only.restrict_to_owner(self.metadata_file)
+            # Through the same atomic owner-only writer as the salt one screen
+            # up: this used to be open() + chmod, the ordering the writer's
+            # docstring names as the world-readable window, for the file the
+            # store later reads back as untrusted input.
+            _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
             iterations = self.KDF_ITERATIONS
 
         # Derive key using the appropriate algorithm

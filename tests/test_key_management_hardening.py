@@ -101,6 +101,29 @@ class TestFilePermissions:
                 _owner_only.access_description(path) == expected
             ), f"{key_id}.json is {_owner_only.access_description(path)}"
         assert _owner_only.access_description(store.salt_file) == expected
+        assert _owner_only.access_description(store.metadata_file) == expected
+
+    def test_the_kdf_metadata_is_written_through_the_atomic_writer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The metadata file was written with open() + chmod one line after the
+        salt went through _atomic_write_bytes — the ordering that writer's own
+        docstring calls the fixed race — for the file the store reads back as
+        untrusted input.  Every file the store creates goes through the
+        writer now."""
+        from ama_cryptography import key_management as km
+
+        written: list[Path] = []
+        real = km._atomic_write_bytes
+
+        def recording(path: Path, data: bytes) -> None:
+            written.append(Path(path))
+            real(path, data)
+
+        monkeypatch.setattr(km, "_atomic_write_bytes", recording)
+        store = _make_store(tmp_path)
+        assert store.metadata_file in written, [p.name for p in written]
+        assert store.salt_file in written
 
     def test_a_pre_existing_wide_store_is_narrowed(self, tmp_path: Path) -> None:
         """Opening an existing store tightens it, rather than trusting it.
