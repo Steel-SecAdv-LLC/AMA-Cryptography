@@ -181,6 +181,12 @@ def main() -> int:
     print(f"INVARIANT-43: log message encodability ({TARGET_ENCODING})")
     print(f"  files scanned: {files_scanned}; emission sites: {sites_scanned}")
 
+    if files_scanned == 0:
+        # A package directory with no .py in it is a layout change or a broken
+        # glob, and "PASS over nothing" used to be the verdict.
+        print("  FAIL — scanned 0 files; the scan scope is empty, which is a checker fault.")
+        return 1
+
     if failures:
         print(f"  FAIL — {len(failures)} finding(s):\n")
         for failure in failures:

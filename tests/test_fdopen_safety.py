@@ -129,3 +129,21 @@ class TestRealPackageIsGuarded:
             p.read_text(encoding="utf-8") for p in (REPO_ROOT / "ama_cryptography").glob("*.py")
         ]
         assert sum(s.count("os.fdopen(") for s in sources) >= 1
+
+
+class TestNothingCheckedIsNotClean:
+    """An explicit path the checker cannot read is an error, not a clean run:
+    it used to be dropped and the run printed "clean: 0 os.fdopen call
+    site(s)"."""
+
+    def test_an_unreadable_explicit_path_is_an_error(self, tmp_path: Path) -> None:
+        from tools.check_fdopen_safety import main
+
+        assert main(["--paths", str(tmp_path / "missing.py")]) == 2
+
+    def test_a_readable_clean_path_passes(self, tmp_path: Path) -> None:
+        from tools.check_fdopen_safety import main
+
+        clean = tmp_path / "clean.py"
+        clean.write_text("x = 1\n", encoding="utf-8")
+        assert main(["--paths", str(clean)]) == 0

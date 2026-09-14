@@ -243,3 +243,14 @@ class TestInlineGetLoggerIdiom:
         failures, _, sites = tool.audit(root)
         assert failures == []
         assert sites == 0
+
+
+class TestAnEmptyScopeIsAFault:
+    def test_a_package_directory_with_no_sources_fails(
+        self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PASS over zero files used to be the verdict for an empty package
+        directory; a layout change or a broken glob is a checker fault."""
+        (tmp_path / tool.PACKAGE_DIR).mkdir()
+        monkeypatch.chdir(tmp_path)
+        assert tool.main() == 1

@@ -406,6 +406,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     targets: Iterable[Path]
     if args.paths:
         targets = [Path(p).resolve() for p in args.paths]
+        # An explicit path the scanner cannot scan is an error, not a clean
+        # result: a typo, a moved file or a path outside the checkout used to
+        # be silently dropped and the run printed "clean: 0 file(s)".
+        for path in targets:
+            if not path.is_file():
+                print(f"ERROR: {path} is not a file the secret scanner can read.")
+                return 2
+            try:
+                path.relative_to(repo_root)
+            except ValueError:
+                print(f"ERROR: {path} is outside the repository; nothing was scanned.")
+                return 2
     else:
         targets = _tracked_files(repo_root, staged_only=args.staged)
 
@@ -418,6 +430,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue  # outside the repository
         scanned += 1
         findings.extend(scan_file(path, repo_root))
+
+    if scanned == 0 and not args.staged:
+        # Staged mode legitimately sees nothing when the index is empty; every
+        # other mode scanning nothing means the enumeration broke.
+        print("ERROR: the secret scanner scanned 0 files — refusing to report clean.")
+        return 2
 
     if findings:
         print("SECRET SCAN FAILED — potential credential material detected:\n")
