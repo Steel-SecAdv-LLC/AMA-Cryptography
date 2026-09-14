@@ -52,7 +52,7 @@ def _signed(alg: int) -> tuple[bytes, bytes, bytes]:
         sig_size = pb.AmaContext._SIG_SIZES[alg]
         sig = ctypes.create_string_buffer(sig_size)
         sig_len = ctypes.c_size_t(sig_size)
-        assert ctx.sign(message, sk.raw, sig, ctypes.byref(sig_len)) == AMA_SUCCESS
+        assert ctx.sign(message, sk.raw, sig, ctypes.pointer(sig_len)) == AMA_SUCCESS
         return message, sig.raw[: sig_len.value], pk.raw
 
 

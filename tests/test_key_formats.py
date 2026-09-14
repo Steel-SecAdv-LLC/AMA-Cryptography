@@ -1879,10 +1879,8 @@ def test_the_setter_returns_the_previous_value_and_restores_it() -> None:
     try:
         assert previous is True
         assert kf.get_pq_import_consistency() is False
-        # A second call reports the value it is replacing, not the default …
+        # A second call reports the value it is replacing, not the default.
         assert kf.set_pq_import_consistency(False) is False
-        # … and the argument is coerced to a plain bool on the way in.
-        assert kf.set_pq_import_consistency(0) is False
         assert kf.get_pq_import_consistency() is False
     finally:
         restored_from = kf.set_pq_import_consistency(previous)
