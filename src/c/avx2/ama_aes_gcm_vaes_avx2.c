@@ -76,6 +76,7 @@
 #include <string.h>
 #include "ama_cryptography.h"
 #include "ama_avx2_internal.h"
+#include "../internal/ama_ct_barrier.h"
 
 /* MSVC: leave kernel out, let dispatcher fall back to AVX2 AES-NI. */
 #if defined(_MSC_VER)
@@ -664,7 +665,14 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     uint8_t computed_tag_bytes[16];
     _mm_storeu_si128((__m128i *)computed_tag_bytes, computed_tag);
     int tag_match = (ama_consttime_memcmp(computed_tag_bytes, tag, 16) == 0);
-    size_t bound_mask = (size_t)0 - (size_t)tag_match;
+    /* Through the value barrier, as in the scalar kernel (ama_aes_gcm.c):
+     * at -O2 gcc rewrote `x & (0 - tag_match)` as a conditional move on
+     * tag_match, which the Memcheck secret-taint gate reports because
+     * tag_match derives from the key.  The scalar copy gained the barrier
+     * when that gate found it; these two copies of the same selection did
+     * not, and the cmov was visible in the shipped object
+     * (objdump: `sete ... cmove` after the call to ama_consttime_memcmp). */
+    size_t bound_mask = (size_t)ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)tag_match);
     size_t bounded_full      = full_blocks & bound_mask;
     size_t bounded_remaining = remaining   & bound_mask;
 
