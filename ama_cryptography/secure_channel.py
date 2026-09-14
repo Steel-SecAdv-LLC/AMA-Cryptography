@@ -946,7 +946,7 @@ class SecureChannelInitiator:
         # (INVARIANT-1), and both sides must agree byte-for-byte, which two
         # FIPS 202 implementations do.
         from ama_cryptography.pqc_backends import (
-            native_sha3_256,  # noqa: PLC0415  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
+            native_sha3_256,  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
         )
 
         self._handshake_hash = native_sha3_256(msg.serialize())
@@ -1215,7 +1215,7 @@ class SecureChannelResponder:
         # Same kernel as the initiator side above — the two transcript hashes
         # must be equal, and neither may come from OpenSSL (INVARIANT-1).
         from ama_cryptography.pqc_backends import (
-            native_sha3_256,  # noqa: PLC0415  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
+            native_sha3_256,  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
         )
 
         handshake_hash = native_sha3_256(msg.serialize())

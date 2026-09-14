@@ -1066,7 +1066,7 @@ class NonceTracker:
         # modules pqc_backends itself pulls in.
         from ama_cryptography.pqc_backends import (
             native_sha256,
-        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+        )  # deferred: import cycle with pqc_backends (MON-002)
 
         key_hash = native_sha256(key_id).hex()
         nonce_hex = nonce.hex()
@@ -1167,7 +1167,7 @@ class NonceTracker:
         """
         from ama_cryptography.pqc_backends import (
             native_sha256,
-        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+        )  # deferred: import cycle with pqc_backends (MON-002)
 
         key_hash = native_sha256(key_id).hex()
         with self._lock:
@@ -1212,7 +1212,7 @@ class NonceTracker:
         # modules pqc_backends itself pulls in.
         from ama_cryptography.pqc_backends import (
             native_sha256,
-        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+        )  # deferred: import cycle with pqc_backends (MON-002)
 
         key_hash = native_sha256(key_id).hex()
         return self._counters.get(key_hash, 0)
@@ -3612,7 +3612,7 @@ class RefactoringAnalyzer:
         """
         from ama_cryptography.pqc_backends import (
             native_sha3_256,
-        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+        )  # deferred: import cycle with pqc_backends (MON-002)
 
         return native_sha3_256(filepath.read_bytes()).hex()
 
@@ -3786,7 +3786,7 @@ class RefactoringAnalyzer:
             # Priority 9: Compute and cache content hash
             from ama_cryptography.pqc_backends import (
                 native_sha3_256,
-            )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+            )  # deferred: import cycle with pqc_backends (MON-002)
 
             content_hash = native_sha3_256(source.encode("utf-8")).hex()
             metrics["content_hash"] = content_hash

@@ -955,12 +955,12 @@ class SecureBuffer:
         """
         try:
             secure_memzero(data)
-        except Exception as exc:  # noqa: BLE001 -- a finalizer cannot raise usefully (MEM-014)
+        except Exception as exc:  # a finalizer cannot raise usefully (MEM-014)
             logger.warning("SecureBuffer: finalizer wipe failed: %s", exc)
         if locked:
             try:
                 secure_munlock(data)
-            except Exception as exc:  # noqa: BLE001 -- a finalizer cannot raise usefully (MEM-014)
+            except Exception as exc:  # a finalizer cannot raise usefully (MEM-014)
                 logger.warning("SecureBuffer: finalizer munlock failed: %s", exc)
 
     def __enter__(self) -> bytearray:

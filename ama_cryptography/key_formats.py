@@ -1394,9 +1394,9 @@ def _ml_kem_embedded_public_key(alg: _Alg, secret: bytes) -> bytes:
 
 def _read_implicit_bit_string(reader: DerReader, alg: _Alg) -> bytes:
     """Read the [1] publicKey field, which is an IMPLICIT BIT STRING."""
-    raw = reader._buf[
-        reader._pos : reader._end
-    ]  # noqa: SLF001 -- implicit tagging strips the BIT STRING header, so the octets must be read directly (KF-001)
+    # Implicit tagging strips the BIT STRING header, so the octets must be
+    # read directly from the reader's buffer (KF-001).
+    raw = reader._buf[reader._pos : reader._end]
     if not raw:
         raise KeyFormatError("empty PKCS#8 publicKey field")
     if raw[0] != 0x00:
@@ -1484,9 +1484,8 @@ def _parse_pq_private_key(
 
     if tag == 0x80:  # [0] IMPLICIT seed — the tag replaces the OCTET STRING's
         body = reader.read_tagged(0, constructed=False)
-        seed = body._buf[
-            body._pos : body._end
-        ]  # noqa: SLF001 -- IMPLICIT [0] OCTET STRING carries no inner header (KF-002)
+        # IMPLICIT [0] OCTET STRING carries no inner header (KF-002).
+        seed = body._buf[body._pos : body._end]
         reader.finish()
         expanded, public = _expand_pq_seed(alg, seed)
         return expanded, public, seed

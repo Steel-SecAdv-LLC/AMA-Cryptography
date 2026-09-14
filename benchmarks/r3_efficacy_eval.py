@@ -143,7 +143,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=394)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    rng = random.Random(args.seed)
+    rng = random.Random(args.seed)  # fmt: skip  # noqa: S311 -- anomaly-injection positions from a seeded PRNG so the experiment reproduces; nothing cryptographic is drawn (REE-001)
 
     trace = benign_trace(args.samples)
     med = statistics.median(trace)

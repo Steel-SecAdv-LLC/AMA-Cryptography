@@ -347,12 +347,11 @@ ignore = [
 #   UP015: redundant open modes (existing pattern)
 #   RUF010: explicit f-string type conversion (existing pattern)
 #   RUF022: unsorted __all__ (existing order is logical, not alphabetical)
-#   RUF100: unused noqa directives (will be cleaned separately)
 # SECURITY: S110 (bare except:pass) and B904 (raise-without-from) are NOT
 # suppressed — crypto code must propagate exceptions with full context.
 "ama_cryptography/*" = [
     "N803", "N806", "N818",
-    "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
+    "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022",
     "S101", "S106", "S107",
     "E402", "E501",
     "B028",
@@ -368,7 +367,7 @@ ignore = [
 #   UP012: unnecessary UTF-8 encoding argument
 "ama_cryptography/legacy_compat.py" = [
     "N803", "N806", "N818",
-    "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022", "RUF100",
+    "RUF001", "RUF002", "RUF003", "RUF010", "RUF012", "RUF022",
     "S101", "S106", "S107",
     "E402", "E501",
     "B028",
@@ -389,23 +388,24 @@ ignore = [
 # benchmarks/* — chart generation and bench-harness scripts:
 #   C901: matplotlib chart builders unavoidably exceed McCabe complexity (many panels, axes, annotations).
 #   RUF001: chart captions and axis labels use the Unicode multiplication sign (×) and Greek letters intentionally.
-#   E402/E501/F541/I001/RUF059/RUF100/UP006/UP035: same legacy-formatting / typing-imports patterns the
+#   E501/F541/I001/RUF059/UP006/UP035: same legacy-formatting / typing-imports patterns the
 #         rest of the codebase carries (see "ama_cryptography/*" header above).
 #   S603/S607: subprocess calls with bare executable name (git, cmake, ...) are intentional in benchmark tooling.
-#   S311: r3_efficacy_eval.py draws anomaly-injection positions from a seeded PRNG
-#         so the experiment reproduces; nothing cryptographic is drawn.
+#   E402 and S311 are NOT file-scoped here: the sys.path-then-import shape and the
+#         seeded, non-cryptographic PRNG draws each carry a line-scoped, justified
+#         `noqa` at the site (INVARIANT-13), and RUF100 keeps every such directive live.
 "benchmarks/*" = [
     "C901",
-    "E402", "E501", "F541", "I001",
-    "RUF001", "RUF059", "RUF100",
-    "S311", "S603", "S607",
+    "E501", "F541", "I001",
+    "RUF001", "RUF059",
+    "S603", "S607",
     "UP006", "UP035",
 ]
 # examples/**  (double-star) is required — scripts live in examples/python/
 "examples/**" = [
     "B007", "B904",
     "E402",
-    "RUF001", "RUF059", "RUF100",
+    "RUF001", "RUF059",
     "S106",
     "UP006", "UP035",
 ]

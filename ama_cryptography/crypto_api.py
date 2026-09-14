@@ -56,7 +56,7 @@ from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 # persistent NonceTracker / monitor with a good path.
 try:
     _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
-except Exception as _monitor_persist_exc:  # noqa: BLE001 -- degrade, never brick import (AUDIT-15)
+except Exception as _monitor_persist_exc:  # degrade, never brick import (AUDIT-15)
     logging.getLogger(__name__).warning(
         "monitor persistence unavailable (%s: %s); continuing with in-memory-only "
         "nonce tracking. Persistent cross-restart nonce-reuse detection is disabled "
@@ -66,9 +66,7 @@ except Exception as _monitor_persist_exc:  # noqa: BLE001 -- degrade, never bric
     )
     try:
         _monitor = AmaCryptographyMonitor(enabled=True, nonce_persist_path=os.devnull)
-    except (
-        Exception
-    ):  # noqa: BLE001 -- last resort: monitoring off, library still imports (AUDIT-15)
+    except Exception:  # last resort: monitoring off, library still imports (AUDIT-15)
         _monitor = create_monitor(enabled=False)
 
 # Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback

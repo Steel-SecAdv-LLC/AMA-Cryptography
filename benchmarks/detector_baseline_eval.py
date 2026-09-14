@@ -130,7 +130,8 @@ def collect_real_timings(count: int) -> Tuple[List[float], str, str]:
     degrading.
     """
     try:
-        from ama_cryptography.pqc_backends import (  # noqa: PLC0415 -- deferred import keeps the optional backend off the module-load path (DBE-001)
+        # Deferred import keeps the optional backend off the module-load path (DBE-001).
+        from ama_cryptography.pqc_backends import (
             native_ed25519_keypair,
             native_ed25519_sign,
         )
@@ -163,7 +164,7 @@ def collect_real_timings(count: int) -> Tuple[List[float], str, str]:
 
 
 def inject_spikes(base: Sequence[float], *, rate: float, magnitude: float, seed: int) -> Stream:
-    # noqa rationale as above: choosing WHICH samples to corrupt in a
+    # Same S311 rationale as above: choosing WHICH samples to corrupt in a
     # benchmark stream is not a cryptographic draw, and seeding it is what
     # makes the evaluation reproducible run to run.
     rng = random.Random(seed)  # fmt: skip  # noqa: S311 -- deterministic baseline data, not key material (DBE-002)
@@ -267,7 +268,8 @@ def run_shipped(
     stronger z-branch than production shipped; measuring a re-implementation
     is how the sigma-inertness defect stayed invisible.)
     """
-    from ama_cryptography.monitoring import ResonanceTimingMonitor  # fmt: skip  # noqa: PLC0415 -- deferred import keeps the optional backend off the module-load path (DBE-001)
+    # Deferred import keeps the optional backend off the module-load path (DBE-001).
+    from ama_cryptography.monitoring import ResonanceTimingMonitor
 
     monitor = ResonanceTimingMonitor(
         anomaly_profiles={

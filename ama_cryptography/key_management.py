@@ -340,7 +340,7 @@ class HDKeyDerivation:
             # unauthorized vendor (INVARIANT-1).  Byte-identical: pinned
             # against the official BIP39 vector and differentially against
             # hashlib in tests/test_sha2_pbkdf2_native.py.
-            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+            from ama_cryptography.pqc_backends import (  # deferred: import cycle with pqc_backends (KMG-001)
                 native_pbkdf2_hmac_sha512,
             )
 
@@ -1206,7 +1206,7 @@ class SecureKeyStorage:
             self.kdf_params["iterations"] = iterations
             # Key-encryption-key derivation on this module's own PBKDF2
             # (INVARIANT-1; see the BIP39 site above for the full rationale).
-            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+            from ama_cryptography.pqc_backends import (  # deferred: import cycle with pqc_backends (KMG-001)
                 native_pbkdf2_hmac_sha256,
             )
 
@@ -1278,7 +1278,7 @@ class SecureKeyStorage:
             )
         else:
             # Same KDF as the initial derivation above (INVARIANT-1).
-            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+            from ama_cryptography.pqc_backends import (  # deferred: import cycle with pqc_backends (KMG-001)
                 native_pbkdf2_hmac_sha256,
             )
 
@@ -2071,7 +2071,7 @@ if __name__ == "__main__":
     # the module's own SHA3-256 rather than OpenSSL-backed hashlib
     # (INVARIANT-1).
     from ama_cryptography.pqc_backends import (
-        native_sha3_256,  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+        native_sha3_256,  # deferred: import cycle with pqc_backends (KMG-001)
     )
 
     sk_fp = native_sha3_256(signing_key).hex()[:16]

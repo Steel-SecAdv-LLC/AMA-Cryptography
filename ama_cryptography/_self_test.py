@@ -3047,10 +3047,10 @@ def _run_rng_stage() -> Tuple[bool, Optional[str]]:
     # unreachable, an OpenSSL-seeded one would be a vendor in the RNG path.
     from ama_cryptography.exceptions import (
         NativeBackendUnavailableError,
-    )  # noqa: PLC0415  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
+    )  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
     from ama_cryptography.pqc_backends import (
         native_sha256,
-    )  # noqa: PLC0415  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
+    )  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
 
     try:
         _rng_state["previous"] = native_sha256(out2)
