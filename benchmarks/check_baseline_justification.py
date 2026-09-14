@@ -100,6 +100,26 @@ def _run_git(*args: str) -> str:
     return result.stdout
 
 
+def _require_commit(ref: str) -> str:
+    """Resolve ``ref`` to a commit id, or raise ``CalledProcessError``.
+
+    ``_load_baseline_at`` and ``_load_metadata_at`` treat a failed ``git show``
+    as "the file did not exist at that ref" — right for a baseline this diff
+    adds, and wrong for a ref that does not exist at all: every comparison then
+    degrades to ``{}`` against ``{}``, and ``_check_validity_window`` returns no
+    failures having checked nothing.  That is how
+    ``test_the_current_tree_satisfies_the_rule`` passed on every shallow CI
+    checkout — ``origin/main`` was absent, so the guard compared nothing with
+    nothing, and the test's own "skip if the ref is missing" branch never ran.
+
+    An empty ref is the same hole in a different shape: ``git show :path``
+    reads the index, so ``--base-ref ""`` compares HEAD with itself and the
+    CLI prints OK.  Resolving the ref first makes both an error in the caller
+    that ``main`` and the tests already handle.
+    """
+    return _run_git("rev-parse", "--verify", f"{ref}^{{commit}}").strip()
+
+
 def _load_baseline_at(ref: str, path: str = BASELINE_PATH) -> Dict[str, Dict[str, object]]:
     """Return {primitive_name: entry_dict} merged from benchmarks + pqc_benchmarks
     sections, as they appeared at ``ref``. Missing file yields {}."""
@@ -559,6 +579,8 @@ def _check_validity_window(base_ref: str, head_ref: str) -> List[str]:
     so it constrains the next extension rather than retroactively failing the
     current files.
     """
+    _require_commit(base_ref)
+    _require_commit(head_ref)
     failures: List[str] = []
     for path in ALL_BASELINE_PATHS:
         before_meta = _load_metadata_at(base_ref, path)
@@ -678,6 +700,19 @@ def main(argv: List[str]) -> int:
         except OSError as exc:
             print(f"ERROR: could not read --pr-body-file: {exc}", file=sys.stderr)
             return 2
+
+    try:
+        for ref in (args.base_ref, args.head_ref):
+            _require_commit(ref)
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"ERROR: ref {ref!r} does not resolve to a commit ({exc.stderr.strip()}). "
+            "Nothing can be compared against a ref that is not in the checkout; "
+            "a shallow clone needs fetch-depth: 0, and an empty --base-ref would "
+            "silently compare HEAD with itself.",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         per_path_changes: List[Tuple[str, List[Tuple[str, object, object]]]] = []

@@ -707,6 +707,8 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         import benchmarks.check_baseline_justification as guard
 
         def fake_run_git(*args: str) -> str:
+            if args[0] == "rev-parse":
+                return "0" * 40 + "\n"  # both synthetic refs resolve
             ref, _, path = args[1].partition(":")
             if path != guard.ARM_BASELINE_PATH:
                 raise subprocess.CalledProcessError(1, "git")
@@ -783,6 +785,8 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         after = calibrated("5.0.0", "5.0.0", 150)
 
         def fake_run_git(*args: str) -> str:
+            if args[0] == "rev-parse":
+                return "0" * 40 + "\n"
             if args[0] == "cat-file":
                 return ""
             if args[0] == "diff":
@@ -809,6 +813,7 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         ]
         assert guard._check_validity_window("BASE", "HEAD") == []
 
+    @pytest.mark.requires_git_history
     def test_the_current_tree_satisfies_the_rule(self) -> None:
         """This branch must not itself be extending a window silently."""
         import subprocess
@@ -820,6 +825,7 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
             pytest.skip("origin/main is not available in this checkout")
 
+    @pytest.mark.requires_git_history
     def test_the_working_tree_satisfies_it_too(self) -> None:
         """The same rule, one commit earlier.
 
@@ -868,6 +874,36 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
                 + "  Add a {path, reason} entry for each — measured, not asserted — "
                 "before committing. Leaving it to CI costs a red check and a cycle."
             )
+
+    def test_a_missing_base_ref_raises_rather_than_passing(self) -> None:
+        """Real git, no fake: a ref that is not in the checkout is an error.
+
+        Before ``_require_commit`` the loaders swallowed the failed ``git
+        show`` as "file absent at that ref", every comparison became ``{}``
+        against ``{}``, and the window check returned no failures.  In a
+        depth-1 checkout — every CI pytest lane until this pass — that made
+        ``test_the_current_tree_satisfies_the_rule`` a pass that checked
+        nothing, and its skip branch for the missing ref dead code.
+        """
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        with pytest.raises(subprocess.CalledProcessError):
+            guard._check_validity_window("no-such-ref-for-this-test", "HEAD")
+
+    def test_the_cli_rejects_an_empty_base_ref(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """``git show :path`` reads the index, so an empty ``--base-ref`` used
+        to compare HEAD with itself and print OK — exit 0 on a guard that had
+        compared nothing.  ``github.event.pull_request.base.sha`` is empty on
+        any trigger that is not a pull request, which is exactly the run in
+        which nobody is looking at the output."""
+        import benchmarks.check_baseline_justification as guard
+
+        assert guard.main(["--base-ref", "", "--head-ref", "HEAD"]) == 2
+        err = capsys.readouterr().err
+        assert "does not resolve to a commit" in err
+        assert "OK:" not in capsys.readouterr().out
 
 
 class TestReleaseParsing:
