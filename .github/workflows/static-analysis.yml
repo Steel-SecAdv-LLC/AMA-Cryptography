@@ -582,7 +582,26 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev
 
-      - name: Build with MSan
+      - name: Build with MSan (every SIMD kernel instrumented)
+        # This lane configured -DAMA_ENABLE_SIMD=OFF from the day it was added,
+        # so no AVX2, AVX-512, NEON or SVE2 kernel had ever executed under
+        # MemorySanitizer: the uninitialised-read class this sanitizer exists
+        # for was checked on the scalar fallbacks and never on the kernels a
+        # wheel actually runs.  Measured before flipping it: with clang-18 and
+        # SIMD=ON the full suite passes 90/90 in 84 s of wall clock against
+        # this job's 25-minute budget, every avx2/*.o and the AVX-512 x4
+        # Keccak object carry __msan_* references (instrumented, not opaque),
+        # the dispatcher's verbose init shows the AVX2 kernels wired, and gdb
+        # breakpoints on ama_kyber_ntt_avx2, ama_dilithium_ntt_avx2,
+        # ama_chacha20_block_x8_avx2, ama_argon2_g_avx2,
+        # ama_x25519_scalarmult_x4_avx2 and ama_keccak_f1600_x4_avx512 hit
+        # hundreds to thousands of times inside the KATs, with zero MSan
+        # reports.  AVX-512 is built too: the kernel skips (77) on runners
+        # without AVX-512F/VL and is exercised on those that have it.
+        #
+        # The per-slot KAT sweep registered in tests/c/CMakeLists.txt is part
+        # of this ctest run, so each SIMD kernel is exercised under MSan with
+        # its slot pinned, not only when the auto-tune happens to select it.
         run: |
           cmake -B build-msan \
             -DCMAKE_C_COMPILER=clang-18 \
@@ -594,7 +613,9 @@ jobs:
             -DAMA_BUILD_TESTS=ON \
             -DAMA_BUILD_EXAMPLES=OFF \
             -DAMA_ENABLE_LTO=OFF \
-            -DAMA_ENABLE_SIMD=OFF \
+            -DAMA_ENABLE_SIMD=ON \
+            -DAMA_ENABLE_AVX2=ON \
+            -DAMA_ENABLE_AVX512=ON \
             -DAMA_AES_CONSTTIME=ON
           cmake --build build-msan -j$(nproc)
 
@@ -1401,7 +1422,11 @@ jobs:
         run: |
           .github/scripts/apt-install.sh cmake clang-18 libc++-18-dev libc++abi-18-dev
 
-      - name: Configure with MSan (KAT-only, SIMD off, const-time AES)
+      - name: Configure with MSan (KAT-only, SIMD on, const-time AES)
+        # SIMD was OFF here too, so the per-PR MSan coverage of the PQC KATs
+        # was of the scalar NTTs and the generic 4-way Keccak — not of the AVX2
+        # kernels every x86-64 wheel runs them through.  See the full lane
+        # above for the measurement that made flipping it safe.
         run: |
           cmake -B build-msan-kat \
             -DCMAKE_C_COMPILER=clang-18 \
@@ -1413,18 +1438,29 @@ jobs:
             -DAMA_BUILD_TESTS=ON \
             -DAMA_BUILD_EXAMPLES=OFF \
             -DAMA_ENABLE_LTO=OFF \
-            -DAMA_ENABLE_SIMD=OFF \
+            -DAMA_ENABLE_SIMD=ON \
+            -DAMA_ENABLE_AVX2=ON \
+            -DAMA_ENABLE_AVX512=ON \
             -DAMA_AES_CONSTTIME=ON
 
       - name: Build only the test_kat target (+ its deps)
         run: cmake --build build-msan-kat --target test_kat -j"$(nproc)"
 
-      - name: Run test_kat under MSan
+      - name: Run test_kat under MSan, default wiring and under every pinned slot
         env:
           MSAN_OPTIONS: print_stacktrace=1:halt_on_error=1:abort_on_error=1
         # `ctest -R` honours the add_test WORKING_DIRECTORY (repo root) needed to
-        # locate the NIST KAT vector files. Anchored regex matches exactly test_kat.
-        run: ctest --test-dir build-msan-kat -R '^test_kat$' --output-on-failure
+        # locate the NIST KAT vector files.  The second alternative selects the
+        # per-slot sweep cells that run this same executable with one SIMD
+        # slot pinned (tests/c/CMakeLists.txt): the AVX2 NTTs and the AVX2
+        # 4-way Keccak are mandatory on this runner class and FAIL if the pin
+        # is not honoured; the AVX-512 cell skips where the silicon is absent.
+        # --no-tests=error: a regex that matches nothing is a broken lane, not
+        # a green one.
+        run: |
+          ctest --test-dir build-msan-kat \
+            -R '^(test_kat|kat_sweep__.*__test_kat)$' \
+            --output-on-failure --no-tests=error
 
   static-analysis-gate:
     name: Static Analysis Gate

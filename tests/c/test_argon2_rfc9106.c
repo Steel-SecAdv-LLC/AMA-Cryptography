@@ -62,6 +62,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "kat_slot_guard.h"
 
 static int g_failures = 0;
 static int g_checks = 0;
@@ -370,6 +371,7 @@ static void test_optional_inputs_reject_null_with_nonzero_length(void) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     printf("=== Argon2id RFC 9106 Sec 5.3 known-answer test ===\n\n");
 
     test_prehash_digest_matches_rfc();

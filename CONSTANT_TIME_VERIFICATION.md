@@ -144,6 +144,8 @@ Each lane also reports the per-class mean difference in nanoseconds beside its t
 
   Remaining after this: the two SVE2 cells and `sha3-avx512x4` above, both of which are genuine hardware-availability limits rather than missing wiring.
 
+- **~~Four more kernels had no pin name, and three of them were switched OFF by every other pin.~~ Closed.** The AVX2 4-way Keccak (`keccak_f1600_x4`, the kernel that expands every ML-KEM and ML-DSA matrix in every x86-64 wheel), the x86 AES-NI+PCLMULQDQ and VAES+VPCLMULQDQ AES-GCM kernels, and the SVE2 ML-DSA NTT were all wired by the default dispatch and none had an `AMA_DISPATCH_ONLY` name. Worse than unmeasurable: `apply_dispatch_only()` resets `keccak_f1600_x4` to the generic kernel and zeroes both AES-GCM slots before honouring any pin, so under *every* sweep cell those three ran their scalar fallbacks. `sha3-avx2x4`, `aes-gcm-aesni`, `aes-gcm-vaes` and `dilithium-ntt-sve2` now exist; the first two are mandatory on `ubuntu-latest` (AVX2 and AES-NI are on every hosted x86-64 runner), `aes-gcm-vaes` and `dilithium-ntt-sve2` are optional for the same silicon reason as `sha3-avx512x4` and the SVE2 cells. The same names drive the per-slot known-answer sweep in `tests/c/CMakeLists.txt`, which runs the published-vector KATs under each pin on every ctest lane, including MemorySanitizer.
+
 ### Running the Verification
 
 #### Quick Test (100K iterations)

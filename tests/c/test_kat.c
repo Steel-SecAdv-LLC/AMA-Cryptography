@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "kat_slot_guard.h"
 
 /* ============================================================================
  * TEST INFRASTRUCTURE
@@ -900,6 +901,7 @@ static int test_kyber_compress_roundtrip(void) {
  * ============================================================================ */
 
 int main(int argc, char *argv[]) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     (void)argc;
     (void)argv;
 

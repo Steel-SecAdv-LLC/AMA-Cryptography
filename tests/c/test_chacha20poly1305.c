@@ -24,6 +24,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 static int failures = 0;
 static int checks   = 0;
@@ -283,6 +284,7 @@ static void test_tag_mismatch(void) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     printf("===========================================\n");
     printf("ChaCha20-Poly1305 KAT + AVX2 cross-check\n");
     printf("===========================================\n\n");

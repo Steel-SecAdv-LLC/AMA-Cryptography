@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "kat_slot_guard.h"
 
 extern void ama_test_force_aes_gcm_scalar(void);
 extern void ama_test_restore_aes_gcm(void);
@@ -245,6 +246,7 @@ static void test_scalar_vs_simd_equiv(void) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     printf("==================================================\n");
     printf("AES-256-GCM scalar reference KAT + scalar/SIMD\n");
     printf("equivalence (exercises table-free word-level GHASH)\n");

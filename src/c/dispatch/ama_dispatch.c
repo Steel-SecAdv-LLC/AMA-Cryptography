@@ -658,6 +658,9 @@ typedef enum {
  */
 static const char *const AMA_DISPATCH_ONLY_SLOTS[] = {
     "sha3-avx512x4",
+    "sha3-avx2x4",
+    "aes-gcm-aesni",
+    "aes-gcm-vaes",
     "kyber-ntt-avx2",
     "dilithium-ntt-avx2",
     "chacha20-avx2x8",
@@ -670,6 +673,7 @@ static const char *const AMA_DISPATCH_ONLY_SLOTS[] = {
     "argon2-g-neon",
     "kyber-sve2",
     "sha3-sve2",
+    "dilithium-ntt-sve2",
     "x25519-avx2",
     NULL,
 };
@@ -708,6 +712,22 @@ static apply_dispatch_only_result_t apply_dispatch_only(
 #endif
 
 #ifdef AMA_HAVE_AVX2_IMPL
+    /* The AVX2 4-way Keccak had no pin of its own: every pin resets
+     * keccak_f1600_x4 to the generic kernel (above), the only x4 name was the
+     * AVX-512 one, and on hosts where the auto-tune reverts the AVX2 x4 slot
+     * the default-dispatch KATs ran generic Keccak too — so the kernel that
+     * expands every ML-KEM matrix and ML-DSA matrix in every x86-64 wheel
+     * could go unverified against a published vector on a green run.  Same
+     * feature-probe resolution as the NTT slots below: the kernel is compiled
+     * whenever this branch is, and a pin exists to override the auto-tune. */
+    if (strcmp(slot, "sha3-avx2x4") == 0) {
+        if (ama_has_avx2()) {
+            dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx2;
+            *resolved_label_out = "sha3-avx2x4";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
     /* These four resolve the way the NEON NTT branches do — on the FEATURE
      * question, wiring the kernels directly — not with the `saved ==` test
      * an earlier revision used.  The NEON block's doctrine (see the long
@@ -768,6 +788,41 @@ static apply_dispatch_only_result_t apply_dispatch_only(
             *resolved_label_out = "x25519-avx2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
+#endif
+
+#ifdef AMA_HAVE_X86_AESNI_IMPL
+    /* The x86 AES-GCM kernels had no pin either, and every pin ZEROED them:
+     * under any AMA_DISPATCH_ONLY the backend fell to bitsliced-software, so
+     * no sweep cell could ever measure or KAT the AES-NI or VAES kernel, and
+     * in C the SP 800-38D vectors were only ever run with the slots forced
+     * scalar (tests/c/test_aes_gcm_scalar_kat.c).  The gates mirror the
+     * default wiring exactly: AES-NI and PCLMULQDQ checked individually (a
+     * hypervisor can mask one), VAES through the bundle probe. */
+    if (strcmp(slot, "aes-gcm-aesni") == 0) {
+        if (ama_has_aes_ni() && ama_has_pclmulqdq()) {
+            dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
+            dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
+            *resolved_label_out = "aes-gcm-aesni";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
+    if (strcmp(slot, "aes-gcm-vaes") == 0) {
+        /* Same two build gates as the installer below: the YMM kernel
+         * genuinely needs AVX2, and it is not built under MSVC. */
+#ifdef AMA_HAVE_AVX2_IMPL
+#if !defined(_MSC_VER)
+        if (ama_has_aes_ni() && ama_has_pclmulqdq() && ama_cpuid_has_vaes_aesgcm()) {
+            dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_vaes_avx2;
+            dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_vaes_avx2;
+            *resolved_label_out = "aes-gcm-vaes";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
+#endif
+#endif
+        /* Known name, kernel not in this build or not on this host. */
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
 #endif
@@ -923,6 +978,19 @@ static apply_dispatch_only_result_t apply_dispatch_only(
         if (saved.keccak_f1600 == ama_keccak_f1600_sve2) {
             dispatch_table.keccak_f1600 = saved.keccak_f1600;
             *resolved_label_out = "sha3-sve2";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
+    /* The SVE2 ML-DSA NTT was wired by the default SVE2 block below but had
+     * no pin name, so neither the dudect sweep nor the KAT sweep could
+     * isolate it.  Same saved== resolution as the two SVE2 slots above. */
+    if (strcmp(slot, "dilithium-ntt-sve2") == 0) {
+        if (saved.dilithium_ntt == ama_dilithium_ntt_sve2) {
+            dispatch_table.dilithium_ntt       = saved.dilithium_ntt;
+            dispatch_table.dilithium_invntt    = saved.dilithium_invntt;
+            dispatch_table.dilithium_pointwise = saved.dilithium_pointwise;
+            *resolved_label_out = "dilithium-ntt-sve2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
         return AMA_DISPATCH_ONLY_UNSUPPORTED;

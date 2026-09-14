@@ -393,6 +393,16 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm]
         slot:
           - sha3-avx512x4
+          # The AVX2 4-way Keccak and the two x86 AES-GCM hardware kernels had
+          # no pin name at all — worse, every OTHER pin reset the x4 slot to
+          # generic and zeroed the AES-GCM slots, so no sweep cell could ever
+          # measure them.  The names exist now (src/c/dispatch/ama_dispatch.c).
+          # sha3-avx2x4 and aes-gcm-aesni are mandatory on x86-64: AVX2 and
+          # AES-NI+PCLMULQDQ are on every hosted x86-64 runner.  aes-gcm-vaes
+          # is optional, like sha3-avx512x4: VAES is on some runner SKUs only.
+          - sha3-avx2x4
+          - aes-gcm-aesni
+          - aes-gcm-vaes
           - kyber-ntt-avx2
           - dilithium-ntt-avx2
           - chacha20-avx2x8
@@ -411,6 +421,9 @@ jobs:
           - argon2-g-neon
           - kyber-sve2
           - sha3-sve2
+          # The SVE2 ML-DSA NTT was wired but had no pin name; optional like the
+          # other two SVE2 cells, since it depends on the runner's silicon.
+          - dilithium-ntt-sve2
           - x25519-avx2
         exclude:
           # x86-64 hosts (ubuntu-latest): exclude NEON + SVE2 slots.
@@ -434,6 +447,8 @@ jobs:
             slot: kyber-sve2
           - os: ubuntu-latest
             slot: sha3-sve2
+          - os: ubuntu-latest
+            slot: dilithium-ntt-sve2
           # AArch64 hosts (ubuntu-24.04-arm): exclude AVX-* slots and
           # the AVX2 X25519 lane.  Same rationale as above, with
           # the six NEON slots retained on this side because AArch64
@@ -445,6 +460,12 @@ jobs:
           # is what it silently meant while that flag was missing.
           - os: ubuntu-24.04-arm
             slot: sha3-avx512x4
+          - os: ubuntu-24.04-arm
+            slot: sha3-avx2x4
+          - os: ubuntu-24.04-arm
+            slot: aes-gcm-aesni
+          - os: ubuntu-24.04-arm
+            slot: aes-gcm-vaes
           - os: ubuntu-24.04-arm
             slot: kyber-ntt-avx2
           - os: ubuntu-24.04-arm
@@ -543,7 +564,7 @@ jobs:
           # such a regression rode a green gate with only a ::warning:: — the
           # same "a gate slot that cannot fail" shape as the AVX-512 KAT lane
           # (audit M26).  Fail the mandatory slots; skip only the optional ones.
-          OPTIONAL_SLOTS="sha3-avx512x4 kyber-sve2 sha3-sve2"
+          OPTIONAL_SLOTS="sha3-avx512x4 aes-gcm-vaes kyber-sve2 sha3-sve2 dilithium-ntt-sve2"
           if [ "$rc" -eq 77 ]; then
             case " ${OPTIONAL_SLOTS} " in
               *" ${AMA_DISPATCH_ONLY} "*)

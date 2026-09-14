@@ -20,6 +20,7 @@
 
 #include "ama_cryptography.h"
 #include "../../src/c/internal/ama_testing_exports.h"
+#include "kat_slot_guard.h"
 
 #define KAT_PATH "tests/kat/fips203/acvp/acvp_encapsulation_aft.kat"
 #define MAX_HEX  (2 * 1568 + 8)
@@ -43,6 +44,7 @@ static void chomp(char *s) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     FILE *f = fopen(KAT_PATH, "r");
     static char line[MAX_HEX + 64];
     static uint8_t ek[1568], m[32], c_exp[1568], k_exp[32], ct[1568], ss[32];

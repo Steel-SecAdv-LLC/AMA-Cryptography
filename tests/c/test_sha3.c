@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -35,6 +36,7 @@ static const uint8_t sha3_256_abc_expected[32] = {
 };
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     uint8_t output[32];
     ama_error_t rc;
 

@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 #define TEST_ASSERT(condition, message)                          \
     do {                                                         \
@@ -216,6 +217,7 @@ cleanup:
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     uint8_t out[32];
 
     /* RFC 7748 §5.2 TV1: scalar * u */

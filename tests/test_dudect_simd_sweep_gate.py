@@ -32,8 +32,15 @@ yaml = pytest.importorskip("yaml")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DUDECT_YML = REPO_ROOT / ".github" / "workflows" / "dudect.yml"
 
-#: The only slots whose CPU feature is genuinely runner-silicon-dependent.
-EXPECTED_OPTIONAL = {"sha3-avx512x4", "kyber-sve2", "sha3-sve2"}
+#: The only slots whose CPU feature is genuinely runner-silicon-dependent:
+#: AVX-512 and VAES are on some hosted x86-64 SKUs only, SVE2 on some AArch64.
+EXPECTED_OPTIONAL = {
+    "sha3-avx512x4",
+    "aes-gcm-vaes",
+    "kyber-sve2",
+    "sha3-sve2",
+    "dilithium-ntt-sve2",
+}
 
 # The membership-rule test below runs the step's own POSIX `case` through bash
 # with a POSIX PATH, so it reproduces the workflow byte-for-byte on the runners

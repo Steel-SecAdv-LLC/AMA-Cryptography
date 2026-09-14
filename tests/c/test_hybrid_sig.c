@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 static int checks = 0, failures = 0;
 #define CHECK(cond, msg) do { checks++; if (!(cond)) { failures++; fprintf(stderr, "FAIL: %s (%s:%d)\n", msg, __FILE__, __LINE__); } } while (0)
@@ -23,6 +24,7 @@ static int checks = 0, failures = 0;
 static const char DOMAIN[] = AMA_HYBRID_SIG_DOMAIN;
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     ama_context_t *ctx = ama_context_init(AMA_ALG_HYBRID);
     static uint8_t pk[AMA_HYBRID_PUBLIC_KEY_BYTES], sk[AMA_HYBRID_SECRET_KEY_BYTES];
     static uint8_t sig[AMA_HYBRID_SIGNATURE_BYTES], sig2[AMA_HYBRID_SIGNATURE_BYTES];

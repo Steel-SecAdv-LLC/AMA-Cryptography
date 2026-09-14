@@ -285,9 +285,9 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build-arm-sve2 \
-            -R '^test_dispatch_only_(kyber|sha3)-sve2$' \
+            -R '^test_dispatch_only_(kyber|sha3|dilithium-ntt)-sve2$' \
             --output-on-failure --no-tests=error | tee /tmp/sve2_wiring.txt
-          for slot in kyber sha3; do
+          for slot in kyber sha3 dilithium-ntt; do
             grep -Eq "test_dispatch_only_${slot}-sve2 .*Passed" /tmp/sve2_wiring.txt \
               || { echo "::error::${slot}-sve2 dispatch wiring not exercised (not Passed) — SVE2 dispatch regressed or auto-tune reverted it (M4)"; exit 1; }
           done

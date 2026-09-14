@@ -33,6 +33,13 @@ add_test(NAME test_secure_free_scrub_negative
          COMMAND test_secure_free_scrub negative)
 set_tests_properties(test_secure_free_scrub_negative PROPERTIES SKIP_RETURN_CODE 77)
 add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
+# The same SP 800-38D vectors (plus Cases 15 and 16) through the public API
+# with whichever AES-GCM kernel the dispatcher installed.  The scalar KAT
+# above forces the slots to the software path by design; until this target
+# existed no C test ran a published AES-GCM vector with the AES-NI, VAES or
+# ARMv8 kernel in place.  Under the per-slot sweep below it also requires
+# ama_aes_gcm_active_backend() to name the pinned kernel.
+add_ama_test(test_aes_gcm_kat test_aes_gcm_kat.c)
 # Standalone SHA-512 (FIPS 180-4) byte-exact KAT over the exported
 # ama_ed25519_sha512 one-shot (the shipped FIPS 180-4 SHA-512 core shared by
 # HMAC-SHA-512/384, HKDF-SHA-512, Ed25519 and SLH-DSA-SHA2 H_msg).
@@ -67,6 +74,9 @@ target_link_libraries(test_dispatch_only_env ama_cryptography_test)
 # as unsupported.  Handled inline below.
 foreach(slot
     sha3-avx512x4
+    sha3-avx2x4
+    aes-gcm-aesni
+    aes-gcm-vaes
     kyber-ntt-avx2
     dilithium-ntt-avx2
     chacha20-avx2x8
@@ -78,7 +88,8 @@ foreach(slot
     dilithium-ntt-neon
     argon2-g-neon
     kyber-sve2
-    sha3-sve2)
+    sha3-sve2
+    dilithium-ntt-sve2)
     add_test(NAME test_dispatch_only_${slot}
              COMMAND test_dispatch_only_env)
     set_tests_properties(test_dispatch_only_${slot} PROPERTIES
@@ -770,6 +781,166 @@ if(NOT WIN32)
         -U__linux__ -U__APPLE__)
     add_test(NAME test_platform_rand_generic COMMAND test_platform_rand_generic)
 endif()
+
+# ===========================================================================
+# Per-slot known-answer sweep.
+#
+# test_dispatch_only_<slot> above proves that AMA_DISPATCH_ONLY=<slot> resolves
+# to <slot>.  It executes no cryptography.  Until this block existed no CTest
+# case ran a published-vector KAT with a SIMD kernel PINNED: every AVX2, NEON,
+# SVE2 and AVX-512 kernel was checked against the standards' answers only when
+# the host's default wiring happened to select it — and the auto-tune could,
+# and on some hosts did, revert a kernel before the KAT ran, so a green
+# default-dispatch run said nothing about which kernel it had exercised.
+#
+# Each cell runs one KAT executable with exactly one SIMD slot pinned and
+# every other slot at its scalar fallback, so the published vector either
+# passes through that kernel or the cell says why it did not run.  A cell
+# cannot pass vacuously: every executable named here calls
+# KAT_SLOT_GUARD_OR_EXIT() (tests/c/kat_slot_guard.h) as the first statement
+# of main().  A pin the dispatcher did not honour exits 77 (Skipped) — or 1
+# when AMA_KAT_SWEEP_REQUIRED=1 says this build's CI runner class mandates the
+# slot, in which case a refusal is a dispatch-wiring regression that would
+# otherwise report a shipped kernel verified by its scalar fallback.  The two
+# *_control cells at the end prove both exits fire.
+#
+# Which slots are mandated follows dudect.yml's classification: AVX2 and
+# AES-NI+PCLMULQDQ are on every GitHub-hosted x86-64 runner; NEON on every
+# AArch64 runner, and the ARMv8 Crypto Extensions wherever the build compiled
+# them.  AVX-512, VAES and SVE2 depend on the runner's silicon and may skip.
+# AMA_KAT_SWEEP_STRICT=OFF turns the mandated cells into skips for a host
+# outside that class (an x86-64 VM without AVX2).
+#
+# Executable choice per slot: only KATs whose primitive routes through the
+# pinned slot and whose answers are published (FIPS 202/203/204, SP 800-38D,
+# RFC 7748/8439/9106, NIST ACVP), plus the AES-GCM and X25519 equivalence
+# runs whose "dispatched" side IS the pinned kernel.  The Python gate
+# tests/test_kat_slot_sweep_gate.py holds this table, the dispatcher's
+# inventory, the contract test, the header and dudect.yml to one list.
+# ===========================================================================
+option(AMA_KAT_SWEEP_STRICT
+       "Fail (rather than skip) a per-slot KAT cell whose slot this build's CI runner class mandates"
+       ON)
+
+set(_ama_sweep_x86 0)
+set(_ama_sweep_arm 0)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    set(_ama_sweep_x86 1)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+    set(_ama_sweep_arm 1)
+endif()
+# AVX2 kernels: compiled under AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2 on x86-64.
+set(_ama_req_avx2 0)
+if(_ama_sweep_x86 AND AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
+    set(_ama_req_avx2 1)
+endif()
+# AES-NI kernel: compiled on every 64-bit x86 build regardless of the SIMD
+# switches (top-level CMakeLists.txt, AMA_HAVE_X86_AESNI_IMPL).
+set(_ama_req_aesni ${_ama_sweep_x86})
+# NEON kernels: compiled under AMA_ENABLE_SIMD AND AMA_ENABLE_NEON on AArch64;
+# the AES+PMULL kernel only where the toolchain turned the Crypto Extensions
+# on (AMA_HAVE_NEON_CRYPTO_EXT_IMPL: not MSVC, not AMA_FORCE_NO_ARM_CRYPTO).
+set(_ama_req_neon 0)
+if(_ama_sweep_arm AND AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
+    set(_ama_req_neon 1)
+endif()
+set(_ama_req_neon_crypto 0)
+if(_ama_req_neon AND NOT MSVC AND NOT AMA_FORCE_NO_ARM_CRYPTO)
+    set(_ama_req_neon_crypto 1)
+endif()
+
+function(ama_kat_sweep_cell slot exe required extra_env)
+    if(NOT TARGET ${exe})
+        return()
+    endif()
+    set(_name "kat_sweep__${slot}__${exe}")
+    get_test_property(${exe} WORKING_DIRECTORY _wd)
+    if(_wd)
+        add_test(NAME ${_name} COMMAND ${exe} WORKING_DIRECTORY ${_wd})
+    else()
+        add_test(NAME ${_name} COMMAND ${exe})
+    endif()
+    set(_env "AMA_DISPATCH_ONLY=${slot};AMA_DISPATCH_NO_AUTOTUNE=1")
+    if(required AND AMA_KAT_SWEEP_STRICT)
+        list(APPEND _env "AMA_KAT_SWEEP_REQUIRED=1")
+    endif()
+    if(extra_env)
+        list(APPEND _env "${extra_env}")
+    endif()
+    set_tests_properties(${_name} PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS "kat-sweep"
+        ENVIRONMENT "${_env}")
+endfunction()
+
+# --- x86-64 slots -----------------------------------------------------------
+# keccak_f1600_x4: expands every ML-KEM / ML-DSA matrix.  AVX-512 is optional
+# (silicon), AVX2 is mandated.
+ama_kat_sweep_cell(sha3-avx512x4 test_kat 0 "")
+ama_kat_sweep_cell(sha3-avx512x4 test_ml_kem_acvp_encaps 0 "")
+ama_kat_sweep_cell(sha3-avx512x4 test_sha3_x4 0 "")
+ama_kat_sweep_cell(sha3-avx2x4 test_kat ${_ama_req_avx2} "")
+ama_kat_sweep_cell(sha3-avx2x4 test_ml_kem_acvp_encaps ${_ama_req_avx2} "")
+ama_kat_sweep_cell(sha3-avx2x4 test_sha3_x4 ${_ama_req_avx2} "")
+ama_kat_sweep_cell(kyber-ntt-avx2 test_kat ${_ama_req_avx2} "")
+ama_kat_sweep_cell(kyber-ntt-avx2 test_ml_kem_acvp_encaps ${_ama_req_avx2} "")
+ama_kat_sweep_cell(dilithium-ntt-avx2 test_kat ${_ama_req_avx2} "")
+ama_kat_sweep_cell(dilithium-ntt-avx2 test_hybrid_sig ${_ama_req_avx2} "")
+ama_kat_sweep_cell(chacha20-avx2x8 test_chacha20poly1305 ${_ama_req_avx2} "")
+ama_kat_sweep_cell(argon2-g-avx2 test_argon2_rfc9106 ${_ama_req_avx2} "")
+ama_kat_sweep_cell(argon2-g-avx2 test_argon2id ${_ama_req_avx2} "")
+# x25519_x4 is opt-in; the pin needs the opt-in flag as well (see the
+# test_dispatch_only_x25519-avx2 case above).
+ama_kat_sweep_cell(x25519-avx2 test_x25519 ${_ama_req_avx2} "AMA_DISPATCH_USE_X25519_AVX2=1")
+ama_kat_sweep_cell(aes-gcm-aesni test_aes_gcm_kat ${_ama_req_aesni} "")
+ama_kat_sweep_cell(aes-gcm-aesni test_aes_gcm_scalar_kat ${_ama_req_aesni} "")
+ama_kat_sweep_cell(aes-gcm-vaes test_aes_gcm_kat 0 "")
+ama_kat_sweep_cell(aes-gcm-vaes test_aes_gcm_scalar_kat 0 "")
+
+# --- AArch64 slots ----------------------------------------------------------
+ama_kat_sweep_cell(sha3-neon test_sha3 ${_ama_req_neon} "")
+ama_kat_sweep_cell(sha3-neon test_sha3_512_stream ${_ama_req_neon} "")
+ama_kat_sweep_cell(sha3-neon test_agent_binding ${_ama_req_neon} "")
+ama_kat_sweep_cell(sha3-neon test_kat ${_ama_req_neon} "")
+ama_kat_sweep_cell(sha3-neon test_ml_kem_acvp_encaps ${_ama_req_neon} "")
+ama_kat_sweep_cell(kyber-ntt-neon test_kat ${_ama_req_neon} "")
+ama_kat_sweep_cell(kyber-ntt-neon test_ml_kem_acvp_encaps ${_ama_req_neon} "")
+ama_kat_sweep_cell(dilithium-ntt-neon test_kat ${_ama_req_neon} "")
+ama_kat_sweep_cell(dilithium-ntt-neon test_hybrid_sig ${_ama_req_neon} "")
+ama_kat_sweep_cell(chacha20-neon test_chacha20poly1305 ${_ama_req_neon} "")
+ama_kat_sweep_cell(argon2-g-neon test_argon2_rfc9106 ${_ama_req_neon} "")
+ama_kat_sweep_cell(argon2-g-neon test_argon2id ${_ama_req_neon} "")
+ama_kat_sweep_cell(aes-gcm-neon test_aes_gcm_kat ${_ama_req_neon_crypto} "")
+ama_kat_sweep_cell(aes-gcm-neon test_aes_gcm_scalar_kat ${_ama_req_neon_crypto} "")
+# SVE2 depends on the runner's silicon (and on AMA_ENABLE_SVE2); the QEMU SVE2
+# lane asserts separately that these pins are honoured there.
+ama_kat_sweep_cell(sha3-sve2 test_sha3 0 "")
+ama_kat_sweep_cell(sha3-sve2 test_kat 0 "")
+ama_kat_sweep_cell(kyber-sve2 test_kat 0 "")
+ama_kat_sweep_cell(kyber-sve2 test_ml_kem_acvp_encaps 0 "")
+ama_kat_sweep_cell(dilithium-ntt-sve2 test_kat 0 "")
+
+# --- negative controls -------------------------------------------------------
+# A slot this build cannot honour, through a guarded executable.  With the
+# mandate flag the guard must FAIL; without it, SKIP.  PASS_REGULAR_EXPRESSION
+# ignores the exit code and passes only on the guard's own verdict line, so
+# deleting the guard from test_sha3 (exit 0, no line) fails both cells, and a
+# guard that skipped where it must fail fails the first.
+if(_ama_sweep_x86)
+    set(_ama_sweep_foreign_slot "sha3-neon")
+else()
+    set(_ama_sweep_foreign_slot "kyber-ntt-avx2")
+endif()
+add_test(NAME kat_sweep_control_mandated_refusal_fails COMMAND test_sha3)
+set_tests_properties(kat_sweep_control_mandated_refusal_fails PROPERTIES
+    LABELS "kat-sweep"
+    ENVIRONMENT "AMA_DISPATCH_ONLY=${_ama_sweep_foreign_slot};AMA_DISPATCH_NO_AUTOTUNE=1;AMA_KAT_SWEEP_REQUIRED=1"
+    PASS_REGULAR_EXPRESSION "\\[kat-slot-guard\\] FAIL:")
+add_test(NAME kat_sweep_control_optional_refusal_skips COMMAND test_sha3)
+set_tests_properties(kat_sweep_control_optional_refusal_skips PROPERTIES
+    LABELS "kat-sweep"
+    ENVIRONMENT "AMA_DISPATCH_ONLY=${_ama_sweep_foreign_slot};AMA_DISPATCH_NO_AUTOTUNE=1"
+    PASS_REGULAR_EXPRESSION "\\[kat-slot-guard\\] SKIP:")
 
 # ---------------------------------------------------------------------------
 # Cross-architecture lanes: give a re-exec'ed CHILD the sysroot the emulator

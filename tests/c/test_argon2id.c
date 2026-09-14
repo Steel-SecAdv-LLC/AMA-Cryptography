@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 /* Declared here because these are AMA_TESTING_MODE-only (no public
  * header): the test library links them from ama_dispatch.c. */
@@ -438,6 +439,7 @@ static void test_legacy_shim_self_consistency(void) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     printf("===========================================\n");
     printf("Argon2id KAT + AVX2-G vs scalar-G parity\n");
     printf("===========================================\n\n");

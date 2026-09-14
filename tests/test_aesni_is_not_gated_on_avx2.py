@@ -230,6 +230,60 @@ def _preprocessor_block(source: str, opening: str) -> str:
     raise AssertionError(f"no #endif closes {opening!r}")
 
 
+def _preprocessor_block_spans(source: str, opening: str) -> list[tuple[int, int]]:
+    """``[start, end)`` of the text inside EVERY ``opening`` block in ``source``.
+
+    :func:`_preprocessor_block` returns the first block only.  Since the
+    ``AMA_DISPATCH_ONLY`` pins for the x86 AES-GCM kernels were added, the
+    dispatcher installs those kernels from two ``#ifdef
+    AMA_HAVE_X86_AESNI_IMPL`` blocks — the pin, which comes first in the file,
+    and the default installer — and a test that looked only at the first block
+    would have stopped looking at the installer without anyone noticing.  The
+    tests below check every install site against every block instead.
+    """
+    spans: list[tuple[int, int]] = []
+    search_from = 0
+    while True:
+        found = source.find(opening, search_from)
+        if found == -1:
+            return spans
+        start = found + len(opening)
+        depth = 1
+        pos = start
+        for line in source[start:].splitlines(keepends=True):
+            stripped = line.lstrip()
+            if stripped.startswith(("#if", "#ifdef", "#ifndef")):
+                depth += 1
+            elif stripped.startswith("#endif"):
+                depth -= 1
+                if depth == 0:
+                    spans.append((start, pos))
+                    break
+            pos += len(line)
+        else:
+            raise AssertionError(f"no #endif closes {opening!r} at offset {found}")
+        search_from = pos
+
+
+def _install_sites(source: str, kernel: str) -> list[int]:
+    """Offsets of every ``dispatch_table.aes_gcm_encrypt = <kernel>;``.
+
+    Assignments only: the backend reporter compares the same pointer with
+    ``==`` and must not count as an install.
+    """
+    install = re.compile(rf"dispatch_table\.aes_gcm_encrypt\s*=\s*{re.escape(kernel)}\s*;")
+    sites = [m.start() for m in install.finditer(source)]
+    assert sites, f"{kernel} is never installed into dispatch_table"
+    return sites
+
+
+def _enclosing_span(spans: list[tuple[int, int]], offset: int) -> tuple[int, int] | None:
+    for span in spans:
+        if span[0] <= offset < span[1]:
+            return span
+    return None
+
+
 def _function_body(source: str, signature: str) -> str:
     """The braced body of one C function, by brace matching.
 
@@ -272,10 +326,12 @@ class TestTheDispatchGatingMatchesThat:
         ``#ifdef AMA_HAVE_AVX2_IMPL`` does not end the search early.
         """
         assert "#ifdef AMA_HAVE_X86_AESNI_IMPL" in DISPATCH
-        block = _preprocessor_block(DISPATCH, "#ifdef AMA_HAVE_X86_AESNI_IMPL")
-        assert "ama_aes256_gcm_encrypt_avx2" in block, (
-            "the AES-NI kernel is not installed inside the " "AMA_HAVE_X86_AESNI_IMPL block"
-        )
+        blocks = _preprocessor_block_spans(DISPATCH, "#ifdef AMA_HAVE_X86_AESNI_IMPL")
+        for site in _install_sites(DISPATCH, "ama_aes256_gcm_encrypt_avx2"):
+            assert _enclosing_span(blocks, site) is not None, (
+                f"the AES-NI kernel is installed at offset {site} outside every "
+                "AMA_HAVE_X86_AESNI_IMPL block"
+            )
 
     def test_the_install_does_not_require_the_avx2_tier(self) -> None:
         """``dispatch_info.aes_gcm >= AMA_IMPL_AVX2`` was the runtime half.
@@ -361,20 +417,31 @@ class TestTheDispatchGatingMatchesThat:
         not a region").  The guard is asserted within the VAES call's own
         nested block, so an unrelated ``#ifdef AMA_HAVE_AVX2_IMPL``
         occurrence elsewhere in the window cannot satisfy it.
+
+        Checked at EVERY site that installs the VAES kernel — the default
+        installer and the ``AMA_DISPATCH_ONLY=aes-gcm-vaes`` pin — each
+        against the AES-NI block that encloses it.  Looking only at the first
+        AES-NI block in the file stopped covering the installer the day the
+        pin was added ahead of it.
         """
-        block = _preprocessor_block(DISPATCH, "#ifdef AMA_HAVE_X86_AESNI_IMPL")
-        vaes_index = block.index("ama_aes256_gcm_encrypt_vaes_avx2")
-        guard_index = block.rfind("#ifdef AMA_HAVE_AVX2_IMPL", 0, vaes_index)
-        assert guard_index != -1, (
-            "the VAES install is no longer preceded by an AVX2 gate inside " "the AES-NI block"
-        )
-        # And the guard actually encloses the call: its block, opened at the
-        # guard, must still be open at the call site.
-        inner = _preprocessor_block(block[guard_index:], "#ifdef AMA_HAVE_AVX2_IMPL")
-        assert "ama_aes256_gcm_encrypt_vaes_avx2" in inner, (
-            "the AVX2 #ifdef closes before the VAES install — the call sits "
-            "outside the gate it appears to be under"
-        )
+        blocks = _preprocessor_block_spans(DISPATCH, "#ifdef AMA_HAVE_X86_AESNI_IMPL")
+        for site in _install_sites(DISPATCH, "ama_aes256_gcm_encrypt_vaes_avx2"):
+            span = _enclosing_span(blocks, site)
+            assert span is not None, f"VAES install at offset {site} is outside every AES-NI block"
+            block = DISPATCH[span[0] : span[1]]
+            vaes_index = site - span[0]
+            guard_index = block.rfind("#ifdef AMA_HAVE_AVX2_IMPL", 0, vaes_index)
+            assert guard_index != -1, (
+                f"the VAES install at offset {site} is no longer preceded by an "
+                "AVX2 gate inside its AES-NI block"
+            )
+            # And the guard actually encloses the call: its block, opened at
+            # the guard, must still be open at the call site.
+            inner = _preprocessor_block(block[guard_index:], "#ifdef AMA_HAVE_AVX2_IMPL")
+            assert "ama_aes256_gcm_encrypt_vaes_avx2" in inner, (
+                f"the AVX2 #ifdef closes before the VAES install at offset {site} "
+                "— the call sits outside the gate it appears to be under"
+            )
 
 
 # ---------------------------------------------------------------------------
