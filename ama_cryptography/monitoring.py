@@ -64,6 +64,7 @@ from typing import (
 )
 
 from ama_cryptography import _owner_only
+from ama_cryptography.pqc_backends import native_sha256, native_sha3_256
 
 logger = logging.getLogger(__name__)
 
@@ -1062,12 +1063,7 @@ class NonceTracker:
         """
         # key_id is key-identifying material inside a security control; its
         # digest comes from this module's own SHA-256, not OpenSSL-backed
-        # hashlib (INVARIANT-1).  Deferred import: monitoring is imported by
-        # modules pqc_backends itself pulls in.
-        from ama_cryptography.pqc_backends import (
-            native_sha256,
-        )  # deferred: import cycle with pqc_backends (MON-002)
-
+        # hashlib (INVARIANT-1).
         key_hash = native_sha256(key_id).hex()
         nonce_hex = nonce.hex()
         entry = (key_hash, nonce_hex)
@@ -1165,10 +1161,6 @@ class NonceTracker:
         replace of a 0600 temporary in the same directory, so a crash leaves
         either the old ledger or the new one and never a truncated file.
         """
-        from ama_cryptography.pqc_backends import (
-            native_sha256,
-        )  # deferred: import cycle with pqc_backends (MON-002)
-
         key_hash = native_sha256(key_id).hex()
         with self._lock:
             dropped = {entry for entry in self._seen if entry[0] == key_hash}
@@ -1208,12 +1200,7 @@ class NonceTracker:
         """Get current nonce count for a key."""
         # key_id is key-identifying material inside a security control; its
         # digest comes from this module's own SHA-256, not OpenSSL-backed
-        # hashlib (INVARIANT-1).  Deferred import: monitoring is imported by
-        # modules pqc_backends itself pulls in.
-        from ama_cryptography.pqc_backends import (
-            native_sha256,
-        )  # deferred: import cycle with pqc_backends (MON-002)
-
+        # hashlib (INVARIANT-1).
         key_hash = native_sha256(key_id).hex()
         return self._counters.get(key_hash, 0)
 
@@ -3610,10 +3597,6 @@ class RefactoringAnalyzer:
         are Python sources, so a whole-file read replaces the old 8 KiB
         streaming loop without a memory concern.
         """
-        from ama_cryptography.pqc_backends import (
-            native_sha3_256,
-        )  # deferred: import cycle with pqc_backends (MON-002)
-
         return native_sha3_256(filepath.read_bytes()).hex()
 
     def verify_integrity(self) -> List[IntegrityViolation]:
@@ -3784,10 +3767,6 @@ class RefactoringAnalyzer:
                 }
 
             # Priority 9: Compute and cache content hash
-            from ama_cryptography.pqc_backends import (
-                native_sha3_256,
-            )  # deferred: import cycle with pqc_backends (MON-002)
-
             content_hash = native_sha3_256(source.encode("utf-8")).hex()
             metrics["content_hash"] = content_hash
             self.analysis_cache[str(filepath)] = metrics

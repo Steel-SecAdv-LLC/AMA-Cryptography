@@ -58,6 +58,7 @@ from ama_cryptography._module_state import pairwise_test_agreement as pairwise_t
 from ama_cryptography._module_state import pairwise_test_kem as pairwise_test_kem
 from ama_cryptography._module_state import pairwise_test_signature as pairwise_test_signature
 from ama_cryptography._module_state import secure_token_bytes as secure_token_bytes
+from ama_cryptography.exceptions import NativeBackendUnavailableError
 
 #: The module's public surface.  The ``_module_state`` names re-exported above
 #: appear here as well: ``__all__`` states the re-export intent in the form
@@ -3045,12 +3046,13 @@ def _run_rng_stage() -> Tuple[bool, Optional[str]]:
     # refuses before the continuous test is consulted, and in a normal
     # no-native import POST hard-fails — an unseeded continuous test is
     # unreachable, an OpenSSL-seeded one would be a vendor in the RNG path.
-    from ama_cryptography.exceptions import (
-        NativeBackendUnavailableError,
-    )  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
-    from ama_cryptography.pqc_backends import (
-        native_sha256,
-    )  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
+    # Deferred on purpose — init ordering, not a cycle (pqc_backends never
+    # imports this module): the package __init__ imports _self_test before
+    # POST runs, and pqc_backends, which dlopens the native library on import,
+    # is first loaded by the POST stages themselves (the native-backend stage
+    # records its load diagnostics).  A module-scope import here would load
+    # the library before POST had begun (MST-001).
+    from ama_cryptography.pqc_backends import native_sha256
 
     try:
         _rng_state["previous"] = native_sha256(out2)

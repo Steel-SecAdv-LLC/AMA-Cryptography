@@ -46,7 +46,13 @@ from ama_cryptography.exceptions import (
 from ama_cryptography.exceptions import (
     SecurityWarning as SecurityWarning,
 )
-from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
+from ama_cryptography.pqc_backends import (
+    _HMAC_SHA512_NATIVE_AVAILABLE,
+    native_hmac_sha512,
+    native_pbkdf2_hmac_sha256,
+    native_pbkdf2_hmac_sha512,
+    native_sha3_256,
+)
 from ama_cryptography.secure_memory import secure_memzero
 
 
@@ -340,10 +346,6 @@ class HDKeyDerivation:
             # unauthorized vendor (INVARIANT-1).  Byte-identical: pinned
             # against the official BIP39 vector and differentially against
             # hashlib in tests/test_sha2_pbkdf2_native.py.
-            from ama_cryptography.pqc_backends import (  # deferred: import cycle with pqc_backends (KMG-001)
-                native_pbkdf2_hmac_sha512,
-            )
-
             self.master_seed = native_pbkdf2_hmac_sha512(
                 cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
             )
@@ -1206,10 +1208,6 @@ class SecureKeyStorage:
             self.kdf_params["iterations"] = iterations
             # Key-encryption-key derivation on this module's own PBKDF2
             # (INVARIANT-1; see the BIP39 site above for the full rationale).
-            from ama_cryptography.pqc_backends import (  # deferred: import cycle with pqc_backends (KMG-001)
-                native_pbkdf2_hmac_sha256,
-            )
-
             self.encryption_key = bytearray(
                 native_pbkdf2_hmac_sha256(
                     master_password.encode("utf-8"),
@@ -1278,10 +1276,6 @@ class SecureKeyStorage:
             )
         else:
             # Same KDF as the initial derivation above (INVARIANT-1).
-            from ama_cryptography.pqc_backends import (  # deferred: import cycle with pqc_backends (KMG-001)
-                native_pbkdf2_hmac_sha256,
-            )
-
             new_encryption_key = bytearray(
                 native_pbkdf2_hmac_sha256(
                     master_password.encode("utf-8"),
@@ -2070,10 +2064,6 @@ if __name__ == "__main__":
     # The fingerprint input IS key material, so even this display path uses
     # the module's own SHA3-256 rather than OpenSSL-backed hashlib
     # (INVARIANT-1).
-    from ama_cryptography.pqc_backends import (
-        native_sha3_256,  # deferred: import cycle with pqc_backends (KMG-001)
-    )
-
     sk_fp = native_sha3_256(signing_key).hex()[:16]
     ek_fp = native_sha3_256(encryption_key).hex()[:16]
     logger.info(f"Signing key fingerprint:    sha3-256:{sk_fp}")
