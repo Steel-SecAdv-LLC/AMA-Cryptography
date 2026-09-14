@@ -4158,7 +4158,11 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
 
     Raises:
         KyberUnavailableError: If Kyber backend is not available
-        ValueError: If public_key has incorrect length
+        ValueError: If public_key has incorrect length, or is not an
+            encapsulation key at all — FIPS 203 Sec 7.2 input check 2 (the
+            modulus check) found a coefficient outside ``[0, q)``.  A
+            conformant peer rejects such a key before use; so does this
+            binding, as an input error rather than a backend fault.
 
     Example:
         >>> keypair = generate_kyber_keypair()
@@ -4190,6 +4194,18 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
             ss_buf,
             ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
         )
+        if rc == -4:
+            # AMA_ERROR_VERIFY_FAILED after the Python length check above can
+            # only be FIPS 203 Sec 7.2 input check 2: a 12-bit coefficient of
+            # the encapsulation key is >= q, so these bytes are not an
+            # encapsulation key.  That is a rejected INPUT, not a missing
+            # backend — the same distinction kyber_decapsulate draws for the
+            # Sec 7.3 hash check — and it used to surface here as
+            # KyberUnavailableError("... error code -4").
+            raise ValueError(
+                "Kyber-1024 encapsulation key rejected: a coefficient is outside "
+                "[0, q) (FIPS 203 Sec 7.2 modulus check)"
+            )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
