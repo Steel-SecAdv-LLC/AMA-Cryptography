@@ -10,15 +10,15 @@
   },
   "test_coverage": {
     "counts": {
-      "Core Crypto\n& NIST KATs": 851,
-      "Key Management\n& Rotation": 266,
-      "Memory Security\n& Fuzzing": 337,
-      "Other": 2769,
-      "PQC Backends\n& Integration": 772,
-      "Performance\n& Monitoring": 376
+      "Core Crypto\n& NIST KATs": 856,
+      "Key Management\n& Rotation": 275,
+      "Memory Security\n& Fuzzing": 338,
+      "Other": 2829,
+      "PQC Backends\n& Integration": 773,
+      "Performance\n& Monitoring": 366
     },
-    "n_files": 237,
-    "total_tests": 5371,
+    "n_files": 241,
+    "total_tests": 5437,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -47,6 +47,7 @@
       "test_changelog_dated_figures.py",
       "test_choco_retry_gate.py",
       "test_ci_gate_negative.py",
+      "test_codeql_severity_gate.py",
       "test_competitive_page.py",
       "test_compiler_warning_gate.py",
       "test_conftest_backend_skip_scoping.py",
@@ -73,6 +74,7 @@
       "test_fuzz_target_registration.py",
       "test_gap_closure_review.py",
       "test_gate_coverage.py",
+      "test_generic_verify_signature_length.py",
       "test_ghash_constant_time_gate.py",
       "test_handshake_failure_clears_state.py",
       "test_hd_interop_honesty_gate.py",
@@ -135,6 +137,7 @@
       "test_setup_signer_contract.py",
       "test_sha2_pbkdf2_native.py",
       "test_signing_keypair_normalization.py",
+      "test_slhdsa_keygen_from_seed.py",
       "test_stdlib_hash_boundary_gate.py",
       "test_suppression_hygiene_gate.py",
       "test_sve2_impl_macro_is_msvc_guarded.py",
@@ -158,6 +161,7 @@
       "test_wycheproof_corpus_provenance.py",
       "test_wycheproof_fetch_retry.py",
       "test_wycheproof_gate.py",
+      "test_wycheproof_vector_embedding.py",
       "test_x25519_canonical_u.py",
       "test_x25519_dispatch_policy.py"
     ]

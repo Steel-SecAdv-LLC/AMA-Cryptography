@@ -32,6 +32,279 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > was removed from this branch in the eighteenth pass below and remains in the
 > branch's commit history.
 
+### Maintenance pass, twenty-seventh (2026-09-14) — the honesty audit: what was green without checking, and what it took to make it check
+
+The twenty-sixth pass closed the last three findings of PR #394's review
+campaign. This pass asked a different question of the same tree: what
+reports green without having checked anything? It ran seven independent
+finder angles over the branch — Python suppressions, C and build-level
+masking, CI masking, dead code, vacuous gates, C bugs, Python bugs together
+with a self-review of the twenty-sixth pass — and put every finding through
+an adversarial re-verification before anything was changed. Thirty-five
+findings came back: twenty-six were confirmed, seven were downgraded (real,
+narrower than filed) and two were refuted. Every confirmed or downgraded
+item is remediated at its source below, each with a proof that failed
+before the change and passes after; the two refutations are recorded as
+such. Three things this pass got wrong on the way are recorded too, because
+a pass about honesty that hid its own corrections would not be one.
+
+#### Skips that were green (INVARIANT-47)
+
+A skip is green. Four guards read git objects a depth-1 clone does not have
+— the baseline validity window against `origin/main`, calibration-commit
+drift, the benchmark snapshot's provenance commit, the embedded v4.0.0 tag
+bytes — and both pytest lanes checked out at depth 1, so every one of them
+skipped on every CI run for as long as it existed. Nothing installed Flask,
+so the six attack-surface pins on the Flask demo never ran. Twelve skip
+reasons gated on native features the CI build produces — ChaCha20-Poly1305,
+deterministic keygen, the context API, FROST, the Cython 3R detector
+kernels, the `math_engine` extension, the Cython binding extensions, mlock —
+and named none of the nine keywords `AMA_CI_REQUIRE_BACKENDS` escalates on,
+so a build that silently dropped any of them would have skipped its tests
+and stayed green. The `.clang-format` validity test skipped on every macOS,
+Windows and ARM lane, which carry no clang-format; only the ubuntu-latest
+runner image happens to. And `tests/test_performance.py`
+skipped itself on every runner by design: ten wall-clock ops/sec floors
+measured on one host, a promise no run kept.
+
+Worse than a skip: `test_the_current_tree_satisfies_the_rule` did not skip
+in the shallow lanes, it passed. `_load_metadata_at` treated a failed
+`git show` as "the file did not exist at that ref", so with `origin/main`
+absent the validity-window guard compared `{}` with `{}`, returned no
+failures, and the test's own "skip if the ref is missing" branch was dead
+code. Measured in a depth-1 clone: the test passes and the other three
+guards skip. The CLI had the same hole in another shape: `git show :path`
+reads the index, so `--base-ref ""` compared HEAD with itself and printed
+OK (measured: exit 0). `_require_commit` now resolves both refs first; a
+missing ref raises, an empty `--base-ref` exits 2, and both have tests
+against real git.
+
+Both pytest lanes now check out with `fetch-depth: 0`, install a new
+`[examples]` extra (Flask ≥ 3.1.1, the CVE-2025-47278 floor) and the
+`clang-format` wheel, and set `AMA_CI_REQUIRE_HISTORY` beside
+`AMA_CI_REQUIRE_BACKENDS`. Two markers make a recurrence fail rather than
+skip: `requires_git_history` (escalated under the history flag) and
+`requires_example_deps` (escalated under the backends flag, like the
+interop-oracle marker); each flag is scoped to what its lane promises, and
+`tests/test_conftest_backend_skip_scoping.py` drives the production hook
+through pytester in both directions. The twelve native-feature reasons now
+name what is missing as native, and the completeness guard grows from one
+module to eight, reads `skipif` markers as well as `pytest.skip` calls, and
+carries a verbatim allowlist for the two host-OS reasons that an entry no
+longer matching any skip fails. Measured on the f08daea runs of both
+workflows — ubuntu, ARM, macOS, macOS-Intel, Windows — none of the twelve
+skips fires today; the escalation is in place before the day one does.
+Measured after the change in a depth-1 clone of this tree: the four history
+guards skip without the flag and fail with it; with Flask uninstalled the
+six pins skip without the flag and fail with it. The wall-clock file is
+gone; its one timing-independent assertion, a bound on live Python objects
+across a thousand hashes, lives beside the RSS bound it complements in
+`tests/test_memory_security.py`.
+
+#### Gates that could pass having checked nothing
+
+- `fuzzing.yml` "Every dictionary must parse" read `out=$(fuzz_sha3
+  -dict=... -runs=0 2>&1 || true)` and grepped for libFuzzer's rejection
+  text, so a harness that did not execute produced thirteen "ok" lines
+  (measured: a missing binary exits 127 with no rejection text). The loop
+  keeps the exit status and requires the count validated to equal the count
+  on disk and be non-zero. Verification downgraded this to low — the build
+  step before it fails if the binary is not built, so the unguarded case is
+  a binary that exists and dies — and the fix stands.
+- `static-analysis.yml`'s prefix-map check set `leaked=1` only inside its
+  loop and printed "no absolute build path survives" afterwards; an empty
+  extraction reported a clean result having examined nothing (measured). It
+  counts the objects it examined and fails below the nine the step's own
+  comment enumerates.
+- `wiki-sync.yml` exited 0 on every clone failure — a token without the
+  permission as much as the one-time "wiki not initialised" bootstrap — so
+  the public wiki could go stale behind a green run. Only "Repository not
+  found" is a green skip now; anything else exits 1. No pipe in the
+  decision: the step runs under GitHub's default `bash -e {0}`, which does
+  not set pipefail, so `git clone | tee` would have reported tee's status
+  (driven with a fake git under the same settings: ok → 0, not found → 0
+  with the banner, denied → 1).
+- `tools/check_secrets.py`, `tools/check_fdopen_safety.py` and
+  `tools/check_log_message_encodability.py` reported "clean" over zero
+  files: a typo'd, moved, unreadable or out-of-tree explicit path was
+  indistinguishable from a clean scan. Each now exits with an error naming
+  the path, and none prints a clean verdict having scanned nothing.
+- `tools/check_gate_coverage.py`'s non-vacuity floors said "Current tree: 14
+  workflow files, 72 jobs" against 18 and 83, so four workflows could
+  disappear without tripping the meta-gate. Both floors equal the live
+  counts and `tests/test_gate_coverage.py` holds them there.
+- `tools/check_codeql_severity.py` blocked on SARIF level `error` only;
+  CodeQL's security queries mostly carry `warning` with their CVSS-style
+  rating in `properties.security-severity`, so a warning rated 9.8 passed
+  (measured with a crafted report). The gate — which had no tests — now
+  blocks at or above 7.0 whatever the level, and has twelve.
+- `tools/check_suppression_hygiene.py` scanned `src/c` and `include` for
+  analyser comment markers only and reported the 87 files "carry none at
+  all"; they carried two `-Wpedantic` pragmas and a `no_sanitize_address`.
+  The scan now matches compiler- and sanitizer-level suppressions. The
+  pragmas are gone (the warning they hid is allowlisted centrally in the
+  compiler-warning gate, beside the `fe51.h`/`fe64.h` sites it already
+  covered; measured on a rebuild, both units emit it and the gate accepts
+  it); the sanitizer attribute on `ama_secure_stack_wipe` is a recorded,
+  keyed exemption with its reason in the tool and in INVARIANT-13's
+  register, printed in the verdict and reported stale if the marker goes.
+- INVARIANT-36 said `benchmarks/` was "the sole place external
+  cryptographic code is invoked anywhere in the tree" while a CI lane
+  exists to install PyCA cryptography, PyNaCl and pycryptodome so four test
+  modules cross-check AMA against them. The register records both
+  exceptions and the originality gate's verdict says what it checked. And
+  `test_signature_verification_cross_library` — docstringed "sign with
+  pynacl, verify with AMA" — never referenced AMA; it asserted that
+  libsodium's own signature was 64 bytes. It now verifies both directions
+  and rejects a corrupted signature.
+- The twenty-sixth pass's per-slot KAT sweep counted `test_chacha20poly1305`
+  as a published-vector KAT for the `chacha20-avx2x8` cell. Its published
+  vector was RFC 8439's 114-byte message, and `chacha20_xor` hands only
+  whole 512-byte chunks to the 8-way kernel, so under that pin the
+  published answer never entered the kernel the cell is named for
+  (measured with a breakpoint: the first entry came from the equivalence
+  sweep against the file's own scalar reference). Wycheproof
+  `chacha20_poly1305_test.json` tcId 90 — 513 bytes, valid — is embedded
+  from the corpus this repository already carries; the first entry into the
+  kernel under the pin is now the published vector, and
+  `tests/test_wycheproof_vector_embedding.py` holds the embedded bytes equal
+  to the JSON's and the JSON equal to the manifest's digest.
+
+#### Path-filtered guards that could not be required (INVARIANT-31)
+
+`baseline-guard.yml` and `integrity-anchor-check.yml` run only on pull
+requests touching their paths; GitHub reports no check for a workflow that
+path filtering skipped, so neither context could be a required status
+check and a red guard was advisory — `baseline-guard.yml`'s header said so,
+told the operator not to require it, and cited `dudect.yml` as the
+precedent, which had since been fixed with a no-op twin (and still carried
+the pre-twin text citing `baseline-guard.yml` back). Both guards now have
+twins on the same pattern; `tools/check_gate_coverage.py` applies the twin
+rule to every path-filtered pull-request workflow, gate or no gate, and
+measured with the twins removed the old rule reports nothing and the new
+one names both. `dudect.yml`'s note says the gate is requirable.
+
+#### Defects in the code, and code that said one thing and did another
+
+- `ama_verify(AMA_ALG_ED25519)` checked `signature_len < 64` where every
+  sibling branch checks `!=`, so a valid signature followed by any bytes
+  verified through the generic API and through `AmaContext.verify`
+  (measured: 65 and 80 bytes returned success; ML-DSA-65 rejected one
+  trailing byte). The guard is exact; `tests/c/test_core.c` and
+  `tests/test_generic_verify_signature_length.py` pin 63, 64, 65 and 80 for
+  Ed25519, ML-DSA-65 and HYBRID.
+- The AES-NI and VAES AES-GCM decrypt kernels folded the tag comparison
+  into the loop bounds without the value barrier the scalar kernel gained
+  when the secret-taint gate found gcc rewriting the mask as a conditional
+  move on key-derived data; the cmov was in the shipped object and the taint
+  sweep runs the scalar path only. Both kernels take the mask through the
+  barrier (measured: conditional moves in the whole function, AVX2 3 → 1,
+  the survivor a tail-length select on public lengths; VAES 2 → 0).
+- `ama_secure_alloc()` discarded `ama_secure_mlock()`'s result, and that
+  function reaches `madvise(MADV_DONTDUMP)` only after `mlock()` succeeds, so
+  an unprivileged process over `RLIMIT_MEMLOCK` got a buffer that was both
+  swappable and core-dumpable although the advice needs no limit (measured
+  unprivileged: no `dd` VmFlag). The advice is applied independently, the
+  header says which properties survive an mlock failure, and the DONTDUMP
+  test carries the `RLIMIT_MEMLOCK=0` case (fails before, passes after).
+- `kyber_encapsulate` raised `KyberUnavailableError` for every non-zero
+  native code, so the FIPS 203 §7.2 encapsulation-key rejection read as a
+  missing backend; it is `ValueError`, as decapsulation's §7.3 hash-check
+  rejection already was. Two adversarial tests wrapped their assertions in
+  `contextlib.suppress(Exception)` — `AssertionError` is an `Exception`, so
+  they could not fail — and now pin the real contract.
+- `_self_test.last_failure()` was written only at the next
+  `reset_module()`, so after the import-time POST failed — the one moment an
+  operator would consult it — it was empty (measured). It is recorded when
+  the POST fails.
+- `SecureKeyStorage` wrote `.kdf_metadata.json` with `open()` + `chmod` one
+  line after routing the salt through `_atomic_write_bytes`, whose docstring
+  names that ordering as the window it exists to close; it goes through the
+  writer, whose never-used `mode` parameter is gone.
+- Five SIMD kernels shipped compiled with no caller, no dispatch wiring and
+  no test — the three ML-KEM pointwise kernels, the AVX2 single-state
+  Keccak permutation, the NEON WOTS chain helper whose block layout the
+  test file itself recorded as differing from the scalar reference — while
+  six places in the tree said the pointwise kernels were wired or
+  equivalence-tested. The kernels and their private helpers are deleted,
+  the exports map and the documents follow the dispatcher, three empty
+  `target_compile_definitions()` calls are gone, and two unused static AVX2
+  polynomial helpers went with them.
+- `RUF100` was switched off for the package and `benchmarks/`, hiding 30
+  `noqa` directives that named rules ruff never runs here; the hygiene
+  gate reported each as justified. It is enforced and the inert directives
+  are gone. Four of them justified function-scoped imports in
+  `key_management.py` as breaking an import cycle with `pqc_backends` — a
+  module the file already imports at module scope; the imports are hoisted
+  where the graph allows and the reasons are true where they stay.
+- Four exported API surfaces had no test at all — `set_pq_import_consistency`
+  (the kill-switch for a key-import security check, whose thread and task
+  isolation is what makes disabling it safe), `HSMKeyStorage.destroy_key`,
+  `analyze_codebase`, and `generate_slhdsa_keypair_from_seed`, which the
+  CHANGELOG had announced as a delivered binding while it sat outside every
+  `__all__`; each has one now, and the seed binding is exported and pinned
+  to the FIPS 205 keys. The ACVP projection URL has one source of truth.
+- The import-time comment and warning around the persistent nonce ledger
+  said cross-restart reuse detection "is disabled" when the ledger could not
+  load, which read as though the library performed it; no encrypt path in
+  the package calls `check_nonce` (verification downgraded this to a
+  doc-honesty item: the tracker is opt-in public API and the library's
+  bound is the durable per-key counter of INVARIANT-22). The text says
+  opt-in and `tests/test_nonce_tracker_is_opt_in.py` pins the reading to
+  the code.
+- The tools behind the fail-on-warning and fail-on-severity gates — Sphinx
+  and its theme and typehints extension, bandit in the one job that never
+  installed the lock, pip-audit everywhere — were installed unpinned beside
+  pinned black, ruff, mypy and pytest. They are pinned.
+- `static-analysis.yml`'s header, gate comment and the gate's own
+  explanation said MSan and TSan were schedule/dispatch-only and skip on
+  pull requests; the conditions ran them on every trigger and the gate
+  required success on every trigger. The comments say what the conditions
+  do, and the two `if:` blocks that enumerated every trigger are gone.
+- `crypto_api` imported the first-party RFC 3161 module inside a
+  try/except whose fallback bound the timestamp exceptions to `Exception`
+  and `get_timestamp` to None under a comment calling the state
+  unsupported; the import is unconditional and a broken installation fails
+  at import.
+
+#### Corrected on the way
+
+Three claims made earlier in this pass were wrong and are corrected here
+and in later commits rather than rewritten out of the history. A commit
+said the `.clang-format` validity test "skipped on every CI run because no
+workflow installs clang-format"; verification refuted the filed finding —
+the ubuntu-latest runner image carries clang-format, so the test ran on
+those lanes — and what the change actually does is make it run on the
+macOS, Windows and ARM lanes too and fail rather than skip where the wheel
+is installed. A commit said the
+constant-time bitsliced AES backend got the shallowest fuzzing of any lane
+and gave the `fuzz-consttime-aes` job the seeds, dictionary, persisted
+corpus and budget of the default lane; verification showed
+`AMA_AES_CONSTTIME` defaults to ON and `fuzz-core`'s `fuzz_aes_gcm` cell
+already fuzzes the identical backend with all of that, so the job was a
+duplicate under a name that read as extra coverage. It is removed. A commit
+said the RFC 3161 fallback turned `except TimestampError` into a bare broad
+except that swallowed `CryptoModuleError`; the availability guard runs
+first, so that branch was unreachable, and the message was amended to the
+mechanism that does occur.
+
+#### What this pass did not establish
+
+The NEON and SVE2 edits (deleted kernels, the relocated rotate helper) are
+compiled on the AArch64 and QEMU lanes, not here; the first CI run after
+this push is their first build. The FastAPI example has no test and its
+dependency is not in the `[examples]` extra; the extra covers the example
+the suite drives. There is no `AMA_DISPATCH_ONLY` pin for the scalar
+AES-GCM path, so on an AES-NI host nothing fuzzes the bitsliced kernel
+itself; a lane that would add that coverage needs a dispatcher pin that
+does not exist yet. INVARIANT-13's C register carries one exemption; its
+reason is stated, and the gate will report it the moment the marker goes
+(an earlier CHANGELOG entry, CI-03, had stated in writing that the gate
+covered diagnostic pragmas; the code never did until now). The cost of the
+pass in CI time is thirty-five matrix cells each fetching a 50 MB pack
+instead of a depth-1 clone (seconds per cell), two more no-op twin
+workflows, and one fewer fuzz job.
+
 ### Maintenance pass, twenty-sixth (2026-09-14) — the three open audit findings closed: bytes pinned, kernels swept, fuzzing that accumulates
 
 PR #394's review campaign carried three findings that no pass had closed:

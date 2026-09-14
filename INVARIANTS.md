@@ -2743,5 +2743,55 @@ minutes in parallel with the other lanes.
 
 ---
 
+## INVARIANT-47 — A Lane That Provisions a Resource Fails the Skip of It
+
+Both pytest lanes checked out at depth 1, so four guards that read git
+objects — the baseline validity window against `origin/main`,
+calibration-commit drift, the benchmark snapshot's provenance commit, the
+embedded v4.0.0 tag bytes — skipped on every CI run for as long as they
+existed; nothing installed Flask, so the six attack-surface pins on the Flask
+demo never ran; twelve skip reasons gated on native features the CI build
+produces and named none of the keywords the backend escalation matches; the
+`.clang-format` validity test skipped everywhere for want of the tool. A skip
+is green, and every one of these was green on every run. One was worse than
+a skip: with `origin/main` absent the validity-window guard compared nothing
+with nothing and passed.
+
+**The rule.** When a lane is configured to provide what a test needs — the
+native backends, the interoperability oracles, the full git history, an
+example's third-party dependency, a tool the lane installs — a skip of that
+test in that lane is a failure, not a skip. The lane says what it provides
+with a flag (`AMA_CI_REQUIRE_BACKENDS`, `AMA_CI_REQUIRE_HISTORY`); a test says
+what it needs with a marker (`requires_interop_oracle`,
+`requires_git_history`, `requires_example_deps`) or, for the native backends,
+by naming the backend in its skip reason; and `tests/conftest.py` turns the
+skip into a failure only where the two meet. A flag never escalates a skip
+outside its own promise: the history flag leaves backend skips alone and the
+backends flag leaves history skips alone, so a lane that builds the C
+library on a shallow checkout is still allowed to skip the history guards.
+Outside CI, every one of these remains an ordinary skip.
+
+**Why a marker and not a keyword, wherever possible.** A keyword match on the
+reason text is a functional property of prose, and prose drifts; the markers
+are the escalation for everything added after the backend keywords, and the
+backend keywords themselves are held to their modules by a completeness guard
+that reads `skipif` markers and `pytest.skip` calls alike and allowlists
+host-OS reasons verbatim. A guard that cannot skip silently is only half the
+rule; the other half is that it cannot pass silently either, which is why
+the baseline guard resolves its refs before comparing anything.
+
+**Enforcement.** `tests/conftest.py` escalates the three markers and the
+backend keywords under their flags; `tests/test_conftest_backend_skip_scoping.py`
+drives the production hook through pytester for every marker in both
+directions, holds every history skip and every `[examples]` importorskip
+under its marker, and holds the eight backend-only modules' reasons to the
+keyword set; `ci.yml` and `ci-build-test.yml` check out with
+`fetch-depth: 0`, install `[examples]` and `clang-format`, and set both
+flags on their pytest steps; `benchmarks/check_baseline_justification.py`
+refuses a ref it cannot resolve and an empty base ref, with tests against
+real git.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
 _Last updated: 2026-09-14_
