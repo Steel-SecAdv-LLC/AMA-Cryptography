@@ -911,6 +911,13 @@ class NonceTracker:
     """
     Tracks (key_id_hash, nonce) tuples to detect nonce reuse.
 
+    Opt-in.  No encrypt path in this package feeds a tracker: a caller that
+    wants (key, nonce) reuse detection invokes
+    :meth:`AmaCryptographyMonitor.check_nonce` around its own AEAD calls.
+    ``AESGCMProvider`` and ``SecureSession`` bound nonce use through the
+    durable per-key counter of INVARIANT-22 instead and never inspect nonce
+    values; ``tests/test_nonce_tracker_is_opt_in.py`` pins that.
+
     Uses a rolling hash set (NOT a bloom filter — false negatives are
     dangerous for nonce reuse detection).
 
@@ -3942,6 +3949,10 @@ class AmaCryptographyMonitor:
     def check_nonce(self, key_id: bytes, nonce: bytes) -> None:
         """
         Check for nonce reuse (Priority 2).
+
+        Opt-in: no encrypt path in this package calls this; a caller invokes
+        it around its own AEAD calls when it wants (key, nonce) reuse
+        detection, persisted across restarts when the ledger is writable.
 
         Args:
             key_id: Key identifier

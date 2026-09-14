@@ -44,9 +44,19 @@ from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
 # Module-level 3R monitor instance — feeds timing data to anomaly detection.
 #
-# A corrupt / torn / oversized / unwritable persisted nonce ledger
-# (~/.ama_cryptography/nonce_tracker.dat) must NOT brick the entire library at
-# import.  The persistent ledger is a cross-restart defense-in-depth feature
+# The persistent nonce ledger (~/.ama_cryptography/nonce_tracker.dat) backs
+# the OPT-IN AmaCryptographyMonitor.check_nonce() API: a caller that wants
+# (key, nonce) reuse detection across restarts invokes it around its own AEAD
+# calls.  No encrypt path in this package calls it — AESGCMProvider and
+# SecureSession bound how many nonces a key may see through the durable
+# per-key counter of INVARIANT-22 and never inspect nonce values — and
+# tests/test_nonce_tracker_is_opt_in.py pins that reading, so this text
+# cannot drift from the code.  (This comment and the warning below used to
+# say cross-restart reuse detection "is disabled" when the ledger could not
+# be loaded, which read as though the library had been performing it.)
+#
+# A corrupt / torn / oversized / unwritable ledger must NOT brick the entire
+# library at import.  The ledger is a cross-restart defense-in-depth feature
 # whose history is already unrecoverable once the file is corrupt (a torn
 # append after a crash or power-loss needs no attacker), and an unresolvable or
 # read-only HOME is an environment fault, not a cryptographic one — so a
@@ -58,9 +68,10 @@ try:
     _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
 except Exception as _monitor_persist_exc:  # degrade, never brick import (AUDIT-15)
     logging.getLogger(__name__).warning(
-        "monitor persistence unavailable (%s: %s); continuing with in-memory-only "
-        "nonce tracking. Persistent cross-restart nonce-reuse detection is disabled "
-        "until the backing file is repaired or removed.",
+        "monitor persistence unavailable (%s: %s); the opt-in check_nonce() ledger "
+        "continues in memory only for this process, without its cross-restart "
+        "history, until the backing file is repaired or removed. (No encrypt path in "
+        "this package calls check_nonce; nonce use is bounded by the per-key counter.)",
         type(_monitor_persist_exc).__name__,
         _monitor_persist_exc,
     )
