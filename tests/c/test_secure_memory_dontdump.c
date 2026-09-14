@@ -2,7 +2,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file test_secure_memory_dontdump.c
- * @brief Proves ama_secure_mlock() actually applies MADV_DONTDUMP.
+ * @brief Proves ama_secure_mlock() and ama_secure_alloc() actually apply
+ *        MADV_DONTDUMP.
  *
  * The header of ama_secure_memory.c promises "madvise(MADV_DONTDUMP) to
  * prevent core dump leakage".  madvise(2) demands a page-aligned address
@@ -13,6 +14,16 @@
  * /proc/self/smaps to require the "dd" VmFlag on every VMA covering the
  * buffer.  That is the kernel's own record that the pages are excluded
  * from core dumps.
+ *
+ * Case 2 pins the allocator under the failure the first case skips on:
+ * RLIMIT_MEMLOCK is lowered to 0 in-process and ama_secure_alloc() must
+ * still hand out a mapping the kernel records as "dd".  The advice needs
+ * no rlimit, so an mlock() failure is no reason to lose it — but it was
+ * lost whenever the allocator reached the advice only through
+ * ama_secure_mlock(), which returns before madvise when mlock fails.
+ * Whether mlock succeeded (CAP_IPC_LOCK, e.g. root) or failed (an
+ * unprivileged process) is reported, not skipped on: the "dd" requirement
+ * holds on both branches.
  *
  * Exit codes: 0 pass, 1 fail, 77 skip (non-Linux, or the environment
  * cannot mlock at all).
@@ -40,10 +51,12 @@ int main(void) {
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 
-/* Return 1 if every VMA overlapping [lo, hi) carries the "dd" VmFlag,
- * 0 if any does not, -1 on parse failure. */
-static int range_has_dontdump(uintptr_t lo, uintptr_t hi) {
+/* Return 1 if every VMA overlapping [lo, hi) carries the two-letter
+ * VmFlag `flag` ("dd" = VM_DONTDUMP, "lo" = VM_LOCKED), 0 if any does
+ * not, -1 on parse failure. */
+static int range_has_vmflag(uintptr_t lo, uintptr_t hi, const char flag[2]) {
     FILE *fh = fopen("/proc/self/smaps", "r");
     if (!fh) return -1;
     char line[512];
@@ -57,23 +70,84 @@ static int range_has_dontdump(uintptr_t lo, uintptr_t hi) {
             if (overlaps) seen_any = 1;
         } else if (overlaps && strncmp(line, "VmFlags:", 8) == 0) {
             /* VmFlags is a space-separated list of two-letter flags. */
-            int has_dd = 0;
+            int has_flag = 0;
             char *p = line + 8;
             while (*p && *p != '\n') {
                 while (*p == ' ' || *p == '\t') p++;
                 if (*p == '\0' || *p == '\n') break;
-                if (p[0] == 'd' && p[1] == 'd' &&
+                if (p[0] == flag[0] && p[1] == flag[1] &&
                     (p[2] == ' ' || p[2] == '\n' || p[2] == '\0')) {
-                    has_dd = 1; break;
+                    has_flag = 1; break;
                 }
                 while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
             }
-            if (has_dd) covered++; else violations++;
+            if (has_flag) covered++; else violations++;
         }
     }
     fclose(fh);
     if (!seen_any) return -1;
     return violations == 0 && covered > 0;
+}
+
+static int range_has_dontdump(uintptr_t lo, uintptr_t hi) {
+    return range_has_vmflag(lo, hi, "dd");
+}
+
+/* Case 2: ama_secure_alloc() with RLIMIT_MEMLOCK lowered to 0 in-process.
+ * Returns 0 on pass, 1 on fail.  Lowering the limit (soft and hard) is
+ * irreversible for an unprivileged process, so this runs last. */
+static int alloc_keeps_dontdump_without_memlock(size_t page) {
+    struct rlimit rl;
+    rl.rlim_cur = 0;
+    rl.rlim_max = 0;
+    if (setrlimit(RLIMIT_MEMLOCK, &rl) != 0) {
+        printf("FAIL: setrlimit(RLIMIT_MEMLOCK, 0)\n");
+        return 1;
+    }
+
+    /* One byte over a page, so the allocator's whole-page rounding is on
+     * the measured path too: the mapping is exactly two pages. */
+    const size_t len = page + 1;
+    const size_t mapped = 2 * page;
+    unsigned char *buf = (unsigned char *)ama_secure_alloc(len);
+    if (!buf) {
+        printf("FAIL: ama_secure_alloc(%zu) returned NULL under RLIMIT_MEMLOCK=0 "
+               "(the contract promises a usable buffer when only the lock fails)\n",
+               len);
+        return 1;
+    }
+    const uintptr_t lo = (uintptr_t)buf;
+    const uintptr_t hi = lo + mapped;
+
+    /* Which branch did the allocator's mlock() take?  The kernel's "lo"
+     * VmFlag is the record: with CAP_IPC_LOCK (root) mlock ignores the
+     * rlimit and succeeds; without it, a limit of 0 makes it fail.  Both
+     * are legitimate hosts for this test and neither is skipped. */
+    int locked = range_has_vmflag(lo, hi, "lo");
+    if (locked < 0) { printf("FAIL: smaps parse (alloc, lo)\n"); ama_secure_free(buf, len); return 1; }
+    printf("INFO: under RLIMIT_MEMLOCK=0 the allocator's mlock() %s "
+           "(%s) — exercising the '%s' branch\n",
+           locked ? "succeeded" : "failed",
+           locked ? "CAP_IPC_LOCK bypasses the limit" : "unprivileged process",
+           locked ? "mlock ok" : "mlock failed");
+
+    int dd = range_has_dontdump(lo, hi);
+    if (dd < 0) { printf("FAIL: smaps parse (alloc, dd)\n"); ama_secure_free(buf, len); return 1; }
+    if (dd != 1) {
+        printf("FAIL: ama_secure_alloc buffer [%#lx, %#lx) is dumpable — no 'dd' "
+               "VmFlag — on the '%s' branch: the no-core-dump advice was lost "
+               "along with the lock\n",
+               (unsigned long)lo, (unsigned long)hi,
+               locked ? "mlock ok" : "mlock failed");
+        ama_secure_free(buf, len);
+        return 1;
+    }
+
+    ama_secure_free(buf, len);
+    printf("PASS: ama_secure_alloc yields kernel-recorded 'dd' (MADV_DONTDUMP) "
+           "under RLIMIT_MEMLOCK=0 on the '%s' branch\n",
+           locked ? "mlock ok" : "mlock failed");
+    return 0;
 }
 
 int main(void) {
@@ -155,6 +229,10 @@ int main(void) {
     free(raw);
     printf("PASS: unaligned ama_secure_mlock yields kernel-recorded 'dd' "
            "(MADV_DONTDUMP) over the full range\n");
+
+    /* Case 2 runs last: it lowers RLIMIT_MEMLOCK to 0 for the rest of the
+     * process, which the ama_secure_mlock case above must not see. */
+    if (alloc_keeps_dontdump_without_memlock(page) != 0) return 1;
     return 0;
 }
 #endif /* __linux__ */

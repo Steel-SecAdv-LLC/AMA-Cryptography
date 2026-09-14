@@ -467,8 +467,8 @@ AMA_API ama_error_t ama_secure_mlock(void* ptr, size_t len);
 AMA_API ama_error_t ama_secure_munlock(void* ptr, size_t len);
 
 /**
- * @brief Allocate a zeroed buffer in a private page-aligned mapping, and
- *        attempt to lock it into RAM with no-core-dump advice.
+ * @brief Allocate a zeroed buffer in a private page-aligned mapping, mark
+ *        it non-dumpable, and attempt to lock it into RAM.
  *
  * The buffer owns whole pages (one anonymous mapping per allocation), so
  * locking, the MADV_DONTDUMP advice and ama_secure_free() act on this
@@ -476,9 +476,16 @@ AMA_API ama_error_t ama_secure_munlock(void* ptr, size_t len);
  *
  * @warning Locking is best-effort and NOT guaranteed: mlock() fails when
  * the allocation would exceed RLIMIT_MEMLOCK (often 64 KiB by default) and
- * this function still returns a usable, zeroed, swappable buffer rather
- * than NULL.  When the locked property is load-bearing, call
- * ama_secure_mlock() on the returned buffer and act on its return value.
+ * this function still returns a usable buffer rather than NULL.  An mlock()
+ * failure costs ONLY the lock.  The returned buffer is still (a) zeroed,
+ * (b) a private page-aligned mapping of its own, and (c) on platforms with
+ * MADV_DONTDUMP (Linux), excluded from core dumps: the advice is applied
+ * to the mapping before and independently of the lock attempt, so it does
+ * not depend on RLIMIT_MEMLOCK and survives an mlock() failure.  Only
+ * (d), "never paged to swap", is lost.  Platforms without MADV_DONTDUMP
+ * (Windows, macOS) never had (c).  When the locked property is
+ * load-bearing, call ama_secure_mlock() on the returned buffer and act on
+ * its return value; that call keeps its own fail-closed contract.
  *
  * @param size Number of bytes to allocate (rounded up to whole pages)
  * @return Pointer to zeroed memory, or NULL on failure

@@ -115,7 +115,8 @@ AMA_API ama_error_t ama_secure_munlock(void *ptr, size_t len) {
 }
 
 /**
- * @brief Allocate a zeroed buffer and attempt to lock it into RAM.
+ * @brief Allocate a zeroed buffer, mark it non-dumpable and attempt to
+ *        lock it into RAM.
  *
  * @param size  Number of bytes to allocate
  * @return Pointer to zeroed memory, or NULL on failure
@@ -126,9 +127,22 @@ AMA_API ama_error_t ama_secure_munlock(void *ptr, size_t len) {
  * 64 KiB and is routinely hit.  The failure is deliberately non-fatal — a
  * usable-but-swappable buffer beats refusing to allocate — but it means a
  * caller MUST NOT treat this allocation as proof that the contents can never
- * reach swap or a core dump.  Call ama_secure_mlock() directly and inspect
- * its return value when the locked property is load-bearing; the Python
- * binding surfaces the same distinction via `SecureBuffer.locked`.
+ * reach swap.  Call ama_secure_mlock() directly and inspect its return
+ * value when the locked property is load-bearing; the Python binding
+ * surfaces the same distinction via `SecureBuffer.locked`.
+ *
+ * An mlock() failure costs the lock and nothing else.  The buffer is still
+ * zeroed, still a private page-aligned mapping of its own, and — where the
+ * platform has MADV_DONTDUMP — still excluded from core dumps: the advice
+ * is applied to the fresh mapping before and independently of the lock
+ * attempt, because madvise(2) is subject to no rlimit and there is no
+ * reason for it to fail when mlock does.  The allocator used to reach the
+ * advice only through ama_secure_mlock(), which (correctly, for its own
+ * contract) returns before madvise when mlock fails, so any unprivileged
+ * process past its RLIMIT_MEMLOCK silently lost the no-core-dump property
+ * together with the lock.  tests/c/test_secure_memory_dontdump.c lowers
+ * RLIMIT_MEMLOCK to 0 in-process and reads the kernel's own "dd" VmFlag
+ * record to keep the two decoupled.
  *
  * Every allocation owns its pages.  Buffers used to come from `malloc()`,
  * which packs allocations together, so the kernel's page-granular
@@ -180,12 +194,39 @@ AMA_API void *ama_secure_alloc(size_t size) {
      * keeps the "zeroed" half of the contract independent of that. */
     ama_secure_memzero(ptr, rounded);
 
+#if defined(_WIN32) || defined(_WIN64)
     /* Lock in memory — best-effort; see the @warning above.  The status is
-     * intentionally discarded here and the contract documents that the
-     * buffer may be swappable, rather than claiming a guarantee the
-     * allocator cannot make.  The region is page-aligned, so the
-     * MADV_DONTDUMP advice inside applies to exactly these pages. */
-    (void)ama_secure_mlock(ptr, rounded);
+     * intentionally discarded and the contract documents that the buffer
+     * may be swappable, rather than claiming a guarantee the allocator
+     * cannot make.  Windows has no per-mapping core-dump exclusion. */
+    (void)VirtualLock(ptr, rounded);
+#else
+    /* No-core-dump advice FIRST, and independently of the lock.  The
+     * mapping is page-aligned and whole-page sized, so the advice applies
+     * to exactly these pages with no rounding.  It is not routed through
+     * ama_secure_mlock(): that function reaches its madvise only after
+     * mlock() succeeds and fails closed otherwise — the right contract for
+     * a direct caller who inspects the return value, but the wrong one for
+     * an allocator that discards it, because an RLIMIT_MEMLOCK failure
+     * (64 KiB by default, no privilege needed to hit it) then took the
+     * advice down with the lock although madvise needs no rlimit and would
+     * have succeeded.  There is no return channel for the advice from this
+     * allocator, so it is applied here as a best-effort property alongside
+     * the lock rather than made fatal: the only kernel that rejects
+     * MADV_DONTDUMP on a fresh private anonymous mapping is one that lacks
+     * the advice altogether (Linux < 3.4), where the previous code returned
+     * a dumpable buffer as well.  Measured by
+     * tests/c/test_secure_memory_dontdump.c on both mlock branches. */
+#ifdef MADV_DONTDUMP
+    (void)madvise(ptr, rounded, MADV_DONTDUMP);
+#endif
+
+    /* Lock in memory — best-effort; see the @warning above.  The status is
+     * intentionally discarded and the contract documents that the buffer
+     * may be swappable, rather than claiming a guarantee the allocator
+     * cannot make.  A failure here leaves the advice above in place. */
+    (void)mlock(ptr, rounded);
+#endif
 
     return ptr;
 }

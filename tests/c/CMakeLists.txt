@@ -17,8 +17,12 @@ add_ama_test(test_core test_core.c)
 # Item-10 core-dump hygiene (2026-08 v5 audit): ama_secure_mlock() must leave
 # the kernel's own "dd" (MADV_DONTDUMP) VmFlag on every page of a locked,
 # page-UNALIGNED buffer — madvise(2) EINVALs on unaligned addresses, so a
-# call sequence containing madvise proves nothing by itself.  Linux-only;
-# skips (77) elsewhere or when mlock is impossible (RLIMIT_MEMLOCK).
+# call sequence containing madvise proves nothing by itself.  Its second
+# case lowers RLIMIT_MEMLOCK to 0 in-process and requires ama_secure_alloc()
+# to keep "dd" whether or not its mlock() succeeds (root: CAP_IPC_LOCK
+# bypasses the limit; unprivileged: mlock fails) — the advice must not be
+# coupled to the lock.  Linux-only; skips (77) elsewhere or when mlock is
+# impossible from the start (RLIMIT_MEMLOCK already exhausted).
 add_ama_test(test_secure_memory_dontdump test_secure_memory_dontdump.c)
 set_tests_properties(test_secure_memory_dontdump PROPERTIES SKIP_RETURN_CODE 77)
 # Item-8 post-free scrub (2026-08 v5 audit): heap inspection via
