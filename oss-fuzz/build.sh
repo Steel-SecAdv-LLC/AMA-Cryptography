@@ -13,11 +13,20 @@
 #   $CFLAGS - C compiler flags (includes sanitizer flags)
 #   $CXXFLAGS - C++ compiler flags
 #   $LIB_FUZZING_ENGINE - Fuzzing engine library (libFuzzer, AFL, etc.)
+#   $WORK   - Scratch directory for intermediates
+#
+# Intermediates go under $WORK, never under the source tree: helper.py
+# build_fuzzers (and tools/test_oss_fuzz_build.sh, which drives it) mount a
+# developer's or CI's checkout over /src/ama-cryptography, and a `build/`
+# written there would land in that checkout — on top of a native build if
+# one exists.
 
 cd /src/ama-cryptography
+BUILD_DIR="${WORK:-/work}/ama-build"
+mkdir -p "$BUILD_DIR"
 
 # Build the AMA C library with CMake
-cmake -B build \
+cmake -B "$BUILD_DIR" \
     -DAMA_USE_NATIVE_PQC=ON \
     -DAMA_BUILD_SHARED=OFF \
     -DAMA_BUILD_STATIC=ON \
@@ -31,10 +40,10 @@ cmake -B build \
     -DCMAKE_C_FLAGS="$CFLAGS" \
     -DCMAKE_CXX_FLAGS="$CXXFLAGS"
 
-cmake --build build -j$(nproc)
+cmake --build "$BUILD_DIR" -j$(nproc)
 
 # Find the static library
-AMA_LIB=$(find build -name "libama_cryptography_static.a" | head -1)
+AMA_LIB=$(find "$BUILD_DIR" -name "libama_cryptography_static.a" | head -1)
 if [ -z "$AMA_LIB" ]; then
     echo "ERROR: Could not find libama_cryptography_static.a"
     exit 1
@@ -72,7 +81,7 @@ for target in "${FUZZ_TARGETS[@]}"; do
 
     echo "Building fuzz target: $target"
     $CC $CFLAGS -I"$INCLUDE_DIR" \
-        -c "$src_file" -o "build/${target}.o"
+        -c "$src_file" -o "$BUILD_DIR/${target}.o"
 
     # Per-target extras.  fuzz_frost uses --wrap=ama_randombytes to
     # service randomness from a SHA3-256 counter PRNG keyed by the fuzz
@@ -82,13 +91,13 @@ for target in "${FUZZ_TARGETS[@]}"; do
     extra_link_flags=()
     if [ "$target" = "fuzz_frost" ]; then
         $CC $CFLAGS -I"$INCLUDE_DIR" \
-            -c "fuzz/fuzz_rng.c" -o "build/fuzz_rng.o"
-        extra_objs+=("build/fuzz_rng.o")
+            -c "fuzz/fuzz_rng.c" -o "$BUILD_DIR/fuzz_rng.o"
+        extra_objs+=("$BUILD_DIR/fuzz_rng.o")
         extra_link_flags+=("-Wl,--wrap=ama_randombytes")
     fi
 
     $CXX $CXXFLAGS \
-        "build/${target}.o" "${extra_objs[@]}" \
+        "$BUILD_DIR/${target}.o" "${extra_objs[@]}" \
         "$AMA_LIB" \
         $LIB_FUZZING_ENGINE \
         "${extra_link_flags[@]}" \

@@ -451,8 +451,10 @@ Location: `fuzz/`
 - Core: SHA3, Ed25519, AES-GCM, HKDF, consttime, agent-binding, Ascon
 - PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1, FROST
 
-OSS-Fuzz onboarding prepared in `oss-fuzz/` for continuous 24/7 fuzzing.
-See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for details.
+The OSS-Fuzz submission files in `oss-fuzz/` are built and checked by
+OSS-Fuzz's own driver on every push (`tools/test_oss_fuzz_build.sh`), and
+ClusterFuzzLite runs them nightly on OSS-Fuzz's infrastructure with a
+persisted corpus. See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md).
 
 ### Python Test Suite
 
@@ -709,10 +711,14 @@ calibrated for the max-over-21-rungs statistic; a single Welch t would use 4.5):
 
 See [docs/constant-time-testing.md](docs/constant-time-testing.md) for methodology and usage.
 
-### Continuous Fuzzing (OSS-Fuzz)
+### Continuous Fuzzing (ClusterFuzzLite and OSS-Fuzz)
 
-15 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries, prepared
-for [OSS-Fuzz](https://github.com/google/oss-fuzz) onboarding:
+15 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries. They run
+nightly under [ClusterFuzzLite](https://google.github.io/clusterfuzzlite/)
+(batch mode, ASan/UBSan/MSan, corpus kept between runs, weekly prune and
+coverage report), the per-PR lane keeps and merges its corpus across runs,
+and the [OSS-Fuzz](https://github.com/google/oss-fuzz) submission files are
+built and checked by OSS-Fuzz's driver on every push:
 
 ✓ All fuzz targets have `LLVMFuzzerTestOneInput` entry points
 ✓ No hardcoded paths or environment dependencies

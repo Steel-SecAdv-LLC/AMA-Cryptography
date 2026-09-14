@@ -22,12 +22,14 @@ RUN apt-get update && apt-get install -y \
 
 # Clone the repository.
 #
-# AMA_REF selects what is built.  It defaults to the default branch, which is
-# what OSS-Fuzz itself wants; tools/test_oss_fuzz_build.sh overrides it so a
-# developer verifying the build locally verifies THEIR tree rather than
-# whatever `main` happens to be — the doc presented that script as the way to
-# "verify the build works locally before submitting", and it could only ever
-# validate `main`.
+# AMA_REF selects what is cloned.  It defaults to the default branch, which is
+# what OSS-Fuzz itself wants.  A local or CI check of a specific tree does not
+# go through this ARG at all: tools/test_oss_fuzz_build.sh passes the checkout
+# to `helper.py build_fuzzers` as its source path, which mounts it over the
+# WORKDIR below and so over this clone.  (An earlier revision of this comment
+# said the script set AMA_REF; it never did, and a build-arg would in any case
+# only reach a commit that had already been pushed.)  The ARG stays for a
+# manual `docker build --build-arg AMA_REF=<ref>` of a pushed ref.
 ARG AMA_REF=""
 RUN git clone --depth 1 https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git /src/ama-cryptography \
     && if [ -n "$AMA_REF" ]; then \

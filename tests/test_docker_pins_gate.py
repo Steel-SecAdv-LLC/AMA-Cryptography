@@ -220,6 +220,9 @@ class TestExemptions:
         oss = REPO_ROOT / "oss-fuzz" / "Dockerfile"
         assert "oss-fuzz/Dockerfile" in gate.EXEMPT
         assert gate.audit([oss], today=_TODAY) == [], "the real OSS-Fuzz file should pass"
+        cflite = REPO_ROOT / ".clusterfuzzlite" / "Dockerfile"
+        assert ".clusterfuzzlite/Dockerfile" in gate.EXEMPT
+        assert gate.audit([cflite], today=_TODAY) == [], "the ClusterFuzzLite twin should pass"
 
         # Same path, prose removed: the exemption must no longer be accepted.
         stripped = "FROM gcr.io/oss-fuzz-base/base-builder\nRUN echo hi\n"
@@ -245,6 +248,7 @@ class TestScopeAndFailClosed:
             "docker/Dockerfile.alpine",
             "docker/Dockerfile.c-api",
             "oss-fuzz/Dockerfile",
+            ".clusterfuzzlite/Dockerfile",
         ):
             assert expected in found, f"{expected} is not scanned"
 

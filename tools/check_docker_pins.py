@@ -52,7 +52,8 @@ What is checked
 ``documented exemptions``
     A Dockerfile may opt out of pinning only by appearing in ``EXEMPT`` *and*
     carrying prose that explains why, so an exemption cannot be silent.
-    ``oss-fuzz/Dockerfile`` is the one entry: OSS-Fuzz builds it inside its
+    ``oss-fuzz/Dockerfile`` and its ClusterFuzzLite twin
+    ``.clusterfuzzlite/Dockerfile`` are the entries: OSS-Fuzz builds them inside its
     own infrastructure against whatever ``base-builder`` it currently ships
     and rebuilds every project when that base moves, so the pin belongs to
     OSS-Fuzz rather than to this repository.
@@ -113,7 +114,7 @@ UNDOCUMENTED_EXEMPTION = "undocumented-exemption"
 
 #: Repo-relative Dockerfiles that may use an unpinned base, each of which must
 #: also explain itself in prose. See the module docstring.
-EXEMPT = {"oss-fuzz/Dockerfile"}
+EXEMPT = {"oss-fuzz/Dockerfile", ".clusterfuzzlite/Dockerfile"}
 
 #: A word the explanation must use, searched in COMMENT LINES ONLY.
 #:
