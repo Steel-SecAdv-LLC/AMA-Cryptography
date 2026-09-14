@@ -1028,8 +1028,6 @@ class TestNativeLibraryDetection:
         ``_get_lib_names`` is platform-conditional, so the names for the other
         two platforms are read out of its source rather than by calling it.
         """
-        import re
-
         from tests.conftest import native_library_present
 
         repo_root = Path(__file__).resolve().parent.parent
