@@ -1,0 +1,12 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# ClusterFuzzLite project metadata (google/clusterfuzzlite).  The build
+# integration itself is oss-fuzz/: .clusterfuzzlite/build.sh execs
+# oss-fuzz/build.sh, so the fuzzers ClusterFuzzLite runs nightly are built by
+# the same script an OSS-Fuzz submission would use.
+language: c
+sanitizers:
+  - address
+  - undefined
+  - memory

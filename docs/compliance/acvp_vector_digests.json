@@ -1,0 +1,57 @@
+{
+  "note": "SHA-256 and byte length of every ACVP-Server internalProjection.json that nist_vectors/fetch_vectors.py downloads, taken at the immutable upstream ref below. The ref names a snapshot; these digests fix its bytes. fetch_vectors.py refuses to write a download that does not match and refuses to trust a local file that does not match; run_vectors.py refuses to validate against one; .github/workflows/acvp_validation.yml checks every file between the two steps and cross-checks this ref against docs/compliance/acvp_attestation.json. Regenerate ONLY with `python3 nist_vectors/fetch_vectors.py --refresh-manifest` (with ACVP_REF set) when the pin is deliberately advanced, in the same commit as the attestation refresh. A digest that changed on its own is not a stale manifest: it means the tag no longer serves the bytes the attestation was generated against.",
+  "acvp_ref": "v1.1.0.42",
+  "base_url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/v1.1.0.42/gen-val/json-files",
+  "files": {
+    "HMAC-SHA2-256-2.0.json": {
+      "algo_dir": "HMAC-SHA2-256-2.0",
+      "bytes": 81364,
+      "sha256": "a9d0734b93aee71bc6f30b47daab782fd96b39688afe4fbddb009e99402ec989"
+    },
+    "ML-DSA-keyGen-FIPS204.json": {
+      "algo_dir": "ML-DSA-keyGen-FIPS204",
+      "bytes": 882437,
+      "sha256": "6027a0ad263de2fa4a96a6bc086b17daa494dcadeb4a51e31b1258225c1d382f"
+    },
+    "ML-DSA-sigVer-FIPS204.json": {
+      "algo_dir": "ML-DSA-sigVer-FIPS204",
+      "bytes": 4523114,
+      "sha256": "85827fd9f058d617b956301d342f2792d66ff188987ccce87f014f0bdb282457"
+    },
+    "ML-KEM-encapDecap-FIPS203.json": {
+      "algo_dir": "ML-KEM-encapDecap-FIPS203",
+      "bytes": 1478114,
+      "sha256": "f1e22b7d399dde7bf61b838770c658a380e4b1cfc4bd395dbed9ec6c1d977d9d"
+    },
+    "ML-KEM-keyGen-FIPS203.json": {
+      "algo_dir": "ML-KEM-keyGen-FIPS203",
+      "bytes": 558841,
+      "sha256": "d7a62a2c3476957f56dd8d24f9004ea6776ccfe995ffe71a65bb9506dc9c7b1b"
+    },
+    "SHA3-256-2.0.json": {
+      "algo_dir": "SHA3-256-2.0",
+      "bytes": 1217364,
+      "sha256": "dba4689436c7e440e61dc517210def3e8e09e50c0e9eff29ea66d89bdd0f2c63"
+    },
+    "SHA3-512-2.0.json": {
+      "algo_dir": "SHA3-512-2.0",
+      "bytes": 1148507,
+      "sha256": "b0521468a178f7fd362d63319aa69b708885d08f0c71cee99ac70729f5bdf64b"
+    },
+    "SHAKE-128-1.0.json": {
+      "algo_dir": "SHAKE-128-1.0",
+      "bytes": 1282487,
+      "sha256": "ec2f9da6b146ae58fde2b73e552d3b29753fdfce7e05fbbb66329a075fa5d103"
+    },
+    "SHAKE-256-1.0.json": {
+      "algo_dir": "SHAKE-256-1.0",
+      "bytes": 1319076,
+      "sha256": "94d0992ed2acbebe45f359cb1ffaceaf881a170339935ba9d2d36c8388005d26"
+    },
+    "SLH-DSA-sigVer-FIPS205.json": {
+      "algo_dir": "SLH-DSA-sigVer-FIPS205",
+      "bytes": 30731848,
+      "sha256": "a013fc2104f4ed4799d96d51141f65b965969b2cf10646626a021b6d456ce792"
+    }
+  }
+}

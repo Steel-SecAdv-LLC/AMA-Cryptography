@@ -92,9 +92,19 @@ env:
   #      these numbers stay in lockstep.
   #   4. Also update the default in nist_vectors/fetch_vectors.py so a
   #      local run without ACVP_REF set reproduces the same snapshot.
-  #   5. The resolved ref is normalized (strip whitespace, empty →
+  #   5. Re-pin the BYTES, not only the name: with ACVP_REF exported, run
+  #      `python3 nist_vectors/fetch_vectors.py --refresh-manifest`, which
+  #      rewrites docs/compliance/acvp_vector_digests.json from what the
+  #      new tag serves (it refuses to run under GitHub Actions — moving
+  #      the pin is a reviewed change).  Commit the manifest with the
+  #      attestation.  Every fetch and every harness run verifies against
+  #      it; the "Every fetched projection must match its pinned digest"
+  #      step below and the summary cross-check fail if the manifest's
+  #      acvp_ref and this ACVP_REF disagree.
+  #   6. The resolved ref is normalized (strip whitespace, empty →
   #      "v1.1.0.42") and recorded in validation_summary.json::acvp_ref
-  #      as well as checked against acvp_attestation.json::acvp_ref.
+  #      as well as checked against acvp_attestation.json::acvp_ref and
+  #      acvp_vector_digests.json::acvp_ref.
   ACVP_REF: v1.1.0.42
 
 jobs:
@@ -124,9 +134,20 @@ jobs:
           cmake --build build -j"$(nproc)"
 
       - name: Fetch NIST ACVP vectors
+        # Every download is verified against docs/compliance/acvp_vector_digests.json
+        # before it is written, and a file already on disk is verified rather
+        # than trusted; a mismatch fails this step by name.
         env:
           ACVP_REF: ${{ env.ACVP_REF }}
         run: python3 nist_vectors/fetch_vectors.py
+
+      - name: Every fetched projection must match its pinned digest
+        # A tag pins a name; the manifest pins the bytes.  The fetch step
+        # already refused a mismatch, and run_vectors.py refuses one again
+        # on load — this step is the visible, independent record between
+        # the two that the ten files the harness is about to read are the
+        # ten the attestation was generated against.  Nothing here fetches.
+        run: python3 tools/acvp_vector_pin.py --check
 
       - name: Run ACVP vector validation
         id: run_vectors
@@ -452,6 +473,36 @@ jobs:
                   "skipping attestation cross-check."
               )
 
+          # The digest manifest must be pinned to the ref this run used: its
+          # digests are only meaningful at the ref they were taken from.
+          # fetch_vectors.py and run_vectors.py each refused already if they
+          # differed; this re-check puts the disagreement into the summary
+          # artifact rather than only into a step log, and a MISSING manifest
+          # is a failure — a run whose projections were not pinned at all is
+          # not the attested run.
+          manifest_mismatches: list[str] = []
+          man_path = Path("docs/compliance/acvp_vector_digests.json")
+          if man_path.is_file():
+              man_ref = str(json.loads(man_path.read_text()).get("acvp_ref", "")).strip()
+              if man_ref != acvp_ref:
+                  manifest_mismatches.append(
+                      f"acvp_vector_digests.json acvp_ref={man_ref!r} vs run={acvp_ref!r} "
+                      f"(re-pin with `nist_vectors/fetch_vectors.py --refresh-manifest`)"
+                  )
+          else:
+              manifest_mismatches.append(
+                  "docs/compliance/acvp_vector_digests.json is missing: the fetched "
+                  "projections were validated against without a byte-level pin"
+              )
+          if manifest_mismatches:
+              status = "fail"
+              print("::error::the ACVP digest manifest does not match this run:")
+              for m in manifest_mismatches:
+                  print(f"    {m}")
+          validation_summary["digest_manifest_ref"] = (
+              man_ref if man_path.is_file() else None
+          )
+
           # Write validation_summary.json AFTER the attestation cross-check so
           # the `status` field on disk always reflects the final decision
           # (including cross-check failures). Previously the summary was
@@ -482,6 +533,8 @@ jobs:
               # was missing and the cross-check was skipped.
               if "mismatches" in locals() and mismatches:
                   reasons.append(f"attestation_mismatch {len(mismatches)}")
+              if manifest_mismatches:
+                  reasons.append("digest_manifest_mismatch")
               if not reasons:
                   # Last-resort fallback — should only fire if status was
                   # flipped to "fail" for a reason we didn't enumerate above.
