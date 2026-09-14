@@ -17,27 +17,17 @@
  *      backends.  This is the only production code path that
  *      transitively exercises SIMD inside SLH-DSA/SPHINCS+.
  *
- *   2. **SPHINCS+ AVX2 `wots_chain` helper vs scalar SHA-256**.
- *      `ama_sphincs_wots_chain_avx2` ships in the build alongside
- *      the production SPHINCS+-256f scalar pipeline.  It is NOT on
- *      the production call path today (see `slh_wots_chain` in
- *      `src/c/ama_slhdsa.c` — it loops scalar SHA-256 step-by-step
- *      and never dispatches to the SIMD helper), but it is shipped,
- *      documents the SIMD intent for a future wiring, and needs
- *      parity coverage so that wiring is safe.
- *
- *      Compares the AVX2 helper against an inlined scalar SHA-256
- *      implementation (FIPS 180-4) executed with the exact same
- *      block-build / chaining pattern.  This is byte-identity, not
- *      algebraic equivalence — a mismatch means a SIMD regression
- *      that would silently corrupt WOTS+ chains the moment the
- *      helper is wired in.
- *
- *      The AVX2 helper is `extern` (not `static`) so this test can
- *      reach it (see src/c/avx2/ama_sphincs_avx2.c).  The NEON
- *      `wots_chain` lane was previously pinned here too, but has
- *      been deliberately retired — see the explanatory comment block
- *      inside `run_wots_chain_parity` for the full rationale.
+ *   2. **Retired: the `wots_chain` helper lanes.**  This lane used to
+ *      compare `ama_sphincs_wots_chain_avx2` (and, earlier, the NEON
+ *      helper) against a scalar SHA-256 transcription of the same
+ *      algorithm.  Neither helper exists any more:
+ *      `src/c/avx2/ama_sphincs_avx2.c` is a placeholder TU shipping no
+ *      kernel, and the NEON helper was deleted in the twenty-seventh
+ *      maintenance pass as compiled, uncalled, untested code whose
+ *      block layout differed from the scalar reference.  The lane body
+ *      records why the comparison proved nothing; `run_wots_chain_parity`
+ *      stays so the retirement is visible where the lane was, and this
+ *      header no longer describes a comparison that does not run.
  *
  * SKIP semantics:
  *   - Lane 1 SKIPs (informational) when the dispatched Keccak

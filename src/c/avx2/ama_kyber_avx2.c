@@ -271,34 +271,6 @@ void ama_kyber_cbd2_avx2(int16_t poly[KYBER_N], const uint8_t buf[128]) {
     }
 }
 
-/* ============================================================================
- * Vectorized polynomial addition
- * ============================================================================ */
-static AMA_MAYBE_UNUSED void ama_kyber_poly_add_avx2(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 16; i++) {
-        __m256i va = _mm256_loadu_si256((const __m256i *)(a + i * 16));
-        __m256i vb = _mm256_loadu_si256((const __m256i *)(b + i * 16));
-        __m256i vr = _mm256_add_epi16(va, vb);
-        _mm256_storeu_si256((__m256i *)(r + i * 16), vr);
-    }
-}
-
-/* ============================================================================
- * Vectorized polynomial subtraction
- * ============================================================================ */
-static AMA_MAYBE_UNUSED void ama_kyber_poly_sub_avx2(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 16; i++) {
-        __m256i va = _mm256_loadu_si256((const __m256i *)(a + i * 16));
-        __m256i vb = _mm256_loadu_si256((const __m256i *)(b + i * 16));
-        __m256i vr = _mm256_sub_epi16(va, vb);
-        _mm256_storeu_si256((__m256i *)(r + i * 16), vr);
-    }
-}
-
 #else
 typedef int ama_kyber_avx2_not_available;
 #endif /* __x86_64__ */

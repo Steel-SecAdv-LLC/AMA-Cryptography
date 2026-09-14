@@ -53,11 +53,6 @@ static const uint32_t K256[64] = {
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 };
 
-/* NEON rotate right for 32-bit lanes */
-static inline uint32_t rotr32(uint32_t x, int n) {
-    return (x >> n) | (x << (32 - n));
-}
-
 /* ============================================================================
  * NEON-assisted SHA-256 compression (single block)
  *
@@ -157,6 +152,13 @@ void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]) {
     vst1q_u32(state + 4, efgh);
 }
 #else
+/* Scalar rotate right for the fallback below; only that path uses it, so
+ * it lives inside this branch rather than sitting unused on Crypto
+ * Extension builds. */
+static inline uint32_t rotr32(uint32_t x, int n) {
+    return (x >> n) | (x << (32 - n));
+}
+
 /* Fallback path: pure scalar SHA-256 compression for AArch64 builds
  * without `__ARM_FEATURE_SHA2` (e.g., ARMv8 cores without the optional
  * Crypto Extensions, or compilers that don't set the feature macro).
