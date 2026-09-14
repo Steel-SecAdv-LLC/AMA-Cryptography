@@ -241,6 +241,11 @@ def reset_module() -> bool:
     the state went ERROR → OPERATIONAL and the reason, the failing stage and its
     detail string were gone.  A transient fault that clears on retry is the case
     an operator most needs the record of.
+
+    A POST that failed has already recorded itself (see ``_run_self_tests``);
+    the snapshot here additionally captures an ERROR entered at runtime through
+    ``_set_error`` — a downstream timing-leak or pairwise-test failure whose
+    reason POST itself never saw — against the results table that was live.
     """
     with _POST_LOCK:
         if module_status() == "ERROR":
@@ -3146,6 +3151,16 @@ def _run_self_tests() -> bool:
             _clear_self_test_thread()
 
         _POST_DURATION_MS = (time.monotonic() - start) * 1000
+
+        if not all_passed:
+            # Snapshot the failed run for :func:`last_failure` NOW.  Until this
+            # line the record was written only by ``reset_module()``, so a
+            # failed POST that nobody had yet tried to recover from reported
+            # "no failure" — the opposite of the truth, and exactly when an
+            # operator reads it.
+            _LAST_FAILURE["reason"] = module_error_reason()
+            _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
+            _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
 
         if all_passed:
             _set_operational()

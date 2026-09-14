@@ -557,6 +557,67 @@ class TestRunSelfTestsFailures:
             st.update_integrity_digest()
             _set_operational()
 
+    def test_last_failure_records_the_failed_run_and_survives_recovery(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        isolated_integrity_file: Path,
+    ) -> None:
+        """``last_failure()`` reports a failed POST as soon as it has failed —
+        not only once ``reset_module()`` has been asked to recover — and the
+        record outlives the successful re-run that follows."""
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            _set_operational,
+            last_failure,
+            module_error_reason,
+            module_self_test_results,
+            module_status,
+            post_duration_ms,
+            reset_module,
+        )
+
+        real_kat = st._kat_sha3_256
+        untouched_record = last_failure()
+        monkeypatch.setattr(
+            "ama_cryptography._self_test._kat_sha3_256",
+            lambda: (False, "synthetic soft failure"),
+        )
+        try:
+            assert _run_self_tests() is False
+            assert module_status() == "ERROR"
+            failed_reason = module_error_reason()
+            failed_results = module_self_test_results()
+            failed_duration = post_duration_ms()
+            assert failed_reason is not None and "synthetic soft failure" in failed_reason
+            assert any(ok is False for _, ok, _ in failed_results), "no failing stage in the table"
+
+            record = last_failure()
+            assert record == {
+                "reason": failed_reason,
+                "results": failed_results,
+                "duration_ms": failed_duration,
+            }
+            # The record is a copy: a caller cannot edit the module's memory.
+            record["results"].append(("tampered", True, ""))
+            assert last_failure()["results"] == failed_results
+
+            # Clear the fault and recover.  The re-run passes and replaces the
+            # live results table, and must NOT erase the record of the failure.
+            monkeypatch.setattr(st, "_kat_sha3_256", real_kat)
+            assert reset_module() is True
+            assert module_status() == "OPERATIONAL"
+            assert module_error_reason() is None
+            assert all(ok is not False for _, ok, _ in module_self_test_results())
+            assert last_failure() == {
+                "reason": failed_reason,
+                "results": failed_results,
+                "duration_ms": failed_duration,
+            }
+        finally:
+            st.update_integrity_digest()
+            _set_operational()
+            st._LAST_FAILURE.update(untouched_record)
+
     def test_rng_identical_outputs_fails(
         self,
         monkeypatch: pytest.MonkeyPatch,
