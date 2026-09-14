@@ -55,17 +55,48 @@ from typing import Any, Iterable, Sequence
 #: Levels that block. SARIF 2.1.0 defines: none, note, warning, error.
 BLOCKING_LEVELS = frozenset({"error"})
 
+#: CodeQL's security queries mostly carry ``@problem.severity warning`` and put
+#: their CVSS-style rating in the rule's ``properties.security-severity``;
+#: GitHub's own code-scanning threshold is keyed on that rating for exactly
+#: this reason.  A gate that read only the level let a warning-level result
+#: rated 9.8 through (measured with a crafted SARIF).  Results at or above
+#: this rating block whatever their level; 7.0 is the boundary of CVSS "high".
+SECURITY_SEVERITY_FLOOR = 7.0
+
+
+def _rules(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """The rule objects of one SARIF run: the driver's, then any extension's."""
+    tool = run.get("tool") or {}
+    rules: list[dict[str, Any]] = list(((tool.get("driver")) or {}).get("rules") or [])
+    for extension in tool.get("extensions") or []:
+        rules.extend(extension.get("rules") or [])
+    return rules
+
 
 def _rule_levels(run: dict[str, Any]) -> dict[str, str]:
     """``ruleId -> defaultConfiguration.level`` for one SARIF run."""
-    driver = ((run.get("tool") or {}).get("driver")) or {}
     levels: dict[str, str] = {}
-    for rule in driver.get("rules") or []:
+    for rule in _rules(run):
         rule_id = rule.get("id")
         level = ((rule.get("defaultConfiguration") or {}).get("level")) or ""
         if rule_id and level:
             levels[str(rule_id)] = str(level)
     return levels
+
+
+def _rule_security_severities(run: dict[str, Any]) -> dict[str, float]:
+    """``ruleId -> properties.security-severity`` (a float) for one SARIF run."""
+    ratings: dict[str, float] = {}
+    for rule in _rules(run):
+        rule_id = rule.get("id")
+        raw = (rule.get("properties") or {}).get("security-severity")
+        if rule_id is None or raw is None:
+            continue
+        try:
+            ratings[str(rule_id)] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return ratings
 
 
 def _location(result: dict[str, Any]) -> str:
@@ -81,16 +112,26 @@ def _message(result: dict[str, Any]) -> str:
     return str(((result.get("message") or {}).get("text")) or "").strip().replace("\n", " ")
 
 
-def findings(sarif: dict[str, Any]) -> list[tuple[str, str, str, str]]:
-    """``(level, ruleId, location, message)`` for every result in the report."""
-    out: list[tuple[str, str, str, str]] = []
+def findings(sarif: dict[str, Any]) -> list[tuple[str, str, str, str, float | None]]:
+    """``(level, ruleId, location, message, security-severity)`` for every
+    result in the report; the rating is ``None`` for a rule that carries none."""
+    out: list[tuple[str, str, str, str, float | None]] = []
     for run in sarif.get("runs") or []:
         rule_levels = _rule_levels(run)
+        ratings = _rule_security_severities(run)
         for result in run.get("results") or []:
             rule_id = str(result.get("ruleId") or "<no rule id>")
             level = str(result.get("level") or rule_levels.get(rule_id) or "warning")
-            out.append((level, rule_id, _location(result), _message(result)))
+            out.append((level, rule_id, _location(result), _message(result), ratings.get(rule_id)))
     return out
+
+
+def blocks(level: str, security_severity: float | None) -> bool:
+    """Whether one result blocks: error level, or a security rating at or
+    above :data:`SECURITY_SEVERITY_FLOOR` regardless of level."""
+    if level in BLOCKING_LEVELS:
+        return True
+    return security_severity is not None and security_severity >= SECURITY_SEVERITY_FLOOR
 
 
 def audit(paths: Iterable[Path]) -> tuple[list[str], int, int]:
@@ -111,10 +152,11 @@ def audit(paths: Iterable[Path]) -> tuple[list[str], int, int]:
         seen_any = True
         rows = findings(sarif)
         total += len(rows)
-        for level, rule_id, location, message in rows:
-            if level in BLOCKING_LEVELS:
+        for level, rule_id, location, message, rating in rows:
+            if blocks(level, rating):
                 blocking += 1
-                failures.append(f"{location}: [{level}] {rule_id}: {message}")
+                tag = f"{level}" if rating is None else f"{level}, security-severity {rating:g}"
+                failures.append(f"{location}: [{tag}] {rule_id}: {message}")
     if not seen_any and not failures:
         failures.append("no SARIF report was examined at all")
     return failures, blocking, total
@@ -122,7 +164,10 @@ def audit(paths: Iterable[Path]) -> tuple[list[str], int, int]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fail on CodeQL results at or above error severity."
+        description=(
+            "Fail on CodeQL results at error level, or with a security-severity "
+            f"rating of {SECURITY_SEVERITY_FLOOR:g} or higher at any level."
+        )
     )
     parser.add_argument(
         "reports",
@@ -146,7 +191,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"CodeQL severity gate: {total} result(s) across {len(paths)} report(s)")
     if failures:
         print(
-            f"\nCODEQL SEVERITY GATE FAILED — {blocking} error-level result(s):\n", file=sys.stderr
+            f"\nCODEQL SEVERITY GATE FAILED — {blocking} blocking result(s) (error level, "
+            f"or security-severity >= {SECURITY_SEVERITY_FLOOR:g}):\n",
+            file=sys.stderr,
         )
         for row in failures:
             print(f"  {row}", file=sys.stderr)
@@ -156,7 +203,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    print("PASS — no CodeQL result at or above error severity.")
+    print(
+        "PASS — no CodeQL result at error level or with security-severity "
+        f">= {SECURITY_SEVERITY_FLOOR:g}."
+    )
     return 0
 
 
