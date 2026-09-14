@@ -15,14 +15,16 @@ name: CI - dudect Constant-Time Verification
 # silently skip such PRs.
 #
 # PRs that don't touch any of those paths still won't trigger this
-# workflow, so its named jobs do NOT emit a status check on such PRs.
-# Consequence for branch rulesets: do NOT add these names to the
-# `main` branch's required-status-check list.  A required check that
-# is never reported on path-filtered PRs blocks merge indefinitely
-# with 'Expected — Waiting for status to be reported'.  Same reasoning
-# as `baseline-guard.yml::Enforce baseline.json justification` and the
-# wiki-sync job — see PR #289 description ('Deliberately not included')
-# for the canonical exclusion list.
+# workflow, so on its own its `Constant-Time Gate` context would never be
+# reported on such PRs and could not be a required status check.
+# `.github/workflows/dudect-skip.yml` is the no-op twin (same workflow
+# `name:`, same gate job `name:`, complementary `paths-ignore:`), so
+# exactly one of the pair reports the context on every pull request and
+# the context CAN be required; tools/check_gate_coverage.py holds the two
+# path lists complementary.  baseline-guard.yml and
+# integrity-anchor-check.yml carry twins on the same pattern.  (This note
+# used to say the opposite, citing baseline-guard.yml as the reason not
+# to require the gate, after the twin had already been added.)
 #
 # The dudect gate still fails closed when it DOES run (no
 # `continue-on-error`, no silent skips inside the harness), which is

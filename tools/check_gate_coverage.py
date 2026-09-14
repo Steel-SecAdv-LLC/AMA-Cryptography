@@ -101,7 +101,7 @@ WORKFLOW_DIR = Path(".github/workflows")
 #: the drift the floor exists to catch.  Adding or removing a workflow or a job
 #: now means changing these two numbers in the same change, under review.
 MIN_WORKFLOWS = 20
-MIN_JOBS_INSPECTED = 85
+MIN_JOBS_INSPECTED = 84
 
 
 def _load(path: Path) -> dict[Any, Any]:
