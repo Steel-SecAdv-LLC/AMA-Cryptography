@@ -159,6 +159,20 @@ benchmark = [
     # benchmarks/requirements-bench.txt.
     "cryptography>=46.0.7",
 ]
+examples = [
+    # Third-party packages the shipped examples under examples/python/ import
+    # beyond this library.  Not a runtime dependency: INVARIANT-1 (zero
+    # runtime dependencies) is about the production code path, and nothing
+    # under ama_cryptography/ imports these.  The require-backends lanes in
+    # ci.yml and ci-build-test.yml install this extra so the attack-surface
+    # pins on flask_integration.py in tests/test_python_examples.py run;
+    # before it existed nothing installed Flask in CI and those six tests
+    # skipped on every run.
+    #   pip install "ama-cryptography[examples]"
+    # Floor 3.1.1: CVE-2025-47278 (GHSA-4grg-w6v8-c28g), sessions signed
+    # with a SECRET_KEY_FALLBACKS key instead of the current one.
+    "flask>=3.1.1",
+]
 docs = [
     "sphinx>=8.1.3",
     "sphinx-rtd-theme>=3.1.0",
@@ -582,6 +596,8 @@ markers = [
     "fips: marks FIPS 140-3 self-test and compliance tests",
     "requires_host_isa(token): the test's subject is an instruction-set extension; on a host without it the CI backend-skip escalation in tests/conftest.py leaves the skip alone (tokens: x86, x86-64, aarch64)",
     "requires_interop_oracle: the test cross-checks an AMA primitive against an external reference implementation (PyCA cryptography / PyNaCl / pycryptodome); under AMA_CI_REQUIRE_BACKENDS the require-backends lane installs those, so a skip means the oracle install broke and tests/conftest.py escalates it to a failure (audit M18)",
+    "requires_git_history: the test reads git objects a shallow clone does not have (origin/main, a baseline's calibration commit, the v4.0.0 release tag); under AMA_CI_REQUIRE_HISTORY the lane checked out with fetch-depth: 0, so a skip means the checkout is shallow again and tests/conftest.py escalates it to a failure",
+    "requires_example_deps: the test drives a shipped example that imports a third-party package from the [examples] extra (Flask); under AMA_CI_REQUIRE_BACKENDS the require-backends lane installs that extra, so a skip means the install broke and tests/conftest.py escalates it to a failure",
 ]
 filterwarnings = [
     "error",

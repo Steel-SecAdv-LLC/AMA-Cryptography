@@ -274,6 +274,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history and tags, for the same four history-dependent guards
+          # ci.yml::test names on its checkout; AMA_CI_REQUIRE_HISTORY on the
+          # test step below turns a recurrence of the shallow-clone skip into
+          # a failure.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         id: setup-python
@@ -519,7 +525,13 @@ jobs:
         # executable, because HSMKeyStorage reaches the token through that
         # binding.  The token is provisioned on all three OSes, so the extra
         # stays unconditional; the step above has already satisfied it.
-        run: pip install -e ".[dev,hsm]"
+        #
+        # [examples] supplies Flask for the attack-surface pins on
+        # examples/python/flask_integration.py; "Run tests" below sets
+        # AMA_CI_REQUIRE_BACKENDS=1, under which tests/conftest.py escalates a
+        # skipped requires_example_deps test to a failure, so the extra must be
+        # installed wherever that flag is set.
+        run: pip install -e ".[dev,hsm,examples]"
         shell: bash
 
       - name: Install differential/interop reference libraries (test-only)
@@ -591,6 +603,9 @@ jobs:
           # native C library didn't build / didn't load — otherwise
           # tests silently skip and mask backend regressions.
           AMA_CI_REQUIRE_BACKENDS: "1"
+          # The checkout is fetch-depth: 0, so a history-dependent guard that
+          # skips here is a broken checkout, not a shallow one.
+          AMA_CI_REQUIRE_HISTORY: "1"
           # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}

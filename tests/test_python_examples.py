@@ -433,6 +433,7 @@ class TestTheHarnessReadsWhatTheProgramWrote:
             )
 
 
+@pytest.mark.requires_example_deps
 class TestFlaskIntegrationSurface:
     """Attack-surface pins for the Flask demo (2026-08-31 v5 audit, item 20).
 

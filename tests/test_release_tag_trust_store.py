@@ -394,12 +394,15 @@ class TestTheNegativeControls:
 class TestTheEmbeddedFixtureMatchesTheRepository:
     """When the tag is present locally, the embedded copy must be it.
 
-    CI checkouts do not fetch tags at the default depth, so this cannot be a
-    hard requirement; every check above runs regardless.  Where the tag *is*
-    reachable — a maintainer's clone, any lane with ``fetch-depth: 0`` — a
-    divergence between the object store and the embedded bytes is caught.
+    A depth-1 checkout does not have the tag, so outside CI this is a skip and
+    every check above runs regardless.  Both pytest lanes now check out with
+    ``fetch-depth: 0`` and set ``AMA_CI_REQUIRE_HISTORY``, under which
+    ``tests/conftest.py`` turns the skip into a failure: there the tag is
+    promised, and a divergence between the object store and the embedded bytes
+    is caught on every run rather than only in a maintainer's clone.
     """
 
+    @pytest.mark.requires_git_history
     def test_embedded_bytes_equal_the_real_tag_object(self, tag_object: bytes) -> None:
         probe = subprocess.run(
             ["git", "cat-file", "-t", "v4.0.0"],

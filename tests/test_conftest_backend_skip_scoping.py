@@ -31,6 +31,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -731,6 +732,261 @@ def test_the_interop_marker_is_registered_so_strict_markers_accepts_it() -> None
         encoding="utf-8"
     )
     assert "requires_interop_oracle" in pyproject
+
+
+# ---------------------------------------------------------------------------
+# History and example-dependency escalation
+#
+# The same shape as M18, found the same way: a skip that was green on every CI
+# run.  Both pytest lanes checked out at depth 1, so the four guards that read
+# git objects (origin/main, a baseline's calibration commit, the benchmark
+# snapshot's provenance commit, the v4.0.0 tag) skipped every time, and
+# nothing installed Flask, so the six attack-surface pins on the Flask demo
+# never ran either.  The lanes now fetch the full history and install the
+# [examples] extra; these markers are what make a recurrence fail.
+# ---------------------------------------------------------------------------
+
+
+def test_history_marked_skip_becomes_a_failure_under_the_history_flag(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A skipped test carrying ``requires_git_history`` must become a hard
+    failure under ``AMA_CI_REQUIRE_HISTORY=1``, with or without the backends
+    flag — the lane promised the history, not the backends."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_HISTORY", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_git_history
+        def test_reads_origin_main():
+            pytest.skip("origin/main is not available in this checkout")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: origin/main is not available in this checkout*"])
+
+
+def test_history_marked_skip_without_the_history_flag_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backends flag alone does not promise history: a lane that builds
+    the C library on a shallow checkout is still allowed to skip these."""
+    monkeypatch.delenv("AMA_CI_REQUIRE_HISTORY", raising=False)
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_git_history
+        def test_reads_origin_main():
+            pytest.skip("origin/main is not available in this checkout")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_the_history_flag_alone_does_not_escalate_backend_skips(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scoping in the other direction: ``AMA_CI_REQUIRE_HISTORY`` says nothing
+    about backends, so a backend skip under it alone stays a skip."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_HISTORY", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.skipif(True, reason="Kyber backend unavailable")
+        def test_kyber():
+            raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_example_deps_marked_skip_becomes_a_failure_in_ci(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pytest.importorskip`` on an example's dependency, under a marker, is
+    a failure in the require-backends lane: the lane installs [examples]."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_example_deps
+        class TestDemo:
+            def test_surface(self):
+                pytest.importorskip("no_such_example_dependency_zzz")
+                raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: could not import 'no_such_example_dependency_zzz'*"])
+
+
+def test_example_deps_marked_skip_without_ci_env_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A contributor without Flask installed gets a skip, not a failure."""
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_example_deps
+        class TestDemo:
+            def test_surface(self):
+                pytest.importorskip("no_such_example_dependency_zzz")
+                raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+#: Reason fragments that identify an imperative skip as gating on git objects a
+#: shallow clone lacks.  Every history skip in the tree uses one of these.
+_HISTORY_SKIP_TOKENS = (
+    "shallow clone",
+    "not in this checkout",
+    "not available in this checkout",
+    "tags not fetched",
+)
+
+
+def _string_parts(node: ast.expr) -> str:
+    """The literal text of a constant or f-string argument, for token matching."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value for v in node.values if isinstance(v, ast.Constant) and isinstance(v.value, str)
+        )
+    return ""
+
+
+def _is_pytest_call(call: ast.Call, name: str) -> bool:
+    func = call.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == name
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "pytest"
+    )
+
+
+def _defs_with_effective_markers(
+    tree: ast.AST,
+) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, set[str]]]:
+    """Every function def with the decorator names in force on it — its own plus
+    those of every enclosing class, since a class-level marker applies to each
+    method (``TestFlaskIntegrationSurface`` carries the marker on the class)."""
+    out: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, set[str]]] = []
+
+    def visit(node: ast.AST, inherited: set[str]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                visit(child, inherited | _decorator_names(child))
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.append((child, inherited | _decorator_names(child)))
+                visit(child, inherited | _decorator_names(child))
+            else:
+                visit(child, inherited)
+
+    visit(tree, set())
+    return out
+
+
+def test_every_history_skip_in_the_tree_carries_the_marker() -> None:
+    """Completeness guard: a ``pytest.skip`` whose reason says the git object
+    is missing must be inside a test carrying ``requires_git_history``, so a
+    new history-dependent guard cannot skip silently in CI the way the four
+    existing ones did.
+
+    Non-vacuous: fails if the scan finds no history skips at all."""
+    tests_dir = Path(__file__).resolve().parent
+    offenders: list[str] = []
+    sites = 0
+    for path in sorted(tests_dir.glob("test_*.py")):
+        if path.name == Path(__file__).name:
+            continue  # the pytester fixtures above are strings, not tests
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for func, markers in _defs_with_effective_markers(tree):
+            for node in ast.walk(func):
+                if not (isinstance(node, ast.Call) and _is_pytest_call(node, "skip")):
+                    continue
+                reason = _string_parts(node.args[0]).lower() if node.args else ""
+                if not any(tok in reason for tok in _HISTORY_SKIP_TOKENS):
+                    continue
+                sites += 1
+                if "requires_git_history" not in markers:
+                    offenders.append(f"{path.name}:{node.lineno}:{func.name}")
+    assert sites >= 4, f"expected the known history skip sites, found {sites}"
+    assert not offenders, (
+        "these tests skip when a git object is missing but lack "
+        f"@pytest.mark.requires_git_history, so a shallow checkout would mute them silently: "
+        f"{offenders}"
+    )
+
+
+def _examples_extra_packages() -> set[str]:
+    """Distribution names declared in pyproject's ``[examples]`` extra."""
+    pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"^examples = \[(.*?)^\]", pyproject, re.MULTILINE | re.DOTALL)
+    assert match, "pyproject.toml declares no [examples] extra"
+    names = {
+        re.split(r"[<>=!~;\[ ]", req.strip().strip("\"'"), maxsplit=1)[0].lower()
+        for req in re.findall(r"^\s*\"([^\"]+)\"", match.group(1), re.MULTILINE)
+    }
+    assert names, "the [examples] extra is empty"
+    return names
+
+
+def test_every_example_dependency_importorskip_carries_the_marker() -> None:
+    """Completeness guard: ``pytest.importorskip`` on a package the [examples]
+    extra provides must sit under ``requires_example_deps``, so the escalation
+    covers every example the lane installs dependencies for.
+
+    Non-vacuous: fails if no such importorskip exists, and if the extra stops
+    naming Flask."""
+    packages = _examples_extra_packages()
+    assert "flask" in packages, packages
+    tests_dir = Path(__file__).resolve().parent
+    offenders: list[str] = []
+    sites = 0
+    for path in sorted(tests_dir.glob("test_*.py")):
+        if path.name == Path(__file__).name:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for func, markers in _defs_with_effective_markers(tree):
+            for node in ast.walk(func):
+                if not (isinstance(node, ast.Call) and _is_pytest_call(node, "importorskip")):
+                    continue
+                target = _string_parts(node.args[0]).lower() if node.args else ""
+                if target.split(".")[0] not in packages:
+                    continue
+                sites += 1
+                if "requires_example_deps" not in markers:
+                    offenders.append(f"{path.name}:{node.lineno}:{func.name}")
+    assert sites >= 1, "expected an importorskip on an [examples] package, found none"
+    assert not offenders, (
+        "these tests importorskip a package the [examples] extra installs but lack "
+        f"@pytest.mark.requires_example_deps, so a broken install would mute them: {offenders}"
+    )
+
+
+def test_the_history_and_example_markers_are_registered() -> None:
+    """--strict-markers is in addopts; an unregistered marker would fail the
+    whole suite."""
+    pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert "requires_git_history" in pyproject
+    assert "requires_example_deps" in pyproject
 
 
 class TestNativeLibraryDetection:

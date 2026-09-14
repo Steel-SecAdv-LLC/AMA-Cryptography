@@ -36,6 +36,16 @@ import pytest
 # legitimate skips are preserved.
 
 _CI = os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("true", "1", "yes")
+
+# When AMA_CI_REQUIRE_HISTORY=1 is set (by a lane whose checkout is
+# ``fetch-depth: 0``), every branch and every tag is in the checkout.  A test
+# marked ``requires_git_history`` skips when the object it reads is absent —
+# ``origin/main``, a baseline's calibration commit, the v4.0.0 release tag —
+# which is the honest answer in a shallow clone and a broken checkout here.
+# Four such guards skipped on every CI run for as long as they existed, because
+# the two pytest lanes checked out at depth 1; nothing reported it, because a
+# skip is green.  This flag is what makes that visible.
+_CI_HISTORY = os.environ.get("AMA_CI_REQUIRE_HISTORY", "").lower() in ("true", "1", "yes")
 _BACKEND_SKIP_REASONS = (
     "dilithium",
     "kyber",
@@ -225,12 +235,40 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
     not one of those, and telling the operator to build the C library is not a
     remedy for it.  See :data:`HOST_ISA_PREDICATES` for why that exemption
     cannot be used to hide a real missing backend.
+
+    Two more markers name things a lane promises to provide, and are escalated
+    on the same principle — a skip must not stand in for coverage the lane was
+    configured to have:
+
+    * ``requires_git_history`` under ``AMA_CI_REQUIRE_HISTORY``: the lane
+      checked out with ``fetch-depth: 0``, so ``origin/main``, the baselines'
+      calibration commits and the release tag are present; a skip means the
+      checkout is shallow again and the history-dependent guards went silent.
+    * ``requires_example_deps`` under ``AMA_CI_REQUIRE_BACKENDS``: the lane
+      installs the ``[examples]`` extra, so the shipped examples' third-party
+      imports resolve; a skip means the install broke and the attack-surface
+      pins on the Flask demo stopped running — as they had on every CI run
+      before the extra existed.
     """
     outcome = yield
-    if not _CI:
+    if not (_CI or _CI_HISTORY):
         return
     rep = outcome.get_result()
     if not rep.skipped:
+        return
+    if _CI_HISTORY and item.get_closest_marker("requires_git_history") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'git history unavailable'} — "
+            "this lane checks out the full history (fetch-depth: 0), so the git "
+            "object this test reads must be present. A skip here means the "
+            "checkout is shallow again and the history-dependent guards "
+            "(baseline validity window, calibration-commit drift, snapshot "
+            "provenance, the embedded release tag) went silent."
+        )
+        return
+    if not _CI:
         return
     if host_isa_exempts(item):
         # The test declares an instruction set this host does not have, so no
@@ -264,6 +302,21 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
             "the cross-implementation validation oracle (PyCA cryptography / PyNaCl / "
             "pycryptodome) must be installed in the require-backends lane so this check "
             "runs. Install .[dev,legacy,benchmark] plus pycryptodome (audit M18)."
+        )
+        return
+
+    # Shipped examples: a test marked requires_example_deps drives an example
+    # under examples/python/ that imports a third-party package (Flask).  The
+    # require-backends lanes install the [examples] extra, so a skip here means
+    # that install broke and the example's attack-surface pins went silent.
+    # Marker-based for the same reason as the oracle escalation above.
+    if item.get_closest_marker("requires_example_deps") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'example dependency unavailable'} — "
+            "the require-backends lane installs the [examples] extra so the shipped "
+            "examples' tests run. Install .[examples]."
         )
         return
 

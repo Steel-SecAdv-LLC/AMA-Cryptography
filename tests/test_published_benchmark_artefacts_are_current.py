@@ -82,6 +82,7 @@ def test_every_published_floor_matches_the_baseline_ledger(
     )
 
 
+@pytest.mark.requires_git_history
 def test_the_snapshot_names_a_commit_this_repository_contains(
     results: dict[str, Any],
 ) -> None:

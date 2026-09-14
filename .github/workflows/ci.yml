@@ -95,6 +95,16 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        # Every branch and tag, not a depth-1 clone.  Four guards read git
+        # objects a shallow clone does not have — the baseline validity window
+        # against origin/main, calibration-commit drift, the benchmark
+        # snapshot's provenance commit, the embedded v4.0.0 tag bytes — and
+        # skipped on every run of this job until this was set.  The pytest step
+        # below sets AMA_CI_REQUIRE_HISTORY so a recurrence fails instead of
+        # skipping (marker requires_git_history, tests/conftest.py).  The full
+        # pack is ~50 MB; the clone cost is seconds per cell.
+        fetch-depth: 0
 
     - name: Set up Python ${{ matrix.python-version }}
       id: setup-python
@@ -338,7 +348,13 @@ jobs:
         # [hsm] supplies PyKCS11, for the same reason: SoftHSM2 alone is not
         # enough to run the HSM lane, because HSMKeyStorage reaches the token
         # through PyKCS11.
-        pip install -e ".[dev,legacy,benchmark,hsm]" pycryptodome
+        #
+        # [examples] supplies Flask, for the same reason again: the
+        # attack-surface pins on examples/python/flask_integration.py in
+        # tests/test_python_examples.py import it, and skipped on every run
+        # before it was installed.  tests/conftest.py escalates that skip to
+        # a failure under AMA_CI_REQUIRE_BACKENDS (marker requires_example_deps).
+        pip install -e ".[dev,legacy,benchmark,hsm,examples]" pycryptodome
 
     # The signed integrity artefact binds two digests: the .py sources
     # (platform-independent) and the built native library (specific to the exact
@@ -456,6 +472,9 @@ jobs:
     - name: Run pytest test suite
       env:
         AMA_CI_REQUIRE_BACKENDS: "1"
+        # The checkout above is fetch-depth: 0, so a history-dependent guard
+        # that skips here is a broken checkout, not a shallow one.
+        AMA_CI_REQUIRE_HISTORY: "1"
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 

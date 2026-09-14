@@ -129,6 +129,11 @@ pip install -e ".[hsm]"
 # Comparative benchmarking against external reference implementations
 pip install -e ".[benchmark]"
 
+# Third-party packages the shipped examples import (Flask for
+# examples/python/flask_integration.py); the CI test lanes install this so the
+# examples' tests run rather than skip
+pip install -e ".[examples]"
+
 # Development tools (pytest, black, ruff, mypy, coverage)
 pip install -e ".[dev]"
 
