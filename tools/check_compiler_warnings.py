@@ -57,7 +57,8 @@ What is allowed, and why
 (There is no vendored C source: the tree's one vendored backend was removed
 in the twenty-first maintenance pass, and its exemption with it.)
 
-``fe51.h`` / ``fe64.h`` — ``ISO C does not support '__int128' types``
+``fe51.h`` / ``fe64.h`` / ``ama_nistp.c`` / ``ama_secp256k1.c`` —
+``ISO C does not support '__int128' types``
     ``-Wpedantic`` under GCC.  The 128-bit limbs are what the field
     arithmetic is built on; there is no ISO C spelling of them.
 
@@ -141,12 +142,16 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         # loose: the file name AND `warning:` AND the specific diagnostic text
         # must all still appear on the line.
         pattern=re.compile(
-            r"fe(51|64)\.h.*warning:.*ISO C does not support " rf"{_QUOTE}__int128{_QUOTE} types"
+            r"(?:fe(?:51|64)\.h|ama_nistp\.c|ama_secp256k1\.c).*warning:.*ISO C does not support "
+            rf"{_QUOTE}__int128{_QUOTE} types"
         ),
         reason=(
             "-Wpedantic under GCC.  The 128-bit limbs are what the X25519 / "
-            "Ed25519 field arithmetic is built on; ISO C has no spelling for "
-            "them."
+            "Ed25519 field arithmetic is built on, and the NIST P-curve and "
+            "secp256k1 units widen through the same type; ISO C has no "
+            "spelling for it.  ama_nistp.c and ama_secp256k1.c used to hide "
+            "the warning with a diagnostic pragma, which INVARIANT-13 forbids "
+            "in src/c; the allowlist is the reviewed place for it."
         ),
     ),
     Exemption(

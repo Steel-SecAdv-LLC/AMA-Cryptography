@@ -346,3 +346,101 @@ class TestCppcheckRunsCleanWithoutSuppressions:
             "mask in the defined `0 - ((uint64_t)x >> n)` form -- rather than "
             "re-adding a suppression:\n" + "\n".join(findings[:40])
         )
+
+
+# ---------------------------------------------------------------------------
+# The C-tree scan sees compiler- and sanitizer-level suppressions
+# ---------------------------------------------------------------------------
+#
+# The scan recognised analyser comment markers (NOLINT, cppcheck-suppress, …)
+# only, so `#pragma GCC diagnostic ignored`, `no_sanitize` attributes and
+# `optnone` silenced diagnostics in the crypto core while the gate reported the
+# tree "carries none at all".  The real tree carried three.
+
+
+def _c_tree(tmp_path: Path, **files: str) -> Path:
+    """A repository-shaped tree with the given files under src/c/."""
+    for name, body in files.items():
+        path = tmp_path / "src" / "c" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '#pragma GCC diagnostic ignored "-Wpedantic"',
+        '#pragma clang diagnostic ignored "-Wcast-align"',
+        "#pragma warning(disable: 4996)",
+        "#pragma warning( suppress : 4127 )",
+        '__attribute__((no_sanitize("address")))',
+        "__attribute__((noinline, no_sanitize_address))",
+        "__attribute__((no_sanitize_memory))",
+        "__attribute__((optnone))",
+    ],
+)
+def test_compiler_and_sanitizer_suppressions_are_violations(tmp_path: Path, line: str) -> None:
+    from tools.check_suppression_hygiene import scan_c_tree
+
+    violations = scan_c_tree(_c_tree(tmp_path, **{"a.c": f"int x;\n{line}\nvoid f(void) {{}}\n"}))
+    assert len(violations) == 1, violations
+    assert "src/c/a.c:2" in violations[0]
+
+
+def test_the_stack_wipe_exemption_is_keyed_by_file_and_marker(tmp_path: Path) -> None:
+    """The one recorded exemption applies to that file and that marker only:
+    the same attribute in another file, or another marker in that file, is a
+    violation; the recorded pair in the recorded file is not."""
+    from tools.check_suppression_hygiene import scan_c_tree
+
+    elsewhere = scan_c_tree(
+        _c_tree(tmp_path, **{"other.c": "__attribute__((noinline, no_sanitize_address))\n"})
+    )
+    assert len(elsewhere) == 1 and "src/c/other.c:1" in elsewhere[0], elsewhere
+
+    same_file_other_marker = scan_c_tree(
+        _c_tree(
+            tmp_path / "second",
+            **{"ama_consttime.c": '#pragma GCC diagnostic ignored "-Wall"\n'},
+        )
+    )
+    # The pragma is a violation, and the file is present without its recorded
+    # marker, so the register entry is reported stale as well.
+    assert any("src/c/ama_consttime.c:1" in v for v in same_file_other_marker)
+    assert any("matches nothing" in v for v in same_file_other_marker)
+
+    exempt = scan_c_tree(
+        _c_tree(
+            tmp_path / "third",
+            **{"ama_consttime.c": "__attribute__((noinline, no_sanitize_address))\n"},
+        )
+    )
+    assert exempt == []
+
+
+def test_a_stale_exemption_is_reported(tmp_path: Path) -> None:
+    """The recorded file without the recorded marker fails, so the register
+    cannot outlive its marker; a tree without the file (the scanner's own
+    synthetic scopes) is not a verdict on the register."""
+    from tools.check_suppression_hygiene import scan_c_tree
+
+    violations = scan_c_tree(_c_tree(tmp_path, **{"ama_consttime.c": "int y;\n"}))
+    assert len(violations) == 1, violations
+    assert "src/c/ama_consttime.c" in violations[0]
+    assert "matches nothing" in violations[0]
+
+    assert scan_c_tree(_c_tree(tmp_path / "without", **{"clean.c": "int y;\n"})) == []
+
+
+def test_the_real_tree_carries_only_the_recorded_exemption() -> None:
+    from tools.check_suppression_hygiene import _C_SUPPRESSION_EXEMPTIONS, scan_c_tree
+
+    assert scan_c_tree(REPO_ROOT) == []
+    assert set(_C_SUPPRESSION_EXEMPTIONS) == {("src/c/ama_consttime.c", "no_sanitize_address")}
+    source = (REPO_ROOT / "src" / "c" / "ama_consttime.c").read_text(encoding="utf-8")
+    assert "no_sanitize_address" in source
+    for unit in ("ama_nistp.c", "ama_secp256k1.c"):
+        assert "diagnostic ignored" not in (REPO_ROOT / "src" / "c" / unit).read_text(
+            encoding="utf-8"
+        ), f"{unit} hides a warning behind a pragma again"

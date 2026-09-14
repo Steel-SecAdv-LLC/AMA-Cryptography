@@ -86,10 +86,11 @@ typedef struct {
  * ============================================================================ */
 
 #ifdef __SIZEOF_INT128__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
+/* -Wpedantic reports the GNU extension here; the warning is allowlisted
+ * centrally in tools/check_compiler_warnings.py beside the fe51/fe64 sites
+ * rather than silenced with a pragma (INVARIANT-13 forbids suppressions in
+ * this tree). */
 typedef unsigned __int128 uint128_t;
-#pragma GCC diagnostic pop
 #define MUL64(a, b) ((uint128_t)(a) * (uint128_t)(b))
 #define LO64(x)     ((uint64_t)(x))
 #define HI64(x)     ((uint64_t)((x) >> 64))

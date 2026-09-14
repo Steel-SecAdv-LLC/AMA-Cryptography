@@ -19,6 +19,7 @@ builds of this tree, not invented text.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -116,6 +117,17 @@ class TestAllowlistRejectsEverythingElse:
         assert result.returncode == 1
         assert "outside the frozen allowlist" in result.stderr
         assert line in result.stderr
+
+    @pytest.mark.parametrize("unit", ["ama_nistp.c", "ama_secp256k1.c"])
+    def test_int128_in_the_wide_arithmetic_units_is_exempt(self, tmp_path: Path, unit: str) -> None:
+        """The two units that used to hide this warning behind a diagnostic
+        pragma (which INVARIANT-13 forbids in src/c) are on the same central
+        allowlist as fe51.h / fe64.h."""
+        line = INT128_ASCII.replace("fe51.h", unit)
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 0, result.stderr
+        assert "allowlisted [int128-extension]: 1" in result.stdout
 
     def test_int128_outside_the_named_headers_is_not_exempt(self, tmp_path: Path) -> None:
         """The exemption is scoped to fe51.h / fe64.h, not to the text."""
@@ -243,6 +255,14 @@ class TestClangFormatConfigLoads:
 
         clang_format = shutil.which("clang-format")
         if clang_format is None:
+            # Both pytest lanes install the clang-format wheel; a skip there
+            # is a broken install, not a host without the tool.  This test
+            # skipped on every CI run before the lanes installed it.
+            if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("1", "true", "yes"):
+                pytest.fail(
+                    "clang-format is not installed in a lane that installs it; the "
+                    ".clang-format validity check cannot run"
+                )
             pytest.skip("clang-format not installed")
         result = subprocess.run(
             [clang_format, "--dump-config"],

@@ -279,7 +279,32 @@ _C_VENDOR_MARKER = "vendor"
 #: comment: writing it in a source comment ARMS it.
 _C_SUPPRESSION_RE = re.compile(
     r"NOLINT(?:NEXTLINE|BEGIN|END)?\b|cppcheck-suppress|nosemgrep|coverity\s*\[|/\*\s*LINTED"
+    # Compiler- and sanitizer-level suppressions.  The scan used to recognise
+    # analyser comment markers only, so a `#pragma GCC diagnostic ignored`, an
+    # MSVC `#pragma warning(disable)`, a `no_sanitize` attribute or `optnone`
+    # silenced a diagnostic in the crypto core while the gate reported the C
+    # tree "carries none at all".  The tree carried three.
+    r"|#\s*pragma\s+(?:GCC|clang)\s+diagnostic\s+ignored"
+    r"|#\s*pragma\s+warning\s*\(\s*(?:disable|suppress)"
+    r"|\bno_sanitize(?:_address|_memory|_thread|_undefined)?\b"
+    r"|__attribute__\s*\(\s*\(\s*optnone"
 )
+
+#: The recorded exceptions to "none, regardless of justification", keyed by
+#: (repository-relative path, the exact marker text the scan matched).  Each
+#: entry is a suppression the code cannot do without, stated with its reason,
+#: and INVARIANT-13's register names it too.  An entry that no longer matches
+#: anything is itself a violation, so the list cannot outlive its markers.
+_C_SUPPRESSION_EXEMPTIONS: dict[tuple[str, str], str] = {
+    ("src/c/ama_consttime.c", "no_sanitize_address"): (
+        "ama_secure_stack_wipe zeroes the stack region a just-returned callee "
+        "used, by address, which is exactly the access AddressSanitizer "
+        "instruments stack frames to catch; under ASan the scrub would be "
+        "reported as the fault it deliberately resembles, and the function has "
+        "no other way to reach the compiler's unnamed copies of key material "
+        "(INVARIANT-6)."
+    ),
+}
 
 
 def c_tree_files(repo_root: Path) -> list[Path]:
@@ -311,6 +336,7 @@ def scan_c_tree(repo_root: Path) -> list[str]:
     in ``.clang-tidy`` — which is what that file's own header says.
     """
     violations: list[str] = []
+    exemptions_seen: set[tuple[str, str]] = set()
     files = c_tree_files(repo_root)
     if not files:
         # Fail closed: an empty scope means the layout moved or the glob broke,
@@ -329,11 +355,29 @@ def scan_c_tree(repo_root: Path) -> list[str]:
         for lineno, line in enumerate(text.splitlines(), start=1):
             match = _C_SUPPRESSION_RE.search(line)
             if match:
+                if (rel, match.group(0)) in _C_SUPPRESSION_EXEMPTIONS:
+                    exemptions_seen.add((rel, match.group(0)))
+                    continue
                 violations.append(
                     f"{rel}:{lineno}: suppression marker {match.group(0)!r} in a "
                     "tree where INVARIANT-13 forbids suppressions regardless of "
                     "justification — fix the code or drop the check category"
                 )
+    # A recorded exemption whose file is in the scanned tree but no longer
+    # carries the marker is stale: the register would then claim a suppression
+    # the code does not have.  (A tree without the file at all is a synthetic
+    # scope — the scanner's own tests — and says nothing about the register;
+    # tests/test_suppression_hygiene_gate.py pins the entry against the real
+    # tree separately.)
+    scanned = {path.relative_to(repo_root).as_posix() for path in files}
+    for path_marker in sorted(set(_C_SUPPRESSION_EXEMPTIONS) - exemptions_seen):
+        if path_marker[0] not in scanned:
+            continue
+        violations.append(
+            f"{path_marker[0]}: the recorded exemption for {path_marker[1]!r} matches "
+            "nothing in the file any more — delete the entry from "
+            "_C_SUPPRESSION_EXEMPTIONS (a register that outlives its marker misleads)"
+        )
     return violations
 
 
@@ -555,10 +599,12 @@ def main() -> int:
         )
         return 1
 
+    exempt = ", ".join(f"{path}:{marker}" for path, marker in sorted(_C_SUPPRESSION_EXEMPTIONS))
     print(
         "INVARIANT-13: all suppressions are properly justified "
         f"({len(targets)} Python files), and the {len(c_tree_files(repo_root))} "
-        "non-vendored C/H files under src/c and include carry none at all."
+        "non-vendored C/H files under src/c and include carry none beyond the "
+        f"{len(_C_SUPPRESSION_EXEMPTIONS)} recorded exemption(s): {exempt}."
     )
     return 0
 

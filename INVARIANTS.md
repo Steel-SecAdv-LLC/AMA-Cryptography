@@ -659,9 +659,28 @@ suppression states a fact rather than a hope.
 *The absolutely-forbidden pass* covers every non-vendored `.c` and `.h` under
 `src/c/` and `include/` — the same enumeration the fail-closed clang-tidy job
 performs — and fails on the presence of `NOLINT*`, `cppcheck-suppress`,
-`nosemgrep`, `coverity[` or `LINTED`, with no justification escape hatch,
-because that is what "regardless of justification" means. It fails closed on an
-empty scope: a glob that matches nothing is a checker fault, not a clean tree.
+`nosemgrep`, `coverity[` or `LINTED`, and, since the twenty-seventh pass, of
+the compiler- and sanitizer-level forms too: `#pragma GCC/clang diagnostic
+ignored`, MSVC `#pragma warning(disable|suppress)`, `no_sanitize*` attributes
+and `optnone`. It used to recognise the analyser comment markers only, so the
+tree carried two `-Wpedantic` pragmas and a `no_sanitize_address` while the
+gate reported that it carried none. The pragmas are gone (the warning they hid
+is allowlisted centrally in `tools/check_compiler_warnings.py`, beside the
+`fe51.h`/`fe64.h` sites it already covered). There is no justification escape
+hatch, because that is what "regardless of justification" means. It fails
+closed on an empty scope: a glob that matches nothing is a checker fault, not
+a clean tree.
+
+**One exception is recorded: `no_sanitize_address` on `ama_secure_stack_wipe`
+(`src/c/ama_consttime.c`).** The function zeroes, by address, the stack region
+a just-returned callee used — the only way to reach the compiler's unnamed
+copies of key material (INVARIANT-6) — and that access is exactly what
+AddressSanitizer instruments stack frames to catch, so under ASan the scrub
+would be reported as the fault it deliberately resembles. The gate carries it
+as a per-site entry keyed by file and marker, prints it in its verdict, and
+fails if the entry ever stops matching, so the register cannot outlive the
+marker. Recording it is the point: an absolute "none" that omits a live one
+misleads exactly as a stale register does.
 
 *The portability pass* covers every tracked Python file and fails on a
 `# type: ignore` sitting inside an `except ImportError` whose `try` imports a
@@ -1906,14 +1925,32 @@ implementers to run — the same category as a specification's worked example, a
 they keep their own provenance gates (INVARIANT-24's sibling machinery in
 `.github/workflows/corpus-provenance.yml`).
 
-**One exception is recorded: `benchmarks/` (audit M22).** The benchmark harness
-links and drives the reference implementations named in the Statement to measure
-AMA's throughput against them. That is the sole place external cryptographic code
-is invoked anywhere in the tree; it is intentional — the project benchmarks
-*against* these vendors, it does not use them in any operation — it feeds no
-answer key, and it is deliberately outside the gate's scope (the gate scans
-`ama_cryptography/`, `tests/` and `tools/`, not `benchmarks/`). Recording it is
-the point: an absolute "no exceptions" that omits a live one is the converse of
+**Two exceptions are recorded.** The first is `benchmarks/` (audit M22): the
+benchmark harness links and drives the reference implementations named in the
+Statement to measure AMA's throughput against them. It is intentional — the
+project benchmarks *against* these vendors, it does not use them in any
+operation — it feeds no answer key, and it is deliberately outside the gate's
+scope (the gate scans `ama_cryptography/`, `tests/` and `tools/`, not
+`benchmarks/`).
+
+The second is the interoperability oracles: the tests carrying
+`@pytest.mark.requires_interop_oracle` in `tests/test_aes_gcm_native.py`,
+`tests/test_hkdf_sha3_256.py`, `tests/test_ed25519_native.py` and
+`tests/test_differential.py` import PyCA cryptography, PyNaCl or pycryptodome
+and check that AMA and a second implementation agree — PyCA encrypts and AMA
+decrypts, libsodium signs and AMA verifies, and the reverse. That is
+interoperability evidence, and it is what the require-backends lane installs
+those packages for (audit M18); it is not the answer key. AMA's correctness is
+established by the published vectors under `nist_vectors/` and `tests/kat/`
+and by the specification-derived references in this repository, and a
+disagreement with an oracle is investigated against the specification, never
+resolved in the other implementation's favour. Until the twenty-seventh pass
+this register said `benchmarks/` was the sole place external cryptographic
+code is invoked anywhere in the tree, while a CI lane existed to require these
+four modules to run; the gate (`tools/check_corpus_originality.py`) looks for
+spawned binaries and vendored corpora and structurally cannot see a Python
+import, and its verdict now says what it checked. Recording both is the
+point: an absolute "no exceptions" that omits a live one is the converse of
 the failure this register warns against below — as misleading as a named-but-
 removed exception, because a reader takes the register as complete.
 
