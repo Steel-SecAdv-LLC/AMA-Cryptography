@@ -269,19 +269,43 @@ jobs:
           cmake --build build-fuzz --target fuzz_sha3 -j$(nproc)
 
       - name: Every dictionary must parse
+        # Three outcomes per dictionary, and each has to be told apart: the
+        # harness ran and accepted it (exit 0, the only "ok"); the harness
+        # ran and rejected it (ParseDictionaryFile in the output); or the
+        # harness did not run at all.  The loop used to read
+        # `out=$(... || true)` and grep for the rejection text, so a binary
+        # that failed to execute — missing, or dying in the sanitizer runtime
+        # before main — produced no rejection text and thirteen "ok" lines
+        # (measured: a nonexistent binary gives exit 127 and no such text).
+        # The exit status is kept, and the count of dictionaries actually
+        # validated must equal the count on disk and be non-zero, so an empty
+        # glob cannot pass either.
         run: |
           set -uo pipefail
           rc=0
+          checked=0
+          expected="$(find fuzz/dictionaries -maxdepth 1 -name '*.dict' | wc -l)"
           for d in fuzz/dictionaries/*.dict; do
             # -runs=0 loads the dictionary, then exits without fuzzing.
-            out=$(./build-fuzz/bin/fuzz_sha3 -dict="$d" -runs=0 2>&1 || true)
+            out=$(./build-fuzz/bin/fuzz_sha3 -dict="$d" -runs=0 2>&1)
+            status=$?
             if echo "$out" | grep -q "ParseDictionaryFile"; then
               echo "::error file=$d::libFuzzer rejected this dictionary — the WHOLE file is discarded at runtime. $(echo "$out" | grep ParseDictionaryFile | head -1)"
               rc=1
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::fuzz_sha3 did not run cleanly on $d (exit $status); nothing about the dictionary was established:"
+              echo "$out" | tail -5
+              rc=1
             else
               echo "ok: $d"
+              checked=$((checked + 1))
             fi
           done
+          if [ "$checked" -eq 0 ] || [ "$checked" -ne "$expected" ]; then
+            echo "::error::validated $checked of $expected dictionaries under fuzz/dictionaries/; every one must be checked and there must be at least one"
+            rc=1
+          fi
+          echo "validated $checked of $expected dictionaries"
           exit $rc
 
       - name: Generated seed corpora must match their generators
@@ -573,7 +597,7 @@ jobs:
   fuzz-consttime-aes:
     name: Fuzz AES-GCM (constant-time bitsliced backend)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -583,6 +607,21 @@ jobs:
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
           .github/scripts/apt-install.sh cmake clang libclang-rt-dev
+
+      - name: Restore the persisted fuzz_aes_gcm corpus
+        # The same corpus the default-backend lane accumulates (its inputs
+        # are backend-independent: an AES-GCM input reaches the same tag-verify
+        # and multi-block branches whichever kernel computes it).  Restore
+        # only: the default-backend lane is the one that merges and saves, so
+        # the two lanes cannot race each other's writes.
+        id: corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: corpus/fuzz_aes_gcm_ct
+          key: fuzz-corpus-fuzz_aes_gcm-${{ hashFiles('fuzz/fuzz_aes_gcm.c') }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-fuzz_aes_gcm-${{ hashFiles('fuzz/fuzz_aes_gcm.c') }}-
+            fuzz-corpus-fuzz_aes_gcm-
 
       - name: Build with constant-time AES
         run: |
@@ -599,17 +638,30 @@ jobs:
           cmake --build build-fuzz-ct --target fuzz_aes_gcm -j$(nproc)
 
       - name: Run AES-GCM fuzzer (consttime backend)
+        env:
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || (github.event_name == 'schedule' && '900') || '60' }}
+        # The bitsliced backend is the security-sensitive configuration and
+        # used to get the shallowest fuzzing of any lane: an empty corpus, no
+        # seeds, no dictionary and 30 seconds, while the default-backend lane
+        # for the same harness restored its corpus, seeded 58 inputs, loaded
+        # the dictionary and ran for 60 (900 nightly).  Same inputs, same
+        # dictionary, same budget now; the corpus cache is restored above.
         run: |
+          set -euo pipefail
           mkdir -p corpus/fuzz_aes_gcm_ct
           mkdir -p artifacts/fuzz_aes_gcm_ct
+          echo "Restored corpus: $(find corpus/fuzz_aes_gcm_ct -type f | wc -l) unit(s) (cache key matched: '${{ steps.corpus.outputs.cache-matched-key }}')."
+          cp -r fuzz/seed_corpus/fuzz_aes_gcm/. corpus/fuzz_aes_gcm_ct/
+          echo "Seeded corpus now holds $(ls -1 corpus/fuzz_aes_gcm_ct | wc -l) input(s)."
           # Same derivation as the main lanes — see the comment there.  This
           # target's deepest branch fits well inside the floor, but a ceiling
           # written by hand is the defect, not the number it happens to hold.
           MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
                        --max-len fuzz_aes_gcm)"
           ./build-fuzz-ct/bin/fuzz_aes_gcm \
-            -max_total_time=30 \
+            -max_total_time="${FUZZ_DURATION}" \
             -max_len="$MAX_LEN" \
+            -dict=fuzz/dictionaries/fuzz_aes_gcm.dict \
             -artifact_prefix=artifacts/fuzz_aes_gcm_ct/ \
             corpus/fuzz_aes_gcm_ct/
 
