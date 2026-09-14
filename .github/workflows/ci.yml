@@ -355,6 +355,12 @@ jobs:
         # before it was installed.  tests/conftest.py escalates that skip to
         # a failure under AMA_CI_REQUIRE_BACKENDS (marker requires_example_deps).
         pip install -e ".[dev,legacy,benchmark,hsm,examples]" pycryptodome
+        # clang-format (the PyPI wheel, every OS and architecture in this
+        # matrix): tests/test_compiler_warning_gate.py checks that the
+        # committed .clang-format parses and carries this repository's
+        # settings, and skipped on every CI run because nothing installed the
+        # tool.  Under AMA_CI_REQUIRE_BACKENDS that skip is now a failure.
+        pip install "clang-format==23.1.1"
 
     # The signed integrity artefact binds two digests: the .py sources
     # (platform-independent) and the built native library (specific to the exact

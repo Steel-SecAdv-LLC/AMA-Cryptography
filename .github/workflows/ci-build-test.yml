@@ -531,7 +531,10 @@ jobs:
         # AMA_CI_REQUIRE_BACKENDS=1, under which tests/conftest.py escalates a
         # skipped requires_example_deps test to a failure, so the extra must be
         # installed wherever that flag is set.
-        run: pip install -e ".[dev,hsm,examples]"
+        run: |
+          pip install -e ".[dev,hsm,examples]"
+          # clang-format for tests/test_compiler_warning_gate.py — see ci.yml.
+          pip install "clang-format==23.1.1"
         shell: bash
 
       - name: Install differential/interop reference libraries (test-only)
