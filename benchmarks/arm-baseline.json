@@ -203,6 +203,11 @@
         "date": "2026-09-07",
         "release": "5.0.0",
         "change": "ED25519 FLOORS RE-BASED TO FOUR-RUN MEDIANS on the canonical runner class for this file (ubuntu-24.04-arm (aarch64)). The preceding entry set the three Ed25519 floors from ONE benchmark-regression job at head c6020ac. The four jobs that followed on byte-identical Ed25519 code (heads f2ac1d8, 4a45408, 755cd22 and 447cdf0 change no Ed25519 source; run/job 34070019745/101585569584, 34082980156/101621669852, 34084425292/101625629991, 34084821515/101626784335) measured ed25519_keygen 14649 / 14708 / 14706 / 14547; ed25519_sign 58389 / 58735 / 58789 / 58795; ed25519_verify 31351 / 31473 / 31021 / 31188 ops/sec. baseline_value is now the median of those four (even count: mean of the middle two, rounded to the nearest integer; computed by script from the job logs, not by hand): ed25519_keygen 14595 -> 14678 ops/sec, ed25519_sign 58452 -> 58762 ops/sec, ed25519_verify 31259 -> 31270 ops/sec. tolerance_percent stays 15. This fleet is homogeneous (run-to-run spread 1.5% or less on these rows), so the medians land within 0.6% of the single-run values. No other floor moves; calibration_evidence and floor_drift_acknowledged are unchanged."
+      },
+      {
+        "date": "2026-09-16",
+        "release": "unreleased",
+        "change": "ed25519_sign FLOOR RE-BASED 58762 -> 29381 ops/sec on aarch64 for the INVARIANT-51 check, which adds a second fixed-base scalar multiplication to every signature. This file's tolerance for the entry is 15%, not the 45% the x86-64 file allows, so the change would have failed the aarch64 benchmark job by a wide margin (about -46% against -15%) rather than marginally. DERIVED, NOT MEASURED -- stated plainly because this session had no aarch64 host. On x86-64 the added operation is 10659 ns against a 12586 ns unchecked sign, so the multiplication is a fraction f = 0.847 of the original and the slowdown is (1 + f) = 1.847x. The structure is architecture-independent (signing goes from one fixed-base multiplication to two) but f is not: on a host where the multiplication dominates the hashing more heavily, f approaches 1 and the slowdown approaches 2x. The bound used here is that worst case, 58762 / 2.0 = 29381, rather than the x86-derived 58762 / 1.847 = 31817 -- conservative in the direction that cannot produce a false failure, because a floor set too high on a 15% tolerance would red the job on every run and a gate that always fails is a gate that gets disabled. tolerance_percent is deliberately left at 15 rather than widened to match x86-64: the uncertainty belongs in the baseline, where it is visible and bounded, not in the tolerance, where it would also hide the next genuine aarch64 regression. ACTION REQUIRED: the first green aarch64 benchmark run after this change should re-base this entry from its measurement, the way the preceding x86-64 entries were re-based from four-run medians on their canonical runner."
       }
     ],
     "runner_cpu_class": "aarch64",
@@ -909,7 +914,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 58762,
+      "baseline_value": 29381,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "microbenchmark"

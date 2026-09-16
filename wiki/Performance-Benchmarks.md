@@ -312,30 +312,30 @@ python3 tools/update_docs.py        # regenerates the table below
 ```
 
 <!-- AUTO-BENCHMARK-TABLE-START -->
-<!-- Throughput numbers below were written by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` (the same command CI runs) on 2026-09-08, on the host that record names (Linux-6.18.44-fc-v24-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)).  They describe THAT host: compare rows within the table, not against a different machine.  The regression-floor column is the value enforced by `benchmarks/baseline.json` (CI fails when measured drops more than `tolerance_percent` below floor).  Regenerate via `python tools/update_docs.py`. -->
-_Headline source: `benchmarks/benchmark-results.json` (run 2026-09-08 on Linux-6.18.44-fc-v24-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)). Regression floor: `benchmarks/baseline.json`, measured on the CI runner class named there — a floor and a throughput figure are different machines on purpose, so the gap between the columns is not headroom unless both were measured on the same host.  CI fails when measured falls more than `tolerance_percent` below floor._
+<!-- Throughput numbers below were written by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` (the same command CI runs) on 2026-09-16, on the host that record names (Linux-6.18.44-fc-v33-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)).  They describe THAT host: compare rows within the table, not against a different machine.  The regression-floor column is the value enforced by `benchmarks/baseline.json` (CI fails when measured drops more than `tolerance_percent` below floor).  Regenerate via `python tools/update_docs.py`. -->
+_Headline source: `benchmarks/benchmark-results.json` (run 2026-09-16 on Linux-6.18.44-fc-v33-x86_64-with-glibc2.39 / x86_64, 4 logical processor(s)). Regression floor: `benchmarks/baseline.json`, measured on the CI runner class named there — a floor and a throughput figure are different machines on purpose, so the gap between the columns is not headroom unless both were measured on the same host.  CI fails when measured falls more than `tolerance_percent` below floor._
 
 | Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |
 |-----------|---------------------:|---------------------------:|----------:|------|
-| Ama Sha3 256 Hash | 423,439 | 327,222 | ±45% | microbenchmark |
-| Hmac Sha3 256 | 293,001 | 215,299 | ±45% | microbenchmark |
-| Ed25519 Keygen | 16,814 | 15,370 | ±45% | microbenchmark |
-| Ed25519 Sign | 76,279 | 70,496 | ±45% | microbenchmark |
-| Ed25519 Verify | 33,003 | 30,542 | ±45% | microbenchmark |
-| Hkdf Derive | 198,122 | 131,341 | ±45% | microbenchmark |
-| Full Package Create | 2,406.9 | 1,983 | ±45% | complex_operation |
-| Full Package Verify | 2,692.2 | 3,442 | ±45% | complex_operation |
-| Secp256K1 Ecdsa Sign | 9,965.9 | 8,068 | ±45% | microbenchmark |
-| Secp256K1 Ecdsa Verify | 4,299.1 | 3,302 | ±45% | microbenchmark |
-| Dilithium Keygen | 1,775.9 | 1,312 | ±45% | microbenchmark |
-| Dilithium Sign | 3,470.6 | 2,636 | ±45% | microbenchmark |
-| Dilithium Verify | 11,608 | 8,897 | ±45% | microbenchmark |
-| Kyber Keygen | 3,972.2 | 2,726 | ±45% | microbenchmark |
-| Kyber Encapsulate | 18,806 | 11,994 | ±45% | microbenchmark |
-| Aes 256 Gcm Encrypt | 308,159 | 224,406 | ±45% | microbenchmark |
-| Chacha20Poly1305 Encrypt | 293,329 | 227,521 | ±45% | microbenchmark |
-| X25519 Scalarmult | 22,050 | 16,876 | ±45% | microbenchmark |
-| X25519 Scalarmult Batch4 | 5,248.3 | 4,074 | ±45% | microbenchmark |
+| Ama Sha3 256 Hash | 356,139 | 327,222 | ±45% | microbenchmark |
+| Hmac Sha3 256 | 240,850 | 215,299 | ±45% | microbenchmark |
+| Ed25519 Keygen | 12,410 | 15,370 | ±45% | microbenchmark |
+| Ed25519 Sign | 38,555 | 38,170 | ±45% | microbenchmark |
+| Ed25519 Verify | 28,347 | 30,542 | ±45% | microbenchmark |
+| Hkdf Derive | 162,904 | 131,341 | ±45% | microbenchmark |
+| Full Package Create | 1,790.9 | 1,983 | ±45% | complex_operation |
+| Full Package Verify | 2,211.8 | 3,442 | ±45% | complex_operation |
+| Secp256K1 Ecdsa Sign | 8,657.7 | 8,068 | ±45% | microbenchmark |
+| Secp256K1 Ecdsa Verify | 3,665.9 | 3,302 | ±45% | microbenchmark |
+| Dilithium Keygen | 1,438.6 | 1,312 | ±45% | microbenchmark |
+| Dilithium Sign | 2,935.1 | 2,636 | ±45% | microbenchmark |
+| Dilithium Verify | 9,892.4 | 8,897 | ±45% | microbenchmark |
+| Kyber Keygen | 3,403.5 | 2,726 | ±45% | microbenchmark |
+| Kyber Encapsulate | 16,013 | 11,994 | ±45% | microbenchmark |
+| Aes 256 Gcm Encrypt | 284,597 | 224,406 | ±45% | microbenchmark |
+| Chacha20Poly1305 Encrypt | 243,814 | 227,521 | ±45% | microbenchmark |
+| X25519 Scalarmult | 17,664 | 16,876 | ±45% | microbenchmark |
+| X25519 Scalarmult Batch4 | 4,230.6 | 4,074 | ±45% | microbenchmark |
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*

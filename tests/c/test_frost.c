@@ -678,6 +678,89 @@ int main(void) {
             TEST_ASSERT(bad_index == 1,
                         "the first mismatched signer is the one named");
         }
+
+        /* 9g — a DUPLICATE signer index is refused by aggregation.
+         *
+         * Not a double-count: the Lagrange coefficient divides by
+         * (idx_j - idx_i), which is zero when two rows carry the same index,
+         * so a duplicate makes the coefficient of EVERY signer in the set
+         * undefined.  Aggregation used to carry its own inline copy of this
+         * rule; it now shares signer_index_set_is_valid() with the
+         * per-participant entry points, and this pins that the shared
+         * version is actually reached from here. */
+        {
+            uint8_t dup_indices[2];
+            dup_indices[0] = 1;
+            dup_indices[1] = 1;
+
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, sig_shares, commitments,
+                                     public_shares, dup_indices, 2,
+                                     msg, msg_len, group_pk, &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "aggregate refuses a duplicated signer index");
+
+            /* A zero index is the other half of the same rule: index 0 is the
+             * evaluation point that yields the group secret itself. */
+            dup_indices[0] = 0;
+            dup_indices[1] = 2;
+            rc = ama_frost_aggregate(signature, sig_shares, commitments,
+                                     public_shares, dup_indices, 2,
+                                     msg, msg_len, group_pk, &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "aggregate refuses a zero signer index");
+        }
+
+        /* 9h — a SMALL-ORDER commitment point is refused on its way in.
+         *
+         * The relation would reject it anyway and no forgery is known through
+         * this path, but "the arithmetic happens to fail" is a property a
+         * reader has to re-derive, while refusing the input is a property of
+         * the code.  An order-8 E_i contributes nothing the binding factor can
+         * bind, which is the standing hazard in every Schnorr-family threshold
+         * scheme.  The encoding used is the identity, y = 1. */
+        {
+            uint8_t bad_commitments[2 * 64];
+            static const uint8_t IDENTITY[32] = { 1 };
+
+            /* D_1 replaced by the identity encoding. */
+            memcpy(bad_commitments, commitments, sizeof bad_commitments);
+            memcpy(bad_commitments, IDENTITY, 32);
+            rc = ama_frost_verify_share(sig_shares, 1, public_shares,
+                                        bad_commitments, signer_indices, 2,
+                                        msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "a small-order D_i is refused");
+
+            /* E_1 replaced by the identity encoding. */
+            memcpy(bad_commitments, commitments, sizeof bad_commitments);
+            memcpy(bad_commitments + 32, IDENTITY, 32);
+            rc = ama_frost_verify_share(sig_shares, 1, public_shares,
+                                        bad_commitments, signer_indices, 2,
+                                        msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "a small-order E_i is refused");
+
+            /* And a small-order public key share. */
+            {
+                uint8_t bad_shares[2 * 32];
+                memcpy(bad_shares, public_shares, sizeof bad_shares);
+                memcpy(bad_shares, IDENTITY, 32);
+                rc = ama_frost_verify_share(sig_shares, 1, bad_shares,
+                                            commitments, signer_indices, 2,
+                                            msg, msg_len, group_pk);
+                TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                            "a small-order public key share is refused");
+            }
+
+            /* The control: the untouched inputs still verify, so the three
+             * refusals above are not a function that has started saying no. */
+            rc = ama_frost_verify_share(sig_shares, 1, public_shares,
+                                        commitments, signer_indices, 2,
+                                        msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_SUCCESS,
+                        "the honest share still verifies");
+        }
     }
 
     printf("\n===========================================\n");

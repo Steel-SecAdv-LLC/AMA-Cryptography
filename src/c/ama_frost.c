@@ -61,6 +61,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_ed25519_canonical.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -516,21 +517,54 @@ static ama_error_t compute_challenge(uint8_t c[32],
  * INPUT VALIDATION HELPERS
  * ====================================================================== */
 
-/* Validate signer_indices: all in [1, MAX_PARTICIPANTS], unique,
- * and participant_index is a member. */
-static int validate_signer_indices(const uint8_t *signer_indices,
-    uint8_t num_signers, uint8_t participant_index)
+/* Validate the index SET alone: every index in [1, 255] and no repeats.
+ *
+ * Split out because both rules are load-bearing and both are needed in two
+ * places.  A zero index is rejected because the scheme is 1-based and index 0
+ * is the evaluation point that yields the secret itself.  A repeated index is
+ * rejected because the Lagrange coefficient
+ *
+ *     lambda_i = prod_{j != i} idx_j / (idx_j - idx_i)
+ *
+ * divides by (idx_j - idx_i), which is ZERO when two rows carry the same
+ * index — so a duplicate does not merely double-count a signer, it makes the
+ * coefficient of every signer in the set undefined.  This is the classic
+ * threshold-signature implementation trap.
+ *
+ * Aggregation carried its own inline copy of exactly these two tests.  Two
+ * statements of one rule drift: whichever copy the next reader finds first is
+ * the one they will believe, and the rule matters most in aggregation, which
+ * is the copy nothing named. */
+static int signer_index_set_is_valid(const uint8_t *signer_indices,
+    uint8_t num_signers)
 {
     uint8_t seen[256] = {0};
-    int found_self = 0;
     for (int i = 0; i < num_signers; i++) {
         uint8_t idx = signer_indices[i];
         if (idx == 0) return 0;  /* indices are 1-based */
-        if (seen[idx]) return 0;  /* duplicate */
+        if (seen[idx]) return 0;  /* duplicate: see the lambda note above */
         seen[idx] = 1;
-        if (idx == participant_index) found_self = 1;
     }
-    return found_self;
+    return 1;
+}
+
+/* The set rules above, plus: participant_index is a member of the set.
+ * The per-participant entry points need the membership test; aggregation
+ * does not, because it has no single participant's point of view. */
+static int validate_signer_indices(const uint8_t *signer_indices,
+    uint8_t num_signers, uint8_t participant_index)
+{
+    int i;
+
+    if (!signer_index_set_is_valid(signer_indices, num_signers)) {
+        return 0;
+    }
+    for (i = 0; i < (int)num_signers; i++) {
+        if (signer_indices[i] == participant_index) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* Is every byte of buf[0..len) zero?  Returns 1 if so, 0 otherwise.
@@ -918,6 +952,36 @@ static ama_error_t verify_share_core(
     uint8_t lhs[32], rho_E[32], comm_share[32], pk_term[32], rhs[32];
     ama_error_t rc;
 
+    /* The three points below arrive from a PARTICIPANT, who in this protocol
+     * is not assumed honest — the whole purpose of share verification is to
+     * catch one who is not.  D_i and E_i are that participant's round-1
+     * commitment; PK_i is their public key share.  Each is refused unless it
+     * is a canonically encoded point of large order.
+     *
+     * WHY, when the relation below would reject a bogus point anyway.  It
+     * would, and no forgery is known through this path: the aggregate is
+     * additionally checked against the group key by a full RFC 8032 verify,
+     * which itself refuses small-order points since INVARIANT-48.  The reason
+     * is that "the equation happens to fail" is a property of the arithmetic,
+     * re-derived by every reader, whereas refusing the input is a property of
+     * the code.  Small-order commitments are the standing hazard in every
+     * Schnorr-family threshold scheme — an order-8 E_i contributes nothing
+     * the binding factor can bind, which is exactly the leverage a rogue
+     * participant looks for — and a non-canonical encoding would make the
+     * final memcmp compare two spellings of one point and call them different.
+     *
+     * An honest D_i / E_i is [d]B for a uniformly random non-zero d, so it
+     * lands in the small-order subgroup with probability about 2^-252.  No
+     * legitimate ceremony is affected. */
+    if (!ama_ed25519_point_encoding_is_canonical(commitment) ||
+        !ama_ed25519_point_encoding_is_canonical(commitment + 32) ||
+        !ama_ed25519_point_encoding_is_canonical(public_share) ||
+        ama_ed25519_point_is_small_order(commitment) ||
+        ama_ed25519_point_is_small_order(commitment + 32) ||
+        ama_ed25519_point_is_small_order(public_share)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
     compute_lagrange_coeff(lambda, participant_index, signer_indices, num_signers);
     scalar_mul(lambda_c, lambda, challenge);
 
@@ -1099,15 +1163,13 @@ AMA_API ama_error_t ama_frost_aggregate(
         return AMA_ERROR_INVALID_PARAM;
     if (num_signers < 2)
         return AMA_ERROR_INVALID_PARAM;
-    /* Validate signer_indices: unique, non-zero */
-    {
-        uint8_t seen[256] = {0};
-        for (int i = 0; i < num_signers; i++) {
-            uint8_t idx = signer_indices[i];
-            if (idx == 0 || seen[idx]) return AMA_ERROR_INVALID_PARAM;
-            seen[idx] = 1;
-        }
-    }
+    /* One statement of the rule, shared with the per-participant entry
+     * points — see signer_index_set_is_valid() for why a duplicate index is
+     * not a double-count but an undefined Lagrange coefficient for EVERY
+     * signer in the set.  No membership test here: aggregation has no single
+     * participant's point of view. */
+    if (!signer_index_set_is_valid(signer_indices, num_signers))
+        return AMA_ERROR_INVALID_PARAM;
 
     uint8_t R[32];
     ama_error_t rc = compute_group_commitment(R, commitments, signer_indices,

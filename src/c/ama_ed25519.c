@@ -889,14 +889,23 @@ ama_error_t ama_ed25519_sign(
     } else {
         /* Both early exits fire AFTER the expansion above, so `hash`
          * already holds the clamped secret scalar and the PRF key —
-         * scrub it on the way out (INVARIANT-6). */
+         * scrub it on the way out (INVARIANT-6).
+         *
+         * `derived_a` is scrubbed alongside it.  It is the PUBLIC key, so
+         * leaving it would disclose nothing; it is cleared anyway because the
+         * rule this file follows is "every buffer this function wrote is
+         * cleared on every exit", and a buffer exempted on the reviewer's
+         * judgement that its contents happen to be public is a buffer whose
+         * exemption has to be re-derived by the next reader. */
         if (message_len > SIZE_MAX - 64) {
             ama_secure_memzero(hash, sizeof(hash));
+            ama_secure_memzero(derived_a, sizeof(derived_a));
             return AMA_ERROR_INVALID_PARAM;
         }
         buf = (uint8_t *)malloc(64 + message_len);
         if (!buf) {
             ama_secure_memzero(hash, sizeof(hash));
+            ama_secure_memzero(derived_a, sizeof(derived_a));
             return AMA_ERROR_MEMORY;
         }
         buf_on_heap = 1;
