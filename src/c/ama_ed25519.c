@@ -53,6 +53,7 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "internal/ama_sha2.h"
+#include "internal/ama_ct_declassify.h"
 #include "internal/ama_ed25519_canonical.h"
 #include "internal/ama_ed25519_backend.h"
 #include "internal/ama_ed25519_halfsize.h"
@@ -875,10 +876,44 @@ ama_error_t ama_ed25519_sign(
      * the comparison would sign under the key it actually holds.
      */
     ed25519_scalarmult_base(derived_a, hash);
-    if (ama_consttime_memcmp(derived_a, secret_key + 32, 32) != 0) {
-        ama_secure_memzero(hash, sizeof(hash));
-        ama_secure_memzero(derived_a, sizeof(derived_a));
-        return AMA_ERROR_INVALID_PARAM;
+    /* DECLASSIFY before the branch.  `derived_a` is A = [a]B: the PUBLIC key,
+     * and the very value this function is about to hash into H(R || A || M)
+     * and hand to anyone who verifies the signature.  It is public by
+     * definition.  But it is *computed from* the secret scalar, so under the
+     * Valgrind taint lane (tools/check_ghash_constant_time.py --taint, where
+     * the secret key is marked undefined) it inherits that taint, and the
+     * branch below is reported as a control-flow decision depending on the
+     * secret.  It did: ED25519-SIGN SECRET-TAINT CHECK FAILED on CI the first
+     * time this check shipped, which is the gate doing its job -- it cannot
+     * know which derived values are public and must assume none are.
+     *
+     * Declassifying says so explicitly, which is the same construction
+     * libsecp256k1 (secp256k1_declassify) and BoringSSL use, and which
+     * ama_nistp.c already uses for its candidate-validity flag.  What is
+     * declassified is exactly the 64 public bytes below -- `hash`, which holds
+     * the clamped scalar and the nonce PRF key, keeps its taint.
+     *
+     * BOTH operands need it, which is the part that is easy to get half
+     * right.  `derived_a` carries the taint forward from the scalar; the
+     * STORED half is bytes 32..63 of `secret_key`, and the taint driver marks
+     * the whole 64-byte key undefined, so the comparison reads tainted bytes
+     * from that side too.  Declassifying only the derived one leaves the gate
+     * failing for the other, which is what the first attempt at this fix did.
+     * It is copied into a local rather than declassified in place so the
+     * caller's buffer is never written through a cast-away-const. */
+    {
+        uint8_t stored_a[32];
+
+        memcpy(stored_a, secret_key + 32, 32);
+        AMA_CT_DECLASSIFY(derived_a, sizeof derived_a);
+        AMA_CT_DECLASSIFY(stored_a, sizeof stored_a);
+        if (ama_consttime_memcmp(derived_a, stored_a, 32) != 0) {
+            ama_secure_memzero(hash, sizeof(hash));
+            ama_secure_memzero(derived_a, sizeof(derived_a));
+            ama_secure_memzero(stored_a, sizeof(stored_a));
+            return AMA_ERROR_INVALID_PARAM;
+        }
+        ama_secure_memzero(stored_a, sizeof(stored_a));
     }
 
     /* Determine buffer allocation: use stack for small messages.
