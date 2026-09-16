@@ -53,7 +53,7 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_cpuid.h"
 #include "internal/ama_sha2.h"
-#include "internal/ama_ct_declassify.h"
+#include "internal/ama_ct_barrier.h"
 #include "internal/ama_ed25519_canonical.h"
 #include "internal/ama_ed25519_backend.h"
 #include "internal/ama_ed25519_halfsize.h"
@@ -834,6 +834,11 @@ ama_error_t ama_ed25519_sign(
     uint8_t r[64];
     uint8_t hram[64];
     uint8_t derived_a[32];
+    /* INVARIANT-51 verdict, carried as a mask instead of a branch: 0 when
+     * the stored public half is the one this scalar generates, ~0 when it
+     * is not.  Applied at the single exit below. */
+    uint64_t key_mismatch;
+    ama_error_t rc;
     /* Stack buffer for messages <= ED25519_STACK_THRESHOLD (4KB).
      * Eliminates malloc/free overhead for >99% of real-world messages.
      * Only heap-allocate for unusually large messages. */
@@ -876,44 +881,55 @@ ama_error_t ama_ed25519_sign(
      * the comparison would sign under the key it actually holds.
      */
     ed25519_scalarmult_base(derived_a, hash);
-    /* DECLASSIFY before the branch.  `derived_a` is A = [a]B: the PUBLIC key,
-     * and the very value this function is about to hash into H(R || A || M)
-     * and hand to anyone who verifies the signature.  It is public by
-     * definition.  But it is *computed from* the secret scalar, so under the
-     * Valgrind taint lane (tools/check_ghash_constant_time.py --taint, where
-     * the secret key is marked undefined) it inherits that taint, and the
-     * branch below is reported as a control-flow decision depending on the
-     * secret.  It did: ED25519-SIGN SECRET-TAINT CHECK FAILED on CI the first
-     * time this check shipped, which is the gate doing its job -- it cannot
-     * know which derived values are public and must assume none are.
-     *
-     * Declassifying says so explicitly, which is the same construction
-     * libsecp256k1 (secp256k1_declassify) and BoringSSL use, and which
-     * ama_nistp.c already uses for its candidate-validity flag.  What is
-     * declassified is exactly the 64 public bytes below -- `hash`, which holds
-     * the clamped scalar and the nonce PRF key, keeps its taint.
-     *
-     * BOTH operands need it, which is the part that is easy to get half
-     * right.  `derived_a` carries the taint forward from the scalar; the
-     * STORED half is bytes 32..63 of `secret_key`, and the taint driver marks
-     * the whole 64-byte key undefined, so the comparison reads tainted bytes
-     * from that side too.  Declassifying only the derived one leaves the gate
-     * failing for the other, which is what the first attempt at this fix did.
-     * It is copied into a local rather than declassified in place so the
-     * caller's buffer is never written through a cast-away-const. */
-    {
-        uint8_t stored_a[32];
 
-        memcpy(stored_a, secret_key + 32, 32);
-        AMA_CT_DECLASSIFY(derived_a, sizeof derived_a);
-        AMA_CT_DECLASSIFY(stored_a, sizeof stored_a);
-        if (ama_consttime_memcmp(derived_a, stored_a, 32) != 0) {
-            ama_secure_memzero(hash, sizeof(hash));
-            ama_secure_memzero(derived_a, sizeof(derived_a));
-            ama_secure_memzero(stored_a, sizeof(stored_a));
-            return AMA_ERROR_INVALID_PARAM;
+    /* The comparison is a MASK, not a branch, and there is no declassification
+     * point here.
+     *
+     * The first version of this check branched: `if (memcmp(...) != 0) return`.
+     * Both operands are public -- `derived_a` is A = [a]B, the very value this
+     * function hashes into H(R || A || M) and hands to every verifier -- but
+     * both are *computed from* the secret seed, so the Valgrind secret-taint
+     * lane (tools/check_ghash_constant_time.py --taint) inherits the taint and
+     * reports the branch.  It did: ED25519-SIGN SECRET-TAINT CHECK FAILED.
+     *
+     * An explicit declassification point (internal/ama_ct_declassify.h, the
+     * libsecp256k1 / BoringSSL construction this tree uses in ama_secp256k1.c
+     * and ama_nistp.c) silences that -- but ONLY in an AMA_TESTING_MODE
+     * build.  The gate's second lane runs the same targets against the
+     * shipped shared object, built exactly
+     * as the wheel ships it, where the macro expands to nothing; the branch is
+     * reported there and the lane's own comment already excludes `ecdsa` and
+     * `nistp-ecdsa` from it for precisely that reason.  Taking that exclusion
+     * for `ed25519-sign` would drop the tree's most-used signing path out of
+     * the only lane that measures the bytes a user actually runs, to
+     * accommodate one comparison.
+     *
+     * So the comparison does not branch.  `diff` accumulates the XOR of the
+     * two halves, `key_mismatch` becomes 0 or ~0 by arithmetic alone (no
+     * relational operator, so no setcc the compiler can turn into a cmov the
+     * taint lane would also report), the signature is computed unconditionally
+     * under `derived_a`, and the verdict is applied by masking the output and
+     * the return code at the single exit.  The mask is laundered through
+     * ama_ct_value_barrier_u64 so the optimizer cannot recover "this is 0 or
+     * ~0" and reintroduce the branch it would need to skip the masking loop --
+     * see internal/ama_ct_barrier.h.
+     *
+     * A caller whose key half disagrees therefore pays a full signature and
+     * receives 64 zero bytes with AMA_ERROR_INVALID_PARAM, rather than an
+     * untouched buffer.  That is the safer contract: a caller that ignores the
+     * return code gets an unusable signature instead of a valid one produced
+     * under a key half it did not supply, which is the fault hazard this
+     * invariant exists to close. */
+    {
+        uint8_t diff = 0;
+        unsigned i;
+
+        for (i = 0; i < 32u; i++) {
+            diff = (uint8_t)(diff | (uint8_t)(derived_a[i] ^ secret_key[32 + i]));
         }
-        ama_secure_memzero(stored_a, sizeof(stored_a));
+        /* (diff + 255) >> 8 is 0 for diff == 0 and 1 for every other byte. */
+        key_mismatch = ama_ct_value_barrier_u64(
+            (uint64_t)0 - (((uint64_t)diff + 0xFFu) >> 8));
     }
 
     /* Determine buffer allocation: use stack for small messages.
@@ -969,6 +985,25 @@ ama_error_t ama_ed25519_sign(
     /* s = r + H(R||A||M) * a mod L */
     sc25519_muladd(signature + 32, r, hram, hash);
 
+    /* Apply the INVARIANT-51 verdict.  Unconditional on both outcomes, so the
+     * ed25519-sign instruction-count and secret-taint lanes see one path. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    {
+        const uint8_t keep = (uint8_t)~(uint8_t)key_mismatch;
+        unsigned i;
+
+        for (i = 0; i < 64u; i++) {
+            signature[i] = (uint8_t)(signature[i] & keep);
+        }
+        /* 0 (AMA_SUCCESS) when the halves agreed, AMA_ERROR_INVALID_PARAM
+         * otherwise.  Same construction as the AEAD verify verdict in
+         * ama_aes_gcm.c: narrowing ~0 through uint32_t is correct on 32- and
+         * 64-bit targets alike. */
+        rc = (ama_error_t)((int)AMA_ERROR_INVALID_PARAM &
+                           (int)(int32_t)(uint32_t)key_mismatch);
+    }
+
     /* Cleanup — scrub all sensitive intermediates */
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(r, sizeof(r));
@@ -979,7 +1014,7 @@ ama_error_t ama_ed25519_sign(
         free(buf);
     }
 
-    return AMA_SUCCESS;
+    return rc;
 }
 
 /**

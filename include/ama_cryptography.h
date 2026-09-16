@@ -1340,7 +1340,20 @@ AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_k
  *                     `ama_ed25519_keypair` produces. No length parameter,
  *                     no validation. Passing only the 32-byte seed reads 32
  *                     bytes past the end of the buffer.
- * @return AMA_SUCCESS or error code
+ *
+ *                     INVARIANT-51: bytes 32..63 must be the public key this
+ *                     seed generates. The signer derives A = [a]B and refuses
+ *                     a key whose stored half disagrees, because signing one
+ *                     message twice under two different halves shares R and
+ *                     discloses the private scalar. A caller that stores the
+ *                     halves separately, or reassembles a key from a
+ *                     corrupted record, reaches that input without a fault
+ *                     injector.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the stored public half
+ *         is not the derived one. On that refusal all 64 signature bytes are
+ *         written as zero rather than left untouched, so a caller that ignores
+ *         the return code gets an unusable signature instead of a valid one
+ *         produced under a public half it did not supply.
  *
  * See the fixed-length buffer contract above.
  */

@@ -430,3 +430,45 @@ sixteen floors, `calibration_evidence` and `floor_drift_acknowledged` are
 untouched; both `baseline_change_log`s carry the run and job IDs. `README.md`
 publishes the same four runs' medians for all nineteen benchmarks on both
 runner classes.
+
+## 2026-09-16: the audit remediation's cost, measured rather than derived
+
+The 2026-09 audit remediation added work to three benchmarked paths, and the
+first attempt to floor one of them was a derivation rather than a measurement.
+This section records the correction.
+
+`ama_ed25519_sign` now derives `A = [a]B` and refuses a key whose stored
+public half disagrees (INVARIANT-51, audit finding B-2), so signing does two
+fixed-base scalar multiplications where it did one. On x86_64 that is a
+measured 1.85x, and the x86_64 floor was re-based from it. No aarch64 host was
+available, so the aarch64 floor was set at the worst case the structure
+admits — `58,762 / 2.0 = 29,381 ops/sec` — with the change log entry saying
+plainly that it was **derived, not measured**, and marking the first aarch64
+benchmark run after it as ACTION REQUIRED.
+
+That run is workflow run `35155721711`, job `104994944714`, at head
+`84ad90d2`, on `ubuntu-24.04-arm`. It measured `ed25519_sign` at **32,852
+ops/sec** — above the 30,266 the branch inherited from `main`, so on aarch64
+the second multiplication costs less than the conservative bound allowed for,
+and the derived floor was 11% below what the runner actually delivers.
+
+The same run showed two floors that a derivation had not anticipated at all:
+
+| Primitive | aarch64 before → after | measured | cause |
+|---|---|---|---|
+| `ed25519_keygen` | 14,678 → 12,271 | 12,271 ops/sec | the row times the Python `keypair()` call, which runs a FIPS 140-3 pairwise-consistency **sign** on every key, so it pays the INVARIANT-51 multiplication too |
+| `ed25519_sign` | 29,381 → 32,852 | 32,852 ops/sec | derived bound replaced by the runner's own figure |
+| `full_package_verify` | 4,426 → 3,441 | 3,441 ops/sec | the verify path now rebuilds and checks the INVARIANT-52 canonical transcript and rejects small-order Ed25519 points (audit A-2, A-3) |
+
+`ed25519_keygen` is the entry worth reading twice. Nothing in Ed25519 key
+generation changed; the row moved 16.4% because the benchmark measures the
+public API call, and that call signs. x86_64 shows the same movement — 14,405
+against a 15,370 floor — and passed only because that file's tolerance is 45
+where this one's is 15. A floor that describes a composite operation moves
+when any part of the composite moves, which is the property that makes the
+tolerance, not the floor, the wrong place to absorb a known change.
+
+Tolerances are unchanged (15% on all three). These are single-run figures
+rather than four-run medians: the fleet this file describes has a documented
+cross-run spread of <= 3% on these rows, so 15% is a 5x margin over it, and
+the next aarch64 run on this branch is the confirmation.

@@ -208,6 +208,11 @@
         "date": "2026-09-16",
         "release": "unreleased",
         "change": "ed25519_sign FLOOR RE-BASED 58762 -> 29381 ops/sec on aarch64 for the INVARIANT-51 check, which adds a second fixed-base scalar multiplication to every signature. This file's tolerance for the entry is 15%, not the 45% the x86-64 file allows, so the change would have failed the aarch64 benchmark job by a wide margin (about -46% against -15%) rather than marginally. DERIVED, NOT MEASURED -- stated plainly because this session had no aarch64 host. On x86-64 the added operation is 10659 ns against a 12586 ns unchecked sign, so the multiplication is a fraction f = 0.847 of the original and the slowdown is (1 + f) = 1.847x. The structure is architecture-independent (signing goes from one fixed-base multiplication to two) but f is not: on a host where the multiplication dominates the hashing more heavily, f approaches 1 and the slowdown approaches 2x. The bound used here is that worst case, 58762 / 2.0 = 29381, rather than the x86-derived 58762 / 1.847 = 31817 -- conservative in the direction that cannot produce a false failure, because a floor set too high on a 15% tolerance would red the job on every run and a gate that always fails is a gate that gets disabled. tolerance_percent is deliberately left at 15 rather than widened to match x86-64: the uncertainty belongs in the baseline, where it is visible and bounded, not in the tolerance, where it would also hide the next genuine aarch64 regression. ACTION REQUIRED: the first green aarch64 benchmark run after this change should re-base this entry from its measurement, the way the preceding x86-64 entries were re-based from four-run medians on their canonical runner."
+      },
+      {
+        "date": "2026-09-16",
+        "release": "unreleased",
+        "change": "Three aarch64 floors re-based FROM THE MEASUREMENT this file's own canonical runner produced, replacing the derived ed25519_sign bound the preceding entry flagged ACTION REQUIRED. Source: the ubuntu-24.04-arm Benchmark Regression Detection (aarch64) job of CI run 35155721711 (job 104994944714) at head 84ad90d2, AMA_RUNNER_CPU_CLASS=aarch64, AMA_MATRIX_BASELINE=benchmarks/arm-baseline.json. ed25519_sign 29381 -> 32852 ops/sec: the derived bound assumed the INVARIANT-51 second fixed-base multiplication could double the cost (f -> 1); measured on aarch64 it does not, and 32852 ops/sec is the runner's own figure, ABOVE the 30266 this branch inherited, so the check costs less on aarch64 than the conservative bound allowed for. ed25519_keygen 14678 -> 12271 ops/sec: this row times the Python keypair() call, which runs a FIPS 140-3 pairwise-consistency SIGN on every key, so it carries the same INVARIANT-51 multiplication a second time; 12271 ops/sec is the measured result and the 16.4% shortfall against the old floor is exactly that added work, not a keygen regression -- x86-64 shows the same movement (14405 against a 15370 floor) and passes only because that file's tolerance is 45. full_package_verify 4426 -> 3441 ops/sec: the package verify path now rebuilds and checks the INVARIANT-52 canonical transcript and rejects small-order Ed25519 points before verifying (2026-09 audit A-2 and A-3), which is strictly more cryptography than the floor it replaces measured; 3441 ops/sec is the measured figure and the 13.2% cut against the 3965 inherited from main is that work. The x86-64 file already floors this row at 3442 from its own runner. All three tolerance_percent values are unchanged (15). One run, not a median of four: the fleet this file describes has a documented cross-run spread of <= 3% for these rows, so a 15% tolerance is a 5x margin over the measured spread, and the next aarch64 run on this branch is the confirmation."
       }
     ],
     "runner_cpu_class": "aarch64",
@@ -906,7 +911,7 @@
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation through the Python API: one CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify that keypair() runs on every key (native keygen alone is about a sixth of the timed operation). Not comparable with the 4.x native-keygen-only row.",
       "metric": "operations_per_second",
-      "baseline_value": 14678,
+      "baseline_value": 12271,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "microbenchmark"
@@ -914,7 +919,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 29381,
+      "baseline_value": 32852,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "microbenchmark"
@@ -962,7 +967,7 @@
     "full_package_verify": {
       "description": "Complete crypto package verification (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 4426,
+      "baseline_value": 3441,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "complex_operation"
