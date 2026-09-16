@@ -430,6 +430,12 @@ model (T4.3). Branch protection rules should enforce this.
 > **Status:** Signed commits are enabled via branch protection on `main` and
 > `develop`.
 
+> **Doing it:** `docs/RELEASE_SIGNING.md` is the operator runbook — what to
+> sign, what deliberately not to sign, and the two commands. It was written
+> because the previous runbook lived in a comment block inside
+> `release.yml`, which is the last place anyone looks while standing at a
+> terminal, and because eleven unsigned tags is what that costs.
+
 ### INVARIANT-10 Addendum — Release Tags Must Be Annotated and Signed
 
 A release tag **must** be an annotated tag object carrying a signature. A

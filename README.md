@@ -1285,6 +1285,7 @@ Full reproduction instructions:
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [INVARIANTS.md](INVARIANTS.md) | Canonical architectural invariants (INVARIANT-1 through INVARIANT-52) and vendoring policy |
+| [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) | The maintainer's two commands for signing a release tag (INVARIANT-10) |
 | [AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md) | Ethical pillar specification |
 
 </details>
