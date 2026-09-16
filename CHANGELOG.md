@@ -19,15 +19,16 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-### Independent audit remediation pass — 2026-09-16
+### Security review remediation pass — 2026-09-16
 
-`docs/audit/INDEPENDENT_AUDIT_2026-09.md` is an engineering and cryptographic
-audit of this branch: build, execute, attack, then read. It reported 8 High,
-18 Medium, 20 Low and 6 Informational findings. This pass fixes every High and
-the secondary findings named below, and adds a remediation addendum (§0a) to
-that report written by the same author after doing the work — including the
-three things the remediation found that the audit had not, and one coverage
-loss the fixes caused.
+An engineering and cryptographic review of this branch — build, execute,
+attack, then read — found defects in the composition layer that the primitive
+layer did not have. This pass fixes them.
+
+Finding identifiers below (A-1, B-2, and so on) are internal tracking
+references. The defect, the measurement and the reasoning are stated here and
+in the invariant register, so nothing a reader needs in order to understand a
+change depends on a document outside this repository.
 
 #### Security — BREAKING, and free to take because 5.0.0 was never tagged
 

@@ -41,12 +41,12 @@ INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {
 }
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "09b5e84973526e9371b5a4d6d3952341946ad7552a5fce9a59a4839c732893b0"
+INTEGRITY_PUBKEY_HEX = "177cc12c6e5bd5215f5f813d4e55135fed04ff763f9ee12eb130af795d88fffe"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "c2f3150e3d0ffb689861236595c7faaf2c1acfd4efb7580910ea96c5721c93c88db253afcb1b6b0155fb2e73fa6b7cd0408b5bbab4ad1c45e020d90b8bf8a50a"
+INTEGRITY_SIGNATURE_HEX = "f7dbed091238b67e3f0a2282c784145d76b546a5a9f0d4fba2c1a97fdfc453b8482f5212d00c93d636bb5e6cac5358b755a0dad7c74f2fa73d105d70399f1103"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"

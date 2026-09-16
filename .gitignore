@@ -279,3 +279,13 @@ oom-*
 timeout-*
 leak-*
 
+
+# Internal review and audit material. These are organisation-internal
+# deliverables, not part of the published library: a report enumerating
+# findings — including any not yet remediated — is written for the maintainer,
+# not for a consumer of the package. Security fixes are disclosed in
+# CHANGELOG.md and the durable engineering rationale lives in INVARIANTS.md,
+# so nothing a reader needs is only in here. Ignored rather than merely
+# deleted because docs/audit/ has been removed from this repository once
+# before and came back.
+docs/audit/
