@@ -865,13 +865,19 @@ SIGNATURE_FORMAT_V2 = "2.0.0"
 #: the field that was changed.  V3 signs and MACs a transcript of all of them.
 SIGNATURE_FORMAT_V3 = "3.0.0"
 
-#: Deliberately outside both transcripts: the RFC 3161 token is acquired
-#: AFTER the signature exists (it timestamps the content), so it cannot be
-#: inside it.  It is not left unbound — RFC 3161 §2.4.2 binds the token to
-#: ``content_hash`` through its own message imprint, and
-#: ``_verify_rfc3161_token`` checks exactly that binding.  See INVARIANT-37
-#: for what that check does and does not assert.
-_V3_EXCLUDES_TIMESTAMP_TOKEN = True
+# The RFC 3161 token is deliberately outside both transcripts: it is acquired
+# AFTER the signature exists (it timestamps the content), so it cannot be
+# inside it.  It is not left unbound — RFC 3161 §2.4.2 binds the token to
+# ``content_hash`` through its own message imprint, and
+# ``_verify_rfc3161_token`` checks exactly that binding.  See INVARIANT-37 for
+# what that check does and does not assert.
+#
+# Recorded as a comment rather than a module constant: the assignment it
+# replaces (`_V3_EXCLUDES_TIMESTAMP_TOKEN = True`) was read by nothing, so the
+# `True` asserted nothing and only the prose carried the decision.  A comment
+# keeps the reasoning where the next reader needs it without pretending to be
+# a checked invariant — the same correction this branch already applied to
+# `docs/conf.py`'s no-op Sphinx defaults.
 
 
 def build_signature_message(

@@ -37,7 +37,6 @@ from pathlib import Path
 import pytest
 
 import ama_cryptography.pqc_backends as pb
-from ama_cryptography.pqc_backends import SphincsKeyPair
 
 pytestmark = pytest.mark.skipif(
     not pb.SPHINCS_AVAILABLE, reason="SPHINCS+/SLH-DSA native backend not available"
@@ -56,25 +55,25 @@ _MESSAGE = b"transfer 1000 to mallory"
 
 
 @pytest.fixture(scope="module")
-def keypair() -> SphincsKeyPair:
+def keypair() -> pb.SphincsKeyPair:
     return pb.generate_sphincs_keypair()
 
 
 class TestCrossVerificationOracleClosed:
     """The legacy and §10.2 interfaces must not accept each other's signatures."""
 
-    def test_probe_one(self, keypair: SphincsKeyPair) -> None:
+    def test_probe_one(self, keypair: pb.SphincsKeyPair) -> None:
         """A ctx="" §10.2 signature is not a legacy signature over 0x00 0x00 || M."""
         sig = pb.slhdsa_sign(_MESSAGE, keypair.secret_key, b"", param_set="SHA2-256f")
         assert not pb.sphincs_verify(b"\x00\x00" + _MESSAGE, sig, keypair.public_key)
 
-    def test_probe_two(self, keypair: SphincsKeyPair) -> None:
+    def test_probe_two(self, keypair: pb.SphincsKeyPair) -> None:
         """A legacy signature over a forged wrapper is not a ctx="x" signature over M."""
         sig = pb.sphincs_sign(b"\x00\x01x" + _MESSAGE, keypair.secret_key)
         assert not pb.slhdsa_verify(_MESSAGE, sig, keypair.public_key, b"x", param_set="SHA2-256f")
 
     def test_legacy_api_is_section_10_2_with_the_empty_context(
-        self, keypair: SphincsKeyPair
+        self, keypair: pb.SphincsKeyPair
     ) -> None:
         """sphincs_sign/verify ARE slhdsa_sign/verify with ctx=b"", both ways."""
         legacy = pb.sphincs_sign(_MESSAGE, keypair.secret_key)
@@ -84,7 +83,7 @@ class TestCrossVerificationOracleClosed:
         # ... and therefore also equal to verify_ctx with an empty context.
         assert pb.sphincs_verify_ctx(_MESSAGE, legacy, keypair.public_key, b"")
 
-    def test_distinct_contexts_do_not_cross_verify(self, keypair: SphincsKeyPair) -> None:
+    def test_distinct_contexts_do_not_cross_verify(self, keypair: pb.SphincsKeyPair) -> None:
         """The property the wrapper exists to provide, stated directly."""
         sig = pb.slhdsa_sign(_MESSAGE, keypair.secret_key, b"app-a", param_set="SHA2-256f")
         assert pb.slhdsa_verify(_MESSAGE, sig, keypair.public_key, b"app-a", param_set="SHA2-256f")
@@ -186,7 +185,7 @@ class TestEmptyMessageIsAMessage:
         again = pb.slhdsa_sign_deterministic(b"", kp.secret_key, b"", param_set=param_set)
         assert sig == again
 
-    def test_legacy_api_empty_message(self, keypair: SphincsKeyPair) -> None:
+    def test_legacy_api_empty_message(self, keypair: pb.SphincsKeyPair) -> None:
         sig = pb.sphincs_sign(b"", keypair.secret_key)
         assert pb.sphincs_verify(b"", sig, keypair.public_key)
         assert pb.slhdsa_verify(b"", sig, keypair.public_key, b"", param_set="SHA2-256f")

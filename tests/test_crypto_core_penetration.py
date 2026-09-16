@@ -44,6 +44,7 @@ from ama_cryptography.legacy_compat import (
     MASTER_CODES,
     MASTER_HELIX_PARAMS,
     QuantumSignatureUnavailableError,
+    build_package_transcript,
     canonical_hash_code,
     create_crypto_package,
     create_ethical_hkdf_context,
@@ -58,6 +59,7 @@ from ama_cryptography.legacy_compat import (
     hmac_authenticate,
     hmac_verify,
     length_prefixed_encode,
+    recompute_ethical_hash,
     verify_crypto_package,
 )
 
@@ -731,18 +733,16 @@ def _resign(pkg: Any, kms: Any) -> Any:
     plausibility check it was written for rather than silently becoming a
     second test of the signature.
     """
-    import ama_cryptography.legacy_compat as lc
-
-    content_hash = lc.canonical_hash_code(
+    content_hash = canonical_hash_code(
         MASTER_CODES, MASTER_HELIX_PARAMS, hash_version=pkg.hash_format_version
     )
-    ethical = lc.recompute_ethical_hash(pkg.ethical_vector)
-    hmac_msg = lc.build_package_transcript("hmac", pkg, content_hash, ethical)
-    pkg.hmac_tag = lc.hmac_authenticate(hmac_msg, kms.hmac_key).hex()
-    sig_msg = lc.build_package_transcript("signature", pkg, content_hash, ethical)
-    pkg.ed25519_signature = lc.ed25519_sign(sig_msg, kms.ed25519_keypair.private_key).hex()
+    ethical = recompute_ethical_hash(pkg.ethical_vector)
+    hmac_msg = build_package_transcript("hmac", pkg, content_hash, ethical)
+    pkg.hmac_tag = hmac_authenticate(hmac_msg, kms.hmac_key).hex()
+    sig_msg = build_package_transcript("signature", pkg, content_hash, ethical)
+    pkg.ed25519_signature = ed25519_sign(sig_msg, kms.ed25519_keypair.private_key).hex()
     if pkg.dilithium_signature is not None and kms.dilithium_keypair is not None:
-        pkg.dilithium_signature = lc.dilithium_sign(sig_msg, kms.dilithium_keypair.secret_key).hex()
+        pkg.dilithium_signature = dilithium_sign(sig_msg, kms.dilithium_keypair.secret_key).hex()
     return pkg
 
 
@@ -810,6 +810,11 @@ class TestMalformedInputHandling:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["content_hash"] is False
         except (ValueError, QuantumSignatureRequiredError):
+            # Both are the PASS condition, which is why this handler is empty:
+            # the test asserts the API does not crash on malformed hex, and a
+            # typed refusal is the API declining, not crashing.  The `except
+            # Exception` below is what fails the test, so swallowing these two
+            # here narrows what counts as a crash rather than hiding one.
             pass
         except Exception as exc:
             pytest.fail(f"Unexpected exception for invalid hex: {exc!r}")

@@ -49,9 +49,11 @@ from ama_cryptography.exceptions import (
 from ama_cryptography.legacy_compat import (
     SIGNATURE_FORMAT_V1,
     SIGNATURE_FORMAT_V2,
+    SIGNATURE_FORMAT_V3,
     _verify_dilithium_with_policy,
     _verify_rfc3161_token,
     _verify_timestamp_value,
+    build_package_transcript,
     build_signature_message,
     canonical_hash_code,
     create_crypto_package,
@@ -62,6 +64,7 @@ from ama_cryptography.legacy_compat import (
     generate_key_management_system,
     get_rfc3161_timestamp,
     length_prefixed_encode,
+    recompute_ethical_hash,
     secure_wipe,
     verify_crypto_package,
     verify_rfc3161_timestamp,
@@ -314,16 +317,14 @@ class TestDilithiumPolicyEnforcement:
         ``package.ethical_hash`` for the same reason the verifier does, so this
         helper mirrors the verifier rather than paraphrasing it.
         """
-        import ama_cryptography.legacy_compat as lc
-
         computed_hash = canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
         sig_format = getattr(package, "signature_format_version", SIGNATURE_FORMAT_V1)
-        if sig_format == lc.SIGNATURE_FORMAT_V3:
-            return lc.build_package_transcript(
+        if sig_format == SIGNATURE_FORMAT_V3:
+            return build_package_transcript(
                 "signature",
                 package,
                 computed_hash,
-                lc.recompute_ethical_hash(package.ethical_vector),
+                recompute_ethical_hash(package.ethical_vector),
             )
         if sig_format == SIGNATURE_FORMAT_V2:
             ethical_hash_bytes = bytes.fromhex(package.ethical_hash)
