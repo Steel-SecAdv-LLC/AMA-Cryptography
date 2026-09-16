@@ -715,10 +715,31 @@ int main(void) {
             CHECK(verdict == 1, label);
         }
 
-        /* A freshly generated key, signed and verified through the library's
-         * own sign path — the RFC vectors are fixed data, this is not. */
+        /* A generated key, signed and verified through the library's own sign
+         * path — the RFC vectors are fixed data, this is not.
+         *
+         * The seed is SUPPLIED. `ama_ed25519_keypair` does not draw one: its
+         * contract is "caller must provide seed in secret_key[0..31]", and it
+         * hashes those 32 bytes on its first line. An earlier revision of this
+         * test declared `sk` and passed it straight in, so the key was derived
+         * from whatever was on the stack. That is not merely non-deterministic
+         * — in a real caller it is a silent key-generation failure — and it is
+         * invisible in an ordinary build, because uninitialised stack memory
+         * hashes as readily as a seed. MemorySanitizer caught it in CI
+         * (use-of-uninitialized-value in ge_scalarmult_base_fe51, traced to
+         * this frame); nothing in the local ctest run could have.
+         *
+         * A fixed seed rather than a random one: this lane asserts a positive
+         * control, and a control that changes on every run cannot be bisected
+         * when it starts failing. */
         {
-            uint8_t pk[32], sk[64], sig[64];
+            uint8_t pk[32], sig[64];
+            uint8_t sk[64] = {
+                0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+                0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+                0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+                0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60
+            };
 
             CHECK(ama_ed25519_keypair(pk, sk) == AMA_SUCCESS,
                   "[6] POSITIVE: keypair generation succeeds");
