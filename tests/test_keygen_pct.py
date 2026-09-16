@@ -25,7 +25,10 @@ the session.
 from __future__ import annotations
 
 import ctypes
-from typing import Any, Callable
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Callable, cast
 
 import pytest
 
@@ -339,3 +342,352 @@ class TestAbiVersionHandshake:
         version, reject = pb._abi_handshake(_FakeLib())  # type: ignore[arg-type]  # duck-typed stand-in for a CDLL (PCT-001)
         assert version == f"{pb._CRYPTOGRAPHY_VERSION_MAJOR}.9.9"
         assert reject is None
+
+
+# ---------------------------------------------------------------------------
+# Output-buffer capacity on the whole context API (2026-09 audit, A-1).
+# ---------------------------------------------------------------------------
+
+
+class TestContextOutputBufferCapacity:
+    """The capacity contract, on every context method that writes a buffer.
+
+    ``keypair_generate`` refused undersized buffers from the day the gap was
+    found on *its* arguments (the test above).  ``sign``,
+    ``kem_encapsulate`` and ``kem_decapsulate`` take the same
+    ``(buffer, declared-length)`` shape and did not, and the C side cannot
+    make the check for them: ``ama_sign`` in ``src/c/ama_core.c`` validates
+    only that the DECLARED length is at least
+    ``AMA_ML_DSA_65_SIGNATURE_BYTES``, which a caller-declared 3309 satisfies
+    whatever the real allocation is.
+
+    Measured by the audit before the fix: a 64-byte buffer declared as 3309
+    returned ``AMA_SUCCESS``, reported 3309 bytes written, and killed the
+    process with SIGSEGV.  Each refusal below is that measurement, pinned.
+    """
+
+    @staticmethod
+    def _skip_without_context_api() -> None:
+        if not pb._CONTEXT_API_AVAILABLE:
+            pytest.skip("native context API not available in this build")
+
+    # -- the measurement, in a process of its own ---------------------------
+
+    #: The audit's reproduction, verbatim, for a child interpreter.  It is run
+    #: out-of-process because a regression here is *memory corruption*: the
+    #: in-process tests below would take the whole pytest session down with
+    #: SIGSEGV, and a dead session reports a signal rather than a diagnosis.
+    #: Declared first in the class so its clean verdict is on the record
+    #: before any in-process test can crash the run.
+    _REPRODUCTION = """
+import ctypes
+import sys
+
+import ama_cryptography.pqc_backends as pb
+
+if not pb._CONTEXT_API_AVAILABLE:
+    print("VERDICT SKIP")
+    sys.exit(0)
+
+with pb.AmaContext(pb.AmaContext.ALG_ML_DSA_65) as ctx:
+    pk = ctypes.create_string_buffer(pb.DILITHIUM_PUBLIC_KEY_BYTES)
+    sk = ctypes.create_string_buffer(pb.DILITHIUM_SECRET_KEY_BYTES)
+    assert ctx.keypair_generate(
+        pk, pb.DILITHIUM_PUBLIC_KEY_BYTES, sk, pb.DILITHIUM_SECRET_KEY_BYTES
+    ) == 0
+    signature = ctypes.create_string_buffer(64)
+    declared = ctypes.pointer(ctypes.c_size_t(pb.DILITHIUM_SIGNATURE_BYTES))
+    rc = ctx.sign(b"audit A-1", sk.raw, signature, declared)
+
+print("VERDICT", rc, declared.contents.value)
+"""
+
+    def test_the_measured_overflow_cannot_crash_a_child_interpreter(self) -> None:
+        """Before the fix this child returned ``AMA_SUCCESS``, reported 3309
+        bytes written into a 64-byte buffer, and died with SIGSEGV (exit
+        ``-11``).  Both halves are asserted: a clean exit alone would also be
+        produced by a build whose ``sign`` had been made to fail everywhere,
+        and ``rc == -1`` alone would be produced by a guard that refuses and
+        then lets the call through anyway.
+        """
+        self._skip_without_context_api()
+        proc = subprocess.run(
+            [sys.executable, "-c", self._REPRODUCTION],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        assert proc.returncode == 0, (
+            f"child exited {proc.returncode} "
+            f"(negative = killed by that signal)\n{proc.stderr[-2000:]}"
+        )
+        verdict = [ln for ln in proc.stdout.splitlines() if ln.startswith("VERDICT")]
+        assert verdict, proc.stdout + proc.stderr[-2000:]
+        if verdict[-1] == "VERDICT SKIP":
+            pytest.skip("native context API not available in the child build")
+        assert verdict[-1] == f"VERDICT -1 {pb.DILITHIUM_SIGNATURE_BYTES}", verdict[-1]
+
+    # -- sign ---------------------------------------------------------------
+
+    def test_sign_refuses_a_declared_length_larger_than_the_buffer(self) -> None:
+        """The exact shape that segfaulted: an honest algorithm-sized
+        declaration over a buffer that is nowhere near that size."""
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_ML_DSA_65) as ctx:
+            pk = ctypes.create_string_buffer(pb.DILITHIUM_PUBLIC_KEY_BYTES)
+            sk = ctypes.create_string_buffer(pb.DILITHIUM_SECRET_KEY_BYTES)
+            assert (
+                ctx.keypair_generate(
+                    pk,
+                    pb.DILITHIUM_PUBLIC_KEY_BYTES,
+                    sk,
+                    pb.DILITHIUM_SECRET_KEY_BYTES,
+                )
+                == 0
+            )
+            sig = ctypes.create_string_buffer(64)
+            sig_len = ctypes.pointer(ctypes.c_size_t(pb.DILITHIUM_SIGNATURE_BYTES))
+            assert ctx.sign(b"regression", sk.raw, sig, sig_len) == -1
+
+    def test_sign_refuses_a_read_only_output_buffer(self) -> None:
+        """``ctypes`` marshals an immutable ``bytes`` as an output pointer
+        without complaint; CPython then has C write through an object it
+        guarantees is immutable (interned literals are shared process-wide)."""
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_ML_DSA_65) as ctx:
+            pk = ctypes.create_string_buffer(pb.DILITHIUM_PUBLIC_KEY_BYTES)
+            sk = ctypes.create_string_buffer(pb.DILITHIUM_SECRET_KEY_BYTES)
+            ctx.keypair_generate(
+                pk, pb.DILITHIUM_PUBLIC_KEY_BYTES, sk, pb.DILITHIUM_SECRET_KEY_BYTES
+            )
+            frozen = self._frozen(pb.DILITHIUM_SIGNATURE_BYTES)
+            sig_len = ctypes.pointer(ctypes.c_size_t(pb.DILITHIUM_SIGNATURE_BYTES))
+            assert ctx.sign(b"regression", sk.raw, frozen, sig_len) == -1
+
+    def test_sign_still_succeeds_on_a_correctly_sized_buffer(self) -> None:
+        """The positive control: the guard refuses the hazard, not the API.
+
+        Without this, every refusal above would also pass if ``sign`` had
+        simply been made to return ``-1`` unconditionally.
+        """
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_ML_DSA_65) as ctx:
+            pk = ctypes.create_string_buffer(pb.DILITHIUM_PUBLIC_KEY_BYTES)
+            sk = ctypes.create_string_buffer(pb.DILITHIUM_SECRET_KEY_BYTES)
+            assert (
+                ctx.keypair_generate(
+                    pk,
+                    pb.DILITHIUM_PUBLIC_KEY_BYTES,
+                    sk,
+                    pb.DILITHIUM_SECRET_KEY_BYTES,
+                )
+                == 0
+            )
+            sig = ctypes.create_string_buffer(pb.DILITHIUM_SIGNATURE_BYTES)
+            sig_len = ctypes.pointer(ctypes.c_size_t(pb.DILITHIUM_SIGNATURE_BYTES))
+            assert ctx.sign(b"regression", sk.raw, sig, sig_len) == 0
+            assert sig_len.contents.value == pb.DILITHIUM_SIGNATURE_BYTES
+            assert ctx.verify(
+                b"regression",
+                sig.raw[: sig_len.contents.value],
+                pk.raw[: pb.DILITHIUM_PUBLIC_KEY_BYTES],
+            )
+
+    # -- kem_encapsulate ----------------------------------------------------
+
+    def test_kem_encapsulate_refuses_an_oversized_ciphertext_declaration(self) -> None:
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+            pk, _sk = self._kyber_keypair(ctx)
+            ct = ctypes.create_string_buffer(8)
+            ct_len = ctypes.pointer(ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES))
+            ss = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
+            assert ctx.kem_encapsulate(pk, ct, ct_len, ss, pb.KYBER_SHARED_SECRET_BYTES) == -1
+
+    def test_kem_encapsulate_refuses_an_oversized_shared_secret_declaration(self) -> None:
+        """The second output buffer is checked too: a caller who gets one
+        right and the other wrong is the shape that produced the defect."""
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+            pk, _sk = self._kyber_keypair(ctx)
+            ct = ctypes.create_string_buffer(pb.KYBER_CIPHERTEXT_BYTES)
+            ct_len = ctypes.pointer(ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES))
+            ss = ctypes.create_string_buffer(1)
+            assert ctx.kem_encapsulate(pk, ct, ct_len, ss, pb.KYBER_SHARED_SECRET_BYTES) == -1
+
+    def test_kem_encapsulate_refuses_read_only_output_buffers(self) -> None:
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+            pk, _sk = self._kyber_keypair(ctx)
+            ct_len = ctypes.pointer(ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES))
+            frozen_ct = self._frozen(pb.KYBER_CIPHERTEXT_BYTES)
+            ss = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
+            assert (
+                ctx.kem_encapsulate(pk, frozen_ct, ct_len, ss, pb.KYBER_SHARED_SECRET_BYTES) == -1
+            )
+            ct = ctypes.create_string_buffer(pb.KYBER_CIPHERTEXT_BYTES)
+            frozen_ss = self._frozen(pb.KYBER_SHARED_SECRET_BYTES)
+            assert (
+                ctx.kem_encapsulate(pk, ct, ct_len, frozen_ss, pb.KYBER_SHARED_SECRET_BYTES) == -1
+            )
+
+    # -- kem_decapsulate ----------------------------------------------------
+
+    def test_kem_decapsulate_refuses_an_oversized_shared_secret_declaration(self) -> None:
+        """Here the declared length is a by-value ``size_t`` rather than an
+        in/out pointer — the third spelling ``_declared_out_len`` resolves."""
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+            pk, sk = self._kyber_keypair(ctx)
+            ct, _ss = self._encapsulate(ctx, pk)
+            small = ctypes.create_string_buffer(1)
+            assert ctx.kem_decapsulate(ct, sk, small, pb.KYBER_SHARED_SECRET_BYTES) == -1
+
+    def test_kem_decapsulate_refuses_a_read_only_output_buffer(self) -> None:
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+            pk, sk = self._kyber_keypair(ctx)
+            ct, _ss = self._encapsulate(ctx, pk)
+            frozen = self._frozen(pb.KYBER_SHARED_SECRET_BYTES)
+            assert ctx.kem_decapsulate(ct, sk, frozen, pb.KYBER_SHARED_SECRET_BYTES) == -1
+
+    def test_the_kem_round_trip_still_agrees(self) -> None:
+        """Positive control for both KEM methods at once."""
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+            pk, sk = self._kyber_keypair(ctx)
+            ct, ss_enc = self._encapsulate(ctx, pk)
+            ss_dec = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
+            assert ctx.kem_decapsulate(ct, sk, ss_dec, pb.KYBER_SHARED_SECRET_BYTES) == 0
+            assert ss_dec.raw[: pb.KYBER_SHARED_SECRET_BYTES] == ss_enc
+
+    # -- keypair_generate ---------------------------------------------------
+
+    def test_keypair_generate_refuses_read_only_key_buffers(self) -> None:
+        """The undersized direction was already covered; the immutable one
+        was not, and it reaches further: an immutable ``bytes`` passes the
+        capacity check, so the pairwise consistency test then ran against a
+        buffer the native side could not have written."""
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_ED25519) as ctx:
+            frozen_pk = self._frozen(pb.ED25519_PUBLIC_KEY_BYTES)
+            sk = ctypes.create_string_buffer(pb.ED25519_SECRET_KEY_BYTES)
+            assert (
+                ctx.keypair_generate(
+                    frozen_pk,
+                    pb.ED25519_PUBLIC_KEY_BYTES,
+                    sk,
+                    pb.ED25519_SECRET_KEY_BYTES,
+                )
+                == -1
+            )
+            pk = ctypes.create_string_buffer(pb.ED25519_PUBLIC_KEY_BYTES)
+            frozen_sk = self._frozen(pb.ED25519_SECRET_KEY_BYTES)
+            assert (
+                ctx.keypair_generate(
+                    pk,
+                    pb.ED25519_PUBLIC_KEY_BYTES,
+                    frozen_sk,
+                    pb.ED25519_SECRET_KEY_BYTES,
+                )
+                == -1
+            )
+
+    # -- helpers ------------------------------------------------------------
+
+    @staticmethod
+    def _frozen(size: int) -> ctypes.Array[ctypes.c_char]:
+        """An immutable ``bytes`` of ``size``, typed as an output buffer.
+
+        ``AmaContext`` annotates these parameters as ``ctypes`` arrays.  An
+        annotation is a promise, not a mechanism: ``ctypes`` marshals a
+        ``bytes`` through the same ``c_char_p`` parameter without complaint,
+        so at run time the guard is the only thing between a mistaken caller
+        and C writing through an object CPython guarantees is immutable.
+        Testing the guard therefore means passing exactly what the annotation
+        forbids — laundered once here, with the reason stated, rather than
+        with six suppressions scattered over the call sites (PCT-002).
+        """
+        return cast("ctypes.Array[ctypes.c_char]", b"\x00" * size)
+
+    @staticmethod
+    def _kyber_keypair(ctx: Any) -> tuple[bytes, bytes]:
+        pk = ctypes.create_string_buffer(pb.KYBER_PUBLIC_KEY_BYTES)
+        sk = ctypes.create_string_buffer(pb.KYBER_SECRET_KEY_BYTES)
+        assert (
+            ctx.keypair_generate(pk, pb.KYBER_PUBLIC_KEY_BYTES, sk, pb.KYBER_SECRET_KEY_BYTES) == 0
+        )
+        return pk.raw[: pb.KYBER_PUBLIC_KEY_BYTES], sk.raw[: pb.KYBER_SECRET_KEY_BYTES]
+
+    @staticmethod
+    def _encapsulate(ctx: Any, public_key: bytes) -> tuple[bytes, bytes]:
+        ct = ctypes.create_string_buffer(pb.KYBER_CIPHERTEXT_BYTES)
+        ct_len = ctypes.pointer(ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES))
+        ss = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
+        assert ctx.kem_encapsulate(public_key, ct, ct_len, ss, pb.KYBER_SHARED_SECRET_BYTES) == 0
+        return (
+            ct.raw[: ct_len.contents.value],
+            ss.raw[: pb.KYBER_SHARED_SECRET_BYTES],
+        )
+
+
+# ---------------------------------------------------------------------------
+# The helpers the guard is built from, pinned on their own.
+# ---------------------------------------------------------------------------
+
+
+class TestOutputBufferHelpers:
+    """``_declared_out_len`` and ``_out_buffer_is_writable`` decide every
+    refusal above, including the two cases where they deliberately decline to
+    refuse.  Those two are the ones most likely to be "tidied" by a later
+    reader, so they are stated here rather than left implicit."""
+
+    def test_declared_out_len_resolves_all_three_spellings(self) -> None:
+        assert pb._declared_out_len(3309) == 3309
+        assert pb._declared_out_len(ctypes.c_size_t(3309)) == 3309
+        assert pb._declared_out_len(ctypes.pointer(ctypes.c_size_t(3309))) == 3309
+
+    def test_declared_out_len_rejects_a_bool(self) -> None:
+        """``bool`` is an ``int`` subclass; ``True`` must not read as 1."""
+        assert pb._declared_out_len(True) is None
+        assert pb._declared_out_len(False) is None
+
+    def test_declared_out_len_gives_up_on_byref(self) -> None:
+        """``byref`` returns a ``CArgObject``, which exposes nothing.  The
+        guard treats an unreadable declaration as "nothing to compare"
+        rather than as a refusal — refusing a spelling the C ABI accepts
+        would break working callers to close a hazard it cannot see."""
+        assert pb._declared_out_len(ctypes.byref(ctypes.c_size_t(3309))) is None
+
+    def test_writability_distinguishes_the_buffer_kinds(self) -> None:
+        assert pb._out_buffer_is_writable(ctypes.create_string_buffer(16)) is True
+        assert pb._out_buffer_is_writable(bytearray(16)) is True
+        assert pb._out_buffer_is_writable(b"\x00" * 16) is False
+        assert pb._out_buffer_is_writable(memoryview(b"\x00" * 16)) is False
+
+    def test_capacity_is_read_from_arrays_and_buffers_only(self) -> None:
+        assert pb._output_buffer_capacity(ctypes.create_string_buffer(16)) == 16
+        assert pb._output_buffer_capacity((ctypes.c_ubyte * 16)()) == 16
+        assert pb._output_buffer_capacity(bytearray(16)) == 16
+        assert pb._output_buffer_capacity(b"\x00" * 16) == 16
+        assert pb._output_buffer_capacity(None) is None
+
+    def test_a_pointer_is_left_to_the_callers_contract(self) -> None:
+        """``ctypes.cast(buf, c_char_p)`` is a legitimate spelling for a
+        buffer of ANY size, and the pointer hides that size completely.
+
+        ``ctypes.sizeof`` answers 8 for it — the width of the pointer, not of
+        the buffer — so a capacity check built on ``sizeof`` alone would
+        refuse every such caller while proving nothing.  Refusing a spelling
+        the C ABI accepts would be a breaking change dressed up as a
+        hardening, so the pointer passes through and ``ama_sign``'s own NULL
+        and length checks in ``src/c/ama_core.c`` remain its only contract.
+        """
+        big = ctypes.create_string_buffer(pb.DILITHIUM_SIGNATURE_BYTES)
+        pointer = ctypes.cast(big, ctypes.c_char_p)
+        assert ctypes.sizeof(pointer) == ctypes.sizeof(ctypes.c_void_p)
+        assert pb._output_buffer_capacity(pointer) is None
+        assert pb._declared_length_fits(pointer, pb.DILITHIUM_SIGNATURE_BYTES) is True
+        assert pb._out_buffer_is_writable(pointer) is True

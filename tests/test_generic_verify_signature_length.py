@@ -60,7 +60,7 @@ def _signed(alg: int) -> tuple[bytes, bytes, bytes]:
 def test_the_exact_length_verifies(name: str, alg: int) -> None:
     message, signature, public_key = _signed(alg)
     with pb.AmaContext(alg) as ctx:
-        assert ctx.verify(message, signature, public_key) == AMA_SUCCESS, name
+        assert ctx.verify_rc(message, signature, public_key) == AMA_SUCCESS, name
 
 
 @pytest.mark.parametrize(("name", "alg"), _ALGORITHMS)
@@ -70,7 +70,7 @@ def test_trailing_bytes_are_not_a_signature(name: str, alg: int, extra: int) -> 
     message, signature, public_key = _signed(alg)
     padded = signature + bytes([0xAA]) * extra
     with pb.AmaContext(alg) as ctx:
-        assert ctx.verify(message, padded, public_key) == AMA_ERROR_VERIFY_FAILED, (
+        assert ctx.verify_rc(message, padded, public_key) == AMA_ERROR_VERIFY_FAILED, (
             f"{name}: a {len(padded)}-byte buffer verified as a " f"{len(signature)}-byte signature"
         )
 
@@ -79,4 +79,4 @@ def test_trailing_bytes_are_not_a_signature(name: str, alg: int, extra: int) -> 
 def test_a_truncated_signature_is_not_a_signature(name: str, alg: int) -> None:
     message, signature, public_key = _signed(alg)
     with pb.AmaContext(alg) as ctx:
-        assert ctx.verify(message, signature[:-1], public_key) == AMA_ERROR_VERIFY_FAILED, name
+        assert ctx.verify_rc(message, signature[:-1], public_key) == AMA_ERROR_VERIFY_FAILED, name

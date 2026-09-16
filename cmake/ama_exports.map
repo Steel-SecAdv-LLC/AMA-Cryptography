@@ -24,6 +24,18 @@
         # Low).
         ama_ascon_permutation_for_test;
 
+        # FIPS 205 §9 internal interface (slh_sign_internal /
+        # slh_verify_internal).  §9 says these shall not be exposed to
+        # applications other than for testing, and while
+        # ama_slhdsa_sign_internal WAS exported it cross-verified with the
+        # §10.2 API under one key in both directions — a signing oracle for
+        # pure signatures on attacker-chosen (ctx, M) pairs (INVARIANT-50).
+        # They are now compiled only under AMA_TESTING_MODE, so on this tree
+        # there is nothing here to localise; the entries are the defence in
+        # depth that catches a build which does compile them in.
+        ama_slhdsa_sign_internal;
+        ama_slhdsa_verify_internal;
+
         # ------------------------------------------------------------------
         # Internal symbols that the `ama_*` wildcard above would otherwise
         # publish.  Each is defined with external linkage because a SIBLING

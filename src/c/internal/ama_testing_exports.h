@@ -256,6 +256,49 @@ void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 void ama_dilithium_test_invntt_bound_reset(void);
 int32_t ama_dilithium_test_invntt_bound_get(void);
 
+/* --- src/c/ama_slhdsa.c -------------------------------------------------- */
+
+/**
+ * The FIPS 205 §9 internal interface: slh_sign_internal (§9.2) and
+ * slh_verify_internal (§9.3), operating on the RAW byte string with no §10.2
+ * context wrapper and, for signing, a caller-supplied `addrnd`.
+ *
+ * WHY THEY ARE HERE AND NOT IN THE PUBLIC HEADER
+ *
+ * FIPS 205 §9 states the internal functions shall not be exposed to
+ * applications other than for testing.  `ama_slhdsa_sign_internal` was
+ * AMA_API and present in the production shared object (`nm -D` found it), and
+ * `ama_sphincs_sign` / `ama_sphincs_verify` were the same raw interface under
+ * a public name.  Both cross-verified with the §10.2 API under one key, in
+ * both directions, which made any caller that signed caller-influenced bytes
+ * a signing oracle for pure signatures on attacker-chosen (ctx, M) pairs.
+ * INVARIANT-50 records the measurement.
+ *
+ * ACVP's `signatureInterface == "internal"` groups are the legitimate use, so
+ * the functions still exist — compiled only into the AMA_TESTING_MODE
+ * archive, the same construction as ama_ascon_permutation_for_test and for
+ * the same reason: absence by construction, not by export control, so the ELF
+ * version script and the Mach-O exported-symbols list cannot disagree about
+ * them.  `cmake/ama_exports.map` localises both names as defence in depth.
+ *
+ * `message` may be NULL only when `message_len` is 0 (the empty message).
+ */
+ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
+                                     uint8_t *signature,
+                                     size_t *signature_len,
+                                     const uint8_t *message,
+                                     size_t message_len,
+                                     const uint8_t *addrnd,
+                                     const uint8_t *sk);
+
+/** Counterpart of the above: FIPS 205 §9.3 slh_verify_internal. */
+ama_error_t ama_slhdsa_verify_internal(ama_slhdsa_param_set_t ps,
+                                       const uint8_t *signature,
+                                       size_t signature_len,
+                                       const uint8_t *message,
+                                       size_t message_len,
+                                       const uint8_t *pk);
+
 /* --- src/c/ama_argon2.c ------------------------------------------------- */
 
 /**

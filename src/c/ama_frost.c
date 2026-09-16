@@ -30,6 +30,33 @@
  * implementation: every participant in a ceremony must run this library.
  * RFC 8032 (Ed25519) conformance of the final signature is unconditional.
  * Group order: l = 2^252 + 27742317777372353535851937790883648493
+ *
+ * INVARIANT-49 (added 2026-09-16, audit findings A-4 and A-5).  Two
+ * protocol-level properties are now enforced HERE rather than delegated to
+ * the caller's discipline, because the 2026-09 audit demonstrated both
+ * failures against the shipped library:
+ *
+ *   1. A nonce pair is SINGLE-USE and is consumed by the library.
+ *      ama_frost_round2_sign() takes it non-`const` and zeroizes it on every
+ *      exit, success and failure alike, and refuses an all-zero (already
+ *      consumed) pair.  The audit's sub-review called round 2 three times
+ *      with one nonce pair over three different messages, solved the
+ *      resulting 3x3 linear system mod l, and recovered the hiding nonce,
+ *      the binding nonce AND the participant's long-term secret share.
+ *      Nothing exotic was required: a cached round-1 result or a retry of a
+ *      failed round 2 against a different message reaches it.
+ *
+ *   2. Aggregation VERIFIES every signature share before it returns success.
+ *      ama_frost_aggregate() previously summed z_i mod l and returned
+ *      AMA_SUCCESS unconditionally; one flipped bit in a share produced
+ *      rc == 0 followed by ama_ed25519_verify() == -4, with no indication of
+ *      which participant was at fault.  Identifiable abort — the robustness
+ *      property FROST's round structure exists to buy — was absent.  Each
+ *      share is now checked against the RFC 9591 section 5.3 relation by
+ *      ama_frost_verify_share() / verify_share_core(), the offending
+ *      participant index is reported to the caller, and the assembled
+ *      signature is verified against the group public key as defence in
+ *      depth before it is handed back.
  */
 
 #include "../include/ama_cryptography.h"
@@ -506,6 +533,41 @@ static int validate_signer_indices(const uint8_t *signer_indices,
     return found_self;
 }
 
+/* Is every byte of buf[0..len) zero?  Returns 1 if so, 0 otherwise.
+ *
+ * WHY THIS IS CONSTANT-TIME, stated because the opposite conclusion is the
+ * tempting one (INVARIANT-49).  The only caller is the consumed-nonce check
+ * at the top of ama_frost_round2_sign(), and the buffer it reads is the
+ * participant's live hiding/binding nonce pair — the most damaging secret in
+ * the protocol, because two partial signatures under one nonce disclose the
+ * long-term share by subtraction (audit A-4).
+ *
+ * The argument for NOT bothering runs: the buffer belongs to the caller, the
+ * caller can read it whenever it likes, and the answer — "has this nonce
+ * already been consumed?" — is published by the return code anyway, so it is
+ * public.  Both halves of that are true and neither is the question.  What a
+ * short-circuiting loop leaks is not the ANSWER but the SHAPE of a nonce that
+ * is not all-zero: an early-exit scan runs for as many iterations as the
+ * hiding nonce has leading zero bytes, so its timing measures the high-order
+ * structure of a secret scalar, once per signing round, repeatably, for any
+ * observer co-resident with the signer.  The caller owning the buffer does
+ * not licence this library to leak its contents to a third party in the same
+ * address space.
+ *
+ * So: fold all 64 bytes with OR and branch exactly once, on the aggregate
+ * bit.  That single branch IS on a public event — the consumed/not-consumed
+ * protocol state — which is the same reject-and-fail-closed structure
+ * scalar_random() and ama_frost_keygen_trusted_dealer() already use for
+ * their zero-scalar checks.  Measured cost: 64 byte-ORs, against the eight
+ * scalar multiplications and three SHA-512 passes the rest of round 2
+ * performs.  It is not worth reasoning about the saving.
+ */
+static int frost_is_all_zero(const uint8_t *buf, size_t len) {
+    uint8_t acc = 0;
+    for (size_t i = 0; i < len; i++) acc |= buf[i];
+    return acc == 0;
+}
+
 /* ======================================================================
  * PUBLIC API: TRUSTED DEALER KEY GENERATION
  * ====================================================================== */
@@ -599,6 +661,25 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
 
 /* ======================================================================
  * PUBLIC API: ROUND 1 — NONCE COMMITMENT
+ *
+ * ONE-SHOT NONCE CONTRACT (INVARIANT-49).  The nonce pair this function
+ * writes is good for EXACTLY ONE call to ama_frost_round2_sign(), over
+ * exactly one message.  Round 2 consumes it: it zeroizes the buffer on every
+ * exit and refuses an already-consumed (all-zero) pair, so a caller that
+ * re-presents it gets AMA_ERROR_INVALID_PARAM rather than a second partial
+ * signature.  The caller's obligations follow from that:
+ *
+ *   - do not copy the nonce pair anywhere the library cannot reach; a copy
+ *     defeats the consumption in exactly the way a memcpy of any other
+ *     secret defeats its scrubbing;
+ *   - do not persist it across a process restart, a checkpoint, or a VM
+ *     snapshot (see the SCOPE note on nonce_generate above — the derivation
+ *     is stateless, so restored RNG state reproduces the nonce);
+ *   - to sign a second message, run round 1 again.
+ *
+ * The cost of ignoring this is not degraded security, it is total: the
+ * 2026-09 audit recovered a participant's long-term secret share from three
+ * partial signatures made under one nonce pair.
  * ====================================================================== */
 
 AMA_API ama_error_t ama_frost_round1_commit(
@@ -652,6 +733,41 @@ AMA_API ama_error_t ama_frost_round1_commit(
  * NOTE: The commitments buffer MUST be ordered to match signer_indices:
  * commitments[i*64..(i+1)*64] is the commitment from participant
  * signer_indices[i].
+ *
+ * ONE-SHOT NONCE CONTRACT (INVARIANT-49) — THE NONCE PAIR IS CONSUMED HERE.
+ * `nonce_pair` is an IN/OUT parameter, not an input: on return it is 64 zero
+ * bytes, whatever this function returned.  A second call with the same buffer
+ * sees the all-zero pair and fails closed with AMA_ERROR_INVALID_PARAM.
+ *
+ * WHY THE LIBRARY AND NOT THE CALLER.  Until 2026-09 this parameter was
+ * `const uint8_t *`, the function held no state, and calling it repeatedly
+ * with one nonce pair over different messages returned AMA_SUCCESS every
+ * time.  Each call emits z = d + e*rho + (lambda*s)*c with rho and c varying
+ * per message and (d, e, lambda*s) fixed, so three calls are three
+ * independent linear equations in three unknowns mod l.  The audit's
+ * sub-review solved that system and recovered, from the partial signatures
+ * alone and with no host access:
+ *
+ *     recovered d == hiding nonce  : True
+ *     recovered e == binding nonce : True
+ *     recovered secret share s_1   : True
+ *
+ * That is full compromise of the participant, and with t participants so
+ * compromised the group secret is reconstructible.  The reachable paths are
+ * ordinary API misuse, not an attack: a cached round-1 result, a retry of a
+ * failed round 2 against a different message, a coordinator that asks for a
+ * re-sign.  SECURITY.md already documented the repeating-CSPRNG hazard as a
+ * deployment obligation; nothing warned that the API itself permitted reuse
+ * inside one healthy process.  A `const` pointer and a documented obligation
+ * cannot prevent this.  Consuming the buffer can, so the buffer is consumed.
+ *
+ * EVERY exit scrubs, including the parameter-validation refusals.  The
+ * alternative — scrub only where a share was actually emitted — is a weaker
+ * contract ("dead unless it returned INVALID_PARAM") that a caller must
+ * reason about at each call site, and it is not testable as a single
+ * property.  "Round 2 consumes the nonce, whatever the outcome" is.  A caller
+ * whose arguments were malformed re-runs round 1, which is cheap; the failure
+ * this buys protection against is not.
  * ====================================================================== */
 
 AMA_API ama_error_t ama_frost_round2_sign(
@@ -660,39 +776,61 @@ AMA_API ama_error_t ama_frost_round2_sign(
     size_t message_len,
     const uint8_t *participant_share,
     uint8_t participant_index,
-    const uint8_t *nonce_pair,
+    uint8_t *nonce_pair,
     const uint8_t *commitments,
     const uint8_t *signer_indices,
     uint8_t num_signers,
     const uint8_t *group_public_key)
 {
-    if (!sig_share || !message || !participant_share || !nonce_pair ||
-        !commitments || !signer_indices || !group_public_key)
-        return AMA_ERROR_INVALID_PARAM;
-    if (num_signers < 2)
-        return AMA_ERROR_INVALID_PARAM;
-    if (!validate_signer_indices(signer_indices, num_signers, participant_index))
+    /* `nonce_pair` is NULL-checked first and alone, because every exit below
+     * scrubs it: the buffer must be known addressable before any other
+     * validation is allowed to return. */
+    if (!nonce_pair)
         return AMA_ERROR_INVALID_PARAM;
 
-    const uint8_t *hiding_nonce = nonce_pair;
+    /* Declared before the first `goto consume` so no jump crosses an
+     * initialisation. */
+    uint8_t rho[32], R[32], challenge[32], lambda[32], tmp1[32], tmp2[32];
+    const uint8_t *hiding_nonce  = nonce_pair;
     const uint8_t *binding_nonce = nonce_pair + 32;
-    const uint8_t *secret_share = participant_share;
+    const uint8_t *secret_share  = participant_share;
+    ama_error_t rc = AMA_SUCCESS;
 
-    uint8_t rho[32];
-    ama_error_t rc = compute_binding_factor(rho, participant_index, message,
+    if (!sig_share || !message || !participant_share ||
+        !commitments || !signer_indices || !group_public_key) {
+        rc = AMA_ERROR_INVALID_PARAM;
+        goto consume;
+    }
+    if (num_signers < 2) {
+        rc = AMA_ERROR_INVALID_PARAM;
+        goto consume;
+    }
+    if (!validate_signer_indices(signer_indices, num_signers, participant_index)) {
+        rc = AMA_ERROR_INVALID_PARAM;
+        goto consume;
+    }
+
+    /* Refuse an already-consumed pair.  An all-zero nonce pair is also the
+     * degenerate pair that would publish d = e = 0 (the commitment would be
+     * the identity point twice over), so this check fails closed on both the
+     * replay and the degenerate-input reading.  See frost_is_all_zero() for
+     * why the fold is constant-time. */
+    if (frost_is_all_zero(nonce_pair, AMA_FROST_NONCE_BYTES)) {
+        rc = AMA_ERROR_INVALID_PARAM;
+        goto consume;
+    }
+
+    rc = compute_binding_factor(rho, participant_index, message,
         message_len, commitments, num_signers, group_public_key);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) goto consume;
 
-    uint8_t R[32];
     rc = compute_group_commitment(R, commitments, signer_indices, num_signers,
         message, message_len, group_public_key);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) goto consume;
 
-    uint8_t challenge[32];
     rc = compute_challenge(challenge, R, group_public_key, message, message_len);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) goto consume;
 
-    uint8_t lambda[32];
     compute_lagrange_coeff(lambda, participant_index, signer_indices, num_signers);
 
     /* z_i = d_i + e_i * rho_i + lambda_i * s_i * c
@@ -703,7 +841,6 @@ AMA_API ama_error_t ama_frost_round2_sign(
      * tmp2 = lambda * s_i               (scalar_mul)
      * z_i  = tmp1 + tmp2 * challenge    (tmp1 + tmp2*c)
      */
-    uint8_t tmp1[32], tmp2[32];
 
     /* tmp1 = hiding_nonce + binding_nonce * rho */
     ama_ed25519_sc_muladd(tmp1, hiding_nonce, binding_nonce, rho);
@@ -714,13 +851,167 @@ AMA_API ama_error_t ama_frost_round2_sign(
     /* z_i = tmp1 + tmp2 * challenge */
     ama_ed25519_sc_muladd(sig_share, tmp1, tmp2, challenge);
 
-    ama_secure_memzero(rho, 32);
-    ama_secure_memzero(challenge, 32);
-    ama_secure_memzero(lambda, 32);
-    ama_secure_memzero(tmp1, 32);
-    ama_secure_memzero(tmp2, 32);
+consume:
+    /* THE CONSUMPTION POINT (INVARIANT-49).  `ama_secure_memzero` is the
+     * non-elidable write (src/c/ama_consttime.c), so no separate barrier
+     * annotation applies here.  Reached from every exit past the NULL check,
+     * which is what makes a repeat call find 64 zero bytes and be refused
+     * above.  `rho`, `challenge`, `lambda`, `tmp1`, `tmp2` may be
+     * uninitialised on the early paths; scrubbing an uninitialised automatic
+     * object is defined (it is only a write) and is cheaper and less
+     * error-prone than tracking which of them are live on which path. */
+    ama_secure_memzero(nonce_pair, AMA_FROST_NONCE_BYTES);
+    ama_secure_memzero(rho, sizeof(rho));
+    ama_secure_memzero(R, sizeof(R));
+    ama_secure_memzero(challenge, sizeof(challenge));
+    ama_secure_memzero(lambda, sizeof(lambda));
+    ama_secure_memzero(tmp1, sizeof(tmp1));
+    ama_secure_memzero(tmp2, sizeof(tmp2));
+    return rc;
+}
 
-    return AMA_SUCCESS;
+/* ======================================================================
+ * PER-SHARE VERIFICATION (RFC 9591 section 5.3)
+ *
+ * The relation a well-formed share satisfies:
+ *
+ *     g^{z_i}  ==  D_i + rho_i * E_i  +  (lambda_i * c) * PK_i
+ *
+ * equivalently  R_i = g^{z_i} * (D_i * E_i^{rho_i} * PK_i^{lambda_i*c})^{-1}
+ * is the identity.  D_i / E_i are participant i's hiding / binding
+ * commitment points, rho_i its binding factor, lambda_i its Lagrange
+ * coefficient over the signing set, c the group challenge and PK_i its
+ * PUBLIC key share (participant_share[32..64) as dealt).
+ *
+ * Every scalar fed to ama_ed25519_scalarmult_public() below — rho_i, and
+ * lambda_i*c — is PUBLIC: rho_i is a hash of the message, the commitments
+ * and the group key; lambda_i is a function of the signer indices alone; c
+ * is the Ed25519 challenge, which the verifier recomputes.  That is the
+ * documented precondition of that routine (it is variable-time in the
+ * scalar), and it is met.  z_i is likewise public — it is the value the
+ * participant transmits — so the base multiplication could use the
+ * variable-time path too; it uses the constant-time
+ * ama_ed25519_point_from_scalar() because that is the base-point entry point
+ * this file already depends on, and the saving would be unmeasurable.
+ * ====================================================================== */
+
+/* Check one share against the section 5.3 relation, given the per-session
+ * values (R-derived challenge, and this participant's binding factor) that
+ * the caller has already computed.  Splitting it this way keeps
+ * ama_frost_aggregate() at O(n) binding-factor hashes: the public
+ * ama_frost_verify_share() below recomputes the session values for one
+ * share, and aggregation computes them once for the whole set.
+ *
+ * Returns AMA_SUCCESS, AMA_ERROR_VERIFY_FAILED when the relation does not
+ * hold, or AMA_ERROR_INVALID_PARAM when a supplied point does not decode. */
+static ama_error_t verify_share_core(
+    const uint8_t sig_share[32],
+    const uint8_t public_share[32],
+    const uint8_t commitment[64],
+    const uint8_t rho[32],
+    const uint8_t challenge[32],
+    uint8_t participant_index,
+    const uint8_t *signer_indices,
+    uint8_t num_signers)
+{
+    uint8_t lambda[32], lambda_c[32];
+    uint8_t lhs[32], rho_E[32], comm_share[32], pk_term[32], rhs[32];
+    ama_error_t rc;
+
+    compute_lagrange_coeff(lambda, participant_index, signer_indices, num_signers);
+    scalar_mul(lambda_c, lambda, challenge);
+
+    /* LHS = z_i * G */
+    rc = ama_ed25519_point_from_scalar(lhs, sig_share);
+    if (rc != AMA_SUCCESS) goto done;
+
+    /* comm_share = D_i + rho_i * E_i */
+    rc = ama_ed25519_scalarmult_public(rho_E, rho, commitment + 32);
+    if (rc != AMA_SUCCESS) goto done;
+    rc = ama_ed25519_point_add(comm_share, commitment, rho_E);
+    if (rc != AMA_SUCCESS) goto done;
+
+    /* pk_term = (lambda_i * c) * PK_i */
+    rc = ama_ed25519_scalarmult_public(pk_term, lambda_c, public_share);
+    if (rc != AMA_SUCCESS) goto done;
+
+    /* RHS = comm_share + pk_term */
+    rc = ama_ed25519_point_add(rhs, comm_share, pk_term);
+    if (rc != AMA_SUCCESS) goto done;
+
+    /* Both operands are public points and both were produced by this file's
+     * own compression routines, so the encodings are canonical and a byte
+     * comparison decides the group equality.  ama_consttime_memcmp is used
+     * for it because it is this tree's default comparison primitive, not
+     * because secrecy requires it here — nothing compared on this line is
+     * secret.  Spelling that out so a later reader does not "optimise" it
+     * into memcmp in a context where the operands HAVE become secret. */
+    rc = (ama_consttime_memcmp(lhs, rhs, 32) == 0)
+             ? AMA_SUCCESS
+             : AMA_ERROR_VERIFY_FAILED;
+
+done:
+    ama_secure_memzero(lambda, sizeof(lambda));
+    ama_secure_memzero(lambda_c, sizeof(lambda_c));
+    return rc;
+}
+
+/* ======================================================================
+ * PUBLIC API: VERIFY ONE SIGNATURE SHARE
+ * ====================================================================== */
+
+AMA_API ama_error_t ama_frost_verify_share(
+    const uint8_t *sig_share,
+    uint8_t participant_index,
+    const uint8_t *participant_public_share,
+    const uint8_t *commitments,
+    const uint8_t *signer_indices,
+    uint8_t num_signers,
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t *group_public_key)
+{
+    if (!sig_share || !participant_public_share || !commitments ||
+        !signer_indices || !message || !group_public_key)
+        return AMA_ERROR_INVALID_PARAM;
+    if (num_signers < 2)
+        return AMA_ERROR_INVALID_PARAM;
+    if (!validate_signer_indices(signer_indices, num_signers, participant_index))
+        return AMA_ERROR_INVALID_PARAM;
+
+    /* Locate this participant's row.  validate_signer_indices() has already
+     * established that the index is present exactly once, so the search
+     * always succeeds; the loop exists to map participant index -> array
+     * position, which is the ordering contract the commitments buffer
+     * carries. */
+    uint8_t pos = 0;
+    for (uint8_t i = 0; i < num_signers; i++) {
+        if (signer_indices[i] == participant_index) { pos = i; break; }
+    }
+
+    uint8_t rho[32], R[32], challenge[32];
+    ama_error_t rc = compute_binding_factor(rho, participant_index, message,
+        message_len, commitments, num_signers, group_public_key);
+    if (rc != AMA_SUCCESS) return rc;
+
+    rc = compute_group_commitment(R, commitments, signer_indices, num_signers,
+        message, message_len, group_public_key);
+    if (rc != AMA_SUCCESS) return rc;
+
+    rc = compute_challenge(challenge, R, group_public_key, message, message_len);
+    if (rc != AMA_SUCCESS) return rc;
+
+    /* rho, R and challenge are left unscrubbed on purpose, and the asymmetry
+     * with ama_frost_round2_sign() is worth one line: all three are PUBLIC —
+     * any verifier recomputes them from the commitments, the message and the
+     * group public key.  Round 2 scrubs its copies because they share a frame
+     * with the secret share and the nonces, where a stale public value is
+     * indistinguishable to a reader from a stale secret one.  No secret
+     * enters this function at all. */
+    return verify_share_core(sig_share, participant_public_share,
+                             commitments + (size_t)pos * 64,
+                             rho, challenge, participant_index,
+                             signer_indices, num_signers);
 }
 
 /* ======================================================================
@@ -729,23 +1020,82 @@ AMA_API ama_error_t ama_frost_round2_sign(
  * Produces a standard Ed25519 signature (R, z) that verifies with
  * ama_ed25519_verify() using the group public key.
  *
- * NOTE: The commitments buffer MUST be ordered to match signer_indices:
- * commitments[i*64..(i+1)*64] is the commitment from participant
- * signer_indices[i].
+ * NOTE: The commitments, sig_shares and signer_public_shares buffers MUST
+ * all be ordered to match signer_indices: row i of each belongs to
+ * participant signer_indices[i].
+ *
+ * IDENTIFIABLE ABORT (INVARIANT-49, audit A-5).  This function previously
+ * summed z_i mod l, concatenated the result with R, and returned
+ * AMA_SUCCESS unconditionally — it checked nothing.  Flipping one bit of one
+ * share produced rc == 0 here and ama_ed25519_verify() == -4 downstream,
+ * with no indication of which participant was responsible.  A single
+ * malicious or faulty participant could therefore destroy every ceremony it
+ * joined, anonymously, and a caller trusting the return code would publish
+ * an invalid signature.  Identifiable abort is the robustness property
+ * FROST's two-round structure exists to buy, and it was absent.
+ *
+ * Two checks now stand between the shares and AMA_SUCCESS:
+ *
+ *   1. Every share is verified against the RFC 9591 section 5.3 relation
+ *      before it is added to the sum, and the first failure returns with the
+ *      offending PARTICIPANT INDEX written to *bad_participant_index.  That
+ *      requires each signer's PUBLIC key share, which this function did not
+ *      previously receive — hence the `signer_public_shares` parameter and
+ *      the breaking signature change.  There is no way to recover PK_i from
+ *      what the old signature carried: the commitments are nonce points, not
+ *      key shares.
+ *
+ *   2. Defence in depth: the assembled (R, z) is verified against the group
+ *      public key with the ordinary RFC 8032 verifier before it is copied to
+ *      the caller.  Step 1 is the attributing check and should make step 2
+ *      unreachable; step 2 is what catches a disagreement between this
+ *      file's R/challenge derivation and the verifier the world will use —
+ *      i.e. a bug here — instead of shipping it.
+ *
+ * ATTRIBUTION CHANNEL.  `bad_participant_index` is an out-parameter, and it
+ * is optional (NULL is accepted).  The alternatives were considered and are
+ * worse in C: encoding the index into the return value would require either
+ * a new error code per participant or an int-typed return that is no longer
+ * an ama_error_t, breaking the one error convention every other entry point
+ * in this library shares; and an output struct would be a new public type
+ * for one byte.  The out-parameter keeps `ama_error_t` meaning exactly what
+ * it means everywhere else, lets a caller that does not care about blame
+ * pass NULL, and is the shape the rest of this header already uses for
+ * secondary outputs.  Its contract:
+ *
+ *   - written on ENTRY (to 0) before any other work, so a caller can never
+ *     read a stale value from a previous call;
+ *   - on a share rejection, set to signer_indices[i] — the 1-based
+ *     PARTICIPANT index, not the array position i;
+ *   - left 0 for every failure that is not attributable to one participant
+ *     (malformed arguments, allocation failure, the step-2 aggregate check).
+ *     0 is unambiguous as "not attributable" because participant indices are
+ *     1-based and validated non-zero directly below.
+ *
+ * The error code is AMA_ERROR_VERIFY_FAILED, which this function could not
+ * previously return at all, so it is unambiguous here: it means a share (or
+ * the aggregate) failed verification, never a malformed argument.  It is NOT
+ * a new enum value — see the header's note on why the error enum was left
+ * alone.
  * ====================================================================== */
 
 AMA_API ama_error_t ama_frost_aggregate(
     uint8_t *signature,
     const uint8_t *sig_shares,
     const uint8_t *commitments,
+    const uint8_t *signer_public_shares,
     const uint8_t *signer_indices,
     uint8_t num_signers,
     const uint8_t *message,
     size_t message_len,
-    const uint8_t *group_public_key)
+    const uint8_t *group_public_key,
+    uint8_t *bad_participant_index)
 {
-    if (!signature || !sig_shares || !commitments || !signer_indices ||
-        !message || !group_public_key)
+    /* Before anything can fail: no caller ever reads a stale blame value. */
+    if (bad_participant_index) *bad_participant_index = 0;
+
+    if (!signature || !sig_shares || !commitments || !signer_public_shares ||
+        !signer_indices || !message || !group_public_key)
         return AMA_ERROR_INVALID_PARAM;
     if (num_signers < 2)
         return AMA_ERROR_INVALID_PARAM;
@@ -764,18 +1114,58 @@ AMA_API ama_error_t ama_frost_aggregate(
         num_signers, message, message_len, group_public_key);
     if (rc != AMA_SUCCESS) return rc;
 
-    /* Aggregate z = sum(z_i) mod l */
+    uint8_t challenge[32];
+    rc = compute_challenge(challenge, R, group_public_key, message, message_len);
+    if (rc != AMA_SUCCESS) return rc;
+
+    /* Step 1 — verify every share BEFORE it contributes to the sum, so a bad
+     * share can never reach the output even transiently. */
+    for (int i = 0; i < num_signers; i++) {
+        uint8_t rho_i[32];
+        rc = compute_binding_factor(rho_i, signer_indices[i], message,
+            message_len, commitments, num_signers, group_public_key);
+        if (rc != AMA_SUCCESS) return rc;
+
+        rc = verify_share_core(sig_shares + (size_t)i * 32,
+                               signer_public_shares + (size_t)i * 32,
+                               commitments + (size_t)i * 64,
+                               rho_i, challenge, signer_indices[i],
+                               signer_indices, num_signers);
+        ama_secure_memzero(rho_i, sizeof(rho_i));
+        if (rc != AMA_SUCCESS) {
+            /* Attribute, then refuse.  A point that does not decode comes
+             * back as AMA_ERROR_INVALID_PARAM rather than
+             * AMA_ERROR_VERIFY_FAILED; both are that participant's
+             * defective contribution, so both name it. */
+            if (bad_participant_index)
+                *bad_participant_index = signer_indices[i];
+            return rc;
+        }
+    }
+
+    /* Aggregate z = sum(z_i) mod l.  Assembled in a local so the caller's
+     * `signature` buffer is left untouched unless this function returns
+     * AMA_SUCCESS — refusal writes no output. */
     uint8_t z[32];
-    memset(z, 0, 32);  // PUBLIC-DATA: z — FROST signature share output slot, pre-use init filled by scalar_add
+    memset(z, 0, 32);  // PUBLIC-DATA: z — FROST aggregate scalar accumulator (sum of the PUBLIC signature shares), pre-use init filled by scalar_add
     for (int i = 0; i < num_signers; i++) {
         uint8_t tmp[32];
         scalar_add(tmp, z, sig_shares + i * 32);
         memcpy(z, tmp, 32);
     }
 
-    memcpy(signature, R, 32);
-    memcpy(signature + 32, z, 32);
+    uint8_t candidate[64];
+    memcpy(candidate, R, 32);
+    memcpy(candidate + 32, z, 32);
 
+    /* Step 2 — defence in depth. */
+    rc = ama_ed25519_verify(candidate, message, message_len, group_public_key);
+    if (rc != AMA_SUCCESS) {
+        memset(candidate, 0, sizeof(candidate));  // PUBLIC-DATA: candidate — a rejected aggregate signature (R || z); R is the public group commitment and z the sum of the public shares, so nothing secret is held here.  Cleared anyway so a refusal leaves nothing signature-shaped on the stack for a later frame to mistake for a valid one.
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
+    memcpy(signature, candidate, 64);
     return AMA_SUCCESS;
 }
 

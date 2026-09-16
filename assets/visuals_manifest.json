@@ -10,15 +10,15 @@
   },
   "test_coverage": {
     "counts": {
-      "Core Crypto\n& NIST KATs": 856,
+      "Core Crypto\n& NIST KATs": 896,
       "Key Management\n& Rotation": 275,
-      "Memory Security\n& Fuzzing": 338,
-      "Other": 2829,
+      "Memory Security\n& Fuzzing": 339,
+      "Other": 2887,
       "PQC Backends\n& Integration": 773,
       "Performance\n& Monitoring": 366
     },
-    "n_files": 241,
-    "total_tests": 5437,
+    "n_files": 245,
+    "total_tests": 5536,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -53,6 +53,7 @@
       "test_conftest_backend_skip_scoping.py",
       "test_constant_time_length_precheck.py",
       "test_corpus_originality.py",
+      "test_crypto_package_transcript.py",
       "test_ct_gate_tier_pinning.py",
       "test_ctypes_abi_gate.py",
       "test_dashboard_provenance.py",
@@ -137,6 +138,7 @@
       "test_setup_signer_contract.py",
       "test_sha2_pbkdf2_native.py",
       "test_signing_keypair_normalization.py",
+      "test_slhdsa_context_separation.py",
       "test_slhdsa_keygen_from_seed.py",
       "test_stdlib_hash_boundary_gate.py",
       "test_suppression_hygiene_gate.py",

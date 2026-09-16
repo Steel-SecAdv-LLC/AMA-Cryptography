@@ -15,6 +15,14 @@
  * configure time); the predicates stay here because every decode and every
  * verify funnels through them.
  *
+ * The file has since collected the whole input-canonicalisation family for
+ * this curve, because the rules are read together and drift apart when they
+ * are stored apart: 0 <= S < L (INVARIANT-26), canonical point encodings —
+ * y < p and an admissible x-sign bit (INVARIANT-38) — and the small-order
+ * point rejection below (INVARIANT-48).  Every one of them is a pure byte
+ * predicate over public input, so this header needs no field arithmetic and
+ * both field instantiations plus the C tests can include it directly.
+ *
  * Not constant time by requirement — S arrives in the signature and is
  * public — but written branch-free anyway.
  */
@@ -168,6 +176,147 @@ static inline int ama_ed25519_point_x_sign_is_admissible(const uint8_t p[32]) {
     is_p_minus_1 &= (uint32_t)(y[31] == 0x7f);
 
     return (int)(1u - (sign_set & (is_one | is_p_minus_1)));
+}
+
+/* The seven y coordinates — bit 255 masked off, 32-byte little-endian — that
+ * name the eight points of the order-8 subgroup E[8], plus the two
+ * non-canonical spellings of two of them.  The encoding's sign bit is masked
+ * before the compare, so these seven rows cover FOURTEEN 32-byte encodings.
+ *
+ * Derived rather than copied, and checked: E[8] = { O, (0, -1), (±i, 0), and
+ * four points of order 8 }, eight points whose distinct y values are 1 (the
+ * identity), p-1 (the order-2 point), 0 (both order-4 points) and the two
+ * order-8 values below.  `p` and `p+1` are the non-canonical spellings of 0
+ * and 1; an exhaustive sweep of the nineteen-value band [p, 2^255) found
+ * those two and no others reducing into the set.  Each of the fourteen
+ * encodings was decoded with a permissive decoder — one that reduces y mod p
+ * and ignores the x = 0 sign rule, which is what an unguarded decoder does —
+ * and every one gave a point P with [8]P = O, hitting all eight points.
+ *
+ * The rows are little-endian, so the two order-8 values read
+ * 0x05fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826 and
+ * 0x7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7 as
+ * integers.  They are the same two the libsodium blocklist carries, which is
+ * a cross-check on the derivation and not its source. */
+static const uint8_t AMA_ED25519_SMALL_ORDER_Y[7][32] = {
+    /* y = 0 — the two points of order 4, (±sqrt(-1), 0). */
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    /* y = 1 — the identity, the point this invariant exists for. */
+    {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    /* y = 0x05fc...e826 — two of the four points of order 8. */
+    {0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0,
+     0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+     0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39,
+     0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05},
+    /* y = 0x7a03...17c7 — the other two points of order 8. */
+    {0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f,
+     0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+     0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6,
+     0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a},
+    /* y = p-1 — the point of order 2, (0, -1). */
+    {0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+    /* y = p — non-canonical spelling of y = 0. */
+    {0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+    /* y = p+1 — non-canonical spelling of the identity. */
+    {0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}
+};
+
+/* 1 when the 32-byte compressed encoding names a point of the order-8
+ * subgroup, else 0.  INVARIANT-48.  Note the polarity: 1 means REJECT, the
+ * opposite of the `_is_canonical` / `_is_admissible` predicates above, which
+ * is why the name says what 1 means.
+ *
+ * THE DEFECT.  Verification here is COFACTORLESS — it decides
+ * [S]B - R - [h]A = O, not the cofactored 8([S]B - R - [h]A) = O — and it
+ * performed no order check on A or on R.  Set A to the identity encoding and
+ * the [h]A term vanishes for every h, so the equation collapses to
+ * [S]B = R and the pair (R = [s]B, S = s) satisfies it FOR EVERY MESSAGE.
+ * Measured against a pure-Python RFC 8032 reference at s ∈ {1, 5, 12345} —
+ * all below L, so the canonical-S check above does not block them: all three
+ * were ACCEPTED by ama_ed25519_verify for every one of four test messages.
+ * One 64-byte string, produced without any secret, valid for everything.
+ * It reached the package layer, where crypto_api embeds the public key in
+ * the package it verifies: swapping the embedded key to the identity and the
+ * signature to the forgery gave primary_signature = true, primary = true,
+ * core_valid = true.  A verifier that accepts an attacker-supplied key stops
+ * meaning "the signer holds a secret".
+ *
+ * WHY A BYTE BLOCKLIST AND NOT AN ORDER CHECK.  Both decide exactly the same
+ * predicate — the table is the complete set of encodings any decoder maps
+ * into E[8], enumerated above, not a heuristic — so the choice is cost.
+ * Measured on this tree (Release, gcc -O2, x86-64), min of three runs:
+ *
+ *     this predicate                                     127 ns
+ *     cofactor-clearing [8]A == O via the library's own
+ *       ama_ed25519_scalarmult_public                  9,065 ns
+ *     a bare point decode (point_add against identity) 10,927 ns
+ *     one whole ama_ed25519_verify                    34,951 ns
+ *
+ * 71x per call; the two calls this fix adds (A and R) cost 0.25 us against
+ * 18.1 us, i.e. +0.7% on a verify instead of +52%.  The gap is structural
+ * rather than an artefact of that ladder: an order check must DECODE first,
+ * and a decode is a field square root — one z^(2^252 - 3) exponentiation,
+ * ~250 squarings — which the decode row above prices on its own.  The
+ * blocklist needs no field arithmetic, which is the second reason it wins:
+ * this header is pure byte predicates, included by both field instantiations
+ * and directly by the C tests, and has no curve arithmetic to call.  An order
+ * check would have had to live inside the GE_SYM-templated
+ * internal/ama_ed25519_ge.h and be instantiated per field, i.e. more code in
+ * the place where the two instantiations can diverge.
+ *
+ * SIGN-BIT INSENSITIVE ON PURPOSE.  Bit 255 carries the sign of x, not part
+ * of y, and both sign choices over one of these y values are still in E[8].
+ * Masking it is what turns seven rows into the fourteen encodings.  Six of
+ * those fourteen are already refused by
+ * ama_ed25519_point_encoding_is_canonical() — y = p and y = p+1 under either
+ * sign fail the y < p rule, and y = 1 or y = p-1 with the sign bit SET fail
+ * the x = 0 sign rule.  Blocking them here as well costs nothing and keeps
+ * this predicate's contract independent of the order a call site applies the
+ * three rules in.
+ *
+ * SAFE FOR R.  An honest R is [r]B with r = H(prefix || M) mod L, so R lands
+ * in E[8] only when r ≡ 0 (mod L) — probability about 2^-252.  No legitimate
+ * signature is affected.
+ *
+ * Public input; constant time is not a requirement here, but the comparison
+ * is branch-free for the same reason as its siblings above — it costs
+ * nothing at this size. */
+static inline int ama_ed25519_point_is_small_order(const uint8_t p[32]) {
+    uint32_t hit = 0;
+    size_t i, j;
+
+    for (i = 0; i < 7; i++) {
+        uint32_t diff = 0;
+
+        for (j = 0; j < 31; j++) {
+            diff |= (uint32_t)(p[j] ^ AMA_ED25519_SMALL_ORDER_Y[i][j]);
+        }
+        /* Bit 255 masked off: the row stores y, the encoding stores y and a
+         * sign bit. */
+        diff |= (uint32_t)((uint8_t)(p[31] & 0x7f) ^ AMA_ED25519_SMALL_ORDER_Y[i][31]);
+
+        /* diff == 0 -> 1, diff != 0 -> 0, without a branch.  diff is an OR of
+         * byte differences so it lies in [0, 255]; for any non-zero value
+         * (diff | -diff) has bit 31 set, and for zero it does not. */
+        hit |= 1u - ((diff | (uint32_t)(0u - diff)) >> 31);
+    }
+
+    return (int)hit;
 }
 
 /* 1 when the 64-byte signature's S half (bytes 32..63) is canonical. */

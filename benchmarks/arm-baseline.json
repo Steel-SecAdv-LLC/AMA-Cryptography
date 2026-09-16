@@ -857,6 +857,22 @@
       {
         "path": "ama_cryptography/_owner_only.py",
         "reason": "New module: the cross-platform owner-only access control (chmod on POSIX, a protected owner-only DACL on Windows) that SecureKeyStorage, its KDF metadata and the NonceTracker ledger now use instead of POSIX-only mode bits. Measured rather than asserted: with restrict_to_owner and restrict_fd_to_owner wrapped in a live call counter, all nineteen floored benchmarks -- ama_sha3_256_hash, hmac_sha3_256, ed25519_keygen/sign/verify, secp256k1_ecdsa_sign/verify, hkdf_derive, full_package_create/verify, dilithium_keygen/sign/verify, kyber_keygen/encapsulate, aes_256_gcm_encrypt, chacha20poly1305_encrypt, x25519_scalarmult and x25519_scalarmult_batch4 -- report ZERO calls into this module, so no floored path traverses it. The counter is not vacuous: the two paths that do use the control report non-zero on the same instrumentation (NonceTracker.check_and_record 1 call, SecureKeyStorage store 4). Neither of those is a floored benchmark."
+      },
+      {
+        "path": "ama_cryptography/_package_transcript.py",
+        "reason": "New module (2026-09 audit, A-2 / INVARIANT-52): the canonical, injective, length-prefixed encoding a package signature is computed over. It is reached only from crypto_api.package_transcript and legacy_compat.build_package_transcript, so the only floored rows it touches are full_package_create and full_package_verify, and its cost is included in the same-host measurement recorded against ama_cryptography/crypto_api.py above (+13.0 % create, +18.4 % verify). It is on no other benchmarked path: no primitive benchmark imports it, directly or transitively. On aarch64 specifically: no ARM benchmark drives it either, and the NEON translation units are separate files this change does not touch."
+      },
+      {
+        "path": "ama_cryptography/agent_binding.py",
+        "reason": "2026-09 audit, A-6: docstring changes only, on derive_key and signing_context, recording that the authority key is now an input to the derivation rather than only to the gate. No executable statement in this module changed — verifiable by diff — and no floored row imports it. It cannot move a floor. On aarch64 specifically: no ARM benchmark drives it either, and the NEON translation units are separate files this change does not touch."
+      },
+      {
+        "path": "src/c/ama_agent_binding.c",
+        "reason": "2026-09 audit, A-6: authority_binder() mixes the operator key into the agent-bound HKDF and into the signature context, which the policy gate previously only consulted. No benchmark in benchmarks/baseline.json or arm-baseline.json drives any ama_agent_binding_* entry point — the file's timing instrument is the strict dudect lane and the deterministic Callgrind gate on ama_agent_binding_check, and check() is not modified by this change (the binder is computed in hkdf_agent_bound and binding_context, after check returns). Measured rather than asserted: the added work is one HMAC-SHA3-256 over 89 bytes, and only for a binding whose policy requires authorization; an unrestricted binding takes a memset of 32 bytes. Neither is on a floored path at all. On aarch64 specifically: no ARM benchmark drives it either, and the NEON translation units are separate files this change does not touch."
+      },
+      {
+        "path": "src/c/avx2/ama_chacha20poly1305_avx2.c",
+        "reason": "2026-09 audit, C-6: the three static ama_poly1305_*_avx2 helpers and their state struct were DELETED, along with the now-unused ama_uint128.h include and the file header's claim that they were in use. They were marked AMA_MAYBE_UNUSED and nothing referenced them anywhere in the tree (grep across .c/.h/.py/.txt/.cmake returns the defining file only), and they were arithmetically wrong besides — a 10-bit mask on the r2 limb where the 44/44/42 split needs 42, and a fold constant of 5 where that split folds 2^132 as 4*5 = 20. Removing code that nothing calls cannot change the behaviour or the timing of code that does: the AEAD's Poly1305 is the scalar implementation in src/c/ama_chacha20poly1305.c, which this file neither defines nor calls. chacha20poly1305_encrypt is unaffected; the ChaCha20 AVX2 kernels in the same file are untouched. On aarch64 specifically: no ARM benchmark drives it either, and the NEON translation units are separate files this change does not touch."
       }
     ]
   },

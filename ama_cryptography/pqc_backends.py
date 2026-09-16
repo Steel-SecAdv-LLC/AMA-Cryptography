@@ -1484,16 +1484,25 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_slhdsa_sign_deterministic.restype = ctypes.c_int
 
-        lib.ama_slhdsa_sign_internal.argtypes = [
+        # ama_slhdsa_sign_addrnd, not ama_slhdsa_sign_internal: the FIPS 205
+        # §9.2 internal interface is no longer in the shared object (§9 says it
+        # must not be exposed to applications other than for testing, and while
+        # it was exposed it cross-verified with the §10.2 API under one key —
+        # INVARIANT-50).  This is §10.2 with a caller-supplied addrnd, which is
+        # what NIST ACVP's hedged sigGen vectors need and cannot be used to
+        # sign an unprefixed string.
+        lib.ama_slhdsa_sign_addrnd.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_size_t),
-            ctypes.c_char_p,
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,
+            ctypes.c_char_p,  # ctx
             ctypes.c_size_t,
             ctypes.c_char_p,  # addrnd (n bytes)
-            ctypes.c_char_p,
+            ctypes.c_char_p,  # sk
         ]
-        lib.ama_slhdsa_sign_internal.restype = ctypes.c_int
+        lib.ama_slhdsa_sign_addrnd.restype = ctypes.c_int
 
         return True
     except AttributeError:
@@ -2686,7 +2695,7 @@ def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # message_len
             ctypes.c_char_p,  # participant_share
             ctypes.c_uint8,  # participant_index
-            ctypes.c_char_p,  # nonce_pair
+            ctypes.c_char_p,  # nonce_pair (IN/OUT — zeroized by the callee)
             ctypes.c_char_p,  # commitments
             ctypes.c_char_p,  # signer_indices
             ctypes.c_uint8,  # num_signers
@@ -2694,15 +2703,30 @@ def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_frost_round2_sign.restype = ctypes.c_int
 
-        lib.ama_frost_aggregate.argtypes = [
-            ctypes.c_char_p,  # signature
-            ctypes.c_char_p,  # sig_shares
+        lib.ama_frost_verify_share.argtypes = [
+            ctypes.c_char_p,  # sig_share
+            ctypes.c_uint8,  # participant_index
+            ctypes.c_char_p,  # participant_public_share
             ctypes.c_char_p,  # commitments
             ctypes.c_char_p,  # signer_indices
             ctypes.c_uint8,  # num_signers
             ctypes.c_char_p,  # message
             ctypes.c_size_t,  # message_len
             ctypes.c_char_p,  # group_public_key
+        ]
+        lib.ama_frost_verify_share.restype = ctypes.c_int
+
+        lib.ama_frost_aggregate.argtypes = [
+            ctypes.c_char_p,  # signature
+            ctypes.c_char_p,  # sig_shares
+            ctypes.c_char_p,  # commitments
+            ctypes.c_char_p,  # signer_public_shares
+            ctypes.c_char_p,  # signer_indices
+            ctypes.c_uint8,  # num_signers
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # group_public_key
+            ctypes.POINTER(ctypes.c_uint8),  # bad_participant_index (out)
         ]
         lib.ama_frost_aggregate.restype = ctypes.c_int
         return True
@@ -3207,12 +3231,66 @@ _SPHINCS_UNAVAILABLE_MSG = (
 )
 
 
+def _require_bytes_like(name: str, value: Any) -> None:
+    """Refuse an argument the C side would receive as a NULL pointer.
+
+    ``ctypes.c_char_p`` marshals ``None`` to NULL without complaint, so a
+    Python-level ``None`` arrives at a C function as a null pointer with
+    whatever length the wrapper computed beside it.  For a ``void`` primitive
+    that is a crash with no diagnosis; here it is a ``TypeError`` naming the
+    parameter (2026-09 audit, C-5).
+
+    ``name`` is a literal at every call site — never a value — for the same
+    CodeQL clear-text-logging reason documented on
+    :func:`_declared_length_fits`.
+    """
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{name} must be bytes-like, got {type(value).__name__}")
+
+
+def _output_buffer_capacity(buf: Any) -> Optional[int]:
+    """How many bytes ``buf`` can actually hold, or ``None`` if unknowable.
+
+    Only two kinds of argument carry a capacity the caller can be held to:
+
+    * a ``ctypes`` **array** (``create_string_buffer``, ``(c_ubyte * n)()``),
+      whose ``sizeof`` is the allocation; and
+    * an object exporting the **buffer protocol** (``bytes``, ``bytearray``,
+      ``memoryview``), whose ``nbytes`` is the allocation.
+
+    Everything else — a ``c_char_p``, a ``POINTER(...)``, ``NULL`` — is a
+    pointer, and a pointer's capacity is not visible from Python at all.
+    ``ctypes.sizeof`` answers 8 for every one of them, which is the width of
+    the pointer and not of the buffer behind it; comparing a declared length
+    against that 8 would refuse ``ctypes.cast(buf, c_char_p)`` — a legitimate
+    spelling for a buffer of any size — while proving nothing about the real
+    allocation.  So a pointer returns ``None``: unknowable, left to the
+    caller's contract, exactly as the C ABI has always left it.
+    """
+    if isinstance(buf, ctypes.Array):
+        return ctypes.sizeof(buf)
+    try:
+        ctypes.sizeof(buf)
+    except TypeError:
+        pass  # not a ctypes object at all — the buffer protocol may know
+    else:
+        # A ctypes pointer or scalar.  It exports the buffer protocol over
+        # its OWN storage, so ``memoryview`` would answer 8 here for the same
+        # reason ``sizeof`` does.  Neither number describes the allocation.
+        return None
+    try:
+        return memoryview(buf).nbytes
+    except TypeError:
+        return None
+
+
 def _declared_length_fits(buf: Any, declared: int) -> bool:
     """Whether ``declared`` bytes fit in ``buf``, when ``buf`` knows its size.
 
-    ``ctypes`` arrays know their own size, so the check is made where it is
-    knowable; raw pointers do not, and are left to the caller's contract as
-    they always were — hence ``True`` rather than a refusal on ``TypeError``.
+    A buffer whose capacity is unknowable (see
+    :func:`_output_buffer_capacity`) is accepted rather than refused: a
+    refusal there would break working callers to close a hazard this function
+    cannot see in the first place.
 
     Split out of ``keypair_generate`` so each buffer is checked on its own
     with a literal log message.  The loop this replaced iterated
@@ -3223,11 +3301,67 @@ def _declared_length_fits(buf: Any, declared: int) -> bool:
     but the parameter's NAME was ever logged; restructuring removes the flow
     rather than explaining it.
     """
-    try:
-        actual = ctypes.sizeof(buf)
-    except TypeError:
-        return True  # not a sized ctypes object — nothing to compare
+    actual = _output_buffer_capacity(buf)
+    if actual is None:
+        return True  # capacity not knowable — nothing to compare
     return bool(declared <= actual)
+
+
+def _declared_out_len(value: Any) -> Optional[int]:
+    """The integer a caller declared for an output buffer, or ``None``.
+
+    ``ama_sign`` and ``ama_kem_encapsulate`` take their output length as
+    ``POINTER(c_size_t)`` (in/out), while ``ama_kem_decapsulate`` takes a plain
+    ``c_size_t``.  A caller may legitimately spell either as a ``pointer()``, a
+    bare ``c_size_t``, or — for the by-value parameter — a Python ``int``.  All
+    three are resolved here so the capacity check below sees one number.
+
+    ``None`` means "the declaration could not be read", which happens for
+    ``ctypes.byref()`` (a ``CArgObject``, which deliberately exposes nothing).
+    The caller treats that as "nothing to compare" rather than as a refusal,
+    exactly as :func:`_declared_length_fits` treats a raw pointer: refusing a
+    spelling the C ABI accepts would break working callers to close a hazard
+    this function cannot see in the first place.
+    """
+    if isinstance(value, bool):
+        # bool is an int subclass and 0/1 would silently read as a length.
+        return None
+    if isinstance(value, int):
+        return value
+    contents = getattr(value, "contents", None)
+    if contents is not None:
+        inner = getattr(contents, "value", None)
+        if isinstance(inner, int):
+            return inner
+        return None
+    inner = getattr(value, "value", None)
+    return inner if isinstance(inner, int) else None
+
+
+def _out_buffer_is_writable(buf: Any) -> bool:
+    """Whether C may write its output through ``buf``.
+
+    ``ctypes`` marshals an immutable ``bytes`` through a ``c_char_p`` parameter
+    without complaint, so a caller who passes one as an *output* buffer has the
+    native side write through an object CPython guarantees is immutable.  The
+    2026-09 audit reached that state through ``keypair_generate``: the C side
+    wrote a real keypair into a ``bytes``, every alias of that object observed
+    the mutation, and the pairwise consistency test then died with
+    ``TypeError: underlying buffer is not writable`` — *after* the write, so
+    INVARIANT-41's "no keypair is released untested" was skipped while the key
+    sat in caller-visible storage, and the failure was a ``TypeError`` rather
+    than a ``CryptoModuleError``, so the module never entered the ERROR state.
+
+    ``memoryview`` answers the question directly for anything exposing the
+    buffer protocol.  A raw ``ctypes`` pointer exposes no buffer at all and
+    raises ``TypeError``; that is the documented "caller's contract" case
+    :func:`_declared_length_fits` already leaves alone, so it reads as writable
+    here for the same reason.
+    """
+    try:
+        return not memoryview(buf).readonly
+    except TypeError:
+        return True  # not a buffer object (a raw pointer) — caller's contract
 
 
 class AmaContext:
@@ -3351,6 +3485,26 @@ class AmaContext:
                 "keypair_generate: secret_key_len exceeds the supplied buffer's size"
             )
             return -1  # AMA_ERROR_INVALID_PARAM
+        # Writability, checked BEFORE the native call rather than discovered
+        # after it.  An immutable `bytes` marshals through `c_char_p` happily,
+        # so the C side wrote a real keypair into it and only then did
+        # `_keypair_pairwise_test`'s `from_buffer` raise
+        # `TypeError: underlying buffer is not writable` — leaving an UNTESTED
+        # keypair in caller-visible storage (INVARIANT-41's one promise), with
+        # a `TypeError` rather than a `CryptoModuleError` so the module never
+        # entered the ERROR state and the secret key was never wiped.
+        # Refusing up front makes the failure a clean -1 before anything is
+        # generated.  See `_out_buffer_is_writable`.
+        if not _out_buffer_is_writable(public_key):
+            logging.getLogger(__name__).error(
+                "keypair_generate: the public_key buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(secret_key):
+            logging.getLogger(__name__).error(
+                "keypair_generate: the secret_key buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         rc = int(
             _native_lib.ama_keypair_generate(
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len
@@ -3448,7 +3602,7 @@ class AmaContext:
                 return bytes(sig.raw[: sig_len.value])
 
             def _verify(message: bytes, signature: bytes, pub: bytes) -> bool:
-                return self.verify(message, signature, pub) == 0
+                return self.verify(message, signature, pub)
 
             pairwise_test_signature(
                 _sign, _verify, sk_view, pk, f"AmaContext(alg={self._algorithm})"
@@ -3468,6 +3622,31 @@ class AmaContext:
         """Call ``ama_sign``. Returns ``AMA_SUCCESS`` (0) on success."""
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
+        # Output-buffer capacity, checked HERE because the C side cannot.
+        #
+        # `ama_sign` validates only that the DECLARED length is large enough
+        # for the algorithm (`*signature_len < AMA_ML_DSA_65_SIGNATURE_BYTES`
+        # in ama_core.c), which a caller-declared 3309 satisfies whatever the
+        # real allocation is — so a 64-byte buffer declared as 3309 took 3309
+        # bytes of signature.  Measured by the 2026-09 audit: rc = 0 returned
+        # (success), `*signature_len` = 3309, process dead with SIGSEGV.
+        #
+        # `keypair_generate` has carried this guard since the gap was found on
+        # ITS arguments, with a comment explaining exactly why Python has to
+        # make the check.  The reasoning was never applied to the three sibling
+        # methods that take the same (buffer, declared-length) shape, which is
+        # the whole of the defect: the guard existed one method away.
+        _declared = _declared_out_len(signature_len)
+        if _declared is not None and not _declared_length_fits(signature, _declared):
+            logging.getLogger(__name__).error(
+                "sign: signature_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(signature):
+            logging.getLogger(__name__).error(
+                "sign: the signature buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         return int(
             _native_lib.ama_sign(
                 self._ctx,
@@ -3480,17 +3659,27 @@ class AmaContext:
             )
         )
 
-    def verify(
+    def verify_rc(
         self,
         message: bytes,
         signature: bytes,
         public_key: bytes,
     ) -> int:
         """
-        Call ``ama_verify``.
+        Call ``ama_verify`` and return its raw ``ama_error_t``.
 
-        Returns ``AMA_SUCCESS`` (0) if the signature is valid,
-        ``AMA_ERROR_VERIFY_FAILED`` (-4) if it is not.
+        ``AMA_SUCCESS`` (0) if the signature is valid,
+        ``AMA_ERROR_VERIFY_FAILED`` (-4) if it is not, and other negative
+        codes for a malformed call.  Use this only when the distinction
+        matters; :meth:`verify` is the answer to "is this signature good".
+
+        This method used to be called ``verify``, and that was a sharp edge
+        pointing the wrong way (2026-09 audit, B-14).  C convention makes
+        success ``0``, so ``if ctx.verify(...)`` accepted every forgery and
+        rejected every genuine signature — silently, in the direction that
+        fails open.  It was the only ``verify`` in this module that did not
+        return ``bool``.  The raw code is still available, under a name that
+        cannot be mistaken for a predicate.
         """
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
@@ -3505,6 +3694,21 @@ class AmaContext:
                 len(public_key),
             )
         )
+
+    def verify(
+        self,
+        message: bytes,
+        signature: bytes,
+        public_key: bytes,
+    ) -> bool:
+        """Whether ``signature`` is a valid signature on ``message``.
+
+        ``True`` only for ``AMA_SUCCESS``: every other code — a verification
+        failure, a closed context, a malformed length — is ``False``.  That
+        is the same contract as every other ``verify`` in this module, which
+        is the point (see :meth:`verify_rc`).
+        """
+        return self.verify_rc(message, signature, public_key) == 0
 
     # ------------------------------------------------------------------
     # KEM operations (Kyber-1024 context)
@@ -3521,6 +3725,32 @@ class AmaContext:
         """Call ``ama_kem_encapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
+        # Two output buffers, same reasoning as `sign` above — see the comment
+        # there for the measurement.  Both are checked, because a caller that
+        # gets one right and the other wrong is exactly the shape that produced
+        # the defect in the first place.
+        _declared_ct = _declared_out_len(ciphertext_len)
+        if _declared_ct is not None and not _declared_length_fits(ciphertext, _declared_ct):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: ciphertext_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(ciphertext):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: the ciphertext buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        _declared_ss = _declared_out_len(shared_secret_len)
+        if _declared_ss is not None and not _declared_length_fits(shared_secret, _declared_ss):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: shared_secret_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(shared_secret):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: the shared_secret buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         return int(
             _native_lib.ama_kem_encapsulate(
                 self._ctx,
@@ -3543,6 +3773,20 @@ class AmaContext:
         """Call ``ama_kem_decapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
+        # Same guard as `sign` and `kem_encapsulate` above.  Here the declared
+        # length is a by-value `c_size_t` rather than an in/out pointer, which
+        # is why `_declared_out_len` resolves all three spellings.
+        _declared_ss = _declared_out_len(shared_secret_len)
+        if _declared_ss is not None and not _declared_length_fits(shared_secret, _declared_ss):
+            logging.getLogger(__name__).error(
+                "kem_decapsulate: shared_secret_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(shared_secret):
+            logging.getLogger(__name__).error(
+                "kem_decapsulate: the shared_secret buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         return int(
             _native_lib.ama_kem_decapsulate(
                 self._ctx,
@@ -4345,13 +4589,24 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
 
 def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
-    Sign message with SPHINCS+-SHA2-256f-simple.
+    Sign message with SPHINCS+-SHA2-256f-simple (FIPS 205 §10.2, empty context).
 
     SPHINCS+ signatures are large (~49KB) but provide strong security
     guarantees based only on hash function security assumptions.
 
+    The bytes signed are ``M' = 0x00 || 0x00 || message`` — FIPS 205 §10.2
+    ``slh_sign`` with ``ctx = b""``, identical to
+    ``slhdsa_sign(message, secret_key, b"", param_set="SHA2-256f")``.
+
+    **Wire-format break.** This signed the RAW message until the
+    context-separation fix, which made it the FIPS 205 §9.2 internal interface
+    under a public name and let it cross-verify with :func:`slhdsa_verify`
+    under the same key — a signing oracle for pure signatures on
+    attacker-chosen ``(ctx, M)`` pairs (INVARIANT-50). Signatures produced by
+    the previous behaviour do not verify here.
+
     Args:
-        message: Data to sign (arbitrary length)
+        message: Data to sign (arbitrary length, including empty)
         secret_key: SPHINCS+-256f secret key (128 bytes)
 
     Returns:
@@ -4400,7 +4655,13 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
 
 def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """
-    Verify SPHINCS+-SHA2-256f-simple signature.
+    Verify SPHINCS+-SHA2-256f-simple signature (FIPS 205 §10.2, empty context).
+
+    The exact counterpart of :func:`sphincs_sign`: verifies
+    ``M' = 0x00 || 0x00 || message``, equivalent to
+    ``sphincs_verify_ctx(message, signature, public_key, b"")``. Like
+    :func:`sphincs_sign` this verified the RAW message before the
+    context-separation fix (INVARIANT-50).
 
     Args:
         message: Original data
@@ -4808,18 +5069,42 @@ def slhdsa_sign_deterministic(
     return bytes(sig_buf.raw[: sig_buf_len.value])
 
 
-def slhdsa_sign_internal(
+def slhdsa_sign_addrnd(
     message: bytes,
     secret_key: Union[bytes, bytearray],
     addrnd: bytes,
+    ctx: bytes = b"",
     param_set: str = "SHAKE-128s",
 ) -> bytes:
-    """SLH-DSA "internal interface" sign with explicit ``addrnd``.
+    """SLH-DSA §10.2 hedged sign with a caller-supplied ``addrnd``.
 
-    Skips the FIPS 205 §10.2 context wrapper and signs ``message`` directly.
-    Exposed for ACVP ``signatureInterface == "internal"`` KAT validation.
+    Applies the same ``M' = 0x00 || len(ctx) || ctx || M`` wrapper as
+    :func:`slhdsa_sign`; only the randomizer differs. Exposed so NIST ACVP's
+    **hedged** sigGen vectors — which publish ``additionalRandomness`` — can be
+    reproduced byte-for-byte *through* the wrapper.
+
+    This replaced ``slhdsa_sign_internal``, which called the FIPS 205 §9.2
+    internal interface. That entry point signed the raw message, so it
+    cross-verified with the §10.2 API under one key and was a signing oracle
+    for pure signatures on attacker-chosen ``(ctx, M)`` pairs; FIPS 205 §9 says
+    the internal functions must not be exposed to applications other than for
+    testing, and it is now compiled only under ``AMA_TESTING_MODE`` and absent
+    from the shared object this module loads (INVARIANT-50). The ACVP replay
+    got *stronger* in the move: the test used to build ``M'`` itself, so the
+    wrapper — the thing the defect was about — was outside the vector.
+
+    **Production code should call** :func:`slhdsa_sign`: an ``addrnd`` that
+    does not come from an approved RBG is not the approved hedged variant.
+
+    Raises:
+        ValueError: If ``len(ctx) > 255``, or ``secret_key`` / ``addrnd`` is
+            the wrong length.
+        SphincsUnavailableError: If the native backend is not built.
+        RuntimeError: On native signing failure.
     """
     check_crypto_permitted()
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     enum_id, _, sk_len, sig_len, n = _slhdsa_resolve(param_set)
     if not SPHINCS_AVAILABLE or _native_lib is None:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
@@ -4843,17 +5128,19 @@ def slhdsa_sign_internal(
     sk_buf = _borrow(secret_key)
     addrnd_buf = ctypes.create_string_buffer(bytes(addrnd), n)
     try:
-        rc = _native_lib.ama_slhdsa_sign_internal(
+        rc = _native_lib.ama_slhdsa_sign_addrnd(
             ctypes.c_int(enum_id),
             sig_buf,
             ctypes.byref(sig_buf_len),
             message,
             ctypes.c_size_t(len(message)),
+            ctx if ctx else None,
+            ctypes.c_size_t(len(ctx)),
             addrnd_buf,
             sk_buf,
         )
         if rc != 0:
-            raise RuntimeError(f"ama_slhdsa_sign_internal({param_set}) failed: rc={rc}")
+            raise RuntimeError(f"ama_slhdsa_sign_addrnd({param_set}) failed: rc={rc}")
         return bytes(sig_buf.raw[: sig_buf_len.value])
     finally:
         # sk_buf is a BORROW of the caller's storage (see above) and is not
@@ -6096,12 +6383,18 @@ def native_hmac_sha256(key: bytes, msg: bytes) -> bytes:
             "HMAC-SHA-256 native backend not available. " + _INSTALL_HINT
         )
 
+    # ama_hmac_sha256 returns void at the C level, so this boundary is the
+    # only place a bad argument can be REPORTED rather than merely survived.
+    # The previous comment here claimed invalid pointers were "all caught
+    # before the call by ctypes marshalling"; they are not — `c_char_p`
+    # accepts `None` as NULL, and the C side dereferenced it (2026-09 audit,
+    # C-5, a SIGSEGV).  The C side no longer dereferences, but it cannot say
+    # why it produced nothing, so the type check lives here.
+    _require_bytes_like("key", key)
+    _require_bytes_like("msg", msg)
+
     out_buf = ctypes.create_string_buffer(32)
 
-    # ama_hmac_sha256 returns void at the C level (no failure path that
-    # isn't a programmer error — invalid pointer / negative length /
-    # etc., all caught before the call by ctypes marshalling), so no
-    # rc check.  Matches the signature ama_hmac_sha256.h declares.
     _native_lib.ama_hmac_sha256(
         key,
         ctypes.c_size_t(len(key)),
@@ -6143,6 +6436,10 @@ def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
         raise NativeBackendUnavailableError(
             "HMAC-SHA-256 native backend not available. " + _INSTALL_HINT
         )
+
+    _require_bytes_like("key", key)
+    _require_bytes_like("msg1", msg1)
+    _require_bytes_like("msg2", msg2)
 
     out_buf = ctypes.create_string_buffer(32)
 
@@ -8737,6 +9034,13 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
 FROST_AVAILABLE = _FROST_AVAILABLE
 FROST_BACKEND = _FROST_BACKEND
 
+#: ``AMA_ERROR_VERIFY_FAILED`` from ``include/ama_cryptography.h``.  Named
+#: here rather than written as a bare ``-4`` because the FROST wrappers below
+#: have to tell "a share is invalid" (a verdict, reported as False or as
+#: FrostShareRejected) apart from "the check could not run" (an exception),
+#: and a bare literal at three call sites is how that distinction rots.
+_AMA_ERROR_VERIFY_FAILED = -4
+
 
 def frost_keygen_trusted_dealer(
     threshold: int,
@@ -8813,13 +9117,27 @@ def frost_keygen_trusted_dealer(
             nonces.append(nonce)
             commitment_list.append(commitment)
         commitments = b"".join(commitment_list)
+        # INVARIANT-49: one nonce pair, one round-2 call.  Each ``nonces[i]``
+        # is a bytearray that ``frost_round2_sign`` zeroizes in place, so this
+        # loop consumes each exactly once and none survives the closure.
         sig_shares = b"".join(
             frost_round2_sign(
                 message, signer_shares[i], i + 1, nonces[i], commitments, indices, threshold, gpk
             )
             for i in range(threshold)
         )
-        return frost_aggregate(sig_shares, commitments, indices, threshold, message, gpk)
+        # INVARIANT-49: aggregation verifies every share against the RFC 9591
+        # section 5.3 relation, which needs each signer's PUBLIC key share —
+        # bytes [32, 64) of its dealt 64-byte share, in signer_indices order.
+        # That makes the pairwise consistency test strictly stronger than it
+        # was: a dealer that mints a secret half not matching the public half
+        # it publishes now fails at aggregation with the culprit named,
+        # instead of producing a signature that only the final Ed25519 verify
+        # rejects.
+        public_shares = b"".join(share[32:64] for share in signer_shares)
+        return frost_aggregate(
+            sig_shares, commitments, public_shares, indices, threshold, message, gpk
+        )
 
     pairwise_test_signature(
         _frost_roundtrip_sign,
@@ -8834,12 +9152,27 @@ def frost_keygen_trusted_dealer(
 def frost_round1_commit(participant_share: bytes) -> tuple:
     """FROST Round 1: Generate nonce commitment.
 
+    **ONE-SHOT NONCE CONTRACT (INVARIANT-49).**  The returned ``nonce_pair``
+    is valid for exactly ONE ``frost_round2_sign`` call, over exactly one
+    message, and that call ZEROIZES it in place.  To sign a second message,
+    call this function again.
+
+    It is returned as a ``bytearray`` rather than ``bytes`` precisely so that
+    the consumption is possible: the C library writes 64 zero bytes over the
+    buffer on its way out of round 2, and an immutable ``bytes`` object cannot
+    be written to (attempting it is undefined behaviour in CPython, not merely
+    ineffective).  Do not take a ``bytes`` copy of it; a copy is outside
+    anything the library can consume, and three partial signatures made under
+    one nonce pair disclose the participant's long-term secret share (the
+    2026-09 audit recovered one).
+
     Args:
         participant_share: 64-byte participant share from keygen.
 
     Returns:
-        Tuple of (nonce_pair, commitment) — nonce_pair is SECRET (64 bytes),
-        commitment is PUBLIC (64 bytes).
+        Tuple of (nonce_pair, commitment) — nonce_pair is SECRET, SINGLE-USE
+        and mutable (``bytearray``, 64 bytes); commitment is PUBLIC
+        (``bytes``, 64 bytes).
     """
     check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
@@ -8854,26 +9187,56 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
     if rc != 0:
         raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
 
-    return bytes(nonce_buf), bytes(commit_buf)
+    # ``nonce_buf.raw`` is the 64 bytes without ctypes' NUL-termination
+    # convention; copied into a bytearray so the caller holds a buffer round 2
+    # can scrub, then the staging buffer is scrubbed here so the nonce is not
+    # left in a second place.
+    nonce_pair = bytearray(nonce_buf.raw[:FROST_NONCE_BYTES])
+    ctypes.memset(nonce_buf, 0, FROST_NONCE_BYTES)
+    return nonce_pair, bytes(commit_buf.raw[:FROST_COMMITMENT_BYTES])
 
 
 def frost_round2_sign(
     message: bytes,
     participant_share: bytes,
     participant_index: int,
-    nonce_pair: bytes,
+    nonce_pair: bytearray,
     commitments: bytes,
     signer_indices: bytes,
     num_signers: int,
     group_public_key: bytes,
 ) -> bytes:
-    """FROST Round 2: Generate signature share.
+    """FROST Round 2: Generate signature share — **consumes the nonce pair**.
+
+    **ONE-SHOT NONCE CONTRACT (INVARIANT-49).**  ``nonce_pair`` is an IN/OUT
+    argument: the native library zeroizes it on every exit, success and
+    failure alike, and refuses an already-consumed (all-zero) pair.  On return
+    the caller's ``bytearray`` therefore holds 64 zero bytes, and a second
+    call with it raises ``RuntimeError``.  Call ``frost_round1_commit`` again
+    for each further message.
+
+    Why a writable buffer is *required* rather than accepted-if-offered: the C
+    entry point takes ``uint8_t *`` and writes through it, and writing through
+    a pointer into an immutable ``bytes`` object is undefined behaviour in
+    CPython (short ``bytes`` are interned and shared process-wide).  Copying
+    into a scratch buffer instead would let the caller's copy survive, which
+    is exactly the reuse this contract exists to make impossible — the copy
+    would still verify, and three signatures under one nonce pair disclose the
+    participant's long-term secret share.  So an immutable argument is a
+    ``TypeError``, not a silently weaker mode.
+
+    This wrapper also scrubs the buffer for the failures it detects BEFORE
+    calling C (bad lengths, bad indices), so "round 2 consumes the nonce,
+    whatever the outcome" holds at the Python boundary exactly as it does at
+    the C boundary, and a caller never has to ask which layer refused.
 
     Args:
         message: Message to sign.
         participant_share: 64-byte share.
         participant_index: 1-based participant index.
-        nonce_pair: 64-byte nonce pair from round 1 (SECRET).
+        nonce_pair: 64-byte WRITABLE nonce pair from ``frost_round1_commit``
+            (SECRET, SINGLE-USE).  Zeroized in place before this function
+            returns or raises.
         commitments: Concatenated commitments (num_signers * 64 bytes).
         signer_indices: Byte array of 1-based signer indices.
         num_signers: Number of signers in this session.
@@ -8881,6 +9244,12 @@ def frost_round2_sign(
 
     Returns:
         32-byte signature share.
+
+    Raises:
+        TypeError: ``nonce_pair`` is not a writable buffer.
+        ValueError: any argument has the wrong length or range.
+        RuntimeError: the native call refused — including the refusal of an
+            already-consumed nonce pair.
     """
     check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
@@ -8893,6 +9262,132 @@ def frost_round2_sign(
         raise ValueError("participant_index must be in [1, 255]")
     if len(nonce_pair) != FROST_NONCE_BYTES:
         raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
+
+    # Pre-bound so the `finally` below cannot be reached with `rc` unset on a
+    # path that raises before the native call.
+    rc = -1
+    # Take the writable view first: everything below this point can scrub.
+    try:
+        nonce_view = (ctypes.c_char * FROST_NONCE_BYTES).from_buffer(nonce_pair)
+    except TypeError as exc:
+        raise TypeError(
+            "nonce_pair must be a writable buffer (bytearray / memoryview), not "
+            f"{type(nonce_pair).__name__}: FROST round 2 consumes the nonce pair "
+            "in place (INVARIANT-49).  Use the bytearray returned by "
+            "frost_round1_commit()."
+        ) from exc
+
+    try:
+        if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
+            raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+        if len(signer_indices) != num_signers:
+            raise ValueError(f"signer_indices must be {num_signers} bytes")
+        if len(group_public_key) != 32:
+            raise ValueError("group_public_key must be 32 bytes")
+
+        sig_share_buf = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
+
+        rc = _native_lib.ama_frost_round2_sign(
+            sig_share_buf,
+            message,
+            ctypes.c_size_t(len(message)),
+            participant_share,
+            ctypes.c_uint8(participant_index),
+            nonce_view,
+            commitments,
+            signer_indices,
+            ctypes.c_uint8(num_signers),
+            group_public_key,
+        )
+    finally:
+        # Belt and braces.  The C side already scrubbed on every path it
+        # reached; this covers the paths it did not (the argument checks
+        # above) and makes the consumption unconditional at this boundary too.
+        # `del` releases the exported buffer so the caller's bytearray can be
+        # resized again — ctypes keeps a buffer export alive for the life of
+        # the view.
+        ctypes.memset(nonce_view, 0, FROST_NONCE_BYTES)
+        del nonce_view
+    if rc != 0:
+        raise RuntimeError(
+            f"FROST round2 sign failed (rc={rc}).  rc=-1 with a nonce pair that "
+            "has already been used is the INVARIANT-49 one-shot refusal: run "
+            "frost_round1_commit() again for each message."
+        )
+
+    return bytes(sig_share_buf.raw[:FROST_SIG_SHARE_BYTES])
+
+
+class FrostShareRejected(RuntimeError):
+    """A FROST signature share failed verification, and we know whose it was.
+
+    Raised by :func:`frost_aggregate` when a share does not satisfy the
+    RFC 9591 section 5.3 relation.  ``participant_index`` carries the 1-based
+    index of the participant that supplied it — the attribution that makes
+    identifiable abort possible (INVARIANT-49).  It is ``0`` when the failure
+    is not attributable to one participant, which today means the final
+    whole-signature check against the group public key.
+
+    A ``RuntimeError`` subclass so that callers written against the previous
+    ``RuntimeError`` contract keep working unchanged.
+    """
+
+    def __init__(self, message: str, participant_index: int) -> None:
+        super().__init__(message)
+        self.participant_index = participant_index
+
+
+def frost_verify_share(
+    sig_share: bytes,
+    participant_index: int,
+    participant_public_share: bytes,
+    commitments: bytes,
+    signer_indices: bytes,
+    num_signers: int,
+    message: bytes,
+    group_public_key: bytes,
+) -> bool:
+    """Verify one FROST signature share (RFC 9591 section 5.3 relation).
+
+    Checks ``g^z_i == D_i + rho_i * E_i + (lambda_i * c) * PK_i``.
+    :func:`frost_aggregate` applies this to every share already, so a
+    coordinator that only aggregates need not call it; it is exposed for
+    coordinators that want to validate shares as they arrive (and so drop a
+    bad one before the round completes), and for auditing a ceremony
+    after the fact.
+
+    Args:
+        sig_share: 32-byte signature share z_i.
+        participant_index: 1-based index of the share's author.
+        participant_public_share: 32-byte PUBLIC key share PK_i — bytes
+            [32, 64) of that participant's dealt 64-byte share.
+        commitments: Concatenated commitments (num_signers * 64 bytes),
+            ordered to match ``signer_indices``.
+        signer_indices: Byte array of 1-based signer indices.
+        num_signers: Number of signers in this session.
+        message: Message that was signed.
+        group_public_key: 32-byte group public key.
+
+    Returns:
+        True if the share satisfies the relation, False if it does not.
+
+    Raises:
+        ValueError: an argument has the wrong length or range.
+        RuntimeError: the native call could not reach a verdict (a point that
+            does not decode, a signer set that omits ``participant_index``).
+            A *verdict* of "invalid" is ``False``, not an exception.
+    """
+    check_crypto_permitted()
+    if not _FROST_AVAILABLE or _native_lib is None:
+        raise NativeBackendUnavailableError("FROST native library not available")
+    if not (2 <= num_signers <= 255):
+        raise ValueError("num_signers must be in [2, 255]")
+    if len(sig_share) != FROST_SIG_SHARE_BYTES:
+        raise ValueError(f"sig_share must be {FROST_SIG_SHARE_BYTES} bytes")
+    if not (1 <= participant_index <= 255):
+        raise ValueError("participant_index must be in [1, 255]")
+    if len(participant_public_share) != 32:
+        raise ValueError("participant_public_share must be 32 bytes")
     if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
         raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
     if len(signer_indices) != num_signers:
@@ -8900,39 +9395,53 @@ def frost_round2_sign(
     if len(group_public_key) != 32:
         raise ValueError("group_public_key must be 32 bytes")
 
-    sig_share_buf = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
-
-    rc = _native_lib.ama_frost_round2_sign(
-        sig_share_buf,
-        message,
-        ctypes.c_size_t(len(message)),
-        participant_share,
+    rc = _native_lib.ama_frost_verify_share(
+        sig_share,
         ctypes.c_uint8(participant_index),
-        nonce_pair,
+        participant_public_share,
         commitments,
         signer_indices,
         ctypes.c_uint8(num_signers),
+        message,
+        ctypes.c_size_t(len(message)),
         group_public_key,
     )
-    if rc != 0:
-        raise RuntimeError(f"FROST round2 sign failed (rc={rc})")
-
-    return bytes(sig_share_buf)
+    if rc == 0:
+        return True
+    if rc == _AMA_ERROR_VERIFY_FAILED:
+        return False
+    raise RuntimeError(f"FROST share verification could not run (rc={rc})")
 
 
 def frost_aggregate(
     sig_shares: bytes,
     commitments: bytes,
+    signer_public_shares: bytes,
     signer_indices: bytes,
     num_signers: int,
     message: bytes,
     group_public_key: bytes,
 ) -> bytes:
-    """Aggregate FROST signature shares into an Ed25519-compatible signature.
+    """Aggregate VERIFIED FROST signature shares into an Ed25519 signature.
+
+    **IDENTIFIABLE ABORT (INVARIANT-49).**  Every share is verified against
+    the RFC 9591 section 5.3 relation before it contributes to the sum, and
+    the assembled signature is verified against the group public key as
+    defence in depth.  A bad share raises :class:`FrostShareRejected`, whose
+    ``participant_index`` names the culprit.
+
+    BREAKING: ``signer_public_shares`` is a new required argument, positioned
+    with the other per-signer arrays.  Share verification is against each
+    signer's PUBLIC key share PK_i, and the previous argument list carried no
+    way to obtain one — the commitments are nonce points, not key shares.
+    Build it by concatenating ``share[32:64]`` of each signer's dealt 64-byte
+    share, in ``signer_indices`` order.
 
     Args:
         sig_shares: Concatenated signature shares (num_signers * 32 bytes).
         commitments: Concatenated commitments (num_signers * 64 bytes).
+        signer_public_shares: Concatenated PUBLIC key shares
+            (num_signers * 32 bytes), ordered to match ``signer_indices``.
         signer_indices: Byte array of 1-based signer indices.
         num_signers: Number of signers.
         message: Original message.
@@ -8940,6 +9449,14 @@ def frost_aggregate(
 
     Returns:
         64-byte Ed25519-format signature (R || z).
+
+    Raises:
+        ValueError: an argument has the wrong length or the signer set is
+            malformed.
+        FrostShareRejected: a share failed verification (``participant_index``
+            names it), or the assembled signature failed verification under
+            the group public key (``participant_index == 0``).
+        RuntimeError: any other native failure.
     """
     check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
@@ -8950,6 +9467,8 @@ def frost_aggregate(
         raise ValueError(f"sig_shares must be {num_signers * FROST_SIG_SHARE_BYTES} bytes")
     if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
         raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+    if len(signer_public_shares) != num_signers * 32:
+        raise ValueError(f"signer_public_shares must be {num_signers * 32} bytes")
     if len(signer_indices) != num_signers:
         raise ValueError(f"signer_indices must be {num_signers} bytes")
     if any(idx == 0 for idx in signer_indices):
@@ -8960,18 +9479,39 @@ def frost_aggregate(
         raise ValueError("group_public_key must be 32 bytes")
 
     sig_buf = ctypes.create_string_buffer(64)
+    bad_index = ctypes.c_uint8(0)
 
     rc = _native_lib.ama_frost_aggregate(
         sig_buf,
         sig_shares,
         commitments,
+        signer_public_shares,
         signer_indices,
         ctypes.c_uint8(num_signers),
         message,
         ctypes.c_size_t(len(message)),
         group_public_key,
+        ctypes.byref(bad_index),
     )
+    if rc == _AMA_ERROR_VERIFY_FAILED:
+        culprit = int(bad_index.value)
+        if culprit:
+            raise FrostShareRejected(
+                f"FROST aggregate rejected the signature share from participant "
+                f"{culprit}: it does not satisfy the RFC 9591 section 5.3 "
+                f"relation.  Exclude that participant and re-run the round.",
+                culprit,
+            )
+        raise FrostShareRejected(
+            "FROST aggregate: every share verified but the assembled signature "
+            "does not verify under the group public key.  No participant is "
+            "implicated; this is the defence-in-depth check and it failing "
+            "indicates a library or input-ordering defect, not a bad signer.",
+            0,
+        )
     if rc != 0:
-        raise RuntimeError(f"FROST aggregate failed (rc={rc})")
+        culprit = int(bad_index.value)
+        blame = f" (participant {culprit})" if culprit else ""
+        raise RuntimeError(f"FROST aggregate failed (rc={rc}){blame}")
 
-    return bytes(sig_buf)
+    return bytes(sig_buf.raw[:64])

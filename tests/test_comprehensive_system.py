@@ -306,9 +306,25 @@ class TestDilithiumPolicyEnforcement:
         return create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
 
     def _build_signature_message_for_package(self, package: Any) -> Any:
-        """Helper to build the correct signature message based on package format version."""
+        """Helper to build the correct signature message based on package format version.
+
+        V3 (the format produced since the 2026-09 audit's A-2 fix) signs a
+        transcript of the whole package rather than a content hash plus an
+        ethical hash; ``recompute_ethical_hash`` is used instead of
+        ``package.ethical_hash`` for the same reason the verifier does, so this
+        helper mirrors the verifier rather than paraphrasing it.
+        """
+        import ama_cryptography.legacy_compat as lc
+
         computed_hash = canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
         sig_format = getattr(package, "signature_format_version", SIGNATURE_FORMAT_V1)
+        if sig_format == lc.SIGNATURE_FORMAT_V3:
+            return lc.build_package_transcript(
+                "signature",
+                package,
+                computed_hash,
+                lc.recompute_ethical_hash(package.ethical_vector),
+            )
         if sig_format == SIGNATURE_FORMAT_V2:
             ethical_hash_bytes = bytes.fromhex(package.ethical_hash)
             return build_signature_message(computed_hash, ethical_hash_bytes, SIGNATURE_FORMAT_V2)

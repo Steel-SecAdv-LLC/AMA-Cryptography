@@ -41,6 +41,18 @@
  *     red.  The old y = p assertions are kept and relabelled SMOKE, which is
  *     what they always were.
  *
+ *     That repair has since been overtaken by INVARIANT-48, which rejects
+ *     ALL fourteen small-order encodings at ama_ed25519_verify.  The
+ *     identity is one of them, so the forgery is now rejected under the
+ *     canonical identity encoding as well, and the accept that made these
+ *     four discriminating is gone.  Measured with the §5.1.3 guard neutered
+ *     and INVARIANT-48 in place: 6 failed / 44 passed, and the four
+ *     forgery lines all printed [ OK ].  They are relabelled SMOKE and the
+ *     control is relabelled PIN; INVARIANT-38's live coverage at the verify
+ *     site is gone, and what remains — the RANGE band and the decode-path
+ *     y = 0 / y = p pair, which INVARIANT-48 does not touch — is what those
+ *     6 failures were.
+ *
  * Covers single verify and batch verify.  As of B1 (5.0.0 pre-tag audit) both
  * backends' batch verify is a per-entry loop over ama_ed25519_verify, so the
  * canonical-S rule reaches the batch path through single verify rather than a
@@ -380,7 +392,15 @@ int main(void) {
          * sign-bit pair still rejects because that decoder recomputes x and
          * compares its sign — so the sign-bit pair was a pin on the vendored
          * backend and is a smoke on fe51, and is labelled for the site rather
-         * than the backend. */
+         * than the backend.
+         *
+         * ALL OF THAT IS HISTORY AS OF INVARIANT-48.  "The only thing
+         * standing between this signature and AMA_SUCCESS is the public-key
+         * rule at the verify site" was the paragraph's load-bearing claim,
+         * and it no longer holds: the small-order rule now stands there too,
+         * and it fires first and on all fourteen small-order encodings.  The
+         * four assertions are kept — the forgery must stay rejected — but
+         * they are SMOKE now.  See the control below for the measurement. */
         {
             uint8_t forge_s[32];
             uint8_t forge_sig[64];
@@ -401,31 +421,57 @@ int main(void) {
             y_p_plus_1[0] = 0xee;
             y_p_plus_1[31] = 0x7f;   /* y = p + 1, reduces to y = 1 */
 
-            /* Non-vacuity control: the CANONICAL identity encoding accepts
-             * the forgery on every build.  That is the well-known property
-             * of an identity public key, not a defect — RFC 8032 does not
-             * require rejecting it — and it is what proves the two rejects
-             * below come from the encoding rule and not from the forgery
-             * being malformed. */
+            /* The non-vacuity control THAT NO LONGER HOLDS, and the reason
+             * the four lines below are now SMOKE rather than PIN.
+             *
+             * This assertion used to read `== AMA_SUCCESS`: the canonical
+             * identity encoding accepted the forgery on every build, which
+             * is what proved the two rejects below came from the §5.1.3
+             * encoding rule and not from the forgery being malformed.  It
+             * was written with "RFC 8032 does not require rejecting it" as
+             * the justification, and that sentence was true of the RFC and
+             * wrong as a policy: the 2026-09 audit turned the same
+             * construction into a universal forgery, because this verifier
+             * is cofactorless and the package layer hands it
+             * attacker-supplied keys.  INVARIANT-48 now rejects a
+             * small-order public key outright, so the control flips to
+             * `!= AMA_SUCCESS` and the coverage it was supporting goes with
+             * it.
+             *
+             * Measured, on this tree, with the §5.1.3 guard neutered but
+             * INVARIANT-48 in place: 6 failed / 44 passed, and all four
+             * lines below printed [ OK ].  So they no longer discriminate
+             * for INVARIANT-38 and are relabelled.  INVARIANT-38's
+             * non-vacuous coverage is the five assertions that DID fail
+             * under that mutation — the RANGE band checks above and the
+             * decode-path pair "y = p rejected by point_add though y = 0 is
+             * accepted" — which INVARIANT-48 does not touch, because the
+             * small-order predicate is applied at ama_ed25519_verify and not
+             * inside the decoder.
+             *
+             * The discriminating vectors for INVARIANT-48 itself, which
+             * satisfy the group equation and therefore turn only on the
+             * small-order rule, are in tests/c/test_ed25519_small_order.c. */
             {
                 uint8_t id_plain[32];
                 memset(id_plain, 0, sizeof(id_plain));
                 id_plain[0] = 0x01;
                 CHECK(ama_ed25519_verify(forge_sig, msg, sizeof(msg), id_plain)
-                          == AMA_SUCCESS,
-                      "SMOKE the forgery verifies under the canonical identity key");
+                          != AMA_SUCCESS,
+                      "PIN   the forgery is rejected under the canonical identity key "
+                      "(INVARIANT-48)");
             }
 
             CHECK(ama_ed25519_verify(forge_sig, msg, sizeof(msg), y_p_plus_1)
                       != AMA_SUCCESS,
-                  "PIN   universal forgery under y = p + 1 rejected (single verify site)");
+                  "SMOKE universal forgery under y = p + 1 rejected (single verify site)");
             CHECK(!batch_accepts(forge_sig, msg, sizeof(msg), y_p_plus_1),
-                  "PIN   universal forgery under y = p + 1 rejected (batch verify site)");
+                  "SMOKE universal forgery under y = p + 1 rejected (batch verify site)");
             CHECK(ama_ed25519_verify(forge_sig, msg, sizeof(msg), id_signbit)
                       != AMA_SUCCESS,
-                  "PIN   universal forgery under the x-sign-set identity rejected (single)");
+                  "SMOKE universal forgery under the x-sign-set identity rejected (single)");
             CHECK(!batch_accepts(forge_sig, msg, sizeof(msg), id_signbit),
-                  "PIN   universal forgery under the x-sign-set identity rejected (batch)");
+                  "SMOKE universal forgery under the x-sign-set identity rejected (batch)");
         }
     }
 

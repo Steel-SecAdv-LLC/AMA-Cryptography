@@ -1279,6 +1279,8 @@ def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
 def verify_timestamp_binding(
     data: bytes,
     timestamp_result: TimestampResult,
+    *,
+    allow_disabled: bool = False,
 ) -> bool:
     """Whether *timestamp_result* binds *data* — and nothing beyond that.
 
@@ -1297,8 +1299,11 @@ def verify_timestamp_binding(
     1. The stored ``data_hash`` is recomputed from ``data`` under
        ``timestamp_result.hash_algorithm`` and must match — so a
        ``TimestampResult`` captured for one payload cannot validate another.
-    2. A ``"disabled"`` result (empty token) stops there: there is no token to
-       bind, and step 1 is the whole of what such a result can assert.
+    2. A ``"disabled"`` result (empty token) is **refused** unless the caller
+       passes ``allow_disabled=True``. There is no token in such a result, so
+       there is no binding to check; the two fields that identify it as
+       "disabled" come from the same caller-supplied structure as everything
+       else in it. See ``allow_disabled`` below.
     3. A MockTSA-format token is honoured only inside a testing context and
        refused everywhere else — its HMAC key ships inside the token, so
        outside a test it is a forgery primitive, not a verification path.
@@ -1308,6 +1313,26 @@ def verify_timestamp_binding(
     Args:
         data: Original data that was timestamped.
         timestamp_result: TimestampResult from :func:`get_timestamp`.
+        allow_disabled: Accept a result that carries no token at all, on the
+            caller's own statement that timestamping is switched off. Defaults
+            to ``False``, which is a behaviour change (2026-09 audit, B-7).
+
+            The disabled branch used to return ``True`` on a hash match alone.
+            Both fields selecting it — ``tsa_url == "disabled"`` and
+            ``token == b""`` — and the ``data_hash`` it compared against come
+            out of the *same* unauthenticated structure, so anyone who could
+            edit a stored ``TimestampResult`` could blank the token, set
+            ``tsa_url``, write their own digest, and be told the binding
+            holds. A real token was downgradable to no token at all, and the
+            verdict did not change. This module had already closed exactly
+            that shape one branch below, for mock tokens, and for the same
+            reason.
+
+            Passing ``True`` re-enables the old behaviour deliberately: it is
+            then the *caller's* configuration asserting there is no
+            timestamp, not the artefact's own claim about itself, and step 1
+            (the data-hash check) still runs. Callers that never disable
+            timestamping should leave it alone.
 
     Returns:
         ``True`` if the message-imprint binding holds, ``False`` otherwise.
@@ -1335,6 +1360,15 @@ def verify_timestamp_binding(
     # TimestampResult must match the actual data. Without this check,
     # a TimestampResult from payload A would validate payload B.
     if timestamp_result.tsa_url == "disabled" and timestamp_result.token == b"":
+        if not allow_disabled:
+            _logger.warning(
+                "Refusing a timestamp result that carries no token: 'disabled' "
+                "is a claim the result makes about itself, so accepting it "
+                "would let a real token be downgraded to none. Pass "
+                "allow_disabled=True if timestamping is off by YOUR "
+                "configuration."
+            )
+            return False
         computed_hash = _compute_data_hash(data, timestamp_result.hash_algorithm)
         if computed_hash is None:
             return False
@@ -1392,6 +1426,8 @@ def verify_timestamp(
     data: bytes,
     timestamp_result: TimestampResult,
     certificate_file: Optional[str] = None,
+    *,
+    allow_disabled: bool = False,
 ) -> bool:
     """Deprecated alias for :func:`verify_timestamp_binding`.
 
@@ -1404,9 +1440,11 @@ def verify_timestamp(
         was step 3, and chain validation of the TSA certificate was step 5.
         Neither ran; both read as promises.
 
-    The return value is unchanged and the checks are unchanged — this is a
-    rename, not a behaviour change, so an existing ``if verify_timestamp(...)``
-    keeps meaning exactly what it meant.
+    The rename itself was not a behaviour change, so an existing
+    ``if verify_timestamp(...)`` kept meaning exactly what it meant.  The
+    2026-09 audit (B-7) did change one thing on both names: a result carrying
+    no token is now refused unless ``allow_disabled=True``.  See
+    :func:`verify_timestamp_binding` for why.
 
     Args:
         data: Original data that was timestamped.
@@ -1416,6 +1454,8 @@ def verify_timestamp(
             deprecated surface so a call site written against the old contract
             fails loudly rather than losing the request;
             :func:`verify_timestamp_binding` does not accept it at all.
+        allow_disabled: Forwarded unchanged — see
+            :func:`verify_timestamp_binding`.
 
     Returns:
         ``True`` if the message-imprint binding holds, ``False`` otherwise.
@@ -1438,7 +1478,7 @@ def verify_timestamp(
             "AMA implements neither CMS SignerInfo verification nor X.509 path "
             "validation and will not report a weaker check as though it were this one."
         )
-    return verify_timestamp_binding(data, timestamp_result)
+    return verify_timestamp_binding(data, timestamp_result, allow_disabled=allow_disabled)
 
 
 # Public API

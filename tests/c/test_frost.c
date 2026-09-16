@@ -17,6 +17,13 @@
  *   - Tamper detection: flipping a bit in the aggregated signature breaks verify
  *   - Tamper detection: flipping the message breaks verify
  *   - Parameter validation: threshold=1, num<threshold, NULL args, zero secret
+ *   - INVARIANT-49 part 1 (Test 8): the nonce pair is single-use and consumed
+ *     by the library — zeroized on the success path AND on the failure path,
+ *     an all-zero pair refused, and the audit's three-signatures-under-one-
+ *     nonce share-recovery attack no longer reachable through the API
+ *   - INVARIANT-49 part 2 (Test 9): aggregation verifies every share against
+ *     the RFC 9591 section 5.3 relation, reports the offending participant
+ *     index, and verifies the assembled signature under the group key
  */
 
 #include <stdio.h>
@@ -129,14 +136,29 @@ static int run_threshold_signature(uint8_t threshold, uint8_t n,
         if (rc != AMA_SUCCESS) { free(shares); return -1; }
     }
 
-    /* 4. Aggregate. */
+    /* 4. Aggregate.  INVARIANT-49: aggregation verifies every share, which
+     *    needs each signer's PUBLIC key share — the second half of the dealt
+     *    64-byte share — gathered in signer_indices order. */
+    uint8_t public_shares[AMA_FROST_MAX_PARTICIPANTS * 32];
+    for (uint8_t i = 0; i < threshold; i++) {
+        uint8_t idx = signer_indices[i];
+        memcpy(public_shares + (size_t)i * 32,
+               shares + (size_t)(idx - 1) * 64 + 32, 32);
+    }
+
+    uint8_t bad_index = 0xFF;  /* poisoned: aggregate must reset it on entry */
     rc = ama_frost_aggregate(out_signature,
                               sig_shares, commitments,
+                              public_shares,
                               signer_indices, threshold,
                               message, message_len,
-                              group_pk);
+                              group_pk, &bad_index);
     free(shares);
     if (rc != AMA_SUCCESS) return -1;
+    /* A success that leaves the blame channel non-zero would mean the
+     * out-parameter is not reset on entry — the stale-attribution defect the
+     * contract exists to exclude. */
+    if (bad_index != 0) return -1;
 
     memcpy(out_group_pk, group_pk, 32);
     return 0;
@@ -254,6 +276,13 @@ int main(void) {
             commitments, duplicate_indices, 2, group_pk);
         TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
                     "round2_sign rejects duplicate signer indices");
+
+        /* INVARIANT-49: that refusal CONSUMED the nonce pair, so the next
+         * negative case needs a fresh one.  Re-running round 1 here rather
+         * than reusing the (now zeroed) buffer keeps each assertion testing
+         * the condition it names instead of accidentally re-testing the
+         * consumed-nonce refusal. */
+        ama_frost_round1_commit(nonces, commitments, shares + 0 * 64);
 
         uint8_t signer_indices[] = {1, 2};
         rc = ama_frost_round2_sign(
@@ -390,6 +419,265 @@ int main(void) {
         }
 
         ama_frost_randombytes_hook = NULL;
+    }
+
+    /* Test 8: INVARIANT-49 part 1 — the nonce pair is single-use, and the
+     * library is what enforces it (audit finding A-4).
+     *
+     * Before this fix `nonce_pair` was `const uint8_t *`, round 2 held no
+     * state, and repeated calls with one pair over different messages each
+     * returned AMA_SUCCESS.  Each emits z = d + e*rho + (lambda*s)*c with rho
+     * and c varying per message and (d, e, lambda*s) fixed, so three calls
+     * are three independent linear equations in three unknowns mod l; the
+     * audit's sub-review solved that system and recovered the hiding nonce,
+     * the binding nonce AND the participant's long-term secret share.  The
+     * assertions below pin every property that closes it. */
+    {
+        uint8_t group_pk[32];
+        uint8_t shares[3 * 64];
+        uint8_t signer_indices[] = {1, 2};
+        const uint8_t msg_a[] = "message A";
+        const uint8_t msg_b[] = "message B";
+        const uint8_t msg_c[] = "message C";
+
+        rc = ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares,
+                                             FIXED_GROUP_SECRET);
+        TEST_ASSERT(rc == AMA_SUCCESS, "keygen for the nonce-reuse tests");
+
+        /* 8a — SUCCESS path: the buffer is zeroed after a signature share is
+         * produced. */
+        {
+            uint8_t nonces[2 * 64], commitments[2 * 64], sig_share[32];
+            ama_frost_round1_commit(nonces,      commitments,      shares + 0 * 64);
+            ama_frost_round1_commit(nonces + 64, commitments + 64, shares + 1 * 64);
+
+            rc = ama_frost_round2_sign(sig_share, msg_a, sizeof(msg_a) - 1,
+                                       shares + 0 * 64, 1, nonces,
+                                       commitments, signer_indices, 2, group_pk);
+            TEST_ASSERT(rc == AMA_SUCCESS, "round2 succeeds with a fresh nonce pair");
+
+            int zeroed = 1;
+            for (int i = 0; i < 64; i++) if (nonces[i] != 0) { zeroed = 0; break; }
+            TEST_ASSERT(zeroed,
+                        "nonce pair is zeroed after a SUCCESSFUL round 2");
+
+            /* 8b — the second call with that buffer is refused, not served. */
+            rc = ama_frost_round2_sign(sig_share, msg_b, sizeof(msg_b) - 1,
+                                       shares + 0 * 64, 1, nonces,
+                                       commitments, signer_indices, 2, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "a second round 2 with the same nonce pair is REFUSED");
+        }
+
+        /* 8c — FAILURE path: the buffer is zeroed even when round 2 refuses.
+         * The contract is "round 2 consumes the nonce, whatever the outcome",
+         * not "unless it returned an error"; a weaker rule would have to be
+         * re-checked at every call site. */
+        {
+            uint8_t nonces[2 * 64], commitments[2 * 64], sig_share[32];
+            uint8_t duplicate_indices[] = {1, 1};
+            ama_frost_round1_commit(nonces,      commitments,      shares + 0 * 64);
+            ama_frost_round1_commit(nonces + 64, commitments + 64, shares + 1 * 64);
+
+            rc = ama_frost_round2_sign(sig_share, msg_a, sizeof(msg_a) - 1,
+                                       shares + 0 * 64, 1, nonces,
+                                       commitments, duplicate_indices, 2, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "round 2 refuses a malformed signer set");
+
+            int zeroed = 1;
+            for (int i = 0; i < 64; i++) if (nonces[i] != 0) { zeroed = 0; break; }
+            TEST_ASSERT(zeroed,
+                        "nonce pair is zeroed after a FAILED round 2");
+        }
+
+        /* 8d — an all-zero nonce pair supplied directly is refused.  This is
+         * the same predicate as 8b, asserted without going through a prior
+         * round 2, so a regression that zeroed the buffer but dropped the
+         * entry check still fails here. */
+        {
+            uint8_t zero_nonces[64] = {0};
+            uint8_t scratch_nonces[2 * 64], commitments[2 * 64], sig_share[32];
+            ama_frost_round1_commit(scratch_nonces,      commitments,
+                                    shares + 0 * 64);
+            ama_frost_round1_commit(scratch_nonces + 64, commitments + 64,
+                                    shares + 1 * 64);
+
+            rc = ama_frost_round2_sign(sig_share, msg_a, sizeof(msg_a) - 1,
+                                       shares + 0 * 64, 1, zero_nonces,
+                                       commitments, signer_indices, 2, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "an all-zero nonce pair is refused on entry");
+        }
+
+        /* 8e — THE ATTACK, asserted to be blocked.  Three signings under one
+         * nonce pair is exactly what the audit's recovery needed; only the
+         * first may succeed. */
+        {
+            uint8_t nonces[2 * 64], commitments[2 * 64];
+            uint8_t z_a[32], z_b[32], z_c[32];
+            ama_frost_round1_commit(nonces,      commitments,      shares + 0 * 64);
+            ama_frost_round1_commit(nonces + 64, commitments + 64, shares + 1 * 64);
+
+            ama_error_t rc_a = ama_frost_round2_sign(
+                z_a, msg_a, sizeof(msg_a) - 1, shares + 0 * 64, 1, nonces,
+                commitments, signer_indices, 2, group_pk);
+            ama_error_t rc_b = ama_frost_round2_sign(
+                z_b, msg_b, sizeof(msg_b) - 1, shares + 0 * 64, 1, nonces,
+                commitments, signer_indices, 2, group_pk);
+            ama_error_t rc_c = ama_frost_round2_sign(
+                z_c, msg_c, sizeof(msg_c) - 1, shares + 0 * 64, 1, nonces,
+                commitments, signer_indices, 2, group_pk);
+
+            TEST_ASSERT(rc_a == AMA_SUCCESS,
+                        "ATTACK: the first signing under the nonce pair succeeds");
+            TEST_ASSERT(rc_b != AMA_SUCCESS && rc_c != AMA_SUCCESS,
+                        "ATTACK BLOCKED: signings 2 and 3 under one nonce pair "
+                        "are refused, so the 3x3 system is never obtainable");
+        }
+    }
+
+    /* Test 9: INVARIANT-49 part 2 — aggregation verifies every share, names
+     * the culprit, and checks the assembled signature (audit finding A-5).
+     *
+     * Before this fix aggregation summed z_i, concatenated with R, and
+     * returned AMA_SUCCESS unconditionally: one flipped bit in one share gave
+     * rc == 0 here and ama_ed25519_verify() == -4 downstream, with no way to
+     * tell which participant was at fault. */
+    {
+        uint8_t group_pk[32];
+        uint8_t shares[3 * 64];
+        uint8_t signer_indices[] = {1, 2};
+        uint8_t nonces[2 * 64], commitments[2 * 64];
+        uint8_t public_shares[2 * 32];
+        uint8_t sig_shares[2 * 32];
+        uint8_t signature[64];
+        uint8_t bad_index;
+        const uint8_t msg[] = "FROST share-verification test";
+        const size_t msg_len = sizeof(msg) - 1;
+
+        rc = ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares,
+                                             FIXED_GROUP_SECRET);
+        TEST_ASSERT(rc == AMA_SUCCESS, "keygen for the share-verification tests");
+
+        for (int i = 0; i < 2; i++) {
+            ama_frost_round1_commit(nonces + i * 64, commitments + i * 64,
+                                    shares + i * 64);
+            memcpy(public_shares + i * 32, shares + i * 64 + 32, 32);
+        }
+        for (int i = 0; i < 2; i++) {
+            rc = ama_frost_round2_sign(sig_shares + i * 32, msg, msg_len,
+                                       shares + i * 64, signer_indices[i],
+                                       nonces + i * 64, commitments,
+                                       signer_indices, 2, group_pk);
+            TEST_ASSERT(rc == AMA_SUCCESS, "round 2 produces a share");
+        }
+
+        /* 9a — every honest share satisfies the RFC 9591 section 5.3
+         * relation through the new standalone entry point. */
+        for (int i = 0; i < 2; i++) {
+            rc = ama_frost_verify_share(sig_shares + i * 32, signer_indices[i],
+                                        public_shares + i * 32, commitments,
+                                        signer_indices, 2, msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_SUCCESS,
+                        "ama_frost_verify_share accepts an honest share");
+        }
+
+        /* 9b — the honest ceremony still aggregates, the blame channel reads
+         * "nobody", and the aggregate verifies under plain RFC 8032. */
+        bad_index = 0xFF;
+        rc = ama_frost_aggregate(signature, sig_shares, commitments,
+                                 public_shares, signer_indices, 2,
+                                 msg, msg_len, group_pk, &bad_index);
+        TEST_ASSERT(rc == AMA_SUCCESS, "honest ceremony aggregates");
+        TEST_ASSERT(bad_index == 0,
+                    "bad_participant_index is reset to 0 on success");
+        rc = ama_ed25519_verify(signature, msg, msg_len, group_pk);
+        TEST_ASSERT(rc == AMA_SUCCESS,
+                    "aggregate verifies under RFC 8032 Ed25519");
+
+        /* 9c — corrupt participant 2's share by one bit.  Aggregation must
+         * refuse AND attribute; this is the exact input that used to return
+         * rc == 0. */
+        {
+            uint8_t corrupt_shares[2 * 32];
+            uint8_t untouched[64];
+            memcpy(corrupt_shares, sig_shares, sizeof(corrupt_shares));
+            corrupt_shares[32] ^= 0x01;              /* first byte of z_2 */
+            memset(untouched, 0xCD, sizeof(untouched));
+            memcpy(signature, untouched, sizeof(signature));
+
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, corrupt_shares, commitments,
+                                     public_shares, signer_indices, 2,
+                                     msg, msg_len, group_pk, &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "aggregate REJECTS a corrupted signature share");
+            TEST_ASSERT(bad_index == 2,
+                        "aggregate reports the offending participant index (2)");
+            TEST_ASSERT(memcmp(signature, untouched, 64) == 0,
+                        "a rejected aggregation writes no signature");
+
+            /* Same verdict from the standalone entry point. */
+            rc = ama_frost_verify_share(corrupt_shares + 32, 2,
+                                        public_shares + 32, commitments,
+                                        signer_indices, 2, msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "ama_frost_verify_share rejects the corrupted share");
+            rc = ama_frost_verify_share(corrupt_shares, 1,
+                                        public_shares, commitments,
+                                        signer_indices, 2, msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_SUCCESS,
+                        "the untouched share of the same ceremony still verifies");
+        }
+
+        /* 9d — corrupt participant 1 instead: the reported index must follow
+         * the culprit, not be a constant that happens to match 9c. */
+        {
+            uint8_t corrupt_shares[2 * 32];
+            memcpy(corrupt_shares, sig_shares, sizeof(corrupt_shares));
+            corrupt_shares[0] ^= 0x80;               /* first byte of z_1 */
+
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, corrupt_shares, commitments,
+                                     public_shares, signer_indices, 2,
+                                     msg, msg_len, group_pk, &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "aggregate rejects a corrupted share from participant 1");
+            TEST_ASSERT(bad_index == 1,
+                        "the reported index tracks the culprit (1)");
+        }
+
+        /* 9e — NULL blame channel is accepted: a caller that does not want
+         * attribution must not be forced to allocate for it. */
+        {
+            uint8_t corrupt_shares[2 * 32];
+            memcpy(corrupt_shares, sig_shares, sizeof(corrupt_shares));
+            corrupt_shares[32] ^= 0x01;
+            rc = ama_frost_aggregate(signature, corrupt_shares, commitments,
+                                     public_shares, signer_indices, 2,
+                                     msg, msg_len, group_pk, NULL);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "aggregate accepts a NULL bad_participant_index");
+        }
+
+        /* 9f — a wrong public key share is a rejection too: verification is
+         * against PK_i, so a coordinator handed the wrong key share for a
+         * signer must not be told the ceremony is fine. */
+        {
+            uint8_t swapped[2 * 32];
+            memcpy(swapped,      public_shares + 32, 32);
+            memcpy(swapped + 32, public_shares,      32);
+
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, sig_shares, commitments,
+                                     swapped, signer_indices, 2,
+                                     msg, msg_len, group_pk, &bad_index);
+            TEST_ASSERT(rc != AMA_SUCCESS,
+                        "aggregate rejects mismatched public key shares");
+            TEST_ASSERT(bad_index == 1,
+                        "the first mismatched signer is the one named");
+        }
     }
 
     printf("\n===========================================\n");

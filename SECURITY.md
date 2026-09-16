@@ -74,6 +74,19 @@ into HKDF's `info` and into the ML-DSA / SLH-DSA signature context, so material
 derived under one binding is cryptographically unrelated to the same input under
 any other — including one differing in a single capability bit.
 
+For a restricted binding the authority key is an **input to those two
+derivations**, not only to the policy gate in front of them: each takes a
+32-byte `HMAC-SHA3-256(K_auth, subdomain || enc(b))` binder. The distinction is
+the whole of the guarantee against the adversary this feature names. Until the
+2026-09 audit the key authenticated the binding record and nothing more, while
+the HKDF `info` and the signature context were functions of `enc(b)` alone —
+public, and obtainable from an unauthorized binding via
+`ama_agent_binding_encode()`. An agent with in-process access can call
+`ama_hkdf` itself, so it could reproduce the derived bytes without holding the
+key at all, and the audit did. Unrestricted bindings take a fixed zero binder:
+they have no operator secret, and the guarantee is scoped to the population
+named above.
+
 This is domain separation and policy over the existing SHA3-256 /
 HMAC-SHA3-256 / HKDF primitives; **no new algorithm is introduced**
 (INVARIANT-1 intact). Refusal is fail-closed: no output bytes, a distinct error
@@ -85,7 +98,9 @@ so neither *whether* nor *which* clause refused is observable by timing.
 that calls the library (an HSM, a separate supervisor process, or an operator
 workstation). The binding constrains derivations made *through* it: route
 persistence-material derivation through a binding to realise the protection. It
-is not a sandbox and does not restrain code that never calls this library.
+is not a sandbox and does not restrain code that never calls this library — an
+agent that derives its persistence material from an input this library never
+sees is outside the scope of this control, and always was.
 
 Two advisory 3R detectors (`VolumeSpikeDetector`, `NoteArtifactDetector`, both
 on by default) surface the corresponding runtime behaviour — operation bursts

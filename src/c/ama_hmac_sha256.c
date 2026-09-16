@@ -21,6 +21,38 @@
 /* Scrub sensitive stack data */
 extern void ama_secure_memzero(void *ptr, size_t len);
 
+/**
+ * Whether the caller's arguments can be dereferenced as described.
+ *
+ * Both entry points are `void`, and both are exported and ctypes-facing, so
+ * a downstream binding that gets a length wrong hands this code a NULL with a
+ * non-zero length and the SHA-256 kernel dereferences it.  The 2026-09 audit
+ * reached a SIGSEGV that way (C-5).
+ *
+ * A `void` function cannot report a caller bug, and the return type is not
+ * changed here because eighteen internal call sites pass stack arrays and
+ * would gain a return value nobody could act on.  What it CAN do is decline
+ * to dereference: the guard below is damage limitation for a caller bug, not
+ * an error channel.  The one place an error can actually be reported is the
+ * Python boundary, and `native_hmac_sha256` / `native_hmac_sha256_2` now
+ * reject these arguments before they arrive.
+ *
+ * On refusal the output is zeroed rather than left as the caller found it, so
+ * a caller that ignores its own bug gets a value that is not the MAC of
+ * anything it asked for, instead of whatever the output buffer happened to
+ * contain.
+ */
+static int hmac_args_are_dereferenceable(const uint8_t *key, size_t key_len,
+                                          const uint8_t *data, size_t data_len) {
+    if (!key && key_len > 0) {
+        return 0;
+    }
+    if (!data && data_len > 0) {
+        return 0;
+    }
+    return 1;
+}
+
 void ama_hmac_sha256(const uint8_t *key, size_t key_len,
                       const uint8_t *data, size_t data_len,
                       uint8_t out[32]) {
@@ -30,6 +62,14 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
     uint8_t inner_hash[AMA_SHA256_DIGEST_SIZE];
     ama_sha256_ctx ctx;
     unsigned int i;
+
+    if (!out) {
+        return;  /* nowhere to write; nothing else is safe to touch either */
+    }
+    if (!hmac_args_are_dereferenceable(key, key_len, data, data_len)) {
+        ama_secure_memzero(out, AMA_SHA256_DIGEST_SIZE);
+        return;
+    }
 
     /* Step 1: Derive K' from key.  `k_prime` will hold the HMAC key
      * (possibly truncated via SHA-256) for the lifetime of the call —
@@ -85,6 +125,15 @@ void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
     uint8_t inner_hash[AMA_SHA256_DIGEST_SIZE];
     ama_sha256_ctx ctx;
     unsigned int i;
+
+    if (!out) {
+        return;
+    }
+    if (!hmac_args_are_dereferenceable(key, key_len, data1, data1_len) ||
+        !hmac_args_are_dereferenceable(key, key_len, data2, data2_len)) {
+        ama_secure_memzero(out, AMA_SHA256_DIGEST_SIZE);
+        return;
+    }
 
     /* Derive K' — see ama_hmac_sha256() for INVARIANT-6 rationale. */
     ama_secure_memzero(k_prime, AMA_SHA256_BLOCK_SIZE);

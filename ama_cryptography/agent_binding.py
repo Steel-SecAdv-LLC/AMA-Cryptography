@@ -457,6 +457,14 @@ class AgentBinding:
         Pass the result verbatim as the ``ctx`` argument so the signature is
         bound to this agent instance and capability set.  Refuses (and returns
         nothing) when the policy refuses.
+
+        For a RESTRICTED binding the value is a function of ``authority_key``
+        as well as of the binding, so it cannot be reproduced without the key.
+        It could be until the 2026-09 audit (A-6): the context was
+        ``SHA3-256(0x02 || encode())``, and ``encode()`` works on an
+        unauthorized binding, so the adversary this feature names — an agent
+        with in-process access — recomputed it holding no key at all.
+        Unrestricted bindings have no operator secret and are unchanged.
         """
         lib = _require_native()
         key = None if authority_key is None else _as_bytes("authority_key", authority_key)
@@ -479,6 +487,14 @@ class AgentBinding:
         authority_key: Optional[_BufferInput] = None,
     ) -> bytes:
         """HKDF-SHA3-256 with this binding folded into ``info``.
+
+        For a RESTRICTED binding the output is a function of ``authority_key``
+        as well — the C side mixes in a binder derived from it — so an agent
+        that can call ``native_hkdf`` directly still cannot produce these
+        bytes.  Before the 2026-09 audit (A-6) it could: the key gated this
+        entry point and nothing more, and the derivation was reproducible from
+        the public canonical encoding.  Unrestricted bindings have no operator
+        secret and take a fixed zero binder.
 
         Args:
             ikm: Input key material.

@@ -780,7 +780,7 @@ Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (15 targets coveri
 
 ### Architectural Invariants
 
-All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the architectural invariants defined in [`INVARIANTS.md`](INVARIANTS.md) (canonical, INVARIANT-1 through INVARIANT-47). `.github/INVARIANTS.md` is a three-line pointer to it, kept that way by the version-consistency gate so a second divergent copy cannot reappear. Highlights:
+All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the architectural invariants defined in [`INVARIANTS.md`](INVARIANTS.md) (canonical, INVARIANT-1 through INVARIANT-52). `.github/INVARIANTS.md` is a three-line pointer to it, kept that way by the version-consistency gate so a second divergent copy cannot reappear. Highlights:
 
 1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib `os`/`secrets` permitted for OS entropy; `hashlib` (OpenSSL-backed in every libcrypto-linked CPython) is confined to the pre-execution trust bootstrap, pinned with exact per-file counts by `tools/check_stdlib_hash_boundary.py` — all production hashing and key derivation runs on the native kernels. All primitives must map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md); no cryptographic source is vendored, and `src/c/vendor/` must not exist (the vendor-isolation gate fails the build if it reappears).
 2. **INVARIANT-2 — Fail-Closed CI**: Security-critical CI steps must not use `continue-on-error: true`.
@@ -788,7 +788,7 @@ All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must sat
 4. **INVARIANT-4 — Pinned Action References**: All third-party GitHub Actions pinned to full commit SHA.
 5. **INVARIANT-15 — Thread-Safe CPU Dispatch**: `ama_cpuid.c` one-time init must use `pthread_once` (POSIX) or `InitOnceExecuteOnce` (Windows — MSVC and MinGW-w64 alike, selected on `_WIN32` rather than `_MSC_VER`); lockless flag + plain-variable patterns are prohibited.
 
-See [`INVARIANTS.md`](INVARIANTS.md) for the complete set (INVARIANT-1 through INVARIANT-47) and vendoring policy.
+See [`INVARIANTS.md`](INVARIANTS.md) for the complete set (INVARIANT-1 through INVARIANT-52) and vendoring policy.
 
 ---
 
@@ -837,7 +837,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | All C functions | 80 `test_*.c` registered via ctest in `tests/c/` (+ 2 standalone `x25519_equiv_*.c`) |
+| C Unit Tests | Native library validation | All C functions | 82 `test_*.c` registered via ctest in `tests/c/` (+ 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -845,7 +845,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 5,439 Python test functions across 242 test files, plus the
+**Total:** 5,538 Python test functions across 246 test files, plus the
 ctest-registered C tests and the two standalone `x25519_equiv_*.c` drivers under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,
@@ -961,7 +961,7 @@ Cryptographic implementations are validated against:
 - `docs/compliance/CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT)
 - `CSRC_STANDARDS.md`: Governing standards registry
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
-- `INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-47), including vendoring policy and CSRC_STANDARDS.md mapping (`.github/INVARIANTS.md` is a pointer to it)
+- `INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-52), including vendoring policy and CSRC_STANDARDS.md mapping (`.github/INVARIANTS.md` is a pointer to it)
 
 ---
 

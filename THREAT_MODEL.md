@@ -161,7 +161,13 @@ concrete instance of this pattern. See M3.5.
 **Scope note for T3.6.** The binding constrains derivations that are made
 *through* it, so its protection is realised when a deployment routes
 persistence-material derivation through a binding; it is not a sandbox and does
-not contain code that never calls the library. The detectors are advisory
+not contain code that never calls the library. Within that scope the control is
+cryptographic rather than procedural: for a restricted binding the authority key
+is mixed into the HKDF and into the signature context, so an agent with
+in-process access cannot obtain the bytes by calling the primitive underneath.
+It could until the 2026-09 audit, which measured exactly that — the derivation
+was reproducible from the public canonical encoding with no authority key —
+and the fix is the binder described in `SECURITY.md` and INVARIANT-30. The detectors are advisory
 heuristics — an agent that avoids the successor vocabulary is not flagged, and
 `flagged=False` is not a statement that a payload is benign.
 

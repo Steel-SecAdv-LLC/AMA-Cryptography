@@ -365,6 +365,16 @@ ama_error_t ama_sign(
                 *signature_len = AMA_SPHINCS_256F_SIGNATURE_BYTES;
                 return AMA_ERROR_INVALID_PARAM;
             }
+            /* FIPS 205 §10.2 slh_sign with the empty context: this call signs
+             * M' = 0x00 || 0x00 || message.  ama_sphincs_sign signed the RAW
+             * message until the context-separation fix, which made this
+             * generic entry point — the one a caller reaches with
+             * AMA_ALG_SPHINCS_256F and no algorithm-specific knowledge — the
+             * §9.2 internal interface in disguise, cross-verifying with
+             * ama_slhdsa_verify under the same key.  The fix lives in
+             * ama_sphincs_sign; this branch is correct because it delegates
+             * there, and the comment is here so the next reader does not have
+             * to go and check.  See INVARIANT-50. */
             return ama_sphincs_sign(signature, signature_len,
                                     message, message_len, secret_key);
 
@@ -469,6 +479,8 @@ ama_error_t ama_verify(
             if (public_key_len < AMA_SPHINCS_256F_PUBLIC_KEY_BYTES) {
                 return AMA_ERROR_INVALID_PARAM;
             }
+            /* FIPS 205 §10.2 slh_verify with the empty context — the exact
+             * counterpart of the ama_sign branch above.  See INVARIANT-50. */
             return ama_sphincs_verify(message, message_len,
                                       signature, signature_len, public_key);
 

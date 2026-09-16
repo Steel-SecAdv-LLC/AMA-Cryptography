@@ -19,6 +19,119 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Independent audit remediation pass — 2026-09-16
+
+`docs/audit/INDEPENDENT_AUDIT_2026-09.md` is an engineering and cryptographic
+audit of this branch: build, execute, attack, then read. It reported 8 High,
+18 Medium, 20 Low and 6 Informational findings. This pass fixes every High and
+the secondary findings named below, and adds a remediation addendum (§0a) to
+that report written by the same author after doing the work — including the
+three things the remediation found that the audit had not, and one coverage
+loss the fixes caused.
+
+#### Security — BREAKING, and free to take because 5.0.0 was never tagged
+
+- **A-1 · Heap overflow through `AmaContext.sign` / `kem_encapsulate` /
+  `kem_decapsulate`.** `ama_sign` validates only that the *declared* length is
+  large enough for the algorithm, which a caller-declared 3309 satisfies
+  whatever the real allocation is. Measured before the fix: a 64-byte buffer
+  declared as 3309 returned `AMA_SUCCESS`, reported 3309 bytes written, and
+  killed the process with SIGSEGV. `keypair_generate` had carried the guard
+  since the gap was found on *its* arguments; the reasoning was never applied
+  to the three sibling methods with the same shape, which is the whole of the
+  defect. Output capacity is now read only where it is genuinely knowable — a
+  `ctypes.Array` or the buffer protocol — because `ctypes.sizeof` answers 8
+  for any pointer and a check built on it would have refused
+  `ctypes.cast(buf, c_char_p)` while proving nothing.
+- **A-2 · Optional post-quantum layers could be stripped from a signed
+  package (INVARIANT-52, new).** `create_crypto_package` signed the `content`
+  bytes, so the add-on signatures, the KEM ciphertext, the timestamp token and
+  the metadata were all outside the signature. *Corrupting* an add-on was
+  caught; **removing** one was not. Measured on a package with every layer
+  enabled and the key pinned: 10 of 17 tamper cases detected. The signature
+  now covers a canonical, injective, length-prefixed transcript of the whole
+  package, built by one function both the creator and the verifier call —
+  17/17. The same defect class on the legacy surface (`author`, `timestamp`,
+  `version` and `ethical_vector` forgeable under a valid HMAC) is closed by
+  `SIGNATURE_FORMAT_V3` — 3/7 to 7/7. There is one package format, not two.
+- **A-3 · Ed25519 accepted small-order public keys (INVARIANT-48, new).**
+  Verification is cofactorless and performed no order check, so `A` = the
+  identity gave one key-free signature valid for *every* message. Wider than
+  first reported: all eight canonical small-order points admit a per-key
+  forgery via a search over `j < n`. 12/12 universal and 8/8 per-key forgeries
+  accepted before, 0 after, through single and batch verify alike.
+- **A-4 / A-5 · FROST nonce reuse and unverified aggregation (INVARIANT-49,
+  new).** Round 2 now consumes the nonce pair on every exit, and aggregation
+  verifies every share against the RFC 9591 §5.3 relation before it
+  contributes, naming the culprit by 1-based index. `ama_frost_aggregate`
+  takes two new arguments; `frost_aggregate` raises `FrostShareRejected`.
+- **A-6 · The agent-binding authority key gated policy but not the
+  derivation (INVARIANT-30, amended).** `K_auth` authenticated the binding
+  record; the HKDF `info` and the signature context were functions of the
+  public canonical encoding alone, and `encode()` works on an unauthorized
+  binding. The adversary this feature names is an agent with in-process
+  access, which can call `ama_hkdf` itself — so the control was a gate to step
+  around, and the audit stepped around it. A restricted binding's derivations
+  now take an `HMAC-SHA3-256(K_auth, subdomain ‖ enc(b))` binder. `README.md`,
+  `SECURITY.md`, `THREAT_MODEL.md` and INVARIANT-30 are corrected to describe
+  what is now true.
+- **B-1 · The FIPS 205 §9 internal interface shipped (INVARIANT-50, new).**
+  `ama_sphincs_sign`/`_verify` are now §10.2 with the empty context and
+  `ama_slhdsa_sign_internal` is test-only; the cross-verification oracle
+  between the two interfaces is closed. Absorbing the prefix into the
+  streaming hashes rather than materialising `M'` made 64 MiB signing 9.4 %
+  *faster* than the §10.2 path it replaced and removed the last heap
+  allocation from `src/c/ama_slhdsa.c`.
+- **B-2 · The Ed25519 signer trusted the caller's public half
+  (INVARIANT-51, new).** `A` was taken verbatim from `secret_key[32..63]` for
+  `H(R ‖ A ‖ M)` and never checked. Two signatures over one message under two
+  different halves share `R` and give `s₁ − s₂ = (h₁ − h₂)·a mod L` — the
+  private scalar. The signer derives `A = [a]B` and refuses a disagreeing key.
+  **This costs 81 % on signing** (13,189 → 23,915 ns, median of 3,000 on one
+  host) and there is deliberately no opt-out, because an opt-out is the hazard
+  under another name. See `floor_drift_acknowledged`.
+- **B-6 · Session keys survived TTL expiry and leaked through `asdict`.**
+  Expiry set `CLOSED` without wiping, and `close()` early-returns on `CLOSED`,
+  so the AES-256 keys stayed live for the process lifetime. Separately,
+  `repr=False` covers exactly one of the three ways a field escapes: `__eq__`
+  compared 64 bytes of key material with `==`, and `asdict` emitted both keys.
+  The keys are now `InitVar` bound to a plain attribute — outside all three at
+  once, with no copy and with the storage identity `close()` depends on.
+- **B-7 · RFC 3161 "disabled" mode failed open.** Both fields selecting the
+  branch and the digest it compared against came from the same unauthenticated
+  structure, so a real token was downgradable to no token at all under a
+  `True`. Now refused unless the *caller* passes `allow_disabled=True`.
+- **B-14 · `AmaContext.verify` returned an inverted truthiness.** It returned
+  the raw `ama_error_t`, so `if ctx.verify(...)` accepted every forgery. It
+  returns `bool`; the raw code is `verify_rc`.
+- **C-5 · `ama_hmac_sha256` dereferenced NULL.** The C side no longer
+  dereferences a NULL with a non-zero length; the Python boundary — the only
+  place a `void` primitive's caller bug can be *reported* — raises.
+- **C-6 · Dead, arithmetically wrong AVX2 Poly1305 helpers removed.** A
+  10-bit mask where the 44/44/42 limb split needs 42, and a fold constant of 5
+  where that split folds `2^132` as `4·5 = 20`. Unreachable as shipped; the
+  file header advertised them as in use, which is the part that could have led
+  someone to wire them up.
+
+#### Not fixed, stated so it is not assumed
+
+A-7 (the release signing seed is in scope for unpinned PyPI build
+dependencies) and A-8 (tag-signature preflight ordering) are workflow and
+process findings and are left for the maintainer. Every other Medium, Low and
+Informational finding in the report is unchanged. FROST is still **not** RFC
+9591 ciphersuite-interoperable — the header title now says so rather than
+implying otherwise, which corrects the claim and not the code.
+
+#### Verification
+
+`ctest` 136/136. `pytest` 7,881 passed / 0 failed / 46 skipped. `black`,
+`ruff` and `mypy` clean across the package and all 249 test files. Every
+derived-doc, count, visual-asset and benchmark-validity gate green. Each fix
+carries a measured before/after against the audit's own reproduction, and each
+regression test is written as a refusal or an inequality rather than a pinned
+value — a pinned value would also pass against an implementation that had
+started returning a constant.
+
 ## [5.0.0] - 2026-09-10
 
 > **Dated figures are dated.** Counts, line numbers and measurements quoted

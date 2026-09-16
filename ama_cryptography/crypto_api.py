@@ -40,6 +40,7 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._module_state import check_operational as _check_operational
 from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._package_transcript import transcript as _transcript
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
 # Module-level 3R monitor instance — feeds timing data to anomaly detection.
@@ -2345,6 +2346,9 @@ class CryptoPackageResult:
         Non-repudiation via hybrid classical + post-quantum dual signature.
         Both signatures must verify.  Ed25519 provides 128-bit classical
         security; ML-DSA-65 provides 192-bit quantum security (NIST Level 3).
+        The signed message is a canonical transcript of every other field on
+        this object (:func:`package_transcript`), so no field here is outside
+        the signature and no optional layer can be removed unnoticed.
 
     Layer 4 — Key Independence (HKDF-SHA3-256, RFC 5869):
         Derives cryptographically independent sub-keys from a 256-bit master
@@ -2700,6 +2704,15 @@ def create_crypto_package(
         Hybrid classical + post-quantum non-repudiation.  128-bit classical
         security (RFC 8032) + 192-bit quantum security (NIST FIPS 204).
 
+        The signature covers a canonical transcript of the **entire package**
+        — the content digest, every embedded public key, the add-on
+        signatures and ciphertexts and their *presence*, the HKDF salt, info
+        and derived keys, the timestamp token, and the metadata — not the
+        ``content`` bytes alone.  Signing the content alone left every other
+        field unauthenticated, so an attacker able to modify a package could
+        strip its SLH-DSA and ML-KEM layers and it still verified as fully
+        valid (2026-09 audit, A-2).  See :func:`package_transcript`.
+
     Layer 4 — Key Independence (HKDF-SHA3-256, RFC 5869):
         Derives N independent sub-keys from a 256-bit master secret,
         preventing key reuse across cryptographic boundaries.
@@ -2828,20 +2841,13 @@ def create_crypto_package(
     else:
         primary_keypair = primary_crypto.generate_keypair()
         _signing_secret = primary_keypair.secret_key
-    _t0 = time.perf_counter_ns()
-    primary_signature = primary_crypto.sign(content, _signing_secret)
-    _sign_ns = time.perf_counter_ns() - _t0
-    _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000, input_size=len(content))
-    # INVARIANT-30 companion signal.  Wired at the sites that are already
-    # instrumented rather than pushed down into the providers, so no new call
-    # path acquires a lock and the hot primitives stay untouched.  The
-    # fingerprint is a slice of the PUBLIC key — it lets the detector tell
-    # ephemeral-identity-per-artifact churn from a hot loop over one key.
-    _monitor.record_operation_event(
-        f"{config.signature_algorithm.name.lower()}_sign",
-        key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
-    )
     keypairs[config.signature_algorithm.name] = primary_keypair
+    # The signature itself is produced at the END of this function, over the
+    # finished package's transcript rather than over `content`.  Signing here
+    # — before the add-ons, the timestamp and the metadata exist — is what
+    # left every one of them outside the signature (2026-09 audit, A-2): an
+    # attacker could strip the SLH-DSA and ML-KEM layers from a package and it
+    # still verified as fully valid.  See `package_transcript`.
 
     # Optional add-on: SPHINCS+ secondary signature
     if config.use_sphincs:
@@ -2937,11 +2943,24 @@ def create_crypto_package(
         "multi_layer_defense": True,
     }
 
-    return CryptoPackageResult(
+    # ========================================================================
+    # LAYER 3, completed: sign the finished package's transcript
+    # ========================================================================
+    # The package is assembled first with a placeholder signature, the
+    # transcript is taken from THE SAME function the verifier will call, and
+    # the real signature replaces the placeholder.  `package_transcript` never
+    # reads `primary_signature`, so the placeholder cannot influence what is
+    # signed; `test_crypto_package_transcript.py` pins that independently.
+    #
+    # Assembling the object rather than passing a dozen locals to a parallel
+    # builder is deliberate: a second construction site is a second thing that
+    # can drift out of step with the verifier, and the two agreeing is the
+    # entire property being bought here.
+    package = CryptoPackageResult(
         content_hash=content_hash,
         hmac_key=hmac_key,
         hmac_tag=hmac_tag,
-        primary_signature=primary_signature,
+        primary_signature=_unsigned_placeholder(config.signature_algorithm),
         sphincs_signature=sphincs_signature,
         derived_keys=derived_keys,
         hkdf_salt=hkdf_salt,
@@ -2952,6 +2971,113 @@ def create_crypto_package(
         kem_shared_secret=kem_shared_secret,
         keypairs=keypairs,
         metadata=metadata,
+    )
+    signed_transcript = package_transcript(package, _precomputed_hash)
+    _t0 = time.perf_counter_ns()
+    package.primary_signature = primary_crypto.sign(signed_transcript, _signing_secret)
+    _sign_ns = time.perf_counter_ns() - _t0
+    _monitor.monitor_crypto_operation(
+        "sign", _sign_ns / 1_000_000, input_size=len(signed_transcript)
+    )
+    # INVARIANT-30 companion signal.  Wired at the sites that are already
+    # instrumented rather than pushed down into the providers, so no new call
+    # path acquires a lock and the hot primitives stay untouched.  The
+    # fingerprint is a slice of the PUBLIC key — it lets the detector tell
+    # ephemeral-identity-per-artifact churn from a hot loop over one key.
+    _monitor.record_operation_event(
+        f"{config.signature_algorithm.name.lower()}_sign",
+        key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
+    )
+    return package
+
+
+def _unsigned_placeholder(algorithm: AlgorithmType) -> Signature:
+    """The signature slot of a package that has not been signed yet.
+
+    ``create_crypto_package`` assembles the package, takes its transcript, and
+    only then signs — so for the length of one expression the object holds a
+    signature that does not exist.  An empty ``bytes`` is the honest value for
+    that: it verifies against nothing, so a package that somehow escaped with
+    the placeholder still in place fails Layer 3 rather than passing it.
+    """
+    return Signature(
+        signature=b"",
+        algorithm=algorithm,
+        message_hash=b"",
+        metadata={"unsigned_placeholder": True},
+    )
+
+
+def package_transcript(package: "CryptoPackageResult", content_digest: bytes) -> bytes:
+    """The exact bytes a package's Layer-3 signature is computed over.
+
+    Every field of the package except ``primary_signature`` itself, plus the
+    *presence* of each optional one.  ``create_crypto_package`` and
+    ``verify_crypto_package`` both call THIS function rather than each
+    assembling their own byte string: the two views agreeing is the whole
+    property, and two hand-written assemblies that must stay in step is how
+    they stop agreeing.  ``primary_signature`` is read nowhere below, which is
+    what lets the creator build the package with a placeholder, compute the
+    transcript, and fill the real signature in afterwards.
+
+    ``content_digest`` is the SHA3-256 of the content actually in hand — the
+    bytes the creator signed, or the bytes the verifier was handed — and is
+    bound ALONGSIDE ``package.content_hash``, the package's own stored claim
+    about them.  Binding only the stored claim would leave
+    ``results["primary_signature"]`` True for a verifier called with entirely
+    different content (the transcript would not have moved), so a caller
+    reading that one key rather than ``all_valid`` would be told a signature
+    covered bytes it never saw.  Binding only the digest would leave the
+    stored claim unsigned.  Both are bound, so every field of the package is
+    under the signature without exception.
+
+    Deliberately NOT included: ``hmac_key``, ``hkdf_master_secret`` and
+    ``kem_shared_secret``.  Binding a secret adds nothing — each is already
+    pinned through the public commitment it produces (``hmac_tag`` for the
+    key, ``derived_keys`` for the master secret) — and it would make the
+    transcript uncomputable from the redacted form :meth:`to_dict` emits.
+
+    ``derived_keys`` IS included, and the reason is worth stating because
+    binding the salt, info and count alone looks sufficient and is not: an
+    attacker who swaps ``hkdf_master_secret`` and recomputes the derived keys
+    to match leaves Layer 4 self-consistent and every one of salt, info and
+    count unchanged.  The derived keys themselves are the only field that
+    moves, so they are the field that has to be signed.
+
+    Raises:
+        TypeError: if any field holds a value the encoding cannot represent.
+            Failing here is deliberate — see ``_package_transcript``.
+    """
+    sphincs = package.sphincs_signature
+    return _transcript(
+        [
+            ("content_digest", content_digest),
+            ("content_hash", package.content_hash),
+            ("hmac_tag", package.hmac_tag),
+            (
+                "public_keys",
+                {name: kp.public_key for name, kp in package.keypairs.items()},
+            ),
+            (
+                "sphincs_signature",
+                (
+                    None
+                    if sphincs is None
+                    else {
+                        "signature": sphincs.signature,
+                        "algorithm": sphincs.algorithm.name,
+                        "message_hash": sphincs.message_hash,
+                        "metadata": sphincs.metadata,
+                    }
+                ),
+            ),
+            ("derived_keys", list(package.derived_keys)),
+            ("hkdf_salt", package.hkdf_salt),
+            ("hkdf_info", package.hkdf_info),
+            ("kem_ciphertext", package.kem_ciphertext),
+            ("timestamp", package.timestamp),
+            ("metadata", package.metadata),
+        ]
     )
 
 
@@ -3019,15 +3145,31 @@ def _verify_package_signature(
         key_pinned = False
 
     try:
+        # Over the TRANSCRIPT, not over `content`.  `content` reaches this
+        # signature through `content_hash`, which the transcript binds and
+        # which Layer 1 independently recomputes; everything else in the
+        # package — the add-ons, their presence, the timestamp, the metadata —
+        # reaches it only here.  Signing `content` alone is what let a package
+        # be stripped of its post-quantum layers and still verify (A-2).
+        signed_transcript = package_transcript(package, native_sha3_256(content))
         primary_crypto = AmaCryptography(algorithm=sig_alg)
         _t0 = time.perf_counter_ns()
         signature_valid = primary_crypto.verify(
-            content,
+            signed_transcript,
             package.primary_signature.signature,
             embedded_pk,
         )
         _verify_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000, input_size=len(content))
+        _monitor.monitor_crypto_operation(
+            "verify", _verify_ns / 1_000_000, input_size=len(signed_transcript)
+        )
+    except TypeError as exc:
+        # A field the transcript cannot encode.  The package is malformed, and
+        # the signature cannot be checked against it at all — fail closed and
+        # say which condition it was, rather than folding it into the generic
+        # handler below where it would read as a verification failure.
+        logger.error("Layer 3 transcript could not be built from the package: %s", exc)
+        return False, key_pinned
     except Exception as exc:
         logger.error("Layer 3 signature verification error: %s", exc)
         return False, key_pinned
@@ -3136,10 +3278,16 @@ def verify_crypto_package(
       stored hash.
     - *Layer 2 — Keyed Authentication:* recompute HMAC-SHA3-256 with
       stored key and compare to stored tag.
-    - *Layer 3 — Digital Signature:* verify primary signature
-      (Ed25519 + ML-DSA-65) against the signing public key, which is taken
-      from ``expected_public_key`` when supplied and otherwise from the
-      package itself (see the authenticity note below).
+    - *Layer 3 — Digital Signature:* rebuild the package's canonical
+      transcript (:func:`package_transcript`) over the ``content`` actually
+      supplied, and verify the primary signature (Ed25519 + ML-DSA-65) over
+      it against the signing public key, which is taken from
+      ``expected_public_key`` when supplied and otherwise from the package
+      itself (see the authenticity note below).  Because the transcript
+      covers every other field and the presence of every optional one, this
+      layer — not the add-on checks below — is what makes stripping an add-on
+      detectable.  A package carrying a field the transcript cannot encode
+      fails this layer rather than raising.
     - *Layer 4 — Key Independence:* re-derive keys from stored master
       secret, salt, and info; compare to stored derived keys.
 

@@ -832,6 +832,7 @@ ama_error_t ama_ed25519_sign(
     uint8_t hash[64];
     uint8_t r[64];
     uint8_t hram[64];
+    uint8_t derived_a[32];
     /* Stack buffer for messages <= ED25519_STACK_THRESHOLD (4KB).
      * Eliminates malloc/free overhead for >99% of real-world messages.
      * Only heap-allocate for unusually large messages. */
@@ -848,6 +849,37 @@ ama_error_t ama_ed25519_sign(
     hash[0] &= 248;
     hash[31] &= 127;
     hash[31] |= 64;
+
+    /* INVARIANT-51: the public half must be the one this scalar generates.
+     *
+     * This function derives the scalar `a` and the nonce PRF key from
+     * secret_key[0..31] but used to take `A` verbatim from secret_key[32..63]
+     * for H(R || A || M), checking nothing.  `r` depends only on the seed and
+     * the message, so two signatures over ONE message under two different `A`
+     * halves share `R` and give
+     *
+     *     s1 - s2 = (h1 - h2) * a  (mod L)
+     *
+     * which recovers the private scalar outright.  That is the classic
+     * "Taming the many EdDSAs" fault hazard (2026-09 audit, B-2), and the
+     * header documented the 64-byte layout in detail while saying nothing
+     * about the integrity requirement on bytes 32..63 — so a caller storing
+     * the two halves separately, or reassembling a key from a corrupted
+     * record, had no way to know it mattered.
+     *
+     * The check costs one fixed-base scalar multiplication, the same
+     * operation that computes R, so signing does roughly 2x the curve work it
+     * did.  Measured on this tree it is the difference between a key that
+     * survives a bit-flip and one that hands over its scalar; `derived_a` is
+     * then used for the hash as well, so even a caller that somehow got past
+     * the comparison would sign under the key it actually holds.
+     */
+    ed25519_scalarmult_base(derived_a, hash);
+    if (ama_consttime_memcmp(derived_a, secret_key + 32, 32) != 0) {
+        ama_secure_memzero(hash, sizeof(hash));
+        ama_secure_memzero(derived_a, sizeof(derived_a));
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     /* Determine buffer allocation: use stack for small messages.
      * Compare against the threshold directly to avoid size_t overflow
@@ -883,7 +915,7 @@ ama_error_t ama_ed25519_sign(
 
     /* H(R || A || message) — reuse the same buffer (64 + msg_len >= 32 + msg_len) */
     memcpy(buf, signature, 32);
-    memcpy(buf + 32, secret_key + 32, 32);
+    memcpy(buf + 32, derived_a, 32);  /* proven equal to secret_key[32..63] above */
     if (message_len > 0) {
         memcpy(buf + 64, message, message_len);
     }
@@ -897,6 +929,7 @@ ama_error_t ama_ed25519_sign(
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(r, sizeof(r));
     ama_secure_memzero(hram, sizeof(hram));
+    ama_secure_memzero(derived_a, sizeof(derived_a));
     ama_secure_memzero(buf, 64 + message_len);
     if (buf_on_heap) {
         free(buf);
@@ -953,6 +986,44 @@ ama_error_t ama_ed25519_verify(
         return AMA_ERROR_VERIFY_FAILED;
     }
 
+    /* Small-order A and small-order R are REJECTED — INVARIANT-48.
+     *
+     * RFC 8032 does not require this; it is a policy choice, and it is
+     * load-bearing because the group check below is COFACTORLESS (see the
+     * block comment on it).  With A = the identity encoding the [h]A term is
+     * the identity for every h, the equation collapses to [S]B = R, and
+     * (R = [s]B, S = s) then satisfies it FOR EVERY MESSAGE.  Measured
+     * against a pure-Python RFC 8032 reference at s ∈ {1, 5, 12345} — all
+     * below L, so the canonical-S check above does not block them — all
+     * three were ACCEPTED here for all four messages tried.  A universal
+     * forgery requiring no secret at all, and the package layer hands this
+     * function attacker-supplied keys: crypto_api embeds the public key in
+     * the package it verifies, so swapping that key to the identity and the
+     * signature to the forgery reported primary_signature = true,
+     * primary = true, core_valid = true.
+     *
+     * Torsion-shifted keys (A + T8) were NOT the gap — cofactorless
+     * verification already rejects those, measured at 0 of 400 accepted —
+     * which is why the fix is stated as "small order", not as the
+     * cofactored-verifier repair it resembles.
+     *
+     * R is held to the same rule.  An honest R is [r]B with
+     * r = H(prefix || M) mod l, so it is small-order only when r ≡ 0
+     * (mod l): about 2^-252.  Rejecting it costs no legitimate signature and
+     * removes the second half of the "signature that verifies under a point
+     * nobody holds a discrete log for" family.
+     *
+     * Two byte predicates on public inputs, 127 ns each against ~35 us for
+     * the verify they precede; internal/ama_ed25519_canonical.h records the
+     * measurement against the cofactor-clearing alternative.  Placed on THIS
+     * path, which ama_ed25519_batch_verify calls per entry, so batch cannot
+     * decide a different predicate — the same construction INVARIANT-26 and
+     * INVARIANT-38 rely on. */
+    if (ama_ed25519_point_is_small_order(public_key) ||
+        ama_ed25519_point_is_small_order(signature)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
     /* h = H(R || A || message) mod l — stack allocation for small messages.
      * Compare against the threshold directly to avoid size_t overflow
      * in (64 + message_len) when message_len is near SIZE_MAX. */
@@ -980,8 +1051,18 @@ ama_error_t ama_ed25519_verify(
         free(buf);
     }
 
-    /* Check [s]B - R - [h]A = O.  The group check runs in the half-size
-     * form of internal/ama_ed25519_halfsize.h: (v0, v1) with v1 ≡ v0 h
+    /* Check [s]B - R - [h]A = O.  This is the COFACTORLESS equation, not the
+     * cofactored 8([s]B - R - [h]A) = O that ZIP-215 and libsodium's
+     * permissive mode decide.  RFC 8032 §5.1.7 permits either; the choice is
+     * AMA's, it is part of the published contract of ama_ed25519_verify (see
+     * include/ama_cryptography.h for the interoperability consequence — two
+     * verifiers that disagree on torsion-carrying signatures can split a
+     * consensus system), and INVARIANT-48 is what the choice costs: a
+     * cofactorless verifier accepts the identity as A unless something
+     * rejects it, so the small-order gate above is not optional here.
+     *
+     * The group check runs in the half-size form of
+     * internal/ama_ed25519_halfsize.h: (v0, v1) with v1 ≡ v0 h
      * (mod 8l) and v0 odd, v2 = v0 s mod l split into 128-bit halves k0, k1,
      * and one ladder of about 128 doublings over
      *
@@ -1075,7 +1156,14 @@ ama_error_t ama_ed25519_batch_verify(
      * is to BE the single verifier, per entry: a randomised aggregate decides
      * a different predicate (it accepts canonically encoded small-order
      * residues with probability ~1/ord), which is the defect B1 of the 5.0.0
-     * pre-tag audit removed. */
+     * pre-tag audit removed.
+     *
+     * That is also how every input rule reaches this path.  There is no
+     * second copy of the canonical-S (INVARIANT-26), canonical-R
+     * (INVARIANT-38) or small-order (INVARIANT-48) checks here, and there
+     * must not be: they are inherited because this loop body IS
+     * ama_ed25519_verify.  tests/c/test_ed25519_small_order.c asserts the
+     * inheritance rather than assuming it, on every vector it uses. */
     for (i = 0; i < count; i++) {
         ama_error_t rc = ama_ed25519_verify(
             entries[i].signature,

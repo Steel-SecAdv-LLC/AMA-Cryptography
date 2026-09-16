@@ -74,7 +74,7 @@ import struct
 import threading
 import time
 from _thread import LockType
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from enum import Enum, auto
 from typing import Optional, Tuple
 
@@ -464,8 +464,25 @@ class HandshakeResponse:
         )
 
 
+class _SessionKeys:
+    """Declares where a session's live keys are stored.
+
+    A plain class, deliberately: annotations on a non-dataclass base are not
+    dataclass fields, so ``send_key`` and ``recv_key`` are ordinary instance
+    attributes on :class:`SecureSession` rather than members of its field
+    list.  That is what keeps them out of ``__repr__``, out of ``__eq__`` and
+    out of ``dataclasses.asdict`` at once.  It also gives the type checker
+    the declaration it needs, which the ``InitVar`` annotations in the
+    subclass cannot supply (an ``InitVar`` is a constructor parameter, not
+    an attribute).
+    """
+
+    send_key: bytearray
+    recv_key: bytearray
+
+
 @dataclass
-class SecureSession:
+class SecureSession(_SessionKeys):
     """Established session with encrypt/decrypt/rekey capabilities.
 
     Manages symmetric session keys derived from the Noise-NK handshake,
@@ -509,16 +526,26 @@ class SecureSession:
     """
 
     session_id: bytes
-    # repr=False on both keys.  These are the live AES-256 session keys, and
-    # a dataclass repr reaches far more places than a deliberate print: a
-    # logger called with the session as an argument, an exception whose
-    # traceback shows local variables, `%r` in a debug message, a debugger
-    # watch window.  Any one of those wrote both keys out in full.
-    # `crypto_api.KeyPair.secret_key` already carries this marker for the same
-    # reason; SecureSession simply did not.  The keys stay ordinary fields —
-    # only their appearance in the generated repr changes.
-    send_key: bytearray = field(repr=False)
-    recv_key: bytearray = field(repr=False)
+    # The live AES-256 session keys are ``InitVar``, not fields.
+    #
+    # They were fields marked ``repr=False``, which suppresses exactly one
+    # leak: the generated ``__repr__``.  It does not touch the generated
+    # ``__eq__``, which compared 64 bytes of key material with ``==`` — a
+    # non-constant-time comparison on a secret — and it does not touch
+    # ``dataclasses.asdict``, which walks ``fields()`` and emitted both keys
+    # in full (2026-09 audit, B-6).  ``repr=False`` on a secret therefore
+    # reads as protection while covering one of the three ways out.
+    #
+    # An ``InitVar`` is not a field.  It is accepted by ``__init__`` under
+    # the same keyword, so every caller is unchanged, and
+    # ``__post_init__`` binds it to a PLAIN attribute — same object, no copy,
+    # so ``close()`` still wipes the caller's own buffer in place (which
+    # ``test_close_wipes_in_place`` pins by identity).  Being no longer a
+    # field, it is invisible to ``__repr__``, to ``__eq__`` and to
+    # ``asdict`` alike: one mechanism instead of three markers, and nothing
+    # left to forget on the next secret that arrives here.
+    send_key: InitVar[bytearray]
+    recv_key: InitVar[bytearray]
     send_seq: int = 0
     recv_seq: int = 0
     created_at: float = field(default_factory=time.monotonic)
@@ -537,12 +564,13 @@ class SecureSession:
     # Sliding window size for replay detection
     REPLAY_WINDOW_SIZE: int = 256
 
-    def __post_init__(self) -> None:
-        """Initialise the per-session lock for thread-safe state mutation.
+    def __post_init__(self, send_key: bytearray, recv_key: bytearray) -> None:
+        """Bind the session keys and initialise the per-session lock.
 
-        Stored as an instance attribute (not a dataclass field) so it
-        is excluded from equality, hashing, and repr — locks are not
-        meaningful state to expose.
+        The lock is stored as an instance attribute (not a dataclass field)
+        so it is excluded from equality, hashing, and repr — locks are not
+        meaningful state to expose.  The keys are stored the same way, for a
+        stronger version of the same reason: see the ``InitVar`` note above.
         """
         # NOTE: ``threading.Lock`` (not RLock).  encrypt/decrypt/rekey/
         # close do not recurse into one another while holding the lock,
@@ -558,10 +586,10 @@ class SecureSession:
         # Defensive type coercion: callers from older API paths might pass
         # ``bytes`` for send/recv keys.  We canonicalise to bytearray so
         # ``close()`` can wipe the live memory rather than rebind names.
-        if not isinstance(self.send_key, bytearray):
-            self.send_key = bytearray(self.send_key)
-        if not isinstance(self.recv_key, bytearray):
-            self.recv_key = bytearray(self.recv_key)
+        # A ``bytearray`` is adopted BY IDENTITY — not copied — so the
+        # caller's own buffer is the one ``close()`` scrubs.
+        self.send_key = send_key if isinstance(send_key, bytearray) else bytearray(send_key)
+        self.recv_key = recv_key if isinstance(recv_key, bytearray) else bytearray(recv_key)
 
     def is_expired(self) -> bool:
         """Check if session has exceeded its TTL."""
@@ -629,7 +657,13 @@ class SecureSession:
             if self._state != ChannelState.ESTABLISHED:
                 raise ChannelError(f"Cannot encrypt in state {self._state}")
             if self.is_expired():
-                self._state = ChannelState.CLOSED
+                # Expiry is a close, so it wipes.  Setting CLOSED without
+                # wiping left the AES-256 keys live for the process lifetime
+                # (2026-09 audit, B-6): `close()` early-returns on CLOSED, so
+                # after the first post-expiry call NO later `close()` could
+                # scrub them, and the TTL that exists to bound key lifetime
+                # instead guaranteed the keys outlived it.
+                self._expire_and_wipe()
                 raise SessionExpiredError("Session TTL expired")
 
             # Nonce-reuse budget.  Checked BEFORE the nonce is drawn, so the
@@ -706,7 +740,13 @@ class SecureSession:
             if self._state != ChannelState.ESTABLISHED:
                 raise ChannelError(f"Cannot decrypt in state {self._state}")
             if self.is_expired():
-                self._state = ChannelState.CLOSED
+                # Expiry is a close, so it wipes.  Setting CLOSED without
+                # wiping left the AES-256 keys live for the process lifetime
+                # (2026-09 audit, B-6): `close()` early-returns on CLOSED, so
+                # after the first post-expiry call NO later `close()` could
+                # scrub them, and the TTL that exists to bound key lifetime
+                # instead guaranteed the keys outlived it.
+                self._expire_and_wipe()
                 raise SessionExpiredError("Session TTL expired")
             if msg.session_id != self.session_id:
                 raise ChannelError("Session ID mismatch")
@@ -814,6 +854,28 @@ class SecureSession:
                     first_err = exc
         if first_err is not None:
             raise first_err
+
+    def _expire_and_wipe(self) -> None:
+        """Close on TTL expiry, wiping like any other close.
+
+        Separate from :meth:`close` only because the callers already hold
+        ``self._lock`` and ``close()`` takes it.  The wipe itself is the same
+        call, deliberately: two ways to close, one of which forgets to wipe,
+        is exactly the defect this replaced.
+
+        A wipe failure must not swallow the expiry — the caller is about to
+        raise ``SessionExpiredError``, which is the more important signal —
+        so a backend hiccup is logged rather than re-raised here.  The state
+        is CLOSED either way, so no further operation proceeds.
+        """
+        self._state = ChannelState.CLOSED
+        try:
+            self._wipe_keys()
+        except (SecureMemoryError, TypeError):
+            logger.exception(
+                "Session %s expired but its key material could not be wiped",
+                self.session_id.hex()[:16],
+            )
 
     def close(self) -> None:
         """Close the session and securely wipe key material.

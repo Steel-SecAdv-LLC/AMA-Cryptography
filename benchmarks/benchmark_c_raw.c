@@ -1389,13 +1389,25 @@ static bench_result_t bench_frost_round2_sign(int iters, int warmup) {
     size_t msg_len = sizeof(msg) - 1;
     uint8_t sig_share[AMA_FROST_SIG_SHARE_BYTES];
 
-    for (int i = 0; i < warmup; i++)
+    /* INVARIANT-49: round 2 CONSUMES the nonce pair (it is zeroized on every
+     * exit, and an all-zero pair is refused), so a benchmark loop cannot
+     * reuse one buffer — the second iteration would fail with
+     * AMA_ERROR_INVALID_PARAM.  Signer 0's round-1 commitment is therefore
+     * regenerated before each measured call, OUTSIDE the timed window: the
+     * clock starts after ama_frost_round1_commit() returns, so what is
+     * reported is still the cost of round 2 alone. */
+    for (int i = 0; i < warmup; i++) {
+        BENCH_REQUIRE(ama_frost_round1_commit(nonce_pairs[0], commitments,
+                                              shares + 0 * AMA_FROST_SHARE_BYTES));
         BENCH_REQUIRE(ama_frost_round2_sign(sig_share, msg, msg_len,
                                             shares + 0 * AMA_FROST_SHARE_BYTES, 1,
                                             nonce_pairs[0],
                                             commitments, signer_indices, 2, group_pk));
+    }
 
     for (int i = 0; i < iters; i++) {
+        BENCH_REQUIRE(ama_frost_round1_commit(nonce_pairs[0], commitments,
+                                              shares + 0 * AMA_FROST_SHARE_BYTES));
         double t0 = now_ns();
         ama_error_t rc = ama_frost_round2_sign(sig_share, msg, msg_len,
                                                shares + 0 * AMA_FROST_SHARE_BYTES, 1,
@@ -1435,16 +1447,33 @@ static bench_result_t bench_frost_aggregate(int iters, int warmup) {
                                             commitments, signer_indices, 2, group_pk));
     }
 
+    /* INVARIANT-49: aggregation now verifies every share against the RFC 9591
+     * section 5.3 relation, which needs each signer's PUBLIC key share — the
+     * second half of the 64-byte dealt share, gathered here in
+     * signer_indices order.  The measured figure consequently covers the
+     * per-share verification as well as the sum; that is the honest cost of
+     * the operation, not an overhead to be benchmarked around. */
+    uint8_t signer_public_shares[2 * 32];
+    for (int s = 0; s < 2; s++) {
+        memcpy(signer_public_shares + s * 32,
+               shares + s * AMA_FROST_SHARE_BYTES + 32, 32);
+    }
+
     uint8_t signature[64];
+    uint8_t bad_index = 0;
 
     for (int i = 0; i < warmup; i++)
         BENCH_REQUIRE(ama_frost_aggregate(signature, sig_shares, commitments,
-                                          signer_indices, 2, msg, msg_len, group_pk));
+                                          signer_public_shares,
+                                          signer_indices, 2, msg, msg_len,
+                                          group_pk, &bad_index));
 
     for (int i = 0; i < iters; i++) {
         double t0 = now_ns();
         ama_error_t rc = ama_frost_aggregate(signature, sig_shares, commitments,
-                                             signer_indices, 2, msg, msg_len, group_pk);
+                                             signer_public_shares,
+                                             signer_indices, 2, msg, msg_len,
+                                             group_pk, &bad_index);
         g_samples[i] = now_ns() - t0;
         BENCH_CHECK(rc, "ama_frost_aggregate");
     }

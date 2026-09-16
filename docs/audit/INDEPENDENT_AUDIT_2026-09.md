@@ -11,6 +11,114 @@
 
 ---
 
+## 0a. Remediation addendum — 2026-09-16
+
+**Status: every High finding and the named secondary findings are fixed on this branch.** This
+section is written by the same author as the audit above, after doing the remediation. The audit
+body is left exactly as it was measured; nothing in it is softened retroactively, and where the
+remediation contradicted a claim in it, that is stated here rather than edited out of it.
+
+### What was fixed, and what was measured after
+
+| Finding | Fix | Verification, on the post-fix build |
+|---|---|---|
+| **A-1** — heap overflow via `AmaContext.sign` / `kem_*` | Output-buffer capacity and writability are checked Python-side, where the declared length and the real allocation are both visible. `_output_buffer_capacity` reads a capacity only from a `ctypes.Array` or the buffer protocol; a pointer returns "unknowable" and passes through to C's own checks | The audit's reproduction, in a child process: exit `-11` (SIGSEGV) with `rc = 0` and 3309 bytes written before; exit `0` with `rc = -1` after. 34 tests, incl. that child-process case first in the file so its verdict is on the record before any in-process case could crash the run |
+| **A-2** — optional PQ layers strippable from a signed package | The signature covers a canonical, injective, length-prefixed transcript of the whole package, built by one function both the creator and the verifier call. One package format, not two | The audit's own 17-case tamper matrix: **10/17 detected before, 17/17 after**. The legacy surface: **3/7 before, 7/7 after**. Both with an untampered-clone control |
+| **A-3** — Ed25519 accepts small-order public keys | Branch-free small-order rejection on `A` and on `R`, ahead of the group equation (INVARIANT-48) | 12/12 universal forgeries and 8/8 per-key forgeries accepted before, 0 after, through both single and batch verify |
+| **A-4 / A-5** — FROST nonce reuse; unverified aggregation | The library consumes the nonce pair on every exit from round 2; aggregation verifies every share against RFC 9591 §5.3 before it contributes, and names the culprit (INVARIANT-49) | Three signings under one nonce: first succeeds, rest refused. Corrupted share rejected with the right 1-based index, asserted for two different culprits |
+| **A-6** — authority key gates policy but not the derivation | A restricted binding's HKDF and signature context each take an `HMAC-SHA3-256(K_auth, subdomain ‖ enc(b))` binder (INVARIANT-30, amended) | Both audit bypasses — `native_hkdf(ikm, 32, salt, enc(b) ‖ u32be(len) ‖ info)` and `SHA3-256(0x02 ‖ enc(b))` — no longer reproduce the key or the context. A guessed zero binder does not either |
+| **B-1** — FIPS 205 §9 interface shipped | The legacy/generic API is §10.2 with the empty context; `ama_slhdsa_sign_internal` is test-only and localised in the export map (INVARIANT-50) | Both cross-verification probes were `True`; both are `False`. `dlsym` finds neither §9 symbol in the shipped `.so` |
+| **B-2** — signer trusts the caller's public half | `ama_ed25519_sign` derives `A = [a]B` and refuses a disagreeing key (INVARIANT-51) | A single flipped bit in bytes 32..63 is refused; the two-signature transcript the scalar-recovery attack needs cannot be produced |
+| **B-6** — session keys not wiped on TTL expiry; `asdict` emits them | Expiry wipes through the same path `close()` uses. The keys became `InitVar` + a plain attribute, so they are outside `__repr__`, `__eq__` **and** `asdict` at once, with no copy and with storage identity preserved | `asdict` no longer carries either key; `__eq__` no longer touches key material; `close()` still wipes the caller's own buffer in place |
+| **B-7** — RFC 3161 "disabled" mode fails open | A result carrying no token is refused unless the **caller** passes `allow_disabled=True` — their configuration, not the artefact's claim about itself | A downgraded result returns `False` by default; the S2 data-hash check still runs when opted into |
+| **B-14** — `AmaContext.verify` truthiness inverted | `verify` returns `bool`; the raw code moved to `verify_rc` | `if ctx.verify(...)` now means what it reads as |
+| **C-5** — `ama_hmac_sha256` NULL-dereferences | The C side declines to dereference and zeroes the output; the Python boundary — the only place an error can be *reported* — raises `TypeError` | The SIGSEGV path is gone |
+| **C-6** — dead, arithmetically wrong AVX2 Poly1305 | Deleted, and the file header that advertised them corrected | Confirmed unreferenced across the tree before removal |
+
+### Costs, measured rather than asserted
+
+Three fixes cost measurable performance. All figures are medians on one development host, same
+library, only the named file swapped — cross-host comparison against the committed floors is not
+offered, because it would not be meaningful.
+
+| Path | Before | After | Change |
+|---|---|---|---|
+| `ed25519_sign` (B-2) | 13,189 ns | 23,915 ns | **+81.3 %** |
+| `full_package_create` (A-2) | 1,318,568 ns | 1,489,372 ns | +13.0 % |
+| `full_package_verify` (A-2) | 409,296 ns | 484,439 ns | +18.4 % |
+
+`ed25519_sign` is the one that needs a decision from the maintainer. In ops/sec that is
+75,822 → 41,815 against a committed floor of 70,496 with 45 % tolerance — inside the band, with
+roughly four points of margin. The floor is **not** edited here: re-flooring is a
+calibration-host measurement and this is not the calibration host. It is recorded in
+`benchmarks/baseline.json` under `floor_drift_acknowledged` as a coarse floor pending that pass.
+There is deliberately no opt-out flag for the check, because an opt-out is the hazard under
+another name.
+
+Two fixes cost nothing or less than nothing: routing SLH-DSA through §10.2 by absorbing the
+prefix into the streaming hashes made 64 MiB signing **9.4 % faster** than the interface it
+replaced, and removed the last heap allocation from that file.
+
+### What the remediation found that the audit had not
+
+Fixing a finding is a second look at it, and three of those looks turned up more than the audit
+reported. Recorded here rather than folded silently into the fixes:
+
+1. **A-2 was wider than the table in §2 shows.** Three further tamper cases also returned
+   `all_valid: True`: a rewritten add-on-signature `metadata` dict, a **consistently swapped
+   HMAC key and tag** (Layer 2 was wholly forgeable by anyone who could edit the package), and a
+   **dropped derived key** (Layer 4's count was unbound). All three are in the 17-case matrix
+   above and all three are now detected.
+2. **A-3 is wider than "the identity point".** The identity is the only key admitting a
+   *universal* forgery, but it is not the only forgeable one: for a small-order `A` of order `n`,
+   `[h]A = [h mod n]A`, so an attacker with no secret can search `j ∈ [0, n)` for a candidate
+   satisfying the hash relation and succeed with probability 1 in `n ≤ 8`. All eight canonical
+   small-order public keys were forgeable, not one.
+3. **My own first patch for A-1 contained a defect of the same family as the finding.** It used
+   `ctypes.sizeof` as the capacity, which answers **8** for any pointer — so
+   `ctypes.cast(buf, c_char_p)`, a legitimate spelling for a buffer of any size, would have been
+   refused while nothing was proven about the real allocation. Caught by writing the test that
+   asserts a pointer passes through, and fixed before it was committed. It is the same shape as
+   the original finding: a check that reads as protection at one surface and is not one at the
+   sibling surface.
+
+### One coverage loss, declared
+
+Closing A-3 made four assertions in `tests/c/test_ed25519_canonical_s.c` vacuous. That file
+proved its INVARIANT-38 forgery pins non-vacuous with a control asserting that *the canonical
+identity encoding accepts the forgery* — justified at the time because RFC 8032 does not require
+rejecting it. INVARIANT-48 now rejects it, so the four dependent assertions are downgraded from
+PIN to SMOKE and labelled as such, with the measurement: with the §5.1.3 guard neutered and
+INVARIANT-48 in place, that file reports 6 failed / 44 passed and all four of those lines print
+`[ OK ]`. INVARIANT-38's live coverage is those 6 failures. No replacement non-vacuous
+verify-site pin for INVARIANT-38 was constructible: it would need an encoding INVARIANT-38
+refuses but INVARIANT-48 permits, *and* a signature satisfying the group equation under the point
+it decodes to, and for a large-order point that search is infeasible.
+
+### What is NOT fixed
+
+Everything in §2 below not named in the table above — the remaining Medium, Low and Informational
+findings — is **unchanged**. In particular A-7 (the release signing seed is in scope for unpinned
+PyPI build dependencies) and A-8 (tag-signature preflight ordering) are process and workflow
+findings, not code, and are left for the maintainer. The FROST implementation is still **not**
+RFC 9591 ciphersuite-interoperable; the header now says so in its title rather than implying
+otherwise, which is a correction to the claim and not to the code.
+
+### Post-remediation verification
+
+| Activity | Result |
+|---|---|
+| CMake Release build | Clean |
+| `ctest` | **136 / 136 passed** |
+| `pytest` (full suite) | **7,881 passed, 0 failed, 46 skipped** |
+| `black --check`, `ruff check`, `mypy` | Clean across the package and all 249 test files |
+| Derived-doc, count, visual and benchmark-window gates | All green |
+| New invariants | INVARIANT-48 … INVARIANT-52 |
+
+---
+
+---
+
 ## 0. Scope, method and evidence standard
 
 The repository was cloned, configured, built and executed. Nothing here rests on reading alone
@@ -704,7 +812,7 @@ Thirty-two invariants name a gate or test that exists and passes. INVARIANT-1 (t
 boundary, pinned with exact per-file counts), -13 (suppression hygiene), -23 (the in-house secret
 scanner with evasion resistance), -31 (gate reachability), -35 (selector strictness), -36 (corpus
 originality), -37 (verification-claim honesty driven by a machine-readable capability table), -39
-(error-state gating over 105 native plus 10 Cython entry points), -41 (pairwise consistency over 19
+(error-state gating over 106 native plus 10 Cython entry points), -41 (pairwise consistency over 19
 keygen paths) and -42 (declared ctypes ABI) are the strongest. INVARIANT-20 I verified directly:
 configuring with `-DAMA_AES_CONSTTIME=OFF` alone fails at CMake configure with a `FATAL_ERROR`
 naming the acknowledgement flag.

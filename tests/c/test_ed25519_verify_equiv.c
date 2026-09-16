@@ -39,10 +39,18 @@
  *       sc25519_to_wnaf.
  *
  *   (D) Strict-encoding rejection vectors.  Four negative (sig, msg, pk)
- *       tuples that any correct cofactored Ed25519 verifier MUST reject
- *       on the underlying group-element check, not on a strict-mode-only
+ *       tuples that any correct Ed25519 verifier MUST reject on the
+ *       underlying group-element check, not on a strict-mode-only
  *       canonicalization rule — robust against the cofactored vs
  *       cofactorless distinction (Chalkias & Konstantinou 2020).
+ *
+ *       This file used to call AMA's verifier "cofactored".  It is
+ *       COFACTORLESS: ama_ed25519_verify decides [S]B - R - [h]A = O, not
+ *       8([S]B - R - [h]A) = O.  The choice is documented at
+ *       ama_ed25519_verify in include/ama_cryptography.h, with the
+ *       interoperability consequence.  The word was wrong, not the vectors:
+ *       "robust against the distinction" was always the property this layer
+ *       wanted, and these four have it.
  *
  *   (E) RFC 8032 §7.1 KAT pin for absolute correctness.
  */
@@ -443,12 +451,14 @@ int main(void) {
     /* ====================================================================
      * Layer (D): strict-encoding rejection vectors.
      *
-     * Each vector is a (sig, msg, pk) tuple that any correct cofactored
-     * Ed25519 verifier MUST reject.  These are explicitly chosen to be
+     * Each vector is a (sig, msg, pk) tuple that any correct Ed25519
+     * verifier MUST reject.  These are explicitly chosen to be
      * robust against the cofactored vs cofactorless distinction that
      * Chalkias & Konstantinou (2020) showed splits real-world Ed25519
      * impls — i.e., they fail on the underlying group-element check,
-     * not on a strict-mode-only canonicalization rule.
+     * not on a strict-mode-only canonicalization rule.  (AMA's verifier
+     * is the COFACTORLESS one; this file said "cofactored" until the
+     * INVARIANT-48 pass corrected it.  See the note in the file header.)
      *
      * Rejection criterion exercised, per vector:
      *   D.1 — A is the identity element.  [h](-A) = identity, so
@@ -458,6 +468,15 @@ int main(void) {
      *         bit).  Then we'd need [s]B + [h](-A) = identity, which
      *         constrains s to a specific function of h, A — which our
      *         random msg/pk does not satisfy.  Reject.
+     *
+     *         D.1 and D.2 now reject EARLIER than that, at the
+     *         INVARIANT-48 small-order gate, and both rejected before it
+     *         existed for the reasons stated above — so neither is
+     *         coverage for that invariant, the way D.3 is not coverage
+     *         for INVARIANT-26.  The discriminating vectors, which
+     *         satisfy the group equation and so turn only on the
+     *         small-order rule, are in
+     *         tests/c/test_ed25519_small_order.c.
      *   D.3 — s-half of signature replaced with the group order l.
      *         NOT a malleability test — see the note at the case
      *         itself.  [l]B = identity, so R_check = [h](-A), which

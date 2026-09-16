@@ -63,6 +63,7 @@ _logger = logging.getLogger(__name__)
 # in *this* module's namespace.
 # ---------------------------------------------------------------------------
 from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._package_transcript import transcript as _transcript
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
@@ -848,13 +849,42 @@ SIGNATURE_DOMAIN_PREFIX = b"AMA-PKG-v2"
 SIGNATURE_FORMAT_V1 = "1.0.0"
 SIGNATURE_FORMAT_V2 = "2.0.0"
 
+#: The format this module PRODUCES.  V1 and V2 remain verifiable — a package
+#: already written down does not become unreadable because a weakness was
+#: found in what it left unsigned — but nothing new is minted in them.
+#:
+#: What V3 changes, and why (2026-09 audit, A-2, legacy half).  Under V2 the
+#: signature covered ``content_hash`` and ``ethical_hash``, and the HMAC
+#: covered ``content_hash`` alone.  Everything that says whose package it is
+#: — ``author``, ``timestamp``, ``version``, both public keys, the quantum
+#: flag and the two format selectors — was therefore signed by nothing.  An
+#: attacker who mints their own keypair, keeps the content and the ethical
+#: vector, rewrites the author and re-signs produces a package whose Ed25519
+#: signature verifies against the key it carries and whose HMAC still
+#: verifies under the real key, because neither construction ever looked at
+#: the field that was changed.  V3 signs and MACs a transcript of all of them.
+SIGNATURE_FORMAT_V3 = "3.0.0"
+
+#: Deliberately outside both transcripts: the RFC 3161 token is acquired
+#: AFTER the signature exists (it timestamps the content), so it cannot be
+#: inside it.  It is not left unbound — RFC 3161 §2.4.2 binds the token to
+#: ``content_hash`` through its own message imprint, and
+#: ``_verify_rfc3161_token`` checks exactly that binding.  See INVARIANT-37
+#: for what that check does and does not assert.
+_V3_EXCLUDES_TIMESTAMP_TOKEN = True
+
 
 def build_signature_message(
     content_hash: bytes,
     ethical_hash: bytes,
     version: str = SIGNATURE_FORMAT_V2,
 ) -> bytes:
-    """Build domain-separated message for hybrid signature binding."""
+    """Build domain-separated message for hybrid signature binding.
+
+    V1 and V2 only.  V3 signs a transcript of the whole package and is built
+    by :func:`build_package_transcript`, which needs fields this function is
+    not given.
+    """
     if len(content_hash) != 32:
         raise ValueError(f"content_hash must be 32 bytes, got {len(content_hash)}")
     if len(ethical_hash) != 32:
@@ -864,6 +894,65 @@ def build_signature_message(
     message = SIGNATURE_DOMAIN_PREFIX + version_bytes + content_hash + ethical_hash
 
     return message
+
+
+def build_package_transcript(
+    purpose: str,
+    package: CryptoPackage,
+    content_hash: bytes,
+    ethical_hash: bytes,
+) -> bytes:
+    """The bytes a V3 package's signature (or HMAC) is computed over.
+
+    ``purpose`` is ``"signature"`` or ``"hmac"``.  It is the first field, so
+    the two transcripts of one package can never collide and a signature can
+    never be replayed as a MAC or the reverse.
+
+    ``content_hash`` and ``ethical_hash`` are passed in rather than read off
+    ``package`` because the authoritative values are the RECOMPUTED ones — the
+    hash of the codes actually in hand and the hash of the ethical vector
+    actually carried — not the package's stored claims about them.  The stored
+    strings are bound as well, so a package whose cached hex disagrees with
+    its own content fails the signature rather than only a side check.  This
+    is what makes ``ethical_vector`` unforgeable: rewriting it changes
+    ``ethical_hash``, which changes the transcript.
+
+    ``ed25519_signature`` and ``dilithium_signature`` are not included — they
+    are what the transcript authorises — and neither is ``hmac_tag``, for the
+    same reason in the ``"hmac"`` direction.
+    """
+    return _transcript(
+        [
+            ("purpose", purpose),
+            ("content_digest", content_hash),
+            ("ethical_digest", ethical_hash),
+            ("content_hash", package.content_hash),
+            ("ethical_hash", package.ethical_hash),
+            ("author", package.author),
+            ("timestamp", package.timestamp),
+            ("version", package.version),
+            ("ed25519_pubkey", package.ed25519_pubkey),
+            ("dilithium_pubkey", package.dilithium_pubkey),
+            ("quantum_signatures_enabled", package.quantum_signatures_enabled),
+            ("signature_format_version", package.signature_format_version),
+            ("hash_format_version", package.hash_format_version),
+        ]
+    )
+
+
+def recompute_ethical_hash(ethical_vector: Dict[str, float]) -> bytes:
+    """The SHA3-256 an ethical vector must hash to.
+
+    One function, called by the creator and by the verifier, because the
+    verifier used to take ``package.ethical_hash`` on trust and never derive
+    it from ``package.ethical_vector``.  The two could therefore disagree
+    freely: the signature bound the hash, nothing bound the vector, and a
+    reader of ``package.ethical_vector`` was looking at an attacker-chosen
+    value under a valid signature.  ``ARCHITECTURE.md`` says ethical metadata
+    "cannot be separated from cryptographic proofs"; this is the function that
+    makes that true rather than aspirational.
+    """
+    return native_sha3_256(json.dumps(ethical_vector, sort_keys=True).encode())
 
 
 @dataclass
@@ -938,22 +1027,58 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
         duration_ms = (time.time() - start_time) * 1000
         monitor.monitor_crypto_operation("sha3_256_hash", duration_ms, input_size=len(content_hash))
 
-    # 2. Generate HMAC authentication tag
-    start_time = time.time()
-    hmac_tag = hmac_authenticate(content_hash, kms.hmac_key)
-    if monitor:
-        duration_ms = (time.time() - start_time) * 1000
-        monitor.monitor_crypto_operation("hmac_auth", duration_ms, input_size=len(content_hash))
-
-    # 3. Compute ethical hash BEFORE signing
+    # 2. Compute the ethical hash BEFORE anything is signed or MACed
     ethical_vector_copy = kms.ethical_vector.copy()
-    ethical_json = json.dumps(ethical_vector_copy, sort_keys=True)
-    ethical_hash_bytes = native_sha3_256(ethical_json.encode())
+    ethical_hash_bytes = recompute_ethical_hash(ethical_vector_copy)
     ethical_hash_hex = ethical_hash_bytes.hex()
 
-    # 4. Build domain-separated message for hybrid signature binding (v2 format)
-    signature_message = build_signature_message(
-        content_hash, ethical_hash_bytes, SIGNATURE_FORMAT_V2
+    # 3. Assemble the package, then MAC and sign its transcript
+    #
+    # The identity fields — author, timestamp, version, both public keys, the
+    # quantum flag, the format selectors — used to be written straight into
+    # the returned object with neither the HMAC nor the signature ever looking
+    # at them (2026-09 audit, A-2).  Assembling first and deriving both
+    # authenticators from THE SAME function the verifier calls is what makes
+    # "the package is signed" mean the whole package.  `hmac_tag`,
+    # `ed25519_signature` and `dilithium_signature` are the three fields
+    # `build_package_transcript` does not read, which is what lets them be
+    # placeholders here and filled in below.
+    timestamp = datetime.now(timezone.utc).isoformat()
+    package = CryptoPackage(
+        content_hash=content_hash.hex(),
+        hmac_tag="",
+        ed25519_signature="",
+        dilithium_signature=None,
+        timestamp=timestamp,
+        timestamp_token=None,
+        author=author,
+        ed25519_pubkey=kms.ed25519_keypair.public_key.hex(),
+        dilithium_pubkey=(
+            kms.dilithium_keypair.public_key.hex()
+            if kms.quantum_signatures_enabled and kms.dilithium_keypair is not None
+            else None
+        ),
+        version="2.1",
+        ethical_vector=ethical_vector_copy,
+        ethical_hash=ethical_hash_hex,
+        quantum_signatures_enabled=(
+            kms.quantum_signatures_enabled and kms.dilithium_keypair is not None
+        ),
+        signature_format_version=SIGNATURE_FORMAT_V3,
+        hash_format_version=HASH_FORMAT_V2,
+    )
+
+    start_time = time.time()
+    hmac_message = build_package_transcript("hmac", package, content_hash, ethical_hash_bytes)
+    hmac_tag = hmac_authenticate(hmac_message, kms.hmac_key)
+    package.hmac_tag = hmac_tag.hex()
+    if monitor:
+        duration_ms = (time.time() - start_time) * 1000
+        monitor.monitor_crypto_operation("hmac_auth", duration_ms, input_size=len(hmac_message))
+
+    # 4. Build the signature transcript
+    signature_message = build_package_transcript(
+        "signature", package, content_hash, ethical_hash_bytes
     )
 
     # 5. Sign with Ed25519
@@ -967,31 +1092,42 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
 
     # 6. Sign with Dilithium (if available)
     dilithium_sig = None
-    dilithium_pubkey = None
-    quantum_signatures_enabled = False
-    if kms.quantum_signatures_enabled and kms.dilithium_keypair is not None:
+    if package.quantum_signatures_enabled and kms.dilithium_keypair is not None:
         start_time = time.time()
         try:
             dilithium_sig = dilithium_sign(signature_message, kms.dilithium_keypair.secret_key)
-            dilithium_pubkey = kms.dilithium_keypair.public_key.hex()
-            quantum_signatures_enabled = True
         except QuantumSignatureUnavailableError:
             _logger.debug(
                 "Dilithium signing unavailable; quantum signature layer omitted. "
                 "Package will lack ML-DSA-65 protection. "
                 "Verify PQC backend is installed for production deployments."
             )
+            # The flag and the public key describe what the package CARRIES,
+            # and it now carries no ML-DSA-65 signature.  Both are inside the
+            # transcript, so they have to be corrected before the Ed25519
+            # signature below is taken over it — a package claiming a quantum
+            # layer it does not have would otherwise be signed saying so.
+            package.quantum_signatures_enabled = False
+            package.dilithium_pubkey = None
+            signature_message = build_package_transcript(
+                "signature", package, content_hash, ethical_hash_bytes
+            )
+            hmac_message = build_package_transcript(
+                "hmac", package, content_hash, ethical_hash_bytes
+            )
+            package.hmac_tag = hmac_authenticate(hmac_message, kms.hmac_key).hex()
         if monitor and dilithium_sig is not None:
             duration_ms = (time.time() - start_time) * 1000
             monitor.monitor_crypto_operation(
                 "dilithium_sign", duration_ms, input_size=len(signature_message)
             )
 
-    # 7. Generate timestamp
-    timestamp = datetime.now(timezone.utc).isoformat()
-
-    # 8. Get RFC 3161 timestamp (optional)
-    timestamp_token = None
+    # 7. Get RFC 3161 timestamp (optional)
+    #
+    # After signing, necessarily: the token timestamps the content, so it
+    # cannot be inside the signature that it post-dates.  It is not left
+    # unauthenticated — RFC 3161 §2.4.2 binds it to `content_hash` through its
+    # own message imprint, which `_verify_rfc3161_token` checks.
     if use_rfc3161:
         token = get_rfc3161_timestamp(content_hash, tsa_url)
         if token is None:
@@ -999,7 +1135,7 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
                 "RFC 3161 timestamp request failed. "
                 "Cannot fall back silently — timestamps are a security layer."
             )
-        timestamp_token = base64.b64encode(token).decode("ascii")
+        package.timestamp_token = base64.b64encode(token).decode("ascii")
 
     # 9. Record package metadata for pattern analysis
     if monitor:
@@ -1012,23 +1148,9 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
             }
         )
 
-    return CryptoPackage(
-        content_hash=content_hash.hex(),
-        hmac_tag=hmac_tag.hex(),
-        ed25519_signature=ed25519_sig.hex(),
-        dilithium_signature=dilithium_sig.hex() if dilithium_sig else None,
-        timestamp=timestamp,
-        timestamp_token=timestamp_token,
-        author=author,
-        ed25519_pubkey=kms.ed25519_keypair.public_key.hex(),
-        dilithium_pubkey=dilithium_pubkey,
-        version="2.1",
-        ethical_vector=ethical_vector_copy,
-        ethical_hash=ethical_hash_hex,
-        quantum_signatures_enabled=quantum_signatures_enabled,
-        signature_format_version=SIGNATURE_FORMAT_V2,
-        hash_format_version=HASH_FORMAT_V2,
-    )
+    package.ed25519_signature = ed25519_sig.hex()
+    package.dilithium_signature = dilithium_sig.hex() if dilithium_sig else None
+    return package
 
 
 def _verify_timestamp_value(timestamp_str: str) -> bool:
@@ -1327,17 +1449,23 @@ def verify_crypto_package(
         computed_hash = canonical_hash_code(codes, helix_params, hash_version=pkg_hash_ver)
         results["content_hash"] = computed_hash.hex() == package.content_hash
 
-        start_time = time.time() if monitor else None
-        results["hmac"] = hmac_verify(computed_hash, bytes.fromhex(package.hmac_tag), hmac_key)
-        if monitor and start_time is not None:
-            monitor.monitor_crypto_operation(
-                "hmac_verify",
-                (time.time() - start_time) * 1000,
-                input_size=len(computed_hash),
-            )
+        # The ethical vector, derived rather than trusted.  `package.
+        # ethical_hash` is what the signature binds; `package.ethical_vector`
+        # is what a reader acts on, and nothing used to connect the two, so
+        # the vector was an attacker-chosen value under a valid signature
+        # (2026-09 audit, A-2).  The recomputed digest is what goes into the
+        # signature message below, so a rewritten vector fails the SIGNATURE
+        # and not merely this side check — a caller reading `results["ed25519"]`
+        # alone is not told the vector was verified when it was not.
+        ethical_hash_bytes = recompute_ethical_hash(package.ethical_vector)
+        results["ethical_vector"] = ethical_hash_bytes.hex() == package.ethical_hash
 
         sig_format = getattr(package, "signature_format_version", SIGNATURE_FORMAT_V1)
-        if sig_format not in (SIGNATURE_FORMAT_V1, SIGNATURE_FORMAT_V2):
+        if sig_format not in (
+            SIGNATURE_FORMAT_V1,
+            SIGNATURE_FORMAT_V2,
+            SIGNATURE_FORMAT_V3,
+        ):
             # No default branch (INVARIANT-35).  signature_format_version is an
             # unauthenticated package field, and the else-branch below is the
             # V1 construction — a bare digest with no domain prefix and no
@@ -1348,15 +1476,33 @@ def verify_crypto_package(
             # not just the literal "1.0.0".
             raise ValueError(
                 f"unknown signature_format_version {sig_format!r}: expected "
-                f"{SIGNATURE_FORMAT_V1!r} or {SIGNATURE_FORMAT_V2!r}"
+                f"{SIGNATURE_FORMAT_V1!r}, {SIGNATURE_FORMAT_V2!r} or "
+                f"{SIGNATURE_FORMAT_V3!r}"
             )
-        if sig_format == SIGNATURE_FORMAT_V2:
-            ethical_hash_bytes = bytes.fromhex(package.ethical_hash)
+        if sig_format == SIGNATURE_FORMAT_V3:
+            signature_message = build_package_transcript(
+                "signature", package, computed_hash, ethical_hash_bytes
+            )
+            hmac_message = build_package_transcript(
+                "hmac", package, computed_hash, ethical_hash_bytes
+            )
+        elif sig_format == SIGNATURE_FORMAT_V2:
             signature_message = build_signature_message(
                 computed_hash, ethical_hash_bytes, SIGNATURE_FORMAT_V2
             )
+            hmac_message = computed_hash
         else:
             signature_message = computed_hash
+            hmac_message = computed_hash
+
+        start_time = time.time() if monitor else None
+        results["hmac"] = hmac_verify(hmac_message, bytes.fromhex(package.hmac_tag), hmac_key)
+        if monitor and start_time is not None:
+            monitor.monitor_crypto_operation(
+                "hmac_verify",
+                (time.time() - start_time) * 1000,
+                input_size=len(hmac_message),
+            )
 
         start_time = time.time() if monitor else None
         results["ed25519"] = ed25519_verify(
