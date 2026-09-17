@@ -7,7 +7,10 @@
  *        multiprecision arithmetic.
  *
  * For every h in a structured-plus-random corpus the decomposition must give
- *   1. v0 odd and non-zero;
+ *   1. 0 < v0 < l with v0 odd — together, and only together, these give
+ *      gcd(v0, 8l) = 1, which is what makes v0 P = O equivalent to P = O.
+ *      Oddness alone is not enough: l itself is odd, and the degenerate pair
+ *      (v0, v1) = (l, 0) satisfies conditions 2 and 3 as well;
  *   2. v1 - v0 h ≡ 0 (mod 8l) — the congruence the verify equation rests on,
  *      checked here by computing v0 h as a 512-bit product, adding or
  *      subtracting v1, and reducing modulo 8l by long division (schoolbook
@@ -190,6 +193,24 @@ static void check_one(const uint8_t h[32], int random_part, double *sum_bits, in
         if (failures <= 10) printf("  FAIL: v0 not odd / zero\n");
         return;
     }
+    /* v0 < l.  Oddness alone does NOT establish gcd(v0, 8l) = 1, which is
+     * what makes v0 P = O equivalent to P = O: l is odd, so the degenerate
+     * pair (v0, v1) = (l, 0) — exactly what the r_{k+1} == 0 guard in
+     * hs_choose rejects — satisfies every other assertion in this function,
+     * including the congruence, whenever 8 | h.  It would also make the
+     * verify equation read [0]B - [l]R - [0]A = O, which holds for every R
+     * and every A.  With v0 odd and 0 < v0 < l (l prime), gcd(v0, 8l) = 1
+     * follows, so this is the assertion that closes the argument. */
+    {
+        uint64_t v0w[WIDE] = {0}, lwide[WIDE] = {0};
+        from_bytes4(v0w, v0);
+        memcpy(lwide, L_LIMBS, sizeof L_LIMBS);
+        if (wide_cmp(v0w, lwide) >= 0) {
+            failures++;
+            if (failures <= 10) printf("  FAIL: v0 >= l (gcd(v0, 8l) != 1)\n");
+            return;
+        }
+    }
     /* (v0 h - v1) mod 8l == 0, computing v0 h + |v1| when v1 < 0. */
     from_bytes4(a, v0);
     from_bytes4(b, h);
@@ -268,6 +289,49 @@ int main(void) {
     h[31] = 0x0A;
     check_one(h, 0, &sum_bits, &max_bits);
 
+    /* Scalars that drive the Euclid sequence to r_{k+1} == 0 with t_k even,
+     * the one branch of hs_choose that neither the structured corpus above
+     * nor the random corpus below reaches.  The candidate the guard there
+     * rejects is (v0, v1) = (l, 0), which passes every other check in
+     * check_one and would make the verify equation hold for every input.
+     *
+     * Constructed, not searched for: the termination needs gcd(h, 8l) = 8
+     * (gcd 1, 2 or 4 forces t_k odd), so h = 8 h' with h' = t^{-1} mod l for
+     * an even t, keeping h' < l/8 so h < l.  Unreachable from a hash in
+     * practice — steering h here is a ~2^252 preimage search, so this is a
+     * latent-correctness guard, not an attack surface — which is exactly why
+     * it needs fixed vectors.  The first entry is the extreme case: the
+     * smallest cofactor that occurs, where the rejected pair loses the size
+     * comparison in hs_choose by a single bit (253 against 252). */
+    {
+        static const uint8_t r_next_zero[4][32] = {
+            /* t_k = 10 (4 bits, even), r_k = 8, r_prev = 252 bits */
+            {0x58, 0x76, 0x91, 0x7d, 0x7b, 0x82, 0xdb, 0xac,
+             0xde, 0xe3, 0x92, 0xb5, 0x4b, 0x2e, 0x7f, 0xdd,
+             0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+             0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x0c},
+            /* t_k 127 bits, even; r_k = 8, r_prev = 129 bits */
+            {0x70, 0xf3, 0xe6, 0x33, 0xd9, 0x4b, 0xf0, 0x06,
+             0x54, 0x97, 0x23, 0xe9, 0x84, 0x70, 0x91, 0x54,
+             0x37, 0xf9, 0xa4, 0x8e, 0x20, 0x45, 0x8a, 0x02,
+             0xc7, 0x8d, 0x06, 0x29, 0xfc, 0x43, 0x0c, 0x05},
+            /* t_k 127 bits, even; r_k = 8, r_prev = 129 bits */
+            {0x48, 0x6d, 0xb5, 0x4d, 0xe6, 0x58, 0xea, 0xcc,
+             0x7a, 0xa0, 0xe3, 0x05, 0xdd, 0x18, 0x43, 0xa8,
+             0x74, 0x65, 0x14, 0xf5, 0xc5, 0x7d, 0xf2, 0x89,
+             0x1b, 0xda, 0xb8, 0x65, 0x15, 0x36, 0xc6, 0x06},
+            /* t_k 122 bits, even; r_k = 8, r_prev = 134 bits */
+            {0xd8, 0x65, 0xb2, 0x0f, 0x0f, 0x4e, 0xd9, 0xcb,
+             0x0b, 0x07, 0x8a, 0xd4, 0xb0, 0x97, 0xbb, 0x68,
+             0x8e, 0x44, 0x25, 0x82, 0x5c, 0xc2, 0x7d, 0x31,
+             0x63, 0xea, 0x15, 0xa3, 0xb4, 0x2e, 0x1e, 0x0f},
+        };
+        for (k = 0; k < 4; k++) {
+            memcpy(h, r_next_zero[k], 32);
+            check_one(h, 0, &sum_bits, &max_bits);
+        }
+    }
+
     /* Random h < l (rejection on the top byte keeps h < 2^252 <= l). */
     for (i = 0; i < RANDOM_INPUTS; i++) {
         int j;
@@ -290,6 +354,6 @@ int main(void) {
         printf("FAIL: %d mismatch(es)\n", failures);
         return 1;
     }
-    printf("PASS: v1 ≡ v0 h (mod 8l), v0 odd, wNAF exact on every input\n");
+    printf("PASS: v1 ≡ v0 h (mod 8l), 0 < v0 < l odd, wNAF exact on every input\n");
     return 0;
 }

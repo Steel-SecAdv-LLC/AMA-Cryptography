@@ -19,6 +19,44 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Half-size decomposition test blind spot — 2026-09-17
+
+`tests/c/test_ed25519_half_reduce.c` asserted that `v0` is odd and non-zero,
+that `v1 ≡ v0 h (mod 8l)`, and that the wNAF recoding is exact. Those three
+do not imply what the verification identity actually rests on, which is
+`gcd(v0, 8l) = 1`. **`l` is odd**, so the degenerate pair
+`(v0, v1) = (l, 0)` — precisely the candidate the `r_{k+1} == 0` guard in
+`hs_choose` exists to reject — satisfies every one of them, the congruence
+included (`l·h ≡ 0 (mod 8l)` whenever `8 | h`, which is the only case in
+which that guard can fire at all). A regression that returned it would make
+verification read `[0]B - [l]R - [0]A = O`, which holds for *every* `R` and
+*every* `A`, and the suite would have stayed green.
+
+Measured, not argued. The guard's branch was reached **zero** times across
+the whole structured corpus and 200,000 random scalars, so nothing exercised
+it. It is reachable only by construction: termination needs
+`gcd(h, 8l) = 8`, since gcd 1, 2 or 4 forces `t_k` odd and skips the branch
+entirely, so `h = 8 h'` with `h' = t^{-1} mod l` for an even `t` and
+`h' < l/8`. Four such scalars are now fixed vectors in the corpus, and
+`check_one` asserts `0 < v0 < l`, which with oddness and `l` prime gives
+`gcd(v0, 8l) = 1`.
+
+Discriminated by mutation rather than assumed: against a build with the guard
+dropped and the two `t_k ± t_{k-1}` candidates disabled, so `hs_choose`
+returns `(l, 0)`, the pre-change test **passes** (exit 0) and the current one
+**fails** on exactly the four new vectors (exit 1). Both halves are
+load-bearing — the assertion alone catches nothing, because no prior input
+reached the branch.
+
+No shipped code changed; `ama_ed25519_half_reduce` is correct as written and
+its output is unchanged on every input. Two further observations recorded
+because they are thin rather than wrong: the guard is never *decisive* — the
+rejected pair is `(±l, 0)`, always 253 bits, and the size comparison already
+discards it, by a margin measured at a single bit (253 against 252) in the
+smallest-cofactor case — and that margin is a consequence of `h < l` forcing
+a first quotient of at least 8, not of anything the code enforces. The guard
+should stay.
+
 ### Security review remediation pass — 2026-09-16
 
 An engineering and cryptographic review of this branch — build, execute,
