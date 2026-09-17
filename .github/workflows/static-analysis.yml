@@ -475,6 +475,44 @@ jobs:
           python3 tools/check_compiler_warnings.py \
             build-warnings-arm.log build-warnings-arm-sve2.log
 
+      # The AArch64 CFI marking, checked on the object rather than on the flag.
+      #
+      # tools/wheel_smoke_test.py already asserts this, but only at RELEASE and
+      # only for the runner's own architecture, so the AArch64 case was checked
+      # by nothing until a release dry run refused the wheel.  This lane already
+      # cross-builds the library; reading the property note here costs one
+      # readelf and moves the finding from release day to the pull request.
+      #
+      # Both halves matter and they fail for different reasons: the landing-pad
+      # instructions go missing when -mbranch-protection stops being applied,
+      # and the property note goes missing when an unmarked object (the C
+      # runtime's crti.o/crtn.o) clears the link-time AND.  The second is what
+      # actually happened.
+      - name: AArch64 CFI marking survives the link (BTI property + landing pads)
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib=build-strict-arm/lib/libama_cryptography.so.5.0.0
+          test -f "$lib" || { echo "::error::$lib not built"; exit 1; }
+          pads=$(aarch64-linux-gnu-objdump -d "$lib" | grep -c '\bbti\b' || true)
+          pac=$(aarch64-linux-gnu-objdump -d "$lib" | grep -c '\bpaciasp\b' || true)
+          note=$(aarch64-linux-gnu-readelf -nW "$lib" | grep -o 'BTI' | head -1 || true)
+          echo "BTI landing pads: $pads   PAC-RET: $pac   property note: ${note:-ABSENT}"
+          rc=0
+          if [ "$pads" -eq 0 ] || [ "$pac" -eq 0 ]; then
+            echo "::error::-mbranch-protection=standard is not reaching the compiler: \
+          $pads bti / $pac paciasp instructions in the built library."
+            rc=1
+          fi
+          if [ -z "$note" ]; then
+            echo "::error::the GNU property note carries no BTI bit, so the loader will \
+          never map this library PROT_BTI and every landing pad above is inert. \
+          An unmarked input object cleared the link-time AND — check that \
+          -nostartfiles is still applied to the shared link (CMakeLists.txt)."
+            rc=1
+          fi
+          exit $rc
+
   version-consistency:
     # Enforces audit 5a: every file that declares the library version must
     # agree with ama_cryptography/__init__.py. Also enforces audit 6a:

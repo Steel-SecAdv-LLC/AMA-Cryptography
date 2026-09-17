@@ -222,6 +222,53 @@ else()
         else()
             message(STATUS "CFI: -mbranch-protection=standard unsupported — AArch64 CFI off")
         endif()
+
+        # ...and the marking has to survive the LINK, which is a separate
+        # problem from emitting it.  GNU_PROPERTY_AARCH64_FEATURE_1_AND is an
+        # AND over every input object: one object without the BTI bit clears
+        # it for the whole output.  The comment above reasoned that this tree
+        # has no hand-written assembly and therefore no unmarked object — true
+        # of THIS project's objects, and irrelevant, because the toolchain
+        # contributes its own.  `crti.o` and `crtn.o` come from the C runtime
+        # and carry no BTI property on any glibc built before BTI was routine,
+        # which is every manylinux base: measured on AlmaLinux 9's aarch64
+        # libc.so.6 (the manylinux_2_34 image, the newest available) — it has
+        # no .note.gnu.property at all.  Bumping the image does not fix this.
+        #
+        # Measured on this tree, cross-built for aarch64: the shipped
+        # libama_cryptography.so.5.0.0 carried 145 `bti` landing pads and 278
+        # `paciasp` instructions and NO property note, so the loader never
+        # mapped it PROT_BTI and every landing pad was inert.  That is what
+        # tools/wheel_smoke_test.py caught on the first release dry run.
+        #
+        # `-z force-bti` is the obvious remedy and is wrong here: it writes the
+        # property anyway, and `_init` (from crti.o) begins `nop`, not `bti c`,
+        # while DT_INIT is emitted and called INDIRECTLY by the loader — so the
+        # marking would promise an enforcement the image cannot honour and
+        # SIGILL on hardware that enforces it.  Claiming the property is not
+        # the same as having it (INVARIANT-16).
+        #
+        # Dropping the C runtime startup objects from the SHARED library link
+        # removes the unmarked inputs instead of lying about them.  A shared
+        # object does not need them: constructors and destructors live in
+        # .init_array/.fini_array, which the dynamic loader walks directly.
+        # Verified under qemu-aarch64 rather than assumed — with the flag the
+        # note reads "BTI, PAC", DT_INIT is gone, and a dlopen/dlsym of the
+        # object still runs both its constructor and its destructor.
+        #
+        # SHARED ONLY.  An executable needs crt1.o for `_start`; this must
+        # never reach CMAKE_EXE_LINKER_FLAGS.
+        if(_have_check_linker_flag)
+            check_linker_flag(C "-nostartfiles" AMA_HAVE_NOSTARTFILES)
+        endif()
+        if(AMA_HAVE_BRANCH_PROTECTION AND AMA_HAVE_NOSTARTFILES)
+            set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -nostartfiles")
+            message(STATUS "CFI: AArch64 BTI property preserved through the link (-nostartfiles, shared only)")
+        elseif(AMA_HAVE_BRANCH_PROTECTION)
+            message(WARNING "CFI: -nostartfiles unavailable — the AArch64 BTI property will be "
+                            "cleared at link time by the C runtime's unmarked crti.o/crtn.o, and "
+                            "tools/wheel_smoke_test.py will refuse the resulting wheel.")
+        endif()
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|i[3-6]86|x86")
         check_c_compiler_flag("-fcf-protection=full" AMA_HAVE_CF_PROTECTION)
         if(AMA_HAVE_CF_PROTECTION)

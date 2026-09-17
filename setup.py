@@ -465,6 +465,26 @@ def get_compiler_flags() -> tuple[list[str], list[str]]:
         if platform.system() == "Linux":
             link_flags.extend(["-Wl,-z,relro", "-Wl,-z,now", "-Wl,-z,noexecstack"])
 
+            # Keep the AArch64 BTI property alive across the link, for the
+            # same reason and by the same means as CMakeLists.txt (see the
+            # long note there).  GNU_PROPERTY_AARCH64_FEATURE_1_AND is an AND
+            # over every input object, and the C runtime's crti.o/crtn.o carry
+            # no BTI bit on any manylinux base, so the marking these
+            # extensions' own objects carry is cleared at link time and the
+            # loader never maps them PROT_BTI.  Measured on the release dry
+            # run: all six binding extensions shipped with BTI landing pads
+            # and no property note.
+            #
+            # An extension module is a shared object, so it does not need the
+            # startup files -- its module-init runs through .init_array, which
+            # the dynamic loader walks itself.  Verified under qemu-aarch64:
+            # dlopen/dlsym of an object linked this way still runs both its
+            # constructor and its destructor.  Probed, because a toolchain
+            # that rejects the flag must still build.
+            _machine = (_target_arches() or [platform.machine()])[0].lower()
+            if _machine in ("aarch64", "arm64") and _compiler_accepts("-nostartfiles"):
+                link_flags.append("-nostartfiles")
+
         if COVERAGE:
             flags.extend(["--coverage"])
             link_flags.extend(["--coverage"])
