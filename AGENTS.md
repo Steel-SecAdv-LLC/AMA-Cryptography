@@ -1,87 +1,88 @@
-# Standing Orders for Any AI Working on AMA Cryptography
+# Engineering Operations Directive
 
-**From:** Andrew E. A. — Steel Security Advisors LLC, owner of this repository
-**Applies to:** every AI agent that touches this tree. Astra, Claude, whoever comes next.
-**Read this before your first tool call. Not after.**
-
----
-
-## 1. Why you are here
-
-This is a cryptographic library that real systems will depend on. It has no
-third-party crypto underneath it — if something is wrong here, nothing catches
-it downstream. That is the whole premise of the project, and it is why I hold
-the bar where I hold it.
-
-I have spent months on this. I do not need enthusiasm. I need **confidence and
-fidelity**. Those two words are the job.
-
-What I want from you:
-
-- Real strategy, engineering, and signal.
-- Work that is **finished** — no gaps, no deferments, no suppressions, no
-  silencing, no weakness left in place with a note attached.
-- Awareness. Do not act unconsciously. Know what is around you in this tree
-  before you change it.
-- Your own verification. Check your work, then check it a second way. Tell me
-  the truth about what you found, including when the truth is that you were
-  wrong an hour ago.
-
-What I do not want:
-
-- Guessing presented as fact.
-- Questions you could have answered by reading the repository.
-- Scope you invented because it seemed interesting.
-- Anything that increases my future work without paying for itself now.
-
-Stay alert for genuine synergies, novel methods, or breakthroughs worth having.
-They are welcome. They are not an excuse to wander.
+**Applies to:** every automated agent and every contributor operating on this
+repository.
+**Status:** binding. This directive is read before the first tool call of a
+session, not after.
+**Authority:** subordinate to `INVARIANTS.md`; superior to convenience,
+convention, and individual preference.
 
 ---
 
-## 2. What this system is
+## 1. Purpose and scope
 
-Read `ARCHITECTURE.md` in full before substantive work. The short version:
+This repository implements a cryptographic library with no third-party
+cryptographic dependencies. Every primitive is native to this tree. There is no
+upstream implementation to catch an error made here, and no downstream consumer
+positioned to detect one. The correctness burden terminates in this repository.
 
-**Native C cryptographic core, Python application layer, zero external crypto
-dependencies.** Every primitive — ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519,
-X25519, secp256k1, P-256/384/521, AES-256-GCM, ChaCha20-Poly1305, SHA-3, HKDF,
-Argon2id, FROST — is implemented in this tree under `src/c/`. The Python layer
-calls those kernels. `hashlib` is confined to the gate-pinned trust bootstrap
-and nowhere else.
+This directive states what the repository requires of anyone modifying it: the
+standard of evidence, the order of precedence when requirements conflict, the
+classification of findings, and the enforcement model. It is written to remain
+valid independent of who maintains the repository.
 
-**The layers:**
+The repository requires confidence and fidelity. Work is complete when it is
+proven, not when it is plausible.
 
-| Layer | What lives there |
+---
+
+## 2. Order of precedence
+
+When requirements conflict, they resolve in this order. A lower item never
+justifies compromising a higher one.
+
+| Rank | Requirement |
 |---|---|
-| `src/c/` | The primitives. No vendored crypto. No suppressions. Ever. |
+| 1 | **Security invariants** — the 52 numbered invariants in `INVARIANTS.md` |
+| 2 | **Correctness** — conformance to FIPS/RFC, ACVP and KAT agreement, ABI truth |
+| 3 | **Reproducibility** — deterministic builds, byte-equal artifacts, pinned corpora |
+| 4 | **Performance** — measured throughput and instruction counts against their floors |
+| 5 | **Developer convenience** — build ergonomics, run time, tooling comfort |
+
+A change that improves rank 4 by weakening rank 1 or 2 is rejected regardless of
+the magnitude of the improvement. A change that cannot satisfy rank 1 is
+escalated to the repository maintainer for a decision; it is not resolved by the
+agent bending the invariant.
+
+---
+
+## 3. System architecture
+
+Read `ARCHITECTURE.md` in full before substantive work. Summary:
+
+Native C cryptographic core with a Python application layer and zero external
+cryptographic dependencies. ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519, X25519,
+secp256k1, P-256/384/521, AES-256-GCM, ChaCha20-Poly1305, SHA-3, HKDF, Argon2id
+and FROST are implemented under `src/c/`. The Python layer calls those kernels.
+`hashlib` is confined to the gate-pinned pre-execution trust bootstrap.
+
+| Path | Contents |
+|---|---|
+| `src/c/` | Cryptographic primitives. No vendored crypto. No suppressions. |
 | `src/c/{avx2,avx512,neon,sve2}/` | SIMD kernels, CPUID-gated, each pinned by KAT |
 | `src/c/dispatch/` | Runtime backend selection |
-| `include/` | The public C ABI — every exported symbol is declared here, no exceptions |
+| `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
 | `tests/c/`, `tests/` | 83 C suites, 245 Python test modules |
-| `tools/check_*.py` | The gates. These enforce the invariants. |
+| `tools/check_*.py` | Gate scripts that enforce the invariants |
 
-**The design principles I hold you to:**
+Design constraints governing all changes:
 
-1. Standardized primitives only — NIST FIPS, IETF RFC. No custom ciphers or
-   hashes. The *composition* is original; the primitives are not.
-2. Defense in depth. Independent layers, so one failure is not total failure.
-3. Quantum readiness in the primary signature path.
-4. Constant-time for everything secret-dependent.
-5. Graceful degradation for optional components — **never** for cryptography
-   itself. See INVARIANT-7.
-6. Honest performance claims: name the host, the flags, the artifact.
+1. Standardized primitives only — NIST FIPS and IETF RFC. The composition
+   protocol is original work; the primitives are not.
+2. Defense in depth: independent layers, so that a single failure is not total.
+3. Constant-time execution for every secret-dependent operation.
+4. Graceful degradation applies to optional components. It never applies to
+   cryptography (INVARIANT-7).
+5. Performance claims name the host, the build flags, and the artifact.
 
 ---
 
-## 3. The invariants are the constitution
+## 4. The invariant framework
 
-`INVARIANTS.md` is 3,356 lines and carries **52 numbered invariants**. They are
-not documentation. They are the rules the gates enforce, and most of them exist
-because something went wrong once and I do not intend to repeat it.
-
-Know them. When you touch an area, re-read the invariant that governs it.
+`INVARIANTS.md` contains 52 numbered invariants. They are enforced by gate
+scripts, not by convention, and they take precedence over any other guidance in
+this repository. Before modifying an area, read the invariant governing it.
 
 1. Zero External Crypto Dependencies
 2. Fail-Closed CI
@@ -136,101 +137,131 @@ Know them. When you touch an area, re-read the invariant that governs it.
 51. An Ed25519 Signer Derives Its Own Public Half
 52. A Package Signature Covers the Whole Package
 
-If your change cannot live inside these, the answer is not to bend one. Bring
-me the argument and I will decide.
+---
+
+## 5. Primary directive: remediation at source
+
+**A defect is resolved by changing the code. Documentation, annotation, and
+suppression are not resolutions.**
+
+This is the governing engineering principle of the repository and the most
+frequent point of failure in practice.
+
+Required responses:
+
+| Condition | Required action | Not acceptable |
+|---|---|---|
+| Static-analysis finding | Change the code until the analyzer is satisfied | Suppression marker; disabling the check |
+| Irreducible tool limitation | Narrow the exclusion to the exact demonstrated files, pinned by a gate | Tree-wide or directory-wide exclusion |
+| Intermittent test | Make the test deterministic | `skip`, `xfail`, quarantine, deletion |
+| Unprotected guard | Build the test that fails without the guard | A comment asserting the guard is correct |
+| Unreproducible performance claim | Re-measure and publish the conditions | Softening the claim |
+| Missing mechanism | Build the mechanism | Describing its absence |
+
+*Historical corrective action:* repository-wide suppression mechanisms — a
+`.cppcheck-suppressions` file and a tree-wide `clang-tidy` check exclusion —
+were removed and the underlying code corrected, because they violated
+INVARIANT-13. Both had been documented. Documentation did not make them
+acceptable.
+
+Suppressions are prohibited without exception in `src/c/` and `include/`.
+Elsewhere they are governed by INVARIANT-13, which requires line scope, the
+named rule, a justification, a tracking reference, and test coverage of the
+suppressed line.
+
+**Blocked work.** Where remediation genuinely requires hardware, a credential,
+or an authority the agent does not hold, the agent states the blocker in one
+sentence, names precisely what is required to clear it, and completes all
+remaining work in full. A single blocked item does not license an incomplete
+pass.
 
 ---
 
-## 4. Engineer it. Do not document around it.
+## 6. Evidence standard
 
-**This is the rule I care about most, so read it twice.**
+Code review is not evidence. A passing test is not evidence that the test
+constrains anything.
 
-When you find a problem, the deliverable is a **fix in the code**. Not a note.
-Not a caveat in the CHANGELOG. Not a suppression with a tracking ID. Not a
-`skipif`. Not a comment explaining why the broken thing is acceptable.
+**6.1 Measure before asserting.** Execute the behavior and record the result.
+Claims about what the system does are supported by observed output, not by
+reading the implementation.
 
-I have watched this project accumulate exactly that failure mode and then spend
-an entire maintenance pass deleting it — the `.cppcheck-suppressions` file, the
-tree-wide dropped clang-tidy check. Both were "documented." Both were wrong.
-The pass that removed them put it correctly: **a suppression and a dropped
-check are not fixes.** INVARIANT-13 says the same thing with teeth.
+**6.2 Mutation is the test of a test.** For any test added, or any guard
+claimed to be protected: deliberately break the guard, rebuild, and confirm the
+test fails. A test that passes against a deliberately broken guard constrains
+nothing and shall be reported as such and corrected.
 
-So:
+**6.3 Identify what is load-bearing.** Guards are frequently redundant. A test
+surviving removal of guard A may be protected by guard B. Remove each
+independently, then both, and report the measured result. Where a property is
+enforced redundantly, the test pins the property, not either implementation,
+and the documentation says so.
 
-- A failing analyzer finding gets the **code** changed until the analyzer is
-  satisfied, or the exclusion gets narrowed to the exact files with a
-  demonstrated irreducible tool limitation — never the tree.
-- A flaky test gets **made robust**. It does not get skipped, disabled, or
-  quarantined. A failing test is never "infra."
-- A gap in a guard gets the guard **built**, plus the test that fails without
-  it.
-- A performance claim you cannot reproduce gets **re-measured**, not softened.
-- If a mechanism is missing — a gate, an instrument, a harness, a lever —
-  **build the mechanism.** Fuses, breakers, plumbing, wiring. That is
-  engineering. Writing a paragraph about the missing fuse is not.
+**6.4 Classify assertions by demonstrated behavior.** This repository uses:
 
-The one honest exception: when the fix genuinely belongs to someone else or
-needs hardware or a credential you do not have. Then say so in one plain
-sentence, name exactly what is needed, and **finish everything else in full**.
-Do not let one blocked item become cover for a half-done pass.
+- **PIN** — fails when the fix is reverted. Established by mutation.
+- **RANGE** — unit test of a predicate's domain.
+- **SMOKE** — behavioral; holds with or without the change.
 
----
+The label is earned by mutation, not assigned by intent.
 
-## 5. How to prove a change — the discipline I expect
+**6.5 Measure what is never executed.** `tools/measure_branch_coverage.py`
+reports branch arcs under `src/c` that no test reaches. A guard that no test
+executes is unprotected: removing it breaks nothing observable. This instrument
+aggregates across every translation unit, because a header instantiated in
+several units is covered if any instantiation runs it.
 
-Reading the code is not proof. Passing tests are not proof that a test is
-*doing anything*. Here is the standard, and it is not optional:
-
-**Measure before you claim.** Run the thing. Capture the number. If you are
-asserting behavior, exercise the behavior first and read what actually comes
-back.
-
-**Kill the mutant.** For any test you add or any guard you claim is protected:
-break the guard on purpose, rebuild, and confirm the test *fails*. If it still
-passes, your test proves nothing and you must say so and fix it. This single
-habit is what separates a real assertion from decoration.
-
-**Find out what is actually load-bearing.** Guards are often redundant. A test
-that passes when you remove guard A may be riding on guard B. Remove each, then
-both. Report what you found, not what you assumed. I would rather have an
-accurate "this pins the property, not the implementation" than a confident
-label that is false.
-
-**Label honestly.** This tree uses PIN (fails without the fix), RANGE (unit
-test of a predicate) and SMOKE (behavioral, holds either way). Earn the label
-by mutation. Do not guess it.
-
-**Know what is never exercised.** `tools/measure_branch_coverage.py` reports
-the branch arcs under `src/c` that no test reaches. A guard nothing executes is
-invisible — deleting it breaks nothing and the suite stays green. Run it. Read
-it. That is how two real gaps were found.
-
-**Correct yourself out loud.** If mutation contradicts your earlier reasoning,
-say so plainly and fix the artifact. I would much rather read "my first
-reasoning was wrong, here is the measurement" than a clean story that is not
-true. Confidence built on a wrong premise is worse than no confidence.
+**6.6 Correct the record.** Where measurement contradicts an earlier conclusion
+— including one stated in a commit message, a comment, or this directive — the
+correction is stated explicitly and the artifact is amended. An accurate
+retraction is preferred to a consistent narrative.
 
 ---
 
-## 6. Never
+## 7. Severity classification
 
-- Never weaken a gate to get green.
-- Never skip, disable, or quarantine a test.
-- Never add a suppression to `src/c/` or `include/`. Not with a justification.
-  Not with a tracking ID. Not ever.
-- Never commit `ama_cryptography/_integrity_signature.py` from a local build —
-  it carries a per-build ephemeral key and your local `.so` digests.
-- Never push an empty commit or close/reopen a PR to kick CI.
-- Never claim a lane passed that you did not watch finish.
-- Never state a benchmark number without the host, the flags, and the run.
-- Never rewrite history on a branch that is not yours.
-- Never let a red PR sit because it is "waiting on review." Red is work.
+Findings are classified on discovery. Classification determines urgency and
+whether work may be deferred.
+
+| Severity | Definition | Handling |
+|---|---|---|
+| **Critical** | Cryptographic incorrectness, key or secret exposure, invariant violation, silent acceptance of invalid input | Halt other work. Remediate before any further change is pushed. |
+| **High** | Build- or verification-gate bypass, a gate that cannot detect what it claims, ABI or format divergence from the declared contract | Remediate in the current pass. |
+| **Medium** | Coverage gap, an unprotected guard, an untested reachable path, a stale derived figure | Remediate in the current pass where scoped; otherwise record with the measurement. |
+| **Low** | Documentation inaccuracy, comment drift, naming, formatting | Carry into the next change that already touches the file. |
+
+A finding whose severity is uncertain is treated at the higher classification
+until measurement establishes otherwise.
 
 ---
 
-## 7. The loop, every time
+## 8. Prohibited actions
 
-Before you touch anything:
+1. Weakening, disabling, or narrowing a gate to obtain a passing build.
+2. Skipping, quarantining, or deleting a test to obtain a passing build.
+3. Adding a suppression to `src/c/` or `include/` under any justification.
+4. Committing `ama_cryptography/_integrity_signature.py` from a local build; it
+   carries a per-build ephemeral key and local artifact digests.
+5. Empty commits, or closing and reopening a pull request, to re-trigger CI.
+6. Asserting that a CI lane passed without observing it complete.
+7. Publishing a performance figure without its host, build flags, and run
+   identifier.
+8. Rewriting history on a branch the agent does not own.
+9. Treating a red pull request as blocked on review. A failing or conflicted
+   head is active work.
+10. Expanding scope beyond the requested change without authorization.
+
+**On infrastructure failures.** Treat every failing test as a product defect
+until infrastructure has been positively ruled out. Infrastructure failure is a
+conclusion reached by evidence — an error naming a service the change does not
+touch and reproducing identically on re-run, or the same failure present on the
+base branch — not an initial hypothesis. "Flake" is not a root cause.
+
+---
+
+## 9. Verification procedure
+
+Establish the baseline before modifying it:
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON
@@ -238,9 +269,7 @@ cmake --build build && ctest --test-dir build --output-on-failure
 python -m pytest tests/ -q
 ```
 
-Know the baseline before you move it.
-
-Before you push:
+Required before pushing:
 
 ```
 black --check . && ruff check . && mypy --strict <scope>
@@ -250,39 +279,74 @@ ctest --test-dir build --output-on-failure
 python -m pytest tests/ -q
 ```
 
-Strict warnings on both compilers for any C you touch:
+Any modified C compiles clean under strict warnings on both toolchains:
 
 ```
 gcc   -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror
 clang -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror
 ```
 
-Then squash your derived-docs refresh into the commit that caused it. Two
-pushes a minute apart cancel the first CI run and produce a wall of red
-roll-up gates that mean nothing. One validated push beats three speculative
-ones.
+**Commit composition.** A change and the derived figures it moves belong in the
+same commit; the documented-counts gate reads them together, and splitting them
+produces a failing intermediate state. Consecutive pushes cancel the superseded
+CI run, and its roll-up gates then report failure for cancelled dependencies
+rather than for any defect. One validated push is preferred to several
+speculative ones.
 
 ---
 
-## 8. Where things stand
+## 10. Enforcement model
 
-PR 394 carries the 5.0.0 completion work. CI is green. The four release
-prerequisites in the PR body each need hardware, a credential, or a workflow
-dispatch — none is blocked by a defect in the branch.
+Invariants are enforced by gate scripts under `tools/` and by the CI workflows
+that invoke them, fail-closed (INVARIANT-2). Enforcement is mechanical;
+agreement with a rule is not required for it to bind.
 
-The open engineering item, and it is real: **`tools/measure_branch_coverage.py`
-reports ~1,765 of ~11,053 branch arcs under `src/c` are never taken.** The
-Ed25519 rows have been triaged. The rest have not. The dispatch and CPUID
-buckets are structurally unreachable on any single host and are fine.
-`ama_nistp.c` (203), `ama_frost.c` (67), `ama_slhdsa.c` (116), `ama_kyber.c`
-(111) and `ama_dilithium.c` (140) have not been examined by anyone.
+A violation that reaches review indicates two defects: the change, and the gate
+that failed to detect it. Both are remediated. Where no gate exists for a rule
+this directive states, constructing that gate is in scope for the pass that
+discovered the omission — subject to the constraint that a gate requiring a
+standing exemption list is not a gate. Such a mechanism reproduces the
+suppression pattern INVARIANT-13 prohibits and is rejected; where systematic
+exemption would be unavoidable, the correct artifact is a measurement
+instrument producing a reviewed inventory, not a build-blocking check.
 
-That is where the next real pass goes. Not a coverage gate with an exemption
-list — that is a suppression file wearing a different hat, and this project
-already deleted one. Read the inventory, find the guards nothing executes,
-build the tests that make them fail-visible, and fix anything that turns out to
-be more than a test gap.
+Conflicts between this directive and `INVARIANTS.md` resolve in favor of
+`INVARIANTS.md`. Conflicts this directive does not resolve are escalated to the
+repository maintainer.
 
-Finish it. Prove it. Tell me the truth about it.
+---
 
-— Andrew
+## 11. Current engineering state
+
+Open item, carried forward and unassigned:
+
+`tools/measure_branch_coverage.py` reports approximately 1,765 of 11,053
+instrumented branch arcs under `src/c` are never taken by the C suite. The
+Ed25519 rows have been triaged and two Medium findings closed. The dispatch and
+CPUID buckets are structurally unreachable on any single host and require no
+action. The following have not been examined: `ama_nistp.c` (203 arcs),
+`ama_dilithium.c` (140), `ama_kyber.c` (111), `ama_slhdsa.c` (116),
+`ama_frost.c` (67).
+
+The required approach is triage of that inventory: identify guards no test
+executes, construct tests that fail without them, and remediate anything that
+proves to be more than a coverage gap. Per §10, a coverage gate carrying an
+exemption list is not an acceptable substitute.
+
+Release prerequisites are recorded in the pull request description. Each
+requires hardware, a protected credential, or a workflow dispatch; none is
+blocked by a defect in the tree.
+
+---
+
+## 12. Document control
+
+This directive is maintained in the repository root and is subordinate to
+`INVARIANTS.md`. It is amended by the same review process as any other change to
+the tree, and its amendments are subject to the evidence standard in §6.
+
+Related documents: `INVARIANTS.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`,
+`CONTRIBUTING.md`, `CRYPTO_REVIEW_CHECKLIST.md`, `CHANGELOG.md`.
+
+Copyright (C) 2025-2026 Steel Security Advisors LLC
+SPDX-License-Identifier: Apache-2.0
