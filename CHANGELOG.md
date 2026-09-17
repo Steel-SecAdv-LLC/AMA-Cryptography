@@ -19,6 +19,47 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### §5.1.3 enforcement on the non-verify decoders — 2026-09-17
+
+Branch coverage over the whole C suite (gcov, all 141 translation units
+aggregated, so a header instantiated several times counts as covered when any
+instantiation ran) put a number on something no gate reports: **1,521 of
+10,763 instrumented branch arcs under `src/c` are never taken.** Most of that
+is legitimate — CPU-feature arcs for ISAs absent on one host (239 in
+`dispatch/ama_dispatch.c`, 42 in `ama_cpuid.c`), allocation-failure and
+NULL-argument returns, and SIMD kernels other runners cover. Reading the
+Ed25519 rows of that inventory found one arc worth acting on.
+
+`ama_ed25519_scalarmult_public`, `ama_ed25519_double_scalarmult_public` and
+`ama_ed25519_point_add` decode a caller-supplied point without the verify
+path in front of them, and no test drove any of the three with an encoding
+RFC 8032 §5.1.3 step 3 forbids (`x = 0` with `x_0 = 1`, i.e. `y = 1` or
+`y = p - 1` with the sign bit set). `tests/c/test_ed25519_canonical_r.c`
+covers the rule on verify only. `ama_frost.c` calls `scalarmult_public` on a
+commitment half taken off the wire, where accepting a second spelling of a
+point that already has a canonical one is what lets two byte strings decode
+to one group element in a transcript.
+
+Behaviour was correct already and is unchanged: all four forbidden encodings
+are refused on all three entry points, measured before anything was written.
+`tests/c/test_ed25519_decode_x_zero.c` now asserts it — 12 assertions, 6 PIN
+and 6 SMOKE.
+
+The labels were corrected by mutation rather than reasoned, and the first
+reasoning was wrong. Two independent guards enforce the rule: the byte
+predicate `ama_ed25519_point_x_sign_is_admissible` in `ge_decode_prepare`,
+and `fe_iszero(h->X) && x_sign` in `ge_decode_finish`. The coverage gap is
+the second one's taken-arc, reached **zero** times — the first short-circuits
+it on every path, not only on verify, which is not what the placement
+suggests. Each guard is sufficient alone, so deleting either changes no
+verdict: both single mutations were run and all twelve assertions still
+passed. Only removing **both** discriminates — 6 passed / 6 failed, exactly
+the PIN set. The file therefore pins the property on three entry points that
+previously asserted nothing about it, not either implementation of it. The
+redundancy is deliberate defence in depth and is left in place; that no test
+can see one half of a redundant pair go missing is a property of redundancy,
+not a defect.
+
 ### Half-size decomposition test blind spot — 2026-09-17
 
 `tests/c/test_ed25519_half_reduce.c` asserted that `v0` is odd and non-zero,

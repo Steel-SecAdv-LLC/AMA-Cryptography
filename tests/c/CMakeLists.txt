@@ -284,6 +284,22 @@ add_ama_test(test_ed25519_canonical_r test_ed25519_canonical_r.c)
 # header for why that distinction is load-bearing here.
 add_ama_test(test_ed25519_small_order test_ed25519_small_order.c)
 
+# RFC 8032 §5.1.3 step 3 on the three public entry points that decode a
+# caller-supplied point outside verify (scalarmult_public,
+# double_scalarmult_public, point_add).  test_ed25519_canonical_r.c pins the
+# rule on verify and says nothing about these three, which no test drove with
+# an x = 0 encoding.  ama_frost.c calls scalarmult_public on a commitment half
+# taken off the wire, so this rule is what stops two byte strings decoding to
+# one group element in a transcript.  Two independent guards enforce it — the
+# byte predicate in ge_decode_prepare and `fe_iszero(h->X) && x_sign` in
+# ge_decode_finish — and aggregated gcov over the whole C suite showed the
+# latter's taken-arc reached zero times, because the former short-circuits it
+# everywhere, not only on verify.  Each is sufficient alone, so the PIN lines
+# discriminate only when both are removed (measured: 6 passed / 6 failed,
+# exactly the PIN set); SMOKE lines hold either way.  The file pins the
+# property, not either implementation of it.
+add_ama_test(test_ed25519_decode_x_zero test_ed25519_decode_x_zero.c)
+
 # Public scalar-multiplication contract for ama_ed25519_scalarmult_public and
 # ama_ed25519_double_scalarmult_public: the two defects it pins (a stale
 # extended-t on the joint routine of the since-removed vendored backend, the
