@@ -19,6 +19,47 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Second-pass coverage triage: FROST, NIST P-curves, SLH-DSA — 2026-09-17
+
+The first pass above triaged only the Ed25519 rows of the branch-coverage
+inventory. This pass walked the three largest untriaged API-surface rows —
+`ama_nistp.c` (203 untaken arcs), `ama_slhdsa.c` (116), `ama_frost.c` (67) —
+classified every arc as reachable or structural, and converted the reachable
+ones into pins in the existing suites (`test_nistp`, `test_frost`,
+`test_slhdsa_context_separation`; no new test binaries, so the documented
+suite counts are unchanged). After the pass the whole-tree inventory stands
+at **1,496 of 11,581 arcs never taken** (from 1,762/11,077): `ama_nistp.c`
+203→52, `ama_slhdsa.c` 116→58, `ama_frost.c` 67→30. The residue is
+structural — allocation-failure and infallible-hash `rc` legs, CSPRNG
+failure on entry points that do not consult the test hook, probabilistic
+resample legs (r=0/s=0, candidate≥n), cofactor-1 impossibilities, and gcov
+short-circuit combinatorics — each verified against source, not assumed.
+
+New pins worth naming: the P-256 verifier refuses the R-at-infinity forgery
+shape (r = n−z, s = 1 under d = 1) and the Q = −G infinity row; the DER
+parser walks a full malformation matrix plus a hand-built P-521 139-octet
+long-form (0x81) roundtrip; sign refuses d ∈ {0, n} and unknown flag bits;
+FROST round-2 consumes the nonce pair on **every** exit past the NULL check
+(INVARIANT-49 — one draw, one use, even when the call is refused), pinned
+with a counting CSPRNG hook; canonical-but-non-point (y = 2) and
+non-canonical (y = p) encodings are refused at share verify, round 2, and
+aggregate with `blame == 0`; SLH-DSA pins the hedged/addrnd/deterministic
+success paths, ctx > 255 and NULL legs on all ten entry points, the FIPS 205
+§9 internal interface, and a SHAKE-128s full-verify walk that must land on a
+clean `VERIFY_FAILED`.
+
+Mutation duty (each guard broken, watched fail, restored, watched pass)
+surfaced two redundancies worth recording rather than "fixing":
+`frost_verify_share_core`'s commitment canonicality/small-order pre-checks
+are second guards behind the group-commitment fold — disabling them alone
+fails nothing (the fold refuses first); only the public-share legs are
+load-bearing. Likewise the DER parser's two total-length checks are
+individually redundant: only relaxing both lets a trailing byte through.
+Both are defence-in-depth by design, kept, and now documented as such.
+Three Ed25519 findings from the first pass (the unreachable `hs_cmp` else,
+the `hs_choose` one-bit margin, the §5.1.3 dual guards) were deliberately
+left untouched.
+
 ### §5.1.3 enforcement on the non-verify decoders — 2026-09-17
 
 Branch coverage over the whole C suite (gcov, all 141 translation units

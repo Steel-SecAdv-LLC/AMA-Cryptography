@@ -440,6 +440,339 @@ static int part_b_acvp_internal_sigver(void) {
     return 0;
 }
 
+/* ===========================================================================
+ * Part C — argument-validation matrix (coverage triage, 2026-09-17)
+ *
+ * Branch-coverage measurement showed every NULL-pointer leg, the unknown-
+ * parameter-set leg, the ctx_len > 255 leg, the short-buffer legs and the
+ * CSPRNG-failure legs of the ten entry points untaken: the guards existed
+ * but nothing drove them.  Each check below flips exactly one argument.
+ *
+ * The empty-message signing at the end is behavioural, not a rejection:
+ * FIPS 205 defines M ∈ B*, (NULL, 0) is the empty message, and the SHA2
+ * H_msg path has a memcpy that is legitimately SKIPPED only when
+ * message_len == 0 — an arc no other test reaches.
+ * =========================================================================== */
+static ama_error_t failing_randombytes(uint8_t *buf, size_t len) {
+    memset(buf, 0, len);
+    return AMA_ERROR_CRYPTO;
+}
+
+/* Test-only KAT hook, defined in src/c/ama_slhdsa.c under AMA_TESTING_MODE;
+ * declared the same way tests/c/test_kat.c declares it. */
+extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len);
+
+static void part_c_argument_validation(void) {
+    static uint8_t sig[AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES];
+    static uint8_t pk[AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES];
+    static uint8_t sk[AMA_SLHDSA_SHA2_256F_SECRET_KEY_BYTES];
+    const ama_slhdsa_param_set_t bad_ps = (ama_slhdsa_param_set_t)99;
+    const uint8_t msg[] = "part C";
+    const size_t msg_len = sizeof(msg) - 1;
+    uint8_t seed[32], addrnd[32];
+    size_t sig_len;
+    ama_error_t rc;
+
+    printf("  part C: argument-validation matrix\n");
+    memset(seed, 0x42, sizeof seed);
+    memset(addrnd, 0x24, sizeof addrnd);
+
+    /* --- keygen legs ------------------------------------------------------ */
+    check(ama_slhdsa_keygen(bad_ps, pk, sk) == AMA_ERROR_INVALID_PARAM,
+          "keygen refuses an unknown parameter set");
+    check(ama_slhdsa_keygen(AMA_SLHDSA_SHA2_256F, NULL, sk) == AMA_ERROR_INVALID_PARAM,
+          "keygen refuses a NULL pk");
+    check(ama_slhdsa_keygen(AMA_SLHDSA_SHA2_256F, pk, NULL) == AMA_ERROR_INVALID_PARAM,
+          "keygen refuses a NULL sk");
+    check(ama_slhdsa_keygen_from_seed(bad_ps, seed, seed, seed, pk, sk)
+              == AMA_ERROR_INVALID_PARAM,
+          "keygen_from_seed refuses an unknown parameter set");
+    check(ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, NULL, seed, seed, pk, sk)
+              == AMA_ERROR_INVALID_PARAM, "keygen_from_seed refuses a NULL sk_seed");
+    check(ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, seed, NULL, seed, pk, sk)
+              == AMA_ERROR_INVALID_PARAM, "keygen_from_seed refuses a NULL sk_prf");
+    check(ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, seed, seed, NULL, pk, sk)
+              == AMA_ERROR_INVALID_PARAM, "keygen_from_seed refuses a NULL pk_seed");
+    check(ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, seed, seed, seed, NULL, sk)
+              == AMA_ERROR_INVALID_PARAM, "keygen_from_seed refuses a NULL pk");
+    check(ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, seed, seed, seed, pk, NULL)
+              == AMA_ERROR_INVALID_PARAM, "keygen_from_seed refuses a NULL sk");
+
+    /* A real deterministic keypair for everything below. */
+    rc = ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, seed, seed, seed, pk, sk);
+    check(rc == AMA_SUCCESS, "keygen_from_seed produced the part C keypair");
+
+    /* --- hedged sign legs ------------------------------------------------- */
+    sig_len = sizeof sig;
+    check(ama_slhdsa_sign(bad_ps, sig, &sig_len, msg, msg_len, NULL, 0, sk)
+              == AMA_ERROR_INVALID_PARAM, "sign refuses an unknown parameter set");
+    check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, NULL, &sig_len, msg, msg_len,
+                          NULL, 0, sk) == AMA_ERROR_INVALID_PARAM,
+          "sign refuses a NULL signature");
+    check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig, NULL, msg, msg_len,
+                          NULL, 0, sk) == AMA_ERROR_INVALID_PARAM,
+          "sign refuses a NULL signature_len");
+    check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig, &sig_len, msg, msg_len,
+                          NULL, 0, NULL) == AMA_ERROR_INVALID_PARAM,
+          "sign refuses a NULL sk");
+    check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig, &sig_len, NULL, msg_len,
+                          NULL, 0, sk) == AMA_ERROR_INVALID_PARAM,
+          "sign refuses a NULL message with nonzero length");
+    check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig, &sig_len, msg, msg_len,
+                          NULL, 1, sk) == AMA_ERROR_INVALID_PARAM,
+          "sign refuses a NULL ctx with nonzero length");
+    {
+        static uint8_t big_ctx[256];
+        sig_len = sizeof sig;
+        check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig, &sig_len, msg, msg_len,
+                              big_ctx, sizeof big_ctx, sk) == AMA_ERROR_INVALID_PARAM,
+              "sign refuses ctx_len > 255");
+    }
+    sig_len = AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES - 1;
+    check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig, &sig_len, msg, msg_len,
+                          NULL, 0, sk) == AMA_ERROR_INVALID_PARAM,
+          "sign refuses a short signature buffer");
+    check(sig_len == AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+          "a short-buffer rejection reports the required size");
+
+    /* --- deterministic and addrnd sign legs -------------------------------- */
+    sig_len = sizeof sig;
+    check(ama_slhdsa_sign_deterministic(bad_ps, sig, &sig_len, msg, msg_len,
+                                        NULL, 0, sk) == AMA_ERROR_INVALID_PARAM,
+          "sign_deterministic refuses an unknown parameter set");
+    check(ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F, NULL, &sig_len,
+                                        msg, msg_len, NULL, 0, sk)
+              == AMA_ERROR_INVALID_PARAM, "sign_deterministic refuses a NULL signature");
+    check(ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F, sig, NULL,
+                                        msg, msg_len, NULL, 0, sk)
+              == AMA_ERROR_INVALID_PARAM, "sign_deterministic refuses a NULL signature_len");
+    check(ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                                        NULL, msg_len, NULL, 0, sk)
+              == AMA_ERROR_INVALID_PARAM,
+          "sign_deterministic refuses a NULL message with nonzero length");
+    sig_len = AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES - 1;
+    check(ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                                        msg, msg_len, NULL, 0, sk)
+              == AMA_ERROR_INVALID_PARAM,
+          "sign_deterministic refuses a short signature buffer");
+
+    sig_len = sizeof sig;
+    check(ama_slhdsa_sign_addrnd(bad_ps, sig, &sig_len, msg, msg_len,
+                                 NULL, 0, addrnd, sk) == AMA_ERROR_INVALID_PARAM,
+          "sign_addrnd refuses an unknown parameter set");
+    check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, NULL, &sig_len, msg,
+                                 msg_len, NULL, 0, addrnd, sk)
+              == AMA_ERROR_INVALID_PARAM, "sign_addrnd refuses a NULL signature");
+    check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, sig, NULL, msg,
+                                 msg_len, NULL, 0, addrnd, sk)
+              == AMA_ERROR_INVALID_PARAM, "sign_addrnd refuses a NULL signature_len");
+    check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, sig, &sig_len, msg,
+                                 msg_len, NULL, 0, NULL, sk)
+              == AMA_ERROR_INVALID_PARAM, "sign_addrnd refuses a NULL addrnd");
+    check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, sig, &sig_len, msg,
+                                 msg_len, NULL, 0, addrnd, NULL)
+              == AMA_ERROR_INVALID_PARAM, "sign_addrnd refuses a NULL sk");
+    check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, sig, &sig_len, NULL,
+                                 msg_len, NULL, 0, addrnd, sk)
+              == AMA_ERROR_INVALID_PARAM,
+          "sign_addrnd refuses a NULL message with nonzero length");
+    sig_len = AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES - 1;
+    check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, sig, &sig_len, msg,
+                                 msg_len, NULL, 0, addrnd, sk)
+              == AMA_ERROR_INVALID_PARAM,
+          "sign_addrnd refuses a short signature buffer");
+
+    /* --- verify legs -------------------------------------------------------- */
+    check(ama_slhdsa_verify(bad_ps, sig, sizeof sig, msg, msg_len, NULL, 0, pk)
+              == AMA_ERROR_INVALID_PARAM, "verify refuses an unknown parameter set");
+    check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, NULL, sizeof sig, msg, msg_len,
+                            NULL, 0, pk) == AMA_ERROR_INVALID_PARAM,
+          "verify refuses a NULL signature");
+    check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sizeof sig, msg, msg_len,
+                            NULL, 0, NULL) == AMA_ERROR_INVALID_PARAM,
+          "verify refuses a NULL pk");
+    check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sizeof sig, NULL, msg_len,
+                            NULL, 0, pk) == AMA_ERROR_INVALID_PARAM,
+          "verify refuses a NULL message with nonzero length");
+    check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sizeof sig, msg, msg_len,
+                            NULL, 1, pk) == AMA_ERROR_INVALID_PARAM,
+          "verify refuses a NULL ctx with nonzero length");
+
+    /* --- legacy SPHINCS+ wrapper legs --------------------------------------- */
+    check(ama_sphincs_keypair(NULL, sk) == AMA_ERROR_INVALID_PARAM,
+          "sphincs_keypair refuses a NULL pk");
+    check(ama_sphincs_keypair(pk, NULL) == AMA_ERROR_INVALID_PARAM,
+          "sphincs_keypair refuses a NULL sk");
+    sig_len = sizeof sig;
+    check(ama_sphincs_sign(NULL, &sig_len, msg, msg_len, sk)
+              == AMA_ERROR_INVALID_PARAM, "sphincs_sign refuses a NULL signature");
+    check(ama_sphincs_sign(sig, NULL, msg, msg_len, sk)
+              == AMA_ERROR_INVALID_PARAM, "sphincs_sign refuses a NULL signature_len");
+    check(ama_sphincs_sign(sig, &sig_len, msg, msg_len, NULL)
+              == AMA_ERROR_INVALID_PARAM, "sphincs_sign refuses a NULL sk");
+    check(ama_sphincs_sign(sig, &sig_len, NULL, msg_len, sk)
+              == AMA_ERROR_INVALID_PARAM,
+          "sphincs_sign refuses a NULL message with nonzero length");
+    sig_len = AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES - 1;
+    check(ama_sphincs_sign(sig, &sig_len, msg, msg_len, sk)
+              == AMA_ERROR_INVALID_PARAM,
+          "sphincs_sign refuses a short signature buffer");
+    check(ama_sphincs_verify(msg, msg_len, NULL, sizeof sig, pk)
+              == AMA_ERROR_INVALID_PARAM, "sphincs_verify refuses a NULL signature");
+    check(ama_sphincs_verify(msg, msg_len, sig, sizeof sig, NULL)
+              == AMA_ERROR_INVALID_PARAM, "sphincs_verify refuses a NULL pk");
+    check(ama_sphincs_verify(NULL, msg_len, sig, sizeof sig, pk)
+              == AMA_ERROR_INVALID_PARAM,
+          "sphincs_verify refuses a NULL message with nonzero length");
+    {
+        static uint8_t big_ctx[256];
+        check(ama_sphincs_verify_ctx(msg, msg_len, big_ctx, sizeof big_ctx,
+                                     sig, sizeof sig, pk) == AMA_ERROR_INVALID_PARAM,
+              "sphincs_verify_ctx refuses ctx_len > 255");
+        check(ama_sphincs_verify_ctx(msg, msg_len, NULL, 1,
+                                     sig, sizeof sig, pk) == AMA_ERROR_INVALID_PARAM,
+              "sphincs_verify_ctx refuses a NULL ctx with nonzero length");
+    }
+
+    /* --- CSPRNG failure fails closed (hook-reachable draw sites) ------------ */
+    ama_sphincs_randombytes_hook = failing_randombytes;
+    check(ama_sphincs_keypair(pk, sk) == AMA_ERROR_CRYPTO,
+          "sphincs_keypair fails closed on CSPRNG failure");
+    sig_len = sizeof sig;
+    check(ama_sphincs_sign(sig, &sig_len, msg, msg_len, sk) == AMA_ERROR_CRYPTO,
+          "sphincs_sign fails closed on CSPRNG failure");
+    ama_sphincs_randombytes_hook = NULL;
+
+    /* Rebuild the deterministic keypair — the hook test scrambled sk/pk. */
+    rc = ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHA2_256F, seed, seed, seed, pk, sk);
+    check(rc == AMA_SUCCESS, "keypair rebuilt after the hook tests");
+
+    /* --- the EMPTY message is signable and verifiable (FIPS 205, M ∈ B*) ---- */
+    sig_len = sizeof sig;
+    rc = ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                                       NULL, 0, NULL, 0, sk);
+    check(rc == AMA_SUCCESS, "the empty message signs");
+    check(sig_len == AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+          "the empty-message signature has the advertised length");
+    check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sig_len, NULL, 0,
+                            NULL, 0, pk) == AMA_SUCCESS,
+          "the empty-message signature verifies");
+    check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sig_len - 1, NULL, 0,
+                            NULL, 0, pk) == AMA_ERROR_VERIFY_FAILED,
+          "a truncated signature is refused");
+    sig[100] ^= 0x01;
+    check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sig_len, NULL, 0,
+                            NULL, 0, pk) == AMA_ERROR_VERIFY_FAILED,
+          "a corrupted empty-message signature is refused");
+
+    /* Success paths of the hedged FIPS 205 §10.2 wrappers.  Everything above
+     * exercises rejection legs; the all-arguments-valid arcs of
+     * ama_slhdsa_keygen / ama_slhdsa_sign / ama_slhdsa_sign_addrnd were
+     * otherwise only reachable from the Python suite (production library),
+     * not this instrumented C binary. */
+    {
+        uint8_t hpk[AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES];
+        uint8_t hsk[AMA_SLHDSA_SHA2_256F_SECRET_KEY_BYTES];
+        const uint8_t hmsg[4] = {0x68, 0x65, 0x64, 0x67};
+        check(ama_slhdsa_keygen(AMA_SLHDSA_SHA2_256F, hpk, hsk) == AMA_SUCCESS,
+              "hedged keygen succeeds with valid arguments");
+
+        sig_len = sizeof(sig);
+        check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                              hmsg, sizeof(hmsg), NULL, 0, hsk) == AMA_SUCCESS,
+              "hedged sign succeeds with valid arguments");
+        check(sig_len == AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+              "hedged sign reports the advertised signature length");
+        check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sig_len,
+                                hmsg, sizeof(hmsg), NULL, 0, hpk) == AMA_SUCCESS,
+              "the hedged signature verifies");
+
+        sig_len = sizeof(sig);
+        check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                                     hmsg, sizeof(hmsg), NULL, 0,
+                                     addrnd, hsk) == AMA_SUCCESS,
+              "sign_addrnd succeeds with valid arguments");
+        check(ama_slhdsa_verify(AMA_SLHDSA_SHA2_256F, sig, sig_len,
+                                hmsg, sizeof(hmsg), NULL, 0, hpk) == AMA_SUCCESS,
+              "the caller-randomness signature verifies");
+
+        /* Rejection legs the earlier sweeps missed: NULL secret key and an
+         * oversized context on the deterministic and addrnd entry points. */
+        {
+            static uint8_t big_ctx[256];
+            sig_len = sizeof(sig);
+            check(ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                                                hmsg, sizeof(hmsg), NULL, 0,
+                                                NULL) == AMA_ERROR_INVALID_PARAM,
+                  "deterministic sign refuses a NULL secret key");
+            check(ama_slhdsa_sign_deterministic(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                                                hmsg, sizeof(hmsg), big_ctx,
+                                                sizeof big_ctx,
+                                                hsk) == AMA_ERROR_INVALID_PARAM,
+                  "deterministic sign refuses a 256-byte context");
+            check(ama_slhdsa_sign_addrnd(AMA_SLHDSA_SHA2_256F, sig, &sig_len,
+                                         hmsg, sizeof(hmsg), big_ctx,
+                                         sizeof big_ctx,
+                                         addrnd, hsk) == AMA_ERROR_INVALID_PARAM,
+                  "sign_addrnd refuses a 256-byte context");
+        }
+    }
+
+    /* FIPS 205 §9 internal interface (testing-mode exports): parameter-set
+     * and pointer validation mirrors the public wrappers. */
+    {
+        uint8_t ipk[AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES];
+        memset(ipk, 0, sizeof(ipk));
+        sig_len = sizeof(sig);
+        check(ama_slhdsa_sign_internal((ama_slhdsa_param_set_t)99, sig, &sig_len,
+                                       msg, sizeof(msg), addrnd,
+                                       sk) == AMA_ERROR_INVALID_PARAM,
+              "sign_internal refuses an unknown parameter set");
+        check(ama_slhdsa_sign_internal(AMA_SLHDSA_SHA2_256F, NULL, &sig_len,
+                                       msg, sizeof(msg), addrnd,
+                                       sk) == AMA_ERROR_INVALID_PARAM,
+              "sign_internal refuses a NULL signature buffer");
+        check(ama_slhdsa_verify_internal((ama_slhdsa_param_set_t)99, sig,
+                                         AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+                                         msg, sizeof(msg),
+                                         ipk) == AMA_ERROR_INVALID_PARAM,
+              "verify_internal refuses an unknown parameter set");
+        check(ama_slhdsa_verify_internal(AMA_SLHDSA_SHA2_256F, NULL,
+                                         AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+                                         msg, sizeof(msg),
+                                         ipk) == AMA_ERROR_INVALID_PARAM,
+              "verify_internal refuses a NULL signature");
+        check(ama_slhdsa_verify_internal(AMA_SLHDSA_SHA2_256F, sig,
+                                         AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES,
+                                         msg, sizeof(msg),
+                                         NULL) == AMA_ERROR_INVALID_PARAM,
+              "verify_internal refuses a NULL public key");
+    }
+
+    /* SLH-DSA-SHAKE-128s: the SHAKE H_msg/PRF/thash codepaths are otherwise
+     * exercised only by the Python KAT corpus against the production library,
+     * never inside this instrumented binary.  Signing 128s at -O0 is too slow
+     * for the suite, but a full verify of a well-formed-length garbage
+     * signature walks the complete SHAKE recompute path (FORS, hypertree,
+     * H_msg) and must land on a clean VERIFY_FAILED. */
+    {
+        uint8_t spk[AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES];
+        uint8_t ssk[AMA_SLHDSA_SHAKE_128S_SECRET_KEY_BYTES];
+        static uint8_t ssig[AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES];
+        uint8_t sseed[16];
+        size_t i;
+        for (i = 0; i < sizeof(sseed); ++i) sseed[i] = (uint8_t)(0xa5 ^ i);
+        for (i = 0; i < sizeof(ssig); ++i) ssig[i] = (uint8_t)(i * 31 + 7);
+        check(ama_slhdsa_keygen_from_seed(AMA_SLHDSA_SHAKE_128S, sseed, sseed,
+                                          sseed, spk, ssk) == AMA_SUCCESS,
+              "SHAKE-128s keygen_from_seed succeeds");
+        check(ama_slhdsa_verify(AMA_SLHDSA_SHAKE_128S, ssig, sizeof(ssig),
+                                msg, sizeof(msg), NULL, 0,
+                                spk) == AMA_ERROR_VERIFY_FAILED,
+              "SHAKE-128s cleanly refuses a garbage signature of valid length");
+    }
+}
+
 int main(void) {
     KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
 
@@ -447,6 +780,7 @@ int main(void) {
     part_a_context_separation();
     printf("    part A: %d checks\n", checks);
     part_b_acvp_internal_sigver();
+    part_c_argument_validation();
 
     if (failures != 0) {
         fprintf(stderr, "\nFAILED: %d of %d checks\n", failures, checks);
