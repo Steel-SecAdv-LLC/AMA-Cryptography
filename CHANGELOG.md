@@ -1469,12 +1469,19 @@ and **gates whose green light was wired to nothing**.
 - **`ama_secure_alloc()` is page-granular** (mmap / VirtualAlloc). Releasing
   one buffer used to `munlock` every other live buffer sharing its pages while
   `SecureBuffer.locked` kept reporting `True`.
-- **The shared library exports 212 symbols, not 241.** Every remaining export
-  is declared in a public header. The AES-GCM SIMD kernels in particular
-  deliberately omit the NULL checks and the SP 800-38D length limits the public
-  entry point enforces once, and the VAES kernel is not CPUID-gated at its own
-  entry, so a consumer resolving them by name got neither the guard nor the
-  SIGILL protection.
+- **The shared library exports only its `ama_*` ABI, where before
+  `cmake/ama_exports.map` it exported every defined symbol.** A C consumer
+  resolving a removed symbol by name no longer links, and every remaining
+  export is declared in a public header. The exact count is
+  architecture-dependent — measured at 214 on x86-64 and 224 on aarch64,
+  because each architecture compiles a different set of SIMD kernels — so
+  `tools/check_export_allowlist.py` pins that property rather than a number:
+  every exported symbol is `ama_*` (or a linker-generated ELF marker), over a
+  non-vacuity floor that rejects a stripped or wrong-path library. The AES-GCM
+  SIMD kernels in particular deliberately omit the NULL checks and the SP
+  800-38D length limits the public entry point enforces once, and the VAES
+  kernel is not CPUID-gated at its own entry, so a consumer resolving them by
+  name got neither the guard nor the SIGILL protection.
 
 #### Key material on the dead stack (INVARIANT-6)
 
