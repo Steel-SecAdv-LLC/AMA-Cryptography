@@ -83,7 +83,7 @@ from ama_cryptography.rfc3161_timestamp import (
     request_timestamp_exchange,
     verify_token_binding,
 )
-from ama_cryptography.secure_memory import constant_time_compare, lengths_match
+from ama_cryptography.secure_memory import constant_time_compare, lengths_match, secure_memzero
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +236,33 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
 def secure_wipe(data: Union[bytes, bytearray]) -> None:
     """Securely wipe sensitive data from memory.
 
-    NOTE: This is NOT the same as ``secure_memzero``.  ``secure_wipe``
-    accepts ``Union[bytes, bytearray]`` and raises ``TypeError`` with a
-    specific message for ``bytes``.  ``secure_memzero`` accepts
-    ``Union[bytearray, memoryview]``.
+    Delegates to :func:`ama_cryptography.secure_memory.secure_memzero`, which
+    on a normal build reaches the native kernel in ``src/c/ama_consttime.c``:
+    zeros written once through ``volatile`` stores, followed by a compiler
+    barrier.  The barrier is the mechanism — it denies the compiler the proof
+    that the stores are dead, so they cannot be eliminated.
+
+    Until 5.0.x this function was three plain Python ``for`` loops
+    (0x00, 0xFF, 0x00) with no barrier of any kind, while ``CRYPTOGRAPHY.md``
+    described it as using memory barriers and verifying the wipe.  Neither was
+    true, and the loops were the weaker construction anyway: repeat counts do
+    not defeat an optimiser, barriers do.  Routing this through the same kernel
+    the rest of the package uses makes the documented property the implemented
+    one, and inherits its fail-closed contract — with no native backend and no
+    ``AMA_ALLOW_PYTHON_MEMZERO`` opt-in, ``secure_memzero`` refuses rather than
+    degrading to a best-effort loop (INVARIANT-7).
+
+    NOTE: the accepted types still differ from ``secure_memzero``'s.
+    ``secure_wipe`` takes ``Union[bytes, bytearray]`` so it can raise
+    ``TypeError`` with a specific, actionable message for ``bytes``;
+    ``secure_memzero`` takes ``Union[bytearray, memoryview]``.
+
+    Raises:
+        TypeError: If ``data`` is not a ``bytearray``.
+        SecureMemoryError: Propagated from ``secure_memzero`` — no native
+            backend without the documented opt-in, a residual non-zero byte
+            observed by the opt-in fallback's verification, or a
+            non-contiguous ``memoryview``.
     """
     if not isinstance(data, bytearray):
         raise TypeError(
@@ -247,17 +270,7 @@ def secure_wipe(data: Union[bytes, bytearray]) -> None:
             "Convert keys to bytearray before use: bytearray(key_bytes)"
         )
 
-    # Overwrite with zeros
-    for i in range(len(data)):
-        data[i] = 0
-
-    # Overwrite with ones
-    for i in range(len(data)):
-        data[i] = 0xFF
-
-    # Final overwrite with zeros
-    for i in range(len(data)):
-        data[i] = 0
+    secure_memzero(data)
 
 
 # ============================================================================

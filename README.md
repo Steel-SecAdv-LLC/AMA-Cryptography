@@ -285,7 +285,7 @@ Additional C sources:
 
 **AVX-512 (`src/c/avx512/`, 1 file, opt-in via `-DAMA_ENABLE_AVX512=ON`):** EVEX-encoded YMM-width 4-way Keccak permutation (`ama_sha3_x4_avx512.c` — `vprolq` for the 64-bit rotate, `vpternlogq` for the theta `0x96` and chi `0xD2` collapses). No ZMM register touched. XCR0 5+6+7-gated so an EVEX YMM op cannot `#UD` on a host whose hypervisor advertises CPUID without the ZMM save area. See [docs/AVX512_KECCAK_ADR.md](docs/AVX512_KECCAK_ADR.md).
 
-**NEON (`src/c/neon/`, 8 files):** ARM NEON 128-bit vector equivalents using `<arm_neon.h>` intrinsics + ARM Crypto Extensions — Ed25519, ML-KEM, ML-DSA, SPHINCS+, SHA3, AES-GCM, ChaCha20-Poly1305, Argon2.
+**NEON (`src/c/neon/`, 7 files):** ARM NEON 128-bit vector equivalents using `<arm_neon.h>` intrinsics + ARM Crypto Extensions — ML-KEM (`ama_kyber_neon.c`), ML-DSA (`ama_dilithium_neon.c`), SPHINCS+ (`ama_sphincs_neon.c`), SHA3 (`ama_sha3_neon.c`), AES-GCM (`ama_aes_gcm_neon.c`), ChaCha20-Poly1305 (`ama_chacha20poly1305_neon.c`), Argon2 (`ama_argon2_neon.c`). **There is no Ed25519 NEON kernel** — no `ama_ed25519_neon.c` exists, and this line listed one for eight algorithms against seven files. On AArch64 the Ed25519 group arithmetic runs the portable radix-2^51 backend (`src/c/internal/ama_ed25519_ge.h` instantiated over `fe51`); the MULX/ADX instantiation is x86-64-only. The file count is checked by `tools/check_documented_counts.py` and the per-algorithm claim by `tools/check_public_api_docs.py`.
 
 **SVE2 (`src/c/sve2/`, 8 files): three wired via dispatch**, their externs in `src/c/dispatch/ama_dispatch.c`. Two are genuine scalable-vector kernels — ML-KEM forward/inverse NTT + add/sub/reduce (`ama_kyber_sve2.c`; the `kyber_pointwise` dispatch slot is NULL on every tier and no SVE2 basemul kernel exists) and ML-DSA NTT trio (`ama_dilithium_sve2.c`): VL-agnostic `svwhilelt`-predicated load/store/add/sub, with the modular (Montgomery/Barrett) reductions done scalar — each file's header states the split. The third, SHA3/Keccak (`ama_sha3_sve2.c`), is wired and auto-tuned but its `ama_keccak_f1600_sve2` is a **scalar** permutation, not a vector one: a correctly strip-mined VL-agnostic theta measured slower than scalar at every vector length (a 5-element column-parity reduction cannot fill a vector), so the SVE intrinsics were removed and the file documents it. The remaining five (`ama_aes_gcm_sve2.c`, `ama_chacha20poly1305_sve2.c`, `ama_argon2_sve2.c`, `ama_sphincs_sve2.c`, `ama_ed25519_sve2.c`) are documented placeholders — their per-file headers state the specific reason each cannot be wired today (dispatch-signature mismatch, algorithmic non-conformance to RFC 9106 BlaMka, absent dispatch surface, no production batched caller) and the preconditions a future kernel must meet. Until those hold, SVE2 hosts dispatch those five algorithms to the validated NEON kernels — a strict upgrade over the generic-C fallback.
 
@@ -395,8 +395,41 @@ These are the only 5.0.0 throughput measurements this repository publishes, and 
 | `ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 378,016 (356,429–416,067) | 436,136 (436,018–436,698) |
 | `hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes) | 260,704 (246,064–286,568) | 303,692 (303,251–303,870) |
 | `ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation; not comparable with the 4.x native-keygen-only row) | 15,370 (14,349–16,622) | 14,678 (14,547–14,708) |
-| `ed25519_sign` — Ed25519 signature generation (native C, expanded key) | 70,496 (67,521–73,660) | 58,762 (58,389–58,795) |
+| `ed25519_sign` — Ed25519 signature generation (native C, expanded key) — **superseded, see note below** | ~~70,496 (67,521–73,660)~~ → **38,170** derived | ~~58,762 (58,389–58,795)~~ → **32,852** derived |
 | `ed25519_verify` — Ed25519 signature verification (native C) | 30,542 (28,003–33,234) | 31,270 (31,021–31,473) |
+
+> **The `ed25519_sign` row is a pre-INVARIANT-51 measurement and no longer
+> describes this code.** [INVARIANT-51](INVARIANTS.md#invariant-51--an-ed25519-signer-derives-its-own-public-half)
+> makes `ama_ed25519_sign` derive `A = [a]B` from the secret scalar and refuse a
+> 64-byte key whose stored bytes 32..63 disagree with it — closing a
+> private-scalar recovery hazard (two signatures over one message under two
+> different `A` halves share `R`, and `s₁ − s₂ = (h₁ − h₂)·a mod L` yields the
+> scalar). The check is a second fixed-base scalar multiplication on every
+> signature, so signing does roughly twice the curve work. There is no opt-out,
+> deliberately.
+>
+> **Derivation of the replacement figures** (host-independent, because both
+> multiplications scale together on any microarchitecture): measured at the C
+> level on this tree, min-of-20,000 medians with the Python binding excluded —
+> `ama_ed25519_sign` 12,586 ns before the check and 23,245 ns after, a ratio of
+> **1.8469×**. Applied to each runner's own four-run median:
+> 70,496 / 1.8469 = **38,170** (x86-64) and 58,762 / 1.8469 = **31,817**;
+> `benchmarks/arm-baseline.json` carries **32,852** for aarch64, measured on its
+> own homogeneous runner rather than derived. Both are the enforced floors.
+>
+> **Corroboration on an independent host** (4-vCPU Linux x86-64 sandbox,
+> Python 3.11.15, `LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py`):
+> **36,517 ops/sec** measured, 4.3% below the 38,170 floor and well inside its
+> ±45% tolerance. The raw-C harness (`build/bin/benchmark_c_raw --json`) on the
+> same host reports 22.561 µs/op = 44,324 ops/sec, the gap being per-call FFI
+> overhead.
+>
+> The runner medians above are not re-run here: the four workflow runs they cite
+> are a fixed historical record, and GitHub's runner fleet is not reachable from
+> this environment. They are left visible, struck through, so the ledger stays
+> auditable rather than quietly rewritten. `tools/check_benchmark_claims.py`
+> holds the enforced floors in this table to `benchmarks/baseline.json` and
+> `benchmarks/arm-baseline.json`.
 | `hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys) | 174,757 (165,505–189,877) | 208,931 (208,005–209,262) |
 | `full_package_create` — Complete crypto package creation (with PQC) | 2,232 (2,119–2,393) | 2,604 (2,564–2,626) |
 | `full_package_verify` — Complete crypto package verification (with PQC) | 3,974 (3,524–4,561) | 4,668 (4,476–4,724) |

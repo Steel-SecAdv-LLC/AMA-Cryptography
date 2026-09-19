@@ -143,14 +143,32 @@ shorter `OCTET STRING` that is still valid DER and is a different key.
 RFC 8554 Appendix F's two complete HSS/LMS test cases: a public key, a message
 and a signature each.
 
-**AMA does not implement HSS/LMS.** This corpus asserts nothing about AMA's
-behaviour; it is the answer key for that work, vendored so it is a checked-in,
-verifiable artefact rather than a claim that an extraction exists somewhere.
-`tests/test_rfc8554_vectors.py` validates it structurally — the sizes re-derived
-from the parameter sets each case names, the registry values read back out of
-the assembled key, and the messages' ASCII recovered — and asserts that nothing
-in the package claims to implement LMS or XMSS, so the corpus cannot quietly
-acquire a meaning it does not have.
+**AMA implements HSS/LMS verification, and this corpus is what verifies it.**
+`ama_lms_verify` and `ama_hss_verify` are implemented in `src/c/ama_lms.c` and
+are exported by the shared library; `ama_lms_pubkey_params`,
+`ama_lms_signature_length`, `ama_hss_pubkey_levels` and
+`ama_lms_signing_available` are exported alongside them.
+
+**Signing is withheld, and reported rather than discovered.**
+`ama_lms_signing_available()` returns 0. LMS is a stateful hash-based scheme:
+reusing a one-time key index forfeits the security of the whole tree, so
+signing is not shipped until a fail-closed durable state manager exists. That
+is a deliberate omission, not an unimplemented corner — `src/c/ama_lms.c:497`
+says so at the function.
+
+`tests/test_rfc8554_vectors.py` does both jobs. It validates the corpus
+structurally — the sizes re-derived from the parameter sets each case names,
+the registry values read back out of the assembled key, and the messages' ASCII
+recovered — and it runs the published signatures through `ama_hss_verify` and
+`ama_lms_verify`, checks that each case fails under the other's key, that every
+signature region is covered, that truncation and trailing data are refused, and
+that an out-of-range leaf index is refused. It also asserts that nothing in the
+package claims to *sign* with LMS and that nothing claims XMSS at all.
+
+This paragraph previously read "AMA does not implement HSS/LMS. This corpus
+asserts nothing about AMA's behaviour." That was true when the corpus was
+vendored and stopped being true when the verifier landed; the test file was
+updated and this README was not.
 
 That structural validation is not ceremony: the first extraction ran case 1's
 signature block on into "Test Case 2 Private Key" and picked up 96 octets of

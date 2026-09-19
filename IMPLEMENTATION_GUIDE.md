@@ -133,10 +133,18 @@ All production cryptographic algorithms (SHA3-256, HKDF, Ed25519, AES-256-GCM, M
 #### Verify Installation
 
 ```python
-from ama_cryptography.pqc_backends import get_pqc_status
-print("PQC status:")
-print(get_pqc_status())
-# Output should report ML-DSA-65, ML-KEM-1024, and SLH-DSA as available
+from ama_cryptography.pqc_backends import PQCStatus, get_pqc_status, get_pqc_backend_info
+
+# get_pqc_status() returns a PQCStatus ENUM (AVAILABLE / UNAVAILABLE), a
+# single rollup verdict — not a per-algorithm report.
+print("PQC status:", get_pqc_status())          # PQCStatus.AVAILABLE
+assert get_pqc_status() is PQCStatus.AVAILABLE
+
+# The per-algorithm report is get_pqc_backend_info()["algorithms"], keyed by
+# the implementation's own spellings.
+for name, meta in sorted(get_pqc_backend_info()["algorithms"].items()):
+    print(f"  {name}: {meta['available']} ({meta['backend']})")
+# ML-DSA-65, Kyber-1024 and SPHINCS+-256f should all report True / native.
 ```
 
 ### Step 2: Set Up Key Management
@@ -318,7 +326,7 @@ def create_package_with_timestamp(
 
 # Usage
 pkg = create_package_with_timestamp(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms
 )
@@ -334,7 +342,7 @@ else:
 ```python
 # DigiCert Timestamp Server
 pkg = create_crypto_package(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms,
     author="Steel-SecAdv-LLC",
@@ -344,7 +352,7 @@ pkg = create_crypto_package(
 
 # GlobalSign Timestamp Server
 pkg = create_crypto_package(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms,
     author="Steel-SecAdv-LLC",
@@ -443,7 +451,7 @@ def sign_codes(
     return pkg
 
 # Sign master Omni-Codes
-pkg = sign_codes(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms)
+pkg = sign_codes(MASTER_CODES, MASTER_HELIX_PARAMS, kms)
 ```
 
 ### Step 6: Verify Omni-Code Packages
@@ -490,7 +498,7 @@ def verify_dna_package(
 # Verify package
 is_valid = verify_dna_package(
     "CRYPTO_PACKAGE.json",
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms.hmac_key
 )
@@ -573,7 +581,7 @@ kms_org2 = generate_key_management_system("Organization2")
 kms_org3 = generate_key_management_system("Organization3")
 
 multi_pkg = create_multi_signed_package(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     [
         ("Organization1", kms_org1),
@@ -715,7 +723,7 @@ Regenerate package with correct key:
 print(f"HMAC key: {kms.hmac_key.hex()[:16]}...")
 
 # Re-sign with correct key
-pkg = create_crypto_package(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms, ...)
+pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, ...)
 ```
 
 ---
@@ -749,7 +757,7 @@ def sign_multiple_codes(
     return packages
 
 # Usage: Sign 1000 Omni-Code sets
-dna_list = [(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS) for _ in range(1000)]
+dna_list = [(MASTER_CODES, MASTER_HELIX_PARAMS) for _ in range(1000)]
 packages = sign_multiple_codes(dna_list, kms)
 
 # Performance: ~1000 packages/second (with Dilithium)
@@ -785,7 +793,7 @@ def verify_multiple_packages(
     return results
 
 # Usage: Verify 1000 packages with 4 workers
-results = verify_multiple_packages(packages, MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms.hmac_key)
+results = verify_multiple_packages(packages, MASTER_CODES, MASTER_HELIX_PARAMS, kms.hmac_key)
 
 # Performance: ~4000 packages/second (4 cores)
 ```
@@ -1004,7 +1012,7 @@ migrate_package_directory(
     input_dir="packages_v1",
     output_dir="packages_v2",
     kms=kms,
-    codes=MASTER_OMNI_CODES,
+    codes=MASTER_CODES,
     helix_params=MASTER_HELIX_PARAMS
 )
 ```
@@ -1103,7 +1111,7 @@ def test_migration():
     # 1. Create v2.0.0 package
     kms = generate_key_management_system("TestOrg")
     pkg_v2 = create_crypto_package(
-        MASTER_OMNI_CODES,
+        MASTER_CODES,
         MASTER_HELIX_PARAMS,
         kms,
         author="TestOrg"
@@ -1112,7 +1120,10 @@ def test_migration():
     # 2. Verify all fields present
     assert hasattr(pkg_v2, 'ethical_vector')
     assert hasattr(pkg_v2, 'ethical_hash')
-    assert len(pkg_v2.ethical_vector) == 12
+    # ETHICAL_VECTOR is FOUR pillars weighted 3.0 each: the sum is 12.0, the
+    # length is 4 (ama_cryptography/equations.py:142-153, which raises at
+    # import if either stops holding).
+    assert len(pkg_v2.ethical_vector) == 4
     assert sum(pkg_v2.ethical_vector.values()) == 12.0
 
     # 3. Verify ethical hash
@@ -1120,7 +1131,7 @@ def test_migration():
 
     # 4. Verify cryptographic integrity
     results = verify_crypto_package(
-        MASTER_OMNI_CODES,
+        MASTER_CODES,
         MASTER_HELIX_PARAMS,
         pkg_v2,
         kms.hmac_key

@@ -167,6 +167,31 @@ production default. It is exposed through the unified
 
 > **Dual-signature security:** Both Ed25519 and ML-DSA-65 signatures must independently verify for the package to be accepted. An attacker must forge **both** simultaneously — one classical forgery (2^128 classical operations) and one quantum-resistant forgery (2^190 quantum operations).
 
+**That guarantee depends on domain separation, and format v1 did not have it.**
+
+In **v2** — the shipped format — each half signs the message bound to
+`HYBRID_SIG_DOMAIN`
+(`b"AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65"`, `crypto_api.py:1608`).
+ML-DSA-65 carries it as its FIPS 204 §5.2 context string; Ed25519 (RFC 8032
+pure, which has no context parameter) signs the identical
+`0x00 || len(label) || label || M` wrapper by hand, via
+`hybrid_classical_input()`. Both halves therefore bind the same prefix, and
+neither half is a valid standalone signature over the raw message.
+
+In **v1** both components signed the raw message. Against a key reused across
+contexts that is a splicing hazard in both directions: a standalone Ed25519
+signature over `M` was *also* a valid classical half of a hybrid signature over
+`M`, and a standalone ML-DSA-65 signature over `M` was a valid quantum half. An
+attacker holding one standalone signature and one component forgery could
+assemble an accepted hybrid signature without forging both halves of the hybrid
+— which is the guarantee above, defeated. Signatures made by the v1 format do
+not verify under v2, deliberately: the label is part of the format, and
+changing it changes every signature.
+
+`tests/test_hybrid_signature_domain_separation.py` pins both directions —
+neither a standalone Ed25519 nor a standalone ML-DSA-65 signature can be
+spliced into a v2 hybrid signature.
+
 ### Hybrid signing API
 
 <!-- example: python-run -->

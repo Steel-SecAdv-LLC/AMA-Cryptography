@@ -279,8 +279,14 @@ python3 benchmarks/benchmark_runner.py -v
 >
 > - Cython microbenchmark on a 32 B message: ~250k ops/sec on this host
 >   (`benchmarks/benchmark_suite.py` "hmac_auth" column above).
-> - Pure ctypes on a 1 KB message: ~130k ops/sec
->   (`benchmarks/benchmark_runner.py` → `benchmarks/benchmark-results.json`, baseline 76,215).
+> - Pure ctypes on a 1 KB message: ~241k ops/sec on the canonical record's host
+>   (`benchmarks/benchmark_runner.py` → `benchmarks/benchmark-results.json`).
+>   The **enforced floor** is 215,299 ops/sec on x86-64
+>   (`benchmarks/baseline.json`) and 285,176 on aarch64
+>   (`benchmarks/arm-baseline.json`) — not 76,215, which was a floor from a
+>   4.x-era baseline and had been stale here for two majors. Both floors are
+>   re-derived by `tools/check_benchmark_claims.py` on every CI run, so this
+>   sentence cannot drift from the JSON again.
 > - Shared GitHub Actions runner under CI: ~12k ops/sec (much slower, noisier
 >   hardware). The `benchmarks/baseline.json` value is set for the CI host and
 >   is not a statement about the primitive's performance in general.

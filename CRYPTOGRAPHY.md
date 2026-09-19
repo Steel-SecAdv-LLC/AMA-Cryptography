@@ -310,10 +310,29 @@ All verified via dudect-style timing analysis (see [CONSTANT_TIME_VERIFICATION.m
 
 ### Key Zeroization
 
-All key material is securely wiped after use via `secure_wipe()` which:
-1. Overwrites memory with zeros
-2. Uses memory barriers to prevent compiler optimization
-3. Verifies the wipe completed
+Key material is wiped through one kernel. `ama_cryptography.secure_memory.secure_memzero()`
+— and `legacy_compat.secure_wipe()`, which delegates to it — calls
+`ama_secure_memzero()` in `src/c/ama_consttime.c`, which:
+
+1. writes zeros **once**, through `volatile` 64-bit stores; then
+2. issues a compiler barrier.
+
+The barrier is the mechanism, not a repeat count: it denies the compiler the
+proof that the stores are dead, which is what dead-store elimination needs.
+There is no third "verification" pass on the native path — the barrier makes
+one unnecessary, and a read-back would itself be removable.
+
+**Fail-closed, not best-effort.** With no native backend and no
+`AMA_ALLOW_PYTHON_MEMZERO=1` opt-in, `secure_memzero()` raises
+`SecureMemoryError` rather than degrading to an interpreter loop (INVARIANT-7).
+The opt-in fallback is the only path that loops, and it *does* verify, because
+it has no barrier to rely on; if it observes a residual non-zero byte it raises.
+
+Until 5.0.x this section described memory barriers and a verification pass that
+`secure_wipe()` did not have — it was three plain Python `for` loops
+(0x00 / 0xFF / 0x00) with no barrier of any kind. The function now routes
+through the native kernel, so the property described here is the property
+implemented. `tools/check_crypto_construction_docs.py` holds the two together.
 
 ### Backend Selection
 
@@ -323,24 +342,38 @@ PQC is provided by the native C library (`libama_cryptography.so`):
 - **SPHINCS+-SHA2-256f** - Native C (FIPS 205)
 
 Check availability with:
+
 ```python
-from ama_cryptography.pqc_backends import get_pqc_status
-status = get_pqc_status()
-print(f"Dilithium: {status.dilithium_available}")
-print(f"Kyber: {status.kyber_available}")
-print(f"SPHINCS+: {status.sphincs_available}")
+from ama_cryptography.pqc_backends import PQCStatus, get_pqc_status, get_pqc_backend_info
+
+# get_pqc_status() returns a PQCStatus ENUM — it has no per-algorithm
+# attributes. The per-algorithm view is get_pqc_backend_info()'s dict.
+assert get_pqc_status() is PQCStatus.AVAILABLE
+
+info = get_pqc_backend_info()
+print(f"Dilithium: {info['dilithium_available']}")
+print(f"Kyber: {info['kyber_available']}")
+print(f"SPHINCS+: {info['sphincs_available']}")
 ```
 
 ### Adaptive Cryptographic Posture
 
 The adaptive posture system (`ama_cryptography/adaptive_posture.py`) bridges the 3R monitor with runtime security responses:
 
-| Threat Level | Score | Response |
-|-------------|-------|----------|
-| NOMINAL | 0.0-0.3 | No action |
-| ELEVATED | 0.3-0.6 | Increase monitoring |
-| HIGH | 0.6-0.8 | Rotate keys |
-| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+| Threat Level | Composite score | Response |
+|-------------|-----------------|----------|
+| NOMINAL | < 0.15 | No action |
+| ELEVATED | 0.15 – 0.45 | Increase monitoring |
+| HIGH | 0.45 – 0.80 | Rotate keys |
+| CRITICAL | ≥ 0.80 | Rotate keys + switch algorithm + alert |
+
+The boundaries are `PostureEvaluator.DEFAULT_ELEVATED_THRESHOLD` /
+`DEFAULT_HIGH_THRESHOLD` / `DEFAULT_CRITICAL_THRESHOLD`
+(`adaptive_posture.py:148-150`), calibrated as 3σ / 5σ / 7σ in the composite
+score space rather than as round fractions — which is why they are not
+0.3 / 0.6 / 0.8. The composite is four weighted signals, not three:
+timing 0.45, pattern 0.25, resonance 0.15, Lyapunov 0.15
+(`adaptive_posture.py:265-268`).
 
 Algorithm strength ordering: ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) → HYBRID_SIG (3)
 

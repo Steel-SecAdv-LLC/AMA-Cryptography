@@ -749,7 +749,7 @@ def generate_ethical_kms(author: str) -> KeyManagementSystem:
 kms = generate_ethical_kms("Steel-SecAdv-LLC")
 
 pkg = create_crypto_package(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms,
     author="Steel-SecAdv-LLC"

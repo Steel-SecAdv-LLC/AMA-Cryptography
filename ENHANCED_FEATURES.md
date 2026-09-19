@@ -277,17 +277,31 @@ Automatic best-implementation selection at initialization:
 The adaptive posture system bridges the 3R runtime anomaly monitor with the cryptographic API for dynamic security responses.
 
 **Components:**
-- **PostureEvaluator** — Weighted scoring: timing (50%), pattern (30%), resonance (20%) with exponential decay
+- **PostureEvaluator** — Weighted scoring over **four** signals: timing 0.45,
+  pattern 0.25, resonance 0.15, Lyapunov stability 0.15
+  (`adaptive_posture.py:265-268`), with exponential decay on the accumulated
+  score. The Lyapunov term is the double-helix engine's divergence signal; an
+  earlier revision of this section described a three-signal 0.50/0.30/0.20
+  model, which has not been the construction since the fourth signal was added.
 - **CryptoPostureController** — Key rotation, algorithm switching, cooldown enforcement (300s default)
 
 **Threat Levels:**
 
-| Level | Score | Automated Response |
-|-------|-------|--------------------|
-| NOMINAL | 0.0-0.3 | No action |
-| ELEVATED | 0.3-0.6 | Increase monitoring frequency |
-| HIGH | 0.6-0.8 | Rotate keys |
-| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+| Level | Composite score | Automated Response |
+|-------|-----------------|--------------------|
+| NOMINAL | < 0.15 | No action |
+| ELEVATED | 0.15 – 0.45 | Increase monitoring frequency |
+| HIGH | 0.45 – 0.80 | Rotate keys |
+| CRITICAL | ≥ 0.80 | Rotate keys + switch algorithm + alert |
+
+The thresholds are `DEFAULT_ELEVATED_THRESHOLD` = 0.15,
+`DEFAULT_HIGH_THRESHOLD` = 0.45 and `DEFAULT_CRITICAL_THRESHOLD` = 0.80
+(`adaptive_posture.py:148-150`) — 3σ, 5σ and 7σ mapped into the composite score
+space, which is why they are not the 0.3 / 0.6 / 0.8 this table used to show.
+Lowering the documented ELEVATED boundary from 0.3 to the implemented 0.15
+matters in the direction that counts: the implementation escalates *earlier*
+than the old table promised, so a reader calibrating alerts against 0.3 was
+under-reading their own monitor.
 
 **Algorithm Strength Ordering:**
 ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) → HYBRID_SIG (3)
@@ -311,7 +325,15 @@ combined_ss = HKDF-SHA3-256(
 **Security Properties:**
 - IND-CCA2 secure if **either** component KEM remains unbroken
 - Ciphertext binding prevents mix-and-match attacks
-- Uses native C HKDF-SHA3-256 with Python fallback
+- Uses native C HKDF-SHA3-256. **There is no Python fallback.**
+  `HybridCombiner.combine()` raises `RuntimeError` when `ama_hkdf` is
+  unavailable (`hybrid_combiner.py:241-250`), per INVARIANT-7. The
+  `_hkdf_python` static method still exists, but it is test-only: it raises
+  unless the caller passes an explicit keyword-only opt-in, and `combine()`
+  never reaches for it. An earlier revision of this line advertised the
+  fallback as a feature; a fallback here would be a non-constant-time HKDF
+  silently substituted into secret-dependent key combination, which is the
+  substitution INVARIANT-7 exists to forbid.
 
 ---
 
