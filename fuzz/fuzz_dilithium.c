@@ -85,9 +85,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         size_t msg_len = payload_len - AMA_ML_DSA_65_SIGNATURE_BYTES -
                          AMA_ML_DSA_65_PUBLIC_KEY_BYTES;
 
-        /* Should not crash */
-        ama_dilithium_verify(msg, msg_len, sig,
-                              AMA_ML_DSA_65_SIGNATURE_BYTES, pk);
+/* A signature and public key drawn from fuzz data verify with
+         * probability far below 2^-100, so ANY success here is a broken
+         * verifier — the kind of defect "must not crash" cannot see.  A
+         * genuine forgery found by the fuzzer traps, which is the outcome
+         * this harness exists for. */
+        if (ama_dilithium_verify(msg, msg_len, sig,
+                                 AMA_ML_DSA_65_SIGNATURE_BYTES, pk) == AMA_SUCCESS) {
+            __builtin_trap();
+        }
         break;
     }
     case 2: {

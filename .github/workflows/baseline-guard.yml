@@ -12,13 +12,15 @@
 # and docs/BENCHMARK_HISTORY.md for the motivating history.
 #
 # RULESET / REQUIRED-CHECKS NOTE: this workflow is path-filtered to PRs
-# touching a benchmark baseline JSON, so its 'Enforce baseline JSON
-# justification' job does NOT emit on unrelated PRs. Do NOT list this
-# job in the `main` branch's required-status-check ruleset — it would
-# block every PR that doesn't touch baseline.json with 'Expected —
-# Waiting for status to be reported'. Same reasoning as `dudect.yml`
-# and the wiki-sync job; see PR #289 'Deliberately not included' for
-# the canonical exclusion list.
+# touching a benchmark baseline JSON, so on its own its 'Enforce baseline
+# JSON justification' context would never be reported on an unrelated PR
+# and could not be a required status check — a red guard was advisory.
+# `.github/workflows/baseline-guard-skip.yml` is the no-op twin (same
+# workflow `name:`, same job `name:`, the complementary `paths-ignore:`),
+# so exactly one of the pair reports the context on every pull request
+# and it CAN be required, the same way dudect.yml, arm-qemu.yml and
+# corpus-provenance.yml are.  tools/check_gate_coverage.py holds the two
+# path lists complementary.
 
 name: Baseline Change Guard
 
@@ -27,6 +29,9 @@ on:
     paths:
       - "benchmarks/baseline.json"
       - "benchmarks/arm-baseline.json"
+      # The script that adjudicates those two files.  Without it, a change that
+      # weakens the justification check runs against nothing.
+      - "benchmarks/check_baseline_justification.py"
 
 permissions:
   contents: read

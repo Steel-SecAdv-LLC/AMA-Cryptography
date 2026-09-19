@@ -12,7 +12,17 @@
 #   make install    - Install library system-wide
 #   make docker     - Build Docker image
 
-.PHONY: all c python test clean install docker help c-api constant-time-check security-scan fuzz fuzz-run
+# EVERY target here is a command, not a file.  `docs`, `docker` and `fuzz` are
+# also real directories in this tree, and GNU make treats a target that names an
+# existing file with no newer prerequisites as up to date: `make docs` printed
+# nothing and ran nothing, silently, including after the recipe was rewritten to
+# route sphinx through `$(RUN)`.  The other names are listed for the same
+# reason one step earlier — a directory added later must not be able to disable
+# a target by existing.
+.PHONY: all c python test test-c test-python test-examples benchmark clean \
+        install dev-install format lint docs docker dist security-audit \
+        security-scan constant-time-check constant-time-check-full fuzz \
+        fuzz-run c-api docker-c-api profile help
 
 # Default target
 all: c python
@@ -21,13 +31,19 @@ all: c python
 c:
 	@echo "Building C library (native PQC + all crypto primitives)..."
 	@mkdir -p build
-	@cd build && cmake .. -DAMA_USE_NATIVE_PQC=ON && $(MAKE)
+	@# CMAKE_BUILD_TYPE=Release is explicit, not decorative: an empty build type
+	@# applies NONE of the per-config flags, so this target used to produce an
+	@# unoptimised library with no _FORTIFY_SOURCE (which is inert without -O)
+	@# and no LTO — and `make install` below then installs exactly that build
+	@# system-wide.  Every document that quotes performance or hardening for
+	@# this project describes the Release configuration.
+	@cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C library built successfully"
 
 # Build Python package with extensions
 python:
 	@echo "Building Python package..."
-	@python3 setup.py build_ext --inplace
+	@$(PYTHON) setup.py build_ext --inplace
 	@echo "✓ Python package built successfully"
 
 # Run tests
@@ -40,7 +56,7 @@ test-c: c
 
 test-python: python
 	@echo "Running Python tests..."
-	@pytest tests/ -v --cov=ama_cryptography --cov-report=term-missing
+	@$(RUN) pytest tests/ -v --cov=ama_cryptography --cov-report=term-missing
 	@echo "✓ Python tests passed"
 
 # Execute the shipped Python examples.
@@ -55,14 +71,13 @@ test-python: python
 # backend, and the Cython extensions are optional to them.
 test-examples: c
 	@echo "Running shipped Python examples..."
-	@pytest tests/test_python_examples.py -v
+	@$(RUN) pytest tests/test_python_examples.py -v
 	@echo "✓ Python examples ran to completion"
 
 # Run benchmarks
 benchmark: python
 	@echo "Running benchmarks..."
-	@python3 benchmarks/benchmark_suite.py
-	@pytest tests/ --benchmark-only
+	@$(PYTHON) benchmarks/benchmark_suite.py
 
 # Clean build artifacts
 clean:
@@ -82,7 +97,7 @@ clean:
 	@find ama_cryptography -type f -name "*.so" -delete
 	@find ama_cryptography -type f -name "*.pyd" -delete
 	# The native library is bundled into the package by setup.py as a SONAME
-	# chain — libama_cryptography.so -> .so.4 -> .so.4.0.0 — and the two rules
+	# chain — libama_cryptography.so -> .so.5 -> .so.5.0.0 — and the two rules
 	# above miss every link in it: the first two are symlinks, which `-type f`
 	# excludes, and the third does not match `*.so`. So the whole chain
 	# survived `make clean`, and pqc_backends._get_search_dirs() searches this
@@ -99,31 +114,54 @@ clean:
 install: all
 	@echo "Installing AMA Cryptography..."
 	@cd build && sudo $(MAKE) install
-	@pip3 install -e .
+	@$(RUN) pip install -e .
 	@echo "✓ Installed successfully"
 
 # Development install
 dev-install:
 	@echo "Installing development dependencies..."
-	@pip3 install -e ".[dev,all]"
+	@$(RUN) pip install -e ".[dev,all]"
 	@echo "✓ Development environment ready"
+
+# The interpreter's own tools, never the bare console scripts — with one
+# documented exception, semgrep, at its call site below.
+#
+# `mypy` on PATH here was 1.19.1 from a uv-managed tool install while the
+# pinned toolchain (requirements-lock.txt, both CI images,
+# .pre-commit-config.yaml) is 2.3.0 — and [tool.mypy] sets
+# python_version = "3.10", which mypy 1.x accepts with different semantics.
+# Measured on the merge base, over the scope ci.yml type-checks: 1.19.1 reports
+# 499 errors in 44 files where 2.3.0 reports 486 in 30.  `make lint` therefore
+# could not tell you what CI would say, in either direction.  Same hazard for
+# black and ruff, whose formatting differs across versions.
+PYTHON ?= python3
+RUN := $(PYTHON) -m
 
 # Format code
 format:
 	@echo "Formatting code..."
-	@black ama_cryptography/ tests/ *.py
-	@ruff check --select I --fix ama_cryptography/ tests/ *.py
+	@$(RUN) black .
+	@$(RUN) ruff check --select I --fix .
 	@echo "✓ Code formatted"
 
 # Lint code
+# The scope and the flags CI uses, so a green `make lint` means something.
+# This target ran `ruff check ama_cryptography/ tests/` and `mypy
+# ama_cryptography/ --ignore-missing-imports`, which is neither:
+# --ignore-missing-imports silences the missing-stub errors the pyproject
+# overrides answer file by file, and one directory is a third of the Python in
+# the tree.
 lint:
 	@echo "Linting code..."
-	@ruff check ama_cryptography/ tests/
-	@mypy ama_cryptography/ --ignore-missing-imports
+	@$(RUN) ruff check .
+	@MYPYPATH=. $(RUN) mypy --strict --explicit-package-bases \
+	  ama_cryptography/ tests/ tools/ benchmarks/ examples/ \
+	  fuzz/python/ nist_vectors/ schemas/ wycheproof_vectors/ \
+	  docs/conf.py setup.py ama_cryptography_monitor.py
 	@echo "✓ Lint passed"
 
 # Generate documentation
-# Requires: sphinx from requirements-dev.txt (pip install -r requirements-dev.txt)
+# Requires: sphinx (pip install -e ".[docs]")
 #
 # AMA_SPHINX_BUILD=1 lifts the INVARIANT-7 import guards in crypto_api.py /
 # key_management.py / legacy_compat.py so autodoc can introspect the modules
@@ -134,8 +172,17 @@ lint:
 # collecting the full list, so docstring regressions fail the build.
 docs:
 	@echo "Generating documentation..."
-	@cd build && doxygen ../docs/Doxyfile
-	@AMA_SPHINX_BUILD=1 sphinx-build -W --keep-going -b html docs docs/_build/html
+	@# Doxygen runs from the REPOSITORY ROOT: docs/Doxyfile's relative
+	@# INPUT (include/ src/c/) and OUTPUT_DIRECTORY (build/docs) resolve
+	@# against the directory doxygen is STARTED in, not the Doxyfile's.
+	@# The previous recipe did `cd build && doxygen ../docs/Doxyfile`,
+	@# which died on a clean checkout (nothing creates build/ here) and,
+	@# when build/ existed, pointed INPUT at build/include and build/src/c
+	@# (absent) and wrote the output to build/build/docs — not the path
+	@# the recipe then printed.  mkdir -p is for OUTPUT_DIRECTORY only.
+	@mkdir -p build
+	@doxygen docs/Doxyfile
+	@AMA_SPHINX_BUILD=1 $(RUN) sphinx -W --keep-going -b html docs docs/_build/html
 	@echo "✓ Documentation generated"
 	@echo "  C API docs:      build/docs/html/index.html"
 	@echo "  Python API docs: docs/_build/html/index.html"
@@ -149,36 +196,59 @@ docker:
 # Create release distribution
 dist: clean
 	@echo "Creating distribution packages..."
-	@python3 -m build
+	@$(RUN) build
 	@echo "✓ Distribution packages created in dist/"
 
 # Security audit (basic)
 security-audit:
 	@echo "Running security audit..."
-	@pip-audit
-	@bandit -r ama_cryptography/ -ll
+	@$(RUN) pip_audit --strict --desc --requirement requirements-lock.txt
+	@$(RUN) bandit -r ama_cryptography/ -ll
 	@echo "✓ Security audit complete"
 
 # Comprehensive security scan (bandit + semgrep + dependency scanning)
 security-scan:
 	@echo "Running comprehensive security scan..."
 	@echo "[1/3] Running bandit for Python security issues..."
-	@# Produce the JSON, then apply the SAME severity gate CI uses. The `|| true`
-	@# is only on the report-writing bandit run (bandit exits non-zero when it
-	@# finds anything at the -ll floor); the gate below is what actually decides
-	@# pass/fail, fail-closed on a missing/erroring report.
-	@bandit -r ama_cryptography/ -ll -f json -o bandit-report.json || true
-	@python3 tools/check_bandit_severity.py bandit-report.json
+	@# Produce the JSON, then apply the SAME severity gate CI uses — over the
+	@# SAME scope and the same unfiltered report.  This ran over
+	@# ama_cryptography/ alone with -ll while ci.yml scans
+	@# `ama_cryptography/ setup.py tools/` with no severity pre-filter
+	@# (the gate below is the filter), so a green local run did not mean a
+	@# green gate.  --exit-zero replaces the old `|| true`: same effect
+	@# (bandit's own exit status is not the verdict), stated as a flag the
+	@# gate's comment in ci.yml already explains rather than swallowed in
+	@# shell.
+	@$(RUN) bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
+	@$(PYTHON) tools/check_bandit_severity.py bandit-report.json
 	@echo "[2/3] Running semgrep for cryptographic rules..."
 	@# semgrep scan exits 0 regardless of findings; the gate reads the JSON and
 	@# fails on ERROR-severity findings or a scan that did not run. No `|| echo`
 	@# swallowing a failure into a success line.
-	@semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
-	@python3 tools/check_semgrep_severity.py semgrep-report.json
+	@#
+	@# The ONE tool here not run as `$$(PYTHON) -m <tool>`, and the exception
+	@# is upstream's: semgrep 1.38.0 deprecated the module entry point —
+	@# `python -m semgrep` prints "Using `python -m semgrep` to run Semgrep is
+	@# deprecated as of 1.38.0. Please simply run `semgrep` instead." — so
+	@# routing it that way would pin a path upstream is removing.
+	@#
+	@# ci.yml's static-analysis job does the same: it installs a pinned
+	@# `semgrep==1.74.0` and invokes the console script, so this line matches
+	@# what CI runs. Be clear about the cost: `$$(RUN)` exists to pick the
+	@# INTERPRETER's copy of a tool over a console script from some other
+	@# environment, and semgrep does not get that guarantee here. The version
+	@# it resolves is whatever is on PATH, which is why CI pins its own.
+	@semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/ --json -o semgrep-report.json
+	@$(PYTHON) tools/check_semgrep_severity.py semgrep-report.json
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
 	@# pip-audit exits non-zero when a known-vulnerable dependency is present;
 	@# let that propagate rather than masking it with `|| echo completed`.
-	@pip-audit
+	@# Scoped to the lock file, not the ambient interpreter: a bare `pip-audit`
+	@# reports CVEs in packages this project does not ship (pip, urllib3 and
+	@# whatever else the host image carries), so the target went red for reasons
+	@# nothing in this repository can fix. Same scoping ci.yml and security.yml
+	@# already use.
+	@$(RUN) pip_audit --strict --desc --requirement requirements-lock.txt
 	@echo "✓ Comprehensive security scan complete (bandit + semgrep + pip-audit all passed)"
 
 # Constant-time verification (dudect-style timing analysis)
@@ -239,11 +309,12 @@ fuzz-run: fuzz
 c-api:
 	@echo "Building C API library with native PQC..."
 	@mkdir -p build
-	@cd build && cmake .. -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON \
+	@cd build && cmake .. -DCMAKE_BUILD_TYPE=Release \
+		-DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON \
 		-DAMA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C API built successfully"
 	@echo "  Shared library: build/lib/libama_cryptography.so"
-	@echo "  Static library: build/lib/libama_cryptography.a"
+	@echo "  Static library: build/lib/libama_cryptography_static.a"
 	@echo "  Headers: include/ama_cryptography.h"
 	@echo "  PQC: NATIVE (ML-DSA-65, Kyber-1024, SPHINCS+-256f)"
 
@@ -257,8 +328,8 @@ docker-c-api:
 # Performance profiling
 profile: python
 	@echo "Profiling performance..."
-	@python3 -m cProfile -o profile.stats benchmarks/benchmark_suite.py
-	@python3 -c "import pstats; p = pstats.Stats('profile.stats'); p.sort_stats('cumulative'); p.print_stats(30)"
+	@$(RUN) cProfile -o profile.stats benchmarks/benchmark_suite.py
+	@$(PYTHON) -c "import pstats; p = pstats.Stats('profile.stats'); p.sort_stats('cumulative'); p.print_stats(30)"
 
 # Help
 help:

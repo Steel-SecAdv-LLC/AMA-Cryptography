@@ -35,20 +35,6 @@ def _random_bytes(n: int) -> bytes:
     return os.urandom(n)
 
 
-def _mock_classical_encapsulate(pk: bytes) -> tuple[bytes, bytes]:
-    """Simulates X25519 encapsulation: returns (ct, ss)."""
-    ct = _random_bytes(32)
-    ss = _random_bytes(32)
-    return ct, ss
-
-
-def _mock_pqc_encapsulate(pk: bytes) -> tuple[bytes, bytes]:
-    """Simulates Kyber encapsulation: returns (ct, ss)."""
-    ct = _random_bytes(1568)
-    ss = _random_bytes(32)
-    return ct, ss
-
-
 # ---------------------------------------------------------------------------
 # INVARIANT-7: combine() must raise when native HKDF is unavailable
 # ---------------------------------------------------------------------------

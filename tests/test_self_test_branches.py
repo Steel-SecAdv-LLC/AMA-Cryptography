@@ -103,7 +103,7 @@ class TestTimingOracleBranches:
 
         This reproduces the shared-runner failure shape: |t| above 4.5 with
         a mean delta below the absolute-effect floor.  Under the post-RA7BN
-        platform-aware floor (``max(50, 4×perf_counter_resolution_ns)``),
+        platform-aware floor (``max(100, 4×perf_counter_resolution_ns)``),
         this pattern must be ABSORBED as scheduler / quantization noise
         rather than treated as a real leak — otherwise the module flips to
         ERROR and every subsequent crypto call is locked out for a non-
@@ -120,8 +120,8 @@ class TestTimingOracleBranches:
         """
 
         # Target delta: just under the host's auto-computed floor.  Reading
-        # ``_TIMING_MIN_EFFECT_NS`` rather than hard-coding 50 / 400 keeps
-        # this test correct on Linux (1 ns clock → 50 ns floor) and
+        # ``_TIMING_MIN_EFFECT_NS`` rather than hard-coding 100 / 400 keeps
+        # this test correct on Linux (1 ns clock → 100 ns floor) and
         # Windows (100 ns clock → 400 ns floor) without per-platform
         # branching.
         target_delta = st._TIMING_MIN_EFFECT_NS - 5.0
@@ -183,10 +183,14 @@ class TestTimingFloorScaling:
     """
 
     def test_floor_at_least_absolute_baseline(self) -> None:
-        # The module-import-time floor must never drop below the 50 ns
+        # The module-import-time floor must never drop below the 100 ns
         # absolute baseline regardless of platform — even a hypothetical
-        # zero-resolution clock would still produce a >= 50 ns floor.
-        assert st._TIMING_MIN_EFFECT_NS >= 50.0
+        # zero-resolution clock would still produce a >= 100 ns floor.
+        # (100 rather than the original 50: a shared ubuntu-latest runner
+        # produced delta=51 ns / |t|=11.48 of pure jitter — job
+        # 97259726191 — on a binary the deterministic callgrind
+        # `consttime` target measures at zero cross-class instructions.)
+        assert st._TIMING_MIN_EFFECT_NS >= 100.0
 
     def test_floor_scales_with_coarse_clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A 100 ns simulated resolution must yield a 400 ns floor."""
@@ -203,7 +207,7 @@ class TestTimingFloorScaling:
     def test_floor_uses_absolute_baseline_on_fine_clock(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A 1 ns simulated resolution must collapse to the 50 ns floor."""
+        """A 1 ns simulated resolution must collapse to the 100 ns floor."""
         from types import SimpleNamespace
 
         def fake_get_clock_info(name: str) -> SimpleNamespace:
@@ -213,7 +217,7 @@ class TestTimingFloorScaling:
         monkeypatch.setattr(time, "get_clock_info", fake_get_clock_info)
         floor = st._compute_timing_min_effect_ns()
         # 4 × 1 = 4 ns, below absolute baseline → use baseline.
-        assert floor == 50.0, f"expected 50 ns baseline; got {floor!r}"
+        assert floor == 100.0, f"expected 100 ns baseline; got {floor!r}"
 
     def test_floor_environment_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Operators can pin the floor explicitly for a deployment."""
@@ -552,6 +556,67 @@ class TestRunSelfTestsFailures:
         finally:
             st.update_integrity_digest()
             _set_operational()
+
+    def test_last_failure_records_the_failed_run_and_survives_recovery(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        isolated_integrity_file: Path,
+    ) -> None:
+        """``last_failure()`` reports a failed POST as soon as it has failed —
+        not only once ``reset_module()`` has been asked to recover — and the
+        record outlives the successful re-run that follows."""
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            _set_operational,
+            last_failure,
+            module_error_reason,
+            module_self_test_results,
+            module_status,
+            post_duration_ms,
+            reset_module,
+        )
+
+        real_kat = st._kat_sha3_256
+        untouched_record = last_failure()
+        monkeypatch.setattr(
+            "ama_cryptography._self_test._kat_sha3_256",
+            lambda: (False, "synthetic soft failure"),
+        )
+        try:
+            assert _run_self_tests() is False
+            assert module_status() == "ERROR"
+            failed_reason = module_error_reason()
+            failed_results = module_self_test_results()
+            failed_duration = post_duration_ms()
+            assert failed_reason is not None and "synthetic soft failure" in failed_reason
+            assert any(ok is False for _, ok, _ in failed_results), "no failing stage in the table"
+
+            record = last_failure()
+            assert record == {
+                "reason": failed_reason,
+                "results": failed_results,
+                "duration_ms": failed_duration,
+            }
+            # The record is a copy: a caller cannot edit the module's memory.
+            record["results"].append(("tampered", True, ""))
+            assert last_failure()["results"] == failed_results
+
+            # Clear the fault and recover.  The re-run passes and replaces the
+            # live results table, and must NOT erase the record of the failure.
+            monkeypatch.setattr(st, "_kat_sha3_256", real_kat)
+            assert reset_module() is True
+            assert module_status() == "OPERATIONAL"
+            assert module_error_reason() is None
+            assert all(ok is not False for _, ok, _ in module_self_test_results())
+            assert last_failure() == {
+                "reason": failed_reason,
+                "results": failed_results,
+                "duration_ms": failed_duration,
+            }
+        finally:
+            st.update_integrity_digest()
+            _set_operational()
+            st._LAST_FAILURE.update(untouched_record)
 
     def test_rng_identical_outputs_fails(
         self,

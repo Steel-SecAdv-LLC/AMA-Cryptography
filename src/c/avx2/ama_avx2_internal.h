@@ -81,20 +81,13 @@ extern "C" {
 /* ============================================================================
  * SHA-3 / Keccak
  * ============================================================================ */
-void         ama_keccak_f1600_avx2(uint64_t state[25]);
 void         ama_keccak_f1600_x4_avx2(uint64_t states[4][25]);
-ama_error_t  ama_sha3_256_avx2(const uint8_t *input, size_t input_len,
-                                uint8_t output[32]);
 
 /* ============================================================================
  * Kyber (ML-KEM) — dispatch-facing entry points
  * ============================================================================ */
 void ama_kyber_ntt_avx2(int16_t poly[256], const int16_t zetas[128]);
 void ama_kyber_invntt_avx2(int16_t poly[256], const int16_t zetas[128]);
-void ama_kyber_poly_pointwise_avx2(int16_t r[256],
-                                    const int16_t a[256],
-                                    const int16_t b[256],
-                                    const int16_t zetas[128]);
 void ama_kyber_cbd2_avx2(int16_t poly[256], const uint8_t buf[128]);
 
 /* ============================================================================

@@ -1,0 +1,825 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+/**
+ * @file test_ed25519_small_order.c
+ * @brief Small-order public keys and R halves are rejected — INVARIANT-48
+ *
+ * THE DEFECT THIS FILE EXISTS FOR
+ *
+ * ama_ed25519_verify decides the COFACTORLESS equation [S]B - R - [h]A = O
+ * and, until this invariant, checked nothing about the ORDER of A or R.  Set
+ * A to the identity encoding (`01 00..00`) and the [h]A term is the identity
+ * for every h, so the equation collapses to [S]B = R and the pair
+ * (R = [s]B, S = s) satisfies it FOR EVERY MESSAGE.  Measured against a
+ * pure-Python RFC 8032 reference at s in {1, 5, 12345} — every one below L,
+ * so the canonical-S rule (INVARIANT-26) does not block them — all three
+ * were ACCEPTED by this library for all four messages tried: 12 of 12,
+ * single verify and batch verify alike.  One 64-byte string, no secret, and
+ * it authenticates anything.  It reached the package layer, where crypto_api
+ * embeds the public key inside the package it verifies, and reported
+ * primary_signature = true, primary = true, core_valid = true.
+ *
+ * THE FINDING IS WIDER THAN THE IDENTITY
+ *
+ * The identity is the only key for which ONE signature works for EVERY
+ * message, but it is not the only forgeable one.  For a small-order A of
+ * order n, [h]A = [h mod n]A, so an attacker with no secret at all can pick
+ * any S, walk j over [0, n), set R = [S]B - [j]A, and keep the first
+ * candidate whose h = H(R || A || M) satisfies h = j (mod n) — one in n
+ * candidates lands, and n <= 8.  The result is a signature valid under that
+ * A for that message.  Measured: constructed for all EIGHT canonically
+ * encoded small-order points and all eight were ACCEPTED before this fix,
+ * 8 of 8, and 0 of 8 after.  Those eight vectors are the load-bearing ones
+ * below; the whole file was written around them because a rejection is only
+ * evidence when the thing it differs from is accepted.
+ *
+ * NOT-VACUOUS, AND WHY THAT MATTERS HERE
+ *
+ * tests/test_ed25519_canonical_y.py records what went wrong the last two
+ * times this invariant family was tested: assertions of the form "verify
+ * returns false for a small-order public key" pass with the rule fully
+ * REMOVED, because verify also returns false for the wrong-key reason.
+ * Measured on this tree: the genuine signature put to all fourteen
+ * small-order encodings gives 0 of 14 accepted both before and after the
+ * fix — so those assertions prove nothing on their own, and they are marked
+ * SMOKE below rather than quietly counted as coverage.  Every assertion in
+ * this file carries one of three labels:
+ *
+ *   FORGERY — the signature SATISFIES the cofactorless group equation under
+ *             the small-order input, so only the INVARIANT-48 predicate can
+ *             reject it.  These are the assertions that fail without the
+ *             fix.  Measured against a build at the parent commit: all 21
+ *             of them accepted.
+ *   RANGE   — a direct unit test of ama_ed25519_point_is_small_order(), the
+ *             predicate itself, including the near-misses that must NOT be
+ *             blocked.
+ *   SMOKE   — behavioural, rejected with or without the fix, kept because
+ *             the fourteen encodings should be covered end to end and
+ *             because a future refactor could make them discriminating.
+ *
+ * The labels are measured, not asserted.  With
+ * ama_ed25519_point_is_small_order() neutered to `return 0` on this tree:
+ * 102 passed / 38 failed, and the 38 are exactly the 15 RANGE assertions,
+ * the 21 FORGERY assertions and the 2 MIXED BATCH aggregate assertions.
+ * Every [5] SMOKE line printed [ OK ] under that mutation, which is why it
+ * says SMOKE.
+ *
+ * THE SIX ENCODINGS THAT WERE ALREADY REFUSED
+ *
+ * Six of the fourteen never reached the group equation even before this
+ * fix: y = p and y = p+1 under either sign fail INVARIANT-38's y < p rule,
+ * and y = 1 or y = p-1 with the x-sign bit SET fail its x = 0 sign rule.
+ * There is therefore no FORGERY vector for those six — one cannot be built,
+ * since the decoder refuses the encoding — and the RANGE block is what pins
+ * them: the predicate must answer 1 for all fourteen regardless of which
+ * rule would have caught them, so that the three rules stay independent of
+ * the order verify applies them in.
+ *
+ * BATCH
+ *
+ * ama_ed25519_batch_verify is an unconditional per-entry loop over
+ * ama_ed25519_verify, so it inherits the rule by construction rather than
+ * by a second copy of it.  That is asserted here, not assumed: every vector
+ * in this file is put to BOTH entry points and the two verdicts compared,
+ * and a mixed batch (one genuine entry among the forgeries) is checked so
+ * the batch answer cannot be a uniform "reject everything".
+ */
+
+#include "../../include/ama_cryptography.h"
+/* White-box: the byte predicate verify calls.  Header-only static inline,
+ * identical in both field instantiations — no link dependency. */
+#include "../../src/c/internal/ama_ed25519_canonical.h"
+
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+
+static int failed = 0;
+static int passed = 0;
+
+#define CHECK(cond, label)                                                     \
+    do {                                                                       \
+        if (cond) { passed++; printf("  [ OK ] %s\n", (label)); }              \
+        else      { failed++; printf("  [FAIL] %s\n", (label)); }              \
+    } while (0)
+
+#define SMALL_ORDER_COUNT 14
+#define UNIVERSAL_COUNT    3
+#define PER_KEY_COUNT      8
+
+/* The message the per-key and R-half vectors were constructed against.  It
+ * is part of the vector: h = H(R || A || M) is what the construction solved
+ * for, so changing this string invalidates every FORGERY vector below. */
+static const char VECTOR_MSG[] = "INVARIANT-48 discriminating vector";
+
+/* Four messages for the universal forgery, which is message-independent by
+ * construction — that independence is the whole point of the identity case
+ * and is what this array demonstrates. */
+static const char *const UNIVERSAL_MSGS[4] = {
+    "", "abc", "the quick brown fox", "INVARIANT-48"
+};
+
+static const uint8_t SMALL_ORDER_ENC[SMALL_ORDER_COUNT][32] = {
+    { /* [ 0] y = 0,   sign 0 — an order-4 point, (+sqrt(-1), 0) */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* [ 1] y = 0,   sign 1 — the other order-4 point */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80
+    },
+    { /* [ 2] y = 1,   sign 0 — THE IDENTITY, canonical encoding */
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* [ 3] y = 1,   sign 1 — the identity, x-sign set (INVARIANT-38 also refuses) */
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80
+    },
+    { /* [ 4] y = 0x05fc..e826, sign 0 — an order-8 point */
+        0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0,
+        0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+        0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39,
+        0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05
+    },
+    { /* [ 5] y = 0x05fc..e826, sign 1 — an order-8 point */
+        0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0,
+        0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+        0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39,
+        0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x85
+    },
+    { /* [ 6] y = 0x7a03..17c7, sign 0 — an order-8 point */
+        0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f,
+        0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+        0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6,
+        0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a
+    },
+    { /* [ 7] y = 0x7a03..17c7, sign 1 — an order-8 point */
+        0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f,
+        0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+        0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6,
+        0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0xfa
+    },
+    { /* [ 8] y = p-1, sign 0 — the order-2 point */
+        0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f
+    },
+    { /* [ 9] y = p-1, sign 1 — the order-2 point (INVARIANT-38 also refuses) */
+        0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+    },
+    { /* [10] y = p,   sign 0 — non-canonical spelling of y = 0 (INVARIANT-38 also refuses) */
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f
+    },
+    { /* [11] y = p,   sign 1 — non-canonical spelling of y = 0 (INVARIANT-38 also refuses) */
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+    },
+    { /* [12] y = p+1, sign 0 — non-canonical spelling of the identity (INVARIANT-38 also refuses) */
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f
+    },
+    { /* [13] y = p+1, sign 1 — non-canonical spelling of the identity (INVARIANT-38 also refuses) */
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+    },
+};
+
+static const uint8_t UNIVERSAL_FORGERY[UNIVERSAL_COUNT][64] = {
+    { /* s = 1:  R = [1]B,  S = 1 */
+        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* s = 5:  R = [5]B,  S = 5 */
+        0xed, 0xc8, 0x76, 0xd6, 0x83, 0x1f, 0xd2, 0x10,
+        0x5d, 0x0b, 0x43, 0x89, 0xca, 0x2e, 0x28, 0x31,
+        0x66, 0x46, 0x92, 0x89, 0x14, 0x6e, 0x2c, 0xe0,
+        0x6f, 0xae, 0xfe, 0x98, 0xb2, 0x25, 0x48, 0xdf,
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* s = 12345:  R = [12345]B,  S = 12345 */
+        0xef, 0x4f, 0x62, 0xf8, 0x47, 0x97, 0x33, 0xad,
+        0x87, 0x9c, 0xfa, 0xce, 0xd3, 0xc8, 0x9a, 0x9c,
+        0x39, 0xdd, 0x4f, 0xc7, 0x95, 0xef, 0x2e, 0xfa,
+        0x1c, 0x3e, 0xaf, 0xe4, 0xd7, 0x29, 0xa0, 0x81,
+        0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+};
+
+static const uint8_t PER_KEY_A[PER_KEY_COUNT][32] = {
+    { /* A of order 4, encoding 000000000000.. ; j = 3 */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* A of order 4, encoding 000000000000.. ; j = 0 */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80
+    },
+    { /* A of order 1, encoding 010000000000.. ; j = 0 */
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* A of order 8, encoding 26e8958fc2b2.. ; j = 3 */
+        0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0,
+        0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+        0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39,
+        0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05
+    },
+    { /* A of order 8, encoding 26e8958fc2b2.. ; j = 1 */
+        0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0,
+        0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+        0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39,
+        0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x85
+    },
+    { /* A of order 8, encoding c7176a703d4d.. ; j = 0 */
+        0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f,
+        0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+        0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6,
+        0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a
+    },
+    { /* A of order 8, encoding c7176a703d4d.. ; j = 3 */
+        0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f,
+        0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+        0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6,
+        0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0xfa
+    },
+    { /* A of order 2, encoding ecffffffffff.. ; j = 1 */
+        0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f
+    },
+};
+
+static const uint8_t PER_KEY_SIG[PER_KEY_COUNT][64] = {
+    { /* matching signature for A of order 4 */
+        0x3a, 0x25, 0xef, 0xff, 0x09, 0xb7, 0x2b, 0x4f,
+        0x77, 0xb3, 0x9d, 0xc0, 0x58, 0xda, 0xe5, 0xab,
+        0x3a, 0x44, 0x22, 0xd6, 0x70, 0x3b, 0xae, 0x4e,
+        0x16, 0x86, 0x20, 0xcf, 0x03, 0xa0, 0x60, 0xaf,
+        0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* matching signature for A of order 4 */
+        0xee, 0xee, 0x6e, 0xf4, 0x63, 0xee, 0xf4, 0x73,
+        0xee, 0xc7, 0x1f, 0x6a, 0xf5, 0x81, 0x8c, 0xa3,
+        0x7f, 0x88, 0x65, 0x41, 0xea, 0xd6, 0x23, 0x99,
+        0x6a, 0x81, 0xae, 0x7d, 0x3c, 0xae, 0x25, 0xd4,
+        0x11, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* matching signature for A of order 1 */
+        0x82, 0x6f, 0xd1, 0x8b, 0xec, 0x7a, 0x43, 0x60,
+        0xf9, 0x53, 0xeb, 0x79, 0xae, 0xb9, 0xbb, 0x3b,
+        0x47, 0x1d, 0x11, 0xfd, 0xcf, 0x02, 0xff, 0x7a,
+        0xcd, 0x43, 0xd9, 0x65, 0xf0, 0xf4, 0xc1, 0xe8,
+        0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* matching signature for A of order 8 */
+        0xc2, 0x8c, 0xed, 0x10, 0x3a, 0x25, 0xfc, 0xe5,
+        0xaa, 0xc8, 0x52, 0x61, 0x0d, 0x19, 0xa9, 0xca,
+        0x3e, 0xae, 0xfe, 0x30, 0x37, 0x40, 0x2b, 0x2d,
+        0x28, 0x58, 0x32, 0xf5, 0xb4, 0x3e, 0xad, 0xc1,
+        0x11, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* matching signature for A of order 8 */
+        0x2b, 0x73, 0x12, 0xef, 0xc5, 0xda, 0x03, 0x1a,
+        0x55, 0x37, 0xad, 0x9e, 0xf2, 0xe6, 0x56, 0x35,
+        0xc1, 0x51, 0x01, 0xcf, 0xc8, 0xbf, 0xd4, 0xd2,
+        0xd7, 0xa7, 0xcd, 0x0a, 0x4b, 0xc1, 0x52, 0x3e,
+        0x11, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* matching signature for A of order 8 */
+        0x81, 0x44, 0xf9, 0xda, 0x0d, 0x02, 0xf7, 0x53,
+        0xf3, 0x21, 0xb7, 0x41, 0x2b, 0xf1, 0xa2, 0x2a,
+        0x19, 0xb2, 0x22, 0x88, 0x9a, 0x17, 0xfa, 0xb4,
+        0x85, 0xcf, 0x3d, 0xcb, 0xda, 0x23, 0x5c, 0x80,
+        0x12, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* matching signature for A of order 8 */
+        0xe8, 0xf5, 0xbf, 0x9e, 0xe4, 0x5e, 0x17, 0x27,
+        0x90, 0x0f, 0x0c, 0x38, 0xab, 0x4a, 0xbd, 0x4a,
+        0x8d, 0x04, 0x04, 0x89, 0x0f, 0xe2, 0x2a, 0xba,
+        0x58, 0xd8, 0x59, 0xf4, 0x39, 0x8a, 0x02, 0xbe,
+        0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+    { /* matching signature for A of order 2 */
+        0x6b, 0x90, 0x2e, 0x74, 0x13, 0x85, 0xbc, 0x9f,
+        0x06, 0xac, 0x14, 0x86, 0x51, 0x46, 0x44, 0xc4,
+        0xb8, 0xe2, 0xee, 0x02, 0x30, 0xfd, 0x00, 0x85,
+        0x32, 0xbc, 0x26, 0x9a, 0x0f, 0x0b, 0x3e, 0x17,
+        0x10, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    },
+};
+
+static const uint8_t R_IDENTITY_A[32] = {
+    0x03, 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe,
+    0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99,
+    0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f,
+    0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8
+};
+
+static const uint8_t R_IDENTITY_SIG[64] = {
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x8d, 0x0a, 0x9d, 0x9d, 0x0c, 0x99, 0xc2, 0x1b,
+    0x11, 0xbe, 0xe6, 0xe5, 0x1f, 0x1e, 0x59, 0xb1,
+    0xda, 0x00, 0x86, 0x1f, 0x2d, 0x87, 0x5d, 0xe7,
+    0xb9, 0x24, 0x3f, 0xe0, 0x24, 0xb8, 0xf3, 0x0b
+};
+
+static const uint8_t GENUINE_A[32] = {
+    0x03, 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe,
+    0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99,
+    0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f,
+    0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8
+};
+
+static const uint8_t GENUINE_SIG[64] = {
+    0xb3, 0xa6, 0xc1, 0xce, 0xbb, 0x3c, 0x76, 0x86,
+    0xcb, 0x6b, 0x00, 0xe6, 0x36, 0x48, 0x6a, 0x99,
+    0xfc, 0xee, 0x79, 0xbb, 0x99, 0x1a, 0x84, 0x70,
+    0x04, 0xde, 0x85, 0x2a, 0x19, 0xf3, 0x56, 0x61,
+    0xa6, 0x55, 0xbf, 0xb5, 0x0a, 0x4f, 0xe6, 0x88,
+    0xc4, 0x8c, 0x1c, 0x14, 0x72, 0x63, 0x6c, 0xbb,
+    0xca, 0x25, 0xac, 0x31, 0x80, 0x16, 0x4b, 0xef,
+    0x8b, 0x45, 0xb0, 0xab, 0xd7, 0xc6, 0xe0, 0x0c
+};
+
+/* RFC 8032 §7.1 TEST 1, TEST 2 and TEST 3 — the absolute-correctness pin.
+ * A rule that rejects small-order inputs must not have moved the verdict on
+ * the standard's own vectors, and these are the cheapest statement of that.
+ * TEST 1 is byte-identical to the copy in tests/c/test_ed25519.c; all three
+ * were regenerated from their §7.1 seeds by the same reference that built
+ * the forgery vectors, which is how that reference was itself checked. */
+static const uint8_t RFC8032_PK[3][32] = {
+    { /* TEST 1 */
+        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+        0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+        0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+        0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a
+    },
+    { /* TEST 2 */
+        0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a,
+        0x92, 0xb7, 0x0a, 0xa7, 0x4d, 0x1b, 0x7e, 0xbc,
+        0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c,
+        0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c
+    },
+    { /* TEST 3 */
+        0xfc, 0x51, 0xcd, 0x8e, 0x62, 0x18, 0xa1, 0xa3,
+        0x8d, 0xa4, 0x7e, 0xd0, 0x02, 0x30, 0xf0, 0x58,
+        0x08, 0x16, 0xed, 0x13, 0xba, 0x33, 0x03, 0xac,
+        0x5d, 0xeb, 0x91, 0x15, 0x48, 0x90, 0x80, 0x25
+    }
+};
+static const uint8_t RFC8032_SIG[3][64] = {
+    { /* TEST 1 — empty message */
+        0xe5, 0x56, 0x43, 0x00, 0xc3, 0x60, 0xac, 0x72,
+        0x90, 0x86, 0xe2, 0xcc, 0x80, 0x6e, 0x82, 0x8a,
+        0x84, 0x87, 0x7f, 0x1e, 0xb8, 0xe5, 0xd9, 0x74,
+        0xd8, 0x73, 0xe0, 0x65, 0x22, 0x49, 0x01, 0x55,
+        0x5f, 0xb8, 0x82, 0x15, 0x90, 0xa3, 0x3b, 0xac,
+        0xc6, 0x1e, 0x39, 0x70, 0x1c, 0xf9, 0xb4, 0x6b,
+        0xd2, 0x5b, 0xf5, 0xf0, 0x59, 0x5b, 0xbe, 0x24,
+        0x65, 0x51, 0x41, 0x43, 0x8e, 0x7a, 0x10, 0x0b
+    },
+    { /* TEST 2 — message 0x72 */
+        0x92, 0xa0, 0x09, 0xa9, 0xf0, 0xd4, 0xca, 0xb8,
+        0x72, 0x0e, 0x82, 0x0b, 0x5f, 0x64, 0x25, 0x40,
+        0xa2, 0xb2, 0x7b, 0x54, 0x16, 0x50, 0x3f, 0x8f,
+        0xb3, 0x76, 0x22, 0x23, 0xeb, 0xdb, 0x69, 0xda,
+        0x08, 0x5a, 0xc1, 0xe4, 0x3e, 0x15, 0x99, 0x6e,
+        0x45, 0x8f, 0x36, 0x13, 0xd0, 0xf1, 0x1d, 0x8c,
+        0x38, 0x7b, 0x2e, 0xae, 0xb4, 0x30, 0x2a, 0xee,
+        0xb0, 0x0d, 0x29, 0x16, 0x12, 0xbb, 0x0c, 0x00
+    },
+    { /* TEST 3 — message 0xaf 0x82 */
+        0x62, 0x91, 0xd6, 0x57, 0xde, 0xec, 0x24, 0x02,
+        0x48, 0x27, 0xe6, 0x9c, 0x3a, 0xbe, 0x01, 0xa3,
+        0x0c, 0xe5, 0x48, 0xa2, 0x84, 0x74, 0x3a, 0x44,
+        0x5e, 0x36, 0x80, 0xd7, 0xdb, 0x5a, 0xc3, 0xac,
+        0x18, 0xff, 0x9b, 0x53, 0x8d, 0x16, 0xf2, 0x90,
+        0xae, 0x67, 0xf7, 0x60, 0x98, 0x4d, 0xc6, 0x59,
+        0x4a, 0x7c, 0x15, 0xe9, 0x71, 0x6e, 0xd2, 0x8d,
+        0xc0, 0x27, 0xbe, 0xce, 0xea, 0x1e, 0xc4, 0x0a
+    }
+};
+static const uint8_t RFC8032_MSG[3][2] = { {0x00, 0x00}, {0x72, 0x00}, {0xaf, 0x82} };
+static const size_t  RFC8032_MSG_LEN[3] = { 0, 1, 2 };
+
+/* The RFC 8032 base point B, compressed.  A prime-order point and the most
+ * obvious thing a blocklist must NOT catch. */
+static const uint8_t ED25519_BASEPOINT[32] = {
+    0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66
+};
+
+/* One (message, signature, public key) tuple, put to BOTH entry points, with
+ * the two verdicts required to agree.  Returns the shared verdict.
+ *
+ * Batch verification is a per-entry loop over ama_ed25519_verify, so the two
+ * agreeing is a property of the code's shape rather than of any check
+ * duplicated here — which is exactly why it is asserted on every vector
+ * instead of argued once. */
+static int verify_both(const uint8_t sig[64], const uint8_t *msg, size_t msg_len,
+                       const uint8_t pk[32], const char *label) {
+    ama_ed25519_batch_entry entry;
+    int result = 0;
+    int single, batch;
+    char buf[192];
+
+    single = (ama_ed25519_verify(sig, msg, msg_len, pk) == AMA_SUCCESS);
+
+    entry.message = msg;
+    entry.message_len = msg_len;
+    entry.signature = sig;
+    entry.public_key = pk;
+    (void)ama_ed25519_batch_verify(&entry, 1, &result);
+    batch = (result == 1);
+
+    snprintf(buf, sizeof(buf), "%s — batch verify agrees with single verify", label);
+    CHECK(single == batch, buf);
+    return single;
+}
+
+int main(void) {
+    int i, j;
+    char label[192];
+    const size_t vec_len = sizeof(VECTOR_MSG) - 1;
+
+    printf("=== Ed25519 small-order rejection (INVARIANT-48) ===\n");
+
+    /* ================================================================
+     * [1] RANGE — the predicate itself.
+     *
+     * The only block whose assertions are a direct statement about
+     * ama_ed25519_point_is_small_order().  Everything else here is
+     * behavioural and reaches the predicate through verify.
+     * ================================================================ */
+    printf("\n--- [1] RANGE: ama_ed25519_point_is_small_order() ---\n");
+    for (i = 0; i < SMALL_ORDER_COUNT; i++) {
+        snprintf(label, sizeof(label),
+                 "[1] RANGE: encoding %2d of 14 is reported small-order", i);
+        CHECK(ama_ed25519_point_is_small_order(SMALL_ORDER_ENC[i]) == 1, label);
+    }
+
+    /* The near-misses.  A blocklist that answered 1 for these would reject
+     * real keys, and a `memcmp` over the wrong length or a mis-transcribed
+     * row is exactly the defect that shows up here first.  Each differs from
+     * a blocked row in ONE byte or ONE bit. */
+    {
+        uint8_t near[32];
+
+        /* y = 2 — one off the identity. */
+        memset(near, 0, 32);
+        near[0] = 0x02;
+        CHECK(ama_ed25519_point_is_small_order(near) == 0,
+              "[1] RANGE: y = 2 (one off the identity) is NOT small-order");
+
+        /* y = p-2 — one off the order-2 point. */
+        memset(near, 0xff, 32);
+        near[0] = 0xeb;
+        near[31] = 0x7f;
+        CHECK(ama_ed25519_point_is_small_order(near) == 0,
+              "[1] RANGE: y = p-2 (one off the order-2 point) is NOT small-order");
+
+        /* y = p+2 — one past the last non-canonical row. */
+        memset(near, 0xff, 32);
+        near[0] = 0xef;
+        near[31] = 0x7f;
+        CHECK(ama_ed25519_point_is_small_order(near) == 0,
+              "[1] RANGE: y = p+2 (one past the last blocked row) is NOT small-order");
+
+        /* Each order-8 row with its top y byte perturbed. */
+        memcpy(near, SMALL_ORDER_ENC[4], 32);
+        near[30] ^= 0x01;
+        CHECK(ama_ed25519_point_is_small_order(near) == 0,
+              "[1] RANGE: order-8 row with byte 30 perturbed is NOT small-order");
+        memcpy(near, SMALL_ORDER_ENC[6], 32);
+        near[0] ^= 0x01;
+        CHECK(ama_ed25519_point_is_small_order(near) == 0,
+              "[1] RANGE: the other order-8 row with byte 0 perturbed is NOT small-order");
+
+        CHECK(ama_ed25519_point_is_small_order(ED25519_BASEPOINT) == 0,
+              "[1] RANGE: the RFC 8032 base point is NOT small-order");
+        CHECK(ama_ed25519_point_is_small_order(GENUINE_A) == 0,
+              "[1] RANGE: a genuine public key is NOT small-order");
+        for (i = 0; i < 3; i++) {
+            snprintf(label, sizeof(label),
+                     "[1] RANGE: RFC 8032 TEST %d public key is NOT small-order", i + 1);
+            CHECK(ama_ed25519_point_is_small_order(RFC8032_PK[i]) == 0, label);
+        }
+
+        /* Sign-bit insensitivity, asserted in both directions: setting bit
+         * 255 on a blocked row must not clear the verdict, and setting it on
+         * a non-blocked y must not create one.  Masking that bit is what
+         * turns seven stored rows into fourteen blocked encodings. */
+        memcpy(near, GENUINE_A, 32);
+        near[31] ^= 0x80;
+        CHECK(ama_ed25519_point_is_small_order(near) == 0,
+              "[1] RANGE: flipping the x-sign bit of a genuine key creates no hit");
+        memcpy(near, SMALL_ORDER_ENC[2], 32);   /* the identity, sign 0 */
+        near[31] ^= 0x80;
+        CHECK(ama_ed25519_point_is_small_order(near) == 1,
+              "[1] RANGE: flipping the x-sign bit of the identity keeps the hit");
+    }
+
+    /* ================================================================
+     * [2] FORGERY — A = identity, one signature for every message.
+     *
+     * The audited finding.  Each of these satisfies [S]B - R - [h]A = O
+     * for EVERY message, so nothing but the small-order rule stands
+     * between them and AMA_SUCCESS.  Measured at the parent commit:
+     * 12 of 12 ACCEPTED.
+     * ================================================================ */
+    printf("\n--- [2] FORGERY: universal forgery under A = identity ---\n");
+    for (i = 0; i < UNIVERSAL_COUNT; i++) {
+        for (j = 0; j < 4; j++) {
+            const uint8_t *m = (const uint8_t *)UNIVERSAL_MSGS[j];
+            size_t mlen = strlen(UNIVERSAL_MSGS[j]);
+            int verdict;
+
+            snprintf(label, sizeof(label),
+                     "[2] FORGERY: (R = [s]B, S = s) vector %d under A = identity, msg \"%s\"",
+                     i, UNIVERSAL_MSGS[j]);
+            verdict = verify_both(UNIVERSAL_FORGERY[i], m, mlen,
+                                  SMALL_ORDER_ENC[2], label);
+            CHECK(verdict == 0, label);
+        }
+    }
+
+    /* ================================================================
+     * [3] FORGERY — one signature per canonically encoded small-order A.
+     *
+     * Built by the j-search described in the file header: no secret is
+     * involved, only 8 hash evaluations at worst per key.  Measured at
+     * the parent commit: 8 of 8 ACCEPTED.
+     * ================================================================ */
+    printf("\n--- [3] FORGERY: per-key forgery under each canonical small-order A ---\n");
+    for (i = 0; i < PER_KEY_COUNT; i++) {
+        int verdict;
+
+        snprintf(label, sizeof(label),
+                 "[3] FORGERY: group-equation-satisfying signature under small-order A #%d", i);
+        verdict = verify_both(PER_KEY_SIG[i], (const uint8_t *)VECTOR_MSG, vec_len,
+                              PER_KEY_A[i], label);
+        CHECK(verdict == 0, label);
+    }
+
+    /* ================================================================
+     * [4] FORGERY — small-order R.
+     *
+     * R = the identity's CANONICAL encoding with S = h*a mod L, under a
+     * real public key.  [S]B - R - [h]A is the identity exactly, so the
+     * group equation holds and INVARIANT-38's canonical-R rule does not
+     * apply (this encoding IS canonical — that is the difference from
+     * tests/c/test_ed25519_canonical_r.c, which uses the sign-bit-SET
+     * spelling of the same point).  Producing it needs the signer's own
+     * key, which is the point: without INVARIANT-48 a signer could mint
+     * a signature carrying no randomness at all and it would verify.
+     * Measured at the parent commit: ACCEPTED.
+     *
+     * The other thirteen encodings admit no such vector as R.  For a
+     * small-order T that is not the identity, [S]B = T + [h]A has no
+     * solution S when A has prime order, because T is not in <B>.
+     * ================================================================ */
+    printf("\n--- [4] FORGERY: small-order R (identity) with a real public key ---\n");
+    {
+        int verdict = verify_both(R_IDENTITY_SIG, (const uint8_t *)VECTOR_MSG, vec_len,
+                                  R_IDENTITY_A,
+                                  "[4] FORGERY: R = identity, S = h*a mod L");
+        CHECK(verdict == 0,
+              "[4] FORGERY: R = identity with S = h*a mod L is rejected");
+    }
+
+    /* ================================================================
+     * [5] SMOKE — the fourteen encodings as A against a genuine signature.
+     *
+     * Rejected before the fix and after it (0 of 14 both ways), because a
+     * signature made under a different key fails the group equation on its
+     * own.  Kept for end-to-end coverage of all fourteen and labelled so
+     * nobody counts it as evidence.  Section [1] is the real pin for the
+     * six encodings that have no FORGERY vector.
+     * ================================================================ */
+    printf("\n--- [5] SMOKE: 14 encodings as A against a genuine signature ---\n");
+    for (i = 0; i < SMALL_ORDER_COUNT; i++) {
+        int verdict;
+
+        snprintf(label, sizeof(label),
+                 "[5] SMOKE: genuine signature under small-order encoding %2d is rejected", i);
+        verdict = verify_both(GENUINE_SIG, (const uint8_t *)VECTOR_MSG, vec_len,
+                              SMALL_ORDER_ENC[i], label);
+        CHECK(verdict == 0, label);
+    }
+
+    /* Same fourteen, this time spliced into the R half of a genuine
+     * signature.  Also SMOKE: the recomputed point cannot match. */
+    printf("\n--- [5] SMOKE: 14 encodings as the R half of a genuine signature ---\n");
+    for (i = 0; i < SMALL_ORDER_COUNT; i++) {
+        uint8_t sig[64];
+        int verdict;
+
+        memcpy(sig, GENUINE_SIG, 64);
+        memcpy(sig, SMALL_ORDER_ENC[i], 32);
+        snprintf(label, sizeof(label),
+                 "[5] SMOKE: small-order R %2d spliced into a genuine signature is rejected", i);
+        verdict = verify_both(sig, (const uint8_t *)VECTOR_MSG, vec_len,
+                              GENUINE_A, label);
+        CHECK(verdict == 0, label);
+    }
+
+    /* ================================================================
+     * [6] POSITIVE CONTROL — what must still be accepted.
+     *
+     * Without this block every assertion above is satisfied by a verify
+     * that returns AMA_ERROR_VERIFY_FAILED unconditionally.
+     * ================================================================ */
+    printf("\n--- [6] POSITIVE CONTROL ---\n");
+    {
+        int verdict;
+
+        verdict = verify_both(GENUINE_SIG, (const uint8_t *)VECTOR_MSG, vec_len,
+                              GENUINE_A, "[6] POSITIVE: genuine signature");
+        CHECK(verdict == 1,
+              "[6] POSITIVE: a genuine signature still verifies");
+
+        for (i = 0; i < 3; i++) {
+            snprintf(label, sizeof(label), "[6] POSITIVE: RFC 8032 §7.1 TEST %d", i + 1);
+            verdict = verify_both(RFC8032_SIG[i], RFC8032_MSG[i], RFC8032_MSG_LEN[i],
+                                  RFC8032_PK[i], label);
+            CHECK(verdict == 1, label);
+        }
+
+        /* A generated key, signed and verified through the library's own sign
+         * path — the RFC vectors are fixed data, this is not.
+         *
+         * The seed is SUPPLIED. `ama_ed25519_keypair` does not draw one: its
+         * contract is "caller must provide seed in secret_key[0..31]", and it
+         * hashes those 32 bytes on its first line. An earlier revision of this
+         * test declared `sk` and passed it straight in, so the key was derived
+         * from whatever was on the stack. That is not merely non-deterministic
+         * — in a real caller it is a silent key-generation failure — and it is
+         * invisible in an ordinary build, because uninitialised stack memory
+         * hashes as readily as a seed. MemorySanitizer caught it in CI
+         * (use-of-uninitialized-value in ge_scalarmult_base_fe51, traced to
+         * this frame); nothing in the local ctest run could have.
+         *
+         * A fixed seed rather than a random one: this lane asserts a positive
+         * control, and a control that changes on every run cannot be bisected
+         * when it starts failing. */
+        {
+            uint8_t pk[32], sig[64];
+            uint8_t sk[64] = {
+                0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+                0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+                0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+                0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60
+            };
+
+            CHECK(ama_ed25519_keypair(pk, sk) == AMA_SUCCESS,
+                  "[6] POSITIVE: keypair generation succeeds");
+            CHECK(ama_ed25519_sign(sig, (const uint8_t *)VECTOR_MSG, vec_len, sk)
+                      == AMA_SUCCESS,
+                  "[6] POSITIVE: signing succeeds");
+            CHECK(ama_ed25519_point_is_small_order(pk) == 0,
+                  "[6] POSITIVE: a generated public key is not small-order");
+            verdict = verify_both(sig, (const uint8_t *)VECTOR_MSG, vec_len, pk,
+                                  "[6] POSITIVE: freshly generated signature");
+            CHECK(verdict == 1,
+                  "[6] POSITIVE: a freshly generated signature verifies");
+        }
+    }
+
+    /* ================================================================
+     * [7] MIXED BATCH — batch cannot be answering "reject everything".
+     *
+     * One genuine entry first, then every forgery vector in the file, in
+     * one call.  Pins both that the genuine entry survives the company it
+     * keeps and that each rejected slot is rejected individually rather
+     * than by an all-or-nothing return code.
+     * ================================================================ */
+    printf("\n--- [7] MIXED BATCH ---\n");
+    {
+        ama_ed25519_batch_entry entries[1 + UNIVERSAL_COUNT + PER_KEY_COUNT + 1];
+        int results[1 + UNIVERSAL_COUNT + PER_KEY_COUNT + 1];
+        size_t count = 0;
+        ama_error_t rc;
+        int n_ok = 0;
+
+        entries[count].message = (const uint8_t *)VECTOR_MSG;
+        entries[count].message_len = vec_len;
+        entries[count].signature = GENUINE_SIG;
+        entries[count].public_key = GENUINE_A;
+        count++;
+
+        for (i = 0; i < UNIVERSAL_COUNT; i++) {
+            entries[count].message = (const uint8_t *)VECTOR_MSG;
+            entries[count].message_len = vec_len;
+            entries[count].signature = UNIVERSAL_FORGERY[i];
+            entries[count].public_key = SMALL_ORDER_ENC[2];
+            count++;
+        }
+        for (i = 0; i < PER_KEY_COUNT; i++) {
+            entries[count].message = (const uint8_t *)VECTOR_MSG;
+            entries[count].message_len = vec_len;
+            entries[count].signature = PER_KEY_SIG[i];
+            entries[count].public_key = PER_KEY_A[i];
+            count++;
+        }
+        entries[count].message = (const uint8_t *)VECTOR_MSG;
+        entries[count].message_len = vec_len;
+        entries[count].signature = R_IDENTITY_SIG;
+        entries[count].public_key = R_IDENTITY_A;
+        count++;
+
+        memset(results, 0x7f, sizeof(results));
+        rc = ama_ed25519_batch_verify(entries, count, results);
+        CHECK(rc == AMA_ERROR_VERIFY_FAILED,
+              "[7] MIXED BATCH: a batch containing forgeries returns VERIFY_FAILED");
+        CHECK(results[0] == 1,
+              "[7] MIXED BATCH: the genuine entry is still reported valid");
+        for (i = 1; i < (int)count; i++) {
+            if (results[i] == 0) {
+                n_ok++;
+            }
+        }
+        snprintf(label, sizeof(label),
+                 "[7] MIXED BATCH: all %d forgery entries reported invalid",
+                 (int)count - 1);
+        CHECK(n_ok == (int)count - 1, label);
+    }
+
+    printf("\n===========================================\n");
+    if (failed) {
+        printf("%d small-order check(s) FAILED  (%d passed)\n", failed, passed);
+        return 1;
+    }
+    printf("All small-order checks passed (%d checks).\n", passed);
+    printf("===========================================\n");
+    return 0;
+}

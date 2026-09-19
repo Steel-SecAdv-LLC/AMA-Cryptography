@@ -44,6 +44,7 @@ from ama_cryptography.legacy_compat import (
     MASTER_CODES,
     MASTER_HELIX_PARAMS,
     QuantumSignatureUnavailableError,
+    build_package_transcript,
     canonical_hash_code,
     create_crypto_package,
     create_ethical_hkdf_context,
@@ -58,6 +59,7 @@ from ama_cryptography.legacy_compat import (
     hmac_authenticate,
     hmac_verify,
     length_prefixed_encode,
+    recompute_ethical_hash,
     verify_crypto_package,
 )
 
@@ -639,8 +641,7 @@ class TestCryptoPackageVerification:
         tampered = copy.copy(valid_package)
         # Flip first character of hash
         tampered.content_hash = "f" + valid_package.content_hash[1:]
-        results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, tampered, kms.hmac_key)
-        assert results["content_hash"] is False
+        assert _rejects(MASTER_CODES, MASTER_HELIX_PARAMS, tampered, kms.hmac_key, "content_hash")
 
     def test_verify_tampered_hmac_tag_fails(self, kms: Any, valid_package: Any) -> None:
         """Tampered HMAC tag should fail verification."""
@@ -669,8 +670,7 @@ class TestCryptoPackageVerification:
         tampered = copy.copy(valid_package)
         other_kp = generate_ed25519_keypair()
         tampered.ed25519_pubkey = other_kp.public_key.hex()
-        results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, tampered, kms.hmac_key)
-        assert results["ed25519"] is False
+        assert _rejects(MASTER_CODES, MASTER_HELIX_PARAMS, tampered, kms.hmac_key, "ed25519")
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
     def test_verify_tampered_dilithium_signature_fails(self, kms: Any, valid_package: Any) -> None:
@@ -693,6 +693,59 @@ class TestCryptoPackageVerification:
         assert results["dilithium"] is False
 
 
+def _rejects(codes: str, helix: Any, package: Any, hmac_key: bytes, key: str) -> bool:
+    """Whether verification rejects ``package`` — by verdict or by raising.
+
+    Since the 2026-09 audit (A-2), the legacy package's signature covers a
+    transcript of every identity field, so tampering with ANY of them breaks
+    the ML-DSA-65 signature.  With ``require_quantum_signatures`` in force
+    (the default when Dilithium is built), that surfaces as
+    ``QuantumSignatureRequiredError`` rather than as a ``False`` in the
+    results dict — a strictly harder refusal, raised before the per-layer
+    verdicts are returned at all.
+
+    These tests were written to assert "this tamper is detected", and they
+    still do.  Treating only ``results[key] is False`` as detection would now
+    make them fail on the very hardening that made the tamper detectable in
+    the first place.
+    """
+    from ama_cryptography.exceptions import QuantumSignatureRequiredError
+
+    try:
+        return verify_crypto_package(codes, helix, package, hmac_key)[key] is False
+    except QuantumSignatureRequiredError:
+        return True
+
+
+def _resign(pkg: Any, kms: Any) -> Any:
+    """Re-sign a package after mutating an authenticated field.
+
+    Since the 2026-09 audit (A-2), the legacy package's signature and HMAC
+    both cover a transcript of every identity field — ``timestamp`` among
+    them.  Rewriting ``pkg.timestamp`` therefore breaks the ML-DSA-65
+    signature, and ``verify_crypto_package`` raises before it ever evaluates
+    ``results["timestamp"]``.
+
+    That is the point of the fix, and it means these tests can no longer
+    reach ``_verify_timestamp_value`` by tampering: a package with a
+    ridiculous timestamp now has to be one an *authorised signer* produced.
+    Re-signing here builds exactly that, so each test still exercises the
+    plausibility check it was written for rather than silently becoming a
+    second test of the signature.
+    """
+    content_hash = canonical_hash_code(
+        MASTER_CODES, MASTER_HELIX_PARAMS, hash_version=pkg.hash_format_version
+    )
+    ethical = recompute_ethical_hash(pkg.ethical_vector)
+    hmac_msg = build_package_transcript("hmac", pkg, content_hash, ethical)
+    pkg.hmac_tag = hmac_authenticate(hmac_msg, kms.hmac_key).hex()
+    sig_msg = build_package_transcript("signature", pkg, content_hash, ethical)
+    pkg.ed25519_signature = ed25519_sign(sig_msg, kms.ed25519_keypair.private_key).hex()
+    if pkg.dilithium_signature is not None and kms.dilithium_keypair is not None:
+        pkg.dilithium_signature = dilithium_sign(sig_msg, kms.dilithium_keypair.secret_key).hex()
+    return pkg
+
+
 class TestTimestampValidation:
     """Penetration tests for timestamp validation."""
 
@@ -712,6 +765,7 @@ class TestTimestampValidation:
         # Set timestamp to tomorrow
         future = datetime.now(timezone.utc) + timedelta(days=1)
         pkg.timestamp = future.isoformat()
+        _resign(pkg, kms)
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
         assert results["timestamp"] is False
 
@@ -721,6 +775,7 @@ class TestTimestampValidation:
         # Set timestamp to 11 years ago
         old = datetime.now(timezone.utc) - timedelta(days=4000)
         pkg.timestamp = old.isoformat()
+        _resign(pkg, kms)
         results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
         assert results["timestamp"] is False
 
@@ -728,6 +783,7 @@ class TestTimestampValidation:
         """Malformed timestamp raises ValueError (fail-loud contract)."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.timestamp = "not-a-valid-timestamp"
+        _resign(pkg, kms)
         with pytest.raises(ValueError, match="Invalid timestamp format"):
             verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
 
@@ -743,12 +799,22 @@ class TestMalformedInputHandling:
         """Invalid hex in content_hash should not crash."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.content_hash = "not_valid_hex!!!"
-        # Should either return False for content_hash or raise ValueError
+        # The contract is "does not crash": a typed refusal from this API is a
+        # rejection, not a crash.  QuantumSignatureRequiredError joins the list
+        # because the field is now inside the signed transcript (A-2), so
+        # rewriting it breaks the ML-DSA-65 signature before anything tries to
+        # parse the hex.
+        from ama_cryptography.exceptions import QuantumSignatureRequiredError
+
         try:
             results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
             assert results["content_hash"] is False
-        except ValueError:
-            # ValueError is acceptable for invalid hex — the function rejects bad input
+        except (ValueError, QuantumSignatureRequiredError):
+            # Both are the PASS condition, which is why this handler is empty:
+            # the test asserts the API does not crash on malformed hex, and a
+            # typed refusal is the API declining, not crashing.  The `except
+            # Exception` below is what fails the test, so swallowing these two
+            # here narrows what counts as a crash rather than hiding one.
             pass
         except Exception as exc:
             pytest.fail(f"Unexpected exception for invalid hex: {exc!r}")

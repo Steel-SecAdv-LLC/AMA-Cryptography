@@ -12,12 +12,31 @@ ML-DSA signing is rejection-sampled: its cost depends on the message, so it
 is measured over N distinct random messages, never one fixed message.
 """
 
+import importlib
 import json
 import os
 import statistics
 import time
+from collections.abc import Callable
+from typing import Any, Dict, List
 
-from cryptography.hazmat.primitives.asymmetric import mldsa, mlkem
+# ML-DSA and ML-KEM reached `cryptography` in 46.0; this file is written
+# against 49.0.0 (OpenSSL 4.0.1).  Loaded through importlib rather than
+# `from ... import mldsa, mlkem` so an older install fails HERE, naming the
+# requirement, instead of raising a bare ImportError from a submodule that
+# older versions simply do not have.
+try:
+    mldsa: Any = importlib.import_module("cryptography.hazmat.primitives.asymmetric.mldsa")
+    mlkem: Any = importlib.import_module("cryptography.hazmat.primitives.asymmetric.mlkem")
+except ImportError as exc:  # pragma: no cover - environment guard
+    import cryptography as _cryptography
+
+    raise SystemExit(
+        "this benchmark needs `cryptography` >= 46.0 for ML-DSA / ML-KEM "
+        f"(installed: {_cryptography.__version__}); it is the OpenSSL side of "
+        f"the head-to-head and there is nothing to compare against without it "
+        f"[{exc}]"
+    ) from exc
 
 from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair,
@@ -30,10 +49,10 @@ from ama_cryptography.pqc_backends import (
 
 ROUNDS = 200
 MSGS = [os.urandom(64) for _ in range(ROUNDS)]
-rows = []
+rows: List[Dict[str, Any]] = []
 
 
-def bench(label, impl, fn, n=ROUNDS):
+def bench(label: str, impl: str, fn: Callable[..., object], n: int = ROUNDS) -> None:
     fn()  # warm
     ts = []
     for i in range(n):
@@ -54,7 +73,7 @@ def bench(label, impl, fn, n=ROUNDS):
     print(f"  {label:<26} {impl:<26} {med:10.1f} us  {1e6/med:10.1f} ops/s")
 
 
-def main():
+def main() -> None:
     # ── ML-DSA-65 ──
     akp = generate_dilithium_keypair()
     apk, ask = akp.public_key, akp.secret_key
@@ -99,8 +118,33 @@ def main():
     bench("ML-KEM-1024 decaps", "OpenSSL 4.0.1", lambda i=0: mkey.decapsulate(mct))
 
     out = "pqc_results.json"
+    # Same provenance contract as comparative_benchmark.py: the competitive
+    # page refuses to render result files whose measuring build is unknown,
+    # and it cross-checks that BOTH files carry the same ama_commit.
+    # Imported package-qualified — the one spelling mypy --strict resolves
+    # under MYPYPATH=. — with the repository root put on sys.path first,
+    # because the documented way of running this file is as a script, where
+    # sys.path[0] is benchmarks/ itself and the `benchmarks` package is not
+    # importable.  (A bare `from comparative_benchmark import ...` fallback
+    # would need a type-ignore, which INVARIANT-13 forbids here.)
+    import sys
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from benchmarks.comparative_benchmark import _measurement_provenance
+
     with open(out, "w") as f:
-        json.dump({"rounds": ROUNDS, "results": rows}, f, indent=2)
+        json.dump(
+            {
+                "provenance": _measurement_provenance(),
+                "rounds": ROUNDS,
+                "results": rows,
+            },
+            f,
+            indent=2,
+        )
     print(f"\nwrote {out} ({len(rows)} rows)")
 
 

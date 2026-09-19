@@ -27,6 +27,10 @@
  */
 
 #include "../../include/ama_cryptography.h"
+/* ama_ascon_permutation_for_test is test-only and deliberately absent from the
+ * installed public header; it lives here and is reached by linking the static
+ * ama_cryptography_test archive. */
+#include "../../src/c/internal/ama_testing_exports.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

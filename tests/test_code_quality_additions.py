@@ -71,7 +71,13 @@ class TestSecureMemoryImplementation:
     """Tests for stdlib-only secure memory implementation."""
 
     def test_secure_memzero_works(self) -> None:
-        """secure_memzero zeros data using multi-pass overwrite."""
+        """_memzero leaves the buffer zeroed.
+
+        The mechanism is a single pass of ``volatile`` stores plus a compiler
+        barrier on the native path, not a multi-pass overwrite — see
+        ``src/c/ama_consttime.c``. This asserts the post-condition, which is
+        what the caller depends on either way.
+        """
         from ama_cryptography.secure_memory import _memzero
 
         data = bytearray(b"sensitive data here")
@@ -79,8 +85,13 @@ class TestSecureMemoryImplementation:
 
         assert all(b == 0 for b in data)
 
-    def test_memzero_multipass(self) -> None:
-        """_memzero performs multi-pass overwrite."""
+    def test_memzero_clears_a_fully_populated_buffer(self) -> None:
+        """_memzero zeros every byte of a buffer with no zero bytes in it.
+
+        Renamed from ``test_memzero_multipass``: the name asserted a mechanism
+        the body never checked, and the mechanism it named is not the one the
+        native kernel uses.
+        """
         from ama_cryptography.secure_memory import _memzero
 
         # Create data and verify it zeros it
@@ -234,10 +245,16 @@ class TestKeyManagementDecryptPaths:
     @pytest.fixture
     def temp_storage(self, tmp_path: Any) -> Any:
         """Create a temporary storage directory."""
+        import secrets as _secrets
+
         from ama_cryptography.key_management import SecureKeyStorage
 
         storage_path = tmp_path / "test_keys"
-        storage = SecureKeyStorage(storage_path, master_password="test_password_123")
+        # Generated per fixture rather than a literal: the value is never
+        # asserted on and the store lives only inside `tmp_path`, so nothing
+        # needs it to be stable — and a literal is what CodeQL reports as
+        # py/hardcoded-credentials.
+        storage = SecureKeyStorage(storage_path, master_password=_secrets.token_urlsafe(32))
         return storage
 
     @skip_no_native_aes

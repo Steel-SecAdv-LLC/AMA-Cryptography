@@ -129,7 +129,7 @@ class HealthResponse(BaseModel):
     service: str
     timestamp: str
     pqc_available: bool
-    algorithms: list
+    algorithms: list[str]
 
 
 # Initialize FastAPI app
@@ -160,7 +160,7 @@ KEYPAIR = CRYPTO.generate_keypair()
 class SignedResponse(JSONResponse):
     """Custom response class that adds cryptographic signature headers."""
 
-    def __init__(self, content: Any, **kwargs):
+    def __init__(self, content: Any, **kwargs: Any) -> None:
         super().__init__(content, **kwargs)
 
         # Sign the response content
@@ -200,7 +200,7 @@ async def verify_hmac_auth(
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["Health"])
-async def health_check():
+async def health_check() -> Any:
     """
     Health check endpoint with cryptographic capabilities.
 
@@ -223,7 +223,7 @@ async def health_check():
 
 
 @app.post("/api/sign", response_model=SignResponse, tags=["Cryptography"])
-async def sign_data(request: SignRequest):
+async def sign_data(request: SignRequest) -> Any:
     """
     Sign data with AMA Cryptography cryptographic system.
 
@@ -259,7 +259,7 @@ async def sign_data(request: SignRequest):
 
 
 @app.post("/api/verify", response_model=VerifyResponse, tags=["Cryptography"])
-async def verify_signature(request: VerifyRequest):
+async def verify_signature(request: VerifyRequest) -> Any:
     """
     Verify a cryptographic signature.
 
@@ -278,7 +278,7 @@ async def verify_signature(request: VerifyRequest):
 
 
 @app.get("/api/protected-data", response_model=ProtectedDataResponse, tags=["Data Protection"])
-async def get_protected_data():
+async def get_protected_data() -> Any:
     """
     Get a cryptographically protected data package.
 
@@ -303,7 +303,7 @@ async def get_protected_data():
     package = await loop.run_in_executor(
         None,
         lambda: create_crypto_package(
-            dna_codes=data_str,
+            codes=data_str,
             helix_params=helix_params,
             kms=KMS,
             author="FastAPI Server",
@@ -332,7 +332,7 @@ async def get_protected_data():
     tags=["Data Protection"],
     dependencies=[Depends(verify_hmac_auth)],
 )
-async def create_protected_data(request: ProtectedDataRequest):
+async def create_protected_data(request: ProtectedDataRequest) -> Any:
     """
     Create a new protected data package.
 
@@ -345,7 +345,7 @@ async def create_protected_data(request: ProtectedDataRequest):
     package = await loop.run_in_executor(
         None,
         lambda: create_crypto_package(
-            dna_codes=data_str,
+            codes=data_str,
             helix_params=helix_params,
             kms=KMS,
             author=request.author,
@@ -363,7 +363,7 @@ async def create_protected_data(request: ProtectedDataRequest):
 
 
 @app.get("/api/keys/public", tags=["Keys"])
-async def get_public_keys():
+async def get_public_keys() -> Any:
     """Get server's public keys for client-side verification."""
     return {
         "ed25519_public_key": KEYPAIR.public_key.hex(),
@@ -373,7 +373,7 @@ async def get_public_keys():
 
 
 @app.get("/api/capabilities", tags=["Info"])
-async def get_capabilities():
+async def get_capabilities() -> Any:
     """Get detailed cryptographic capabilities."""
     caps = get_pqc_capabilities()
 
@@ -396,7 +396,7 @@ async def get_capabilities():
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
+async def global_exception_handler(request: Request, exc: Exception) -> Any:
     """Handle all unhandled exceptions securely."""
     return JSONResponse(
         status_code=500,
@@ -407,7 +407,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-def main():
+def main() -> None:
     """Run the FastAPI server with uvicorn."""
     print("=" * 60)
     print("AMA CRYPTOGRAPHY - FASTAPI INTEGRATION EXAMPLE")

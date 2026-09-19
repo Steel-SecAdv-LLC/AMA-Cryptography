@@ -24,7 +24,7 @@ same call for exactly the same reason.
 This is the second time this defect class has been found in the coverage for
 this one invariant: ``tests/c/test_ed25519_canonical_s.c`` had it (``y = p``
 is not the signer's key, so verify rejects it either way) and
-``tools/check_ed25519_backend_parity.py`` had it (its corpus contained no
+the former backend-differential tool had it (its corpus contained no
 non-canonical ``y`` at all). The lesson is the same each time and it is worth
 stating plainly: **a rejection is only evidence when something that differs
 from it in exactly one respect is accepted.** A test whose expected result is
@@ -52,7 +52,8 @@ as refusals *alongside* the ``y = 0`` control that proves refusal is not the
 uniform answer.
 
 ``tests/c/test_ed25519_canonical_s.c`` isolates the predicate itself, and the
-backend-differential job proves donna and fe51 agree on every case.
+frozen oracle (``tests/test_ed25519_frozen_oracle.py``) holds the in-house
+backend to the answers the removed vendored one gave on every case.
 """
 
 from __future__ import annotations
@@ -100,8 +101,8 @@ def decode() -> dict[str, Callable[[bytes], bool]]:
 
     ``ama_ed25519_point_add`` and ``ama_ed25519_scalarmult_public`` are C-ABI
     only — ``pqc_backends`` exposes no Python wrapper — and they are the same
-    pair ``tools/check_ed25519_backend_parity.py`` uses for its decode stage,
-    for the same reason: they succeed or fail on the decode alone.
+    pair the frozen-oracle fixture uses for its decode records, for the same
+    reason: they succeed or fail on the decode alone.
     """
     if _native_lib is None:  # pragma: no cover - INVARIANT-7 makes this unreachable
         pytest.skip("native library unavailable")
@@ -235,9 +236,9 @@ class TestNullArgumentsAreRefused:
     That mattered more once this module started driving those entry points
     through ctypes: a Python ``None`` arrives as NULL and takes the interpreter
     down with it, so an unguarded parameter turns a test-suite typo into a
-    crash with no traceback. Both backends are fixed identically, which the
-    backend-differential job requires — they must agree on the verdict for
-    every input, and NULL is an input.
+    crash with no traceback. Both field instantiations are fixed identically:
+    the frozen oracle and the fe51/MULX differential require them to agree on
+    the verdict for every input, and NULL is an input.
 
     ``point_from_scalar`` needed an ABI change to be fixable at all: it
     returned ``void`` through 3.x, so an early return on NULL would have left
@@ -313,5 +314,66 @@ class TestSignatureVerificationIsUnaffected:
         for _ in range(64):
             public_key, secret_key = native_ed25519_keypair()
             assert int.from_bytes(public_key, "little") & ((1 << 255) - 1) < P
+            signature = native_ed25519_sign(MESSAGE, secret_key)
+            assert native_ed25519_verify(signature, MESSAGE, public_key) is True
+
+
+class TestXIsZeroWithSignBitSet:
+    """RFC 8032 §5.1.3 step 3: "if x = 0, and x_0 = 1, decoding fails."
+
+    ``x = 0`` has a single square root, so the sign bit distinguishes nothing
+    and the encoding carrying it is a SECOND spelling of a point whose
+    canonical encoding does not.  Neither backend then in the tree implemented
+    the rule: the fe51 decoder negates conditionally and ``-0 == 0``, so the bit
+    was silently ignored; the vendored one compared parity and skipped the
+    negate for the same reason.
+
+    ``x = 0`` exactly when ``y² = 1`` — the numerator of
+    ``x² = (y²-1)/(dy²+1)`` vanishes — i.e. ``y = 1`` (the identity) or
+    ``y = p-1``.  Those two, and only those two, must reject with the bit set.
+
+    Not a forgery route: neither point is a usable verification key.  This is
+    the encoding-uniqueness family of INVARIANT-26/29/38, applied to the
+    coordinate those invariants do not cover.
+    """
+
+    @pytest.mark.parametrize("op", OPS)
+    @pytest.mark.parametrize("y", [1, P - 1], ids=["y=1 (identity)", "y=p-1"])
+    def test_sign_bit_set_is_refused(
+        self, decode: dict[str, Callable[[bytes], bool]], op: str, y: int
+    ) -> None:
+        assert decode[op](_encode(y, sign_bit=1)) is False
+
+    @pytest.mark.parametrize("op", OPS)
+    @pytest.mark.parametrize("y", [1, P - 1], ids=["y=1 (identity)", "y=p-1"])
+    def test_the_canonical_encoding_still_decodes(
+        self, decode: dict[str, Callable[[bytes], bool]], op: str, y: int
+    ) -> None:
+        """The fix must reject the twin, not the point."""
+        assert decode[op](_encode(y, sign_bit=0)) is True
+
+    @pytest.mark.parametrize("op", OPS)
+    def test_ordinary_points_keep_both_sign_bits(
+        self, decode: dict[str, Callable[[bytes], bool]], op: str
+    ) -> None:
+        """Only x = 0 is affected.
+
+        For every other y both sign bits are legitimate — they select the two
+        distinct square roots — so a check that rejected them would break
+        half of all public keys.  2G is a real point on the curve; its
+        y-coordinate is not ±1, so flipping the bit must still decode.
+        """
+        y = int.from_bytes(_TWO_G, "little") & ((1 << 255) - 1)
+        assert decode[op](_encode(y, sign_bit=0)) is True
+        assert decode[op](_encode(y, sign_bit=1)) is True
+
+    def test_real_keys_are_unaffected(self) -> None:
+        """Freshly generated keypairs still sign and verify.
+
+        The guard runs on every public-key decode, so a regression in it would
+        surface here as a wholesale verification failure.
+        """
+        for _ in range(32):
+            public_key, secret_key = native_ed25519_keypair()
             signature = native_ed25519_sign(MESSAGE, secret_key)
             assert native_ed25519_verify(signature, MESSAGE, public_key) is True

@@ -199,6 +199,69 @@ int main(void) {
     rc = ama_secp256k1_point_mul(privkey, Gx, Gy, out_x, out_y);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "zero scalar rejected by point_mul");
 
+    /* Test 6b: the caller-supplied point is validated, not trusted.
+     *
+     * point_mul is the one entry point in this file's public API that pairs
+     * a caller-supplied point with a SECRET scalar, so an unvalidated point
+     * here was the invalid-curve surface: the a = 0 add/double formulas
+     * never reference b, so an off-curve input runs valid arithmetic on
+     * whatever curve y^2 = x^3 + (y^2 - x^3) the attacker chose.  Each
+     * rejection is paired with the accepting control immediately above
+     * (tests 1-5 accept G and multiples), the rule
+     * tests/test_ed25519_canonical_y.py states.
+     */
+    be32(privkey, 1);
+    {
+        uint8_t bad[32];
+
+        /* Off-curve: G with y+1 satisfies no curve equation of interest. */
+        memcpy(bad, Gy, 32);
+        bad[31] = (uint8_t)(bad[31] + 1u);
+        rc = ama_secp256k1_point_mul(privkey, Gx, bad, out_x, out_y);
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                    "off-curve point (Gy+1) rejected by point_mul");
+
+        /* Non-canonical coordinate, the only shape that separates
+         * "rejected" from "silently reduced" (the rule the nistp
+         * second-encoding tests state): a coordinate >= p that reduces
+         * ONTO a real curve point.  x = 1 is on the curve
+         * (1 + 7 = 8 is a QR mod p), so x_bytes = p + 1 is the second
+         * encoding of that point's x — an implementation that reduces
+         * first would accept it and compute the same product as the
+         * canonical control, which must itself be ACCEPTED. */
+        {
+            /* p + 1, big-endian. */
+            static const uint8_t X_P_PLUS_1[32] = {
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF, 0xFC, 0x30,
+            };
+            /* x = 1, big-endian. */
+            static const uint8_t X_ONE[32] = {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            };
+            /* y = sqrt(8) mod p (the even root's smaller representative),
+             * derived from the curve equation alone. */
+            static const uint8_t Y_OF_ONE[32] = {
+                0x42, 0x18, 0xF2, 0x0A, 0xE6, 0xC6, 0x46, 0xB3,
+                0x63, 0xDB, 0x68, 0x60, 0x58, 0x22, 0xFB, 0x14,
+                0x26, 0x4C, 0xA8, 0xD2, 0x58, 0x7F, 0xDD, 0x6F,
+                0xBC, 0x75, 0x0D, 0x58, 0x7E, 0x76, 0xA7, 0xEE,
+            };
+
+            rc = ama_secp256k1_point_mul(privkey, X_ONE, Y_OF_ONE,
+                                         out_x, out_y);
+            TEST_ASSERT(rc == AMA_SUCCESS,
+                        "canonical control (x=1, sqrt(8)) accepted by point_mul");
+            rc = ama_secp256k1_point_mul(privkey, X_P_PLUS_1, Y_OF_ONE,
+                                         out_x, out_y);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "non-canonical x (p + 1) rejected by point_mul, not reduced");
+        }
+    }
+
     /* Test 7: NULL parameters rejected */
     be32(privkey, 1);
     rc = ama_secp256k1_point_mul(NULL, Gx, Gy, out_x, out_y);
@@ -382,6 +445,140 @@ int main(void) {
                 fprintf(stderr, "  comb mismatch at random trial %d\n", c);
         }
         TEST_ASSERT(ok, "comb: d*G == ladder over 2000 random scalars");
+    }
+
+    /* ---------------------------------------------------------------
+     * Fixed-width r||s must be the same signature the DER form carries.
+     *
+     * ama_secp256k1_ecdsa_sign_raw exists so the deterministic
+     * constant-time gate can measure the signing arithmetic without the
+     * DER encoder's key-dependent length in the count.  That is only
+     * sound if the two entry points really are the same arithmetic, so
+     * this decodes the DER signature back to (r, s) and compares.
+     * ------------------------------------------------------------- */
+    {
+        uint8_t priv[32], digest[32], raw_pub64[64], raw_pub33[33];
+        uint8_t der[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+        uint8_t raw[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
+        size_t der_len = 0;
+        int trial, ok = 1;
+        size_t der_lengths_seen = 0, distinct_der_lengths[8];
+
+        for (trial = 0; trial < 512 && ok; trial++) {
+            _xs_fill(priv, 32);
+            priv[0] &= 0x7F;
+            if (priv[31] == 0) priv[31] = 1;
+            _xs_fill(digest, 32);
+
+            der_len = sizeof der;
+            if (ama_secp256k1_ecdsa_sign(der, &der_len, digest, priv) != AMA_SUCCESS)
+                continue;
+            if (ama_secp256k1_ecdsa_sign_raw(raw, digest, priv) != AMA_SUCCESS) {
+                ok = 0;
+                fprintf(stderr, "  raw signing failed where DER succeeded (trial %d)\n", trial);
+                break;
+            }
+
+            /* Record the DISTINCT DER lengths seen.
+             *
+             * An earlier revision asserted `der_len <
+             * AMA_SECP256K1_ECDSA_MAX_SIG_LEN`, which proves nothing: low-s
+             * normalisation caps s at (n-1)/2, so s never needs a 0x00 pad
+             * and its INTEGER is always 32 octets. The maximum is therefore
+             * 2 + 2+33 + 2+32 = 71, and the assertion was true by
+             * construction. Measured over 20,000 signatures the length is
+             * 69, 70 or 71 and never 72.
+             *
+             * What is worth asserting is that the length actually VARIED, so
+             * the equivalence comparison covered both a padded r and an
+             * unpadded one rather than one shape repeatedly. */
+            {
+                size_t li, known = 0;
+                for (li = 0; li < der_lengths_seen; li++)
+                    if (distinct_der_lengths[li] == der_len) known = 1;
+                if (!known && der_lengths_seen < (sizeof distinct_der_lengths /
+                                                  sizeof distinct_der_lengths[0]))
+                    distinct_der_lengths[der_lengths_seen++] = der_len;
+            }
+
+            /* Minimal DER: 30 L 02 Lr <r> 02 Ls <s>. Decode and right-align
+             * each INTEGER into 32 octets, then compare with r||s. */
+            {
+                const uint8_t *p = der;
+                uint8_t want[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
+                size_t i, lr, ls;
+                memset(want, 0, sizeof want);
+                if (p[0] != 0x30 || (size_t)p[1] + 2u != der_len) { ok = 0; break; }
+                p += 2;
+                if (p[0] != 0x02) { ok = 0; break; }
+                lr = p[1]; p += 2;
+                if (lr > 33) { ok = 0; break; }
+                for (i = 0; i < lr; i++)
+                    if (lr - i <= 32) want[32 - (lr - i)] = p[i];
+                p += lr;
+                if (p[0] != 0x02) { ok = 0; break; }
+                ls = p[1]; p += 2;
+                if (ls > 33) { ok = 0; break; }
+                for (i = 0; i < ls; i++)
+                    if (ls - i <= 32) want[64 - (ls - i)] = p[i];
+
+                if (memcmp(want, raw, sizeof want) != 0) {
+                    ok = 0;
+                    fprintf(stderr, "  raw != DER-decoded r||s at trial %d\n", trial);
+                }
+            }
+
+            /* And the raw signature must verify, once re-encoded. */
+            if (ok) {
+                if (ama_secp256k1_pubkey_from_privkey(priv, raw_pub33) != AMA_SUCCESS) continue;
+                if (ama_secp256k1_pubkey_decompress(raw_pub33, raw_pub64) != AMA_SUCCESS) continue;
+                if (ama_secp256k1_ecdsa_verify(der, der_len, digest, raw_pub64) != AMA_SUCCESS) {
+                    ok = 0;
+                    fprintf(stderr, "  DER signature did not verify at trial %d\n", trial);
+                }
+            }
+        }
+        TEST_ASSERT(ok, "raw r||s equals the DER signature over 512 keys");
+        TEST_ASSERT(der_lengths_seen >= 2,
+                    "the comparison saw DER signatures of at least two lengths");
+
+        /* Rejections mirror the DER entry point's. */
+        TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(NULL, digest, priv) == AMA_ERROR_INVALID_PARAM,
+                    "raw signing rejects a NULL output buffer");
+        TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, NULL, priv) == AMA_ERROR_INVALID_PARAM,
+                    "raw signing rejects a NULL digest");
+        TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, digest, NULL) == AMA_ERROR_INVALID_PARAM,
+                    "raw signing rejects a NULL private key");
+        {
+            /* The rejection AND the documented promise that goes with it.
+             *
+             * The header states that on any non-success the output buffer is
+             * zeroized rather than left partly written. An earlier revision
+             * of this block pre-filled the buffer with 0xAA and then never
+             * looked at it, so the promise was untested — and it was in fact
+             * untrue: the key-range rejection returned before reaching the
+             * function's scrub, leaving both the caller's buffer and the
+             * private-key scalar `d` untouched on the stack. */
+            /* `zero_priv` is initialised at declaration: this is a test
+             * INPUT set to the all-zero scalar, not a scrub of live key
+             * material, and the memset spelling is what
+             * tools/check_c_secret_zeroization.py flags on a secret-named
+             * buffer now that tests/c is inside its scope. */
+            uint8_t zero_priv[32] = {0};
+            uint8_t expect_zero[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
+            memset(expect_zero, 0, sizeof expect_zero);
+            memset(raw, 0xAA, sizeof raw);
+            TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, digest, zero_priv) != AMA_SUCCESS,
+                        "raw signing rejects the zero scalar");
+            TEST_ASSERT(memcmp(raw, expect_zero, sizeof raw) == 0,
+                        "a rejected raw signing zeroizes the output buffer");
+
+            memset(raw, 0xAA, sizeof raw);
+            TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, NULL, priv) != AMA_SUCCESS,
+                        "raw signing rejects a NULL digest");
+            TEST_ASSERT(memcmp(raw, expect_zero, sizeof raw) == 0,
+                        "a NULL-digest rejection zeroizes the output buffer too");
+        }
     }
 
     printf("\n===========================================\n");

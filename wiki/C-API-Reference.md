@@ -8,18 +8,36 @@ Reference documentation for the AMA Cryptography native C library (`include/ama_
 
 The C library is built as both a shared library (`.so`/`.dll`) and static library (`.a`/`.lib`). It requires C11 (`-std=c11`).
 
-**Include path:**
+**Include path.** The installed header is `ama_cryptography.h` at the top of
+the install prefix's include directory, so a consumer writes an angle-bracket
+or plain quoted include and supplies `-I` — exactly what
+`examples/c/simple_example.c` does and what `pkg-config --cflags
+ama_cryptography` emits:
+
+<!-- example: c-run -->
 ```c
-#include "../include/ama_cryptography.h"
+#include <ama_cryptography.h>
+#include <stdio.h>
+
+int main(void) {
+    int major = 0, minor = 0, patch = 0;
+    ama_version_number(&major, &minor, &patch);
+    printf("AMA Cryptography %d.%d.%d (%s)\n", major, minor, patch, ama_version_string());
+    return 0;
+}
 ```
 
-**Link flags:**
-```bash
-# Shared library
--L./build -lama_cryptography
+**Link flags.** The build tree puts both libraries under `build/lib`, and an
+installed tree under `${libdir}`; `pkg-config` is the supported way to get
+these right:
 
-# Static library
--L./build -lama_cryptography_static
+```bash
+# From an install prefix (recommended)
+cc example.c $(pkg-config --cflags --libs ama_cryptography)
+
+# Directly against a build tree
+cc example.c -Iinclude -Lbuild/lib -lama_cryptography            # shared
+cc example.c -Iinclude build/lib/libama_cryptography_static.a -lpthread -lm   # static
 ```
 
 ---
@@ -28,16 +46,22 @@ The C library is built as both a shared library (`.so`/`.dll`) and static librar
 
 ### `ama_context_init()`
 
-Initialize a cryptographic context.
+Initialize a cryptographic context for one algorithm.
 
+<!-- example: c-decl -->
 ```c
-ama_context_t *ama_context_init(void);
+ama_context_t* ama_context_init(ama_algorithm_t algorithm);
 ```
+
+`algorithm` is one of `AMA_ALG_ML_DSA_65`, `AMA_ALG_KYBER_1024`,
+`AMA_ALG_SPHINCS_256F`, `AMA_ALG_ED25519`, `AMA_ALG_HYBRID`. Returns `NULL` on
+allocation failure or an unknown algorithm.
 
 ### `ama_context_free()`
 
 Securely free a context (zeroes internal key material).
 
+<!-- example: c-decl -->
 ```c
 void ama_context_free(ama_context_t *ctx);
 ```
@@ -46,25 +70,68 @@ void ama_context_free(ama_context_t *ctx);
 
 ## Random Number Generation
 
-### `ama_random_bytes()`
+### There is no public RNG entry point — and `ama_randombytes()` is not one
 
-Generate cryptographically secure random bytes.
+AMA draws entropy from the platform CSPRNG internally:
 
+- Linux 3.17+: `getrandom(2)`, blocking semantics
+- macOS 10.12+: `getentropy(3)` in 256-byte chunks
+- Windows Vista+: `BCryptGenRandom` with `BCRYPT_USE_SYSTEM_PREFERRED_RNG`
+- BSD fallback: `/dev/urandom`
+
+That wrapper is `ama_randombytes()` in `src/c/ama_platform_rand.c`, and it is
+**internal in both directions**:
+
+1. It is declared in `src/c/ama_platform_rand.h`, which is not part of the
+   installed header set — `include/ama_cryptography.h` does not declare it.
+2. It is **not an exported symbol**. `cmake/ama_exports.map` names it
+   explicitly in the `local:` list ("Platform CSPRNG wrapper — internal;
+   callers use the algorithm APIs"), so the `ama_*` wildcard does not publish
+   it. `nm --dynamic --defined-only libama_cryptography.so` returns nothing for
+   it, and a downstream `extern ama_error_t ama_randombytes(...)` fails at link
+   time with an undefined reference.
+
+An earlier revision of this page said the opposite and offered the `extern`
+declaration as a supported recipe. It never linked.
+
+**What to use instead.** Every AMA entry point that needs entropy draws it
+itself — `ama_keypair_generate()`, `ama_nistp_keypair()`, `ama_x25519_keypair()`,
+`ama_ml_kem_*`, `ama_ml_dsa_*`, `ama_slhdsa_*`. When you genuinely need raw
+bytes of your own (a nonce for your protocol, a seed for
+`ama_ed25519_keypair()`), call your platform's CSPRNG directly — that is an
+operating-system service, not a cryptographic primitive AMA should be
+re-exporting:
+
+<!-- example: c-run -->
 ```c
-int ama_random_bytes(uint8_t *buf, size_t len);
-```
+#include <ama_cryptography.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-Uses platform-native CSPRNG:
-- Linux: `getrandom()` syscall (kernel ≥ 3.17)
-- macOS: `getentropy()`
-- Windows: `BCryptGenRandom()`
+/* Portable enough for an example: the OS CSPRNG through the C library.
+ * On Linux/glibc 2.25+ and macOS 10.12+ this is getentropy(3); on Windows
+ * use BCryptGenRandom with BCRYPT_USE_SYSTEM_PREFERRED_RNG. */
+#if defined(__linux__) || defined(__APPLE__)
+#  include <sys/random.h>
+static int os_random(uint8_t *out, size_t len) { return getentropy(out, len); }
+#else
+static int os_random(uint8_t *out, size_t len) {
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f == NULL) { return -1; }
+    size_t got = fread(out, 1, len, f);
+    fclose(f);
+    return got == len ? 0 : -1;
+}
+#endif
 
-**Returns:** 0 on success, negative on error.
-
-```c
-uint8_t key[32];
-if (ama_random_bytes(key, 32) != 0) {
-    // handle error
+int main(void) {
+    uint8_t nonce[12] = {0};
+    if (os_random(nonce, sizeof(nonce)) != 0) {
+        return 1;   /* fail closed: never proceed with a half-filled nonce */
+    }
+    printf("drew %zu random bytes\n", sizeof(nonce));
+    ama_secure_memzero(nonce, sizeof(nonce));
+    return 0;
 }
 ```
 
@@ -74,29 +141,65 @@ if (ama_random_bytes(key, 32) != 0) {
 
 ### SHA3-256
 
+<!-- example: c-decl -->
 ```c
-// One-shot hash
-int ama_sha3_256(
-    const uint8_t *message, size_t message_len,
-    uint8_t digest[32]          // Output: 32 bytes
-);
+// One-shot hash; `output` receives 32 bytes
+ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
 
-// Streaming API
-ama_sha3_ctx_t ctx;
-ama_sha3_256_init(&ctx);
-ama_sha3_256_update(&ctx, data, len);
-ama_sha3_256_final(&ctx, digest);
+// Streaming API (the context type is `ama_sha3_ctx`, not a `_t` alias)
+ama_error_t ama_sha3_init(ama_sha3_ctx* ctx);
+ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output);
 ```
+
+**Example:**
+
+<!-- example: c-run -->
+```c
+#include <ama_cryptography.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    const uint8_t *data = (const uint8_t *)"abc";
+    const size_t len = 3;
+
+    ama_sha3_ctx ctx;
+    uint8_t digest[32] = {0};
+
+    ama_sha3_init(&ctx);
+    ama_sha3_update(&ctx, data, len);
+    ama_sha3_final(&ctx, digest);
+
+    /* FIPS 202 SHA3-256("abc") */
+    uint8_t one_shot[32] = {0};
+    ama_sha3_256(data, len, one_shot);
+    if (memcmp(digest, one_shot, sizeof(digest)) != 0) { return 1; }
+
+    printf("SHA3-256(\"abc\")[0..3] = %02x%02x%02x%02x\n",
+           digest[0], digest[1], digest[2], digest[3]);
+    return 0;
+}
+```
+
+SHA3-512 has the same three-call shape: `ama_sha3_512_init`,
+`ama_sha3_512_update`, `ama_sha3_512_final`, reusing `ama_sha3_ctx`.
 
 ### SHAKE256 (XOF)
 
+The XOF reuses `ama_sha3_ctx` — SHAKE256's rate equals SHA3-256's — so there is
+no separate context type and nothing to release: the context is a plain struct
+the caller owns.
+
+<!-- example: c-decl -->
 ```c
-void ama_shake256_inc_init(ama_shake256incctx *ctx);
-void ama_shake256_inc_absorb(ama_shake256incctx *ctx, const uint8_t *in, size_t inlen);
-void ama_shake256_inc_finalize(ama_shake256incctx *ctx);
-void ama_shake256_inc_squeeze(uint8_t *out, size_t outlen, ama_shake256incctx *ctx);
-void ama_shake256_inc_ctx_release(ama_shake256incctx *ctx);
+ama_error_t ama_shake256_inc_init(ama_sha3_ctx* ctx);
+ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size_t len);
+ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx);
+ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t outlen);
 ```
+
+`ama_shake128_inc_*` provides the same four calls for SHAKE128.
 
 ---
 
@@ -104,11 +207,12 @@ void ama_shake256_inc_ctx_release(ama_shake256incctx *ctx);
 
 ### HMAC-SHA3-256
 
+<!-- example: c-decl -->
 ```c
-int ama_hmac_sha3_256(
+ama_error_t ama_hmac_sha3_256(
     const uint8_t *key, size_t key_len,
-    const uint8_t *message, size_t message_len,
-    uint8_t tag[32]             // Output: 32 bytes
+    const uint8_t *msg, size_t msg_len,
+    uint8_t out[32]             // Output: 32 bytes
 );
 ```
 
@@ -118,8 +222,9 @@ int ama_hmac_sha3_256(
 
 ### HKDF-SHA3-256
 
+<!-- example: c-decl -->
 ```c
-int ama_hkdf(
+ama_error_t ama_hkdf(
     const uint8_t *salt, size_t salt_len,   // Optional salt (NULL for zero salt)
     const uint8_t *ikm, size_t ikm_len,     // Input key material
     const uint8_t *info, size_t info_len,   // Context info
@@ -128,15 +233,32 @@ int ama_hkdf(
 ```
 
 **Example:**
+
+<!-- example: c-run -->
 ```c
-uint8_t derived_key[32];
-const char *info = "ama-hmac-key-v1";
-ama_hkdf(
-    NULL, 0,                          // no salt
-    master_secret, 32,                // input key material
-    (uint8_t *)info, strlen(info),    // context
-    derived_key, 32                   // output
-);
+#include <ama_cryptography.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+    uint8_t master_secret[32] = {0};   /* in real use: from a KEM or a KDF */
+    memset(master_secret, 0xA5, sizeof(master_secret));
+
+    uint8_t derived_key[32] = {0};
+    const char *info = "ama-hmac-key-v1";
+    ama_error_t rc = ama_hkdf(
+        NULL, 0,                          /* no salt */
+        master_secret, 32,                /* input key material */
+        (const uint8_t *)info, strlen(info),  /* context */
+        derived_key, 32                   /* output */
+    );
+    if (rc != AMA_SUCCESS) { return 1; }
+
+    printf("derived %02x%02x...\n", derived_key[0], derived_key[1]);
+    ama_secure_memzero(master_secret, sizeof(master_secret));
+    ama_secure_memzero(derived_key, sizeof(derived_key));
+    return 0;
+}
 ```
 
 ### Agent-Bound HKDF (INVARIANT-30)
@@ -145,21 +267,22 @@ Binds derived material to a named agent instance. Non-`EPHEMERAL` lifetimes and
 restricted capabilities (`PERSISTENCE`, `SELF_REPLICATE`, `DELEGATE`) require an
 operator-held authority key; otherwise the call refuses and writes nothing.
 
+<!-- example: c-decl -->
 ```c
 typedef struct {
     uint8_t version;      // AMA_AGENT_BINDING_VERSION
     uint8_t lifetime;     // ama_agent_lifetime_t (EPHEMERAL/SESSION/PERSISTENT)
     uint8_t capabilities; // bitmask of AMA_AGENT_CAP_*
     uint8_t reserved;     // MUST be zero
-    uint8_t instance_id[32];
-    uint8_t ethical_profile[32];  // all-zero = absent
-    uint8_t authorization[32];    // all-zero = unauthorized
+    uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES];
+    uint8_t ethical_profile[AMA_ETHICAL_PROFILE_BYTES];  // all-zero = absent
+    uint8_t authorization[AMA_AGENT_BINDING_TAG_BYTES];  // all-zero = absent
 } ama_agent_binding_t;
 
 ama_error_t ama_agent_binding_init(ama_agent_binding_t *b,
                                    ama_agent_lifetime_t lifetime,
                                    uint8_t capabilities,
-                                   const uint8_t instance_id[32],
+                                   const uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES],
                                    const uint8_t *ethical_profile);  // or NULL
 
 ama_error_t ama_agent_binding_authorize(ama_agent_binding_t *b,      // operator-side
@@ -173,7 +296,7 @@ ama_error_t ama_agent_binding_check(const ama_agent_binding_t *b,    // constant
 ama_error_t ama_agent_binding_context(const ama_agent_binding_t *b,  // ML-DSA/SLH-DSA ctx
                                       const uint8_t *authority_key,
                                       size_t key_len,
-                                      uint8_t out_ctx[32]);
+                                      uint8_t out_ctx[AMA_AGENT_BINDING_CONTEXT_BYTES]);
 
 ama_error_t ama_hkdf_agent_bound(const ama_agent_binding_t *b,
                                  const uint8_t *authority_key, size_t key_len,
@@ -184,19 +307,41 @@ ama_error_t ama_hkdf_agent_bound(const ama_agent_binding_t *b,
 ```
 
 **Example — ordinary ephemeral use needs no authority key:**
+
+<!-- example: c-run -->
 ```c
-ama_agent_binding_t b;
-uint8_t session_key[32];
+#include <ama_cryptography.h>
+#include <stdio.h>
+#include <string.h>
 
-ama_agent_binding_init(&b, AMA_AGENT_LIFETIME_EPHEMERAL,
-                       AMA_AGENT_CAP_DATA_SIGN, instance_id, NULL);
+int main(void) {
+    uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES];
+    uint8_t ikm[32];
+    memset(instance_id, 0x11, sizeof(instance_id));
+    memset(ikm, 0x22, sizeof(ikm));
 
-if (ama_hkdf_agent_bound(&b, NULL, 0,
-                         NULL, 0,
-                         ikm, sizeof(ikm),
-                         (const uint8_t *)"session", 7,
-                         session_key, sizeof(session_key)) != AMA_SUCCESS) {
-    /* refused: no bytes written */
+    ama_agent_binding_t b;
+    uint8_t session_key[32] = {0};
+
+    if (ama_agent_binding_init(&b, AMA_AGENT_LIFETIME_EPHEMERAL,
+                               AMA_AGENT_CAP_DATA_SIGN, instance_id,
+                               NULL) != AMA_SUCCESS) {
+        return 1;
+    }
+
+    if (ama_hkdf_agent_bound(&b, NULL, 0,
+                             NULL, 0,
+                             ikm, sizeof(ikm),
+                             (const uint8_t *)"session", 7,
+                             session_key, sizeof(session_key)) != AMA_SUCCESS) {
+        /* refused: no bytes written */
+        return 1;
+    }
+
+    printf("agent-bound session key %02x%02x...\n", session_key[0], session_key[1]);
+    ama_secure_memzero(session_key, sizeof(session_key));
+    ama_secure_memzero(ikm, sizeof(ikm));
+    return 0;
 }
 ```
 
@@ -211,133 +356,254 @@ nothing. The layer needs only SHA3/HMAC/HKDF, so it is available in the
 
 ### Ed25519
 
+The secret key is **64 bytes**, not 32: RFC 8032's expanded form, seed followed
+by the public key (`AMA_ED25519_SECRET_KEY_BYTES`). Sizing that buffer at 32
+overflows it on every call.
+
+> ### `ama_ed25519_keypair()` does not generate the seed. You do.
+>
+> This is the single most important contract on this page. The function's
+> `secret_key` parameter is **in/out**: the caller must place 32 bytes of
+> CSPRNG output in `secret_key[0..31]` *before* the call, and the function
+> hashes those bytes to derive the scalar and writes the public key into
+> `secret_key[32..63]`. `include/ama_cryptography.h:1306-1316` states it, and
+> `src/c/ama_ed25519.c:799` is the line that reads it:
+> `sha512(secret_key, 32, hash);`
+>
+> An earlier revision of this page showed
+> `uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES]; ama_ed25519_keypair(pk, sk);` —
+> an uninitialised stack buffer as the seed. It compiles with no warning under
+> `-Wall -Wextra`, it prints `valid=1`, and the private key it mints is
+> whatever the stack happened to hold. `tools/check_doc_examples.py` now runs
+> every `c-run` block on this page under `valgrind` memcheck with
+> `--track-origins=yes`, which reports that exact defect ("Uninitialised value
+> was created by a stack allocation") and fails the build.
+>
+> **Prefer `ama_keypair_generate()`**, which draws the seed from the platform
+> CSPRNG itself and is the only Ed25519 key-generation path on this page that
+> cannot be misused this way.
+
+<!-- example: c-decl -->
 ```c
 // Generate key pair
-// pk: 32 bytes, sk: 32 bytes (seed)
-int ama_ed25519_keypair(uint8_t pk[32], uint8_t sk[32]);
+// public_key: 32 bytes, secret_key: IN 32-byte seed at [0..31], OUT public key at [32..63]
+ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
 
 // Sign a message
-// sig: 64 bytes output
-int ama_ed25519_sign(
-    uint8_t sig[64],
+ama_error_t ama_ed25519_sign(
+    uint8_t signature[64],
     const uint8_t *message, size_t message_len,
-    const uint8_t sk[32]
+    const uint8_t secret_key[64]
 );
 
 // Verify a signature
-// Returns: 0 if valid, non-zero if invalid
-int ama_ed25519_verify(
-    const uint8_t sig[64],
+// Returns: AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not
+ama_error_t ama_ed25519_verify(
+    const uint8_t signature[64],
     const uint8_t *message, size_t message_len,
-    const uint8_t pk[32]
+    const uint8_t public_key[32]
 );
 ```
 
-**Example:**
+**Example — recommended form. The context API seeds the key itself:**
+
+<!-- example: c-run -->
 ```c
-uint8_t pk[32], sk[32];
-ama_ed25519_keypair(pk, sk);
+#include <ama_cryptography.h>
+#include <stdio.h>
 
-uint8_t sig[64];
-const uint8_t *msg = (uint8_t *)"Hello";
-ama_ed25519_sign(sig, msg, 5, sk);
+int main(void) {
+    uint8_t pk[AMA_ED25519_PUBLIC_KEY_BYTES] = {0};   /* 32 */
+    uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES] = {0};   /* 64 */
 
-int valid = (ama_ed25519_verify(sig, msg, 5, pk) == 0);
+    ama_context_t *ctx = ama_context_init(AMA_ALG_ED25519);
+    if (ctx == NULL) { return 1; }
+    /* Draws 32 seed bytes from the platform CSPRNG, then derives the key.
+     * Scrubs both buffers on any failure path (INVARIANT-6). */
+    ama_error_t rc = ama_keypair_generate(ctx, pk, sizeof(pk), sk, sizeof(sk));
+    ama_context_free(ctx);
+    if (rc != AMA_SUCCESS) { return 1; }
+
+    uint8_t sig[AMA_ED25519_SIGNATURE_BYTES] = {0};   /* 64 */
+    const uint8_t *msg = (const uint8_t *)"Hello";
+    if (ama_ed25519_sign(sig, msg, 5, sk) != AMA_SUCCESS) { return 1; }
+
+    int valid = (ama_ed25519_verify(sig, msg, 5, pk) == AMA_SUCCESS);
+    printf("valid=%d\n", valid);
+
+    ama_secure_memzero(sk, sizeof(sk));
+    return valid ? 0 : 1;
+}
 ```
+
+**Example — explicit-seed form.** Use this only when the seed comes from
+somewhere you control (a KDF, an HSM, a stored backup). The seed **must** be
+written before the call:
+
+<!-- example: c-run -->
+```c
+#include <ama_cryptography.h>
+#include <stdio.h>
+#if defined(__linux__) || defined(__APPLE__)
+#  include <sys/random.h>
+#  define OS_RANDOM(buf, len) (getentropy((buf), (len)) == 0)
+#else
+#  define OS_RANDOM(buf, len) (0)   /* see the RNG section for the portable form */
+#endif
+
+int main(void) {
+    uint8_t pk[AMA_ED25519_PUBLIC_KEY_BYTES] = {0};
+    uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES] = {0};
+
+    /* THE SEED. 32 bytes, in sk[0..31], before the call. Never leave this
+     * buffer uninitialised — `ama_ed25519_keypair` hashes it as-is. */
+    if (!OS_RANDOM(sk, 32)) { return 1; }
+
+    if (ama_ed25519_keypair(pk, sk) != AMA_SUCCESS) { return 1; }
+
+    uint8_t sig[AMA_ED25519_SIGNATURE_BYTES] = {0};
+    const uint8_t *msg = (const uint8_t *)"Hello";
+    if (ama_ed25519_sign(sig, msg, 5, sk) != AMA_SUCCESS) { return 1; }
+
+    int valid = (ama_ed25519_verify(sig, msg, 5, pk) == AMA_SUCCESS);
+    printf("valid=%d\n", valid);
+
+    ama_secure_memzero(sk, sizeof(sk));
+    return valid ? 0 : 1;
+}
+```
+
+> `ama_ed25519_sign()` re-derives `A = [a]B` from the seed and refuses a key
+> whose stored bytes 32..63 disagree with it (INVARIANT-51), so a key rebuilt
+> from a corrupted record is rejected rather than turned into the two-signature
+> transcript that leaks the private scalar.
 
 ---
 
 ### ML-DSA-65 (Dilithium — FIPS 204)
 
-```c
-// Key sizes
-#define AMA_DILITHIUM_PK_BYTES   1952
-#define AMA_DILITHIUM_SK_BYTES   4032
-#define AMA_DILITHIUM_SIG_BYTES  3309
+Buffer sizes come from the header's parameter-set macros. There is no
+`AMA_DILITHIUM_*` shorthand family:
 
+<!-- example: c-const -->
+```c
+#define AMA_ML_DSA_65_PUBLIC_KEY_BYTES 1952
+#define AMA_ML_DSA_65_SECRET_KEY_BYTES 4032
+#define AMA_ML_DSA_65_SIGNATURE_BYTES  3309
+```
+
+Note the argument order of `verify`: **message first, signature second**.
+
+<!-- example: c-decl -->
+```c
 // Generate key pair
-int ama_dilithium_keypair(
-    uint8_t pk[AMA_DILITHIUM_PK_BYTES],
-    uint8_t sk[AMA_DILITHIUM_SK_BYTES]
+ama_error_t ama_dilithium_keypair(uint8_t *public_key, uint8_t *secret_key);
+
+// Deterministic variant from a 32-byte seed (FIPS 204 xi)
+ama_error_t ama_dilithium_keypair_from_seed(
+    const uint8_t xi[32], uint8_t *public_key, uint8_t *secret_key
 );
 
-// Sign a message
-int ama_dilithium_sign(
-    uint8_t *sig, size_t *sig_len,          // sig_len output ≤ AMA_DILITHIUM_SIG_BYTES
-    const uint8_t *message, size_t msg_len,
-    const uint8_t sk[AMA_DILITHIUM_SK_BYTES]
+// Sign a message; *signature_len is in/out
+ama_error_t ama_dilithium_sign(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *secret_key
 );
 
 // Verify a signature
-// Returns: 0 if valid, non-zero if invalid
-int ama_dilithium_verify(
-    const uint8_t *sig, size_t sig_len,
-    const uint8_t *message, size_t msg_len,
-    const uint8_t pk[AMA_DILITHIUM_PK_BYTES]
+// Returns: AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not
+ama_error_t ama_dilithium_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key
 );
 ```
+
+The `ama_ml_dsa_*` entry points take an explicit `ama_ml_dsa_param_set_t`
+(`AMA_ML_DSA_44`, `AMA_ML_DSA_65`, `AMA_ML_DSA_87`); the `ama_dilithium_*` names
+above are the ML-DSA-65 shorthand.
 
 ---
 
 ### ML-KEM-1024 (Kyber — FIPS 203)
 
+Buffer sizes come from the header's parameter-set macros. There is no
+`AMA_KYBER_*` shorthand family:
+
+<!-- example: c-const -->
 ```c
-// Key sizes
-#define AMA_KYBER_PK_BYTES   1568
-#define AMA_KYBER_SK_BYTES   3168
-#define AMA_KYBER_CT_BYTES   1568
-#define AMA_KYBER_SS_BYTES   32
+#define AMA_KYBER_1024_PUBLIC_KEY_BYTES    1568
+#define AMA_KYBER_1024_SECRET_KEY_BYTES    3168
+#define AMA_KYBER_1024_CIPHERTEXT_BYTES    1568
+#define AMA_KYBER_1024_SHARED_SECRET_BYTES   32
+```
 
+Every buffer is passed with its length; the entry points are
+`encapsulate`/`decapsulate`, not `enc`/`dec`.
+
+<!-- example: c-decl -->
+```c
 // Generate key pair
-int ama_kyber_keypair(
-    uint8_t pk[AMA_KYBER_PK_BYTES],
-    uint8_t sk[AMA_KYBER_SK_BYTES]
+ama_error_t ama_kyber_keypair(
+    uint8_t *pk, size_t pk_len,
+    uint8_t *sk, size_t sk_len
 );
 
-// Encapsulate: generates ciphertext and shared secret
-int ama_kyber_enc(
-    uint8_t ct[AMA_KYBER_CT_BYTES],
-    uint8_t ss[AMA_KYBER_SS_BYTES],
-    const uint8_t pk[AMA_KYBER_PK_BYTES]
+// Encapsulate: produces ciphertext and shared secret from the peer public key
+ama_error_t ama_kyber_encapsulate(
+    const uint8_t *pk, size_t pk_len,
+    uint8_t *ct, size_t *ct_len,
+    uint8_t *ss, size_t ss_len
 );
 
-// Decapsulate: recovers shared secret from ciphertext
-int ama_kyber_dec(
-    uint8_t ss[AMA_KYBER_SS_BYTES],
-    const uint8_t ct[AMA_KYBER_CT_BYTES],
-    const uint8_t sk[AMA_KYBER_SK_BYTES]
+// Decapsulate: recovers the shared secret from the ciphertext
+ama_error_t ama_kyber_decapsulate(
+    const uint8_t *ct, size_t ct_len,
+    const uint8_t *sk, size_t sk_len,
+    uint8_t *ss, size_t ss_len
 );
 ```
+
+The `ama_ml_kem_*` entry points take an explicit `ama_ml_kem_param_set_t`
+(`AMA_ML_KEM_512`, `AMA_ML_KEM_768`, `AMA_ML_KEM_1024`); the `ama_kyber_*` names
+above are the ML-KEM-1024 shorthand.
 
 ---
 
 ### SPHINCS+-SHA2-256f (FIPS 205)
 
+Buffer sizes come from the header's parameter-set macros. There is no
+`AMA_SPHINCS_*` shorthand family:
+
+<!-- example: c-const -->
 ```c
-// Key sizes
-#define AMA_SPHINCS_PK_BYTES   64
-#define AMA_SPHINCS_SK_BYTES   128
-#define AMA_SPHINCS_SIG_BYTES  49856
+#define AMA_SPHINCS_256F_PUBLIC_KEY_BYTES     64
+#define AMA_SPHINCS_256F_SECRET_KEY_BYTES    128
+#define AMA_SPHINCS_256F_SIGNATURE_BYTES   49856
+```
 
+As with ML-DSA, `verify` takes the **message first, signature second**, and
+`sign` writes the signature length through a `size_t *`.
+
+<!-- example: c-decl -->
+```c
 // Generate key pair
-int ama_sphincs_keypair(
-    uint8_t pk[AMA_SPHINCS_PK_BYTES],
-    uint8_t sk[AMA_SPHINCS_SK_BYTES]
-);
+ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key);
 
-// Sign
-int ama_sphincs_sign(
-    uint8_t sig[AMA_SPHINCS_SIG_BYTES],
-    const uint8_t *message, size_t msg_len,
-    const uint8_t sk[AMA_SPHINCS_SK_BYTES]
+// Sign; *signature_len is in/out
+ama_error_t ama_sphincs_sign(
+    uint8_t *signature, size_t *signature_len,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *secret_key
 );
 
 // Verify
-// Returns: 0 if valid, non-zero if invalid
-int ama_sphincs_verify(
-    const uint8_t sig[AMA_SPHINCS_SIG_BYTES],
-    const uint8_t *message, size_t msg_len,
-    const uint8_t pk[AMA_SPHINCS_PK_BYTES]
+// Returns: AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not
+ama_error_t ama_sphincs_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *public_key
 );
 ```
 
@@ -347,25 +613,31 @@ int ama_sphincs_verify(
 
 ### AES-256-GCM
 
+**Key and nonce come first.** Both AEADs in this library take
+`(key, nonce, payload, ...)`; a caller that puts the payload first is passing
+plaintext where the key is expected, and every one of those parameters is a
+`const uint8_t *`, so the compiler will not catch it.
+
+<!-- example: c-decl -->
 ```c
 // Encrypt
-// Returns: 0 on success, negative on error
-int ama_aes256_gcm_encrypt(
+// Returns: AMA_SUCCESS, or a negative ama_error_t
+ama_error_t ama_aes256_gcm_encrypt(
+    const uint8_t key[32],                  // 256-bit key
+    const uint8_t nonce[12],                // 96-bit nonce/IV
     const uint8_t *plaintext, size_t pt_len,
     const uint8_t *aad, size_t aad_len,     // Additional authenticated data
-    const uint8_t key[32],                  // 256-bit key
-    const uint8_t iv[12],                   // 96-bit nonce/IV
     uint8_t *ciphertext,                    // Output: pt_len bytes
     uint8_t tag[16]                         // Output: 16-byte GCM tag
 );
 
 // Decrypt and authenticate
-// Returns: 0 on success, AMA_ERR_AUTH_FAILED if tag mismatch
-int ama_aes256_gcm_decrypt(
+// Returns: AMA_SUCCESS, or AMA_ERROR_VERIFY_FAILED if the tag does not match
+ama_error_t ama_aes256_gcm_decrypt(
+    const uint8_t key[32],
+    const uint8_t nonce[12],
     const uint8_t *ciphertext, size_t ct_len,
     const uint8_t *aad, size_t aad_len,
-    const uint8_t key[32],
-    const uint8_t iv[12],
     const uint8_t tag[16],
     uint8_t *plaintext                      // Output: ct_len bytes
 );
@@ -373,23 +645,24 @@ int ama_aes256_gcm_decrypt(
 
 ### ChaCha20-Poly1305
 
+<!-- example: c-decl -->
 ```c
 // Encrypt
-int ama_chacha20poly1305_encrypt(
-    const uint8_t *plaintext, size_t pt_len,
-    const uint8_t *aad, size_t aad_len,
+ama_error_t ama_chacha20poly1305_encrypt(
     const uint8_t key[32],                  // 256-bit key
     const uint8_t nonce[12],                // 96-bit nonce
+    const uint8_t *plaintext, size_t pt_len,
+    const uint8_t *aad, size_t aad_len,
     uint8_t *ciphertext,                    // Output: pt_len bytes
     uint8_t tag[16]                         // Output: 16-byte Poly1305 tag
 );
 
 // Decrypt and authenticate
-int ama_chacha20poly1305_decrypt(
-    const uint8_t *ciphertext, size_t ct_len,
-    const uint8_t *aad, size_t aad_len,
+ama_error_t ama_chacha20poly1305_decrypt(
     const uint8_t key[32],
     const uint8_t nonce[12],
+    const uint8_t *ciphertext, size_t ct_len,
+    const uint8_t *aad, size_t aad_len,
     const uint8_t tag[16],
     uint8_t *plaintext
 );
@@ -401,17 +674,18 @@ int ama_chacha20poly1305_decrypt(
 
 ### X25519
 
+<!-- example: c-decl -->
 ```c
 // Generate key pair
-// sk: 32 bytes (random scalar), pk: 32 bytes (Curve25519 public key)
-int ama_x25519_keypair(uint8_t pk[32], uint8_t sk[32]);
+// secret_key: 32 bytes (random scalar), public_key: 32 bytes (Curve25519 point)
+ama_error_t ama_x25519_keypair(uint8_t public_key[32], uint8_t secret_key[32]);
 
 // Compute shared secret
-// shared_secret = X25519(sk, peer_pk)
-int ama_x25519_key_exchange(
+// shared_secret = X25519(our_secret_key, their_public_key)
+ama_error_t ama_x25519_key_exchange(
     uint8_t shared_secret[32],
-    const uint8_t sk[32],
-    const uint8_t peer_pk[32]
+    const uint8_t our_secret_key[32],
+    const uint8_t their_public_key[32]
 );
 ```
 
@@ -421,14 +695,15 @@ int ama_x25519_key_exchange(
 
 ### Argon2id
 
+<!-- example: c-decl -->
 ```c
-int ama_argon2id(
+ama_error_t ama_argon2id(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt, size_t salt_len,
     uint32_t t_cost,          // Time cost (iterations)
     uint32_t m_cost,          // Memory cost (KiB)
     uint32_t parallelism,     // Parallelism degree
-    uint8_t *output, size_t output_len  // Output hash
+    uint8_t *output, size_t out_len  // Output hash
 );
 ```
 
@@ -436,16 +711,20 @@ int ama_argon2id(
 
 ## Constant-Time Operations
 
+`condition` is the **first** parameter of the two conditional operations, not
+the last.
+
+<!-- example: c-decl -->
 ```c
 // Constant-time memory comparison (timing-safe)
 // Returns: 0 if equal, non-zero if different
 int ama_consttime_memcmp(const void *a, const void *b, size_t len);
 
 // Constant-time conditional swap (no branch)
-void ama_consttime_swap(void *a, void *b, size_t len, int condition);
+void ama_consttime_swap(int condition, void *a, void *b, size_t len);
 
 // Constant-time copy (no branch on condition)
-void ama_consttime_copy(void *dst, const void *src, size_t len, int condition);
+void ama_consttime_copy(int condition, void *dst, const void *src, size_t len);
 ```
 
 ---
@@ -455,6 +734,7 @@ void ama_consttime_copy(void *dst, const void *src, size_t len, int condition);
 The canonical definition is the `ama_error_t` enum in
 [`include/ama_cryptography.h`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h):
 
+<!-- example: c-const -->
 ```c
 typedef enum {
     AMA_SUCCESS               =  0,
@@ -480,7 +760,9 @@ New codes are appended, so existing values never change.
 
 - **C Standard:** C11 (`CMAKE_C_STANDARD 11`, no extensions)
 - **CMake:** 3.15+
-- **Compiler:** GCC 7+, Clang 6+, MSVC 2019+
+- **Compiler:** GCC 12+, Clang 15+, MSVC 2019+ — enforced by
+  `CMakeLists.txt:89-107`, which raises `FATAL_ERROR` below those
+  versions (constant-time code generation, INVARIANT-8 / INVARIANT-12)
 - **Platforms:** Linux, macOS, Windows
 
 See [Installation](Installation) for build instructions.

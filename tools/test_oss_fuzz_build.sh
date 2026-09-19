@@ -2,75 +2,98 @@
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Local OSS-Fuzz build verification script
+# Build THIS checkout's fuzzers the way OSS-Fuzz builds them, then run
+# OSS-Fuzz's own bad-build check over the result.
 #
-# This script uses OSS-Fuzz's infrastructure to test the build locally
-# before submitting a PR to google/oss-fuzz.
+# What runs
+# ---------
+#   1. google/oss-fuzz is fetched at OSS_FUZZ_REF (a pinned commit, so the
+#      driver is the same on every run) unless a checkout is given.
+#   2. oss-fuzz/{project.yaml,Dockerfile,build.sh} are copied into
+#      projects/ama-cryptography of that checkout — exactly the submission.
+#   3. `infra/helper.py build_fuzzers ama-cryptography <this repo>` builds the
+#      image from oss-fuzz/Dockerfile (FROM gcr.io/oss-fuzz-base/base-builder)
+#      and runs OSS-Fuzz's `compile` driver with this repository MOUNTED over
+#      the Dockerfile's clone, so the tree that is built is the one you are
+#      standing in, not whatever the default branch holds.  (An earlier
+#      revision of this script said that too and did not do it: it passed no
+#      source path, so it built the clone.)
+#   4. `infra/helper.py check_build ama-cryptography` runs every fuzzer inside
+#      base-runner: it must start, be linked against the requested engine and
+#      sanitizer, and survive its seed corpus.  That is the check OSS-Fuzz
+#      applies to every project on every build.
 #
-# Prerequisites:
-#   - Docker installed and running
-#   - google/oss-fuzz repository cloned locally
+# Prerequisites: Docker running, python3, git.  Network for the base images
+# and the infra checkout.  Roughly ten minutes on a hosted runner.
 #
 # Usage:
-#   ./tools/test_oss_fuzz_build.sh [path-to-oss-fuzz-checkout]
+#   tools/test_oss_fuzz_build.sh [path-to-oss-fuzz-checkout]
+#   OSS_FUZZ_REF=<commit>  tools/test_oss_fuzz_build.sh
+#   SANITIZER=undefined    tools/test_oss_fuzz_build.sh
 #
-# If no path is given, the script clones oss-fuzz into /tmp/oss-fuzz.
+# .github/workflows/fuzzing.yml runs this on every push and pull request.
 
 set -euo pipefail
 
-OSS_FUZZ_DIR="${1:-/tmp/oss-fuzz}"
+OSS_FUZZ_DIR="${1:-${RUNNER_TEMP:-/tmp}/oss-fuzz}"
+OSS_FUZZ_REF="${OSS_FUZZ_REF:-4e65aea32254fe988ac4b84dbb088d2d08d789e7}"
+SANITIZER="${SANITIZER:-address}"
+ENGINE="${ENGINE:-libfuzzer}"
 PROJECT_NAME="ama-cryptography"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Check prerequisites
-if ! command -v docker &>/dev/null; then
-    echo "ERROR: Docker is required but not installed."
-    echo "Install Docker: https://docs.docker.com/get-docker/"
+if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: Docker is required but not installed." >&2
+    exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+    echo "ERROR: Docker daemon is not running." >&2
+    exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required (OSS-Fuzz's helper.py)." >&2
     exit 1
 fi
 
-if ! docker info &>/dev/null; then
-    echo "ERROR: Docker daemon is not running."
-    exit 1
-fi
-
-# Clone or update OSS-Fuzz
-if [ ! -d "$OSS_FUZZ_DIR" ]; then
-    echo "Cloning google/oss-fuzz into $OSS_FUZZ_DIR..."
-    git clone --depth 1 https://github.com/google/oss-fuzz.git "$OSS_FUZZ_DIR"
+if [ ! -f "$OSS_FUZZ_DIR/infra/helper.py" ]; then
+    echo "Fetching google/oss-fuzz at $OSS_FUZZ_REF into $OSS_FUZZ_DIR..."
+    mkdir -p "$OSS_FUZZ_DIR"
+    git -C "$OSS_FUZZ_DIR" init -q
+    git -C "$OSS_FUZZ_DIR" remote add origin https://github.com/google/oss-fuzz.git
+    git -C "$OSS_FUZZ_DIR" fetch -q --depth 1 origin "$OSS_FUZZ_REF"
+    git -C "$OSS_FUZZ_DIR" checkout -q FETCH_HEAD
 else
-    echo "Using existing OSS-Fuzz checkout at $OSS_FUZZ_DIR"
+    echo "Using the OSS-Fuzz checkout at $OSS_FUZZ_DIR" \
+         "($(git -C "$OSS_FUZZ_DIR" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
 fi
 
-# Create project directory in OSS-Fuzz checkout
 PROJECT_DIR="$OSS_FUZZ_DIR/projects/$PROJECT_NAME"
 mkdir -p "$PROJECT_DIR"
-
-# Copy OSS-Fuzz configuration files
-echo "Copying OSS-Fuzz configuration files..."
+echo "Copying the submission files into projects/$PROJECT_NAME..."
 cp "$REPO_ROOT/oss-fuzz/project.yaml" "$PROJECT_DIR/"
 cp "$REPO_ROOT/oss-fuzz/Dockerfile" "$PROJECT_DIR/"
 cp "$REPO_ROOT/oss-fuzz/build.sh" "$PROJECT_DIR/"
 
-echo ""
-echo "=== Step 1: Building Docker image ==="
-python3 "$OSS_FUZZ_DIR/infra/helper.py" build_image "$PROJECT_NAME"
+cd "$OSS_FUZZ_DIR"
 
 echo ""
-echo "=== Step 2: Building fuzz targets ==="
-python3 "$OSS_FUZZ_DIR/infra/helper.py" build_fuzzers "$PROJECT_NAME"
+echo "=== Step 1: build the fuzzers inside base-builder (engine=$ENGINE sanitizer=$SANITIZER) ==="
+# The trailing path is helper.py's `source_path`: it is mounted over the
+# Dockerfile's WORKDIR (/src/ama-cryptography), so the build compiles this
+# checkout.  oss-fuzz/build.sh builds into $WORK, never into the mounted tree.
+python3 infra/helper.py build_fuzzers \
+    --engine "$ENGINE" --sanitizer "$SANITIZER" \
+    "$PROJECT_NAME" "$REPO_ROOT"
 
 echo ""
-echo "=== Step 3: Checking build ==="
-python3 "$OSS_FUZZ_DIR/infra/helper.py" check_build "$PROJECT_NAME"
+echo "=== Step 2: OSS-Fuzz's bad-build check over every fuzzer ==="
+python3 infra/helper.py check_build \
+    --engine "$ENGINE" --sanitizer "$SANITIZER" \
+    "$PROJECT_NAME"
 
 echo ""
-echo "=== All checks passed! ==="
-echo "The OSS-Fuzz build is working correctly."
-echo ""
-echo "Next steps:"
-echo "  1. Fork https://github.com/google/oss-fuzz"
-echo "  2. Copy oss-fuzz/ files to projects/$PROJECT_NAME/"
-echo "  3. Submit a PR to google/oss-fuzz"
-echo "  See docs/oss-fuzz-onboarding.md for full instructions."
+echo "=== OSS-Fuzz build and check passed for this checkout ==="
+echo "Fuzzers are in $OSS_FUZZ_DIR/build/out/$PROJECT_NAME/."
+echo "To submit: fork https://github.com/google/oss-fuzz, copy oss-fuzz/ to"
+echo "projects/$PROJECT_NAME/, and open the pull request (docs/oss-fuzz-onboarding.md)."

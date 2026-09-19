@@ -19,12 +19,18 @@ annotated, X.509-signed PASS
 
 The three passing fixtures embed a signature *block* that is not a real
 signature. That is deliberate and it is exactly what the tool claims to check:
-its docstring states it verifies shape, not cryptography, because verification
-needs a trust store the repository does not ship. A fixture that had to carry a
-genuine signature would need a private key in the test suite, which
-INVARIANT-17 forbids outright. The line these tests draw is the line the tool
-draws — and the ``test_a_real_signature_is_not_required`` case says so out loud
-so nobody later reads a PASS here as a cryptographic result.
+its docstring states it verifies shape, not cryptography. A fixture that had to
+carry a genuine signature would need a private key in the test suite, which
+INVARIANT-17 forbids outright.
+
+(The repository *does* ship a trust store — ``.github/allowed_signers`` — and
+``tests/test_release_tag_trust_store.py`` performs the real cryptographic check
+against it, on a real signature, with no private key anywhere. This module and
+that one draw different lines on purpose: shape here, attribution there.)
+
+The line these tests draw is the line the tool draws — and the
+``test_a_real_signature_is_not_required`` case says so out loud so nobody later
+reads a PASS here as a cryptographic result.
 
 Tag objects are written with ``git hash-object -t tag`` rather than
 ``git tag -s`` for the same reason: ``git tag -s`` would need a configured
@@ -39,8 +45,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+import yaml
 
 from tools.check_release_tag import (
     DESCRIPTION,
@@ -346,6 +354,56 @@ class TestTheGateIsWiredIntoTheReleasePipeline:
         preceding = workflow[:invocation]
         assert "refs/tags/${TAG}:refs/tags/${TAG}" in preceding
         assert "--force" in preceding[preceding.index("git fetch") :]
+
+
+class TestTheUnanchoredReleaseGuardIsWired:
+    """A canonical-repo tag must not publish an unanchored release (audit H3).
+
+    release.yml never runs on pull_request, so nothing in PR CI would notice if
+    this guard were dropped -- these tests pin its shape in the file itself.
+    """
+
+    @pytest.fixture(scope="class")
+    def release(self) -> dict[str, Any]:
+        text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        return cast("dict[str, Any]", yaml.safe_load(text))
+
+    def _preflight_guard_step(self, release: dict[str, Any]) -> dict[str, Any]:
+        steps = release["jobs"]["preflight"]["steps"]
+        matches = [s for s in steps if "unanchored release" in str(s.get("name", "")).lower()]
+        assert len(matches) == 1, "expected exactly one preflight anchoring guard step"
+        return cast("dict[str, Any]", matches[0])
+
+    def test_the_guard_runs_on_every_version_tag_push(self, release: dict[str, Any]) -> None:
+        # It must NOT be gated on the anchor variable — a guard that only runs
+        # when already anchored is the vacuous shape this whole finding is about.
+        condition = str(self._preflight_guard_step(release)["if"])
+        assert "github.event_name == 'push'" in condition
+        assert "startsWith(github.ref, 'refs/tags/v')" in condition
+        assert "AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX" not in condition
+
+    def test_the_guard_refuses_the_canonical_repo_without_an_anchor(
+        self, release: dict[str, Any]
+    ) -> None:
+        step = self._preflight_guard_step(release)
+        env = step.get("env", {})
+        assert env.get("CANONICAL_REPO"), "the guard must name the canonical repository"
+        assert "AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX" in str(env.get("ANCHOR_PUBKEY", ""))
+        run = step["run"]
+        # Fails closed on the canonical repo, and only there.
+        assert "exit 1" in run
+        assert "GITHUB_REPOSITORY" in run and "CANONICAL_REPO" in run
+
+    def test_the_release_notes_state_the_anchoring_status(self, release: dict[str, Any]) -> None:
+        steps = release["jobs"]["github-release"]["steps"]
+        anchor_line = [s for s in steps if s.get("id") == "anchor_line"]
+        assert len(anchor_line) == 1, "the release job must compute an anchoring notes line"
+        body = next(
+            s["with"]["body"]
+            for s in steps
+            if isinstance(s.get("with"), dict) and "body" in s["with"]
+        )
+        assert "steps.anchor_line.outputs.line" in body
 
 
 class TestTheHelpOutputIsUsable:

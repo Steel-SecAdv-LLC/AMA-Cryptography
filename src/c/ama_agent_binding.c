@@ -35,11 +35,17 @@ static const uint8_t AMA_AGENT_BIND_LABEL[17] = {
     'B', 'I', 'N', 'D', '-', 'v', '1'
 };
 
-/* Sub-domain tags: distinct constants for the two things the encoded record
- * is fed into, so an authorization tag can never be replayed as a signature
- * context (and vice versa). */
+/* Sub-domain tags: distinct constants for everything the encoded record is
+ * fed into, so no one of them can ever be replayed as another. */
 #define AMA_AGENT_SUBDOMAIN_AUTH_TAG  0x01u
 #define AMA_AGENT_SUBDOMAIN_SIG_CTX   0x02u
+/* Binders: the authority key mixed INTO a derivation, rather than merely
+ * consulted by the policy gate beside it.  See authority_binder(). */
+#define AMA_AGENT_SUBDOMAIN_HKDF_BIND 0x03u
+#define AMA_AGENT_SUBDOMAIN_CTX_BIND  0x04u
+
+/* Width of a binder.  Same as the tag: both are HMAC-SHA3-256 outputs. */
+#define AMA_AGENT_BINDER_BYTES 32u
 
 /* ========================================================================== */
 /* Branch-free helpers                                                        */
@@ -133,8 +139,11 @@ typedef char ama_agent_encoding_width_check[
 #endif
 
 /* Width of the HKDF info prefix built by ama_hkdf_agent_bound():
- * enc(b) || u32be(info_len). */
-#define AMA_AGENT_BOUND_PREFIX_BYTES ((size_t)AMA_AGENT_BINDING_ENCODED_BYTES + 4u)
+ * enc(b) || binder || u32be(info_len).  Both leading components are
+ * fixed-width, so the concatenation needs only the one length prefix that
+ * separates them from the caller's `info`. */
+#define AMA_AGENT_BOUND_PREFIX_BYTES                                          \
+    ((size_t)AMA_AGENT_BINDING_ENCODED_BYTES + (size_t)AMA_AGENT_BINDER_BYTES + 4u)
 
 /* Upper bound on the caller-supplied `info` length.  Two independent
  * constraints apply:
@@ -243,6 +252,56 @@ static ama_error_t compute_binding_tag(
     ama_secure_memzero(msg, sizeof(msg));
     ama_secure_memzero(zero_key, sizeof(zero_key));
     return rc;
+}
+
+/**
+ * The authority key, mixed into a derivation rather than only checked beside
+ * it.
+ *
+ * THE DEFECT THIS EXISTS FOR (2026-09 audit, A-6).  `ama_agent_binding_check`
+ * is a sound, constant-time policy gate, and `ama_hkdf_agent_bound` and
+ * `ama_agent_binding_context` both call it.  But neither passed the authority
+ * key to the primitive underneath: the HKDF info was `enc(b) || u32be(len) ||
+ * info` and the signature context was `SHA3-256(0x02 || enc(b))`, both of
+ * which are computable from public values alone.  `enc(b)` is public,
+ * `ama_agent_binding_encode` works on an UNAUTHORIZED binding, and the
+ * threat model for this feature (THREAT_MODEL.md T3.6) is an agent with
+ * in-process access — which is to say, an adversary that can call `ama_hkdf`
+ * directly.  Against exactly that adversary the control was a gate to walk
+ * around, not a key to be without.  Measured: an unauthorized caller
+ * reproduced both outputs byte-for-byte with no authority key.
+ *
+ * The binder closes it.  Each derivation now takes a 32-byte
+ * HMAC-SHA3-256(K_auth, subdomain || enc(b)) as an input, so the output is
+ * unobtainable without K_auth, not merely unreachable through this entry
+ * point.  Separate subdomains keep the HKDF binder, the context binder and
+ * the authorization tag mutually unreplayable.
+ *
+ * WHEN THE KEY IS MIXED.  Only when the binding's own policy requires
+ * authorization.  An unrestricted binding has no operator secret to be bound
+ * to, and mixing a key that merely happened to be passed would make one
+ * binding derive two different keys depending on an argument the policy
+ * ignores — a silent fork for callers, buying nothing.  The branch is on
+ * `b->capabilities` and `b->lifetime`, both of which are carried in the clear
+ * inside `enc(b)`, so it is not a secret-dependent branch; `compute_binding_tag`
+ * already branches on the same class of public property.
+ */
+static ama_error_t authority_binder(
+    const ama_agent_binding_t* b,
+    uint8_t subdomain,
+    const uint8_t* authority_key,
+    size_t key_len,
+    uint8_t out[AMA_AGENT_BINDER_BYTES]
+) {
+    if (ct_requires_authorization_mask(b) == 0) {
+        /* No operator secret in play.  A fixed zero binder keeps ONE code
+         * path downstream — the alternative is a second HKDF info layout that
+         * only unrestricted bindings ever take, and a layout nothing exercises
+         * is a layout nothing checks. */
+        ama_secure_memzero(out, AMA_AGENT_BINDER_BYTES);
+        return AMA_SUCCESS;
+    }
+    return compute_binding_tag(b, subdomain, authority_key, key_len, out);
 }
 
 /* ========================================================================== */
@@ -376,7 +435,7 @@ AMA_API ama_error_t ama_agent_binding_context(
     size_t key_len,
     uint8_t out_ctx[AMA_AGENT_BINDING_CONTEXT_BYTES]
 ) {
-    uint8_t msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES];
+    uint8_t msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES + AMA_AGENT_BINDER_BYTES];
     ama_error_t rc;
 
     if (!b || !out_ctx) {
@@ -390,6 +449,16 @@ AMA_API ama_error_t ama_agent_binding_context(
 
     msg[0] = (uint8_t)AMA_AGENT_SUBDOMAIN_SIG_CTX;
     encode_unchecked(b, msg + 1);
+    /* The binder goes at a FIXED offset after a FIXED-width encoding, so the
+     * message stays unambiguous without a length prefix. */
+    rc = authority_binder(b, (uint8_t)AMA_AGENT_SUBDOMAIN_CTX_BIND,
+                          authority_key, key_len,
+                          msg + 1 + AMA_AGENT_BINDING_ENCODED_BYTES);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(msg, sizeof(msg));
+        ama_secure_memzero(out_ctx, (size_t)AMA_AGENT_BINDING_CONTEXT_BYTES);
+        return rc;
+    }
     rc = ama_sha3_256(msg, sizeof(msg), out_ctx);
     ama_secure_memzero(msg, sizeof(msg));
     if (rc != AMA_SUCCESS) {
@@ -411,11 +480,14 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
     uint8_t* okm,
     size_t okm_len
 ) {
-    /* enc(b) || u32be(info_len) || info.  The 4-byte length prefix keeps the
-     * concatenation injective: without it, a caller-chosen `info` could be
-     * made to imitate a different binding's trailing bytes.  Sized from the
-     * same constant the overflow bound is derived from, so the two cannot
-     * drift apart. */
+    /* enc(b) || binder || u32be(info_len) || info.  The 4-byte length prefix
+     * keeps the concatenation injective: without it, a caller-chosen `info`
+     * could be made to imitate a different binding's trailing bytes.  Sized
+     * from the same constant the overflow bound is derived from, so the two
+     * cannot drift apart.
+     *
+     * `binder` is what makes this derivation need the authority key rather
+     * than merely pass a gate that consulted one — see authority_binder(). */
     uint8_t prefix[AMA_AGENT_BOUND_PREFIX_BYTES];
     uint8_t stack_info[256];
     uint8_t* joined = NULL;
@@ -440,10 +512,21 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
     }
 
     encode_unchecked(b, prefix);
-    prefix[AMA_AGENT_BINDING_ENCODED_BYTES + 0] = (uint8_t)((info_len >> 24) & 0xFFu);
-    prefix[AMA_AGENT_BINDING_ENCODED_BYTES + 1] = (uint8_t)((info_len >> 16) & 0xFFu);
-    prefix[AMA_AGENT_BINDING_ENCODED_BYTES + 2] = (uint8_t)((info_len >> 8) & 0xFFu);
-    prefix[AMA_AGENT_BINDING_ENCODED_BYTES + 3] = (uint8_t)(info_len & 0xFFu);
+    rc = authority_binder(b, (uint8_t)AMA_AGENT_SUBDOMAIN_HKDF_BIND,
+                          authority_key, key_len,
+                          prefix + AMA_AGENT_BINDING_ENCODED_BYTES);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(prefix, sizeof(prefix));
+        return rc;
+    }
+    {
+        const size_t len_off =
+            (size_t)AMA_AGENT_BINDING_ENCODED_BYTES + (size_t)AMA_AGENT_BINDER_BYTES;
+        prefix[len_off + 0] = (uint8_t)((info_len >> 24) & 0xFFu);
+        prefix[len_off + 1] = (uint8_t)((info_len >> 16) & 0xFFu);
+        prefix[len_off + 2] = (uint8_t)((info_len >> 8) & 0xFFu);
+        prefix[len_off + 3] = (uint8_t)(info_len & 0xFFu);
+    }
 
     joined_len = sizeof(prefix) + info_len;
     if (joined_len <= sizeof(stack_info)) {

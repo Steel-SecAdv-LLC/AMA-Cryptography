@@ -54,15 +54,19 @@ static const uint8_t rfc8032_sig_empty[64] = {
     0x65, 0x51, 0x41, 0x43, 0x8e, 0x7a, 0x10, 0x0b
 };
 
-int main(void) {
+/* Every check below, once per field backend.  The fe64-mulx instantiation is
+ * opt-in (ama_ed25519_set_mulx_override(1)) and until this loop existed no
+ * test replayed the RFC 8032 vectors through it: test_ed25519_fe51_mulx_equiv
+ * compares the two backends on a generated corpus, which proves they agree
+ * with each other and nothing about the standard.  A second pass under the
+ * override, on hosts that carry the unit, closes that. */
+static int run_vectors(const char *backend_label) {
     uint8_t public_key[32];
     uint8_t secret_key[64];
     uint8_t signature[64];
     ama_error_t rc;
 
-    printf("===========================================\n");
-    printf("Ed25519 Test Suite (RFC 8032)\n");
-    printf("===========================================\n\n");
+    printf("--- backend: %s ---\n", backend_label);
 
     /* Test 1: Keypair generation with known seed */
     memcpy(secret_key, rfc8032_sk_seed, 32);
@@ -127,5 +131,29 @@ int main(void) {
     printf("All Ed25519 tests passed (including RFC 8032 KAT + roundtrip)!\n");
     printf("===========================================\n");
 
+    return 0;
+}
+
+int main(void) {
+    printf("===========================================\n");
+    printf("Ed25519 Test Suite (RFC 8032)\n");
+    printf("===========================================\n\n");
+
+    if (run_vectors("default (fe51)") != 0) return 1;
+
+    /* Second pass through the MULX+ADX instantiation where the host has it.
+     * ama_ed25519_active_backend() reports whether the override took effect:
+     * a build without the unit, or a CPU without BMI2+ADX, keeps "fe51" and
+     * the pass is reported as not available rather than as passed. */
+    ama_ed25519_set_mulx_override(1);
+    if (strcmp(ama_ed25519_active_backend(), "fe51") != 0) {
+        if (run_vectors("fe64-mulx (override)") != 0) return 1;
+    } else {
+        printf("--- backend: fe64-mulx not available on this build/host; "
+               "RFC 8032 vectors replayed on the default backend only ---\n");
+    }
+    ama_ed25519_set_mulx_override(0);
+
+    printf("\nAll Ed25519 tests passed.\n");
     return 0;
 }

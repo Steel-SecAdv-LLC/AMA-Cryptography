@@ -26,6 +26,7 @@ import math
 import sys
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 # Derive repo root relative to this file for portability
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -185,30 +186,56 @@ class TestQuadraticFormConstraints(unittest.TestCase):
         self.assertTrue(allclose(corrected, state))
 
     def test_sigma_quadratic_enforcement_correction(self) -> None:
-        """Test automatic correction mechanism exists."""
-        # Test that the correction function properly scales states
-        state = Vec([1.0, 1.0, 1.0])
-        E = eye(3) * 0.5  # Diagonal matrix with values < threshold
+        """A violated threshold is actually corrected, to the threshold.
+
+        σ is a Rayleigh quotient, so ``σ(kx) == σ(x)``: scaling cannot change
+        it, and the correction has to rotate the state toward E's dominant
+        eigenvector.  This asserts the property the function advertises —
+        σ_corrected >= threshold — rather than "σ did not decrease", which a
+        no-op satisfies (and which is how a scale-only "correction" went
+        unnoticed through 4.0).
+        """
+        # E's dominant eigenvalue is 1.0, so a 0.9 threshold is reachable;
+        # the state starts aligned with the weak (0.2) directions.
+        E = eye(4) * 0.2
+        E[0][0] = 1.0
+        state = Vec([0.0, 1.0, 1.0, 1.0])
 
         sigma_original = calculate_sigma_quadratic(state, E)
-        valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.96)
+        self.assertLess(sigma_original, 0.9, "Original should be below threshold")
 
-        # For a diagonal matrix, the correction should work
-        # σ_quadratic = x^T·E·x / ||x||² = sum(E_ii * x_i^2) / sum(x_i^2)
-        # For diagonal E and uniform state, σ = E_ii (all same)
-        self.assertFalse(valid, "Original state should be invalid")
-        self.assertLess(sigma_original, 0.96, "Original should be below threshold")
+        valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.9)
+        self.assertFalse(valid, "Original state should be reported invalid")
 
-        # After correction, verify state was modified
-        self.assertFalse(allclose(state, corrected), "State should be corrected")
-
-        # Verify sigma improved (though may not reach threshold for all matrices)
         sigma_corrected = calculate_sigma_quadratic(corrected, E)
         self.assertGreaterEqual(
             sigma_corrected,
-            sigma_original * 0.95,  # Should not decrease
-            "Correction should not decrease sigma",
+            0.9 - 1e-9,
+            f"Correction must reach the threshold, got {sigma_corrected}",
         )
+
+        # The correction preserves the state's magnitude: σ does not depend on
+        # it, but the downstream helix dynamics do.
+        norm_before = math.sqrt(sum(v * v for v in state))
+        norm_after = math.sqrt(sum(v * v for v in corrected))
+        self.assertAlmostEqual(norm_before, norm_after, places=9)
+
+    def test_sigma_quadratic_enforcement_unreachable_threshold(self) -> None:
+        """An unreachable threshold is reported, not faked.
+
+        ``max_x σ(x) == λ_max``, so with E = 0.5·I no state whatsoever can
+        reach 0.96.  The honest result is "invalid, unchanged" — perturbing the
+        state would return something that still fails the constraint while
+        looking corrected.
+        """
+        state = Vec([1.0, 1.0, 1.0])
+        E = eye(3) * 0.5
+
+        valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.96)
+
+        self.assertFalse(valid, "0.96 is unreachable for λ_max = 0.5")
+        self.assertTrue(allclose(corrected, state), "Unreachable → state unchanged")
+        self.assertAlmostEqual(calculate_sigma_quadratic(corrected, E), 0.5, places=12)
 
     def test_initialize_ethical_matrix_positive_definite(self) -> None:
         """Test ethical matrix is positive-definite."""
@@ -242,6 +269,199 @@ class TestIntegration(unittest.TestCase):
         self.assertTrue(results["golden_ratio"], "Golden ratio failed")
         self.assertTrue(results["sigma_quadratic"], "σ_quadratic failed")
         self.assertTrue(results["frameworks_ready"], "Overall frameworks not ready")
+
+
+class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
+    """``max_x sigma(x)`` is the largest ALGEBRAIC eigenvalue, not the largest
+    by magnitude — and power iteration finds the second one.
+
+    ``_dominant_eigenvector`` is plain power iteration, so it converges to the
+    eigenvector of the largest-magnitude eigenvalue.  Its docstring asserted
+    that this equals ``max_x sigma_quadratic(x)``, which holds only for a
+    positive semi-definite matrix; ``enforce_sigma_quadratic_threshold`` then
+    used it as an unreachability oracle ("lambda_max < threshold: no state
+    satisfies the constraint").  Nothing on the public boundary validates
+    definiteness — both functions take an arbitrary caller-supplied array — and
+    the iteration itself already carried explicit handling for a negative
+    dominant eigenvalue, so the indefinite case was reachable, not excluded.
+
+    Measured before the fix on ``E = diag(-5, 1)``: the direction came back as
+    ``[1, 0]`` where sigma = -5, and a threshold of 0.5 — which the state
+    ``[0, 1]`` meets with sigma = 1.0 — was reported unreachable and the state
+    returned uncorrected.
+    """
+
+    #: Eigenvalues -5 and +1: largest by magnitude is -5, largest
+    #: algebraically is +1, and they have different eigenvectors.
+    INDEFINITE: ClassVar[list[list[float]]] = [[-5.0, 0.0], [0.0, 1.0]]
+
+    def test_a_reachable_threshold_is_reached(self) -> None:
+        met, corrected = enforce_sigma_quadratic_threshold(
+            Vec([1.0, 0.0]), self.INDEFINITE, threshold=0.5
+        )
+        self.assertFalse(met, "the input state violated the threshold")
+        sigma = calculate_sigma_quadratic(corrected, self.INDEFINITE)
+        self.assertGreaterEqual(sigma + 1e-9, 0.5, f"correction left sigma at {sigma}")
+
+    def test_the_corrected_state_keeps_the_callers_norm(self) -> None:
+        state = Vec([3.0, 0.0])
+        _met, corrected = enforce_sigma_quadratic_threshold(state, self.INDEFINITE, threshold=0.5)
+        self.assertAlmostEqual(math.sqrt(corrected @ corrected), 3.0, places=9)
+
+    def test_a_genuinely_unreachable_threshold_is_still_refused(self) -> None:
+        """Non-vacuity: the fix must not be "always correct something".
+
+        2.0 is above this matrix's true lambda_max of 1.0, so no state meets
+        it and the state must come back untouched.
+        """
+        state = Vec([1.0, 0.0])
+        met, corrected = enforce_sigma_quadratic_threshold(state, self.INDEFINITE, threshold=2.0)
+        self.assertFalse(met)
+        self.assertEqual(list(corrected), list(state))
+
+    def test_the_direction_maximises_sigma_over_the_whole_matrix(self) -> None:
+        """Stated as the property, checked against a dense sweep."""
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        for data in (
+            self.INDEFINITE,
+            [[-1.0, 2.0], [2.0, -1.0]],  # eigenvalues -3 and +1
+            [[0.0, 1.0], [1.0, 0.0]],  # eigenvalues -1 and +1
+            [[2.0, 0.0], [0.0, 3.0]],  # already positive definite
+        ):
+            matrix = asmat(data)
+            direction = _dominant_eigenvector(matrix)
+            assert direction is not None
+            best = calculate_sigma_quadratic(direction, matrix)
+            for step in range(721):
+                angle = math.pi * step / 720.0
+                probe = Vec([math.cos(angle), math.sin(angle)])
+                self.assertLessEqual(
+                    calculate_sigma_quadratic(probe, matrix),
+                    best + 1e-9,
+                    f"{data}: a swept direction beat the reported maximiser",
+                )
+
+    def test_a_positive_definite_matrix_is_unaffected(self) -> None:
+        """The shift is zero whenever Gershgorin already bounds below at >= 0."""
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _gershgorin_lower_bound
+
+        matrix = initialize_ethical_matrix(6)
+        self.assertGreaterEqual(_gershgorin_lower_bound(asmat(matrix)), 0.0)
+
+    def test_gershgorin_is_a_bound_not_the_spectrum(self) -> None:
+        """A positive-definite matrix can still have a negative bound.
+
+        The docstring once said "for a matrix that was already PSD the bound
+        is >= 0, c is 0, and the iteration is bit-identical".  That is false
+        for almost every PSD matrix with off-diagonal mass: ``[[1, 2], [2, 5]]``
+        has eigenvalues ~5.83 and ~0.17 — positive definite — and a Gershgorin
+        lower bound of -1, so a shift IS applied.  Harmless, because shifting
+        preserves eigenvectors exactly, but the claim of bit-identity was not.
+        This test exists so that claim cannot come back.
+        """
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _gershgorin_lower_bound
+
+        psd = asmat([[1.0, 2.0], [2.0, 5.0]])
+        # Positive definite by Sylvester's criterion — derived from the
+        # MATRIX, not restated as literals: `assertGreater(1.0, 0.0)` was a
+        # compile-time truth that kept passing however `psd` was edited,
+        # leaving the load-bearing Gershgorin assertion attached to a
+        # premise nothing checked.
+        self.assertGreater(psd[0][0], 0.0)
+        self.assertGreater(psd[0][0] * psd[1][1] - psd[0][1] * psd[1][0], 0.0)
+        self.assertLess(_gershgorin_lower_bound(psd), 0.0)
+
+
+class TestSigmaIsBlindToTheSkewPart(unittest.TestCase):
+    """``argmax_x sigma(x)`` is an eigenproblem on ``(E + E^T)/2``, not on ``E``.
+
+    ``sigma(x) = x^T E x / x^T x`` and ``x^T E x`` is a scalar, so it equals
+    ``x^T E^T x``; averaging gives ``x^T E x = x^T ((E + E^T)/2) x`` for every
+    ``x``.  The skew part contributes exactly nothing.
+
+    The first version of the indefinite-matrix fix shifted and iterated ``E``
+    itself, which is the right operator only when ``E`` is symmetric.  Measured
+    on ``E = [[0, 4], [0, 1]]``: it returned ``[0.970, 0.243]`` where
+    ``sigma = 1.000``, against a true maximum of ``2.562`` at
+    ``[0.615, 0.788]`` — the same class of failure the shift was added to
+    remove, reached through a different input.
+    """
+
+    NON_SYMMETRIC = (
+        [[0.0, 4.0], [0.0, 1.0]],
+        [[3.0, -7.0], [2.0, 3.0]],
+        [[1.0, 10.0], [-2.0, 1.0]],
+        [[-5.0, 6.0], [0.0, -1.0]],
+    )
+
+    def test_the_symmetric_part_is_what_sigma_sees(self) -> None:
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _symmetric_part
+
+        for data in self.NON_SYMMETRIC:
+            matrix = asmat(data)
+            sym = _symmetric_part(matrix)
+            for step in range(181):
+                angle = math.pi * step / 180.0
+                probe = Vec([math.cos(angle), math.sin(angle)])
+                self.assertAlmostEqual(
+                    calculate_sigma_quadratic(probe, matrix),
+                    calculate_sigma_quadratic(probe, sym),
+                    places=12,
+                    msg=f"{data}: sigma differs between E and its symmetric part",
+                )
+
+    def test_the_direction_maximises_sigma_for_non_symmetric_input(self) -> None:
+        """The property, swept densely — this is what caught the defect."""
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        for data in self.NON_SYMMETRIC:
+            matrix = asmat(data)
+            direction = _dominant_eigenvector(matrix)
+            self.assertIsNotNone(direction, f"{data}: no direction returned")
+            assert direction is not None
+            best = calculate_sigma_quadratic(direction, matrix)
+            for step in range(2881):
+                angle = math.pi * step / 2880.0
+                probe = Vec([math.cos(angle), math.sin(angle)])
+                self.assertLessEqual(
+                    calculate_sigma_quadratic(probe, matrix),
+                    best + 1e-9,
+                    f"{data}: a swept direction beat the reported maximiser",
+                )
+
+    def test_a_purely_skew_matrix_has_no_maximiser(self) -> None:
+        """sigma is identically zero there, so "no direction" is the answer.
+
+        Returning some arbitrary unit vector would be worse than None: the
+        caller blends toward it to raise sigma, and no blend can.
+        """
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        skew = asmat([[0.0, 1.0], [-1.0, 0.0]])
+        for step in range(181):
+            angle = math.pi * step / 180.0
+            probe = Vec([math.cos(angle), math.sin(angle)])
+            self.assertAlmostEqual(calculate_sigma_quadratic(probe, skew), 0.0, places=12)
+        self.assertIsNone(_dominant_eigenvector(skew))
+
+    def test_symmetric_input_is_untouched_by_the_symmetrisation(self) -> None:
+        """The documented case must be an exact identity, not an approximation."""
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _symmetric_part
+
+        for data in ([[2.0, 0.0], [0.0, 3.0]], [[-1.0, 2.0], [2.0, -1.0]]):
+            matrix = asmat(data)
+            sym = _symmetric_part(matrix)
+            for i in range(2):
+                for j in range(2):
+                    self.assertEqual(float(sym[i][j]), float(matrix[i][j]), f"{data} [{i}][{j}]")
 
 
 if __name__ == "__main__":

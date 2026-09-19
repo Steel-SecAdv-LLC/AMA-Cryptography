@@ -6,7 +6,7 @@ X25519 dispatch policy tests (D-7 follow-up).
 
 The AVX2 4-way Montgomery-ladder kernel (PR #273) is INTENTIONALLY opt-in
 on x86_64: on hosts where the scalar fe64 path uses native MULX/ADX, four
-sequential scalar ladders outrun four lanes of the AVX2 32-bit-limb donna
+sequential scalar ladders outrun four lanes of the AVX2 32-bit-limb
 ladder (the audit on 2026-04-27 measured zero speedup at batch sizes 4/8/16
 on a Skylake-class Xeon and confirmed this is the documented dispatch
 policy in src/c/dispatch/ama_dispatch.c lines 478-502).

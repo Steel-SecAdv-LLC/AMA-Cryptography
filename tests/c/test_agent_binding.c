@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -99,6 +100,7 @@ static int buffer_is_zero(const uint8_t *p, size_t n) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     ama_agent_binding_t eph, sess, pers, tampered;
     uint8_t enc[AMA_AGENT_BINDING_ENCODED_BYTES];
     uint8_t enc2[AMA_AGENT_BINDING_ENCODED_BYTES];
@@ -251,6 +253,62 @@ int main(void) {
                               NULL, 0, IKM, sizeof(IKM), NULL, 0,
                               okm_b, sizeof(okm_b));
     TEST_ASSERT(rc == AMA_SUCCESS, "derive: authorized persistence derivation succeeds");
+
+    /* ---------------------------------------------------------------- */
+    /* The authority key is an INPUT, not only a gate (2026-09 audit A-6) */
+    /* ---------------------------------------------------------------- */
+    /* The gate above is sound, and both derivations call it.  Until the
+     * audit, neither passed the key to the primitive underneath: the HKDF
+     * info was `enc(b) || u32be(info_len) || info`, which is a function of
+     * public values only.  `ama_agent_binding_encode` works on an
+     * unauthorized record, and the adversary this file is about can call
+     * `ama_hkdf` itself — so the derived bytes were obtainable without ever
+     * holding the key, and the audit obtained them.
+     *
+     * Both checks below are inequalities rather than pinned expected values:
+     * a KAT would also pass if the derivation started returning a constant. */
+    {
+        uint8_t bypass_info[AMA_AGENT_BINDING_ENCODED_BYTES + 32 + 4];
+        uint8_t bypass_okm[32];
+
+        rc = ama_agent_binding_encode(&pers, enc2, sizeof(enc2));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the record still encodes (it is public)");
+
+        /* The pre-fix layout: enc(b) || u32be(0). */
+        memcpy(bypass_info, enc2, sizeof(enc2));
+        memset(bypass_info + sizeof(enc2), 0, 4);
+        rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                      bypass_info, sizeof(enc2) + 4u, bypass_okm, sizeof(bypass_okm));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the bypass derivation itself runs");
+        TEST_ASSERT(memcmp(bypass_okm, okm_b, sizeof(okm_b)) != 0,
+                    "binder: the audit's public-encoding bypass no longer reproduces the key");
+
+        /* The current layout with a guessed all-zero binder. */
+        memcpy(bypass_info, enc2, sizeof(enc2));
+        memset(bypass_info + sizeof(enc2), 0, 32 + 4);
+        rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                      bypass_info, sizeof(bypass_info), bypass_okm, sizeof(bypass_okm));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the zero-binder derivation itself runs");
+        TEST_ASSERT(memcmp(bypass_okm, okm_b, sizeof(okm_b)) != 0,
+                    "binder: a guessed zero binder does not reproduce a restricted key");
+
+        /* An UNRESTRICTED binding has no operator secret, so it takes a zero
+         * binder by design.  Pinned positively: it is what proves the two
+         * inequalities above fail because of a real binder rather than
+         * because the layout moved under them. */
+        rc = ama_agent_binding_encode(&eph, enc2, sizeof(enc2));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the ephemeral record encodes");
+        memcpy(bypass_info, enc2, sizeof(enc2));
+        memset(bypass_info + sizeof(enc2), 0, 32 + 4);
+        rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                      bypass_info, sizeof(bypass_info), bypass_okm, sizeof(bypass_okm));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the unrestricted reference derivation runs");
+        rc = ama_hkdf_agent_bound(&eph, NULL, 0, NULL, 0, IKM, sizeof(IKM), NULL, 0,
+                                  okm_a, sizeof(okm_a));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the unrestricted derivation runs");
+        TEST_ASSERT(memcmp(bypass_okm, okm_a, sizeof(okm_a)) == 0,
+                    "binder: an unrestricted binding uses the documented zero-binder layout");
+    }
 
     /* A tag minted under a different authority key must not verify — this is
      * the property that an escaped agent cannot satisfy. */

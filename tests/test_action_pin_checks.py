@@ -98,14 +98,19 @@ class TestFindPins:
     def test_a_mutable_tag_reference_is_not_counted_as_a_pin(
         self, tool: ModuleType, tmp_path: Path
     ) -> None:
-        """Non-detection: ``@v1`` is a different violation (INVARIANT-4).
+        """``find_pins`` collects SHA pins only; ``find_unpinned`` is the other half.
 
-        This checker's subject is whether a *SHA* resolves. Reporting ``@v1``
-        here would make its output about two rules at once and its failures
-        harder to act on.
+        This used to end the story, with the comment "``@v1`` is a different
+        violation (INVARIANT-4)" — and INVARIANT-4 had no enforcement anywhere,
+        so recording the gap here is all that ever happened to it.  The split
+        is still right (this collector's subject is whether a SHA resolves),
+        but the other rule is now checked too, by
+        :class:`TestUnpinnedReferencesAreRefused` below.
         """
         directory = _workflow(tmp_path, "      - uses: actions/checkout@v5\n")
         assert tool.find_pins(directory) == []
+        # ...and the reference is not simply ignored by the gate as a whole.
+        assert [u.ref for u in tool.find_unpinned(directory)] == ["actions/checkout@v5"]
 
     def test_scans_yaml_as_well_as_yml(self, tool: ModuleType, tmp_path: Path) -> None:
         directory = _workflow(
@@ -188,13 +193,43 @@ class TestVerdict:
         refs = {GOOD_SHA: ["refs/tags/v5.0.1^{}"]}
         assert _run(tool, monkeypatch, [pin], refs, strict=True) == 0
 
-    def test_strict_tolerates_a_sha_carrying_no_tag(
+    def test_strict_refuses_a_sha_carrying_no_tag(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A branch-head pin has no tag to contradict the comment."""
+        """A pin must resolve to a RELEASE TAG, not merely to some ref.
+
+        ``git ls-remote`` advertises every branch head, so an untagged SHA
+        used to satisfy "resolves upstream" and — because the comment check
+        only fired when a tag existed to contradict it — a false ``# v7.0.1``
+        label sailed through as well. INVARIANT-24 says the trailing version
+        comment must name a tag the SHA really points at, which cannot hold
+        for a SHA that is not tagged at all.
+        """
         pin = tool.Pin("ci.yml", 3, "some/action", GOOD_SHA, "main")
         refs = {GOOD_SHA: ["refs/heads/main"]}
-        assert _run(tool, monkeypatch, [pin], refs, strict=True) == 0
+        assert _run(tool, monkeypatch, [pin], refs, strict=True) == 1
+
+    def test_strict_refuses_a_pin_to_an_upstream_pull_request_head(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The supply-chain shape the tag requirement exists to refuse.
+
+        GitHub advertises ``refs/pull/N/head`` for every pull request ever
+        opened upstream, merged or not, so a pin to anybody's un-reviewed
+        branch resolved and passed while claiming a release version.
+        """
+        pin = tool.Pin("ci.yml", 3, "some/action", GOOD_SHA, "v7.0.1")
+        refs = {GOOD_SHA: ["refs/pull/4242/head"]}
+        assert _run(tool, monkeypatch, [pin], refs, strict=True) == 1
+
+    def test_non_strict_still_accepts_an_untagged_sha(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tag requirement is a ``--strict`` rule; the default mode only
+        asks whether the SHA exists upstream at all."""
+        pin = tool.Pin("ci.yml", 3, "some/action", GOOD_SHA, "main")
+        refs = {GOOD_SHA: ["refs/heads/main"]}
+        assert _run(tool, monkeypatch, [pin], refs, strict=False) == 0
 
     def test_unreachable_upstream_is_inconclusive_not_a_pass(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
@@ -227,8 +262,119 @@ class TestVerdict:
         monkeypatch.setattr(tool, "list_remote_refs", _refs)
         assert int(tool.main([])) == 1
 
-    def test_no_pins_at_all_is_not_a_failure(
+    def test_no_pins_at_all_fails_closed(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """This used to exit 0 — "No SHA-pinned actions found — nothing to
+        verify."
+
+        Every other gate in ``tools/`` refuses an empty scan
+        (``check_vendor_isolation``, ``check_docker_pins``,
+        ``check_secret_division``, ``check_compiler_warnings``,
+        ``check_dudect_class_staging``, ``check_fuzz_input_reachability``).
+        This repository pins 122 references, so an empty collection is a
+        broken collector or a moved workflow directory, never a clean tree —
+        and passing on it is the failure direction.
+        """
         monkeypatch.setattr(tool, "find_pins", lambda _dir: [])
-        assert int(tool.main([])) == 0
+        assert int(tool.main([])) == 1
+
+
+class TestUnpinnedReferencesAreRefused:
+    """INVARIANT-4, which nothing enforced until 5.0.0.
+
+    INVARIANTS.md: "All third-party GitHub Actions used in security workflows
+    **must** be pinned to a full commit SHA, not a mutable tag (``@main``,
+    ``@v1``, etc.)"; ARCHITECTURE.md restates it as an enforced invariant.  The
+    only checker that reads workflow ``uses:`` lines matched
+    ``@[0-9a-f]{40}`` exclusively, so a reference carrying no SHA was
+    structurally invisible to it — the rule had a checker that could not see
+    its violations.
+
+    A mutable tag is not a cosmetic problem: whoever controls the upstream
+    repository can move it, and the workflow then runs different code with no
+    diff in this repository.
+    """
+
+    @pytest.mark.parametrize(
+        "ref,label",
+        [
+            ("actions/checkout@v4", "a version tag"),
+            ("actions/checkout@main", "a branch"),
+            ("actions/checkout@3d3c42e", "an abbreviated SHA"),
+            ("actions/checkout", "no ref at all"),
+            ("some/action@3d3c42e5aac5ba805825da76410c181273ba90b1x", "41 characters"),
+        ],
+    )
+    def test_an_unpinned_reference_is_reported(
+        self, tool: ModuleType, tmp_path: Path, ref: str, label: str
+    ) -> None:
+        directory = _workflow(tmp_path, f"      - uses: {ref}\n")
+        found = tool.find_unpinned(directory)
+        assert found, f"accepted {label}: {ref}"
+        assert found[0].ref == ref
+
+    @pytest.mark.parametrize(
+        "ref,label",
+        [
+            ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "a full SHA"),
+            ("./.github/workflows/local.yml", "a local reusable workflow"),
+            ("docker://alpine:3.19", "a container reference"),
+        ],
+    )
+    def test_a_compliant_reference_is_accepted(
+        self, tool: ModuleType, tmp_path: Path, ref: str, label: str
+    ) -> None:
+        directory = _workflow(tmp_path, f"      - uses: {ref}\n")
+        assert tool.find_unpinned(directory) == [], label
+
+    def test_a_commented_out_reference_is_not_a_violation(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        directory = _workflow(tmp_path, "#      - uses: actions/checkout@v4\n")
+        assert tool.find_unpinned(directory) == []
+
+    def test_the_slsa_generator_exemption_is_named_and_reasoned(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The one reference that cannot comply, and why it is not a hole.
+
+        The SLSA generator verifies that its caller referenced it by a
+        semantic-version tag and fails otherwise, because the tag is what its
+        provenance attests.  The exemption is keyed on the exact workflow path,
+        not a prefix, so a different workflow from the same generator does not
+        inherit it silently.
+        """
+        exempt = (
+            "slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml"
+        )
+        assert exempt in tool._PIN_EXEMPT
+        assert len(tool._PIN_EXEMPT[exempt]) > 80, "an exemption needs a stated reason"
+        directory = _workflow(tmp_path, f"    uses: {exempt}@v2.1.0\n")
+        assert tool.find_unpinned(directory) == []
+
+        sibling = "slsa-framework/slsa-github-generator/.github/workflows/other.yml"
+        directory = _workflow(tmp_path, f"    uses: {sibling}@v2.1.0\n")
+        assert tool.find_unpinned(directory) != [], "the exemption leaked to a sibling workflow"
+
+    def test_the_repository_has_no_unpinned_reference(self, tool: ModuleType) -> None:
+        assert tool.find_unpinned(REPO_ROOT / ".github" / "workflows") == []
+
+    def test_an_empty_pin_set_fails_closed(self, tool: ModuleType, tmp_path: Path) -> None:
+        """ "Nothing to verify" used to exit 0.
+
+        Every other gate in ``tools/`` refuses an empty scan. This repository
+        pins 122 references, so an empty collection means the collector broke.
+        """
+        workflows = _workflow(tmp_path, "      - run: echo hi\n")
+        assert tool.find_pins(workflows) == [], "the collector found a pin where there is none"
+
+        # ...and the GATE refuses it.  Asserting only that the collector
+        # returns [] is a statement about the collector, not about failing
+        # closed, and this test is named for the latter: with the `if not pins`
+        # branch deleted the assertion above still held.
+        exit_code = tool.main(["--strict", "--root", str(tmp_path)])
+        assert exit_code != 0, (
+            "an empty pin set exited 0 — the gate passed vacuously on a tree "
+            "where the collector found nothing to check"
+        )

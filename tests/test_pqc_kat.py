@@ -619,11 +619,37 @@ class TestSLHDSA_SHA2_256f_KAT:
         sig = sphincs_provider.sign(b"original", kp.secret_key)
         assert not sphincs_provider.verify(b"modified", sig, kp.public_key)
 
-    def test_acvp_sigver_internal_vectors(self, sphincs_provider: Any) -> None:
-        """Validate against NIST ACVP SLH-DSA-sigVer-FIPS205 internal vectors."""
+    def test_acvp_sigver_internal_vectors_are_not_replayable_from_python(
+        self, sphincs_provider: Any
+    ) -> None:
+        """The internal-interface vectors moved to C, with the interface itself.
+
+        This test used to replay the 14 SLH-DSA-SHA2-256f
+        ``signatureInterface == "internal"`` sigVer vectors through
+        ``sphincs_verify`` — which worked only because that shipped entry point
+        WAS FIPS 205 §9 ``slh_verify_internal``, verifying the raw message with
+        no ``0x00 || len(ctx) || ctx`` prefix. That is the defect INVARIANT-50
+        records: it cross-verified with ``slhdsa_sign`` under one key in both
+        directions. ``sphincs_verify`` is now §10.2 with the empty context, so
+        it cannot and must not accept those vectors, and the §9 interface is
+        compiled only under ``AMA_TESTING_MODE``.
+
+        The vectors are replayed in ``tests/c/test_slhdsa_context_separation.c``
+        against ``ama_slhdsa_verify_internal``, which links the
+        ``ama_cryptography_test`` archive;
+        ``tests/test_slhdsa_context_separation.py`` pins that they are still
+        all fourteen. What this test asserts is the other half: that a
+        *shipped* verifier does not accept a §9 signature, on every one of
+        NIST's own valid cases.
+        """
         vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
         if not vectors_path.exists():
-            pytest.skip("ACVP SLH-DSA vectors not available")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {vectors_path}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
 
         with open(vectors_path) as f:
             data = json.load(f)
@@ -636,18 +662,20 @@ class TestSLHDSA_SHA2_256f_KAT:
                 continue
 
             for tc in group["tests"]:
+                if not tc["testPassed"]:
+                    continue  # already invalid; it proves nothing about the wrapper
                 pk = bytes.fromhex(tc["pk"])
                 sig = bytes.fromhex(tc["signature"])
                 msg = bytes.fromhex(tc["message"])
-                expected = tc["testPassed"]
 
-                result = sphincs_provider.verify(msg, sig, pk)
-                assert (
-                    result == expected
-                ), f"ACVP tcId={tc['tcId']}: expected {expected}, got {result}"
+                assert not sphincs_provider.verify(msg, sig, pk), (
+                    f"ACVP tcId={tc['tcId']}: a FIPS 205 section 9 internal-interface "
+                    "signature was accepted by the shipped verifier — the context "
+                    "wrapper is not being applied (INVARIANT-50)"
+                )
                 tested += 1
 
-        assert tested > 0, "No SLH-DSA-SHA2-256f internal vectors found"
+        assert tested > 0, "No valid SLH-DSA-SHA2-256f internal vectors found"
 
     def test_acvp_sigver_external_pure_vectors(self, sphincs_provider: Any) -> None:
         """Validate against NIST ACVP SLH-DSA-sigVer-FIPS205 external pure vectors."""
@@ -655,7 +683,12 @@ class TestSLHDSA_SHA2_256f_KAT:
 
         vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
         if not vectors_path.exists():
-            pytest.skip("ACVP SLH-DSA vectors not available")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {vectors_path}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
 
         with open(vectors_path) as f:
             data = json.load(f)
@@ -708,12 +741,20 @@ class TestSLHDSA_SHAKE_128s_ACVP:
     @pytest.fixture(scope="class")
     def vectors(self) -> list[dict[str, Any]]:
         if not self.VECTORS_PATH.exists():
-            pytest.skip(f"NIST ACVP SLH-DSA-SHAKE-128s vectors not present at {self.VECTORS_PATH}")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {self.VECTORS_PATH}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
         with open(self.VECTORS_PATH) as f:
             data = json.load(f)
         vectors: list[dict[str, Any]] = data["vectors"]
         if not vectors:
-            pytest.skip("No SLH-DSA-SHAKE-128s vectors in JSON")
+            pytest.fail(
+                f"{self.VECTORS_PATH} contains no vectors. An emptied corpus "
+                "passes every test in this class vacuously."
+            )
         return vectors
 
     def test_size_constants(self) -> None:
@@ -777,8 +818,8 @@ class TestSLHDSA_SHAKE_128s_ACVP:
         covered as a subset of the deterministic external/pure set.
         """
         from ama_cryptography.pqc_backends import (
+            slhdsa_sign_addrnd,
             slhdsa_sign_deterministic,
-            slhdsa_sign_internal,
         )
 
         det_count = hedged_count = 0
@@ -793,12 +834,15 @@ class TestSLHDSA_SHAKE_128s_ACVP:
                 produced = slhdsa_sign_deterministic(msg, sk, ctx, param_set="SHAKE-128s")
                 det_count += 1
             else:
-                # Hedged: NIST provides additionalRandomness; replay it via the
-                # internal interface after applying the §10.2 context wrapper
-                # (matching the exact M' the public sign() would build).
+                # Hedged: NIST provides additionalRandomness. This replays it
+                # through the §10.2 entry point, which builds
+                # M' = 0x00 || len(ctx) || ctx || M itself. It used to go
+                # through slhdsa_sign_internal with the wrapper built HERE,
+                # which left the wrapper — the thing INVARIANT-50 is about —
+                # outside the vector, and needed the FIPS 205 §9 interface in
+                # the shipped .so to do it.
                 addrnd = bytes.fromhex(v["additionalRandomness"])
-                wrapped = b"\x00" + bytes([len(ctx)]) + ctx + msg
-                produced = slhdsa_sign_internal(wrapped, sk, addrnd, param_set="SHAKE-128s")
+                produced = slhdsa_sign_addrnd(msg, sk, addrnd, ctx, param_set="SHAKE-128s")
                 hedged_count += 1
 
             assert produced == expected, (
@@ -849,20 +893,28 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
     @pytest.fixture(scope="class")
     def vectors(self) -> list[dict[str, Any]]:
         if not self.VECTORS_PATH.exists():
-            pytest.skip(f"NIST ACVP SLH-DSA-SHA2-256f vectors not present at {self.VECTORS_PATH}")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {self.VECTORS_PATH}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
         with open(self.VECTORS_PATH) as f:
             data = json.load(f)
         vectors: list[dict[str, Any]] = data["vectors"]
         if not vectors:
-            pytest.skip("No SLH-DSA-SHA2-256f vectors in JSON")
+            pytest.fail(
+                f"{self.VECTORS_PATH} contains no vectors. An emptied corpus "
+                "passes every test in this class vacuously."
+            )
         return vectors
 
     @staticmethod
     def _produce(v: dict[str, Any]) -> bytes:
         """Reproduce the signature for a vector via the byte-exact ACVP interface."""
         from ama_cryptography.pqc_backends import (
+            slhdsa_sign_addrnd,
             slhdsa_sign_deterministic,
-            slhdsa_sign_internal,
         )
 
         sk = bytes.fromhex(v["sk"])
@@ -870,12 +922,11 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
         ctx = bytes.fromhex(v.get("context", ""))
         if v.get("deterministic"):
             return slhdsa_sign_deterministic(msg, sk, ctx, param_set="SHA2-256f")
-        # Hedged: replay NIST additionalRandomness through the internal interface
-        # after applying the FIPS 205 §10.2 context wrapper (the M' the public
-        # sign() would build).
+        # Hedged: replay NIST additionalRandomness through the §10.2 entry
+        # point, which applies the context wrapper itself — see the
+        # SHAKE-128s sibling for why this no longer builds M' here.
         addrnd = bytes.fromhex(v["additionalRandomness"])
-        wrapped = b"\x00" + bytes([len(ctx)]) + ctx + msg
-        return slhdsa_sign_internal(wrapped, sk, addrnd, param_set="SHA2-256f")
+        return slhdsa_sign_addrnd(msg, sk, addrnd, ctx, param_set="SHA2-256f")
 
     def test_size_constants(self) -> None:
         from ama_cryptography.pqc_backends import (
@@ -914,8 +965,9 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
         """The 32-byte message randomizer R IS byte-exact to NIST for both modes.
 
         R = PRF_msg(SK.prf, opt_rand, M') — proves the SHA-512-based message
-        digest path of SHA2-256f matches FIPS 205 exactly (the divergence is
-        strictly downstream, in the FORS/WOTS+/hypertree body).
+        digest path of SHA2-256f matches FIPS 205 in isolation, so a future
+        regression is localized to it rather than the FORS/WOTS+/hypertree
+        body (covered in full by ``test_acvp_siggen_byte_exact``).
         """
         det = hedged = 0
         for v in vectors:

@@ -7,6 +7,14 @@ on:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
   pull_request:
     branches: [ main, develop ]
+  schedule:
+    # Nightly deep campaign, 02:20 UTC.  Per-PR runs give each target 60 s
+    # from the accumulated corpus (see the cache steps below); this run gives
+    # each 15 minutes and saves what it found, so the corpus every later run
+    # starts from keeps deepening on the default branch.  The schedule runs
+    # on `main` only, which is where a saved cache is visible to every
+    # branch and pull request.
+    - cron: '20 2 * * *'
   workflow_dispatch:
     inputs:
       fuzz_duration:
@@ -30,7 +38,9 @@ jobs:
   fuzz-core:
     name: Fuzz Core Primitives (${{ matrix.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The nightly schedule fuzzes each target for 900 s; the per-PR budget
+    # stays at 20 minutes for the 60 s run plus the build.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 40 || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -60,14 +70,36 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
+
+      - name: Restore the accumulated corpus (${{ matrix.target }})
+        # Every run used to start from fuzz/seed_corpus and throw away what it
+        # found: 60 seconds of exploration per push, then nothing.  A fuzzer
+        # that never keeps its corpus rediscovers the same shallow inputs
+        # forever and never reaches the deep branches (the frozen ML-DSA
+        # verify path needs 5,262-byte inputs; SLH-DSA verify 49,921).  The
+        # corpus is now persisted in the Actions cache per target: this step
+        # restores the newest one (restore-keys are prefix matches, newest
+        # first — the same harness source preferred, then any earlier
+        # corpus for the target), the run fuzzes FROM it, the merge step keeps
+        # only the coverage-adding units, and the save step writes it back
+        # under a run-unique key.  A pull request restores the default
+        # branch's corpus; the nightly schedule on `main` is what deepens it.
+        id: corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ hashFiles(format('fuzz/{0}.c', matrix.target)) }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-${{ hashFiles(format('fuzz/{0}.c', matrix.target)) }}-
+            fuzz-corpus-${{ matrix.target }}-
 
       - name: Build fuzz targets
         run: |
           cmake -B build-fuzz \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -76,8 +108,9 @@ jobs:
           cmake --build build-fuzz --target ${{ matrix.target }} -j$(nproc)
 
       - name: Run fuzzer (${{ matrix.target }})
+        id: fuzz
         env:
-          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || (github.event_name == 'schedule' && '900') || '60' }}
         # Seeds the corpus from fuzz/seed_corpus/<target>/ and loads
         # fuzz/dictionaries/<target>.dict when they exist.  Before this, the
         # run started from an EMPTY corpus with no dictionary, so both trees
@@ -86,28 +119,96 @@ jobs:
         # `validate-fuzz-dictionaries` (below) guarantees the dict actually
         # parses, because libFuzzer discards a whole dictionary on the first
         # malformed line and only warns.
+        #
+        # The corpus restored above is the starting point; the seeds are
+        # merged into it (same-named units are byte-identical).  The nightly
+        # schedule runs 900 s per target instead of 60.
         run: |
           set -euo pipefail
           mkdir -p corpus/${{ matrix.target }}
           mkdir -p artifacts/${{ matrix.target }}
+          RESTORED="$(find corpus/${{ matrix.target }} -type f | wc -l)"
+          echo "restored_units=$RESTORED" >> "$GITHUB_OUTPUT"
+          echo "Restored corpus: $RESTORED unit(s) (cache key matched: '${{ steps.corpus.outputs.cache-matched-key }}')."
           if [ -d "fuzz/seed_corpus/${{ matrix.target }}" ]; then
             cp -r fuzz/seed_corpus/${{ matrix.target }}/. corpus/${{ matrix.target }}/
-            echo "Seeded corpus with $(ls -1 corpus/${{ matrix.target }} | wc -l) input(s)."
+            echo "Seeded corpus now holds $(ls -1 corpus/${{ matrix.target }} | wc -l) input(s)."
           else
-            echo "No seed corpus for ${{ matrix.target }} — starting cold."
+            echo "No seed corpus for ${{ matrix.target }} — starting from the restored corpus alone."
           fi
           DICT_ARG=""
           if [ -f "fuzz/dictionaries/${{ matrix.target }}.dict" ]; then
             DICT_ARG="-dict=fuzz/dictionaries/${{ matrix.target }}.dict"
             echo "Using dictionary fuzz/dictionaries/${{ matrix.target }}.dict"
           fi
-          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
+          # The ceiling comes from the harness, not from a number written
+          # here.  libFuzzer never generates a unit longer than -max_len and
+          # TRUNCATES corpus units to it, so a target whose deepest branch
+          # needs more bytes than this can never enter that branch — measured:
+          # fuzz_dilithium's fully-fuzzed ML-DSA verify needs 5,262 bytes and
+          # fuzz_sphincs' two SLH-DSA verify cases need 49,921 and 49,857,
+          # against the 4,096 that used to be hard-coded here.  Those branches
+          # had never executed in any run.
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
+                       --max-len ${{ matrix.target }})"
+          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s (-max_len=$MAX_LEN)..."
           ./build-fuzz/bin/${{ matrix.target }} \
             -max_total_time=${FUZZ_DURATION} \
-            -max_len=4096 \
+            -max_len="$MAX_LEN" \
             ${DICT_ARG} \
             -artifact_prefix=artifacts/${{ matrix.target }}/ \
             corpus/${{ matrix.target }}/
+
+      - name: Merge the corpus down to its coverage-adding units (${{ matrix.target }})
+        # libFuzzer's -merge=1 writes into the FIRST directory only those units
+        # from the others that add coverage, so what is saved is minimal and
+        # deterministic (measured: a second merge of the same inputs adds 0
+        # files, 0 features).  The numbers before and after are the growth
+        # signal this lane never had: how many units the run started from,
+        # how many it added, how many survived the merge, and the feature and
+        # edge counts libFuzzer reports for the merged set.  The ceiling is the
+        # harness's, from the same tool the run step uses.
+        #
+        # Runs after a failed fuzz step too: a crash goes to artifacts/, not
+        # to the corpus, and the coverage found before it is still worth
+        # keeping.  A merge that itself fails fails this step by name.
+        if: always() && steps.fuzz.outcome != 'cancelled' && steps.fuzz.outcome != 'skipped'
+        id: merge
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py --max-len "$TARGET")"
+          BEFORE="$(find "corpus/$TARGET" -type f | wc -l)"
+          mkdir -p "corpus-merged/$TARGET"
+          ./build-fuzz/bin/"$TARGET" -merge=1 -max_len="$MAX_LEN" \
+            "corpus-merged/$TARGET" "corpus/$TARGET" 2>&1 | tee "merge-$TARGET.log" | tail -5
+          SUMMARY="$(grep -E 'MERGE-OUTER: [0-9]+ new files' "merge-$TARGET.log" | tail -1)"
+          AFTER="$(find "corpus-merged/$TARGET" -type f | wc -l)"
+          FEATURES="$(echo "$SUMMARY" | sed -E 's/.* with ([0-9]+) new features.*/\1/')"
+          EDGES="$(echo "$SUMMARY" | sed -E 's/.*; ([0-9]+) new coverage edges.*/\1/')"
+          rm -rf "corpus/$TARGET"
+          mv "corpus-merged/$TARGET" "corpus/$TARGET"
+          echo "corpus $TARGET: restored=${RESTORED_UNITS:-0} after-run=$BEFORE merged=$AFTER features=$FEATURES edges=$EDGES"
+          {
+            echo "### Corpus: \`$TARGET\`"
+            echo ""
+            echo "| restored | after run | merged | features | edges | fuzz seconds |"
+            echo "|---:|---:|---:|---:|---:|---:|"
+            echo "| ${RESTORED_UNITS:-0} | $BEFORE | $AFTER | $FEATURES | $EDGES | ${FUZZ_DURATION} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          RESTORED_UNITS: ${{ steps.fuzz.outputs.restored_units }}
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || (github.event_name == 'schedule' && '900') || '60' }}
+
+      - name: Save the accumulated corpus (${{ matrix.target }})
+        # Under the run-unique primary key, so every run leaves a newer entry
+        # for the next restore's prefix match.  Skipped only if the merge did
+        # not produce a corpus to save.
+        if: always() && steps.merge.outcome == 'success'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: corpus/${{ matrix.target }}
+          key: ${{ steps.corpus.outputs.cache-primary-key }}
 
       - name: Upload crash artifacts
         if: failure()
@@ -141,36 +242,99 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-18-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-18-dev
 
       - name: Build one fuzz target (dictionary parser host)
         run: |
+          # -O2 -g with NDEBUG stripped, matching every other fuzz configure
+          # in this file.  This was `Debug` (-O0) on the stated ground that
+          # "Release would append -fomit-frame-pointer after them and cost the
+          # stack traces a crash report is for" — measured false: CMake appends
+          # the target's own flags AFTER CMAKE_C_FLAGS_<CONFIG>, and
+          # fuzz/CMakeLists.txt ends its FUZZ_FLAGS with -fno-omit-frame-pointer,
+          # so the frame pointer survives at every build type (checked in the
+          # emitted flags.make of a Release fuzz configure).  What -O0 did cost
+          # is depth: at 60 s per target, one seed corpus and the same -max_len,
+          # -O2 -g reached 3.0x to 16.7x more executions per target than -O0
+          # (measured per target at both optimisation levels: fuzz_sphincs
+          # 20 -> 116, fuzz_frost 515 -> 5,627, fuzz_dilithium
+          # 1,748 -> 7,167).  NDEBUG is left OUT so assert() stays live exactly
+          # as it was under Debug — the ONLY semantic difference between the two
+          # configurations is the optimisation level.
           cmake -B build-fuzz -DAMA_BUILD_FUZZ=ON \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DAMA_USE_NATIVE_PQC=ON
           cmake --build build-fuzz --target fuzz_sha3 -j$(nproc)
 
       - name: Every dictionary must parse
+        # Three outcomes per dictionary, and each has to be told apart: the
+        # harness ran and accepted it (exit 0, the only "ok"); the harness
+        # ran and rejected it (ParseDictionaryFile in the output); or the
+        # harness did not run at all.  The loop used to read
+        # `out=$(... || true)` and grep for the rejection text, so a binary
+        # that failed to execute — missing, or dying in the sanitizer runtime
+        # before main — produced no rejection text and thirteen "ok" lines
+        # (measured: a nonexistent binary gives exit 127 and no such text).
+        # The exit status is kept, and the count of dictionaries actually
+        # validated must equal the count on disk and be non-zero, so an empty
+        # glob cannot pass either.
         run: |
           set -uo pipefail
           rc=0
+          checked=0
+          expected="$(find fuzz/dictionaries -maxdepth 1 -name '*.dict' | wc -l)"
           for d in fuzz/dictionaries/*.dict; do
             # -runs=0 loads the dictionary, then exits without fuzzing.
-            out=$(./build-fuzz/bin/fuzz_sha3 -dict="$d" -runs=0 2>&1 || true)
+            out=$(./build-fuzz/bin/fuzz_sha3 -dict="$d" -runs=0 2>&1)
+            status=$?
             if echo "$out" | grep -q "ParseDictionaryFile"; then
               echo "::error file=$d::libFuzzer rejected this dictionary — the WHOLE file is discarded at runtime. $(echo "$out" | grep ParseDictionaryFile | head -1)"
               rc=1
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::fuzz_sha3 did not run cleanly on $d (exit $status); nothing about the dictionary was established:"
+              echo "$out" | tail -5
+              rc=1
             else
               echo "ok: $d"
+              checked=$((checked + 1))
             fi
           done
+          if [ "$checked" -eq 0 ] || [ "$checked" -ne "$expected" ]; then
+            echo "::error::validated $checked of $expected dictionaries under fuzz/dictionaries/; every one must be checked and there must be at least one"
+            rc=1
+          fi
+          echo "validated $checked of $expected dictionaries"
           exit $rc
+
+      - name: Generated seed corpora must match their generators
+        # Two corpora are produced by a script rather than by hand, so that
+        # what each seed covers is stated and reproducible.  Both scripts have
+        # a --check mode and NEITHER was wired to anything, which makes the
+        # generator and the committed bytes free to drift apart silently —
+        # and a corpus that no longer matches its documented rationale is a
+        # corpus whose rationale is fiction.  This is the step that notices.
+        run: |
+          set -euo pipefail
+          python3 tools/build_ascon_seed_corpus.py --check
+          python3 tools/build_kyber_seed_corpus.py --check
+          python3 tools/build_pqc_verify_seed_corpus.py --check
+
+      - name: Every harness branch must be reachable by its own lane
+        # Registration (check_fuzz_target_registration.py) says a harness
+        # RUNS.  This says its branches can be ENTERED: libFuzzer never
+        # generates a unit longer than -max_len and truncates corpus units to
+        # it, so a guard above that ceiling is a branch no run can reach.
+        # fuzz_dilithium's fully-fuzzed ML-DSA verify and both of
+        # fuzz_sphincs' SLH-DSA verify cases sat above it and had never
+        # executed.
+        run: python3 tools/check_fuzz_input_reachability.py
 
   fuzz-pqc:
     name: Fuzz PQC Primitives (${{ matrix.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ github.event_name == 'schedule' && 50 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -182,8 +346,17 @@ jobs:
           - fuzz_argon2
           - fuzz_secp256k1
           - fuzz_frost
-        # SPHINCS+ is too slow for CI fuzzing — run manually
-        # - fuzz_sphincs
+          # SLH-DSA verification is the slowest execution in the suite
+          # (~0.17 s each at -O2), so a 60-second run is hundreds of
+          # executions rather than millions.  That is still coverage over the
+          # seeded corpus, which reaches both verify branches, and it is what
+          # the registration gate's "a harness nobody runs is
+          # indistinguishable from one that finds nothing" was written for.
+          # It ran nowhere at all until this pass: the commented-out entry it
+          # carried was accepted by the gate as a "documented exclusion", and
+          # the compensating control that justified it (OSS-Fuzz) is not
+          # onboarded.
+          - fuzz_sphincs
 
     steps:
       - name: Checkout code
@@ -193,14 +366,36 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
+
+      - name: Restore the accumulated corpus (${{ matrix.target }})
+        # Every run used to start from fuzz/seed_corpus and throw away what it
+        # found: 60 seconds of exploration per push, then nothing.  A fuzzer
+        # that never keeps its corpus rediscovers the same shallow inputs
+        # forever and never reaches the deep branches (the frozen ML-DSA
+        # verify path needs 5,262-byte inputs; SLH-DSA verify 49,921).  The
+        # corpus is now persisted in the Actions cache per target: this step
+        # restores the newest one (restore-keys are prefix matches, newest
+        # first — the same harness source preferred, then any earlier
+        # corpus for the target), the run fuzzes FROM it, the merge step keeps
+        # only the coverage-adding units, and the save step writes it back
+        # under a run-unique key.  A pull request restores the default
+        # branch's corpus; the nightly schedule on `main` is what deepens it.
+        id: corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ hashFiles(format('fuzz/{0}.c', matrix.target)) }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-${{ hashFiles(format('fuzz/{0}.c', matrix.target)) }}-
+            fuzz-corpus-${{ matrix.target }}-
 
       - name: Build fuzz targets
         run: |
           cmake -B build-fuzz \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -209,32 +404,98 @@ jobs:
           cmake --build build-fuzz --target ${{ matrix.target }} -j$(nproc)
 
       - name: Run fuzzer (${{ matrix.target }})
+        id: fuzz
         env:
-          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || (github.event_name == 'schedule' && '900') || '60' }}
         # Same seed-corpus + dictionary wiring as the core lane above; see the
-        # comment there for why both were previously unused at runtime.
+        # comment there for why both were previously unused at runtime, and
+        # for the restored corpus this now starts from.
         run: |
           set -euo pipefail
           mkdir -p corpus/${{ matrix.target }}
           mkdir -p artifacts/${{ matrix.target }}
+          RESTORED="$(find corpus/${{ matrix.target }} -type f | wc -l)"
+          echo "restored_units=$RESTORED" >> "$GITHUB_OUTPUT"
+          echo "Restored corpus: $RESTORED unit(s) (cache key matched: '${{ steps.corpus.outputs.cache-matched-key }}')."
           if [ -d "fuzz/seed_corpus/${{ matrix.target }}" ]; then
             cp -r fuzz/seed_corpus/${{ matrix.target }}/. corpus/${{ matrix.target }}/
-            echo "Seeded corpus with $(ls -1 corpus/${{ matrix.target }} | wc -l) input(s)."
+            echo "Seeded corpus now holds $(ls -1 corpus/${{ matrix.target }} | wc -l) input(s)."
           else
-            echo "No seed corpus for ${{ matrix.target }} — starting cold."
+            echo "No seed corpus for ${{ matrix.target }} — starting from the restored corpus alone."
           fi
           DICT_ARG=""
           if [ -f "fuzz/dictionaries/${{ matrix.target }}.dict" ]; then
             DICT_ARG="-dict=fuzz/dictionaries/${{ matrix.target }}.dict"
             echo "Using dictionary fuzz/dictionaries/${{ matrix.target }}.dict"
           fi
-          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
+          # The ceiling comes from the harness, not from a number written
+          # here.  libFuzzer never generates a unit longer than -max_len and
+          # TRUNCATES corpus units to it, so a target whose deepest branch
+          # needs more bytes than this can never enter that branch — measured:
+          # fuzz_dilithium's fully-fuzzed ML-DSA verify needs 5,262 bytes and
+          # fuzz_sphincs' two SLH-DSA verify cases need 49,921 and 49,857,
+          # against the 4,096 that used to be hard-coded here.  Those branches
+          # had never executed in any run.
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
+                       --max-len ${{ matrix.target }})"
+          echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s (-max_len=$MAX_LEN)..."
           ./build-fuzz/bin/${{ matrix.target }} \
             -max_total_time=${FUZZ_DURATION} \
-            -max_len=4096 \
+            -max_len="$MAX_LEN" \
             ${DICT_ARG} \
             -artifact_prefix=artifacts/${{ matrix.target }}/ \
             corpus/${{ matrix.target }}/
+
+      - name: Merge the corpus down to its coverage-adding units (${{ matrix.target }})
+        # libFuzzer's -merge=1 writes into the FIRST directory only those units
+        # from the others that add coverage, so what is saved is minimal and
+        # deterministic (measured: a second merge of the same inputs adds 0
+        # files, 0 features).  The numbers before and after are the growth
+        # signal this lane never had: how many units the run started from,
+        # how many it added, how many survived the merge, and the feature and
+        # edge counts libFuzzer reports for the merged set.  The ceiling is the
+        # harness's, from the same tool the run step uses.
+        #
+        # Runs after a failed fuzz step too: a crash goes to artifacts/, not
+        # to the corpus, and the coverage found before it is still worth
+        # keeping.  A merge that itself fails fails this step by name.
+        if: always() && steps.fuzz.outcome != 'cancelled' && steps.fuzz.outcome != 'skipped'
+        id: merge
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py --max-len "$TARGET")"
+          BEFORE="$(find "corpus/$TARGET" -type f | wc -l)"
+          mkdir -p "corpus-merged/$TARGET"
+          ./build-fuzz/bin/"$TARGET" -merge=1 -max_len="$MAX_LEN" \
+            "corpus-merged/$TARGET" "corpus/$TARGET" 2>&1 | tee "merge-$TARGET.log" | tail -5
+          SUMMARY="$(grep -E 'MERGE-OUTER: [0-9]+ new files' "merge-$TARGET.log" | tail -1)"
+          AFTER="$(find "corpus-merged/$TARGET" -type f | wc -l)"
+          FEATURES="$(echo "$SUMMARY" | sed -E 's/.* with ([0-9]+) new features.*/\1/')"
+          EDGES="$(echo "$SUMMARY" | sed -E 's/.*; ([0-9]+) new coverage edges.*/\1/')"
+          rm -rf "corpus/$TARGET"
+          mv "corpus-merged/$TARGET" "corpus/$TARGET"
+          echo "corpus $TARGET: restored=${RESTORED_UNITS:-0} after-run=$BEFORE merged=$AFTER features=$FEATURES edges=$EDGES"
+          {
+            echo "### Corpus: \`$TARGET\`"
+            echo ""
+            echo "| restored | after run | merged | features | edges | fuzz seconds |"
+            echo "|---:|---:|---:|---:|---:|---:|"
+            echo "| ${RESTORED_UNITS:-0} | $BEFORE | $AFTER | $FEATURES | $EDGES | ${FUZZ_DURATION} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          RESTORED_UNITS: ${{ steps.fuzz.outputs.restored_units }}
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || (github.event_name == 'schedule' && '900') || '60' }}
+
+      - name: Save the accumulated corpus (${{ matrix.target }})
+        # Under the run-unique primary key, so every run leaves a newer entry
+        # for the next restore's prefix match.  Skipped only if the merge did
+        # not produce a corpus to save.
+        if: always() && steps.merge.outcome == 'success'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: corpus/${{ matrix.target }}
+          key: ${{ steps.corpus.outputs.cache-primary-key }}
 
       - name: Upload crash artifacts
         if: failure()
@@ -278,8 +539,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential
+          .github/scripts/apt-install.sh cmake build-essential
 
       - name: Build the native library
         # The parsers call into the native backend for key derivation and the
@@ -290,6 +550,25 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j$(nproc)
+
+      - name: Bind the freshly-built library into the integrity artefact
+        # A library built here is not the library the committed artefact was
+        # signed over, and since 5.0.0 a digest mismatch is refused BEFORE the
+        # object is mapped rather than reported after — so without this step
+        # the harness cannot import the package it is meant to fuzz, and the
+        # job fails on the import rather than on a parser defect.
+        #
+        # Every other job that builds the library and then imports the package
+        # already does this (ci.yml, ci-build-test.yml, integrity-anchor-
+        # check.yml); this one built the library and skipped the step, which
+        # only became visible once the refusal stopped being demotable.
+        #
+        # This is the positive path (a valid signature verifies). Tamper
+        # DETECTION is covered by tests/test_native_integrity.py on a
+        # purpose-built tree, so re-signing here removes no coverage.
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: python -m ama_cryptography.integrity --update --sign
 
       - name: Fuzz the key parsers
         env:
@@ -315,52 +594,6 @@ jobs:
           path: artifacts/python-parsers/
           retention-days: 30
 
-  fuzz-consttime-aes:
-    name: Fuzz AES-GCM (constant-time bitsliced backend)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Install dependencies
-        run: |
-          # Remove non-essential third-party apt repos that may cause 403 errors on runners
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
-
-      - name: Build with constant-time AES
-        run: |
-          cmake -B build-fuzz-ct \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DAMA_BUILD_FUZZ=ON \
-            -DAMA_BUILD_TESTS=OFF \
-            -DAMA_BUILD_EXAMPLES=OFF \
-            -DAMA_ENABLE_LTO=OFF \
-            -DAMA_AES_CONSTTIME=ON \
-            -DAMA_USE_NATIVE_PQC=ON
-          cmake --build build-fuzz-ct --target fuzz_aes_gcm -j$(nproc)
-
-      - name: Run AES-GCM fuzzer (consttime backend)
-        run: |
-          mkdir -p corpus/fuzz_aes_gcm_ct
-          mkdir -p artifacts/fuzz_aes_gcm_ct
-          ./build-fuzz-ct/bin/fuzz_aes_gcm \
-            -max_total_time=30 \
-            -max_len=4096 \
-            -artifact_prefix=artifacts/fuzz_aes_gcm_ct/ \
-            corpus/fuzz_aes_gcm_ct/
-
-      - name: Upload crash artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: fuzz-crashes-aes-gcm-consttime
-          path: artifacts/fuzz_aes_gcm_ct/
-          retention-days: 30
-
   # Constant-time verification of the legacy tools/constant_time/ harnesses
   # lives in .github/workflows/dudect.yml :: dudect-legacy-harnesses.  That
   # job runs the same `dudect_harness 50000` and `dudect_crypto 50000`
@@ -369,6 +602,38 @@ jobs:
   # earlier in-file `constant-time-crypto` job lacked.  Keeping a second,
   # un-pinned copy here only multiplied flake exposure on contended
   # runners without adding coverage.
+
+  # ---------------------------------------------------------------------
+  # OSS-Fuzz integration, exercised
+  # ---------------------------------------------------------------------
+  # oss-fuzz/{Dockerfile,build.sh,project.yaml} are the files a
+  # google/oss-fuzz submission carries.  Nothing had ever built them: the
+  # project is not onboarded, tools/test_oss_fuzz_build.sh needed a local
+  # Docker daemon nobody ran in CI, and the fuzz-target registration gate
+  # could only check that build.sh NAMED every harness.  A build integration
+  # that has never been executed is exactly the "prepared" that means
+  # "unknown".  This job runs OSS-Fuzz's own driver over this checkout —
+  # helper.py build_fuzzers inside gcr.io/oss-fuzz-base/base-builder with
+  # the checkout mounted over the Dockerfile's clone, then check_build, which
+  # is the bad-build check OSS-Fuzz applies to every project: every fuzzer
+  # starts, is linked against the requested engine and sanitizer, and runs
+  # its seed corpus.  It is the pre-submission check, executed on every
+  # push and pull request so the integration cannot rot before it is used.
+  oss-fuzz-build:
+    name: OSS-Fuzz integration (base-builder build + check_build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Build and check every fuzzer under OSS-Fuzz's own driver
+        # OSS_FUZZ_REF pins the google/oss-fuzz infra the check runs with;
+        # the base-builder image it pulls is OSS-Fuzz's moving toolchain by
+        # design (see the note in oss-fuzz/Dockerfile).
+        env:
+          OSS_FUZZ_REF: 4e65aea32254fe988ac4b84dbb088d2d08d789e7
+        run: tools/test_oss_fuzz_build.sh "$RUNNER_TEMP/oss-fuzz"
 
   fuzzing-gate:
     name: Fuzzing Gate
@@ -387,8 +652,8 @@ jobs:
       - fuzz-core
       - fuzz-pqc
       - fuzz-python-parsers
-      - fuzz-consttime-aes
       - validate-fuzz-dictionaries
+      - oss-fuzz-build
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

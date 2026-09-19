@@ -38,6 +38,7 @@
 #include "ama_dispatch.h"
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -57,6 +58,12 @@ extern void ama_argon2_g_avx2(uint64_t out[128],
 /*  production scalar cannot invalidate the equivalence contract by    */
 /*  mutating the reference side of the test (INVARIANT-1).             */
 /* -------------------------------------------------------------------- */
+
+/* Guarded by the same predicate as the only call sites below.  Defining
+ * these unconditionally left them unused on every non-x86-64 target — the
+ * -Wunused-function class `-Werror=unused-function` makes fatal in the
+ * strict-warnings gate, unreported until that gate covered AArch64. */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
 
 static uint64_t ref_rotr64(uint64_t x, unsigned int n) {
     return (x >> n) | (x << (64 - n));
@@ -134,6 +141,8 @@ static void argon2_g_ref(uint64_t out[QWORDS_IN_BLOCK],
     }
 }
 
+#endif /* AMA_HAVE_AVX2_IMPL && x86-64 */
+
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
 static uint64_t prng_state;
 static uint64_t prng_next(void) {
@@ -172,11 +181,14 @@ int main(void) {
 #else
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->argon2_g != ama_argon2_g_avx2) {
+        /* Function-pointer-to-integer via explicit cast is sanctioned by
+         * C11 6.3.2.3p6; the object-pointer (void *) form is not, and
+         * trips -Wpedantic. */
         printf("  SKIP: dispatcher did not select the AVX2 Argon2 G\n"
-               "        kernel (argon2_g=%p, env opt-out, or future\n"
+               "        kernel (argon2_g=%#" PRIxPTR ", env opt-out, or future\n"
                "        ISA wiring landed first).  Nothing to compare\n"
                "        against the scalar reference.\n",
-               (void *)dt->argon2_g);
+               (uintptr_t)dt->argon2_g);
         return 77;
     }
 

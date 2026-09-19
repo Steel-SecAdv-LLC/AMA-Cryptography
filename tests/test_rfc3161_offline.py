@@ -211,10 +211,17 @@ class TestVerifyTimestamp:
             assert verify_timestamp(data, result) is True
 
     def test_verify_disabled_token_valid_with_matching_data(self) -> None:
-        """Disabled tokens should verify as True when data matches."""
+        """Disabled tokens verify as True when data matches AND the caller
+        opts in — the opt-in is the 2026-09 audit's B-7 fix."""
         result = get_timestamp(b"data", tsa_mode="disabled")
         assert result is not None
-        assert verify_timestamp(b"data", result) is True
+        assert verify_timestamp(b"data", result, allow_disabled=True) is True
+
+    def test_verify_disabled_token_is_refused_without_the_opt_in(self) -> None:
+        """A real token must not be downgradable to no token at all (B-7)."""
+        result = get_timestamp(b"data", tsa_mode="disabled")
+        assert result is not None
+        assert verify_timestamp(b"data", result) is False
 
 
 class TestDefaultTSAUrl:

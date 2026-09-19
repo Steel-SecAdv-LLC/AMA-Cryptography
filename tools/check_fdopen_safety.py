@@ -196,6 +196,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     violations: list[Violation] = []
     call_sites = 0
+    scanned = 0
     for path in targets:
         try:
             rel = str(path.relative_to(repo_root)).replace("\\", "/")
@@ -203,12 +204,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             rel = str(path)
         try:
             source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
+            if args.paths:
+                # An explicit path that cannot be read is an error, not a
+                # clean result; it used to be dropped and the run printed
+                # "clean: 0 os.fdopen call site(s)".
+                print(f"ERROR: {path} could not be read ({exc}); nothing was checked.")
+                return 2
             continue
+        scanned += 1
         if "fdopen" not in source:
             continue
         call_sites += count_call_sites(source)
         violations.extend(check_source(rel, source))
+
+    if scanned == 0:
+        print("ERROR: the FD-ownership check read 0 files — refusing to report clean.")
+        return 2
 
     if violations:
         print("FD-OWNERSHIP CHECK FAILED — unguarded os.fdopen call(s):\n")

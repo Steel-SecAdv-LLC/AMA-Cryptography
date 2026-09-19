@@ -3,10 +3,11 @@
 /**
  * libFuzzer harness for FROST threshold Ed25519 signatures (RFC 9591).
  *
- * Targets the four public entry points:
+ * Targets the five public entry points:
  *   - ama_frost_keygen_trusted_dealer
  *   - ama_frost_round1_commit
  *   - ama_frost_round2_sign
+ *   - ama_frost_verify_share
  *   - ama_frost_aggregate
  *
  * Strategy: consume the first bytes of the fuzzer input as the structural
@@ -174,12 +175,28 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             if (rc != AMA_SUCCESS) return 0;
         }
 
+        /* INVARIANT-49: aggregation verifies every share, which needs each
+         * signer's PUBLIC key share — the second half of its dealt share,
+         * gathered in signer_indices order. */
+        uint8_t signer_public_shares[FROST_FUZZ_MAX_N * 32];
+        for (uint8_t i = 0; i < threshold; i++) {
+            memcpy(signer_public_shares + (size_t)i * 32,
+                   shares + (size_t)i * 64 + 32, 32);
+        }
+
         uint8_t signature[64];
+        uint8_t bad_index = 0xFF;
         rc = ama_frost_aggregate(
             signature, sig_shares, commitments,
+            signer_public_shares,
             signer_indices, threshold,
-            msg, msg_len, group_pk);
+            msg, msg_len, group_pk, &bad_index);
         if (rc != AMA_SUCCESS) return 0;
+        /* On success the blame channel must read "not attributable" (0).  A
+         * non-zero value alongside AMA_SUCCESS would mean the out-parameter
+         * is not being reset on entry, which is the stale-attribution bug
+         * the contract exists to exclude. */
+        if (bad_index != 0) __builtin_trap();
 
         /* Aggregated FROST signature must verify as a standard Ed25519
          * signature under the group public key. */
@@ -191,20 +208,36 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         /* Feed fully-fuzzed aggregate inputs to exercise input validation
          * and commitment parsing. Must not crash regardless of input. */
         size_t needed = (size_t)threshold * 32 + (size_t)threshold * 64 +
-                        (size_t)threshold + 1;
+                        (size_t)threshold * 32 + (size_t)threshold + 1;
         if (payload_len < needed) return 0;
 
         const uint8_t *sig_shares_raw = payload;
         const uint8_t *commitments_raw = sig_shares_raw + (size_t)threshold * 32;
-        const uint8_t *signer_indices_raw =
+        const uint8_t *public_shares_raw =
             commitments_raw + (size_t)threshold * 64;
+        const uint8_t *signer_indices_raw =
+            public_shares_raw + (size_t)threshold * 32;
         const uint8_t *msg_raw = signer_indices_raw + threshold;
         size_t msg_len = payload_len - (size_t)(msg_raw - payload);
 
+        /* Fuzzed public key shares as well as fuzzed commitments: the share
+         * verification added for INVARIANT-49 decompresses both, so both are
+         * attacker-controlled inputs to point decoding and both belong in
+         * this arm. */
         uint8_t signature[64];
+        uint8_t bad_index = 0;
         ama_frost_aggregate(
             signature, sig_shares_raw, commitments_raw,
+            public_shares_raw,
             signer_indices_raw, threshold,
+            msg_raw, msg_len, group_pk, &bad_index);
+
+        /* The share-verification entry point takes the same fuzzed inputs
+         * directly; it is a public API surface of its own and must be
+         * equally crash-free. */
+        ama_frost_verify_share(
+            sig_shares_raw, signer_indices_raw[0], public_shares_raw,
+            commitments_raw, signer_indices_raw, threshold,
             msg_raw, msg_len, group_pk);
         break;
     }

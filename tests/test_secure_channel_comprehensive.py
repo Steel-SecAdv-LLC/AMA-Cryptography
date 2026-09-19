@@ -373,6 +373,38 @@ class TestSecureSessionEncryption:
         with pytest.raises(ValueError, match="Message too large"):
             init_sess.encrypt(b"\x00" * (MAX_MESSAGE_SIZE + 1))
 
+    def test_decrypt_rejects_oversized_ciphertext(
+        self,
+        established_session: tuple[SecureSession, SecureSession],
+    ) -> None:
+        """decrypt() bounds ciphertext size BEFORE the AEAD, mirroring encrypt().
+
+        Decrypt-path resource exhaustion: the receive path fed the ciphertext
+        straight into native_aes256_gcm_decrypt, which allocates a
+        plaintext-sized buffer and runs the full GHASH+CTR pass before the tag
+        check.  An on-path attacker who knows the cleartext
+        session_id could force that work per fresh-seq frame.  decrypt() now
+        rejects a ciphertext larger than MAX_MESSAGE_SIZE up front.
+        """
+        _, resp_sess = established_session
+
+        from ama_cryptography.secure_channel import (
+            MAX_MESSAGE_SIZE,
+            NONCE_BYTES,
+            TAG_BYTES,
+            ChannelMessage,
+        )
+
+        oversized = ChannelMessage(
+            session_id=resp_sess.session_id,
+            sequence_number=0,
+            nonce=b"\x00" * NONCE_BYTES,
+            ciphertext=b"\x00" * (MAX_MESSAGE_SIZE + 1),
+            tag=b"\x00" * TAG_BYTES,
+        )
+        with pytest.raises(ValueError, match="Ciphertext too large"):
+            resp_sess.decrypt(oversized)
+
     def test_sequence_numbers_increment(
         self,
         established_session: tuple[SecureSession, SecureSession],
@@ -447,6 +479,64 @@ class TestChannelMessageSerialization:
         )
 
         with pytest.raises(ChannelError, match="Truncated"):
+            ChannelMessage.deserialize(data)
+
+    def test_oversized_ct_len_rejected(self) -> None:
+        """A ct_len over MAX_MESSAGE_SIZE is rejected before the slice.
+
+        Receive-side size-cap asymmetry: ChannelMessage.deserialize bounded
+        ct_len only by the actual buffer, so a hostile 32-bit length that DID
+        come with matching bytes drove a large slice allocation.  It now
+        applies the same MAX_MESSAGE_SIZE ceiling the handshake frames already
+        carry."""
+        from ama_cryptography.secure_channel import (
+            MAX_MESSAGE_SIZE,
+            NONCE_BYTES,
+            SESSION_ID_BYTES,
+            TAG_BYTES,
+            ChannelError,
+            ChannelMessage,
+        )
+
+        over = MAX_MESSAGE_SIZE + 1
+        # ct_len over the ceiling, with the bytes actually present so the
+        # truncation check passes and the ceiling is what rejects it.
+        data = (
+            b"\x00" * SESSION_ID_BYTES
+            + struct.pack(">Q", 0)
+            + b"\x00" * NONCE_BYTES
+            + struct.pack(">I", over)
+            + b"\x00" * over
+            + b"\x00" * TAG_BYTES
+        )
+        with pytest.raises(ChannelError, match="exceeds maximum"):
+            ChannelMessage.deserialize(data)
+
+    def test_trailing_bytes_rejected(self) -> None:
+        """Bytes past the tag make the frame malformed, as for the handshake.
+
+        ChannelMessage.deserialize silently ignored
+        trailing bytes (unlike HandshakeMessage/HandshakeResponse), a
+        parser-differential ambiguity.  It now rejects them.
+        """
+        from ama_cryptography.secure_channel import (
+            NONCE_BYTES,
+            SESSION_ID_BYTES,
+            TAG_BYTES,
+            ChannelError,
+            ChannelMessage,
+        )
+
+        # A well-formed empty-ciphertext frame plus one trailing byte.
+        data = (
+            b"\x00" * SESSION_ID_BYTES
+            + struct.pack(">Q", 0)
+            + b"\x00" * NONCE_BYTES
+            + struct.pack(">I", 0)
+            + b"\x00" * TAG_BYTES
+            + b"\x99"  # one byte past the tag
+        )
+        with pytest.raises(ChannelError, match="trailing"):
             ChannelMessage.deserialize(data)
 
 

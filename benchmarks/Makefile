@@ -31,10 +31,10 @@ endif
 
 # If the shared library exists, link against it; otherwise compile sources directly
 LIB_SO       := $(BUILD_DIR)/lib/libama_cryptography.so
-LIB_A        := $(BUILD_DIR)/lib/libama_cryptography.a
+LIB_A        := $(BUILD_DIR)/lib/libama_cryptography_static.a
 
 # C source files needed when linking statically
-C_SOURCES    := $(wildcard $(SRC_DIR)/ama_*.c) $(SRC_DIR)/ed25519_donna_shim.c
+C_SOURCES    := $(wildcard $(SRC_DIR)/ama_*.c)
 
 .PHONY: all clean help
 
@@ -52,7 +52,6 @@ benchmark_c_raw: benchmark_c_raw.c
 	else \
 		echo "No pre-built library found. Compiling from sources..."; \
 		$(CC) $(CFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/internal \
-			-I$(SRC_DIR)/vendor/ed25519-donna \
 			-DAMA_BUILDING_STATIC \
 			-o $@ $< $(C_SOURCES) $(LDFLAGS); \
 	fi

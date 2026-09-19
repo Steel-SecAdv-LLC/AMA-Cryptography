@@ -533,7 +533,7 @@ class TestFrostValidation:
                 message=b"m",
                 participant_share=b"\x00" * pq.FROST_SHARE_BYTES,
                 participant_index=1,
-                nonce_pair=b"\x00" * pq.FROST_NONCE_BYTES,
+                nonce_pair=bytearray(pq.FROST_NONCE_BYTES),
                 commitments=b"",
                 signer_indices=b"",
                 num_signers=1,
@@ -546,7 +546,7 @@ class TestFrostValidation:
                 message=b"m",
                 participant_share=b"\x00" * pq.FROST_SHARE_BYTES,
                 participant_index=0,
-                nonce_pair=b"\x00" * pq.FROST_NONCE_BYTES,
+                nonce_pair=bytearray(pq.FROST_NONCE_BYTES),
                 commitments=b"\x00" * (2 * pq.FROST_COMMITMENT_BYTES),
                 signer_indices=b"\x01\x02",
                 num_signers=2,
@@ -558,6 +558,7 @@ class TestFrostValidation:
             pq.frost_aggregate(
                 sig_shares=b"",
                 commitments=b"",
+                signer_public_shares=b"",
                 signer_indices=b"",
                 num_signers=1,
                 message=b"m",
@@ -569,6 +570,7 @@ class TestFrostValidation:
             pq.frost_aggregate(
                 sig_shares=b"\x00" * (2 * pq.FROST_SIG_SHARE_BYTES),
                 commitments=b"\x00" * (2 * pq.FROST_COMMITMENT_BYTES),
+                signer_public_shares=b"\x00" * 64,
                 signer_indices=b"\x01\x01",
                 num_signers=2,
                 message=b"m",
@@ -580,6 +582,7 @@ class TestFrostValidation:
             pq.frost_aggregate(
                 sig_shares=b"\x00" * (2 * pq.FROST_SIG_SHARE_BYTES),
                 commitments=b"\x00" * (2 * pq.FROST_COMMITMENT_BYTES),
+                signer_public_shares=b"\x00" * 64,
                 signer_indices=b"\x00\x01",
                 num_signers=2,
                 message=b"m",

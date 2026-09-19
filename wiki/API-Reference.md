@@ -34,6 +34,7 @@ subclass that can also be used directly.
 
 Defined in `ama_cryptography/crypto_api.py:203–212`.
 
+<!-- example: python-names module=ama_cryptography.crypto_api -->
 ```python
 from enum import Enum, auto
 
@@ -58,6 +59,7 @@ class AlgorithmType(Enum):
 
 Defined in `ama_cryptography/crypto_api.py:215–220`.
 
+<!-- example: python-names module=ama_cryptography.crypto_api -->
 ```python
 class CryptoBackend(Enum):
     """Available implementation backends."""
@@ -82,6 +84,7 @@ Defined in `ama_cryptography/crypto_api.py:223–274`. Not `frozen=True`;
 sensitive fields use `field(repr=False)` so `repr()` never surfaces key
 material.
 
+<!-- example: python-names module=ama_cryptography.crypto_api -->
 ```python
 @dataclass
 class KeyPair:
@@ -113,6 +116,7 @@ High-level, algorithm-agnostic orchestrator. Used as-is for single-algorithm
 workflows, or configured with `HYBRID_SIG` / `HYBRID_KEM` to transparently
 drive the Ed25519+ML-DSA-65 or X25519+ML-KEM-1024 hybrid providers.
 
+<!-- example: python-signature module=ama_cryptography.crypto_api bind=crypto:AmaCryptography -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType, CryptoBackend
 
@@ -174,6 +178,7 @@ Each provider shares the same constructor signature as `AmaCryptography`
 
 #### `KeypairCache`
 
+<!-- example: python-signature module=ama_cryptography.crypto_api -->
 ```python
 cache = KeypairCache(algorithm: AlgorithmType = AlgorithmType.HYBRID_SIG)
 ```
@@ -182,6 +187,7 @@ Fixed-size cache for hot-path keypair reuse. Constant-time-zeroed on eviction.
 
 #### `AESGCMProvider` (AEAD)
 
+<!-- example: python-signature module=ama_cryptography.crypto_api bind=aead:AESGCMProvider -->
 ```python
 from ama_cryptography.crypto_api import AESGCMProvider
 import os
@@ -220,6 +226,7 @@ missing native backend raises **`RuntimeError`**.
 Signatures (`algorithm ∈ {"sha256", "sha384", "sha512", "sha3-256"}`; HMAC
 digest length is 32 / 48 / 64 / 32 bytes respectively):
 
+<!-- example: python-signature module=ama_cryptography.crypto_api -->
 ```python
 def quick_hmac(key: bytes, message: bytes, algorithm: str = "sha256") -> bytes: ...
 
@@ -234,6 +241,7 @@ def quick_hkdf(
 
 Usage:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import quick_hmac, quick_hkdf
 
@@ -255,6 +263,7 @@ algorithm without the string dispatch.
 
 ### Constants
 
+<!-- example: python-names module=ama_cryptography.pqc_backends -->
 ```python
 DILITHIUM_AVAILABLE: bool  # True if ML-DSA-65 is available
 KYBER_AVAILABLE: bool      # True if ML-KEM-1024 is available
@@ -265,6 +274,7 @@ SPHINCS_AVAILABLE: bool    # True if SPHINCS+ is available
 
 #### Status and Discovery
 
+<!-- example: python-signature module=ama_cryptography.pqc_backends -->
 ```python
 # High-level rollup: returns PQCStatus.AVAILABLE if at least one PQC
 # backend loaded, PQCStatus.UNAVAILABLE otherwise.
@@ -280,6 +290,7 @@ get_pqc_backend_info() -> dict
 
 #### ML-DSA-65 (Dilithium)
 
+<!-- example: python-signature module=ama_cryptography.pqc_backends -->
 ```python
 # Generate ML-DSA-65 key pair.
 # Returns a DilithiumKeyPair dataclass with .public_key (1952 bytes),
@@ -296,6 +307,7 @@ valid: bool = dilithium_verify(message: bytes, signature: bytes, public_key: byt
 
 #### ML-KEM-1024 (Kyber)
 
+<!-- example: python-signature module=ama_cryptography.pqc_backends -->
 ```python
 # Generate ML-KEM-1024 key pair.
 # Returns a KyberKeyPair dataclass with .public_key (1568 bytes),
@@ -314,6 +326,7 @@ ss: bytes = kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes
 
 #### SPHINCS+-SHA2-256f
 
+<!-- example: python-signature module=ama_cryptography.pqc_backends -->
 ```python
 # Generate SPHINCS+ key pair.
 # Returns a SphincsKeyPair dataclass with .public_key (64 bytes),
@@ -335,6 +348,7 @@ compliant (no stdlib `hashlib` / `hmac`) and raise **`RuntimeError`** when the
 native backend is unavailable. The [`quick_hmac` / `quick_hkdf`](#crypto_api)
 dispatchers in `crypto_api` are thin string-selectable wrappers over these.
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     native_sha256, native_sha3_256, native_sha3_512, native_shake128, native_shake256,
@@ -371,6 +385,7 @@ okm = native_hkdf_sha256(b"ikm", 32, salt=b"salt", info=b"context")
 
 #### `KeyStatus`
 
+<!-- example: python-names module=ama_cryptography.key_management -->
 ```python
 class KeyStatus(Enum):
     ACTIVE
@@ -384,17 +399,23 @@ class KeyStatus(Enum):
 
 #### `KeyMetadata`
 
+<!-- example: python-names module=ama_cryptography.key_management -->
 ```python
 @dataclass
 class KeyMetadata:
+    # Eleven fields, none with a default: construct via
+    # KeyRotationManager.register_key() rather than by hand.
     key_id: str
     created_at: datetime           # timezone-aware (UTC)
     expires_at: Optional[datetime] # timezone-aware (UTC), or None
     status: KeyStatus
     version: int
-    usage_count: int
-    max_usage: int
+    parent_id: Optional[str]
     derivation_path: Optional[str]
+    usage_count: int
+    max_usage: Optional[int]
+    purpose: str
+    metadata: Dict[str, Any]
 ```
 
 ### Classes
@@ -414,6 +435,7 @@ derivation are supported:
   Non-hardened derivation uses the native secp256k1 public-key
   computation.
 
+<!-- example: python-signature module=ama_cryptography.key_management bind=hd:HDKeyDerivation -->
 ```python
 from ama_cryptography.key_management import HDKeyDerivation
 
@@ -436,6 +458,7 @@ key, chain_code = hd.derive_path(path: str)   # e.g. "m/44'/0'/0'/0'" or "m/44/0
 
 #### `KeyRotationManager`
 
+<!-- example: python-signature module=ama_cryptography.key_management bind=mgr:KeyRotationManager -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager, KeyMetadata
@@ -471,6 +494,7 @@ material as `Optional[bytes]` (or `None` if the id is missing); metadata
 is stored separately as a JSON-serializable `dict` and is typically
 retrieved via `KeyRotationManager`.
 
+<!-- example: python-signature module=ama_cryptography.key_management bind=storage:SecureKeyStorage -->
 ```python
 from pathlib import Path
 from ama_cryptography.key_management import SecureKeyStorage
@@ -478,6 +502,7 @@ from ama_cryptography.key_management import SecureKeyStorage
 storage = SecureKeyStorage(
     storage_path: Path,
     master_password: Optional[str] = None,
+    allow_legacy_kdf: bool = False,   # opt-in to reading pre-v5 KDF records
 )
 
 # Store / retrieve / delete
@@ -487,9 +512,9 @@ storage.store_key(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None
 
-key_bytes: Optional[bytes] = storage.retrieve_key(key_id: str)
-storage.delete_key(key_id: str) -> None
-all_ids:   list[str]       = storage.list_keys()
+key_bytes: Optional[bytes] = storage.retrieve_key(key_id: str) -> Optional[bytes]
+deleted:   bool            = storage.delete_key(key_id: str) -> bool
+all_ids:   List[str]       = storage.list_keys() -> List[str]
 ```
 
 #### `HSMKeyStorage` (optional — PyKCS11)
@@ -502,23 +527,63 @@ when called without the dependency.
 
 ## `secure_memory`
 
+<!-- example: python-signature module=ama_cryptography.secure_memory -->
 ```python
-# Context manager: auto-zero buffer on exit
-with SecureBuffer(size: int) as buf:
-    buf.data: bytearray  # size bytes, initially zeroed
+# Construction.  `SecureBuffer.__enter__` yields the BYTEARRAY, not the
+# wrapper — inside the `with`, the bound name IS the buffer (see the runnable
+# example below).
+SecureBuffer(size: int, lock: bool = True) -> None
 
-# Multi-pass overwrite (must be bytearray)
-secure_memzero(buffer: bytearray) -> None
+# Functional form of the same thing; yields the bytearray directly.
+secure_buffer(size: int, lock: bool = True) -> Generator[bytearray, None, None]
 
-# Lock memory into RAM (prevent swap)
-# Returns True if successful
-locked: bool = secure_mlock(buffer: bytearray) -> bool
+# Zero a buffer.  The native kernel writes zeros ONCE through volatile stores
+# and then issues a compiler barrier; the barrier, not a repeat count, is what
+# defeats dead-store elimination (src/c/ama_consttime.c).
+secure_memzero(data: Union[bytearray, memoryview]) -> None
 
-# Unlock memory (allow swap)
-secure_munlock(buffer: bytearray) -> None
+# Lock memory into RAM (prevent swap).
+# Returns None and RAISES on failure — it does NOT return a boolean, so
+# `if secure_mlock(buf):` takes the failure branch on every successful lock.
+secure_mlock(data: Union[bytes, bytearray, memoryview]) -> None
+
+# Unlock memory (allow swap).  Same contract: None, raises on failure.
+secure_munlock(data: Union[bytes, bytearray, memoryview]) -> None
 
 # Constant-time byte comparison (timing-safe)
-equal: bool = constant_time_compare(a: bytes, b: bytes) -> bool
+constant_time_compare(a: Union[bytes, bytearray, memoryview], b: Union[bytes, bytearray, memoryview]) -> bool
+
+# Backend introspection
+is_available() -> bool
+get_status() -> Dict[str, Union[bool, str]]
+```
+
+Runnable form — note that `buf` is the `bytearray`:
+
+<!-- example: python-run -->
+```python
+import os
+
+from ama_cryptography.secure_memory import (
+    SecureBuffer,
+    constant_time_compare,
+    secure_memzero,
+    secure_mlock,
+    secure_munlock,
+)
+
+with SecureBuffer(32) as buf:
+    assert isinstance(buf, bytearray) and len(buf) == 32
+    buf[:] = os.urandom(32)
+
+material = bytearray(os.urandom(32))
+secure_mlock(material)          # returns None; raises SecureMemoryError on failure
+try:
+    assert constant_time_compare(bytes(material), bytes(material))
+finally:
+    secure_memzero(material)
+    secure_munlock(material)
+assert bytes(material) == bytes(32)
 ```
 
 ---
@@ -533,6 +598,7 @@ shared secrets, both ciphertexts, and (optionally) both public keys —
 length prefixing prevents the component-stripping attack fixed in
 v2.1.5 (audit finding C6).
 
+<!-- example: python-signature module=ama_cryptography.hybrid_combiner bind=combiner:HybridCombiner -->
 ```python
 from ama_cryptography.hybrid_combiner import HybridCombiner, HybridEncapsulation
 
@@ -572,6 +638,7 @@ shared: bytes = combiner.combine(
 
 #### `HybridEncapsulation`
 
+<!-- example: python-names module=ama_cryptography.hybrid_combiner -->
 ```python
 @dataclass
 class HybridEncapsulation:
@@ -586,6 +653,7 @@ class HybridEncapsulation:
 
 ## `adaptive_posture`
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.adaptive_posture import (
     PostureEvaluator,
@@ -594,13 +662,20 @@ from ama_cryptography.adaptive_posture import (
     PostureAction,
     ThreatLevel,
 )
+from ama_cryptography_monitor import AmaCryptographyMonitor
 
 evaluator = PostureEvaluator()
 
 # Evaluate a 3R-monitor report dict. `PostureEvaluator.evaluate()` takes
 # a single positional `monitor_report: Dict[str, Any]` argument — NOT a
 # keyword argument called `monitor_signals`.
+monitor_report = AmaCryptographyMonitor(enabled=True).get_security_report()
 evaluation: PostureEvaluation = evaluator.evaluate(monitor_report)
+
+# The composite score is FOUR signals, weighted 0.45 / 0.25 / 0.15 / 0.15
+# (adaptive_posture.py:265-268) — timing, pattern, resonance, Lyapunov:
+print(sorted(k for k in evaluation.signals if k.endswith("_score")))
+# ['lyapunov_score', 'pattern_score', 'raw_score', 'resonance_score', 'timing_score']
 
 # PostureEvaluation fields (dataclass, see adaptive_posture.py:68):
 #   evaluation.threat_level : ThreatLevel
@@ -608,12 +683,13 @@ evaluation: PostureEvaluation = evaluator.evaluate(monitor_report)
 #   evaluation.confidence   : float (0.0 – 1.0)
 #   evaluation.signals      : Dict[str, Any]  # contributing anomaly signals
 #   evaluation.timestamp    : float
+assert isinstance(evaluation.threat_level, ThreatLevel)
+assert isinstance(evaluation.action, PostureAction)
 
 # The controller's public entry point is `evaluate_and_respond()`, which
 # internally calls the monitor, runs the evaluator, and dispatches the
 # recommended action through its private `_execute_action(action)`
 # machinery. There is NO public `execute_action(evaluation, ...)` method.
-from ama_cryptography_monitor import AmaCryptographyMonitor
 monitor    = AmaCryptographyMonitor(enabled=True)
 controller = CryptoPostureController(monitor=monitor)
 
@@ -622,7 +698,7 @@ if evaluation.action != PostureAction.NONE:
     # Application-level response (logging, paging, circuit-breaking, etc.).
     # The controller has already applied the cryptographic action by the
     # time evaluate_and_respond() returns.
-    ...
+    print("posture action applied:", evaluation.action)
 ```
 
 ---
@@ -638,6 +714,7 @@ if evaluation.action != PostureAction.NONE:
 > this boundary; [INVARIANT-37](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/INVARIANTS.md)
 > enforces it against every document in the repository.
 
+<!-- example: python-signature module=ama_cryptography.rfc3161_timestamp -->
 ```python
 from ama_cryptography.rfc3161_timestamp import (
     allow_mock_tsa,
@@ -666,6 +743,7 @@ result: TimestampResult = get_timestamp(
 binds: bool = verify_timestamp_binding(
     data: bytes,
     timestamp_result: TimestampResult,
+    allow_disabled: bool = False,   # True accepts a "disabled" tsa_mode result
 )
 
 # The same verdict as a record, for an audit trail or compliance profile.
@@ -680,7 +758,12 @@ record.not_verified          # frozenset: {"tsa_signature",
 
 # Deprecated: same check, but the name claims attestation AMA does not perform.
 # Emits DeprecationWarning; certificate_file raises.
-valid: bool = verify_timestamp(data, timestamp_result, certificate_file=None)
+valid: bool = verify_timestamp(
+    data: bytes,
+    timestamp_result: TimestampResult,
+    certificate_file: str | None = None,   # REFUSED — raises TimestampError
+    allow_disabled: bool = False,
+)
 
 # TimestampResult fields (frozen dataclass):
 #   token:          bytes   — DER-encoded RFC 3161 token
@@ -711,26 +794,41 @@ forbids long-lived persistence material and successor-authorizing signatures unl
 human-held operator key authorizes them. Domain separation and policy over the existing
 SHA3-256 / HMAC-SHA3-256 / HKDF primitives — no new algorithm.
 
+<!-- example: python-run -->
 ```python
 import os
 from ama_cryptography.agent_binding import (
     AgentBinding, AgentLifetime, AgentCapability, EthicalBindingError,
 )
+from ama_cryptography.pqc_backends import native_sha3_256
+
+ikm = os.urandom(32)
+iid = os.urandom(32)
+authority_key = os.urandom(32)
+profile_document = b"AMA ethical profile v1"
 
 # Ordinary ephemeral use needs no operator key and no ethical profile.
 b = AgentBinding(instance_id=os.urandom(32),
                  capabilities=AgentCapability.DATA_SIGN)
 session_key = b.derive_key(ikm, 32, info=b"session")     # HKDF, binding folded into info
 ctx = b.signing_context()                                # 32-byte ML-DSA / SLH-DSA ctx
+assert len(session_key) == 32 and len(ctx) == 32
 
 # Persistence / self-replication require the operator.
 p = AgentBinding(instance_id=iid,
                  lifetime=AgentLifetime.PERSISTENT,
                  capabilities=AgentCapability.PERSISTENCE,
-                 ethical_profile_hash=sha3_256(profile_document))
+                 ethical_profile_hash=native_sha3_256(profile_document))
+
+# Without authorize(), derive_key() raises EthicalBindingError and writes nothing.
+try:
+    p.derive_key(ikm, 32)
+except EthicalBindingError as exc:
+    print("unauthorized persistence refused:", exc)
+
 p.authorize(authority_key)                               # operator-side; needs K_auth
 root = p.derive_key(ikm, 32, authority_key=authority_key)
-# Without authorize(), derive_key() raises EthicalBindingError and writes nothing.
+assert len(root) == 32
 ```
 
 Refusal is fail-closed: no output bytes, a distinct error (`EthicalBindingError` /
@@ -745,14 +843,19 @@ properties, not merely for memory safety.
 The 3R runtime monitor (`AmaCryptographyMonitor`, `create_monitor()`) plus two optional
 agentic-abuse detectors, on by default and advisory-only.
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.monitoring import (
     create_monitor, VolumeSpikeDetector, NoteArtifactDetector,
 )
 
+fp = b"\x01" * 8
+payload = b"a signed payload"
+
 m = create_monitor()                                     # both detectors active
 m.record_operation_event("kyber_encaps", key_fingerprint=fp)   # feeds the volume detector
 signal = m.inspect_signed_payload(payload, label="note")       # scores for note-like structure
+print("note-artifact signal:", signal)
 # Opt out entirely:
 m = create_monitor(detect_volume_spikes=False, detect_note_artifacts=False)
 ```
@@ -772,6 +875,7 @@ is an optimisation and never a correctness dependency.
 
 ## `exceptions`
 
+<!-- example: python-names module=ama_cryptography.exceptions -->
 ```python
 from ama_cryptography.exceptions import (
     AmaCryptographyError,             # catch-all root of the exception hierarchy (Exception)
@@ -826,24 +930,66 @@ UserWarning (builtin)
 
 ## Package-Level Imports
 
+`import ama_cryptography` binds **five** public submodules as attributes of the
+package. Every other submodule needs its own `import` statement — the
+package's PEP 562 `__getattr__` resolves *symbol* names (`AmaCryptography`,
+`create_crypto_package`, the `key_formats` helpers) and raises `AttributeError`
+for a submodule name it does not eagerly import.
+
+(On a tree where the Cython extensions are built, the compiled FFI bindings —
+`sha3_binding`, `hmac_binding`, `hkdf_binding`, `ed25519_binding`,
+`dilithium_binding`, `math_engine` — also appear as attributes, because
+`pqc_backends` imports whichever of them exist. They are an optimisation, not
+public API: everything they accelerate has a pure-ctypes path.)
+
+The example below is written for a **fresh interpreter**, which is the only
+state in which the question has a stable answer: Python binds a submodule as an
+attribute of its parent package the moment anything in the process imports it,
+so once *your* program has done `import ama_cryptography.key_management`
+anywhere, `ama_cryptography.key_management` resolves from then on. Do not rely
+on that — write the import you need.
+
+<!-- example: python-run -->
 ```python
 import ama_cryptography
 
-# Always available
-ama_cryptography.crypto_api
+# Bound by a bare `import ama_cryptography` — these five and no others:
 ama_cryptography.pqc_backends
-ama_cryptography.key_management
 ama_cryptography.secure_memory
-ama_cryptography.hybrid_combiner
-ama_cryptography.adaptive_posture
-ama_cryptography.rfc3161_timestamp
 ama_cryptography.exceptions
+ama_cryptography.equations
+ama_cryptography.double_helix_engine
 
-# Conditionally available (requires NumPy)
-# Loaded lazily via PEP 562 __getattr__ to avoid hard dependency
-ama_cryptography.equations       # conditional import
-ama_cryptography.double_helix_engine  # conditional import
+# NOT bound by a bare import. `ama_cryptography.crypto_api` raises
+# AttributeError; `import ama_cryptography.crypto_api` is the way in.
+for name in (
+    "crypto_api",
+    "key_management",
+    "hybrid_combiner",
+    "adaptive_posture",
+    "rfc3161_timestamp",
+    "key_formats",
+    "legacy_compat",
+):
+    try:
+        getattr(ama_cryptography, name)
+    except AttributeError:
+        pass
+    else:  # pragma: no cover - would mean the package changed
+        raise AssertionError(f"{name} is now eagerly bound; update this page")
+
+import ama_cryptography.crypto_api          # this works
+from ama_cryptography.key_management import KeyRotationManager   # so does this
+
+# Symbols, as opposed to submodules, ARE reachable from the package:
+ama_cryptography.AmaCryptography
+ama_cryptography.create_crypto_package
+ama_cryptography.ETHICAL_VECTOR
 ```
+
+`equations` and `double_helix_engine` are imported eagerly by
+`ama_cryptography/__init__.py`, not lazily: they are bound whether or not
+NumPy is present.
 
 ---
 

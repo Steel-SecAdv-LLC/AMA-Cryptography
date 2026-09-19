@@ -32,7 +32,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-04-17
-Version: 4.0.0
+Version: 5.0.0
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -60,7 +60,7 @@ from ama_cryptography._numeric import (
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "4.0.0"
+__version__ = "5.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",
@@ -479,6 +479,142 @@ def calculate_sigma_quadratic(state: object, E: object) -> float:
     return float((x @ Ex) / x_norm_sq)
 
 
+def _gershgorin_lower_bound(matrix: Mat) -> float:
+    """A guaranteed lower bound on ``matrix``'s smallest eigenvalue.
+
+    Gershgorin: every eigenvalue lies in some disc centred on a diagonal entry
+    with radius the absolute row sum of the off-diagonal entries, so
+    ``min_i (a_ii - sum_{j != i} |a_ij|)`` is below all of them.  Cheap, exact
+    as a bound, and needs no assumption about definiteness — which is the point
+    here, since the assumption is what was wrong.
+    """
+    best = math.inf
+    for i in range(matrix.rows):
+        row = matrix[i]
+        radius = sum(abs(row[j]) for j in range(matrix.cols) if j != i)
+        best = min(best, float(row[i]) - radius)
+    return 0.0 if best is math.inf else best
+
+
+def _symmetric_part(matrix: Mat) -> Mat:
+    """``(E + Eᵀ) / 2`` — the only part of ``E`` that σ_quadratic can see.
+
+    ``σ(x) = xᵀEx / xᵀx``, and ``xᵀEx`` is a scalar, so it equals its own
+    transpose ``xᵀEᵀx``; averaging gives ``xᵀEx = xᵀ((E + Eᵀ)/2)x`` for every
+    ``x``.  The skew part contributes exactly zero to the quadratic form.
+
+    That is why maximising σ is an eigenproblem on the SYMMETRIC PART and not
+    on ``E``: for a symmetric ``E`` the two coincide and this is the identity,
+    but for a non-symmetric one they do not, and iterating ``E`` answers a
+    different question than the caller asked.
+    """
+    n = matrix.rows
+    out = matrix.copy()
+    for i in range(n):
+        for j in range(matrix.cols):
+            out[i, j] = 0.5 * (float(matrix[i][j]) + float(matrix[j][i]))
+    return out
+
+
+def _dominant_eigenvector(
+    matrix: Mat,
+    *,
+    iterations: int = 512,
+    tol: float = 1e-13,
+) -> Optional[Vec]:
+    """Unit vector maximising ``σ_quadratic(x) = xᵀ·matrix·x / xᵀx``, or None.
+
+    The contract is stated as the quantity the caller wants rather than as
+    "the dominant eigenvector", because two separate things had to be true
+    before those were the same vector, and neither was checked.
+
+    **1. It must be the largest ALGEBRAIC eigenvalue, not the largest by
+    magnitude.**  Power iteration converges to the largest-magnitude one, and
+    this function's contract used to say so while its one caller used the
+    result as ``argmax_x σ(x)``.  Those coincide only when no eigenvalue is
+    negative.  ``E`` is *documented* positive-definite (see
+    :func:`initialize_ethical_matrix`) but nothing on the public boundary
+    checks it — ``calculate_sigma_quadratic`` and
+    :func:`enforce_sigma_quadratic_threshold` both accept an arbitrary
+    caller-supplied array — and the loop below already had explicit handling
+    for a negative dominant eigenvalue, so the indefinite case was reachable
+    rather than excluded.  Measured on ``E = diag(-5, 1)``: it returned
+    ``[1, 0]``, where ``σ = -5``, while ``max_x σ(x) = +1`` at ``[0, 1]``, and
+    :func:`enforce_sigma_quadratic_threshold` then called threshold 0.5
+    unreachable for a threshold a real state meets.
+
+    Answered by a Gershgorin shift: iterate ``M + cI`` with
+    ``c = max(0, -λ_min_bound)``.  Shifting moves every eigenvalue by the same
+    ``c`` and changes no eigenvector, and the shifted matrix has no negative
+    eigenvalue, so largest-magnitude and largest-algebraic coincide.
+
+    **2. It must be an eigenproblem on the SYMMETRIC PART.**  The first
+    version of this fix shifted and iterated ``E`` itself, which is still the
+    wrong operator whenever ``E`` is not symmetric: ``σ`` cannot see the skew
+    part at all (see :func:`_symmetric_part`), so ``argmax σ`` is the top
+    eigenvector of ``(E + Eᵀ)/2``.  Measured on ``E = [[0, 4], [0, 1]]``,
+    which the shift alone does not help: it returned ``[0.970, 0.243]`` where
+    ``σ = 1.000``, while ``max_x σ(x) = 2.562`` at ``[0.615, 0.788]`` — the
+    same class of failure the shift was added to remove, reached through a
+    different input.  The iteration now runs on the symmetric part, which is
+    an identity for every symmetric ``E`` and therefore changes nothing for
+    the documented case.
+
+    A note on what the shift does NOT promise.  Gershgorin gives a *bound*,
+    not the spectrum: a positive-definite matrix can perfectly well have a
+    negative Gershgorin lower bound — ``[[1, 2], [2, 5]]`` has eigenvalues
+    ≈5.83 and ≈0.17 and a bound of −1 — so ``c`` is frequently non-zero on
+    exactly the matrices this function is documented to receive.  That is
+    harmless, because shifting preserves eigenvectors exactly, but it means
+    the arithmetic is NOT bit-identical to the pre-fix code on those inputs
+    and no claim here says otherwise.
+
+    Returns None when the iteration cannot produce a direction (a zero matrix,
+    or a start vector that lands exactly in the null space and stays there);
+    callers treat that as "no correction available" rather than guessing.
+    """
+    n = matrix.rows
+    if n == 0 or matrix.cols != n:
+        return None
+
+    # Symmetrise BEFORE bounding: the shift has to be computed from the
+    # operator that is actually iterated, or it can fail to clear the
+    # symmetric part's most negative eigenvalue.
+    matrix = _symmetric_part(matrix)
+
+    shift = -_gershgorin_lower_bound(matrix)
+    if shift > 0.0:
+        shifted = matrix.copy()
+        for i in range(n):
+            shifted[i, i] = float(shifted[i, i]) + shift
+        matrix = shifted
+
+    # Start off-axis so a vector orthogonal to the dominant eigenvector is not
+    # a fixed point of the iteration for a symmetric matrix with structured
+    # eigenvectors (a plain all-ones start is exactly orthogonal to the
+    # dominant eigenvector of, e.g., diag(1, -1)).
+    v = asvec([1.0 + (i % 3) * 0.25 for i in range(n)])
+    norm = math.sqrt(v @ v)
+    v = v * (1.0 / norm)
+
+    for _ in range(iterations):
+        w = matrix @ v
+        w_norm = math.sqrt(w @ w)
+        if w_norm == 0.0:
+            return None
+        w = w * (1.0 / w_norm)
+        # Converged when the direction stops moving.  Compare against both
+        # signs: for a negative dominant eigenvalue the iterate flips each
+        # step while the direction itself is stationary.
+        delta_pos = math.sqrt(sum((a - b) ** 2 for a, b in zip(list(w), list(v))))
+        delta_neg = math.sqrt(sum((a + b) ** 2 for a, b in zip(list(w), list(v))))
+        v = w
+        if min(delta_pos, delta_neg) <= tol:
+            break
+
+    return v
+
+
 def enforce_sigma_quadratic_threshold(
     state: object,
     E: object,
@@ -487,7 +623,10 @@ def enforce_sigma_quadratic_threshold(
     """
     Enforce σ_quadratic ≥ threshold constraint.
 
-    If violated, scale state by √(threshold/σ) to satisfy constraint.
+    If violated, rotate the state toward ``E``'s dominant eigenvector by the
+    smallest blend that reaches ``threshold``, preserving its norm.  Scaling
+    cannot serve here: σ is a Rayleigh quotient, so ``σ(kx) == σ(x)`` for every
+    scalar ``k`` — see the 5.0 note below.
 
     Args:
         state: State vector x.  ``Vec``, ``numpy.ndarray``, or any 1-D
@@ -500,8 +639,15 @@ def enforce_sigma_quadratic_threshold(
         ``(is_valid, corrected_state)``.
 
         ``is_valid`` is True if the original state met the threshold.
-        ``corrected_state`` is always a ``Vec`` — the original (converted, and
-        never the caller's own object) or a scaled copy of it.
+        ``corrected_state`` is always a ``Vec``, never the caller's own object.
+        It is the converted original on three paths — the threshold was
+        already met, the state is the zero vector, or ``threshold`` exceeds
+        ``λ_max`` and no state can satisfy it — and otherwise a norm-preserving
+        rotation of it toward ``E``'s dominant eigenvector.  Measured over 500
+        random states against a matrix with ``λ_max = 2.0``: 434 violated,
+        every one landed within 1e-15 of the threshold (the blend is minimal,
+        so it reaches the threshold and does not overshoot), and the largest
+        relative change in ‖x‖ was 3.3e-16.
 
     Raises:
         TypeError: An argument is not array-like, or holds non-numbers.
@@ -513,6 +659,18 @@ def enforce_sigma_quadratic_threshold(
        ``Vec`` on both branches.  Through 3.x the pass branch handed back the
        caller's own object while the correction branch returned a new one, so
        whether the result aliased the input depended on the data.
+
+    .. versionchanged:: 5.0
+       The correction actually corrects.  Through 4.0 it scaled the state by
+       ``√(threshold/σ)`` — but σ is a Rayleigh quotient, ``σ(kx) == σ(x)`` for
+       every scalar k, so the "corrected" state had exactly the σ it started
+       with and the advertised enforcement was a provable no-op (verified: σ
+       0.1 before, 0.1 after, against a 0.96 threshold).  Raising σ requires
+       rotating x toward E's dominant eigenvector, which is what this now does,
+       by the smallest blend that reaches the threshold.  The state's norm is
+       preserved, and when the threshold exceeds ``λ_max`` — unreachable by any
+       state, since ``max_x σ(x) == λ_max`` — the state is returned unchanged
+       rather than perturbed to no purpose.
     """
     x = asvec(state)
     sigma = calculate_sigma_quadratic(x, E)
@@ -520,9 +678,46 @@ def enforce_sigma_quadratic_threshold(
     if sigma >= threshold:
         return True, x
 
-    # Correction: scale by √(threshold/σ)
-    scale = math.sqrt(threshold / sigma) if sigma > 0 else 1.0
-    corrected_state = x * scale
+    matrix = asmat(E, copy=False)
+    x_norm = math.sqrt(x @ x)
+    if x_norm == 0.0:
+        # No direction to rotate: σ is undefined for the zero vector (reported
+        # as 0.0) and every state is a scalar multiple of it.  Unchanged.
+        return False, x
+
+    dominant = _dominant_eigenvector(matrix)
+    if dominant is None or calculate_sigma_quadratic(dominant, matrix) < threshold:
+        # λ_max < threshold: no state satisfies the constraint, so there is no
+        # correction to make.  Report the violation instead of returning a
+        # perturbed state that still fails.
+        return False, x
+
+    # Smallest blend toward the dominant eigenvector that reaches the
+    # threshold.  σ is continuous in α and σ(α=1) == λ_max >= threshold, so a
+    # bisection on [0, 1] always converges; taking the smallest such α keeps
+    # the correction minimal rather than discarding the caller's direction.
+    unit_x = x * (1.0 / x_norm)
+    lo, hi = 0.0, 1.0
+    for _ in range(64):
+        mid = (lo + hi) / 2.0
+        candidate = unit_x * (1.0 - mid) + dominant * mid
+        if math.sqrt(candidate @ candidate) == 0.0:
+            # x anti-parallel to the eigenvector: the blend passes through the
+            # origin.  Step past it.
+            lo = mid
+            continue
+        if calculate_sigma_quadratic(candidate, matrix) >= threshold:
+            hi = mid
+        else:
+            lo = mid
+
+    blended = unit_x * (1.0 - hi) + dominant * hi
+    blended_norm = math.sqrt(blended @ blended)
+    if blended_norm == 0.0:
+        return False, x
+    # Restore the caller's magnitude — σ does not depend on it, but the state
+    # feeds downstream dynamics that do.
+    corrected_state = blended * (x_norm / blended_norm)
 
     return False, corrected_state
 
@@ -636,22 +831,22 @@ if __name__ == "__main__":
     logger.info("\n[1/5] Helical Geometric Invariants:")
     dna_results = verify_all_codes()
     for code, data in dna_results.items():
-        status = "✓" if data["valid"] else "✗"
+        status = "[OK]" if data["valid"] else "[FAIL]"
         logger.info(f"  {status} {code[:15]}: error = {data['fundamental_error']:.2e}")
 
     logger.info("\n[2/5] Lyapunov Stability Theory:")
     test_state = Vec([0.5, 0.3, 0.2])
     stable, V, proof = lyapunov_stability_proof(test_state)
-    logger.info(f"  {'✓' if stable else '✗'} Asymptotic stability: {stable}")
+    logger.info(f"  {'[OK]' if stable else '[FAIL]'} Asymptotic stability: {stable}")
     logger.info(f"  V(x) = {V:.6f}")
-    logger.info(f"  V̇(x) = {proof['V_dot']:.6f} (≤ 0 required)")
+    logger.info(f"  V_dot(x) = {proof['V_dot']:.6f} (<= 0 required)")
     logger.info(f"  Time to 99%: {proof['time_to_99']:.2f} time units")
 
     logger.info("\n[3/5] Golden Ratio Harmonics:")
     converged, ratio, proof = golden_ratio_convergence_proof(30)
-    logger.info(f"  {'✓' if converged else '✗'} Fibonacci convergence: {converged}")
-    logger.info(f"  F₃₁/F₃₀ = {ratio:.15f}")
-    logger.info(f"  φ       = {PHI:.15f}")
+    logger.info(f"  {'[OK]' if converged else '[FAIL]'} Fibonacci convergence: {converged}")
+    logger.info(f"  F31/F30 = {ratio:.15f}")
+    logger.info(f"  phi       = {PHI:.15f}")
     logger.info(f"  Error   = {proof['error']:.2e}")
 
     logger.info("\n[4/5] Quadratic Form Constraints:")
@@ -659,22 +854,24 @@ if __name__ == "__main__":
     E = initialize_ethical_matrix(4)
     sigma = calculate_sigma_quadratic(test_state_4d, E)
     valid, corrected = enforce_sigma_quadratic_threshold(test_state_4d, E, 0.96)
-    logger.info(f"  σ_quadratic = {sigma:.6f}")
-    logger.info(f"  {'✓' if valid else '✗'} Threshold (≥ 0.96): {valid}")
+    logger.info(f"  sigma_quadratic = {sigma:.6f}")
+    logger.info(f"  {'[OK]' if valid else '[FAIL]'} Threshold (>= 0.96): {valid}")
     if not valid:
         sigma_corrected = calculate_sigma_quadratic(corrected, E)
-        logger.info(f"  σ_quadratic (corrected) = {sigma_corrected:.6f}")
+        logger.info(f"  sigma_quadratic (corrected) = {sigma_corrected:.6f}")
 
     logger.info("\n[5/5] Overall Framework Status:")
     for framework, framework_status in results.items():
         if framework != "frameworks_ready":
-            logger.info(f"  {'✓' if framework_status else '✗'} {framework}: {framework_status}")
+            logger.info(
+                f"  {'[OK]' if framework_status else '[FAIL]'} {framework}: {framework_status}"
+            )
 
     logger.info("\n" + "=" * 70)
     if results["frameworks_ready"]:
-        logger.info("✓ ALL MATHEMATICAL FRAMEWORKS VERIFIED")
+        logger.info("[OK] ALL MATHEMATICAL FRAMEWORKS VERIFIED")
         logger.info("\nMachine-precision foundations ready for cryptographic integration.")
     else:
-        logger.warning("✗ SOME FRAMEWORKS FAILED VERIFICATION")
+        logger.warning("[FAIL] SOME FRAMEWORKS FAILED VERIFICATION")
         logger.warning("\nPlease review framework implementation.")
     logger.info("=" * 70)

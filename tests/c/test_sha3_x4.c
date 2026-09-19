@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include "kat_slot_guard.h"
 
 static int failed = 0;
 
@@ -177,6 +178,7 @@ done:
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     printf("===========================================\n");
     printf("4-way SHAKE128/SHAKE256 vs scalar equivalence test\n");
     printf("===========================================\n\n");

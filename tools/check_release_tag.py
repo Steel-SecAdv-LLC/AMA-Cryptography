@@ -51,13 +51,25 @@ Checked, fail-closed:
    distinction is the difference between a gate and a substring search.
 
 **Not** checked, and stated plainly rather than implied (INVARIANT-37): this
-tool does **not** verify the signature. Verification needs a trust store — an
-``allowed_signers`` file or a GPG keyring — holding the maintainer's public
-key, and this repository ships neither, because publishing one would assert a
-key binding that only the account owner can establish. What is checked here is
-*shape*: the properties that were wrong on all eleven historical tags, that
-need no key material to establish, and whose absence means no later
-verification can ever succeed.
+tool does **not** verify the signature. What is checked here is *shape*: the
+properties that were wrong on all eleven historical tags, that need no key
+material to establish, and whose absence means no later verification can ever
+succeed. Keeping verification out of this tool is what lets it run first, in
+preflight, before anything is built — with no key material, no ``ssh-keygen``
+and no network.
+
+Verification is a separate check with a separate input, and it is not missing.
+The trust store — the list binding a public key to a name, without which a
+valid signature is unattributable — ships at ``.github/allowed_signers``.
+``tests/test_release_tag_trust_store.py`` checks on every CI run that the key in
+it is the key that signed v4.0.0, and ``README.md`` documents the
+``git verify-tag`` invocation a consumer runs offline.
+
+Earlier releases of this docstring said the repository shipped no trust store
+"because publishing one would assert a key binding that only the account owner
+can establish". The owner had already established it before that sentence was
+written; INVARIANT-10's addendum records the correction and why the mistake is
+worth keeping on the page.
 
 GitHub's own verified/unverified badge is the complementary half. It is
 account-level state, not repository state — it turns on when the signing key
@@ -117,10 +129,11 @@ checked, fail-closed:
   2. it names a tag object, not a commit (the lightweight case)
   3. that object carries a complete OpenPGP, SSH or SIGNED MESSAGE block
 
-NOT checked: the signature is not verified. That needs a trust store this
-repository deliberately does not ship, so this gate reports shape only
-(INVARIANT-37). GitHub's verified/unverified badge is the complementary
-account-level check.
+NOT checked: the signature is not verified here -- this gate needs no key
+material by design, so it can run before anything is built (INVARIANT-37).
+The trust store is .github/allowed_signers; tests/test_release_tag_trust_store.py
+checks it, and README documents the git verify-tag command consumers run.
+GitHub's verified/unverified badge is the complementary account-level check.
 
 in CI: fetch the tag ref first --
   git fetch --force origin refs/tags/<tag>:refs/tags/<tag>
@@ -270,15 +283,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {problem}")
         print(
             "\nThis gate checks the tag's SHAPE only. It does not verify the "
-            "signature —\nthat needs a trust store this repository "
-            "deliberately does not ship."
+            "signature —\nfor that, run:\n  git -c "
+            "gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag "
+            f"{args.tag}"
         )
         return 1
 
     print(f"OK    `{args.tag}` is an annotated tag object carrying a signature.")
     print(
-        "      Signature NOT verified here (no trust store); GitHub's "
-        "verified/unverified\n      badge is the account-level check."
+        "      Signature NOT verified here (shape gate). To verify it:\n"
+        "        git -c gpg.ssh.allowedSignersFile=.github/allowed_signers "
+        f"verify-tag {args.tag}\n"
+        "      GitHub's verified/unverified badge is the account-level check."
     )
     return 0
 

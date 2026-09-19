@@ -40,7 +40,8 @@ jobs:
       - name: Install documentation dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install sphinx sphinx_rtd_theme sphinx-autodoc-typehints
+          # Same pins as the docs-build gate in ci.yml.
+          python -m pip install "sphinx==9.0.4" "sphinx_rtd_theme==3.1.0" "sphinx-autodoc-typehints==3.6.1"
 
       - name: Run auto-documentation updater
         run: python tools/update_docs.py
