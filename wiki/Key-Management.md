@@ -20,6 +20,7 @@ The key management system provides enterprise-grade capabilities:
 
 ### `KeyStatus` Enum
 
+<!-- example: python-names module=ama_cryptography.key_management -->
 ```python
 from ama_cryptography.key_management import KeyStatus
 
@@ -33,21 +34,33 @@ class KeyStatus(Enum):
 
 ### `KeyMetadata`
 
+<!-- example: python-run -->
 ```python
-from ama_cryptography.key_management import KeyMetadata
+from datetime import datetime, timedelta, timezone
 
-# Metadata attached to every managed key
+from ama_cryptography.key_management import KeyMetadata, KeyStatus
+
+# Metadata attached to every managed key. Every field is REQUIRED — the
+# dataclass declares no defaults (key_management.py::KeyMetadata), so
+# `KeyMetadata(...)` without all eleven raises TypeError.
 meta = KeyMetadata(
     key_id="kid-abc123",
     created_at=datetime.now(timezone.utc),
     expires_at=datetime.now(timezone.utc) + timedelta(days=365),
     status=KeyStatus.ACTIVE,
     version=1,
+    parent_id=None,
+    derivation_path="m/44'/0'/0'/0'",
     usage_count=0,
     max_usage=10000,
-    derivation_path="m/44'/0'/0'/0'",
+    purpose="document-signatures",
+    metadata={},
 )
+print(meta.key_id, meta.status)
 ```
+
+In practice you rarely construct one by hand: `KeyRotationManager.register_key()`
+builds and returns it with every field populated.
 
 ### `KeyRotationManager`
 
@@ -56,6 +69,7 @@ hold key material itself — that stays with the application (or an HSM,
 or `SecureKeyStorage` below); the manager tracks metadata (status,
 version, expiry, usage counts) and exposes rotation hooks.
 
+<!-- example: python-run -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager
@@ -138,6 +152,7 @@ any explicit BIP32 path.
 
 ### `HDKeyDerivation`
 
+<!-- example: python-run -->
 ```python
 import os
 from ama_cryptography.key_management import HDKeyDerivation
@@ -198,6 +213,7 @@ ACTIVE
 
 ### Full Lifecycle Example
 
+<!-- example: python-run -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager, KeyStatus
@@ -234,6 +250,7 @@ mgr.revoke_key("signing-key-v1", reason="superseded")
 
 For encrypted storage of key material at rest:
 
+<!-- example: python-run -->
 ```python
 import os
 from pathlib import Path
@@ -267,9 +284,11 @@ from ama_cryptography.key_management import (
 # process's random in-memory key **cannot be decrypted after process
 # restart**. Use a stable master_password whenever the store must
 # survive across processes.
+import tempfile
+
 storage = SecureKeyStorage(
-    storage_path=Path("/var/lib/myapp/keys"),
-    master_password=os.environ["AMA_KEY_PASSWORD"],   # stable → persistable
+    storage_path=Path(tempfile.mkdtemp()),   # in production: Path("/var/lib/myapp/keys")
+    master_password=os.environ.get("AMA_KEY_PASSWORD", "example-passphrase"),
 )
 mgr = KeyRotationManager()
 
@@ -290,10 +309,24 @@ active_meta = mgr.export_metadata()
 
 ### Key Storage Security
 
-- **In-Memory:** Key material is stored as `bytearray` to allow in-place zeroing
-- **At-Rest:** Keys are encrypted with AES-256-GCM before serialization
-- **Memory Lock:** Uses `secure_mlock()` to prevent key swapping to disk
-- **Zeroing:** Automatic multi-pass zeroing via `SecureBuffer` context manager
+- **In-Memory:** the derived encryption key is held as a `bytearray`
+  (`key_management.py:867`, `:1179`, `:1211`) so it can be zeroed in place.
+- **At-Rest:** key material is sealed with AES-256-GCM
+  (`SecureKeyStorage.store_key` → `native_aes256_gcm_encrypt`,
+  `key_management.py:1440-1477`), with a fresh 96-bit nonce per record
+  (INVARIANT-41) and the record's own metadata bound as AAD.
+- **Zeroing:** `SecureKeyStorage.__exit__` calls
+  `ama_cryptography.secure_memory.secure_memzero` on the encryption key
+  (`key_management.py:1655-1657`). That is the native barrier-backed wipe —
+  one pass through `volatile` stores followed by a compiler barrier
+  (`src/c/ama_consttime.c`), not a multi-pass Python loop.
+- **Memory lock: not performed.** `key_management.py` contains no reference to
+  `secure_mlock` and does not use `SecureBuffer`; nothing in this module pins
+  key pages against swap. An earlier revision of this page claimed both. If
+  your threat model includes swap, lock the pages yourself around the
+  material you hold — `ama_cryptography.secure_memory.secure_mlock()` is the
+  call, and it returns `None` and raises on failure rather than returning a
+  boolean.
 
 ---
 
@@ -303,6 +336,7 @@ active_meta = mgr.export_metadata()
 
 For production deployments, store master secrets in FIPS 140-2 Level 3+ HSMs:
 
+<!-- example: pseudocode: needs a provisioned AWS CloudHSM cluster and boto3 credentials -->
 ```python
 # AWS CloudHSM Example
 import boto3
@@ -326,6 +360,7 @@ def store_master_secret_hsm(master_secret: bytes, key_label: str) -> str:
 
 For personal/small-team use (FIPS 140-2 Level 2):
 
+<!-- example: pseudocode: needs a physically attached YubiKey and the ykman package -->
 ```python
 from ykman.device import connect_to_device
 from ykman.piv import PivController
@@ -341,6 +376,7 @@ def store_key_yubikey(master_secret: bytes, slot: int = 0x82):
 
 Minimum security for development. Use PBKDF2 with 600,000+ iterations (OWASP 2024):
 
+<!-- example: pseudocode: third-party PyCA example shown for contrast, not an AMA API -->
 ```python
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
@@ -377,6 +413,7 @@ def encrypt_master_secret(master_secret: bytes, password: str, path: str):
 
 ### Automated Rotation
 
+<!-- example: python-run -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager
@@ -431,6 +468,7 @@ If you share a `KeyRotationManager` instance across threads, you are
 responsible for serializing **every** mutating call (not just rotation)
 behind your own lock:
 
+<!-- example: pseudocode: an ellipsis sketch of the locking pattern, not a program -->
 ```python
 import threading
 
@@ -450,14 +488,20 @@ rotation requests through a queue.
 
 ## Exception Handling
 
+<!-- example: python-run -->
 ```python
+from datetime import timedelta
+
 from ama_cryptography.exceptions import (
     KeyManagementError,
     PQCUnavailableError,
     QuantumSignatureUnavailableError,
     SecurityWarning,
 )
+from ama_cryptography.key_management import KeyRotationManager
 from ama_cryptography.pqc_backends import generate_dilithium_keypair
+
+mgr = KeyRotationManager(rotation_period=timedelta(days=90))
 
 try:
     meta = mgr.register_key("my-key", purpose="doc-signing")

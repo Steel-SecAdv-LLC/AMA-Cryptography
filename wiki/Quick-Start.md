@@ -8,6 +8,7 @@ Get up and running with AMA Cryptography in 5 minutes.
 
 ## 1. Import the Package
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair,
@@ -27,10 +28,20 @@ from ama_cryptography.key_management import KeyRotationManager
 
 ## 2. Verify PQC Availability
 
+<!-- example: python-run -->
 ```python
+from ama_cryptography.pqc_backends import get_pqc_status, get_pqc_backend_info
+
 status = get_pqc_status()
 print(status)
 # PQCStatus.AVAILABLE  — at least one PQC backend loaded
+#
+# get_pqc_status() returns a PQCStatus ENUM, not a dict and not a string.
+# Compare against the enum member, or read `.value` for the "AVAILABLE" /
+# "UNAVAILABLE" string (ama_cryptography/pqc_backends.py::PQCStatus).
+from ama_cryptography.pqc_backends import PQCStatus
+assert status is PQCStatus.AVAILABLE
+assert status.value == "AVAILABLE"
 
 # Detailed backend info dict (see ama_cryptography/pqc_backends.py::get_pqc_backend_info).
 # Top-level keys: status, <algo>_available, <algo>_backend, algorithms,
@@ -41,12 +52,14 @@ print(info["dilithium_available"], info["dilithium_backend"])  # True, "native"
 print(info["kyber_available"],     info["kyber_backend"])      # True, "native"
 print(info["sphincs_available"],   info["sphincs_backend"])    # True, "native"
 
-# Per-algorithm matrix lives under info["algorithms"]:
+# Per-algorithm matrix lives under info["algorithms"].  The keys are the
+# implementation's own spellings — "Kyber-1024" and "SPHINCS+-256f", not the
+# FIPS names — see ama_cryptography/pqc_backends.py::get_pqc_backend_info.
 for name, meta in info["algorithms"].items():
     print(name, meta["available"], meta["backend"], meta["security_level"])
-# ML-DSA-65     True native 3
-# ML-KEM-1024    True native 5
-# SLH-DSA-SHA2-256f True native 5
+# ML-DSA-65      True native 3
+# Kyber-1024     True native 5
+# SPHINCS+-256f  True native 5
 ```
 
 ---
@@ -58,6 +71,7 @@ The legacy multi-layer orchestrator lives in
 pipeline used by historical AMA deployments. For new code prefer
 `AmaCryptography` from section 4 below.
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.legacy_compat import (
     generate_key_management_system,
@@ -78,12 +92,21 @@ codes = """
 
 helix_params = [(20.0, 0.7), (15.0, 1.0)]
 
-# Step 3: Create the multi-layer crypto package
-package = create_crypto_package(codes, helix_params, kms)
-print(f"Package created: {package['package_id']}")
+# Step 3: Create the multi-layer crypto package.
+# `author` is a REQUIRED fourth argument (legacy_compat.py::create_crypto_package);
+# omitting it raises TypeError.
+package = create_crypto_package(codes, helix_params, kms, author="MyOrganization")
+
+# The result is a CryptoPackage DATACLASS, not a dict — there is no
+# `package["..."]` and no `package_id` field.  Read its attributes:
+print(f"Package by {package.author}, format v{package.signature_format_version}")
 
 # Step 4: Verify the package
 results = verify_crypto_package(codes, helix_params, package, kms.hmac_key)
+# results keys: content_hash, hmac, ed25519, dilithium, timestamp,
+#               rfc3161, rfc3161_binding, ethical_vector.
+# The two rfc3161 entries are None when no RFC 3161 token was requested —
+# None means "not checked", which is not the same as False.
 
 # Step 5: Check all verification results
 if all([
@@ -106,6 +129,7 @@ export_public_keys(kms, Path("public_keys"))
 
 For direct use of the PQC signing API:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair,
@@ -132,6 +156,7 @@ print(f"Valid: {valid}")  # True
 
 ## 5. AES-256-GCM Encryption
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AESGCMProvider
 import os
@@ -162,6 +187,7 @@ print("Encryption/decryption successful!")
 
 ## 6. Key Rotation
 
+<!-- example: python-run -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager
@@ -201,6 +227,7 @@ same module.
 
 ## 7. Hybrid KEM (Classical + PQC)
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
@@ -225,21 +252,32 @@ the combiner with custom classical and PQC KEM callables.
 
 ## 8. Secure Memory
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.secure_memory import SecureBuffer, secure_memzero
 import os
 
-# Use context manager for automatic zeroing on exit
+# Use the context manager for automatic zeroing on exit.
+# __enter__ yields the BYTEARRAY itself, not the SecureBuffer wrapper —
+# inside the `with`, `buf` IS the buffer and has no `.data` attribute.
 with SecureBuffer(32) as buf:
-    # buf.data is a bytearray of 32 zeroed bytes
-    buf.data[:] = os.urandom(32)
-    print(f"Using key: {buf.data.hex()[:8]}...")
-# buf.data is automatically zeroed here
+    # buf is a bytearray of 32 zeroed bytes
+    buf[:] = os.urandom(32)
+    print(f"Using key: {buf.hex()[:8]}...")
+# the buffer is zeroed here
 
-# Manual zeroing
+# `.data` on the wrapper is valid only while the context is open — it
+# raises RuntimeError otherwise, so keep a reference if you want both:
+holder = SecureBuffer(32)
+with holder as buf:
+    assert holder.data is buf
+
+# Manual zeroing.  The native kernel writes zeros ONCE through volatile
+# stores and then issues a compiler barrier; the barrier, not a repeat
+# count, is what defeats dead-store elimination (src/c/ama_consttime.c).
 sensitive = bytearray(os.urandom(32))
 # ... use sensitive ...
-secure_memzero(sensitive)  # Multi-pass overwrite
+secure_memzero(sensitive)
 print(f"After zeroing: {sensitive.hex()}")  # 000000...
 ```
 
@@ -256,13 +294,36 @@ Choose the verification profile appropriate for your deployment:
 | `hybrid` | Ed25519 + ML-DSA-65 | Typical production |
 | `strict` | All layers + RFC 3161 binding | High-assurance, regulatory |
 
+<!-- example: python-run -->
 ```python
-# Strict profile: require all layers
-results = verify_crypto_package(codes, helix_params, pkg, hmac_key)
-if not (results["content_hash"] and results["hmac"]
-        and results["ed25519"] and results["dilithium"] is True
-        and results["rfc3161_binding"] is True):
-    raise ValueError("Package failed strict verification profile")
+from ama_cryptography.legacy_compat import (
+    generate_key_management_system,
+    create_crypto_package,
+    verify_crypto_package,
+)
+
+kms = generate_key_management_system("MyOrganization")
+codes = "1. test\n"
+helix_params = [(20.0, 0.7)]
+pkg = create_crypto_package(codes, helix_params, kms, author="MyOrganization")
+
+
+def verify_strict(codes, helix_params, pkg, hmac_key):
+    """Strict profile: every layer, including the RFC 3161 binding."""
+    results = verify_crypto_package(codes, helix_params, pkg, hmac_key)
+    if not (results["content_hash"] and results["hmac"]
+            and results["ed25519"] and results["dilithium"] is True
+            and results["rfc3161_binding"] is True):
+        raise ValueError("Package failed strict verification profile")
+    return results
+
+
+# This package carries no RFC 3161 token, so `rfc3161_binding` is None —
+# "not checked", which the strict profile must treat as a refusal, not a pass.
+try:
+    verify_strict(codes, helix_params, pkg, kms.hmac_key)
+except ValueError as exc:
+    print(f"strict profile correctly refused: {exc}")
 ```
 
 `rfc3161_binding` establishes that the stored token refers to this package. It does **not** establish that a trusted authority issued it — AMA verifies no TSA signature and no certificate chain — so a `strict` profile must pair it with whatever control does establish the token's provenance. (The old key name `rfc3161` still returns the same value but emits a `DeprecationWarning` when read: the bare name read as attestation, which is the misreading it caused.)

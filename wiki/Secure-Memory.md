@@ -19,6 +19,7 @@ The `secure_memory` module provides these capabilities using only the standard l
 
 A context manager for automatic, guaranteed memory zeroing:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.secure_memory import SecureBuffer
 import os
@@ -31,8 +32,9 @@ with SecureBuffer(32) as buf:
     # Use buf for cryptographic operations...
     key = bytes(buf)
 
-# On context manager __exit__, buf is automatically zeroed
-# (multi-pass overwrite, ensuring the key cannot be recovered)
+# On context manager __exit__, buf is automatically zeroed by the native
+# kernel: one pass of volatile stores followed by a compiler barrier.
+print("buffer zeroed on exit")
 ```
 
 ### Internal Design
@@ -43,32 +45,42 @@ with SecureBuffer(32) as buf:
 
 ## `secure_memzero()`
 
-Multi-pass memory overwrite for sensitive data:
+Barrier-backed memory zeroing for sensitive data:
 
+<!-- example: python-run -->
 ```python
+import os
+
+from ama_cryptography.pqc_backends import native_hmac_sha3_256
 from ama_cryptography.secure_memory import secure_memzero
 
 # Load sensitive data
 secret_key = bytearray(os.urandom(32))
 
 # Use the key...
-signature = sign(message, bytes(secret_key))
+tag = native_hmac_sha3_256(bytes(secret_key), b"message")
 
 # Zero immediately after use
 secure_memzero(secret_key)
-# secret_key is now all zeros
+assert bytes(secret_key) == bytes(32)   # secret_key is now all zeros
 ```
 
-> **Important:** Always pass a `bytearray`, not `bytes`. `bytes` objects are immutable and cannot be zeroed.
+> **Important:** Always pass a `bytearray` or a contiguous `memoryview`, not
+> `bytes`. `bytes` objects are immutable and cannot be zeroed.
 
 ### Implementation
 
-`secure_memzero()` performs multiple overwrite passes:
-1. Fill with `0x00`
-2. Fill with `0xFF`
-3. Final fill with `0x00`
+`secure_memzero()` writes zeros **once**, through `volatile` 64-bit stores, and
+then issues a compiler barrier (`src/c/ama_consttime.c`,
+`ama_secure_memzero()`). The barrier — not a repeat count — is what stops
+dead-store elimination: it tells the compiler the memory may be observed, so
+the stores cannot be proved dead and removed.
 
-This protects against "compiler optimization" attacks where a naive `memset()` call to zero is optimized away because the buffer is not subsequently read.
+A three-pass 0x00 / 0xFF / 0x00 description belonged to the **opt-in
+pure-Python fallback** (`AMA_ALLOW_PYTHON_MEMZERO=1`), which loops in the
+interpreter because it has no barrier to reach for. It was never what the
+shipped native kernel does, and on a normal build that fallback is refused
+outright rather than used (`SecureMemoryError` — see INVARIANT-7).
 
 ---
 
@@ -76,7 +88,10 @@ This protects against "compiler optimization" attacks where a naive `memset()` c
 
 Lock memory pages to prevent swapping to disk:
 
+<!-- example: python-run -->
 ```python
+import os
+
 from ama_cryptography.secure_memory import secure_mlock, secure_munlock
 
 secret = bytearray(os.urandom(32))
@@ -92,8 +107,14 @@ print("Memory locked in RAM (will not swap)")
 secure_munlock(secret)
 
 # Zero the memory
+from ama_cryptography.secure_memory import secure_memzero
 secure_memzero(secret)
 ```
+
+> **Return value.** `secure_mlock()` and `secure_munlock()` return `None`. They
+> signal failure by raising (`SecureMemoryError`, `NotImplementedError`,
+> `OSError`), not by returning a boolean — `if secure_mlock(buf):` takes the
+> false branch on every *successful* lock.
 
 ### Platform Notes
 
@@ -111,12 +132,19 @@ secure_memzero(secret)
 
 Timing-safe byte comparison:
 
+<!-- example: python-run -->
 ```python
+import os
+
+from ama_cryptography.pqc_backends import native_hmac_sha3_256
 from ama_cryptography.secure_memory import constant_time_compare
 
+key = os.urandom(32)
+message = b"payload"
+
 # Timing-safe comparison (always runs in O(n) time regardless of where mismatch occurs)
-hmac_expected = compute_hmac(message, key)
-hmac_received = package["hmac_tag"]
+hmac_expected = native_hmac_sha3_256(key, message)
+hmac_received = native_hmac_sha3_256(key, message)
 
 # Safe: does not leak position of first mismatch
 if constant_time_compare(hmac_expected, hmac_received):
@@ -156,20 +184,32 @@ non-constant-time length pre-check.
 
 Encrypted storage with automatic memory management:
 
+<!-- example: python-run -->
 ```python
+import os
+import tempfile
+from pathlib import Path
+
 from ama_cryptography.key_management import SecureKeyStorage
 
-# encryption_key is bytearray to allow in-place zeroing
-encryption_key = bytearray(os.urandom(32))
-
-with SecureKeyStorage(encryption_key) as storage:
-    # Store key material (encrypted with AES-256-GCM)
-    storage.store("signing-key-v1", os.urandom(32))
+# The constructor takes a storage DIRECTORY and an optional master password —
+# not a raw encryption key. The AES-256 key is derived from the password
+# (Argon2id, or PBKDF2-HMAC-SHA256 when the native Argon2 backend is absent)
+# and held internally as a bytearray so it can be zeroed in place.
+with SecureKeyStorage(
+    storage_path=Path(tempfile.mkdtemp()),
+    master_password="example-passphrase",
+) as storage:
+    # Store key material (sealed with AES-256-GCM; the methods are
+    # store_key / retrieve_key, not store / retrieve)
+    material = os.urandom(32)
+    storage.store_key("signing-key-v1", material)
 
     # Retrieve key material (decrypted on access)
-    key = storage.retrieve("signing-key-v1")
+    key = storage.retrieve_key("signing-key-v1")
+    assert key == material
 
-# encryption_key is zeroed on context manager exit
+# The derived encryption key is zeroed by __exit__ via secure_memzero().
 ```
 
 ---
@@ -178,48 +218,94 @@ with SecureKeyStorage(encryption_key) as storage:
 
 ### Do: Use `bytearray` for Key Material
 
+<!-- example: python-run -->
 ```python
+import os
+
+from ama_cryptography.secure_memory import secure_memzero
+
 # ✓ Correct: bytearray can be zeroed
 key = bytearray(os.urandom(32))
 # ... use key ...
 secure_memzero(key)
+assert bytes(key) == bytes(32)
 ```
 
+<!-- example: python-run -->
 ```python
+import os
+
+from ama_cryptography.secure_memory import secure_memzero
+
 # ✗ Incorrect: bytes cannot be zeroed in-place
 key = os.urandom(32)   # bytes object
-# Cannot zero this after use
+try:
+    secure_memzero(key)
+except TypeError as exc:
+    print("refused, as it must be:", exc)
 ```
 
 ### Do: Use `SecureBuffer` Context Manager
 
+<!-- example: python-run -->
 ```python
+import os
+
+from ama_cryptography.crypto_api import AESGCMProvider
+from ama_cryptography.secure_memory import SecureBuffer
+
+plaintext = b"payload"
+
 # ✓ Automatic zeroing even on exception
 with SecureBuffer(32) as buf:
-    buf[:] = get_key_from_hsm()
-    result = encrypt(plaintext, bytes(buf))
+    buf[:] = os.urandom(32)             # in production: your HSM / KDF
+    result = AESGCMProvider().encrypt(plaintext, bytes(buf))
 # buf is zeroed here, even if encrypt() raised
+print("ciphertext bytes:", len(result["ciphertext"]))
 ```
 
 ### Do: Lock Sensitive Buffers in RAM
 
+<!-- example: python-run -->
 ```python
-# ✓ Prevent swap exposure for long-lived keys
-master_key = bytearray(load_master_key())
+import os
+
+from ama_cryptography.secure_memory import (
+    secure_memzero,
+    secure_mlock,
+    secure_munlock,
+)
+
+# ✓ Prevent swap exposure for long-lived keys.
+# secure_mlock returns None and raises on failure — do not branch on it.
+master_key = bytearray(os.urandom(32))
 secure_mlock(master_key)
-# ... use master_key for the session ...
-secure_munlock(master_key)
-secure_memzero(master_key)
+try:
+    pass  # ... use master_key for the session ...
+finally:
+    secure_memzero(master_key)   # wipe while the pages are still pinned
+    secure_munlock(master_key)
 ```
 
 ### Do: Use Constant-Time Comparisons for MACs and Secrets
 
+<!-- example: python-run -->
 ```python
+import os
+
+from ama_cryptography.pqc_backends import native_hmac_sha3_256
+from ama_cryptography.secure_memory import constant_time_compare
+
+key = os.urandom(32)
+expected_mac = native_hmac_sha3_256(key, b"payload")
+received_mac = native_hmac_sha3_256(key, b"payload")
+
 # ✓ Constant-time comparison for HMAC tags
 if constant_time_compare(expected_mac, received_mac):
-    proceed()
+    print("MAC accepted")
 ```
 
+<!-- example: pseudocode: shows the anti-pattern this page tells you not to write -->
 ```python
 # ✗ Timing-vulnerable comparison
 if expected_mac == received_mac:   # DO NOT USE for secrets
