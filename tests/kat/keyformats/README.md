@@ -165,6 +165,7 @@ signature region is covered, that truncation and trailing data are refused, and
 that an out-of-range leaf index is refused. It also asserts that nothing in the
 package claims to *sign* with LMS and that nothing claims XMSS at all.
 
+<!-- claim-check: quoting-retired-wording -->
 This paragraph previously read "AMA does not implement HSS/LMS. This corpus
 asserts nothing about AMA's behaviour." That was true when the corpus was
 vendored and stopped being true when the verifier landed; the test file was

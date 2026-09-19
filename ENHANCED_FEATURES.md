@@ -281,6 +281,7 @@ The adaptive posture system bridges the 3R runtime anomaly monitor with the cryp
   pattern 0.25, resonance 0.15, Lyapunov stability 0.15
   (`adaptive_posture.py:265-268`), with exponential decay on the accumulated
   score. The Lyapunov term is the double-helix engine's divergence signal; an
+  <!-- claim-check: quoting-retired-wording -->
   earlier revision of this section described a three-signal 0.50/0.30/0.20
   model, which has not been the construction since the fourth signal was added.
 - **CryptoPostureController** — Key rotation, algorithm switching, cooldown enforcement (300s default)

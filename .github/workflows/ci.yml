@@ -1269,6 +1269,124 @@ jobs:
       run: |
         python tools/check_hd_interop_honesty.py
 
+    - name: "Install valgrind for the documented-C-example uninitialised-read oracle"
+      # tools/check_doc_examples.py compiles and RUNS every `c-run` block on
+      # the documentation pages. Compiling is not enough: the defect that
+      # motivated the gate —
+      #
+      #     uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES];
+      #     ama_ed25519_keypair(pk, sk);
+      #
+      # — compiles clean under -Wall -Wextra -Werror and prints valid=1.
+      # ama_ed25519_keypair CONSUMES a caller-supplied 32-byte seed in
+      # secret_key[0..31] (include/ama_cryptography.h:1306-1316), so that
+      # example minted an Ed25519 private key from uninitialised stack memory
+      # and nothing in the toolchain could see it. memcheck can: it reports
+      # "Uninitialised value was created by a stack allocation" at main.
+      # Without valgrind the gate still compiles, links and runs each example,
+      # but this class of defect goes back to being invisible.
+      run: |
+        .github/scripts/apt-install.sh valgrind
+
+    - name: "Documented examples must run, compile and link"
+      # A copy-pasteable example is API surface: a reader cannot verify one
+      # without running it, and a reader who runs one and gets a traceback
+      # concludes the library is broken rather than the page.
+      #
+      # Before this gate the four pages new users are pointed at carried
+      # create_crypto_package(codes, helix, kms) — a TypeError on the first
+      # line, since `author` has always been required; package['package_id']
+      # against a dataclass; buf.data inside `with SecureBuffer(...) as buf`,
+      # where __enter__ yields the bytearray; get_pqc_status() printed as a
+      # JSON object when it returns an enum; MASTER_OMNI_CODES, a name that
+      # has never existed; and the uninitialised Ed25519 seed above.
+      #
+      # Every python/c block on a covered page must declare what it claims
+      # (python-run, python-signature, python-names, c-run, c-decl, c-const,
+      # or `pseudocode: <reason>`); an unmarked block fails, which is what
+      # stops coverage decaying as pages grow. Both directions are pinned by
+      # tests/test_documentation_integrity_gates.py, whose negative controls
+      # are the literal wording this pass removed.
+      run: |
+        python tools/check_doc_examples.py --library-dir build/lib
+
+    - name: "Security-relevant constructions must match the code that implements them"
+      # For an integrator, a cryptographic document IS the specification. When
+      # it disagrees with the implementation either they build against a
+      # construction that does not exist, or they trust a property the code
+      # does not provide. Both shipped:
+      #
+      #   * CRYPTOGRAPHY.md said secure_wipe() "uses memory barriers" and
+      #     "verifies the wipe completed". It was three plain Python for-loops.
+      #   * ARCHITECTURE.md and ENHANCED_FEATURES.md advertised a "pure Python
+      #     HKDF fallback" for the hybrid KEM combiner. combine() RAISES when
+      #     ama_hkdf is absent, because a non-constant-time HKDF substituted
+      #     into secret-dependent key combination is what INVARIANT-7 forbids —
+      #     the documentation was advertising the forbidden behaviour.
+      #   * Two threat tables published 0.3/0.6/0.8 against an implementation
+      #     using 0.15/0.45/0.80, and a three-signal 0.50/0.30/0.20 weighting
+      #     against a four-signal 0.45/0.25/0.15/0.15 one. The threshold error
+      #     ran in the dangerous direction: the module escalates EARLIER than
+      #     the table promised, so an operator calibrating to it under-read
+      #     their own monitor.
+      #   * tests/kat/keyformats/README.md said "AMA does not implement
+      #     HSS/LMS" while ama_lms_verify and ama_hss_verify were exported.
+      #
+      # Like check_verification_claim_honesty.py, the authority is DERIVED from
+      # the source tree with ast rather than written into the gate: implement a
+      # fallback and the fallback rule stops firing on its own; change a weight
+      # and the weight the gate demands changes with it. A denylist would
+      # freeze today's implementation into CI and start rejecting documentation
+      # once it became true. The gate fails closed (exit 2) if it cannot derive
+      # a complete authority, because a gate that silently learns nothing
+      # reports green on everything.
+      run: |
+        python tools/check_crypto_construction_docs.py
+
+    - name: "Documented public API must match what users can import, call and link"
+      # Five different oracles for five different failure modes, all of which
+      # failed the same way — silently, until a user hit them:
+      #   * the set of submodules a bare `import ama_cryptography` binds
+      #     (measured in a fresh subprocess, because Python binds a submodule
+      #     as a package attribute the moment anything in the process imports
+      #     it — an in-process check answers a different question)
+      #   * signatures and which parameters are required
+      #   * return types, asserted from a real CALL rather than an annotation
+      #   * what a context manager's __enter__ actually yields
+      #   * the version script vs. the produced symbols, in BOTH directions:
+      #     a localised name silently exported is an unintended ABI surface,
+      #     and a documented name silently localised is a link recipe that has
+      #     never worked (wiki/C-API-Reference.md offered exactly that for
+      #     ama_randombytes)
+      # plus the architecture-specific kernel inventory, because README.md
+      # claimed eight NEON files including an Ed25519 kernel against seven
+      # files and no such kernel.
+      run: |
+        python tools/check_public_api_docs.py --library-dir build/lib --require-library
+
+    - name: "Documented benchmark numbers must be re-derivable from their records"
+      # This gate deliberately does NOT enforce absolute performance in CI:
+      # runner hardware varies by more than any honest tolerance, and a gate
+      # that fails on a slow runner teaches people to re-run until green.
+      # It enforces everything that is not hardware — provenance, units,
+      # benchmark identifier, architecture label and acceptable range:
+      #
+      #   * every cell of the AUTO-PIPELINE-LATENCY and AUTO-BENCHMARK-TABLE
+      #     blocks is recomputed from benchmarks/benchmark-results.json and
+      #     compared, so a hand-edited number cannot survive a push
+      #   * every regression floor cited in prose must exist in
+      #     benchmarks/baseline.json or benchmarks/arm-baseline.json —
+      #     the rule that catches wiki/Performance-Benchmarks.md's 76,215,
+      #     a 4.x-era floor that had been stale for two majors
+      #   * the results record must carry the command, host, sampling method
+      #     and aggregation that make it reproducible, or nothing may quote it
+      #   * a measured figure more than 8x its own floor is a units or identity
+      #     error, not a fast host — ARCHITECTURE.md's "4.20 ms" ML-DSA-65
+      #     signing figure was ~30x out and contradicted a table three lines
+      #     above it
+      run: |
+        python tools/check_benchmark_claims.py
+
     - name: "Verify the vendored key-format conformance corpus"
       # tests/kat/keyformats/ is the only evidence that AMA's key encodings
       # match the specifications rather than merely themselves, and
@@ -1811,6 +1929,32 @@ jobs:
             "./consumer_${cc}_static"
           done
           echo "OK: C consumer linked and ran under gcc and clang, shared and static."
+
+      - name: Compile and run the documented C examples against the INSTALLED prefix
+        # The same gate security-checks runs, but pointed at the install tree
+        # rather than the build tree — which is the only place the documented
+        # `#include <ama_cryptography.h>` and the pkg-config flags are the
+        # ones a downstream consumer actually gets. wiki/C-API-Reference.md
+        # told readers to write `#include "../include/ama_cryptography.h"`,
+        # a repo-relative path no installed consumer can use, and to link
+        # `-L./build` when both libraries are under build/lib.
+        #
+        # Run under both compilers for the same reason the step above does:
+        # the examples are compiled -Wall -Wextra -Werror, and the two
+        # toolchains do not warn about the same things.
+        run: |
+          set -euxo pipefail
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list || true
+          .github/scripts/apt-install.sh valgrind
+          PREFIX="$PWD/consumer-prefix"
+          for cc in gcc clang; do
+            CC="$cc" python tools/check_doc_examples.py \
+              --lang c \
+              --compiler "$cc" \
+              --include-dir "$PREFIX/include" \
+              --library-dir "$PREFIX/lib"
+          done
+          echo "OK: every documented C example compiles, links and runs against the installed library."
 
   ci-gate:
     name: CI Gate

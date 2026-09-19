@@ -150,18 +150,20 @@ _DECL = re.compile(
     r"\s*(?::\s*\.\.\.)?\s*$"
 )
 
+
 #: A line is a SIGNATURE declaration (checkable) rather than an ordinary CALL
 #: (not checkable — the arguments are values, not parameter names) when it
 #: annotates or defaults a parameter, or declares a return type, or is written
 #: with ``def``.  ``aead = AESGCMProvider()`` is a call; ``AESGCMProvider(
 #: backend: CryptoBackend = ...)`` is a declaration.
-def _is_signature_declaration(line: str, match: "re.Match[str]") -> bool:
+def _is_signature_declaration(line: str, match: re.Match[str]) -> bool:
     if line.startswith("def "):
         return True
     if match.group("ret"):
         return True
     params = match.group("params") or ""
     return ":" in params or "=" in params
+
 
 #: A C prototype in a ``c-decl`` block:  ``ret name(args);``
 _C_PROTO = re.compile(
@@ -198,9 +200,7 @@ class Block:
         """
         if self.directive is None or self.mode == "pseudocode":
             return {}
-        return dict(
-            part.split("=", 1) for part in self.directive.split()[1:] if "=" in part  # noqa: C416
-        )
+        return dict(part.split("=", 1) for part in self.directive.split()[1:] if "=" in part)
 
     @property
     def reason(self) -> str:
@@ -301,7 +301,7 @@ def run_python(block: Block, report: Report, repo: Path) -> None:
         environment.setdefault("PYTHONPATH", str(repo))
         environment["PYTHONWARNINGS"] = "ignore"
         try:
-            completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            completed = subprocess.run(
                 [sys.executable, str(script)],
                 capture_output=True,
                 text=True,
@@ -471,9 +471,7 @@ def check_python_signatures(block: Block, report: Report) -> None:
         return
     module_name = block.options["module"]
     bindings = dict(
-        pair.split(":", 1)
-        for pair in block.options.get("bind", "").split(",")
-        if ":" in pair
+        pair.split(":", 1) for pair in block.options.get("bind", "").split(",") if ":" in pair
     )
 
     checked = 0
@@ -516,17 +514,18 @@ def _compare_signature(
     match: re.Match[str],
     line: str,
 ) -> None:
+    if not callable(target):
+        return  # a constant or a module attribute; existence was the claim
     try:
-        actual = inspect.signature(target)  # type: ignore[arg-type]
+        actual = inspect.signature(target)
     except (TypeError, ValueError):
-        return  # not a callable we can introspect; existence was the claim
+        return  # a builtin with no introspectable signature
 
     actual_parameters = [
         parameter
         for parameter in actual.parameters.values()
         if parameter.name != "self"
-        and parameter.kind
-        not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        and parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
     ]
     actual_names = [parameter.name for parameter in actual_parameters]
     actual_required = {
@@ -664,8 +663,7 @@ def check_c_constants(block: Block, report: Report, repo: Path) -> None:
     """Every documented macro / enumerator carries the header's value."""
     header = (repo / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
     defines = {
-        match.group("name"): match.group("value").strip()
-        for match in _C_DEFINE.finditer(header)
+        match.group("name"): match.group("value").strip() for match in _C_DEFINE.finditer(header)
     }
     enumerators = {
         match.group("name"): re.sub(r"\s+", "", match.group("value"))
@@ -699,8 +697,7 @@ def check_c_constants(block: Block, report: Report, repo: Path) -> None:
             elif enumerators[name] != value:
                 report.fail(
                     block,
-                    f"{name} documented as {value} but the header assigns "
-                    f"{enumerators[name]}",
+                    f"{name} documented as {value} but the header assigns " f"{enumerators[name]}",
                 )
     if checked == 0:
         report.fail(block, "c-const block lists no `#define` or `NAME = value` row")
@@ -710,7 +707,7 @@ def check_c_constants(block: Block, report: Report, repo: Path) -> None:
 
 def exported_symbols(library: Path) -> frozenset[str]:
     """Dynamic ``ama_*`` symbols the built shared object actually exports."""
-    completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+    completed = subprocess.run(
         ["nm", "--dynamic", "--defined-only", "--format=posix", str(library)],
         capture_output=True,
         text=True,
@@ -761,9 +758,7 @@ def run_c(
             "-lm",
             "-lpthread",
         ]
-        compiled = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            compile_argv, capture_output=True, text=True, check=False
-        )
+        compiled = subprocess.run(compile_argv, capture_output=True, text=True, check=False)
         if compiled.returncode != 0:
             report.fail(block, f"{compiler} failed:\n      {_tail(compiled.stderr)}")
             return
@@ -779,7 +774,7 @@ def run_c(
                 *run_argv,
             ]
         try:
-            executed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            executed = subprocess.run(
                 run_argv, capture_output=True, text=True, cwd=workdir, timeout=600, check=False
             )
         except subprocess.TimeoutExpired:

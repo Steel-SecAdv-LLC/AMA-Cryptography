@@ -151,6 +151,14 @@ NOT_IN_TREE = {
         "historical: CSRC_ALIGN_REPORT.md says in the same sentence that it "
         "existed at the audit date and was deleted in v3.3.0 (#362)"
     ),
+    "ama_ed25519_neon.c": (
+        "deliberate absence: README.md names this file in order to state that "
+        "it does NOT exist. The NEON line listed eight algorithms including an "
+        "Ed25519 kernel against seven translation units, and on AArch64 the "
+        "Ed25519 group arithmetic runs the portable radix-2^51 backend. Naming "
+        "the file is how a reader checks the correction; "
+        "tools/check_public_api_docs.py holds the seven-file inventory."
+    ),
 }
 
 

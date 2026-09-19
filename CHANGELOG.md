@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-09-14 |
+| Last Updated | 2026-09-19 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,162 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+### Documentation integrity: the claims are now bound to the code — 2026-09-19
+
+**INVARIANT-53.** Four gates, seventeen corrected claims, one implementation
+fix, and one C example that had been minting Ed25519 private keys from
+uninitialised stack memory.
+
+#### The example
+
+`wiki/C-API-Reference.md` — the page a C consumer is pointed at — showed:
+
+<!-- claim-check: quoting-retired-wording -->
+```c
+uint8_t pk[AMA_ED25519_PUBLIC_KEY_BYTES];   /* 32 */
+uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES];   /* 64 */
+ama_ed25519_keypair(pk, sk);
+```
+
+`ama_ed25519_keypair` does not generate the seed. The caller must place 32
+bytes of CSPRNG output in `secret_key[0..31]` before the call:
+`include/ama_cryptography.h:1306-1316` states it, and `src/c/ama_ed25519.c:799`
+is the line that reads them — `sha512(secret_key, 32, hash)`. The example
+handed it whatever the stack held. It compiles clean under
+`-Wall -Wextra -Werror`, prints `valid=1`, and the key verifies, which is why
+nobody caught it by reading.
+
+Replaced with two examples, both now executed in CI under
+`valgrind --track-origins=yes`: the `ama_context_init` / `ama_keypair_generate`
+path, which draws the seed from the platform CSPRNG itself and is the
+recommended form; and an explicit-seed form for callers whose seed comes from a
+KDF or an HSM. The unsafe version is a named regression test — memcheck reports
+"Uninitialised value was created by a stack allocation at main" and the build
+goes red.
+
+#### The gates
+
+| Gate | Runs in | Catches |
+|---|---|---|
+| `tools/check_doc_examples.py` | `security-checks`, `c-consumer` | invalid imports, missing required arguments, wrong return types, invalid attribute access, wrong context-manager behaviour, examples that do not compile or link, unsafe use of uninitialised values, examples contradicting the public API |
+| `tools/check_crypto_construction_docs.py` | `security-checks` | fallback claims the implementation forbids, wrong algorithm/construction descriptions, wrong thresholds/weights/signal counts, removed or nonexistent symbols, contradictions with INVARIANTS, reintroduction of a corrected claim in another document |
+| `tools/check_public_api_docs.py` | `security-checks` | package exports after a bare import, signatures and required parameters, return types, context-manager return values, C export map vs. produced symbols, HSS/LMS exports, architecture-specific claims |
+| `tools/check_benchmark_claims.py` | `security-checks` | hand-edited cells in generated tables, floors cited in prose that enforce nothing, records missing reproduction provenance, units and identity errors |
+
+Every `python`/`c` block on a covered page must now declare what it claims —
+`python-run`, `python-signature`, `python-names`, `c-run`, `c-decl`,
+`c-const`, or `pseudocode: <reason>`. An unmarked block fails, which is what
+stops coverage decaying as pages grow. 95 blocks across 7 pages: 90 executed
+or checked, 5 explicitly pseudocode (a YubiKey, an AWS CloudHSM, a PyCA
+contrast snippet, a threading sketch, and the timing-unsafe anti-pattern the
+page tells you not to write).
+
+The construction gate scans source comments and docstrings as well as prose,
+which found two more: `crypto_api.py` carried "Import HMAC and HKDF from
+pqc_backends (native C) with pure-Python fallback" four lines above the
+module's own INVARIANT-7 guard, and `secure_memory.py`'s module docstring
+described `secure_memzero` as a "Multi-pass byte-level overwrite" while the
+function's own docstring — in the same file — correctly said the native kernel
+writes once and issues a barrier. A test named `test_memzero_multipass`
+asserted only that the buffer ended up zeroed; it is renamed to say so.
+
+The construction gate derives its authority from the source with `ast` rather
+than carrying the numbers, following `check_verification_claim_honesty.py`:
+implement a fallback and the fallback rule stops firing on its own; change a
+weight and the weight the gate demands changes with it. It exits 2 on a
+partial derivation, because a gate that silently learns nothing reports green
+on everything.
+
+`tests/test_documentation_integrity_gates.py` pins all four in both
+directions — 45 tests. The negative controls are the literal text this pass
+removed, and positive controls assert the corrected wording passes, because a
+gate nobody can satisfy is a gate that gets disabled.
+
+#### The implementation fix
+
+`legacy_compat.secure_wipe()` was three plain Python `for` loops
+(0x00, 0xFF, 0x00) with no barrier of any kind, while `CRYPTOGRAPHY.md:315`
+described it as using memory barriers and verifying the wipe. Here the
+documentation was right about what the library should do, so the code is what
+moved: it now delegates to `secure_memory.secure_memzero()`, which reaches
+`ama_secure_memzero()` in `src/c/ama_consttime.c` — zeros written once through
+`volatile` stores, then a compiler barrier. The barrier is the mechanism; a
+repeat count does not defeat an optimiser. It also inherits the fail-closed
+contract: no native backend and no `AMA_ALLOW_PYTHON_MEMZERO` opt-in means
+raise, not degrade (INVARIANT-7). 107 memory/comprehensive tests pass
+unchanged.
+
+#### The claims
+
+<!-- claim-check: quoting-retired-wording -->
+Security-relevant: the "pure Python SHA3-256 fallback" for the hybrid KEM
+combiner (`ARCHITECTURE.md:440`, `ENHANCED_FEATURES.md:314`) — `combine()`
+raises, and documenting the forbidden substitution as a feature is how an
+integrator comes to rely on it; posture weights `timing 50% / pattern 30% /
+resonance 20%` against the implemented four-signal
+`0.45 / 0.25 / 0.15 / 0.15` (`ENHANCED_FEATURES.md:280`,
+`ARCHITECTURE.md:423`); threat thresholds `0.3 / 0.6 / 0.8` against
+`0.15 / 0.45 / 0.80` (`ENHANCED_FEATURES.md:287`, `CRYPTOGRAPHY.md:340`) — an
+error in the dangerous direction, since the module escalates *earlier* than
+the table promised; the v1 hybrid-signature splicing property, now stated
+(`wiki/Hybrid-Cryptography.md`); `secure_mlock()` documented as returning a
+boolean when it returns `None` and raises; `key_management.py` documented as
+locking pages with `secure_mlock` and zeroing through `SecureBuffer` when it
+references neither; and "AMA does not implement HSS/LMS" against exported
+`ama_lms_verify` / `ama_hss_verify` (`tests/kat/keyformats/README.md:146`).
+
+<!-- claim-check: quoting-retired-wording -->
+API: `MASTER_OMNI_CODES` (13 sites, a name that has never existed — it is
+`MASTER_CODES`); `assert len(pkg_v2.ethical_vector) == 12` (four pillars
+weighted 3.0 each: the *sum* is 12.0); `get_pqc_status()` documented as a dict
+in three places when it returns a `PQCStatus` enum; eight "always available"
+submodules of which five raise `AttributeError`; `buf.data` inside
+`with SecureBuffer(...) as buf`; `create_crypto_package(codes, helix, kms)`
+without its required `author`; `package['package_id']` against a dataclass;
+GCC 7 / Clang 6 as the compiler floor when `CMakeLists.txt:89-107` raises
+`FATAL_ERROR` below GCC 12 / Clang 15; and `ama_randombytes` documented as
+externally linkable with an `extern` recipe, when `cmake/ama_exports.map`
+names it in the `local:` list and `nm --dynamic` returns nothing.
+
+Running the new gates surfaced four more nobody had reported:
+`SecureKeyStorage` had gained an `allow_legacy_kdf` parameter the page did not
+carry and `delete_key` returns `bool` (documented `None`);
+`verify_timestamp_binding` and `verify_timestamp` had gained `allow_disabled`;
+`KeyMetadata` has eleven required fields and the example passed eight; and
+`wiki/Secure-Memory.md`'s `SecureKeyStorage` example passed a raw encryption
+key to a constructor that takes a storage directory, calling
+`store()` / `retrieve()` instead of `store_key()` / `retrieve_key()`.
+
+<!-- claim-check: quoting-retired-wording -->
+Measurements: `ARCHITECTURE.md` published "ML-DSA-65 signing (4.20 ms,
+dominant signing cost)" three lines below a table putting a whole multi-layer
+package creation at 2.17 ms — self-contradictory before a reader reached a
+measurement, and ~30x the real cost. That table is now generated from
+`benchmarks/benchmark-results.json` by `tools/update_docs.py`, with every cell
+derived as `1000 / ops_per_second` and a provenance block carrying the exact
+command, source record, platform, build, units, sampling, aggregation,
+tolerance and drift-detection mechanism. The bottleneck sentence is arithmetic
+on two rows of the same table (ML-DSA-65 sign 0.341 ms against 0.558 ms for the
+pipeline — 61%). `wiki/Performance-Benchmarks.md:283` cited a 76,215 ops/sec
+HMAC floor that had been 215,299 (x86-64) / 285,176 (aarch64) for two majors.
+`README.md:398` published `ed25519_sign` at 70,496 after INVARIANT-51 roughly
+halved signing by design and after the floor itself was re-based to 38,170 in
+this repository; the row is struck through rather than rewritten — the four
+cited workflow runs are a fixed historical record — with the 1.8469x C-level
+derivation and a corroborating measurement from this tree (36,517 ops/sec via
+the Python runner, 44,324 raw C, 4-vCPU x86-64). `README.md:288` claimed eight
+NEON files including an Ed25519 kernel; there are seven and no such kernel has
+ever existed.
+
+#### Data hygiene
+
+The nine `pqc_benchmarks` floors in `benchmarks/baseline.json` and
+`benchmarks/arm-baseline.json` declared no `tier`, and `tools/update_docs.py`
+had been defaulting them to `microbenchmark` silently — an implicit constant
+in the published table. Each now declares it. The generated tables are
+byte-identical, confirming the default was what the data meant.
+
 
 ### §5.1.3 enforcement on the non-verify decoders — 2026-09-17
 

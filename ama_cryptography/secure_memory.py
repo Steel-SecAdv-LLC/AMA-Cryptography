@@ -22,7 +22,11 @@ Features:
 
 Implementation notes:
 
-- ``secure_memzero``: Multi-pass byte-level overwrite
+- ``secure_memzero``: one pass of ``volatile`` stores followed by a
+  compiler barrier (``ama_secure_memzero``, ``src/c/ama_consttime.c``).
+  The barrier is what defeats dead-store elimination; a repeat count is
+  not.  Only the opt-in ``AMA_ALLOW_PYTHON_MEMZERO`` fallback loops, and
+  a normal build refuses that path rather than using it.
 - ``secure_mlock`` / ``secure_munlock``: Native C backend (VirtualLock/mlock) or POSIX fallback
 - ``constant_time_compare``: ``ama_consttime_memcmp`` (C), required — raises
   ``RuntimeError`` when the native library is absent

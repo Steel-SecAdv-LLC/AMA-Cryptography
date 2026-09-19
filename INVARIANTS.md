@@ -3352,5 +3352,123 @@ returned success.
 
 ---
 
+## INVARIANT-53 — A Documented Claim Must Resolve Against the Implementation
+
+**Statement.** Every claim the tracked documentation makes about this library
+must be **derivable from the library**, and a gate must derive it. That covers
+four kinds of claim, each with its own oracle:
+
+1. **Examples.** Every fenced `python` or `c` block on a user-facing page runs,
+   compiles and links — or carries an explicit `pseudocode: <reason>` marker.
+2. **Constructions.** Every security-relevant description — a fallback, a
+   weighting, a threshold, a zeroing strategy, a symbol's existence — matches
+   what the source does, with the expected value **parsed out of the source**
+   rather than written into the gate.
+3. **Public API.** Every documented import, signature, return type, context
+   manager and exported symbol matches what a user can actually reach.
+4. **Measurements.** Every published performance figure is re-derivable from a
+   record that states the command, host, units, sampling and aggregation behind
+   it.
+
+**Why.** Documentation is not commentary on this library; for an integrator it
+*is* the specification. When it disagrees with the code, either they build
+against something that does not exist or they trust a property the code does
+not provide — and both are defects in the deployment, not typos in a file.
+
+The 2026-09 documentation-integrity pass found every one of those four kinds,
+and the worst of them was an example:
+
+```c
+uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES];   /* 64 */
+ama_ed25519_keypair(pk, sk);
+```
+
+`ama_ed25519_keypair` does not generate the seed. The caller must place 32
+bytes of CSPRNG output in `secret_key[0..31]` before the call — the header says
+so at [`include/ama_cryptography.h:1306-1316`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h),
+and `src/c/ama_ed25519.c:799` is the line that reads them
+(`sha512(secret_key, 32, hash)`). That example, on the page a C consumer is
+pointed at, minted an Ed25519 private key from uninitialised stack memory. It
+compiled clean under `-Wall -Wextra -Werror` and printed `valid=1`.
+
+<!-- claim-check: quoting-retired-wording -->
+The rest were the same shape, smaller: `create_crypto_package(codes, helix,
+kms)` raising `TypeError` because `author` has always been required;
+`package['package_id']` subscripting a dataclass; `buf.data` inside
+`with SecureBuffer(...) as buf`, where `__enter__` yields the bytearray;
+`get_pqc_status()` documented as a dict with a worked JSON example, returning a
+`PQCStatus` enum; `locked: bool = secure_mlock(...)` against a function that
+returns `None` and raises on failure; `MASTER_OMNI_CODES`, a name that has
+never existed, used thirteen times; an `extern` link recipe for
+`ama_randombytes`, which `cmake/ama_exports.map` localises and which exports no
+symbol; eight "always available" submodules of which five raise
+`AttributeError`; a "pure Python HKDF fallback" for a combiner that raises
+(INVARIANT-7); posture thresholds of 0.3/0.6/0.8 against 0.15/0.45/0.80, and a
+three-signal weighting against a four-signal one; "AMA does not implement
+HSS/LMS" while `ama_lms_verify` and `ama_hss_verify` were exported; and
+"ML-DSA-65 signing (4.20 ms)" three lines below a table putting a whole package
+creation at 2.17 ms.
+
+**Do not weaken the implementation to make a document true.** Where a claim and
+the code disagree, the code and the invariants are authoritative unless testing
+shows the code defective. `secure_wipe()` is the one case in this pass where it
+was: `CRYPTOGRAPHY.md` described memory barriers the three Python `for` loops
+did not have, so the function now delegates to the native barrier-backed
+`secure_memzero` — the claim was right about what the library should do, and
+the code was what moved.
+
+**Enforcement.** Four gates, run in `ci.yml`:
+
+* `tools/check_doc_examples.py` — `security-checks` (Python and C against the
+  build tree) and `c-consumer` (C against an *installed* prefix, under gcc and
+  clang, which is the only place the documented `#include <ama_cryptography.h>`
+  and pkg-config flags are the ones a downstream consumer gets). Every
+  `python`/`c` block on a covered page must declare its mode; an unmarked block
+  fails, which is what stops coverage decaying as pages grow. `c-run` blocks
+  execute under `valgrind --track-origins=yes`, because compiling is not enough
+  — the uninitialised-seed example compiles and succeeds, and only a memory
+  checker can see it.
+* `tools/check_crypto_construction_docs.py` — `security-checks`. Derives its
+  authority with `ast` from `hybrid_combiner.py`, `adaptive_posture.py`,
+  `equations.py`, `legacy_compat.py`, `src/c/ama_consttime.c` and
+  `src/c/ama_lms.c`, so implementing a fallback stops the fallback rule firing
+  on its own and changing a weight changes the weight the gate demands. It
+  fails closed (exit 2) on a partial derivation: a gate that silently learns
+  nothing reports green on everything. Its scan covers source comments and
+  docstrings as well as prose — they drift identically and are read by the
+  same people — and the four gate scripts and their test module are exempt by
+  name, because a gate cannot be written without quoting what it rejects. That
+  exemption list is checked at startup, so an entry outliving its file fails
+  rather than quietly widening.
+* `tools/check_public_api_docs.py` — `security-checks`, with
+  `--require-library`. Bare-import reachability (measured in a fresh
+  subprocess, because Python binds a submodule as a package attribute the
+  moment anything in the process imports it), signatures, return types asserted
+  from real calls, `__enter__` return values, the version script against
+  `nm --dynamic` in both directions, and the per-architecture SIMD inventory.
+* `tools/check_benchmark_claims.py` — `security-checks`. Re-derives every cell
+  of the generated benchmark blocks, requires every floor cited in prose to
+  exist in `baseline.json` or `arm-baseline.json`, requires the results record
+  to carry reproduction provenance, and rejects a measured figure more than 8x
+  its own floor as a units or identity error.
+
+A **correction note** may quote the wording it retires — a reader cannot
+otherwise tell what changed — but only behind an explicit
+`<!-- claim-check: quoting-retired-wording -->` marker. A waiver that can be
+inferred is a waiver that arrives by accident.
+
+**Verification.** `tests/test_documentation_integrity_gates.py` pins all four
+in both directions. The negative controls are not invented: each is the literal
+text this pass removed, so a regression to any of them fails a named test.
+Positive controls assert that the *corrected* wording passes, because a gate
+nobody can satisfy is a gate that gets disabled.
+
+**Why a gate and not just a correction.** INVARIANT-16's BIP32 case is the
+precedent recorded in this document: that claim was corrected once
+(CHANGELOG KM-HD-001), shipped with no gate, and came back in six places.
+`tools/check_hd_interop_honesty.py` exists because of it.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-09-16_
+_Last updated: 2026-09-19_

@@ -81,7 +81,10 @@ except Exception as _monitor_persist_exc:  # degrade, never brick import (AUDIT-
     except Exception:  # last resort: monitoring off, library still imports (AUDIT-15)
         _monitor = create_monitor(enabled=False)
 
-# Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
+# Import HMAC and HKDF from pqc_backends.  Native C only — INVARIANT-7
+# forbids a pure-Python substitute for either, and the module-level guard
+# below raises rather than providing one.  The two `_*_NATIVE_AVAILABLE`
+# flags imported here are what that guard reads.
 from ama_cryptography.pqc_backends import (
     _HKDF_NATIVE_AVAILABLE,
     _HMAC_SHA3_256_NATIVE_AVAILABLE,

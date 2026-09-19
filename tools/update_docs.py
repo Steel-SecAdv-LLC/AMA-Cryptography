@@ -659,9 +659,7 @@ def update_pipeline_latency_docs(dry_run: bool = False) -> bool:
         if LATENCY_START not in text:
             continue
         carrying += 1
-        pattern = re.compile(
-            re.escape(LATENCY_START) + r".*?" + re.escape(LATENCY_END), re.DOTALL
-        )
+        pattern = re.compile(re.escape(LATENCY_START) + r".*?" + re.escape(LATENCY_END), re.DOTALL)
         new_text = pattern.sub(f"{LATENCY_START}\n{table}\n{LATENCY_END}", text)
         if new_text != text:
             if dry_run:

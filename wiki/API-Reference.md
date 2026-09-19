@@ -930,11 +930,24 @@ UserWarning (builtin)
 
 ## Package-Level Imports
 
-`import ama_cryptography` binds **five** submodules as attributes of the
+`import ama_cryptography` binds **five** public submodules as attributes of the
 package. Every other submodule needs its own `import` statement — the
 package's PEP 562 `__getattr__` resolves *symbol* names (`AmaCryptography`,
 `create_crypto_package`, the `key_formats` helpers) and raises `AttributeError`
 for a submodule name it does not eagerly import.
+
+(On a tree where the Cython extensions are built, the compiled FFI bindings —
+`sha3_binding`, `hmac_binding`, `hkdf_binding`, `ed25519_binding`,
+`dilithium_binding`, `math_engine` — also appear as attributes, because
+`pqc_backends` imports whichever of them exist. They are an optimisation, not
+public API: everything they accelerate has a pure-ctypes path.)
+
+The example below is written for a **fresh interpreter**, which is the only
+state in which the question has a stable answer: Python binds a submodule as an
+attribute of its parent package the moment anything in the process imports it,
+so once *your* program has done `import ama_cryptography.key_management`
+anywhere, `ama_cryptography.key_management` resolves from then on. Do not rely
+on that — write the import you need.
 
 <!-- example: python-run -->
 ```python

@@ -64,8 +64,14 @@ PUBLIC_INCLUDE = REPO_ROOT / "include"
 #: Functions the wiki documents that are declared in an internal header rather
 #: than in ``include/``.  The value is the header, so the entry is a statement
 #: about the tree and not a place to hide a typo.
-INTERNAL_HEADER_DOCUMENTED = {
-    "ama_randombytes": "src/c/ama_platform_rand.h",
+INTERNAL_HEADER_DOCUMENTED: dict[str, str] = {
+    # ``ama_randombytes`` used to be here: wiki/C-API-Reference.md documented
+    # its prototype and offered an ``extern`` declaration as a recipe for
+    # out-of-tree callers.  That recipe never linked — cmake/ama_exports.map
+    # names the symbol in its ``local:`` list, so ``nm --dynamic`` finds
+    # nothing — and the page now says so instead of declaring it.  The entry is
+    # removed rather than kept, because this map is a statement about what the
+    # page documents.
 }
 
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
