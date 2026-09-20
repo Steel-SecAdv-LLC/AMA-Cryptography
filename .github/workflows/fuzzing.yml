@@ -345,6 +345,7 @@ jobs:
           - fuzz_x25519
           - fuzz_argon2
           - fuzz_secp256k1
+          - fuzz_nistp
           - fuzz_frost
           # SLH-DSA verification is the slowest execution in the suite
           # (~0.17 s each at -O2), so a 60-second run is hundreds of

@@ -72,6 +72,20 @@ DEFAULT_MAX_LEN = 4096
 #: bound worked out by hand and the reasoning that gets it.  Anything not
 #: listed here and not statically resolvable fails the gate.
 MANUAL_BOUNDS: dict[str, tuple[int, str]] = {
+    "fuzz_nistp": (
+        200,
+        "every guard is against nb = ama_nistp_field_bytes(curve) or "
+        "pub_len = ama_nistp_pubkey_bytes(curve): runtime lookups, but ranging "
+        "over exactly three curves, so each is bounded by its P-521 value -- "
+        "nb <= 66 (AMA_NISTP_MAX_FIELD_BYTES) and pub_len <= 132 "
+        "(AMA_NISTP_MAX_PUBKEY_BYTES). Guard by guard: `2u * nb` <= 132 "
+        "(case 1, raw r || s); `pub_len` <= 132 (case 4, a public key); "
+        "`pub_len + 1u` <= 133 (case 3, a public key plus at least one "
+        "signature octet); `nb` <= 66 (default case, a private scalar); and "
+        "the widest, `nb + pub_len` <= 198 (default case, scalar plus peer "
+        "key). 198 plus the 2-byte header -- data[0] curve selector, data[1] "
+        "case selector -- before the payload gives 200",
+    ),
     "fuzz_frost": (
         780,
         "case 2 gates on `needed = threshold*32 + threshold*64 + threshold + 1`, "

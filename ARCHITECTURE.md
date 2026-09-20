@@ -811,7 +811,7 @@ The C library uses CMake (`CMakeLists.txt`, ~1,300 lines) with the following key
 
 When `AMA_USE_NATIVE_PQC=OFF`, the PQC source files are excluded and the library provides only classical primitives (SHA3, Ed25519, HKDF, AES-GCM).
 
-Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (15 targets covering all C implementations).
+Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (16 targets covering all C implementations).
 
 ### Architectural Invariants
 
@@ -877,7 +877,7 @@ docker run ama-cryptography:latest
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
 | Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
-| Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
+| Fuzz Tests | Input mutation testing | 16 C targets | `fuzz/fuzz_*.c` (17 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
 **Total:** 5,607 Python test functions across 247 test files, plus the

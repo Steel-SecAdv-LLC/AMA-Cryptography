@@ -473,7 +473,7 @@ cmake -B build -DAMA_ENABLE_DUDECT=ON && cmake --build build
 
 Location: `fuzz/`
 
-15 libFuzzer fuzz targets with seed corpora and dictionaries:
+16 libFuzzer fuzz targets with seed corpora and dictionaries:
 - Core: SHA3, Ed25519, AES-GCM, HKDF, consttime, agent-binding, Ascon
 - PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1, FROST
 
@@ -739,7 +739,7 @@ See [docs/constant-time-testing.md](docs/constant-time-testing.md) for methodolo
 
 ### Continuous Fuzzing (ClusterFuzzLite and OSS-Fuzz)
 
-15 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries. They run
+16 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries. They run
 nightly under [ClusterFuzzLite](https://google.github.io/clusterfuzzlite/)
 (batch mode, ASan/UBSan/MSan, corpus kept between runs, weekly prune and
 coverage report), the per-PR lane keeps and merges its corpus across runs,

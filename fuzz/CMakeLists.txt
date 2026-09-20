@@ -39,6 +39,7 @@ set(FUZZ_PQC_TARGETS
     fuzz_x25519
     fuzz_argon2
     fuzz_secp256k1
+    fuzz_nistp
     fuzz_frost
 )
 
