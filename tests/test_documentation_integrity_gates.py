@@ -1195,6 +1195,186 @@ class TestEveryLocalisedSymbolIsCheckedOnEveryPlatform:
         assert len(expected) >= 30
 
 
+class TestThePeExportTableIsStatedNotInherited:
+    """A compiler clone reached the MinGW DLL's ABI and no flag could remove it.
+
+    GCC propagates a public entry point's ``__declspec(dllexport)`` to the
+    clones its interprocedural passes create, so ``ama_hmac_sha256.part.0`` was
+    exported: a partial-inlining fragment with a compiler-chosen signature and
+    none of the entry point's argument checks. Three controls were measured
+    before the fourth was built:
+
+    * ``-Wl,--exclude-all-symbols`` suppresses AUTO-export, not an explicit
+      dllexport — 191 exports either way.
+    * ``-fno-partial-inlining`` produced ``.constprop.0`` in its place. The
+      suffix is not a fixed set, so naming clones is not a fix.
+    * a ``.def`` ALONE changes nothing, because GNU ld unions it with the
+      dllexport'd set rather than restricting to it.
+
+    What works is removing the attribute so the ``.def`` is the sole authority
+    (``AMA_EXPORTS_FROM_DEF``), and generating that ``.def`` from the AMA_API
+    declarations so it can never name a clone — nothing declares one.
+    """
+
+    GENERATOR = REPO_ROOT / "cmake" / "generate_pe_def.cmake"
+
+    def _generate(self, tmp_path: Path, repo: Path) -> list[str]:
+        output = tmp_path / "ama_cryptography.def"
+        completed = subprocess.run(
+            [
+                "cmake",
+                f"-DAMA_SOURCE_DIR={repo}",
+                f"-DAMA_DEF_OUTPUT={output}",
+                "-P",
+                str(self.GENERATOR),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        body = output.read_text(encoding="utf-8")
+        assert "EXPORTS" in body
+        return [line.strip() for line in body.splitlines() if line.startswith("    ama_")]
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_the_generated_list_is_the_declared_abi(self, tmp_path: Path) -> None:
+        """Two independent derivations of the same set must agree.
+
+        The generator is CMake reading lines; this reads the same headers with
+        the gate's own multi-line regex. Agreement is what makes the generated
+        file trustworthy without a Windows host to link on.
+        """
+        module = _load(PUBLIC_API)
+        declared: set[str] = set()
+        for header in sorted((REPO_ROOT / "include").rglob("*.h")) + sorted(
+            (REPO_ROOT / "src" / "c").rglob("*.h")
+        ):
+            declared |= set(module._AMA_API.findall(header.read_text(encoding="utf-8")))
+        expected = declared - module.localised_symbols(REPO_ROOT)
+
+        generated = self._generate(tmp_path, REPO_ROOT)
+        assert sorted(set(generated)) == sorted(expected)
+        assert len(generated) == len(set(generated)), "the .def repeats a name"
+        assert len(generated) >= 150, "the declared ABI collapsed; that is an ABI change"
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_no_localised_symbol_is_in_the_real_export_table(self, tmp_path: Path) -> None:
+        """SMOKE, and labelled so deliberately.
+
+        Measured: on this tree none of the thirty localised names is
+        AMA_API-declared, so ``declared - localised`` equals ``declared`` and
+        this holds with or without the subtraction — removing it from the
+        generator leaves this test passing. It stays as a standing check on the
+        real tree; ``test_a_localised_declaration_is_subtracted`` is what
+        actually constrains the subtraction.
+        """
+        module = _load(PUBLIC_API)
+        generated = set(self._generate(tmp_path, REPO_ROOT))
+        assert not (generated & module.localised_symbols(REPO_ROOT))
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_a_localised_declaration_is_subtracted(self, tmp_path: Path) -> None:
+        """The PIN on the subtraction, over a tree where it is not a no-op.
+
+        A header can declare AMA_API on something the version script localises —
+        exactly the case the subtraction exists for, and the case the real tree
+        happens not to exercise. Built here on purpose: without the subtraction
+        the internal name lands in EXPORTS and is published.
+        """
+        repo = tmp_path / "repo"
+        (repo / "cmake").mkdir(parents=True)
+        (repo / "include").mkdir()
+        (repo / "include" / "x.h").write_text(
+            "AMA_API int ama_public_entry(void);\n"
+            "AMA_API void ama_internal_kernel_avx2(void);\n",
+            encoding="utf-8",
+        )
+        (repo / "cmake" / "ama_exports.map").write_text(
+            "{\n    global:\n        ama_*;\n"
+            "    local:\n        ama_internal_kernel_avx2;\n};\n",
+            encoding="utf-8",
+        )
+        assert self._generate(tmp_path, repo) == ["ama_public_entry"]
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_a_clone_cannot_appear_in_the_generated_list(self, tmp_path: Path) -> None:
+        """The property that closes the class, rather than one clone's name."""
+        module = _load(PUBLIC_API)
+        for name in self._generate(tmp_path, REPO_ROOT):
+            assert module._PLAIN_SYMBOL.fullmatch(name), name
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_an_empty_local_block_fails_the_configure(self, tmp_path: Path) -> None:
+        """Non-vacuity: a map that stops parsing must not publish the internals.
+
+        This is the failure the macOS list had — an export control that silently
+        covers nothing reads exactly like one that works.
+        """
+        repo = tmp_path / "repo"
+        (repo / "cmake").mkdir(parents=True)
+        (repo / "include").mkdir()
+        (repo / "include" / "x.h").write_text("AMA_API int ama_thing(void);\n", encoding="utf-8")
+        (repo / "cmake" / "ama_exports.map").write_text("{ global: ama_*; };\n", encoding="utf-8")
+        completed = subprocess.run(
+            [
+                "cmake",
+                f"-DAMA_SOURCE_DIR={repo}",
+                f"-DAMA_DEF_OUTPUT={tmp_path / 'out.def'}",
+                "-P",
+                str(self.GENERATOR),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert "local:" in completed.stderr
+        assert not (tmp_path / "out.def").exists()
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_no_declarations_fails_the_configure(self, tmp_path: Path) -> None:
+        """An empty EXPORTS section links a DLL that exports nothing."""
+        repo = tmp_path / "repo"
+        (repo / "cmake").mkdir(parents=True)
+        (repo / "include").mkdir()
+        (repo / "include" / "x.h").write_text("int plain_function(void);\n", encoding="utf-8")
+        (repo / "cmake" / "ama_exports.map").write_text(
+            "{ global: ama_*; local: ama_secret; };\n", encoding="utf-8"
+        )
+        completed = subprocess.run(
+            [
+                "cmake",
+                f"-DAMA_SOURCE_DIR={repo}",
+                f"-DAMA_DEF_OUTPUT={tmp_path / 'out.def'}",
+                "-P",
+                str(self.GENERATOR),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert "AMA_API" in completed.stderr
+
+    def test_the_def_is_the_sole_authority_on_mingw(self) -> None:
+        """A .def beside dllexport would be decoration.
+
+        Measured: GNU ld exports the union, so a .def naming one of two
+        dllexport'd functions still exports both. The build therefore has to
+        remove the attribute as well, and the header has to honour that define.
+        """
+        cmakelists = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        assert "AMA_EXPORTS_FROM_DEF" in cmakelists
+        assert "WIN32 AND NOT MSVC" in cmakelists
+        header = (REPO_ROOT / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
+        assert "defined(AMA_BUILDING_SHARED) && defined(AMA_EXPORTS_FROM_DEF)" in header
+        # MSVC keeps dllexport: it emits no such clones, and link.exe takes no
+        # -Wl flag. Losing that branch would unexport the whole Windows ABI.
+        assert "#elif defined(AMA_BUILDING_SHARED)" in header
+        assert "__declspec(dllexport)" in header
+
+
 class TestTheGateInvocationPatternCannotBacktrack:
     """CodeQL py/redos, security-severity 7.5, on this file's own regex.
 

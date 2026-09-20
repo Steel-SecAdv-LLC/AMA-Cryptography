@@ -1041,6 +1041,57 @@ if(AMA_BUILD_SHARED)
             "-Wl,-unexported_symbols_list,${_ama_unexported_file}")
         set_property(TARGET ama_cryptography_shared APPEND PROPERTY
             LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map")
+    elseif(WIN32 AND NOT MSVC)
+        # MinGW.  PE has no version script; a .def states the export table
+        # outright, and that is the only control that closes this class.  GCC
+        # propagates a public entry point's dllexport to the clones its
+        # interprocedural passes create, so `ama_hmac_sha256.part.0` -- a
+        # partial-inlining fragment with a compiler-chosen signature and none of
+        # the entry point's argument checks -- reached the DLL's export table.
+        # Measured, both narrower controls fail: -Wl,--exclude-all-symbols
+        # suppresses AUTO-export rather than an explicit dllexport and left the
+        # count at 191 either way, and -fno-partial-inlining merely produced
+        # `.constprop.0` instead.  The suffix is not a fixed set, so naming
+        # clones is not a fix.
+        #
+        # The list is GENERATED from the AMA_API declarations and the version
+        # script's `local:` block -- never written by hand, which is the failure
+        # cmake/ama_exports.macos.sym already had.  Measured equivalence on the
+        # cross-built DLL: the derived set is EXACTLY the 190 real exports, and
+        # the clone is excluded by construction because nothing declares one.
+        # AMA_API must expand to NOTHING here: GNU ld unions a .def with the
+        # dllexport'd set rather than restricting to it (measured -- a .def
+        # naming one of two dllexport'd functions exports both), so with the
+        # attribute left on, the .def cannot remove the clone that inherits it.
+        target_compile_definitions(ama_cryptography_shared PRIVATE AMA_EXPORTS_FROM_DEF)
+        set(_ama_def_file "${CMAKE_CURRENT_BINARY_DIR}/ama_cryptography.def")
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}"
+                    "-DAMA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DAMA_DEF_OUTPUT=${_ama_def_file}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_pe_def.cmake"
+            RESULT_VARIABLE _ama_def_result
+            OUTPUT_VARIABLE _ama_def_output
+            ERROR_VARIABLE _ama_def_output)
+        if(NOT _ama_def_result EQUAL 0)
+            message(FATAL_ERROR
+                "could not generate the PE export definition: ${_ama_def_output}")
+        endif()
+        # The .def is an ordinary link input to GNU ld for a PE target.
+        target_link_options(ama_cryptography_shared PRIVATE "${_ama_def_file}")
+        set_property(TARGET ama_cryptography_shared APPEND PROPERTY
+            LINK_DEPENDS "${_ama_def_file}")
+        # Re-run the configure when anything the list is derived from changes,
+        # so adding an AMA_API entry point cannot silently leave it unexported.
+        # tools/check_public_api_docs.py is the backstop: it fails when a
+        # declared entry point is neither exported nor deliberately localised.
+        file(GLOB_RECURSE _ama_def_inputs
+            "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/c/*.h")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            ${_ama_def_inputs}
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_pe_def.cmake")
     elseif(NOT MSVC)
         target_link_options(ama_cryptography_shared PRIVATE
             "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"

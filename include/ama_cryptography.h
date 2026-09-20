@@ -24,9 +24,23 @@ extern "C" {
  *
  * When compiling the library itself (shared or static), AMA_API is either
  * __declspec(dllexport) or empty.  Only external consumers of the shared
- * DLL get __declspec(dllimport). */
+ * DLL get __declspec(dllimport).
+ *
+ * AMA_EXPORTS_FROM_DEF is set by CMakeLists.txt for the MinGW shared build,
+ * where the export table is stated by a generated module-definition file
+ * instead (cmake/generate_pe_def.cmake).  It has to make AMA_API EMPTY rather
+ * than merely adding the .def, because GNU ld UNIONS a .def with whatever
+ * carries __declspec(dllexport) -- measured: a .def naming one of two
+ * dllexport'd functions exports both.  That union is how
+ * `ama_hmac_sha256.part.0` reached the ABI: GCC propagates the attribute from
+ * a public entry point to the clones its interprocedural passes create, so no
+ * linker flag can take it back off.  With nothing marked, the .def is the sole
+ * authority and a clone cannot appear in it, because nothing declares one.
+ * MSVC is unaffected and keeps dllexport: it emits no such clones. */
 #if defined(_WIN32) || defined(_WIN64)
-  #ifdef AMA_BUILDING_SHARED
+  #if defined(AMA_BUILDING_SHARED) && defined(AMA_EXPORTS_FROM_DEF)
+    #define AMA_API  /* exports stated by the generated .def */
+  #elif defined(AMA_BUILDING_SHARED)
     #define AMA_API __declspec(dllexport)
   #elif defined(AMA_BUILDING_STATIC) || defined(AMA_TESTING_MODE)
     #define AMA_API  /* static library or test build — no dllimport */
