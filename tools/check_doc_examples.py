@@ -960,21 +960,32 @@ def check_c_constants(block: Block, report: Report, repo: Path) -> None:
 
 
 def exported_symbols(library: Path) -> frozenset[str]:
-    """Dynamic ``ama_*`` symbols the built shared object actually exports."""
-    completed = subprocess.run(
-        ["nm", "--dynamic", "--defined-only", "--format=posix", str(library)],
-        capture_output=True,
-        text=True,
-        check=False,
+    """Symbols the built library actually exports, whatever format it is in.
+
+    This used to carry its own copy of ``nm --dynamic --defined-only
+    --format=posix``, which reads ELF and only ELF.  Both copies then failed
+    the same way on the same day: Xcode's nm answers a Mach-O dylib with
+    ``File format has no dynamic symbol table`` and exits non-zero, so every
+    macOS lane raised out of this function, and ``nm`` on a PE DLL prints
+    "no symbols" and exits ZERO, so the windows lanes read an empty export set
+    as sixteen missing entry points.
+
+    ``tools/check_public_api_docs.py`` owns the reader and is the gate whose
+    subject is the export surface; this borrows it rather than restating it, so
+    there is one definition of "exported" in the tree and one place to fix.
+    Loaded by path for the reason ``_load_encodability_predicate`` documents:
+    ``tools/`` is not a package.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_exports_for_doc_examples", REPO / "tools" / "check_public_api_docs.py"
     )
-    if completed.returncode != 0:
-        raise RuntimeError(f"nm failed on {library}: {completed.stderr.strip()}")
-    names: set[str] = set()
-    for line in completed.stdout.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[1] in {"T", "W", "i", "D", "B", "R"}:
-            names.add(parts[0])
-    return frozenset(names)
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable on a real tree
+        raise RuntimeError("cannot load tools/check_public_api_docs.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    reader: Callable[[Path], frozenset[str]] = module.dynamic_symbols
+    return reader(library)
 
 
 # ---------------------------------------------------------------------------

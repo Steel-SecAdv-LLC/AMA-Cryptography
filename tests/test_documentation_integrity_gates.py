@@ -41,9 +41,10 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Iterator, Optional, cast
+from typing import Any, Iterator, Optional, Sequence, cast
 from unittest import mock
 
 import pytest
@@ -154,6 +155,18 @@ def _scratch_repo(tmp_path: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8", newline="")
     return scratch
+
+
+#: A workflow line that runs one of the gate scripts, optionally behind leading
+#: ``VAR=value`` assignments.
+#:
+#: The name side is ``[^\s=]+`` rather than ``\S+`` so each assignment splits at
+#: exactly one place.  With ``\S+=\S+`` the ``=`` is itself a ``\S``, so a run of
+#: ``!==!`` tokens can be divided between name and value in exponentially many
+#: ways, all of which are tried before the match fails: CodeQL flagged it
+#: py/redos at security-severity 7.5, and measured here, 22 repetitions took
+#: 0.73s against 0.0003s for this form.
+_GATE_INVOCATION = re.compile(r"^(?:[^\s=]+=\S+ )*python3? tools/check_[a-z_]+\.py")
 
 
 class _ParserBuiltError(Exception):
@@ -692,6 +705,201 @@ class TestCryptoConstructionDocs:
 # ===========================================================================
 
 
+def _minimal_pe(exports: Sequence[str]) -> bytes:
+    """A PE32+ image whose export directory names exactly ``exports``.
+
+    Synthesised rather than compiled: the parser under test must be pinned on
+    every runner, and macOS and Windows have no MinGW to produce a DLL. The
+    parser itself was validated in the field against a real cross-built
+    ``libama_cryptography.dll`` — this keeps that reading honest without a
+    toolchain. Layout per the PE/COFF specification, §3 (headers) and §5.3
+    (the export directory); every field the parser does not read is left zero.
+    """
+    pe_offset = 0x80
+    optional_size = 240  # >= 112 + 16 * 8, so data directory 0 is inside it
+    optional = pe_offset + 24
+    section_table = optional + optional_size
+    raw = section_table + 40  # one section header
+    section_rva = 0x1000
+
+    directory = bytearray(40)
+    name_pointers = bytearray()
+    blob = bytearray()
+    names_rva = section_rva + 40 + 4 * len(exports)
+    for name in exports:
+        name_pointers += (names_rva + len(blob)).to_bytes(4, "little")
+        blob += name.encode("ascii") + b"\0"
+    directory[24:28] = len(exports).to_bytes(4, "little")  # NumberOfNamePointers
+    directory[32:36] = (section_rva + 40).to_bytes(4, "little")  # NamePointerRVA
+    section = bytes(directory) + bytes(name_pointers) + bytes(blob)
+
+    image = bytearray(raw + len(section))
+    image[0:2] = b"MZ"
+    image[0x3C:0x40] = pe_offset.to_bytes(4, "little")
+    image[pe_offset : pe_offset + 4] = b"PE\0\0"
+    image[pe_offset + 4 : pe_offset + 6] = (0x8664).to_bytes(2, "little")  # Machine
+    image[pe_offset + 6 : pe_offset + 8] = (1).to_bytes(2, "little")  # NumberOfSections
+    image[pe_offset + 20 : pe_offset + 22] = optional_size.to_bytes(2, "little")
+    image[optional : optional + 2] = (0x20B).to_bytes(2, "little")  # PE32+
+    image[optional + 112 : optional + 116] = section_rva.to_bytes(4, "little")
+    image[optional + 116 : optional + 120] = len(section).to_bytes(4, "little")
+    image[section_table : section_table + 8] = b".edata\0\0"
+    image[section_table + 8 : section_table + 12] = len(section).to_bytes(4, "little")
+    image[section_table + 12 : section_table + 16] = section_rva.to_bytes(4, "little")
+    image[section_table + 16 : section_table + 20] = len(section).to_bytes(4, "little")
+    image[section_table + 20 : section_table + 24] = raw.to_bytes(4, "little")
+    image[raw:] = section
+    return bytes(image)
+
+
+class TestThePublicApiGateReadsTheImageInFrontOfIt:
+    """``nm --dynamic`` reads ELF. The gate is handed three formats.
+
+    On a098d8ba the windows-latest lane reported sixteen missing exports.
+    Measured against a MinGW-built DLL that demonstrably exports them:
+    ``nm --dynamic --defined-only --format=posix`` prints "no symbols" and
+    **exits zero**, so the gate saw an empty set and read it as a catastrophic
+    ABI failure. The sixteen were a reading error, and a genuinely dropped
+    export would have been indistinguishable from it.
+    """
+
+    def test_the_format_comes_from_the_magic_bytes(self, tmp_path: Path) -> None:
+        module = _load(PUBLIC_API)
+        cases = {
+            "an.so": b"\x7fELF\x02\x01\x01\x00",
+            "a.dll": _minimal_pe(["ama_x"]),
+            "a.dylib": b"\xcf\xfa\xed\xfe" + bytes(16),
+        }
+        formats = []
+        for name, payload in cases.items():
+            path = tmp_path / name
+            path.write_bytes(payload)
+            formats.append(module.object_format(path))
+        assert formats == ["elf", "pe", "macho"]
+
+    def test_a_format_it_cannot_read_is_named_not_guessed(self, tmp_path: Path) -> None:
+        """An unreadable image is an error, never an empty export set."""
+        path = tmp_path / "not-an-object"
+        path.write_bytes(b"#!/bin/sh\nexit 0\n")
+        module = _load(PUBLIC_API)
+        with pytest.raises(RuntimeError, match="not an object file"):
+            module.object_format(path)
+
+    def test_pe_exports_are_read_from_the_export_directory(self, tmp_path: Path) -> None:
+        names = ["ama_sha3_256", "ama_ed25519_sign", "ama_hkdf"]
+        path = tmp_path / "ama_cryptography.dll"
+        path.write_bytes(_minimal_pe(names))
+        module = _load(PUBLIC_API)
+        assert module.pe_export_names(path) == frozenset(names)
+        assert module.dynamic_symbols(path) == frozenset(names)
+
+    def test_reading_no_ama_symbols_raises_instead_of_reporting_them_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """The pin on the whole defect class.
+
+        Returning an empty set here is what turned an unreadable image into
+        sixteen invented documentation failures. It must be impossible to
+        confuse "I could not read this" with "this exports nothing".
+        """
+        path = tmp_path / "ama_cryptography.dll"
+        path.write_bytes(_minimal_pe(["unrelated_symbol"]))
+        module = _load(PUBLIC_API)
+        with pytest.raises(RuntimeError, match=r"read 0 ama_\* symbols"):
+            module.dynamic_symbols(path)
+
+    def test_the_elf_reader_still_reads_the_built_library(self) -> None:
+        """Positive control: the format this gate has always read."""
+        if _BUILT_LIBRARY is None or _BUILT_LIBRARY.read_bytes()[:4] != b"\x7fELF":
+            pytest.skip("this host's build is not ELF; the PE and Mach-O paths cover it")
+        module = _load(PUBLIC_API)
+        symbols = module.dynamic_symbols(_BUILT_LIBRARY)
+        assert {"ama_sha3_256", "ama_ed25519_sign"} <= symbols
+
+    def test_macho_is_read_by_whichever_nm_the_runner_ships(self) -> None:
+        """Xcode ships LLVM nm; older images ship cctools nm.
+
+        They do not accept the same spelling of "defined external symbols",
+        and which one is ``/usr/bin/nm`` is a property of the runner image, not
+        of the library. Before this, the macOS lanes never reached the export
+        check at all — ``find_library`` globbed ``.so*`` only — so a wrong flag
+        would have turned ten green jobs red on its first run.
+
+        Exercised here against this host's own library, because what is under
+        test is the invocation sequence, not the object format: the first
+        spelling is made to fail and the reader must still produce the answer.
+        """
+        if _BUILT_LIBRARY is None:
+            pytest.skip("no built library on this host to run nm against")
+        module = _load(PUBLIC_API)
+        working = module._MACHO_NM_ARGV[-1]
+        with mock.patch.object(module, "_MACHO_NM_ARGV", (("--no-such-nm-option",), working)):
+            symbols = module._macho_symbols(_BUILT_LIBRARY)
+        assert "ama_sha3_256" in symbols
+
+    def test_when_no_nm_spelling_works_every_attempt_is_named(self) -> None:
+        """Failing closed is not enough; it has to say what it tried."""
+        if _BUILT_LIBRARY is None:
+            pytest.skip("no built library on this host to run nm against")
+        module = _load(PUBLIC_API)
+        with mock.patch.object(
+            module, "_MACHO_NM_ARGV", (("--no-such-nm-option",), ("--also-not-real",))
+        ):
+            with pytest.raises(RuntimeError) as caught:
+                module._macho_symbols(_BUILT_LIBRARY)
+        message = str(caught.value)
+        assert "--no-such-nm-option" in message
+        assert "--also-not-real" in message
+
+    def test_both_gates_read_exports_through_the_same_reader(self, tmp_path: Path) -> None:
+        """One definition of "exported" in the tree, not two.
+
+        ``check_doc_examples.py`` carried its own copy of
+        ``nm --dynamic --defined-only --format=posix``.  Both copies failed the
+        same day on a098d8ba, in opposite directions: on macOS Xcode's nm
+        answers a dylib with "File format has no dynamic symbol table" and
+        exits non-zero, so every macOS lane raised out of the gate; on Windows
+        nm prints "no symbols" and exits ZERO, so the lane read an empty set as
+        sixteen missing entry points.  Fixing one copy would have left the
+        other.
+
+        A PE image is the probe because it is the format the duplicated reader
+        could not read at all: if ``exported_symbols`` still had its own nm,
+        this returns empty rather than the names.
+        """
+        names = ["ama_sha3_256", "ama_ed25519_verify", "ama_hkdf"]
+        path = tmp_path / "ama_cryptography.dll"
+        path.write_bytes(_minimal_pe(names))
+        assert _load(DOC_EXAMPLES).exported_symbols(path) == frozenset(names)
+
+    def test_a_compiler_clone_never_reaches_the_exported_abi(self, tmp_path: Path) -> None:
+        """Measured on the cross-built DLL: ``ama_hmac_sha256.part.0``.
+
+        A GCC interprocedural clone inherits the entry point's dllexport, so it
+        lands on the PE export table with a compiler-chosen signature and none
+        of the entry point's argument checks — the guard-bypass surface
+        ``cmake/ama_exports.map`` keeps off the ELF ABI. Naming clones is not
+        the fix and this asserts the failure says so: suppressing
+        ``-fpartial-inlining`` moved the symbol to ``.constprop.0``.
+        """
+        module = _load(PUBLIC_API)
+        declared = set(module._AMA_API.findall(Path("include/ama_cryptography.h").read_text()))
+        clean = sorted(declared | set(module.MUST_BE_EXPORTED))
+        path = tmp_path / "ama_cryptography.dll"
+
+        path.write_bytes(_minimal_pe(clean))
+        report = module.Report()
+        module.check_exports(report, REPO_ROOT, path)
+        assert report.failures == [], report.failures
+
+        path.write_bytes(_minimal_pe([*clean, "ama_hmac_sha256.part.0"]))
+        report = module.Report()
+        module.check_exports(report, REPO_ROOT, path)
+        assert len(report.failures) == 1
+        assert "ama_hmac_sha256.part.0" in report.failures[0]
+        assert "never by naming the clones" in report.failures[0]
+
+
 class TestPublicApiDocs:
     def test_the_real_package_matches_its_documentation(self) -> None:
         completed = _run(PUBLIC_API)
@@ -894,6 +1102,48 @@ class TestBenchmarkClaims:
 # ===========================================================================
 
 
+class TestTheGateInvocationPatternCannotBacktrack:
+    """CodeQL py/redos, security-severity 7.5, on this file's own regex.
+
+    ``^(\\S+=\\S+ )*python3? tools/...`` splits each ``VAR=value`` token at any
+    of its ``=`` characters, because ``=`` is itself a ``\\S``. A line of
+    ``!==!`` tokens that does not end in a gate invocation is therefore retried
+    in exponentially many ways before the match fails. A scan over every
+    workflow file is exactly where a pathological line can arrive.
+    """
+
+    def test_a_pathological_line_does_not_blow_up(self) -> None:
+        # The line must NOT end in a gate invocation. A line that matches
+        # settles on the first split and never backtracks — the first version
+        # of this test appended a real `python3 tools/...` and so passed
+        # against the vulnerable pattern, which the mutation run caught.
+        line = "!==! " * 26 + "no-gate-here"
+        start = time.perf_counter()
+        _GATE_INVOCATION.match(line)
+        elapsed = time.perf_counter() - start
+        # Measured: the ambiguous form took 0.73s at 22 repetitions and roughly
+        # quadruples with each further one; this form is ~0.0003s at any length.
+        # The budget is four orders of magnitude above the fixed cost, so a
+        # loaded runner cannot reach it but the defect cannot hide under it.
+        assert elapsed < 1.0, f"{elapsed:.3f}s — the pattern is backtracking again"
+
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            ("python tools/check_headers.py", True),
+            ("python3 tools/check_doc_examples.py --library-dir build/lib", True),
+            ("CC=gcc python tools/check_doc_examples.py --lang c", True),
+            ("A=1 B=2 python3 tools/check_public_api_docs.py", True),
+            ("PYTHONPATH=a=b python tools/check_headers.py", True),
+            ("pytest tests/ -q", False),
+            ("python tools/refresh_derived_docs.py", False),
+        ],
+    )
+    def test_it_still_recognises_exactly_what_it_did(self, line: str, expected: bool) -> None:
+        """A faster pattern that matches a different set is not the same check."""
+        assert bool(_GATE_INVOCATION.match(line)) is expected
+
+
 class TestTheWorkflowInvokesTheseGatesCorrectly:
     """Every `python tools/check_*.py ...` line in ci.yml must be a valid call.
 
@@ -944,7 +1194,7 @@ class TestTheWorkflowInvokesTheseGatesCorrectly:
 
             for line in joined:
                 line = line.lstrip("-").strip()
-                if not re.match(r"^(\S+=\S+ )*python3? tools/check_[a-z_]+\.py", line):
+                if not _GATE_INVOCATION.match(line):
                     continue
                 try:
                     argv = shlex.split(line)

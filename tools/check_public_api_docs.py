@@ -75,7 +75,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -432,22 +432,174 @@ def check_context_managers(report: Report) -> None:
 
 _AMA_API = re.compile(r"AMA_API\s+[A-Za-z_][\w \*]*?\b(ama_[A-Za-z0-9_]+)\s*\(")
 
+#: A real C entry point is a plain identifier.  Anything else on the export
+#: table is a linker or compiler artefact rather than something a consumer
+#: was meant to call.
+_PLAIN_SYMBOL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
-def dynamic_symbols(library: Path) -> frozenset[str]:
+
+#: Magic bytes to object format.  Mach-O appears in both byte orders and in the
+#: fat/universal wrapper, because a macOS runner may produce any of them.
+_OBJECT_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"\x7fELF", "elf"),
+    (b"MZ", "pe"),
+    (b"\xfe\xed\xfa\xce", "macho"),
+    (b"\xfe\xed\xfa\xcf", "macho"),
+    (b"\xce\xfa\xed\xfe", "macho"),
+    (b"\xcf\xfa\xed\xfe", "macho"),
+    (b"\xca\xfe\xba\xbe", "macho"),
+)
+
+
+def object_format(library: Path) -> str:
+    """``elf`` / ``pe`` / ``macho``, read from the file's magic bytes.
+
+    Not from the file extension: a CI lane may hand this an unsuffixed path, a
+    versioned ``.so.5.0.0`` or a ``.dll`` whose name says nothing about what is
+    inside it.
+    """
+    with library.open("rb") as handle:
+        head = handle.read(4)
+    for magic, name in _OBJECT_MAGIC:
+        if head.startswith(magic):
+            return name
+    raise RuntimeError(
+        f"{library} is not an object file this gate can read "
+        f"(magic {head!r}); it reads ELF, PE and Mach-O."
+    )
+
+
+def _nm_symbols(library: Path, argv: Sequence[str]) -> frozenset[str]:
     completed = subprocess.run(
-        ["nm", "--dynamic", "--defined-only", "--format=posix", str(library)],
-        capture_output=True,
-        text=True,
-        check=False,
+        ["nm", *argv, str(library)], capture_output=True, text=True, check=False
     )
     if completed.returncode != 0:
         raise RuntimeError(f"nm failed on {library}: {completed.stderr.strip()}")
     names: set[str] = set()
     for line in completed.stdout.splitlines():
         parts = line.split()
-        if len(parts) >= 2 and parts[1] in {"T", "W", "i", "D", "B", "R"}:
-            names.add(parts[0])
+        if len(parts) >= 2 and parts[1] in {"T", "W", "i", "D", "B", "R", "S"}:
+            # Mach-O prefixes C symbols with an underscore; ELF does not.
+            names.add(parts[0][1:] if parts[0].startswith("_ama_") else parts[0])
     return frozenset(names)
+
+
+#: The same request in the two spellings macOS may answer to.  `--dynamic` is
+#: GNU-only and Mach-O has no dynamic-symbol section to ask for: a dylib's
+#: exports are its defined external symbols.  Xcode ships LLVM's nm, which
+#: takes the long options; cctools nm takes only the classic short ones, and
+#: which of the two is `/usr/bin/nm` depends on the runner image.  Asking both
+#: is tool-invocation portability, not a fallback: the answer either names
+#: ama_* symbols or `dynamic_symbols` refuses it.
+_MACHO_NM_ARGV: tuple[tuple[str, ...], ...] = (
+    ("-g", "--defined-only", "--format=posix"),
+    ("-g", "-U", "-P"),
+)
+
+
+def _macho_symbols(library: Path) -> frozenset[str]:
+    attempts: list[str] = []
+    for argv in _MACHO_NM_ARGV:
+        try:
+            names = _nm_symbols(library, argv)
+        except RuntimeError as exc:
+            attempts.append(f"nm {' '.join(argv)}: {exc}")
+            continue
+        if any(name.startswith("ama_") for name in names):
+            return names
+        attempts.append(f"nm {' '.join(argv)}: exited 0 but named no ama_* symbol")
+    raise RuntimeError(f"no nm invocation read {library} as Mach-O. " + "; ".join(attempts))
+
+
+def pe_export_names(library: Path) -> frozenset[str]:
+    """The names in a PE image's export directory.
+
+    ``nm --dynamic`` does not read PE: run against a MinGW-built DLL that
+    demonstrably exports ``ama_sha3_256`` it prints "no symbols" and **exits
+    zero**, so the caller sees an empty set and reports every documented symbol
+    as missing.  That is what the windows-latest lane reported on a098d8ba —
+    sixteen ABI failures that did not exist, and, worse, a reading under which a
+    genuinely dropped export would have been indistinguishable from the noise.
+
+    So the export directory is read directly, which needs no toolchain on the
+    host and gives the same answer everywhere.  Layout: PE/COFF specification
+    §3 (headers), §5.3 (the ``.edata`` export directory).
+    """
+    image = library.read_bytes()
+
+    def u16(offset: int) -> int:
+        return int.from_bytes(image[offset : offset + 2], "little")
+
+    def u32(offset: int) -> int:
+        return int.from_bytes(image[offset : offset + 4], "little")
+
+    pe = u32(0x3C)  # IMAGE_DOS_HEADER.e_lfanew
+    if image[pe : pe + 4] != b"PE\0\0":
+        raise RuntimeError(f"{library}: no PE signature at e_lfanew {pe:#x}")
+    sections = u16(pe + 6)
+    optional_size = u16(pe + 20)
+    optional = pe + 24
+    magic = u16(optional)
+    if magic == 0x20B:  # PE32+
+        directories = optional + 112
+    elif magic == 0x10B:  # PE32
+        directories = optional + 96
+    else:
+        raise RuntimeError(f"{library}: unknown optional-header magic {magic:#x}")
+
+    # Section table maps a relative virtual address onto a file offset.
+    table = optional + optional_size
+    layout = [
+        (u32(entry + 12), u32(entry + 8), u32(entry + 20))  # rva, virtual size, raw offset
+        for entry in (table + 40 * index for index in range(sections))
+    ]
+
+    def offset_of(rva: int) -> int:
+        for start, size, raw in layout:
+            if start <= rva < start + size:
+                return raw + (rva - start)
+        raise RuntimeError(f"{library}: RVA {rva:#x} is in no section")
+
+    export_rva = u32(directories)
+    if export_rva == 0:  # no export directory at all
+        return frozenset()
+    export = offset_of(export_rva)
+    name_count = u32(export + 24)
+    names_rva = u32(export + 32)
+    names_table = offset_of(names_rva)
+
+    names: set[str] = set()
+    for index in range(name_count):
+        start = offset_of(u32(names_table + 4 * index))
+        end = image.index(b"\0", start)
+        names.add(image[start:end].decode("ascii"))
+    return frozenset(names)
+
+
+def dynamic_symbols(library: Path) -> frozenset[str]:
+    """Every name an out-of-tree consumer can resolve against ``library``.
+
+    Fails closed.  A reader that cannot understand the format in front of it
+    must say so, because the alternative — returning an empty set — is
+    indistinguishable from "this library exports nothing", which is how a
+    gate reports a catastrophe it did not observe.
+    """
+    kind = object_format(library)
+    if kind == "pe":
+        names = pe_export_names(library)
+    elif kind == "macho":
+        names = _macho_symbols(library)
+    else:
+        names = _nm_symbols(library, ("--dynamic", "--defined-only", "--format=posix"))
+
+    if not any(name.startswith("ama_") for name in names):
+        raise RuntimeError(
+            f"read 0 ama_* symbols from {library} ({kind}). Either the reader "
+            "cannot see this image's exports or the library carries none; "
+            "both are defects, and neither may be reported as a documentation "
+            f"failure. Symbols read: {len(names)}."
+        )
+    return names
 
 
 def check_exports(report: Report, repo: Path, library: Optional[Path]) -> None:
@@ -478,6 +630,32 @@ def check_exports(report: Report, repo: Path, library: Optional[Path]) -> None:
             )
         else:
             report.ok()
+
+    # No compiler-generated clone may reach the ABI.  GCC's partial inlining,
+    # constant propagation and IPA-SRA emit `name.part.N`, `name.constprop.N`,
+    # `name.isra.N`, `name.cold` and `name.localalias` with default visibility;
+    # the ELF version script's `local:` catch-all hides them, and MinGW's ld
+    # auto-exported `ama_hmac_sha256.part.0` from the DLL until CMakeLists
+    # passed --exclude-all-symbols.  A consumer that resolves one calls a
+    # fragment of a public entry point with a compiler-chosen signature and
+    # none of that entry point's argument checks, which is the same
+    # guard-bypass surface the localised names above exist to keep off the ABI.
+    clones = sorted(name for name in exported if not _PLAIN_SYMBOL.fullmatch(name))
+    if clones:
+        report.fail(
+            "compiler-generated symbol(s) on the exported ABI: "
+            f"{', '.join(clones)}. A clone suffix (.part.N, .constprop.N, "
+            ".isra.N, .cold, .localalias) is an internal fragment of a public "
+            "entry point, not an entry point: it has a compiler-chosen "
+            "signature and none of that entry point's argument checks. Fix it "
+            "by restricting the export set at the link step -- the version "
+            "script on ELF, the exported-symbols list on Mach-O, a .def on PE "
+            "-- and never by naming the clones, which change with the "
+            "optimiser (measured: suppressing -fpartial-inlining moved "
+            "ama_hmac_sha256.part.0 to ama_hmac_sha256.constprop.0)."
+        )
+    else:
+        report.ok()
 
     # Every AMA_API prototype in the public header must be reachable, unless
     # the version script deliberately localises it.
