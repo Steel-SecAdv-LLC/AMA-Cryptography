@@ -998,10 +998,49 @@ if(AMA_BUILD_SHARED)
     # controls exports through AMA_API/__declspec on the header; macOS uses a
     # two-level namespace and the exported-symbols list for parity.
     if(APPLE)
+        # cmake/ama_exports.macos.sym listed `_ama_*` and nothing else, so the
+        # dylib published EVERY ama_* symbol, including the thirty the version
+        # script above localises.  Measured on the macOS lanes the moment the
+        # export check reached them: ama_randombytes, ama_sha256_init and
+        # ama_keccak_f1600_generic -- a raw Keccak permutation with no NULL
+        # checks and no CPUID gate -- were resolvable by name from the shipped
+        # dylib.  A Mach-O exported-symbols list cannot express "these, except
+        # those": it has wildcards but no negation.
+        #
+        # So the control is inverted to -unexported_symbols_list, which can.
+        # That drops the `_ama_*` inclusion wildcard, and measurement says it
+        # costs nothing: linked with no export control at all this library
+        # publishes 241 globals and ALL 241 are ama_*, so the wildcard hid
+        # nothing the exclusion list does not.  (It was written when the
+        # vendored Ed25519 tree contributed un-prefixed names; that tree is
+        # gone, and tools/check_vendor_isolation.py keeps it gone.)
+        #
+        # The list is GENERATED from the version script's own `local:` block
+        # rather than maintained beside it.  Two hand-kept lists are how the
+        # two platforms came to disagree in the first place.
+        set(_ama_unexported "")
+        set(_ama_in_local FALSE)
+        file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map" _ama_map_lines)
+        foreach(_ama_line IN LISTS _ama_map_lines)
+            if(_ama_line MATCHES "^[ 	]*local:")
+                set(_ama_in_local TRUE)
+            elseif(_ama_in_local AND _ama_line MATCHES "^[ 	]*(ama_[A-Za-z0-9_]+)[ 	]*;")
+                string(APPEND _ama_unexported "_${CMAKE_MATCH_1}\n")
+            endif()
+        endforeach()
+        if(_ama_unexported STREQUAL "")
+            message(FATAL_ERROR
+                "cmake/ama_exports.map yielded no `local:` symbols, so the macOS "
+                "dylib would publish every internal helper. Fail the configure "
+                "rather than link an unrestricted export table.")
+        endif()
+        set(_ama_unexported_file
+            "${CMAKE_CURRENT_BINARY_DIR}/ama_exports.macos.unexported.sym")
+        file(WRITE "${_ama_unexported_file}" "${_ama_unexported}")
         target_link_options(ama_cryptography_shared PRIVATE
-            "-Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.macos.sym")
+            "-Wl,-unexported_symbols_list,${_ama_unexported_file}")
         set_property(TARGET ama_cryptography_shared APPEND PROPERTY
-            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.macos.sym")
+            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map")
     elseif(NOT MSVC)
         target_link_options(ama_cryptography_shared PRIVATE
             "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"

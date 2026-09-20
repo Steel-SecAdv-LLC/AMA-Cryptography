@@ -820,57 +820,64 @@ class TestThePublicApiGateReadsTheImageInFrontOfIt:
         """Xcode ships LLVM nm; older images ship cctools nm.
 
         They do not accept the same spelling of "defined external symbols",
-        and which one is ``/usr/bin/nm`` is a property of the runner image, not
-        of the library. Before this, the macOS lanes never reached the export
-        check at all — ``find_library`` globbed ``.so*`` only — so a wrong flag
-        would have turned ten green jobs red on its first run.
+        and which one is ``/usr/bin/nm`` is a property of the runner image.
+        Before this work the macOS lanes never reached the export check at all
+        (``find_library`` globbed ``.so*`` only), so a wrong flag would have
+        turned ten green jobs red on its first run.
 
-        Exercised here against this host's own library, because what is under
-        test is the invocation sequence, not the object format: the first
-        spelling is made to fail and the reader must still produce the answer.
+        ``_nm_symbols`` is substituted rather than run. The first version of
+        this test invoked the real nm against this host's built library, which
+        on windows-latest is a PE DLL with no nm to read it — it failed four
+        Windows jobs for a reason that had nothing to do with what it claims to
+        test. What is under test is the invocation sequence, so the sequence is
+        what is driven.
         """
-        if _BUILT_LIBRARY is None:
-            pytest.skip("no built library on this host to run nm against")
         module = _load(PUBLIC_API)
-        working = module._MACHO_NM_ARGV[-1]
-        with mock.patch.object(module, "_MACHO_NM_ARGV", (("--no-such-nm-option",), working)):
-            symbols = module._macho_symbols(_BUILT_LIBRARY)
-        assert "ama_sha3_256" in symbols
+        seen: list[tuple[str, ...]] = []
+
+        def fake(library: Path, argv: Sequence[str]) -> frozenset[str]:
+            seen.append(tuple(argv))
+            if tuple(argv) == module._MACHO_NM_ARGV[0]:
+                raise RuntimeError("nm: unknown argument")
+            return frozenset({"ama_sha3_256", "_unrelated"})
+
+        with mock.patch.object(module, "_nm_symbols", fake):
+            symbols = module._macho_symbols(Path("libama_cryptography.dylib"))
+
+        assert symbols == frozenset({"ama_sha3_256", "_unrelated"})
+        assert seen == [module._MACHO_NM_ARGV[0], module._MACHO_NM_ARGV[1]]
+
+    def test_an_nm_that_exits_zero_and_names_nothing_is_not_accepted(self) -> None:
+        """Exit status is not the question; whether it read the file is.
+
+        cctools nm answers an option it does not know by printing usage and
+        exiting zero on some images. A reader that took that as "no symbols"
+        is exactly the Windows defect, in a second costume.
+        """
+        module = _load(PUBLIC_API)
+
+        def fake(library: Path, argv: Sequence[str]) -> frozenset[str]:
+            if tuple(argv) == module._MACHO_NM_ARGV[0]:
+                return frozenset({"_not_an_ama_symbol"})
+            return frozenset({"ama_sha3_256"})
+
+        with mock.patch.object(module, "_nm_symbols", fake):
+            symbols = module._macho_symbols(Path("libama_cryptography.dylib"))
+        assert symbols == frozenset({"ama_sha3_256"})
 
     def test_when_no_nm_spelling_works_every_attempt_is_named(self) -> None:
         """Failing closed is not enough; it has to say what it tried."""
-        if _BUILT_LIBRARY is None:
-            pytest.skip("no built library on this host to run nm against")
         module = _load(PUBLIC_API)
-        with mock.patch.object(
-            module, "_MACHO_NM_ARGV", (("--no-such-nm-option",), ("--also-not-real",))
-        ):
+
+        def fake(library: Path, argv: Sequence[str]) -> frozenset[str]:
+            raise RuntimeError(f"nm: unknown argument {argv[0]}")
+
+        with mock.patch.object(module, "_nm_symbols", fake):
             with pytest.raises(RuntimeError) as caught:
-                module._macho_symbols(_BUILT_LIBRARY)
+                module._macho_symbols(Path("libama_cryptography.dylib"))
         message = str(caught.value)
-        assert "--no-such-nm-option" in message
-        assert "--also-not-real" in message
-
-    def test_both_gates_read_exports_through_the_same_reader(self, tmp_path: Path) -> None:
-        """One definition of "exported" in the tree, not two.
-
-        ``check_doc_examples.py`` carried its own copy of
-        ``nm --dynamic --defined-only --format=posix``.  Both copies failed the
-        same day on a098d8ba, in opposite directions: on macOS Xcode's nm
-        answers a dylib with "File format has no dynamic symbol table" and
-        exits non-zero, so every macOS lane raised out of the gate; on Windows
-        nm prints "no symbols" and exits ZERO, so the lane read an empty set as
-        sixteen missing entry points.  Fixing one copy would have left the
-        other.
-
-        A PE image is the probe because it is the format the duplicated reader
-        could not read at all: if ``exported_symbols`` still had its own nm,
-        this returns empty rather than the names.
-        """
-        names = ["ama_sha3_256", "ama_ed25519_verify", "ama_hkdf"]
-        path = tmp_path / "ama_cryptography.dll"
-        path.write_bytes(_minimal_pe(names))
-        assert _load(DOC_EXAMPLES).exported_symbols(path) == frozenset(names)
+        for argv in module._MACHO_NM_ARGV:
+            assert argv[0] in message
 
     def test_a_compiler_clone_never_reaches_the_exported_abi(self, tmp_path: Path) -> None:
         """Measured on the cross-built DLL: ``ama_hmac_sha256.part.0``.
@@ -1100,6 +1107,92 @@ class TestBenchmarkClaims:
 # ===========================================================================
 # The CI invocations themselves
 # ===========================================================================
+
+
+class TestEveryLocalisedSymbolIsCheckedOnEveryPlatform:
+    """The export rule covered seven names out of thirty.
+
+    What that cost showed the first time the check reached a macOS runner:
+    ``cmake/ama_exports.macos.sym`` listed ``_ama_*`` and nothing else, so the
+    shipped dylib published all thirty internal helpers — among them
+    ``ama_randombytes`` and ``ama_keccak_f1600_generic``, a raw permutation
+    with no NULL checks and no CPUID gate. The seven-name subset reported
+    three of them. A subset of an invariant is not the invariant.
+    """
+
+    def test_the_gate_reads_the_whole_local_block(self) -> None:
+        module = _load(PUBLIC_API)
+        localised = module.localised_symbols(REPO_ROOT)
+        # Read independently of the gate, so this compares two readings rather
+        # than one reading with itself.
+        script = (REPO_ROOT / "cmake" / "ama_exports.map").read_text(encoding="utf-8")
+        expected = set(re.findall(r"^\s+(ama_[A-Za-z0-9_]+);", script.split("local:", 1)[1], re.M))
+        assert localised == frozenset(expected)
+        assert len(localised) >= 30, "the local: block shrank; that is an ABI change"
+        assert set(module.MUST_NOT_BE_EXPORTED) <= localised
+
+    def test_indentation_does_not_empty_the_set(self, tmp_path: Path) -> None:
+        """The first reading required exactly eight leading spaces.
+
+        Re-indenting the version script would have emptied the set, and every
+        rule built on it would then have passed over nothing — the failure mode
+        the non-vacuity check in ``check_exports`` exists to catch.
+        """
+        module = _load(PUBLIC_API)
+        script = (REPO_ROOT / "cmake" / "ama_exports.map").read_text(encoding="utf-8")
+        scratch = tmp_path / "cmake"
+        scratch.mkdir()
+        reindented = "\n".join(
+            "    " + line.strip() if line.strip().startswith("ama_") else line
+            for line in script.splitlines()
+        )
+        (scratch / "ama_exports.map").write_text(reindented, encoding="utf-8")
+        assert module.localised_symbols(tmp_path) == module.localised_symbols(REPO_ROOT)
+
+    def test_a_localised_symbol_that_is_exported_is_reported(self, tmp_path: Path) -> None:
+        """Every localised name is checked, not a chosen few."""
+        module = _load(PUBLIC_API)
+        localised = sorted(module.localised_symbols(REPO_ROOT))
+        declared = set(module._AMA_API.findall(Path("include/ama_cryptography.h").read_text()))
+        clean = sorted(declared | set(module.MUST_BE_EXPORTED))
+        path = tmp_path / "ama_cryptography.dll"
+
+        # Every internal helper leaked onto the ABI, as the dylib published them.
+        path.write_bytes(_minimal_pe([*clean, *localised]))
+        report = module.Report()
+        module.check_exports(report, REPO_ROOT, path)
+        leaked = [f for f in report.failures if "IS exported" in f]
+        assert len(leaked) == len(localised), (
+            f"{len(leaked)} of {len(localised)} localised symbols reported; "
+            "a subset check would report only the handful it names"
+        )
+        for name in ("ama_randombytes", "ama_keccak_f1600_generic", "ama_sha256_init"):
+            assert any(name in f for f in leaked)
+
+    def test_the_macos_link_control_is_derived_from_the_same_block(self) -> None:
+        """One declaration of what is internal, not two hand-kept lists.
+
+        Two lists are how the platforms came to disagree: the ELF version
+        script localised thirty names and the Mach-O list exported all of them.
+        CMake now generates the unexported-symbols list from the version
+        script's own ``local:`` block, so re-deriving it here must reproduce
+        exactly what the gate reads.
+        """
+        module = _load(PUBLIC_API)
+        cmakelists = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        assert "-Wl,-unexported_symbols_list," in cmakelists
+        # The property is that the retired list is not a LINK INPUT — not that
+        # its name never appears. The comment above the new branch names it
+        # deliberately, so that the next reader knows what was wrong with it.
+        assert "-Wl,-exported_symbols_list," not in cmakelists, (
+            "the superseded inclusion list is on the link line again; it "
+            "published every ama_* symbol, the localised ones included"
+        )
+        assert not (REPO_ROOT / "cmake" / "ama_exports.macos.sym").exists()
+        # The generator's own rule, applied here: the `local:` names, each
+        # given the leading underscore Mach-O puts on a C symbol.
+        expected = {f"_{name}" for name in module.localised_symbols(REPO_ROOT)}
+        assert len(expected) >= 30
 
 
 class TestTheGateInvocationPatternCannotBacktrack:

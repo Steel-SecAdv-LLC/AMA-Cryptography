@@ -602,6 +602,22 @@ def dynamic_symbols(library: Path) -> frozenset[str]:
     return names
 
 
+def localised_symbols(repo: Path) -> frozenset[str]:
+    """The names ``cmake/ama_exports.map`` keeps off the ABI.
+
+    The version script is the single declaration of what is internal; CMake
+    generates the macOS unexported-symbols list from this same block, so the
+    two platforms cannot disagree about it the way they did before.
+
+    Indentation-insensitive on purpose: the first version matched exactly eight
+    leading spaces, so re-indenting the file would have emptied this set and
+    every rule built on it would have passed over nothing.
+    """
+    script = (repo / "cmake" / "ama_exports.map").read_text(encoding="utf-8")
+    body = script.split("local:", 1)[1] if "local:" in script else ""
+    return frozenset(re.findall(r"^\s*(ama_[A-Za-z0-9_]+)\s*;", body, re.MULTILINE))
+
+
 def check_exports(report: Report, repo: Path, library: Optional[Path]) -> None:
     if library is None:
         report.skipped.append(
@@ -611,7 +627,26 @@ def check_exports(report: Report, repo: Path, library: Optional[Path]) -> None:
         return
     exported = dynamic_symbols(library)
 
-    for name in MUST_NOT_BE_EXPORTED:
+    # EVERY name the version script localises, not a hand-picked few. This was
+    # seven names, and the cost of that showed the first time the check reached
+    # a macOS runner: the dylib published all thirty, and the seven-name subset
+    # reported three. A subset of an invariant is not the invariant.
+    localised = localised_symbols(repo)
+    unnamed = sorted(set(MUST_NOT_BE_EXPORTED) - localised)
+    if unnamed:
+        # Non-vacuity. If the `local:` block ever fails to parse, this rule
+        # would check nothing and pass, which is the shape of a gate that
+        # reports success because it looked at an empty set.
+        report.fail(
+            "cmake/ama_exports.map does not localise "
+            f"{', '.join(unnamed)}, which this gate names explicitly. Either "
+            "the version script lost them or the `local:` block no longer "
+            "parses — and an export rule over an empty set passes vacuously."
+        )
+    else:
+        report.ok()
+
+    for name in sorted(localised):
         if name in exported:
             report.fail(
                 f"{name} IS exported by {library.name}, but cmake/ama_exports.map "
@@ -661,8 +696,6 @@ def check_exports(report: Report, repo: Path, library: Optional[Path]) -> None:
     # the version script deliberately localises it.
     header = (repo / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
     declared = frozenset(_AMA_API.findall(header))
-    version_script = (repo / "cmake" / "ama_exports.map").read_text(encoding="utf-8")
-    localised = frozenset(re.findall(r"^\s{8}(ama_[A-Za-z0-9_]+);", version_script, re.MULTILINE))
     unreachable = sorted(declared - exported - localised)
     if unreachable:
         report.fail(
