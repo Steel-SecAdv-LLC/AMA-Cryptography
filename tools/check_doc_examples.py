@@ -590,13 +590,12 @@ def check_python_signatures(block: Block, report: Report) -> None:
         head, *rest = name.split(".")
         # `bind=crypto:AmaCryptography` lets a listing show instance methods on
         # the receiver name the surrounding prose uses.
-        owner_label = module_name
         if head in bindings:
             owner_label = f"{module_name}.{bindings[head]}"
             target = getattr(module, bindings[head], None)
         else:
-            target = getattr(module, head, None)
             owner_label = module_name
+            target = getattr(module, head, None)
         for attribute in rest:
             target = getattr(target, attribute, None)
         if target is None:

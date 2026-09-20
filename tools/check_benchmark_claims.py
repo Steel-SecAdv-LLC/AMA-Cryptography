@@ -113,12 +113,17 @@ _FLOOR_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
-#: A bare latency assertion with a unit, for the units rule.
-_LATENCY_CLAIM = re.compile(
-    r"(?P<what>[A-Za-z0-9 +\-/]{3,40}?)\s*(?:signing|sign|verify|hash|derive)"
-    r"[^.\n]{0,40}?\(?\s*~?(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>ms|µs|us|ns)\b",
-    re.IGNORECASE,
-)
+# A `_LATENCY_CLAIM` regex stood here, described as being "for the units
+# rule". No units rule was ever written, and measurement says one of that shape
+# must not be: scanning prose for `<number> <unit>` and re-deriving it finds 32
+# hits, and all but a handful are the frozen historical ledger in CHANGELOG.md
+# and docs/BENCHMARK_HISTORY.md, which record what a past release measured and
+# would be WRONG to re-derive against today's record. The live figures moved
+# into the AUTO-PIPELINE-LATENCY and AUTO-BENCHMARK-TABLE blocks instead, where
+# check_generated_tables re-derives every cell rather than pattern-matching
+# prose — a stronger check than the one the regex named, which is why it was
+# left unused. Removed rather than kept as an unused global that implies a rule
+# the gate does not run.
 
 
 @dataclass
@@ -228,9 +233,6 @@ def _extract_block(text: str, start: str, end: str) -> Optional[str]:
     if start not in text or end not in text:
         return None
     return text.split(start, 1)[1].split(end, 1)[0]
-
-
-_TABLE_ROW = re.compile(r"^\|\s*(?P<label>[^|]+?)\s*\|(?P<rest>.*)\|\s*$")
 
 
 def check_generated_tables(report: Report, repo: Path, results: dict[str, Any]) -> None:
