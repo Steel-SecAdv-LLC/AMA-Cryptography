@@ -453,6 +453,13 @@ These are the only 5.0.0 throughput measurements this repository publishes, and 
 
 *Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, multi-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
 
+<!-- canonical-bench: begin -->
+<!-- Every measurement between these markers is pinned by
+     benchmarks/canonical-host.json and enforced by
+     tools/check_canonical_benchmarks.py. Changing a number here
+     without changing the record -- or adding one with no host
+     provenance -- fails the gate. Re-measurement needs the named
+     host; drift detection does not. -->
 ### ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)
 
 | Operation | Throughput (Python API via ctypes) | Latency | Notes |
@@ -514,6 +521,7 @@ Public-key derivation and the ECDSA signing nonce both compute `d·G` against th
 
 `ama_secp256k1_point_mul` (caller-supplied base) keeps the constant-time Montgomery ladder. Constant-time preserved: scalar read at fixed indices, table read by masked full-table scan. Welch's t-test over 60,000 samples: **|t| = 0.29** fixed-vs-random and **|t| = 1.03** on a Hamming-weight split, against dudect's 4.5 threshold. See [`docs/BENCHMARK_HISTORY.md`](docs/BENCHMARK_HISTORY.md).
 
+<!-- canonical-bench: end -->
 ### Benchmark Charts
 
 | Chart | Description |
@@ -1054,7 +1062,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*5,607 test functions across 247 Python test files plus 83 C test suites (85 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*5,623 test functions across 248 Python test files plus 83 C test suites (85 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1676,7 +1684,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 5,607 test functions across 247 Python files plus 83 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 5,623 test functions across 248 Python files plus 83 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

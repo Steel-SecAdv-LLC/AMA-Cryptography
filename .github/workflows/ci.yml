@@ -1387,6 +1387,20 @@ jobs:
       run: |
         python tools/check_benchmark_claims.py
 
+    - name: "The canonical-host figures must match their record"
+      # check_benchmark_claims.py above pins what is re-derivable from
+      # benchmarks/benchmark-results.json. It does not see the canonical-host
+      # tables, because nothing carried those figures as data -- measured: with
+      # the ML-DSA-65 KeyGen row edited from 3,626 to 9,626 ops/sec, that gate
+      # still reported "OK 86 benchmark claim(s) consistent with their records".
+      #
+      # Re-measuring that host needs that host, and this lane does not have one.
+      # Noticing that a published number changed needs only a record, which is
+      # benchmarks/canonical-host.json. The comparison runs both ways, so an
+      # invented figure and a quietly deleted one both fail.
+      run: |
+        python tools/check_canonical_benchmarks.py
+
     - name: "Verify the vendored key-format conformance corpus"
       # tests/kat/keyformats/ is the only evidence that AMA's key encodings
       # match the specifications rather than merely themselves, and

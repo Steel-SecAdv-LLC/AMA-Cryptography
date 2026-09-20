@@ -63,7 +63,7 @@ and FROST are implemented under `src/c/`. The Python layer calls those kernels.
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 83 C suites, 245 Python test modules |
+| `tests/c/`, `tests/` | 83 C suites, 247 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -328,14 +328,45 @@ action. The following have not been examined: `ama_nistp.c` (203 arcs),
 `ama_dilithium.c` (140), `ama_kyber.c` (111), `ama_slhdsa.c` (116),
 `ama_frost.c` (67).
 
-The required approach is triage of that inventory: identify guards no test
-executes, construct tests that fail without them, and remediate anything that
-proves to be more than a coverage gap. Per §10, a coverage gate carrying an
-exemption list is not an acceptable substitute.
+**What this inventory is, and what it is not.** Two corrections, per §6.6,
+because the paragraph above has twice been read as a defect list and worked as
+one.
+
+First, the instrument measures one suite. Its own docstring says so — "the
+branch arcs under `src/c` that the C suite never takes" — and its documented
+procedure builds with `--coverage` and runs `ctest`, nothing else. The Python suite
+never executes under it. An arc reached only from Python is
+therefore counted here as never taken, so the number is an inventory of what
+the C suite does not reach, which is not the same set as the guards no test
+protects. Extending the measurement to cover both suites is open and unsolved;
+until it is, a row in this inventory is a question, not a finding.
+
+Second, `839b66b4` — the commit that produced this inventory — already
+classified NULL-argument returns and allocation-failure returns among the arcs
+that are legitimately never taken. Arc count recovered against that class is
+not triage progress, and reporting it as such is a measurement error. `abde8640`
+made exactly that error and its claim is withdrawn; the test it added is kept,
+because it pins real INVARIANT-5 guards.
+
+The required approach is unchanged in kind but not in target: identify guards
+*no test in either suite* executes, construct tests that fail without them, and
+remediate anything that proves to be more than a coverage gap. An arc is
+triaged when its classification is established by mutation, not when it stops
+appearing in a count. Per §10, a coverage gate carrying an exemption list is
+not an acceptable substitute.
+
+`ama_nistp.c` now also has exploratory coverage: `fuzz/fuzz_nistp.c` drives its
+four parsers and asserts four properties across them. That is a standing check,
+not a reduction in the figure above, which is a `ctest` measurement.
 
 Release prerequisites are recorded in the pull request description. Each
 requires hardware, a protected credential, or a workflow dispatch; none is
-blocked by a defect in the tree.
+blocked by a defect in the tree. One of them has been narrowed: the published
+canonical-host benchmark figures now have a drift mechanism
+(`tools/check_canonical_benchmarks.py` against `benchmarks/canonical-host.json`),
+so an edited, invented or quietly deleted figure fails CI. Re-measuring that
+host still requires AVX-512 silicon this project's CI does not have; detecting
+that a published number changed no longer does.
 
 ---
 

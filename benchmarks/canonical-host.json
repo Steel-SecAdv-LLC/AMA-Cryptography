@@ -1,0 +1,324 @@
+{
+  "schema": 1,
+  "why": "The figures README.md publishes between the canonical-bench markers, held as data so tools/check_canonical_benchmarks.py can detect drift. Re-measuring the canonical host needs that host; noticing that a published number changed does not. Editing a figure in README.md without editing it here fails the gate, and so does adding one that cites no source.",
+  "sources": {
+    "canonical-bench-host": {
+      "description": "Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ (Sapphire Rapids / Zen 4 class), Python 3.11.15, native C backend via ctypes. Not a runner this project's CI has.",
+      "measured": "2026-04-25 to 2026-04-27",
+      "command": "python benchmarks/benchmark_runner.py; build/bin/benchmark_c_raw --json"
+    },
+    "sandbox-host": {
+      "description": "The secp256k1 fixed-base comb measurement host, raw C, reported alongside the Welch t-test in docs/BENCHMARK_HISTORY.md.",
+      "measured": "2026-07-29",
+      "command": "build/bin/benchmark_c_raw --json"
+    },
+    "comb-table-size": {
+      "description": "Not a measurement of a machine: the 4-block fixed-base comb table is a compile-time constant, 16 entries, sized from the generator table in src/c/ama_secp256k1.c.",
+      "measured": "2026-07-29",
+      "command": "sizeof the comb table in src/c/ama_secp256k1.c"
+    },
+    "literature": {
+      "description": "Reported by OpenSSL (crypto/ec/asm/x25519-x86_64.pl) and BoringSSL (fiat-crypto MULX/ADX), not measured by this repository. Recorded so the citation cannot drift into reading as an AMA measurement (INVARIANT-36).",
+      "measured": "n/a - cited, not measured",
+      "command": "see the cited upstream sources"
+    }
+  },
+  "measurements": [
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "**KeyGen**",
+      "approx": false,
+      "value": "3,626",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "**KeyGen**",
+      "approx": true,
+      "value": "276",
+      "unit": "µs",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "**Sign**",
+      "approx": false,
+      "value": "2,976",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "**Sign**",
+      "approx": true,
+      "value": "336",
+      "unit": "µs",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "**Verify**",
+      "approx": false,
+      "value": "7,576",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "**Verify**",
+      "approx": true,
+      "value": "132",
+      "unit": "µs",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)",
+      "label": "**KeyGen**",
+      "approx": false,
+      "value": "4,965",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)",
+      "label": "**Encapsulate**",
+      "approx": false,
+      "value": "10,253",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Full Multi-Layer Package Performance",
+      "label": "Package Create (all layers)",
+      "approx": false,
+      "value": "2,853",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Full Multi-Layer Package Performance",
+      "label": "Package Create (all layers)",
+      "approx": true,
+      "value": "350",
+      "unit": "µs",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Full Multi-Layer Package Performance",
+      "label": "Package Verify (all layers)",
+      "approx": false,
+      "value": "4,973",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Full Multi-Layer Package Performance",
+      "label": "Package Verify (all layers)",
+      "approx": true,
+      "value": "201",
+      "unit": "µs",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "SHA3-256 (1KB)",
+      "approx": false,
+      "value": "1",
+      "unit": "KB",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "SHA3-256 (1KB)",
+      "approx": false,
+      "value": "184,112",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "HMAC-SHA3-256 (1KB)",
+      "approx": false,
+      "value": "1",
+      "unit": "KB",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "HMAC-SHA3-256 (1KB)",
+      "approx": false,
+      "value": "115,408",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "HKDF-SHA3-256 (3-key derive)",
+      "approx": false,
+      "value": "81,703",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "Ed25519 KeyGen",
+      "approx": false,
+      "value": "55,716",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "Ed25519 Sign",
+      "approx": false,
+      "value": "51,488",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "Ed25519 Verify",
+      "approx": false,
+      "value": "21,338",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "AES-256-GCM Encrypt (1KB)",
+      "approx": false,
+      "value": "1",
+      "unit": "KB",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "AES-256-GCM Encrypt (1KB)",
+      "approx": false,
+      "value": "293,143",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "ChaCha20-Poly1305 Encrypt (1KB)",
+      "approx": false,
+      "value": "1",
+      "unit": "KB",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "ChaCha20-Poly1305 Encrypt (1KB)",
+      "approx": false,
+      "value": "256,249",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "X25519 Scalar-mult (fe64 + MULX+ADX kernel)",
+      "approx": false,
+      "value": "15,401",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "(prose)",
+      "approx": true,
+      "value": "11,500",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "(prose)",
+      "approx": true,
+      "value": "15,401",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "(prose)",
+      "approx": true,
+      "value": "34",
+      "unit": "%",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "(prose)",
+      "approx": true,
+      "value": "16,983",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "2.2",
+      "unit": "×",
+      "source": "literature"
+    },
+    {
+      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
+      "label": "(prose)",
+      "approx": true,
+      "value": "1.9",
+      "unit": "KB",
+      "source": "comb-table-size"
+    },
+    {
+      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "354.97",
+      "unit": "µs",
+      "source": "sandbox-host"
+    },
+    {
+      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "83.36",
+      "unit": "µs",
+      "source": "sandbox-host"
+    },
+    {
+      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "4.26",
+      "unit": "×",
+      "source": "sandbox-host"
+    },
+    {
+      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "392.94",
+      "unit": "µs",
+      "source": "sandbox-host"
+    },
+    {
+      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "125.54",
+      "unit": "µs",
+      "source": "sandbox-host"
+    },
+    {
+      "heading": "secp256k1 Fixed-Base Comb (2026-07-29)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "3.13",
+      "unit": "×",
+      "source": "sandbox-host"
+    }
+  ]
+}
