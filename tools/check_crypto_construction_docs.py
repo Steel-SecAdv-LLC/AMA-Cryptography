@@ -673,6 +673,19 @@ def _rule_symbols(line: str, authority: Authority, repo: Path) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _display_path(path: Path, repo: Path) -> str:
+    """A path for the report: repo-relative when it is inside, absolute when not.
+
+    A fixture handed to ``--file`` may live outside the tree — that is how the
+    tests drive these gates without writing into the working copy, which is
+    what corrupted ARCHITECTURE.md's line endings on Windows.
+    """
+    try:
+        return path.relative_to(repo).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def scanned_files(repo: Path = REPO) -> list[Path]:
     seen: list[Path] = []
     for path in sorted(repo.rglob("*")):
@@ -696,7 +709,7 @@ def find_claims(
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        relative = path.relative_to(repo).as_posix()
+        relative = _display_path(path, repo)
         source_lines = text.splitlines()
         waived = False
         for number, raw in enumerate(source_lines, start=1):

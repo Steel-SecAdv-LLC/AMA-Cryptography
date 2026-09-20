@@ -381,6 +381,13 @@ def check_return_types(report: Report) -> None:
             args = (bytearray(32),)
         try:
             with contextlib.redirect_stdout(io.StringIO()):
+                if name == "secure_munlock":
+                    # Unlocking a page that was never locked is not a defined
+                    # operation: Linux's munlock(2) tolerates it, Windows'
+                    # VirtualUnlock returns ERROR_NOT_LOCKED and the wrapper
+                    # raises. This check is about the RETURN TYPE, so it has to
+                    # exercise the call the way a caller would — lock first.
+                    module.secure_mlock(*args)
                 value = target(*args)
         except Exception as exc:
             report.fail(f"{module_name}.{name}{args!r} raised {exc!r}")
@@ -509,20 +516,51 @@ def check_simd_inventory(report: Report, repo: Path) -> None:
         report.ok()
 
 
-def find_library(repo: Path, explicit: Optional[Path]) -> Optional[Path]:
+#: Shared-library basenames by platform.  Globbing ``libama_cryptography.so*``
+#: unconditionally — which this gate did while it was written on Linux — finds
+#: nothing on macOS or Windows, so the export checks reported "skipped" on two
+#: of the three platforms the matrix covers.
+_LIBRARY_PATTERNS: tuple[str, ...] = (
+    "libama_cryptography.so*",
+    "libama_cryptography.*dylib",
+    "libama_cryptography.dll*",
+    "ama_cryptography.dll",
+)
+
+
+def find_library(
+    repo: Path, explicit: Optional[Path] = None, directory: Optional[Path] = None
+) -> Optional[Path]:
     if explicit is not None:
         return explicit if explicit.is_file() else None
-    for directory in (repo / "build" / "lib", repo / "ama_cryptography", repo / "build"):
-        candidates = sorted(directory.glob("libama_cryptography.so*"))
-        if candidates:
-            return candidates[-1]
+    searched = [directory] if directory is not None else []
+    searched += [repo / "build" / "lib", repo / "ama_cryptography", repo / "build"]
+    for candidate_dir in searched:
+        if candidate_dir is None or not candidate_dir.is_dir():
+            continue
+        for pattern in _LIBRARY_PATTERNS:
+            matches = sorted(candidate_dir.glob(pattern))
+            if matches:
+                return matches[-1]
     return None
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=REPO)
-    parser.add_argument("--library", type=Path, default=None)
+    parser.add_argument(
+        "--library", type=Path, default=None, help="explicit path to the built shared object"
+    )
+    parser.add_argument(
+        "--library-dir",
+        type=Path,
+        default=None,
+        help=(
+            "directory holding the built shared object; the same spelling "
+            "tools/check_doc_examples.py takes, so one CI line cannot be right "
+            "for one gate and wrong for the other"
+        ),
+    )
     parser.add_argument(
         "--require-library",
         action="store_true",
@@ -544,7 +582,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     check_context_managers(report)
     check_simd_inventory(report, repo)
 
-    library = find_library(repo, args.library)
+    library = find_library(repo, args.library, args.library_dir)
     if library is None and args.require_library:
         print(
             "FATAL: --require-library was given but no built " "libama_cryptography.so was found.",

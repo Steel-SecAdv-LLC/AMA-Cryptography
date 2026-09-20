@@ -115,9 +115,12 @@ if all([
     results["ed25519"],
     results["dilithium"] is True,
 ]):
-    print("✓ ALL VERIFICATIONS PASSED")
+    # ASCII only: a Windows console defaults to cp1252, which cannot encode
+    # U+2713/U+2717, so a tick here would raise UnicodeEncodeError rather than
+    # print (INVARIANT-43).
+    print("ALL VERIFICATIONS PASSED")
 else:
-    print("✗ Verification failed:", results)
+    print("Verification FAILED:", results)
 
 # Step 6: Export public keys for distribution
 export_public_keys(kms, Path("public_keys"))

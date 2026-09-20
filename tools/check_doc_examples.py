@@ -103,7 +103,10 @@ Exit status
 from __future__ import annotations
 
 import argparse
+import ast
+import builtins
 import importlib
+import importlib.util
 import inspect
 import os
 import re
@@ -111,9 +114,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
+import typing
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Callable, Iterable, Optional, Sequence
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -234,9 +239,22 @@ class Report:
 # ---------------------------------------------------------------------------
 
 
+def _display_path(path: Path, repo: Path) -> str:
+    """A path for the report: repo-relative when it is inside, absolute when not.
+
+    A fixture handed to ``--file`` may live outside the tree — that is how the
+    tests drive these gates without writing into the working copy, which is
+    what corrupted ARCHITECTURE.md's line endings on Windows.
+    """
+    try:
+        return path.relative_to(repo).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def extract_blocks(path: Path, repo: Path = REPO) -> list[Block]:
     """Every fenced block in ``path`` whose language this gate checks."""
-    relative = path.relative_to(repo).as_posix()
+    relative = _display_path(path, repo)
     lines = path.read_text(encoding="utf-8").splitlines()
     blocks: list[Block] = []
     index = 0
@@ -291,6 +309,93 @@ def _directive_above(lines: Sequence[str], fence_index: int) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # python-run
 # ---------------------------------------------------------------------------
+
+
+def _load_encodability_predicate() -> Callable[[str], list[str]]:
+    """``unencodable_characters`` from the gate that owns INVARIANT-43.
+
+    Loaded by path rather than imported by name: ``tools/`` is not a package,
+    so a bare import works only when the caller happens to have that directory
+    on ``sys.path`` — which mutating ``sys.path`` at call time would paper over
+    while leaving the dependency invisible to the type checker.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_encodability_for_doc_examples", REPO / "tools" / "check_log_message_encodability.py"
+    )
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable on a real tree
+        raise RuntimeError("cannot load tools/check_log_message_encodability.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    predicate: Callable[[str], list[str]] = module.unencodable_characters
+    return predicate
+
+
+def _cp1252_offenders(code: str) -> list[tuple[int, str, list[str]]]:
+    """Characters a printed literal carries that cp1252 cannot represent.
+
+    INVARIANT-43 already requires this of the library's own log and warning
+    text, and ``tools/check_log_message_encodability.py`` owns the rule; this
+    imports that module's predicate rather than restating it, so there is one
+    definition of "encodable" in the tree.
+
+    It applies to a documented example for the same reason it applies to a log
+    record: a Windows console defaults to cp1252, so ``print("\u2713 ALL
+    VERIFICATIONS PASSED")`` — which wiki/Quick-Start.md carried — does not
+    fail on the check mark, it raises ``UnicodeEncodeError`` and takes the
+    whole example down with it. A reader on Windows copies the block, runs it,
+    and watches the library appear to crash.
+
+    Only text that reaches ``print`` is checked. Comments and identifiers are
+    never encoded to the console, and an em dash in a comment is both correct
+    and cp1252-encodable anyway.
+    """
+    import ast as _ast
+
+    unencodable_characters = _load_encodability_predicate()
+
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return []  # not valid Python; run_python reports that on its own
+
+    offenders: list[tuple[int, str, list[str]]] = []
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, _ast.Name) and func.id == "print"):
+            continue
+        for piece in _ast.walk(node):
+            text: Optional[str] = None
+            if isinstance(piece, _ast.Constant) and isinstance(piece.value, str):
+                text = piece.value
+            elif isinstance(piece, _ast.JoinedStr):
+                text = "".join(
+                    part.value
+                    for part in piece.values
+                    if isinstance(part, _ast.Constant) and isinstance(part.value, str)
+                )
+            if not text:
+                continue
+            bad = unencodable_characters(text)
+            if bad:
+                offenders.append((getattr(piece, "lineno", node.lineno), text, bad))
+    return offenders
+
+
+def check_python_encodability(block: Block, report: Report) -> None:
+    """A printed literal must survive a cp1252 console (INVARIANT-43)."""
+    for lineno, text, bad in _cp1252_offenders(block.code):
+        rendered = ", ".join(f"U+{ord(ch):04X} {ch!r}" for ch in bad)
+        report.fail(
+            block,
+            f"line {lineno} prints {text[:60]!r}, which a cp1252 console cannot "
+            f"encode ({rendered}). On Windows this example does not print a tick "
+            "— it raises UnicodeEncodeError and dies. INVARIANT-43 requires every "
+            "literal the library emits to survive a cp1252 handler; an example a "
+            'reader is told to run is held to the same rule. Use ASCII ("OK" / '
+            '"FAILED") or a character cp1252 carries.',
+        )
 
 
 def run_python(block: Block, report: Report, repo: Path) -> None:
@@ -562,7 +667,7 @@ def _compare_signature(
     actual_return = actual.return_annotation
     if actual_return is inspect.Signature.empty:
         return
-    if not _return_matches(declared_return, actual_return):
+    if not _return_matches(declared_return, actual_return, target):
         report.fail(
             block,
             f"{module_name}.{name} documented as returning {declared_return!r} "
@@ -587,9 +692,158 @@ def _render(annotation: object) -> str:
     return getattr(annotation, "__name__", None) or str(annotation)
 
 
-def _return_matches(declared: str, actual: object) -> bool:
-    rendered = _render(actual)
+def _canonical(annotation: object) -> str:
+    """A spelling- and interpreter-version-independent key for an annotation.
 
+    The first revision of this comparison rendered both sides with ``str()``
+    and compared the text.  That made the gate's verdict depend on the running
+    interpreter: CPython 3.14 renders ``Optional[bytes]`` as ``bytes | None``
+    and ``Dict[str, Union[bool, str]]`` as ``typing.Dict[str, bool | str]``,
+    so two `wiki/API-Reference.md` lines that are correct on every version
+    passed under 3.10-3.13 and failed the 3.14 matrix cell.  A documentation
+    claim is either true of the implementation or it is not; which Python
+    happens to run the check is not part of that question.
+
+    ``typing.get_origin``/``get_args`` decompose the annotation into the same
+    structure on every supported version (measured on 3.11 and 3.14), so this
+    walks that structure instead of any rendering of it.  ``Union`` members are
+    sorted because a union is a set: ``Optional[X]``, ``Union[X, None]`` and
+    ``X | None`` are one type written three ways.
+    """
+    if annotation is None or annotation is type(None):
+        return "None"
+    if annotation is Ellipsis:
+        return "..."
+    if isinstance(annotation, list):  # Callable[[int, str], X] parameter lists
+        return "[" + ",".join(_canonical(item) for item in annotation) + "]"
+    origin = typing.get_origin(annotation)
+    if origin is None:
+        name = getattr(annotation, "__name__", None)
+        return name if isinstance(name, str) else str(annotation)
+    args = typing.get_args(annotation)
+    if origin is typing.Union or origin is types.UnionType:
+        return "Union[" + ",".join(sorted(_canonical(item) for item in args)) + "]"
+    # `typing.Dict[...]` and `dict[...]` share the `dict` origin, which is the
+    # normalisation the old `typing.` text strip was reaching for.
+    origin_name = getattr(origin, "__name__", None) or str(origin)
+    if not args:
+        return str(origin_name)
+    return f"{origin_name}[{','.join(_canonical(item) for item in args)}]"
+
+
+#: Returned when a documented return type names something this interpreter
+#: cannot resolve.  ``None`` cannot serve as that signal: ``-> None`` is a
+#: perfectly ordinary annotation that resolves TO ``None``.
+_UNRESOLVED = object()
+
+
+class _NotATypeExpressionError(Exception):
+    """A node the annotation grammar below does not accept."""
+
+
+def _evaluate_type_expression(node: ast.expr, namespace: dict[str, object]) -> object:
+    """Resolve one node of a type expression against ``namespace``.
+
+    Deliberately an interpreter for the annotation grammar rather than a call
+    to ``eval``.  ``eval`` would work, but it would execute whatever a covered
+    page happens to contain and would need a bandit suppression to pass this
+    repository's own lint gate; neither is acceptable for a check whose whole
+    purpose is that claims are verified rather than asserted.  The grammar
+    accepted here is exactly what a return annotation can be: a name, a dotted
+    name, a subscript, a tuple or list of those, ``X | Y``, and the constants
+    ``None`` / ``...`` / a forward-reference string.
+    """
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):  # a forward reference, e.g. "SecureBuffer"
+            resolved = namespace.get(node.value, _UNRESOLVED)
+            if resolved is _UNRESOLVED:
+                raise _NotATypeExpressionError(node.value)
+            return resolved
+        return node.value  # None or Ellipsis
+    if isinstance(node, ast.Name):
+        if node.id not in namespace:
+            raise _NotATypeExpressionError(node.id)
+        return namespace[node.id]
+    if isinstance(node, ast.Attribute):
+        owner = _evaluate_type_expression(node.value, namespace)
+        try:
+            return getattr(owner, node.attr)
+        except AttributeError as exc:
+            raise _NotATypeExpressionError(node.attr) from exc
+    if isinstance(node, ast.Subscript):
+        container = typing.cast(typing.Any, _evaluate_type_expression(node.value, namespace))
+        parameter = _evaluate_type_expression(node.slice, namespace)
+        try:
+            return container[parameter]
+        except (TypeError, KeyError, AttributeError) as exc:
+            raise _NotATypeExpressionError(ast.unparse(node)) from exc
+    if isinstance(node, ast.Tuple):
+        return tuple(_evaluate_type_expression(item, namespace) for item in node.elts)
+    if isinstance(node, ast.List):  # the parameter list of Callable[[int], X]
+        return [_evaluate_type_expression(item, namespace) for item in node.elts]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        left = typing.cast(typing.Any, _evaluate_type_expression(node.left, namespace))
+        right = _evaluate_type_expression(node.right, namespace)
+        try:
+            return left | right
+        except TypeError as exc:
+            raise _NotATypeExpressionError("|") from exc
+    raise _NotATypeExpressionError(type(node).__name__)
+
+
+def _resolve_annotation(declared: str, target: object) -> object:
+    """``declared`` as a type object, or ``_UNRESOLVED``.
+
+    Resolved against the namespace of the module that defines ``target`` — the
+    same names the annotation was written against — with ``typing`` added so a
+    page may write ``Optional[bytes]`` where the module imported it as
+    ``t.Optional``.  A page is free to describe a return in prose that names
+    nothing importable; that returns ``_UNRESOLVED`` and falls back to the text
+    comparison, rather than failing the page.
+    """
+    try:
+        tree = ast.parse(declared.strip(), mode="eval")
+    except SyntaxError:
+        return _UNRESOLVED
+    module = sys.modules.get(str(getattr(target, "__module__", "")))
+    # Only the TYPES from builtins: `bytes` and `dict` have to resolve for
+    # `Optional[bytes]` to mean anything, and nothing that opens a file has any
+    # business in a type expression.
+    namespace: dict[str, object] = {
+        name: getattr(builtins, name)
+        for name in dir(builtins)
+        if isinstance(getattr(builtins, name), type)
+    }
+    namespace.update(vars(typing))
+    # So a page may write the fully qualified `typing.Dict[...]` even where the
+    # module it documents imported the name directly.
+    namespace["typing"] = typing
+    if module is not None:
+        namespace.update(vars(module))
+    namespace.setdefault("NoneType", type(None))
+    try:
+        return _evaluate_type_expression(tree.body, namespace)
+    except _NotATypeExpressionError:
+        return _UNRESOLVED
+
+
+def _return_matches(declared: str, actual: object, target: object = None) -> bool:
+    if isinstance(actual, str):
+        # A module carrying `from __future__ import annotations` (PEP 563) hands
+        # `inspect.signature` the annotation as SOURCE TEXT, so without this the
+        # comparison would be a type object against a string and every
+        # parameterised return on those ten package modules would report a
+        # mismatch that does not exist.  Resolved through the same grammar, so
+        # both sides are types.
+        resolved_actual = _resolve_annotation(actual, target)
+        if resolved_actual is not _UNRESOLVED:
+            actual = resolved_actual
+    resolved = _resolve_annotation(declared, target)
+    if resolved is not _UNRESOLVED:
+        return _canonical(resolved) == _canonical(actual)
+
+    # The documented return is prose, not a type expression. Compare the text,
+    # which is all either side has.
     def normalise(text: str) -> str:
         # `typing.Generator[bytearray, NoneType, NoneType]` and
         # `Generator[bytearray, None, None]` are the same annotation written two
@@ -597,7 +851,7 @@ def _return_matches(declared: str, actual: object) -> bool:
         stripped = re.sub(r"\s|typing\.|builtins\.", "", text)
         return re.sub(r"\bNoneType\b", "None", stripped)
 
-    return normalise(declared) == normalise(rendered)
+    return normalise(declared) == normalise(_render(actual))
 
 
 # ---------------------------------------------------------------------------
@@ -730,6 +984,45 @@ def exported_symbols(library: Path) -> frozenset[str]:
 
 _C_WARNING_FLAGS = ("-Wall", "-Wextra", "-Werror", "-Wno-error=unused-parameter")
 
+#: Shared-library basenames by platform.  The gate ran only on Linux while it
+#: was being written and globbed ``libama_cryptography.so*`` unconditionally,
+#: so on macOS and Windows it found nothing and the C lane silently reported
+#: "skipped" — a gate that passes because it looked in the wrong place.
+_LIBRARY_PATTERNS: tuple[str, ...] = (
+    "libama_cryptography.so*",  # Linux / BSD
+    "libama_cryptography.*dylib",  # macOS
+    "libama_cryptography.dll*",  # MinGW
+    "ama_cryptography.dll",  # MSVC
+    "ama_cryptography.lib",  # MSVC import library
+    "libama_cryptography.dll.a",  # MinGW import library
+)
+
+
+def find_library(directory: Optional[Path]) -> Optional[Path]:
+    """The built shared object in ``directory``, whatever this platform calls it."""
+    if directory is None or not directory.is_dir():
+        return None
+    for pattern in _LIBRARY_PATTERNS:
+        matches = sorted(directory.glob(pattern))
+        if matches:
+            return matches[-1]
+    return None
+
+
+def _link_argv(library_dir: Path) -> list[str]:
+    """Link flags for this platform.
+
+    ``-Wl,-rpath`` is a GNU/BSD loader concept; Windows resolves a DLL from
+    PATH and the directory of the executable, and passing the flag there makes
+    the link fail rather than the run.
+    """
+    argv = [f"-L{library_dir}", "-lama_cryptography"]
+    if sys.platform == "win32":
+        return argv
+    argv.append(f"-Wl,-rpath,{library_dir}")
+    argv += ["-lm", "-lpthread"]
+    return argv
+
 
 def run_c(
     block: Block,
@@ -752,11 +1045,7 @@ def run_c(
             str(source),
             "-o",
             str(binary),
-            f"-L{library_dir}",
-            "-lama_cryptography",
-            f"-Wl,-rpath,{library_dir}",
-            "-lm",
-            "-lpthread",
+            *_link_argv(library_dir),
         ]
         compiled = subprocess.run(compile_argv, capture_output=True, text=True, check=False)
         if compiled.returncode != 0:
@@ -817,9 +1106,12 @@ def check_blocks(
     report = Report()
     exported: Optional[frozenset[str]] = None
     if library_dir is not None:
-        candidates = sorted(library_dir.glob("libama_cryptography.so*"))
-        if candidates:
-            exported = exported_symbols(candidates[-1])
+        library = find_library(library_dir)
+        if library is not None and sys.platform != "win32":
+            # `nm --dynamic` reads ELF and Mach-O; the PE export table needs a
+            # different tool, so on Windows the c-decl mode checks the header
+            # only and says so rather than pretending it checked the ABI.
+            exported = exported_symbols(library)
 
     for block in blocks:
         family = "c" if block.language == "c" else "python"
@@ -855,6 +1147,10 @@ def check_blocks(
             continue
 
         if mode == "python-run":
+            # Checked before execution: the encodability defect is invisible on
+            # a UTF-8 runner, so running the block on Linux would report green
+            # on the exact example that breaks for a Windows reader.
+            check_python_encodability(block, report)
             run_python(block, report, repo)
         elif mode == "python-signature":
             check_python_signatures(block, report)
@@ -934,8 +1230,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     include_dir = (args.include_dir or (repo / "include")).resolve()
     library_dir = args.library_dir.resolve() if args.library_dir else None
     if library_dir is None:
-        default_library = (repo / "build" / "lib").resolve()
-        library_dir = default_library if default_library.is_dir() else None
+        # Search the places a build actually leaves the library. The CMake tree
+        # puts it in build/lib; `pip install -e .` and the wheel builds leave it
+        # beside the package, which is where the macOS and Windows test-matrix
+        # jobs have it. Looking only in build/lib made the C lane report
+        # "skipped" on those runners — a gate passing because it looked in one
+        # place and found nothing.
+        for candidate in (
+            repo / "build" / "lib",
+            repo / "ama_cryptography",
+            repo / "build",
+        ):
+            if find_library(candidate) is not None:
+                library_dir = candidate.resolve()
+                break
 
     report = check_blocks(
         blocks,
