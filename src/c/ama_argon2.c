@@ -714,9 +714,11 @@ static ama_error_t ama_argon2id_core(
             blake2b_update(&S, password, pwd_len);
         }
         blake2b_update_u32le(&S, (uint32_t)salt_len);
-        if (salt_len > 0) {
-            blake2b_update(&S, salt, salt_len);
-        }
+        /* No `if (salt_len > 0)` here: the check above rejects salt_len <
+         * ARGON2_MIN_SALT_LENGTH, so it could never be false, and
+         * blake2b_update returns on inlen == 0 before it reads `in` anyway.
+         * The siblings below keep theirs because their lengths CAN be 0. */
+        blake2b_update(&S, salt, salt_len);
         blake2b_update_u32le(&S, (uint32_t)secret_len);
         if (secret_len > 0) {
             blake2b_update(&S, secret, secret_len);
