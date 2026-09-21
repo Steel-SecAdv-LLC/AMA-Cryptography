@@ -286,6 +286,39 @@ _SAMPLING_REPEATS: dict[str, int] = {
 }
 
 
+#: Why the most recent benchmark returned ``None``.  ``_measure_benchmark``
+#: clears it before each call and reads it immediately after, so "most recent"
+#: is unambiguous: this runner is single-threaded and measures one benchmark at
+#: a time.
+_LAST_UNAVAILABLE: Optional[str] = None
+
+
+def _unavailable(exc: BaseException) -> None:
+    """Record why a benchmark could not run, so the skip can name its cause.
+
+    Every call site of this helper used to be ``except Exception: return
+    None``, and both skip messages then read "not available" whatever had
+    actually happened.  That is how a required lane came to fail with
+    ``chacha20poly1305_encrypt: skipped -- the primitive is absent from this
+    build`` on a build whose own log shows ``ama_chacha20poly1305.c`` compiled
+    into both the shared and static targets: the exception was discarded where
+    it was raised, so the run reported a cause that was not the cause, and the
+    failure could not be diagnosed from the log at all (INVARIANT-3).
+
+    The skip itself is unchanged.  An absent primitive is still a skip, and
+    ``--require-populated-baseline`` still fails a run whose floor went
+    unmeasured (INVARIANT-47).  What changes is that the run now says which
+    exception produced it.
+    """
+    global _LAST_UNAVAILABLE
+    _LAST_UNAVAILABLE = f"{type(exc).__name__}: {exc}"
+
+
+def _unavailable_reason() -> str:
+    """The recorded cause, formatted for a skip line."""
+    return _LAST_UNAVAILABLE or "no exception recorded"
+
+
 def _measure_benchmark(name: str, func: "Callable[[], Optional[float]]") -> Optional[float]:
     """Run one registered benchmark, repeating it if it is a high-variance one.
 
@@ -295,9 +328,11 @@ def _measure_benchmark(name: str, func: "Callable[[], Optional[float]]") -> Opti
     reported, matching ``benchmark_operation``'s estimator; ``None`` (the
     primitive is absent from this build) short-circuits.
     """
+    global _LAST_UNAVAILABLE
     repeats = _SAMPLING_REPEATS.get(name, 1)
     best: Optional[float] = None
     for _ in range(repeats):
+        _LAST_UNAVAILABLE = None
         value = func()
         if value is None:
             return None
@@ -778,7 +813,8 @@ def run_kyber_keygen_benchmark(iterations: int = 20) -> Optional[float]:
             generate_kyber_keypair()
 
         return benchmark_operation(operation, iterations, warmup=2)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -800,7 +836,8 @@ def run_kyber_encapsulate_benchmark(iterations: int = 20) -> Optional[float]:
             kyber_encapsulate(kp.public_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -821,7 +858,8 @@ def run_aes_gcm_benchmark(iterations: int = 100) -> Optional[float]:
             native_aes256_gcm_encrypt(key, nonce, plaintext, aad)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -842,7 +880,8 @@ def run_chacha20poly1305_benchmark(iterations: int = 100) -> Optional[float]:
             native_chacha20poly1305_encrypt(key, nonce, plaintext, aad)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -861,7 +900,8 @@ def run_x25519_benchmark(iterations: int = 100) -> Optional[float]:
             native_x25519_key_exchange(scalar, point)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -902,7 +942,8 @@ def run_x25519_batch4_benchmark(iterations: int = 100) -> Optional[float]:
             native_x25519_scalarmult_batch(scalars, points)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -953,7 +994,8 @@ def run_secp256k1_ecdsa_sign_benchmark(iterations: int = 100) -> Optional[float]
             native_secp256k1_ecdsa_sign(_SECP256K1_BENCH_DIGEST, _SECP256K1_BENCH_PRIVKEY)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -979,7 +1021,8 @@ def run_secp256k1_ecdsa_verify_benchmark(iterations: int = 100) -> Optional[floa
             native_secp256k1_ecdsa_verify(signature, _SECP256K1_BENCH_DIGEST, pubkey)
 
         return benchmark_operation(operation, iterations, warmup=5)
-    except Exception:
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -1049,7 +1092,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         # AMA_USE_NATIVE_PQC=ON) the number is present and hard-gated below.
         if ops_per_sec is None:
             if verbose:
-                print("SKIPPED (primitive not available in this build)")
+                print(f"SKIPPED ({_unavailable_reason()})")
             continue
 
         baseline_value = config["baseline_value"]
@@ -1099,7 +1142,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
 
         if pqc_ops_per_sec is None:
             if verbose:
-                print("SKIPPED (PQC not available)")
+                print(f"SKIPPED ({_unavailable_reason()})")
             continue
 
         baseline_value = config["baseline_value"]
