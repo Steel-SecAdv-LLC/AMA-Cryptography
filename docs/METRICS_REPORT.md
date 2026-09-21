@@ -91,20 +91,20 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 
 | Scope | Files | Lines |
 |-------|------:|------:|
-| Library Python (`ama_cryptography/*.py`) | 30 | 40,777 |
+| Library Python (`ama_cryptography/*.py`) | 30 | 40,774 |
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 87 | 52,522 |
-| Library total (Python + C + headers) | 117 | **93,299** |
+| Library total (Python + C + headers) | 117 | **93,296** |
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,423 |
 | Tests (`tests/**/*.py`) | 251 | 104,575 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,873 |
-| **Whole project** (source + docs + config) | 741 | **419,381** |
+| **Whole project** (source + docs + config) | 741 | **419,378** |
 
 **Library total (the figure that most closely tracks "library size"):
-93,299 lines** across 117 files under `ama_cryptography/`, `src/c/`,
+93,296 lines** across 117 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`419,381` lines across Python, C, headers,
+**Whole-project total** (`419,378` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -163,12 +163,12 @@ the whole-project figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers) | 93,299 | 22.2% | `ama_cryptography/` + `src/c/` + `include/` |
+| Library (Python + C + headers) | 93,296 | 22.2% | `ama_cryptography/` + `src/c/` + `include/` |
 | Tests | 104,575 | 24.9% | `tests/**/*.py` |
 | Top-level Python | 1,423 | 0.3% | `*.py` at repo root |
 | Cython | 1,873 | 0.4% | `*.pyx` + `*.pxd` |
 | Everything else (remainder) | 218,211 | 52.0% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **419,381** | **100%** | sum of the scopes above |
+| **Whole-project total** | **419,378** | **100%** | sum of the scopes above |
 
 Test code (24.9%) is roughly 1.1x the size of the library (22.2%) — i.e. the test-to-library ratio is roughly **1.12**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands

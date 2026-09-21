@@ -9263,9 +9263,6 @@ def frost_round2_sign(
     if len(nonce_pair) != FROST_NONCE_BYTES:
         raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
 
-    # Pre-bound so the `finally` below cannot be reached with `rc` unset on a
-    # path that raises before the native call.
-    rc = -1
     # Take the writable view first: everything below this point can scrub.
     try:
         nonce_view = (ctypes.c_char * FROST_NONCE_BYTES).from_buffer(nonce_pair)
