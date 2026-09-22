@@ -323,25 +323,26 @@ _Headline source: `benchmarks/benchmark-results.json` (run 2026-09-22 on Linux-6
 
 | Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |
 |-----------|---------------------:|---------------------------:|----------:|------|
-| Ama Sha3 256 Hash | 250,960 | 327,222 | ±45% | microbenchmark |
-| Hmac Sha3 256 | 176,713 | 215,299 | ±45% | microbenchmark |
-| Ed25519 Keygen | 12,011 | 12,368 | ±45% | microbenchmark |
-| Ed25519 Sign | 36,646 | 38,811 | ±45% | microbenchmark |
-| Ed25519 Verify | 27,390 | 27,934 | ±45% | microbenchmark |
-| Hkdf Derive | 113,804 | 131,341 | ±45% | microbenchmark |
-| Full Package Create | 1,841.9 | 1,856 | ±45% | complex_operation |
-| Full Package Verify | 3,028.6 | 2,807 | ±45% | complex_operation |
-| Secp256K1 Ecdsa Sign | 8,763.8 | 8,068 | ±45% | microbenchmark |
-| Secp256K1 Ecdsa Verify | 3,735.0 | 3,302 | ±45% | microbenchmark |
-| Dilithium Keygen | 1,480.3 | 1,312 | ±45% | microbenchmark |
-| Dilithium Sign | 2,937.5 | 2,636 | ±45% | microbenchmark |
-| Dilithium Verify | 9,812.0 | 8,897 | ±45% | microbenchmark |
-| Kyber Keygen | 3,419.1 | 2,726 | ±45% | microbenchmark |
-| Kyber Encapsulate | 16,227 | 11,994 | ±45% | microbenchmark |
-| Aes 256 Gcm Encrypt | 281,763 | 224,406 | ±45% | microbenchmark |
-| Chacha20Poly1305 Encrypt | 244,379 | 227,521 | ±45% | microbenchmark |
-| X25519 Scalarmult | 17,773 | 16,876 | ±45% | microbenchmark |
-| X25519 Scalarmult Batch4 | 4,262.8 | 4,074 | ±45% | microbenchmark |
+| Ama Sha3 256 Hash | 298,723 | 327,222 | ±45% | microbenchmark |
+| Hmac Sha3 256 | 205,641 | 215,299 | ±45% | microbenchmark |
+| Ed25519 Keygen | 11,316 | 12,368 | ±45% | microbenchmark |
+| Ed25519 Sign | 35,287 | 38,811 | ±45% | microbenchmark |
+| Ed25519 Sign Expanded | 56,746 | 61,671 | ±45% | microbenchmark |
+| Ed25519 Verify | 25,181 | 27,934 | ±45% | microbenchmark |
+| Hkdf Derive | 136,549 | 131,341 | ±45% | microbenchmark |
+| Full Package Create | 1,386.9 | 1,856 | ±45% | complex_operation |
+| Full Package Verify | 2,444.0 | 2,807 | ±45% | complex_operation |
+| Secp256K1 Ecdsa Sign | 8,416.7 | 8,068 | ±45% | microbenchmark |
+| Secp256K1 Ecdsa Verify | 3,642.2 | 3,302 | ±45% | microbenchmark |
+| Dilithium Keygen | 1,142.2 | 1,312 | ±45% | microbenchmark |
+| Dilithium Sign | 2,172.4 | 2,636 | ±45% | microbenchmark |
+| Dilithium Verify | 7,837.3 | 8,897 | ±45% | microbenchmark |
+| Kyber Keygen | 2,125.7 | 2,726 | ±45% | microbenchmark |
+| Kyber Encapsulate | 10,091 | 11,994 | ±45% | microbenchmark |
+| Aes 256 Gcm Encrypt | 267,103 | 224,406 | ±45% | microbenchmark |
+| Chacha20Poly1305 Encrypt | 219,335 | 227,521 | ±45% | microbenchmark |
+| X25519 Scalarmult | 18,024 | 16,876 | ±45% | microbenchmark |
+| X25519 Scalarmult Batch4 | 4,268.3 | 4,074 | ±45% | microbenchmark |
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*
