@@ -47,7 +47,16 @@ message-buffer scrub gives 0 because R || A overwrites the prefix before
 return, so that scrub is redundant with the overwrite on this needle and the
 test pins the property, not the scrub (§6.3). Registered in
 `tests/c/CMakeLists.txt` with the AEAD probe's flags and skip code; the C
-suite is 85 files / 87 translation units.
+suite is 85 files / 87 translation units. Corrected after its first CI run
+(§6.6): the AArch64 UBSan lane failed the expand verdict while printing
+0 hits, because the harness evaluated the count twice per poison (once for
+the print, once for the check) and the scanner itself spills the needle it
+compares against into its own frame under aarch64 gcc 13.3.0 `-O2
+-fsanitize=undefined` — reproduced under QEMU: `scalar[16..32]` at
+anchor-95 and `prefix[0..16]` at anchor-143 after one scan, invisible on
+x86-64 gcc and clang, which keep the needle in registers. Each verdict now
+evaluates the count once per poison, the file records the measurement, and
+the expand-scrub mutation still fails the test on both hosts (1 hit each).
 
 **Medium — the constant-time gate's tables were not checked against each
 other.** `tests/test_ghash_constant_time_gate.py` now carries the entry point

@@ -31,6 +31,20 @@
  * pins the property -- no scalar or prefix on the dead stack -- and not any
  * one of the scrubs that together produce it.
  *
+ * ONE SCAN PER POISON.  The scanning function is not exempt from the
+ * defect it measures: a compiler may spill the needle it is comparing
+ * against into the scanner's own frame, below the anchor, inside the window
+ * the next scan at the same depth will read.  Measured: aarch64 gcc 13.3.0
+ * at -O2 with -fsanitize=undefined (the arm-qemu UBSan lane) leaves
+ * scalar[16..32] at anchor-95 and prefix[0..16] at anchor-143 after one
+ * scan, so a second evaluation of `secret_residue_count()` before the next
+ * `poison_stack()` reported the first evaluation's spill as library residue
+ * and failed the expand verdict; x86-64 gcc and clang keep the needle in
+ * registers and never showed it.  Each verdict below therefore evaluates the
+ * count exactly once per poison and prints that value; `poison_stack()`'s
+ * 32 KiB frame at this same depth is what clears the previous scan's spill
+ * before the next probed call.
+ *
  * CONTROL and BASELINE follow the AEAD harness exactly: a sentinel the probe
  * MUST see, then a window that MUST hold no copy of either needle before any
  * signing call, so a verdict is trusted only after both directions are
@@ -184,6 +198,7 @@ int main(void) {
 #else
     unsigned i;
     int control_hits;
+    int hits;
     uint8_t *big;
     const size_t big_len = 8192u;
 
@@ -234,8 +249,9 @@ int main(void) {
     /* --- expand_secret_key: its `hash` holds both needles and is scrubbed. */
     poison_stack();
     run_expand();
-    printf("  expand_secret_key: %d hit(s)\n", secret_residue_count());
-    CHECK(secret_residue_count() == 0,
+    hits = secret_residue_count();
+    printf("  expand_secret_key: %d hit(s)\n", hits);
+    CHECK(hits == 0,
           "expand_secret_key leaves neither the scalar nor the prefix on the "
           "dead stack");
     CHECK(memcmp(g_expanded, g_scalar, 32) == 0 &&
@@ -245,8 +261,9 @@ int main(void) {
     /* --- sign_expanded, stack path: the prefix is copied into `stack_buf`. */
     poison_stack();
     run_sign_expanded();
-    printf("  sign_expanded (stack path): %d hit(s)\n", secret_residue_count());
-    CHECK(secret_residue_count() == 0,
+    hits = secret_residue_count();
+    printf("  sign_expanded (stack path): %d hit(s)\n", hits);
+    CHECK(hits == 0,
           "sign_expanded (stack path) leaves neither the scalar nor the "
           "prefix on the dead stack");
     CHECK(ama_ed25519_verify(g_sig, g_msg, MSG_BYTES, g_pk) == AMA_SUCCESS,
@@ -255,8 +272,9 @@ int main(void) {
     /* --- sign_expanded, heap path. */
     poison_stack();
     run_sign_expanded_large(big, big_len);
-    printf("  sign_expanded (heap path): %d hit(s)\n", secret_residue_count());
-    CHECK(secret_residue_count() == 0,
+    hits = secret_residue_count();
+    printf("  sign_expanded (heap path): %d hit(s)\n", hits);
+    CHECK(hits == 0,
           "sign_expanded (heap path) leaves neither the scalar nor the "
           "prefix on the dead stack");
     CHECK(ama_ed25519_verify(g_sig, big, big_len, g_pk) == AMA_SUCCESS,
@@ -265,8 +283,9 @@ int main(void) {
     /* --- sign from the 64-byte key: derives `hash` itself, then signs. */
     poison_stack();
     run_sign();
-    printf("  sign: %d hit(s)\n", secret_residue_count());
-    CHECK(secret_residue_count() == 0,
+    hits = secret_residue_count();
+    printf("  sign: %d hit(s)\n", hits);
+    CHECK(hits == 0,
           "sign leaves neither the scalar nor the prefix on the dead stack");
     CHECK(ama_ed25519_verify(g_sig, g_msg, MSG_BYTES, g_pk) == AMA_SUCCESS,
           "sign signature verifies");
