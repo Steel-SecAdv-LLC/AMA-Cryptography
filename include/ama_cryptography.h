@@ -204,6 +204,10 @@ typedef enum {
 #define AMA_ED25519_PUBLIC_KEY_BYTES 32
 #define AMA_ED25519_SECRET_KEY_BYTES 64
 #define AMA_ED25519_SIGNATURE_BYTES 64
+/* The expanded signing form ama_ed25519_expand_secret_key produces:
+ * a(32) || prefix(32) || A(32) || tag(32).  See the function's contract. */
+#define AMA_ED25519_EXPANDED_KEY_BYTES 128
+#define AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET 64
 
 /* ----------------------------------------------------------------------------
  * Hybrid signature (AMA_ALG_HYBRID): Ed25519 + ML-DSA-65, format v2.
@@ -1376,6 +1380,89 @@ AMA_API ama_error_t ama_ed25519_sign(
     const uint8_t *message,
     size_t message_len,
     const uint8_t secret_key[64]
+);
+
+/**
+ * @brief Expand a 64-byte Ed25519 secret key into the 128-byte signing form
+ *
+ * INVARIANT-51 at key load. `ama_ed25519_sign` derives `A = [a]B` on every
+ * signature to refuse a stored public half that is not the one its scalar
+ * generates. This function performs that derivation ONCE and produces a
+ * form `ama_ed25519_sign_expanded` can use without repeating it:
+ *
+ *     [  0.. 31]  a       the clamped secret scalar, SHA-512(seed)[0..31]
+ *     [ 32.. 63]  prefix  the nonce PRF key, SHA-512(seed)[32..63]
+ *     [ 64.. 95]  A       the public key, computed here as [a]B
+ *     [ 96..127]  tag     SHA-512("AMA/Ed25519/expanded-key/v1" || a || prefix || A)[0..31]
+ *
+ * The tag is the property's carrier. The hazard INVARIANT-51 closes is a
+ * stored `A` that differs from `[a]B`: two signatures over one message under
+ * two different halves share `R` and disclose the scalar. In this form
+ * neither `A`, `a` nor `prefix` can change without the tag failing to
+ * verify, and the signer re-checks the tag on every signature at the cost of
+ * two SHA-512 compressions rather than a fixed-base scalar multiplication.
+ * A single flipped bit anywhere in the 128 bytes — what a storage fault or a
+ * mis-copied record produces — is refused. A party able to rewrite the tag
+ * consistently can read `a` from the same bytes and needs no fault.
+ *
+ * This is NOT a storage or interchange format. It holds the private scalar
+ * in the clear (the same secrecy class as the seed, which is one SHA-512
+ * from it) and exists so a caller signing many times under one key pays the
+ * derivation once. Hold it exactly as long as the signing session and scrub
+ * it with `ama_secure_memzero` (INVARIANT-6). Read the public key from
+ * offset `AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET`; do not construct or edit
+ * the form by hand — a hand-assembled buffer is refused unless its tag is
+ * correct, and the only supported way to obtain a correct tag is this
+ * function.
+ *
+ * @param expanded    Output. Caller MUST supply exactly
+ *                    `AMA_ED25519_EXPANDED_KEY_BYTES` (128) writable bytes;
+ *                    all 128 are written. On refusal all 128 are zero, a
+ *                    buffer `ama_ed25519_sign_expanded` also refuses.
+ * @param secret_key  Caller MUST supply exactly 64 readable bytes laid out
+ *                    as seed(32) || public_key(32), the form
+ *                    `ama_ed25519_keypair` produces. No length parameter.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the stored public
+ *         half is not the derived one (or an argument is NULL).
+ *
+ * See the fixed-length buffer contract above.
+ */
+AMA_API ama_error_t ama_ed25519_expand_secret_key(
+    uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES],
+    const uint8_t secret_key[64]
+);
+
+/**
+ * @brief Sign a message with an expanded Ed25519 key
+ *
+ * Produces, for a message and the expanded form of a key, exactly the bytes
+ * `ama_ed25519_sign` produces for the same message and the 64-byte key —
+ * RFC 8032 Ed25519 (pure EdDSA), deterministic — after re-verifying the
+ * expanded key's tag. The tag check is a mask, not a branch, and the
+ * verdict is applied at a single exit (the construction `ama_ed25519_sign`
+ * uses for its INVARIANT-51 verdict), so the instruction stream does not
+ * depend on the key.
+ *
+ * @param signature   Output. Caller MUST supply exactly 64 writable bytes;
+ *                    all 64 are written. On refusal all 64 are zero.
+ * @param message     Message to sign. Bounded by `message_len`, which IS
+ *                    checked; a zero-length message is valid.
+ * @param message_len Length of `message` in bytes.
+ * @param expanded    Caller MUST supply exactly
+ *                    `AMA_ED25519_EXPANDED_KEY_BYTES` (128) readable bytes
+ *                    as produced by `ama_ed25519_expand_secret_key`. No
+ *                    length parameter.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the tag does not
+ *         verify (or an argument is NULL); AMA_ERROR_MEMORY when a message
+ *         above the 4 KiB stack threshold cannot be buffered.
+ *
+ * See the fixed-length buffer contract above.
+ */
+AMA_API ama_error_t ama_ed25519_sign_expanded(
+    uint8_t signature[64],
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES]
 );
 
 /**

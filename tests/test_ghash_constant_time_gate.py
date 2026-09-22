@@ -629,6 +629,9 @@ class TestCalibration:
             # runner has AVX2, so without it the fold a non-AVX2 x86-64 host
             # runs on every keygen and sign was measured nowhere.
             "ed25519-sign-sse2fold",
+            # The expanded signing form: the same core, reached with a tag
+            # check in place of the per-call INVARIANT-51 derivation.
+            "ed25519-sign-expanded",
             "nistp-ecdsa",
             "x25519",
             "x25519-batch",

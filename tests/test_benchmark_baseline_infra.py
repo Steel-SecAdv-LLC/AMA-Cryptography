@@ -1012,7 +1012,7 @@ class TestProvenanceRecordsTheMeasuredTree:
         """
         observed: list[tuple[str, ...]] = []
 
-        def _fake_git(*args: str) -> str:
+        def _fake_git(*args: str, **_kwargs: Any) -> str:
             observed.append(args)
             # Clean on the first status query, dirty on every later one — the
             # shape a run has once it has written its own tracked output.
@@ -1059,8 +1059,40 @@ class TestTheTreeRowNamesWhatIsDirty:
     primitive.  The paths make the two distinguishable from the record alone.
     """
 
+    def test_the_first_porcelain_line_keeps_its_leading_status_column(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Porcelain v1 puts a SPACE in column one for an unstaged change, so
+        the first line of the output begins with whitespace.  A helper that
+        strips the whole output before the parser sees it eats that space
+        and the parser then eats the path's first character: the committed
+        record at cd02072 read ``ma_cryptography/_integrity_digest.txt``.
+        This drives the real ``_git`` through a fake subprocess, so the
+        strip is in the loop; the tests above fake ``_git`` itself and
+        never saw it."""
+
+        class _Completed:
+            def __init__(self, stdout: str) -> None:
+                self.stdout = stdout
+
+        def fake_run(argv: list[str], **kwargs: Any) -> _Completed:
+            if argv[1] == "status":
+                return _Completed(
+                    " M ama_cryptography/_integrity_digest.txt\n"
+                    " M ama_cryptography/_integrity_signature.py\n"
+                )
+            return _Completed("abc123\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        commit, dirty, paths = br.capture_tree_state()
+        assert (commit, dirty) == ("abc123", True)
+        assert paths == (
+            "ama_cryptography/_integrity_digest.txt",
+            "ama_cryptography/_integrity_signature.py",
+        )
+
     def test_capture_parses_the_porcelain_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def _fake_git(*args: str) -> str:
+        def _fake_git(*args: str, **_kwargs: Any) -> str:
             if args[0] == "status":
                 return " M ama_cryptography/_integrity_signature.py\n?? scratch/notes.txt"
             return "1234567890abcdef"
@@ -1073,7 +1105,9 @@ class TestTheTreeRowNamesWhatIsDirty:
         assert paths == ("ama_cryptography/_integrity_signature.py", "scratch/notes.txt")
 
     def test_a_clean_tree_captures_no_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(br, "_git", lambda *args: "" if args[0] == "status" else "abc123")
+        monkeypatch.setattr(
+            br, "_git", lambda *args, **_kw: "" if args[0] == "status" else "abc123"
+        )
         monkeypatch.setattr(br, "_TREE_STATE", None)
         assert br.capture_tree_state() == ("abc123", False, ())
 

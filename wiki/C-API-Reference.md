@@ -478,6 +478,39 @@ int main(void) {
 > from a corrupted record is rejected rather than turned into the two-signature
 > transcript that leaks the private scalar.
 
+**Signing many times under one key.** The re-derivation above is one
+fixed-base scalar multiplication per signature — the same work as computing
+`R`. A caller that signs repeatedly under one key can pay it once:
+
+<!-- example: c-decl -->
+```c
+// Verify the stored public half once and produce the 128-byte signing form:
+// a(32) || prefix(32) || A(32) || tag(32).  Refuses a disagreeing half with
+// AMA_ERROR_INVALID_PARAM and 128 zero bytes.
+ama_error_t ama_ed25519_expand_secret_key(
+    uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES],
+    const uint8_t secret_key[64]
+);
+
+// Sign with the expanded form.  Re-checks the tag (two SHA-512 compressions
+// instead of a scalar multiplication) and produces exactly the bytes
+// ama_ed25519_sign() produces for the 64-byte key the form came from.
+ama_error_t ama_ed25519_sign_expanded(
+    uint8_t signature[64],
+    const uint8_t *message, size_t message_len,
+    const uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES]
+);
+```
+
+The expanded form holds the private scalar in the clear and is not a storage
+format: hold it for the signing session, read the public key at
+`AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET`, and scrub it with
+`ama_secure_memzero()` when done. Any single flipped bit in the 128 bytes is
+refused at signing, so the property INVARIANT-51 states holds on this path
+too. Measured on the tree that introduced it, a signature through the
+expanded form costs 0.55× the per-call path (`benchmarks/benchmark_c_raw`
+rows "Ed25519 Sign" and "Ed25519 Sign (expanded)").
+
 ---
 
 ### ML-DSA-65 (Dilithium — FIPS 204)

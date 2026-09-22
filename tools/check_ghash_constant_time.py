@@ -72,7 +72,7 @@ compiler that does perform the conversion, not as a signal this gate reproduces 
 today's toolchain; the operative measurement is the per-target limits below (all
 zero), which the gate DOES reproduce on both gcc 13 and clang 18.
 
-Per-target limits are set from measurement, not from headroom: all EIGHTEEN
+Per-target limits are set from measurement, not from headroom: all TWENTY
 targets measure a cross-class delta of exactly zero under both gcc 13 and
 clang 18 at -O3, with a same-class floor of exactly zero, and every limit is
 0.  `ecdsa` was the last holdout — it carried a limit of 64 for the DER
@@ -265,6 +265,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: kyber-decaps          0 / 0               0 / 0                0
 #: sha3-256              0 / 0               0 / 0                0
 #: ed25519-sign          0 / 0               0 / 0                0
+#: ed25519-sign-expanded 0 / 0               0 / 0                0
 #: x25519                0 / 0               0 / 0                0
 #: x25519-batch          0 / 0               0 / 0                0
 #: nistp-ecdsa           0 / 0               0 / 0                0
@@ -276,7 +277,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: secure-memzero        0 / 0               0 / 0                0
 #: ===============  =================  ===================  ===============
 #:
-#: All nineteen are exactly zero, on both compilers, with a same-class floor of
+#: All twenty are exactly zero, on both compilers, with a same-class floor of
 #: exactly zero — which is what "deterministic instrument" has to mean.  Their
 #: limit is 0.  A single retired instruction of cross-class
 #: difference in any of them falsifies the property the target states, and
@@ -312,7 +313,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: comparison saw at least one short DER signature so it cannot pass over
 #: full-length cases alone.
 #:
-#: `x25519-batch` is the thirteenth of the nineteen, and it exists because a
+#: `x25519-batch` is the thirteenth of the twenty, and it exists because a
 #: lane can be
 #: informational only where something else blocks.  `tests/c/test_dudect.c`
 #: registers eight info-only wall-clock lanes, and each one that names a reason
@@ -345,7 +346,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: report a 1,744-instruction / 1,024-data-reference cross-class delta and exit
 #: 1.  The mutation was reverted.
 THRESHOLDS = {
-    # Every one of the nineteen is invariant by construction and measures
+    # Every one of the twenty is invariant by construction and measures
     # exactly zero on both compilers; see the table above.  `ecdsa` was the
     # last holdout at 64, for the DER length term, and reached zero the way
     # `nistp-ecdsa` did: by signing through a fixed-width entry point.
@@ -364,6 +365,11 @@ THRESHOLDS = {
     # without this target the SSE2 fold — what a non-AVX2 x86-64 host runs
     # on every keygen and sign — was measured nowhere.  0/0 like its sibling.
     "ed25519-sign-sse2fold": 0,
+    # ama_ed25519_sign_expanded: the same signing core reached through the
+    # 128-byte expanded form, whose tag check replaces the per-call
+    # derivation of A.  The tag comparison is a laundered mask like the
+    # INVARIANT-51 comparison it stands in for; 0/0 like its siblings.
+    "ed25519-sign-expanded": 0,
     "nistp-ecdsa": 0,
     "x25519": 0,
     # `ama_x25519_scalarmult_batch` — a separate entry point with its own
@@ -395,9 +401,9 @@ THRESHOLDS = {
 }
 
 #: The prose above states this inventory's size in five present-tense places
-#: ("all NINETEEN targets", "All nineteen are exactly zero", "the thirteenth
-#: of the eighteen", "Every one of the nineteen", "across all eighteen
-#: targets" / "the inventory is nineteen" below MISS_THRESHOLD) — past-tense
+#: ("all TWENTY", "All twenty are exactly zero", "the thirteenth
+#: of the twenty", "Every one of the twenty", "across all twenty
+#: targets" / "the inventory is twenty" below MISS_THRESHOLD) — past-tense
 #: records such as "the other thirteen sat at 0" describe the inventory at
 #: the moment they were measured and stay as written.  The count drifted
 #: before this check existed: at one point the same dict was
@@ -406,7 +412,7 @@ THRESHOLDS = {
 #: src/c/ama_secp256k1.c and include/ama_cryptography.h.  Nothing checked any
 #: of them.  This does.  A target added or removed without updating the prose
 #: stops the tool at import with the number to write.
-_DOCUMENTED_TARGET_COUNT = 19
+_DOCUMENTED_TARGET_COUNT = 20
 if len(THRESHOLDS) != _DOCUMENTED_TARGET_COUNT:
     raise SystemExit(
         f"check_ghash_constant_time.py: THRESHOLDS holds {len(THRESHOLDS)} "
@@ -536,6 +542,15 @@ _REMEDY = {
         "src/c/internal/ama_ed25519_ge.h (the mask select over the table row);\n"
         "a delta on both is in the shared group code.  Confirm the wiring line\n"
         "says `sse2 niels-select fold`, otherwise the override did not take."
+    ),
+    "ed25519-sign-expanded": (
+        "ama_ed25519_sign_expanded in src/c/ama_ed25519.c must not branch on the\n"
+        "expanded key: the scalar, the nonce prefix, the public half as it flows\n"
+        "through H(R || A || M), or the tag comparison.  A delta here and not on\n"
+        "ed25519-sign localises the defect to the expanded entry point -- the\n"
+        "tag recomputation (ed25519_expanded_tag) or the mask it feeds\n"
+        "(ed25519_mismatch_mask32) -- since the two targets share the signing\n"
+        "core.  A delta on both is in the shared core or the comb."
     ),
     "nistp-ecdsa": (
         "The usual cause is the optimizer branching on a mask that\n"
@@ -1358,6 +1373,75 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
+_ED25519_SIGN_EXPANDED_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* Ed25519 signing through the EXPANDED form with the SECRET KEY as the class
+ * variable.  Same message, same classes, same iteration count as the
+ * ed25519-sign driver, so the two counts are directly comparable.
+ *
+ * Why this target exists.  The wall-clock lane in
+ * tools/constant_time/dudect_crypto.c reported t = -6.71 for Ed25519 sign in
+ * 4 of 5 rounds, consistently signed, on the same CI run that flagged
+ * SHA3-256 — and passed (-2.40) on the immediately preceding commit, which
+ * differed by no C code at all.
+ *
+ * This is the lane that matters most of the three, because unlike a hash the
+ * class variable here IS the long-term secret: a real input-dependence would
+ * be a key-recovery surface, not a nuisance.  So it gets the deterministic
+ * instrument rather than an argument from the wall clock.
+ *
+ * Ed25519 signing is deterministic (RFC 8032 §5.1.6 derives the nonce from
+ * the key and message), so for a fixed message the retired-instruction count
+ * is a pure function of the secret key.  Constant-time signing means that
+ * function is constant.  The scalar multiplication is a fixed-window comb
+ * over the base point and the SHA-512 core is branchless, so an
+ * input-independent count is the expected result and a delta localises the
+ * defect to src/c/ama_ed25519.c.
+ *
+ * The class byte becomes the 32-byte seed, mirroring the dudect lane's
+ * all-zero vs all-0xFF seeds but spreading the byte so the classes land on
+ * different sides of any secret-dependent predicate rather than only on the
+ * two Hamming extremes.  The message is FIXED: varying it would make the
+ * count vary for a legitimate reason (message length feeds the SHA-512 block
+ * count) and mask the property under test. */
+int main(int argc, char **argv) {
+    uint8_t public_key[32];
+    uint8_t secret_key[64];
+    uint8_t signature[64];
+    uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES];
+    /* Fixed message — see above.  64 bytes, the width the dudect lane signs. */
+    static const uint8_t message[64] = {
+        0x41, 0x4d, 0x41, 0x20, 0x43, 0x72, 0x79, 0x70, 0x74, 0x6f, 0x67, 0x72,
+        0x61, 0x70, 0x68, 0x79, 0x20, 0x45, 0x64, 0x32, 0x35, 0x35, 0x31, 0x39,
+        0x20, 0x69, 0x6e, 0x73, 0x74, 0x72, 0x75, 0x63, 0x74, 0x69, 0x6f, 0x6e,
+        0x2d, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x20, 0x69, 0x6e, 0x76, 0x61, 0x72,
+        0x69, 0x61, 0x6e, 0x63, 0x65, 0x20, 0x64, 0x72, 0x69, 0x76, 0x65, 0x72,
+        0x2e, 0x00, 0x00, 0x00,
+    };
+    unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+
+    /* The seed occupies secret_key[0..31]; ama_ed25519_keypair writes the
+     * public key into [32..63].  See the contract in ama_cryptography.h. */
+    for (unsigned i = 0; i < 32u; i++)
+        secret_key[i] = (uint8_t)(fill * 31u + i * 167u + i * i * 13u);
+    if (ama_ed25519_keypair(public_key, secret_key) != AMA_SUCCESS) return 1;
+    /* The INVARIANT-51 derivation happens here, once; the loop below signs
+     * with the expanded form and re-checks its tag on every call. */
+    if (ama_ed25519_expand_secret_key(expanded, secret_key) != AMA_SUCCESS) return 1;
+
+    static volatile uint8_t sink;
+    for (int i = 0; i < 200; i++) {
+        if (ama_ed25519_sign_expanded(signature, message, sizeof message, expanded) != AMA_SUCCESS)
+            return 1;
+        sink = (uint8_t)(sink ^ signature[0]);
+    }
+    return 0;
+}
+"""
 
 _ED25519_SIGN_SSE2FOLD_DRIVER = r"""
 /* Generated by tools/check_ghash_constant_time.py — do not edit. */
@@ -1770,6 +1854,34 @@ int main(void) {
     return 0;
 }
 """,
+    "ed25519-sign-expanded": _TAINT_PRELUDE
+    + r"""
+/* Secret: the 32-byte seed.  The expanded form (scalar, prefix, public key
+ * and tag) is derived from it and inherits the taint, so the tag comparison
+ * in ama_ed25519_sign_expanded is checked here for a branch on tainted data
+ * exactly as the INVARIANT-51 comparison in ama_ed25519_sign is. */
+int main(void) {
+    uint8_t public_key[32], secret_key[64], signature[64];
+    uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES];
+    static const uint8_t message[64] = "AMA Cryptography Ed25519 taint driver.";
+    for (unsigned i = 0; i < 32u; i++) secret_key[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    TAINT(secret_key, 32);
+    if (ama_ed25519_keypair(public_key, secret_key) != AMA_SUCCESS) return 1;
+    {
+        ama_error_t rc = ama_ed25519_expand_secret_key(expanded, secret_key);
+        UNTAINT(&rc, sizeof rc);
+        if (rc != AMA_SUCCESS) return 1;
+    }
+    static volatile uint8_t sink;
+    for (int i = 0; i < 2; i++) {
+        ama_error_t rc = ama_ed25519_sign_expanded(signature, message, sizeof message, expanded);
+        UNTAINT(&rc, sizeof rc);
+        if (rc != AMA_SUCCESS) return 1;
+        sink = (uint8_t)(sink ^ signature[0]);
+    }
+    return 0;
+}
+""",
     "ed25519-sign-sse2fold": _TAINT_PRELUDE
     + r"""
 /* Secret: the 32-byte seed the expanded key is derived from; everything
@@ -2142,6 +2254,7 @@ _DRIVERS = {
     "sha3-256": _SHA3_256_DRIVER,
     "ed25519-sign": _ED25519_SIGN_DRIVER,
     "ed25519-sign-sse2fold": _ED25519_SIGN_SSE2FOLD_DRIVER,
+    "ed25519-sign-expanded": _ED25519_SIGN_EXPANDED_DRIVER,
     "nistp-ecdsa": _NISTP_ECDSA_DRIVER,
     "x25519": _X25519_DRIVER,
     "x25519-batch": _X25519_BATCH_DRIVER,
@@ -2214,11 +2327,11 @@ def _limit_for(metric: str, count_threshold: int) -> int:
 
 
 #: Miss-count threshold.  Zero, and that is measured rather than aspirational:
-#: across all nineteen targets at gcc 13 -O3 and clang 18 -O3, every
+#: across all twenty targets at gcc 13 -O3 and clang 18 -O3, every
 #: cross-class miss delta and every same-class noise floor is exactly 0.  (An
 #: earlier revision of this note said "all ten targets" and cited ecdsa as
 #: "the one target with a legitimate public-data spread ... 24 instructions
-#: and 8 data references".  Both were stale: the inventory is nineteen, and
+#: and 8 data references".  Both were stale: the inventory is twenty, and
 #: ecdsa's spread went to zero when the target moved to
 #: `ama_secp256k1_ecdsa_sign_raw`.)  A non-zero delta here means the two
 #: classes walked different addresses, which is the finding this metric exists

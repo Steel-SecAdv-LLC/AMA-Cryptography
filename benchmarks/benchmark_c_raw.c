@@ -428,6 +428,53 @@ static bench_result_t bench_ed25519_sign(int iters, int warmup) {
     return compute_stats("Ed25519 Sign", g_samples, iters);
 }
 
+/* The expanded signing form.  ama_ed25519_expand_secret_key does the
+ * INVARIANT-51 derivation (A = [a]B, compared against the stored half) once;
+ * ama_ed25519_sign_expanded re-checks a SHA-512 tag instead of re-deriving.
+ * The two rows below are the cost of the load and the per-signature cost it
+ * buys, on the same message and key as "Ed25519 Sign" so the ratio between
+ * the rows is the ratio between the paths. */
+static bench_result_t bench_ed25519_expand_key(int iters, int warmup) {
+    uint8_t pk[32], sk[64], expanded[AMA_ED25519_EXPANDED_KEY_BYTES];
+
+    fill_random(sk, 32);
+    BENCH_REQUIRE(ama_ed25519_keypair(pk, sk));
+
+    for (int i = 0; i < warmup; i++)
+        BENCH_REQUIRE(ama_ed25519_expand_secret_key(expanded, sk));
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_error_t rc = ama_ed25519_expand_secret_key(expanded, sk);
+        g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_ed25519_expand_secret_key");
+    }
+    ama_secure_memzero(expanded, sizeof(expanded));
+    return compute_stats("Ed25519 Expand Key", g_samples, iters);
+}
+
+static bench_result_t bench_ed25519_sign_expanded(int iters, int warmup) {
+    uint8_t pk[32], sk[64], sig[64], expanded[AMA_ED25519_EXPANDED_KEY_BYTES];
+    const uint8_t msg[] = "Benchmark message for Ed25519 sign/verify test 0123456789ABCDEF";
+    size_t msg_len = sizeof(msg) - 1;
+
+    fill_random(sk, 32);
+    BENCH_REQUIRE(ama_ed25519_keypair(pk, sk));
+    BENCH_REQUIRE(ama_ed25519_expand_secret_key(expanded, sk));
+
+    for (int i = 0; i < warmup; i++)
+        BENCH_REQUIRE(ama_ed25519_sign_expanded(sig, msg, msg_len, expanded));
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_error_t rc = ama_ed25519_sign_expanded(sig, msg, msg_len, expanded);
+        g_samples[i] = now_ns() - t0;
+        BENCH_CHECK(rc, "ama_ed25519_sign_expanded");
+    }
+    ama_secure_memzero(expanded, sizeof(expanded));
+    return compute_stats("Ed25519 Sign (expanded)", g_samples, iters);
+}
+
 /* Ed25519 verify, end-to-end: SHA-512(R||A||M), point decompression,
  * and the verify scalar-mult.  The reported number is what protocol
  * stacks (TLS cert chains, Noise handshakes, MLS Welcome/Commit) see
@@ -1680,6 +1727,8 @@ int main(int argc, char **argv) {
     /* --- Ed25519 --- */
     BENCH_ROW(bench_ed25519_keygen(iters_med, warmup));
     BENCH_ROW(bench_ed25519_sign(iters_med, warmup));
+    BENCH_ROW(bench_ed25519_expand_key(iters_med, warmup));
+    BENCH_ROW(bench_ed25519_sign_expanded(iters_med, warmup));
     BENCH_ROW(bench_ed25519_verify(iters_med, warmup));
     BENCH_ROW(bench_ed25519_double_scalarmult(iters_med, warmup));
 

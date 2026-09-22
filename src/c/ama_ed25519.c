@@ -779,6 +779,200 @@ static void ed25519_scalarmult_base(uint8_t out[32], const uint8_t s[32]) {
 }
 
 /* ============================================================================
+ * SHARED SIGNING CORE AND THE EXPANDED-KEY FORM
+ * ============================================================================
+ *
+ * Two public entry points sign.  `ama_ed25519_sign` takes the RFC 8032 64-byte
+ * key (seed || A) and, per INVARIANT-51, re-derives A = [a]B on every call to
+ * refuse a stored half that disagrees.  `ama_ed25519_sign_expanded` takes the
+ * 128-byte form `ama_ed25519_expand_secret_key` produces, in which that
+ * derivation has been done ONCE, at expansion, and the result is bound by a
+ * digest the signer re-checks at the cost of two SHA-512 compressions instead
+ * of a fixed-base scalar multiplication.  Both feed the same core below, so
+ * the signature bytes are identical by construction and the property the
+ * invariant states -- the signer never hashes a public half its own scalar
+ * did not generate -- holds on both.
+ *
+ * Expanded-key layout (AMA_ED25519_EXPANDED_KEY_BYTES = 128):
+ *
+ *     [  0.. 31]  a       the clamped secret scalar, h[0..31]
+ *     [ 32.. 63]  prefix  the nonce PRF key, h[32..63]
+ *     [ 64.. 95]  A       the public key, computed as [a]B at expansion
+ *     [ 96..127]  tag     SHA-512(DOMAIN || a || prefix || A)[0..31]
+ *
+ * where h = SHA-512(seed) and DOMAIN is the fixed 32-byte string below.  The
+ * tag is what makes the expanded form safe to hold: the hazard INVARIANT-51
+ * closes is a stored A that is NOT [a]B, and in this form A cannot change --
+ * nor can a or prefix -- without the tag failing to verify, because the tag
+ * is a preimage-bound function of all three.  A party that can rewrite the
+ * tag consistently can read `a` from the same bytes and needs no fault.
+ * A single flipped bit anywhere in the 128 bytes, the shape a storage fault
+ * or a mis-copied record produces, is refused (tests/c/test_ed25519_expanded.c
+ * flips every one of the 1,024 and checks each).
+ *
+ * The expanded form is NOT a storage format: it holds the private scalar in
+ * the clear (the 64-byte form holds the seed, from which the same scalar is
+ * one SHA-512 away, so this is the same secrecy class), and it exists so a
+ * caller that signs many times under one key pays the INVARIANT-51
+ * derivation once.  Callers scrub it with ama_secure_memzero when done
+ * (INVARIANT-6), exactly as they would the 64-byte key.
+ */
+
+#define ED25519_EXPANDED_SCALAR 0u
+#define ED25519_EXPANDED_PREFIX 32u
+#define ED25519_EXPANDED_PUBLIC 64u
+#define ED25519_EXPANDED_TAG 96u
+#define ED25519_EXPANDED_TAGGED_BYTES 96u
+
+_Static_assert(AMA_ED25519_EXPANDED_KEY_BYTES == 128u,
+               "expanded-key layout is 32-byte scalar, prefix, A and tag");
+_Static_assert(AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET == ED25519_EXPANDED_PUBLIC,
+               "public header offset must match the layout above");
+
+/* 32 bytes: the ASCII label, zero-padded.  Distinct from every other SHA-512
+ * input this file produces (a 32-byte seed; prefix || M; R || A || M with R
+ * a curve point), so an expanded-key tag can never be confused with a
+ * nonce or a challenge hash and vice versa. */
+static const uint8_t ED25519_EXPANDED_DOMAIN[32] = {
+    'A', 'M', 'A', '/', 'E', 'd', '2', '5', '5', '1', '9', '/',
+    'e', 'x', 'p', 'a', 'n', 'd', 'e', 'd', '-', 'k', 'e', 'y',
+    '/', 'v', '1', 0, 0, 0, 0, 0
+};
+
+/* tag = SHA-512(DOMAIN || expanded[0..95])[0..31].  Scrubs its own buffers:
+ * the input carries the scalar and the prefix. */
+static void ed25519_expanded_tag(uint8_t tag[32], const uint8_t tagged[ED25519_EXPANDED_TAGGED_BYTES]) {
+    uint8_t buf[32 + ED25519_EXPANDED_TAGGED_BYTES];
+    uint8_t h[64];
+
+    memcpy(buf, ED25519_EXPANDED_DOMAIN, 32);
+    memcpy(buf + 32, tagged, ED25519_EXPANDED_TAGGED_BYTES);
+    sha512(buf, sizeof(buf), h);
+    memcpy(tag, h, 32);
+    ama_secure_memzero(buf, sizeof(buf));
+    ama_secure_memzero(h, sizeof(h));
+}
+
+/* 0 when the two 32-byte strings are equal, ~0 otherwise -- by arithmetic
+ * alone.  No relational operator, so no setcc the compiler can turn into a
+ * cmov, and the result is laundered through ama_ct_value_barrier_u64 so the
+ * optimizer cannot recover "this is 0 or ~0" and reintroduce a branch.  See
+ * the design record in ama_ed25519_sign for why a branch is not acceptable
+ * here even though both operands are, in the end, public. */
+static uint64_t ed25519_mismatch_mask32(const uint8_t *x, const uint8_t *y) {
+    uint8_t diff = 0;
+    unsigned i;
+
+    for (i = 0; i < 32u; i++) {
+        diff = (uint8_t)(diff | (uint8_t)(x[i] ^ y[i]));
+    }
+    /* (diff + 255) >> 8 is 0 for diff == 0 and 1 for every other byte. */
+    return ama_ct_value_barrier_u64((uint64_t)0 - (((uint64_t)diff + 0xFFu) >> 8));
+}
+
+/* The signature computation both entry points share, from the point where
+ * the scalar, the prefix and the public half are known.
+ *
+ *   r = H(prefix || M) mod L;  R = [r]B;  h = H(R || A || M) mod L;
+ *   s = r + h * a mod L
+ *
+ * `key_mismatch` is the caller's INVARIANT-51 verdict, 0 or ~0.  The
+ * signature is computed unconditionally and the verdict is applied by
+ * masking the output and the return code at the single exit, so the
+ * instruction-count and secret-taint lanes see one path whatever the key.
+ * The two exits before the computation (an unrepresentable length, an
+ * allocation failure) write nothing and touch no secret; the caller scrubs
+ * its own inputs on every return.  Everything this function writes is
+ * scrubbed here. */
+static ama_error_t ed25519_sign_core(
+    uint8_t signature[64],
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t scalar[32],
+    const uint8_t prefix[32],
+    const uint8_t public_key[32],
+    uint64_t key_mismatch
+) {
+    uint8_t r[64];
+    uint8_t hram[64];
+    ama_error_t rc;
+    /* Stack buffer for messages <= ED25519_STACK_THRESHOLD (4KB).
+     * Eliminates malloc/free overhead for >99% of real-world messages.
+     * Only heap-allocate for unusually large messages. */
+    uint8_t stack_buf[64 + ED25519_STACK_THRESHOLD];
+    uint8_t *buf;
+    int buf_on_heap = 0;
+
+    /* Determine buffer allocation: use stack for small messages.
+     * Compare against the threshold directly to avoid size_t overflow
+     * in (64 + message_len) when message_len is near SIZE_MAX. */
+    if (message_len <= ED25519_STACK_THRESHOLD) {
+        buf = stack_buf;
+    } else {
+        if (message_len > SIZE_MAX - 64) {
+            return AMA_ERROR_INVALID_PARAM;
+        }
+        buf = (uint8_t *)malloc(64 + message_len);
+        if (!buf) {
+            return AMA_ERROR_MEMORY;
+        }
+        buf_on_heap = 1;
+    }
+
+    /* r = H(prefix || message) mod L */
+    memcpy(buf, prefix, 32);
+    if (message_len > 0) {
+        memcpy(buf + 32, message, message_len);
+    }
+    sha512(buf, 32 + message_len, r);
+    sc25519_reduce(r);
+
+    /* R = [r]B */
+    ed25519_scalarmult_base(signature, r);
+
+    /* H(R || A || message) -- reuse the same buffer (64 + msg_len >= 32 + msg_len) */
+    memcpy(buf, signature, 32);
+    memcpy(buf + 32, public_key, 32);
+    if (message_len > 0) {
+        memcpy(buf + 64, message, message_len);
+    }
+    sha512(buf, 64 + message_len, hram);
+    sc25519_reduce(hram);
+
+    /* s = r + H(R||A||M) * a mod L */
+    sc25519_muladd(signature + 32, r, hram, scalar);
+
+    /* Apply the INVARIANT-51 verdict.  Unconditional on both outcomes, so the
+     * ed25519-sign instruction-count and secret-taint lanes see one path. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    {
+        const uint8_t keep = (uint8_t)~(uint8_t)key_mismatch;
+        unsigned i;
+
+        for (i = 0; i < 64u; i++) {
+            signature[i] = (uint8_t)(signature[i] & keep);
+        }
+        /* 0 (AMA_SUCCESS) when the key verified, AMA_ERROR_INVALID_PARAM
+         * otherwise.  Same construction as the AEAD verify verdict in
+         * ama_aes_gcm.c: narrowing ~0 through uint32_t is correct on 32- and
+         * 64-bit targets alike. */
+        rc = (ama_error_t)((int)AMA_ERROR_INVALID_PARAM &
+                           (int)(int32_t)(uint32_t)key_mismatch);
+    }
+
+    /* Cleanup -- scrub all sensitive intermediates */
+    ama_secure_memzero(r, sizeof(r));
+    ama_secure_memzero(hram, sizeof(hram));
+    ama_secure_memzero(buf, 64 + message_len);
+    if (buf_on_heap) {
+        free(buf);
+    }
+
+    return rc;
+}
+
+/* ============================================================================
  * ED25519 API FUNCTIONS
  * ============================================================================ */
 
@@ -831,20 +1025,12 @@ ama_error_t ama_ed25519_sign(
     const uint8_t secret_key[64]
 ) {
     uint8_t hash[64];
-    uint8_t r[64];
-    uint8_t hram[64];
     uint8_t derived_a[32];
     /* INVARIANT-51 verdict, carried as a mask instead of a branch: 0 when
      * the stored public half is the one this scalar generates, ~0 when it
-     * is not.  Applied at the single exit below. */
+     * is not.  Applied at the core's single exit. */
     uint64_t key_mismatch;
     ama_error_t rc;
-    /* Stack buffer for messages <= ED25519_STACK_THRESHOLD (4KB).
-     * Eliminates malloc/free overhead for >99% of real-world messages.
-     * Only heap-allocate for unusually large messages. */
-    uint8_t stack_buf[64 + ED25519_STACK_THRESHOLD];
-    uint8_t *buf;
-    int buf_on_heap = 0;
 
     if (!signature || !secret_key || (!message && message_len > 0)) {
         return AMA_ERROR_INVALID_PARAM;
@@ -920,100 +1106,123 @@ ama_error_t ama_ed25519_sign(
      * return code gets an unusable signature instead of a valid one produced
      * under a key half it did not supply, which is the fault hazard this
      * invariant exists to close. */
-    {
-        uint8_t diff = 0;
-        unsigned i;
+    key_mismatch = ed25519_mismatch_mask32(derived_a, secret_key + 32);
 
-        for (i = 0; i < 32u; i++) {
-            diff = (uint8_t)(diff | (uint8_t)(derived_a[i] ^ secret_key[32 + i]));
-        }
-        /* (diff + 255) >> 8 is 0 for diff == 0 and 1 for every other byte. */
-        key_mismatch = ama_ct_value_barrier_u64(
-            (uint64_t)0 - (((uint64_t)diff + 0xFFu) >> 8));
+    /* `derived_a` is used for the hash as well -- proven equal to
+     * secret_key[32..63] above, and under the key this scalar actually
+     * generates even if it were not. */
+    rc = ed25519_sign_core(signature, message, message_len,
+                           hash, hash + 32, derived_a, key_mismatch);
+
+    /* Cleanup -- scrub on every exit, including the core's two early ones.
+     * `derived_a` is the PUBLIC key, so leaving it would disclose nothing; it
+     * is cleared anyway because the rule this file follows is "every buffer
+     * this function wrote is cleared on every exit", and a buffer exempted on
+     * the reviewer's judgement that its contents happen to be public is a
+     * buffer whose exemption has to be re-derived by the next reader. */
+    ama_secure_memzero(hash, sizeof(hash));
+    ama_secure_memzero(derived_a, sizeof(derived_a));
+
+    return rc;
+}
+
+/**
+ * Expand a 64-byte secret key into the 128-byte signing form
+ *
+ * INVARIANT-51 at key load: derives A = [a]B once, refuses a key whose stored
+ * public half disagrees (128 zero bytes and AMA_ERROR_INVALID_PARAM, by the
+ * same mask construction as ama_ed25519_sign), and binds a, prefix and A
+ * under the tag ama_ed25519_sign_expanded re-checks on every signature.
+ *
+ * @param expanded   Output: 128-byte expanded key (layout above)
+ * @param secret_key 64-byte secret key, seed || A
+ * @return AMA_SUCCESS or error code
+ */
+ama_error_t ama_ed25519_expand_secret_key(
+    uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES],
+    const uint8_t secret_key[64]
+) {
+    uint8_t hash[64];
+    uint64_t key_mismatch;
+    ama_error_t rc;
+
+    if (!expanded || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Determine buffer allocation: use stack for small messages.
-     * Compare against the threshold directly to avoid size_t overflow
-     * in (64 + message_len) when message_len is near SIZE_MAX. */
-    if (message_len <= ED25519_STACK_THRESHOLD) {
-        buf = stack_buf;
-    } else {
-        /* Both early exits fire AFTER the expansion above, so `hash`
-         * already holds the clamped secret scalar and the PRF key —
-         * scrub it on the way out (INVARIANT-6).
-         *
-         * `derived_a` is scrubbed alongside it.  It is the PUBLIC key, so
-         * leaving it would disclose nothing; it is cleared anyway because the
-         * rule this file follows is "every buffer this function wrote is
-         * cleared on every exit", and a buffer exempted on the reviewer's
-         * judgement that its contents happen to be public is a buffer whose
-         * exemption has to be re-derived by the next reader. */
-        if (message_len > SIZE_MAX - 64) {
-            ama_secure_memzero(hash, sizeof(hash));
-            ama_secure_memzero(derived_a, sizeof(derived_a));
-            return AMA_ERROR_INVALID_PARAM;
-        }
-        buf = (uint8_t *)malloc(64 + message_len);
-        if (!buf) {
-            ama_secure_memzero(hash, sizeof(hash));
-            ama_secure_memzero(derived_a, sizeof(derived_a));
-            return AMA_ERROR_MEMORY;
-        }
-        buf_on_heap = 1;
-    }
+    sha512(secret_key, 32, hash);
+    hash[0] &= 248;
+    hash[31] &= 127;
+    hash[31] |= 64;
 
-    /* r = H(h[32..63] || message) mod L */
-    memcpy(buf, hash + 32, 32);
-    if (message_len > 0) {
-        memcpy(buf + 32, message, message_len);
-    }
-    sha512(buf, 32 + message_len, r);
-    sc25519_reduce(r);
+    /* A = [a]B, written straight into its slot; then the verdict against
+     * the stored half, as a mask (see ama_ed25519_sign). */
+    ed25519_scalarmult_base(expanded + ED25519_EXPANDED_PUBLIC, hash);
+    key_mismatch = ed25519_mismatch_mask32(expanded + ED25519_EXPANDED_PUBLIC,
+                                           secret_key + 32);
 
-    /* R = [r]B */
-    ed25519_scalarmult_base(signature, r);
+    memcpy(expanded + ED25519_EXPANDED_SCALAR, hash, 32);
+    memcpy(expanded + ED25519_EXPANDED_PREFIX, hash + 32, 32);
+    ed25519_expanded_tag(expanded + ED25519_EXPANDED_TAG, expanded);
 
-    /* H(R || A || message) — reuse the same buffer (64 + msg_len >= 32 + msg_len) */
-    memcpy(buf, signature, 32);
-    memcpy(buf + 32, derived_a, 32);  /* proven equal to secret_key[32..63] above */
-    if (message_len > 0) {
-        memcpy(buf + 64, message, message_len);
-    }
-    sha512(buf, 64 + message_len, hram);
-    sc25519_reduce(hram);
-
-    /* s = r + H(R||A||M) * a mod L */
-    sc25519_muladd(signature + 32, r, hram, hash);
-
-    /* Apply the INVARIANT-51 verdict.  Unconditional on both outcomes, so the
-     * ed25519-sign instruction-count and secret-taint lanes see one path. */
-    _Static_assert(AMA_SUCCESS == 0,
-                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    /* Apply the verdict to all 128 bytes and the return code, unconditionally
+     * (one path for the instruction-count and secret-taint lanes).  A refused
+     * key therefore yields a buffer ama_ed25519_sign_expanded also refuses --
+     * its tag is zero and the tag of 96 zero bytes is not -- so a caller that
+     * ignores this return code still cannot sign. */
     {
         const uint8_t keep = (uint8_t)~(uint8_t)key_mismatch;
         unsigned i;
 
-        for (i = 0; i < 64u; i++) {
-            signature[i] = (uint8_t)(signature[i] & keep);
+        for (i = 0; i < AMA_ED25519_EXPANDED_KEY_BYTES; i++) {
+            expanded[i] = (uint8_t)(expanded[i] & keep);
         }
-        /* 0 (AMA_SUCCESS) when the halves agreed, AMA_ERROR_INVALID_PARAM
-         * otherwise.  Same construction as the AEAD verify verdict in
-         * ama_aes_gcm.c: narrowing ~0 through uint32_t is correct on 32- and
-         * 64-bit targets alike. */
         rc = (ama_error_t)((int)AMA_ERROR_INVALID_PARAM &
                            (int)(int32_t)(uint32_t)key_mismatch);
     }
 
-    /* Cleanup — scrub all sensitive intermediates */
     ama_secure_memzero(hash, sizeof(hash));
-    ama_secure_memzero(r, sizeof(r));
-    ama_secure_memzero(hram, sizeof(hram));
-    ama_secure_memzero(derived_a, sizeof(derived_a));
-    ama_secure_memzero(buf, 64 + message_len);
-    if (buf_on_heap) {
-        free(buf);
+    return rc;
+}
+
+/**
+ * Sign a message with an expanded Ed25519 key
+ *
+ * Recomputes the tag over bytes 0..95 and refuses (64 zero bytes,
+ * AMA_ERROR_INVALID_PARAM) an expanded key whose tag disagrees; otherwise
+ * produces exactly the bytes ama_ed25519_sign produces for the 64-byte key
+ * the expanded one came from.
+ *
+ * @param signature   Output: 64-byte signature
+ * @param message     Message to sign
+ * @param message_len Length of message
+ * @param expanded    128-byte expanded key from ama_ed25519_expand_secret_key
+ * @return AMA_SUCCESS or error code
+ */
+ama_error_t ama_ed25519_sign_expanded(
+    uint8_t signature[64],
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES]
+) {
+    uint8_t tag[32];
+    uint64_t key_mismatch;
+    ama_error_t rc;
+
+    if (!signature || !expanded || (!message && message_len > 0)) {
+        return AMA_ERROR_INVALID_PARAM;
     }
 
+    ed25519_expanded_tag(tag, expanded);
+    key_mismatch = ed25519_mismatch_mask32(tag, expanded + ED25519_EXPANDED_TAG);
+
+    rc = ed25519_sign_core(signature, message, message_len,
+                           expanded + ED25519_EXPANDED_SCALAR,
+                           expanded + ED25519_EXPANDED_PREFIX,
+                           expanded + ED25519_EXPANDED_PUBLIC,
+                           key_mismatch);
+
+    ama_secure_memzero(tag, sizeof(tag));
     return rc;
 }
 

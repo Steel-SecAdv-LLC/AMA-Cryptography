@@ -1547,6 +1547,21 @@ def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_ed25519_verify.restype = ctypes.c_int
 
+        # The expanded signing form (INVARIANT-51 verified at key load).
+        lib.ama_ed25519_expand_secret_key.argtypes = [
+            ctypes.c_char_p,  # expanded[128]
+            ctypes.c_char_p,  # secret_key[64]
+        ]
+        lib.ama_ed25519_expand_secret_key.restype = ctypes.c_int
+
+        lib.ama_ed25519_sign_expanded.argtypes = [
+            ctypes.c_char_p,  # signature[64]
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # expanded[128]
+        ]
+        lib.ama_ed25519_sign_expanded.restype = ctypes.c_int
+
     except AttributeError:
         return False
 
@@ -2614,8 +2629,8 @@ def _setup_chacha20poly1305_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # pt_len
             ctypes.c_char_p,  # aad
             ctypes.c_size_t,  # aad_len
-            ctypes.c_char_p,  # ciphertext
-            ctypes.c_char_p,  # tag[16]
+            ctypes.c_void_p,  # ciphertext (output; c_void_p so an offset into one buffer is accepted)
+            ctypes.c_void_p,  # tag[16]    (output, at pt_len into the same buffer)
         ]
         lib.ama_chacha20poly1305_encrypt.restype = ctypes.c_int
 
@@ -3198,6 +3213,11 @@ _SLHDSA_PARAM_SETS = {
 ED25519_PUBLIC_KEY_BYTES = 32
 ED25519_SECRET_KEY_BYTES = 64
 ED25519_SIGNATURE_BYTES = 64
+# The expanded signing form ama_ed25519_expand_secret_key produces:
+# a(32) || prefix(32) || A(32) || tag(32).  AMA_ED25519_EXPANDED_KEY_BYTES and
+# AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET in include/ama_cryptography.h.
+ED25519_EXPANDED_KEY_BYTES = 128
+ED25519_EXPANDED_PUBLIC_KEY_OFFSET = 64
 
 # AES-256-GCM (NIST SP 800-38D)
 AES256_KEY_BYTES = 32
@@ -5294,6 +5314,128 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
     return bytes(sig_buf)
 
 
+class Ed25519SigningKey:
+    """An Ed25519 key loaded once for many signatures.
+
+    INVARIANT-51 verified at key load. :func:`native_ed25519_sign` derives
+    ``A = [a]B`` on every call to refuse a 64-byte key whose stored public
+    half is not the one its seed generates, which doubles the curve work per
+    signature. This object performs that derivation once, in
+    ``ama_ed25519_expand_secret_key``, and signs with
+    ``ama_ed25519_sign_expanded``, which re-checks a SHA-512 tag binding the
+    scalar, the nonce prefix and the public key instead of re-deriving.
+    Measured on the tree that introduced it, a signature costs 0.55x what the
+    per-call path costs; the signature bytes are identical (RFC 8032, pinned
+    by ``tests/test_ed25519_expanded_key.py`` against the RFC vectors, the
+    frozen oracle and the per-call path).
+
+    Construction:
+
+    * a 64-byte ``seed || A`` key is expanded directly; a public half that
+      is not ``[a]B`` raises :class:`ValueError` and nothing is retained;
+    * a 32-byte seed goes through :func:`native_ed25519_keypair_from_seed`
+      first, so it pays the FIPS 140-3 pairwise-consistency test INVARIANT-41
+      requires of every seed-derived keypair, once, here, rather than on
+      every signature as the seed arms of ``crypto_api`` and
+      ``legacy_compat`` do.
+
+    Lifetime (INVARIANT-6): the expanded form holds the private scalar. It
+    lives in a ctypes buffer this object owns, is zeroed by :meth:`close`
+    (also on context-manager exit and on garbage collection), and a closed
+    key refuses to sign. Hold the object exactly as long as the signing
+    session. It is not a storage format and has no serialisation.
+
+    The object is safe to share between threads: signing reads the buffer
+    and the C entry point keeps no state.
+    """
+
+    __slots__ = ("__weakref__", "_closed", "_expanded", "_public_key")
+
+    def __init__(self, secret_key: Union[bytes, bytearray]) -> None:
+        check_crypto_permitted()
+        if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+            raise NativeBackendUnavailableError(
+                "Ed25519 native backend not available. " + _INSTALL_HINT
+            )
+        self._closed = True  # until the expansion below succeeds
+        self._expanded: Any = None
+        self._public_key = b""
+
+        if len(secret_key) == 32:
+            _, secret_key = native_ed25519_keypair_from_seed(bytes(secret_key))
+        elif len(secret_key) != ED25519_SECRET_KEY_BYTES:
+            raise ValueError(
+                "Ed25519 secret key must be 32 bytes (seed) or "
+                f"{ED25519_SECRET_KEY_BYTES} bytes (seed || public key), got {len(secret_key)}"
+            )
+
+        expanded = ctypes.create_string_buffer(ED25519_EXPANDED_KEY_BYTES)
+        # INVARIANT-6: borrow the caller's storage rather than snapshot it.
+        rc = _native_lib.ama_ed25519_expand_secret_key(expanded, _borrow(secret_key))
+        if rc != 0:
+            # The C side has already zeroed the buffer on refusal; nothing of
+            # the key is retained either way.
+            raise ValueError(
+                "Ed25519 secret key refused: its stored public half is not the "
+                "one its seed generates (INVARIANT-51)"
+            )
+        self._expanded = expanded
+        self._public_key = expanded.raw[
+            ED25519_EXPANDED_PUBLIC_KEY_OFFSET : ED25519_EXPANDED_PUBLIC_KEY_OFFSET + 32
+        ]
+        self._closed = False
+
+    @property
+    def public_key(self) -> bytes:
+        """The 32-byte public key, as derived at load."""
+        return self._public_key
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def sign(self, message: bytes) -> bytes:
+        """Sign ``message``; the bytes :func:`native_ed25519_sign` would return.
+
+        Raises :class:`RuntimeError` if the key is closed, or if the expanded
+        form no longer verifies against its tag — a corruption of this
+        object's memory after load, which the C side refuses with a zero
+        signature rather than signing under a public half it did not derive.
+        """
+        check_crypto_permitted()
+        if self._closed:
+            raise RuntimeError("Ed25519 signing key is closed")
+        sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
+        rc = _native_lib.ama_ed25519_sign_expanded(
+            sig_buf, message, ctypes.c_size_t(len(message)), self._expanded
+        )
+        if rc != 0:
+            raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
+        return bytes(sig_buf)
+
+    def close(self) -> None:
+        """Zero the expanded key. Idempotent; the key cannot sign afterwards."""
+        if self._expanded is not None:
+            ctypes.memset(self._expanded, 0, ED25519_EXPANDED_KEY_BYTES)
+        self._closed = True
+
+    def __enter__(self) -> "Ed25519SigningKey":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # A constructor that raised before the buffer existed leaves the slot
+        # unset; there is then nothing to zero.
+        if getattr(self, "_expanded", None) is not None:
+            self.close()
+
+    def __repr__(self) -> str:
+        state = "closed" if self._closed else "open"
+        return f"<Ed25519SigningKey {state} public_key={self._public_key.hex()[:16]}...>"
+
+
 def _binding_imports_permitted() -> bool:
     """May this process import a Cython binding extension?
 
@@ -5541,8 +5683,15 @@ def native_aes256_gcm_encrypt(
             f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, " f"got {len(nonce)}"
         )
 
-    ct_buf = ctypes.create_string_buffer(len(plaintext))
-    tag_buf = ctypes.create_string_buffer(AES256_GCM_TAG_BYTES)
+    # One output allocation for ciphertext || tag, split on the way out.  The
+    # two-buffer form cost a second ctypes allocation per call; measured on
+    # the tree that changed it (1 KiB, 20,000-call windows, best of 5) the
+    # wrapper went from 4.215 us to 3.673 us per call, the C kernel being
+    # 0.65 us of either.  The tag pointer is the same buffer at offset
+    # pt_len, so the kernel's contract (two distinct output pointers) is
+    # unchanged.
+    pt_len = len(plaintext)
+    out_buf = ctypes.create_string_buffer(pt_len + AES256_GCM_TAG_BYTES)
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; do not call bytes(key), which leaves an immutable
@@ -5561,12 +5710,12 @@ def native_aes256_gcm_encrypt(
         rc = _native_lib.ama_aes256_gcm_encrypt(
             key_buf,
             nonce_buf,
-            pt_buf if len(plaintext) > 0 else None,
-            ctypes.c_size_t(len(plaintext)),
+            pt_buf if pt_len > 0 else None,
+            pt_len,
             aad_buf if len(aad) > 0 else None,
-            ctypes.c_size_t(len(aad)),
-            ct_buf,
-            tag_buf,
+            len(aad),
+            out_buf,
+            ctypes.byref(out_buf, pt_len),
         )
     finally:
         if borrow is not None:
@@ -5574,7 +5723,8 @@ def native_aes256_gcm_encrypt(
     if rc != 0:
         raise RuntimeError(f"AES-256-GCM encryption failed (rc={rc})")
 
-    return bytes(ct_buf), bytes(tag_buf)
+    out = out_buf.raw
+    return out[:pt_len], out[pt_len:]
 
 
 def native_aes256_gcm_decrypt(
@@ -8826,8 +8976,9 @@ def native_chacha20poly1305_encrypt(
     pt_len = len(plaintext)
     aad_len = len(aad) if aad else 0
 
-    ct_buf = ctypes.create_string_buffer(pt_len)
-    tag_buf = ctypes.create_string_buffer(POLY1305_TAG_BYTES)
+    # One output allocation for ciphertext || tag, split on the way out (the
+    # same change as native_aes256_gcm_encrypt, for the same reason).
+    out_buf = ctypes.create_string_buffer(pt_len + POLY1305_TAG_BYTES)
 
     aad_in = aad if aad else b""
     borrow = (
@@ -8846,8 +8997,8 @@ def native_chacha20poly1305_encrypt(
             pt_len,
             aad_buf if aad_len > 0 else None,
             aad_len,
-            ct_buf,
-            tag_buf,
+            out_buf,
+            ctypes.byref(out_buf, pt_len),
         )
     finally:
         if borrow is not None:
@@ -8855,7 +9006,8 @@ def native_chacha20poly1305_encrypt(
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed (rc={rc})")
 
-    return bytes(ct_buf), bytes(tag_buf)
+    out = out_buf.raw
+    return out[:pt_len], out[pt_len:]
 
 
 def native_chacha20poly1305_decrypt(

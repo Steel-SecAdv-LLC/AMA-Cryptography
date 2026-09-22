@@ -762,6 +762,16 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ed25519-sign
 
+      - name: Ed25519 signing through the expanded form must not depend on the key
+        # ama_ed25519_sign_expanded shares the signing core with
+        # ama_ed25519_sign; what it adds is the tag recomputation and the
+        # mask it feeds, in place of the per-call INVARIANT-51 derivation.
+        # Same driver shape, message and classes as ed25519-sign, so a delta
+        # here and not there localises to the expanded entry point.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ed25519-sign-expanded
+
       - name: Ed25519 signing under the SSE2 Niels-select fold must not depend on the key
         # Every runner here has AVX2, so the ed25519-sign target above measures
         # the AVX2 fold only.  A non-AVX2 x86-64 host runs the SSE2 fold on
@@ -953,6 +963,7 @@ jobs:
         run: |
           set -euo pipefail
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
+                        ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
                         consttime ghash ascon-encrypt agent-binding aead-verify; do
             python tools/check_ghash_constant_time.py \
@@ -978,7 +989,8 @@ jobs:
       - name: Secret-taint on the shipped shared object
         run: |
           set -euo pipefail
-          for target in x25519 x25519-batch ed25519-sign secp256k1-scalarmult \
+          for target in x25519 x25519-batch ed25519-sign ed25519-sign-expanded \
+                        secp256k1-scalarmult \
                         kyber-decaps consttime ascon-encrypt agent-binding; do
             python tools/check_ghash_constant_time.py \
               --lib build-shared/lib/libama_cryptography.so \

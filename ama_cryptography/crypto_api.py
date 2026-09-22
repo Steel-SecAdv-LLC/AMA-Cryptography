@@ -101,6 +101,7 @@ from ama_cryptography.pqc_backends import (
     SPHINCS_PUBLIC_KEY_BYTES,
     SPHINCS_SECRET_KEY_BYTES,
     SPHINCS_SIGNATURE_BYTES,
+    Ed25519SigningKey,
     KyberUnavailableError,
     PQCStatus,
     PQCUnavailableError,
@@ -560,6 +561,26 @@ class Ed25519Provider(CryptoProvider):
             message_hash=message_hash,
             metadata={"signature_size": len(sig_bytes), "backend": "native_c"},
         )
+
+    def signing_key(self, secret_key: Union[bytes, bytearray]) -> Ed25519SigningKey:
+        """
+        Load ``secret_key`` once for many signatures (INVARIANT-51 at key load).
+
+        :meth:`sign` re-derives the public half on every call, and for a
+        32-byte seed re-runs keypair generation and its pairwise test as well.
+        The returned :class:`~ama_cryptography.pqc_backends.Ed25519SigningKey`
+        pays both once; ``key.sign(message)`` then returns the same bytes
+        :meth:`sign` would. Close it (or use it as a context manager) when the
+        signing session ends; it holds the private scalar until then.
+
+        Args:
+            secret_key: 32-byte Ed25519 seed or 64-byte native key
+
+        Returns:
+            An open Ed25519SigningKey
+        """
+        _enforce_invariant7()
+        return Ed25519SigningKey(secret_key)
 
     def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """

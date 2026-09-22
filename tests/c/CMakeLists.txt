@@ -219,6 +219,10 @@ if(AMA_USE_NATIVE_PQC)
     set_tests_properties(test_slhdsa_context_separation PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 add_ama_test(test_ed25519 test_ed25519.c)
+# The expanded signing form (INVARIANT-51 verified at key load): RFC 8032
+# vectors through ama_ed25519_sign_expanded, byte-equality with the 64-byte
+# path across a length sweep, every expanded-key bit flipped and refused.
+add_ama_test(test_ed25519_expanded test_ed25519_expanded.c)
 
 # The next two targets each reach a symbol that lives under
 # AMA_USE_NATIVE_PQC in the top-level source list, so both are built only

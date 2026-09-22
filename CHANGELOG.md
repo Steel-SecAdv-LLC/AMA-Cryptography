@@ -19,6 +19,47 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Ed25519: INVARIANT-51 verified at key load — 2026-09-22
+
+**Added.** `ama_ed25519_expand_secret_key` and `ama_ed25519_sign_expanded`
+(`include/ama_cryptography.h`, `src/c/ama_ed25519.c`), and their Python owner
+`pqc_backends.Ed25519SigningKey` with `crypto_api.Ed25519Provider.signing_key()`.
+The per-call signer re-derives `A = [a]B` on every signature to refuse a
+64-byte key whose stored public half disagrees (INVARIANT-51). The expanded
+form does that derivation once, at load, and binds the scalar, the nonce
+prefix and `A` under a SHA-512 tag the signer re-checks instead — so the
+hazard the invariant closes stays closed (every one of the 128 bytes is
+load-bearing; a flipped bit is refused) while a signature costs one
+fixed-base multiplication, not two. Both entry points share one signing core;
+the signature bytes are identical. The 64-byte per-call path and its
+contract are unchanged.
+
+**Measured** (2026-09-22, `build/bin/benchmark_c_raw`, median of 1,000,
+Intel Xeon @2.80GHz container, `taskset -c 0`): `ama_ed25519_sign` 24,780 ns,
+`ama_ed25519_sign_expanded` 13,613 ns (0.55×), `ama_ed25519_expand_secret_key`
+12,632 ns once. Python API (`benchmarks/benchmark_runner.py` harness, three
+runs): `ed25519_sign` 34,566–34,977 ops/s, `ed25519_sign_expanded`
+55,524–55,728 ops/s. `ama_ed25519_sign`'s instruction count is unchanged by
+the shared core (331,814 → 331,864 Ir, +0.02%, `benchmarks/ic_driver.c`).
+
+**Pinned.** `tests/c/test_ed25519_expanded.c` (RFC 8032 §7.1 vectors through
+the expanded path, byte-equality with the per-call path over 32 keys × 20
+lengths across the 4 KiB stack threshold, all 1,024 expanded-key bits flipped
+and refused, refusal at load, on both field backends; verified to fail
+against an expander and a signer that never refuse) and
+`tests/test_ed25519_expanded_key.py` (the same through the Python object plus
+the frozen oracle's 24 sign records, PyCA cross-verification, lifetime and
+INVARIANT-41-once-at-load). New `ed25519-sign-expanded` targets in
+`tools/check_ghash_constant_time.py` (instruction-count 0/0 and secret-taint,
+test archive and shipped shared object), wired into `dudect.yml`. New
+`ed25519_sign_expanded` regression row in both baselines at a derived floor,
+to be re-based to the canonical runner's own figure after its first run.
+
+**Corrected (§6.6).** INVARIANT-51's enforcement paragraph described a
+`ama_consttime_memcmp` before any allocation and a refusal that wrote no
+signature; the shipped code has always been a laundered mask applied after
+the full computation, zeroing the output. The text now says what the code does.
+
 ### Benchmark and visual-asset refresh — 2026-09-22
 
 Every measured artefact in the tree was brought to the code it describes, or

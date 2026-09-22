@@ -280,6 +280,7 @@ _SAMPLING_REPEATS: dict[str, int] = {
     "hkdf_derive": _EXTRA_SAMPLED_ROUNDS,
     "ed25519_keygen": _EXTRA_SAMPLED_ROUNDS,
     "ed25519_sign": _EXTRA_SAMPLED_ROUNDS,
+    "ed25519_sign_expanded": _EXTRA_SAMPLED_ROUNDS,
     "ed25519_verify": _EXTRA_SAMPLED_ROUNDS,
     "aes_256_gcm_encrypt": _EXTRA_SAMPLED_ROUNDS,
     "chacha20poly1305_encrypt": _EXTRA_SAMPLED_ROUNDS,
@@ -610,6 +611,31 @@ def run_ed25519_sign_benchmark(iterations: int = 50) -> float:
         ed25519_sign(message, keypair.private_key)
 
     return benchmark_operation(operation, iterations)
+
+
+def run_ed25519_sign_expanded_benchmark(iterations: int = 50) -> float:
+    """Benchmark Ed25519 signing through a key loaded once (INVARIANT-51 at load).
+
+    Same message and key source as ``ed25519_sign``; the difference is that
+    the INVARIANT-51 derivation of the public half happens once, in
+    ``Ed25519SigningKey``, outside the timed operation, and each signature
+    re-checks the expanded form's tag instead.  The ratio between this row
+    and ``ed25519_sign`` is the per-signature cost that derivation had.
+    """
+    from ama_cryptography.legacy_compat import generate_ed25519_keypair
+    from ama_cryptography.pqc_backends import Ed25519SigningKey
+
+    keypair = generate_ed25519_keypair()
+    message = b"Test message for signing" * 10
+    key = Ed25519SigningKey(keypair.private_key)
+
+    def operation() -> None:
+        key.sign(message)
+
+    try:
+        return benchmark_operation(operation, iterations)
+    finally:
+        key.close()
 
 
 def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
@@ -1037,6 +1063,7 @@ BENCHMARK_FUNCTIONS: dict[str, Callable[[], Optional[float]]] = {
     "hmac_sha3_256": run_hmac_sha3_256_benchmark,
     "ed25519_keygen": run_ed25519_keygen_benchmark,
     "ed25519_sign": run_ed25519_sign_benchmark,
+    "ed25519_sign_expanded": run_ed25519_sign_expanded_benchmark,
     "ed25519_verify": run_ed25519_verify_benchmark,
     "hkdf_derive": run_hkdf_derive_benchmark,
     "full_package_create": run_full_package_create_benchmark,
@@ -1335,17 +1362,25 @@ def _provenance_key(label: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in label.strip().lower()).strip("_")
 
 
-def _git(*args: str) -> str:
+def _git(*args: str, keep_leading_whitespace: bool = False) -> str:
     """Run a read-only git command, or return ``"unknown"``.
 
     Guarded on every axis that can fail, so producing a report never fails
     because the host has no git, no repository, or a slow filesystem.
+
+    ``keep_leading_whitespace`` is for ``status --porcelain``, whose first
+    column is a SPACE for an unstaged change: stripping the whole output
+    removed that space from the first line and the parser then removed the
+    path's first character in its place (the record at cd02072 named
+    ``ma_cryptography/_integrity_digest.txt``).  Trailing whitespace is
+    always removed.
     """
     try:
         out = subprocess.run(
             ["git", *args], capture_output=True, text=True, check=False, timeout=10
         )
-        return out.stdout.strip() or "unknown"
+        text = out.stdout.rstrip() if keep_leading_whitespace else out.stdout.strip()
+        return text or "unknown"
     except Exception:
         return "unknown"
 
@@ -1375,7 +1410,7 @@ def capture_tree_state() -> "tuple[str, bool, tuple[str, ...]]":
     changes to a primitive.  Naming the paths lets a reader tell the two
     apart without the checkout the record was made on.
     """
-    status = _git("status", "--porcelain")
+    status = _git("status", "--porcelain", keep_leading_whitespace=True)
     dirty = status not in ("", "unknown")
     paths: tuple[str, ...] = ()
     if dirty:

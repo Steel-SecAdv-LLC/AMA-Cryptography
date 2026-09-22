@@ -218,6 +218,11 @@
         "date": "2026-09-22",
         "release": "unreleased",
         "change": "full_package_create FLOOR RE-BASED 2379 -> 2135 ops/sec on the canonical runner class for this file (ubuntu-24.04-arm (aarch64)), and the three 2026-09-16 single-run floors CONFIRMED by four runs. Source: the Benchmark Regression Detection (aarch64) jobs of CI runs 35545407750 (job 106170292802, head ebc80b9), 35548705329 (job 106179299071, head 1bf806b), 35608144468 (job 106360244481, head da8901d) and 35611329428 (job 106370902832, head 1e79cd1), 2026-09-20 to 2026-09-21, none of which changes a measured path. full_package_create measured 2114 / 2155 / 2110 / 2177 ops/sec against the 2379 floor -- 10.3% under it at the median, on this row's 25% tolerance -- for the INVARIANT-51 second scalar multiplication inside the package's Ed25519 signature plus the INVARIANT-52 canonical transcript, the same change that moved the x86-64 row; baseline_value is the median of the four (even count: mean of the middle two, rounded half up; computed by script from the job logs), 2135 ops/sec, with tolerance_percent unchanged at 25. The 2026-09-16 entry set ed25519_keygen, ed25519_sign and full_package_verify from one run and named the next runs as the confirmation: they measured ed25519_keygen 12315 / 12278 / 12269 / 12286 (median 12282, +0.1% on the 12271 floor), ed25519_sign 32843 / 32839 / 32848 / 32852 (median 32846, within 0.02% of the 32852 floor) and full_package_verify 3556 / 3509 / 3482 / 3522 ops/sec (median 3516, +2.2% on the 3441 floor) -- confirmed, and left as set. Every other floor in this file was cleared by all four runs; the closest are aes_256_gcm_encrypt at 233826..235180 against 234678 (a floor set from the two final-wrapper-state runs of the 2026-08-14 calibration; the median sits 0.1% under it, inside the 15% band) and ed25519_verify at 30719..31111 against 31270 (0.7% under at the median). floor_drift_acknowledged carries the provenance-only change to benchmarks/benchmark_runner.py made in the same pass."
+      },
+      {
+        "date": "2026-09-22",
+        "release": "unreleased",
+        "change": "ed25519_sign_expanded ROW ADDED at a DERIVED, CONSERVATIVE floor of 49278 ops/sec (ubuntu-24.04-arm (aarch64)): this row is new and the canonical runner has not run it, and no aarch64 host was available to this pass. Derivation: this file's ed25519_sign floor, 32852, times 1.5, where the x86_64 development host measured the ratio between the two rows at 1.589..1.606 (four runs, see benchmarks/baseline.json) and 1.820x at the C level. The operation removed from the timed path is one of the two fixed-base scalar multiplications, the same fraction of the work on any microarchitecture, so a ratio below the measured one is a floor that cannot be missed by a correct build; 1.5 rather than 1.59 because this file's tolerance is 15%, not 45%. Re-base to the runner's own median once it has run this row, as this file did for ed25519_sign (derived 29381 -> measured 32852)."
       }
     ],
     "runner_cpu_class": "aarch64",
@@ -925,6 +930,14 @@
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
       "baseline_value": 32852,
+      "unit": "ops/sec",
+      "tolerance_percent": 15,
+      "tier": "microbenchmark"
+    },
+    "ed25519_sign_expanded": {
+      "description": "Ed25519 signature generation through Ed25519SigningKey: the key is loaded once, outside the timed operation, with the INVARIANT-51 derivation of the public half done at load; each timed signature re-checks the expanded form's tag (ama_ed25519_sign_expanded) instead of re-deriving. Same 240-byte message and key source as ed25519_sign; the ratio between the two rows is the per-signature cost the derivation had.",
+      "metric": "operations_per_second",
+      "baseline_value": 49278,
       "unit": "ops/sec",
       "tolerance_percent": 15,
       "tier": "microbenchmark"

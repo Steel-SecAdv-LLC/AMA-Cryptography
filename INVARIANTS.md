@@ -3241,10 +3241,16 @@ stack buffers and adding an allocation back has to be a deliberate edit.
 
 ## INVARIANT-51 — An Ed25519 Signer Derives Its Own Public Half
 
-**Statement.** `ama_ed25519_sign` must derive `A = [a]B` from the secret scalar
-it computed and refuse any 64-byte secret key whose stored bytes 32..63 differ
-from it. The value fed to `H(R ‖ A ‖ M)` is the derived one. Refusal is
-`AMA_ERROR_INVALID_PARAM` with no signature written.
+**Statement.** No Ed25519 signing entry point in this library hashes a public
+half into `H(R ‖ A ‖ M)` that its own secret scalar did not generate.
+`ama_ed25519_sign` must derive `A = [a]B` from the scalar it computed and
+refuse any 64-byte secret key whose stored bytes 32..63 differ from it.
+`ama_ed25519_expand_secret_key` must perform the same derivation and refusal
+once, at load, and bind the scalar, the nonce prefix and `A` under a tag that
+`ama_ed25519_sign_expanded` must re-verify on every signature, refusing an
+expanded key whose tag disagrees. Refusal on every path is
+`AMA_ERROR_INVALID_PARAM` with the output written as zeros (64 signature
+bytes, or the 128 expanded bytes), never left untouched.
 
 **Why.** The 64-byte layout `seed ‖ A` exists to cache `A` so signing can skip
 a scalar multiplication. Trusting that cache is a private-key recovery hazard,
@@ -3262,28 +3268,68 @@ halves separately, rebuilding a key from a corrupted record, or copying 32
 bytes from the wrong buffer produced exactly this input with no reason to think
 it mattered. No fault injection is needed; ordinary storage corruption suffices.
 
-**Cost, measured rather than asserted.** The check is one fixed-base scalar
-multiplication — the same operation that computes `R` — so signing does roughly
-twice the curve work. Median over 3,000 iterations on this tree, 64-byte
-message: **13,189 ns before, 23,915 ns after (+81 %)**. That is a real cost and
-it is the cost of the property; there is deliberately no opt-out flag, because
-an opt-out is the hazard under a different name and the caller who would reach
-for it is the caller who has not audited their key storage. Verification is
-untouched at ~34,063 ns.
+**Two paths, one property.** The per-call path pays the derivation on every
+signature and needs no state. The expanded path (2026-09-22) pays it once:
+`ama_ed25519_expand_secret_key` derives `A`, refuses a disagreeing half by the
+same masked comparison, and writes `a ‖ prefix ‖ A ‖ tag` with
+`tag = SHA-512("AMA/Ed25519/expanded-key/v1" ‖ a ‖ prefix ‖ A)[0..31]`. The
+tag is what lets the signer skip the derivation without re-opening the
+hazard: `A` cannot change in that form — nor can `a` or `prefix` — without
+the tag failing to verify, and the tag is a preimage-bound function of all
+three, so a fault or a mis-copy that alters any bit of the 128 is refused.
+A party able to rewrite the tag consistently can read `a` from the same
+bytes and needs no fault. The expanded form is not a storage format: it holds
+the scalar in the clear (the same secrecy class as the seed it is one SHA-512
+from), it is documented as opaque, and its Python owner
+(`pqc_backends.Ed25519SigningKey`) zeroes it on close and on collection.
+There is still no opt-out: neither path can be asked to trust a stored half.
 
-**Enforcement.** `src/c/ama_ed25519.c`, in `ama_ed25519_sign`, immediately
-after the scalar clamp and before any buffer is allocated, so the refusal path
-allocates nothing. The comparison is `ama_consttime_memcmp` over all 32 bytes.
-`derived_a` is scrubbed on both exits alongside `hash`, `r` and `hram`
-(INVARIANT-6).
+**Cost, measured rather than asserted.** The per-call check is one fixed-base
+scalar multiplication — the same operation that computes `R` — so that path
+does roughly twice the curve work. The tag check is two SHA-512 compressions.
+Measured on 2026-09-22 (`build/bin/benchmark_c_raw`, median of 1,000, 63-byte
+message, Intel Xeon @2.80GHz container, `taskset -c 0`):
+`ama_ed25519_sign` **24,780 ns**, `ama_ed25519_sign_expanded` **13,613 ns**
+(0.55×), `ama_ed25519_expand_secret_key` 12,632 ns once. Through the Python
+API on the same host and harness as the regression floors: `ed25519_sign`
+34,566–34,977 ops/s, `ed25519_sign_expanded` 55,524–55,728 ops/s (three runs).
+The earlier figures for this invariant (13,189 ns before the check, 23,915 ns
+after, median over 3,000) were taken on a different host and are superseded
+by the above as the record for the per-call cost. Verification is untouched.
+
+**Enforcement.** `src/c/ama_ed25519.c`. Both entry points share
+`ed25519_sign_core`, which takes the caller's verdict as a 0/~0 mask and
+applies it at a single exit by masking the 64 output bytes and the return
+code; the signature is computed unconditionally, so the instruction-count and
+secret-taint lanes see one path whatever the key. The comparisons — the
+derived `A` against the stored half, and the recomputed tag against the
+stored one — are `ed25519_mismatch_mask32`: an XOR-accumulate with no
+relational operator, laundered through `ama_ct_value_barrier_u64`. An earlier
+revision of this paragraph said the comparison was `ama_consttime_memcmp`
+placed before any buffer was allocated, and that refusal wrote no signature;
+the shipped code has never done either — the first version branched and was
+caught by the secret-taint lane, and the mask form that replaced it runs the
+full computation and zeroes the output — so that text is withdrawn (§6.6).
+The scalar, `derived_a`, the recomputed tag and every buffer the core writes
+are scrubbed on every exit (INVARIANT-6).
 
 **Verification.** `tests/test_ed25519_key_half_integrity.py` drives single-bit
 flips at five positions across the public half, a half taken from a different
 key, and an all-zero half, and asserts the two-signature transcript the attack
-needs cannot be produced. Every assertion is a refusal or an inequality rather
-than a pinned signature: a pinned value would also pass against a signer that
-had started returning a constant. The positive control — a well-formed key
-still signs and verifies — is what keeps the rest non-vacuous.
+needs cannot be produced. `tests/c/test_ed25519_expanded.c` and
+`tests/test_ed25519_expanded_key.py` do the same for the expanded path — the
+RFC 8032 §7.1 vectors through it, byte-equality with the per-call path across
+a message-length sweep that crosses the 4 KiB stack threshold and the frozen
+oracle's 24 sign records, every one of the 1,024 expanded-key bits flipped and
+refused, and refusal at load with nothing retained — on both field backends.
+Every assertion is a refusal or an inequality rather than a pinned signature:
+a pinned value would also pass against a signer that had started returning a
+constant. The positive controls — a well-formed key still signs and verifies,
+and the RFC vectors reproduce — are what keep the rest non-vacuous. The
+`ed25519-sign-expanded` targets of `tools/check_ghash_constant_time.py`
+(instruction-count and secret-taint, on the test archive and on the shipped
+shared object) hold the expanded entry point to the same 0/0 standard as
+`ed25519-sign`.
 
 ---
 

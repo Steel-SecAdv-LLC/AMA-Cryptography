@@ -213,6 +213,8 @@ MUST_BE_EXPORTED: tuple[str, ...] = (
     "ama_hss_pubkey_levels",
     "ama_ed25519_keypair",
     "ama_ed25519_sign",
+    "ama_ed25519_expand_secret_key",
+    "ama_ed25519_sign_expanded",
     "ama_ed25519_verify",
     "ama_keypair_generate",
     "ama_context_init",
