@@ -627,15 +627,13 @@ def run_ed25519_sign_expanded_benchmark(iterations: int = 50) -> float:
 
     keypair = generate_ed25519_keypair()
     message = b"Test message for signing" * 10
-    key = Ed25519SigningKey(keypair.private_key)
 
-    def operation() -> None:
-        key.sign(message)
+    with Ed25519SigningKey(keypair.private_key) as key:
 
-    try:
+        def operation() -> None:
+            key.sign(message)
+
         return benchmark_operation(operation, iterations)
-    finally:
-        key.close()
 
 
 def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
