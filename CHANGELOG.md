@@ -92,9 +92,14 @@ entry points and the comment now says so. The AGENTS.md §11 coverage
 inventory is re-stated from a fresh measurement (1,741 of 11,315 arcs, gcc
 13.3.0, this host) and the 839b66b4 commit-message figure of 1,765 / 11,053
 is recorded as not reproducing here (1,792 / 11,081 at that revision on this
-host). The README's "0.55×" was a C-harness ratio published under the
-Python-API heading with no canonical-host figure behind it and is replaced by
-a pointer to the measured record. The C-suite counts (85 / 87) and the
+host). The README performance note said the 64-byte Ed25519 key "stores the
+expanded key to avoid redundant SHA-512 expansion on each sign call", which
+INVARIANT-51 makes false (the signer re-hashes the seed and re-derives `A`
+every call); it now describes the per-call check and the expanded form, and
+points to the measured record rather than citing a ratio — the draft that
+cited the C-harness 0.55× under the Python-API heading was refused by
+`check_canonical_benchmarks.py` because no canonical-host figure stands
+behind it. The C-suite counts (85 / 87) and the
 `test_*.c` row of `docs/METRICS_REPORT.md` and `ARCHITECTURE.md` are updated.
 
 ### Ed25519: INVARIANT-51 verified at key load — 2026-09-22
