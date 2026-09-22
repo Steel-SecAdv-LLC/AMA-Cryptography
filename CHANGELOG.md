@@ -19,6 +19,63 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Benchmark and visual-asset refresh — 2026-09-22
+
+Every measured artefact in the tree was brought to the code it describes, or
+left with the reason stated. Nothing was regenerated from unchanged inputs
+and reported as an update.
+
+**Floors.** Six regression floors move to the medians of the four
+`benchmark-regression` runs at heads `ebc80b9`, `1bf806b`, `da8901d` and
+`1e79cd1` (CI runs 35545407750, 35548705329, 35608144468, 35611329428;
+2026-09-20/21): x86_64 `ed25519_keygen` 15,370 → 12,368, `ed25519_sign`
+38,170 → 38,811 (a derived floor replaced by the measurement),
+`ed25519_verify` 30,542 → 27,934, `full_package_create` 1,983 → 1,856,
+`full_package_verify` 3,442 → 2,807; aarch64 `full_package_create` 2,379 →
+2,135. Each is the documented cost of INVARIANT-51, INVARIANT-52 or the
+audit's small-order rejection, already re-based on aarch64 on 2026-09-16 and
+absorbed by the 45% x86_64 band until now. The same runs confirm the three
+aarch64 single-run floors of 2026-09-16 to within 2.2%. Tolerances are
+unchanged. `README.md`'s 5.0.0 throughput table is republished from the same
+four runs for all nineteen rows on both runner classes. Per AGENTS.md §6.6,
+`docs/BENCHMARK_HISTORY.md` withdraws the 2026-09-16 x86_64 ledger statement
+that `ed25519_verify` "needs no re-base": the canonical runner measures it
+8.5% under the 2026-09-07 median across the audit-remediation window.
+
+**The record says what it measured.** `benchmarks/benchmark_runner.py`'s
+`Tree` row now names the paths `git status --porcelain` reported — every CI
+benchmark lane re-signs `ama_cryptography/_integrity_signature.py` before the
+package will import, so every record those lanes ever produced read `DIRTY`
+for that one file, indistinguishable from uncommitted changes to a primitive
+— and a `Python bindings` row records which of the six Cython extensions
+were imported, because a source checkout without them and a wheel measure
+different code on the hash, MAC, KDF and signature rows.
+`benchmarks/benchmark_suite.py` records the same inventory and
+`tools/generate_dashboards.py` prints it on the dashboard, names the host
+behind the regression panel, and stops writing `null` into the manifest's
+`bench_timestamp` (it read a key no producer emits).
+
+**Re-measured.** The committed snapshot (`benchmarks/benchmark-results.json`,
+`benchmark-report.md`) at `219d3fa` on a clean tree, `taskset -c 0`, CI's
+flags, 19/19, on the ctypes path (the record says so); the AUTO tables in
+`ARCHITECTURE.md` and `wiki/Performance-Benchmarks.md` from it;
+`assets/performance_dashboard.png` from fresh `benchmark_suite.py`,
+`validation_suite.py` (17/17) and `comparative_benchmark.py` (39/39, peers
+installed) runs on the same host; `benchmarks/phase0_baseline_results.json`;
+and every anchored constant in `benchmarks/generate_charts.py` — the six
+`benchmarks/charts/*.svg` had rendered April-2026 measurements of 4.x code
+(Ed25519 sign 5,335 ops/s where the tree measures 39,539). Host: Linux
+6.18.44 in a Docker container on a hypervisor, Intel Xeon @ 2.80GHz, 4 vCPU,
+`avx512f/bw/cd/dq/vl` without VBMI, VAES or VPCLMULQDQ; the auto-tune
+demoted the four-way Keccak here as well.
+
+**Not re-measured, and why.** The canonical-host tables in `README.md` and
+`benchmarks/canonical-host.json`: the host above is not the canonical bench
+host and no figure is attributed to it (release prerequisite 2 in the pull
+request names what clears it). `assets/defense_layers.png`,
+`assets/ethical_binding.png` and `assets/quantum_comparison.png`: their
+inputs are hardcoded tables and the package version, and none moved.
+
 ### Documentation integrity: the claims are now bound to the code — 2026-09-19
 
 **INVARIANT-53.** Four gates, seventeen corrected claims, one implementation

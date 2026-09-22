@@ -1,7 +1,7 @@
 {
   "dashboards": {
-    "bench_timestamp": null,
-    "generated": "2026-08-30 19:56 UTC",
+    "bench_timestamp": "2026-09-22T01:25:48.754327+00:00",
+    "generated": "2026-09-22 01:44 UTC",
     "outputs": [
       "performance_dashboard.png",
       "defense_layers.png"

@@ -974,7 +974,11 @@ def _merge_manifest_entry() -> None:
     recorded["dashboards"] = {
         "version": _PKG_VERSION,
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "bench_timestamp": bench.get("timestamp"),
+        # benchmark_suite.py stamps its run as ``benchmark_start``; the top-level
+        # ``timestamp`` this read first is a key no producer writes, so every
+        # committed manifest recorded null for the one measurement it exists to
+        # attribute.  Both spellings are read, the producer's first.
+        "bench_timestamp": bench.get("benchmark_start") or bench.get("timestamp"),
         "outputs": ["performance_dashboard.png", "defense_layers.png"],
     }
     manifest_path.write_text(json.dumps(recorded, indent=2, sort_keys=True) + "\n")

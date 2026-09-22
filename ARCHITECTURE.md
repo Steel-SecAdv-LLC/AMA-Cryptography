@@ -716,22 +716,22 @@ nothing checking them.
 
 | Operation | Target latency | Measured latency (ms/op) | Measured throughput (ops/sec) |
 |-----------|---------------:|-------------------------:|------------------------------:|
-| Package Creation (multi-layer) | < 5 ms | 0.558 | 1,790.9 |
-| Package Verification (multi-layer) | < 5 ms | 0.452 | 2,211.8 |
-| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.341 | 2,935.1 |
-| Ed25519 Sign | < 1 ms | 0.026 | 38,555 |
-| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0042 | 240,850 |
-| SHA3-256 Hash (1 KB) | < 1 ms | 0.0028 | 356,139 |
-| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0061 | 162,904 |
+| Package Creation (multi-layer) | < 5 ms | 0.543 | 1,841.9 |
+| Package Verification (multi-layer) | < 5 ms | 0.330 | 3,028.6 |
+| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.340 | 2,937.5 |
+| Ed25519 Sign | < 1 ms | 0.027 | 36,646 |
+| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0057 | 176,713 |
+| SHA3-256 Hash (1 KB) | < 1 ms | 0.0040 | 250,960 |
+| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0088 | 113,804 |
 
-**Bottleneck.** ML-DSA-65 signing costs 0.341 ms against 0.558 ms for a whole multi-layer package creation — 61% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
+**Bottleneck.** ML-DSA-65 signing costs 0.340 ms against 0.543 ms for a whole multi-layer package creation — 63% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
 
 **Provenance — everything needed to reproduce these numbers:**
 
-- **Benchmark command:** `python benchmarks/benchmark_runner.py --baseline benchmarks/baseline.json --output benchmarks/benchmark-results.json --markdown benchmark-report.md`
-- **Source record:** `benchmarks/benchmark-results.json`, run 2026-09-16
-- **Platform:** Linux-6.18.44-fc-v33-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
-- **Build:** v5.0.0 · digest a086047c92ac4c7b… · /home/user/AMA-Cryptography/ama_cryptography/libama_cryptography.so
+- **Benchmark command:** `python benchmarks/benchmark_runner.py --verbose --baseline benchmarks/baseline.json --require-runner-class x86_64 --require-populated-baseline --output benchmarks/benchmark-results.json --markdown benchmark-report.md`
+- **Source record:** `benchmarks/benchmark-results.json`, run 2026-09-22
+- **Platform:** Linux-6.18.44-fc-v37-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
+- **Build:** v5.0.0 · digest b9179064a813c9a1… · /home/user/AMA-Cryptography/ama_cryptography/libama_cryptography.so
 - **Units:** milliseconds per operation, computed as `1000 / ops_per_second`; the throughput column is the record's own `ops_per_second` field.
 - **Sampling:** batches grown (sized to the fastest rate observed) until a timed batch spans >= 0.15s of measured wall-clock; 3 full-window batches per call
 - **Aggregation:** fastest observation (throughput noise is one-sided: interference can only make an operation look slower)
