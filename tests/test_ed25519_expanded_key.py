@@ -139,6 +139,7 @@ class TestConformance:
                 assert key.sign(bytes.fromhex(msg_hex)) == bytes.fromhex(sig_hex)
 
     @pytest.mark.skipif(not _HAVE_PYCA, reason="PyCA cryptography not installed")
+    @pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
     def test_an_independent_verifier_accepts_expanded_path_signatures(self) -> None:
         pk, sk = _fresh()
         with pb.Ed25519SigningKey(sk) as key:
