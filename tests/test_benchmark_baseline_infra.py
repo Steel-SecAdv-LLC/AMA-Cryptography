@@ -1065,8 +1065,8 @@ class TestTheTreeRowNamesWhatIsDirty:
         """Porcelain v1 puts a SPACE in column one for an unstaged change, so
         the first line of the output begins with whitespace.  A helper that
         strips the whole output before the parser sees it eats that space
-        and the parser then eats the path's first character: the committed
-        record at cd02072 read ``ma_cryptography/_integrity_digest.txt``.
+        and the parser then eats the path's first character: a record
+        produced on this tree read ``ma_cryptography/_integrity_digest.txt``.
         This drives the real ``_git`` through a fake subprocess, so the
         strip is in the loop; the tests above fake ``_git`` itself and
         never saw it."""

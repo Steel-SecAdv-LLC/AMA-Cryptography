@@ -2279,7 +2279,7 @@ internal modules do.  Each now calls `check_crypto_permitted()` first.
 The count is not written down here, because a number in prose is a number that
 goes stale: `tools/check_error_state_gating.py` enumerates the surface from the
 modules' own ASTs and fails when any entry point is ungated, and its output is
-the authoritative figure (106 native entry points across `pqc_backends`, `ascon`,
+the authoritative figure (107 native entry points across `pqc_backends`, `ascon`,
 `agent_binding` and `secure_memory`, plus 10 Cython binding entry points at the
 time of writing, with 4 documented exemptions, and a discovery step that fails
 if any other module reaches the native library while listed in neither the

@@ -1371,8 +1371,8 @@ def _git(*args: str, keep_leading_whitespace: bool = False) -> str:
     ``keep_leading_whitespace`` is for ``status --porcelain``, whose first
     column is a SPACE for an unstaged change: stripping the whole output
     removed that space from the first line and the parser then removed the
-    path's first character in its place (the record at cd02072 named
-    ``ma_cryptography/_integrity_digest.txt``).  Trailing whitespace is
+    path's first character in its place (a record produced on this tree
+    named ``ma_cryptography/_integrity_digest.txt``).  Trailing whitespace is
     always removed.
     """
     try:

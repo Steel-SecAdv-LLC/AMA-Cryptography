@@ -474,6 +474,71 @@ cross-run spread of <= 3% on these rows, so 15% is a 5x margin over it, and
 the next aarch64 run on this branch is the confirmation.
 
 
+## 2026-09-22: `ed25519_sign_expanded` — INVARIANT-51 paid once, at key load, and a new row at a derived floor
+
+The 2026-09-16 section below re-based `ed25519_sign` for a deliberate
+slowdown: INVARIANT-51 makes `ama_ed25519_sign` derive `A = [a]B` on every
+signature and refuse a stored public half that disagrees. That is the cost of
+the property when the key is a bare 64-byte string with nothing binding its
+halves. The tree now carries a form in which the binding travels with the
+key — `ama_ed25519_expand_secret_key` derives `A` once and writes
+`a ‖ prefix ‖ A ‖ tag`, and `ama_ed25519_sign_expanded` re-checks the tag
+(two SHA-512 compressions) instead of re-deriving (a fixed-base scalar
+multiplication). Same core, identical signature bytes; every one of the 128
+bytes is load-bearing. `pqc_backends.Ed25519SigningKey` owns it in Python.
+
+**Measured, one host, one session** (Intel Xeon @2.80GHz, 4 vCPU container,
+Linux 6.18.44, `taskset -c 0`, tree `24341f8`):
+
+| level | `ed25519_sign` | `ed25519_sign_expanded` | ratio |
+|---|---|---|---|
+| C, `build/bin/benchmark_c_raw`, median of 1,000, 63-byte message | 24,780 ns | 13,613 ns | 1.820× |
+| C, CI benchmark flags (`AMA_ENABLE_AVX512=ON`, `AMA_ENABLE_NATIVE_ARCH=ON`) | 22,977 ns | 12,605 ns | 1.823× |
+| Python API, `benchmark_runner.py` harness, 240-byte message, run 1 | 34,566 ops/s | 55,524 ops/s | 1.606× |
+| Python API, run 2 | 34,977 ops/s | 55,607 ops/s | 1.590× |
+| Python API, run 3 | 34,713 ops/s | 55,728 ops/s | 1.605× |
+| Python API, the committed record (`benchmarks/benchmark-results.json`) | 34,900 ops/s | 55,465 ops/s | 1.589× |
+
+`ama_ed25519_expand_secret_key` itself: 12,632 ns, paid once per key. The
+Python ratio sits below the C ratio by the fixed ctypes cost each call
+carries (and `ed25519_sign` reaches the C through the Cython binding when
+one is built, while the expanded path is ctypes). `ama_ed25519_sign`'s own
+instruction count is unchanged by the shared core: 331,814 → 331,864 Ir,
++0.02%, `benchmarks/ic_driver.c` base against head.
+
+**The new row's floors are derived, not measured on the canonical runners,
+and say so.** The canonical runner has never run this row, so there is no
+four-run median to take. Both change-log entries record the derivation:
+
+| file | source floor | ratio applied | floor | tolerance | failure point |
+|---|---|---|---|---|---|
+| `baseline.json` (x86_64) | `ed25519_sign` 38,811 | 1.589 (the lowest of the four Python ratios above) | **61,671** | 45% | 33,919 |
+| `arm-baseline.json` (aarch64) | `ed25519_sign` 32,852 | 1.5 (conservative: no aarch64 host was available, and this file's band is 15%) | **49,278** | 15% | 41,886 |
+
+The operation removed from the timed path is one of two fixed-base scalar
+multiplications, the same fraction of the work on any microarchitecture, so
+a ratio below the measured one is a floor a correct build cannot miss. Both
+entries say the floor is to be re-based to the runner's own median after its
+first run — as this file did for `ed25519_sign` on aarch64 (derived 29,381,
+then measured 32,852). A derived floor is a placeholder for a measurement,
+not a substitute for one.
+
+`ed25519_sign` itself is not re-based: its floor describes the per-call path,
+which is unchanged. The property test that pins it
+(`test_the_ed25519_sign_floor_tracks_invariant_51`) still holds because that
+path still pays the derivation.
+
+**AEAD encrypt wrappers, same commit.** `native_aes256_gcm_encrypt` and
+`native_chacha20poly1305_encrypt` allocate one output buffer instead of two.
+A/B in one process against the previous wrapper under identical checks
+(20,000-call windows, best of five, `taskset -c 0`): AES-256-GCM 64 B
+3.367 → 3.001 µs, 1 KiB 3.959 → 3.647 µs (−7.9%), 16 KiB 11.434 → 11.407 µs;
+ChaCha20-Poly1305 1 KiB 4.493 → 4.390 µs. No floor moves for it: the change
+is inside the 45% band and the rows' floors describe the same operation.
+For the record, the kernel behind the AES row measures 0.65 µs per 1 KiB
+(`benchmark_c_raw`, 1.54 M ops/s); the Python row's ~3.6 µs is mostly
+marshalling, and that is what the row's floor has always measured.
+
 ## 2026-09-22: the audit remediation's cost on both runner classes — four-run re-base, and the 2026-09-16 floors confirmed
 
 The 2026-09-16 section above re-based three aarch64 floors from a single run

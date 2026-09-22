@@ -63,7 +63,7 @@ and FROST are implemented under `src/c/`. The Python layer calls those kernels.
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 83 C suites, 247 Python test modules |
+| `tests/c/`, `tests/` | 84 C suites, 249 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
