@@ -216,6 +216,24 @@ def _wrap_key(name: str, limit: int = 11) -> str:
     return f"{head}\n{tail}"
 
 
+def _bindings_line(bench_record: Any) -> str:
+    """Which Python-side path the suite timed, from the suite's own record.
+
+    ``benchmark_suite.py`` records the Cython bindings it could reach.  A run
+    from a source checkout without the extensions built goes through ctypes on
+    the hash, MAC, KDF and signature rows, and the image has to say so, or a
+    wheel user reads the slower path as the library's speed.
+    """
+    inventory = (bench_record.get("system_info") or {}).get("cython_bindings")
+    if not isinstance(inventory, dict):
+        return "unrecorded (older benchmark_results.json)"
+    present = inventory.get("present") or []
+    expected = inventory.get("expected") or []
+    if not present:
+        return f"none of {len(expected)} Cython ext. (ctypes path)"
+    return f"{len(present)}/{len(expected)} Cython ext. imported"
+
+
 def _summary_line(artefact: Any) -> str:
     """`passed/total passed`, or `not run` when the artefact is absent.
 
@@ -471,6 +489,20 @@ def create_performance_dashboard() -> None:
         ax.set_xscale("log")
         ax.set_title("Regression: Measured vs Baseline", fontsize=10, fontweight="bold", pad=8)
         ax.set_xlabel("ops/sec (log)")
+        # The floors are measured on the named CI runner class; the measured
+        # bars come from whatever host produced the regression record.  Name
+        # that host in the panel so the two are not read as the same machine.
+        record_host = str((regression.get("provenance") or {}).get("host") or "host unrecorded")
+        ax.text(
+            0.02,
+            0.98,
+            f"measured on: {record_host.split(' / ')[0]}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=5.8,
+            color="#aaaaaa",
+        )
         ax.legend(
             fontsize=7,
             loc="lower right",
@@ -729,6 +761,7 @@ def create_performance_dashboard() -> None:
         + "=" * 42 + "\n\n"
         f"  Platform:        {_PLATFORM}\n"
         f"  Python:          {_PY_VERSION}\n"
+        f"  Bindings:        {_bindings_line(bench)}\n"
         f"  PQC Backend:     Native C (ML-DSA-65)\n"
         f"  Duration:        {bench['benchmark_duration_sec']:.2f}s\n\n"
         f"  SHA3-256:        {ops['sha3_256']['ops_per_sec']:>12,.0f} ops/s\n"

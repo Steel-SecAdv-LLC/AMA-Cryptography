@@ -472,3 +472,129 @@ Tolerances are unchanged (15% on all three). These are single-run figures
 rather than four-run medians: the fleet this file describes has a documented
 cross-run spread of <= 3% on these rows, so 15% is a 5x margin over it, and
 the next aarch64 run on this branch is the confirmation.
+
+
+## 2026-09-22: the audit remediation's cost on both runner classes — four-run re-base, and the 2026-09-16 floors confirmed
+
+The 2026-09-16 section above re-based three aarch64 floors from a single run
+and left the x86_64 file with one derived floor (`ed25519_sign`) and three
+rows it acknowledged were sitting below their floors inside the 45% band
+(`ed25519_keygen`, `full_package_create`, `full_package_verify`). Four
+`benchmark-regression` runs have since landed on identical measured paths —
+heads `ebc80b9`, `1bf806b`, `da8901d` and `1e79cd1` (a gate pin, a benchmark
+skip message, a dead FROST store and a dead Argon2 branch); workflow runs
+35545407750, 35548705329, 35608144468 and 35611329428, 2026-09-20 to
+2026-09-21 — which is the protocol the 2026-09-07 section established.
+Medians are the mean of the middle two, rounded half up, computed by script
+from the job logs.
+
+**x86_64 — `ubuntu-latest`, jobs 106170292775, 106179299451, 106360245063,
+106370902549.** Run 35548705329 is a fast-class sample on every row (20–45%
+above the other three), so the medians are slow-class medians:
+
+| primitive | runs ebc80b9, 1bf806b, da8901d, 1e79cd1 (ops/sec) | median | floor before → after | note |
+|---|---|---|---|---|
+| `ama_sha3_256_hash` | 362,192 / 484,921 / 364,191 / 362,956 | 363,574 | 327,222 | unchanged; median +11.1% vs floor |
+| `hmac_sha3_256` | 248,186 / 331,652 / 249,009 / 247,946 | 248,598 | 215,299 | unchanged; median +15.5% vs floor |
+| `ed25519_keygen` | 12,374 / 16,618 / 12,362 / 12,343 | 12,368 | 15,370 → **12,368** | re-based (median) |
+| `ed25519_sign` | 38,655 / 50,286 / 38,813 / 38,808 | 38,811 | 38,170 → **38,811** | re-based (median) |
+| `ed25519_verify` | 27,759 / 38,799 / 27,942 / 27,925 | 27,934 | 30,542 → **27,934** | re-based (median) |
+| `hkdf_derive` | 166,632 / 220,752 / 166,598 / 166,721 | 166,677 | 131,341 | unchanged; median +26.9% vs floor |
+| `full_package_create` | 1,857 / 2,479 / 1,836 / 1,855 | 1,856 | 1,983 → **1,856** | re-based (median) |
+| `full_package_verify` | 2,793 / 4,244 / 2,803 / 2,811 | 2,807 | 3,442 → **2,807** | re-based (median) |
+| `secp256k1_ecdsa_sign` | 9,211 / 11,869 / 9,179 / 9,187 | 9,199 | 8,068 | unchanged; median +14.0% vs floor |
+| `secp256k1_ecdsa_verify` | 3,717 / 4,874 / 3,724 / 3,722 | 3,723 | 3,302 | unchanged; median +12.7% vs floor |
+| `dilithium_keygen` | 1,511 / 1,907 / 1,548 / 1,497 | 1,530 | 1,312 | unchanged; median +16.6% vs floor |
+| `dilithium_sign` | 3,143 / 3,905 / 3,106 / 3,126 | 3,135 | 2,636 | unchanged; median +18.9% vs floor |
+| `dilithium_verify` | 10,367 / 13,208 / 10,379 / 10,383 | 10,381 | 8,897 | unchanged; median +16.7% vs floor |
+| `kyber_keygen` | 3,238 / 4,360 / 3,262 / 3,265 | 3,264 | 2,726 | unchanged; median +19.7% vs floor |
+| `kyber_encapsulate` | 15,894 / 21,394 / 15,950 / 16,006 | 15,978 | 11,994 | unchanged; median +33.2% vs floor |
+| `aes_256_gcm_encrypt` | 230,869 / 315,191 / 233,991 / 231,406 | 232,699 | 224,406 | unchanged; median +3.7% vs floor |
+| `chacha20poly1305_encrypt` | 231,429 / 306,089 / 235,640 / 234,548 | 235,094 | 227,521 | unchanged; median +3.3% vs floor |
+| `x25519_scalarmult` | 18,894 / 24,705 / 18,966 / 19,001 | 18,984 | 16,876 | unchanged; median +12.5% vs floor |
+| `x25519_scalarmult_batch4` | 4,540 / 5,906 / 4,547 / 4,554 | 4,551 | 4,074 | unchanged; median +11.7% vs floor |
+
+**aarch64 — `ubuntu-24.04-arm`, jobs 106170292802, 106179299071,
+106360244481, 106370902832.** Homogeneous; every row but `dilithium_sign`
+(rejection-sampled) spreads 1.5% or less:
+
+| primitive | runs ebc80b9, 1bf806b, da8901d, 1e79cd1 (ops/sec) | median | floor before → after | note |
+|---|---|---|---|---|
+| `ama_sha3_256_hash` | 436,301 / 436,555 / 433,513 / 436,658 | 436,428 | 426,967 | unchanged; median +2.2% vs floor |
+| `hmac_sha3_256` | 304,312 / 303,642 / 303,360 / 303,993 | 303,818 | 285,176 | unchanged; median +6.5% vs floor |
+| `ed25519_keygen` | 12,315 / 12,278 / 12,269 / 12,286 | 12,282 | 12,271 | unchanged; median +0.1% vs floor |
+| `ed25519_sign` | 32,843 / 32,839 / 32,848 / 32,852 | 32,846 | 32,852 | unchanged; median -0.0% vs floor |
+| `ed25519_verify` | 31,111 / 31,101 / 31,031 / 30,719 | 31,066 | 31,270 | unchanged; median -0.7% vs floor |
+| `hkdf_derive` | 209,182 / 209,407 / 209,153 / 208,684 | 209,168 | 176,697 | unchanged; median +18.4% vs floor |
+| `full_package_create` | 2,114 / 2,155 / 2,110 / 2,177 | 2,135 | 2,379 → **2,135** | re-based (median) |
+| `full_package_verify` | 3,556 / 3,509 / 3,482 / 3,522 | 3,516 | 3,441 | unchanged; median +2.2% vs floor |
+| `secp256k1_ecdsa_sign` | 10,924 / 10,897 / 10,927 / 10,899 | 10,912 | 10,342 | unchanged; median +5.5% vs floor |
+| `secp256k1_ecdsa_verify` | 4,530 / 4,532 / 4,517 / 4,518 | 4,524 | 4,316 | unchanged; median +4.8% vs floor |
+| `dilithium_keygen` | 1,682 / 1,670 / 1,664 / 1,670 | 1,670 | 1,634 | unchanged; median +2.2% vs floor |
+| `dilithium_sign` | 3,944 / 3,570 / 3,456 / 3,637 | 3,604 | 3,316 | unchanged; median +8.7% vs floor |
+| `dilithium_verify` | 11,678 / 11,664 / 11,683 / 11,672 | 11,675 | 11,733 | unchanged; median -0.5% vs floor |
+| `kyber_keygen` | 3,860 / 3,861 / 3,853 / 3,842 | 3,857 | 3,729 | unchanged; median +3.4% vs floor |
+| `kyber_encapsulate` | 21,999 / 21,989 / 21,950 / 21,586 | 21,970 | 20,105 | unchanged; median +9.3% vs floor |
+| `aes_256_gcm_encrypt` | 234,782 / 233,826 / 235,180 / 233,887 | 234,335 | 234,678 | unchanged; median -0.1% vs floor |
+| `chacha20poly1305_encrypt` | 195,505 / 195,800 / 197,531 / 196,184 | 195,992 | 195,365 | unchanged; median +0.3% vs floor |
+| `x25519_scalarmult` | 25,410 / 25,406 / 25,394 / 25,394 | 25,400 | 25,167 | unchanged; median +0.9% vs floor |
+| `x25519_scalarmult_batch4` | 6,070 / 6,075 / 6,062 / 6,053 | 6,066 | 6,011 | unchanged; median +0.9% vs floor |
+
+Six floors move, all for changes already recorded in this ledger:
+
+* x86_64 `ed25519_keygen` 15,370 → 12,368: `keypair()` runs a FIPS 140-3
+  pairwise-consistency sign on every key, so it pays the INVARIANT-51
+  multiplication; the aarch64 file re-based this row on 2026-09-16 and the
+  x86_64 file did not.
+* x86_64 `ed25519_sign` 38,170 → 38,811: the derived floor (70,496 / 1.8469)
+  replaced by the runner's own median, which sits 1.7% above the derivation.
+  A raise, on the three-token rule.
+* x86_64 `ed25519_verify` 30,542 → 27,934. **Correction, per AGENTS.md §6.6.**
+  The 2026-09-16 x86_64 ledger entry stated that verify "gains the two
+  INVARIANT-48 small-order byte predicates at +0.7% and needs no re-base".
+  That was a C-level estimate of the two predicates alone, measured on a
+  development host; the canonical runner measures the whole Python-API verify
+  at −8.5% between the two medians, across a window that also carries the
+  constant-time passes `e8b9c8c` and `1f43143` and the audit remediation
+  `9b86086`. The statement is withdrawn; this entry records the measurement
+  and does not attribute it between those commits.
+* x86_64 `full_package_create` 1,983 → 1,856 and aarch64 `full_package_create`
+  2,379 → 2,135: the INVARIANT-51 multiplication inside the package's Ed25519
+  signature plus the INVARIANT-52 canonical transcript. The aarch64 row sat
+  10.3% under its floor on a 25% band — the same "known change absorbed by the
+  tolerance" the 2026-09-16 section argued against.
+* x86_64 `full_package_verify` 3,442 → 2,807: the INVARIANT-52 transcript
+  rebuild and the small-order rejection before verify (audit A-2, A-3) — the
+  change the aarch64 file re-based for on 2026-09-16 (4,426 → 3,441), now
+  applied to the x86_64 file from its own runner.
+
+Tolerances are unchanged everywhere (45 x86_64; 15 aarch64, 25 for the two
+composites). The x86_64 effective minimums (floor × 0.55) move 8,454 → 6,802,
+20,994 → 21,346, 16,798 → 15,364, 1,091 → 1,021 and 1,893 → 1,544; the
+slowest of the four runs clears each new minimum by at least 79%. The aarch64
+`full_package_create` minimum (floor × 0.75) moves 1,784 → 1,601, cleared by
+32% at the slowest run.
+
+The three aarch64 floors the 2026-09-16 entry set from one run are confirmed
+and left as set: `ed25519_keygen` median 12,282 against 12,271 (+0.1%),
+`ed25519_sign` 32,846 against 32,852 (−0.02%), `full_package_verify` 3,516
+against 3,441 (+2.2%). No other floor moves; every other row measured above
+its floor on all four runs of both classes, the closest being aarch64
+`aes_256_gcm_encrypt` (median 0.1% under a floor taken from two runs on
+2026-08-14, inside its 15% band) and aarch64 `ed25519_verify` (0.7% under).
+
+`README.md`'s 5.0.0 throughput table now publishes these four runs' medians
+for all nineteen rows on both classes, superseding the 2026-09-07 table
+(kept in the section above). Both `baseline_change_log`s carry the run and job
+ids.
+
+**The committed snapshot, and what its provenance now says.** In the same
+pass `benchmarks/benchmark_runner.py` gained two provenance rows and changed
+no measurement path: the `Tree` row names the paths `git status --porcelain`
+reported (every CI benchmark lane re-signs
+`ama_cryptography/_integrity_signature.py` before the package will import, so
+every record those lanes ever produced read `DIRTY` for that one file,
+indistinguishable from uncommitted changes to a primitive), and a
+`Python bindings` row records which of the six Cython extensions were imported
+— a source checkout without them built and a wheel measure different code on
+the hash, MAC, KDF and signature rows, and nothing in the record said which.

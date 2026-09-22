@@ -987,7 +987,7 @@ class TestProvenanceRecordsTheMeasuredTree:
     def test_the_snapshot_is_used_in_preference_to_a_live_query(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(br, "_TREE_STATE", ("c0ffee" * 6 + "abcd", False))
+        monkeypatch.setattr(br, "_TREE_STATE", ("c0ffee" * 6 + "abcd", False, ()))
 
         def _fail(*args: str) -> str:
             raise AssertionError("_provenance queried git despite a captured snapshot")
@@ -999,7 +999,7 @@ class TestProvenanceRecordsTheMeasuredTree:
 
     def test_a_dirty_snapshot_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The flag must still fire when the tree really was modified."""
-        monkeypatch.setattr(br, "_TREE_STATE", ("deadbeef", True))
+        monkeypatch.setattr(br, "_TREE_STATE", ("deadbeef", True, ()))
         assert "working tree DIRTY" in dict(br._provenance())["Commit"]
 
     def test_writing_the_report_files_does_not_make_the_snapshot_dirty(
@@ -1043,9 +1043,78 @@ class TestProvenanceRecordsTheMeasuredTree:
 
         monkeypatch.setattr(subprocess, "run", _boom)
         monkeypatch.setattr(br, "_TREE_STATE", None)
-        commit, dirty = br.capture_tree_state()
+        commit, dirty, paths = br.capture_tree_state()
         assert commit == "unknown"
         assert dirty is False, "an unavailable git must not be reported as a modified tree"
+        assert paths == ()
+
+
+class TestTheTreeRowNamesWhatIsDirty:
+    """A dirty tree is described by its paths, not only by a flag.
+
+    Every CI benchmark lane re-signs ``ama_cryptography/_integrity_signature.py``
+    for the native library it just built before the package will import, so
+    every record those lanes produced read ``DIRTY`` for that one file — and
+    the record could not distinguish it from uncommitted changes to a
+    primitive.  The paths make the two distinguishable from the record alone.
+    """
+
+    def test_capture_parses_the_porcelain_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _fake_git(*args: str) -> str:
+            if args[0] == "status":
+                return " M ama_cryptography/_integrity_signature.py\n?? scratch/notes.txt"
+            return "1234567890abcdef"
+
+        monkeypatch.setattr(br, "_git", _fake_git)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        commit, dirty, paths = br.capture_tree_state()
+        assert commit == "1234567890abcdef"
+        assert dirty is True
+        assert paths == ("ama_cryptography/_integrity_signature.py", "scratch/notes.txt")
+
+    def test_a_clean_tree_captures_no_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(br, "_git", lambda *args: "" if args[0] == "status" else "abc123")
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        assert br.capture_tree_state() == ("abc123", False, ())
+
+    def test_the_tree_row_names_the_paths_in_both_records(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            br, "_TREE_STATE", ("b" * 40, True, ("ama_cryptography/_integrity_signature.py",))
+        )
+        tree_cell = dict(br._provenance())["Tree"]
+        assert tree_cell == (
+            "DIRTY (uncommitted changes: ama_cryptography/_integrity_signature.py)"
+        )
+        provenance = br.generate_report([])["provenance"]
+        assert provenance["tree"] == tree_cell
+        assert provenance["commit"] == "b" * 40, "the paths belong on the Tree row only"
+
+    def test_a_dirty_tree_with_no_captured_paths_still_reads_dirty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("c" * 40, True, ()))
+        assert dict(br._provenance())["Tree"] == "DIRTY (uncommitted changes)"
+
+    def test_a_long_list_is_truncated_by_count_not_dropped(self) -> None:
+        paths = tuple(f"src/c/file{i}.c" for i in range(br._MAX_DIRTY_PATHS_LISTED + 3))
+        row = br._tree_row(True, paths)
+        assert row.startswith("DIRTY (uncommitted changes: src/c/file0.c, ")
+        assert f"src/c/file{br._MAX_DIRTY_PATHS_LISTED - 1}.c and 3 more)" in row
+        assert f"src/c/file{br._MAX_DIRTY_PATHS_LISTED}.c" not in row
+
+    def test_the_bindings_row_says_which_python_path_was_timed(self) -> None:
+        """The record states whether the Cython bindings or ctypes ran.
+
+        Both are legitimate configurations of the same tree; the hash, MAC,
+        KDF and signature rows move between them, so a record without the
+        row cannot be compared with another.
+        """
+        provenance = br.generate_report([])["provenance"]
+        row = provenance["python_bindings"]
+        assert "compiled bindings" in row
+        assert ("imported" in row) or ("ctypes path" in row)
 
 
 class TestBothRecordsCarryProvenance:
@@ -1432,13 +1501,13 @@ class TestTheJsonProvenanceIsMachineReadable:
     """
 
     def test_commit_is_a_bare_hash_on_a_clean_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(br, "_TREE_STATE", ("a" * 40, False))
+        monkeypatch.setattr(br, "_TREE_STATE", ("a" * 40, False, ()))
         provenance = br.generate_report([])["provenance"]
         assert provenance["commit"] == "a" * 40, provenance["commit"]
         assert provenance["tree"] == "clean"
 
     def test_commit_is_a_bare_hash_on_a_dirty_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(br, "_TREE_STATE", ("b" * 40, True))
+        monkeypatch.setattr(br, "_TREE_STATE", ("b" * 40, True, ()))
         provenance = br.generate_report([])["provenance"]
         assert provenance["commit"] == "b" * 40, (
             "the dirty marker is still glued to the commit id, which is what "
@@ -1450,7 +1519,7 @@ class TestTheJsonProvenanceIsMachineReadable:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The human-facing rendering is unchanged: only the JSON was wrong."""
-        monkeypatch.setattr(br, "_TREE_STATE", ("c" * 40, True))
+        monkeypatch.setattr(br, "_TREE_STATE", ("c" * 40, True, ()))
         commit_cell = dict(br._provenance())["Commit"]
         assert commit_cell.startswith("`c" + "c" * 39 + "`")
         assert "working tree DIRTY" in commit_cell
@@ -1458,7 +1527,7 @@ class TestTheJsonProvenanceIsMachineReadable:
     def test_no_json_provenance_value_carries_markdown_ticks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(br, "_TREE_STATE", ("d" * 40, False))
+        monkeypatch.setattr(br, "_TREE_STATE", ("d" * 40, False, ()))
         provenance = br.generate_report([])["provenance"]
         ticked = {k: v for k, v in provenance.items() if isinstance(v, str) and "`" in v}
         assert not ticked, f"markdown formatting reached the JSON block: {ticked}"

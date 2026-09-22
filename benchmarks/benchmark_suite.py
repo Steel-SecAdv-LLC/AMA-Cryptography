@@ -18,6 +18,7 @@ AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
+import importlib.util
 import json
 import os
 import platform
@@ -72,6 +73,26 @@ from ama_cryptography.legacy_compat import (
 from ama_cryptography.pqc_backends import DILITHIUM_BACKEND, native_hkdf, native_sha3_256
 
 
+def _cython_binding_inventory() -> Dict[str, Any]:
+    """Which compiled bindings the timed Python API calls could reach.
+
+    The Cython extensions are optional build products.  When one is absent
+    the same call goes through ctypes, and the hash, MAC, KDF and signature
+    rows move with that choice — so a record that does not say which path it
+    timed cannot be compared with another run.  ``find_spec`` locates the
+    extension without importing it; the package's own binding gate decides
+    whether an import is permitted.
+    """
+    from ama_cryptography._build_sign import _BINDING_STEMS
+
+    present = sorted(
+        stem
+        for stem in _BINDING_STEMS
+        if importlib.util.find_spec(f"ama_cryptography.{stem}") is not None
+    )
+    return {"expected": list(_BINDING_STEMS), "present": present}
+
+
 class BenchmarkSuite:
     """Comprehensive performance benchmarking for AMA Cryptography."""
 
@@ -89,6 +110,7 @@ class BenchmarkSuite:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "dilithium_backend": DILITHIUM_BACKEND,
             "dilithium_available": DILITHIUM_AVAILABLE,
+            "cython_bindings": _cython_binding_inventory(),
         }
         if _HAS_PSUTIL:
             info["cpu_count"] = psutil.cpu_count() or info["cpu_count"]

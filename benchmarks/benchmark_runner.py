@@ -1320,7 +1320,7 @@ def _provenance_json_overrides() -> "dict[str, str]":
     same fact in a place a tool can read; it did not remove the suffix from
     this one, so the JSON still recorded a non-commit for every dirty run.
     """
-    commit, _dirty = _TREE_STATE if _TREE_STATE is not None else capture_tree_state()
+    commit, _dirty, _paths = _TREE_STATE if _TREE_STATE is not None else capture_tree_state()
     return {"Commit": commit}
 
 
@@ -1350,8 +1350,8 @@ def _git(*args: str) -> str:
         return "unknown"
 
 
-def capture_tree_state() -> "tuple[str, bool]":
-    """Snapshot ``(commit, dirty)`` for the tree the measurements come from.
+def capture_tree_state() -> "tuple[str, bool, tuple[str, ...]]":
+    """Snapshot ``(commit, dirty, dirty_paths)`` for the tree the measurements come from.
 
     Called once, **before** the first measurement.  Sampling it later is what
     the first version did, and it made the flag useless: the run writes
@@ -1365,11 +1365,73 @@ def capture_tree_state() -> "tuple[str, bool]":
     A provenance field that always reports the same value carries no
     information, and one that always reports the *alarming* value is worse
     than absent: it trains the reader to ignore it.
+
+    ``dirty_paths`` names what ``git status --porcelain`` reported, because the
+    bare flag had the same defect one level down.  Every CI benchmark lane and
+    every developer build re-signs ``ama_cryptography/_integrity_signature.py``
+    for the native library it just built before the package will import at
+    all, so every record those lanes produced read DIRTY for that one file —
+    indistinguishable, in the record, from a tree carrying uncommitted
+    changes to a primitive.  Naming the paths lets a reader tell the two
+    apart without the checkout the record was made on.
     """
-    return (_git("rev-parse", "HEAD"), _git("status", "--porcelain") not in ("", "unknown"))
+    status = _git("status", "--porcelain")
+    dirty = status not in ("", "unknown")
+    paths: tuple[str, ...] = ()
+    if dirty:
+        # Porcelain v1: two status columns, a space, then the path.
+        paths = tuple(line[3:].strip() for line in status.splitlines() if len(line) > 3)
+    return (_git("rev-parse", "HEAD"), dirty, paths)
 
 
-_TREE_STATE: "tuple[str, bool] | None" = None
+_TREE_STATE: "tuple[str, bool, tuple[str, ...]] | None" = None
+
+#: Dirty paths named in the Tree row before the list is truncated.  A record is
+#: read by a person; a tree with hundreds of modified files is described by
+#: its count, not by a table cell that scrolls.
+_MAX_DIRTY_PATHS_LISTED = 12
+
+
+def _tree_row(dirty: bool, paths: "tuple[str, ...]") -> str:
+    """The Tree provenance value: ``clean``, or DIRTY with the paths named."""
+    if not dirty:
+        return "clean"
+    if not paths:
+        return "DIRTY (uncommitted changes)"
+    shown = ", ".join(paths[:_MAX_DIRTY_PATHS_LISTED])
+    extra = len(paths) - _MAX_DIRTY_PATHS_LISTED
+    if extra > 0:
+        shown += f" and {extra} more"
+    return f"DIRTY (uncommitted changes: {shown})"
+
+
+def _python_bindings_summary() -> str:
+    """Which Python-side path the Python-API rows ran through.
+
+    The Cython bindings are optional build products.  When one is absent the
+    same ``pqc_backends`` call goes through ctypes, and the hash, MAC, KDF and
+    signature rows move with that choice — a source checkout without the
+    extensions built and a wheel measure different code on the same host, and
+    nothing in the record said which.  ``sys.modules`` is the ground truth for
+    "imported": the package probes each binding at import time and falls back
+    silently, so a file merely present on disk is not evidence it was used.
+    Never raises: provenance must not fail for want of a detail.
+    """
+    try:
+        from ama_cryptography._build_sign import _BINDING_STEMS
+
+        imported = sorted(
+            stem for stem in _BINDING_STEMS if f"ama_cryptography.{stem}" in sys.modules
+        )
+        total = len(_BINDING_STEMS)
+        if imported:
+            return f"{len(imported)} of {total} compiled bindings imported: " + ", ".join(imported)
+        return (
+            f"none of the {total} compiled bindings imported "
+            "(ctypes path for every Python-API row)"
+        )
+    except Exception:  # pragma: no cover - provenance must never raise
+        return "unavailable"
 
 
 def _native_backend_summary() -> str:
@@ -1457,7 +1519,7 @@ def _provenance() -> "list[tuple[str, str]]":
     # direct call from a test, or an embedding that skips ``main``. That
     # reading is the pessimistic one (the report files may already be
     # written), which is the right direction for a field about trust.
-    commit, dirty = _TREE_STATE if _TREE_STATE is not None else capture_tree_state()
+    commit, dirty, dirty_paths = _TREE_STATE if _TREE_STATE is not None else capture_tree_state()
     repeated = ", ".join(f"{k} x{v}" for k, v in sorted(_SAMPLING_REPEATS.items()))
     return [
         ("Commit", f"`{commit}`{' (working tree DIRTY)' if dirty else ''}"),
@@ -1473,7 +1535,7 @@ def _provenance() -> "list[tuple[str, str]]":
         # boolean-valued row says the thing outright in both artefacts, and
         # "the numbers describe uncommitted code" is exactly the kind of fact
         # a provenance block exists to make unmissable.
-        ("Tree", "clean" if not dirty else "DIRTY (uncommitted changes)"),
+        ("Tree", _tree_row(dirty, dirty_paths)),
         ("Version", f"`{_package_version()}`"),
         ("Host", f"{platform.platform()} / {platform.machine()}"),
         ("CPU", f"{os.cpu_count()} logical processor(s)"),
@@ -1483,6 +1545,10 @@ def _provenance() -> "list[tuple[str, str]]":
         # Which kernels that binary actually ran, per the dispatcher's own
         # report, auto-tune verdicts included.
         ("Dispatch", _dispatch_wiring_summary()),
+        # Whether the Python-API rows went through the compiled bindings or
+        # ctypes — the third variable behind a figure, after the binary and
+        # the kernels it dispatched to.
+        ("Python bindings", _python_bindings_summary()),
         ("Command", f"`{_invocation()}`"),
         (
             "Sampling",

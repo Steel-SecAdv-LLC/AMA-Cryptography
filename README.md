@@ -386,66 +386,34 @@ Additional C sources:
 >
 > **Where the current, per-runner numbers live.** `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` carry **measured medians** on their named CI runners with a single derived tolerance each — they are regression *floors*, and since 5.0.0 they are no longer pre-discounted guesses (`x86` uses the slow-class median of a measurably two-class `ubuntu-latest` fleet with a uniform 45% tolerance; `aarch64`, a homogeneous fleet with spreads ≤3%, uses 15% — 25% for the two rejection-averaged composites). `benchmark-report.md` is regenerated from a run of the suite and records the exact commit, host, command, repeat count and aggregation. A floor and a canonical-host figure are different numbers on purpose; neither is an estimate of the other.
 
-### 5.0.0 on the canonical CI runners — four-run medians (2026-09-07)
+### 5.0.0 on the canonical CI runners — four-run medians (2026-09-20/21)
 
-These are the only 5.0.0 throughput measurements this repository publishes, and they are on the CI runner classes the regression floors are defined against, not on the canonical bench host. Each figure is the median of four `benchmark-regression` jobs (`python benchmarks/benchmark_runner.py`, Python API — ctypes for every row except `ed25519_sign` and `ed25519_verify`, which run through the Cython binding) at the branch heads `f2ac1d8`, `4a45408`, `755cd22` and `447cdf0`, whose diffs touch no primitive source; workflow runs 34070019745, 34082980156, 34084425292 and 34084821515. Medians of an even count are the mean of the middle two, rounded. The `ubuntu-latest` x86_64 fleet is two-class (about 8–15% between classes), so its min–max spans are wide; `ubuntu-24.04-arm` is homogeneous. The three Ed25519 rows are the in-house backend that replaced ed25519-donna in the twenty-first maintenance pass; its slowest x86_64 run (14,349 / 67,521 / 28,003 ops/sec for keygen / sign / verify) is above donna's last measurement on the same runner class (11,855 / 59,847 / 21,322).
+These are the only 5.0.0 throughput measurements this repository publishes, and they are on the CI runner classes the regression floors are defined against, not on the canonical bench host. Each figure is the median of four `benchmark-regression` jobs (`python benchmarks/benchmark_runner.py` under `taskset -c 0`, Python API through `pqc_backends` with the six Cython bindings built and imported, exactly as `ci.yml` installs them) at the branch heads `ebc80b9`, `1bf806b`, `da8901d` and `1e79cd1`, none of which changes a measured path; workflow runs 35545407750, 35548705329, 35608144468 and 35611329428 (x86_64 jobs 106170292775, 106179299451, 106360245063 and 106370902549; aarch64 jobs 106170292802, 106179299071, 106360244481 and 106370902832), 2026-09-20 to 2026-09-21. Medians of an even count are the mean of the middle two, rounded half up, computed by script from the job logs. The `ubuntu-latest` x86_64 fleet is two-class: run 35548705329 landed on the fast class on every row, 20–45% above the other three, so the x86_64 min–max spans are wide and the medians are slow-class medians; `ubuntu-24.04-arm` is homogeneous (spreads of 1.5% or less on every row except `dilithium_sign`, a rejection-sampled composite). These runs supersede the 2026-09-07 medians (heads `f2ac1d8`, `4a45408`, `755cd22`, `447cdf0`; runs 34070019745, 34082980156, 34084425292, 34084821515), which predate the 2026-09 audit remediation; `docs/BENCHMARK_HISTORY.md` keeps both sets.
 
 | Benchmark | `ubuntu-latest` x86_64 — ops/sec, median (min–max) | `ubuntu-24.04-arm` aarch64 — ops/sec, median (min–max) |
 |---|---|---|
-| `ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 378,016 (356,429–416,067) | 436,136 (436,018–436,698) |
-| `hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes) | 260,704 (246,064–286,568) | 303,692 (303,251–303,870) |
-| `ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation; not comparable with the 4.x native-keygen-only row) | 15,370 (14,349–16,622) | 14,678 (14,547–14,708) |
-| `ed25519_sign` — Ed25519 signature generation (native C, expanded key) — **superseded, see note below** | ~~70,496 (67,521–73,660)~~ → **38,170** derived | ~~58,762 (58,389–58,795)~~ → **32,852** derived |
-| `ed25519_verify` — Ed25519 signature verification (native C) | 30,542 (28,003–33,234) | 31,270 (31,021–31,473) |
+| `ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 363,574 (362,192–484,921) | 436,428 (433,513–436,658) |
+| `hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes) | 248,598 (247,946–331,652) | 303,818 (303,360–304,312) |
+| `ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation; not comparable with the 4.x native-keygen-only row) | 12,368 (12,343–16,618) | 12,282 (12,269–12,315) |
+| `ed25519_sign` — Ed25519 signature generation (native C, expanded key) | 38,811 (38,655–50,286) | 32,846 (32,839–32,852) |
+| `ed25519_verify` — Ed25519 signature verification (native C) | 27,934 (27,759–38,799) | 31,066 (30,719–31,111) |
+| `hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys) | 166,677 (166,598–220,752) | 209,168 (208,684–209,407) |
+| `full_package_create` — Complete crypto package creation (with PQC) | 1,856 (1,836–2,479) | 2,135 (2,110–2,177) |
+| `full_package_verify` — Complete crypto package verification (with PQC) | 2,807 (2,793–4,244) | 3,516 (3,482–3,556) |
+| `secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce) | 9,199 (9,179–11,869) | 10,912 (10,897–10,927) |
+| `secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy) | 3,723 (3,717–4,874) | 4,524 (4,517–4,532) |
+| `dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C) | 1,530 (1,497–1,907) | 1,670 (1,664–1,682) |
+| `dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C) | 3,135 (3,106–3,905) | 3,604 (3,456–3,944) |
+| `dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C) | 10,381 (10,367–13,208) | 11,675 (11,664–11,683) |
+| `kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C) | 3,264 (3,238–4,360) | 3,857 (3,842–3,861) |
+| `kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C) | 15,978 (15,894–21,394) | 21,970 (21,586–21,999) |
+| `aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C) | 232,699 (230,869–315,191) | 234,335 (233,826–235,180) |
+| `chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C) | 235,094 (231,429–306,089) | 195,992 (195,505–197,531) |
+| `x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch) | 18,984 (18,894–24,705) | 25,400 (25,394–25,410) |
+| `x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate | 4,551 (4,540–5,906) | 6,066 (6,053–6,075) |
 
-> **The `ed25519_sign` row is a pre-INVARIANT-51 measurement and no longer
-> describes this code.** [INVARIANT-51](INVARIANTS.md#invariant-51--an-ed25519-signer-derives-its-own-public-half)
-> makes `ama_ed25519_sign` derive `A = [a]B` from the secret scalar and refuse a
-> 64-byte key whose stored bytes 32..63 disagree with it — closing a
-> private-scalar recovery hazard (two signatures over one message under two
-> different `A` halves share `R`, and `s₁ − s₂ = (h₁ − h₂)·a mod L` yields the
-> scalar). The check is a second fixed-base scalar multiplication on every
-> signature, so signing does roughly twice the curve work. There is no opt-out,
-> deliberately.
->
-> **Derivation of the replacement figures** (host-independent, because both
-> multiplications scale together on any microarchitecture): measured at the C
-> level on this tree, min-of-20,000 medians with the Python binding excluded —
-> `ama_ed25519_sign` 12,586 ns before the check and 23,245 ns after, a ratio of
-> **1.8469×**. Applied to each runner's own four-run median:
-> 70,496 / 1.8469 = **38,170** (x86-64) and 58,762 / 1.8469 = **31,817**;
-> `benchmarks/arm-baseline.json` carries **32,852** for aarch64, measured on its
-> own homogeneous runner rather than derived. Both are the enforced floors.
->
-> **Corroboration on an independent host** (4-vCPU Linux x86-64 sandbox,
-> Python 3.11.15, `LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py`):
-> **36,517 ops/sec** measured, 4.3% below the 38,170 floor and well inside its
-> ±45% tolerance. The raw-C harness (`build/bin/benchmark_c_raw --json`) on the
-> same host reports 22.561 µs/op = 44,324 ops/sec, the gap being per-call FFI
-> overhead.
->
-> The runner medians above are not re-run here: the four workflow runs they cite
-> are a fixed historical record, and GitHub's runner fleet is not reachable from
-> this environment. They are left visible, struck through, so the ledger stays
-> auditable rather than quietly rewritten. `tools/check_benchmark_claims.py`
-> holds the enforced floors in this table to `benchmarks/baseline.json` and
-> `benchmarks/arm-baseline.json`.
-| `hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys) | 174,757 (165,505–189,877) | 208,931 (208,005–209,262) |
-| `full_package_create` — Complete crypto package creation (with PQC) | 2,232 (2,119–2,393) | 2,604 (2,564–2,626) |
-| `full_package_verify` — Complete crypto package verification (with PQC) | 3,974 (3,524–4,561) | 4,668 (4,476–4,724) |
-| `secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce) | 9,447 (9,118–10,114) | 10,778 (10,775–10,781) |
-| `secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy) | 3,886 (3,706–4,200) | 4,524 (4,499–4,530) |
-| `dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C) | 1,528 (1,460–1,702) | 1,684 (1,656–1,694) |
-| `dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C) | 3,004 (2,898–3,263) | 3,642 (3,474–3,720) |
-| `dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C) | 10,242 (9,517–11,258) | 11,827 (11,823–11,831) |
-| `kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C) | 3,272 (2,960–3,648) | 3,820 (3,775–3,830) |
-| `kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C) | 15,370 (13,491–17,690) | 21,025 (21,001–21,073) |
-| `aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C) | 249,912 (235,595–271,573) | 236,762 (235,111–237,158) |
-| `chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C) | 249,874 (240,738–260,469) | 197,995 (196,512–198,457) |
-| `x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch) | 20,005 (19,177–21,366) | 25,451 (25,446–25,460) |
-| `x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate | 4,800 (4,612–5,118) | 6,061 (6,054–6,072) |
-
-*The Ed25519 medians in both columns are the `baseline_value` floors in `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` as of 2026-09-07. The other sixteen rows keep their 2026-08-14 calibration floors, which all four runs passed on both runner classes. Tolerances: 45% on x86_64, 15% on aarch64 (25% for the two rejection-averaged composites).*
+> **`ed25519_sign`, `ed25519_keygen`, `ed25519_verify` and the package rows moved for documented reasons, not regressions.** [INVARIANT-51](INVARIANTS.md#invariant-51--an-ed25519-signer-derives-its-own-public-half) makes `ama_ed25519_sign` derive `A = [a]B` and refuse a key whose stored public half disagrees — a second fixed-base scalar multiplication on every signature, with no opt-out — and `keypair()` pays it again inside its FIPS 140-3 pairwise-consistency sign. The package rows additionally rebuild and check the INVARIANT-52 canonical transcript and reject small-order Ed25519 points before verifying (2026-09 audit A-2 and A-3), and `ed25519_verify` carries the INVARIANT-48 small-order public-key and R rejection. The 2026-09-07 medians (Ed25519 70,496 / 58,762 sign, 15,370 / 14,678 keygen, 30,542 / 31,270 verify) predate all of that. The x86_64 `ed25519_sign` floor was first set by a host-independent derivation (70,496 / 1.8469 = 38,170) and is now the runner's own four-run median; the derivation sat 1.7% under the measurement. The aarch64 floors set from one run on 2026-09-16 are reproduced by these four runs to within 0.1% (keygen), 0.02% (sign) and 2.2% (package verify).
+*The x86_64 `ed25519_keygen`, `ed25519_sign`, `ed25519_verify`, `full_package_create` and `full_package_verify` medians and the aarch64 `full_package_create` median are the `baseline_value` floors in `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` as of 2026-09-22; the aarch64 `ed25519_keygen`, `ed25519_sign` and `full_package_verify` floors are the 2026-09-16 single-run values these four runs confirm; the other rows keep their earlier calibration floors, which all four runs passed on both runner classes. Tolerances: 45% on x86_64, 15% on aarch64 (25% for the two rejection-averaged composites).*
 <details>
 <summary><strong>Cryptographic Operation Benchmarks</strong></summary>
 
@@ -1062,7 +1030,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*5,623 test functions across 248 Python test files plus 83 C test suites (85 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*5,629 test functions across 248 Python test files plus 83 C test suites (85 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1684,7 +1652,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 5,623 test functions across 248 Python files plus 83 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 5,629 test functions across 248 Python files plus 83 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
