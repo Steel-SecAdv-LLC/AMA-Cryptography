@@ -2031,3 +2031,72 @@ class TestJustificationMustAccountForTheChange:
             "same history, same repository: the blob scan calls it justified "
             "and the attributed check must not"
         )
+
+
+class TestExpandedSignRowMeasuresTheExpandedPath:
+    def test_the_timed_body_signs_through_the_loaded_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The row exists to measure ``Ed25519SigningKey.sign``; a body that
+        loaded the key inside the timed operation, or signed through the
+        per-call path, would report a different number under the same name."""
+        import ama_cryptography.pqc_backends as pb
+
+        calls: list[str] = []
+        real_sign = pb.Ed25519SigningKey.sign
+        real_init = pb.Ed25519SigningKey.__init__
+
+        def counting_sign(self: Any, message: Any) -> bytes:
+            calls.append("sign")
+            return real_sign(self, message)
+
+        def counting_init(self: Any, secret_key: Any) -> None:
+            calls.append("load")
+            real_init(self, secret_key)
+
+        def run_once(operation: Any, iterations: int) -> float:
+            calls.append("timed:start")
+            operation()
+            calls.append("timed:end")
+            return 1.0
+
+        monkeypatch.setattr(pb.Ed25519SigningKey, "sign", counting_sign)
+        monkeypatch.setattr(pb.Ed25519SigningKey, "__init__", counting_init)
+        monkeypatch.setattr(br, "benchmark_operation", run_once)
+        assert br.run_ed25519_sign_expanded_benchmark(iterations=1) == 1.0
+        # The pairwise test at load signs once through the key; that sign
+        # precedes the timed window, which holds exactly one signature.
+        assert calls[-3:] == ["timed:start", "sign", "timed:end"]
+        assert "load" in calls[: calls.index("timed:start")]
+
+
+class TestPythonBindingsSummaryReadsWhatWasImported:
+    def test_reports_the_imported_bindings_by_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from ama_cryptography._build_sign import _BINDING_STEMS
+
+        for stem in _BINDING_STEMS:
+            monkeypatch.delitem(sys.modules, f"ama_cryptography.{stem}", raising=False)
+        monkeypatch.setitem(sys.modules, f"ama_cryptography.{_BINDING_STEMS[0]}", object())
+        summary = br._python_bindings_summary()
+        assert (
+            summary == f"1 of {len(_BINDING_STEMS)} compiled bindings imported: {_BINDING_STEMS[0]}"
+        )
+
+    def test_reports_the_ctypes_path_when_none_was_imported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography._build_sign import _BINDING_STEMS
+
+        for stem in _BINDING_STEMS:
+            monkeypatch.delitem(sys.modules, f"ama_cryptography.{stem}", raising=False)
+        summary = br._python_bindings_summary()
+        assert summary.startswith(f"none of the {len(_BINDING_STEMS)} compiled bindings imported")
+        assert "ctypes path" in summary
+
+    def test_a_file_on_disk_is_not_evidence(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A binding that exists but was never imported is not counted."""
+        from ama_cryptography._build_sign import _BINDING_STEMS
+
+        for stem in _BINDING_STEMS:
+            monkeypatch.delitem(sys.modules, f"ama_cryptography.{stem}", raising=False)
+        assert _BINDING_STEMS[0] not in br._python_bindings_summary()

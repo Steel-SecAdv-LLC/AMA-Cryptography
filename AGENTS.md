@@ -33,7 +33,7 @@ justifies compromising a higher one.
 
 | Rank | Requirement |
 |---|---|
-| 1 | **Security invariants** — the 52 numbered invariants in `INVARIANTS.md` |
+| 1 | **Security invariants** — the 53 numbered invariants in `INVARIANTS.md` |
 | 2 | **Correctness** — conformance to FIPS/RFC, ACVP and KAT agreement, ABI truth |
 | 3 | **Reproducibility** — deterministic builds, byte-equal artifacts, pinned corpora |
 | 4 | **Performance** — measured throughput and instruction counts against their floors |
@@ -63,7 +63,7 @@ and FROST are implemented under `src/c/`. The Python layer calls those kernels.
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 84 C suites, 249 Python test modules |
+| `tests/c/`, `tests/` | 85 C suites, 248 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -80,7 +80,7 @@ Design constraints governing all changes:
 
 ## 4. The invariant framework
 
-`INVARIANTS.md` contains 52 numbered invariants. They are enforced by gate
+`INVARIANTS.md` contains 53 numbered invariants. They are enforced by gate
 scripts, not by convention, and they take precedence over any other guidance in
 this repository. Before modifying an area, read the invariant governing it.
 
@@ -136,6 +136,7 @@ this repository. Before modifying an area, read the invariant governing it.
 50. Approved-Mode Signing Is Context-Separated
 51. An Ed25519 Signer Derives Its Own Public Half
 52. A Package Signature Covers the Whole Package
+53. A Documented Claim Must Resolve Against the Implementation
 
 ---
 
@@ -320,12 +321,17 @@ repository maintainer.
 
 Open item, carried forward and unassigned:
 
-`tools/measure_branch_coverage.py` reports approximately 1,765 of 11,053
-instrumented branch arcs under `src/c` are never taken by the C suite. The
-Ed25519 rows have been triaged and two Medium findings closed. The dispatch and
-CPUID buckets are structurally unreachable on any single host and require no
-action. The following have not been examined: `ama_nistp.c` (203 arcs),
-`ama_dilithium.c` (140), `ama_kyber.c` (111), `ama_slhdsa.c` (116),
+`tools/measure_branch_coverage.py` reports 1,741 of 11,315 instrumented
+branch arcs under `src/c` never taken by the C suite (measured 2026-09-22 on
+the tree at this directive's revision: gcc 13.3.0, Debug `--coverage -O0 -g`,
+143 translation units, `ctest` 138 tests). The 839b66b4 commit message
+reported 1,765 of 11,053; re-measuring that revision on this host gives
+1,792 of 11,081 over 142 translation units, so the earlier figure belongs to
+a different host and toolchain and is superseded here. The Ed25519 rows have been triaged
+and two Medium findings closed. The dispatch and CPUID buckets (285 and 60
+arcs) are structurally unreachable on any single host and require no action.
+The following have not been examined: `ama_nistp.c` (152 arcs),
+`ama_dilithium.c` (143), `ama_slhdsa.c` (116), `ama_kyber.c` (113),
 `ama_frost.c` (67).
 
 **What this inventory is, and what it is not.** Two corrections, per §6.6,

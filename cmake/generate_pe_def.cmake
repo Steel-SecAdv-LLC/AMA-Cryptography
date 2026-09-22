@@ -34,11 +34,15 @@
 # `.gnu.lto_ama_hmac_sha256.17.<hash>` rather than the symbol.  The headers are
 # the declaration of intent and are readable without a toolchain, on any host.
 #
-# Measured equivalence on the cross-built DLL: the 190 AMA_API-declared ama_*
-# functions across the 28 headers, minus the 30 names cmake/ama_exports.map
-# localises, are EXACTLY the 190 real exports -- no symbol in one set and not
-# the other, in either direction.  The clone is excluded by construction: a
-# compiler never declares one in a header.
+# Measured equivalence on the cross-built DLL (2026-09-20): the 190 AMA_API-
+# declared ama_* functions across the 28 headers, minus the 30 names
+# cmake/ama_exports.map localises, were EXACTLY the 190 real exports -- no
+# symbol in one set and not the other, in either direction.  The tree has
+# declared 192 since `ama_ed25519_expand_secret_key` and
+# `ama_ed25519_sign_expanded` were added on 2026-09-22; the derivation below
+# is what keeps the .def current, and tools/check_public_api_docs.py counts
+# the same set.  The clone is excluded by construction: a compiler never
+# declares one in a header.
 #
 # Usage:
 #   cmake -DAMA_SOURCE_DIR=<repo> -DAMA_DEF_OUTPUT=<path> -P generate_pe_def.cmake
@@ -64,7 +68,8 @@ foreach(_header IN LISTS _ama_headers)
     foreach(_line IN LISTS _lines)
         # A declaration names its function immediately before the parameter
         # list. Verified against the full multi-line regex in
-        # tools/check_public_api_docs.py: both find the same 190 names, so the
+        # tools/check_public_api_docs.py: both find the same names (190 when
+        # measured, 192 on the current tree), so the
         # line-oriented form CMake can express loses nothing here.
         string(REGEX MATCHALL "ama_[A-Za-z0-9_]+[ \t]*\\(" _hits "${_line}")
         foreach(_hit IN LISTS _hits)

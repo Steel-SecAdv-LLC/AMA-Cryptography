@@ -827,3 +827,86 @@ class TestCIRunsEveryTarget:
         assert yaml.safe_load(text) is not None, "dudect.yml must parse"
         for target in tool._DRIVERS:
             assert f"--target {target}" in text, f"no CI step runs --target {target}"
+
+
+#: The library entry point each target exists to measure.  A driver that
+#: compiles, runs and reports a stable count for the WRONG function is a
+#: green gate over nothing; the table and the three checks below close that.
+#: ``TestCIRunsEveryTarget`` proves every target has a CI step; this proves
+#: every target has a driver, a remedy and the call it claims to measure.
+ENTRY_POINTS: dict[str, str] = {
+    "ghash": "ama_aes256_gcm_encrypt",
+    "ecdsa": "ama_secp256k1_ecdsa_sign_raw",
+    "consttime": "ama_consttime_memcmp",
+    "aead-verify": "ama_aes256_gcm_decrypt",
+    "ascon-hash": "ama_ascon_hash256",
+    "ascon-encrypt": "ama_ascon_aead128_encrypt",
+    "agent-binding": "ama_agent_binding_check",
+    "kyber-decaps": "ama_kyber_decapsulate",
+    "sha3-256": "ama_sha3_256",
+    "ed25519-sign": "ama_ed25519_sign",
+    "ed25519-sign-sse2fold": "ama_ed25519_sign",
+    "ed25519-sign-expanded": "ama_ed25519_sign_expanded",
+    "nistp-ecdsa": "ama_nistp_ecdsa_sign_raw",
+    "x25519": "ama_x25519_key_exchange",
+    "x25519-batch": "ama_x25519_scalarmult_batch",
+    "secp256k1-scalarmult": "ama_secp256k1_point_mul",
+    "consttime-lookup": "ama_consttime_lookup",
+    "consttime-swap": "ama_consttime_swap",
+    "consttime-copy": "ama_consttime_copy",
+    "secure-memzero": "ama_secure_memzero",
+}
+
+
+def _calls(source: str) -> set[str]:
+    """Library functions a driver actually calls, comments excluded."""
+    return set(re.findall(r"\b(ama_[a-z0-9_]+)\s*\(", _strip_c_comments(source)))
+
+
+class TestEveryTargetMeasuresItsEntryPoint:
+    def test_tables_cover_the_same_targets(self, tool: ModuleType) -> None:
+        """THRESHOLDS, _DRIVERS, _REMEDY and this table name one set.
+
+        The tool's own import-time check counts THRESHOLDS only; a target
+        dropped from _DRIVERS or _REMEDY still imports and is simply never
+        run, or fails without a remedy.
+        """
+        assert set(tool.THRESHOLDS) == set(tool._DRIVERS)
+        assert set(tool.THRESHOLDS) == set(tool._REMEDY)
+        assert set(tool.THRESHOLDS) == set(ENTRY_POINTS)
+
+    @pytest.mark.parametrize("target", sorted(ENTRY_POINTS))
+    def test_count_driver_calls_its_entry_point(self, tool: ModuleType, target: str) -> None:
+        assert ENTRY_POINTS[target] in _calls(
+            tool._DRIVERS[target]
+        ), f"the {target} count driver never calls {ENTRY_POINTS[target]}"
+
+    def test_every_taint_driver_calls_the_same_entry_point(self, tool: ModuleType) -> None:
+        """A taint driver, where one exists, measures the same function.
+
+        The taint lane is what sees a branch on a secret-derived mask that
+        the count lane cannot (both key classes retire the same instruction
+        count when the branch is taken the same way for both); a taint driver
+        pointed at a different function would leave the count lane as the
+        only witness for that branch.  Iterated, not parametrized: the set of
+        targets that have a taint driver is the tool's to define, and a
+        parametrized version would need a skip for every one that does not.
+        """
+        assert set(tool._TAINT_DRIVERS) <= set(ENTRY_POINTS)
+        wrong = {
+            target: ENTRY_POINTS[target]
+            for target, taint in tool._TAINT_DRIVERS.items()
+            if ENTRY_POINTS[target] not in _calls(taint)
+        }
+        assert not wrong, f"taint drivers that never call their entry point: {wrong}"
+
+    def test_the_expanded_signer_has_a_taint_driver(self, tool: ModuleType) -> None:
+        """INVARIANT-51's expanded form is verified by a masked tag compare.
+
+        The count lane cannot distinguish a branch on that mask from the
+        masked select, because a valid expanded key takes the same side every
+        time; only the taint lane reports the mask reaching a conditional.
+        The taint driver is therefore the load-bearing check for this target
+        and must exist.
+        """
+        assert "ed25519-sign-expanded" in tool._TAINT_DRIVERS

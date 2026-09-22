@@ -497,7 +497,8 @@ Linux 6.18.44, `taskset -c 0`, tree `24341f8`):
 | Python API, `benchmark_runner.py` harness, 240-byte message, run 1 | 34,566 ops/s | 55,524 ops/s | 1.606× |
 | Python API, run 2 | 34,977 ops/s | 55,607 ops/s | 1.590× |
 | Python API, run 3 | 34,713 ops/s | 55,728 ops/s | 1.605× |
-| Python API, the committed record (`benchmarks/benchmark-results.json`) | 34,900 ops/s | 55,465 ops/s | 1.589× |
+| Python API, a full snapshot run at `24341f8` (superseded, see below) | 34,900 ops/s | 55,465 ops/s | 1.589× |
+| Python API, the committed record (`benchmarks/benchmark-results.json`, run at `4e4fa7f`) | 35,287 ops/s | 56,746 ops/s | 1.608× |
 
 `ama_ed25519_expand_secret_key` itself: 12,632 ns, paid once per key. The
 Python ratio sits below the C ratio by the fixed ctypes cost each call
@@ -512,7 +513,7 @@ four-run median to take. Both change-log entries record the derivation:
 
 | file | source floor | ratio applied | floor | tolerance | failure point |
 |---|---|---|---|---|---|
-| `baseline.json` (x86_64) | `ed25519_sign` 38,811 | 1.589 (the lowest of the four Python ratios above) | **61,671** | 45% | 33,919 |
+| `baseline.json` (x86_64) | `ed25519_sign` 38,811 | 1.589 (the lowest of the five Python ratios above; the run it came from was re-run at `4e4fa7f` and only this table and the change-log entry keep its figures — the lower ratio is the conservative floor) | **61,671** | 45% | 33,919 |
 | `arm-baseline.json` (aarch64) | `ed25519_sign` 32,852 | 1.5 (conservative: no aarch64 host was available, and this file's band is 15%) | **49,278** | 15% | 41,886 |
 
 The operation removed from the timed path is one of two fixed-base scalar

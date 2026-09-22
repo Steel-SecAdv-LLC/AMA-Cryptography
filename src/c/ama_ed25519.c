@@ -905,15 +905,24 @@ static ama_error_t ed25519_sign_core(
 
     /* Determine buffer allocation: use stack for small messages.
      * Compare against the threshold directly to avoid size_t overflow
-     * in (64 + message_len) when message_len is near SIZE_MAX. */
+     * in (64 + message_len) when message_len is near SIZE_MAX.
+     *
+     * Both early exits zero the signature and touch no secret.  The
+     * documented contract is that every failing exit after the NULL checks
+     * leaves 64 zero bytes, so a caller that ignores the return code holds
+     * an unusable signature rather than a stale one left in a reused
+     * buffer; the INVARIANT-51 refusal at the single exit below keeps the
+     * same contract by masking. */
     if (message_len <= ED25519_STACK_THRESHOLD) {
         buf = stack_buf;
     } else {
         if (message_len > SIZE_MAX - 64) {
+            memset(signature, 0, 64);  // PUBLIC-DATA: signature — caller's output buffer; no secret has been written to it on this exit, it is zeroed so a caller that ignores the return code holds no stale signature
             return AMA_ERROR_INVALID_PARAM;
         }
         buf = (uint8_t *)malloc(64 + message_len);
         if (!buf) {
+            memset(signature, 0, 64);  // PUBLIC-DATA: signature — same as above: output buffer, nothing secret written yet
             return AMA_ERROR_MEMORY;
         }
         buf_on_heap = 1;

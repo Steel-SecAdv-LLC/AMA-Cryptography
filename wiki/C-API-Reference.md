@@ -366,8 +366,9 @@ overflows it on every call.
 > `secret_key` parameter is **in/out**: the caller must place 32 bytes of
 > CSPRNG output in `secret_key[0..31]` *before* the call, and the function
 > hashes those bytes to derive the scalar and writes the public key into
-> `secret_key[32..63]`. `include/ama_cryptography.h:1306-1316` states it, and
-> `src/c/ama_ed25519.c:799` is the line that reads it:
+> `secret_key[32..63]`. The `ama_ed25519_keypair` contract in
+> `include/ama_cryptography.h` states it, and the first statement of
+> `ama_ed25519_keypair` in `src/c/ama_ed25519.c` is the line that reads it:
 > `sha512(secret_key, 32, hash);`
 >
 > An earlier revision of this page showed

@@ -3292,7 +3292,8 @@ message, Intel Xeon @2.80GHz container, `taskset -c 0`):
 `ama_ed25519_sign` **24,780 ns**, `ama_ed25519_sign_expanded` **13,613 ns**
 (0.55×), `ama_ed25519_expand_secret_key` 12,632 ns once. Through the Python
 API on the same host and harness as the regression floors: `ed25519_sign`
-34,566–34,977 ops/s, `ed25519_sign_expanded` 55,524–55,728 ops/s (three runs).
+34,566–34,977 ops/s, `ed25519_sign_expanded` 55,524–55,728 ops/s (three runs),
+0.62× the per-call time — the C ratio plus the ctypes call both paths share.
 The earlier figures for this invariant (13,189 ns before the check, 23,915 ns
 after, median over 3,000) were taken on a different host and are superseded
 by the above as the record for the per-call cost. Verification is untouched.
@@ -3317,11 +3318,15 @@ are scrubbed on every exit (INVARIANT-6).
 flips at five positions across the public half, a half taken from a different
 key, and an all-zero half, and asserts the two-signature transcript the attack
 needs cannot be produced. `tests/c/test_ed25519_expanded.c` and
-`tests/test_ed25519_expanded_key.py` do the same for the expanded path — the
-RFC 8032 §7.1 vectors through it, byte-equality with the per-call path across
-a message-length sweep that crosses the 4 KiB stack threshold and the frozen
-oracle's 24 sign records, every one of the 1,024 expanded-key bits flipped and
-refused, and refusal at load with nothing retained — on both field backends.
+`tests/test_ed25519_expanded_key.py` do the same for the expanded path. The C
+suite replays the RFC 8032 §7.1 vectors through it, checks byte-equality with
+the per-call path over 32 keys and 20 message lengths that cross the 4 KiB
+stack threshold, flips every one of the 1,024 expanded-key bits and requires
+each to be refused, and drives refusal at load, all on both field backends. The
+Python suite does the same through `Ed25519SigningKey`: the RFC vectors, four
+fresh keys over an 18-length sweep, one bit flipped in each of the 128 bytes of
+the buffer the object owns, the frozen oracle's 24 sign records, PyCA
+cross-verification, and refusal at load with nothing retained.
 Every assertion is a refusal or an inequality rather than a pinned signature:
 a pinned value would also pass against a signer that had started returning a
 constant. The positive controls — a well-formed key still signs and verifies,
@@ -3431,9 +3436,9 @@ ama_ed25519_keypair(pk, sk);
 
 `ama_ed25519_keypair` does not generate the seed. The caller must place 32
 bytes of CSPRNG output in `secret_key[0..31]` before the call — the header says
-so at [`include/ama_cryptography.h:1306-1316`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h),
-and `src/c/ama_ed25519.c:799` is the line that reads them
-(`sha512(secret_key, 32, hash)`). That example, on the page a C consumer is
+so in the `ama_ed25519_keypair` contract of [`include/ama_cryptography.h`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h),
+and the first statement of `ama_ed25519_keypair` in `src/c/ama_ed25519.c` is
+the line that reads them (`sha512(secret_key, 32, hash)`). That example, on the page a C consumer is
 pointed at, minted an Ed25519 private key from uninitialised stack memory. It
 compiled clean under `-Wall -Wextra -Werror` and printed `valid=1`.
 

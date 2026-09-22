@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-09-19 |
+| Last Updated | 2026-09-22 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,84 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+### Second pass over the expanded-key work: two defects, four unprotected guards — 2026-09-22
+
+A full re-read of the INVARIANT-51 change, every file it touched and every
+figure it moved, with the whole system run as CI runs it. Findings, each
+classified on discovery (AGENTS.md §7) and each test pinned by mutation (§6.2):
+
+**High — a failing signer could hand back a stale signature.** `ed25519_sign_core`
+returned `AMA_ERROR_INVALID_PARAM` for a `message_len` above `SIZE_MAX - 64`
+and `AMA_ERROR_MEMORY` for a failed heap allocation without writing the
+signature, so a caller reusing a buffer and ignoring the return code held the
+previous signature. Both exits now write all 64 bytes as zero, which is the
+contract the INVARIANT-51 refusal already kept and the header now states for
+both entry points. `tests/c/test_ed25519_expanded.c` refuses `SIZE_MAX` through
+both signers and requires the zeroed output; it fails on the previous code
+(1 failure) and passes on this one.
+
+**Medium — the Ed25519 signing scrubs were reviewed, never measured.**
+`tests/c/test_ed25519_stack_residue.c` applies the AEAD dead-stack probe to
+`ama_ed25519_expand_secret_key`, `ama_ed25519_sign_expanded` (stack and heap
+paths) and `ama_ed25519_sign`, searching the 32 KiB below its frame for either
+16-byte half of the clamped scalar or the nonce prefix after a sentinel control
+and a clean-window baseline. All four report 0 hits under gcc 13 `-O2`. By
+mutation: removing the `hash` scrub in `ama_ed25519_expand_secret_key` gives
+1 hit, removing it in `ama_ed25519_sign` gives 2; removing the sign core's
+message-buffer scrub gives 0 because R || A overwrites the prefix before
+return, so that scrub is redundant with the overwrite on this needle and the
+test pins the property, not the scrub (§6.3). Registered in
+`tests/c/CMakeLists.txt` with the AEAD probe's flags and skip code; the C
+suite is 85 files / 87 translation units.
+
+**Medium — the constant-time gate's tables were not checked against each
+other.** `tests/test_ghash_constant_time_gate.py` now carries the entry point
+each of the 20 targets exists to measure and asserts that `THRESHOLDS`,
+`_DRIVERS` and `_REMEDY` name one set, that every count driver and every taint
+driver calls its entry point, and that `ed25519-sign-expanded` has a taint
+driver — the load-bearing lane for that target, because a valid expanded key
+takes the same side of the tag-mismatch mask in every key class and the count
+lane cannot see a branch on it (now recorded in the tool's docstring). Each of
+the four mutations it was written against (a target dropped from `_DRIVERS`,
+from `_REMEDY`, from `_TAINT_DRIVERS`; a driver calling the wrong function)
+fails it.
+
+**Medium — `Ed25519SigningKey` made two un-wipeable copies of a seed.** The
+32-byte path went `bytes(seed)` into `native_ed25519_keypair_from_seed`, which
+returned a `bytes` `seed || A` — two immutable copies of the secret no caller
+could clear (INVARIANT-6). The seed is now completed by `ama_ed25519_keypair`
+in a ctypes buffer the constructor owns and zeroes in `finally`, and the
+INVARIANT-41 pairwise test runs on the expanded form the object will sign
+with; a failure closes the object before the exception propagates. `sign()`
+accepts `bytes`, `bytearray` and `memoryview` and refuses anything else with
+`TypeError` rather than a ctypes `ArgumentError` (INVARIANT-5). Pinned in
+`tests/test_ed25519_expanded_key.py` with a `_borrow` spy on both load paths
+(the bytearray-key test now proves the borrow as well as the independence),
+and a close-on-failure test that holds the constructor's frame through the
+traceback — measured: without holding it, `__del__` closed the object first and
+the explicit close looked load-bearing while never being exercised.
+
+**Medium — two benchmark-runner claims had no test.** `_python_bindings_summary`
+is pinned to read `sys.modules` (a binding on disk but never imported is not
+counted) and the timed body of `run_ed25519_sign_expanded_benchmark` is
+pinned to sign through the loaded key with the load outside the window
+(`tests/test_benchmark_baseline_infra.py`).
+
+**Record corrections (§6.6).** The `python -m ama_cryptography` entry point
+was rewritten on `argparse` (it took no arguments but parsed none, so a typo
+was silently ignored); `benchmarks/baseline.json` and `arm-baseline.json`
+acknowledge it under `floor_drift_acknowledged` with the measured reason.
+`cmake/generate_pe_def.cmake` recorded 190 `AMA_API` declarations from its
+2026-09-20 measurement; the tree has declared 192 since the two expanded-key
+entry points and the comment now says so. The AGENTS.md §11 coverage
+inventory is re-stated from a fresh measurement (1,741 of 11,315 arcs, gcc
+13.3.0, this host) and the 839b66b4 commit-message figure of 1,765 / 11,053
+is recorded as not reproducing here (1,792 / 11,081 at that revision on this
+host). The README's "0.55×" was a C-harness ratio published under the
+Python-API heading with no canonical-host figure behind it and is replaced by
+a pointer to the measured record. The C-suite counts (85 / 87) and the
+`test_*.c` row of `docs/METRICS_REPORT.md` and `ARCHITECTURE.md` are updated.
 
 ### Ed25519: INVARIANT-51 verified at key load — 2026-09-22
 
@@ -47,9 +125,12 @@ the expanded path, byte-equality with the per-call path over 32 keys × 20
 lengths across the 4 KiB stack threshold, all 1,024 expanded-key bits flipped
 and refused, refusal at load, on both field backends; verified to fail
 against an expander and a signer that never refuse) and
-`tests/test_ed25519_expanded_key.py` (the same through the Python object plus
-the frozen oracle's 24 sign records, PyCA cross-verification, lifetime and
-INVARIANT-41-once-at-load). New `ed25519-sign-expanded` targets in
+`tests/test_ed25519_expanded_key.py` (through the Python object: the RFC
+vectors, four fresh keys over an 18-length sweep against the per-call path,
+one bit flipped in each of the 128 bytes of the owned buffer and refused, the
+frozen oracle's 24 sign records, PyCA cross-verification, lifetime and
+INVARIANT-41-once-at-load). The committed benchmark snapshot is re-run at
+`4e4fa7f` with the new row (20/20, the six Cython bindings imported). New `ed25519-sign-expanded` targets in
 `tools/check_ghash_constant_time.py` (instruction-count 0/0 and secret-taint,
 test archive and shipped shared object), wired into `dudect.yml`. New
 `ed25519_sign_expanded` regression row in both baselines at a derived floor,
@@ -99,7 +180,10 @@ behind the regression panel, and stops writing `null` into the manifest's
 **Re-measured.** The committed snapshot (`benchmarks/benchmark-results.json`,
 `benchmark-report.md`) at `219d3fa` on a clean tree, `taskset -c 0`, CI's
 flags, 19/19, on the ctypes path (the record says so); the AUTO tables in
-`ARCHITECTURE.md` and `wiki/Performance-Benchmarks.md` from it;
+`ARCHITECTURE.md` and `wiki/Performance-Benchmarks.md` from it. That record
+was superseded the same day by the re-run at `4e4fa7f` described in the entry
+above (20/20, the six Cython bindings imported, Tree row naming the two
+re-signed integrity artefacts);
 `assets/performance_dashboard.png` from fresh `benchmark_suite.py`,
 `validation_suite.py` (17/17) and `comparative_benchmark.py` (39/39, peers
 installed) runs on the same host; `benchmarks/phase0_baseline_results.json`;
@@ -135,9 +219,10 @@ ama_ed25519_keypair(pk, sk);
 ```
 
 `ama_ed25519_keypair` does not generate the seed. The caller must place 32
-bytes of CSPRNG output in `secret_key[0..31]` before the call:
-`include/ama_cryptography.h:1306-1316` states it, and `src/c/ama_ed25519.c:799`
-is the line that reads them — `sha512(secret_key, 32, hash)`. The example
+bytes of CSPRNG output in `secret_key[0..31]` before the call: the
+`ama_ed25519_keypair` contract in `include/ama_cryptography.h` states it, and
+the first statement of `ama_ed25519_keypair` in `src/c/ama_ed25519.c` is the
+line that reads them — `sha512(secret_key, 32, hash)`. The example
 handed it whatever the stack held. It compiles clean under
 `-Wall -Wextra -Werror`, prints `valid=1`, and the key verifies, which is why
 nobody caught it by reading.
@@ -162,7 +247,8 @@ goes red.
 Every `python`/`c` block on a covered page must now declare what it claims —
 `python-run`, `python-signature`, `python-names`, `c-run`, `c-decl`,
 `c-const`, or `pseudocode: <reason>`. An unmarked block fails, which is what
-stops coverage decaying as pages grow. 95 blocks across 7 pages: 90 executed
+stops coverage decaying as pages grow. 95 blocks across 7 pages at that pass
+(96 / 91 / 5 on this head, with the expanded-key declaration block): 90 executed
 or checked, 5 explicitly pseudocode (a YubiKey, an AWS CloudHSM, a PyCA
 contrast snippet, a threading sketch, and the timing-unsafe anti-pattern the
 page tells you not to write).
@@ -184,7 +270,7 @@ partial derivation, because a gate that silently learns nothing reports green
 on everything.
 
 `tests/test_documentation_integrity_gates.py` pins all four in both
-directions — 45 tests. The negative controls are the literal text this pass
+directions — 45 tests at that pass, 69 on this head. The negative controls are the literal text this pass
 removed, and positive controls assert the corrected wording passes, because a
 gate nobody can satisfy is a gate that gets disabled.
 
@@ -16413,6 +16499,8 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 5.0.0 | 2026-09-10 | Fail-closed FIPS 140-3 POST on import (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check (INVARIANT-42); in-house Ed25519 backend replacing ed25519-donna, with donna's verdicts frozen as a replayable oracle; ML-DSA-65 on the FIPS 204 external interface and domain-separated hybrid signatures (format v2); the shared library exports only its `ama_*` ABI; repository-wide audit remediation. BREAKING ×10 — see `[5.0.0]` |
+| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier and a callgrind invariance gate; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material. BREAKING ×6 — see `[4.0.0]` |
 | 3.0.0 | 2026-04-27 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |

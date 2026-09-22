@@ -169,18 +169,77 @@ class TestEquivalenceWithThePerCallPath:
                     assert sig == pb.native_ed25519_sign(msg, sk)
                     assert pb.native_ed25519_verify(sig, msg, pk) is True
 
-    def test_a_bytearray_key_is_borrowed_not_retained(self) -> None:
+    def test_a_bytearray_key_is_borrowed_not_retained(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The caller's storage is what INVARIANT-6 asks them to wipe; the
-        object must not depend on it after load."""
+        object must not depend on it after load.
+
+        Two halves: the load goes through ``_borrow`` with the caller's own
+        object (not a ``bytes`` snapshot of it, which nothing could wipe),
+        and wiping that object afterwards changes nothing the key does.
+        """
         pk, sk = _fresh()
         storage = bytearray(sk)
+        borrowed: list[bool] = []
+        real_borrow = pb._borrow
+
+        def spy(secret: Any) -> Any:
+            borrowed.append(secret is storage)
+            return real_borrow(secret)
+
+        monkeypatch.setattr(pb, "_borrow", spy)
         key = pb.Ed25519SigningKey(storage)
+        assert borrowed == [True]
         sig_before = key.sign(b"borrowed")
         for i in range(len(storage)):
             storage[i] = 0
         assert key.sign(b"borrowed") == sig_before
         assert pb.native_ed25519_verify(sig_before, b"borrowed", pk)
         key.close()
+
+    def test_a_bytearray_seed_is_borrowed_and_never_snapshotted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The seed path used to go ``bytes(seed)`` into the keygen helper,
+        which returned a ``bytes`` seed || A — two immutable copies of the
+        secret no caller could wipe.  It now completes the seed in a ctypes
+        buffer the constructor owns and zeroes."""
+        pk, sk = _fresh()
+        seed = bytearray(sk[:32])
+        borrowed: list[bool] = []
+        real_borrow = pb._borrow
+
+        def spy(secret: Any) -> Any:
+            borrowed.append(secret is seed)
+            return real_borrow(secret)
+
+        def forbidden(*args: object, **kwargs: object) -> None:
+            raise AssertionError("seed load must not snapshot the seed into bytes")
+
+        monkeypatch.setattr(pb, "_borrow", spy)
+        monkeypatch.setattr(pb, "native_ed25519_keypair_from_seed", forbidden)
+        with pb.Ed25519SigningKey(seed) as key:
+            assert borrowed == [True]
+            assert key.public_key == pk
+            for i in range(len(seed)):
+                seed[i] = 0
+            assert key.sign(b"seeded") == pb.native_ed25519_sign(b"seeded", sk)
+
+    @pytest.mark.parametrize("wrap", [bytearray, memoryview, lambda m: memoryview(bytearray(m))])
+    def test_sign_accepts_every_bytes_like_message(self, wrap: Any) -> None:
+        _pk, sk = _fresh()
+        msg = b"any buffer will do" * 3
+        with pb.Ed25519SigningKey(sk) as key:
+            assert key.sign(wrap(msg)) == key.sign(msg)
+
+    @pytest.mark.parametrize("bad", ["text", 7, None, [1, 2, 3]])
+    def test_sign_refuses_a_non_buffer_message_with_type_error(self, bad: Any) -> None:
+        """INVARIANT-5: the refusal is the wrapper's, not a ctypes ArgumentError."""
+        _pk, sk = _fresh()
+        with pb.Ed25519SigningKey(sk) as key:
+            with pytest.raises(TypeError, match="bytes, bytearray or memoryview"):
+                key.sign(bad)
 
     def test_the_provider_hook_returns_the_same_signer(self) -> None:
         pk, sk = _fresh()
@@ -304,6 +363,52 @@ class TestLifetime:
             key.sign(b"no pct here")
         assert calls == ["pct"]
         key.close()
+
+    def test_the_seed_path_pairwise_tests_the_expanded_form_and_closes_on_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The INVARIANT-41 test signs with the object that will be used, so
+        it exercises the expanded form rather than a key it then discards;
+        and a failure leaves no open signer behind."""
+        pk, sk = _fresh()
+        seen: dict[str, Any] = {}
+
+        def capturing(sign_fn: Any, verify_fn: Any, secret: Any, public: Any, algo: str) -> None:
+            seen.update(public=public, algo=algo)
+            sig = sign_fn(b"probe", secret)
+            seen["verifies"] = verify_fn(b"probe", sig, public)
+            seen["matches_per_call"] = sig == pb.native_ed25519_sign(b"probe", sk)
+
+        monkeypatch.setattr(pb, "pairwise_test_signature", capturing)
+        with pb.Ed25519SigningKey(sk[:32]):
+            pass
+        assert seen == {"public": pk, "algo": "Ed25519", "verifies": True, "matches_per_call": True}
+
+        class RefusedError(Exception):
+            pass
+
+        def failing(*args: Any, **kwargs: Any) -> None:
+            raise RefusedError()
+
+        monkeypatch.setattr(pb, "pairwise_test_signature", failing)
+        with pytest.raises(RefusedError) as excinfo:
+            pb.Ed25519SigningKey(sk[:32])
+        # The traceback keeps the constructor's frame -- and so the half-built
+        # signer -- alive, so this is the object's state at the moment the
+        # exception propagated, before ``__del__`` could have closed it for
+        # the constructor.  Measured: without holding the frame, ``__del__``
+        # ran first and made the explicit close look load-bearing when it
+        # was not being exercised at all.
+        tb = excinfo.value.__traceback__
+        signers = []
+        while tb is not None:
+            candidate = tb.tb_frame.f_locals.get("self")
+            if isinstance(candidate, pb.Ed25519SigningKey):
+                signers.append(candidate)
+            tb = tb.tb_next
+        assert signers, "the constructor frame was not on the traceback"
+        assert all(s.closed for s in signers), "a signer whose pairwise test failed was left open"
+        assert all(s._expanded.raw == bytes(pb.ED25519_EXPANDED_KEY_BYTES) for s in signers)
 
     def test_a_64_byte_key_does_not_re_run_key_generation(
         self, monkeypatch: pytest.MonkeyPatch

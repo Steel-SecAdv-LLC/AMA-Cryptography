@@ -15,14 +15,14 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 
 # SHA3-256 digest of the package's .py files at build time (raw 32 bytes,
 # hex-encoded for embeddability).
-INTEGRITY_DIGEST_HEX = "ef01ae62fb73c707ab31db82c89e78c1905c31049fde8fca4834fcd01559e269"
+INTEGRITY_DIGEST_HEX = "b02781ff9a4934732f871e7afc1f242c7a3d18efd3a4b5a701cb1426ec3bfca5"
 
 # SHA3-256 digest of the native library (libama_cryptography) at build time.
 # This is what binds the shared object that performs every cryptographic
 # operation into the same signature that covers the .py files — without it the
 # signature attested to the Python wrapper only, and the implementation the
 # wrapper calls into was covered by nothing.
-INTEGRITY_NATIVE_DIGEST_HEX = "d95f5cc73e89c3472c56df7a1f6912b44fdc1664b1f8ace47af7efa4c1729d42"
+INTEGRITY_NATIVE_DIGEST_HEX = "8d0f3850d62a1ee75a60f18226a217d3eddd10d5c737df4a741b5809e0f078d6"
 
 # SHA3-256 digests of the compiled binding extensions at build time, keyed by
 # exact filename.  These modules contain compiled kernels and execute at import
@@ -32,8 +32,8 @@ INTEGRITY_NATIVE_DIGEST_HEX = "d95f5cc73e89c3472c56df7a1f6912b44fdc1664b1f8ace47
 # disabled), so the build-time digest is the runtime file's digest on every
 # platform.  Verified by ama_cryptography._self_test._check_binding_extensions.
 INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {
-    "dilithium_binding.cpython-311-x86_64-linux-gnu.so": "6b86452117eea45929c400efd5ca28c2fc230743887927536cc5170ddf9cfcea",
-    "ed25519_binding.cpython-311-x86_64-linux-gnu.so": "5a1567bcd5cc2e7b6e739a10f6a093e18c75fb713a1454204de5d8df60e32c96",
+    "dilithium_binding.cpython-311-x86_64-linux-gnu.so": "a010f794101ce9fa8b638fb66d495b0b8d5b1f2ec1abad21b873fdf73ad8a568",
+    "ed25519_binding.cpython-311-x86_64-linux-gnu.so": "60247ee564457c241250bce944331e4b3ed3368111fce319f3a11c2951109421",
     "hkdf_binding.cpython-311-x86_64-linux-gnu.so": "3cbca0664b900db2687a14fb595a849c2f44562c0be299c3d141f1f0f46d446a",
     "hmac_binding.cpython-311-x86_64-linux-gnu.so": "37ed081df78a4af6a6772b4e3acc32b207c90c7abe9f5796dc1602e90ebeb3eb",
     "math_engine.cpython-311-x86_64-linux-gnu.so": "eaebcc6f5247b404e62978ea9cb2303e76757452e09f651fd0fee02f0b5ff4e6",
@@ -41,12 +41,12 @@ INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {
 }
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "86d2b6b187419abdb94c6de933984ead08360584a2bb60e1111adb5afb93cbd4"
+INTEGRITY_PUBKEY_HEX = "d7fa567a89e18c7a8f76280b3e9e9e20a10dde465279e3909a3cd27cfff3f1aa"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "9065714426ca1667d63c424a41421d162acda1933adaba55840ab21b21c7707c7e49076451290eed3a7f243fa95c01b37321a788d37e592a827f32ccff5daa0f"
+INTEGRITY_SIGNATURE_HEX = "4351535daf76232708b1c552ac23217e31c7c18b20fbf3adf8e81817040850c2176f414332a81d9cc6179d701fc0488b7945fa4f1866152413c4d25c8ab8980f"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"

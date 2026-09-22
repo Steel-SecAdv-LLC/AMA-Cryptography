@@ -1368,10 +1368,14 @@ AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_k
  *                     corrupted record, reaches that input without a fault
  *                     injector.
  * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the stored public half
- *         is not the derived one. On that refusal all 64 signature bytes are
- *         written as zero rather than left untouched, so a caller that ignores
- *         the return code gets an unusable signature instead of a valid one
- *         produced under a public half it did not supply.
+ *         is not the derived one (also for a NULL argument or a
+ *         `message_len` above `SIZE_MAX - 64`); AMA_ERROR_MEMORY when a
+ *         message above the 4 KiB stack threshold cannot be buffered. On
+ *         every failing exit after the NULL checks, all 64 signature bytes
+ *         are written as zero rather than left untouched, so a caller that
+ *         ignores the return code gets an unusable signature instead of a
+ *         valid one produced under a public half it did not supply, or a
+ *         stale one left in a reused buffer.
  *
  * See the fixed-length buffer contract above.
  */
@@ -1444,7 +1448,8 @@ AMA_API ama_error_t ama_ed25519_expand_secret_key(
  * depend on the key.
  *
  * @param signature   Output. Caller MUST supply exactly 64 writable bytes;
- *                    all 64 are written. On refusal all 64 are zero.
+ *                    all 64 are written. On every failing exit after the
+ *                    NULL checks all 64 are zero.
  * @param message     Message to sign. Bounded by `message_len`, which IS
  *                    checked; a zero-length message is valid.
  * @param message_len Length of `message` in bytes.
@@ -1453,8 +1458,9 @@ AMA_API ama_error_t ama_ed25519_expand_secret_key(
  *                    as produced by `ama_ed25519_expand_secret_key`. No
  *                    length parameter.
  * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the tag does not
- *         verify (or an argument is NULL); AMA_ERROR_MEMORY when a message
- *         above the 4 KiB stack threshold cannot be buffered.
+ *         verify (or an argument is NULL, or `message_len` exceeds
+ *         `SIZE_MAX - 64`); AMA_ERROR_MEMORY when a message above the 4 KiB
+ *         stack threshold cannot be buffered.
  *
  * See the fixed-length buffer contract above.
  */

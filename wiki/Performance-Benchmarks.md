@@ -4,8 +4,7 @@
 
 Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the native C library via Python/ctypes unless noted.
 
-**Platform:** Linux x86-64 | **CPU:** 16 logical cores (AVX-512F/BW/DQ/VL/VBMI + VAES + VPCLMULQDQ) | **Python:** 3.11.15
-**Date:** 2026-04-25 | **ML-DSA-65 Backend:** native C (no OpenSSL, no liboqs)
+**Canonical-host tables (the hand-maintained tables below):** Linux x86-64 | **CPU:** 16 logical cores (AVX-512F/BW/DQ/VL/VBMI + VAES + VPCLMULQDQ) | **Python:** 3.11.15 | **Date:** 2026-04-25 | **ML-DSA-65 Backend:** native C (no OpenSSL, no liboqs). The AUTO-generated table further down carries its own provenance line (the committed `benchmark_runner.py` record: 2026-09-22, a 4-vCPU container) and is a different host.
 
 ---
 

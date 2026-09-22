@@ -253,6 +253,16 @@ if(AMA_USE_NATIVE_PQC)
         $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
 endif()
 
+# The same probe applied to the Ed25519 signing path: the clamped scalar and
+# the nonce prefix must not survive `ama_ed25519_expand_secret_key`,
+# `ama_ed25519_sign_expanded` (stack and heap paths) or `ama_ed25519_sign`.
+# Links in both PQC lanes.  Same flags and same skip code as the AEAD probe,
+# for the same reasons.
+add_ama_test(test_ed25519_stack_residue test_ed25519_stack_residue.c)
+set_tests_properties(test_ed25519_stack_residue PROPERTIES SKIP_RETURN_CODE 77)
+target_compile_options(test_ed25519_stack_residue PRIVATE
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+
 # The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
 # "exactly 32 / 64 readable bytes" — and nothing about alignment, so an
 # unaligned caller buffer is a legal call.  Until this test, every test in the

@@ -5324,20 +5324,24 @@ class Ed25519SigningKey:
     ``ama_ed25519_expand_secret_key``, and signs with
     ``ama_ed25519_sign_expanded``, which re-checks a SHA-512 tag binding the
     scalar, the nonce prefix and the public key instead of re-deriving.
-    Measured on the tree that introduced it, a signature costs 0.55x what the
-    per-call path costs; the signature bytes are identical (RFC 8032, pinned
-    by ``tests/test_ed25519_expanded_key.py`` against the RFC vectors, the
+    Measured on the tree that introduced it, the C entry point costs 0.55x
+    the per-call one and a signature through this object about 0.625x of
+    ``native_ed25519_sign`` (the difference is the ctypes call the two paths
+    share); the signature bytes are identical (RFC 8032, pinned by
+    ``tests/test_ed25519_expanded_key.py`` against the RFC vectors, the
     frozen oracle and the per-call path).
 
     Construction:
 
     * a 64-byte ``seed || A`` key is expanded directly; a public half that
       is not ``[a]B`` raises :class:`ValueError` and nothing is retained;
-    * a 32-byte seed goes through :func:`native_ed25519_keypair_from_seed`
-      first, so it pays the FIPS 140-3 pairwise-consistency test INVARIANT-41
-      requires of every seed-derived keypair, once, here, rather than on
-      every signature as the seed arms of ``crypto_api`` and
-      ``legacy_compat`` do.
+    * a 32-byte seed is completed to ``seed || A`` by ``ama_ed25519_keypair``
+      in a ctypes buffer this constructor owns and zeroes before returning,
+      so no ``bytes`` copy of the seed-derived key is ever made; it then pays
+      the FIPS 140-3 pairwise-consistency test INVARIANT-41 requires of every
+      seed-derived keypair, once, here, on the expanded form it will sign
+      with, rather than on every signature as the seed arms of
+      ``crypto_api`` and ``legacy_compat`` do.
 
     Lifetime (INVARIANT-6): the expanded form holds the private scalar. It
     lives in a ctypes buffer this object owns, is zeroed by :meth:`close`
@@ -5361,17 +5365,31 @@ class Ed25519SigningKey:
         self._expanded: Any = None
         self._public_key = b""
 
-        if len(secret_key) == 32:
-            _, secret_key = native_ed25519_keypair_from_seed(bytes(secret_key))
-        elif len(secret_key) != ED25519_SECRET_KEY_BYTES:
+        if len(secret_key) not in (32, ED25519_SECRET_KEY_BYTES):
             raise ValueError(
                 "Ed25519 secret key must be 32 bytes (seed) or "
                 f"{ED25519_SECRET_KEY_BYTES} bytes (seed || public key), got {len(secret_key)}"
             )
 
         expanded = ctypes.create_string_buffer(ED25519_EXPANDED_KEY_BYTES)
-        # INVARIANT-6: borrow the caller's storage rather than snapshot it.
-        rc = _native_lib.ama_ed25519_expand_secret_key(expanded, _borrow(secret_key))
+        seed_derived = len(secret_key) == 32
+        # A seed is completed to seed || A in a buffer this frame owns and
+        # wipes (INVARIANT-6); a 64-byte key is borrowed from the caller's
+        # storage rather than snapshotted.
+        sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES) if seed_derived else None
+        try:
+            if sk_buf is not None:
+                pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
+                ctypes.memmove(sk_buf, _borrow(secret_key), 32)
+                rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+                if rc != 0:
+                    raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+                rc = _native_lib.ama_ed25519_expand_secret_key(expanded, sk_buf)
+            else:
+                rc = _native_lib.ama_ed25519_expand_secret_key(expanded, _borrow(secret_key))
+        finally:
+            if sk_buf is not None:
+                ctypes.memset(sk_buf, 0, ED25519_SECRET_KEY_BYTES)
         if rc != 0:
             # The C side has already zeroed the buffer on refusal; nothing of
             # the key is retained either way.
@@ -5384,6 +5402,22 @@ class Ed25519SigningKey:
             ED25519_EXPANDED_PUBLIC_KEY_OFFSET : ED25519_EXPANDED_PUBLIC_KEY_OFFSET + 32
         ]
         self._closed = False
+        if seed_derived:
+            # INVARIANT-41: a seed-derived keypair is released only after it
+            # signs and verifies.  Run on the expanded form this object will
+            # sign with; a failure puts the module in the error state and
+            # this object is closed before the exception propagates.
+            try:
+                pairwise_test_signature(
+                    lambda m, _k: self.sign(m),
+                    lambda m, s, p: native_ed25519_verify(s, m, p),
+                    None,
+                    self._public_key,
+                    "Ed25519",
+                )
+            except BaseException:
+                self.close()
+                raise
 
     @property
     def public_key(self) -> bytes:
@@ -5394,8 +5428,13 @@ class Ed25519SigningKey:
     def closed(self) -> bool:
         return self._closed
 
-    def sign(self, message: bytes) -> bytes:
+    def sign(self, message: _BufferInput) -> bytes:
         """Sign ``message``; the bytes :func:`native_ed25519_sign` would return.
+
+        ``message`` is ``bytes``, ``bytearray`` or a ``memoryview``; anything
+        else raises :class:`TypeError` here rather than as a ctypes argument
+        error (INVARIANT-5).  The message is public, so a mutable input is
+        passed by value.
 
         Raises :class:`RuntimeError` if the key is closed, or if the expanded
         form no longer verifies against its tag — a corruption of this
@@ -5403,6 +5442,12 @@ class Ed25519SigningKey:
         signature rather than signing under a public half it did not derive.
         """
         check_crypto_permitted()
+        if isinstance(message, (bytearray, memoryview)):
+            message = bytes(message)
+        elif not isinstance(message, bytes):
+            raise TypeError(
+                f"message must be bytes, bytearray or memoryview, got {type(message).__name__}"
+            )
         if self._closed:
             raise RuntimeError("Ed25519 signing key is closed")
         sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)

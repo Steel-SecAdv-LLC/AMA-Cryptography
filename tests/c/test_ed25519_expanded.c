@@ -276,6 +276,17 @@ static int run_suite(const char *backend_label) {
                 memcmp(sig_a, sig_b, 64) == 0,
                 "sign_expanded: deterministic");
 
+    /* An unrepresentable length is refused before any secret is touched,
+     * and the refusal still writes all 64 signature bytes as zero. */
+    memset(sig_a, 0xA5, 64);
+    TEST_ASSERT(ama_ed25519_sign_expanded(sig_a, msg, SIZE_MAX, expanded) == AMA_ERROR_INVALID_PARAM &&
+                all_zero(sig_a, 64),
+                "sign_expanded: an unrepresentable message length is refused with a zeroed signature");
+    memset(sig_a, 0xA5, 64);
+    TEST_ASSERT(ama_ed25519_sign(sig_a, msg, SIZE_MAX, sk) == AMA_ERROR_INVALID_PARAM &&
+                all_zero(sig_a, 64),
+                "sign: an unrepresentable message length is refused with a zeroed signature");
+
     ama_secure_memzero(expanded, sizeof(expanded));
     ama_secure_memzero(sk, sizeof(sk));
     free(msg);

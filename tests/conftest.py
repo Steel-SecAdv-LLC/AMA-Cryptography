@@ -374,13 +374,13 @@ def master_seed() -> bytes:
 
 
 @pytest.fixture
-def test_key_material() -> bytes:
+def sample_key_material() -> bytes:
     """Provide standard 32-byte key material for storage tests."""
     return b"test-key-material-32-bytes-long!"
 
 
 @pytest.fixture
-def test_password() -> str:
+def sample_password() -> str:
     """Provide a standard test password."""
     return "test-password-secure-123"  # nosec B105 -- test fixture password, not a production secret (CONF-001)
 
@@ -433,11 +433,11 @@ def rotation_manager_long_period() -> Any:
 
 
 @pytest.fixture
-def secure_storage(temp_storage_path: Path, test_password: str) -> Any:
+def secure_storage(temp_storage_path: Path, sample_password: str) -> Any:
     """Provide a SecureKeyStorage instance with password-derived key."""
     from ama_cryptography.key_management import SecureKeyStorage
 
-    return SecureKeyStorage(temp_storage_path, master_password=test_password)
+    return SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
 
 # =============================================================================

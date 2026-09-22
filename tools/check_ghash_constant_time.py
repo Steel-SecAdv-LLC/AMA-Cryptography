@@ -286,6 +286,16 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: environment cannot reproduce itself, so a host with real measurement noise
 #: is diagnosed instead of silently absorbed.
 #:
+#: `ed25519-sign-expanded` is zero in the count lane for a reason that makes
+#: the count lane alone insufficient for it: the target's secret-dependent
+#: decision is the tag-mismatch mask, and a valid expanded key takes the same
+#: side of it on every call in every key class, so a branch on that mask
+#: would retire the same instructions for both classes and this table could
+#: not see it.  The taint lane can — the mask is derived from tainted bytes,
+#: and a conditional on it is reported wherever it lands — which is why that
+#: target's taint driver is the load-bearing witness and
+#: tests/test_ghash_constant_time_gate.py requires it to exist.
+#:
 #: `nistp-ecdsa` reached zero by construction rather than by luck: its driver
 #: now signs with `ama_nistp_ecdsa_sign_raw`, identical arithmetic to the DER
 #: entry point with a fixed-width 64-octet result, so the DER encoder's
