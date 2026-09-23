@@ -2494,7 +2494,7 @@ FIPS 140-3 requires a conditional self-test on every asymmetric key
 generation: the fresh keypair must demonstrate that its halves correspond
 before the caller receives it. The helpers existed
 (`pairwise_test_signature` / `pairwise_test_kem`) and were wired into **no**
-key-generation path — the 2026-08 audit's finding #5. A keypair whose halves
+key-generation path, so no keygen performed the required test. A keypair whose halves
 do not correspond (a fault mid-generation, a corrupted caller-supplied seed,
 a miscomputed BIP32 modular sum) was handed out and failed later, far from
 the generation event that caused it.
@@ -2586,7 +2586,7 @@ here rather than averaged away.
 ## INVARIANT-42 — The Declared ctypes ABI Must Match the C Header, and the Loaded Library Must Match the Package
 
 A ctypes symbol probe proves a name is exported — not its arity, not its
-parameter types, not its return convention. The 2026-08 audit's finding #7:
+parameter types, not its return convention. The gap this invariant closes:
 a stale major-version library, or any object exporting `ama_`-prefixed
 names, satisfied every `hasattr` check and would corrupt the call frame at
 the first mismatched invocation. A shared object carries no parameter

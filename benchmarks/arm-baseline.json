@@ -897,6 +897,10 @@
       {
         "path": "ama_cryptography/__main__.py",
         "reason": "The `python -m ama_cryptography` entry point, rewritten on argparse in the 2026-09-22 second-pass audit so an unexpected argument is refused instead of ignored. Measured rather than asserted: `benchmarks/benchmark_runner.py` imports `ama_cryptography`, `crypto_api`, `legacy_compat` and `pqc_backends` and never `__main__`, and `__main__` imports nothing a benchmarked row calls; the module runs only when the package is executed as a script, which no floored row does. It cannot move a floor."
+      },
+      {
+        "path": "src/c/internal/ama_stack_wipe.h",
+        "reason": "Internal header for ama_stack_wipe_below(), the 8 KiB dead-stack wipe the four Ed25519 secret entry points (keypair, sign, expand_secret_key, sign_expanded) now run at exit, added in the 2026-09-23 third review pass after the residue probe found clamped-scalar limbs 4.7 KiB below the caller under AArch64 UBSan, beyond the public 4 KiB wipe. Measured rather than asserted, with build/bin/benchmark_c_raw (Release, gcc 13.3.0, x86-64 container, the median of 3 alternating runs against dcc8ab9): Ed25519 KeyGen 11.927 -> 12.150 us (+1.87%), Sign 24.761 -> 24.934 us (+0.70%), Expand Key +0.93%, Sign (expanded) +0.70%, Verify and Double-ScalarMult within noise (-1.65%, -0.45%). Two orders of magnitude inside every Ed25519 floor's tolerance; it cannot move a floor."
       }
     ]
   },

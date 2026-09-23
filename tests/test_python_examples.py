@@ -435,7 +435,7 @@ class TestTheHarnessReadsWhatTheProgramWrote:
 
 @pytest.mark.requires_example_deps
 class TestFlaskIntegrationSurface:
-    """Attack-surface pins for the Flask demo (2026-08-31 v5 audit, item 20).
+    """Attack-surface pins for the Flask demo (hardened in commit 17e5d79d).
 
     The demo listens on a socket, so it is reviewed as an attack surface.
     ``/api/verify`` used ``request.get_json()`` in ``all(k in data ...)`` with

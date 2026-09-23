@@ -135,8 +135,13 @@ MIN_FILES = 20
 def _git_tracked() -> frozenset[str]:
     """Every path `git ls-files` reports, repo-relative and POSIX-separated.
 
-    This function is NAMED for git tracking and consulted neither git nor
-    `.gitignore`: it was `root.rglob("*")`.  One protected root is
+    It asks git: `git ls-files -z`, NUL-separated so a non-ASCII name is not
+    C-quoted into a string that matches no file.  `_all_tracked_files` walks a
+    protected root and keeps only the paths named here, so a file git does not
+    track — including one `.gitignore` excludes — is out of scope.
+
+    That is a correction.  The enumeration this replaced was `root.rglob("*")`,
+    which consulted neither git nor `.gitignore`.  One protected root is
     `nist_vectors/`, whose own `.gitignore` enumerates twelve files the
     tooling deliberately GENERATES there — the ten ACVP JSONs
     `fetch_vectors.py` downloads, `results.json` from `run_vectors.py`, and

@@ -460,6 +460,21 @@ AMA_API void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
                                uint8_t out[32]);
 
 /**
+ * @brief One-shot SHA-256 (FIPS 180-4): hash @p inlen bytes to 32.
+ *
+ * Exported because the Python layer binds it (`pqc_backends.native_sha256`).
+ * It was exported before this declaration existed — declared `AMA_API` only
+ * in the uninstalled `src/c/ama_sha256.h` — so a C consumer had an ABI symbol
+ * with no published prototype, and the MinGW `.def`, generated from the
+ * installed headers' declarations, could not name it.
+ *
+ * @param out   Output: 32-byte digest
+ * @param in    Message (may be NULL when @p inlen is 0)
+ * @param inlen Message length in bytes
+ */
+AMA_API void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen);
+
+/**
  * @brief Lock memory pages to prevent swapping to disk, and mark them
  *        non-dumpable (MADV_DONTDUMP where the platform has it).
  *

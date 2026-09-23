@@ -17,7 +17,6 @@ import io
 import ast
 import os
 import re
-import subprocess
 import sys
 import tokenize
 from pathlib import Path
@@ -523,16 +522,20 @@ def tracked_python_files(root: Path) -> list[Path]:
     ``*.egg-info/``, whichever ``build-*`` a local run left behind), and that
     list is exactly the kind of thing that drifts and quietly narrows the check.
     Same discovery ``check_type_check_scope.py`` uses, for the same reason.
+
+    Enumerated through ``tools/_repo.py``, which lists with ``-z``: the bare
+    ``git ls-files`` this used to run C-quoted a non-ASCII name
+    (``"zz_\\303\\251.py"``), the quoted path matched no file, and a bare
+    ``# noqa`` in ``zz_é.py`` was never read.  The helper raises
+    ``TrackedFilesError`` (a ``RuntimeError``) if git fails or a tracked path is
+    not a regular file on disk.
     """
-    proc = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "*.py"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"git ls-files failed ({proc.returncode}): {proc.stderr.strip()}")
-    return [Path(line) for line in proc.stdout.splitlines() if line.strip()]
+    repo = str(Path(__file__).resolve().parent.parent)
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from tools._repo import tracked_names
+
+    return [Path(name) for name in tracked_names(root, "*.py")]
 
 
 def main() -> int:

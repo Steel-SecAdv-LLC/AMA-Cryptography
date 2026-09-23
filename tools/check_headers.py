@@ -14,8 +14,9 @@ the first thing in the file, above any module docstring. Existing license
 text is removed from wherever it sits, including from inside a C doc block
 that also carries @file/@brief content, which is preserved.
 
-Files are enumerated with `git ls-files`, selected by extension or exact
-name, then filtered through EXEMPTIONS.
+Files are enumerated with `git ls-files -z` (through tools/_repo.py, which
+fails closed on a tracked path that is not a regular file on disk), selected
+by extension or exact name, then filtered through EXEMPTIONS.
 
 Exit codes:
     0  every selected file carries the canonical header
@@ -30,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import subprocess
 import sys
 from pathlib import Path
 
@@ -294,15 +294,20 @@ def is_exempt(rel: str) -> bool:
 
 
 def tracked_files(root: Path) -> list[str]:
-    """Repo-relative paths of every file tracked by git under ``root``."""
-    result = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return [p for p in result.stdout.split("\0") if p]
+    """Repo-relative POSIX paths of every file tracked by git under ``root``.
+
+    Via ``tools/_repo.py``: ``-z`` listing decoded with ``os.fsdecode`` rather
+    than the locale codec ``text=True`` applied, and a tracked path that is not
+    a regular file on disk raises instead of being skipped (the ``is_file()``
+    filter in :func:`selected_files` used to drop it without a word).  A
+    working-tree deletion git confirms is the one path left out.
+    """
+    repo = str(Path(__file__).resolve().parent.parent)
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from tools._repo import tracked_names
+
+    return tracked_names(root)
 
 
 def selected_files(root: Path) -> list[tuple[str, str]]:
@@ -313,8 +318,6 @@ def selected_files(root: Path) -> list[tuple[str, str]]:
             continue
         style = style_for(rel)
         if style is None:
-            continue
-        if not (root / rel).is_file():
             continue
         out.append((rel, style))
     return sorted(out)

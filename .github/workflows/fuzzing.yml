@@ -309,9 +309,9 @@ jobs:
           exit $rc
 
       - name: Generated seed corpora must match their generators
-        # Two corpora are produced by a script rather than by hand, so that
-        # what each seed covers is stated and reproducible.  Both scripts have
-        # a --check mode and NEITHER was wired to anything, which makes the
+        # Three corpora are produced by a script rather than by hand, so that
+        # what each seed covers is stated and reproducible.  Each script has
+        # a --check mode and NONE was wired to anything, which makes the
         # generator and the committed bytes free to drift apart silently —
         # and a corpus that no longer matches its documented rationale is a
         # corpus whose rationale is fiction.  This is the step that notices.

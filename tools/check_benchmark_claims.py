@@ -37,7 +37,11 @@ than no gate. What it enforces instead is everything that is *not* hardware:
    compared. A hand-edited number cannot survive a push.
 2. **Every documented regression floor matches the JSON that enforces it**,
    by benchmark identifier and architecture label. This is the rule that would
-   have caught 76,215 and 70,496.
+   have caught 76,215 and 70,496. Both are resolved from the claim itself —
+   its clause, sentence or table row, widening to paragraph, blockquote and
+   section only while nothing nearer names one — and the value must equal THAT
+   benchmark's floor on THAT architecture. A floor-shaped figure that cannot
+   be attributed to exactly one of each fails: it cannot be checked.
 3. **Provenance is present.** A record that documentation draws numbers from
    must carry the command, host, units and sampling method that make it
    reproducible. A record missing any of them is rejected, so the next person
@@ -106,12 +110,48 @@ LATENCY_END = "<!-- AUTO-PIPELINE-LATENCY-END -->"
 BENCH_START = "<!-- AUTO-BENCHMARK-TABLE-START -->"
 BENCH_END = "<!-- AUTO-BENCHMARK-TABLE-END -->"
 
-#: Documentation lines asserting a regression floor, e.g.
-#: "the enforced floor is 215,299 ops/sec on x86-64".
-_FLOOR_CLAIM = re.compile(
-    r"\bfloor\b[^.\n]{0,120}?\b(?P<value>\d{1,3}(?:,\d{3})+|\d{4,})\b" r"[^.\n]{0,60}?\bops/sec\b",
+#: A throughput-shaped figure: comma-grouped, or four or more bare digits.  The
+#: look-arounds keep it from starting inside ``1.8469`` or a ``2026-09-22`` date.
+_NUMBER = r"(?<![\w.,-])(?P<value>\d{1,3}(?:,\d{3})+|\d{4,})(?![\w]|[.,-]\d)"
+
+#: The ways a sentence asserts that a figure IS a floor.  Each is anchored on
+#: the word "floor" and on the figure, so a sentence that merely mentions a
+#: floor near a number it describes otherwise -- "the floor was first set by a
+#: derivation (70,496 / 1.8469 = 38,170)" -- is not read as a claim.
+_FLOOR_CLAIMS: tuple[re.Pattern[str], ...] = (
+    # "the floor for X on Y is 215,299 ops/sec" -- the form this gate has
+    # always read, unchanged so nothing it caught before now escapes.
+    re.compile(r"\bfloors?\b[^.\n]{0,120}?" + _NUMBER + r"[^.\n]{0,60}?\bops/sec\b", re.IGNORECASE),
+    # "the enforced floor is 285,176" -- the figure is the predicate of
+    # "floor", with only copulas and markup between them; no unit needed.
+    re.compile(r"\bfloors?\b(?:[\s*`:=]|\b(?:is|are|of|at|value)\b)*" + _NUMBER, re.IGNORECASE),
+    # "a 38,811 ops/sec floor", "215,299 ops/sec is the enforced floor".
+    re.compile(
+        _NUMBER + r"(?:\s*ops/sec)?[\s*`]+(?:(?:is|are)\s+the\s+)?(?:[\w`*-]+\s+){0,2}?floors?\b",
+        re.IGNORECASE,
+    ),
+)
+
+#: Architecture designations, keyed by the label this gate files floors under.
+#: ``baseline.json`` is the x86-64 ledger only when it is not the tail of
+#: ``arm-baseline.json``.
+_ARCHITECTURES: dict[str, re.Pattern[str]] = {
+    "x86-64": re.compile(r"x86[-_]64|\bamd64\b|(?<![\w-])baseline\.json|ubuntu-latest", re.I),
+    "aarch64": re.compile(r"\baarch64\b|\barm64\b|arm-baseline\.json|ubuntu-24\.04-arm", re.I),
+}
+
+#: After a claim, a further figure in the same sentence is a claim too when it
+#: is itself labelled with an architecture -- "... 215,299 ops/sec on x86-64
+#: and 285,176 on aarch64".  This is the phrasing the first version of the gate
+#: never parsed: no "floor" before it and no "ops/sec" after it.
+_LABELLED_FIGURE = re.compile(
+    _NUMBER + r"(?:\s*\*\*)?(?:\s*ops/sec)?(?:\s*\*\*)?\s*(?:\bon\b|\bfor\b|\()\s*`?\s*"
+    r"(?:benchmarks/)?(?:x86[-_]64|amd64|aarch64|arm64|arm-baseline\.json|baseline\.json)",
     re.IGNORECASE,
 )
+
+#: "not 76,215" -- a figure named in order to refute it is not a floor claim.
+_REFUTED = re.compile(r"\bnot\s*(?:\*\*)?\s*$", re.IGNORECASE)
 
 # A `_LATENCY_CLAIM` regex stood here, described as being "for the units
 # rule". No units rule was ever written, and measurement says one of that shape
@@ -299,44 +339,322 @@ def check_generated_tables(report: Report, repo: Path, results: dict[str, Any]) 
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _Block:
+    """A paragraph, list item or table, with the enclosing context it resolves in."""
+
+    kind: str  # "para" or "table"
+    lines: tuple[tuple[int, str], ...]  # (1-based line number, text sans quote marker)
+    quote: Optional[int]  # blockquote run the block sits in, if any
+    section: int  # heading-delimited section index
+
+
+_QUOTE_PREFIX = re.compile(r"^\s*>\s?")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.)\s")
+_HEADING = re.compile(r"^\s*#{1,6}\s")
+
+
+def _blocks(text: str) -> list[_Block]:
+    """Split a Markdown page into paragraphs, list items and tables.
+
+    Line numbers are preserved (generated blocks are blanked, not deleted), so
+    a failure names the line a reader has to fix.
+    """
+    raw = text.splitlines()
+    skip = False
+    lines: list[Optional[str]] = []
+    for original in raw:
+        if LATENCY_START in original or BENCH_START in original:
+            skip = True
+        # Generated blocks are re-derived by check_generated_tables; blank
+        # them here so one defect is not reported twice.
+        lines.append(None if skip else original)
+        if LATENCY_END in original or BENCH_END in original:
+            skip = False
+
+    blocks: list[_Block] = []
+    section = 0
+    quote_run = -1
+    in_quote = False
+    current: list[tuple[int, str]] = []
+    current_kind = "para"
+    current_quote: Optional[int] = None
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            blocks.append(_Block(current_kind, tuple(current), current_quote, section))
+        current = []
+
+    for number, line in enumerate(lines, start=1):
+        if line is None:
+            flush()
+            in_quote = False
+            continue
+        quoted = bool(_QUOTE_PREFIX.match(line))
+        if quoted and not in_quote:
+            quote_run += 1
+        if quoted != in_quote:
+            flush()
+        in_quote = quoted
+        body = _QUOTE_PREFIX.sub("", line, count=1) if quoted else line
+        if not body.strip():
+            flush()
+            continue
+        if _HEADING.match(body):
+            flush()
+            section += 1
+            current_kind, current_quote = "para", (quote_run if quoted else None)
+            current = [(number, body.strip())]
+            flush()
+            continue
+        kind = "table" if body.lstrip().startswith("|") else "para"
+        if current and (kind != current_kind or (kind == "para" and _LIST_ITEM.match(body))):
+            flush()
+        if not current:
+            current_kind, current_quote = kind, (quote_run if quoted else None)
+        current.append((number, body.strip()))
+    flush()
+    return blocks
+
+
+def _join(block: _Block) -> tuple[str, list[tuple[int, int]]]:
+    """The block as one string, with (offset, line number) marks."""
+    parts: list[str] = []
+    marks: list[tuple[int, int]] = []
+    offset = 0
+    for number, content in block.lines:
+        marks.append((offset, number))
+        parts.append(content)
+        offset += len(content) + 1
+    return " ".join(parts), marks
+
+
+def _line_at(marks: list[tuple[int, int]], offset: int) -> int:
+    line = marks[0][1]
+    for start, number in marks:
+        if start > offset:
+            break
+        line = number
+    return line
+
+
+def _sentences(text: str) -> list[tuple[int, str]]:
+    """(offset, sentence) pairs; a full stop inside ``1.8469`` does not split."""
+    spans: list[tuple[int, str]] = []
+    start = 0
+    for boundary in re.finditer(r"(?<=[.!?])\s+", text):
+        spans.append((start, text[start : boundary.start()]))
+        start = boundary.end()
+    spans.append((start, text[start:]))
+    return [(offset, sentence) for offset, sentence in spans if sentence.strip()]
+
+
+def _benchmark_patterns(names: set[str]) -> dict[str, re.Pattern[str]]:
+    """``hmac_sha3_256`` also matches ``ama_hmac_sha3_256`` and ``HMAC-SHA3-256``.
+
+    The trailing guard keeps ``ed25519_sign`` from matching inside
+    ``ed25519_sign_expanded``: a name continues through ``_`` or ``-``.
+    """
+    patterns: dict[str, re.Pattern[str]] = {}
+    for name in names:
+        stem = name[4:] if name.startswith("ama_") else name
+        body = r"[-_]".join(re.escape(token) for token in stem.split("_"))
+        patterns[name] = re.compile(
+            r"(?<![A-Za-z0-9])(?:ama[-_])?" + body + r"(?![A-Za-z0-9]|[-_][A-Za-z0-9])",
+            re.IGNORECASE,
+        )
+    return patterns
+
+
+def _resolve(
+    patterns: dict[str, re.Pattern[str]], contexts: list[tuple[str, str]]
+) -> tuple[Optional[str], str]:
+    """The one name the nearest context that names any names, or why not.
+
+    Nearest first.  A context naming two is ambiguous and is NOT resolved by a
+    wider one: widening past an ambiguity is guessing.
+    """
+    for label, text in contexts:
+        found = sorted(name for name, pattern in patterns.items() if pattern.search(text))
+        if len(found) == 1:
+            return found[0], label
+        if len(found) > 1:
+            return None, f"its {label} names {', '.join(found)}"
+    return None, "nothing around it names one"
+
+
+@dataclass(frozen=True)
+class FloorClaim:
+    path: str
+    line: int
+    value: str
+    benchmark: Optional[str]
+    architecture: Optional[str]
+    why_unattributed: str
+    excerpt: str
+
+
+def extract_floor_claims(text: str, path: str, benchmarks: set[str]) -> list[FloorClaim]:
+    """Every figure a page asserts to be a regression floor, attributed.
+
+    Identity is resolved from the claim outward -- the text between this figure
+    and the next claimed one, then its sentence (or table row), then its
+    paragraph, blockquote and section -- and the nearest context naming exactly
+    one benchmark (or architecture) decides.
+    """
+    bench_patterns = _benchmark_patterns(benchmarks)
+    blocks = _blocks(text)
+    quotes: dict[int, str] = {}
+    sections: dict[int, str] = {}
+    for block in blocks:
+        joined = _join(block)[0]
+        sections[block.section] = sections.get(block.section, "") + " " + joined
+        if block.quote is not None:
+            quotes[block.quote] = quotes.get(block.quote, "") + " " + joined
+
+    claims: list[FloorClaim] = []
+
+    def attribute(
+        line: int,
+        value: str,
+        bench_contexts: list[tuple[str, str]],
+        arch_contexts: list[tuple[str, str]],
+        excerpt: str,
+    ) -> None:
+        bench, bench_why = _resolve(bench_patterns, bench_contexts)
+        arch, arch_why = _resolve(_ARCHITECTURES, arch_contexts)
+        why = []
+        if bench is None:
+            why.append(f"no benchmark: {bench_why}")
+        if arch is None:
+            why.append(f"no architecture: {arch_why}")
+        claims.append(FloorClaim(path, line, value, bench, arch, "; ".join(why), excerpt))
+
+    def scan(
+        sentence: str,
+        marks: list[tuple[int, int]],
+        base: int,
+        label: str,
+        wider: list[tuple[str, str]],
+    ) -> None:
+        found: dict[int, str] = {}
+        for pattern in _FLOOR_CLAIMS:
+            for match in pattern.finditer(sentence):
+                found.setdefault(match.start("value"), match.group("value"))
+        if not found:
+            return
+        first = min(found)
+        for match in _LABELLED_FIGURE.finditer(sentence):
+            position = match.start("value")
+            if position > first and not _REFUTED.search(sentence[:position]):
+                found.setdefault(position, match.group("value"))
+        ordered = sorted(found)
+        for index, position in enumerate(ordered):
+            end = ordered[index + 1] if index + 1 < len(ordered) else len(sentence)
+            own = [(label, sentence)]
+            attribute(
+                _line_at(marks, base + position),
+                found[position],
+                own + wider,
+                [("clause", sentence[position:end]), *own, *wider],
+                sentence,
+            )
+
+    for block in blocks:
+        section = ("section", sections[block.section])
+        if block.kind == "table":
+            # A column headed as a floor in ops/sec makes every figure in it a
+            # claim; the row names the benchmark, the header the architecture.
+            header = [cell.strip() for cell in block.lines[0][1].strip("|").split("|")]
+            columns = [
+                index
+                for index, cell in enumerate(header)
+                if re.search(r"\bfloor", cell, re.I) and re.search(r"ops/s", cell, re.I)
+            ]
+            for number, row in block.lines[2:]:
+                cells = [cell.strip() for cell in row.strip("|").split("|")]
+                for index in columns:
+                    if index >= len(cells):
+                        continue
+                    for match in re.finditer(_NUMBER, cells[index]):
+                        attribute(
+                            number,
+                            match.group("value"),
+                            [("row", row), section],
+                            [("column header", header[index]), ("row", row), section],
+                            row,
+                        )
+            # Outside such a column a row is prose: "floor is N ops/sec" in a
+            # cell is a claim, attributed from its row outward.
+            if not columns:
+                for number, row in block.lines:
+                    scan(row, [(0, number)], 0, "row", [section])
+            continue
+
+        joined, marks = _join(block)
+        wider: list[tuple[str, str]] = [("paragraph", joined)]
+        if block.quote is not None:
+            wider.append(("blockquote", quotes[block.quote]))
+        wider.append(section)
+        for start, sentence in _sentences(joined):
+            scan(sentence, marks, start, "sentence", wider)
+    return claims
+
+
 def check_documented_floors(
     report: Report, repo: Path, x86: dict[str, Any], arm: dict[str, Any]
 ) -> None:
-    """Any ops/sec figure documented as a *floor* must be one."""
-    known = {
-        float(entry["baseline_value"])
-        for baseline in (x86, arm)
-        for entry in _floors(baseline).values()
-        if isinstance(entry.get("baseline_value"), (int, float))
-    }
-    if not known:
+    """A figure documented as a floor must be THAT benchmark's floor on THAT architecture.
+
+    Matching a value against every floor in both ledgers -- which this did
+    until 2026-09 -- accepts HMAC's 215,299 cited as the ed25519_sign floor, or
+    an x86-64 figure labelled aarch64.  And a floor-shaped figure the gate
+    cannot attribute to one benchmark and one architecture fails rather than
+    passing: a claim that cannot be checked is not evidence it is right.
+    """
+    floors: dict[tuple[str, str], float] = {}
+    for architecture, baseline in (("x86-64", x86), ("aarch64", arm)):
+        for name, entry in _floors(baseline).items():
+            if isinstance(entry.get("baseline_value"), (int, float)):
+                floors[(architecture, name)] = float(entry["baseline_value"])
+    if not floors:
         report.fail("no floors could be read from the baseline JSON files")
         return
+    benchmarks = {name for _, name in floors}
 
     for path in sorted(list(repo.glob("*.md")) + list(repo.glob("wiki/*.md"))):
         if path.name == "CHANGELOG.md":
             continue
-        text = path.read_text(encoding="utf-8")
-        # Generated blocks are re-derived above; skip them here so one defect
-        # is not reported twice.
-        for start, end in ((LATENCY_START, LATENCY_END), (BENCH_START, BENCH_END)):
-            block = _extract_block(text, start, end)
-            if block is not None:
-                text = text.replace(block, "")
-        for number, raw in enumerate(text.splitlines(), start=1):
-            line = raw.strip()
-            for match in _FLOOR_CLAIM.finditer(line):
-                value = float(match.group("value").replace(",", ""))
-                if value in known:
-                    report.ok()
-                    continue
+        relative = str(path.relative_to(repo))
+        for claim in extract_floor_claims(path.read_text(encoding="utf-8"), relative, benchmarks):
+            where = f"{claim.path}:{claim.line}"
+            excerpt = f"\n      {claim.excerpt[:200]}"
+            if claim.benchmark is None or claim.architecture is None:
                 report.fail(
-                    f"{path.relative_to(repo)}:{number} documents a regression floor "
-                    f"of {match.group('value')} ops/sec. No entry in "
-                    f"{X86_BASELINE_JSON} or {ARM_BASELINE_JSON} carries that "
-                    "value, so it is enforcing nothing.\n"
-                    f"      {line[:150]}"
+                    f"{where} documents a regression floor of {claim.value} that "
+                    f"cannot be attributed ({claim.why_unattributed}). Name the "
+                    "benchmark identifier and the architecture in the claim, so "
+                    "it can be checked against the ledger that enforces it." + excerpt
                 )
+                continue
+            expected = floors.get((claim.architecture, claim.benchmark))
+            ledger = X86_BASELINE_JSON if claim.architecture == "x86-64" else ARM_BASELINE_JSON
+            if expected is None:
+                report.fail(
+                    f"{where} documents a {claim.architecture} floor of {claim.value} "
+                    f"for {claim.benchmark}, which has no floor in {ledger}." + excerpt
+                )
+                continue
+            if float(claim.value.replace(",", "")) != expected:
+                report.fail(
+                    f"{where} documents the {claim.architecture} {claim.benchmark} "
+                    f"floor as {claim.value} ops/sec; {ledger} enforces "
+                    f"{expected:,.0f}. A floor cited against the wrong benchmark "
+                    "or architecture is enforcing nothing." + excerpt
+                )
+                continue
+            report.ok()
 
 
 def check_measured_against_floor(

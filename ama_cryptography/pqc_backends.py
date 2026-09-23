@@ -2869,7 +2869,7 @@ _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED: bool = bool(
 )
 
 # ---------------------------------------------------------------------------
-# ABI version handshake (audit finding #7 close-out).
+# ABI version handshake (INVARIANT-42, runtime half).
 #
 # A ctypes symbol probe proves a NAME is exported, not that the object behind
 # it implements this package's ABI: a stale major-version library, or a
@@ -3529,11 +3529,14 @@ class AmaContext:
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len
             )
         )
-        if rc == 0:
-            # FIPS 140-3 pairwise consistency test (INVARIANT-41), run with
-            # the context's OWN sign/verify or encaps/decaps so the algorithm
-            # under test is exactly the one that generated the keys.
-            self._keypair_pairwise_test(public_key, secret_key)
+        if rc != 0:
+            return rc
+        # FIPS 140-3 pairwise consistency test (INVARIANT-41), run with the
+        # context's OWN sign/verify or encaps/decaps so the algorithm under
+        # test is exactly the one that generated the keys.  Unconditional on
+        # the success path, so tools/check_keygen_pct.py can see that no path
+        # releases a keypair without it.
+        self._keypair_pairwise_test(public_key, secret_key)
         return rc
 
     #: Exact per-algorithm key sizes — mirrors ``get_key_sizes()`` in

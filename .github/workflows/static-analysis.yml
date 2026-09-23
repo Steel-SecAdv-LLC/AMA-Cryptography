@@ -988,8 +988,11 @@ jobs:
       # at PR #323 ready-for-review time (2026-05-20).  The previous
       # fabricated tag `:2026-04-21-f5ec593` did not exist and the
       # docker pull failed with "manifest not found" — Copilot review
-      # #323 follow-up (CI failure on first run).
-      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1
+      # #323 follow-up (CI failure on first run).  Pinned by digest as well
+      # (INVARIANT-4's rule for images, tools/check_docker_pins.py): a tag can
+      # be re-pointed, a digest cannot.  Digest read from the same API on
+      # 2026-09-23.
+      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1@sha256:2147aade9cc6f841c9b610ec7b033299b09e425cd3a652bdf1cb9fc885f86078
     timeout-minutes: 30
     defaults:
       run:

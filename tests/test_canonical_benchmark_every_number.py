@@ -1,0 +1,105 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""Every number in README's canonical-bench region is pinned, not only unit-tagged ones.
+
+``tools/check_canonical_benchmarks.py`` read a figure only when a recognised
+unit (ops/sec, micro-seconds, the multiplication sign, %, KB) immediately
+followed it. Inside the pinned region that left "~10,834 Decaps ops/sec",
+"~4,845 KeyGen, ~3,929 Sign" and every measurement date free to change, and a
+figure published in ms, ns or MB/s was invisible. Now every number token is
+pinned against ``benchmarks/canonical-host.json`` unless its digits are part of
+a name (``ML-DSA-65``, ``Ed25519``, ``64-byte``).
+
+Each negative control edits one number of a copy of the real README, and each
+was mutation-checked: with the mechanism it names removed from the gate, it
+fails.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from tools import check_canonical_benchmarks as gate
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture()
+def tree(tmp_path: Path) -> Path:
+    (tmp_path / "benchmarks").mkdir()
+    for relative in (gate.README, gate.RECORD):
+        (tmp_path / relative).write_text(
+            (REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    return tmp_path
+
+
+def _edit(tree: Path, old: str, new: str) -> None:
+    readme = tree / gate.README
+    text = readme.read_text(encoding="utf-8")
+    region = gate.extract_region(text)
+    assert region is not None and region.count(old) == 1, old
+    readme.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def _run(tree: Path) -> int:
+    return gate.main(["--repo", str(tree)])
+
+
+class TestNumbersWithoutAnAdjacentUnit:
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ("~10,834 Decaps", "~19,834 Decaps"),
+            ("~4,845 KeyGen", "~9,845 KeyGen"),
+            ("~3,929 Sign", "~8,929 Sign"),
+            ("measured 2026-04-25. Decapsulate", "measured 2026-05-25. Decapsulate"),
+            ("Python 3.11.15", "Python 3.12.1"),
+            ("over 60,000 samples", "over 90,000 samples"),
+            ("**|t| = 0.29**", "**|t| = 0.09**"),
+        ],
+    )
+    def test_an_edited_figure_fails(self, tree: Path, old: str, new: str) -> None:
+        assert _run(tree) == 0
+        _edit(tree, old, new)
+        assert _run(tree) == 1
+
+    def test_a_figure_added_in_an_unlisted_unit_fails(self, tree: Path) -> None:
+        _edit(tree, "(~10,834 Decaps ops/sec", "(~10,834 Decaps ops/sec, ~0.09 ms each")
+        assert _run(tree) == 1
+
+    def test_deleting_one_of_two_identical_figures_fails(self, tree: Path) -> None:
+        """The comb sentence's "256 doublings + 256 additions" is two figures, one key."""
+        _edit(tree, "256 doublings + 256 additions", "256 doublings + additions")
+        assert _run(tree) == 1
+
+
+class TestWhatIsAndIsNotAFigure:
+    def test_units_beyond_the_original_five_are_recorded(self) -> None:
+        found = gate.extract_measurements("| **X** | 5 ms | 7 ns | 12.5 MB/s |\n")
+        assert [(entry["value"], entry["unit"]) for entry in found] == [
+            ("5", "ms"),
+            ("7", "ns"),
+            ("12.5", "MB/s"),
+        ]
+
+    def test_digits_inside_a_name_are_not_figures(self) -> None:
+        text = "ML-DSA-65 on x86-64 with a 64-byte Ed25519 key and radix-2^51\n"
+        assert gate.extract_measurements(text) == []
+
+    def test_a_standalone_number_is_a_figure_without_a_unit(self) -> None:
+        found = gate.extract_measurements("FIPS 204, q=8380417, 2026-04-25\n")
+        assert [(entry["value"], entry["unit"]) for entry in found] == [
+            ("204", ""),
+            ("8380417", ""),
+            ("2026-04-25", ""),
+        ]
+
+    def test_a_link_target_is_an_address_not_a_figure(self) -> None:
+        assert gate.extract_measurements("[log](CHANGELOG.md#300---2026-04-27)\n") == []
+
+    def test_a_heading_number_is_pinned(self) -> None:
+        found = gate.extract_measurements("### ML-KEM-1024 (FIPS 203)\n")
+        assert [(entry["label"], entry["value"]) for entry in found] == [("(heading)", "203")]

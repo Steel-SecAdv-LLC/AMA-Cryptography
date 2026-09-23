@@ -524,3 +524,23 @@ class TestMonitorIntegration:
         assert len(monitor.alerts) == 0
         result = monitor.verify_runtime_integrity()
         assert result == {"status": "monitoring_disabled"}
+
+
+class TestImportHijackIsDetected:
+    """verify_imports must REPORT a module resolving somewhere else.
+
+    Until this test only the return type was checked, so the comparison that
+    makes the monitor a monitor was a guard no test executed (AGENTS.md §6.5).
+    """
+
+    def test_a_moved_module_is_reported(self) -> None:
+        analyzer = RefactoringAnalyzer()
+        name = "ama_cryptography.crypto_api"
+        assert name in analyzer._import_baselines
+        analyzer._import_baselines[name] = "/nonexistent/elsewhere/crypto_api.py"
+        violations = analyzer.verify_imports()
+        assert [v.module_name for v in violations] == [name]
+        assert violations[0].expected_path == "/nonexistent/elsewhere/crypto_api.py"
+
+    def test_an_untouched_baseline_reports_nothing(self) -> None:
+        assert RefactoringAnalyzer().verify_imports() == []

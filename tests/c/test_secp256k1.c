@@ -193,7 +193,7 @@ int main(void) {
     }
 
     /* Test 6: zero scalar is rejected */
-    memset(privkey, 0, 32);
+    ama_secure_memzero(privkey, 32);
     rc = ama_secp256k1_pubkey_from_privkey(privkey, pub33);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "zero privkey rejected by pubkey_from_privkey");
     rc = ama_secp256k1_point_mul(privkey, Gx, Gy, out_x, out_y);

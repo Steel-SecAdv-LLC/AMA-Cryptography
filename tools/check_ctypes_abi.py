@@ -14,9 +14,9 @@ A ctypes symbol probe (``hasattr(lib, "ama_foo")``) proves a *name* is
 exported.  It says nothing about arity or ABI: ``lib.ama_foo.argtypes = [...]``
 succeeds against a symbol of any actual signature, and the first call through
 a wrong declaration corrupts the stack or reads foreign memory — silently on
-the happy path, exploitably on a crafted one.  The 2026-08 audit flagged
-exactly this (finding #7): "ctypes symbol probes verify only that a name is
-exported, not its arity/ABI".
+the happy path, exploitably on a crafted one.  This gate closes exactly
+that gap: "ctypes symbol probes verify only that a name is exported, not its
+arity/ABI".
 
 A shared object carries no parameter metadata, so the ABI cannot be read from
 the artefact.  What the repository *does* carry is the authoritative contract:

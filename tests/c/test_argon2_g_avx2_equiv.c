@@ -53,10 +53,11 @@ extern void ama_argon2_g_avx2(uint64_t out[128],
 /* -------------------------------------------------------------------- */
 /*  Inline scalar BlaMka G reference                                    */
 /*                                                                       */
-/*  Lifted byte-for-byte from src/c/ama_argon2.c lines 380-466.  The    */
-/*  ground truth lives in the test TU so a future refactor of the      */
-/*  production scalar cannot invalidate the equivalence contract by    */
-/*  mutating the reference side of the test (INVARIANT-1).             */
+/*  Lifted byte-for-byte from fBlaMka(), BLAMKA_G, blamka_round() and   */
+/*  argon2_G_scalar() in src/c/ama_argon2.c.  The ground truth lives in */
+/*  the test TU so a future refactor of the production scalar cannot    */
+/*  invalidate the equivalence contract by mutating the reference side  */
+/*  of the test (INVARIANT-1).                                          */
 /* -------------------------------------------------------------------- */
 
 /* Guarded by the same predicate as the only call sites below.  Defining

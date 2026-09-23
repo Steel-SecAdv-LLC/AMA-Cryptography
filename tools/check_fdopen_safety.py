@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import subprocess  # nosec B404 -- fixed-argv git invocation only, never a shell (FDO-001)
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -167,19 +166,22 @@ def check_source(rel_path: str, source: str) -> list[Violation]:
 
 
 def _tracked_python_files(repo_root: Path) -> list[Path]:
+    """Every tracked ``*.py`` under ``repo_root``, via ``tools/_repo.py``.
+
+    The bare ``git ls-files`` this used to run C-quoted a non-ASCII name, the
+    ``is_file()`` filter then dropped it, and an unguarded ``os.fdopen`` in
+    ``zz_é.py`` was never parsed.  The helper lists with ``-z`` and fails closed.
+    """
+    repo = str(Path(__file__).resolve().parent.parent)
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from tools._repo import TrackedFilesError, tracked_files
+
     try:
-        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, trusted git binary (FDO-002)
-            ["git", "ls-files", "*.py"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError) as exc:
+        return tracked_files(repo_root, "*.py")
+    except TrackedFilesError as exc:
         print(f"ERROR: unable to enumerate files via git: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    return [repo_root / n for n in out.splitlines() if n.strip() and (repo_root / n).is_file()]
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

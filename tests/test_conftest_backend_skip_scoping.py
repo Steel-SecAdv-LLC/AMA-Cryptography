@@ -458,7 +458,8 @@ def test_every_registered_token_is_used_or_usable() -> None:
 # body or a fixture attaches no marker, so it went straight through the hook
 # and CI reported it as an ordinary skip — the same silently-green outcome the
 # ``skipif`` path exists to prevent. Several PQC KAT suites report a missing
-# backend exactly that way (``tests/test_pqc_kat.py`` lines 164, 177, 555), so
+# backend exactly that way (the ``dilithium_provider``, ``kyber_provider`` and
+# ``sphincs_provider`` fixtures in ``tests/test_pqc_kat.py``), so
 # the gap covered the backends most likely to be absent from a broken build.
 #
 # The hook now also reads the reason pytest recorded on the report itself,

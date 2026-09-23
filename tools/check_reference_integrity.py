@@ -45,20 +45,48 @@ Over the shipped tree (``ama_cryptography/``, ``src/``, ``include/``,
    the identifier, the marker, or the function instead; those move with the
    code.
 
+The shapes, as widened after measuring what the first patterns let through
+("in line 632", "(line 632)", "see line 7", "(v5 audit, 2026-08, item 15)",
+"audit item 15", "the 2026-08 audit's finding #5" all passed):
+
+* a versioned audit (``v5 audit``) with or without a date, in either order;
+* an audit item number (``audit item 15``, ``audit, item 15``, ``item 15 of
+  the v5 audit``);
+* a numbered audit finding (``the audit's finding #5``, ``finding #7``) — a
+  ``CodeQL`` alert number is not one: it resolves in the repository's code
+  scanning;
+* ``at/on/per/in/from/near line NN`` (two or more digits, so "on line 6 of
+  the fixture" describing a string beside it is left alone), ``see line N`` and
+  ``(line N)`` (any number but 1 — line 1 is a fixed position, a shebang or a
+  file-level pragma, and cannot drift), and a FILE NAME followed by a line
+  number (``ama_argon2.c lines 380-466``, ``.gitignore`` line 178``);
+* EXCEPT a line of a published algorithm (``FIPS 204 §5.2 (lines 5-6)``,
+  ``Algorithm 7 line 3``): those are stable, numbered by the standard, and
+  resolve in a document anyone can open.
+
 What is deliberately NOT checked
 --------------------------------
-``CHANGELOG.md`` is exempt, and the exemption is the point rather than a
-convenience: it is a historical record. Its entries describe the tree as it
-stood when they were written, and editing them to satisfy a present-day linter
-would falsify the one file whose value is that it was not revised. A stale
-reference in a changelog is a fact about the past; the same reference in
-``ama_cryptography/session.py`` is a defect in the present.
+``CHANGELOG.md`` is out of SCOPE — it is not in :data:`SCANNED_ROOT_FILES` —
+and that is the point rather than a convenience: it is a historical record.
+Its entries describe the tree as it stood when they were written, and editing
+them to satisfy a present-day linter would falsify the one file whose value is
+that it was not revised. A stale reference in a changelog is a fact about the
+past; the same reference in ``ama_cryptography/session.py`` is a defect in the
+present.  (It used to be listed in :data:`EXEMPT` as well.  That entry could
+never take effect — the file is not scanned — so it was a dead exemption, and
+it is gone; the test now requires every exemption to sit inside the scanned
+scope.)
 
 This module and its test are exempt for a duller reason: both have to quote the
 rejected shapes in order to reject them.  That is still a hole, so the test
-asserts the list is exactly these three entries and that each genuinely contains
-a rejected shape.  An exemption that stops being needed fails the suite instead
-of lingering as a place to hide things.
+asserts the list is exactly these two entries, that each is in scope, and that
+each genuinely contains a rejected shape.  An exemption that stops being needed
+fails the suite instead of lingering as a place to hide things.
+
+A dated audit on its own (``the 2026-09 audit``, ``2026-09 audit, A-2``) is
+not rejected: it names an event rather than a numbered item, and whether those
+finding IDs must resolve to an in-tree document is a policy question this gate
+does not settle.
 
 This gate checks the *shape* of a citation, not its truth. It cannot tell that
 ``INVARIANT-41`` is the right invariant to cite, only that a reader can find
@@ -107,12 +135,12 @@ SCANNED_ROOT_FILES = ("README.md", "SECURITY.md", "ARCHITECTURE.md", "INVARIANTS
 
 #: Files that may contain a rejected shape, and the reason each may.
 #:
-#: An exemption is a hole, so there are three and each is load-bearing:
+#: An exemption is a hole, so there are two and each is load-bearing:
 #: ``tests/test_reference_integrity_gate.py`` asserts that every file listed
-#: here really does contain a rejected shape, and that nothing else is listed.
-#: A stale exemption therefore fails the suite rather than silently widening it.
+#: here is inside the scanned scope, really does contain a rejected shape, and
+#: that nothing else is listed.  A stale exemption therefore fails the suite
+#: rather than silently widening it.
 EXEMPT = {
-    "CHANGELOG.md": "a historical record; not revised to satisfy a linter",
     "tools/check_reference_integrity.py": "quotes the rejected shapes to define them",
     "tests/test_reference_integrity_gate.py": "drives the rejected shapes through the gate",
 }
@@ -122,25 +150,43 @@ SUFFIXES = {".py", ".pyx", ".pyi", ".c", ".h", ".md", ".sh", ".yml", ".yaml"}
 #: Citations that name a development artefact no reader of the repository has.
 PROCESS_CITATION = re.compile(r"""(?xi)
     \b(?:
-        \d{4}-\d{2}\s+v\d+\s+audit          # (2026-08 v5 audit, item 15)
-      | item\s+\d+\s+of\s+the\s+audit
+        \d{4}-\d{2}(?:-\d{2})?\s+v\d+\s+audit     # (2026-08 v5 audit, item 15)
+      | v\d+\s+audit\b                          # (v5 audit, 2026-08, item 15)
+      | audit\W{0,3}\s*items?\s+\#?\d+           # audit item 15 / audit, item 15
+      | items?\s+\#?\d+\s+(?:of|in|from)\s+the\s+(?:[\w-]+\s+){0,2}audit
+      | audit(?:'s)?\s+findings?\s+\#?\s*\d+     # the audit's finding #5
     )
+    | (?<!CodeQL\s)\bfindings?\s+\#\s*\d+        # (finding #7)
     """)
 
 #: Citations to a line number: unverifiable, and stale the moment code moves.
 #: Requires literal digits, so runtime messages ("at line %d") do not match.
-LINE_CITATION = re.compile(r"(?i)\b(?:at|on|see|per)\s+lines?\s+\d{2,4}\b")
+LINE_CITATION = re.compile(r"""(?xi)
+    (?:
+        \b(?:at|on|per|in|from|near)\s+lines?\s+\d{2,5}\b          # at line 632
+      | (?:\bsee\s+|\(\s*)lines?\s+(?!1\b)\d{1,5}\b              # see line 7, (line 632)
+      | \.(?:py|pyx|pyi|c|h|md|sh|ya?ml|txt|toml|cfg|json|gitignore)
+        `{0,2},?\s+(?:now\s+)?lines?\s+\d{1,5}\b                   # foo.c lines 380-466
+    )
+    """)
 
-CHECKS = (
+#: A line of a published algorithm, cited by the standard's own numbering
+#: (``FIPS 204 §5.2 (lines 5-6)``, ``Algorithm 7 line 3``).  Checked against
+#: the text just before a LINE_CITATION match on the same line.
+_STANDARD_CONTEXT = re.compile(r"(?i)(?:Algorithm\s+\d+|§\s*[\d.]+|FIPS\s+\d+)[^\n]{0,12}$")
+
+CHECKS: tuple[tuple[re.Pattern[str], str, re.Pattern[str] | None], ...] = (
     (
         PROCESS_CITATION,
         "cites a development artefact that is not in the repository; state the "
         "finding, or cite a commit or INVARIANT-N",
+        None,
     ),
     (
         LINE_CITATION,
         "cites a source line number, which nothing can keep true; cite the "
         "identifier, marker or function instead",
+        _STANDARD_CONTEXT,
     ),
 )
 
@@ -168,8 +214,12 @@ def _tracked_files(repo_root: Path) -> list[Path]:
 def scan_text(text: str) -> list[tuple[int, str, str]]:
     """Return ``(line_number, matched_text, reason)`` for every bad citation."""
     findings: list[tuple[int, str, str]] = []
-    for pattern, reason in CHECKS:
+    for pattern, reason, excluded_context in CHECKS:
         for match in pattern.finditer(text):
+            if excluded_context is not None:
+                line_start = text.rfind("\n", 0, match.start()) + 1
+                if excluded_context.search(text[line_start : match.start()]):
+                    continue
             line = text.count("\n", 0, match.start()) + 1
             findings.append((line, match.group(0).strip(), reason))
     return sorted(findings)
@@ -202,9 +252,10 @@ def main(argv: list[str] | None = None) -> int:
             "reference is correct.  Ambiguous phrasings ('a previous session', "
             '"the audit\'s") are left to review: in this package they also '
             "match correct prose.\n"
-            "exempt: CHANGELOG.md, a historical record that is not revised to "
-            "satisfy a linter, plus this tool and its test, which must quote "
-            "the rejected shapes in order to define them."
+            "not scanned: CHANGELOG.md, a historical record that is not revised "
+            "to satisfy a linter (it is outside the scanned scope).\n"
+            "exempt: this tool and its test, which must quote the rejected "
+            "shapes in order to define them."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -206,7 +206,9 @@ class TestSupportWindowIsEnforcedNotAdvised:
         deliberately rather than to discover it mid-review.
         """
         horizon = _dt.date.today() + _dt.timedelta(days=gate.GRACE_DAYS)
-        imminent = gate.audit(today=horizon)
+        # Dockerfiles only: workflow images carry no support window, and their
+        # digest rule is held by test_the_real_tree_is_clean.
+        imminent = gate.audit(gate.dockerfiles(), today=horizon)
         assert (
             imminent == []
         ), "a shipped base leaves support within " f"{2 * gate.GRACE_DAYS} days:\n" + "\n".join(
@@ -328,3 +330,102 @@ class TestDocumentedBaseImagesMatchTheDockerfiles:
             "gate forced the bump to 3.23. Update the document, or stop showing a "
             "version it does not track."
         )
+
+
+class TestWorkflowImages:
+    """Images named in workflows and actions, which the Dockerfile glob never read.
+
+    Measured before the fix: ``static-analysis.yml``'s tag-only
+    ``quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1`` job container, and any
+    ``services`` image or ``docker://`` step, produced no finding.
+    """
+
+    _DIGEST = "@sha256:" + "a" * 64
+
+    @staticmethod
+    def _wf(tmp_path: Path, body: str, name: str = "wf.yml") -> Path:
+        return _write(tmp_path, body, name)
+
+    @pytest.mark.parametrize(
+        ("body", "line", "context"),
+        [
+            ("jobs:\n  a:\n    container: ubuntu:24.04\n", 3, "job 'a' container"),
+            (
+                "jobs:\n  a:\n    container:\n"
+                "      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1\n",
+                4,
+                "job 'a' container",
+            ),
+            (
+                "jobs:\n  a:\n    services:\n      db:\n        image: postgres:16\n",
+                5,
+                "job 'a' service 'db'",
+            ),
+            (
+                "jobs:\n  a:\n    steps:\n      - {uses: 'docker://alpine:3.19'}\n",
+                4,
+                "job 'a' step `uses: docker://`",
+            ),
+            (
+                "jobs:\n  a:\n    container: ${{ matrix.image }}\n",
+                3,
+                "job 'a' container",
+            ),
+        ],
+    )
+    def test_an_undigested_workflow_image_is_flagged(
+        self, tmp_path: Path, body: str, line: int, context: str
+    ) -> None:
+        findings = gate.audit([self._wf(tmp_path, body)])
+        assert [(f.line_no, f.kind) for f in findings] == [(line, gate.NOT_DIGEST_PINNED)]
+        assert context in findings[0].message
+
+    def test_action_definitions_are_scanned(self, tmp_path: Path) -> None:
+        composite = self._wf(
+            tmp_path,
+            "runs:\n  using: composite\n  steps:\n    - uses: docker://alpine:3.19\n",
+            "action.yml",
+        )
+        container = tmp_path / "c" / "action.yml"
+        container.parent.mkdir()
+        container.write_text("runs:\n  using: docker\n  image: docker://alpine:3.19\n")
+        findings = gate.audit([composite, container])
+        assert [(f.path.name, f.line_no) for f in findings] == [
+            ("action.yml", 4),
+            ("action.yml", 3),
+        ]
+
+    def test_digest_pinned_workflow_images_pass(self, tmp_path: Path) -> None:
+        body = (
+            "jobs:\n  a:\n"
+            f"    container: ubuntu:24.04{self._DIGEST}\n"
+            "    services:\n"
+            f"      db:\n        image: postgres:16{self._DIGEST}\n"
+            "    steps:\n"
+            f"      - uses: docker://alpine:3.19{self._DIGEST}\n"
+            "      - uses: actions/checkout@" + "b" * 40 + "\n"
+            "  b:\n"
+            f"    container:\n      image: quay.io/x:1{self._DIGEST}\n"
+        )
+        assert gate.audit([self._wf(tmp_path, body)]) == []
+
+    def test_the_tree_walk_includes_workflows_and_actions(self, tmp_path: Path) -> None:
+        (tmp_path / ".github" / "workflows").mkdir(parents=True)
+        (tmp_path / ".github" / "workflows" / "a.yaml").write_text("jobs: {}\n")
+        (tmp_path / ".github" / "actions" / "x").mkdir(parents=True)
+        (tmp_path / ".github" / "actions" / "x" / "action.yml").write_text("runs: {}\n")
+        found = [p.relative_to(tmp_path).as_posix() for p in gate.workflow_files(tmp_path)]
+        assert found == [".github/workflows/a.yaml", ".github/actions/x/action.yml"]
+
+    def test_the_real_workflows_are_in_scope(self) -> None:
+        found = {p.name for p in gate.workflow_files()}
+        assert {"ci.yml", "static-analysis.yml", "release.yml"} <= found
+
+    def test_no_workflows_fails_closed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        _write(tree, _dockerfile())
+        monkeypatch.setattr(gate, "REPO_ROOT", tree)
+        assert gate.main([]) == 2

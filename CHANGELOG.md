@@ -128,6 +128,57 @@ Every new test below fails against the code it replaces (AGENTS.md §6.2).
     code.
   - Stale comments are corrected: select width, safegcd's removed fallback,
     the 6.1% fold margin (was "6.5%").
+- **High — 26 `ama_*` symbols were exported with no public prototype.**
+  The public-API gate compared declared symbols against exported ones, but
+  never the reverse, so these went unseen:
+  - `ama_sha256`, which Python binds and which was declared only in an
+    uninstalled header;
+  - the CPU-feature probes;
+  - three raw Keccak permutations;
+  - this pass's own `ama_stack_wipe_below`.
+
+  `ama_sha256` is now declared in `include/ama_cryptography.h`. The other 25
+  are localised by exact name in `cmake/ama_exports.map`. The gate now fails
+  on any exported `ama_*` symbol that no installed header declares. The 25
+  localised symbols left the export table (215 exports → 190, measured on
+  x86-64); `ama_sha256` stays exported, now with a declaration.
+- **Gate bypasses closed.** Each fix comes with tests that fail against the
+  old gate.
+  - *File enumeration.* Six gates listed files with `git ls-files` without
+    `-z`, so a file with a non-ASCII name was silently skipped: a key planted
+    in `clé_key.txt` passed `check_secrets`. There is now one shared
+    `tools/_repo.py`, which fails closed.
+  - *C suppressions.* See the INVARIANT-13 entry above.
+  - *Benchmark claims.* A floor claim passed if it equalled any floor of any
+    benchmark; it is now attributed to one benchmark and one architecture.
+  - *Canonical benchmarks.* Only numbers followed by a known unit were
+    pinned; now every number in the region is.
+  - *Algorithm registry.* It now reads the Status column.
+  - *Roll-up gates.* Mentioning `needs.*.result` exempted a gate from the
+    evaluation check; the wildcard form must now test failure, cancelled and
+    skipped.
+  - *Keygen PCT.* A pairwise test under an `if` without an `else` counted as
+    unconditional.
+  - *Vendor isolation and the stdlib-hash boundary.* Both now see dynamic
+    and non-literal imports. A run-time-chosen library load is printed as a
+    reviewed inventory rather than failing: it cannot be decided statically,
+    so a blocking rule would need an exemption list (AGENTS.md §10).
+  - *Secret zeroisation.* It now recognises bare secret names and `bzero`.
+  - *Action and image pins.* Flow-style `uses:`, composite actions, and job
+    and service `container` images are now checked.
+  - *Reference integrity.* It now recognises line-number and audit-ID
+    citations.
+  - The dead `tools/build_nistp_seed_corpus.py` is deleted.
+- **What the tightened gates found, fixed at source.**
+  - `AmaContext.keypair_generate` now runs its pairwise test on an
+    unconditional success path.
+  - `monitoring.verify_imports` names its modules from a literal tuple. A new
+    test pins that it reports a moved module; nothing had tested detection.
+  - Three test-file `memset`s on secret-named buffers now use
+    `ama_secure_memzero`.
+  - The `reproducible-build` manylinux container is pinned by digest.
+  - Twenty citations of source line numbers or unresolvable audit IDs are
+    replaced by the identifier or the finding itself.
 
 ### Recorded late: seven changes from 2026-09-20/21 that had no entry
 
@@ -7849,7 +7900,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 20 | Behavioural | `ama_cryptography.integrity --update --sign` binds the extensions present in the tree it repairs. It is the command `_check_binding_extensions` prints as the remedy for "present but not covered", and it previously wrote an empty binding map, so running the documented repair changed the artefact hash, printed "bindings = 0 extension(s) bound", and left the identical warnings and the identical `AMA_FIPS_STRICT=1` failure | none; the documented repair now clears the condition it is documented for |
 | 21 | **Breaking** | completing an import through a POST failure that a re-signing run would repair requires the process to BE the integrity signer (`pqc_backends._process_is_the_integrity_signer`, revoked by secure-execution mode), not merely to carry `AMA_BUILD_PIPELINE=1`. With the variable in a Dockerfile `ENV`, a CI environment or a systemd unit, an attacker with write access to the installed tree could edit any module imported after POST and have every process in that environment complete the import with exit 0 | build tooling is unaffected — `setup.py`, `tools/resign_wheel.py` and `integrity --update --sign` all launch the signer. A script that imported the package under that variable to inspect a failing tree uses `AMA_POST_DIAGNOSTIC_IMPORT=1` |
 | 22 | Behavioural | a posture key rotation that is attempted and FAILS now backs off exponentially (`rotation_cooldown/32` doubling to `rotation_cooldown`) and stops after six consecutive failures, reporting `rotation_suspended` on `get_posture_summary()`. It previously retried on every evaluation cycle with no throttle: measured over 20 cycles at sustained CRITICAL, 20 callback invocations and 20 registered `posture-rotation-N` key identifiers | none for a rotation mechanism that works; a controller that has STOPPED attempting resumes only on `reset()` — the cap guard returns before the rotation mechanism is touched, so there is no next success to have. `confirm_action()` on a suppressed rotation now returns False and leaves the action queued rather than reporting an execution that did not happen |
-| 23 | **Breaking** | the C API: `ama_frost_aggregate` takes `signer_public_shares` and `bad_participant_index`, and verifies every share before summing; `ama_frost_round2_sign` takes a non-`const` `nonce_pair`, which it consumes and zeroes; `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw ML-DSA internal interface), `ama_slhdsa_sign_internal` and `ama_ascon_permutation_for_test` are no longer exported | pass each signer's public key share and read the blame index; keep the nonce pair writable and generate a fresh one per signing; use the `_ctx` ML-DSA functions (an empty context is the default) |
+| 23 | **Breaking** | the C API: `ama_frost_aggregate` takes `signer_public_shares` and `bad_participant_index`, and verifies every share before summing; `ama_frost_round2_sign` takes a non-`const` `nonce_pair`, which it consumes and zeroes; `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw ML-DSA internal interface), `ama_slhdsa_sign_internal` and `ama_ascon_permutation_for_test` are no longer exported, nor are the 24 undeclared helpers the export map now localises (the `ama_has_*` / `ama_cpuid_has_*` CPU probes and three raw Keccak permutations), none of which any installed header ever declared | pass each signer's public key share and read the blame index; keep the nonce pair writable and generate a fresh one per signing; use the `_ctx` ML-DSA functions (an empty context is the default) |
 
 Rows 1, 3, 7, 14 and 21 are the ones a security reviewer should read first.
 Four are fail-closed changes that turn a silent weakness into a loud refusal —
@@ -7879,6 +7930,11 @@ Measured against the `v4.0.0` headers:
   ML-DSA interface, INVARIANT-50), `ama_slhdsa_sign_internal` and
   `ama_ascon_permutation_for_test` now exist only in the test archive.
 - `ama_dispatch_table_t` loses `sha3_256` (row 18).
+- 24 undeclared exports are localised: the `ama_has_*` and
+  `ama_cpuid_has_*` CPU probes, `ama_keccak_f1600_bmi`,
+  `ama_keccak_f1600_x4_avx2` and `ama_keccak_f1600_x4_generic`. None was
+  declared in an installed header. `ama_sha256`, exported the same way,
+  gained a declaration instead, because the Python layer binds it.
 
 ### Completion pass 2 (post-8d72b8c) — the detector made measurable, the lanes made witnessing, the counts made gated
 

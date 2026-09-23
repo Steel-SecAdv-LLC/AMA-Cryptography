@@ -277,6 +277,190 @@ def native_alpha_keypair(kind):
         assert "give it the family's test, or make it raise" in err
 
 
+class TestEveryPath:
+    """An ``if`` with no ``else`` used to open no comparison at all.
+
+    Measured before the fix: wrapping the pairwise call in
+    ``if os.environ.get("AMA_SKIP_PCT") is None:`` left the gate at exit 0
+    while the function released an untested keypair whenever the variable was
+    set.  A missing ``else`` is now an empty arm that falls through to the
+    statements after the ``if``, and that path must reach a test too.
+    """
+
+    ENV_GUARDED = """
+import os
+
+
+def native_alpha_keypair():
+    pk, sk = _lib.gen()
+    if os.environ.get("AMA_SKIP_PCT") is None:
+        pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+    return pk, sk
+"""
+
+    RC_GUARDED = """
+def native_alpha_keypair():
+    rc = _lib.gen(pk, sk)
+    if rc == 0:
+        pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+    return rc
+"""
+
+    FAILURE_EXIT_FIRST = """
+def native_alpha_keypair(n):
+    if n < 32:
+        return -1
+    rc = _lib.gen(pk, sk)
+    if rc != 0:
+        return rc
+    pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+    return rc
+"""
+
+    MATCH_WITHOUT_A_DEFAULT = """
+def native_alpha_keypair(kind):
+    pk, sk = _lib.gen()
+    match kind:
+        case "kem":
+            pairwise_test_kem(_encaps, _decaps, pk, sk, "KEM")
+    return pk, sk
+"""
+
+    EARLY_RETURN_IN_AN_UNTESTED_CONSTRUCT = """
+def native_alpha_keypair(fast):
+    pk, sk = _lib.gen()
+    if fast:
+        return pk, sk
+    pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+    return pk, sk
+"""
+
+    TEST_ONLY_IN_A_LOOP = """
+def native_alpha_keypair(rounds):
+    pk, sk = _lib.gen()
+    for _ in range(rounds):
+        pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+    return pk, sk
+"""
+
+    TEST_ONLY_IN_A_LAMBDA = """
+def native_alpha_keypair():
+    pk, sk = _lib.gen()
+    later = lambda: pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+    return pk, sk
+"""
+
+    TEST_IN_WITH_AND_TRY = """
+def native_alpha_keypair():
+    with _lock:
+        pk, sk = _lib.gen()
+        try:
+            pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+        except RuntimeError:
+            raise
+        return pk, sk
+"""
+
+    SWALLOWED_TEST_FAILURE = """
+def native_alpha_keypair():
+    pk, sk = _lib.gen()
+    try:
+        pairwise_test_signature(_sign, _verify, sk, pk, "Alpha")
+    except RuntimeError:
+        pass
+    return pk, sk
+"""
+
+    DELEGATE_WITH_A_GUARDED_TEST = """
+import os
+
+
+def _pct(pk, sk):
+    if not os.environ.get("AMA_SKIP_PCT"):
+        pairwise_test_kem(_encaps, _decaps, pk, sk, "Alpha")
+
+
+def native_alpha_keypair():
+    pk, sk = _lib.gen()
+    _pct(pk, sk)
+    return pk, sk
+"""
+
+    @staticmethod
+    def _audit(gate: ModuleType, tmp_path: Path, source: str) -> list[tuple[str, int]]:
+        root = _module(tmp_path, source)
+        unwired, examined = gate.audit(root / gate.BACKEND)
+        assert examined == 1
+        return list(unwired)
+
+    def test_the_reported_env_var_bypass_is_caught(self, gate: ModuleType, tmp_path: Path) -> None:
+        assert self._audit(gate, tmp_path, self.ENV_GUARDED) == [
+            ("native_alpha_keypair [path skips the test]", 9)
+        ]
+
+    def test_a_return_code_guard_is_just_as_conditional(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """The shape AmaContext.keypair_generate has; conditions are not evaluated."""
+        assert self._audit(gate, tmp_path, self.RC_GUARDED) == [
+            ("native_alpha_keypair [path skips the test]", 6)
+        ]
+
+    def test_leaving_on_failure_then_testing_unconditionally_passes(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """The remedy the diagnostic recommends must satisfy it."""
+        assert self._audit(gate, tmp_path, self.FAILURE_EXIT_FIRST) == []
+
+    def test_a_match_with_no_default_may_match_nothing(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """The arm rule compares only the cases that exist; the path rule does not."""
+        assert self._audit(gate, tmp_path, self.MATCH_WITHOUT_A_DEFAULT) == [
+            ("native_alpha_keypair [path skips the test]", 7)
+        ]
+
+    def test_an_early_return_in_an_untested_construct_is_not_judged(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """Stated as a limit, not discovered as a surprise.
+
+        A construct with no pairwise test in it is not judged, because its
+        exits are indistinguishable from the input-validation returns
+        (``return -1``) that precede key generation.  If this ever starts
+        failing, the limit was closed deliberately: update the docstring.
+        """
+        assert self._audit(gate, tmp_path, self.EARLY_RETURN_IN_AN_UNTESTED_CONSTRUCT) == []
+
+    def test_a_loop_body_may_run_zero_times(self, gate: ModuleType, tmp_path: Path) -> None:
+        assert self._audit(gate, tmp_path, self.TEST_ONLY_IN_A_LOOP) == [
+            ("native_alpha_keypair [path skips the test]", 6)
+        ]
+
+    def test_a_test_inside_a_lambda_is_not_run(self, gate: ModuleType, tmp_path: Path) -> None:
+        assert self._audit(gate, tmp_path, self.TEST_ONLY_IN_A_LAMBDA) == [
+            ("native_alpha_keypair [path skips the test]", 5)
+        ]
+
+    def test_a_handler_that_swallows_a_failed_test_is_a_path(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """A PCT failure caught and ignored releases the keypair it condemned."""
+        assert self._audit(gate, tmp_path, self.SWALLOWED_TEST_FAILURE) == [
+            ("native_alpha_keypair [path skips the test]", 8)
+        ]
+
+    def test_with_and_try_bodies_run_in_line(self, gate: ModuleType, tmp_path: Path) -> None:
+        assert self._audit(gate, tmp_path, self.TEST_IN_WITH_AND_TRY) == []
+
+    def test_a_delegate_with_a_guarded_test_is_not_a_helper(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        assert self._audit(gate, tmp_path, self.DELEGATE_WITH_A_GUARDED_TEST) == [
+            ("native_alpha_keypair", 10)
+        ]
+
+
 class TestTheRealTree:
     def test_the_shipped_backend_is_fully_wired(self, gate: ModuleType) -> None:
         unwired, examined = gate.audit(REPO_ROOT / gate.BACKEND)

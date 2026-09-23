@@ -32,6 +32,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from tools.check_reference_integrity import (  # noqa: E402 -- repo-root path insert above (REF-001)
     EXEMPT,
+    SCANNED_DIRS,
+    SCANNED_ROOT_FILES,
     check,
     main,
     scan_text,
@@ -48,6 +50,12 @@ class TestTheShapesItMustCatch:
             "# see 2026-09 v5 audit for the rationale",
             "# fixed per item 15 of the audit",
             '"""Regression pin from the 2025-12 v4 audit."""',
+            # Each of these passed before the patterns were widened.
+            "# (v5 audit, 2026-08, item 15)",
+            "# closes audit item 15",
+            "# the 2026-08 audit's finding #5",
+            "# The audit flagged exactly this (finding #7)",
+            "# fixed per item 3 of the v5 audit",
         ],
     )
     def test_a_process_citation_is_reported(self, text: str) -> None:
@@ -62,6 +70,13 @@ class TestTheShapesItMustCatch:
             "# markers at lines 314 and 339",
             "# see line 1098 for the second draw",
             "# per lines 40",
+            # Each of these passed before the patterns were widened.
+            "# the nonce in line 632",
+            "# the nonce (line 632) is drawn fresh",
+            "# see line 7",
+            "# Lifted byte-for-byte from src/c/ama_argon2.c lines 380-466.",
+            "> `.gitignore` line 178 excludes the generated sources",
+            "# hooked at `src/c/dispatch/ama_dispatch.c` lines 596-599",
         ],
     )
     def test_a_source_line_citation_is_reported(self, text: str) -> None:
@@ -101,6 +116,17 @@ class TestTheShapesItMustNotCatch:
             # A line COUNT is not a line citation.
             "# seventeen hundred lines above",
             "# the diff touched 632 lines",
+            # A line of a published algorithm resolves in the standard.
+            "defined in FIPS 204 §5.2 (lines 5–6) before invoking",
+            "* mu = H(tr || M) — FIPS 204 Algorithm 7 line 6",
+            # Line 1 is a fixed position; a fixture's lines are pinned beside it.
+            "# `# type: ignore` on line 1 is mypy's whole-file form",
+            "# The `if` sits on line 6 of the fixture (line 1 is blank).",
+            # A CodeQL alert number resolves in code scanning; a dated audit
+            # event is not an item citation.
+            "# closes CodeQL findings #504/#505/#506",
+            "# until the 2026-09 audit (A-2) it could not",
+            "# kept in line with the header",
         ],
     )
     def test_correct_prose_is_left_alone(self, text: str) -> None:
@@ -110,9 +136,14 @@ class TestTheShapesItMustNotCatch:
 class TestTheExemptionsAreHonest:
     """An exemption is a hole; each one here must still be load-bearing."""
 
-    def test_there_are_exactly_three(self) -> None:
+    def test_there_are_exactly_two(self) -> None:
+        """``CHANGELOG.md`` was a third entry that could never take effect.
+
+        It is not in ``SCANNED_ROOT_FILES``, so the gate never opened it and the
+        exemption exempted nothing.  A dead exemption is still a hole: the day
+        someone widens the scope, it silently decides the outcome.
+        """
         assert set(EXEMPT) == {
-            "CHANGELOG.md",
             "tools/check_reference_integrity.py",
             "tests/test_reference_integrity_gate.py",
         }, (
@@ -135,6 +166,16 @@ class TestTheExemptionsAreHonest:
             f"{name} no longer contains any rejected shape, so its exemption "
             "now proves nothing — remove it from EXEMPT"
         )
+
+    @pytest.mark.parametrize("name", sorted(EXEMPT))
+    def test_each_exemption_is_inside_the_scanned_scope(self, name: str) -> None:
+        """An exemption for a file the gate never reads is dead, not load-bearing."""
+        in_dirs = name.split("/", 1)[0] in SCANNED_DIRS
+        assert in_dirs or name in SCANNED_ROOT_FILES, f"{name} is exempt but never scanned"
+
+    def test_the_changelog_is_out_of_scope_rather_than_exempt(self) -> None:
+        assert "CHANGELOG.md" not in SCANNED_ROOT_FILES
+        assert "CHANGELOG.md" not in EXEMPT
 
     def test_an_exempt_file_is_not_scanned(self) -> None:
         _, problems = check(REPO_ROOT)
