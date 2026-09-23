@@ -74,6 +74,11 @@
 #  define AMA_PROBE_IS_INSTRUMENTED 0
 #endif
 
+/* Everything up to main() is the probe itself, compiled only where it runs:
+ * an instrumented build returns 77 before calling any of it, and would
+ * otherwise carry every helper as an unused function. */
+#if !AMA_PROBE_IS_INSTRUMENTED
+
 #define SCAN_BYTES 32768u
 #define MSG_BYTES  256u
 
@@ -227,6 +232,8 @@ static void run_sign_expanded_large(const uint8_t *big, size_t big_len) {
     CHECK(ama_ed25519_sign_expanded(g_sig, big, big_len, g_expanded) == AMA_SUCCESS,
           "sign_expanded (heap path) succeeds");
 }
+
+#endif /* !AMA_PROBE_IS_INSTRUMENTED */
 
 int main(void) {
 #if AMA_PROBE_IS_INSTRUMENTED

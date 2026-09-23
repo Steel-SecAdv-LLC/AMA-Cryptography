@@ -129,6 +129,37 @@ Every new test below fails against the code it replaces (AGENTS.md §6.2).
   - Stale comments are corrected: select width, safegcd's removed fallback,
     the 6.1% fold margin (was "6.5%").
 
+### Recorded late: seven changes from 2026-09-20/21 that had no entry
+
+The review pass found these commits on the branch with nothing in this file.
+
+- **High — the macOS dylib exported every internal helper (`01a4c82`).**
+  `cmake/ama_exports.macos.sym` was one line, `_ama_*`. A Mach-O export list
+  has no negation, so it published all thirty symbols `ama_exports.map`
+  localises on ELF, including `ama_keccak_f1600_generic`, a raw permutation
+  with no NULL checks and no length limits. macOS now links with
+  `-unexported_symbols_list`, generated at configure time from the version
+  script's own `local:` block. The configure fails closed if that block is
+  empty.
+- **The MinGW DLL export table is stated in a generated `.def` (`ebaae18`).**
+  It had inherited GCC clones such as `ama_hmac_sha256.part.0`: resolvable by
+  name, with a compiler-chosen signature and none of the entry point's
+  argument checks.
+- **`fuzz/fuzz_nistp.c` (`b87d025`).** It drives the four P-curve parsers
+  that read attacker bytes, which no harness reached before.
+- **P-curve NULL-parameter guards executed (`abde864`).** The branch-arc
+  claim that came with it is withdrawn in AGENTS.md §11; the test stays,
+  because it pins real INVARIANT-5 guards.
+- **Argon2id (`1e79cd1`).** A dead `salt_len > 0` branch after the
+  `salt_len >= 8` check is removed, and so is the reason given for keeping
+  it.
+- **FROST Python binding (`da8901d`).** A dead store is removed. Its comment
+  claimed a guarantee the store did not give.
+- **Benchmark skips name their cause (`1bf806b`).** Eight benchmark bodies
+  ended in `except Exception: return None` and printed "PQC not available"
+  for every failure. A required lane therefore reported a cause that was
+  false (INVARIANT-3). The skip now carries the exception.
+
 ### Second pass over the expanded-key work: two defects, four unprotected guards — 2026-09-22
 
 A full re-read of the INVARIANT-51 change, every file it touched and every
@@ -7818,6 +7849,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 20 | Behavioural | `ama_cryptography.integrity --update --sign` binds the extensions present in the tree it repairs. It is the command `_check_binding_extensions` prints as the remedy for "present but not covered", and it previously wrote an empty binding map, so running the documented repair changed the artefact hash, printed "bindings = 0 extension(s) bound", and left the identical warnings and the identical `AMA_FIPS_STRICT=1` failure | none; the documented repair now clears the condition it is documented for |
 | 21 | **Breaking** | completing an import through a POST failure that a re-signing run would repair requires the process to BE the integrity signer (`pqc_backends._process_is_the_integrity_signer`, revoked by secure-execution mode), not merely to carry `AMA_BUILD_PIPELINE=1`. With the variable in a Dockerfile `ENV`, a CI environment or a systemd unit, an attacker with write access to the installed tree could edit any module imported after POST and have every process in that environment complete the import with exit 0 | build tooling is unaffected — `setup.py`, `tools/resign_wheel.py` and `integrity --update --sign` all launch the signer. A script that imported the package under that variable to inspect a failing tree uses `AMA_POST_DIAGNOSTIC_IMPORT=1` |
 | 22 | Behavioural | a posture key rotation that is attempted and FAILS now backs off exponentially (`rotation_cooldown/32` doubling to `rotation_cooldown`) and stops after six consecutive failures, reporting `rotation_suspended` on `get_posture_summary()`. It previously retried on every evaluation cycle with no throttle: measured over 20 cycles at sustained CRITICAL, 20 callback invocations and 20 registered `posture-rotation-N` key identifiers | none for a rotation mechanism that works; a controller that has STOPPED attempting resumes only on `reset()` — the cap guard returns before the rotation mechanism is touched, so there is no next success to have. `confirm_action()` on a suppressed rotation now returns False and leaves the action queued rather than reporting an execution that did not happen |
+| 23 | **Breaking** | the C API: `ama_frost_aggregate` takes `signer_public_shares` and `bad_participant_index`, and verifies every share before summing; `ama_frost_round2_sign` takes a non-`const` `nonce_pair`, which it consumes and zeroes; `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw ML-DSA internal interface), `ama_slhdsa_sign_internal` and `ama_ascon_permutation_for_test` are no longer exported | pass each signer's public key share and read the blame index; keep the nonce pair writable and generate a fresh one per signing; use the `_ctx` ML-DSA functions (an empty context is the default) |
 
 Rows 1, 3, 7, 14 and 21 are the ones a security reviewer should read first.
 Four are fail-closed changes that turn a silent weakness into a loud refusal —
@@ -7834,8 +7866,19 @@ fresh keypair proves its halves correspond.
 
 For C consumers of the installed shared library: the SONAME follows the
 major version by convention, so it moves `.so.4` -> `.so.5` and existing
-binaries must be relinked. No C API signature changed in this release; the
-loader's major-version handshake (INVARIANT-42) now expects major version 5.
+binaries must be relinked, and the loader's major-version handshake
+(INVARIANT-42) now expects major version 5. The C API itself changed; an
+earlier revision of this paragraph said no signature did, which is false.
+Measured against the `v4.0.0` headers:
+
+- `ama_frost_aggregate` takes two new arguments, `signer_public_shares` and
+  `bad_participant_index` (INVARIANT-49's per-share verification and blame).
+- `ama_frost_round2_sign`'s `nonce_pair` is no longer `const`: the call
+  consumes and zeroes the pair.
+- Four exports are gone. `ama_ml_dsa_sign` / `ama_ml_dsa_verify` (the raw
+  ML-DSA interface, INVARIANT-50), `ama_slhdsa_sign_internal` and
+  `ama_ascon_permutation_for_test` now exist only in the test archive.
+- `ama_dispatch_table_t` loses `sha3_256` (row 18).
 
 ### Completion pass 2 (post-8d72b8c) — the detector made measurable, the lanes made witnessing, the counts made gated
 

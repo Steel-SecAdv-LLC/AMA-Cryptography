@@ -84,6 +84,11 @@
 #  define AMA_PROBE_IS_INSTRUMENTED 0
 #endif
 
+/* Everything up to main() is the probe itself, compiled only where it runs:
+ * an instrumented build returns 77 before calling any of it, and would
+ * otherwise carry every helper as an unused function. */
+#if !AMA_PROBE_IS_INSTRUMENTED
+
 
 #define SCAN_BYTES 32768u
 #define MSG_BYTES  256u
@@ -302,6 +307,8 @@ NOINLINE static ama_error_t run_ascon_decrypt(const uint8_t *ct,
                                             NULL, 0, tag, pt));
     return rc;
 }
+
+#endif /* !AMA_PROBE_IS_INSTRUMENTED */
 
 int main(void) {
 #if AMA_PROBE_IS_INSTRUMENTED

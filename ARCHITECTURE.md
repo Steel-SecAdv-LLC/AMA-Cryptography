@@ -143,7 +143,7 @@ AMA Cryptography is designed as a standalone cryptographic library. Any Python o
 | Constant-Time Utilities | memcmp, memzero, swap, lookup, copy | — | Side-channel resistance | **Full** (ama_consttime.c) |
 | Platform CSPRNG | getrandom/getentropy/BCryptGenRandom | — | Entropy source | **Full** (ama_platform_rand.c) |
 
-**C Library Source Files — measured 2026-08-31: 29 top-level `.c` files, 8 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`. Principal modules:**
+**C Library Source Files.** The measured, gate-checked file inventory is README's [C library inventory](README.md#c-library-inventory-v500); this list does not repeat its counts. **Principal modules:**
 
 Core primitives:
 - `src/c/ama_core.c` - Library initialization, version info, feature detection, shared utilities

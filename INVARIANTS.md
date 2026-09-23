@@ -621,7 +621,7 @@ ambiguity the close-out exists to remove.
 ## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
 
 Use of `# noqa`, `# nosec`, `# pylint: disable`, `# type: ignore`, or any
-equivalent suppression marker is **prohibited** unless **all three** of the
+equivalent suppression marker is **prohibited** unless **all four** of the
 following conditions are met:
 
 1. The suppression is **line-scoped**, not file-scoped.
@@ -1961,8 +1961,9 @@ scope (the gate scans `ama_cryptography/`, `tests/` and `tools/`, not
 
 The second is the interoperability oracles: the tests carrying
 `@pytest.mark.requires_interop_oracle` in `tests/test_aes_gcm_native.py`,
-`tests/test_hkdf_sha3_256.py`, `tests/test_ed25519_native.py` and
-`tests/test_differential.py` import PyCA cryptography, PyNaCl or pycryptodome
+`tests/test_hkdf_sha3_256.py`, `tests/test_ed25519_native.py`,
+`tests/test_ed25519_expanded_key.py` and `tests/test_differential.py` import
+PyCA cryptography, PyNaCl or pycryptodome
 and check that AMA and a second implementation agree — PyCA encrypts and AMA
 decrypts, libsodium signs and AMA verifies, and the reverse. That is
 interoperability evidence, and it is what the require-backends lane installs
@@ -2598,7 +2599,7 @@ assignment out of every package module that declares one — the scope is
 DISCOVERED from the package's ASTs rather than enumerated, with
 `REQUIRED_MODULES` as a seven-module floor beneath it (`pqc_backends`,
 `ascon`, `agent_binding`, `secure_memory`, `hybrid_combiner`, `_build_sign`,
-`_self_test`; 136 symbols against 177 header prototypes today) — and requires
+`_self_test`; the gate prints both counts on every run) — and requires
 agreement on
 arity and on a coarse class per position (pointer-like vs. integer-like,
 pointer/integer/void for returns) — the classes that decide call-frame
@@ -3271,8 +3272,9 @@ expanded key whose tag disagrees. Refusal on every path is
 `AMA_ERROR_INVALID_PARAM` with the output written as zeros (64 signature
 bytes, or the 128 expanded bytes), never left untouched.
 
-**Why.** The 64-byte layout `seed ‖ A` exists to cache `A` so signing can skip
-a scalar multiplication. Trusting that cache is a private-key recovery hazard,
+**Why.** The 64-byte layout `seed ‖ A` carries `A` so that a signer can skip a
+scalar multiplication, and implementations that trust it do exactly that; this
+one treats it as a layout, not a cache. Trusting it is a private-key recovery hazard,
 not a hygiene issue. `r = H(h[32..63] ‖ M)` depends on the seed and the message
 alone, so two signatures over **one** message under two different `A` halves
 share `R`, and

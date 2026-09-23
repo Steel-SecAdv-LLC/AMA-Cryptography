@@ -237,8 +237,9 @@ instruction count and was reported by the taint gate at the jump.
 ### Taint targets and what they found
 
 `--taint` drivers exist for `x25519`, `x25519-batch`, `ed25519-sign`,
-`secp256k1-scalarmult`, `ecdsa`, `nistp-ecdsa`, `kyber-decaps`,
-`consttime`, `ghash`, `ascon-encrypt`, `agent-binding` and `aead-verify`.
+`ed25519-sign-expanded`, `ed25519-sign-sse2fold`, `secp256k1-scalarmult`,
+`ecdsa`, `nistp-ecdsa`, `kyber-decaps`, `consttime`, `ghash`, `ascon-encrypt`,
+`agent-binding` and `aead-verify`.
 On its first run over the tree the gate reported, and the tree then removed:
 
 - the RFC 7748 all-zero-output branch in `ama_x25519_key_exchange` and its
