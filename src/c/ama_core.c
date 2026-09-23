@@ -189,8 +189,10 @@ static uint8_t *hybrid_wrap(const uint8_t *message, size_t message_len, size_t *
 #ifdef AMA_USE_NATIVE_PQC
 /**
  * AMA_ALG_HYBRID signing: Ed25519 over the domain-wrapped message, ML-DSA-65
- * with the domain as its FIPS 204 context.  See AMA_HYBRID_SIG_DOMAIN.  On any
- * failure the whole signature buffer is wiped so no half-signature escapes.
+ * with the domain as its FIPS 204 context.  See AMA_HYBRID_SIG_DOMAIN.  The
+ * key-length, output-size and allocation checks return before anything is
+ * written; once signing has started, a failure of either primitive wipes the
+ * whole signature buffer so no half-signature escapes.
  */
 static ama_error_t hybrid_sign(
     const uint8_t* message,

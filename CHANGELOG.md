@@ -19,6 +19,35 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Ed25519 MULX kernel: builds with frame pointers; review fixes on the fold — 2026-09-23
+
+* **`src/c/x86/ama_ed25519_fe64_mulx.c` failed to compile under Clang with a
+  frame pointer.**  The Valgrind lane (`-g -O1 -fno-omit-frame-pointer`,
+  scheduled and `workflow_dispatch` only, so no PR run ever built it) failed
+  with `inline assembly requires more registers than available`: the group
+  arithmetic inlines the fused MULX blocks of
+  `internal/ama_fe64_mulx_kernel.h`, whose operands need every allocatable
+  GPR including `%rbp`.  Measured matrix: Clang 18 fails at `-O1` and `-O2`
+  with `-fno-omit-frame-pointer`; `-O0`, GCC, and the X25519 and NIST-P MULX
+  kernels are unaffected.  Frame-pointer builds are not exotic — sanitizer
+  builds and distributions that package with `-fno-omit-frame-pointer` by
+  default hit the same wall — so the fix is in `CMakeLists.txt`, not in the
+  lane: that one TU is compiled with `-fomit-frame-pointer`.  Release already
+  passes it globally, so shipped objects are unchanged.  Measured: the lane's
+  exact configuration now builds, and the lane's seven memcheck targets run
+  clean under Valgrind (`test_kat` 49/49 from the source tree, as the lane
+  runs it); gcc and clang strict-warnings builds stay inside the frozen
+  allowlist.
+* **Copilot review of the fold.**  The static-analysis reproducible-wheel step
+  still installed `build>=1.0`; it now installs `build>=1.6.1` like every
+  other place the build frontend is pinned.  The provenance comment above the
+  first cibuildwheel pin in `release.yml` named v4.1.1; it now names v4.2.1,
+  the tag `e090b81e` peels to.  The README Cython badge and the `[math]`
+  description said 3.2.8; they now say 3.3.0, the floor `setup.py` enforces.
+  `hybrid_sign()`'s comment overstated its cleanup: the parameter and
+  allocation checks return before anything is written, and only a failure of
+  a signing primitive wipes the buffer; the comment now says exactly that.
+
 ### The two CodeQL notes open on the release-train head, fixed at source — 2026-09-23
 
 The default-branch ruleset enforces `code_scanning` with CodeQL

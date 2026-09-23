@@ -550,8 +550,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
     set(AMA_ED25519_MULX_SOURCES
         src/c/x86/ama_ed25519_fe64_mulx.c
     )
+    # -fomit-frame-pointer: the group arithmetic inlines the fused MULX blocks,
+    # whose operands need every allocatable GPR including %rbp.  With a frame
+    # pointer kept, Clang 18 at -O1/-O2 fails with "inline assembly requires
+    # more registers than available" (GCC, -O0 and the X25519/NIST-P kernels
+    # are unaffected).  Frame-pointer builds are common: the Valgrind lane
+    # (-g -O1 -fno-omit-frame-pointer), sanitizer builds, and distributions
+    # that package with -fno-omit-frame-pointer by default.  Release already
+    # passes -fomit-frame-pointer globally, so shipped objects are unchanged.
     set_source_files_properties(${AMA_ED25519_MULX_SOURCES} PROPERTIES
-        COMPILE_FLAGS "-mbmi2 -madx")
+        COMPILE_FLAGS "-mbmi2 -madx -fomit-frame-pointer")
     add_compile_definitions(AMA_HAVE_ED25519_FE64_MULX_IMPL)
     message(STATUS "Ed25519: MULX+ADX fe64 instantiation enabled (BMI2 + ADX, x86-64 GCC/Clang)")
 endif()

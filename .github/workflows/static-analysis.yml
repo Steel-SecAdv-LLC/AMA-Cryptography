@@ -1065,7 +1065,7 @@ jobs:
           # image is designed for.
           /opt/python/cp311-cp311/bin/python -m pip install --upgrade pip
           /opt/python/cp311-cp311/bin/pip install \
-            'build>=1.0' \
+            'build>=1.6.1' \
             'setuptools>=84.0.0' 'wheel>=0.48.0' \
             'cmake>=4.4.3' 'Cython>=3.3.0' 'numpy>=1.24.0'
           # Front-load the manylinux Python on PATH so subsequent

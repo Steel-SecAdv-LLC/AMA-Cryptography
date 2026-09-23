@@ -405,12 +405,12 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels via cibuildwheel
-        # Real v4.1.1 commit, verified with
-        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v4.1.1
-        # (This block previously said v3.2.0 and quoted the v3.2.0^{} lookup,
-        # left behind when the pin was bumped; the SHA below is the v4.1.1 tag
-        # — 7c619ef… is v3.2.0^{} — and the trailing marker was already
-        # correct, which is why check_action_pins.py never flagged it.)
+        # Real v4.2.1 commit, verified with
+        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v4.2.1
+        # (This block once said v3.2.0 and quoted the v3.2.0^{} lookup, left
+        # behind when the pin was bumped; the trailing marker was correct, which
+        # is why check_action_pins.py never flagged it.  Keep this provenance
+        # line in step with the pin: check_action_pins.py reads only the marker.)
         #
         # Background, kept because it explains a real outage: an earlier pin
         # (e9c4a96e…) did not exist in pypa/cibuildwheel at all — it matched

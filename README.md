@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10--3.14-blue.svg)](https://www.python.org)
 [![C](https://img.shields.io/badge/C-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![Cython](https://img.shields.io/badge/Cython-3.2.8+-yellow.svg)](https://cython.org)
+[![Cython](https://img.shields.io/badge/Cython-3.3.0+-yellow.svg)](https://cython.org)
 [![PQC](https://img.shields.io/badge/PQC-ML--DSA%20%7C%20ML--KEM%20%7C%20SLH--DSA%20%7C%20LMS-purple.svg)](CRYPTOGRAPHY.md)
 [![ACVP](https://img.shields.io/badge/NIST%20ACVP-1215%2F1215-brightgreen.svg)](docs/compliance/ACVP_SELF_ATTESTATION.md)
 [![3R Monitoring](https://img.shields.io/badge/3R-Runtime%20Security-orange.svg)](MONITORING.md)
@@ -1599,7 +1599,7 @@ AMA Cryptography v5.0.0 has **zero core cryptographic dependencies** — all cry
 - **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
 
 **Optional dependency groups:**
-- `[math]`: numpy (≥ 1.24), Cython (≥ 3.2.8) — required only for the optional `math_engine` Cython extension
+- `[math]`: numpy (≥ 1.24), Cython (≥ 3.3.0) — required only for the optional `math_engine` Cython extension
 - `[monitoring]`: numpy (3R engine)
 - `[legacy]`: cryptography — used ONLY by tests/benchmarks for cross-checking; NOT a runtime fallback (INVARIANT-1 prohibits a PyCA dependency in the production path)
 - `[hsm]`: PyKCS11 ≥ 1.5.18 (HSM support)
