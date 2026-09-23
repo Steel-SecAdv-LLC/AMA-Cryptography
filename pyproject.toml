@@ -4,23 +4,24 @@
 # Build-time dependencies (PEP 518).  These versions are floors enforced
 # by setup.py's preflight check (D-9).
 #
-# - setuptools >= 83.0.0 (D-8/D-9): older releases — particularly Debian's
+# - setuptools >= 84.0.0 (D-8/D-9): older releases — particularly Debian's
 #   patched 68.x — fail bdist_wheel with `AttributeError: install_layout`.
 #   70.0.0 closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49; the
-#   floor is pinned at 83.0.0 (the latest baseline) and setup.py's preflight
+#   floor is pinned at 84.0.0 (the latest baseline) and setup.py's preflight
 #   check enforces the SAME value so the isolated-build requirement and the
 #   guard cannot drift.
-# - wheel >= 0.47.0 (D-8): closes GHSA-8rrh-rw8j-w5fx.
+# - wheel >= 0.48.0 (D-8): 0.47.0 closes GHSA-8rrh-rw8j-w5fx; 0.48.0 closes
+#   GHSA-vgq5-9859-3mmw (`wheel convert` path traversal / arbitrary write).
 # - cmake: required to auto-build the native C cryptographic library during
 #   `pip install .` — the CMakeBuild command in setup.py invokes cmake.
 # - numpy, Cython: required to build the math_engine extension; failures
 #   here are now FATAL unless AMA_NO_CYTHON=1 (D-4).  Users on pure-Python
 #   environments are still supported via the opt-out env var.
 requires = [
-    "setuptools>=83.0.0",
-    "wheel>=0.47.0",
-    "cmake>=4.4.0",
-    "Cython>=3.2.8",
+    "setuptools>=84.0.0",
+    "wheel>=0.48.0",
+    "cmake>=4.4.3",
+    "Cython>=3.3.0",
     "numpy>=1.24.0",
 ]
 build-backend = "setuptools.build_meta"
@@ -82,7 +83,7 @@ math = [
     # Not required for core cryptographic operations.
     # Install with: pip install "ama-cryptography[math]"
     "numpy>=1.24.0,<3.0.0",
-    "Cython>=3.2.8",
+    "Cython>=3.3.0",
 ]
 monitoring = [
     # NumPy for mathematical monitoring (equations, double_helix_engine)
@@ -181,13 +182,13 @@ docs = [
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=4.0.0",
-    "hypothesis>=6.161.8",
+    "hypothesis>=6.168.0",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
     # so no version guard is needed.
     "black>=26.5.1",
-    "ruff>=0.16.0",
-    "mypy>=2.3.0",
+    "ruff>=0.16.8",
+    "mypy>=2.3.1",
     # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
     # setuptools ships no `py.typed`.  Without these stubs the type-check job
     # FAILS — measured, 5 errors in setup.py: `Library stubs not installed for
@@ -211,7 +212,7 @@ dev = [
     # test job.  requirements-dev.txt already declared both; this extra was the
     # outlier.
     "PyYAML>=6.0.3",
-    "types-PyYAML>=6.0.12.20260724",
+    "types-PyYAML>=6.0.12.20260906",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
     # that NO CI workflow ever invoked.  Vulnerability scanning is
@@ -227,7 +228,7 @@ dev = [
     # `safety` deletes the chain entirely rather than annotating an
     # ignore-list — INVARIANT-14 hygiene + INVARIANT-1 zero-runtime-dep
     # posture both improve.
-    "Cython>=3.2.8",
+    "Cython>=3.3.0",
     "numpy>=1.24.0",
     # Build and packaging — mirrors requirements-dev.txt's "Build and
     # packaging" block, which documents the two files as equivalent.  These
@@ -235,9 +236,9 @@ dev = [
     # dev-install` -> pip install -e ".[dev,all]") could not run the
     # documented release target (`make dist` -> python -m build): "No
     # module named build".
-    "build>=1.5.0",
-    "setuptools>=83.0.0",
-    "wheel>=0.47.0",
+    "build>=1.6.1",
+    "setuptools>=84.0.0",
+    "wheel>=0.48.0",
 ]
 # Umbrella extra — aggregates the non-overlapping extras above via PEP 508
 # self-reference so a single `pip install ama-cryptography[all]` pulls in
@@ -433,7 +434,7 @@ skip-string-normalization = false
 # Static-analysis target = the project's minimum supported runtime.  The
 # project dropped Python 3.9 (requires-python >= 3.10; see the classifiers and
 # CI matrix), so 3.10 is now both the runtime floor and the type-analysis
-# floor.  This also satisfies mypy >= 2.0 (2.3.0 via the python-dependencies
+# floor.  This also satisfies mypy >= 2.0 (2.3.1 via the python-dependencies
 # group), which refuses python_version="3.9".
 python_version = "3.10"
 strict = true
