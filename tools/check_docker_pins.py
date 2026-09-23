@@ -58,6 +58,21 @@ What is checked
     and rebuilds every project when that base moves, so the pin belongs to
     OSS-Fuzz rather than to this repository.
 
+``workflow images``
+    A Dockerfile is not the only place an image is named.  A workflow job's
+    ``container:`` (string or ``image:``), every ``services.<id>.image``, a
+    step's ``uses: docker://…``, and a Docker container action's
+    ``runs.image: docker://…`` all pull a registry image by reference and run
+    it with the job's token.  The scan globbed ``Dockerfile*`` only, so a
+    tag-only ``container: image: quay.io/pypa/manylinux_2_28_x86_64:<tag>`` in
+    ``static-analysis.yml`` was never examined.  Each of these must carry
+    ``@sha256:<64 hex>`` too; an image computed by a ``${{ }}`` expression
+    cannot be verified and fails the same way.  The workflows are PARSED
+    (``yaml.compose``) so every YAML spelling of those keys is seen.  No
+    ``base-eol`` declaration is required of them: there is no Dockerfile to
+    carry it, and the image's support window is the workflow's owner's to
+    track.
+
 Exit status: 0 when clean, 1 on any finding, 2 on a usage error.  A scan that
 finds no Dockerfiles is an error, not a pass.
 """
@@ -69,6 +84,8 @@ import re
 import sys
 from pathlib import Path
 from typing import NamedTuple, Sequence
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -169,6 +186,120 @@ def dockerfiles(root: Path | None = None) -> list[Path]:
             continue
         out.append(path)
     return out
+
+
+def workflow_files(root: Path | None = None) -> list[Path]:
+    """Every workflow and composite/container action definition under ``.github``."""
+    base = REPO_ROOT if root is None else root
+    github = base / ".github"
+    out: list[Path] = []
+    workflows = github / "workflows"
+    if workflows.is_dir():
+        out.extend(sorted(workflows.glob("*.yml")) + sorted(workflows.glob("*.yaml")))
+    actions = github / "actions"
+    if actions.is_dir():
+        for pattern in ("action.yml", "action.yaml"):
+            out.extend(sorted(path for path in actions.rglob(pattern) if path.is_file()))
+    return out
+
+
+def _get(node: yaml.Node | None, key: str) -> yaml.Node | None:
+    """The value node for ``key`` in a mapping node, or ``None``."""
+    if not isinstance(node, yaml.MappingNode):
+        return None
+    for key_node, value in node.value:
+        if isinstance(key_node, yaml.ScalarNode) and key_node.value == key:
+            found: yaml.Node = value
+            return found
+    return None
+
+
+def _items(node: yaml.Node | None) -> list[tuple[str, yaml.Node]]:
+    if not isinstance(node, yaml.MappingNode):
+        return []
+    return [
+        (str(key.value), value) for key, value in node.value if isinstance(key, yaml.ScalarNode)
+    ]
+
+
+def _steps_images(steps: yaml.Node | None, where: str) -> list[tuple[str, yaml.ScalarNode]]:
+    out: list[tuple[str, yaml.ScalarNode]] = []
+    if isinstance(steps, yaml.SequenceNode):
+        for step in steps.value:
+            uses = _get(step, "uses")
+            if isinstance(uses, yaml.ScalarNode) and str(uses.value).strip().startswith(
+                "docker://"
+            ):
+                out.append((f"{where} step `uses: docker://`", uses))
+    return out
+
+
+def _workflow_image_nodes(root: yaml.Node) -> list[tuple[str, yaml.ScalarNode]]:
+    """``(context, image scalar)`` for every image a workflow or action pulls."""
+    images: list[tuple[str, yaml.ScalarNode]] = []
+    for job_id, job in _items(_get(root, "jobs")):
+        container = _get(job, "container")
+        if isinstance(container, yaml.ScalarNode):
+            images.append((f"job '{job_id}' container", container))
+        else:
+            image = _get(container, "image")
+            if isinstance(image, yaml.ScalarNode):
+                images.append((f"job '{job_id}' container", image))
+        for service_id, service in _items(_get(job, "services")):
+            image = service if isinstance(service, yaml.ScalarNode) else _get(service, "image")
+            if isinstance(image, yaml.ScalarNode):
+                images.append((f"job '{job_id}' service '{service_id}'", image))
+        images.extend(_steps_images(_get(job, "steps"), f"job '{job_id}'"))
+    runs = _get(root, "runs")
+    images.extend(_steps_images(_get(runs, "steps"), "composite action"))
+    runs_image = _get(runs, "image")
+    if isinstance(runs_image, yaml.ScalarNode) and str(runs_image.value).strip().startswith(
+        "docker://"
+    ):
+        images.append(("container action `runs.image`", runs_image))
+    return images
+
+
+def scan_workflow(path: Path, text: str) -> list[Finding]:
+    """Findings for one workflow or action definition: every image digest-pinned."""
+    try:
+        root = yaml.compose(text)
+    except yaml.YAMLError as exc:
+        return [
+            Finding(
+                path,
+                0,
+                f"could not be parsed as YAML ({str(exc).splitlines()[0]}); an image "
+                f"reference this gate cannot read is not one it has verified.",
+                NOT_DIGEST_PINNED,
+            )
+        ]
+    if root is None:
+        return []
+    findings: list[Finding] = []
+    for context, node in _workflow_image_nodes(root):
+        image = str(node.value).strip()
+        reference = image.removeprefix("docker://")
+        if _DIGEST_RE.search(reference):
+            continue
+        computed = "${{" in reference
+        findings.append(
+            Finding(
+                path,
+                node.start_mark.line + 1,
+                f"{context} image {image!r} "
+                + (
+                    "is computed by an expression, so no digest can be verified here. "
+                    if computed
+                    else "is pinned by tag only. "
+                )
+                + "A tag is a mutable pointer: the job runs whatever bytes the "
+                "registry serves under it today, with the job's token. Pin it as "
+                "name:tag@sha256:<digest> (keep the tag for readability).",
+                NOT_DIGEST_PINNED,
+            )
+        )
+    return findings
 
 
 def _declared_eol(lines: Sequence[str]) -> tuple[_dt.date | None, int]:
@@ -304,12 +435,25 @@ def scan(path: Path, text: str, today: _dt.date) -> list[Finding]:
     return findings
 
 
+def _is_workflow(path: Path) -> bool:
+    return path.suffix in (".yml", ".yaml")
+
+
 def audit(paths: Sequence[Path] | None = None, today: _dt.date | None = None) -> list[Finding]:
-    targets = list(paths) if paths is not None else dockerfiles()
+    """Findings for the given files, or for every Dockerfile AND workflow in the tree.
+
+    A ``.yml``/``.yaml`` path is read as a workflow or action definition;
+    anything else as a Dockerfile.
+    """
+    targets = list(paths) if paths is not None else dockerfiles() + workflow_files()
     when = today or _dt.date.today()
     findings: list[Finding] = []
     for path in targets:
-        findings.extend(scan(path, path.read_text(encoding="utf-8", errors="replace"), when))
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if _is_workflow(path):
+            findings.extend(scan_workflow(path, text))
+        else:
+            findings.extend(scan(path, text, when))
     return findings
 
 
@@ -323,11 +467,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"ERROR: not a file: {path}", file=sys.stderr)
             return 2
     else:
-        targets = dockerfiles()
-        if not targets:
-            # Fail closed: an empty scan is a broken scan, not a clean tree.
+        docker = dockerfiles()
+        workflows = workflow_files()
+        # Fail closed PER KIND: an empty scan of either is a broken scan, and
+        # the other kind's files must not carry it to a pass.
+        if not docker:
             print(f"ERROR: no Dockerfiles found under {REPO_ROOT}", file=sys.stderr)
             return 2
+        if not workflows:
+            print(f"ERROR: no workflow files found under {REPO_ROOT}/.github", file=sys.stderr)
+            return 2
+        targets = docker + workflows
 
     findings = audit(targets)
     if findings:
@@ -337,7 +487,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(file=sys.stderr)
         return 1
 
-    print(f"OK    container base images pinned and supported ({len(targets)} Dockerfile(s))")
+    print(
+        f"OK    container images pinned (and Dockerfile bases supported) "
+        f"({len(targets)} Dockerfile/workflow file(s))"
+    )
     return 0
 
 

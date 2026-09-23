@@ -223,27 +223,21 @@ def test_ml_dsa_tampered_signature_rejected(ps: int) -> None:
 def test_ml_dsa_context_is_domain_separating(ps: int) -> None:
     """The §5.2 context wrapper must actually separate domains.
 
-    ``ctx=None`` (internal interface) and ``ctx=b""`` (external/pure with an
-    empty context) are different domains and must produce different
-    signatures — a wrapper applied inconsistently would make them equal.
+    Two contexts under one key are different domains and must produce
+    signatures neither of which verifies under the other.  (The internal
+    interface is the third domain; it no longer ships, and its separation is
+    pinned in tests/c/test_ml_dsa_context_separation.c.)
     """
     pk, sk = pb.native_ml_dsa_keypair(ps)
     msg = b"context separation"
 
-    sig_internal = pb.native_ml_dsa_sign(ps, msg, sk)
     sig_empty_ctx = pb.native_ml_dsa_sign(ps, msg, sk, ctx=b"")
     sig_ctx = pb.native_ml_dsa_sign(ps, msg, sk, ctx=b"ama")
 
-    assert sig_internal != sig_empty_ctx
     assert sig_empty_ctx != sig_ctx
-
-    assert pb.native_ml_dsa_verify(ps, msg, sig_internal, pk)
     assert pb.native_ml_dsa_verify(ps, msg, sig_empty_ctx, pk, ctx=b"")
     assert pb.native_ml_dsa_verify(ps, msg, sig_ctx, pk, ctx=b"ama")
-
-    # Cross-domain verification must fail in every direction.
-    assert not pb.native_ml_dsa_verify(ps, msg, sig_internal, pk, ctx=b"")
-    assert not pb.native_ml_dsa_verify(ps, msg, sig_empty_ctx, pk)
+    assert not pb.native_ml_dsa_verify(ps, msg, sig_empty_ctx, pk, ctx=b"ama")
     assert not pb.native_ml_dsa_verify(ps, msg, sig_ctx, pk, ctx=b"")
 
 
@@ -338,6 +332,7 @@ def test_ml_dsa_known_answer_vectors(ps: int, filename: str) -> None:
 
     keygen_checked = 0
     siggen_checked = 0
+    internal_records = 0
     for rec in records:
         if "seed" in rec:
             pk, sk = pb.native_ml_dsa_keypair_from_seed(ps, bytes.fromhex(rec["seed"]))
@@ -348,12 +343,19 @@ def test_ml_dsa_known_answer_vectors(ps: int, filename: str) -> None:
             sk = bytes.fromhex(rec["skey"])
             msg = bytes.fromhex(rec["msg"]) if rec["msg"] else b""
             ctx = bytes.fromhex(rec["ctx"]) if rec.get("ctx") else b""
-            mode = rec["sigmode"]
-            sig = pb.native_ml_dsa_sign(ps, msg, sk, ctx=None if mode == "internal" else ctx)
-            assert sig == bytes.fromhex(rec["sig"]), f"ML-DSA {mode} signature diverged from KAT"
+            if rec["sigmode"] == "internal":
+                # Algorithm 7 is not in the shipped library (INVARIANT-50);
+                # tests/c/test_ml_dsa_context_separation.c replays these
+                # through the testing archive.  Counted so the corpus cannot
+                # quietly stop carrying them.
+                internal_records += 1
+                continue
+            sig = pb.native_ml_dsa_sign(ps, msg, sk, ctx=ctx)
+            assert sig == bytes.fromhex(rec["sig"]), "ML-DSA external signature diverged from KAT"
             siggen_checked += 1
 
     assert keygen_checked > 0 and siggen_checked > 0, "KAT file exercised nothing"
+    assert internal_records == 0 or internal_records >= 15, internal_records
 
 
 # ---------------------------------------------------------------------------
@@ -381,9 +383,8 @@ def test_legacy_dilithium_wrapper_is_ml_dsa_65() -> None:
 
     It used to be the internal interface (Algorithm 7, no domain separator),
     whose signatures no conforming ML-DSA-65 verifier accepts.  The pairing
-    below is therefore with ``ctx=b""``; the internal interface keeps its own
-    named entry point and its own test in
-    ``tests/test_ml_dsa_interfaces.py``.
+    below is therefore with ``ctx=b""``; the internal interface no longer ships
+    (``tests/test_ml_dsa_interfaces.py``).
     """
     kp = pb.generate_dilithium_keypair()
     sizes = pb.ML_DSA_SIZES[pb.ML_DSA_65]
@@ -400,8 +401,8 @@ def test_legacy_dilithium_wrapper_is_ml_dsa_65() -> None:
         pb.native_ml_dsa_sign(pb.ML_DSA_65, msg, bytes(kp.secret_key), ctx=b""),
         kp.public_key,
     )
-    # And the internal interface is a different domain, not an alias.
-    assert not pb.dilithium_verify(
+    # The default context IS the empty one, so the default signer agrees too.
+    assert pb.dilithium_verify(
         msg, pb.native_ml_dsa_sign(pb.ML_DSA_65, msg, bytes(kp.secret_key)), kp.public_key
     )
 

@@ -41,7 +41,9 @@ static inline int32x4_t mullo_s32(int32x4_t a, int32x4_t b) {
  *
  * A `barrett_reduce_dil_neon` used to sit at this point, unreferenced by any
  * translation unit in the repository — `static inline` with no caller, which
- * is the one shape neither gcc nor clang warns about, so nothing surfaced it.
+ * gcc does not warn about and clang reports only under -Wunused-function in a
+ * lane this file was not built in.  (A `caddq_neon` of the same shape stayed
+ * until a strict clang cross-compile of this file reported it.)
  * It was also wrong: it computed `t = a >> 23; return a - t*q`, omitting the
  * `+ (1 << 22)` rounding term that `dil_reduce32` in src/c/ama_dilithium.c
  * carries.  Measured against that scalar reference over 400,000 values drawn
@@ -57,18 +59,6 @@ static inline int32x4_t mullo_s32(int32x4_t a, int32x4_t b) {
  * wanted, it must be written to match `dil_reduce32` and pinned by an
  * equivalence test, the way `tests/c/test_dilithium_ntt_equiv.c` pins the NTT.
  */
-
-/* ============================================================================
- * Conditional add q (reduce to [0, q))
- * ============================================================================ */
-static inline int32x4_t caddq_neon(int32x4_t a) {
-    const int32x4_t q    = vdupq_n_s32(DILITHIUM_Q);
-    const int32x4_t zero = vdupq_n_s32(0);
-    /* mask = (a < 0) ? 0xFFFFFFFF : 0 */
-    uint32x4_t mask = vcltq_s32(a, zero);
-    int32x4_t addend = vandq_s32(vreinterpretq_s32_u32(mask), q);
-    return vaddq_s32(a, addend);
-}
 
 /* ============================================================================
  * NEON 64-bit Montgomery multiply for Dilithium

@@ -327,6 +327,31 @@ class TestKeyManagementDecryptPaths:
 
         assert temp_storage.retrieve_key(key_id) is None
 
+    @skip_no_native_aes
+    def test_delete_key_overwrites_the_original_bytes_in_place(self, temp_storage: Any) -> None:
+        """The overwrite must land on the key's own blocks, all of them.
+
+        A hard link keeps the inode reachable after the unlink, so its content
+        is exactly what the overwrite left behind.  Truncating first (the
+        previous code) wrote 1 KiB of random bytes to fresh blocks, so the
+        inode's size changed and the original bytes were never touched.
+        """
+        import os
+        import secrets
+
+        key_id = "overwrite-test-key"
+        temp_storage.store_key(key_id, secrets.token_bytes(32))
+        key_file = temp_storage.storage_path / f"{key_id}.json"
+        link = temp_storage.storage_path / "held-link.bin"
+        os.link(key_file, link)
+        original = link.read_bytes()
+
+        assert temp_storage.delete_key(key_id) is True
+        after = link.read_bytes()
+        assert not key_file.exists()
+        assert len(after) == len(original)
+        assert after != original
+
     def test_delete_nonexistent_key_returns_false(self, temp_storage: Any) -> None:
         """Deleting non-existent key returns False."""
         result = temp_storage.delete_key("nonexistent")

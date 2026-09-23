@@ -356,8 +356,10 @@ nothing. The layer needs only SHA3/HMAC/HKDF, so it is available in the
 
 ### Ed25519
 
-The secret key is **64 bytes**, not 32: RFC 8032's expanded form, seed followed
-by the public key (`AMA_ED25519_SECRET_KEY_BYTES`). Sizing that buffer at 32
+The secret key is **64 bytes**, not 32: the RFC 8032 `seed ‖ A` layout, seed
+followed by the public key (`AMA_ED25519_SECRET_KEY_BYTES`). It is not the
+128-byte *expanded form* described below, which `ama_ed25519_sign_expanded`
+reads with no length parameter. Sizing that buffer at 32
 overflows it on every call.
 
 > ### `ama_ed25519_keypair()` does not generate the seed. You do.

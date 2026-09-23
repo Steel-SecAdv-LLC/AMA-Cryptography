@@ -145,7 +145,157 @@ def _needs(job: dict[str, Any]) -> set[str]:
 #: both ci.yml and ci-build-test.yml, corpus-provenance-gate, dudect-gate,
 #: fuzzing-gate, security-gate and static-analysis-gate, of which seven use
 #: the `needs.*.result` wildcard form.
+#:
+#: MENTIONING the wildcard is not evaluating it.  The exemption used to be
+#: granted to any gate whose `if:` text matched this pattern, so
+#: ``if: contains(needs.*.result, 'cancelled') && false`` — a step that can
+#: never run — switched the per-dependency check off and the gate passed.  The
+#: pattern is now only used to say WHY a wildcard gate was rejected; the
+#: exemption itself requires :func:`_wildcard_fail_step`.
 _WILDCARD_NEEDS_RE = re.compile(r"needs\.\*\.(?:result|outputs|conclusion)")
+
+#: The three non-success results a dependency can end in on a pull request.
+#: A wildcard step that fails on only some of them lets the others through:
+#: the failure-only form ``contains(needs.*.result, 'failure')`` passes a
+#: dependency that was *cancelled* or *skipped* (an upstream `needs:` failure
+#: or a mis-scoped `if:` skips it), and the gate goes green over a job that
+#: never ran.
+WILDCARD_REQUIRED_RESULTS = frozenset({"failure", "cancelled", "skipped"})
+
+#: One disjunct of the accepted wildcard condition, exactly.
+_WILDCARD_DISJUNCT_RE = re.compile(r"contains\(\s*needs\.\*\.result\s*,\s*(['\"])([a-z_]+)\1\s*\)")
+
+
+def _split_top_level_or(expression: str) -> list[str] | None:
+    """Split an expression on ``||`` operators that are not inside parentheses.
+
+    Returns ``None`` when the parentheses are unbalanced.  Quoted strings are
+    skipped so a ``'||'`` literal is not an operator.
+    """
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    index = 0
+    quote: str | None = None
+    while index < len(expression):
+        char = expression[index]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+        elif depth == 0 and expression.startswith("||", index):
+            parts.append(expression[start:index])
+            index += 2
+            start = index
+            continue
+        index += 1
+    if depth != 0 or quote is not None:
+        return None
+    parts.append(expression[start:])
+    return [part.strip() for part in parts]
+
+
+def _strip_outer_parens(expression: str) -> str:
+    """Remove parentheses that enclose the WHOLE expression, repeatedly."""
+    text = expression.strip()
+    while text.startswith("(") and text.endswith(")"):
+        depth = 0
+        encloses_all = True
+        for position, char in enumerate(text):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and position != len(text) - 1:
+                    encloses_all = False
+                    break
+        if not encloses_all:
+            break
+        text = text[1:-1].strip()
+    return text
+
+
+def _wildcard_condition_results(condition: str) -> set[str] | None:
+    """The results a wildcard `if:` fails on, or ``None`` if it is any other shape.
+
+    Accepted: a disjunction (``||``) whose every top-level term is exactly
+    ``contains(needs.*.result, '<result>')``, optionally inside ``${{ }}`` and
+    parentheses.  Anything else — a conjunction, a negation, a literal
+    ``false``, a comparison — is rejected, because each of those can make the
+    step unreachable while still mentioning the wildcard.  The accepted shape
+    is monotone: adding a disjunct can only make the step fire MORE often.
+    """
+    text = condition.strip()
+    if text.startswith("${{") and text.endswith("}}"):
+        text = text[3:-2]
+    disjuncts = _split_top_level_or(_strip_outer_parens(text))
+    if not disjuncts:
+        return None
+    results: set[str] = set()
+    for disjunct in disjuncts:
+        match = _WILDCARD_DISJUNCT_RE.fullmatch(_strip_outer_parens(disjunct))
+        if match is None:
+            return None
+        results.add(match.group(2))
+    return results
+
+
+#: A line of a `run:` script that is exactly ``exit <nonzero>`` at column 0,
+#: i.e. not nested in a shell `if`/function body the step could branch around.
+_TOP_LEVEL_NONZERO_EXIT_RE = re.compile(r"^exit[ \t]+([1-9][0-9]*)[ \t]*(?:#.*)?$", re.MULTILINE)
+#: Any `exit` whose status is zero, absent, or computed — each can end the
+#: script successfully before the nonzero exit is reached.
+_ANY_EXIT_RE = re.compile(r"(?:^|[;&|({]\s*|\s)exit\b(?:[ \t]+(\S+))?", re.MULTILINE)
+
+
+def _run_exits_nonzero(run: str) -> bool:
+    """True when a step's script unconditionally ends in a nonzero exit.
+
+    Requires a column-0 ``exit N`` (N >= 1) and no other ``exit`` whose status
+    is not a nonzero literal, so ``exit 0`` / bare ``exit`` / ``exit $rc``
+    cannot short-circuit it.
+    """
+    if not _TOP_LEVEL_NONZERO_EXIT_RE.search(run):
+        return False
+    for match in _ANY_EXIT_RE.finditer(run):
+        status = match.group(1)
+        if status is None or not re.fullmatch(r"[1-9][0-9]*", status):
+            return False
+    return True
+
+
+def _wildcard_fail_step(job: dict[str, Any]) -> bool:
+    """True when some step fails the gate on EVERY non-success wildcard result.
+
+    The step must (1) carry an `if:` of the accepted wildcard shape that covers
+    ``failure``, ``cancelled`` and ``skipped``; (2) run a script that exits
+    nonzero unconditionally; and (3) not carry ``continue-on-error``, which
+    would turn that nonzero exit into a green step.  This is the form every
+    wildcard roll-up gate in this repository uses.
+    """
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        return False
+    for step in steps:
+        if not isinstance(step, dict) or step.get("if") is None:
+            continue
+        results = _wildcard_condition_results(str(step["if"]))
+        if results is None or not WILDCARD_REQUIRED_RESULTS <= results:
+            continue
+        run = step.get("run")
+        if not isinstance(run, str) or not _run_exits_nonzero(run):
+            continue
+        if step.get("continue-on-error") not in (None, False):
+            continue
+        return True
+    return False
 
 
 def _run_text(job: dict[str, Any]) -> str:
@@ -258,9 +408,12 @@ def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
     gate carries ``if: always()``, so it runs anyway, ``rc`` stays 0, and the
     final step prints that every job reached the state the trigger requires.
     """
-    # The wildcard exemption applies only where the wildcard is EVALUATED: the
-    # gate job's own `if:`, or one of its steps' `if:`.
-    if _WILDCARD_NEEDS_RE.search(_gate_condition_text(job)):
+    # The wildcard exemption applies only where the wildcard is EVALUATED AND
+    # ACTED ON: a step whose `if:` fires on failure, cancelled and skipped and
+    # whose script then exits nonzero.  Merely naming `needs.*.result` in an
+    # `if:` -- `contains(needs.*.result, 'cancelled') && false` -- used to be
+    # enough to switch the per-dependency check off.
+    if _wildcard_fail_step(job):
         return []
 
     # Read the EVALUATION, not the binding (H7).  A dependency's env: alias
@@ -356,9 +509,19 @@ def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
                 f"`needs:` and not to that list runs, fails, and leaves the gate "
                 f"green — with `if: always()` the gate runs regardless and its "
                 f"exit status never sees the failure. Reference each dependency "
-                f"in the gate's steps, or switch the gate to the "
-                f"`contains(needs.*.result, 'failure')` form, which cannot go "
-                f"stale."
+                f"in the gate's steps, or give the gate a step with "
+                f"`if: contains(needs.*.result, 'failure') || "
+                f"contains(needs.*.result, 'cancelled') || "
+                f"contains(needs.*.result, 'skipped')` whose script is "
+                f"`exit 1` — the form that cannot go stale. The failure-only "
+                f"form is not enough: it passes a dependency that was "
+                f"cancelled or skipped."
+                + (
+                    " (This gate names `needs.*.result` in an `if:`, but no step "
+                    "of that shape acts on it.)"
+                    if _WILDCARD_NEEDS_RE.search(_gate_condition_text(gate))
+                    else ""
+                )
             )
 
     missing = sorted(other_ids - covered)

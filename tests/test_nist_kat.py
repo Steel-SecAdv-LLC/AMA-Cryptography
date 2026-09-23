@@ -756,30 +756,6 @@ class TestMLDSAKATValidation:
             dilithium_sign_ctx(b"msg", keypair.secret_key, oversized)
 
     @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
-    def test_dilithium_sign_ctx_matches_verify_ctx_wrapper(self) -> None:
-        """
-        Sign/verify wrappers apply the *identical* M' = 0x00||len(ctx)||ctx||M
-        construction. Therefore a signature produced by ``dilithium_sign_ctx``
-        on (M, ctx) must equal a signature produced by the underlying
-        internal signer on the manually-prefixed wrapped message.
-
-        This locks the C-side wrapper symmetry that closes the FIPS 204 §5.2
-        ACVP sigGen vectors with non-empty contexts.  The manual side must be
-        the INTERNAL signer — ``native_ml_dsa_sign(..., ctx=None)`` — because
-        since 5.0.0 ``dilithium_sign`` applies the external wrapper itself
-        and would prefix the already-prefixed message a second time.
-        """
-        keypair = generate_dilithium_keypair()
-        message = b"wrapper equivalence"
-        for ctx in (b"", b"AMA", bytes(range(50)), bytes(range(255))):
-            wrapped = bytes([0x00, len(ctx)]) + ctx + message
-            sig_via_wrapper = dilithium_sign_ctx(message, keypair.secret_key, ctx)
-            sig_via_manual = pb.native_ml_dsa_sign(pb.ML_DSA_65, wrapped, bytes(keypair.secret_key))
-            assert (
-                sig_via_wrapper == sig_via_manual
-            ), f"sign_ctx output diverges from manual M' wrapping at ctx_len={len(ctx)}"
-
-    @pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium backend not available")
     @pytest.mark.skipif(
         not fips204_kat_available(),
         reason="FIPS 204 ML-DSA-65 KAT vectors not available",

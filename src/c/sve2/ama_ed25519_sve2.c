@@ -5,7 +5,7 @@
  * @brief ARM SVE2 Ed25519 placeholder TU (no kernels currently wired)
  *
  * SVE2 Ed25519 acceleration is not currently shipped.  As documented
- * at `src/c/dispatch/ama_dispatch.c` lines 354-357, the dispatcher
+ * in `src/c/dispatch/ama_dispatch.c`, the dispatcher
  * reports `dispatch_info.ed25519 = AMA_IMPL_GENERIC` on every AArch64
  * host: the in-house backend runs its scalar radix-2^51 instantiation
  * there, with no vector path, because:

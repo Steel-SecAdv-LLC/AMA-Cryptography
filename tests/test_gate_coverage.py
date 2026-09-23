@@ -51,6 +51,13 @@ from tools.check_gate_coverage import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+#: The wildcard roll-up condition every wildcard gate in this repository uses.
+THREE_WAY = (
+    "${{ contains(needs.*.result, 'failure') || "
+    "contains(needs.*.result, 'cancelled') || "
+    "contains(needs.*.result, 'skipped') }}"
+)
+
 
 def check(source: str, name: str = "test.yml") -> list[str]:
     """Parse a workflow fragment and run the gate-coverage rules over it."""
@@ -78,7 +85,9 @@ def test_job_absent_from_gate_needs_is_reported() -> None:
               - build
             runs-on: ubuntu-latest
             steps:
-              - if: contains(needs.*.result, 'failure')
+              - if: contains(needs.*.result, 'failure') ||
+                  contains(needs.*.result, 'cancelled') ||
+                  contains(needs.*.result, 'skipped')
                 run: exit 1
         """)
     assert len(failures) == 1
@@ -100,7 +109,9 @@ def test_gate_without_always_is_reported() -> None:
             needs: [build]
             runs-on: ubuntu-latest
             steps:
-              - if: contains(needs.*.result, 'failure')
+              - if: contains(needs.*.result, 'failure') ||
+                  contains(needs.*.result, 'cancelled') ||
+                  contains(needs.*.result, 'skipped')
                 run: exit 1
         """)
     assert len(failures) == 1
@@ -134,7 +145,9 @@ def test_gate_needing_an_undefined_job_is_reported() -> None:
             needs: [build, typoed-job]
             runs-on: ubuntu-latest
             steps:
-              - if: contains(needs.*.result, 'failure')
+              - if: contains(needs.*.result, 'failure') ||
+                  contains(needs.*.result, 'cancelled') ||
+                  contains(needs.*.result, 'skipped')
                 run: exit 1
         """)
     assert len(failures) == 1
@@ -188,7 +201,9 @@ def test_always_accepts_the_expression_wrapped_form() -> None:
                 needs: [build]
                 runs-on: ubuntu-latest
                 steps:
-                  - if: contains(needs.*.result, 'failure')
+                  - if: contains(needs.*.result, 'failure') ||
+                      contains(needs.*.result, 'cancelled') ||
+                      contains(needs.*.result, 'skipped')
                     run: exit 1
             """) == []
 
@@ -206,7 +221,9 @@ def test_needs_given_as_a_bare_string_is_accepted() -> None:
                 needs: build
                 runs-on: ubuntu-latest
                 steps:
-                  - if: contains(needs.*.result, 'failure')
+                  - if: contains(needs.*.result, 'failure') ||
+                      contains(needs.*.result, 'cancelled') ||
+                      contains(needs.*.result, 'skipped')
                     run: exit 1
             """) == []
 
@@ -225,14 +242,18 @@ def test_coverage_may_be_split_across_several_gates() -> None:
                 needs: [alpha]
                 runs-on: ubuntu-latest
                 steps:
-                  - if: contains(needs.*.result, 'failure')
+                  - if: contains(needs.*.result, 'failure') ||
+                      contains(needs.*.result, 'cancelled') ||
+                      contains(needs.*.result, 'skipped')
                     run: exit 1
               beta-gate:
                 if: always()
                 needs: [beta]
                 runs-on: ubuntu-latest
                 steps:
-                  - if: contains(needs.*.result, 'failure')
+                  - if: contains(needs.*.result, 'failure') ||
+                      contains(needs.*.result, 'cancelled') ||
+                      contains(needs.*.result, 'skipped')
                     run: exit 1
             """) == []
 
@@ -325,7 +346,9 @@ def test_the_wildcard_form_covers_every_dependency() -> None:
             needs: [one, two]
             runs-on: ubuntu-latest
             steps:
-              - if: contains(needs.*.result, 'failure')
+              - if: contains(needs.*.result, 'failure') ||
+                  contains(needs.*.result, 'cancelled') ||
+                  contains(needs.*.result, 'skipped')
                 run: exit 1
         """)
     assert failures == []
@@ -593,22 +616,30 @@ class TestAMentionIsNotAnEvaluation:
         }
         assert gate._unevaluated_needs(job) == ["build", "lint"]
 
-    def test_a_wildcard_in_the_gate_condition_still_exempts(self) -> None:
-        """The control: a wildcard that IS evaluated must keep working."""
+    def test_a_wildcard_in_the_gate_job_condition_does_not_exempt(self) -> None:
+        """A job-level wildcard condition fails nothing; it only skips the gate.
+
+        This used to be the "control" asserting the exemption.  A job-level
+        ``if: always() && !contains(needs.*.result, 'failure')`` makes the gate
+        SKIPPED when a dependency fails -- a required context reporting
+        skipped never resolves -- and its steps (``true``) never exit nonzero,
+        so no dependency is evaluated in any sense that can turn the gate red.
+        """
         gate = self._gate()
         job = {
             "needs": ["build", "lint"],
             "if": "always() && !contains(needs.*.result, 'failure')",
             "steps": [{"run": "true"}],
         }
-        assert gate._unevaluated_needs(job) == []
+        assert gate._unevaluated_needs(job) == ["build", "lint"]
 
     def test_a_wildcard_in_a_step_condition_still_exempts(self) -> None:
+        """The control: the three-way wildcard step that exits 1 exempts."""
         gate = self._gate()
         job = {
             "needs": ["build", "lint"],
             "steps": [
-                {"if": "contains(needs.*.result, 'failure')", "run": "exit 1"},
+                {"if": THREE_WAY, "run": "exit 1"},
             ],
         }
         assert gate._unevaluated_needs(job) == []
@@ -641,3 +672,106 @@ class TestAMentionIsNotAnEvaluation:
             "steps": [{"run": 'x=${{ needs.build-test.result }}; [ "$x" = success ]'}],
         }
         assert gate._unevaluated_needs(job) == ["build"]
+
+
+# --------------------------------------------------------------------------
+# A wildcard that is MENTIONED is not a wildcard that is ACTED ON
+# --------------------------------------------------------------------------
+#
+# The per-dependency check was switched off by any `needs.*.result` text in an
+# `if:`.  `if: contains(needs.*.result, 'cancelled') && false` -- a step that
+# can never run -- passed, and so did the failure-only form, which lets a
+# cancelled or skipped dependency through a green gate.
+
+
+def _wildcard_job(condition: str, run: str = "exit 1", **extra: Any) -> dict[str, Any]:
+    step: dict[str, Any] = {"if": condition, "run": run}
+    step.update(extra)
+    return {"if": "always()", "needs": ["build", "lint"], "steps": [step]}
+
+
+def _unevaluated(job: dict[str, Any]) -> list[str]:
+    from tools.check_gate_coverage import _unevaluated_needs
+
+    return _unevaluated_needs(job)
+
+
+def test_an_unreachable_wildcard_step_is_not_an_exemption() -> None:
+    """The reported bypass, verbatim."""
+    job = _wildcard_job("contains(needs.*.result,'cancelled') && false")
+    assert _unevaluated(job) == ["build", "lint"]
+
+
+def test_the_failure_only_wildcard_form_is_not_an_exemption() -> None:
+    """Failure-only passes a cancelled or skipped dependency."""
+    job = _wildcard_job("${{ contains(needs.*.result, 'failure') }}")
+    assert _unevaluated(job) == ["build", "lint"]
+
+
+def test_a_wildcard_missing_one_of_the_three_results_is_not_an_exemption() -> None:
+    for missing in ("failure", "cancelled", "skipped"):
+        present = [r for r in ("failure", "cancelled", "skipped") if r != missing]
+        condition = " || ".join(f"contains(needs.*.result, '{r}')" for r in present)
+        assert _unevaluated(_wildcard_job(condition)) == ["build", "lint"], missing
+
+
+def test_a_negated_or_conjoined_wildcard_is_not_an_exemption() -> None:
+    for condition in (
+        "!(" + THREE_WAY[4:-3] + ")",
+        "(" + THREE_WAY[4:-3] + ") && github.event_name == 'never'",
+        THREE_WAY[4:-3] + " && false",
+    ):
+        assert _unevaluated(_wildcard_job(condition)) == ["build", "lint"], condition
+
+
+def test_a_wildcard_step_that_does_not_exit_nonzero_is_not_an_exemption() -> None:
+    for run in (
+        "echo failed",
+        "exit 0",
+        "exit 0\nexit 1",
+        "if false; then\n  exit 1\nfi",
+        "exit $rc\nexit 1",
+    ):
+        assert _unevaluated(_wildcard_job(THREE_WAY, run=run)) == ["build", "lint"], run
+
+
+def test_a_continue_on_error_wildcard_step_is_not_an_exemption() -> None:
+    extra: dict[str, Any] = {"continue-on-error": True}
+    job = _wildcard_job(THREE_WAY, **extra)
+    assert _unevaluated(job) == ["build", "lint"]
+
+
+def test_the_three_way_wildcard_step_exempts_in_any_order_and_quoting() -> None:
+    """The control, in every spelling the repository's gates use."""
+    for condition in (
+        THREE_WAY,
+        THREE_WAY[4:-3],
+        "contains(needs.*.result, 'skipped') || contains(needs.*.result, \"failure\")"
+        " || contains(needs.*.result, 'cancelled')",
+        "(" + THREE_WAY[4:-3] + ")",
+    ):
+        job = _wildcard_job(condition, run='echo "::error::x"\necho y\nexit 1\n')
+        assert _unevaluated(job) == [], condition
+
+
+def test_the_rejected_wildcard_gate_fails_the_workflow_with_the_right_remedy() -> None:
+    failures = check("""
+        on:
+          pull_request:
+        jobs:
+          build:
+            runs-on: ubuntu-latest
+          ci-gate:
+            if: always()
+            needs: [build]
+            runs-on: ubuntu-latest
+            steps:
+              - if: contains(needs.*.result,'cancelled') && false
+                run: exit 1
+        """)
+    assert len(failures) == 1, failures
+    assert "never evaluates" in failures[0]
+    assert "contains(needs.*.result, 'skipped')" in failures[0]
+    assert "no step of that shape acts on it" in failures[0]
+    # The remedy must not recommend the failure-only form on its own.
+    assert "switch the gate to the `contains(needs.*.result, 'failure')` form" not in failures[0]

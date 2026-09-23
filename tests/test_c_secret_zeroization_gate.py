@@ -1042,13 +1042,27 @@ class TestShippedTreeAnnotationRule:
         monkeypatch.setattr(gate, "C_ROOT", root)
         return _write(root, body)
 
-    @pytest.mark.parametrize("name", ["sk", "seed", "key", "kr", "secret", "seedbuf", "rhoprime"])
+    @pytest.mark.parametrize(
+        ("name", "kind"),
+        [
+            # The bare secret names are now known-secret spellings (see
+            # TestBareSecretNamesAndOtherZeroingCalls), so they are reported as
+            # secret-named rather than merely unannotated.
+            ("sk", "secret-named"),
+            ("seed", "secret-named"),
+            ("key", "secret-named"),
+            ("secret", "secret-named"),
+            ("kr", "unannotated"),
+            ("seedbuf", "unannotated"),
+            ("rhoprime", "unannotated"),
+        ],
+    )
     def test_the_names_the_convention_missed_are_now_flagged(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, kind: str
     ) -> None:
         path = self._shipped(tmp_path, monkeypatch, f"void f(void) {{ memset({name}, 0, 32); }}\n")
         findings = gate.scan_text(path.read_text(), path)
-        assert [(f.dst, f.kind) for f in findings] == [(name, "unannotated")]
+        assert [(f.dst, f.kind) for f in findings] == [(name, kind)]
 
     @pytest.mark.parametrize(
         "body",
@@ -1086,7 +1100,7 @@ class TestShippedTreeAnnotationRule:
         monkeypatch.setattr(gate, "C_ROOT", tmp_path / "src" / "c")
         tests_root = tmp_path / "tests" / "c"
         tests_root.mkdir(parents=True)
-        path = _write(tests_root, "memset(sk, 0, 32);\nmemset(secret_key, 0, 32);\n")
+        path = _write(tests_root, "memset(kr, 0, 32);\nmemset(secret_key, 0, 32);\n")
         assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
             ("secret_key", "secret-named")
         ]
@@ -1176,3 +1190,110 @@ void wipe(const unsigned char *in) {
             filler + '\n    __asm__ __volatile__("" : : "r"(frame) : "memory");',
         )
         assert self._shipped(src), "the barrier must sit beside the write"
+
+
+class TestBareSecretNamesAndOtherZeroingCalls:
+    """Two bypasses of the naming rule, measured before the fix.
+
+    1. ``memset(sk, 0, n)`` / ``memset(ctx->key, 0, n)``: the bare secret names
+       were not known-secret spellings, so in ``tests/c`` they passed outright
+       and in ``src/c`` a ``PUBLIC-DATA`` comment beside them passed too.
+    2. ``bzero(secret_key, n)``, ``__builtin_memset(secret_key, 0, n)``,
+       ``ZeroMemory(...)``: equally elidable, and none carries ``memset`` at a
+       word boundary, so ``_MEMSET_RE`` never saw them.
+    """
+
+    @pytest.mark.parametrize(
+        ("line", "name"),
+        [
+            ("memset(sk, 0, 64);", "sk"),
+            ("memset(key, 0, 32);", "key"),
+            ("memset(keys, 0, 64);", "keys"),
+            ("memset(seed, 0, 48);", "seed"),
+            ("memset(secret, 0, 32);", "secret"),
+            ("memset(priv, 0, 32);", "priv"),
+            ("memset(private, 0, 32);", "private"),
+            ("memset(privkey, 0, 32);", "privkey"),
+            ("memset(ctx->key, 0, 32);", "key"),
+            ("memset(ctx->sk, 0, 64);", "sk"),
+        ],
+    )
+    def test_bare_secret_names_are_secret_named_in_the_test_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line: str, name: str
+    ) -> None:
+        monkeypatch.setattr(gate, "C_ROOT", tmp_path / "src" / "c")
+        path = _write(tmp_path, f"void f(void) {{ {line} }}\n")
+        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
+            (name, "secret-named")
+        ]
+
+    def test_a_public_data_annotation_does_not_launder_a_secret_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        monkeypatch.setattr(gate, "C_ROOT", root)
+        path = _write(root, "memset(sk, 0, 64);  // PUBLIC-DATA: sk — not really\n")
+        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
+            ("sk", "secret-named")
+        ]
+
+    @pytest.mark.parametrize(
+        ("line", "call"),
+        [
+            ("bzero(secret_key, 32);", "bzero"),
+            ("bzero(ctx->sk, 64);", "bzero"),
+            ("__builtin_bzero(master_seed, 64);", "__builtin_bzero"),
+            ("__builtin_memset(secret_key, 0, 32);", "__builtin_memset"),
+            ("ZeroMemory(&kp_local, sizeof(kp_local));", "ZeroMemory"),
+            ("RtlZeroMemory(round_keys, 240);", "RtlZeroMemory"),
+            ("bzero((void *)seed,\n      48);", "bzero"),
+        ],
+    )
+    def test_other_plain_zeroing_calls_are_held_to_the_same_rule(
+        self, tmp_path: Path, line: str, call: str
+    ) -> None:
+        findings = gate.audit([_write(tmp_path, f"void f(void) {{ {line} }}\n")])
+        assert len(findings) == 1, findings
+        assert findings[0].call == call
+        assert f"bare {call}()" in findings[0].render()
+
+    def test_an_unannotated_shipped_bzero_is_flagged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        monkeypatch.setattr(gate, "C_ROOT", root)
+        path = _write(root, "bzero(scratch, 32);\nbzero(tmp, 8);  // PUBLIC-DATA: tmp — counter\n")
+        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
+            ("scratch", "unannotated")
+        ]
+
+    def test_a_bzero_wrapper_macro_and_alias_are_seen_at_the_call_site(
+        self, tmp_path: Path
+    ) -> None:
+        body = (
+            "#define CLR(x) bzero((x), sizeof(x))\n"
+            "#define WIPE bzero\n"
+            "void f(void) { CLR(secret_key); WIPE(master_seed, 64); }\n"
+        )
+        findings = gate.audit([_write(tmp_path, body)])
+        assert sorted(f.dst for f in findings) == ["master_seed", "secret_key"]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "explicit_bzero(secret_key, 32);",
+            "SecureZeroMemory(secret_key, 32);",
+            "RtlSecureZeroMemory(secret_key, 32);",
+            "memset_s(secret_key, 32, 0, 32);",
+            "ama_secure_memzero(sk, 64);",
+            "memset(pk, 0, 32);",
+            "memset(skip, 0, 4);",
+            "memset(keyed, 0, 4);",
+        ],
+    )
+    def test_non_elidable_interfaces_and_non_secret_names_pass(
+        self, tmp_path: Path, line: str
+    ) -> None:
+        assert gate.audit([_write(tmp_path, f"void f(void) {{ {line} }}\n")]) == []

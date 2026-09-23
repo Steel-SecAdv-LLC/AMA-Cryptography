@@ -54,6 +54,7 @@
 #include "../include/ama_cpuid.h"
 #include "internal/ama_sha2.h"
 #include "internal/ama_ct_barrier.h"
+#include "internal/ama_stack_wipe.h"
 #include "internal/ama_ed25519_canonical.h"
 #include "internal/ama_ed25519_backend.h"
 #include "internal/ama_ed25519_halfsize.h"
@@ -107,7 +108,7 @@
 #define GE_CONST_D ama_ed25519_const_d_fe51
 #define GE_CONST_D2 ama_ed25519_const_d2_fe51
 #define GE_CONST_SQRTM1 ama_ed25519_const_sqrtm1_fe51
-/* Niels-table select fold.  On x86-64 the 15-entry constant-time select
+/* Niels-table select fold.  On x86-64 the 16-entry constant-time select
  * runs through the AVX2 kernel when the CPU has AVX2 and through the SSE2
  * fold otherwise; both are mask folds over the whole row.  The override is a
  * measurement knob only: the constant-time gates need to measure the SSE2
@@ -118,12 +119,17 @@
  * contract, never a production policy. */
 static int ama_ed25519_fold_override = -1;
 
+int ama_ed25519_fold_avx2_permitted(void) {
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-static int ed25519_have_avx2_fold(void) {
     return ama_ed25519_fold_override != 0 && ama_has_avx2();
+#else
+    return 0;
+#endif
 }
+
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
 #define GE_NIELS_FOLD_AVX2 ama_ed25519_select15_avx2
-#define GE_HAVE_AVX2() ed25519_have_avx2_fold()
+#define GE_HAVE_AVX2() ama_ed25519_fold_avx2_permitted()
 #endif
 #include "internal/ama_ed25519_ge.h"
 
@@ -133,7 +139,7 @@ AMA_API void ama_ed25519_set_avx2_fold_override(int mode) {
 
 AMA_API const char *ama_ed25519_active_fold(void) {
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-    return ed25519_have_avx2_fold() ? "avx2" : "sse2";
+    return ama_ed25519_fold_avx2_permitted() ? "avx2" : "sse2";
 #elif defined(__x86_64__) || defined(_M_X64)
     return "sse2";
 #else
@@ -710,57 +716,19 @@ static void ed25519_comb_digits(int8_t e[AMA_ED25519_COMB_DIGITS], const uint8_t
  * The scalar is reduced mod l first, and the reduction is load-bearing, not
  * hygiene.  A width-w wNAF of a 256-bit integer needs up to 257 digits, and
  * the compensation step for a negative digit ADDS to the running value, so a
- * digit selected near the top of an unreduced scalar carries out of limb 7.
- * With 256 slots and eight 32-bit limbs that carry was discarded and the
- * 257th digit never emitted, so the recoding silently represented s - 2^256
- * for ~17% of uniform 32-byte scalars — ff..ff recoded as -1 and
+ * digit selected near the top of an unreduced scalar carries past bit 255.
+ * An earlier recoder with 256 slots and eight 32-bit limbs discarded that
+ * carry and never emitted the 257th digit, so it silently represented
+ * s - 2^256 for ~17% of uniform 32-byte scalars — ff..ff recoded as -1 and
  * ama_ed25519_scalarmult_public(out, ff..ff, B) returned -B with AMA_SUCCESS.
- * After reducing, s < l < 2^253: at most 254 digits, the running value stays
- * below 2^254, and neither the slot count nor the limb count can overflow. */
+ * After reducing, s < l < 2^253: at most 254 digits, so 256 slots always
+ * suffice.  The digit rule is verification's (ama_ed25519_wnaf_bytes), so
+ * there is one wNAF recoder in the library, not two. */
 static void sc25519_to_wnaf(int8_t wnaf[256], const uint8_t scalar[32], int w) {
-    uint32_t s[8];
     uint8_t reduced[32];
-    int i, pos;
-    const uint32_t mask = ((uint32_t)1 << w) - 1u;
-    const int32_t half = (int32_t)1 << (w - 1);
-    const int32_t full = (int32_t)1 << w;
 
     sc25519_reduce32(reduced, scalar);
-    for (i = 0; i < 8; i++) {
-        s[i] = (uint32_t)reduced[4 * i]
-             | ((uint32_t)reduced[4 * i + 1] << 8)
-             | ((uint32_t)reduced[4 * i + 2] << 16)
-             | ((uint32_t)reduced[4 * i + 3] << 24);
-    }
-    for (pos = 0; pos < 256; pos++) {
-        int32_t digit = 0;
-        if (s[0] & 1u) {
-            digit = (int32_t)(s[0] & mask);
-            if (digit >= half) digit -= full;
-            if (digit < 0) {
-                uint64_t carry = (uint64_t)(uint32_t)(-digit);
-                for (i = 0; i < 8; i++) {
-                    carry += (uint64_t)s[i];
-                    s[i] = (uint32_t)carry;
-                    carry >>= 32;
-                }
-            } else {
-                uint64_t borrow = 0;
-                uint64_t sub = (uint64_t)(uint32_t)digit;
-                for (i = 0; i < 8; i++) {
-                    uint64_t val = (uint64_t)s[i] - sub - borrow;
-                    s[i] = (uint32_t)val;
-                    borrow = (val >> 63) & 1;
-                    sub = 0;
-                }
-            }
-        }
-        wnaf[pos] = (int8_t)digit;
-        for (i = 0; i < 7; i++) {
-            s[i] = (s[i] >> 1) | (s[i + 1] << 31);
-        }
-        s[7] >>= 1;
-    }
+    (void)ama_ed25519_wnaf_bytes(wnaf, 256, reduced, w);
 }
 
 /* ============================================================================
@@ -881,7 +849,7 @@ static uint64_t ed25519_mismatch_mask32(const uint8_t *x, const uint8_t *y) {
  * masking the output and the return code at the single exit, so the
  * instruction-count and secret-taint lanes see one path whatever the key.
  * The two exits before the computation (an unrepresentable length, an
- * allocation failure) write nothing and touch no secret; the caller scrubs
+ * allocation failure) zero the signature buffer and touch no secret; the caller scrubs
  * its own inputs on every return.  Everything this function writes is
  * scrubbed here. */
 static ama_error_t ed25519_sign_core(
@@ -1015,6 +983,11 @@ ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]) 
     memcpy(secret_key + 32, public_key, 32);
 
     ama_secure_memzero(hash, sizeof(hash));
+    /* INVARIANT-6 backstop: the comb and the scalar arithmetic spill limbs of
+     * `a` into frames no named scrub reaches (measured by
+     * tests/c/test_ed25519_stack_residue.c).  Same construction and reason as
+     * the AEAD entry points, twice the depth: see internal/ama_stack_wipe.h. */
+    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);
     return AMA_SUCCESS;
 }
 
@@ -1131,6 +1104,7 @@ ama_error_t ama_ed25519_sign(
      * buffer whose exemption has to be re-derived by the next reader. */
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(derived_a, sizeof(derived_a));
+    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);  /* see ama_ed25519_keypair */
 
     return rc;
 }
@@ -1191,6 +1165,7 @@ ama_error_t ama_ed25519_expand_secret_key(
     }
 
     ama_secure_memzero(hash, sizeof(hash));
+    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);  /* see ama_ed25519_keypair */
     return rc;
 }
 
@@ -1232,6 +1207,7 @@ ama_error_t ama_ed25519_sign_expanded(
                            key_mismatch);
 
     ama_secure_memzero(tag, sizeof(tag));
+    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);  /* see ama_ed25519_keypair */
     return rc;
 }
 

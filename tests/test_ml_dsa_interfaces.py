@@ -2,17 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """ML-DSA-65: which FIPS 204 interface each entry point implements.
 
-Three interfaces coexist and are easy to confuse; each is pinned here.
+Two interfaces ship, and each is pinned here.
 
-* **Internal** (Algorithm 7, ``mu = H(tr || M)``): ``native_ml_dsa_sign``
-  with ``ctx=None``.  FIPS 204 Sec 5.2 restricts it to testing and to
-  protocols supplying their own domain separation; the ACVP
-  internal-interface vectors replay through it.
 * **External / pure** (Algorithm 2, ``M' = 0x00 || len(ctx) || ctx || M``):
   ``dilithium_sign`` / ``dilithium_verify`` — the flagship API, empty
-  context — and ``native_ml_dsa_sign(ctx=...)`` for a non-empty one.
+  context — and ``native_ml_dsa_sign(ctx=...)``, whose default is also the
+  empty context.
 * **Hedged external** (Algorithm 2 with fresh ``rnd``):
   ``native_ml_dsa_sign_hedged``.
+
+The **internal** interface (Algorithm 7, ``mu = H(tr || M)``) does NOT ship
+(INVARIANT-50).  It did, as ``ama_ml_dsa_sign`` / ``ama_ml_dsa_verify``, and
+under one key it was a signing oracle for external signatures on
+attacker-chosen ``(ctx, M)`` pairs.  It now exists only in the C testing
+archive; ``tests/c/test_ml_dsa_context_separation.c`` pins the wrapper
+equivalence against it.
 
 Until the twenty-third maintenance pass ``dilithium_sign`` was the INTERNAL
 interface, so its output was rejected by every other ML-DSA-65
@@ -40,22 +44,44 @@ def test_flagship_api_is_the_external_interface_with_an_empty_context(
 ) -> None:
     pk, sk = keys
     sig = pb.dilithium_sign(MESSAGE, sk)
-    # Same bytes as the explicit empty-context external call ...
+    # Same bytes as the explicit empty-context external call, and the default.
     assert sig == pb.native_ml_dsa_sign(65, MESSAGE, sk, ctx=b"")
-    # ... and NOT the internal interface it used to be.
-    assert sig != pb.native_ml_dsa_sign(65, MESSAGE, sk)
+    assert sig == pb.native_ml_dsa_sign(65, MESSAGE, sk)
     assert pb.dilithium_verify(MESSAGE, sig, pk)
     assert pb.native_ml_dsa_verify(65, MESSAGE, sig, pk, ctx=b"")
 
 
-def test_internal_interface_signature_does_not_verify_as_external(
+@pytest.mark.parametrize(
+    "symbol",
+    [
+        "ama_ml_dsa_sign",
+        "ama_ml_dsa_verify",
+        "ama_ml_dsa_sign_internal",
+        "ama_ml_dsa_verify_internal",
+    ],
+)
+def test_the_internal_interface_is_not_in_the_shipped_library(symbol: str) -> None:
+    """Absent by construction, under both its old public name and its test name."""
+    assert pb._native_lib is not None
+    assert not hasattr(pb._native_lib, symbol), f"{symbol} is exported"
+
+
+def test_no_shipped_entry_point_signs_the_raw_wrapper_as_a_context_signature(
     keys: tuple[bytes, bytes],
 ) -> None:
+    """The oracle INVARIANT-50 closes, measured the way it was found.
+
+    Signing the bytes ``0x00 || 0x01 || "x" || M`` must never yield a valid
+    signature on ``(M, ctx="x")``.  Through the old raw entry point it did.
+    """
     pk, sk = keys
-    internal = pb.native_ml_dsa_sign(65, MESSAGE, sk)
-    assert pb.native_ml_dsa_verify(65, MESSAGE, internal, pk)  # as internal
-    assert not pb.dilithium_verify(MESSAGE, internal, pk)  # not as external
-    assert not pb.native_ml_dsa_verify(65, MESSAGE, internal, pk, ctx=b"")
+    forged_input = b"\x00\x01x" + MESSAGE
+    for sig in (
+        pb.native_ml_dsa_sign(65, forged_input, sk),
+        pb.dilithium_sign(forged_input, sk),
+        pb.native_ml_dsa_sign_hedged(65, forged_input, sk),
+    ):
+        assert not pb.native_ml_dsa_verify(65, MESSAGE, sig, pk, ctx=b"x")
 
 
 def test_a_non_empty_context_is_a_different_domain(keys: tuple[bytes, bytes]) -> None:

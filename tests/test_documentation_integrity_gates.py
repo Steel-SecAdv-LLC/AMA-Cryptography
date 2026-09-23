@@ -1088,7 +1088,9 @@ class TestBenchmarkClaims:
         """Non-vacuity: the corrected number must not fail."""
         scratch = _scratch_repo(tmp_path)
         (scratch / "CURRENT.md").write_text(
-            "The enforced floor is 215,299 ops/sec on x86-64.\n", encoding="utf-8", newline=""
+            "The enforced hmac_sha3_256 floor is 215,299 ops/sec on x86-64.\n",
+            encoding="utf-8",
+            newline="",
         )
         completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
         assert completed.returncode == 0, completed.stderr

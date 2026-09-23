@@ -1090,6 +1090,80 @@ def update_static_test_counts(dry_run: bool = False, root: Optional[Path] = None
     return True
 
 
+def _rewrite_groups(pattern: re.Pattern[str], values: tuple[int, ...], line: str) -> str:
+    """Replace each numbered group of every ``pattern`` match with ``values``.
+
+    Only the digits move; the prose around them is the document's own.  A
+    figure keeps its thousands separator when it had one or needs one.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        pieces: list[str] = []
+        pos = match.start()
+        for index, value in enumerate(values, start=1):
+            old = match.group(index)
+            pieces.append(match.string[pos : match.start(index)])
+            pieces.append(f"{value:,}" if ("," in old or value >= 1000) else str(value))
+            pos = match.end(index)
+        pieces.append(match.string[pos : match.end()])
+        return "".join(pieces)
+
+    return pattern.sub(_replace, line)
+
+
+def update_inventory_counts(dry_run: bool = False, root: Optional[Path] = None) -> bool:
+    """Re-measure and rewrite the C-suite and source-inventory counts.
+
+    The documented-counts gate checks these (``check_c_suite_counts`` and
+    ``check_source_inventory_counts``) with the patterns and measurements used
+    here, imported rather than re-derived, and until this pass nothing rewrote
+    them: adding a C test or an internal header meant finding every spelling
+    across README.md, ARCHITECTURE.md, AGENTS.md and docs/METRICS_REPORT.md by
+    hand.  History rows are left alone, on the gate's own rule; the CHANGELOG
+    is not rewritten, because an entry's figures are that entry's record.
+    """
+    counts = _counts_module()
+    tree = ROOT if root is None else root
+    suites, units = counts.measure_c_suite_counts(tree)
+    src_units, modules = counts.measure_source_inventory(tree)
+    internal_c, internal_h = counts.measure_internal_sources(tree)
+    rules = (
+        (counts._C_SUITE_PAREN_RE, (suites, units)),
+        (counts._C_SUITE_BARE_RE, (suites,)),
+        (counts._C_SUITE_TABLE_RE, (suites,)),
+        (counts._C_SUITE_CTEST_RE, (suites,)),
+        (counts._C_SUITE_FILES_UNITS_RE, (suites, units)),
+        (counts._SRC_C_UNITS_RE, (src_units,)),
+        (counts._PACKAGE_MODULES_RE, (modules,)),
+        (counts._SRC_C_INTERNAL_RE, (internal_c, internal_h)),
+    )
+    changed: list[str] = []
+    for path in counts._markdown_files(tree):
+        original = path.read_text(encoding="utf-8")
+        lines = []
+        for line in original.splitlines(keepends=True):
+            if not counts._HISTORY_ROW_RE.match(line):
+                for pattern, values in rules:
+                    line = _rewrite_groups(pattern, values, line)
+            lines.append(line)
+        text = "".join(lines)
+        if text != original:
+            changed.append(str(path.relative_to(tree)))
+            if not dry_run:
+                path.write_text(text, encoding="utf-8", newline="")
+
+    if not changed:
+        print("   inventory counts: already current")
+        return False
+    verb = "would be rewritten" if dry_run else "rewritten"
+    print(
+        f"   inventory counts ({suites} C suites / {units} units, {src_units} src/c units, "
+        f"{modules} modules, internal {internal_c} .c / {internal_h} .h) {verb} in: "
+        + ", ".join(changed)
+    )
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AMA Cryptography auto-documentation updater")
     parser.add_argument(
@@ -1112,9 +1186,9 @@ def main() -> None:
         "--counts",
         action="store_true",
         help="Only re-measure and rewrite every count the documented-counts "
-        "gate checks: the Lines-of-Code figures AND the static "
-        "test-function/file claims in README.md, ARCHITECTURE.md and "
-        "docs/METRICS_REPORT.md (the one-command fix for a red counts gate)",
+        "gate checks: the Lines-of-Code figures, the static "
+        "test-function/file claims, and the C-suite and source-inventory "
+        "counts (the one-command fix for a red counts gate)",
     )
     args = parser.parse_args()
 
@@ -1135,6 +1209,8 @@ def main() -> None:
         if args.counts:
             print("\nStatic test counts")
             any_changed |= update_static_test_counts(dry_run=args.dry_run)
+            print("\nInventory counts")
+            any_changed |= update_inventory_counts(dry_run=args.dry_run)
         print(
             "\n✓ Documentation updated" + (" (dry run)" if args.dry_run else "")
             if any_changed

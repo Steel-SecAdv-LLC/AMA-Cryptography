@@ -416,6 +416,59 @@ class TestStaticTestCountRegenerator:
         assert problems == [], problems
 
 
+class TestInventoryCountsAreRegenerated:
+    """`update_docs.py --counts` rewrites the C-suite and source-inventory
+    counts the gate checks, so adding a C test or a header is one command, not
+    a search across four documents."""
+
+    @staticmethod
+    def _tree(root: Path) -> None:
+        (root / "tests" / "c").mkdir(parents=True)
+        for name in ("test_a.c", "test_b.c", "helper.c"):
+            (root / "tests" / "c" / name).write_text("int x;\n", encoding="utf-8")
+        (root / "src" / "c" / "internal").mkdir(parents=True)
+        (root / "src" / "c" / "one.c").write_text("int y;\n", encoding="utf-8")
+        for name in ("a.h", "b.h", "c.h"):
+            (root / "src" / "c" / "internal" / name).write_text("\n", encoding="utf-8")
+        (root / "ama_cryptography").mkdir()
+        for name in ("__init__.py", "m.py"):
+            (root / "ama_cryptography" / name).write_text("\n", encoding="utf-8")
+
+    def test_every_gated_spelling_is_rewritten(self, tmp_path: Path) -> None:
+        self._tree(tmp_path)
+        readme = tmp_path / "README.md"
+        readme.write_text(
+            "plus 9 C test suites (9 translation units) covering\n"
+            "| `test_*.c` files under `tests/c/` | 9 |\n"
+            "9 `test_*.c` registered via ctest\n"
+            "the C suite is 9 suite files / 9 translation units\n"
+            "- Top-level `src/c/*.c` — 9 translation units\n"
+            "- `ama_cryptography/`, 9 modules + `__init__` + `__main__`\n"
+            "- `src/c/internal/` — 9 `.c`: none; 9 `.h`: many\n",
+            encoding="utf-8",
+        )
+        assert update_docs.update_inventory_counts(root=tmp_path) is True
+        counts = update_docs._counts_module()
+        assert counts.check_c_suite_counts(tmp_path) == []
+        assert counts.check_source_inventory_counts(tmp_path) == []
+        text = readme.read_text(encoding="utf-8")
+        assert "plus 2 C test suites (3 translation units) covering" in text
+        assert "`src/c/internal/` — 0 `.c`: none; 3 `.h`: many" in text
+
+    def test_a_history_row_is_left_alone(self, tmp_path: Path) -> None:
+        self._tree(tmp_path)
+        doc = tmp_path / "README.md"
+        row = "| 3.5.0 | 2026-07-30 | 9 C test suites (9 translation units) |\n"
+        doc.write_text(row, encoding="utf-8")
+        assert update_docs.update_inventory_counts(root=tmp_path) is False
+        assert doc.read_text(encoding="utf-8") == row
+
+    def test_the_real_tree_is_current(self) -> None:
+        counts = update_docs._counts_module()
+        assert counts.check_c_suite_counts(REPO_ROOT) == []
+        assert counts.check_source_inventory_counts(REPO_ROOT) == []
+
+
 class TestThePublishedBenchmarkTableTracksTheRecord:
     """`wiki/Performance-Benchmarks.md`'s auto-table must match the record.
 

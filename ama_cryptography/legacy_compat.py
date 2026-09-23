@@ -938,7 +938,10 @@ def build_package_transcript(
 
     ``ed25519_signature`` and ``dilithium_signature`` are not included — they
     are what the transcript authorises — and neither is ``hmac_tag``, for the
-    same reason in the ``"hmac"`` direction.
+    same reason in the ``"hmac"`` direction.  ``timestamp_token`` is: it
+    covers ``content_hash`` rather than the signature, so it exists before
+    signing, and leaving it out let it be stripped with every layer still
+    passing.
     """
     return _transcript(
         [
@@ -949,6 +952,7 @@ def build_package_transcript(
             ("ethical_hash", package.ethical_hash),
             ("author", package.author),
             ("timestamp", package.timestamp),
+            ("timestamp_token", package.timestamp_token),
             ("version", package.version),
             ("ed25519_pubkey", package.ed25519_pubkey),
             ("dilithium_pubkey", package.dilithium_pubkey),
@@ -1062,6 +1066,21 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     # `ed25519_signature` and `dilithium_signature` are the three fields
     # `build_package_transcript` does not read, which is what lets them be
     # placeholders here and filled in below.
+    #
+    # Every field the transcript reads is final before either authenticator
+    # is computed.  The RFC 3161 token is requested first: it timestamps
+    # `content_hash`, not the signature, so nothing stops it being signed, and
+    # an unsigned token could be stripped without any other layer moving.
+    timestamp_token: Optional[str] = None
+    if use_rfc3161:
+        token = get_rfc3161_timestamp(content_hash, tsa_url)
+        if token is None:
+            raise RuntimeError(
+                "RFC 3161 timestamp request failed. "
+                "Cannot fall back silently — timestamps are a security layer."
+            )
+        timestamp_token = base64.b64encode(token).decode("ascii")
+
     timestamp = datetime.now(timezone.utc).isoformat()
     package = CryptoPackage(
         content_hash=content_hash.hex(),
@@ -1069,7 +1088,7 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
         ed25519_signature="",
         dilithium_signature=None,
         timestamp=timestamp,
-        timestamp_token=None,
+        timestamp_token=timestamp_token,
         author=author,
         ed25519_pubkey=kms.ed25519_keypair.public_key.hex(),
         dilithium_pubkey=(
@@ -1087,29 +1106,12 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
         hash_format_version=HASH_FORMAT_V2,
     )
 
-    start_time = time.time()
-    hmac_message = build_package_transcript("hmac", package, content_hash, ethical_hash_bytes)
-    hmac_tag = hmac_authenticate(hmac_message, kms.hmac_key)
-    package.hmac_tag = hmac_tag.hex()
-    if monitor:
-        duration_ms = (time.time() - start_time) * 1000
-        monitor.monitor_crypto_operation("hmac_auth", duration_ms, input_size=len(hmac_message))
-
-    # 4. Build the signature transcript
+    # 4. ML-DSA-65 first, because its availability decides two transcript
+    # fields: a package that cannot carry the quantum signature must not be
+    # MACed or Ed25519-signed saying that it does.
     signature_message = build_package_transcript(
         "signature", package, content_hash, ethical_hash_bytes
     )
-
-    # 5. Sign with Ed25519
-    start_time = time.time()
-    ed25519_sig = ed25519_sign(signature_message, kms.ed25519_keypair.private_key)
-    if monitor:
-        duration_ms = (time.time() - start_time) * 1000
-        monitor.monitor_crypto_operation(
-            "ed25519_sign", duration_ms, input_size=len(signature_message)
-        )
-
-    # 6. Sign with Dilithium (if available)
     dilithium_sig = None
     if package.quantum_signatures_enabled and kms.dilithium_keypair is not None:
         start_time = time.time()
@@ -1121,42 +1123,34 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
                 "Package will lack ML-DSA-65 protection. "
                 "Verify PQC backend is installed for production deployments."
             )
-            # The flag and the public key describe what the package CARRIES,
-            # and it now carries no ML-DSA-65 signature.  Both are inside the
-            # transcript, so they have to be corrected before the Ed25519
-            # signature below is taken over it — a package claiming a quantum
-            # layer it does not have would otherwise be signed saying so.
             package.quantum_signatures_enabled = False
             package.dilithium_pubkey = None
             signature_message = build_package_transcript(
                 "signature", package, content_hash, ethical_hash_bytes
             )
-            hmac_message = build_package_transcript(
-                "hmac", package, content_hash, ethical_hash_bytes
-            )
-            package.hmac_tag = hmac_authenticate(hmac_message, kms.hmac_key).hex()
         if monitor and dilithium_sig is not None:
             duration_ms = (time.time() - start_time) * 1000
             monitor.monitor_crypto_operation(
                 "dilithium_sign", duration_ms, input_size=len(signature_message)
             )
 
-    # 7. Get RFC 3161 timestamp (optional)
-    #
-    # After signing, necessarily: the token timestamps the content, so it
-    # cannot be inside the signature that it post-dates.  It is not left
-    # unauthenticated — RFC 3161 §2.4.2 binds it to `content_hash` through its
-    # own message imprint, which `_verify_rfc3161_token` checks.
-    if use_rfc3161:
-        token = get_rfc3161_timestamp(content_hash, tsa_url)
-        if token is None:
-            raise RuntimeError(
-                "RFC 3161 timestamp request failed. "
-                "Cannot fall back silently — timestamps are a security layer."
-            )
-        package.timestamp_token = base64.b64encode(token).decode("ascii")
+    # 5. HMAC and Ed25519 over the final transcripts
+    start_time = time.time()
+    hmac_message = build_package_transcript("hmac", package, content_hash, ethical_hash_bytes)
+    package.hmac_tag = hmac_authenticate(hmac_message, kms.hmac_key).hex()
+    if monitor:
+        duration_ms = (time.time() - start_time) * 1000
+        monitor.monitor_crypto_operation("hmac_auth", duration_ms, input_size=len(hmac_message))
 
-    # 9. Record package metadata for pattern analysis
+    start_time = time.time()
+    ed25519_sig = ed25519_sign(signature_message, kms.ed25519_keypair.private_key)
+    if monitor:
+        duration_ms = (time.time() - start_time) * 1000
+        monitor.monitor_crypto_operation(
+            "ed25519_sign", duration_ms, input_size=len(signature_message)
+        )
+
+    # 6. Record package metadata for pattern analysis
     if monitor:
         code_count = len([c.strip() for c in codes.split("\n") if c.strip()])
         monitor.record_package_signing(

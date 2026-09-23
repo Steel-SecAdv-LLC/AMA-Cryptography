@@ -35,6 +35,10 @@
         # depth that catches a build which does compile them in.
         ama_slhdsa_sign_internal;
         ama_slhdsa_verify_internal;
+        # FIPS 204 Algorithms 7/8, the same oracle for ML-DSA (INVARIANT-50);
+        # also compiled only under AMA_TESTING_MODE.
+        ama_ml_dsa_sign_internal;
+        ama_ml_dsa_verify_internal;
 
         # ------------------------------------------------------------------
         # Internal symbols that the `ama_*` wildcard above would otherwise
@@ -88,5 +92,69 @@
         ama_sha256_final;
         # Platform CSPRNG wrapper — internal; callers use the algorithm APIs.
         ama_randombytes;
+
+        # Exported until the public-API gate learned to compare the export
+        # table against the installed headers' AMA_API declarations: none of
+        # these has a prototype a consumer can include.  The CPU-feature
+        # probes are declared in include/ama_cpuid.h, which is not installed
+        # and carries no AMA_API; the Keccak entries are raw permutations,
+        # the class ama_keccak_f1600_generic above already is; and
+        # ama_stack_wipe_below is the internal helper behind
+        # ama_secure_stack_wipe.  Exact names, never a wildcard: the gate
+        # parses exact names, and a second pattern competing with `ama_*`
+        # is not reliably ordered by every linker.
+        ama_has_adx;
+        ama_has_aes_ni;
+        ama_has_arm_aes;
+        ama_has_arm_neon;
+        ama_has_arm_pmull;
+        ama_has_arm_sha2;
+        ama_has_arm_sve2;
+        ama_has_avx2;
+        ama_has_avx512f;
+        ama_has_avx512vl;
+        ama_has_bmi1;
+        ama_has_bmi2;
+        ama_has_pclmulqdq;
+        ama_has_sha_ni;
+        ama_has_vaes;
+        ama_has_vpclmulqdq;
+        ama_cpuid_has_arm_aes;
+        ama_cpuid_has_avx512_keccak;
+        ama_cpuid_has_keccak_bmi;
+        ama_cpuid_has_vaes_aesgcm;
+        ama_cpuid_has_x25519_mulx;
+        ama_keccak_f1600_bmi;
+        ama_keccak_f1600_x4_avx2;
+        ama_keccak_f1600_x4_generic;
+        ama_stack_wipe_below;
+
+        # The AArch64 counterparts of the SIMD kernels localised above.  Only
+        # the x86 names were listed, so on AArch64 the `ama_*` wildcard kept
+        # publishing the NEON and SVE2 kernels: the AES-GCM ones without the
+        # entry point's NULL checks or SP 800-38D length limits, and the
+        # SVE2 ones without their CPU gate.  Found by the public-API gate's
+        # exported-but-undeclared check run against an AArch64 build.
+        ama_aes256_gcm_decrypt_neon;
+        ama_aes256_gcm_encrypt_neon;
+        ama_argon2_g_neon;
+        ama_chacha20_block_x4_neon;
+        ama_chacha20_block_x8_neon;
+        ama_dilithium_invntt_neon;
+        ama_dilithium_invntt_sve2;
+        ama_dilithium_ntt_neon;
+        ama_dilithium_ntt_sve2;
+        ama_dilithium_poly_pointwise_neon;
+        ama_dilithium_poly_pointwise_sve2;
+        ama_keccak_f1600_neon;
+        ama_keccak_f1600_sve2;
+        ama_kyber_invntt_neon;
+        ama_kyber_invntt_sve2;
+        ama_kyber_ntt_neon;
+        ama_kyber_ntt_sve2;
+        ama_kyber_poly_add_sve2;
+        ama_kyber_poly_reduce_sve2;
+        ama_kyber_poly_sub_sve2;
+        ama_sha256_compress_neon;
         *;
 };

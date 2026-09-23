@@ -873,3 +873,28 @@ class TestArgvScanSkipsOptionValues:
     ) -> None:
         """Skipping option values must not cost the documented invocations."""
         assert self._scope(monkeypatch, argv)
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            # -c ends option parsing whether its code is joined or separate,
+            # and whether or not it sits inside a flag cluster.
+            ["python", "-cimport app", "-mama_cryptography._build_sign"],
+            ["python", "-Bcimport app", "-mama_cryptography._build_sign"],
+            ["python", "-Ic", "import app", "-m", "ama_cryptography._build_sign"],
+            # A joined -W/-X value is part of its option, not a new one.
+            ["python", "-Wignore", "app.py", "-mama_cryptography._build_sign"],
+            # --update is an argument of the program, never an option value.
+            ["python", "-X", "--update", "-m", "ama_cryptography.integrity", "--verify"],
+        ],
+    )
+    def test_code_and_values_never_masquerade_as_a_signer_launch(
+        self, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+    ) -> None:
+        assert not self._scope(monkeypatch, argv)
+
+    def test_a_flag_cluster_ending_in_m_is_a_signer_launch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert self._scope(monkeypatch, ["python", "-Bm", "ama_cryptography._build_sign"])
+        assert self._scope(monkeypatch, ["python", "-Bmama_cryptography._build_sign"])

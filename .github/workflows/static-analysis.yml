@@ -288,12 +288,15 @@ jobs:
       # [-10, 9] over every int16_t input, and the d=4/d=5 packers plus the
       # d=11 unpacker carry the same explicit casts the d=10 branch always
       # had (the FIPS 203 KATs pin the serialization bit-for-bit).
+      # -Wsign-conversion (which -Wconversion does not imply in C) was
+      # switched off here with -Wno-sign-conversion.  What it reported (loop
+      # indices in ama_aes_gcm.c, ama_kyber.c and tests/c/test_nistp.c, a CPUID
+      # bit in ama_cpuid.c, a mask constant in avx2/ama_dilithium_avx2.c) was
+      # fixed at source, and the flag is on in every lane.
       #
-      # What legitimately remains is exactly two documented language-extension
-      # classes, both required by construction:
-      #   fe51.h / fe64.h            "ISO C does not support '__int128'"
-      #                              (-Wpedantic, gcc) — the 128-bit limbs the
-      #                              field arithmetic is built on.
+      # What legitimately remains is one documented language-extension class
+      # (the `__int128` class is declared with `__extension__` at every site
+      # and no longer emitted):
       #   x86/ama_nistp_mont_mulx.c  overlength string literal (-Woverlength-
       #                              strings, clang) — one atomic asm() block;
       #                              splitting the Montgomery kernel into
@@ -344,7 +347,7 @@ jobs:
           cmake -B build-strict \
             -DCMAKE_BUILD_TYPE=None \
             -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
-            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wsign-conversion \
                              -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=ON \
@@ -371,7 +374,7 @@ jobs:
           cmake -B build-strict-release \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
-            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wsign-conversion \
                              -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=ON \
@@ -437,7 +440,7 @@ jobs:
           cmake -S . -B build-strict-arm -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wsign-conversion \
                              -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_AES_CONSTTIME=ON \
@@ -457,7 +460,7 @@ jobs:
           cmake -S . -B build-strict-arm-sve2 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wsign-conversion \
                              -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_AES_CONSTTIME=ON \
@@ -780,10 +783,10 @@ jobs:
           # / heap surface.  Running the full ctest suite under
           # Valgrind would exceed the runner timeout.
           tests="bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3 bin/test_kat"
-          # Counted from the list rather than written down: a hand-kept count
-          # drifted to 6 when test_kat made the list 7, so a fully clean run
-          # reported "7/6" and failed.
-          expected=$(set -- $tests; echo $#)
+          # Derived from the list, not typed beside it: the list grew to seven
+          # while this said 6, so a full run could never equal it.
+          set -- $tests
+          expected=$#
           ran=0
           for test in $tests; do
             if [ -x "$test" ]; then
@@ -802,7 +805,7 @@ jobs:
           done
           # Non-vacuity floor: a renamed target or a moved bin/ would otherwise
           # let this lane pass with zero invocations while the row still read
-          # "N/N" (audit Low).  Require every listed binary to have run.
+          # "N/N" (audit Low).  Require every expected binary to have run.
           if [ "$ran" -ne "$expected" ]; then
             echo "::error::Valgrind ran $ran/$expected targets — refusing to report success on a partial run."
             exit 1
@@ -985,8 +988,11 @@ jobs:
       # at PR #323 ready-for-review time (2026-05-20).  The previous
       # fabricated tag `:2026-04-21-f5ec593` did not exist and the
       # docker pull failed with "manifest not found" — Copilot review
-      # #323 follow-up (CI failure on first run).
-      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1
+      # #323 follow-up (CI failure on first run).  Pinned by digest as well
+      # (INVARIANT-4's rule for images, tools/check_docker_pins.py): a tag can
+      # be re-pointed, a digest cannot.  Digest read from the same API on
+      # 2026-09-23.
+      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.17-1@sha256:2147aade9cc6f841c9b610ec7b033299b09e425cd3a652bdf1cb9fc885f86078
     timeout-minutes: 30
     defaults:
       run:

@@ -187,3 +187,145 @@ class TestTheScanReachesEveryFile:
         # The absent-allowlist-entry failures are expected for a scratch tree;
         # what must NOT appear is a finding against the __pycache__ copy.
         assert not any("__pycache__" in f for f in gate.scan_package(tmp_path))
+
+
+class TestRunTimeModuleNamesAreResolvedOrRefused:
+    """Bypasses 7 and 8: a module named by an expression, or read from the cache.
+
+    Measured before the fix: ``__import__('hash' + 'lib')``,
+    ``sys.modules['hashlib']`` and ``import_module(n)`` with a variable ``n``
+    each added zero to the count, so a file outside the allowlist carrying any
+    of them passed the gate.
+    """
+
+    @staticmethod
+    def _scan(tmp_path: Path, source: str, name: str = "rogue.py") -> list[str]:
+        (tmp_path / name).write_text(source)
+        return gate.scan_package(tmp_path)
+
+    @staticmethod
+    def _rogue(failures: list[str]) -> list[str]:
+        return [f for f in failures if f.startswith("rogue.py")]
+
+    def test_a_concatenated_dynamic_import_counts(self, tmp_path: Path) -> None:
+        failures = self._scan(tmp_path, "m = __import__('hash' + 'lib')\n")
+        assert any("not in the trust-bootstrap allowlist" in f for f in self._rogue(failures))
+
+    def test_an_fstring_dynamic_import_counts(self, tmp_path: Path) -> None:
+        source = "import importlib\nP = 'hash'\nm = importlib.import_module(f'{P}lib')\n"
+        failures = self._scan(tmp_path, source)
+        assert any("not in the trust-bootstrap allowlist" in f for f in self._rogue(failures))
+
+    def test_a_variable_dynamic_import_fails_outright(self, tmp_path: Path) -> None:
+        source = "import importlib\n\ndef load(n):\n    return importlib.import_module(n)\n"
+        failures = self._rogue(self._scan(tmp_path, source))
+        assert len(failures) == 1, failures
+        assert "rogue.py:4: import_module(n)" in failures[0]
+        assert "not allowlistable" in failures[0]
+
+    def test_an_unresolvable_import_fails_even_in_an_allowlisted_file(self, tmp_path: Path) -> None:
+        source = "import hashlib\nx = hashlib.sha256\ny = __import__(input())\n"
+        failures = self._scan(tmp_path, source, name="__init__.py")
+        assert any(f.startswith("__init__.py:3: __import__(input())") for f in failures), failures
+
+    def test_sys_modules_subscript_of_a_guarded_module_counts(self, tmp_path: Path) -> None:
+        for source in (
+            "import sys\nh = sys.modules['hashlib']\n",
+            "import sys as s\nh = s.modules['_hashlib']\n",
+            "from sys import modules\nh = modules['hm' + 'ac']\n",
+            "import sys\nh = sys.modules.get('hashlib')\n",
+        ):
+            sub = tmp_path / str(abs(hash(source)))
+            sub.mkdir()
+            failures = self._rogue(self._scan(sub, source))
+            assert any("not in the trust-bootstrap allowlist" in f for f in failures), source
+
+    def test_an_unresolvable_sys_modules_key_fails(self, tmp_path: Path) -> None:
+        source = "import sys\n\ndef get(k):\n    return sys.modules[k]\n"
+        failures = self._rogue(self._scan(tmp_path, source))
+        assert failures and "sys.modules(k)" in failures[0], failures
+
+    def test_module_own_name_and_literals_pass(self, tmp_path: Path) -> None:
+        """The shapes the real package uses must stay clean (control)."""
+        source = (
+            "import importlib, sys\n"
+            "me = sys.modules[__name__]\n"
+            "pb = sys.modules.get('ama_cryptography.pqc_backends')\n"
+            "def baselines():\n"
+            "    names = ['ama_cryptography.crypto_api', 'ama_cryptography.key_management']\n"
+            "    for mod_name in names:\n"
+            "        importlib.import_module(mod_name)\n"
+            "MODS = ('a.b', 'a.c')\n"
+            "def verify():\n"
+            "    for mod_name in MODS:\n"
+            "        importlib.import_module(mod_name)\n"
+            "def _load(lib):\n"
+            "    return importlib.import_module(lib)\n"
+            "_load('json')\n"
+            "_load(lib='os')\n"
+        )
+        assert self._rogue(self._scan(tmp_path, source)) == []
+
+    def test_a_loop_over_a_mutated_list_is_not_resolved(self, tmp_path: Path) -> None:
+        source = (
+            "import importlib\n"
+            "def f(extra):\n"
+            "    names = ['json']\n"
+            "    names.append(extra)\n"
+            "    for n in names:\n"
+            "        importlib.import_module(n)\n"
+        )
+        failures = self._rogue(self._scan(tmp_path, source))
+        assert failures and "import_module(n)" in failures[0], failures
+
+    def test_a_loop_over_dict_items_is_not_resolved(self, tmp_path: Path) -> None:
+        """The shape monitoring.verify_imports has."""
+        source = (
+            "import importlib\n"
+            "def f(baselines):\n"
+            "    for mod_name, path in baselines.items():\n"
+            "        importlib.import_module(mod_name)\n"
+        )
+        failures = self._rogue(self._scan(tmp_path, source))
+        assert failures and "import_module(mod_name)" in failures[0], failures
+
+    def test_a_rebound_or_global_name_is_not_resolved(self, tmp_path: Path) -> None:
+        source = (
+            "import importlib\n"
+            "N = 'json'\n"
+            "def poison():\n"
+            "    global N\n"
+            "    N = 'hashlib'\n"
+            "def f():\n"
+            "    return importlib.import_module(N)\n"
+            "def g(flag):\n"
+            "    m = 'json'\n"
+            "    if flag:\n"
+            "        m = 'hashlib'\n"
+            "    return importlib.import_module(m)\n"
+        )
+        failures = self._rogue(self._scan(tmp_path, source))
+        assert [f.split(":")[1] for f in failures] == ["7", "12"], failures
+
+    def test_a_private_helper_that_escapes_is_not_resolved(self, tmp_path: Path) -> None:
+        """A helper passed around may be called with anything."""
+        source = (
+            "import importlib\n"
+            "def _load(lib):\n"
+            "    return importlib.import_module(lib)\n"
+            "_load('json')\n"
+            "REGISTRY = [_load]\n"
+        )
+        failures = self._rogue(self._scan(tmp_path, source))
+        assert failures and "import_module(lib)" in failures[0], failures
+
+    def test_a_private_helper_called_with_a_guarded_name_counts(self, tmp_path: Path) -> None:
+        source = (
+            "import importlib\n"
+            "def _load(lib):\n"
+            "    return importlib.import_module(lib)\n"
+            "_load('json')\n"
+            "_load('hashlib')\n"
+        )
+        failures = self._rogue(self._scan(tmp_path, source))
+        assert any("not in the trust-bootstrap allowlist" in f for f in failures), failures

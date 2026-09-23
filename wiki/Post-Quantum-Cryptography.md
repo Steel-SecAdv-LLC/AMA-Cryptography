@@ -114,7 +114,7 @@ print(f"Tampered: {is_tampered}")  # False
 > packs four SHAKE128 and four SHAKE256 absorptions into a single AVX2
 > 4-way kernel and uses an AVX2-vectorised CBD2 noise sampler — same
 > backend that benefits ML-KEM-1024.  Dispatched automatically when
-> `ama_cpuid_has_avx2()` returns true.  See the
+> `ama_has_avx2()` returns true.  See the
 > [SIMD Acceleration Paths](Performance-Benchmarks#simd-acceleration-paths-300)
 > matrix for the full per-primitive engineered-path inventory and
 > opt-out env vars.

@@ -394,9 +394,11 @@ class TestTheParserFailsWithTheOneExceptionCallersHandle:
             ("empty", b""),
             ("docstring only", b'"""nothing here"""\n'),
             ("comment only", b"# nothing here\n"),
+            # Literals, but not the digest: the gates still had nothing to compare.
+            ("version only", b'BUILD_PIPELINE_VERSION = "3"\n'),
         ):
             pkg = self._staged(tmp_path / label.replace(" ", "_"), payload)
-            with pytest.raises(ArtefactSourceError, match="no literal assignments"):
+            with pytest.raises(ArtefactSourceError, match="no INTEGRITY_DIGEST_HEX"):
                 load_artefact_fields(pkg)
 
     def test_a_missing_artefact_is_none_not_an_error(self, tmp_path: Path) -> None:

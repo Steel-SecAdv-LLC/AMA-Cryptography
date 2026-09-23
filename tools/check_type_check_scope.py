@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -73,16 +72,18 @@ def tracked_python_files(root: Path) -> list[Path]:
     directories to skip (``build/``, ``.venv/``, ``*.egg-info/``, whichever
     ``build-*`` a local run left behind), and that list is exactly the kind of
     thing that drifts and quietly narrows the check.
+
+    Enumerated through ``tools/_repo.py`` (``git ls-files -z``): without ``-z``
+    a non-ASCII name came back C-quoted and was compared against mypy's report
+    under a name no file has, so the verdict was about a path that does not
+    exist rather than the real one.  Raises ``TrackedFilesError`` (a
+    ``RuntimeError``) if git fails or a tracked path is not a regular file.
     """
-    proc = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "*.py"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"git ls-files failed ({proc.returncode}): {proc.stderr.strip()}")
-    return [root / line for line in proc.stdout.splitlines() if line.strip()]
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from tools._repo import tracked_files
+
+    return tracked_files(root, "*.py")
 
 
 def reported_files(report: Path) -> set[Path]:

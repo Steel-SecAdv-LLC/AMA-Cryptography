@@ -263,7 +263,7 @@ signer itself. `skDecode` (Algorithm 25) requires every `s1`/`s2` coefficient to
 be in `[-eta, eta]` and the key to be rejected otherwise — but the packing is
 not surjective onto its bit width (eta = 2 stores a five-value range in three
 bits), so a malformed key decoded to coefficients the specification forbids and
-was accepted. `ama_ml_dsa_sign` now refuses such a key rather than producing
+was accepted. The ML-DSA signers now refuse such a key rather than producing
 signatures nothing verifies and driving the rejection loop off its calibrated
 bounds.
 

@@ -50,9 +50,40 @@ before this rule existed, by planting the defect and re-running the gate:
 replacing the signature arm's call in ``_keypair_pairwise_test`` with a no-op
 left this gate at exit 0 while ``AmaContext.keypair_generate`` released
 untested ML-DSA, SLH-DSA and hybrid keypairs.  Only explicit arms are judged
-(``if``/``elif``/``else`` and ``match`` cases): an ``if`` with no ``else``
-opens no comparison, because its fall-through path may run the test in a
-later statement, and deciding that needs path analysis this gate does not do.
+(``if``/``elif``/``else`` and ``match`` cases) are named line by line.
+
+EVERY PATH, NOT SOME PATH
+-------------------------
+
+Name-set matching asked "does a pairwise test appear anywhere in the body",
+and the arm rule above only compared arms that both exist.  An ``if`` with no
+``else`` was never judged, so wrapping the call in
+``if os.environ.get("AMA_SKIP_PCT") is None:`` — a keypair released untested
+whenever the variable is set — passed.  So did an early ``return pk, sk`` ahead
+of the test.
+
+Each entry point (and each delegated helper) must now reach a pairwise test on
+every path through the constructs that CONTAIN one, which
+:func:`pct_on_every_path` decides by a small structural path walk: a missing
+``else`` is an empty arm that falls through to the statements after the
+``if``; a ``with``/``try`` body runs in-line (``finally`` too, and each
+``except`` handler is its own path); a loop body may run zero times; a
+``match`` with no irrefutable case may match nothing.  A path ends well at a
+pairwise test (or a delegated helper) or at a ``raise``; it ends badly at a
+``return`` or by falling off the end of the body.  Conditions are not
+evaluated — ``if rc == 0:`` is as conditional as ``if os.environ.get(...)``:
+a test the function can skip is a test the function can skip, and the fix is
+to leave the function on the failure path first (``if rc != 0: return rc`` or
+``raise``) and then run the test unconditionally, not to teach the gate which
+conditions are benign.  Nested ``def``/``lambda`` bodies are not paths of the
+enclosing function: defining a callable that would run the test is not running
+it.
+
+Stated limit: a construct with NO pairwise test in it is not judged, so an
+early ``return`` in such a construct (``if bad_len: return -1``) is accepted.
+Those are the input-validation and failure exits that precede key generation,
+and separating them from ``if flag: return pk, sk`` needs to know where key
+material comes into existence, which this gate does not model.
 
 Exit codes
 ----------
@@ -147,6 +178,147 @@ def arms_without_pct(node: ast.AST) -> list[int]:
     return sorted(missing)
 
 
+def _direct_calls(node: ast.AST) -> set[str]:
+    """Names called by ``node`` itself — nested ``def``/``lambda``/class bodies excluded.
+
+    A call inside a lambda or a nested function runs only when THAT callable
+    is invoked, so it is not evidence that the enclosing statement runs it.
+    """
+    names: set[str] = set()
+    stack: list[ast.AST] = [node]
+    while stack:
+        current = stack.pop()
+        if current is not node and isinstance(
+            current, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            continue
+        if isinstance(current, ast.Call):
+            func = current.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+        stack.extend(ast.iter_child_nodes(current))
+    return names
+
+
+def _is_irrefutable(case: ast.match_case) -> bool:
+    """A ``case _:`` / ``case name:`` with no guard matches every subject."""
+    pattern = case.pattern
+    return case.guard is None and isinstance(pattern, ast.MatchAs) and pattern.pattern is None
+
+
+_TryParts = tuple[list[ast.stmt], list[ast.stmt], list[ast.stmt], list[ast.ExceptHandler]]
+
+
+def _try_parts(stmt: ast.stmt) -> _TryParts | None:
+    """``(body, orelse, finalbody, handlers)`` of a ``try`` / ``try*``, else ``None``."""
+    if isinstance(stmt, ast.Try):
+        return stmt.body, stmt.orelse, stmt.finalbody, stmt.handlers
+    if sys.version_info >= (3, 11) and isinstance(stmt, ast.TryStar):
+        return stmt.body, stmt.orelse, stmt.finalbody, stmt.handlers
+    return None
+
+
+def _first_untested_exit(
+    stmts: list[ast.stmt],
+    tests: frozenset[str],
+    loop_exit: list[ast.stmt] | None,
+    end_line: int,
+) -> int | None:
+    """Line of a path through ``stmts`` that ends without a pairwise test.
+
+    ``None`` means every path reaches a call in ``tests`` or a ``raise``.
+    ``loop_exit`` is what runs after ``break``/``continue`` inside a loop body;
+    ``end_line`` is reported when a path falls off the end of the body.
+    """
+    for index, stmt in enumerate(stmts):
+        rest = stmts[index + 1 :]
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # a definition runs nothing
+        if (
+            not isinstance(stmt, (ast.Raise, ast.Return, ast.Break, ast.Continue))
+            and not _direct_calls(stmt) & tests
+        ):
+            # A construct that runs no pairwise test anywhere is not judged:
+            # its early exits are the input-validation / failure returns that
+            # precede key generation, which this gate cannot tell apart from a
+            # release (see the stated limit in the module docstring).
+            continue
+        if isinstance(stmt, ast.Raise):
+            return None
+        if isinstance(stmt, ast.Return):
+            if stmt.value is not None and _direct_calls(stmt.value) & tests:
+                return None
+            return stmt.lineno
+        if isinstance(stmt, (ast.Break, ast.Continue)):
+            if loop_exit is None:
+                return stmt.lineno
+            return _first_untested_exit(loop_exit, tests, None, end_line)
+        if isinstance(stmt, ast.If):
+            if _direct_calls(stmt.test) & tests:
+                return None
+            for arm in (stmt.body, stmt.orelse):
+                line = _first_untested_exit(arm + rest, tests, loop_exit, end_line)
+                if line is not None:
+                    return line
+            return None
+        if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            if any(_direct_calls(item.context_expr) & tests for item in stmt.items):
+                return None
+            return _first_untested_exit(stmt.body + rest, tests, loop_exit, end_line)
+        parts = _try_parts(stmt)
+        if parts is not None:
+            body, orelse, finalbody, handlers = parts
+            if finalbody and _first_untested_exit(finalbody, tests, None, end_line) is None:
+                return None  # `finally` runs on every path out of the try
+            paths = [body + orelse + finalbody + rest]
+            paths.extend(handler.body + finalbody + rest for handler in handlers)
+            for path in paths:
+                line = _first_untested_exit(path, tests, loop_exit, end_line)
+                if line is not None:
+                    return line
+            return None
+        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            header = stmt.test if isinstance(stmt, ast.While) else stmt.iter
+            if _direct_calls(header) & tests:
+                return None
+            after = stmt.orelse + rest
+            # Zero iterations, and one iteration followed by leaving the loop.
+            for path, exit_path in ((after, loop_exit), (stmt.body + after, rest)):
+                line = _first_untested_exit(path, tests, exit_path, end_line)
+                if line is not None:
+                    return line
+            return None
+        if isinstance(stmt, ast.Match):
+            if _direct_calls(stmt.subject) & tests:
+                return None
+            paths = [case.body + rest for case in stmt.cases]
+            if not any(_is_irrefutable(case) for case in stmt.cases):
+                paths.append(rest)
+            for path in paths:
+                line = _first_untested_exit(path, tests, loop_exit, end_line)
+                if line is not None:
+                    return line
+            return None
+        if _direct_calls(stmt) & tests:
+            return None
+    return end_line
+
+
+def pct_on_every_path(
+    node: ast.FunctionDef | ast.AsyncFunctionDef, tests: frozenset[str]
+) -> int | None:
+    """``None`` when every path through ``node`` runs a call in ``tests`` or raises.
+
+    Otherwise the line at which the first untested path leaves the function
+    (a ``return``, or the function's last line when it falls off the end).
+    See "EVERY PATH, NOT SOME PATH" in the module docstring.
+    """
+    end_line = node.end_lineno if node.end_lineno is not None else node.lineno
+    return _first_untested_exit(node.body, tests, None, end_line)
+
+
 def pct_delegating_helpers(tree: ast.AST) -> set[str]:
     """Functions and methods whose body calls a pairwise test on every path.
 
@@ -158,18 +330,20 @@ def pct_delegating_helpers(tree: ast.AST) -> set[str]:
     helpers: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _calls(node) & PCT_HELPERS and not arms_without_pct(node):
+            if pct_on_every_path(node, PCT_HELPERS) is None and not arms_without_pct(node):
                 helpers.add(node.name)
     return helpers
 
 
-def keygen_entry_points(tree: ast.AST) -> list[tuple[str, int, ast.AST]]:
+def keygen_entry_points(
+    tree: ast.AST,
+) -> list[tuple[str, int, ast.FunctionDef | ast.AsyncFunctionDef]]:
     """``(name, lineno, node)`` for every keygen entry point in the module.
 
     Module-level functions and public methods alike: a keypair released from a
     class is released just the same.
     """
-    out: list[tuple[str, int, ast.AST]] = []
+    out: list[tuple[str, int, ast.FunctionDef | ast.AsyncFunctionDef]] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -188,19 +362,26 @@ def audit(path: Path) -> tuple[list[tuple[str, int]], int]:
     helpers = pct_delegating_helpers(tree)
     unwired: set[tuple[str, int]] = set()
     entry_points = keygen_entry_points(tree)
+    tests = PCT_HELPERS | frozenset(helpers)
     for name, lineno, node in entry_points:
-        called = _calls(node)
-        if not (called & PCT_HELPERS or called & helpers):
-            unwired.add((name, lineno))
-        for arm_line in arms_without_pct(node):
+        dark_arms = arms_without_pct(node)
+        for arm_line in dark_arms:
             unwired.add((f"{name} [conditional arm]", arm_line))
+        if dark_arms:
+            continue  # the arm lines already say where the untested path is
+        if not _calls(node) & tests:
+            unwired.add((name, lineno))
+            continue
+        exit_line = pct_on_every_path(node, tests)
+        if exit_line is not None:
+            unwired.add((f"{name} [path skips the test]", exit_line))
     # A delegated helper with a dark arm is named as well as its callers, so
     # the diagnostic points at the line to fix and not only at its effect.
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _calls(node) & PCT_HELPERS:
-                for arm_line in arms_without_pct(node):
-                    unwired.add((f"{node.name} [conditional arm]", arm_line))
+    for candidate in ast.walk(tree):
+        if isinstance(candidate, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _calls(candidate) & PCT_HELPERS:
+                for arm_line in arms_without_pct(candidate):
+                    unwired.add((f"{candidate.name} [conditional arm]", arm_line))
     return sorted(unwired, key=lambda item: (item[1], item[0])), len(entry_points)
 
 
@@ -239,7 +420,12 @@ def main(argv: list[str] | None = None) -> int:
             "pairwise_test_agreement before the keypair is returned, or delegate "
             "to a helper that does. A conditional arm named above is a path that "
             "releases the keypair without the test its sibling arm runs: give it "
-            "the family's test, or make it raise. If the function generates no "
+            "the family's test, or make it raise. A '[path skips the test]' line "
+            "is where a path leaves the function without the test having run on "
+            "it — typically a pairwise test inside an `if` with no `else` (e.g. "
+            "`if rc == 0:`) or a `return` that bypasses a test run on another "
+            "path: leave on the failure path first (`if rc != 0: return rc`, or "
+            "raise) and run the test unconditionally. If the function generates no "
             "key material, add it to EXEMPT in this file with the reason.",
             file=sys.stderr,
         )

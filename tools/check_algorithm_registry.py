@@ -57,6 +57,14 @@ permissive here: "PBKDF2 with HMAC-SHA-512 PRF" in the parameter-set cell of
 the PBKDF2 row would otherwise satisfy a check for a shipping HMAC-SHA-512
 primitive that has no row of its own.
 
+**Status.** INVARIANT-1 requires a *non-deprecated* entry, so only a current
+row can satisfy either level: one whose Status cell is in
+:data:`APPROVED_STATUSES` or, in a table with no Status column, one that does
+not describe itself as deprecated, withdrawn, disallowed or obsolete.  Every
+row that is not current is also reported on its own, because the registry
+lists shipping code only.  Until this was read, a row marked "Withdrawn"
+satisfied its mapping exactly as a "Final" one did.
+
 Both mappings are hand-written because the registry key ("ML-KEM-1024") and the
 symbol prefix (``ama_kyber_``) are different names for the same thing and no
 derivation connects them.  What they are NOT is a hand-maintained list of what
@@ -75,7 +83,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -183,6 +193,25 @@ PARAM_SET_TOKENS: dict[str, str] = {
 #: A registry with fewer rows than this has broken, not shrunk.
 MIN_REGISTRY_ROWS = 30
 
+#: The CSRC publication statuses that make a row a current entry.  INVARIANT-1's
+#: addendum requires a primitive to map to a *non-deprecated* entry, and the
+#: registry states that in its Status column; every row carries "Final" today.
+#: A status outside this set -- "Draft", "Withdrawn", "Superseded",
+#: "Final (deprecated after 2030)" -- is not a current entry.  An allow-set
+#: rather than a deny-list of bad words, so a status nobody anticipated fails.
+APPROVED_STATUSES: frozenset[str] = frozenset({"Final"})
+
+#: Words that mark an entry as not current.  Applied to the Status cell, and to
+#: the whole row where the table has no Status column (the RFC table), so no
+#: row is exempt from the non-deprecation rule because of its table's shape.
+_NOT_CURRENT_RE = re.compile(r"deprecat|withdrawn|disallowed|obsolete", re.IGNORECASE)
+
+#: A cell boundary: a pipe not escaped as ``\|`` inside a code span.
+_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
+
+#: ``|---|:--:|`` and friends.
+_SEPARATOR_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$")
+
 #: Fewer families than this means the header scan has broken.
 MIN_FAMILIES = 20
 
@@ -235,6 +264,68 @@ def registry_algorithm_cells(rows: list[str]) -> list[str]:
     return cells
 
 
+@dataclass(frozen=True)
+class RegistryEntry:
+    """One data row of a registry table, with the status its table declares."""
+
+    line: int
+    text: str
+    algorithm: str
+    status: Optional[str]  # None where the table has no Status column
+
+    def not_current(self) -> Optional[str]:
+        """Why this row is not a non-deprecated entry, or None if it is."""
+        if self.status is not None:
+            if self.status not in APPROVED_STATUSES:
+                return (
+                    f"its Status is {self.status!r}; a current entry is one of "
+                    f"{sorted(APPROVED_STATUSES)}"
+                )
+            return None
+        marker = _NOT_CURRENT_RE.search(self.text)
+        if marker:
+            return f"its table has no Status column and the row says {marker.group(0)!r}"
+        return None
+
+
+def _cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|") and not stripped.endswith("\\|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in _CELL_SPLIT_RE.split(stripped)]
+
+
+def registry_entries(registry: Path) -> list[RegistryEntry]:
+    """Every data row of every table, header and separator rows excluded.
+
+    The Status column is located by its header in each table, not by position,
+    so a reordered table still has its statuses read.
+    """
+    entries: list[RegistryEntry] = []
+    lines = registry.read_text(encoding="utf-8").splitlines()
+    index = 0
+    while index < len(lines):
+        if not lines[index].startswith("|"):
+            index += 1
+            continue
+        header = [cell.strip("*` ").lower() for cell in _cells(lines[index])]
+        status_column = header.index("status") if "status" in header else None
+        index += 1
+        while index < len(lines) and lines[index].startswith("|"):
+            line = lines[index]
+            index += 1
+            if _SEPARATOR_RE.match(line):
+                continue
+            cells = _cells(line)
+            status: Optional[str] = None
+            if status_column is not None:
+                status = cells[status_column].strip("*` ") if status_column < len(cells) else ""
+            entries.append(RegistryEntry(index, line, cells[0] if cells else "", status))
+    return entries
+
+
 def audit(root: Path = REPO) -> list[str]:
     problems: list[str] = []
     header = root / HEADER
@@ -263,8 +354,24 @@ def audit(root: Path = REPO) -> list[str]:
             f"{MIN_REGISTRY_ROWS}) — refusing to check against a registry that "
             f"looks truncated"
         ]
-    joined = "\n".join(rows)
-    algorithm_cells = registry_algorithm_cells(rows)
+    # Only a current entry can satisfy a mapping: a primitive "mapped" to a
+    # withdrawn or deprecated row is exactly what INVARIANT-1's addendum
+    # forbids.  And every non-current row is reported in its own right: the
+    # registry lists shipping code only, so a deprecated row is either a
+    # deprecated primitive that ships or an entry for one that does not.
+    current: list[RegistryEntry] = []
+    for entry in registry_entries(registry):
+        reason = entry.not_current()
+        if reason is None:
+            current.append(entry)
+            continue
+        problems.append(
+            f"{REGISTRY}:{entry.line}: {entry.algorithm!r} is not a current entry — "
+            f"{reason}. INVARIANT-1's addendum requires every primitive to map to "
+            f"a NON-DEPRECATED entry, and this document lists shipping code only."
+        )
+    joined = "\n".join(entry.text for entry in current)
+    algorithm_cells = [entry.algorithm for entry in current]
 
     for family in sorted(families):
         if family not in FAMILY_REGISTRY_TOKENS:
@@ -282,7 +389,7 @@ def audit(root: Path = REPO) -> list[str]:
         for token in tokens:
             if token not in joined:
                 problems.append(
-                    f"{REGISTRY}: no row mentions {token!r}, which family "
+                    f"{REGISTRY}: no current row mentions {token!r}, which family "
                     f"'ama_{family}_*' maps to. The document's own first paragraph "
                     f"says it lists every implemented primitive."
                 )
@@ -299,7 +406,7 @@ def audit(root: Path = REPO) -> list[str]:
         token = PARAM_SET_TOKENS[identifier]
         if not any(token in cell for cell in algorithm_cells):
             problems.append(
-                f"{REGISTRY}: no row's Algorithm column names {token!r}, the "
+                f"{REGISTRY}: no current row's Algorithm column names {token!r}, the "
                 f"parameter set {identifier} ships. A family-level citation is "
                 f"not enough: the document says it maps every primitive to its "
                 f"parameter set."

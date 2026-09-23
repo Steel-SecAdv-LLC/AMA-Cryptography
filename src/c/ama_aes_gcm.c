@@ -186,12 +186,12 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
     int round;
 
     /* AddRoundKey (round 0) */
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         state[j] = in[j] ^ round_keys[j];
 
     for (round = 1; round <= 14; round++) {
         /* SubBytes */
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             t[j] = aes_sbox[state[j]];
 
         /* ShiftRows */
@@ -216,7 +216,7 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
 
         /* AddRoundKey */
         const uint8_t *rk = round_keys + round * 16;
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             state[j] ^= rk[j];
     }
 
@@ -408,7 +408,7 @@ static void ghash(const uint8_t H[16],
     /* Process AAD */
     full_blocks = aad_len / 16;
     for (i = 0; i < full_blocks; i++) {
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= aad[i * 16 + j];
         ghash_mul(S, H);
     }
@@ -419,7 +419,7 @@ static void ghash(const uint8_t H[16],
          * writes on the secure path. */
         ama_secure_memzero(block, 16);
         memcpy(block, aad + full_blocks * 16, remaining);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= block[j];
         ghash_mul(S, H);
     }
@@ -427,7 +427,7 @@ static void ghash(const uint8_t H[16],
     /* Process ciphertext */
     full_blocks = ct_len / 16;
     for (i = 0; i < full_blocks; i++) {
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= ciphertext[i * 16 + j];
         ghash_mul(S, H);
     }
@@ -435,7 +435,7 @@ static void ghash(const uint8_t H[16],
     if (remaining > 0) {
         ama_secure_memzero(block, 16);
         memcpy(block, ciphertext + full_blocks * 16, remaining);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= block[j];
         ghash_mul(S, H);
     }
@@ -464,7 +464,7 @@ static void ghash(const uint8_t H[16],
         block[14] = (uint8_t)(ct_bits >> 8);
         block[15] = (uint8_t)(ct_bits);
     }
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         S[j] ^= block[j];
     ghash_mul(S, H);
 
@@ -601,7 +601,7 @@ ama_error_t ama_aes256_gcm_encrypt(
     for (i = 0; i < full_blocks; i++) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             ciphertext[i * 16 + j] = plaintext[i * 16 + j] ^ keystream[j];
     }
     remaining = pt_len % 16;
@@ -616,7 +616,7 @@ ama_error_t ama_aes256_gcm_encrypt(
     ghash(H, aad, aad_len, ciphertext, pt_len, tag);
 
     /* Final tag = GHASH XOR E_K(J0) */
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         tag[j] ^= tag_mask[j];
 
     /* Scrub sensitive material */
@@ -718,7 +718,7 @@ ama_error_t ama_aes256_gcm_decrypt(
 
     /* Compute GHASH over AAD and ciphertext BEFORE decrypting */
     ghash(H, aad, aad_len, ciphertext, ct_len, computed_tag);
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         computed_tag[j] ^= tag_mask[j];
 
     /* Constant-time tag comparison + unified post-verify control flow.
@@ -746,7 +746,7 @@ ama_error_t ama_aes256_gcm_decrypt(
     for (i = 0; i < bounded_full; i++) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             plaintext[i * 16 + j] = ciphertext[i * 16 + j] ^ keystream[j];
     }
     if (bounded_remaining > 0) {

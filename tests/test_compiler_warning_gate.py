@@ -46,7 +46,9 @@ MISSING_PROTOTYPE = (
     "no previous prototype for 'ama_kyber_ntt_neon' [-Wmissing-prototypes]"
 )
 
-# The two documented extension classes, in both quote spellings GCC uses.
+# The class every `__int128` site used to emit, in both quote spellings GCC
+# uses.  Its allowlist entry was deleted once `__extension__` drove it to zero,
+# so it is now an ordinary out-of-allowlist warning.
 INT128_ASCII = (
     "/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not "
     "support '__int128' types [-Wpedantic]"
@@ -81,13 +83,8 @@ def write_log(tmp_path: Path, name: str, *lines: str) -> Path:
 class TestAllowlistAdmitsItsOwnClasses:
     """Each exemption must admit its class — in either quote spelling."""
 
-    @pytest.mark.parametrize(
-        "line",
-        [INT128_ASCII, INT128_UTF8, OVERLENGTH_LITERAL],
-        ids=["int128-ascii", "int128-utf8", "overlength-literal"],
-    )
-    def test_exempt_line_passes(self, tmp_path: Path, line: str) -> None:
-        log = write_log(tmp_path, "build.log", line)
+    def test_exempt_line_passes(self, tmp_path: Path) -> None:
+        log = write_log(tmp_path, "build.log", OVERLENGTH_LITERAL)
         result = run_gate(log)
         assert result.returncode == 0, result.stderr
 
@@ -98,11 +95,10 @@ class TestAllowlistAdmitsItsOwnClasses:
         assert "no compiler warnings outside the frozen allowlist" in result.stdout
 
     def test_counts_are_reported_so_a_dead_exemption_is_visible(self, tmp_path: Path) -> None:
-        log = write_log(tmp_path, "build.log", INT128_ASCII, INT128_UTF8)
+        log = write_log(tmp_path, "build.log", OVERLENGTH_LITERAL, OVERLENGTH_LITERAL)
         result = run_gate(log)
         assert result.returncode == 0, result.stderr
-        assert "allowlisted [int128-extension]: 2" in result.stdout
-        assert "allowlisted [overlength-asm-literal]: 0" in result.stdout
+        assert "allowlisted [overlength-asm-literal]: 2" in result.stdout
 
 
 class TestAllowlistRejectsEverythingElse:
@@ -118,27 +114,21 @@ class TestAllowlistRejectsEverythingElse:
         assert "outside the frozen allowlist" in result.stderr
         assert line in result.stderr
 
-    @pytest.mark.parametrize("unit", ["ama_nistp.c", "ama_secp256k1.c"])
-    def test_int128_in_the_wide_arithmetic_units_is_exempt(self, tmp_path: Path, unit: str) -> None:
-        """The two units that used to hide this warning behind a diagnostic
-        pragma (which INVARIANT-13 forbids in src/c) are on the same central
-        allowlist as fe51.h / fe64.h."""
-        line = INT128_ASCII.replace("fe51.h", unit)
-        log = write_log(tmp_path, "build.log", line)
-        result = run_gate(log)
-        assert result.returncode == 0, result.stderr
-        assert "allowlisted [int128-extension]: 1" in result.stdout
-
-    def test_int128_outside_the_named_headers_is_not_exempt(self, tmp_path: Path) -> None:
-        """The exemption is scoped to fe51.h / fe64.h, not to the text."""
-        line = INT128_ASCII.replace("fe51.h", "ama_kyber.c")
-        log = write_log(tmp_path, "build.log", line)
+    @pytest.mark.parametrize("unit", ["fe51.h", "fe64.h", "ama_nistp.c", "ama_secp256k1.c"])
+    @pytest.mark.parametrize("line", [INT128_ASCII, INT128_UTF8], ids=["ascii", "utf8"])
+    def test_int128_is_no_longer_exempt_anywhere(
+        self, tmp_path: Path, unit: str, line: str
+    ) -> None:
+        """Every site declares the type with `__extension__`, so a return of
+        the warning is a regression at source, not an allowlisted class."""
+        bad = line.replace("fe51.h", unit)
+        log = write_log(tmp_path, "build.log", bad)
         result = run_gate(log)
         assert result.returncode == 1
-        assert "ama_kyber.c" in result.stderr
+        assert unit in result.stderr
 
     def test_one_bad_log_among_several_fails(self, tmp_path: Path) -> None:
-        clean = write_log(tmp_path, "clean.log", INT128_ASCII)
+        clean = write_log(tmp_path, "clean.log", OVERLENGTH_LITERAL)
         dirty = write_log(tmp_path, "dirty.log", MISSING_PROTOTYPE)
         result = run_gate(clean, dirty)
         assert result.returncode == 1
@@ -161,7 +151,7 @@ class TestFailsClosedOnAbsentEvidence:
         assert "is empty" in result.stderr
 
     def test_missing_log_beside_a_clean_one_is_still_fatal(self, tmp_path: Path) -> None:
-        clean = write_log(tmp_path, "clean.log", INT128_ASCII)
+        clean = write_log(tmp_path, "clean.log", OVERLENGTH_LITERAL)
         result = run_gate(clean, tmp_path / "never-written.log")
         assert result.returncode == 1
 
@@ -347,16 +337,6 @@ class TestInterleavedParallelOutput:
 
     def test_interleaved_allowlisted_warning_is_still_allowlisted(self, tmp_path: Path) -> None:
         log = write_log(tmp_path, "build.log", self.INTERLEAVED_OVERLENGTH)
-        result = run_gate(log)
-        assert result.returncode == 0, result.stderr
-
-    def test_interleaved_int128_is_still_allowlisted(self, tmp_path: Path) -> None:
-        merged = (
-            "/src/c/fe51.h/src/c/fe51.h::188188::2222::  warning: warning: "
-            "ISO C does not support '__int128' types [-Wpedantic]"
-            "ISO C does not support '__int128' types [-Wpedantic]"
-        )
-        log = write_log(tmp_path, "build.log", merged)
         result = run_gate(log)
         assert result.returncode == 0, result.stderr
 

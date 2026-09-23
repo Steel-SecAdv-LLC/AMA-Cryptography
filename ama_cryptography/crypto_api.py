@@ -2832,6 +2832,7 @@ def create_crypto_package(
     sphincs_signature: Optional[Signature] = None
     kem_ciphertext: Optional[bytes] = None
     kem_shared_secret: Optional[bytes] = None
+    kem_commitment: Optional[str] = None
 
     # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
@@ -2948,6 +2949,7 @@ def create_crypto_package(
         )
         kem_ciphertext = encapsulated.ciphertext
         kem_shared_secret = encapsulated.shared_secret
+        kem_commitment = _kem_shared_secret_commitment(kem_shared_secret)
         keypairs["KYBER_1024"] = kyber_keypair
 
     # ========================================================================
@@ -2965,6 +2967,8 @@ def create_crypto_package(
         "pqc_status": get_pqc_capabilities()["status"],
         "defense_layers": 4,
         "multi_layer_defense": True,
+        # Signed stand-in for the KEM shared secret; None without the add-on.
+        "kem_shared_secret_commitment": kem_commitment,
     }
 
     # ========================================================================
@@ -3032,6 +3036,21 @@ def _unsigned_placeholder(algorithm: AlgorithmType) -> Signature:
     )
 
 
+#: Domain separator for the public commitment to a package's KEM shared secret.
+_KEM_SS_COMMITMENT_DOMAIN = b"AMA/crypto-package/kem-shared-secret/v1"
+
+
+def _kem_shared_secret_commitment(shared_secret: bytes) -> str:
+    """The public commitment a package signs in place of its KEM shared secret.
+
+    The secret itself stays out of the transcript (the redacted form must still
+    verify), and the Kyber secret key is out of it too.  Without this value the
+    KEM layer only checked that two unsigned fields agreed with each other: a
+    substituted Kyber secret key plus the secret it decapsulates to passed.
+    """
+    return native_sha3_256(_KEM_SS_COMMITMENT_DOMAIN + bytes(shared_secret)).hex()
+
+
 def package_transcript(package: "CryptoPackageResult", content_digest: bytes) -> bytes:
     """The exact bytes a package's Layer-3 signature is computed over.
 
@@ -3056,10 +3075,11 @@ def package_transcript(package: "CryptoPackageResult", content_digest: bytes) ->
     under the signature without exception.
 
     Deliberately NOT included: ``hmac_key``, ``hkdf_master_secret`` and
-    ``kem_shared_secret``.  Binding a secret adds nothing — each is already
-    pinned through the public commitment it produces (``hmac_tag`` for the
-    key, ``derived_keys`` for the master secret) — and it would make the
-    transcript uncomputable from the redacted form :meth:`to_dict` emits.
+    ``kem_shared_secret``.  Each is pinned through a public commitment that IS
+    signed — ``hmac_tag`` for the key, ``derived_keys`` for the master secret,
+    and ``metadata["kem_shared_secret_commitment"]`` for the KEM secret — and
+    binding a secret directly would make the transcript uncomputable from the
+    redacted form :meth:`to_dict` emits.
 
     ``derived_keys`` IS included, and the reason is worth stating because
     binding the salt, info and count alone looks sufficient and is not: an
@@ -3282,7 +3302,18 @@ def _verify_addon_layers(
             )
             from ama_cryptography.secure_memory import constant_time_compare as _ct2
 
-            results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
+            # Both the shared secret and the Kyber secret key are unsigned, so
+            # decapsulation agreeing with the stored secret proves nothing on
+            # its own: the stored secret must also match the signed commitment.
+            committed = package.metadata.get("kem_shared_secret_commitment")
+            results["kem"] = (
+                isinstance(committed, str)
+                and _ct2(
+                    _kem_shared_secret_commitment(package.kem_shared_secret).encode(),
+                    committed.encode(),
+                )
+                and _ct2(decapsulated_ss, package.kem_shared_secret)
+            )
         except Exception as exc:
             logger.error("KEM decapsulation verification error: %s", exc)
             results["kem"] = False

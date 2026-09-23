@@ -38,7 +38,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional, Union, cast
+from typing import Any, Callable, List, Optional, Sequence, Tuple, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 
@@ -157,6 +157,22 @@ _native_lib: Any = None
 _BufferInput = Union[bytes, bytearray, memoryview]
 
 
+def _byte_view(data: _BufferInput) -> memoryview:
+    """A memoryview of ``data`` that is safe to hand to C as ``len(data)`` bytes.
+
+    The one rule every borrow helper in this module applies.  A view whose
+    items are not single bytes, or that is not one contiguous run, is refused
+    with ``TypeError`` rather than copied: the callers length-check with
+    ``len()``, which counts ITEMS, so a 32-item ``array('I')`` would otherwise
+    pass a 32-byte key check while carrying 128 bytes.
+    """
+    view = memoryview(data)
+    if view.ndim != 1 or view.itemsize != 1 or not view.c_contiguous:
+        view.release()
+        raise TypeError("buffer must be a one-dimensional, contiguous byte buffer")
+    return view
+
+
 class _CBufferViews:
     """Borrow one or more inputs as ctypes-compatible buffers without copying
     writable key material, releasing every borrowed view on exit.
@@ -198,13 +214,11 @@ class _CBufferViews:
                 if isinstance(data, bytes):
                     args.append(data)
                     continue
-                view = memoryview(data)
+                view = _byte_view(data)
                 views.append(view)
                 if view.readonly:
                     args.append(view.tobytes())
                     continue
-                if view.ndim != 1 or view.itemsize != 1:
-                    raise TypeError("buffer must be a one-dimensional byte buffer")
                 args.append((ctypes.c_char * view.nbytes).from_buffer(view))
         except BaseException:
             self.__exit__(None, None, None)
@@ -218,13 +232,6 @@ class _CBufferViews:
         views, self._views = self._views, []
         for view in views:
             view.release()
-
-
-@contextlib.contextmanager
-def _c_buffer_view(data: _BufferInput) -> Iterator[Any]:
-    """Single-buffer form of :class:`_CBufferViews` (see its docstring)."""
-    with _CBufferViews(data) as (arg,):
-        yield arg
 
 
 def _all_bytes(*data: _BufferInput) -> bool:
@@ -579,7 +586,11 @@ def _process_is_the_integrity_signer() -> bool:
        — that is a gap in the surrounding design, not something this check
        can close by itself.
     """
-    if os.environ.get("AMA_BUILD_PIPELINE") != "1":
+    # Secure-execution mode revokes the identity outright: a set-uid/set-gid
+    # or file-capability process runs on behalf of a less-privileged caller,
+    # who must not be able to steer this decision at all.  Stated here, once,
+    # rather than beside each of the three consumers that used to repeat it.
+    if os.environ.get("AMA_BUILD_PIPELINE") != "1" or _in_secure_execution_mode():
         return False
     main_module = sys.modules.get("__main__")
     spec = getattr(main_module, "__spec__", None)
@@ -611,27 +622,69 @@ _MIXED_MODE_SIGNER_MODULES = ("ama_cryptography.integrity",)
 _SIGNING_INTENT_FLAGS = ("--update",)
 
 
-#: Interpreter options that take their value as the NEXT argv element.  The
-#: signer-identity scan must step over that value; otherwise a caller-supplied
-#: option value is read as an interpreter option, and `python -W <value> app.py`
-#: with `<value>` spelled `-mama_cryptography._build_sign` grants app.py
-#: signing scope.  `-W` warns and continues on a bad value, `-X` accepts any
-#: value silently, so neither aborts the way `--check-hash-based-pycs` does.
-_INTERPRETER_OPTIONS_TAKING_A_VALUE = frozenset({"-W", "-X", "--check-hash-based-pycs"})
+#: Interpreter options that take a value.  Short ones may carry it joined
+#: (``-Wignore``) or as the next argv element (``-W ignore``); the long one
+#: only as the next element.  ``-c`` and ``-m`` also take a value but END
+#: option parsing, so they are handled separately below.
+_SHORT_OPTIONS_TAKING_A_VALUE = frozenset("WX")
+_LONG_OPTIONS_TAKING_A_VALUE = frozenset({"--check-hash-based-pycs"})
+
+
+def _parse_interpreter_argv(argv: Sequence[str]) -> Tuple[str, Optional[str], List[str]]:
+    """Split an interpreter command line the way CPython does.
+
+    Returns ``(mode, target, program_args)``: mode is ``"m"`` (``-m target``),
+    ``"c"`` (``-c code``), ``"script"`` (a path or ``-`` for stdin) or
+    ``"none"``; ``program_args`` are the arguments the running program sees.
+
+    Short options cluster (``-bb``, ``-Ic``), and ``-c``/``-m`` inside a
+    cluster end it and take the rest of the cluster, or the next element, as
+    their value.  The earlier scanners recognised only exact spellings, so
+    ``python "-c<code>" -mama_cryptography._build_sign`` was read as a
+    ``-m`` launch of the signer and granted signing scope to ``<code>``, and
+    ``--update`` was matched anywhere in argv, option values included.
+    """
+    index = 1
+    while index < len(argv):
+        argument = argv[index]
+        if argument == "--":
+            rest = list(argv[index + 1 :])
+            return ("script", rest[0], rest[1:]) if rest else ("none", None, [])
+        if argument == "-" or not argument.startswith("-"):
+            return "script", argument, list(argv[index + 1 :])
+        if argument.startswith("--"):
+            index += 2 if argument in _LONG_OPTIONS_TAKING_A_VALUE else 1
+            continue
+        for position, flag in enumerate(argument[1:], start=2):
+            if flag in "cm":
+                joined = argument[position:]
+                if joined:
+                    return flag, joined, list(argv[index + 1 :])
+                if index + 1 < len(argv):
+                    return flag, argv[index + 1], list(argv[index + 2 :])
+                return "none", None, []
+            if flag in _SHORT_OPTIONS_TAKING_A_VALUE:
+                if not argument[position:]:
+                    index += 1  # the value is the next element
+                break
+        index += 1
+    return "none", None, []
+
+
+def _interpreter_argv() -> Tuple[str, Optional[str], List[str]]:
+    """``_parse_interpreter_argv`` over this process's ``sys.orig_argv``.
+
+    ``sys.orig_argv`` is a plain mutable list: in-process code can rewrite it,
+    exactly as it can rewrite ``__main__.__spec__``.  It resists an adversary
+    who can only set environment variables, which is the boundary drawn here.
+    """
+    return _parse_interpreter_argv(list(getattr(sys, "orig_argv", []) or []))
 
 
 def _argv_shows_signing_intent() -> bool:
-    """True when this process's own command line asks for a writing run.
-
-    Read from ``sys.orig_argv`` for the same reason the module identity is:
-    it is the interpreter's immutable record of how the process started, so
-    an adversary who can only set an environment variable cannot forge it,
-    and one who can rewrite the victim's command line is already out of the
-    boundary this check draws.
-    """
-    return any(
-        argument in _SIGNING_INTENT_FLAGS for argument in getattr(sys, "orig_argv", []) or []
-    )
+    """True when the running program's own arguments ask for a writing run."""
+    _mode, _target, program_args = _interpreter_argv()
+    return any(argument in _SIGNING_INTENT_FLAGS for argument in program_args)
 
 
 def _module_confers_signing_scope(name: object) -> bool:
@@ -648,47 +701,13 @@ def _module_confers_signing_scope(name: object) -> bool:
 
 
 def _launched_as_signer_module() -> bool:
-    """True when this process's command line is ``python -m <signer module>``.
+    """True when this process was launched as ``python -m <signer module>``.
 
-    Reads ``sys.orig_argv`` — the exact argv the interpreter was launched
-    with, before any option processing — and answers whether the ``-m``
-    target is one of the signing modules.  Both spellings are recognised
-    (``-m mod`` and ``-mmod``).  The scan stops, answering False, at the
-    first argument that ends interpreter-option parsing (``-c``, ``-``, or a
-    positional script path), so a script that merely *mentions* the module
-    name in its arguments is never identified as the signer.
-
-    The parse is deliberately conservative rather than a full re-implementation
-    of CPython's option grammar: an interpreter option that takes a separate
-    argument (``-W ignore -m mod``) is skipped over correctly because the
-    argument either starts with a letter (ending the scan, False — the
-    fail-safe direction) or is itself option-shaped and harmless to step
-    across.  Any residual misreading requires an adversary who already
-    controls the victim's full command line, which is the same adversary the
-    ``__main__`` check accepts as out of scope.
+    Needed alongside the ``__main__.__spec__`` check because runpy imports the
+    parent package (where POST runs) before it rebinds ``__main__``.
     """
-    argv = list(getattr(sys, "orig_argv", []) or [])
-    index = 1
-    while index < len(argv):
-        argument = argv[index]
-        # Options that consume a SEPARATE following argument must skip it, or
-        # that argument gets read as though it were an interpreter option.
-        # Without this, `python -W -mama_cryptography._build_sign app.py`
-        # matched the joined `-m` form below and handed signing scope to
-        # app.py: `-W` only warns about the bad value and continues, and `-X`
-        # accepts arbitrary values silently.  Verified: both mapped a
-        # digest-mismatching library before this skip existed.
-        if argument in _INTERPRETER_OPTIONS_TAKING_A_VALUE:
-            index += 2
-            continue
-        if argument == "-m":
-            return index + 1 < len(argv) and _module_confers_signing_scope(argv[index + 1])
-        if argument.startswith("-m") and len(argument) > 2:
-            return _module_confers_signing_scope(argument[2:])
-        if argument == "-c" or argument == "-" or not argument.startswith("-"):
-            return False
-        index += 1
-    return False
+    mode, target, _program_args = _interpreter_argv()
+    return mode == "m" and _module_confers_signing_scope(target)
 
 
 @contextlib.contextmanager
@@ -821,8 +840,8 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
             # it.  See that function's docstring for why the build pipeline
             # needs the map at all.
             if (
-                _SIGNING_LOAD_OVERRIDE or _process_is_the_integrity_signer()
-            ) and not _in_secure_execution_mode():
+                _SIGNING_LOAD_OVERRIDE and not _in_secure_execution_mode()
+            ) or _process_is_the_integrity_signer():
                 # The signing tool is explicitly blessing this object. It is
                 # about to become the signed digest, so mapping it is the
                 # operator's stated intent rather than an inherited default.
@@ -2170,26 +2189,6 @@ def _setup_ml_dsa_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ama_ml_dsa_privkey_check.argtypes = [ctypes.c_int, ctypes.c_char_p]
         lib.ama_ml_dsa_privkey_check.restype = ctypes.c_int
 
-        lib.ama_ml_dsa_sign.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.POINTER(ctypes.c_size_t),
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-        ]
-        lib.ama_ml_dsa_sign.restype = ctypes.c_int
-
-        lib.ama_ml_dsa_verify.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-        ]
-        lib.ama_ml_dsa_verify.restype = ctypes.c_int
-
         lib.ama_ml_dsa_sign_ctx.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -2870,7 +2869,7 @@ _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED: bool = bool(
 )
 
 # ---------------------------------------------------------------------------
-# ABI version handshake (audit finding #7 close-out).
+# ABI version handshake (INVARIANT-42, runtime half).
 #
 # A ctypes symbol probe proves a NAME is exported, not that the object behind
 # it implements this package's ABI: a stale major-version library, or a
@@ -3530,11 +3529,14 @@ class AmaContext:
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len
             )
         )
-        if rc == 0:
-            # FIPS 140-3 pairwise consistency test (INVARIANT-41), run with
-            # the context's OWN sign/verify or encaps/decaps so the algorithm
-            # under test is exactly the one that generated the keys.
-            self._keypair_pairwise_test(public_key, secret_key)
+        if rc != 0:
+            return rc
+        # FIPS 140-3 pairwise consistency test (INVARIANT-41), run with the
+        # context's OWN sign/verify or encaps/decaps so the algorithm under
+        # test is exactly the one that generated the keys.  Unconditional on
+        # the success path, so tools/check_keygen_pct.py can see that no path
+        # releases a keypair without it.
+        self._keypair_pairwise_test(public_key, secret_key)
         return rc
 
     #: Exact per-algorithm key sizes — mirrors ``get_key_sizes()`` in
@@ -4149,9 +4151,9 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
     implementation. Signatures produced by 4.x do not verify here and vice
     versa.
 
-    The internal interface is still reachable by name, for the ACVP
-    internal-interface vectors and for protocols supplying their own domain
-    separation: :func:`native_ml_dsa_sign` with ``ctx=None``.
+    The internal interface (Algorithm 7) is not shipped (INVARIANT-50): a
+    raw signer under the same key would sign pure signatures on
+    attacker-chosen ``(ctx, M)`` pairs.
 
     Args:
         message: Data to sign
@@ -6261,7 +6263,7 @@ def _native_sha2_ext(fn_name: str, data: bytes, digest_len: int, label: str) -> 
             f"{label} native backend not available. " + _INSTALL_HINT
         )
     out_buf = ctypes.create_string_buffer(digest_len)
-    rc = getattr(_native_lib, fn_name)(data, ctypes.c_size_t(len(data)), out_buf)
+    rc = getattr(_native_lib, fn_name)(_borrow(data), ctypes.c_size_t(len(data)), out_buf)
     if rc != 0:
         raise RuntimeError(f"{label} failed (rc={rc})")
     return bytes(out_buf)
@@ -6341,9 +6343,9 @@ def _native_pbkdf2(
         )
     out_buf = ctypes.create_string_buffer(out_len)
     rc = getattr(_native_lib, fn_name)(
-        password,
+        _borrow(password),
         ctypes.c_size_t(len(password)),
-        salt,
+        _borrow(salt),
         ctypes.c_size_t(len(salt)),
         ctypes.c_uint32(iterations),
         out_buf,
@@ -7136,11 +7138,11 @@ def _borrow(secret: _BufferInput) -> Any:
     storage INVARIANT-6 asks callers to use precisely so they *can* wipe — this
     borrows the buffer in place with ``from_buffer`` rather than copying it.
 
-    This is the non-context-manager sibling of :func:`_c_buffer_view`, which
-    the AEAD wrappers already use; the flat form suits the ``try``/``finally``
-    shape these wrappers need for their *output* buffers. The borrow is
-    released when the returned object is collected, which is at latest when the
-    wrapper returns.
+    This is the non-context-manager sibling of :class:`_CBufferViews`, which
+    the AEAD wrappers use, and it applies the same rule (:func:`_byte_view`).
+    The flat form suits the ``try``/``finally`` shape these wrappers need for
+    their *output* buffers. The borrow is released when the returned object is
+    collected, which is at latest when the wrapper returns.
 
     Deliberately not a copy-then-wipe helper. Copying to wipe the copy leaves
     the transient ``bytes`` that had to be made to get there — the exact
@@ -7149,8 +7151,8 @@ def _borrow(secret: _BufferInput) -> Any:
     """
     if isinstance(secret, bytes):
         return secret
-    view = memoryview(secret)
-    if view.readonly or view.ndim != 1 or view.itemsize != 1:
+    view = _byte_view(secret)
+    if view.readonly:
         return view.tobytes()
     return (ctypes.c_char * view.nbytes).from_buffer(view)
 
@@ -7165,8 +7167,8 @@ def _wipe(*buffers: Any) -> None:
     ``memset`` them in a ``finally``, and this is that idiom named once instead
     of open-coded at every site.
 
-    *Input* secrets go through :func:`_c_buffer_view` instead, which borrows a
-    ``bytearray`` in place rather than copying it. A wipe-the-copy helper for
+    *Input* secrets go through :func:`_borrow` or :class:`_CBufferViews`
+    instead, which borrow a ``bytearray`` in place rather than copying it. A wipe-the-copy helper for
     inputs is worse than useless: the copy it wipes is the second one, and the
     transient it had to make to get there is the un-wipeable ``bytes`` the
     exercise was supposed to avoid.
@@ -7607,17 +7609,16 @@ def native_ml_dsa_sign(
     message: bytes,
     secret_key: Union[bytes, bytearray],
     *,
-    ctx: Optional[bytes] = None,
+    ctx: bytes = b"",
 ) -> bytes:
     """
-    Sign with ML-DSA (FIPS 204), deterministic variant (rnd = 0^256).
+    Sign with ML-DSA (FIPS 204 Algorithm 2), deterministic variant (rnd = 0^256).
 
     Args:
-        ctx: When not None, applies the FIPS 204 §5.2 external/pure context
-            wrapper ``0x00 || len(ctx) || ctx || M``. ``ctx=b""`` is the
-            empty-context *external* form and is NOT the same signature as
-            ``ctx=None`` (the internal interface) — they are different
-            domains, which is the entire point of the wrapper.
+        ctx: The FIPS 204 §5.2 context; the message signed is
+            ``0x00 || len(ctx) || ctx || M``.  The default is the empty
+            context.  There is no raw (Algorithm 7) mode: the internal
+            interface is not shipped (INVARIANT-50).
 
     Raises:
         ValueError: On a wrong key length or a context longer than 255 bytes.
@@ -7629,46 +7630,40 @@ def native_ml_dsa_sign(
         raise ValueError(
             f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
         )
-    if ctx is not None and len(ctx) > 255:
+    if len(ctx) > 255:
         raise ValueError(f"ML-DSA context must be at most 255 bytes, got {len(ctx)}")
     _ml_dsa_require_native()
 
     sig = ctypes.create_string_buffer(sz["signature"])
     sig_len = ctypes.c_size_t(sz["signature"])
-    sk_buf = _borrow(secret_key)
-    if ctx is None:
-        rc = _native_lib.ama_ml_dsa_sign(
-            pid,
-            sig,
-            ctypes.byref(sig_len),
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            sk_buf,
-        )
-    else:
-        rc = _native_lib.ama_ml_dsa_sign_ctx(
-            pid,
-            sig,
-            ctypes.byref(sig_len),
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(ctx),
-            ctypes.c_size_t(len(ctx)),
-            sk_buf,
-        )
+    rc = _native_lib.ama_ml_dsa_sign_ctx(
+        pid,
+        sig,
+        ctypes.byref(sig_len),
+        bytes(message),
+        ctypes.c_size_t(len(message)),
+        bytes(ctx),
+        ctypes.c_size_t(len(ctx)),
+        _borrow(secret_key),
+    )
+    _ml_dsa_check_sign_rc(rc, "ML-DSA signing")
+    return bytes(sig.raw[: sig_len.value])
+
+
+def _ml_dsa_check_sign_rc(rc: int, label: str) -> None:
+    """Map a native ML-DSA signing return code onto this module's exceptions."""
     if rc == AMA_ERROR_INVALID_PARAM:
         # The signer applies FIPS 204 Algorithm 25's range gate to s1/s2, so a
         # secret key of the right length can still be refused here. That is a
         # property of the key the caller passed, not a failure of the operation,
         # and every other bad-input refusal in this module is a ValueError.
         raise ValueError(
-            "ML-DSA signing refused the secret key: its s1/s2 carry a "
+            f"{label} refused the secret key: its s1/s2 carry a "
             "coefficient outside [-eta, eta] (FIPS 204 Algorithm 25), so it is "
             "not a well-formed private key"
         )
     if rc != 0:
-        raise RuntimeError(f"ML-DSA signing failed (rc={rc})")
-    return bytes(sig.raw[: sig_len.value])
+        raise RuntimeError(f"{label} failed (rc={rc})")
 
 
 def native_ml_dsa_sign_hedged(
@@ -7722,15 +7717,14 @@ def native_ml_dsa_sign_hedged(
         pid,
         out,
         ctypes.byref(out_len),
-        message,
-        len(message),
-        ctx if ctx else None,
-        len(ctx),
-        bytes(secret_key),
+        bytes(message),
+        ctypes.c_size_t(len(message)),
+        bytes(ctx) if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        _borrow(secret_key),
     )
-    if rc != 0:
-        raise RuntimeError(f"ML-DSA-{pid} hedged signing failed (rc={rc})")
-    return out.raw[: out_len.value]
+    _ml_dsa_check_sign_rc(rc, f"ML-DSA-{pid} hedged signing")
+    return bytes(out.raw[: out_len.value])
 
 
 def native_ml_dsa_verify(
@@ -7739,13 +7733,13 @@ def native_ml_dsa_verify(
     signature: bytes,
     public_key: bytes,
     *,
-    ctx: Optional[bytes] = None,
+    ctx: bytes = b"",
 ) -> bool:
     """
-    Verify an ML-DSA signature (FIPS 204).
+    Verify an ML-DSA signature (FIPS 204 Algorithm 3).
 
-    ``ctx`` must match what the signer used: ``None`` for the internal
-    interface, or the same context octets for the external/pure form.
+    ``ctx`` must be the context the signer used; the default is the empty
+    context.
 
     Returns:
         True if valid. A wrong-length signature or public key returns False
@@ -7760,29 +7754,18 @@ def native_ml_dsa_verify(
     _ml_dsa_require_native()
     if len(public_key) != sz["public_key"] or len(signature) != sz["signature"]:
         return False
-    if ctx is not None and len(ctx) > 255:
+    if len(ctx) > 255:
         return False
-
-    if ctx is None:
-        rc = _native_lib.ama_ml_dsa_verify(
-            pid,
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(signature),
-            ctypes.c_size_t(len(signature)),
-            bytes(public_key),
-        )
-    else:
-        rc = _native_lib.ama_ml_dsa_verify_ctx(
-            pid,
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(ctx),
-            ctypes.c_size_t(len(ctx)),
-            bytes(signature),
-            ctypes.c_size_t(len(signature)),
-            bytes(public_key),
-        )
+    rc = _native_lib.ama_ml_dsa_verify_ctx(
+        pid,
+        bytes(message),
+        ctypes.c_size_t(len(message)),
+        bytes(ctx),
+        ctypes.c_size_t(len(ctx)),
+        bytes(signature),
+        ctypes.c_size_t(len(signature)),
+        bytes(public_key),
+    )
     return int(rc) == 0
 
 
@@ -9380,7 +9363,7 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
     nonce_buf = ctypes.create_string_buffer(FROST_NONCE_BYTES)
     commit_buf = ctypes.create_string_buffer(FROST_COMMITMENT_BYTES)
 
-    rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, participant_share)
+    rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, _borrow(participant_share))
     if rc != 0:
         raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
 
@@ -9483,15 +9466,15 @@ def frost_round2_sign(
 
         rc = _native_lib.ama_frost_round2_sign(
             sig_share_buf,
-            message,
+            _borrow(message),
             ctypes.c_size_t(len(message)),
-            participant_share,
+            _borrow(participant_share),
             ctypes.c_uint8(participant_index),
             nonce_view,
-            commitments,
-            signer_indices,
+            _borrow(commitments),
+            _borrow(signer_indices),
             ctypes.c_uint8(num_signers),
-            group_public_key,
+            _borrow(group_public_key),
         )
     finally:
         # Belt and braces.  The C side already scrubbed on every path it

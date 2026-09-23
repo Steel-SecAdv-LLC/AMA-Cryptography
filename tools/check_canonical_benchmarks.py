@@ -47,9 +47,14 @@ How it works
     ...
     <!-- canonical-bench: end -->
 
-Every measurement inside that region must appear in
-``benchmarks/canonical-host.json``, and every measurement in the record must
-still appear in the region. The comparison runs in both directions on purpose:
+Every number inside that region must appear in
+``benchmarks/canonical-host.json``, and every number in the record must still
+appear in the region, as many times as the region prints it. "Every number",
+not "every number followed by a unit this gate recognises": the first version
+read only the latter, so "~10,834 Decaps ops/sec", "~4,845 KeyGen, ~3,929
+Sign" and any figure in ms, ns or MB/s could be edited freely inside the pinned
+region. The only digits not pinned are those inside a name — ``ML-DSA-65``,
+``Ed25519``, ``64-byte`` — which cannot change without the name changing. The comparison runs in both directions on purpose:
 one direction catches an edited or invented figure, the other catches a figure
 quietly dropped to make an inconvenient claim go away.
 
@@ -75,6 +80,7 @@ import argparse
 import json
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
@@ -89,17 +95,57 @@ END_MARKER = "<!-- canonical-bench: end -->"
 #: A number as this README writes them: thousands-separated, decimal, or plain.
 _NUMBER = r"\d{1,3}(?:,\d{3})+|\d+\.\d+|\d+"
 
-#: The units this README publishes. MICRO SIGN and MULTIPLICATION SIGN are
-#: written as escapes rather than as literals: ruff's RUF001 flags them as
-#: confusable with "u" and "x", and it is right to — a gate whose pattern can be
-#: read two ways is a gate that can silently stop matching. The escape is the
-#: same character to `re`, and unambiguous to a reader.
-_UNITS = ("ops/sec", "\u00b5s", "\u00d7", "%", "KB")
+#: The units this README publishes, and the ones a figure could be republished
+#: in. MICRO SIGN and MULTIPLICATION SIGN are written as escapes rather than as
+#: literals: ruff's RUF001 flags them as confusable with "u" and "x", and it is
+#: right to — a gate whose pattern can be read two ways is a gate that can
+#: silently stop matching. The escape is the same character to `re`, and
+#: unambiguous to a reader. Longest first, so ``MB/s`` is not read as ``MB``.
+_UNITS = (
+    "ops/sec",
+    "MB/s",
+    "GB/s",
+    "cycles",
+    "\u00b5s",
+    "us",
+    "ms",
+    "ns",
+    "\u00d7",
+    "%",
+    "KB",
+    "MB",
+    "GB",
+)
 
 #: A measurement is a number followed by a unit. ``~`` marks an approximate
 #: figure and is part of the claim: "~276us" and "276us" say different things
 #: about how the number was arrived at, so the gate keeps them distinct.
-_MEASUREMENT = re.compile(rf"(~?)\s*({_NUMBER})\s*({'|'.join(_UNITS)})")
+_MEASUREMENT = re.compile(rf"(~?)\s*({_NUMBER})\s*({'|'.join(map(re.escape, _UNITS))})(?![A-Za-z])")
+
+#: Every number token the region prints: a date, a dotted version, a
+#: thousands-separated or decimal figure, or a bare digit run.
+_ANY_NUMBER = re.compile(
+    r"(~?)\s*(\d{4}-\d{2}-\d{2}|\d+(?:\.\d+){2,}|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"
+)
+
+#: The characters that glue a digit run into a word: ``ML-DSA-65``, ``x86-64``,
+#: ``radix-2^51``, ``64-byte``. A digit run whose word carries a letter is part
+#: of a NAME, not a figure: it cannot drift without the name changing.
+_WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_^-")
+
+#: A Markdown link target is an address, not a published figure.
+_LINK_TARGET = re.compile(r"\]\([^)]*\)")
+
+
+def _is_name_part(line: str, start: int, end: int) -> bool:
+    """True when the digits at ``line[start:end]`` sit inside a word with a letter."""
+    left = start
+    while left > 0 and line[left - 1] in _WORD_CHARS:
+        left -= 1
+    right = end
+    while right < len(line) and line[right] in _WORD_CHARS:
+        right += 1
+    return any(character.isalpha() for character in line[left:start] + line[end:right])
 
 
 class Report:
@@ -136,7 +182,16 @@ def extract_region(text: str) -> Optional[str]:
 
 
 def extract_measurements(region: str) -> list[dict[str, Any]]:
-    """Every measurement in the region, tagged with the row and section it is in.
+    """Every number in the region, tagged with the row and section it is in.
+
+    Not only the figures followed by a recognised unit: "~10,834 Decaps
+    ops/sec" and "~4,845 KeyGen, ~3,929 Sign" are throughput claims whose unit
+    is not adjacent to the number, and a figure in a unit this gate did not list
+    would have escaped the same way. So every number token is pinned — carrying
+    its unit when one follows it, and an empty unit when none does — unless its
+    digits are part of a name (``ML-DSA-65``, ``Ed25519``, ``64-byte``), which
+    cannot change without the name changing. A heading's numbers are pinned
+    under the label ``(heading)``.
 
     The label is the first cell of a markdown table row, which is how this
     README names the thing being measured. Prose measurements outside a table
@@ -144,16 +199,19 @@ def extract_measurements(region: str) -> list[dict[str, Any]]:
     """
     found: list[dict[str, Any]] = []
     heading = ""
-    for line in region.splitlines():
+    for raw in region.splitlines():
+        line = _LINK_TARGET.sub("]()", raw)
         stripped = line.strip()
         if stripped.startswith("#"):
             heading = stripped.lstrip("# ").strip()
-            continue
-        if stripped.startswith("|") and stripped.count("|") > 2:
+            label = "(heading)"
+        elif stripped.startswith("|") and stripped.count("|") > 2:
             label = stripped.split("|")[1].strip()
         else:
             label = "(prose)"
+        claimed: list[tuple[int, int]] = []
         for match in _MEASUREMENT.finditer(line):
+            claimed.append(match.span(2))
             found.append(
                 {
                     "heading": heading,
@@ -161,6 +219,21 @@ def extract_measurements(region: str) -> list[dict[str, Any]]:
                     "approx": bool(match.group(1)),
                     "value": match.group(2),
                     "unit": match.group(3),
+                }
+            )
+        for match in _ANY_NUMBER.finditer(line):
+            start, end = match.span(2)
+            if any(start < taken_end and taken_start < end for taken_start, taken_end in claimed):
+                continue
+            if _is_name_part(line, start, end):
+                continue
+            found.append(
+                {
+                    "heading": heading,
+                    "label": label,
+                    "approx": bool(match.group(1)),
+                    "value": match.group(2),
+                    "unit": "",
                 }
             )
     return found
@@ -209,7 +282,10 @@ def check_measurements(
         report.fail(f"{RECORD}: 'measurements' is missing or empty")
         return
 
-    recorded: dict[tuple[str, str, bool, str, str], dict[str, Any]] = {}
+    # Counted, not collected into a set: "256 doublings + 256 additions" is two
+    # figures, and deleting one of them must not pass because the other still
+    # carries the same key.
+    recorded: Counter[tuple[str, str, bool, str, str]] = Counter()
     for entry in entries:
         if not isinstance(entry, dict):
             report.fail(f"{RECORD}: a measurement entry is not an object")
@@ -225,28 +301,34 @@ def check_measurements(
                 f"{RECORD}: {key[1]} {key[3]}{key[4]} cites source "
                 f"'{source}', which is not described under 'sources'"
             )
-        recorded[key] = entry
+        recorded[key] += 1
 
-    published_keys = {_key(entry) for entry in published}
+    published_keys: Counter[tuple[str, str, bool, str, str]] = Counter(
+        _key(entry) for entry in published
+    )
 
-    for entry in published:
-        key = _key(entry)
-        if key not in recorded:
-            approx = "~" if key[2] else ""
-            report.fail(
-                f"{README}: '{key[1]}' publishes {approx}{key[3]} {key[4]} under "
-                f"'{key[0]}', which is not in {RECORD}. Either it drifted from the "
-                f"recorded figure, or it is a new claim with no host behind it."
+    for key, count in sorted((published_keys - recorded).items()):
+        approx = "~" if key[2] else ""
+        report.fail(
+            f"{README}: '{key[1]}' publishes {approx}{key[3]} {key[4]}".rstrip()
+            + f" under '{key[0]}'"
+            + (f" {count} more time(s) than" if key in recorded else ", which is not in")
+            + f" {RECORD}. Either it drifted from the recorded figure, or it is a "
+            "new claim with no host behind it."
+        )
+
+    for key, count in sorted((recorded - published_keys).items()):
+        approx = "~" if key[2] else ""
+        report.fail(
+            f"{RECORD} carries '{key[1]}' at {approx}{key[3]} {key[4]}".rstrip()
+            + f" under '{key[0]}'"
+            + (
+                f" {count} more time(s) than {README} publishes it"
+                if key in published_keys
+                else f", but {README} no longer publishes it"
             )
-
-    for key in recorded:
-        if key not in published_keys:
-            approx = "~" if key[2] else ""
-            report.fail(
-                f"{RECORD} carries '{key[1]}' at {approx}{key[3]} {key[4]} under "
-                f"'{key[0]}', but {README} no longer publishes it. A recorded "
-                f"figure is not retired by deleting the line that quotes it."
-            )
+            + ". A recorded figure is not retired by deleting the line that quotes it."
+        )
 
 
 def main(argv: Optional[list[str]] = None) -> int:

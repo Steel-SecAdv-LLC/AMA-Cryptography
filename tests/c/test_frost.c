@@ -761,6 +761,67 @@ int main(void) {
             TEST_ASSERT(rc == AMA_SUCCESS,
                         "the honest share still verifies");
         }
+
+        /* 9i — a share re-spelled as z_i + L is refused (RFC 9591 section
+         * 4.1: a scalar is canonical, 0 <= z < L).  The relation alone cannot
+         * see it — [z + L]B is [z]B — and the aggregate sum reduces it away,
+         * so before the canonical check both entry points accepted it. */
+        {
+            static const uint8_t L[32] = {
+                0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+                0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
+            };
+            uint8_t respelled[2 * 32];
+            unsigned carry = 0;
+            memcpy(respelled, sig_shares, sizeof respelled);
+            for (int k = 0; k < 32; k++) {       /* z_2 += L; z < L so no overflow */
+                carry += (unsigned)respelled[32 + k] + L[k];
+                respelled[32 + k] = (uint8_t)carry;
+                carry >>= 8;
+            }
+            rc = ama_frost_verify_share(respelled + 32, 2, public_shares + 32,
+                                        commitments, signer_indices, 2,
+                                        msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "ama_frost_verify_share refuses z_i + L");
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, respelled, commitments,
+                                     public_shares, signer_indices, 2,
+                                     msg, msg_len, group_pk, &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED && bad_index == 2,
+                        "aggregate refuses z_i + L and names participant 2");
+        }
+
+        /* 9j — a commitment that does not decode is attributed.  Aggregation
+         * builds R from every commitment before it checks any share, so an
+         * undecodable E_2 used to fail inside R with AMA_ERROR_INVALID_PARAM
+         * and bad_participant_index still 0 — an anonymous abort, the exact
+         * outcome INVARIANT-49's blame channel exists to prevent, and not
+         * what the header promises ("index reported when it is one
+         * participant's point"). */
+        {
+            uint8_t bad_commitments[2 * 64];
+            uint8_t off_curve[32] = { 0 };
+            uint8_t probe[32];
+            static const uint8_t ONE[32] = { 1 };
+            /* The smallest canonical y that is not on the curve. */
+            for (off_curve[0] = 2; off_curve[0] < 255; off_curve[0]++) {
+                if (ama_ed25519_scalarmult_public(probe, ONE, off_curve) != AMA_SUCCESS)
+                    break;
+            }
+            TEST_ASSERT(off_curve[0] < 255, "found an encoding that does not decode");
+
+            memcpy(bad_commitments, commitments, sizeof bad_commitments);
+            memcpy(bad_commitments + 64 + 32, off_curve, 32);   /* E_2 */
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, sig_shares, bad_commitments,
+                                     public_shares, signer_indices, 2,
+                                     msg, msg_len, group_pk, &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM && bad_index == 2,
+                        "aggregate attributes an undecodable commitment to participant 2");
+        }
     }
 
     printf("\n===========================================\n");

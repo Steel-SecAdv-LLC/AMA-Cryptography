@@ -268,7 +268,7 @@ static void test_public_api(void) {
         unsigned i;
 
         for (i = 0; i < sizeof(digest); i++) {
-            digest[i] = (uint8_t)(i * 7u + idx);
+            digest[i] = (uint8_t)(i * 7u + (unsigned)idx);
         }
 
         CHECK(ama_nistp_keypair(curve, priv, pub) == AMA_SUCCESS, "keypair failed");
@@ -381,9 +381,11 @@ static void test_pqc_parameter_tables(void) {
  *
  * That made every `if (!c || !x || ...) return AMA_ERROR_INVALID_PARAM;` on the
  * twenty-one-entry-point P-curve surface a guard nothing executed: measured
- * with tools/measure_branch_coverage.py, the arcs at ama_nistp.c lines 1663,
- * 1715, 1750, 1768, 1797, 1901, 2143, 2160, 2285, 2314, 2353 and 2381 were
- * never taken by the C suite, and deleting any of them would have broken no
+ * with tools/measure_branch_coverage.py, the NULL-guard arcs in ama_nistp.c's
+ * ama_nistp_{pubkey_from_privkey, keypair, pubkey_validate, point_encode,
+ * point_decode, ecdh, ecdsa_sign_raw_ex, ecdsa_sign_ex, ecdsa_verify_ex,
+ * ecdsa_verify_raw_ex, sig_der_to_raw, sig_raw_to_der} were never taken by
+ * the C suite, and deleting any of them would have broken no
  * test in either suite -- the shape of thing AGENTS.md section 11 asks this
  * triage to find.
  *

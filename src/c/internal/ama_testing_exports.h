@@ -299,6 +299,33 @@ ama_error_t ama_slhdsa_verify_internal(ama_slhdsa_param_set_t ps,
                                        size_t message_len,
                                        const uint8_t *pk);
 
+/* --- src/c/ama_dilithium.c ---------------------------------------------- */
+
+/**
+ * The FIPS 204 internal interface: ML-DSA.Sign_internal (Algorithm 7) and
+ * ML-DSA.Verify_internal (Algorithm 8) over the RAW message, with no §5.2
+ * context wrapper.
+ *
+ * Shipped as `ama_ml_dsa_sign` / `ama_ml_dsa_verify` until 2026-09-23, and
+ * the same oracle INVARIANT-50 records for SLH-DSA: a signature from
+ * `ama_ml_dsa_sign(0x00 || 0x01 || "x" || M)` was accepted by
+ * `ama_ml_dsa_verify_ctx(M, ctx = "x")` under the same key, so any caller
+ * that signed caller-influenced bytes through the raw entry point signed
+ * pure signatures on attacker-chosen (ctx, M) pairs.  Compiled only into the
+ * AMA_TESTING_MODE archive; `cmake/ama_exports.map` localises both names as
+ * defence in depth.
+ */
+ama_error_t ama_ml_dsa_sign_internal(ama_ml_dsa_param_set_t ps,
+                                     uint8_t *signature, size_t *signature_len,
+                                     const uint8_t *message, size_t message_len,
+                                     const uint8_t *secret_key);
+
+/** Counterpart of the above: FIPS 204 Algorithm 8. */
+ama_error_t ama_ml_dsa_verify_internal(ama_ml_dsa_param_set_t ps,
+                                       const uint8_t *message, size_t message_len,
+                                       const uint8_t *signature, size_t signature_len,
+                                       const uint8_t *public_key);
+
 /* --- src/c/ama_argon2.c ------------------------------------------------- */
 
 /**

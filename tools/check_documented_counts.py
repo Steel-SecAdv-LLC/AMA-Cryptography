@@ -364,13 +364,9 @@ def _loc_tracked_files(repo: Path) -> list[str]:
     build rewrites in place (``_LOC_BUILD_REWRITTEN``) are excluded in both
     modes, for the reason documented on the constant.
     """
-    if (repo / ".git").exists():
-        proc = subprocess.run(
-            ["git", "-C", str(repo), "ls-files", "-z"],
-            capture_output=True,
-            check=True,
-        )
-        tracked = [p.decode("utf-8") for p in proc.stdout.split(b"\0") if p]
+    listed = _git_tracked(repo)
+    if listed is not None:
+        tracked = listed
     else:
         tracked = sorted(
             p.relative_to(repo).as_posix()
@@ -820,29 +816,34 @@ def check_c_suite_counts(repo: Path) -> list[str]:
     return problems
 
 
-def _git_tracked(repo: Path, pattern: str) -> Optional[list[str]]:
-    """Paths git tracks matching ``pattern``, or None when git cannot answer."""
-    try:
-        proc = subprocess.run(
-            # `:(glob)` pathspec magic: without it git's wildmatch lets `*`
-            # cross a `/`, so `src/c/*.c` also matched src/c/avx2/*.c and
-            # friends -- 61 files where the directory holds 29.  The gate
-            # caught it on the first run, which is what it is for.
-            ["git", "-C", str(repo), "ls-files", f":(glob){pattern}"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
+def _git_tracked(repo: Path, *pathspecs: str) -> Optional[list[str]]:
+    """Repo-relative POSIX paths git tracks matching ``pathspecs``, or None
+    when ``repo`` is not a git checkout (no ``.git``: a source tarball, or a
+    non-git fixture directory in this gate's own tests).
+
+    Only the absence of a repository selects the glob fallback.  This used to
+    return None on ANY git failure and also listed without ``-z``, so a
+    non-ASCII name came back C-quoted and a broken git in a real checkout
+    quietly switched the gate to globbing the working tree.  Enumeration now
+    goes through ``tools/_repo.py``: ``-z``, and ``TrackedFilesError`` if git
+    fails or a tracked path is not a regular file on disk.
+    """
+    if not (repo / ".git").exists():
         return None
-    if proc.returncode != 0:
-        return None
-    return [line for line in proc.stdout.splitlines() if line.strip()]
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import tracked_names
+
+    return tracked_names(repo, *pathspecs)
 
 
 def _tracked_or_globbed(repo: Path, pattern: str) -> list[str]:
-    tracked = _git_tracked(repo, pattern)
+    # `:(glob)` pathspec magic: without it git's wildmatch lets `*` cross a
+    # `/`, so `src/c/*.c` also matched src/c/avx2/*.c and friends -- 61 files
+    # where the directory holds 29.  The gate caught it on the first run,
+    # which is what it is for.
+    tracked = _git_tracked(repo, f":(glob){pattern}")
     if tracked is not None:
         return tracked
     return [p.as_posix() for p in sorted(repo.glob(pattern))]

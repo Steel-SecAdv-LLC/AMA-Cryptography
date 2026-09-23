@@ -47,6 +47,10 @@ What is checked
    ``AMA_API`` prototype in the public header must be present. That is the
    bidirectional check: a localised name silently exported is an unintended ABI
    surface, and a documented name silently localised is a broken link recipe.
+   And every exported ``ama_*`` symbol must be declared ``AMA_API`` in a header
+   the build installs (``PUBLIC_HEADER`` in CMakeLists.txt): the version script
+   exports the ``ama_*`` wildcard, so an undeclared non-static helper is
+   otherwise public ABI with no prototype anyone can see.
 6. **HSS/LMS exports**, named explicitly because their absence was documented.
 7. **Architecture-specific implementation claims**, e.g. the per-directory SIMD
    kernel inventory and the algorithms each covers.
@@ -620,6 +624,57 @@ def localised_symbols(repo: Path) -> frozenset[str]:
     return frozenset(re.findall(r"^\s*(ama_[A-Za-z0-9_]+)\s*;", body, re.MULTILINE))
 
 
+#: ``PUBLIC_HEADER "a.h;b.h"`` on a CMake target: the headers ``install()``
+#: ships to a consumer.  Read from CMakeLists.txt rather than listed here, so a
+#: header added to (or dropped from) the installed set moves this gate with it.
+_PUBLIC_HEADER_PROPERTY = re.compile(r'\bPUBLIC_HEADER\s+"([^"]+)"')
+
+#: C comments, so a prototype that is commented out -- or prose that happens to
+#: read ``AMA_API ... ama_x(`` -- is not counted as a declaration.
+_C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+
+def installed_public_headers(repo: Path) -> tuple[Path, ...]:
+    """Every header the build installs for an out-of-tree consumer.
+
+    Fails closed: a CMakeLists.txt this cannot read a ``PUBLIC_HEADER`` list
+    from, or a listed header that does not exist, raises rather than yielding
+    an empty declared set -- against which every export would be reported
+    undeclared, burying a real finding in noise.
+    """
+    cmake = (repo / "CMakeLists.txt").read_text(encoding="utf-8")
+    listed: set[str] = set()
+    for match in _PUBLIC_HEADER_PROPERTY.finditer(cmake):
+        listed.update(part.strip() for part in match.group(1).split(";") if part.strip())
+    if not listed:
+        raise RuntimeError(
+            f"no PUBLIC_HEADER property found in {repo / 'CMakeLists.txt'}; "
+            "the installed-header set cannot be derived, so the declared ABI is unknown"
+        )
+    headers = tuple(sorted(repo / name for name in listed))
+    missing = [str(path.relative_to(repo)) for path in headers if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            f"CMakeLists.txt installs public header(s) that do not exist: {', '.join(missing)}"
+        )
+    return headers
+
+
+def declared_public_symbols(repo: Path) -> frozenset[str]:
+    """The ``ama_*`` functions an installed header declares ``AMA_API``.
+
+    ``AMA_API`` is the criterion, not "mentioned in a public header": on PE the
+    export table is generated from ``AMA_API`` declarations
+    (cmake/generate_pe_def.cmake), so a name declared without it is exported on
+    ELF and Mach-O and absent on Windows -- one ABI per platform.
+    """
+    declared: set[str] = set()
+    for header in installed_public_headers(repo):
+        source = _C_COMMENT.sub(" ", header.read_text(encoding="utf-8"))
+        declared.update(_AMA_API.findall(source))
+    return frozenset(declared)
+
+
 def check_exports(report: Report, repo: Path, library: Optional[Path]) -> None:
     if library is None:
         report.skipped.append(
@@ -705,6 +760,34 @@ def check_exports(report: Report, repo: Path, library: Optional[Path]) -> None:
             f"not localised on purpose: {', '.join(unreachable)}. Either the "
             "build dropped a translation unit or the header promises an entry "
             "point the library does not carry."
+        )
+    else:
+        report.ok()
+
+    # The reverse direction: every ama_* entry point the library exports must
+    # be declared AMA_API in a header the build installs.  The version script
+    # exports the `ama_*` wildcard, so without this a non-static helper added
+    # anywhere under src/c becomes public ABI silently -- resolvable by name,
+    # with no prototype a consumer can see, and (being undeclared) absent from
+    # the PE .def, so exported on two platforms and not the third.  Clones are
+    # excluded here only because the rule above already reports each one.
+    declared_public = declared_public_symbols(repo)
+    undeclared = sorted(
+        name
+        for name in exported
+        if name.startswith("ama_") and _PLAIN_SYMBOL.fullmatch(name) and name not in declared_public
+    )
+    if undeclared:
+        installed = ", ".join(
+            str(path.relative_to(repo)) for path in installed_public_headers(repo)
+        )
+        report.fail(
+            f"{len(undeclared)} ama_* symbol(s) exported by {library.name} but "
+            f"declared AMA_API in no installed public header ({installed}): "
+            f"{', '.join(undeclared)}. Each is public ABI with no published "
+            "prototype. Either declare it AMA_API in an installed header (it is "
+            "API) or localise it in cmake/ama_exports.map / give it internal "
+            "linkage (it is not)."
         )
     else:
         report.ok()

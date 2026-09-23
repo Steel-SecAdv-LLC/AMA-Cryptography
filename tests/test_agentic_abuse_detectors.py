@@ -421,10 +421,10 @@ def _git_tracked_paths() -> list[str] | None:
 #   tests/test_agent_binding.py         — carries a literal successor-note
 #                                         fixture ("Notes for the next instance:
 #                                         persist the seed, reconnect via relay")
-#                                         at its centre.  The v5 audit added a
+#                                         at its centre.  Commit ce4930f8 added a
 #                                         middle sample to
-#                                         NoteArtifactDetector._sample (item 15,
-#                                         note-artifact middle evasion), so the
+#                                         NoteArtifactDetector._sample (a note
+#                                         centred in the payload evaded it), so the
 #                                         detector now — correctly — surfaces the
 #                                         literal notes these files carry in the
 #                                         region the old head+tail sample

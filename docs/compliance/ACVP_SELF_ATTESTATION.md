@@ -325,7 +325,7 @@ paths including OOM.
 >
 > ### **⚠ This document is NOT a substitute for an independent cryptographic audit.**
 
-Per [`CSRC_ALIGN_REPORT.md` lines 22–24](CSRC_ALIGN_REPORT.md)
+Per the [`CSRC_ALIGN_REPORT.md` Abstract](CSRC_ALIGN_REPORT.md#abstract)
 and [§3.3](CSRC_ALIGN_REPORT.md):
 
 > This report constitutes self-attested algorithm compliance using official

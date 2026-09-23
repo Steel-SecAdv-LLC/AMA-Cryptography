@@ -460,6 +460,21 @@ AMA_API void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
                                uint8_t out[32]);
 
 /**
+ * @brief One-shot SHA-256 (FIPS 180-4): hash @p inlen bytes to 32.
+ *
+ * Exported because the Python layer binds it (`pqc_backends.native_sha256`).
+ * It was exported before this declaration existed — declared `AMA_API` only
+ * in the uninstalled `src/c/ama_sha256.h` — so a C consumer had an ABI symbol
+ * with no published prototype, and the MinGW `.def`, generated from the
+ * installed headers' declarations, could not name it.
+ *
+ * @param out   Output: 32-byte digest
+ * @param in    Message (may be NULL when @p inlen is 0)
+ * @param inlen Message length in bytes
+ */
+AMA_API void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen);
+
+/**
  * @brief Lock memory pages to prevent swapping to disk, and mark them
  *        non-dumpable (MADV_DONTDUMP where the platform has it).
  *
@@ -1492,7 +1507,12 @@ AMA_API ama_error_t ama_ed25519_sign_expanded(
  * @param public_key    Caller MUST supply exactly 32 readable bytes. Same
  *                      terms as `signature`: no length parameter, short is
  *                      undefined behaviour, long is ignored not rejected.
- * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid,
+ *         AMA_ERROR_INVALID_PARAM for a NULL `signature` or `public_key`, a
+ *         NULL `message` with a non-zero `message_len`, or a `message_len`
+ *         whose working buffer size would overflow, and AMA_ERROR_MEMORY
+ *         when a message longer than the 4 KiB stack buffer cannot be
+ *         allocated for.  Only AMA_SUCCESS means "verified".
  *
  * See the fixed-length buffer contract above. Note that a rejected
  * signature and a malformed-length signature are NOT distinguishable
@@ -1584,8 +1604,10 @@ typedef struct {
  *                  NULL `signature`, a NULL `public_key`, or a NULL
  *                  `message` with a non-zero `message_len` is rejected as
  *                  an invalid entry (`results[i] = 0`, and the call returns
- *                  `AMA_ERROR_VERIFY_FAILED`), which is the same verdict
- *                  `ama_ed25519_verify` gives those arguments. Until this
+ *                  `AMA_ERROR_VERIFY_FAILED`): every non-success return of
+ *                  `ama_ed25519_verify` for an entry, its
+ *                  `AMA_ERROR_INVALID_PARAM` and `AMA_ERROR_MEMORY`
+ *                  included, is recorded as that entry failing. Until this
  *                  was added the since-removed vendored backend dereferenced
  *                  them and took SIGSEGV while the in-tree backend rejected
  *                  cleanly, so the same call crashed on x86-64 and returned
@@ -1608,7 +1630,8 @@ typedef struct {
  * entry is therefore exactly the single-verify verdict for the same 64 bytes:
  * there is no separate aggregate predicate, no randomizer draw and no
  * working-array allocation, and so no `AMA_ERROR_MEMORY` or `AMA_ERROR_CRYPTO`
- * return. A caller MUST treat any non-`AMA_SUCCESS` return as "at least one
+ * return (an entry whose own verification could not allocate is an entry
+ * that did not verify). A caller MUST treat any non-`AMA_SUCCESS` return as "at least one
  * entry in this batch did not verify" and read `results` per entry rather than
  * switching only on `AMA_ERROR_VERIFY_FAILED`.
  *
@@ -1983,7 +2006,9 @@ AMA_API ama_error_t ama_frost_round2_sign(
  * @param message_len              Message length
  * @param group_public_key         32-byte group public key
  * @return AMA_SUCCESS if the share satisfies the relation;
- *         AMA_ERROR_VERIFY_FAILED if it does not;
+ *         AMA_ERROR_VERIFY_FAILED if it does not, if `sig_share` is not a
+ *         canonical scalar (0 <= z < L, RFC 9591 section 4.1), or if a
+ *         commitment or the public share is non-canonical or small-order;
  *         AMA_ERROR_INVALID_PARAM on a NULL argument, a signer set that does
  *         not contain participant_index, or a point that does not decode.
  */
@@ -3650,29 +3675,13 @@ AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
  * row to save the 57 KB would multiply the dominant cost of signing several
  * times over, on the one ML-DSA path where the parameter set is chosen by the
  * key holder rather than by an attacker. `ama_ml_dsa_keypair` (61 KB) and
- * `ama_ml_dsa_verify` (58 KB) *do* expand A row-wise, because verification is
+ * `ama_ml_dsa_verify_ctx` (58 KB) *do* expand A row-wise, because verification is
  * driven by whoever supplies the signature and has to fit a small stack.
  *
  * All three figures are measured, not asserted:
  * `tests/c/test_pq_parser_stack.c` runs each on a painted, caller-supplied
  * thread stack and holds it under a stated budget.
  */
-/* INTERNAL INTERFACE (FIPS 204 Algorithm 7): mu = H(tr || M), no context
- * wrapper.  Sec 5.2 restricts this to testing and to protocols supplying their
- * own domain separation — the ACVP internal-interface vectors replay through
- * it.  For an interoperable ML-DSA-65 signature use ama_dilithium_sign(), or
- * ama_ml_dsa_sign_ctx() for another parameter set. */
-AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
-                                    uint8_t *signature, size_t *signature_len,
-                                    const uint8_t *message, size_t message_len,
-                                    const uint8_t *secret_key);
-
-/** @brief ML-DSA verification, "internal interface" (no context wrapper). */
-AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
-                                      const uint8_t *message, size_t message_len,
-                                      const uint8_t *signature, size_t signature_len,
-                                      const uint8_t *public_key);
-
 /**
  * @brief ML-DSA signing with the FIPS 204 §5.2 external/pure context wrapper.
  *

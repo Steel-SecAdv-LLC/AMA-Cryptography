@@ -141,14 +141,14 @@ static void *run_job(void *arg) {
                                          job->pk_out, (uint8_t *)job->sk);
             break;
         case 4:
-            job->rc = ama_ml_dsa_sign((ama_ml_dsa_param_set_t)job->param_set,
-                                      job->sig, &job->sig_len,
-                                      job->msg, job->msg_len, job->sk);
+            job->rc = ama_ml_dsa_sign_ctx((ama_ml_dsa_param_set_t)job->param_set,
+                                          job->sig, &job->sig_len,
+                                          job->msg, job->msg_len, NULL, 0, job->sk);
             break;
         case 5:
-            job->rc = ama_ml_dsa_verify((ama_ml_dsa_param_set_t)job->param_set,
-                                        job->msg, job->msg_len,
-                                        job->sig, job->sig_len, job->pk);
+            job->rc = ama_ml_dsa_verify_ctx((ama_ml_dsa_param_set_t)job->param_set,
+                                            job->msg, job->msg_len, NULL, 0,
+                                            job->sig, job->sig_len, job->pk);
             break;
         default:
             job->rc = AMA_SUCCESS;
@@ -514,7 +514,7 @@ int main(int argc, char **argv) {
                 return fail("ML-DSA sign did not succeed under measurement");
             }
             used = used > baseline ? used - baseline : 0;
-            printf("  %-12s ama_ml_dsa_sign:                %6zu bytes of stack\n",
+            printf("  %-12s ama_ml_dsa_sign_ctx:            %6zu bytes of stack\n",
                    name, used);
             if (used > sign_worst) {
                 sign_worst = used;
@@ -541,7 +541,7 @@ int main(int argc, char **argv) {
                 return fail("ML-DSA verify rejected a signature it had just produced");
             }
             used = used > baseline ? used - baseline : 0;
-            printf("  %-12s ama_ml_dsa_verify:              %6zu bytes of stack\n",
+            printf("  %-12s ama_ml_dsa_verify_ctx:          %6zu bytes of stack\n",
                    name, used);
             if (used > op_worst) {
                 op_worst = used;

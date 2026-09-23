@@ -898,6 +898,19 @@ class IntegrityViolation:
     actual_hash: str
 
 
+# The crypto modules whose resolved path the import-hijack monitor baselines
+# at start-up and re-checks on demand.  A module-level literal, so every
+# importlib.import_module() call below names a fixed module and the INVARIANT-1
+# source gates can resolve it; iterating the runtime baseline dict instead made
+# the import target data the gates could not see.
+_IMPORT_BASELINE_MODULES = (
+    "ama_cryptography.crypto_api",
+    "ama_cryptography.key_management",
+    "ama_cryptography.adaptive_posture",
+    "ama_cryptography.secure_memory",
+)
+
+
 @dataclass
 class ImportHijackViolation:
     """Import chain integrity violation (Priority 10)."""
@@ -3577,13 +3590,7 @@ class RefactoringAnalyzer:
         try:
             import importlib
 
-            crypto_modules = [
-                "ama_cryptography.crypto_api",
-                "ama_cryptography.key_management",
-                "ama_cryptography.adaptive_posture",
-                "ama_cryptography.secure_memory",
-            ]
-            for mod_name in crypto_modules:
+            for mod_name in _IMPORT_BASELINE_MODULES:
                 try:
                     mod = importlib.import_module(mod_name)
                     mod_file = getattr(mod, "__file__", None)
@@ -3673,7 +3680,10 @@ class RefactoringAnalyzer:
         import importlib
 
         violations: List[ImportHijackViolation] = []
-        for mod_name, expected_path in self._import_baselines.items():
+        for mod_name in _IMPORT_BASELINE_MODULES:
+            expected_path = self._import_baselines.get(mod_name)
+            if expected_path is None:
+                continue  # not installed at start-up; nothing was baselined
             try:
                 # Force re-import to get current path
                 mod = importlib.import_module(mod_name)

@@ -224,9 +224,6 @@ def secure_memzero(data: Union[bytearray, memoryview]) -> None:
     a repeat count, is what stops dead-store elimination. Only the opt-in
     pure-Python fallback (``AMA_ALLOW_PYTHON_MEMZERO``) loops.
 
-    Overwrites the buffer with zeros, then ones, then zeros again
-    to reduce the chance of the operation being optimized away.
-
     Args:
         data: Mutable buffer to zero (bytearray or memoryview)
 

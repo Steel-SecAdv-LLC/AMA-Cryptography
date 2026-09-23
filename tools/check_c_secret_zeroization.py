@@ -35,6 +35,25 @@ rule established: unambiguous prefixes (``secret_``, ``private_``, ``master_``,
 mass-flagging them trains people to silence the gate, which is worse than not
 having it.
 
+The bare secret names themselves — ``sk``, ``key``/``keys``, ``seed``,
+``secret``, ``priv``/``private``/``privkey`` — were not in that list, so
+``memset(sk, 0, n)`` and ``memset(ctx->key, 0, n)`` passed anywhere a
+``PUBLIC-DATA`` comment sat beside them, and everywhere in ``tests/c`` (where
+the annotation rule does not apply).  They are now known-secret spellings: a
+destination so named is a finding even when annotated ``PUBLIC-DATA``, because
+the annotation asserts a buffer is not secret and the name asserts it is.
+
+``memset`` is not the only plain zeroing call.  ``bzero``, the compiler
+builtins ``__builtin_memset`` / ``__builtin_bzero``, and Windows'
+``ZeroMemory`` / ``RtlZeroMemory`` (macros over ``memset``) are exactly as
+elidable, and none contains the token ``memset`` at a word boundary, so each
+was a complete bypass.  They are held to the same two rules.  The
+NON-elidable interfaces — ``explicit_bzero``, ``memset_s``,
+``memset_explicit``, ``SecureZeroMemory`` — are not the anti-pattern this gate
+exists for and are not matched (``\bbzero`` does not match inside
+``explicit_bzero``, nor ``\bZeroMemory`` inside ``SecureZeroMemory``);
+``ama_secure_memzero`` remains the project's portable spelling.
+
 ``ama_secure_memzero()`` is the required replacement: its volatile writes plus
 memory barrier defeat the dead-store elimination the as-if rule permits on a
 plain ``memset`` whose result is never read (CWE-226).
@@ -75,6 +94,7 @@ _SECRET_NAME_RE = re.compile(
     r"^(secret_[A-Za-z0-9_]+|private_[A-Za-z0-9_]+|master_[A-Za-z0-9_]+"
     r"|seed_[A-Za-z0-9_]+|key_[A-Za-z0-9_]+|sk_[A-Za-z0-9_]+|priv_[A-Za-z0-9_]+"
     r"|kp_[A-Za-z0-9_]+|round_keys?|tag_mask|k_prime|scalar_reduced|wnaf|hram"
+    r"|sk|keys?|seed|secret|priv|private|privkey"
     r"|inner_hash|opad|ipad|h_table|ghash_key|poly_key|chaining_state|nu_state)$"
     r"|^[A-Za-z0-9_]+_(key|secret|seed|state|priv|kp|sk|ks)$"
 )
@@ -161,8 +181,10 @@ _SECRET_NAME_RE = re.compile(
 #     whitespace run again has one parse.
 # tests/test_c_secret_zeroization_gate.py pins the growth ratio at ~2.0x per
 # doubling (linear), which is what caught both earlier regressions.
-_MEMSET_RE = re.compile(
-    r"\bmemset\s*\(\s*"
+#: The destination-argument grammar, shared by the memset and bzero forms so a
+#: fix to one (and its ReDoS discipline, above) cannot miss the other.  Ends
+#: at the comma that closes the destination argument.
+_DST_ARGUMENT = (
     r"(?:\(\s*[A-Za-z_][A-Za-z0-9_]*(?:[ \t]+[A-Za-z_][A-Za-z0-9_]*)*"
     r"(?:[ \t]*\*)*[ \t]*\)\s*)?"
     r"(?:(?P<lparen>\()\s*)?"
@@ -171,12 +193,29 @@ _MEMSET_RE = re.compile(
     r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*"
     r"(?:[ \t]*[-+][ \t]*[A-Za-z0-9_]+"
     r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)*)"
-    r"(?:\s*\))?\s*,\s*"
+    r"(?:\s*\))?\s*,"
+)
+
+#: ``__builtin_memset`` is the same elidable store; ``\bmemset`` cannot match
+#: it (``_`` is a word character), so it is spelled out.
+_MEMSET_RE = re.compile(
+    r"\b(?P<fn>(?:__builtin_)?memset)\s*\(\s*" + _DST_ARGUMENT + r"\s*"
     r"(?:\(\s*)?"
     r"(?P<val>0[xX]0+[uUlL]*|0+[uUlL]*|'\\0')"
     r"(?:\s*\))?"
     r"\s*,"
 )
+
+#: The zero-by-construction calls: ``bzero(dst, len)`` and its builtin and
+#: Windows spellings.  No value argument — every call zeroes.  The word
+#: boundary keeps the non-elidable ``explicit_bzero`` and
+#: ``SecureZeroMemory`` / ``RtlSecureZeroMemory`` out.
+_BZERO_RE = re.compile(
+    r"\b(?P<fn>__builtin_bzero|bzero|RtlZeroMemory|ZeroMemory)\s*\(\s*" + _DST_ARGUMENT
+)
+
+#: Every plain-zeroing call form, for the scans that treat them alike.
+_ZEROING_CALL_RES = (_MEMSET_RE, _BZERO_RE)
 
 #: `#define NAME(p1, p2, ...) ... memset(pN, 0, ...) ...` -- a function-like
 #: macro whose body bare-memsets one of its OWN parameters.  Matched
@@ -216,7 +255,16 @@ _MACRO_UNDEF_RE = re.compile(
 #: `#define NAME memset` -- an object-like alias.  The same blindness one
 #: token earlier: the call site spells the alias, not `memset`.
 _MEMSET_ALIAS_RE = re.compile(
-    r"^[ \t]*#[ \t]*define[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]+memset[ \t]*$",
+    r"^[ \t]*#[ \t]*define[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]+"
+    r"(?:__builtin_)?memset[ \t]*$",
+    re.MULTILINE,
+)
+
+#: `#define NAME bzero` -- the same alias for a call that always zeroes, so
+#: its call sites need no value test.
+_BZERO_ALIAS_RE = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]+"
+    r"(?:__builtin_bzero|bzero|RtlZeroMemory|ZeroMemory)[ \t]*$",
     re.MULTILINE,
 )
 
@@ -306,6 +354,8 @@ class Finding(NamedTuple):
     #: that carries no ``PUBLIC-DATA`` annotation (see
     #: :func:`_has_public_data_annotation`).
     kind: str = "secret-named"
+    #: The zeroing call as spelled (``memset``, ``bzero``, ``__builtin_memset``…).
+    call: str = "memset"
 
     @property
     def target(self) -> str:
@@ -331,19 +381,19 @@ class Finding(NamedTuple):
             rel = self.path
         if self.kind == "unannotated":
             return (
-                f"{rel}:{self.line_no}: bare memset() zeroing {self.dst!r} with no "
+                f"{rel}:{self.line_no}: bare {self.call}() zeroing {self.dst!r} with no "
                 f"PUBLIC-DATA annotation\n"
                 f"    {self.text.strip()}\n"
                 f"    If {self.target} never holds secret material, say so on the call: "
                 f"`// PUBLIC-DATA: {self.dst} — <why>`.  Otherwise use "
-                f"ama_secure_memzero({self.target}, LEN) — a plain memset may be "
+                f"ama_secure_memzero({self.target}, LEN) — a plain {self.call} may be "
                 f"elided by the optimizer (INVARIANT-6, CWE-226)."
             )
         return (
-            f"{rel}:{self.line_no}: bare memset() zeroing secret-named "
+            f"{rel}:{self.line_no}: bare {self.call}() zeroing secret-named "
             f"buffer {self.dst!r}\n"
             f"    {self.text.strip()}\n"
-            f"    Use ama_secure_memzero({self.target}, LEN) — a plain memset may be "
+            f"    Use ama_secure_memzero({self.target}, LEN) — a plain {self.call} may be "
             f"elided by the optimizer (INVARIANT-6, CWE-226)."
         )
 
@@ -602,12 +652,13 @@ def _zeroing_macros(blanked: str) -> list[_ZeroingMacro]:
             continue
         body = define.group("body")
         indices: list[int] = []
-        for call in _MEMSET_RE.finditer(body):
-            target = _destination_name(call.group("dst"))
-            if target in parameters:
-                position = parameters.index(target)
-                if position not in indices:
-                    indices.append(position)
+        for pattern in _ZEROING_CALL_RES:
+            for call in pattern.finditer(body):
+                target = _destination_name(call.group("dst"))
+                if target in parameters:
+                    position = parameters.index(target)
+                    if position not in indices:
+                        indices.append(position)
         # Recorded even when `indices` is empty: a redefinition that zeroes
         # nothing must SUPERSEDE an earlier zeroing one, not be invisible to
         # the call-site lookup.
@@ -622,10 +673,18 @@ def _zeroing_macros(blanked: str) -> list[_ZeroingMacro]:
 
 
 def _memset_aliases(blanked: str) -> list[_ZeroingMacro]:
-    """`#define NAME memset` aliases, mapped to memset's own dst parameter."""
+    """`#define NAME memset` / `#define NAME bzero` aliases, mapped to the dst.
+
+    A memset alias is marked ``alias`` so its call sites must also pass a zero
+    value; a bzero alias zeroes unconditionally and is recorded as a plain
+    zeroing macro.
+    """
     return [
         _ZeroingMacro(define.group("name"), (0,), define.start(), alias=True)
         for define in _MEMSET_ALIAS_RE.finditer(blanked)
+    ] + [
+        _ZeroingMacro(define.group("name"), (0,), define.start())
+        for define in _BZERO_ALIAS_RE.finditer(blanked)
     ]
 
 
@@ -850,10 +909,12 @@ def scan_text(text: str, path: Path) -> list[Finding]:
 
     findings: list[Finding] = []
     shipped = _in_shipped_tree(path)
-    for match in _MEMSET_RE.finditer(blanked):
+    matches = [match for pattern in _ZEROING_CALL_RES for match in pattern.finditer(blanked)]
+    for match in matches:
         dst = _destination_name(match.group("dst"))
         if not dst:
             continue
+        call = match.group("fn")
         line_no = bisect_right(line_starts, match.start())
         raw = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
         expression = ("&" if match.group("amp") else "") + match.group("dst")
@@ -863,11 +924,13 @@ def scan_text(text: str, path: Path) -> list[Finding]:
             # _barrier_follows() has just confirmed is there.
             continue
         if _SECRET_NAME_RE.match(dst):
-            findings.append(Finding(path, line_no, dst, raw, expression))
+            findings.append(Finding(path, line_no, dst, raw, expression, call=call))
             continue
         if shipped:
             if not _has_public_data_annotation(lines, line_no, end_line):
-                findings.append(Finding(path, line_no, dst, raw, expression, "unannotated"))
+                findings.append(
+                    Finding(path, line_no, dst, raw, expression, "unannotated", call=call)
+                )
 
     # Call sites of macros that wrap a bare memset — invisible to the regex
     # above because they carry no `memset` token.  See _MACRO_DEFINE_RE.
@@ -917,7 +980,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     findings = audit(targets)
     if findings:
         print(
-            f"FAIL  bare memset() on secret-named or unannotated buffers ({len(findings)} finding(s)):\n"
+            f"FAIL  bare memset()/bzero() on secret-named or unannotated buffers "
+            f"({len(findings)} finding(s)):\n"
         )
         for finding in findings:
             print(finding.render())
@@ -931,7 +995,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     print(
-        f"OK    no bare memset() on secret-named buffers, and every shipped memset-zero "
+        f"OK    no bare memset()/bzero() on secret-named buffers, and every shipped memset-zero "
         f"is annotated ({len(targets)} C file(s) checked)"
     )
     return 0

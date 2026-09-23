@@ -86,6 +86,22 @@ Checks
     package's own import graph).  Also flags a ``ctypes`` load whose library
     name is a forbidden vendor, which no ``import`` statement would reveal.
 
+    Static ``import`` statements and literal ``CDLL("...")`` arguments were
+    all this check saw, so ``importlib.import_module("cryptography.hazmat…")``,
+    ``__import__("nacl.bindings")`` and ``ctypes.CDLL(name)`` with ``name`` a
+    variable all passed.  Dynamic imports and ``sys.modules`` lookups now go
+    through the resolver in ``tools/check_stdlib_hash_boundary.py`` (imported,
+    not copied): a resolved vendor or comparator module is a violation, and so
+    is a module name that cannot be resolved from the source.  Every ctypes
+    load (``CDLL``/``PyDLL``/``WinDLL``/``OleDLL``, ``LoadLibrary``,
+    ``dlopen``, and the ``ctypes.cdll.<name>`` / ``cdll[...]`` attribute and
+    subscript forms) must name its library by a value the same resolver can
+    prove — a literal, ``None`` (the process handle), ``find_library(<literal>)``,
+    or a name bound once to one of those — and a proven name must not be a
+    vendor's.  A load whose library is chosen at run time is a violation: the
+    gate cannot tell the project's own library from ``libcrypto`` by reading
+    it, and an exemption list would be the suppression INVARIANT-13 forbids.
+
 ``--build-config``
     No ``CMakeLists.txt``, ``cmake/**.cmake`` or ``setup.py`` outside
     ``benchmarks/`` may search for, find, or link a forbidden vendor.
@@ -229,6 +245,11 @@ class Violation(NamedTuple):
     detail: str
 
 
+#: The ``check`` of a finding that is reported for review but does not fail
+#: the gate: a run-time-chosen ctypes load, which no static rule can decide.
+INVENTORY = "source-inventory"
+
+
 # --------------------------------------------------------------------------
 # C source check
 # --------------------------------------------------------------------------
@@ -323,6 +344,91 @@ def check_c_source(c_root: Path, repo_root: Path) -> list[Violation]:
 
 _CTYPES_LOADERS = {"CDLL", "cdll", "LoadLibrary", "WinDLL", "OleDLL", "find_library"}
 
+#: Calls that MAP a library, so their first argument decides what executes.
+#: (``find_library`` only looks a name up; the load that follows is judged.)
+_CTYPES_MAPPERS = frozenset(
+    {"CDLL", "PyDLL", "WinDLL", "OleDLL", "LoadLibrary", "dlopen", "_dlopen"}
+)
+
+#: ``ctypes`` LibraryLoader instances: ``cdll.libcrypto`` and
+#: ``cdll["libcrypto.so.3"]`` map a library by attribute name or key.
+_CTYPES_LIBRARY_LOADERS = frozenset({"cdll", "windll", "oledll", "pydll"})
+
+#: Attributes of a LibraryLoader that are not library names.
+_LIBRARY_LOADER_METHODS = frozenset({"LoadLibrary"})
+
+
+def _put_repo_on_path() -> None:
+    """Make ``tools.<sibling>`` importable when run as ``python tools/check_…py``.
+
+    Only ``tools/`` is on ``sys.path`` then, not the repository root — the
+    convention ``tools/_repo.py`` documents.  The sibling import itself is
+    made inside :func:`_dynamic_source_violations`, after this runs.
+    """
+    repo = str(Path(__file__).resolve().parent.parent)
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+
+
+def _vendor_for_library_name(name: str) -> str | None:
+    lowered = name.lower()
+    for vendor in VENDORS:
+        if any(lib in lowered for lib in vendor.library_names):
+            return vendor.name
+    return None
+
+
+def _is_find_library_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = (
+        func.attr
+        if isinstance(func, ast.Attribute)
+        else func.id if isinstance(func, ast.Name) else None
+    )
+    return name == "find_library" and len(node.args) == 1 and not node.keywords
+
+
+def _loader_name(node: ast.AST) -> str | None:
+    """``cdll`` for ``ctypes.cdll`` / ``cdll``; ``None`` for anything else."""
+    if isinstance(node, ast.Name) and node.id in _CTYPES_LIBRARY_LOADERS:
+        return node.id
+    if isinstance(node, ast.Attribute) and node.attr in _CTYPES_LIBRARY_LOADERS:
+        return node.attr
+    return None
+
+
+def _ctypes_load_sites(tree: ast.Module) -> list[tuple[int, str, ast.expr | None, str | None]]:
+    """``(lineno, form, argument, attribute-name)`` for every ctypes library load.
+
+    ``argument`` is the expression naming the library (``None`` when the name
+    is the attribute itself, in which case ``attribute-name`` carries it).
+    """
+    sites: list[tuple[int, str, ast.expr | None, str | None]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name) else None
+            )
+            if name not in _CTYPES_MAPPERS:
+                continue
+            argument: ast.expr | None = node.args[0] if node.args else None
+            if argument is None:
+                argument = next((kw.value for kw in node.keywords if kw.arg == "name"), None)
+            if argument is None:
+                continue  # CDLL() with no library raises TypeError; loads nothing
+            sites.append((node.lineno, str(name), argument, None))
+        elif isinstance(node, ast.Attribute) and _loader_name(node.value) is not None:
+            if node.attr not in _LIBRARY_LOADER_METHODS and not node.attr.startswith("_"):
+                sites.append((node.lineno, f"{_loader_name(node.value)}.<attr>", None, node.attr))
+        elif isinstance(node, ast.Subscript) and _loader_name(node.value) is not None:
+            sites.append((node.lineno, f"{_loader_name(node.value)}[...]", node.slice, None))
+    return sites
+
 
 def _root_module(dotted: str) -> str:
     return dotted.split(".", 1)[0]
@@ -394,10 +500,16 @@ def check_source(package_dir: Path) -> list[Violation]:
                 attr = func.attr if isinstance(func, ast.Attribute) else None
                 ident = func.id if isinstance(func, ast.Name) else None
                 if (attr in _CTYPES_LOADERS) or (ident in _CTYPES_LOADERS):
+                    is_lookup = "find_library" in (attr, ident)
                     for literal in _string_literals(node):
-                        lowered = literal.lower()
+                        # find_library takes the bare name: "crypto", "ssl".
+                        candidates = [literal, "lib" + literal] if is_lookup else [literal]
                         for vendor in VENDORS:
-                            if any(lib in lowered for lib in vendor.library_names):
+                            if any(
+                                lib in candidate.lower()
+                                for candidate in candidates
+                                for lib in vendor.library_names
+                            ):
                                 violations.append(
                                     Violation(
                                         "source",
@@ -405,6 +517,121 @@ def check_source(package_dir: Path) -> list[Violation]:
                                         f"ctypes load of {literal!r} — {vendor.name}",
                                     )
                                 )
+                                break
+
+        violations.extend(_dynamic_source_violations(tree, path, package_dir))
+    return violations
+
+
+def _dynamic_source_violations(tree: ast.Module, path: Path, package_dir: Path) -> list[Violation]:
+    """Dynamic imports and ctypes loads whose target is a vendor, or unprovable."""
+    # One resolver defines what "provable" means for both INVARIANT-1 source
+    # gates: imported from the sibling, not copied.
+    _put_repo_on_path()
+    from tools.check_stdlib_hash_boundary import (
+        StringResolver,
+        dynamic_imports,
+        module_name_for,
+    )
+
+    try:
+        module_name: str | None = module_name_for(path.resolve(), package_dir.resolve())
+    except ValueError:
+        module_name = None
+
+    class _Resolver(StringResolver):
+        """The shared resolver, plus ``find_library(<name>)`` -> ``lib<name>``."""
+
+        def resolve(self, expr: ast.AST, depth: int = 0) -> frozenset[str | None] | None:
+            if isinstance(expr, ast.Call) and _is_find_library_call(expr):
+                inner = super().resolve(expr.args[0], depth + 1)
+                if inner is None or None in inner:
+                    return None
+                return frozenset("lib" + str(value) for value in inner)
+            result: frozenset[str | None] | None = super().resolve(expr, depth)
+            return result
+
+    violations: list[Violation] = []
+    for site in dynamic_imports(tree, module_name):
+        where = f"{path}:{site.lineno}"
+        if site.names is None:
+            violations.append(
+                Violation(
+                    "source",
+                    where,
+                    f"{site.kind}({site.argument}) — the module is chosen at run time "
+                    f"and cannot be resolved from the source, so it could be any "
+                    f"vendor binding. Name it with a literal (or iterate a literal "
+                    f"tuple of names).",
+                )
+            )
+            continue
+        for dotted in sorted(site.names):
+            root = _root_module(dotted)
+            if root in _MODULE_TO_VENDOR:
+                violations.append(
+                    Violation(
+                        "source",
+                        where,
+                        f"{site.kind}({site.argument}) resolves to {dotted!r} — "
+                        f"{_MODULE_TO_VENDOR[root]} binding",
+                    )
+                )
+            elif root == COMPARATOR_PACKAGE:
+                violations.append(
+                    Violation(
+                        "source",
+                        where,
+                        f"{site.kind}({site.argument}) resolves to {dotted!r} — the "
+                        f"comparator package must not enter the shipped package's "
+                        f"import graph",
+                    )
+                )
+
+    resolver = _Resolver(tree, module_name)
+    for lineno, form, argument, attribute in sorted(
+        _ctypes_load_sites(tree), key=lambda site: (site[0], site[1])
+    ):
+        where = f"{path}:{lineno}"
+        names: frozenset[str | None] | None
+        if attribute is not None:
+            names = frozenset({attribute})
+            shown = attribute
+        elif argument is not None:
+            names = resolver.resolve(argument)
+            shown = ast.unparse(argument)
+        else:
+            continue  # _ctypes_load_sites yields one or the other, never neither
+        if names is None:
+            # Inventory, not a verdict (AGENTS.md §10).  A loader that searches
+            # for the project's own library cannot name it with a literal, so a
+            # blocking rule here could only be met with an exemption list.
+            # What such a load maps is checked where it can be decided: the
+            # runtime check inspects every library the imported package has
+            # actually loaded, and the pre-load digest check refuses a
+            # searched candidate whose bytes are not the signed library's.
+            # The AMA_CRYPTO_LIB_PATH override is the one unverified load and
+            # is recorded as UNVERIFIED by POST.
+            violations.append(
+                Violation(
+                    INVENTORY,
+                    where,
+                    f"ctypes {form}({shown}) — the library is chosen at run time and "
+                    f"cannot be resolved from the source; what it maps is covered "
+                    f"by the runtime check, not proven here.",
+                )
+            )
+            continue
+        for value in sorted(v for v in names if v is not None):
+            vendor_name = _vendor_for_library_name(value)
+            if vendor_name is not None:
+                violations.append(
+                    Violation(
+                        "source",
+                        where,
+                        f"ctypes {form}({shown}) resolves to {value!r} — {vendor_name}",
+                    )
+                )
     return violations
 
 
@@ -1299,6 +1526,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not ran:
         print("ERROR: no check was selected.", file=sys.stderr)
         return 2
+
+    inventory = [v for v in violations if v.check == INVENTORY]
+    violations = [v for v in violations if v.check != INVENTORY]
+    if inventory:
+        print("Reviewed inventory — run-time-chosen library loads (not a failure):")
+        for entry in inventory:
+            print(f"  {entry.where}: {entry.detail}")
 
     if violations:
         print("VENDOR ISOLATION FAILED (INVARIANT-1):", file=sys.stderr)

@@ -143,7 +143,7 @@ AMA Cryptography is designed as a standalone cryptographic library. Any Python o
 | Constant-Time Utilities | memcmp, memzero, swap, lookup, copy | — | Side-channel resistance | **Full** (ama_consttime.c) |
 | Platform CSPRNG | getrandom/getentropy/BCryptGenRandom | — | Entropy source | **Full** (ama_platform_rand.c) |
 
-**C Library Source Files — measured 2026-08-31: 29 top-level `.c` files, 8 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`. Principal modules:**
+**C Library Source Files.** The measured, gate-checked file inventory is README's [C library inventory](README.md#c-library-inventory-v500); this list does not repeat its counts. **Principal modules:**
 
 Core primitives:
 - `src/c/ama_core.c` - Library initialization, version info, feature detection, shared utilities
@@ -872,7 +872,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | All C functions | 85 `test_*.c` registered via ctest in `tests/c/` (+ 2 standalone `x25519_equiv_*.c`) |
+| C Unit Tests | Native library validation | All C functions | 86 `test_*.c` registered via ctest in `tests/c/` (+ 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -880,7 +880,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 16 C targets | `fuzz/fuzz_*.c` (17 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 5,658 Python test functions across 248 test files, plus the
+**Total:** 5,793 Python test functions across 255 test files, plus the
 ctest-registered C tests and the two standalone `x25519_equiv_*.c` drivers under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,

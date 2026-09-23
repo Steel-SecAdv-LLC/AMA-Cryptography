@@ -49,11 +49,15 @@ from __future__ import annotations
 import argparse
 import math
 import re
-import subprocess  # nosec B404 -- fixed-argv git invocation only, see _tracked_files (SEC-001)
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Pattern, Sequence
+
+#: The repository root, put on ``sys.path`` before the ``tools._repo`` import so
+#: the sibling resolves when this file runs as a script (``tools/`` is on the
+#: path then, not the root).  Same pattern as ``check_avx_scoping.py``.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Allowlist — every entry states WHY the path cannot contain a live secret.
@@ -364,33 +368,23 @@ def scan_file(path: Path, repo_root: Path) -> list[Finding]:
 
 
 def _tracked_files(repo_root: Path, staged_only: bool) -> list[Path]:
-    """Enumerate files from git (fixed argv, ``shell=False``)."""
-    args = (
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"]
-        if staged_only
-        else ["git", "ls-files"]
-    )
+    """Enumerate files from git via the shared ``tools/_repo.py`` helper.
+
+    The listing used to be a bare ``git ls-files`` split on newlines.  git
+    C-quotes a non-ASCII path there (``"cl\\303\\251_key.txt"``), the quoted
+    string named no file, and the ``is_file()`` filter dropped it: a key in
+    ``clé_key.txt`` scanned clean.  The helper lists with ``-z`` and fails
+    closed on a tracked or staged path it cannot hand back as a regular file.
+    """
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from tools._repo import TrackedFilesError, staged_files, tracked_files
+
     try:
-        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, trusted git binary (SEC-002)
-            args,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError) as exc:
+        return staged_files(repo_root) if staged_only else tracked_files(repo_root)
+    except TrackedFilesError as exc:
         print(f"ERROR: unable to enumerate files via git: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-
-    paths = []
-    for name in out.splitlines():
-        if not name.strip():
-            continue
-        candidate = repo_root / name
-        if candidate.is_file():
-            paths.append(candidate)
-    return paths
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

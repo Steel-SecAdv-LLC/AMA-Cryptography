@@ -63,7 +63,7 @@ and FROST are implemented under `src/c/`. The Python layer calls those kernels.
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 85 C suites, 248 Python test modules |
+| `tests/c/`, `tests/` | 86 C test suites, 248 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -323,8 +323,9 @@ Open item, carried forward and unassigned:
 
 `tools/measure_branch_coverage.py` reports 1,741 of 11,315 instrumented
 branch arcs under `src/c` never taken by the C suite (measured 2026-09-22 on
-the tree at this directive's revision: gcc 13.3.0, Debug `--coverage -O0 -g`,
-143 translation units, `ctest` 138 tests). The 839b66b4 commit message
+the tree just before `test_ed25519_stack_residue` was added: gcc 13.3.0, Debug
+`--coverage -O0 -g`, 143 translation units, `ctest` 138 tests; the suite has
+grown since, so this is a dated measurement, not a current count). The 839b66b4 commit message
 reported 1,765 of 11,053; re-measuring that revision on this host gives
 1,792 of 11,081 over 142 translation units, so the earlier figure belongs to
 a different host and toolchain and is superseded here. The Ed25519 rows have been triaged

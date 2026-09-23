@@ -156,6 +156,118 @@ class TestSourceCheck:
         assert "refusing to report a clean scan of nothing" in violations[0].detail
 
 
+class TestDynamicSourceForms:
+    """What the static-import / literal-CDLL scan could not see.
+
+    Measured before the fix: each of the first three shapes below produced
+    zero violations from ``check_source``.
+    """
+
+    @pytest.mark.parametrize(
+        ("body", "vendor"),
+        [
+            (
+                'import importlib\nm = importlib.import_module("cryptography.hazmat.primitives")\n',
+                "OpenSSL",
+            ),
+            ('b = __import__("nacl.bindings")\n', "libsodium"),
+            (
+                'import importlib\nm = importlib.import_module("Cry" + "pto.Cipher")\n',
+                "PyCryptodome",
+            ),
+            ('import sys\nm = sys.modules["nacl"]\n', "libsodium"),
+            (
+                "import importlib\n"
+                "def _load(name):\n"
+                "    return importlib.import_module(name)\n"
+                '_load("OpenSSL.crypto")\n',
+                "OpenSSL",
+            ),
+        ],
+    )
+    def test_a_dynamic_vendor_import_is_flagged(
+        self, tmp_path: Path, body: str, vendor: str
+    ) -> None:
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1, violations
+        assert vendor in violations[0].detail
+
+    def test_a_dynamic_comparator_import_is_flagged(self, tmp_path: Path) -> None:
+        body = 'import importlib\nm = importlib.import_module("benchmarks.runner")\n'
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1 and "comparator package" in violations[0].detail
+
+    def test_an_unresolvable_dynamic_import_is_flagged(self, tmp_path: Path) -> None:
+        body = "import importlib\ndef load(n):\n    return importlib.import_module(n)\n"
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1, violations
+        assert "chosen at run time" in violations[0].detail
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "import ctypes\ndef load(_n):\n    return ctypes.CDLL(_n)\n",
+            "import ctypes, os\nlib = ctypes.cdll.LoadLibrary(os.environ['LIB'])\n",
+            "import ctypes\ndef load(p):\n    return ctypes.WinDLL(str(p))\n",
+            "import ctypes\ndef load(p):\n    return ctypes.cdll[p]\n",
+        ],
+    )
+    def test_a_ctypes_load_of_an_unprovable_library_is_flagged(
+        self, tmp_path: Path, body: str
+    ) -> None:
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1, violations
+        assert "chosen at run time" in violations[0].detail
+        assert violations[0].check == gate.INVENTORY
+
+    def test_an_unprovable_load_is_inventoried_not_failed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        pkg = write_package(tmp_path, "import ctypes\ndef load(p):\n    return ctypes.CDLL(p)\n")
+        assert gate.main(["--source", "--package", str(pkg)]) == 0
+        assert "Reviewed inventory" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            'import ctypes\nN = "libcry" + "pto.so.3"\nlib = ctypes.CDLL(N)\n',
+            "import ctypes\nlib = ctypes.cdll.libssl\n",
+            'import ctypes\nlib = ctypes.cdll["libsodium.so.23"]\n',
+            'import ctypes, ctypes.util\nlib = ctypes.CDLL(ctypes.util.find_library("crypto"))\n',
+            'import ctypes.util\nname = ctypes.util.find_library("ssl")\n',
+        ],
+    )
+    def test_a_resolvable_vendor_library_load_is_flagged(self, tmp_path: Path, body: str) -> None:
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert violations, body
+        assert all(
+            ("resolves to" in v.detail or "ctypes load of" in v.detail)
+            and ("OpenSSL" in v.detail or "libsodium" in v.detail)
+            for v in violations
+        ), violations
+
+    def test_provable_non_vendor_loads_pass(self, tmp_path: Path) -> None:
+        """The shapes the shipped package uses (control)."""
+        body = (
+            "import ctypes, ctypes.util, importlib\n"
+            "def libc():\n"
+            '    libc_name = ctypes.util.find_library("c")\n'
+            "    if not libc_name:\n"
+            "        return None\n"
+            "    return ctypes.CDLL(libc_name, use_errno=True)\n"
+            "PROCESS = ctypes.CDLL(None)\n"
+            "_CACHE = {}\n"
+            "def _win(library, function):\n"
+            "    return getattr(ctypes.WinDLL(library, use_last_error=True), function)\n"
+            '_win("advapi32", "OpenProcessToken")\n'
+            '_win("kernel32", "CloseHandle")\n'
+            "def baselines():\n"
+            '    for name in ["pkg.a", "pkg.b"]:\n'
+            "        importlib.import_module(name)\n"
+        )
+        assert gate.check_source(write_package(tmp_path, body)) == []
+
+
 class TestCSourceCheck:
     """The C tree: no vendored directory, no forbidden vendor include anywhere.
 
@@ -231,7 +343,11 @@ class TestShippedPackageIsClean:
     """The property itself, on the tree as committed."""
 
     def test_package_source_is_clean(self) -> None:
-        assert gate.check_source(REPO_ROOT / "ama_cryptography") == []
+        findings = gate.check_source(REPO_ROOT / "ama_cryptography")
+        assert [f for f in findings if f.check != gate.INVENTORY] == []
+        # The inventory is the native loader's run-time-chosen loads, and only
+        # those: a new unprovable load elsewhere shows up here for review.
+        assert {Path(f.where.split(":")[0]).name for f in findings} <= {"pqc_backends.py"}
 
 
 class TestLibraryCheck:

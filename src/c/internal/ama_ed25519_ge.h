@@ -184,14 +184,10 @@ GE_INLINE int GE_SYM(fe_iszero)(const GE_FE f) {
 
 /* z^(p-2): Fermat inversion, the ref10 addition chain (254 S + 11 M).
  *
- * The only route on a build without a 128-bit integer type (MSVC), where
- * fe_invert_ct below calls it.  With safegcd available nothing calls it —
- * fe_invert_ct used to fall back to it on a product re-check that was a
- * branch on a secret-derived value and has been removed — so it is
- * deliberately kept, unused, as the reference the safegcd inverse is
- * differentially tested against (tests/c/test_ed25519_safegcd.c builds its
- * own Fermat chain over the bits of p-2, and this one is the in-tree
- * addition-chain form). */
+ * fe_invert_ct below calls it on a build without a 128-bit integer type
+ * (MSVC), and the AMA_TESTING_MODE table exporter uses it to halve the
+ * precomputed points.  A shipped build with safegcd calls it from neither,
+ * hence the attribute. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((unused))
 #endif

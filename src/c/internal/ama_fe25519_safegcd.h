@@ -36,21 +36,17 @@
  * is why its constant-time modinv64 also runs exactly 10 x 59.  p is 255
  * bits, so the 256-bit bound covers every canonical input.
  *
- * DEFENCE IN DEPTH
+ * VERIFICATION
  *
- * The caller (fe_invert_ct in src/c/internal/ama_ed25519_ge.h) multiplies
- * the returned value by the input and compares the product with 1, in
- * constant time, and falls back to the Fermat chain if the product is not 1
- * (and the input is not 0).  Under the bound above that branch is never
- * taken, so it costs one multiplication and one comparison and its
- * condition is the same public constant for every input; if the bound were
- * ever wrong for some input, the consequence would be a slow inversion for
- * that input rather than a wrong one.  tests/c/test_ed25519_safegcd.c
- * compares the result with an independent square-and-multiply z^(p-2) on a
- * structured-plus-random corpus, checks in fe51 arithmetic that the
- * product with the input is 1 (so the caller's fallback is never needed on
- * that corpus), and, through the AMA_S62_TRACE hook below, records the
- * batch in which g first reaches zero and asserts it is one of the ten.
+ * The caller (fe_invert_ct in src/c/internal/ama_ed25519_ge.h) does not
+ * re-check the result: a product-with-input check followed by a fallback is
+ * a branch on a secret-derived value, and it was removed for that reason.
+ * The bound above is therefore load-bearing, and tests/c/test_ed25519_safegcd.c
+ * holds it: it compares the result with an independent square-and-multiply
+ * z^(p-2) on a structured-plus-random corpus, checks in fe51 arithmetic that
+ * the product with the input is 1, and, through the AMA_S62_TRACE hook below,
+ * records the batch in which g first reaches zero and asserts it is one of
+ * the ten.
  *
  * CONSTANT TIME
  *

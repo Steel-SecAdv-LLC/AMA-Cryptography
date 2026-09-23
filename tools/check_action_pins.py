@@ -44,6 +44,19 @@ not an error the other way round: a pin to a non-tag commit on a branch that
 has since moved may legitimately not appear, so ``--strict`` is offered for
 callers that want that treated as a failure too.
 
+What is read
+------------
+Every ``uses:`` in ``.github/workflows/*.y{a,}ml`` AND in every composite
+action under ``.github/actions/**/action.y{a,}ml`` — a composite action's
+steps run with the caller's token exactly as a workflow's do, and the scan
+used to stop at the workflows directory.  References are collected by
+PARSING the YAML (``yaml.compose``, which keeps line numbers), not by a
+per-line regex: the regex matched only the block form ``- uses: x@y``, so the
+flow form ``- {uses: actions/checkout@v4}`` was invisible to both halves of
+this gate, and a folded scalar (``uses: >-`` with the ref on the next line)
+was reported as the reference ``>-``.  A file that does not parse is a
+finding, not a skip.
+
 Exit status
 -----------
 ``0`` when every pin resolves, ``1`` when any pin does not.  Network failure
@@ -60,10 +73,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
-_PIN_RE = re.compile(
-    r"uses:\s*(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@(?P<sha>[0-9a-f]{40})"
-    r"(?:\s*#\s*(?P<comment>\S+))?"
-)
+import yaml
+
+#: A SHA-pinned third-party reference, matched against the PARSED ``uses:``
+#: value (see "What is read" in the module docstring).
+_PIN_RE = re.compile(r"(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@(?P<sha>[0-9a-f]{40})")
 
 
 @dataclass(frozen=True)
@@ -82,39 +96,105 @@ class Pin:
         return "/".join(self.action.split("/")[:2])
 
 
-def find_pins(workflows_dir: Path) -> list[Pin]:
-    """Collect every SHA-pinned action across the workflow files."""
-    pins: list[Pin] = []
-    for path in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
+@dataclass(frozen=True)
+class UsesRef:
+    """One ``uses:`` value as parsed, with the line it sits on."""
+
+    file: str
+    line_no: int
+    ref: str
+    #: The source line(s) the value spans, for reading a trailing comment.
+    source: str
+
+
+def pin_files(workflows_dir: Path) -> list[tuple[str, Path]]:
+    """``(display name, path)`` for every workflow and composite action.
+
+    Workflows display by file name (as they always have); composite actions
+    by their path under ``.github/`` so two ``action.yml`` files are told
+    apart.  Composite actions live beside the workflows directory, in
+    ``.github/actions/**``.
+    """
+    out: list[tuple[str, Path]] = [(path.name, path) for path in _workflow_files(workflows_dir)]
+    actions_dir = workflows_dir.parent / "actions"
+    if actions_dir.is_dir():
+        for pattern in ("action.yml", "action.yaml"):
+            for path in sorted(actions_dir.rglob(pattern)):
+                if path.is_file():
+                    out.append((path.relative_to(workflows_dir.parent).as_posix(), path))
+    return out
+
+
+def _collect_uses(node: yaml.Node, found: list[yaml.ScalarNode]) -> None:
+    """Every scalar value of a ``uses`` key, anywhere in the document."""
+    if isinstance(node, yaml.MappingNode):
+        for key, value in node.value:
+            if isinstance(key, yaml.ScalarNode) and key.value == "uses":
+                if isinstance(value, yaml.ScalarNode):
+                    found.append(value)
+            _collect_uses(value, found)
+    elif isinstance(node, yaml.SequenceNode):
+        for item in node.value:
+            _collect_uses(item, found)
+
+
+def uses_references(workflows_dir: Path) -> tuple[list[UsesRef], list[str]]:
+    """``(every uses: reference, one message per file that did not parse)``."""
+    refs: list[UsesRef] = []
+    errors: list[str] = []
+    for display, path in pin_files(workflows_dir):
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+            root = yaml.compose(text)
+        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            errors.append(f"{display}: could not be read as YAML ({str(exc).splitlines()[0]})")
             continue
-        for i, line in enumerate(text.splitlines(), start=1):
-            m = _PIN_RE.search(line)
-            if m:
-                pins.append(
-                    Pin(
-                        workflow=path.name,
-                        line_no=i,
-                        action=m.group("action"),
-                        sha=m.group("sha"),
-                        comment=m.group("comment"),
-                    )
-                )
+        if root is None:
+            continue
+        lines = text.splitlines()
+        nodes: list[yaml.ScalarNode] = []
+        _collect_uses(root, nodes)
+        for node in nodes:
+            ref = str(node.value).strip()
+            first, last = node.start_mark.line, max(node.end_mark.line, node.start_mark.line)
+            span = lines[first : last + 1]
+            # A block scalar starts on its indicator line (`uses: >-`); name the
+            # line that actually carries the reference.
+            offset = next((i for i, line in enumerate(span) if ref and ref in line), 0)
+            refs.append(UsesRef(display, first + 1 + offset, ref, "\n".join(span)))
+    return refs, errors
+
+
+def find_pins(workflows_dir: Path) -> list[Pin]:
+    """Collect every SHA-pinned action across the workflows and composite actions."""
+    pins: list[Pin] = []
+    refs, _errors = uses_references(workflows_dir)
+    for use in refs:
+        m = _PIN_RE.fullmatch(use.ref)
+        if not m:
+            continue
+        comment = re.search(
+            re.escape(m.group("sha")) + r"[\"'}\],\s]*#\s*(?P<comment>\S+)", use.source
+        )
+        pins.append(
+            Pin(
+                workflow=use.file,
+                line_no=use.line_no,
+                action=m.group("action"),
+                sha=m.group("sha"),
+                comment=comment.group("comment") if comment else None,
+            )
+        )
     return pins
 
 
-#: Any ``uses:`` reference at all, pinned or not.  ``_PIN_RE`` above matches
-#: only the already-correct form, which is why nothing in this repository ever
-#: enforced INVARIANT-4: the checker verified that SHA pins RESOLVE upstream and
-#: was structurally blind to a reference that carried no SHA.  INVARIANTS.md
-#: states the rule as "All third-party GitHub Actions used in security workflows
-#: **must** be pinned to a full commit SHA, not a mutable tag (`@main`, `@v1`,
-#: etc.)" and ARCHITECTURE.md restates it as enforced.  It was not enforced
-#: anywhere, and ``tests/test_action_pin_checks.py`` recorded the gap in a
-#: comment rather than closing it.
-_USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>\S+)")
+#: Any ``uses:`` reference at all, pinned or not, is now collected by
+#: :func:`uses_references`.  The line regex that did this before matched only
+#: the already-correct block form: INVARIANT-4 had no enforcement at all until
+#: it existed (INVARIANTS.md states the rule as "All third-party GitHub Actions
+#: used in security workflows **must** be pinned to a full commit SHA, not a
+#: mutable tag"), and once it did, the flow form ``- {uses: x@v4}`` still
+#: walked past it.
 
 #: References exempt from the SHA rule, each with the reason it cannot comply.
 #: A path, not a prefix match, so a different workflow from the same generator
@@ -147,31 +227,28 @@ def _workflow_files(workflows_dir: Path) -> list[Path]:
 def find_unpinned(workflows_dir: Path) -> list[Unpinned]:
     """Every third-party ``uses:`` reference that is not a 40-hex commit SHA.
 
-    Local references (``./.github/workflows/x.yml``, ``docker://…``) are not
-    third-party actions and carry no upstream ref to pin; entries in
-    :data:`_PIN_EXEMPT` are named individually with the reason.
+    Local references (``./.github/workflows/x.yml``) are not third-party
+    actions and carry no upstream ref to pin.  ``docker://`` references are
+    container images, held to a digest pin by ``tools/check_docker_pins.py``.
+    Entries in :data:`_PIN_EXEMPT` are named individually with the reason.  A
+    file that does not parse is reported here too: a reference this gate
+    cannot read is not a reference it has verified.
     """
-    out: list[Unpinned] = []
-    for path in _workflow_files(workflows_dir):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
+    refs, errors = uses_references(workflows_dir)
+    out: list[Unpinned] = [
+        Unpinned(workflow=error.split(":", 1)[0], line_no=0, ref=f"<{error.split(': ', 1)[1]}>")
+        for error in errors
+    ]
+    for use in refs:
+        ref = use.ref
+        if ref.startswith("./") or ref.startswith("docker://"):
             continue
-        for i, line in enumerate(text.splitlines(), start=1):
-            if line.lstrip().startswith("#"):
-                continue
-            m = _USES_RE.match(line)
-            if not m:
-                continue
-            ref = m.group("ref").strip().strip("\"'")
-            if ref.startswith("./") or ref.startswith("docker://"):
-                continue
-            action, _, version = ref.partition("@")
-            if action in _PIN_EXEMPT:
-                continue
-            if re.fullmatch(r"[0-9a-f]{40}", version):
-                continue
-            out.append(Unpinned(workflow=path.name, line_no=i, ref=ref))
+        action, _, version = ref.partition("@")
+        if action in _PIN_EXEMPT:
+            continue
+        if re.fullmatch(r"[0-9a-f]{40}", version):
+            continue
+        out.append(Unpinned(workflow=use.file, line_no=use.line_no, ref=ref))
     return out
 
 

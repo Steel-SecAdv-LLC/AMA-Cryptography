@@ -388,58 +388,39 @@ def test_compiler_and_sanitizer_suppressions_are_violations(tmp_path: Path, line
     assert "src/c/a.c:2" in violations[0]
 
 
-def test_the_stack_wipe_exemption_is_keyed_by_file_and_marker(tmp_path: Path) -> None:
-    """The one recorded exemption applies to that file and that marker only:
-    the same attribute in another file, or another marker in that file, is a
-    violation; the recorded pair in the recorded file is not."""
+@pytest.mark.parametrize(
+    "line",
+    [
+        "__attribute__((noinline, no_sanitize_address))",
+        '_Pragma("GCC diagnostic ignored \\"-Wconversion\\"")',
+        "__attribute__((noinline, optnone))",
+        "[[clang::optnone]] void g(void);",
+        '#pragma GCC optimize("O0")',
+        "#pragma clang optimize off",
+        "__attribute__((disable_sanitizer_instrumentation))",
+    ],
+)
+def test_every_spelling_is_a_violation_in_every_file(tmp_path: Path, line: str) -> None:
+    """No exemption register, and no spelling the regex misses.
+
+    ``no_sanitize_address`` on ``ama_secure_stack_wipe`` was the one recorded
+    exception, keyed by file, so the same marker anywhere else in that file
+    passed.  It turned out to be unnecessary — the function writes only its own
+    locals, and the ASan lane runs clean without it — so the register is gone.
+    The other rows are spellings the scan used to miss.
+    """
     from tools.check_suppression_hygiene import scan_c_tree
 
-    elsewhere = scan_c_tree(
-        _c_tree(tmp_path, **{"other.c": "__attribute__((noinline, no_sanitize_address))\n"})
+    violations = scan_c_tree(
+        _c_tree(tmp_path, **{"ama_consttime.c": f"int x;\n{line}\nvoid f(void) {{}}\n"})
     )
-    assert len(elsewhere) == 1 and "src/c/other.c:1" in elsewhere[0], elsewhere
-
-    same_file_other_marker = scan_c_tree(
-        _c_tree(
-            tmp_path / "second",
-            **{"ama_consttime.c": '#pragma GCC diagnostic ignored "-Wall"\n'},
-        )
-    )
-    # The pragma is a violation, and the file is present without its recorded
-    # marker, so the register entry is reported stale as well.
-    assert any("src/c/ama_consttime.c:1" in v for v in same_file_other_marker)
-    assert any("matches nothing" in v for v in same_file_other_marker)
-
-    exempt = scan_c_tree(
-        _c_tree(
-            tmp_path / "third",
-            **{"ama_consttime.c": "__attribute__((noinline, no_sanitize_address))\n"},
-        )
-    )
-    assert exempt == []
+    assert len(violations) == 1 and "src/c/ama_consttime.c:2" in violations[0], violations
 
 
-def test_a_stale_exemption_is_reported(tmp_path: Path) -> None:
-    """The recorded file without the recorded marker fails, so the register
-    cannot outlive its marker; a tree without the file (the scanner's own
-    synthetic scopes) is not a verdict on the register."""
+def test_the_real_tree_carries_none() -> None:
     from tools.check_suppression_hygiene import scan_c_tree
-
-    violations = scan_c_tree(_c_tree(tmp_path, **{"ama_consttime.c": "int y;\n"}))
-    assert len(violations) == 1, violations
-    assert "src/c/ama_consttime.c" in violations[0]
-    assert "matches nothing" in violations[0]
-
-    assert scan_c_tree(_c_tree(tmp_path / "without", **{"clean.c": "int y;\n"})) == []
-
-
-def test_the_real_tree_carries_only_the_recorded_exemption() -> None:
-    from tools.check_suppression_hygiene import _C_SUPPRESSION_EXEMPTIONS, scan_c_tree
 
     assert scan_c_tree(REPO_ROOT) == []
-    assert set(_C_SUPPRESSION_EXEMPTIONS) == {("src/c/ama_consttime.c", "no_sanitize_address")}
-    source = (REPO_ROOT / "src" / "c" / "ama_consttime.c").read_text(encoding="utf-8")
-    assert "no_sanitize_address" in source
     for unit in ("ama_nistp.c", "ama_secp256k1.c"):
         assert "diagnostic ignored" not in (REPO_ROOT / "src" / "c" / unit).read_text(
             encoding="utf-8"

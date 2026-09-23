@@ -84,7 +84,8 @@ static inline int32_t dil_montgomery_reduce_scalar(int64_t a) {
  * via `grep -rn ama_dilithium_poly_add_sve2 .` — dead code, removed per
  * the project's "no speculative API surface" principle.  The wired
  * surface (forward NTT, inverse NTT, pointwise multiply) is unchanged
- * and remains hooked at `src/c/dispatch/ama_dispatch.c` lines 596-599.
+ * and remains hooked in the `AMA_HAVE_SVE2_IMPL` block of
+ * dispatch_init_internal() in `src/c/dispatch/ama_dispatch.c`.
  */
 
 /* ============================================================================

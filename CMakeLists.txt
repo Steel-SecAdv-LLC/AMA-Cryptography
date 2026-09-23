@@ -1183,11 +1183,6 @@ if(AMA_BUILD_STATIC)
     endif()
 endif()
 
-# Examples
-if(AMA_BUILD_EXAMPLES)
-    add_subdirectory(examples/c)
-endif()
-
 # Fuzzing harnesses (libFuzzer / AFL)
 option(AMA_BUILD_FUZZ "Build coverage-guided fuzzing harnesses" OFF)
 if(AMA_BUILD_FUZZ)
@@ -1242,6 +1237,12 @@ if(AMA_BUILD_TESTS)
     endif()
 
     add_subdirectory(tests/c)
+endif()
+
+# Examples.  After the test block, so that enable_testing() has run when
+# examples/c registers each example as a CTest case.
+if(AMA_BUILD_EXAMPLES)
+    add_subdirectory(examples/c)
 endif()
 
 # Raw C benchmark harness (POSIX timing — Linux/macOS only).

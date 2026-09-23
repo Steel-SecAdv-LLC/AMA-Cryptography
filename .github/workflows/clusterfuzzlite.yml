@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 name: ClusterFuzzLite
 
-# Continuous fuzzing on OSS-Fuzz's own infrastructure, without waiting for
+# Continuous fuzzing with OSS-Fuzz's own tooling on GitHub-hosted runners, without waiting for
 # OSS-Fuzz onboarding.  ClusterFuzzLite is the ClusterFuzz engine packaged
 # for CI: it builds the fuzzers from .clusterfuzzlite/ (which reuses
 # oss-fuzz/build.sh), fuzzes them in BATCH mode for an hour per sanitizer

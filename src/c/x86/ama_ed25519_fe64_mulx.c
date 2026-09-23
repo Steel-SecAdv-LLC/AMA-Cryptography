@@ -34,7 +34,7 @@
  *   mixed add p3 + pniels -> p3       4M + 4M                = 8M, 6A
  *   doubling p2 -> p1p1               4S,                      5A
  *   doubling to the next p2 / p3      4S + 3M / 4S + 4M
- *   constant-time select (8 entries)  0M, 1 neg + masked merges
+ *   constant-time select (16 entries) 0M, 1 neg + masked merges
  *
  * Outputs are byte-identical to the fe51 instantiation:
  * tests/c/test_ed25519_fe51_mulx_equiv.c drives both through the public
@@ -157,7 +157,7 @@ void ed25519_fe64_neg_mulx(fe64 h, const fe64 f) {
 #define GE_CONST_SQRTM1 ama_ed25519_const_sqrtm1_fe64
 #if defined(AMA_HAVE_AVX2_IMPL)
 #define GE_NIELS_FOLD_AVX2 ama_ed25519_select12_avx2
-#define GE_HAVE_AVX2() ama_has_avx2()
+#define GE_HAVE_AVX2() ama_ed25519_fold_avx2_permitted()
 #endif
 #include "../internal/ama_ed25519_ge.h"
 

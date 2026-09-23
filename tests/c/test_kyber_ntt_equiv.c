@@ -79,10 +79,10 @@ extern void ama_test_restore_kyber_ntt(void);
 #define KYBER_Q 3329
 
 /* Montgomery + Barrett reductions — verbatim from src/c/ama_kyber.c
- * (lines 1816-1837).  Kept local so the test is independent of any
- * internal-linkage symbols.  Any drift between this copy and the
- * production copy would produce mismatched output and surface as
- * a divergence flagged below. */
+ * (montgomery_reduce() and barrett_reduce()).  Kept local so the test is
+ * independent of any internal-linkage symbols.  Any drift between this
+ * copy and the production copy would produce mismatched output and surface
+ * as a divergence flagged below. */
 static int16_t montgomery_reduce_ref(int32_t a) {
     int32_t t;
     int16_t u;

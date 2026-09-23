@@ -558,10 +558,10 @@ The following claims **no longer hold as written** and are corrected here
    SHA-512 context, so the heap concatenation buffer — and with it the `-1`
    (allocation) and `-2` (overflow) failure paths §2.4 describes — no longer
    exists; the only outcome is `0`. The caller-side mappings are retained as
-   unreachable back-compat (`ama_hkdf.c`, now lines 40–43). The cited line
-   ranges have drifted: the function sits at `src/c/internal/ama_sha2.h:266`,
-   not `:199–212`. The fail-closed property §2.4 claims is preserved
-   vacuously — there is no longer a failure mode to close.
+   unreachable back-compat (the `rc` mapping in `ama_hmac_sha512()` in
+   `ama_hkdf.c`). §2.4's line ranges have drifted: the function now lives in
+   `src/c/internal/ama_sha2.h`, not where §2.4 places it. The fail-closed
+   property §2.4 claims is preserved vacuously — there is no longer a failure mode to close.
 5. **§4.2's regeneration command is now gated.**
    `python -m ama_cryptography.integrity --update` is build-pipeline-only,
    gated behind `AMA_BUILD_PIPELINE=1` (and has grown an `--sign` mode);

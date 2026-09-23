@@ -87,6 +87,17 @@ int main(void) {
     }
 
     if (strcmp(active, "all-default-dispatch") == 0) {
+        /* A case registered where the slot is known to be satisfiable sets
+         * AMA_TEST_EXPECT_HONORED=1, and there an unsupported answer is the
+         * defect under test (a pin refused because an opt-out or the
+         * auto-tune had cleared the default slot), not a host limitation. */
+        const char *expect = getenv("AMA_TEST_EXPECT_HONORED");
+        if (expect && strcmp(expect, "1") == 0) {
+            fprintf(stderr,
+                "FAIL: AMA_DISPATCH_ONLY='%s' must be honored here but "
+                "resolved to '%s'\n", requested, active);
+            return 1;
+        }
         /* apply_dispatch_only() left the table at scalar fallback
          * because the requested slot is not satisfiable on this
          * host (missing CPU feature, missing AMA_HAVE_*_IMPL build

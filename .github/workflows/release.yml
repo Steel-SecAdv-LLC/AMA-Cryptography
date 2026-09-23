@@ -1035,6 +1035,12 @@ jobs:
     #   * publish-pypi FAILED   -> no release  (the original hazard)
     #   * publish-pypi SKIPPED  -> release proceeds, notes say PyPI was skipped
     #   * sign / provenance not successful -> no release, unconditionally
+    #   * verify-reproducible-wheel not successful -> no release.  It is in
+    #     `needs`, but `!cancelled()` replaces the implicit success() check,
+    #     so without this line a failed rebuild comparison skipped PyPI
+    #     (publish-pypi has no status function, so it needs every dependency
+    #     green), and that SKIP then read as "PyPI not configured" here: the
+    #     unreproducible artefacts shipped as a GitHub Release.
     #
     # Bracket indexing, not dot notation: `needs.publish-pypi.result` asks an
     # expression grammar in which `-` is also subtraction to read a hyphenated
@@ -1049,6 +1055,7 @@ jobs:
       && startsWith(github.ref, 'refs/tags/v')
       && needs.sign.result == 'success'
       && needs.provenance.result == 'success'
+      && needs['verify-reproducible-wheel'].result == 'success'
       && needs['publish-pypi'].result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10

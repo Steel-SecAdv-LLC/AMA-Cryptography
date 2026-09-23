@@ -2742,25 +2742,29 @@ AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
     return dil_pubkey_from_sk(P, secret_key, NULL);
 }
 
-AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
-                                    uint8_t *signature, size_t *signature_len,
-                                    const uint8_t *message, size_t message_len,
-                                    const uint8_t *secret_key) {
+#ifdef AMA_TESTING_MODE
+/* FIPS 204 Algorithms 7/8 over the raw message: testing only (INVARIANT-50).
+ * See src/c/internal/ama_testing_exports.h for why these are not shipped. */
+ama_error_t ama_ml_dsa_sign_internal(ama_ml_dsa_param_set_t ps,
+                                     uint8_t *signature, size_t *signature_len,
+                                     const uint8_t *message, size_t message_len,
+                                     const uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
     return dil_sign_internal(P, signature, signature_len, NULL, 0,
                              message, message_len, NULL, secret_key);
 }
 
-AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
-                                      const uint8_t *message, size_t message_len,
-                                      const uint8_t *signature, size_t signature_len,
-                                      const uint8_t *public_key) {
+ama_error_t ama_ml_dsa_verify_internal(ama_ml_dsa_param_set_t ps,
+                                       const uint8_t *message, size_t message_len,
+                                       const uint8_t *signature, size_t signature_len,
+                                       const uint8_t *public_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
     return dil_verify_internal(P, NULL, 0, message, message_len,
                                signature, signature_len, public_key);
 }
+#endif /* AMA_TESTING_MODE */
 
 /* Shared body of the two external-interface signers; `rnd` selects the
  * variant (NULL = deterministic, 32 bytes = hedged). */
@@ -2876,9 +2880,9 @@ AMA_API ama_error_t ama_dilithium_keypair_from_seed(const uint8_t xi[32],
  * They now use the external interface with the empty context, which is what
  * "ML-DSA-65 signature" means everywhere else.
  *
- * The internal interface is still reachable, deliberately and by name:
- * ama_ml_dsa_sign()/ama_ml_dsa_verify() are Algorithm 7/8 and the ACVP
- * internal-interface vectors replay through them. */
+ * The internal interface does not ship (INVARIANT-50): it exists only in the
+ * AMA_TESTING_MODE archive, as ama_ml_dsa_sign_internal() /
+ * ama_ml_dsa_verify_internal(). */
 AMA_API ama_error_t ama_dilithium_sign(uint8_t *signature, size_t *signature_len,
                                        const uint8_t *message, size_t message_len,
                                        const uint8_t *secret_key) {

@@ -296,7 +296,7 @@ static void detect_x86_features(void) {
         has_bmi2_cached       = (ebx >> 8)  & 1;
         has_avx512f_cached    = (ebx >> 16) & 1;
         has_adx_cached        = (ebx >> 19) & 1;
-        has_avx512vl_cached   = (ebx >> 31) & 1;
+        has_avx512vl_cached   = (int)((ebx >> 31) & 1u);
         has_vaes_cached       = (ecx >> 9)  & 1;
         has_vpclmulqdq_cached = (ecx >> 10) & 1;
         has_sha_ni_cached     = (ebx >> 29) & 1;  /* EBX bit 29 — SHA-NI */

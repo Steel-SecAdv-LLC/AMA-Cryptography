@@ -378,3 +378,81 @@ class TestUnpinnedReferencesAreRefused:
             "an empty pin set exited 0 — the gate passed vacuously on a tree "
             "where the collector found nothing to check"
         )
+
+
+class TestEveryYamlSpellingAndEveryActionFileIsRead:
+    """The per-line regex saw one YAML spelling and one directory.
+
+    Measured before the fix: ``- {uses: actions/checkout@v4}`` produced no
+    unpinned finding and its SHA-pinned twin no pin; ``uses: >-`` followed by
+    the ref on the next line was reported as the reference ``'>-'``; and a
+    composite action at ``.github/actions/x/action.yml`` was never opened.
+    """
+
+    def test_a_flow_style_unpinned_reference_is_reported(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        directory = _workflow(
+            tmp_path, "jobs:\n  a:\n    steps:\n      - {uses: actions/checkout@v4}\n"
+        )
+        found = tool.find_unpinned(directory)
+        assert [(u.ref, u.line_no) for u in found] == [("actions/checkout@v4", 4)]
+
+    def test_a_flow_style_pin_is_collected_with_its_comment(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        directory = _workflow(
+            tmp_path,
+            f"jobs:\n  a:\n    steps:\n      - {{uses: actions/checkout@{GOOD_SHA}}}  # v5.0.1\n",
+        )
+        pins = tool.find_pins(directory)
+        assert [(p.action, p.sha, p.comment, p.line_no) for p in pins] == [
+            ("actions/checkout", GOOD_SHA, "v5.0.1", 4)
+        ]
+
+    def test_a_folded_scalar_reports_the_reference_not_the_indicator(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        directory = _workflow(
+            tmp_path, "jobs:\n  a:\n    steps:\n      - uses: >-\n          actions/checkout@v4\n"
+        )
+        found = tool.find_unpinned(directory)
+        assert [(u.ref, u.line_no) for u in found] == [("actions/checkout@v4", 5)]
+
+    def test_a_quoted_reference_is_read_unquoted(self, tool: ModuleType, tmp_path: Path) -> None:
+        directory = _workflow(tmp_path, "      - uses: 'actions/checkout@v4'\n")
+        assert [u.ref for u in tool.find_unpinned(directory)] == ["actions/checkout@v4"]
+
+    def test_a_composite_action_is_scanned(self, tool: ModuleType, tmp_path: Path) -> None:
+        directory = _workflow(tmp_path, f"      - uses: actions/checkout@{GOOD_SHA}\n")
+        action = tmp_path / "actions" / "setup" / "action.yml"
+        action.parent.mkdir(parents=True)
+        action.write_text(
+            "runs:\n  using: composite\n  steps:\n"
+            "    - uses: actions/setup-python@v5\n"
+            f"    - uses: actions/cache@{OTHER_SHA}  # v4\n",
+            encoding="utf-8",
+        )
+        assert [(u.workflow, u.ref) for u in tool.find_unpinned(directory)] == [
+            ("actions/setup/action.yml", "actions/setup-python@v5")
+        ]
+        assert sorted(p.workflow for p in tool.find_pins(directory)) == [
+            "actions/setup/action.yml",
+            "wf.yml",
+        ]
+
+    def test_an_unparseable_workflow_is_a_finding_not_a_skip(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        directory = _workflow(tmp_path, "jobs: [unclosed\n  - uses: actions/checkout@v4\n")
+        found = tool.find_unpinned(directory)
+        assert len(found) == 1 and "could not be read as YAML" in found[0].ref
+
+    def test_a_uses_word_in_a_run_script_is_not_a_reference(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Parsing, not grepping: only a `uses` KEY is a reference."""
+        directory = _workflow(
+            tmp_path, "      - run: |\n          echo 'uses: actions/checkout@v4'\n"
+        )
+        assert tool.find_unpinned(directory) == []

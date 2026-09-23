@@ -22,7 +22,7 @@ must be mirrored here — the pinned numbers below will say so.
 
 Reproduces the figures cited in ``src/c/fe51.h``: zero precondition
 violations, and a worst-case fold of ``0xF0780000000164B2`` at ge_dbl's
-``X = E * F`` (6.5% below 2^64).
+``X = E * F`` (6.1% below 2^64).
 """
 
 from __future__ import annotations
@@ -297,12 +297,12 @@ def test_no_lazy_reduction_precondition_is_violated() -> None:
 
 
 def test_worst_fold_matches_the_fe51_comment() -> None:
-    """Pins the margin quoted in src/c/fe51.h (6.5%, at ge_dbl's E*F)."""
+    """Pins the margin quoted in src/c/fe51.h (6.1% below 2^64, at ge_dbl's E*F)."""
     _, w = _run_model()
     assert w.site == "ge_dbl->p3/X=E*F"
     assert w.c4x19 == 0xF0780000000164B2
-    margin = 2**64 / w.c4x19
-    assert 1.06 < margin < 1.07
+    below = 1 - w.c4x19 / 2**64
+    assert round(below * 100, 1) == 6.1
 
 
 def test_every_column_stays_below_the_128_bit_shift_width() -> None:
