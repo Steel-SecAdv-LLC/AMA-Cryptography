@@ -19,6 +19,33 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### The two CodeQL notes open on the release-train head, fixed at source — 2026-09-23
+
+The default-branch ruleset enforces `code_scanning` with CodeQL
+`alerts_threshold: "all"`, so note-level results block the merge even though
+`tools/check_codeql_severity.py` (which fails CI on error-level results only)
+passes.  The two notes reported on #394's head were both real and are fixed
+at source, with no suppression and no dismissal:
+
+* **`py/import-and-import-from` in `tools/wheel_smoke_test.py`.**  The
+  private-storage check imported `from ama_cryptography import _owner_only`
+  while the module already imports `ama_cryptography` — the exact mix the
+  file's own header comment says it avoids.  Now
+  `import ama_cryptography._owner_only as _owner_only`; the object bound is
+  identical.
+* **Long switch case in `src/c/ama_core.c`.**  The `AMA_ALG_HYBRID` arm of
+  `ama_sign` ran to 36 lines.  Its body moved verbatim into a static
+  `hybrid_sign()`, and the verify arm into `hybrid_verify()` for symmetry,
+  both inside `#ifdef AMA_USE_NATIVE_PQC` like their only callers.  No
+  statement changed: same parameter checks in the same order, same
+  wipe-on-failure of the whole signature buffer, same no-short-circuit AND in
+  verification.  Measured: gcc and clang, both the unoptimized and the
+  Release+LTO strict-warnings configurations, build with no warning outside
+  the frozen allowlist (`tools/check_compiler_warnings.py`); ctest 139/139
+  (skips are SIMD slots this CPU lacks), including `test_core` and
+  `test_hybrid_sig`; the `AMA_USE_NATIVE_PQC=OFF` guard configuration builds.
+  Library LoC re-measured (`tools/update_docs.py --loc`).
+
 ### Dependencies: Dependabot #401 and #402 folded into the release train — 2026-09-23
 
 Both grouped Dependabot PRs are applied here so 5.0.0 ships current pins and
