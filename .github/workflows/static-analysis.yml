@@ -187,7 +187,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd  # v4.38.1
         with:
           languages: c-cpp, python
           queries: security-and-quality
@@ -213,7 +213,7 @@ jobs:
         # `category: "/language:c-cpp"` stamped the python run's upload with
         # the c-cpp label as well, so both languages' alerts filed under one
         # analysis identity.
-        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd  # v4.38.1
         with:
           # Also write the SARIF locally so the severity gate below can read
           # it.  `upload: always` keeps the alerts going to code scanning as
