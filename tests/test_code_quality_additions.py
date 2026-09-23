@@ -328,16 +328,26 @@ class TestKeyManagementDecryptPaths:
         assert temp_storage.retrieve_key(key_id) is None
 
     @skip_no_native_aes
-    def test_delete_key_overwrites_the_original_bytes_in_place(self, temp_storage: Any) -> None:
-        """The overwrite must land on the key's own blocks, all of them.
+    def test_delete_key_overwrites_the_original_bytes_in_place(
+        self, temp_storage: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The overwrite must land on the key's own blocks, all of them, byte-exact.
 
         A hard link keeps the inode reachable after the unlink, so its content
         is exactly what the overwrite left behind.  Truncating first (the
         previous code) wrote 1 KiB of random bytes to fresh blocks, so the
         inode's size changed and the original bytes were never touched.
+
+        The overwrite source is pinned to all-0x0A so the check is
+        deterministic: on Windows a text-mode descriptor (no ``O_BINARY``)
+        writes every 0x0A as 0x0D 0x0A, doubling the length on every run
+        rather than only when random bytes happen to contain a newline.
         """
         import os
         import secrets
+        import types
+
+        from ama_cryptography import key_management
 
         key_id = "overwrite-test-key"
         temp_storage.store_key(key_id, secrets.token_bytes(32))
@@ -346,11 +356,13 @@ class TestKeyManagementDecryptPaths:
         os.link(key_file, link)
         original = link.read_bytes()
 
+        monkeypatch.setattr(
+            key_management, "secrets", types.SimpleNamespace(token_bytes=lambda n: b"\n" * n)
+        )
         assert temp_storage.delete_key(key_id) is True
         after = link.read_bytes()
         assert not key_file.exists()
-        assert len(after) == len(original)
-        assert after != original
+        assert after == b"\n" * len(original)
 
     def test_delete_nonexistent_key_returns_false(self, temp_storage: Any) -> None:
         """Deleting non-existent key returns False."""

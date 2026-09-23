@@ -59,6 +59,24 @@ Every new test below fails against the code it replaces (AGENTS.md §6.2).
 - **Smaller fixes.** An artefact without `INTEGRITY_DIGEST_HEX` is refused like
   an empty one; `delete_key` overwrites the key's own bytes in place instead of
   truncating first; the unused `_c_buffer_view` and a stale docstring are gone.
+- **`delete_key` on Windows wrote past the key.** `os.open` defaults to text
+  mode there, so each 0x0A in the random overwrite went out as 0x0D 0x0A and
+  the overwrite grew the file (377 → 378–381 bytes on five CI legs). The
+  descriptor is now opened `O_BINARY`, and the test overwrites with all-0x0A
+  so it fails on every Windows run without the flag, not only when the random
+  bytes happen to contain a newline.
+- **The agent-binding timing lane measured the GIL, not the check (§6.6).**
+  Its load threads held the GIL, so each sample was a GIL wait of about
+  100 µs around a 2.4 µs call. It also alternated the two classes, used two
+  records at two addresses, and allocated an int for the refusal code inside
+  the timed region. It passed a mutation that recomputes the tag on refusal,
+  so its docstring's "catches a gross verdict-correlated branch" was false,
+  and on Windows it failed the unmodified check (t = −12.56). The lane now
+  times one record with only the tag byte flipped, through a void-return
+  pointer, in a shuffled class order, under load that hashes with the GIL
+  released, and gates on effect size: at most 0.8% unmodified over 22 runs,
+  72–78% for that mutation, 10% threshold. `test_dudect.c` remains the
+  fine-grained instrument.
 - **Key residue on the dead stack (INVARIANT-6).**
   - *Ed25519.* The residue probe now also searches the clamped scalar as the
     21-bit limbs the comb reads it in, and it covers `keypair`. It found

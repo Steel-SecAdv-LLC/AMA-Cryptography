@@ -1602,7 +1602,16 @@ class SecureKeyStorage:
         # refused by the S_ISREG check below -- the check never runs, because
         # the open never returns.  With O_NONBLOCK that open fails ENXIO.  On
         # a regular file the flag has no effect.
-        flags = os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        #
+        # O_BINARY (Windows only) keeps the overwrite byte-exact: os.open
+        # defaults to text mode there, where every 0x0A in the random bytes
+        # is written as 0x0D 0x0A and the overwrite runs past the key's size.
+        flags = (
+            os.O_WRONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_BINARY", 0)
+        )
         try:
             fd = os.open(key_file, flags)
         except FileNotFoundError:
