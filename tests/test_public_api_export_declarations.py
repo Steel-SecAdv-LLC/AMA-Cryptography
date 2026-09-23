@@ -165,7 +165,9 @@ class TestTheReverseDirection:
         (tmp_path / "src" / "h.h").write_text("AMA_API void ama_helper(void);\n", encoding="utf-8")
         assert gate.declared_public_symbols(tmp_path) == frozenset({"ama_real"})
 
-    def test_the_real_trees_formerly_undeclared_exports_are_resolved(self, gate: ModuleType) -> None:
+    def test_the_real_trees_formerly_undeclared_exports_are_resolved(
+        self, gate: ModuleType
+    ) -> None:
         """``ama_sha256`` (bound by Python) is declared in an installed header;
         ``ama_has_avx2`` (declared only in the uninstalled include/ama_cpuid.h)
         is not, and is therefore reported if it is ever exported again."""
