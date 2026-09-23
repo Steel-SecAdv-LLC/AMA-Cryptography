@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-09-22 |
+| Last Updated | 2026-09-23 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,74 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+### Dependencies: Dependabot #401 and #402 folded into the release train — 2026-09-23
+
+Both grouped Dependabot PRs are applied here so 5.0.0 ships current pins and
+the two PRs close as superseded. Both were red on `main` for reasons this
+branch already fixes: #402 through `main`'s `# v4` / `# v7` pin comments,
+which `tools/check_action_pins.py --strict` rejects because those SHAs are
+tagged `v4.2.0` / `v7.3.0` (the exact tags are used here); #401 through
+`integrity-anchor-check.yml` asking a Dependabot run for
+`AMA_INTEGRITY_SIGNING_SEED_HEX`, where this branch signs pull-request runs
+with a throwaway keypair. All are dev/build/CI-only; the library keeps zero
+runtime dependencies (INVARIANT-1).
+
+**SHA-pinned actions (#401).** `codecov/codecov-action` v7.0.0 → v7.1.1,
+`docker/setup-buildx-action` v4.2.0 → v4.4.1, `docker/login-action` v4.5.2 →
+v4.6.0, `docker/build-push-action` v7.3.0 → v7.4.0, `pypa/cibuildwheel`
+v4.1.1 → v4.2.1, `sigstore/gh-action-sigstore-python` v3.4.0 → v3.5.0,
+`pypa/gh-action-pypi-publish` v1.14.1 → v1.14.2,
+`softprops/action-gh-release` v3.0.2 → v3.0.3, `trufflesecurity/trufflehog`
+v3.96.0 → v3.97.5, `github/codeql-action` (init + analyze) v4.37.3 → v4.38.1.
+Every comment names the exact tag its SHA is under (`git ls-remote`);
+`check_action_pins.py --strict` resolves 142/142. cibuildwheel 4.2 builds
+CPython 3.15 by default; the release matrix is unaffected because
+`CIBW_BUILD` names cp310–cp314 in both `release.yml` blocks.
+
+**Build toolchain, floors moved in lockstep (#402).** `setuptools` 83.0.0 →
+84.0.0, `wheel` 0.47.0 → 0.48.0, `cmake` 4.4.0 → 4.4.3, `Cython` 3.2.8 →
+3.3.0, `build` 1.5.0 → 1.6.1 — in `[build-system].requires`, the `[math]` and
+`[dev]` extras, `setup.py`'s preflight tuples and remedy hint,
+`requirements-dev.txt`, `requirements-lock.txt`, the `release.yml`
+before-build commands, the `static-analysis.yml` and
+`integrity-anchor-check.yml` installs, `docker/Dockerfile.alpine` (which had
+drifted to setuptools 78.1.1 / cmake 4.3.2 / Cython 3.2.4) and the README's
+source-install prerequisites. Dependabot had raised `requirements-dev.txt`
+and rewritten the pyproject *comment* to 84.0.0 / 0.48.0 while leaving
+`[build-system].requires` and the preflight at 83.0.0 / 0.47.0. The floors
+are raised rather than held because the documented floor is "the latest
+baseline" and the cmake floor the "Dependabot supply-chain floor"; wheel
+0.48.0 also fixes GHSA-vgq5-9859-3mmw (`wheel convert` path traversal).
+Measured: an isolated `pip install -e .[dev]` and a `--no-isolation` wheel
+build at exactly the new floors both succeed, and the preflight refuses
+setuptools 83.0.0, wheel 0.47.0, Cython 3.2.9 and cmake 4.4.0 one at a time.
+
+**Lint and test toolchain (#402).** `ruff` 0.16.0 → 0.16.8, `mypy` 2.3.0 →
+2.3.1, `types-PyYAML` → 6.0.12.20260906, `hypothesis` 6.161.8 → 6.168.0 —
+moved together in the lock, `[dev]`, `requirements-dev.txt`, both CI lint
+jobs and `.pre-commit-config.yaml`. ruff 0.16.8 adds no finding; mypy 2.3.1
+`--strict` over the CI scope reports none in 385 files, and the Windows-only
+`INTERNAL ERROR` on `benchmarks/generate_competitive.py` recorded in the tenth
+verification pass does not reproduce on Linux, where the pinned lint jobs run.
+Lock-only transitives: `coverage` 7.16.1, `pyproject_hooks` 1.3.3,
+`ast_serialize` 0.11.2, `click` 8.5.0, `librt` 0.15.0, `packaging` 26.3,
+`platformdirs` 4.11.10, `Pygments` 2.21.0. The lock is still the exact
+closure: a clean-venv install of it plus `requirements-dev.txt` freezes back
+to it with pip the only addition, and `pip-audit --strict` finds nothing.
+
+**Not taken.** `pytest-benchmark` and the lock rows for `pytest-timeout`,
+`pytest-xdist`, `execnet`, `py-cpuinfo` and `scipy` — removed on this branch,
+not re-added. `PyKCS11>=1.5.20` — the `[hsm]` extra carries a per-platform
+split (`!=1.5.19` on win32) pinned by `tests/test_hsm_integration.py`, and
+`>=1.5.18` already admits 1.5.20.
+
+**Auto-docs (#392).** `tools/update_docs.py`, run on this tree as
+`auto-docs.yml` runs it, rewrites nothing but the `Last Updated` stamp in
+`wiki/Security-Model.md`, which it sets to the run date on every run; that
+stamp is committed. #392's floor cells were generated from `main`'s pre-5.0
+`benchmarks/baseline.json` and its date stamp predates this branch's 5.0.0
+wiki, so it is obsolete, not merely stale.
 
 ### Second pass over the expanded-key work: two defects, four unprotected guards — 2026-09-22
 
