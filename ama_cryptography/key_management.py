@@ -1618,10 +1618,14 @@ class SecureKeyStorage:
                 raise ValueError(
                     f"Refusing to delete key {key_id!r}: {key_file} is not a regular file"
                 )
-            # Best-effort overwrite before unlinking (see note below on the
-            # limits of this on journaling/CoW/SSD filesystems).
-            os.ftruncate(fd, 0)
-            os.write(fd, secrets.token_bytes(1024))
+            # Best-effort overwrite of the key's own bytes before unlinking
+            # (limited on journaling/CoW/SSD filesystems).  In place and in
+            # full: truncating first sent the random bytes to fresh blocks and
+            # left the old ones untouched, and a short os.write went unnoticed.
+            remaining = st.st_size
+            while remaining > 0:
+                written = os.write(fd, secrets.token_bytes(min(remaining, 65536)))
+                remaining -= written
             os.fsync(fd)
         finally:
             os.close(fd)

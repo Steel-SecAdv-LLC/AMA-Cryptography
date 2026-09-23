@@ -79,7 +79,7 @@ added with the 44/87 parameter sets — a `sigmode` field:
 | `external` | FIPS 204 §5.2 external/pure: `0x00 \|\| len(ctx) \|\| ctx \|\| M` |
 
 Only the **deterministic** ACVP groups (`rnd = 0^256`) are vendored, because that
-is the variant `ama_ml_dsa_sign` implements; the hedged and pre-hash (HashML-DSA)
+is the variant `ama_ml_dsa_sign_ctx` implements; the hedged and pre-hash (HashML-DSA)
 groups are deliberately absent rather than silently unrun. `externalMu` groups are
 also absent — that is a separate interface AMA does not expose.
 

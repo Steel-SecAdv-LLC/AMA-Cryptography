@@ -3209,6 +3209,24 @@ signatures. `cmake/ama_exports.map` localises both §9 names as defence in
 depth, and `tools/check_ctypes_abi.py` refuses a ctypes declaration for a
 symbol the public header no longer declares.
 
+**ML-DSA, the same finding one scheme over (2026-09-23).** FIPS 204 §5.2
+restricts `ML-DSA.Sign_internal` (Algorithm 7) the same way, and the library
+still shipped it as `ama_ml_dsa_sign` / `ama_ml_dsa_verify`, with the Python
+wrappers defaulting to it (`ctx=None`). The oracle reproduced: a signature from
+`ama_ml_dsa_sign(0x00 || 0x01 || "x" || M)` was accepted by
+`ama_ml_dsa_verify_ctx(M, ctx = "x")`. Both are now `ama_ml_dsa_sign_internal`
+/ `_verify_internal` in the `AMA_TESTING_MODE` archive only, localised in
+`cmake/ama_exports.map`, and `native_ml_dsa_sign` / `_verify` take the empty
+context by default. The header's justification for shipping them — "the ACVP
+internal-interface vectors replay through it" — was false for the C side and
+true only of `tests/test_pqc_param_sets.py`'s Python replay of the vendored
+`tests/kat/fips204` corpus; those 30 records now replay byte-exact in
+`tests/c/test_ml_dsa_context_separation.c`, which also pins that the context
+API is the §5.2 wrapper over Algorithm 7 for empty, short and 255-byte
+contexts. `tests/test_ml_dsa_interfaces.py` asserts none of the four names is
+in the shipped library and repeats the oracle probe against every shipped
+signer.
+
 **The empty message is a message.** The same entry points rejected
 `message == NULL` outright, so whether a zero-length message could be signed
 depended on whether the caller's allocator returned a non-NULL pointer for a
@@ -3384,17 +3402,22 @@ hole this closes, so it is refused at signing time rather than discovered by an
 auditor.
 
 Secrets are deliberately *not* in the transcript — `hmac_key`,
-`hkdf_master_secret` and `kem_shared_secret` are each already pinned through
-the public commitment they produce, and including them would make the
-transcript uncomputable from the redacted form `to_dict()` emits. `derived_keys`
+`hkdf_master_secret` and `kem_shared_secret` are each pinned through a public
+commitment that is signed (`hmac_tag`, `derived_keys`, and
+`metadata["kem_shared_secret_commitment"]`, a domain-separated SHA3-256 of the
+KEM secret), and including them would make the transcript uncomputable from
+the redacted form `to_dict()` emits. The KEM commitment was missing until
+2026-09-23: the Kyber secret key and the shared secret were both unsigned, so
+a substituted key together with the secret it decapsulates to left the KEM
+layer passing. `derived_keys`
 *is* included, and the reason is worth stating because binding the salt, info
 and count alone looks sufficient and is not: an attacker who swaps
 `hkdf_master_secret` and recomputes the derived keys to match leaves Layer 4
 self-consistent and salt, info and count unchanged.
 
 **Verification.** `tests/test_crypto_package_transcript.py` runs the audit's
-tamper matrix as a parametrised test — seventeen cases on the modern package,
-six on the legacy one — with an untampered-clone control, because a clone that
+tamper matrix as a parametrised test — eighteen cases on the modern package,
+seven on the legacy one — with an untampered-clone control, because a clone that
 quietly lost a field would make the whole matrix pass while proving nothing
 (`copy.deepcopy` does exactly that here: `__getstate__` strips secrets). The
 encoder's injectivity is tested separately and without a backend. Measured

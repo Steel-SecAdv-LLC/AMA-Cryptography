@@ -212,6 +212,12 @@ if(AMA_USE_NATIVE_PQC)
     # The internal-interface ACVP vectors used to run in
     # tests/test_pqc_kat.py through ama_sphincs_verify, for as long as that
     # shipped entry point WAS the §9 verifier.
+    # The ML-DSA counterpart (INVARIANT-50): links the testing archive for
+    # ama_ml_dsa_sign_internal / _verify_internal, which no longer ship.
+    add_executable(test_ml_dsa_context_separation test_ml_dsa_context_separation.c)
+    target_link_libraries(test_ml_dsa_context_separation ama_cryptography_test)
+    add_test(NAME test_ml_dsa_context_separation COMMAND test_ml_dsa_context_separation
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_executable(test_slhdsa_context_separation test_slhdsa_context_separation.c)
     target_link_libraries(test_slhdsa_context_separation ama_cryptography_test)
     add_test(NAME test_slhdsa_context_separation COMMAND test_slhdsa_context_separation

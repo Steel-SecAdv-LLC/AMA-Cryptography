@@ -15,14 +15,14 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 
 # SHA3-256 digest of the package's .py files at build time (raw 32 bytes,
 # hex-encoded for embeddability).
-INTEGRITY_DIGEST_HEX = "b02781ff9a4934732f871e7afc1f242c7a3d18efd3a4b5a701cb1426ec3bfca5"
+INTEGRITY_DIGEST_HEX = "e64e1bbe0c8bca3361ae954f7538221e78c871bfdf37b55d2dac1ef7ef8574b8"
 
 # SHA3-256 digest of the native library (libama_cryptography) at build time.
 # This is what binds the shared object that performs every cryptographic
 # operation into the same signature that covers the .py files — without it the
 # signature attested to the Python wrapper only, and the implementation the
 # wrapper calls into was covered by nothing.
-INTEGRITY_NATIVE_DIGEST_HEX = "8d0f3850d62a1ee75a60f18226a217d3eddd10d5c737df4a741b5809e0f078d6"
+INTEGRITY_NATIVE_DIGEST_HEX = "1625c9440012fc9a3f24e1dfcecc53d46c41e1a6f2eed4191d1e736011631779"
 
 # SHA3-256 digests of the compiled binding extensions at build time, keyed by
 # exact filename.  These modules contain compiled kernels and execute at import
@@ -41,12 +41,12 @@ INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {
 }
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "d7fa567a89e18c7a8f76280b3e9e9e20a10dde465279e3909a3cd27cfff3f1aa"
+INTEGRITY_PUBKEY_HEX = "f461b0665eb828d39cb059fb3fcf279e916f28370bdc23ecb923e098f8e86048"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "4351535daf76232708b1c552ac23217e31c7c18b20fbf3adf8e81817040850c2176f414332a81d9cc6179d701fc0488b7945fa4f1866152413c4d25c8ab8980f"
+INTEGRITY_SIGNATURE_HEX = "1574428d5f8d291f2badd507fcb776408b94da0cbe119ead85edb1f371311d988e1b31ec256493bfb721a5ee9c142c63df5af78b481ac893a10113c3c7d48f0d"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"

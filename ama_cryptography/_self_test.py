@@ -386,19 +386,16 @@ def _integrity_signer_process() -> bool:
 
     Wraps ``pqc_backends._process_is_the_integrity_signer`` (identity: the
     process was *launched as* the signing module, plus ``AMA_BUILD_PIPELINE=1``)
-    and revokes it under secure-execution mode, mirroring the revocation every
-    other consumer of that identity applies.  Kept as a helper so the anchored
+    which itself revokes the identity under secure-execution mode.  Kept as a
+    helper so the anchored
     classification below reads as one predicate and the two conditions cannot
     drift apart between call sites.
     """
     try:
-        from ama_cryptography.pqc_backends import (
-            _in_secure_execution_mode,
-            _process_is_the_integrity_signer,
-        )
+        from ama_cryptography.pqc_backends import _process_is_the_integrity_signer
     except Exception:  # pragma: no cover - pqc_backends always imports in a built tree
         return False
-    return _process_is_the_integrity_signer() and not _in_secure_execution_mode()
+    return _process_is_the_integrity_signer()
 
 
 # Domain-separation tag for the Ed25519 signature that binds the .py digest and

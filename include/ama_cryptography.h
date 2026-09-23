@@ -3650,29 +3650,13 @@ AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
  * row to save the 57 KB would multiply the dominant cost of signing several
  * times over, on the one ML-DSA path where the parameter set is chosen by the
  * key holder rather than by an attacker. `ama_ml_dsa_keypair` (61 KB) and
- * `ama_ml_dsa_verify` (58 KB) *do* expand A row-wise, because verification is
+ * `ama_ml_dsa_verify_ctx` (58 KB) *do* expand A row-wise, because verification is
  * driven by whoever supplies the signature and has to fit a small stack.
  *
  * All three figures are measured, not asserted:
  * `tests/c/test_pq_parser_stack.c` runs each on a painted, caller-supplied
  * thread stack and holds it under a stated budget.
  */
-/* INTERNAL INTERFACE (FIPS 204 Algorithm 7): mu = H(tr || M), no context
- * wrapper.  Sec 5.2 restricts this to testing and to protocols supplying their
- * own domain separation — the ACVP internal-interface vectors replay through
- * it.  For an interoperable ML-DSA-65 signature use ama_dilithium_sign(), or
- * ama_ml_dsa_sign_ctx() for another parameter set. */
-AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
-                                    uint8_t *signature, size_t *signature_len,
-                                    const uint8_t *message, size_t message_len,
-                                    const uint8_t *secret_key);
-
-/** @brief ML-DSA verification, "internal interface" (no context wrapper). */
-AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
-                                      const uint8_t *message, size_t message_len,
-                                      const uint8_t *signature, size_t signature_len,
-                                      const uint8_t *public_key);
-
 /**
  * @brief ML-DSA signing with the FIPS 204 §5.2 external/pure context wrapper.
  *

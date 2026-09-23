@@ -35,6 +35,10 @@
         # depth that catches a build which does compile them in.
         ama_slhdsa_sign_internal;
         ama_slhdsa_verify_internal;
+        # FIPS 204 Algorithms 7/8, the same oracle for ML-DSA (INVARIANT-50);
+        # also compiled only under AMA_TESTING_MODE.
+        ama_ml_dsa_sign_internal;
+        ama_ml_dsa_verify_internal;
 
         # ------------------------------------------------------------------
         # Internal symbols that the `ama_*` wildcard above would otherwise

@@ -341,8 +341,8 @@ if not _post():
         environment variable may buy execution — stale prose rather than a
         description of the code.  It is the same test now.
 
-        Secure-execution mode revokes it, at the call site, exactly as it
-        does for the native-load escape: a set-uid/set-gid or file-capability
+        Secure-execution mode revokes it (inside the predicate itself, so
+        every consumer gets the same answer): a set-uid/set-gid or file-capability
         process runs on behalf of a less-privileged caller, and that caller
         must not be able to steer this decision at all.
 
@@ -351,13 +351,10 @@ if not _post():
         """
         try:
             from ama_cryptography.pqc_backends import (
-                _in_secure_execution_mode as _secure_mode,
-            )
-            from ama_cryptography.pqc_backends import (
                 _process_is_the_integrity_signer as _is_signer,
             )
 
-            return bool(_is_signer()) and not _secure_mode()
+            return bool(_is_signer())
         except Exception:  # pragma: no cover - fail closed on any lookup fault
             return False
 

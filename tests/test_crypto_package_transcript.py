@@ -237,6 +237,22 @@ def _corrupt_sphincs(package: Any) -> None:
     package.sphincs_signature.signature = bytes([sig[0] ^ 0xFF]) + sig[1:]
 
 
+def _swap_kyber_key_and_secret_consistently(package: Any) -> None:
+    """Replace the Kyber secret key and set the stored secret to what it decapsulates to.
+
+    Neither field is signed, so before the shared secret was committed in the
+    signed metadata this left the KEM layer self-consistent and passing.
+    """
+    from ama_cryptography.pqc_backends import generate_kyber_keypair, kyber_decapsulate
+
+    other = generate_kyber_keypair()
+    # A copy: the keypair object wipes its own bytearray when collected, which
+    # would leave the package holding zeros and fail the row for that reason.
+    secret_key = bytes(other.secret_key)
+    package.keypairs["KYBER_1024"].secret_key = secret_key
+    package.kem_shared_secret = kyber_decapsulate(package.kem_ciphertext, secret_key)
+
+
 #: (name, mutation).  The rows the audit measured, plus the three this
 #: remediation found while proving the fix: a rewritten add-on signature
 #: metadata dict, a consistently swapped HMAC key/tag pair, and a dropped
@@ -258,6 +274,10 @@ TAMPERS: tuple[tuple[str, Callable[[Any], None]], ...] = (
     ("kem_ciphertext stripped", lambda p: setattr(p, "kem_ciphertext", None)),
     ("kem_ciphertext replaced", lambda p: setattr(p, "kem_ciphertext", b"\x01" * 1568)),
     ("kem_shared_secret replaced", lambda p: setattr(p, "kem_shared_secret", b"\x02" * 32)),
+    (
+        "kyber secret key and shared secret swapped consistently",
+        _swap_kyber_key_and_secret_consistently,
+    ),
     ("hmac key and tag swapped consistently", _swap_hmac_consistently),
     ("hkdf_salt altered", lambda p: setattr(p, "hkdf_salt", b"\x04" * 32)),
     ("hkdf_info altered", lambda p: setattr(p, "hkdf_info", b"other-info")),
@@ -425,6 +445,9 @@ LEGACY_TAMPERS: tuple[tuple[str, Callable[[Any], None]], ...] = (
     ),
     ("ethical_hash rewritten", lambda p: setattr(p, "ethical_hash", "00" * 32)),
     ("ed25519_pubkey swapped", lambda p: setattr(p, "ed25519_pubkey", "aa" * 32)),
+    # Outside both authenticators until 2026-09-23: stripping or injecting it
+    # moved only the RFC 3161 verdict, never the signature.
+    ("timestamp_token injected", lambda p: setattr(p, "timestamp_token", "AAAA")),
 )
 
 
@@ -456,6 +479,37 @@ class TestTheLegacyPackageBindsItsOwnIdentity:
             return  # fail-closed raise: detected
         checked = [v for k, v in verdict.items() if k in {"content_hash", "hmac", "ed25519"}]
         assert not all(checked), name
+
+    def test_the_ed25519_signature_covers_the_dilithium_fallback(
+        self, legacy_pair: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When ML-DSA-65 is unavailable the package drops its quantum fields.
+
+        Those fields are in the transcript, so the Ed25519 signature and the
+        HMAC must be taken after they change.  Ed25519 used to be signed
+        first, over a transcript that still claimed a quantum layer, and a
+        freshly created package failed its own verification.
+        """
+        import warnings
+
+        from ama_cryptography.exceptions import QuantumSignatureUnavailableError
+
+        lc, kms, _package = legacy_pair
+
+        def unavailable(*_args: Any, **_kwargs: Any) -> bytes:
+            raise QuantumSignatureUnavailableError("ML-DSA-65 backend not available")
+
+        monkeypatch.setattr(lc, "dilithium_sign", unavailable)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            package = lc.create_crypto_package(LEGACY_CODES, LEGACY_HELIX, kms, "real-author")
+            verdict = lc.verify_crypto_package(
+                LEGACY_CODES, LEGACY_HELIX, package, kms.hmac_key, require_quantum_signatures=False
+            )
+        assert package.quantum_signatures_enabled is False
+        assert package.dilithium_signature is None
+        assert verdict["ed25519"] is True
+        assert verdict["hmac"] is True
 
     def test_the_ethical_vector_is_derived_not_trusted(self, legacy_pair: Any) -> None:
         """The specific claim: ethical metadata cannot be separated from the

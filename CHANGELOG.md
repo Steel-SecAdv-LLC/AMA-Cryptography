@@ -19,6 +19,47 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Third review pass: two signing oracles closed, four boundary defects — 2026-09-23
+
+Every new test below fails against the code it replaces (AGENTS.md §6.2).
+
+- **Critical — the KEM layer of a `crypto_api` package verified nothing.** The
+  Kyber secret key and `kem_shared_secret` were both outside the signature, so
+  a substituted key plus the secret it decapsulates to left `kem: True`. The
+  package now signs `metadata["kem_shared_secret_commitment"]`, a
+  domain-separated SHA3-256 of the secret, and the verifier checks it before
+  decapsulating. New tamper row in `tests/test_crypto_package_transcript.py`
+  (the first draft of it passed for the wrong reason: the substituted key
+  was a `bytearray` its owner wiped on collection).
+- **Critical — the ML-DSA internal interface shipped (INVARIANT-50).**
+  `ama_ml_dsa_sign` / `ama_ml_dsa_verify` were FIPS 204 Algorithm 7 over the
+  raw message, and a signature from `ama_ml_dsa_sign(0x00‖0x01‖"x"‖M)` verified
+  under `ama_ml_dsa_verify_ctx(M, "x")`. **BREAKING:** both are removed from
+  the ABI and exist only in the testing archive as `*_internal`;
+  `native_ml_dsa_sign` / `_verify` default to the empty external context.
+  `tests/c/test_ml_dsa_context_separation.c` pins the §5.2 wrapper and replays
+  the 30 internal and 30 external vendored sigGen records byte-exact.
+- **Legacy packages.** Ed25519 was signed before the ML-DSA fallback rewrote
+  two signed fields, so a package created without an ML-DSA backend failed its
+  own verification; and the RFC 3161 token was outside both authenticators.
+  Both transcripts are now built once, after every field they cover is final,
+  and the token is bound.
+- **Python/C boundary.** One rule (`_byte_view`) for every borrowed buffer:
+  1-D, byte items, contiguous, else `TypeError` — a read-only 32-item
+  `array('I')` used to pass a 32-byte key check as 128 bytes. The ML-DSA hedged
+  signer, both FROST rounds, PBKDF2 and SHA-384/512 accept `bytearray` and
+  `memoryview` instead of raising a ctypes `ArgumentError` (in FROST round 2,
+  after consuming the nonce pair), and the hedged signer borrows its key rather
+  than copying it and maps a malformed key to `ValueError`.
+- **Integrity signer identity.** One parser for the interpreter command line
+  replaces two scanners; `python "-c<code>" -m…_build_sign` and `-Bc` clusters
+  no longer read as a signer launch, and `--update` counts only as a program
+  argument. Secure-execution mode now revokes the identity inside the
+  predicate rather than at three call sites.
+- **Smaller fixes.** An artefact without `INTEGRITY_DIGEST_HEX` is refused like
+  an empty one; `delete_key` overwrites the key's own bytes in place instead of
+  truncating first; the unused `_c_buffer_view` and a stale docstring are gone.
+
 ### Second pass over the expanded-key work: two defects, four unprotected guards — 2026-09-22
 
 A full re-read of the INVARIANT-51 change, every file it touched and every
@@ -1798,8 +1839,9 @@ and **gates whose green light was wired to nothing**.
   supplying their own domain separation. A signature made that way is
   rejected by every conforming ML-DSA-65 verifier — liboqs, BoringSSL, Go,
   Bouncy Castle — and vice versa. Signatures produced by 4.x do not verify
-  under 5.0.0. The internal interface is still reachable by name for the ACVP
-  internal-interface vectors: `ama_ml_dsa_sign()` / `native_ml_dsa_sign(ctx=None)`.
+  under 5.0.0. The internal interface is not shipped: `ama_ml_dsa_sign` /
+  `ama_ml_dsa_verify` were removed from the ABI (INVARIANT-50), and
+  `native_ml_dsa_sign` / `_verify` default to the empty external context.
 - **Hybrid signatures are domain-separated (format v2).** `HybridSignatureProvider`
   concatenated an Ed25519 and an ML-DSA-65 signature, each over the raw
   message, so either half was a valid standalone signature over that message
