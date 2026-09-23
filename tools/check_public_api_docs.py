@@ -652,7 +652,7 @@ def installed_public_headers(repo: Path) -> tuple[Path, ...]:
             "the installed-header set cannot be derived, so the declared ABI is unknown"
         )
     headers = tuple(sorted(repo / name for name in listed))
-    missing = [str(path.relative_to(repo)) for path in headers if not path.is_file()]
+    missing = [path.relative_to(repo).as_posix() for path in headers if not path.is_file()]
     if missing:
         raise RuntimeError(
             f"CMakeLists.txt installs public header(s) that do not exist: {', '.join(missing)}"

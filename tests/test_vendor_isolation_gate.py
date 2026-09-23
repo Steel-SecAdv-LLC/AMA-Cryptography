@@ -347,7 +347,8 @@ class TestShippedPackageIsClean:
         assert [f for f in findings if f.check != gate.INVENTORY] == []
         # The inventory is the native loader's run-time-chosen loads, and only
         # those: a new unprovable load elsewhere shows up here for review.
-        assert {Path(f.where.split(":")[0]).name for f in findings} <= {"pqc_backends.py"}
+        # rsplit: `where` is "path:line", and a Windows path has its own colon.
+        assert {Path(f.where.rsplit(":", 1)[0]).name for f in findings} <= {"pqc_backends.py"}
 
 
 class TestLibraryCheck:
