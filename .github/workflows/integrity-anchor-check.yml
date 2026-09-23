@@ -121,9 +121,15 @@ jobs:
           echo "pull_request: verifying the plumbing with a throwaway keypair."
 
       - name: Check that both values are configured
+        # `cond && a || b` yields b whenever a is empty, so the old spelling
+        # (`pr && throwaway || secret`) handed a pull request the REAL signing
+        # seed if the throwaway step left its value empty.  Inverted, the
+        # fallback on a pull request is the throwaway, and an unset secret on
+        # a push falls back to an unset variable, which the check below
+        # reports as missing.
         env:
-          SEED: ${{ github.event_name == 'pull_request' && env.AMA_CHECK_SEED || secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
-          ANCHOR: ${{ github.event_name == 'pull_request' && env.AMA_CHECK_ANCHOR || vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          SEED: ${{ github.event_name != 'pull_request' && secrets.AMA_INTEGRITY_SIGNING_SEED_HEX || env.AMA_CHECK_SEED }}
+          ANCHOR: ${{ github.event_name != 'pull_request' && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX || env.AMA_CHECK_ANCHOR }}
         run: |
           missing=0
           if [ -z "$SEED" ]; then
@@ -143,8 +149,8 @@ jobs:
           # line (argv is world-readable via /proc on the runner) and never
           # echoed.  GitHub masks the secret in logs regardless; this job also
           # never asks for it to be printed.
-          SEED: ${{ github.event_name == 'pull_request' && env.AMA_CHECK_SEED || secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
-          ANCHOR: ${{ github.event_name == 'pull_request' && env.AMA_CHECK_ANCHOR || vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          SEED: ${{ github.event_name != 'pull_request' && secrets.AMA_INTEGRITY_SIGNING_SEED_HEX || env.AMA_CHECK_SEED }}
+          ANCHOR: ${{ github.event_name != 'pull_request' && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX || env.AMA_CHECK_ANCHOR }}
         run: |
           python - <<'PY'
           import os

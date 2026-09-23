@@ -58,9 +58,12 @@ jobs:
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
+        # No libssl-dev here or in the two jobs below (INVARIANT-1): the
+        # Docker images already omit it, and a build that can find OpenSSL
+        # headers could pick up an accidental include without failing.
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh cmake libssl-dev ${{ matrix.cc }} ${{ matrix.cxx }}
+          .github/scripts/apt-install.sh cmake ${{ matrix.cc }} ${{ matrix.cxx }}
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -301,7 +304,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh build-essential python3-dev cmake libssl-dev
+          .github/scripts/apt-install.sh build-essential python3-dev cmake
 
       - name: Install system dependencies (macOS)
         # startsWith, not equality: this job's matrix carries both macOS
@@ -762,7 +765,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh build-essential cmake libssl-dev
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build wheel via PEP 517 (isolated build env, signed integrity)
         # `python -m build --wheel` runs the build in an isolated env that

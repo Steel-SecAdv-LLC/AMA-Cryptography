@@ -783,7 +783,10 @@ jobs:
           # / heap surface.  Running the full ctest suite under
           # Valgrind would exceed the runner timeout.
           tests="bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3 bin/test_kat"
-          expected=6
+          # Derived from the list, not typed beside it: the list grew to seven
+          # while this said 6, so a full run could never equal it.
+          set -- $tests
+          expected=$#
           ran=0
           for test in $tests; do
             if [ -x "$test" ]; then
@@ -802,7 +805,7 @@ jobs:
           done
           # Non-vacuity floor: a renamed target or a moved bin/ would otherwise
           # let this lane pass with zero invocations while the row still read
-          # "6/6" (audit Low).  Require every expected binary to have run.
+          # "N/N" (audit Low).  Require every expected binary to have run.
           if [ "$ran" -ne "$expected" ]; then
             echo "::error::Valgrind ran $ran/$expected targets — refusing to report success on a partial run."
             exit 1
