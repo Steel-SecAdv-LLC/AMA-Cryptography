@@ -38,6 +38,12 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   clean under Valgrind (`test_kat` 49/49 from the source tree, as the lane
   runs it); gcc and clang strict-warnings builds stay inside the frozen
   allowlist.
+* **The Valgrind lane's non-vacuity floor was off by one.**  Once the lane
+  built, all seven targets ran clean and the step still failed with
+  "Valgrind ran 7/6 targets": the hand-kept `expected=6` was not updated when
+  `test_kat` joined the list.  The count is now derived from the list itself,
+  so the floor keeps its purpose (every listed binary must run) and cannot
+  drift again.
 * **Copilot review of the fold.**  The static-analysis reproducible-wheel step
   still installed `build>=1.0`; it now installs `build>=1.6.1` like every
   other place the build frontend is pinned.  The provenance comment above the
