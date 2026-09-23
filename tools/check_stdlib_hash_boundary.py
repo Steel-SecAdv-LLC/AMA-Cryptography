@@ -104,7 +104,7 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
-from typing import NamedTuple, Union
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DIR = REPO_ROOT / "ama_cryptography"
@@ -164,7 +164,6 @@ _DYNAMIC_IMPORTERS = ("import_module", "__import__")
 # Static string resolution (shared with tools/check_vendor_isolation.py)
 # ---------------------------------------------------------------------------
 
-_FunctionNode = Union[ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda]
 
 #: Bound on resolver recursion; a chain deeper than this is "unresolvable".
 _MAX_RESOLVE_DEPTH = 12

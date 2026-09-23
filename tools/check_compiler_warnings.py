@@ -105,12 +105,6 @@ from typing import Iterable, NamedTuple, Sequence
 #: ``\bwarning\b`` also declines to match the plural ``2 warnings generated.``
 _WARNING_RE = re.compile(r"\bwarning\b\s*(?:C\d+\s*)?:")
 
-#: GCC quotes identifiers with U+2018/U+2019 under a UTF-8 locale and with
-#: ASCII apostrophes otherwise.  ``.{1,3}`` spans either spelling: one ASCII
-#: byte, or the three UTF-8 bytes of the curly quote.  A bracket class would
-#: not work — a C-locale reader splits a multibyte quote into single bytes.
-_QUOTE = r".{1,3}"
-
 
 class Exemption(NamedTuple):
     """One allowlist entry: a name, a matcher, and the reason it exists."""
