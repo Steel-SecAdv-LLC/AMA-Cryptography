@@ -63,13 +63,13 @@ repos:
         args: ['--line-length=100']
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.0
+    rev: v0.16.8
     hooks:
       - id: ruff
         args: ['--fix', '--exit-non-zero-on-fix']
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.3.0
+    rev: v2.3.1
     hooks:
       - id: mypy
         # --explicit-package-bases: without it this hook did not run at all on
@@ -127,7 +127,7 @@ repos:
         # A hook whose findings CI cannot reproduce is one developers learn to
         # disbelieve, so the two environments are kept in step.
         additional_dependencies:
-          - types-PyYAML==6.0.12.20260724
+          - types-PyYAML==6.0.12.20260906
           - PyYAML==6.0.3
           - pytest==9.1.1
           - types-setuptools==84.0.0.20260812

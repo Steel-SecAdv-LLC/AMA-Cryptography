@@ -454,7 +454,7 @@ def check_private_storage_is_owner_only() -> None:
     artefact.
     """
     print("private storage")
-    from ama_cryptography import _owner_only
+    import ama_cryptography._owner_only as _owner_only
     from ama_cryptography.key_management import SecureKeyStorage
     from ama_cryptography.monitoring import NonceTracker
 

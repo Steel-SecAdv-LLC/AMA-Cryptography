@@ -128,7 +128,7 @@ dev-install:
 #
 # `mypy` on PATH here was 1.19.1 from a uv-managed tool install while the
 # pinned toolchain (requirements-lock.txt, both CI images,
-# .pre-commit-config.yaml) is 2.3.0 — and [tool.mypy] sets
+# .pre-commit-config.yaml) was 2.3.0 (2.3.1 today) — and [tool.mypy] sets
 # python_version = "3.10", which mypy 1.x accepts with different semantics.
 # Measured on the merge base, over the scope ci.yml type-checks: 1.19.1 reports
 # 499 errors in 44 files where 2.3.0 reports 486 in 30.  `make lint` therefore

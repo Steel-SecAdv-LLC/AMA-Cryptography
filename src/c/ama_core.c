@@ -186,6 +186,96 @@ static uint8_t *hybrid_wrap(const uint8_t *message, size_t message_len, size_t *
     return buf;
 }
 
+#ifdef AMA_USE_NATIVE_PQC
+/**
+ * AMA_ALG_HYBRID signing: Ed25519 over the domain-wrapped message, ML-DSA-65
+ * with the domain as its FIPS 204 context.  See AMA_HYBRID_SIG_DOMAIN.  The
+ * key-length, output-size and allocation checks return before anything is
+ * written; once signing has started, a failure of either primitive wipes the
+ * whole signature buffer so no half-signature escapes.
+ */
+static ama_error_t hybrid_sign(
+    const uint8_t* message,
+    size_t message_len,
+    const uint8_t* secret_key,
+    size_t secret_key_len,
+    uint8_t* signature,
+    size_t* signature_len
+) {
+    uint8_t *wrapped;
+    size_t wrapped_len, pq_len;
+    ama_error_t rc;
+    if (secret_key_len < AMA_HYBRID_SECRET_KEY_BYTES) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (*signature_len < AMA_HYBRID_SIGNATURE_BYTES) {
+        *signature_len = AMA_HYBRID_SIGNATURE_BYTES;
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    wrapped = hybrid_wrap(message, message_len, &wrapped_len);
+    if (!wrapped) {
+        return AMA_ERROR_MEMORY;
+    }
+    rc = ama_ed25519_sign(signature, wrapped, wrapped_len, secret_key);
+    free(wrapped);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(signature, AMA_HYBRID_SIGNATURE_BYTES);
+        return rc;
+    }
+    pq_len = *signature_len - AMA_ED25519_SIGNATURE_BYTES;
+    rc = ama_dilithium_sign_ctx(signature + AMA_ED25519_SIGNATURE_BYTES, &pq_len,
+                                message, message_len,
+                                (const uint8_t *)AMA_HYBRID_SIG_DOMAIN,
+                                sizeof(AMA_HYBRID_SIG_DOMAIN) - 1,
+                                secret_key + AMA_ED25519_SECRET_KEY_BYTES);
+    if (rc != AMA_SUCCESS || pq_len != AMA_ML_DSA_65_SIGNATURE_BYTES) {
+        ama_secure_memzero(signature, AMA_HYBRID_SIGNATURE_BYTES);
+        return rc != AMA_SUCCESS ? rc : AMA_ERROR_CRYPTO;
+    }
+    *signature_len = AMA_HYBRID_SIGNATURE_BYTES;
+    return AMA_SUCCESS;
+}
+
+/**
+ * AMA_ALG_HYBRID verification: both halves must verify; both are evaluated
+ * (no short-circuit) and the verdict is AND-ed.  Inputs are public, so this
+ * is uniformity, not secrecy.
+ */
+static ama_error_t hybrid_verify(
+    const uint8_t* message,
+    size_t message_len,
+    const uint8_t* signature,
+    size_t signature_len,
+    const uint8_t* public_key,
+    size_t public_key_len
+) {
+    uint8_t *wrapped;
+    size_t wrapped_len;
+    ama_error_t rc_classical, rc_pqc;
+    if (public_key_len < AMA_HYBRID_PUBLIC_KEY_BYTES) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (signature_len != AMA_HYBRID_SIGNATURE_BYTES) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+    wrapped = hybrid_wrap(message, message_len, &wrapped_len);
+    if (!wrapped) {
+        return AMA_ERROR_MEMORY;
+    }
+    rc_classical = ama_ed25519_verify(signature, wrapped, wrapped_len, public_key);
+    free(wrapped);
+    rc_pqc = ama_dilithium_verify_ctx(message, message_len,
+                                      (const uint8_t *)AMA_HYBRID_SIG_DOMAIN,
+                                      sizeof(AMA_HYBRID_SIG_DOMAIN) - 1,
+                                      signature + AMA_ED25519_SIGNATURE_BYTES,
+                                      signature_len - AMA_ED25519_SIGNATURE_BYTES,
+                                      public_key + AMA_ED25519_PUBLIC_KEY_BYTES);
+    return (rc_classical == AMA_SUCCESS && rc_pqc == AMA_SUCCESS)
+               ? AMA_SUCCESS
+               : AMA_ERROR_VERIFY_FAILED;
+}
+#endif /* AMA_USE_NATIVE_PQC */
+
 /**
  * Get expected key sizes for algorithm
  */
@@ -395,42 +485,9 @@ ama_error_t ama_sign(
             *signature_len = AMA_ED25519_SIGNATURE_BYTES;
             return ama_ed25519_sign(signature, message, message_len, secret_key);
 
-        case AMA_ALG_HYBRID: {
-            /* Ed25519 over the domain-wrapped message, ML-DSA-65 with the
-             * domain as its FIPS 204 context.  See AMA_HYBRID_SIG_DOMAIN. */
-            uint8_t *wrapped;
-            size_t wrapped_len, pq_len;
-            ama_error_t rc;
-            if (secret_key_len < AMA_HYBRID_SECRET_KEY_BYTES) {
-                return AMA_ERROR_INVALID_PARAM;
-            }
-            if (*signature_len < AMA_HYBRID_SIGNATURE_BYTES) {
-                *signature_len = AMA_HYBRID_SIGNATURE_BYTES;
-                return AMA_ERROR_INVALID_PARAM;
-            }
-            wrapped = hybrid_wrap(message, message_len, &wrapped_len);
-            if (!wrapped) {
-                return AMA_ERROR_MEMORY;
-            }
-            rc = ama_ed25519_sign(signature, wrapped, wrapped_len, secret_key);
-            free(wrapped);
-            if (rc != AMA_SUCCESS) {
-                ama_secure_memzero(signature, AMA_HYBRID_SIGNATURE_BYTES);
-                return rc;
-            }
-            pq_len = *signature_len - AMA_ED25519_SIGNATURE_BYTES;
-            rc = ama_dilithium_sign_ctx(signature + AMA_ED25519_SIGNATURE_BYTES, &pq_len,
-                                        message, message_len,
-                                        (const uint8_t *)AMA_HYBRID_SIG_DOMAIN,
-                                        sizeof(AMA_HYBRID_SIG_DOMAIN) - 1,
-                                        secret_key + AMA_ED25519_SECRET_KEY_BYTES);
-            if (rc != AMA_SUCCESS || pq_len != AMA_ML_DSA_65_SIGNATURE_BYTES) {
-                ama_secure_memzero(signature, AMA_HYBRID_SIGNATURE_BYTES);
-                return rc != AMA_SUCCESS ? rc : AMA_ERROR_CRYPTO;
-            }
-            *signature_len = AMA_HYBRID_SIGNATURE_BYTES;
-            return AMA_SUCCESS;
-        }
+        case AMA_ALG_HYBRID:
+            return hybrid_sign(message, message_len, secret_key, secret_key_len,
+                               signature, signature_len);
 
         default:
             break;
@@ -505,35 +562,9 @@ ama_error_t ama_verify(
             return ama_ed25519_verify(signature, message, message_len,
                                       public_key);
 
-        case AMA_ALG_HYBRID: {
-            /* Both halves must verify; both are evaluated (no short-circuit)
-             * and the verdict is AND-ed.  Inputs are public, so this is
-             * uniformity, not secrecy. */
-            uint8_t *wrapped;
-            size_t wrapped_len;
-            ama_error_t rc_classical, rc_pqc;
-            if (public_key_len < AMA_HYBRID_PUBLIC_KEY_BYTES) {
-                return AMA_ERROR_INVALID_PARAM;
-            }
-            if (signature_len != AMA_HYBRID_SIGNATURE_BYTES) {
-                return AMA_ERROR_VERIFY_FAILED;
-            }
-            wrapped = hybrid_wrap(message, message_len, &wrapped_len);
-            if (!wrapped) {
-                return AMA_ERROR_MEMORY;
-            }
-            rc_classical = ama_ed25519_verify(signature, wrapped, wrapped_len, public_key);
-            free(wrapped);
-            rc_pqc = ama_dilithium_verify_ctx(message, message_len,
-                                              (const uint8_t *)AMA_HYBRID_SIG_DOMAIN,
-                                              sizeof(AMA_HYBRID_SIG_DOMAIN) - 1,
-                                              signature + AMA_ED25519_SIGNATURE_BYTES,
-                                              signature_len - AMA_ED25519_SIGNATURE_BYTES,
-                                              public_key + AMA_ED25519_PUBLIC_KEY_BYTES);
-            return (rc_classical == AMA_SUCCESS && rc_pqc == AMA_SUCCESS)
-                       ? AMA_SUCCESS
-                       : AMA_ERROR_VERIFY_FAILED;
-        }
+        case AMA_ALG_HYBRID:
+            return hybrid_verify(message, message_len, signature, signature_len,
+                                 public_key, public_key_len);
 
         default:
             break;

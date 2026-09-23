@@ -40,15 +40,16 @@ from typing import Any, Callable, Optional
 # PEP 517 build installs — the comment "enforced by setup.py's preflight check"
 # is factually accurate (Copilot review #5 / D-9-extended).
 #
-#   * setuptools >= 83.0.0:  Debian's patched setuptools 68.x raises
+#   * setuptools >= 84.0.0:  Debian's patched setuptools 68.x raises
 #     AttributeError(install_layout) deep inside pip's bdist_wheel subprocess.
 #     70.0.0 closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49; the
-#     floor is pinned at 83.0.0 to match pyproject.toml's [build-system].
-#   * wheel >= 0.47.0:        closes GHSA-8rrh-rw8j-w5fx.
-#   * cmake >= 4.4.0:         supply-chain floor (matches pyproject.toml's
+#     floor is pinned at 84.0.0 to match pyproject.toml's [build-system].
+#   * wheel >= 0.48.0:        0.47.0 closes GHSA-8rrh-rw8j-w5fx and 0.48.0
+#     closes GHSA-vgq5-9859-3mmw.
+#   * cmake >= 4.4.3:         supply-chain floor (matches pyproject.toml's
 #     [build-system].requires).  CMakeLists.txt's cmake_minimum_required is
 #     3.15, but this higher floor is enforced for supply-chain security.
-#   * Cython >= 3.2.8:        floor for the math_engine extension's
+#   * Cython >= 3.3.0:        floor for the math_engine extension's
 #     `cimport numpy` typed-memoryview surface.
 #   * numpy >= 1.24.0:        provides the `numpy.pxd` headers the Cython
 #     extension absorbs at C-compile time.
@@ -64,15 +65,15 @@ from typing import Any, Callable, Optional
 # (very old build environments), we pad the digit-only tuple to length 3
 # so 70.0+ still satisfies (70, 0, 0).
 _BUILD_REQS = {
-    "setuptools": ((83, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
-    "wheel": ((0, 47, 0), "GHSA-8rrh-rw8j-w5fx"),
+    "setuptools": ((84, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
+    "wheel": ((0, 48, 0), "GHSA-8rrh-rw8j-w5fx, GHSA-vgq5-9859-3mmw"),
     "cmake": (
-        (4, 4, 0),
+        (4, 4, 3),
         "Dependabot supply-chain floor (pyproject.toml [build-system].requires);"
         " CMakeLists.txt cmake_minimum_required is 3.15 but this higher"
         " floor is enforced for supply-chain security",
     ),
-    "Cython": ((3, 2, 8), "math_engine cimport numpy stability floor"),
+    "Cython": ((3, 3, 0), "math_engine cimport numpy stability floor"),
     "numpy": ((1, 24, 0), "numpy.pxd headers required by math_engine"),
 }
 
@@ -111,8 +112,8 @@ def _parse_version(raw: str) -> tuple[int, int, int]:
 
 _REMEDY = (
     "  python3 -m pip install --upgrade "
-    "'setuptools>=83.0.0' 'wheel>=0.47.0' 'cmake>=4.4.0' "
-    "'Cython>=3.2.8' 'numpy>=1.24.0'\n"
+    "'setuptools>=84.0.0' 'wheel>=0.48.0' 'cmake>=4.4.3' "
+    "'Cython>=3.3.0' 'numpy>=1.24.0'\n"
 )
 
 

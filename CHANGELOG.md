@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-09-22 |
+| Last Updated | 2026-09-23 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -210,6 +210,136 @@ The review pass found these commits on the branch with nothing in this file.
   ended in `except Exception: return None` and printed "PQC not available"
   for every failure. A required lane therefore reported a cause that was
   false (INVARIANT-3). The skip now carries the exception.
+
+### Ed25519 MULX kernel: builds with frame pointers; review fixes on the fold — 2026-09-23
+
+* **`src/c/x86/ama_ed25519_fe64_mulx.c` failed to compile under Clang with a
+  frame pointer.**  The Valgrind lane (`-g -O1 -fno-omit-frame-pointer`,
+  scheduled and `workflow_dispatch` only, so no PR run ever built it) failed
+  with `inline assembly requires more registers than available`: the group
+  arithmetic inlines the fused MULX blocks of
+  `internal/ama_fe64_mulx_kernel.h`, whose operands need every allocatable
+  GPR including `%rbp`.  Measured matrix: Clang 18 fails at `-O1` and `-O2`
+  with `-fno-omit-frame-pointer`; `-O0`, GCC, and the X25519 and NIST-P MULX
+  kernels are unaffected.  Frame-pointer builds are not exotic — sanitizer
+  builds and distributions that package with `-fno-omit-frame-pointer` by
+  default hit the same wall — so the fix is in `CMakeLists.txt`, not in the
+  lane: that one TU is compiled with `-fomit-frame-pointer`.  Release already
+  passes it globally, so shipped objects are unchanged.  Measured: the lane's
+  exact configuration now builds, and the lane's seven memcheck targets run
+  clean under Valgrind (`test_kat` 49/49 from the source tree, as the lane
+  runs it); gcc and clang strict-warnings builds stay inside the frozen
+  allowlist.
+* **The Valgrind lane's non-vacuity floor was off by one.**  Once the lane
+  built, all seven targets ran clean and the step still failed with
+  "Valgrind ran 7/6 targets": the hand-kept `expected=6` was not updated when
+  `test_kat` joined the list.  The count is now derived from the list itself,
+  so the floor keeps its purpose (every listed binary must run) and cannot
+  drift again.
+* **Copilot review of the fold.**  The static-analysis reproducible-wheel step
+  still installed `build>=1.0`; it now installs `build>=1.6.1` like every
+  other place the build frontend is pinned.  The provenance comment above the
+  first cibuildwheel pin in `release.yml` named v4.1.1; it now names v4.2.1,
+  the tag `e090b81e` peels to.  The README Cython badge and the `[math]`
+  description said 3.2.8; they now say 3.3.0, the floor `setup.py` enforces.
+  `hybrid_sign()`'s comment overstated its cleanup: the parameter and
+  allocation checks return before anything is written, and only a failure of
+  a signing primitive wipes the buffer; the comment now says exactly that.
+
+### The two CodeQL notes open on the release-train head, fixed at source — 2026-09-23
+
+The default-branch ruleset enforces `code_scanning` with CodeQL
+`alerts_threshold: "all"`, so note-level results block the merge even though
+`tools/check_codeql_severity.py` (which fails CI on error-level results only)
+passes.  The two notes reported on #394's head were both real and are fixed
+at source, with no suppression and no dismissal:
+
+* **`py/import-and-import-from` in `tools/wheel_smoke_test.py`.**  The
+  private-storage check imported `from ama_cryptography import _owner_only`
+  while the module already imports `ama_cryptography` — the exact mix the
+  file's own header comment says it avoids.  Now
+  `import ama_cryptography._owner_only as _owner_only`; the object bound is
+  identical.
+* **Long switch case in `src/c/ama_core.c`.**  The `AMA_ALG_HYBRID` arm of
+  `ama_sign` ran to 36 lines.  Its body moved verbatim into a static
+  `hybrid_sign()`, and the verify arm into `hybrid_verify()` for symmetry,
+  both inside `#ifdef AMA_USE_NATIVE_PQC` like their only callers.  No
+  statement changed: same parameter checks in the same order, same
+  wipe-on-failure of the whole signature buffer, same no-short-circuit AND in
+  verification.  Measured: gcc and clang, both the unoptimized and the
+  Release+LTO strict-warnings configurations, build with no warning outside
+  the frozen allowlist (`tools/check_compiler_warnings.py`); ctest 139/139
+  (skips are SIMD slots this CPU lacks), including `test_core` and
+  `test_hybrid_sig`; the `AMA_USE_NATIVE_PQC=OFF` guard configuration builds.
+  Library LoC re-measured (`tools/update_docs.py --loc`).
+
+### Dependencies: Dependabot #401 and #402 folded into the release train — 2026-09-23
+
+Both grouped Dependabot PRs are applied here so 5.0.0 ships current pins and
+the two PRs close as superseded. Both were red on `main` for reasons this
+branch already fixes: #402 through `main`'s `# v4` / `# v7` pin comments,
+which `tools/check_action_pins.py --strict` rejects because those SHAs are
+tagged `v4.2.0` / `v7.3.0` (the exact tags are used here); #401 through
+`integrity-anchor-check.yml` asking a Dependabot run for
+`AMA_INTEGRITY_SIGNING_SEED_HEX`, where this branch signs pull-request runs
+with a throwaway keypair. All are dev/build/CI-only; the library keeps zero
+runtime dependencies (INVARIANT-1).
+
+**SHA-pinned actions (#401).** `codecov/codecov-action` v7.0.0 → v7.1.1,
+`docker/setup-buildx-action` v4.2.0 → v4.4.1, `docker/login-action` v4.5.2 →
+v4.6.0, `docker/build-push-action` v7.3.0 → v7.4.0, `pypa/cibuildwheel`
+v4.1.1 → v4.2.1, `sigstore/gh-action-sigstore-python` v3.4.0 → v3.5.0,
+`pypa/gh-action-pypi-publish` v1.14.1 → v1.14.2,
+`softprops/action-gh-release` v3.0.2 → v3.0.3, `trufflesecurity/trufflehog`
+v3.96.0 → v3.97.5, `github/codeql-action` (init + analyze) v4.37.3 → v4.38.1.
+Every comment names the exact tag its SHA is under (`git ls-remote`);
+`check_action_pins.py --strict` resolves 142/142. cibuildwheel 4.2 builds
+CPython 3.15 by default; the release matrix is unaffected because
+`CIBW_BUILD` names cp310–cp314 in both `release.yml` blocks.
+
+**Build toolchain, floors moved in lockstep (#402).** `setuptools` 83.0.0 →
+84.0.0, `wheel` 0.47.0 → 0.48.0, `cmake` 4.4.0 → 4.4.3, `Cython` 3.2.8 →
+3.3.0, `build` 1.5.0 → 1.6.1 — in `[build-system].requires`, the `[math]` and
+`[dev]` extras, `setup.py`'s preflight tuples and remedy hint,
+`requirements-dev.txt`, `requirements-lock.txt`, the `release.yml`
+before-build commands, the `static-analysis.yml` and
+`integrity-anchor-check.yml` installs, `docker/Dockerfile.alpine` (which had
+drifted to setuptools 78.1.1 / cmake 4.3.2 / Cython 3.2.4) and the README's
+source-install prerequisites. Dependabot had raised `requirements-dev.txt`
+and rewritten the pyproject *comment* to 84.0.0 / 0.48.0 while leaving
+`[build-system].requires` and the preflight at 83.0.0 / 0.47.0. The floors
+are raised rather than held because the documented floor is "the latest
+baseline" and the cmake floor the "Dependabot supply-chain floor"; wheel
+0.48.0 also fixes GHSA-vgq5-9859-3mmw (`wheel convert` path traversal).
+Measured: an isolated `pip install -e .[dev]` and a `--no-isolation` wheel
+build at exactly the new floors both succeed, and the preflight refuses
+setuptools 83.0.0, wheel 0.47.0, Cython 3.2.9 and cmake 4.4.0 one at a time.
+
+**Lint and test toolchain (#402).** `ruff` 0.16.0 → 0.16.8, `mypy` 2.3.0 →
+2.3.1, `types-PyYAML` → 6.0.12.20260906, `hypothesis` 6.161.8 → 6.168.0 —
+moved together in the lock, `[dev]`, `requirements-dev.txt`, both CI lint
+jobs and `.pre-commit-config.yaml`. ruff 0.16.8 adds no finding; mypy 2.3.1
+`--strict` over the CI scope reports none in 385 files, and the Windows-only
+`INTERNAL ERROR` on `benchmarks/generate_competitive.py` recorded in the tenth
+verification pass does not reproduce on Linux, where the pinned lint jobs run.
+Lock-only transitives: `coverage` 7.16.1, `pyproject_hooks` 1.3.3,
+`ast_serialize` 0.11.2, `click` 8.5.0, `librt` 0.15.0, `packaging` 26.3,
+`platformdirs` 4.11.10, `Pygments` 2.21.0. The lock is still the exact
+closure: a clean-venv install of it plus `requirements-dev.txt` freezes back
+to it with pip the only addition, and `pip-audit --strict` finds nothing.
+
+**Not taken.** `pytest-benchmark` and the lock rows for `pytest-timeout`,
+`pytest-xdist`, `execnet`, `py-cpuinfo` and `scipy` — removed on this branch,
+not re-added. `PyKCS11>=1.5.20` — the `[hsm]` extra carries a per-platform
+split (`!=1.5.19` on win32) pinned by `tests/test_hsm_integration.py`, and
+`>=1.5.18` already admits 1.5.20.
+
+**Auto-docs (#392).** `tools/update_docs.py`, run on this tree as
+`auto-docs.yml` runs it, rewrites nothing but the `Last Updated` stamp in
+`wiki/Security-Model.md`, which it sets to the run date on every run; that
+stamp is committed. #392's floor cells were generated from `main`'s pre-5.0
+`benchmarks/baseline.json` and its date stamp predates this branch's 5.0.0
+wiki, so it is obsolete, not merely stale.
 
 ### Second pass over the expanded-key work: two defects, four unprotected guards — 2026-09-22
 

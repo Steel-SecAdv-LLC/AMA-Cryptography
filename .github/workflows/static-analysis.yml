@@ -187,7 +187,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd  # v4.38.1
         with:
           languages: c-cpp, python
           queries: security-and-quality
@@ -213,7 +213,7 @@ jobs:
         # `category: "/language:c-cpp"` stamped the python run's upload with
         # the c-cpp label as well, so both languages' alerts filed under one
         # analysis identity.
-        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd  # v4.38.1
         with:
           # Also write the SARIF locally so the severity gate below can read
           # it.  `upload: always` keeps the alerts going to code scanning as
@@ -783,10 +783,10 @@ jobs:
           # / heap surface.  Running the full ctest suite under
           # Valgrind would exceed the runner timeout.
           tests="bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3 bin/test_kat"
-          # Derived from the list, not typed beside it: the list grew to seven
-          # while this said 6, so a full run could never equal it.
-          set -- $tests
-          expected=$#
+          # Counted from the list rather than written down: a hand-kept count
+          # drifted to 6 when test_kat made the list 7, so a fully clean run
+          # reported "7/6" and failed.
+          expected=$(set -- $tests; echo $#)
           ran=0
           for test in $tests; do
             if [ -x "$test" ]; then
@@ -805,7 +805,7 @@ jobs:
           done
           # Non-vacuity floor: a renamed target or a moved bin/ would otherwise
           # let this lane pass with zero invocations while the row still read
-          # "N/N" (audit Low).  Require every expected binary to have run.
+          # "N/N" (audit Low).  Require every listed binary to have run.
           if [ "$ran" -ne "$expected" ]; then
             echo "::error::Valgrind ran $ran/$expected targets — refusing to report success on a partial run."
             exit 1
@@ -1074,9 +1074,9 @@ jobs:
           # image is designed for.
           /opt/python/cp311-cp311/bin/python -m pip install --upgrade pip
           /opt/python/cp311-cp311/bin/pip install \
-            'build>=1.0' \
-            'setuptools>=83.0.0' 'wheel>=0.47.0' \
-            'cmake>=4.4.0' 'Cython>=3.2.8' 'numpy>=1.24.0'
+            'build>=1.6.1' \
+            'setuptools>=84.0.0' 'wheel>=0.48.0' \
+            'cmake>=4.4.3' 'Cython>=3.3.0' 'numpy>=1.24.0'
           # Front-load the manylinux Python on PATH so subsequent
           # steps see `python` / `pip` as the pinned 3.11 from the
           # base image (and not a stray host Python that GitHub's
