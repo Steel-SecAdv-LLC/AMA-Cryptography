@@ -317,8 +317,8 @@ static inline void fe51_sub(fe51 h, const fe51 f, const fe51 g) {
  * sites are inside that bound: an interval model over every group-law
  * site (tests/test_fe51_lazy_reduction_bounds.py) puts the tightest,
  * ge_dbl's E*F, at 19*c4 = 0xF0780000000164B2 in the per-limb worst case,
- * 6.5%% below 2^64.  (An earlier revision of this comment said "~16%%";
- * that figure was not derived from the limb bounds.)
+ * 6.1% below 2^64.  (Earlier revisions of this comment said "~16%" and
+ * "6.5%"; neither is the figure the limb bounds give.)
  * So a subtraction whose result feeds a multiply only needs to avoid
  * underflow, which a bias of k*p (k*p ≡ 0 mod p) provides, and can leave the
  * carry to the multiplier's own reduction.  That turns a ~15-cycle dependent
@@ -370,18 +370,6 @@ static inline void fe51_neg(fe51 h, const fe51 f) {
     fe51 zero;
     fe51_0(zero);
     fe51_sub(h, zero, f);
-}
-
-/**
- * Carry/reduce: bring limbs back into [0, 2^51) range.
- */
-static inline void fe51_carry(fe51 h) {
-    uint64_t c;
-    c = h[0] >> 51; h[1] += c; h[0] &= FE51_MASK51;
-    c = h[1] >> 51; h[2] += c; h[1] &= FE51_MASK51;
-    c = h[2] >> 51; h[3] += c; h[2] &= FE51_MASK51;
-    c = h[3] >> 51; h[4] += c; h[3] &= FE51_MASK51;
-    c = h[4] >> 51; h[0] += c * 19; h[4] &= FE51_MASK51;
 }
 
 /**
@@ -540,47 +528,9 @@ FE51_MAYBE_UNUSED void fe51_invert(fe51 out, const fe51 z) {
     fe51_mul(out, t1, t0);                    /* out = z^(2^255-21) = z^(p-2) */
 }
 
-/** Compute z^(2^252 - 3), used for point decompression (sqrt of u/v). */
-FE51_MAYBE_UNUSED void fe51_pow22523(fe51 out, const fe51 z) {
-    fe51 t0, t1, t2, t3;
-    int i;
-
-    fe51_sq(t0, z);
-    fe51_sq(t1, t0);
-    fe51_sq(t1, t1);
-    fe51_mul(t1, z, t1);
-    fe51_mul(t0, t0, t1);
-    fe51_sq(t2, t0);
-    fe51_mul(t1, t1, t2);
-    fe51_sq(t2, t1);
-    for (i = 0; i < 4; i++) fe51_sq(t2, t2);
-    fe51_mul(t1, t2, t1);
-    fe51_sq(t2, t1);
-    for (i = 0; i < 9; i++) fe51_sq(t2, t2);
-    fe51_mul(t2, t2, t1);
-    fe51_sq(t3, t2);
-    for (i = 0; i < 19; i++) fe51_sq(t3, t3);
-    fe51_mul(t2, t3, t2);
-    fe51_sq(t2, t2);
-    for (i = 0; i < 9; i++) fe51_sq(t2, t2);
-    fe51_mul(t1, t2, t1);
-    fe51_sq(t2, t1);
-    for (i = 0; i < 49; i++) fe51_sq(t2, t2);
-    fe51_mul(t2, t2, t1);
-    fe51_sq(t3, t2);
-    for (i = 0; i < 99; i++) fe51_sq(t3, t3);
-    fe51_mul(t2, t3, t2);
-    fe51_sq(t2, t2);
-    for (i = 0; i < 49; i++) fe51_sq(t2, t2);
-    fe51_mul(t1, t2, t1);
-    fe51_sq(t1, t1);
-    fe51_sq(t1, t1);
-    fe51_mul(out, t1, z);   /* z^(2^252-3) */
-}
-
-/* fe51_isnegative / fe51_iszero were removed here: the group template
- * (ama_ed25519_ge.h) defines its own fe_isnegative / fe_iszero and nothing
- * in the tree called these.  They also carried a bare __attribute__((unused))
+/* fe51_isnegative / fe51_iszero / fe51_pow22523 / fe51_carry were removed
+ * here: the group template (ama_ed25519_ge.h) defines its own counterparts
+ * and nothing in the tree called these.  They also carried a bare __attribute__((unused))
  * that does not compile under MSVC, which this header must now build on. */
 
 #endif /* AMA_FE51_AVAILABLE: __int128 or MSVC x64 / ARM64 */

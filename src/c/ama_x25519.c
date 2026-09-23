@@ -70,34 +70,6 @@
 #include "internal/ama_x25519_fe64_mulx.h"
 #endif
 
-/* Benchmark/test-only runtime override for the MULX+ADX gate.
- *
- *   -1 = auto (default; honour CPUID)
- *    0 = force off (pure-C fe64 even when MULX kernel is built + CPUID OK)
- *    1 = force on  (only effective when the kernel TU is linked AND
- *                   CPUID exposes BMI2+ADX; otherwise no-op)
- *
- * Set via the documented `ama_x25519_set_mulx_override()` public API
- * (`include/ama_cryptography.h`). The accessor is consumed only by the
- * `x25519_scalarmult` runtime branch below; non-fe64 build paths
- * ignore it entirely.
- *
- * Storage is a plain `int`, not `_Atomic int`, by design: the public API
- * contract (header docs) restricts the setter to single-threaded harness
- * / test-setup use with no concurrent scalarmult work in flight, so the
- * cost of an `atomic_load_explicit(..., memory_order_relaxed)` on the
- * scalarmult hot path is not justified. The plain `int` does NOT make
- * unsynchronised concurrent reads + writes safe — that would be a C-
- * language-level data race (UB) regardless of how the underlying word
- * write happens to be implemented at the architecture level. The
- * safety guarantee here is the single-threaded contract, not any
- * architecture-atomicity claim. */
-static int ama_x25519_mulx_override = -1;
-
-static inline int ama_x25519_mulx_override_get(void) {
-    return ama_x25519_mulx_override;
-}
-
 /* Test-only observation of which kernel the most recent fe64 scalarmult
  * actually selected. -1 = no fe64 scalarmult has run yet (or this build has
  * no fe64/MULX path), 0 = pure-C fe64 schoolbook, 1 = MULX+ADX kernel.
@@ -156,6 +128,36 @@ AMA_API int ama_x25519_mulx_last_used_get(void) {
  * `x25519_scalarmult_{fe51,fe64}` symbols into a single test binary. */
 #ifndef AMA_X25519_LADDER_LINKAGE
 #  define AMA_X25519_LADDER_LINKAGE static
+#endif
+
+/* Benchmark/test-only runtime override for the MULX+ADX gate.
+ *
+ *   -1 = auto (default; honour CPUID)
+ *    0 = force off (pure-C fe64 even when MULX kernel is built + CPUID OK)
+ *    1 = force on  (only effective when the kernel TU is linked AND
+ *                   CPUID exposes BMI2+ADX; otherwise no-op)
+ *
+ * Set via the documented `ama_x25519_set_mulx_override()` public API
+ * (`include/ama_cryptography.h`). It is read only by the
+ * `x25519_scalarmult` runtime branch below and by the public getter;
+ * non-fe64 build paths ignore it entirely.
+ *
+ * Storage is a plain `int`, not `_Atomic int`, by design: the public API
+ * contract (header docs) restricts the setter to single-threaded harness
+ * / test-setup use with no concurrent scalarmult work in flight, so the
+ * cost of an `atomic_load_explicit(..., memory_order_relaxed)` on the
+ * scalarmult hot path is not justified. The plain `int` does NOT make
+ * unsynchronised concurrent reads + writes safe — that would be a C-
+ * language-level data race (UB) regardless of how the underlying word
+ * write happens to be implemented at the architecture level. The
+ * safety guarantee here is the single-threaded contract, not any
+ * architecture-atomicity claim. */
+#if !defined(AMA_X25519_NO_PUBLIC_API) || \
+    (defined(AMA_X25519_FIELD_FE64) && defined(AMA_HAVE_X25519_FE64_MULX_IMPL))
+/* Defined only where something reads it: the public setter/getter, or the
+ * fe64 MULX branch.  The equivalence TUs that compile this file without the
+ * public API on another field path have neither. */
+static int ama_x25519_mulx_override = -1;
 #endif
 
 /* ============================================================================
@@ -417,7 +419,7 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32],
      * `ama_cpuid_has_x25519_mulx()` is evaluated once and cached in
      * `has_mulx` so the hot path makes a single CPUID-result load even
      * when both the override decision and the safety guard need it. */
-    int override_mode = ama_x25519_mulx_override_get();
+    int override_mode = ama_x25519_mulx_override;
     int has_mulx = ama_cpuid_has_x25519_mulx();
     int use_mulx = (override_mode == -1) ? has_mulx : (override_mode != 0);
     if (use_mulx && has_mulx) {

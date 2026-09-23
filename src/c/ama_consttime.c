@@ -12,6 +12,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_testing_exports.h"
+#include "internal/ama_stack_wipe.h"
 #include <string.h>
 #include <stdint.h>
 #ifdef _MSC_VER
@@ -101,13 +102,20 @@ int ama_consttime_memcmp(const void* a, const void* b, size_t len) {
  * This is a backstop, not a substitute for scrubbing named buffers.
  */
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline, no_sanitize_address))
+__attribute__((noinline))
 #elif defined(_MSC_VER)
 __declspec(noinline)
 #endif
-AMA_API void ama_secure_stack_wipe(void) {
-    unsigned char frame[AMA_STACK_WIPE_BYTES];
-    memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame — dead stack, possibly secret; the barrier below makes the write non-elidable, and memset keeps the wide-store path (29 ns here against 90-127 ns for the volatile word loop)
+void ama_stack_wipe_below(size_t bytes) {
+    /* The frame is always the maximum depth; only the `bytes` nearest the
+     * caller are written, so the public 4 KiB wipe costs what it always did.
+     * The array's high end is adjacent to the caller's frame on every stack
+     * that grows downward, which is every target this library builds for. */
+    unsigned char frame[AMA_STACK_WIPE_MAX_BYTES];
+    if (bytes > sizeof frame) {
+        bytes = sizeof frame;
+    }
+    memset(frame + (sizeof frame - bytes), 0, bytes);  // SCRUB-BARRIER: frame — dead stack, possibly secret; the barrier below makes the write non-elidable, and memset keeps the wide-store path (29 ns here against 90-127 ns for the volatile word loop)
     /* Make the write observable so it survives dead-store elimination, and
      * keep the array's address escaping so the frame is really allocated. */
 #ifdef _MSC_VER
@@ -115,6 +123,10 @@ AMA_API void ama_secure_stack_wipe(void) {
 #else
     __asm__ __volatile__("" : : "r"(frame) : "memory");
 #endif
+}
+
+AMA_API void ama_secure_stack_wipe(void) {
+    ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
 }
 
 void ama_secure_memzero(void* ptr, size_t len) {

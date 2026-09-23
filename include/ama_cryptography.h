@@ -1492,7 +1492,12 @@ AMA_API ama_error_t ama_ed25519_sign_expanded(
  * @param public_key    Caller MUST supply exactly 32 readable bytes. Same
  *                      terms as `signature`: no length parameter, short is
  *                      undefined behaviour, long is ignored not rejected.
- * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid,
+ *         AMA_ERROR_INVALID_PARAM for a NULL `signature` or `public_key`, a
+ *         NULL `message` with a non-zero `message_len`, or a `message_len`
+ *         whose working buffer size would overflow, and AMA_ERROR_MEMORY
+ *         when a message longer than the 4 KiB stack buffer cannot be
+ *         allocated for.  Only AMA_SUCCESS means "verified".
  *
  * See the fixed-length buffer contract above. Note that a rejected
  * signature and a malformed-length signature are NOT distinguishable
@@ -1584,8 +1589,10 @@ typedef struct {
  *                  NULL `signature`, a NULL `public_key`, or a NULL
  *                  `message` with a non-zero `message_len` is rejected as
  *                  an invalid entry (`results[i] = 0`, and the call returns
- *                  `AMA_ERROR_VERIFY_FAILED`), which is the same verdict
- *                  `ama_ed25519_verify` gives those arguments. Until this
+ *                  `AMA_ERROR_VERIFY_FAILED`): every non-success return of
+ *                  `ama_ed25519_verify` for an entry, its
+ *                  `AMA_ERROR_INVALID_PARAM` and `AMA_ERROR_MEMORY`
+ *                  included, is recorded as that entry failing. Until this
  *                  was added the since-removed vendored backend dereferenced
  *                  them and took SIGSEGV while the in-tree backend rejected
  *                  cleanly, so the same call crashed on x86-64 and returned
@@ -1608,7 +1615,8 @@ typedef struct {
  * entry is therefore exactly the single-verify verdict for the same 64 bytes:
  * there is no separate aggregate predicate, no randomizer draw and no
  * working-array allocation, and so no `AMA_ERROR_MEMORY` or `AMA_ERROR_CRYPTO`
- * return. A caller MUST treat any non-`AMA_SUCCESS` return as "at least one
+ * return (an entry whose own verification could not allocate is an entry
+ * that did not verify). A caller MUST treat any non-`AMA_SUCCESS` return as "at least one
  * entry in this batch did not verify" and read `results` per entry rather than
  * switching only on `AMA_ERROR_VERIFY_FAILED`.
  *
@@ -1983,7 +1991,9 @@ AMA_API ama_error_t ama_frost_round2_sign(
  * @param message_len              Message length
  * @param group_public_key         32-byte group public key
  * @return AMA_SUCCESS if the share satisfies the relation;
- *         AMA_ERROR_VERIFY_FAILED if it does not;
+ *         AMA_ERROR_VERIFY_FAILED if it does not, if `sig_share` is not a
+ *         canonical scalar (0 <= z < L, RFC 9591 section 4.1), or if a
+ *         commitment or the public share is non-canonical or small-order;
  *         AMA_ERROR_INVALID_PARAM on a NULL argument, a signer set that does
  *         not contain participant_index, or a point that does not decode.
  */

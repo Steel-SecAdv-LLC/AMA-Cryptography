@@ -268,7 +268,7 @@ static void test_public_api(void) {
         unsigned i;
 
         for (i = 0; i < sizeof(digest); i++) {
-            digest[i] = (uint8_t)(i * 7u + idx);
+            digest[i] = (uint8_t)(i * 7u + (unsigned)idx);
         }
 
         CHECK(ama_nistp_keypair(curve, priv, pub) == AMA_SUCCESS, "keypair failed");

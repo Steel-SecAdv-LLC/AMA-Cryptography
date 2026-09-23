@@ -81,11 +81,9 @@
  * ============================================================================ */
 
 #ifdef __SIZEOF_INT128__
-/* -Wpedantic reports the GNU extension here; the warning is allowlisted
- * centrally in tools/check_compiler_warnings.py beside the fe51/fe64 sites
- * rather than silenced with a pragma (INVARIANT-13 forbids suppressions in
- * this tree). */
-typedef unsigned __int128 nistp_u128;
+/* `__extension__` declares the GNU type as intended, as fe51.h and
+ * internal/ama_wide_mul.h do, so -Wpedantic has nothing to report. */
+__extension__ typedef unsigned __int128 nistp_u128;
 #define NISTP_HAVE_U128 1
 #endif
 

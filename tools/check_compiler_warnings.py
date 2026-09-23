@@ -57,11 +57,6 @@ What is allowed, and why
 (There is no vendored C source: the tree's one vendored backend was removed
 in the twenty-first maintenance pass, and its exemption with it.)
 
-``fe51.h`` / ``fe64.h`` / ``ama_nistp.c`` / ``ama_secp256k1.c`` —
-``ISO C does not support '__int128' types``
-    ``-Wpedantic`` under GCC.  The 128-bit limbs are what the field
-    arithmetic is built on; there is no ISO C spelling of them.
-
 ``x86/ama_nistp_mont_mulx.c`` — ``string literal of length``
     ``-Woverlength-strings`` under clang.  One atomic ``asm()`` block:
     splitting the Montgomery kernel into several ``asm`` statements would
@@ -127,36 +122,17 @@ class Exemption(NamedTuple):
 
 EXEMPTIONS: tuple[Exemption, ...] = (
     Exemption(
-        name="int128-extension",
+        name="overlength-asm-literal",
         # `.*` between the file name and the diagnostic text rather than the
         # exact `:LINE:COL: warning: ` bridge.  Under `make -j N` two compiler
         # processes share one pipe and their stderr can INTERLEAVE inside a
         # single line — observed verbatim in a clean parallel build of this
-        # tree, where two identical -Woverlength-strings diagnostics merged
-        # into `...mont_mulx.c...mont_mulx.c::161161::99::  warning: warning:
-        # string literal...`.  A position-exact pattern stops matching, so an
-        # allowlisted warning is reported as a violation and the gate goes red
-        # for a reason that has nothing to do with the code.  The build steps
-        # now pass `-Otarget` to serialise Make's output, and this pattern is
-        # the defence in depth for any generator that does not.  It is not
-        # loose: the file name AND `warning:` AND the specific diagnostic text
-        # must all still appear on the line.
-        pattern=re.compile(
-            r"(?:fe(?:51|64)\.h|ama_nistp\.c|ama_secp256k1\.c).*warning:.*ISO C does not support "
-            rf"{_QUOTE}__int128{_QUOTE} types"
-        ),
-        reason=(
-            "-Wpedantic under GCC.  The 128-bit limbs are what the X25519 / "
-            "Ed25519 field arithmetic is built on, and the NIST P-curve and "
-            "secp256k1 units widen through the same type; ISO C has no "
-            "spelling for it.  ama_nistp.c and ama_secp256k1.c used to hide "
-            "the warning with a diagnostic pragma, which INVARIANT-13 forbids "
-            "in src/c; the allowlist is the reviewed place for it."
-        ),
-    ),
-    Exemption(
-        name="overlength-asm-literal",
-        # Same interleaving tolerance as int128-extension above.
+        # tree, where two identical diagnostics merged into
+        # `...mont_mulx.c...mont_mulx.c::161161::99::  warning: warning:
+        # string literal...`.  The build steps pass `-Otarget` to serialise
+        # Make's output; this is the defence for any generator that does not.
+        # It is not loose: the file name AND `warning:` AND the specific
+        # diagnostic text must all still appear on the line.
         pattern=re.compile(r"ama_nistp_mont_mulx\.c.*warning:.*string literal of length"),
         reason=(
             "-Woverlength-strings under clang.  One atomic asm() block; "

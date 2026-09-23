@@ -661,26 +661,27 @@ suppression states a fact rather than a hope.
 performs — and fails on the presence of `NOLINT*`, `cppcheck-suppress`,
 `nosemgrep`, `coverity[` or `LINTED`, and, since the twenty-seventh pass, of
 the compiler- and sanitizer-level forms too: `#pragma GCC/clang diagnostic
-ignored`, MSVC `#pragma warning(disable|suppress)`, `no_sanitize*` attributes
-and `optnone`. It used to recognise the analyser comment markers only, so the
-tree carried two `-Wpedantic` pragmas and a `no_sanitize_address` while the
-gate reported that it carried none. The pragmas are gone (the warning they hid
-is allowlisted centrally in `tools/check_compiler_warnings.py`, beside the
-`fe51.h`/`fe64.h` sites it already covered). There is no justification escape
+ignored` and its `_Pragma(...)` operator form, MSVC
+`#pragma warning(disable|suppress)`, `#pragma GCC optimize`/`clang optimize
+off`, `no_sanitize*` and `disable_sanitizer_instrumentation` attributes, and
+`optnone` in any attribute position or as `[[clang::optnone]]`. It used to
+recognise the analyser comment markers only, so the tree carried two `-Wpedantic` pragmas and a `no_sanitize_address` while the
+gate reported that it carried none. The pragmas are gone, and so is the
+warning they hid: every `__int128` declaration carries `__extension__`, and the
+compiler-warning gate's `int128-extension` allowlist entry was deleted with
+it. There is no justification escape
 hatch, because that is what "regardless of justification" means. It fails
 closed on an empty scope: a glob that matches nothing is a checker fault, not
 a clean tree.
 
-**One exception is recorded: `no_sanitize_address` on `ama_secure_stack_wipe`
-(`src/c/ama_consttime.c`).** The function zeroes, by address, the stack region
-a just-returned callee used — the only way to reach the compiler's unnamed
-copies of key material (INVARIANT-6) — and that access is exactly what
-AddressSanitizer instruments stack frames to catch, so under ASan the scrub
-would be reported as the fault it deliberately resembles. The gate carries it
-as a per-site entry keyed by file and marker, prints it in its verdict, and
-fails if the entry ever stops matching, so the register cannot outlive the
-marker. Recording it is the point: an absolute "none" that omits a live one
-misleads exactly as a stale register does.
+**No exception is recorded.** The twenty-seventh pass kept one —
+`no_sanitize_address` on `ama_secure_stack_wipe` — on the stated ground that
+AddressSanitizer would report the scrub as the fault it resembles. That
+ground was never measured, and it is false: the function writes only its own
+local array, which is always a valid access. With the attribute removed the
+clang ASan+UBSan build passes all of `ctest` (140/140, including
+`detect_stack_use_after_return=1`), so the attribute and the gate's exemption
+register were both deleted.
 
 *The portability pass* covers every tracked Python file and fails on a
 `# type: ignore` sitting inside an `except ImportError` whose `try` imports a

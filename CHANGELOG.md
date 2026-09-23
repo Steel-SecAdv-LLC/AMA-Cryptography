@@ -59,6 +59,75 @@ Every new test below fails against the code it replaces (AGENTS.md §6.2).
 - **Smaller fixes.** An artefact without `INTEGRITY_DIGEST_HEX` is refused like
   an empty one; `delete_key` overwrites the key's own bytes in place instead of
   truncating first; the unused `_c_buffer_view` and a stale docstring are gone.
+- **Key residue on the dead stack (INVARIANT-6).**
+  - *Ed25519.* The residue probe now also searches the clamped scalar as the
+    21-bit limbs the comb reads it in, and it covers `keypair`. It found
+    copies after `keypair` and `sign` that the 4 KiB wipe missed under
+    AArch64 UBSan (4.7 KiB down). Ed25519's four secret entry points now
+    wipe 8 KiB through an internal `ama_stack_wipe_below()`. The public
+    `ama_secure_stack_wipe()` still wipes 4 KiB, so the AEAD cost is
+    unchanged.
+  - *Ascon-AEAD128.* It had no wipe at all, while the header said every AEAD
+    entry point had one. Measured against the shipped `.so`: one key word
+    left after an encrypt and one to two after a rejected decrypt, all in
+    the entry point's own frame. The bodies now run in noinline workers, and
+    the public functions wipe after they return.
+  - *The AEAD probe.* It now calls each AEAD below a 512-byte gap, so its
+    own frame can no longer overwrite the bytes it reads. Both probes link
+    the shared library instead of the LTO test archive, which re-optimised
+    Ascon together with the harness and hid the leak. The Ascon reject-path
+    check and the Ed25519 keypair/sign checks fail against the unfixed code.
+- **FROST.**
+  - *Canonical `z_i`.* A share re-spelled as `z_i + L` passed
+    `ama_frost_verify_share` and `ama_frost_aggregate`: `[z+L]B` is `[z]B`,
+    and the sum reduces the extra `L` away. Shares are now required to be
+    canonical, `0 <= z < L` (RFC 9591 §4.1).
+  - *Blame for undecodable commitments.* Aggregation built `R` before
+    checking any share, so an undecodable commitment aborted anonymously
+    with `bad_participant_index = 0`, against the header's contract. Every
+    commitment is now admitted first, and the failure is attributed.
+  - *Binding factors.* Aggregation hashes the commitment list once per
+    signer instead of twice.
+  - Both new rows fail against the old code.
+- **`AMA_DISPATCH_ONLY` pins survive demotion.** Five pins refused
+  (UNSUPPORTED, with a false "CPU lacks the feature" diagnostic) once
+  auto-tune or an env opt-out had cleared the default slot:
+  - `sha3-avx512x4`, `kyber-sve2`, `sha3-sve2` and `dilithium-ntt-sve2`,
+    after auto-tune demotion;
+  - `chacha20-neon`, under `AMA_DISPATCH_NO_CHACHA_AVX2`.
+
+  They now resolve on the probed tier, as the AVX2 and NEON NTT pins already
+  did. A new AArch64 CTest case pins the opt-out path. The setuid branch of
+  the cache-file diagnostic was unreachable (`dispatch_getenv` already
+  returns NULL there) and is gone.
+- **Strict warnings, at source.**
+  - `-Wsign-conversion` was off in every strict CI lane. Its reports in
+    `ama_aes_gcm.c`, `ama_cpuid.c`, `ama_kyber.c`,
+    `avx2/ama_dilithium_avx2.c` and `tests/c/test_nistp.c` are fixed, and
+    the flag is on in all six lane configurations, measured clean locally.
+  - `__int128` is declared with `__extension__` at every site, so the
+    `int128-extension` allowlist entry is deleted.
+  - A strict clang build found an unused static in `ama_x25519.c` without
+    the MULX define, and two dead NEON functions (`blake2b_g_neon`,
+    `caddq_neon`). All three are fixed.
+- **INVARIANT-13 exception retracted (§6.6).** `no_sanitize_address` on
+  `ama_secure_stack_wipe` was justified by an ASan false positive that never
+  existed: the function writes only its own array, and the ASan+UBSan `ctest`
+  passes 140/140 without the attribute. The attribute and the gate's
+  exemption register are deleted. The gate also now recognises `_Pragma(...)`,
+  `#pragma GCC optimize`, `disable_sanitizer_instrumentation` and `optnone` in
+  any attribute position.
+- **Derived counts regenerate.** `update_docs.py --counts` (and so
+  `refresh_derived_docs.py`) now rewrites the C-suite and source-inventory
+  counts with the gate's own patterns and measurements; they used to be
+  hand-edited in four documents.
+- **Ed25519 lows.**
+  - The two wNAF recoders are merged into one.
+  - Unused `fe51_carry` and `fe51_pow22523` are deleted.
+  - The header's `verify` / `batch_verify` return documentation matches the
+    code.
+  - Stale comments are corrected: select width, safegcd's removed fallback,
+    the 6.1% fold margin (was "6.5%").
 
 ### Second pass over the expanded-key work: two defects, four unprotected guards — 2026-09-22
 

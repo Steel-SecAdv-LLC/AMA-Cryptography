@@ -52,6 +52,14 @@ AMA_ED25519_BACKEND_HIDDEN
 int ama_ed25519_ge_double_scalarmult_vartime_mulx(uint8_t out[32], const int8_t *w1,
                                                   const uint8_t p1[32], const int8_t *w2,
                                                   const uint8_t p2[32]);
+/* Whether the Niels-table select runs through the AVX2 fold: the CPU has
+ * AVX2 and ama_ed25519_set_avx2_fold_override() has not forced SSE2.  Defined
+ * once, in ama_ed25519.c, and read by BOTH backends — the MULX unit used to
+ * test ama_has_avx2() alone, so the override (and ama_ed25519_active_fold())
+ * silently did not apply to it. */
+AMA_ED25519_BACKEND_HIDDEN
+int ama_ed25519_fold_avx2_permitted(void);
+
 /* Test-only (defined under AMA_TESTING_MODE in the MULX unit). */
 AMA_ED25519_BACKEND_HIDDEN
 int ama_ed25519_ge_table_entry_mulx(int which, int i, int j, uint8_t out[32]);

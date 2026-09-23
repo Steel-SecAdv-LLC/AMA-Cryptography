@@ -78,7 +78,7 @@ __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
 
     /* Extract high 32 bits */
     __m256i tq_hi_even = _mm256_srli_epi64(tq_even, 32);
-    __m256i tq_hi_odd  = _mm256_and_si256(tq_odd, _mm256_set1_epi64x(0xFFFFFFFF00000000LL));
+    __m256i tq_hi_odd  = _mm256_and_si256(tq_odd, _mm256_set1_epi64x(-0x100000000LL) /* 0xFFFFFFFF00000000 */);
     __m256i tq_hi = _mm256_or_si256(tq_hi_even, tq_hi_odd);
 
     return _mm256_sub_epi32(a_hi, tq_hi);

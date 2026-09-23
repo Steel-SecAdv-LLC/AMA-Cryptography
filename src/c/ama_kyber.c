@@ -3037,7 +3037,7 @@ static void poly_decompress(poly* r, const uint8_t* a, int bits) {
             t[6] = (a[5*i + 3] >> 6) | ((a[5*i + 4] << 2) & 0x1F);
             t[7] = a[5*i + 4] >> 3;
 
-            for (int j = 0; j < 8; j++) {
+            for (unsigned int j = 0; j < 8; j++) {
                 r->coeffs[8*i + j] = (int16_t)((((uint32_t)t[j] * KYBER_Q) + 16) >> 5);
             }
         }

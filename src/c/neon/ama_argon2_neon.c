@@ -50,28 +50,6 @@
  * public header into this kernel TU (mirrors src/c/ama_sha256.c). */
 extern void ama_secure_memzero(void *ptr, size_t len);
 
-/* NEON rotate right by compile-time constants used in Blake2b G.
- * vshrq_n_u64 / vshlq_n_u64 require compile-time constant shift amounts,
- * so we define specialised macros instead of a variable-shift function. */
-#define ROTR64_NEON(x, n) vorrq_u64(vshrq_n_u64((x), (n)), vshlq_n_u64((x), 64 - (n)))
-
-/* ============================================================================
- * Blake2b G function (NEON vectorized, 2 pairs at a time)
- * ============================================================================ */
-static inline void blake2b_g_neon(uint64x2_t *a, uint64x2_t *b,
-                                   uint64x2_t *c, uint64x2_t *d,
-                                   uint64x2_t mx, uint64x2_t my) {
-    *a = vaddq_u64(*a, vaddq_u64(*b, mx));
-    *d = ROTR64_NEON(veorq_u64(*d, *a), 32);
-    *c = vaddq_u64(*c, *d);
-    *b = ROTR64_NEON(veorq_u64(*b, *c), 24);
-    *a = vaddq_u64(*a, vaddq_u64(*b, my));
-    *d = ROTR64_NEON(veorq_u64(*d, *a), 16);
-    *c = vaddq_u64(*c, *d);
-    *b = ROTR64_NEON(veorq_u64(*b, *c), 63);
-}
-
-
 /* ============================================================================
  * BlaMka building blocks (mirrors scalar reference in ama_argon2.c).
  *

@@ -11,6 +11,29 @@ macro(add_ama_test test_name test_source)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endmacro()
 
+# A dead-stack residue probe measures what a caller of the SHIPPED library is
+# left with, so it links the shared library whenever one is built.  Against
+# the test archive the build's -flto re-optimises the primitive together with
+# the harness, and the frame the probe reads is no longer the shipped one:
+# measured, the pre-fix Ascon-AEAD128 left a key word below the caller of the
+# .so, while the same probe LTO-linked against the archive saw nothing and
+# passed.  Public API only, so the shared library's exports suffice; -O2 and
+# no stack protector because the defect only exists in optimized code and the
+# probe's frame arithmetic assumes a plain prologue; 77 is the skip under a
+# sanitizer that moves or instruments the read (see the TUs).
+macro(add_ama_residue_probe test_name test_source)
+    add_executable(${test_name} ${test_source})
+    if(AMA_BUILD_SHARED AND NOT WIN32)
+        target_link_libraries(${test_name} ama_cryptography_shared)
+    else()
+        target_link_libraries(${test_name} ama_cryptography_test)
+    endif()
+    add_test(NAME ${test_name} COMMAND ${test_name})
+    set_tests_properties(${test_name} PROPERTIES SKIP_RETURN_CODE 77)
+    target_compile_options(${test_name} PRIVATE
+        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+endmacro()
+
 # Core tests
 add_ama_test(test_consttime test_consttime.c)
 add_ama_test(test_core test_core.c)
@@ -105,6 +128,19 @@ add_test(NAME test_dispatch_only_x25519-avx2
 set_tests_properties(test_dispatch_only_x25519-avx2 PROPERTIES
     SKIP_RETURN_CODE 77
     ENVIRONMENT "AMA_DISPATCH_ONLY=x25519-avx2;AMA_DISPATCH_USE_X25519_AVX2=1;AMA_DISPATCH_NO_AUTOTUNE=1")
+
+# A pin overrides the default selection, so an env opt-out that cleared the
+# default slot must not make the pin refuse.  AMA_DISPATCH_NO_CHACHA_AVX2
+# clears chacha20_block_x8 on AArch64 as well; chacha20-neon used to test
+# `saved.chacha20_block_x8 == <neon kernel>` and answered UNSUPPORTED (a
+# skip) under it.  AdvSIMD is mandatory on AArch64, so here the pin must be
+# honored, and AMA_TEST_EXPECT_HONORED turns a refusal into a failure.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    add_test(NAME test_dispatch_only_chacha20-neon_after_optout
+             COMMAND test_dispatch_only_env)
+    set_tests_properties(test_dispatch_only_chacha20-neon_after_optout PROPERTIES
+        ENVIRONMENT "AMA_DISPATCH_ONLY=chacha20-neon;AMA_DISPATCH_NO_CHACHA_AVX2=1;AMA_TEST_EXPECT_HONORED=1")
+endif()
 
 # v3.2.0 — AMA_DISPATCH_CACHE_FILE roundtrip + safety contract.  Pins
 # the mode-0600 file creation, the per-slot impl-level fingerprint
@@ -238,36 +274,20 @@ add_ama_test(test_ed25519_expanded test_ed25519_expanded.c)
 #   test_hybrid_sig          AMA_ALG_HYBRID is Ed25519 + ML-DSA-65, so it
 #                            needs ama_dilithium_sign / _verify / _verify_ctx
 #                            from src/c/ama_dilithium.c.
-#   test_aead_stack_residue  probes both AEAD entry points, and the
-#                            ChaCha20-Poly1305 half needs
+#   test_aead_stack_residue  probes the AEAD entry points, and the
+#                            ChaCha20-Poly1305 part needs
 #                            ama_chacha20poly1305_encrypt / _decrypt from
-#                            src/c/ama_chacha20poly1305.c.  Its AES-GCM half
-#                            would link on its own, but keeping that half in
-#                            the OFF lane is a change to the test source, not
-#                            to this file.
+#                            src/c/ama_chacha20poly1305.c.
 if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_hybrid_sig test_hybrid_sig.c)
-    # Dead-stack key residue.  -O2 at minimum: the defect this pins (the
-    # compiler hoisting round keys into unscrubbed spill slots) only exists in
-    # optimized code, and the probe's own frame arithmetic assumes a normal
-    # prologue.
-    add_ama_test(test_aead_stack_residue test_aead_stack_residue.c)
-    # Skips (77) under AddressSanitizer: the probe reads dead stack below its
-    # own frame, which is exactly what ASan's redzones exist to catch.
-    set_tests_properties(test_aead_stack_residue PROPERTIES SKIP_RETURN_CODE 77)
-    target_compile_options(test_aead_stack_residue PRIVATE
-        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+    add_ama_residue_probe(test_aead_stack_residue test_aead_stack_residue.c)
 endif()
 
 # The same probe applied to the Ed25519 signing path: the clamped scalar and
 # the nonce prefix must not survive `ama_ed25519_expand_secret_key`,
 # `ama_ed25519_sign_expanded` (stack and heap paths) or `ama_ed25519_sign`.
-# Links in both PQC lanes.  Same flags and same skip code as the AEAD probe,
-# for the same reasons.
-add_ama_test(test_ed25519_stack_residue test_ed25519_stack_residue.c)
-set_tests_properties(test_ed25519_stack_residue PROPERTIES SKIP_RETURN_CODE 77)
-target_compile_options(test_ed25519_stack_residue PRIVATE
-    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+# Links in both PQC lanes.
+add_ama_residue_probe(test_ed25519_stack_residue test_ed25519_stack_residue.c)
 
 # The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
 # "exactly 32 / 64 readable bytes" — and nothing about alignment, so an

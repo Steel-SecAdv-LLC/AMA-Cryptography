@@ -441,12 +441,16 @@ static ama_error_t compute_binding_factor(uint8_t rho[32],
 }
 
 /* Compute the group commitment R = sum(D_j + rho_j * E_j) using
- * actual Ed25519 point arithmetic. */
+ * actual Ed25519 point arithmetic.  When `rho_out` is non-NULL it receives
+ * every rho_j (num_signers * 32 bytes, row j for signer_indices[j]), so a
+ * caller that needs them again — aggregation, per share — does not rehash
+ * the whole commitment list once more per signer. */
 static ama_error_t compute_group_commitment(uint8_t R[32],
     const uint8_t *commitments, const uint8_t *signer_indices,
     uint8_t num_signers,
     const uint8_t *message, size_t message_len,
-    const uint8_t *group_public_key)
+    const uint8_t *group_public_key,
+    uint8_t *rho_out)
 {
     /* Identity point: (0, 1) compressed */
     uint8_t accum[32];
@@ -478,6 +482,7 @@ static ama_error_t compute_group_commitment(uint8_t R[32],
         if (rc != AMA_SUCCESS) return rc;
         memcpy(accum, new_accum, 32);
 
+        if (rho_out) memcpy(rho_out + (size_t)i * 32, rho_i, 32);
         ama_secure_memzero(rho_i, 32);
     }
 
@@ -859,7 +864,7 @@ AMA_API ama_error_t ama_frost_round2_sign(
     if (rc != AMA_SUCCESS) goto consume;
 
     rc = compute_group_commitment(R, commitments, signer_indices, num_signers,
-        message, message_len, group_public_key);
+        message, message_len, group_public_key, NULL);
     if (rc != AMA_SUCCESS) goto consume;
 
     rc = compute_challenge(challenge, R, group_public_key, message, message_len);
@@ -929,6 +934,19 @@ consume:
  * this file already depends on, and the saving would be unmeasurable.
  * ====================================================================== */
 
+/* A participant-supplied point is admissible when it is canonically encoded
+ * and of large order.  See verify_share_core() for why each is refused
+ * rather than left to the relation. */
+static int frost_point_is_admissible(const uint8_t p[32]) {
+    return ama_ed25519_point_encoding_is_canonical(p) &&
+           !ama_ed25519_point_is_small_order(p);
+}
+
+/* Both halves (D_i, E_i) of one participant's round-1 commitment. */
+static int frost_commitment_is_admissible(const uint8_t c[64]) {
+    return frost_point_is_admissible(c) && frost_point_is_admissible(c + 32);
+}
+
 /* Check one share against the section 5.3 relation, given the per-session
  * values (R-derived challenge, and this participant's binding factor) that
  * the caller has already computed.  Splitting it this way keeps
@@ -972,13 +990,17 @@ static ama_error_t verify_share_core(
      *
      * An honest D_i / E_i is [d]B for a uniformly random non-zero d, so it
      * lands in the small-order subgroup with probability about 2^-252.  No
-     * legitimate ceremony is affected. */
-    if (!ama_ed25519_point_encoding_is_canonical(commitment) ||
-        !ama_ed25519_point_encoding_is_canonical(commitment + 32) ||
-        !ama_ed25519_point_encoding_is_canonical(public_share) ||
-        ama_ed25519_point_is_small_order(commitment) ||
-        ama_ed25519_point_is_small_order(commitment + 32) ||
-        ama_ed25519_point_is_small_order(public_share)) {
+     * legitimate ceremony is affected.
+     *
+     * z_i must be canonical, 0 <= z_i < L (RFC 9591 section 4.1,
+     * DeserializeScalar).  The relation cannot see this: [z_i + L]B is
+     * [z_i]B, so a share re-spelled as z_i + L verifies, and the aggregate
+     * sum reduces it away.  Accepting it would make shares malleable, which
+     * is exactly the property canonical S removes from Ed25519 itself
+     * (INVARIANT-26). */
+    if (!ama_ed25519_scalar_is_canonical(sig_share) ||
+        !frost_commitment_is_admissible(commitment) ||
+        !frost_point_is_admissible(public_share)) {
         return AMA_ERROR_VERIFY_FAILED;
     }
 
@@ -1059,7 +1081,7 @@ AMA_API ama_error_t ama_frost_verify_share(
     if (rc != AMA_SUCCESS) return rc;
 
     rc = compute_group_commitment(R, commitments, signer_indices, num_signers,
-        message, message_len, group_public_key);
+        message, message_len, group_public_key, NULL);
     if (rc != AMA_SUCCESS) return rc;
 
     rc = compute_challenge(challenge, R, group_public_key, message, message_len);
@@ -1171,29 +1193,51 @@ AMA_API ama_error_t ama_frost_aggregate(
     if (!signer_index_set_is_valid(signer_indices, num_signers))
         return AMA_ERROR_INVALID_PARAM;
 
+    /* Every commitment is admitted before the group commitment consumes it,
+     * so a bad one is attributed to the participant who sent it rather than
+     * surfacing as an anonymous failure of R.  The verdicts are the ones
+     * verify_share_core() gives the same input: a non-canonical or
+     * small-order point fails verification, and a point that does not decode
+     * (point_add decodes both halves) is an invalid parameter — the header's
+     * "index reported when it is one participant's point". */
+    for (int i = 0; i < num_signers; i++) {
+        const uint8_t *c = commitments + (size_t)i * 64;
+        uint8_t sum[32];
+        ama_error_t verdict = AMA_SUCCESS;
+        if (!frost_commitment_is_admissible(c))
+            verdict = AMA_ERROR_VERIFY_FAILED;
+        else if (ama_ed25519_point_add(sum, c, c + 32) != AMA_SUCCESS)
+            verdict = AMA_ERROR_INVALID_PARAM;
+        if (verdict != AMA_SUCCESS) {
+            if (bad_participant_index)
+                *bad_participant_index = signer_indices[i];
+            return verdict;
+        }
+    }
+
+    /* The binding factors R is built from are the ones each share is checked
+     * against, so they are computed once, here.  They are public (a hash of
+     * the message, the commitments and the group key). */
+    uint8_t *rho = (uint8_t *)calloc(num_signers, 32);
+    if (!rho) return AMA_ERROR_MEMORY;
+
     uint8_t R[32];
     ama_error_t rc = compute_group_commitment(R, commitments, signer_indices,
-        num_signers, message, message_len, group_public_key);
-    if (rc != AMA_SUCCESS) return rc;
+        num_signers, message, message_len, group_public_key, rho);
+    if (rc != AMA_SUCCESS) goto out;
 
     uint8_t challenge[32];
     rc = compute_challenge(challenge, R, group_public_key, message, message_len);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) goto out;
 
     /* Step 1 — verify every share BEFORE it contributes to the sum, so a bad
      * share can never reach the output even transiently. */
     for (int i = 0; i < num_signers; i++) {
-        uint8_t rho_i[32];
-        rc = compute_binding_factor(rho_i, signer_indices[i], message,
-            message_len, commitments, num_signers, group_public_key);
-        if (rc != AMA_SUCCESS) return rc;
-
         rc = verify_share_core(sig_shares + (size_t)i * 32,
                                signer_public_shares + (size_t)i * 32,
                                commitments + (size_t)i * 64,
-                               rho_i, challenge, signer_indices[i],
-                               signer_indices, num_signers);
-        ama_secure_memzero(rho_i, sizeof(rho_i));
+                               rho + (size_t)i * 32, challenge,
+                               signer_indices[i], signer_indices, num_signers);
         if (rc != AMA_SUCCESS) {
             /* Attribute, then refuse.  A point that does not decode comes
              * back as AMA_ERROR_INVALID_PARAM rather than
@@ -1201,7 +1245,7 @@ AMA_API ama_error_t ama_frost_aggregate(
              * defective contribution, so both name it. */
             if (bad_participant_index)
                 *bad_participant_index = signer_indices[i];
-            return rc;
+            goto out;
         }
     }
 
@@ -1224,11 +1268,15 @@ AMA_API ama_error_t ama_frost_aggregate(
     rc = ama_ed25519_verify(candidate, message, message_len, group_public_key);
     if (rc != AMA_SUCCESS) {
         memset(candidate, 0, sizeof(candidate));  // PUBLIC-DATA: candidate — a rejected aggregate signature (R || z); R is the public group commitment and z the sum of the public shares, so nothing secret is held here.  Cleared anyway so a refusal leaves nothing signature-shaped on the stack for a later frame to mistake for a valid one.
-        return AMA_ERROR_VERIFY_FAILED;
+        rc = AMA_ERROR_VERIFY_FAILED;
+        goto out;
     }
 
     memcpy(signature, candidate, 64);
-    return AMA_SUCCESS;
+
+out:
+    free(rho);
+    return rc;
 }
 
 #ifdef AMA_TESTING_MODE

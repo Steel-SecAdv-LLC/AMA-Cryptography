@@ -103,6 +103,28 @@ static uint8_t g_sentinel[32];
 static uint8_t g_scalar[32];
 static uint8_t g_prefix[32];
 
+/* The scalar again, in the form the scalar arithmetic holds it: twelve signed
+ * 64-bit limbs of 21 bits (sc25519_muladd / sc25519_reduce).  A spilled limb
+ * is not a byte-form copy, so the 16-byte needles above cannot see it — and
+ * one was left behind: limb 8 after sign and keypair under LTO, limb 9 after
+ * sign and sign_expanded without.  Limbs whose value fits in 16 bits are
+ * skipped as needles; they are too likely to occur by chance. */
+static int64_t g_limbs[12];
+
+static void scalar_limbs(const uint8_t s[32], int64_t out[12]) {
+    int i;
+    for (i = 0; i < 12; i++) {
+        const int bit = 21 * i;
+        uint64_t v = 0;
+        int k;
+        for (k = 0; k < 5 && bit / 8 + k < 32; k++) {
+            v |= (uint64_t)s[bit / 8 + k] << (8 * k);
+        }
+        v >>= (unsigned)(bit & 7);
+        out[i] = (i == 11) ? (int64_t)v : (int64_t)(v & 0x1FFFFFu);
+    }
+}
+
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #endif
@@ -140,8 +162,15 @@ static int residue_count(const uint8_t *needle, size_t len) {
 __attribute__((noinline))
 #endif
 static int secret_residue_count(void) {
-    return residue_count(g_scalar, 16) + residue_count(g_scalar + 16, 16)
-         + residue_count(g_prefix, 16) + residue_count(g_prefix + 16, 16);
+    int hits = residue_count(g_scalar, 16) + residue_count(g_scalar + 16, 16)
+             + residue_count(g_prefix, 16) + residue_count(g_prefix + 16, 16);
+    int i;
+    for (i = 0; i < 12; i++) {
+        if (g_limbs[i] > 0xFFFF) {
+            hits += residue_count((const uint8_t *)&g_limbs[i], sizeof g_limbs[i]);
+        }
+    }
+    return hits;
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -170,6 +199,15 @@ __attribute__((noinline))
 static void run_sign_expanded(void) {
     CHECK(ama_ed25519_sign_expanded(g_sig, g_msg, MSG_BYTES, g_expanded) == AMA_SUCCESS,
           "sign_expanded succeeds");
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static void run_keypair(void) {
+    static uint8_t pk[32];
+    CHECK(ama_ed25519_keypair(pk, g_sk) == AMA_SUCCESS && memcmp(pk, g_pk, 32) == 0,
+          "keypair succeeds and is deterministic");
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -224,6 +262,7 @@ int main(void) {
           "expand_secret_key (needle derivation) succeeds");
     memcpy(g_scalar, g_expanded, 32);
     memcpy(g_prefix, g_expanded + 32, 32);
+    scalar_limbs(g_scalar, g_limbs);
     CHECK((g_scalar[0] & 7u) == 0u && (g_scalar[31] & 0xC0u) == 0x40u,
           "needle is the clamped scalar");
 
@@ -279,6 +318,13 @@ int main(void) {
           "prefix on the dead stack");
     CHECK(ama_ed25519_verify(g_sig, big, big_len, g_pk) == AMA_SUCCESS,
           "sign_expanded (heap path) signature verifies");
+
+    /* --- keypair: the comb multiplies by the scalar it derives. */
+    poison_stack();
+    run_keypair();
+    hits = secret_residue_count();
+    printf("  keypair: %d hit(s)\n", hits);
+    CHECK(hits == 0, "keypair leaves neither the scalar nor the prefix on the dead stack");
 
     /* --- sign from the 64-byte key: derives `hash` itself, then signs. */
     poison_stack();

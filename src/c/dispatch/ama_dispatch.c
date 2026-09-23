@@ -700,9 +700,13 @@ static apply_dispatch_only_result_t apply_dispatch_only(
 
 #ifdef AMA_HAVE_AVX512_IMPL
 #if defined(__x86_64__) || defined(_M_X64)
+    /* Resolved on the probed tier, not on `saved`: the auto-tune can revert
+     * keccak_f1600_x4 before this runs (see the demotion doctrine at the
+     * NEON NTT branches).  dispatch_info.sha3 carries the CPUID and XCR0
+     * checks the default wiring uses, and the auto-tune never lowers it. */
     if (strcmp(slot, "sha3-avx512x4") == 0) {
-        if (saved.keccak_f1600_x4 == ama_keccak_f1600_x4_avx512) {
-            dispatch_table.keccak_f1600_x4 = saved.keccak_f1600_x4;
+        if (dispatch_info.sha3 >= AMA_IMPL_AVX512) {
+            dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx512;
             *resolved_label_out = "sha3-avx512x4";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -843,8 +847,10 @@ static apply_dispatch_only_result_t apply_dispatch_only(
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "chacha20-neon") == 0) {
-        if (saved.chacha20_block_x8 == ama_chacha20_block_x8_neon) {
-            dispatch_table.chacha20_block_x8 = saved.chacha20_block_x8;
+        /* Not `saved ==`: AMA_DISPATCH_NO_CHACHA_AVX2 leaves this slot NULL
+         * on AArch64 too, and a pin exists to override the default. */
+        if (ama_has_arm_neon()) {
+            dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_neon;
             *resolved_label_out = "chacha20-neon";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -904,10 +910,11 @@ static apply_dispatch_only_result_t apply_dispatch_only(
      * — which is the right question only where a FEATURE PROBE cannot
      * answer it (none of the current slots; the AVX2 NTT branches above
      * used it and were converted to `ama_has_avx2()` for exactly the
-     * demotion/opt-out reason below, and the remaining `saved ==` users —
-     * `aes-gcm-neon` on FEAT_AES+FEAT_PMULL, the SVE2 slots on SVE2
-     * silicon — are equivalent to their probes only while nothing demotes
-     * them, which their auto-tune exclusion currently guarantees).  For
+     * demotion/opt-out reason below, as were `sha3-avx512x4` and the SVE2
+     * slots, which the auto-tune CAN demote, and `chacha20-neon`, which an
+     * env opt-out clears; the remaining `saved ==` users are `aes-gcm-neon`,
+     * which nothing demotes, and `x25519-avx2`, which is opt-in by design).
+     * For
      * these three it is the wrong question, in two reachable
      * configurations:
      *
@@ -961,22 +968,28 @@ static apply_dispatch_only_result_t apply_dispatch_only(
 #endif
 
 #ifdef AMA_HAVE_SVE2_IMPL
+    /* All three SVE2 pins resolve on the probed tier and wire the kernels
+     * the default SVE2 block wires together, for the same reason as
+     * sha3-avx512x4 above: the auto-tune can revert keccak_f1600 (with the
+     * kyber_poly_* helpers in lockstep), kyber_ntt and dilithium_ntt before
+     * this function runs, and a `saved ==` test then refused a pin whose
+     * whole purpose is to override that selection. */
     if (strcmp(slot, "kyber-sve2") == 0) {
-        if (saved.kyber_ntt == ama_kyber_ntt_sve2) {
-            dispatch_table.kyber_ntt         = saved.kyber_ntt;
-            dispatch_table.kyber_invntt      = saved.kyber_invntt;
-            dispatch_table.kyber_pointwise   = saved.kyber_pointwise;
-            dispatch_table.kyber_poly_add    = saved.kyber_poly_add;
-            dispatch_table.kyber_poly_sub    = saved.kyber_poly_sub;
-            dispatch_table.kyber_poly_reduce = saved.kyber_poly_reduce;
+        if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
+            dispatch_table.kyber_ntt         = ama_kyber_ntt_sve2;
+            dispatch_table.kyber_invntt      = ama_kyber_invntt_sve2;
+            /* kyber_pointwise stays NULL: see the default wiring below. */
+            dispatch_table.kyber_poly_add    = ama_kyber_poly_add_sve2;
+            dispatch_table.kyber_poly_sub    = ama_kyber_poly_sub_sve2;
+            dispatch_table.kyber_poly_reduce = ama_kyber_poly_reduce_sve2;
             *resolved_label_out = "kyber-sve2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "sha3-sve2") == 0) {
-        if (saved.keccak_f1600 == ama_keccak_f1600_sve2) {
-            dispatch_table.keccak_f1600 = saved.keccak_f1600;
+        if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
+            dispatch_table.keccak_f1600 = ama_keccak_f1600_sve2;
             *resolved_label_out = "sha3-sve2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -984,12 +997,12 @@ static apply_dispatch_only_result_t apply_dispatch_only(
     }
     /* The SVE2 ML-DSA NTT was wired by the default SVE2 block below but had
      * no pin name, so neither the dudect sweep nor the KAT sweep could
-     * isolate it.  Same saved== resolution as the two SVE2 slots above. */
+     * isolate it. */
     if (strcmp(slot, "dilithium-ntt-sve2") == 0) {
-        if (saved.dilithium_ntt == ama_dilithium_ntt_sve2) {
-            dispatch_table.dilithium_ntt       = saved.dilithium_ntt;
-            dispatch_table.dilithium_invntt    = saved.dilithium_invntt;
-            dispatch_table.dilithium_pointwise = saved.dilithium_pointwise;
+        if (dispatch_info.dilithium >= AMA_IMPL_SVE2) {
+            dispatch_table.dilithium_ntt       = ama_dilithium_ntt_sve2;
+            dispatch_table.dilithium_invntt    = ama_dilithium_invntt_sve2;
+            dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_sve2;
             *resolved_label_out = "dilithium-ntt-sve2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -2440,8 +2453,9 @@ static void dispatch_init_internal(void) {
      * path; an unprivileged process must not be steered via path
      * traversal or control-character injection.  Two sanitizers
      * compose:
-     *   1. dispatch_env_is_safe() rejects tainted-exec contexts
-     *      entirely (issetugid / AT_SECURE / uid-gid compare).
+     *   1. dispatch_getenv() returns NULL in tainted-exec contexts
+     *      (dispatch_env_is_safe(): issetugid / AT_SECURE / uid-gid
+     *      compare), so the variable reads as unset there.
      *   2. dispatch_cache_path_split() rejects empty / oversized /
      *      ASCII-control path strings and a `.` / `..` BASENAME, and
      *      canonicalises the directory part through realpath() -- a `..`
@@ -2451,9 +2465,9 @@ static void dispatch_init_internal(void) {
      *      canonical form).  That terminates the tainted-data flow CodeQL
      *      tracks from getenv to openat.
      * Either rejection leaves `cache_dfd < 0`, which the surrounding logic treats as "env var unset". */
+    /* dispatch_getenv() already returns NULL in a secure-exec context, so a
+     * non-empty value here is always from a trusted environment. */
     const char *cache_path_env = dispatch_getenv("AMA_DISPATCH_CACHE_FILE");
-    int env_safe = (cache_path_env && cache_path_env[0]
-                    && dispatch_env_is_safe());
     char cache_dir[AMA_DISPATCH_PATH_MAX];
     char cache_base[AMA_DISPATCH_PATH_MAX];
     char cache_display[AMA_DISPATCH_PATH_MAX];
@@ -2462,7 +2476,7 @@ static void dispatch_init_internal(void) {
     cache_display[0] = '\0';
     int cache_dfd = -1;
     int path_ok = 0;
-    if (env_safe
+    if (cache_path_env && cache_path_env[0]
         && dispatch_cache_path_split(cache_path_env,
                                      cache_dir, sizeof(cache_dir),
                                      cache_base, sizeof(cache_base)) == 0) {
@@ -2480,10 +2494,7 @@ static void dispatch_init_internal(void) {
     if (cache_path_env && cache_path_env[0] && (!path_ok || cache_dfd < 0) && dispatch_verbose()) {
         fprintf(stderr,
             "[AMA Dispatch] Auto-tune: AMA_DISPATCH_CACHE_FILE ignored — "
-            "%s\n",
-            env_safe
-                ? "path rejected by sanitizer or parent directory could not be opened"
-                : "process is setuid/setgid or running under a secure-exec context");
+            "path rejected by sanitizer or parent directory could not be opened\n");
     }
 
     char fingerprint[512];

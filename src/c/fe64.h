@@ -28,7 +28,7 @@
 #include <string.h>
 
 typedef uint64_t fe64[4];
-typedef unsigned __int128 uint128_t;
+__extension__ typedef unsigned __int128 uint128_t;
 
 static inline void fe64_0(fe64 h) {
     memset(h, 0, 4 * sizeof(uint64_t));  // PUBLIC-DATA: h — fe64_0 sets the radix-2^64 field element to the additive identity 0; the zero value IS the load-bearing semantics (used as the ladder's initial X1 / Z0 identity), not a placeholder to be overwritten — the post-init read of h is exactly the read of 0

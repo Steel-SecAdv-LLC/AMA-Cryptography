@@ -101,6 +101,7 @@ static int failures = 0;
 
 static uint8_t g_key[32];
 static uint8_t g_nonce[12];
+static uint8_t g_nonce16[16];
 static uint8_t g_msg[MSG_BYTES];
 
 /* What `probe_control()` plants, and what the control searches for.
@@ -193,20 +194,24 @@ static int residue_count(const uint8_t *needle, size_t len) {
  * the library there is `ama_secure_stack_wipe()`, and nothing here was
  * measuring whether it did.
  *
- * Each 16-byte half is therefore searched independently.  For AES-256 either
- * half is 128 bits of the key, so a hit on one is a disclosure on its own. */
+ * Each 16-byte half is therefore searched independently (a whole-key copy
+ * contains both).  For AES-256 either half is 128 bits of the key, so a hit
+ * on one is a disclosure on its own. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #endif
 static int key_residue_count(void) {
-    const int whole = residue_count(g_key, sizeof g_key);
-    const int low = residue_count(g_key, 16);
-    const int high = residue_count(g_key + 16, 16);
-    /* The halves subsume the contiguous case (a whole-key copy contains
-     * both), so the halves alone are the verdict; `whole` is kept for the
-     * printed diagnostic. */
-    (void)whole;
-    return low + high;
+    return residue_count(g_key, 16) + residue_count(g_key + 16, 16);
+}
+
+/* Ascon-AEAD128's 16-byte key is g_key[0:16], held by the permutation as two
+ * 64-bit words in host order, so a spill is an 8-byte word rather than a
+ * 16-byte copy; each word is 64 bits of key. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static int ascon_key_residue_count(void) {
+    return residue_count(g_key, 8) + residue_count(g_key + 8, 8);
 }
 
 /* Positive control: leaves the SENTINEL in a frame the probe must be able to
@@ -225,40 +230,77 @@ static void probe_control(void) {
 #endif
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-static void run_gcm_encrypt(uint8_t *ct, uint8_t *tag) {
-    CHECK(ama_aes256_gcm_encrypt(g_key, g_nonce, g_msg, MSG_BYTES, NULL, 0,
-                                 ct, tag) == AMA_SUCCESS,
-          "AES-256-GCM encrypt succeeds");
-}
+/* Every AEAD call runs below a GAP_BYTES buffer the caller keeps live, so the
+ * primitive's frame lies wholly below the region `residue_count()`'s own
+ * frame overwrites when it is called at the same depth.  Without the gap the
+ * top of the primitive's frame is clobbered by the probe before it is read,
+ * and whether a spill survives to be counted depends on frame layout:
+ * measured, the unfixed Ascon-AEAD128 left a key word 87 bytes below the
+ * anchor under gcc -O2 and in the clobbered bytes under the build's -O3,
+ * where the probe passed against it. */
+#define GAP_BYTES 512u
 
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
+#  define NOINLINE __attribute__((noinline))
+#  define KEEP_LIVE(buf) __asm__ __volatile__("" : : "r"(buf) : "memory")
+#else
+#  define NOINLINE
+#  define KEEP_LIVE(buf) ((void)(buf)[0])
 #endif
-static void run_gcm_decrypt(const uint8_t *ct, const uint8_t *tag, uint8_t *pt) {
-    CHECK(ama_aes256_gcm_decrypt(g_key, g_nonce, ct, MSG_BYTES, NULL, 0,
-                                 tag, pt) == AMA_SUCCESS,
-          "AES-256-GCM decrypt succeeds");
+
+#define RUN_BELOW_GAP(call) do {                                 \
+    volatile uint8_t gap[GAP_BYTES];                             \
+    gap[0] = 0;                                                  \
+    KEEP_LIVE(gap);                                              \
+    rc = (call);                                                 \
+    KEEP_LIVE(gap);                                              \
+} while (0)
+
+NOINLINE static ama_error_t run_gcm_encrypt(uint8_t *ct, uint8_t *tag) {
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_aes256_gcm_encrypt(g_key, g_nonce, g_msg, MSG_BYTES,
+                                         NULL, 0, ct, tag));
+    return rc;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-static void run_chacha_encrypt(uint8_t *ct, uint8_t *tag) {
-    CHECK(ama_chacha20poly1305_encrypt(g_key, g_nonce, g_msg, MSG_BYTES, NULL, 0,
-                                       ct, tag) == AMA_SUCCESS,
-          "ChaCha20-Poly1305 encrypt succeeds");
+NOINLINE static ama_error_t run_gcm_decrypt(const uint8_t *ct,
+                                            const uint8_t *tag, uint8_t *pt) {
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_aes256_gcm_decrypt(g_key, g_nonce, ct, MSG_BYTES,
+                                         NULL, 0, tag, pt));
+    return rc;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-static void run_chacha_decrypt(const uint8_t *ct, const uint8_t *tag, uint8_t *pt) {
-    CHECK(ama_chacha20poly1305_decrypt(g_key, g_nonce, ct, MSG_BYTES, NULL, 0,
-                                       tag, pt) == AMA_SUCCESS,
-          "ChaCha20-Poly1305 decrypt succeeds");
+NOINLINE static ama_error_t run_chacha_encrypt(uint8_t *ct, uint8_t *tag) {
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_chacha20poly1305_encrypt(g_key, g_nonce, g_msg,
+                                               MSG_BYTES, NULL, 0, ct, tag));
+    return rc;
+}
+
+NOINLINE static ama_error_t run_chacha_decrypt(const uint8_t *ct,
+                                               const uint8_t *tag,
+                                               uint8_t *pt) {
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_chacha20poly1305_decrypt(g_key, g_nonce, ct, MSG_BYTES,
+                                               NULL, 0, tag, pt));
+    return rc;
+}
+
+NOINLINE static ama_error_t run_ascon_encrypt(uint8_t *ct, uint8_t *tag) {
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ascon_aead128_encrypt(g_key, g_nonce16, g_msg,
+                                            MSG_BYTES, NULL, 0, ct, tag));
+    return rc;
+}
+
+NOINLINE static ama_error_t run_ascon_decrypt(const uint8_t *ct,
+                                              const uint8_t *tag,
+                                              uint8_t *pt) {
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ascon_aead128_decrypt(g_key, g_nonce16, ct, MSG_BYTES,
+                                            NULL, 0, tag, pt));
+    return rc;
 }
 
 int main(void) {
@@ -286,6 +328,7 @@ int main(void) {
         g_sentinel[i] = (uint8_t)(0xA7u ^ (i * 13u + 3u));
     }
     memset(g_nonce, 0x24, sizeof g_nonce);
+    memset(g_nonce16, 0x24, sizeof g_nonce16);
     memset(g_msg, 0x11, sizeof g_msg);
 
     printf("AEAD dead-stack key residue (INVARIANT-6)\n");
@@ -317,12 +360,12 @@ int main(void) {
 
     /* --- AES-256-GCM, both directions. */
     poison_stack();
-    run_gcm_encrypt(ct, tag);
+    CHECK(run_gcm_encrypt(ct, tag) == AMA_SUCCESS, "AES-256-GCM encrypt succeeds");
     CHECK(key_residue_count() == 0,
           "AES-256-GCM encrypt leaves no raw key on the dead stack");
 
     poison_stack();
-    run_gcm_decrypt(ct, tag, pt);
+    CHECK(run_gcm_decrypt(ct, tag, pt) == AMA_SUCCESS, "AES-256-GCM decrypt succeeds");
     CHECK(key_residue_count() == 0,
           "AES-256-GCM decrypt leaves no raw key on the dead stack");
     CHECK(memcmp(pt, g_msg, MSG_BYTES) == 0, "AES-256-GCM round trip");
@@ -331,34 +374,58 @@ int main(void) {
      * AES-256 the first two round keys ARE the key, so a build that leaks any
      * of the fifteen leaks these two — the pre-fix library failed exactly
      * here, with all fifteen present.  `key_residue_count()` searches each
-     * 16-byte half separately as well as the whole, because the shipped AVX2
+     * 16-byte half separately, because the shipped AVX2
      * kernel spills those two round keys 112 bytes apart rather than
      * contiguously; see its comment. */
 
     /* --- ChaCha20-Poly1305, both directions. */
     poison_stack();
-    run_chacha_encrypt(ct, tag);
+    CHECK(run_chacha_encrypt(ct, tag) == AMA_SUCCESS,
+          "ChaCha20-Poly1305 encrypt succeeds");
     CHECK(key_residue_count() == 0,
           "ChaCha20-Poly1305 encrypt leaves no raw key on the dead stack");
 
     poison_stack();
-    run_chacha_decrypt(ct, tag, pt);
+    CHECK(run_chacha_decrypt(ct, tag, pt) == AMA_SUCCESS,
+          "ChaCha20-Poly1305 decrypt succeeds");
     CHECK(key_residue_count() == 0,
           "ChaCha20-Poly1305 decrypt leaves no raw key on the dead stack");
     CHECK(memcmp(pt, g_msg, MSG_BYTES) == 0, "ChaCha20-Poly1305 round trip");
 
     /* --- a failed verification must not leave the key either. */
-    {
-        uint8_t bad_tag[16];
-        memcpy(bad_tag, tag, sizeof bad_tag);
-        bad_tag[0] ^= 0x01u;
-        poison_stack();
-        CHECK(ama_chacha20poly1305_decrypt(g_key, g_nonce, ct, MSG_BYTES, NULL, 0,
-                                           bad_tag, pt) == AMA_ERROR_VERIFY_FAILED,
-              "ChaCha20-Poly1305 rejects a bad tag");
-        CHECK(key_residue_count() == 0,
-              "ChaCha20-Poly1305 reject path leaves no raw key");
-    }
+    tag[0] ^= 0x01u;
+    poison_stack();
+    CHECK(run_chacha_decrypt(ct, tag, pt) == AMA_ERROR_VERIFY_FAILED,
+          "ChaCha20-Poly1305 rejects a bad tag");
+    CHECK(key_residue_count() == 0,
+          "ChaCha20-Poly1305 reject path leaves no raw key");
+
+    /* --- Ascon-AEAD128, both directions and the reject path.  Pre-fix, gcc
+     * left one key word after an encrypt and one to two after a rejected
+     * decrypt, in the entry point's own frame. */
+    poison_stack();
+    CHECK(ascon_key_residue_count() == 0,
+          "probe baseline: no Ascon key word in the window before any call");
+
+    poison_stack();
+    CHECK(run_ascon_encrypt(ct, tag) == AMA_SUCCESS,
+          "Ascon-AEAD128 encrypt succeeds");
+    CHECK(ascon_key_residue_count() == 0,
+          "Ascon-AEAD128 encrypt leaves no key word on the dead stack");
+
+    poison_stack();
+    CHECK(run_ascon_decrypt(ct, tag, pt) == AMA_SUCCESS,
+          "Ascon-AEAD128 decrypt succeeds");
+    CHECK(ascon_key_residue_count() == 0,
+          "Ascon-AEAD128 decrypt leaves no key word on the dead stack");
+    CHECK(memcmp(pt, g_msg, MSG_BYTES) == 0, "Ascon-AEAD128 round trip");
+
+    tag[0] ^= 0x01u;
+    poison_stack();
+    CHECK(run_ascon_decrypt(ct, tag, pt) == AMA_ERROR_VERIFY_FAILED,
+          "Ascon-AEAD128 rejects a bad tag");
+    CHECK(ascon_key_residue_count() == 0,
+          "Ascon-AEAD128 reject path leaves no key word");
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
