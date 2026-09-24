@@ -3498,7 +3498,7 @@ did not have, so the function now delegates to the native barrier-backed
 `secure_memzero` — the claim was right about what the library should do, and
 the code was what moved.
 
-**Enforcement.** Four gates, run in `ci.yml`:
+**Enforcement.** Five gates, run in `ci.yml`:
 
 * `tools/check_doc_examples.py` — `security-checks` (Python and C against the
   build tree) and `c-consumer` (C against an *installed* prefix, under gcc and
@@ -3532,6 +3532,12 @@ the code was what moved.
   exist in `baseline.json` or `arm-baseline.json`, requires the results record
   to carry reproduction provenance, and rejects a measured figure more than 8x
   its own floor as a units or identity error.
+* `tools/check_published_benchmarks.py` — `security-checks`. The measured
+  figures `README.md` writes by hand — the CI four-run medians and every other
+  number between its `published-bench` markers — are recorded in
+  `benchmarks/published-benchmarks.json` and compared in both directions, so
+  an edited, invented or deleted figure fails; every measurement source must
+  name its host, build flags, command, sampling, aggregation and CI runs.
 
 A **correction note** may quote the wording it retires — a reader cannot
 otherwise tell what changed — but only behind an explicit

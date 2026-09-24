@@ -1,76 +1,78 @@
 #!/usr/bin/env python3
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
-"""AMA Cryptography — pin the published canonical-host benchmark figures.
+"""AMA Cryptography — pin the performance figures README.md publishes.
 
 Why this exists
 ---------------
 ``tools/check_benchmark_claims.py`` pins the numbers that are *re-derivable*:
-the CI-runner tables recomputed from ``benchmarks/benchmark-results.json``, the
+the generated tables recomputed from ``benchmarks/benchmark-results.json``, the
 regression floors quoted in prose, the provenance fields, the units. It does
-not see the canonical-host tables in ``README.md``, because nothing in the tree
-carries those figures as data — they existed only as prose.
+not see a table of measured medians written into ``README.md`` by hand,
+because nothing it reads carries those figures as data.
 
-That gap was measured, not assumed. With the ML-DSA-65 KeyGen row edited from
-``3,626 ops/sec`` to ``9,626 ops/sec``, the existing gate reported::
+That gap was measured, not assumed, twice. With the ML-DSA-65 KeyGen row of
+the old canonical-host table edited from ``3,626 ops/sec`` to
+``9,626 ops/sec``, that gate reported ``OK    86 benchmark claim(s)
+consistent with their records``. And with the ``ama_sha3_256_hash`` x86_64
+median of the CI four-run table edited from ``363,574`` to ``963,574``, it
+reported ``OK    91 benchmark claim(s) consistent with their records`` — as
+did the canonical-host gate this file replaces, whose region did not include
+that table.
 
-    OK    86 benchmark claim(s) consistent with their records
+What this pins
+--------------
+``README.md`` delimits its measured-performance section with::
 
-A fabricated throughput figure survived the full documentation gate set. These
-are the most quotable numbers this repository publishes — they are what a
-reader takes away as "how fast is it" — and they were the only published
-figures with no mechanism behind them at all.
-
-What this pins, and what it deliberately does not
--------------------------------------------------
-Re-measuring the canonical host needs the canonical host: a Linux x86-64 part
-with AVX-512F/VL/BW/DQ/VBMI plus VAES and VPCLMULQDQ. This repository's CI does
-not have one, and that prerequisite is unchanged by this gate.
-
-Drift detection needs no such thing. A number that was measured once and then
-published forever has two distinct failure modes, and only one of them is about
-hardware:
-
-* the figure stops describing the code (needs a re-measurement — blocked), and
-* the figure stops describing the measurement (needs a record — this gate).
-
-The second is the one that has actually bitten this tree: a
-``wiki/Performance-Benchmarks.md`` floor sat two majors stale, and the macOS
-export list drifted from the ELF version script until the dylib published every
-internal helper. An unpinned number does not stay honest on its own.
-
-How it works
-------------
-``README.md`` delimits its host-measured benchmark section with::
-
-    <!-- canonical-bench: begin -->
+    <!-- published-bench: begin -->
     ...
-    <!-- canonical-bench: end -->
+    <!-- published-bench: end -->
 
 Every number inside that region must appear in
-``benchmarks/canonical-host.json``, and every number in the record must still
-appear in the region, as many times as the region prints it. "Every number",
-not "every number followed by a unit this gate recognises": the first version
-read only the latter, so "~10,834 Decaps ops/sec", "~4,845 KeyGen, ~3,929
-Sign" and any figure in ms, ns or MB/s could be edited freely inside the pinned
-region. The only digits not pinned are those inside a name — ``ML-DSA-65``,
-``Ed25519``, ``64-byte`` — which cannot change without the name changing. The comparison runs in both directions on purpose:
-one direction catches an edited or invented figure, the other catches a figure
-quietly dropped to make an inconvenient claim go away.
+``benchmarks/published-benchmarks.json``, and every number in the record must
+still appear in the region, as many times as the region prints it. "Every
+number", not "every number followed by a unit this gate recognises": an
+earlier version read only the latter, so a figure whose unit was not adjacent
+("~10,834 Decaps ops/sec") or was in an unlisted unit could be edited freely
+inside the pinned region. The only digits not pinned are those inside a name —
+``ML-DSA-65``, ``Ed25519``, ``64-byte`` — which cannot change without the name
+changing. The comparison runs in both directions on purpose: one direction
+catches an edited or invented figure, the other a figure quietly dropped to
+make an inconvenient claim go away.
 
-Each record entry names the source it came from, and each source carries its
-provenance — what it is, the date, and the command that produced the number.
-A figure cannot be added to the region without stating where it came from,
-which is what INVARIANT-36 and AGENTS.md section 3.5 require of any published
-performance claim.
+Provenance is a property of the source, and is checked
+------------------------------------------------------
+Each record entry names the source it came from. A source is one of a closed
+set of kinds, and each kind must carry the fields that make its figures
+checkable:
 
-There is no exemption list. Per AGENTS.md section 10 a gate that carries one is
-not a gate, and this one does not need one: the region is explicit, so a number
-that should not be pinned belongs outside the markers rather than on a waiver.
+* ``measurement`` — a figure some machine produced. AGENTS.md section 8 item 7
+  prohibits publishing one without its host, build flags and run identifier,
+  and INVARIANT-53 requires the command, host, units, sampling and aggregation
+  behind it. So a measurement source must state ``host``, ``build``,
+  ``command``, ``sampling``, ``aggregation``, the date ``measured``, and a
+  non-empty list of ``runs``. A figure from hardware whose run cannot be named
+  cannot be recorded, which is the mechanism behind the policy that
+  ``benchmarks/README.md`` states.
+* ``ledger`` — a number read from a committed file (a regression floor, its
+  tolerance, a derivation recorded in a baseline change log).
+* ``specification`` — a number a cited standard defines.
+* ``source-constant`` — a number fixed by this repository's code.
+
+The three non-measurement kinds need a ``description`` and a ``reference``
+naming where the number can be read. An unknown kind fails: a source that is
+not one of these has no provenance rule, and a gate that accepts it has none
+either.
+
+There is no exemption list. Per AGENTS.md section 10 a gate that carries one
+is not a gate, and this one does not need one: the region is explicit, so a
+number that should not be pinned belongs outside the markers rather than on a
+waiver.
 
 Exit codes:
     0  every published figure matches its record
-    1  a figure drifted, was added without a record, or was dropped
+    1  a figure drifted, was added without a record, or was dropped, or a
+       source lacks the provenance its kind requires
     2  the region markers or the record file are missing or malformed
 """
 
@@ -87,10 +89,28 @@ from typing import Any, Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 README = "README.md"
-RECORD = "benchmarks/canonical-host.json"
+RECORD = "benchmarks/published-benchmarks.json"
 
-BEGIN_MARKER = "<!-- canonical-bench: begin -->"
-END_MARKER = "<!-- canonical-bench: end -->"
+BEGIN_MARKER = "<!-- published-bench: begin -->"
+END_MARKER = "<!-- published-bench: end -->"
+
+#: The provenance each kind of source must state. ``description`` is common to
+#: all of them; a measurement adds everything AGENTS.md section 8 item 7 and
+#: INVARIANT-53 require of a published performance figure.
+REQUIRED_BY_KIND: dict[str, tuple[str, ...]] = {
+    "measurement": (
+        "description",
+        "measured",
+        "host",
+        "build",
+        "command",
+        "sampling",
+        "aggregation",
+    ),
+    "ledger": ("description", "reference"),
+    "specification": ("description", "reference"),
+    "source-constant": ("description", "reference"),
+}
 
 #: A number as this README writes them: thousands-separated, decimal, or plain.
 _NUMBER = r"\d{1,3}(?:,\d{3})+|\d+\.\d+|\d+"
@@ -184,14 +204,13 @@ def extract_region(text: str) -> Optional[str]:
 def extract_measurements(region: str) -> list[dict[str, Any]]:
     """Every number in the region, tagged with the row and section it is in.
 
-    Not only the figures followed by a recognised unit: "~10,834 Decaps
-    ops/sec" and "~4,845 KeyGen, ~3,929 Sign" are throughput claims whose unit
-    is not adjacent to the number, and a figure in a unit this gate did not list
-    would have escaped the same way. So every number token is pinned — carrying
-    its unit when one follows it, and an empty unit when none does — unless its
-    digits are part of a name (``ML-DSA-65``, ``Ed25519``, ``64-byte``), which
-    cannot change without the name changing. A heading's numbers are pinned
-    under the label ``(heading)``.
+    Not only the figures followed by a recognised unit: a throughput claim
+    whose unit is not adjacent to the number, or a figure in a unit this gate
+    did not list, would otherwise escape. So every number token is pinned —
+    carrying its unit when one follows it, and an empty unit when none does —
+    unless its digits are part of a name (``ML-DSA-65``, ``Ed25519``,
+    ``64-byte``), which cannot change without the name changing. A heading's
+    numbers are pinned under the label ``(heading)``.
 
     The label is the first cell of a markdown table row, which is how this
     README names the thing being measured. Prose measurements outside a table
@@ -240,33 +259,53 @@ def extract_measurements(region: str) -> list[dict[str, Any]]:
 
 
 def check_sources(report: Report, record: dict[str, Any]) -> set[str]:
-    """Every source in the record must state how its figures were produced.
+    """Every source must be a known kind and state the provenance that kind requires.
 
-    Most sources are hosts. Two are not: the comb table size is a property of
-    the code rather than of any machine, and the 1.8-2.2x range is reported by
-    OpenSSL and BoringSSL, not measured here. Calling either a "host" would be
-    false provenance, so the record names sources and each one says what it is.
+    A measurement additionally names the runs that produced it: a figure from a
+    machine whose run cannot be cited is exactly the kind of number
+    AGENTS.md section 8 item 7 prohibits publishing, so it cannot be recorded
+    here either.
     """
     sources = record.get("sources")
     if not isinstance(sources, dict) or not sources:
         report.fail(f"{RECORD}: 'sources' is missing or empty; no figure can cite one")
         return set()
 
-    required = ("description", "measured", "command")
     named: set[str] = set()
     for name, provenance in sources.items():
         if not isinstance(provenance, dict):
             report.fail(f"{RECORD}: source '{name}' is not an object")
             continue
+        named.add(str(name))
+        kind = provenance.get("kind")
+        required = REQUIRED_BY_KIND.get(kind) if isinstance(kind, str) else None
+        if required is None:
+            report.fail(
+                f"{RECORD}: source '{name}' has kind {kind!r}; it must be one of "
+                f"{', '.join(sorted(REQUIRED_BY_KIND))}, each of which carries its "
+                f"own provenance rule."
+            )
+            continue
         for field in required:
             value = provenance.get(field)
             if not isinstance(value, str) or not value.strip():
                 report.fail(
-                    f"{RECORD}: source '{name}' is missing '{field}'. A published "
-                    f"performance figure names where it came from, when, and the "
-                    f"command that produced it (INVARIANT-36)."
+                    f"{RECORD}: {kind} source '{name}' is missing '{field}'. A "
+                    f"published figure names where it came from and how it was "
+                    f"produced (INVARIANT-53; AGENTS.md section 8 item 7)."
                 )
-        named.add(str(name))
+        if kind == "measurement":
+            runs = provenance.get("runs")
+            if (
+                not isinstance(runs, list)
+                or not runs
+                or not all(isinstance(run, str) and run.strip() for run in runs)
+            ):
+                report.fail(
+                    f"{RECORD}: measurement source '{name}' names no run. A "
+                    f"performance figure is not published without the run "
+                    f"identifier that produced it (AGENTS.md section 8 item 7)."
+                )
     return named
 
 
@@ -282,7 +321,7 @@ def check_measurements(
         report.fail(f"{RECORD}: 'measurements' is missing or empty")
         return
 
-    # Counted, not collected into a set: "256 doublings + 256 additions" is two
+    # Counted, not collected into a set: a figure printed twice is two
     # figures, and deleting one of them must not pass because the other still
     # carries the same key.
     recorded: Counter[tuple[str, str, bool, str, str]] = Counter()
@@ -314,7 +353,7 @@ def check_measurements(
             + f" under '{key[0]}'"
             + (f" {count} more time(s) than" if key in recorded else ", which is not in")
             + f" {RECORD}. Either it drifted from the recorded figure, or it is a "
-            "new claim with no host behind it."
+            "new claim with no source behind it."
         )
 
     for key, count in sorted((recorded - published_keys).items()):
@@ -379,11 +418,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not report.ok():
         for failure in report.failures:
             print(f"FAIL: {failure}", file=sys.stderr)
-        print(f"\n{len(report.failures)} canonical benchmark problem(s)", file=sys.stderr)
+        print(f"\n{len(report.failures)} published benchmark problem(s)", file=sys.stderr)
         return 1
 
     print(
-        f"OK    {len(published)} published canonical figure(s) match {RECORD} "
+        f"OK    {len(published)} published figure(s) match {RECORD} "
         f"across {len(sources)} source(s)"
     )
     return 0

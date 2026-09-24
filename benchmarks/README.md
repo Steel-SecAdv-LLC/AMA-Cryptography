@@ -11,6 +11,7 @@ one of the artifacts below (or to live output regenerated from them):
 
 | Artifact | Scope | Produced by |
 |----------|-------|-------------|
+| [`published-benchmarks.json`](published-benchmarks.json) | Every number in README's *Performance Metrics* section, each citing a source that names its host, build flags, command, sampling, aggregation and CI runs | Written when the published table changes; enforced by `tools/check_published_benchmarks.py` |
 | [`baseline.json`](baseline.json) | CI regression FLOORS. `baseline_value` IS a measured median on the runner class named in `metadata.runner_cpu_class` — not a discount of one — and `tolerance_percent` (45 on x86-64, 15/25 on aarch64) is the separate allowance. The pre-5.0.0 "65% of measured, then a 35-70% tolerance on top" convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM regression without firing; both baseline files now say so in their own `metadata.description`. | Re-measured on the canonical runner when primitives land/change |
 | [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
 | `benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
@@ -24,6 +25,27 @@ If a chart cannot cite one of these, it should not be in the repository.
 The fallback tables in [`generate_charts.py`](generate_charts.py) are
 anchored to `phase0_baseline_results.json` and `benchmark_c_raw`; they
 are overridden by live data from `benchmark_results.json` when available.
+
+## Publishing policy
+
+The throughput figures `README.md` publishes are the CI four-run medians in
+its *Performance Metrics* table: `benchmark-regression` jobs on the
+GitHub-hosted `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (aarch64)
+runners, each figure traceable to named workflow runs and jobs. Every number
+in that section is recorded in [`published-benchmarks.json`](published-benchmarks.json)
+and held there by `tools/check_published_benchmarks.py` in CI: an edited,
+invented or deleted figure fails, and so does a measurement source that does
+not state its host, build flags, command, sampling, aggregation and runs.
+
+AVX-512-class figures (AVX-512F/VL/BW/DQ/VBMI with VAES and VPCLMULQDQ) will
+be published only when they are measured on such hardware, at the release
+commit, with the host, the build flags and the run identifier recorded
+beside them. This project's CI does not provision such a runner, so until
+one is available the README carries no figure for that class of hardware.
+The 4.x-era "canonical host" tables it used to print were measured on that
+class of part before the 5.0.0 changes to the code they described; they were
+removed rather than carried forward, and the retirement is recorded in
+[`../docs/BENCHMARK_HISTORY.md`](../docs/BENCHMARK_HISTORY.md).
 
 
 ## Raw C Benchmark (`benchmark_c_raw.c`)
@@ -199,14 +221,12 @@ The VAES + VPCLMULQDQ AES-GCM path targets **YMM (256-bit), not
 ZMM**. Zen 3+ / Ice Lake+ CPUs execute these without the AVX-512
 ZMM frequency penalty documented for Skylake-SP / Cascade Lake.
 Cloud VM variance on shared hosts is still the dominant noise
-source; published throughput numbers are from bare-metal runs, not
-CI. The regression baseline tracked in
-[`baseline.json`](baseline.json) continues to target the AVX2
-AES-NI + PCLMULQDQ path shipped in #253 / #254 / #260 / #261, and
-the VAES kernel will only be promoted to the published throughput
-number after a 3-run stability check on dedicated silicon — mirroring
-the 2026-04-21 dilithium_sign recalibration pattern already in
-`baseline.json::metadata.baseline_change_log`.
+source. The published throughput numbers are CI medians on the runners
+named under [Publishing policy](#publishing-policy), and the regression
+floor in [`baseline.json`](baseline.json) is measured on the same runner
+class; whether that runner's CPU reports VAES decides which AES-GCM
+kernel the row times, so the row is not a statement about the VAES
+kernel.
 
 Hosts without VAES (or any non-x86-64 host) automatically route
 through the AVX2 AES-NI + PCLMULQDQ fallback, which was already

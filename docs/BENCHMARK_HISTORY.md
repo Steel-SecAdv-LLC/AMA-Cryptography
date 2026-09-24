@@ -664,3 +664,54 @@ indistinguishable from uncommitted changes to a primitive), and a
 `Python bindings` row records which of the six Cython extensions were imported
 — a source checkout without them built and a wheel measure different code on
 the hash, MAC, KDF and signature rows, and nothing in the record said which.
+
+## 2026-09-24: the canonical-host figures retired; two statements about the 2026-09-20/21 runs corrected
+
+No `baseline_value` changes.
+
+**What was removed, and why it was not re-measured.** `README.md` carried
+four tables (ML-DSA-65, ML-KEM-1024, the multi-layer package, and nine core
+primitives) and a paragraph of X25519 figures measured 2026-04-25 to
+2026-04-27 on the "canonical bench host" — Linux x86-64 with
+AVX-512F/VL/BW/DQ/VBMI, VAES and VPCLMULQDQ — and `wiki/Performance-Benchmarks.md`
+carried six hand-maintained `benchmark_suite.py` tables from the same host.
+Every one measured the 4.x code; 5.0.0 changed the AEAD wrappers, added the
+INVARIANT-41 pairwise consistency test to every keygen, the INVARIANT-51
+derivation to every 64-byte-key signature and the INVARIANT-48 and
+INVARIANT-52 checks to verification, so no row described the release. The
+host is not reachable from this project's CI, so the figures could be neither
+re-measured nor reproduced. They are removed rather than carried forward, and
+so is the README's copy of the secp256k1 comb timing and Welch t-test, which
+stays in the 2026-07-29 section above where it is dated and attributed to its
+host. The publishing policy for figures from such hardware is in
+`benchmarks/README.md`.
+
+**The drift gate moved with the figures.** The canonical-host gate and its
+JSON record, both deleted in this pass, pinned the removed region and nothing
+else, so the table that remained — the four-run CI medians of the section
+above — had no pin. Measured before the change: with the x86_64
+`ama_sha3_256_hash` median edited from 363,574 to 963,574 in `README.md`,
+`tools/check_benchmark_claims.py` reported "OK 91 benchmark claim(s)" and the
+canonical gate "OK 76 published canonical figure(s)". The replacement,
+`tools/check_published_benchmarks.py` against `benchmarks/published-benchmarks.json`,
+pins every number of the README's Performance Metrics section in both
+directions, and requires every measurement source to state its host, build
+flags, command, sampling, aggregation and CI runs.
+
+**Corrected (AGENTS.md §6.6).** Two statements in the 2026-09-22 section above,
+and in the README paragraph that restated them, do not match that section's
+own per-run table; this file is append-only, so the section stands as written
+and the correction is recorded here. Recomputed from the per-run columns:
+
+* x86_64 — run 35548705329 is the fastest of the four on every row, but it
+  sits 23.2% (`dilithium_keygen`) to 51.0% (`full_package_verify`: 4,244
+  against 2,811) above the fastest of the other three, not "20–45%". The
+  2026-09-22 entry of `benchmarks/baseline.json`'s change log carries the same
+  "20-45%" phrase.
+* aarch64 — the min–max spread, as a share of the median, is 1.3% or less on
+  every row except `kyber_encapsulate` (1.9%), `full_package_verify` (2.1%),
+  `full_package_create` (3.1%) and `dilithium_sign` (13.5%), not "1.5% or less
+  on every row but `dilithium_sign`".
+
+The medians themselves were recomputed from the same columns (mean of the
+middle two, rounded half up) and all thirty-eight agree with the README table.

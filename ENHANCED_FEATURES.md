@@ -65,15 +65,11 @@ Optimized operations:
 - Lyapunov function evaluation
 - Helix evolution steps
 
-Example speedup measurements:
-```
-Operation                  Python      Cython     Speedup
-─────────────────────────────────────────────────────────
-Lyapunov function         12.3 ms     0.45 ms    27.3x
-Matrix-vector (500x500)   8.7 ms      0.31 ms    28.1x
-NTT (degree 256)          45.2 ms     1.2 ms     37.7x
-Helix evolution step      3.4 ms      0.18 ms    18.9x
-```
+No speed-up figure is published for these operations: the per-operation
+Python-versus-Cython table this section used to show had no benchmark,
+results file or history entry behind it, and was removed with the README
+copy of the same table. `python benchmarks/benchmark_suite.py` measures the
+ratio on the host you run it on.
 
 ### C Constant-Time Primitives
 

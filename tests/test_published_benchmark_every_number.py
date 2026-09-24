@@ -1,14 +1,14 @@
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
-"""Every number in README's canonical-bench region is pinned, not only unit-tagged ones.
+"""Every number in README's published-bench region is pinned, not only unit-tagged ones.
 
-``tools/check_canonical_benchmarks.py`` read a figure only when a recognised
-unit (ops/sec, micro-seconds, the multiplication sign, %, KB) immediately
-followed it. Inside the pinned region that left "~10,834 Decaps ops/sec",
-"~4,845 KeyGen, ~3,929 Sign" and every measurement date free to change, and a
-figure published in ms, ns or MB/s was invisible. Now every number token is
-pinned against ``benchmarks/canonical-host.json`` unless its digits are part of
-a name (``ML-DSA-65``, ``Ed25519``, ``64-byte``).
+The gate's first version read a figure only when a recognised unit (ops/sec,
+micro-seconds, the multiplication sign, %, KB) immediately followed it. That
+left every figure whose unit was not adjacent — and the whole of the CI
+four-run table, whose cells are "363,574 (362,192–484,921)" under a column
+header that carries the unit — free to change. Now every number token is
+pinned against ``benchmarks/published-benchmarks.json`` unless its digits are
+part of a name (``ML-DSA-65``, ``Ed25519``, ``64-byte``).
 
 Each negative control edits one number of a copy of the real README, and each
 was mutation-checked: with the mechanism it names removed from the gate, it
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import check_canonical_benchmarks as gate
+from tools import check_published_benchmarks as gate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -52,13 +52,16 @@ class TestNumbersWithoutAnAdjacentUnit:
     @pytest.mark.parametrize(
         ("old", "new"),
         [
-            ("~10,834 Decaps", "~19,834 Decaps"),
-            ("~4,845 KeyGen", "~9,845 KeyGen"),
-            ("~3,929 Sign", "~8,929 Sign"),
-            ("measured 2026-04-25. Decapsulate", "measured 2026-05-25. Decapsulate"),
-            ("Python 3.11.15", "Python 3.12.1"),
-            ("over 60,000 samples", "over 90,000 samples"),
-            ("**|t| = 0.29**", "**|t| = 0.09**"),
+            # A median, a range bound on the other architecture, a job id.
+            ("| 18,984 (18,894–24,705) |", "| 19,984 (18,894–24,705) |"),
+            ("| 25,400 (25,394–25,410) |", "| 25,400 (25,394–29,410) |"),
+            ("x86_64 jobs 106170292775,", "x86_64 jobs 106170292776,"),
+            # A date, a superseded median quoted in prose, a derivation input.
+            ("2026-09-20 to 2026-09-21", "2026-09-20 to 2026-09-24"),
+            ("(Ed25519 70,496 / 58,762 sign", "(Ed25519 70,496 / 68,762 sign"),
+            ("70,496 / 1.8469 = 38,170", "70,496 / 1.7469 = 38,170"),
+            # A source constant with no unit at all.
+            ("across 4096 random vectors", "across 8192 random vectors"),
         ],
     )
     def test_an_edited_figure_fails(self, tree: Path, old: str, new: str) -> None:
@@ -67,7 +70,7 @@ class TestNumbersWithoutAnAdjacentUnit:
         assert _run(tree) == 1
 
     def test_a_figure_added_in_an_unlisted_unit_fails(self, tree: Path) -> None:
-        _edit(tree, "(~10,834 Decaps ops/sec", "(~10,834 Decaps ops/sec, ~0.09 ms each")
+        _edit(tree, "across 4096 random vectors", "across 4096 random vectors in 3 ms")
         assert _run(tree) == 1
 
     def test_deleting_one_of_two_identical_figures_fails(self, tree: Path) -> None:
@@ -95,6 +98,14 @@ class TestWhatIsAndIsNotAFigure:
             ("204", ""),
             ("8380417", ""),
             ("2026-04-25", ""),
+        ]
+
+    def test_a_table_cell_median_and_range_are_three_figures(self) -> None:
+        found = gate.extract_measurements("| `x` — row | 363,574 (362,192–484,921) |\n")
+        assert [(entry["label"], entry["value"]) for entry in found] == [
+            ("`x` — row", "363,574"),
+            ("`x` — row", "362,192"),
+            ("`x` — row", "484,921"),
         ]
 
     def test_a_link_target_is_an_address_not_a_figure(self) -> None:

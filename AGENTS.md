@@ -368,12 +368,18 @@ not a reduction in the figure above, which is a `ctest` measurement.
 
 Release prerequisites are recorded in the pull request description. Each
 requires hardware, a protected credential, or a workflow dispatch; none is
-blocked by a defect in the tree. One of them has been narrowed: the published
-canonical-host benchmark figures now have a drift mechanism
-(`tools/check_canonical_benchmarks.py` against `benchmarks/canonical-host.json`),
-so an edited, invented or quietly deleted figure fails CI. Re-measuring that
-host still requires AVX-512 silicon this project's CI does not have; detecting
-that a published number changed no longer does.
+blocked by a defect in the tree. Re-measuring the "canonical host" is no
+longer one of them, and the paragraph that stood here is corrected per §6.6:
+it described a drift gate over the README's canonical-host tables as narrowing
+that prerequisite, but those tables were 4.x-era measurements of code 5.0.0
+changed, on hardware this project cannot reach, so pinning them kept figures
+that described nothing current. They are removed rather than re-measured. The
+README's throughput table now carries only CI-measured four-run medians,
+pinned — with the host, build flags and run identifiers of every measurement
+source — by
+`tools/check_published_benchmarks.py` against
+`benchmarks/published-benchmarks.json`. The policy for figures from other
+hardware is stated once, in `benchmarks/README.md`.
 
 ---
 
