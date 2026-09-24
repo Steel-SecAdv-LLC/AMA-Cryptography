@@ -131,6 +131,25 @@ def test_a_yaml_workflow_is_scanned_too(tmp_path: Path) -> None:
         # But a `run:` on one line still has to be caught — skipping `name:`
         # must not become skipping everything with a colon in it.
         ("run: choco install cmake -y", True, "an inline run: is still a command"),
+        # A trailing comment naming the helper is not the helper running: the
+        # exemption was a substring test over the segment, comment included.
+        (
+            "choco install x  # see .github/scripts/choco-install.ps1",
+            True,
+            "a raw call whose trailing comment names the helper",
+        ),
+        (
+            "choco install x --why .github/scripts/choco-install.ps1",
+            True,
+            "the helper named as an argument of a raw call",
+        ),
+        # Expansions in the option run were invisible: only `-` tokens were
+        # consumed, so the sub-command never lined up.
+        ("choco $ChocoArgs install cmake", True, "a $variable option run"),
+        ("choco @chocoArgs install cmake", True, "a splatted option run"),
+        ('choco --source "https://x" install cmake', True, "a quoted option value"),
+        ("choco $cmd cmake", True, "a sub-command held in a variable"),
+        ("choco -y uninstall foo", False, "uninstall after an option"),
     ],
 )
 def test_gate_verdicts(line: str, expect_violation: bool, label: str) -> None:
@@ -340,6 +359,47 @@ class TestLogicalLinesAndSegmentScopedExemption:
     def test_the_helper_alone_is_still_exempt(self) -> None:
         text = "  run: .github/scripts/choco-install.ps1 ninja\n"
         assert gate.scan_text(text, "w.yml") == []
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "  run: .github/scripts/choco-install.ps1 -Package choco $extra\n",
+            '    & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1"'
+            " -Package choco $extra\n",
+            "  run: pwsh -NoProfile -File .github/scripts/choco-install.ps1"
+            " -Package choco @extra\n",
+        ],
+    )
+    def test_a_choco_shaped_helper_argument_is_exempt(self, text: str) -> None:
+        """`choco $extra` here is a package list the helper receives.
+
+        It matches the call pattern (an expansion may be the sub-command), so
+        this pins the command-word exemption itself: with `_runs_through_helper`
+        returning False it fails.
+        """
+        assert gate.scan_text(text, "w.yml") == []
+
+    def test_a_trailing_comment_does_not_splice_the_next_line(self) -> None:
+        """A backtick inside a trailing comment is comment text, not a splice."""
+        text = (
+            "  run: |\n"
+            "    .github/scripts/choco-install.ps1 ninja  # see note `\n"
+            "    choco install cmake -y\n"
+        )
+        found = gate.scan_text(text, "w.yml")
+        assert len(found) == 1, found
+        assert found[0].startswith("w.yml:3:"), found[0]
+
+    @pytest.mark.parametrize("token", ["$X", "@a", "-o $X", '-o "x', "--x -o y"])
+    def test_expansion_tokens_keep_the_scan_linear(self, token: str) -> None:
+        """Accepting an expansion as the sub-command must keep the scan linear."""
+        import time
+
+        line = "  run: choco " + " ".join([token] * 96) + " zzz\n"
+        start = time.perf_counter()
+        gate.scan_text(line, "w.yml")
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, f"96 {token!r} tokens took {elapsed:.2f}s"
 
     def test_the_option_run_is_not_exponential(self) -> None:
         """The same ambiguous option pattern, duplicated verbatim from the apt gate."""

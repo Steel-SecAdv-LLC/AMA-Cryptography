@@ -85,10 +85,30 @@ in that window ``class_idx`` may appear only:
   ``memset(buf, (int)(0xFF * (unsigned)class_idx), n)`` or
   ``b[pos] ^= (uint8_t)class_idx``.
 
-A ternary on the class, an ``if`` on the class, or a ``[class_idx]`` index is a
-violation wherever it appears in that window.  After the timer closes the
-window the class is unconstrained: the next iteration's class is drawn
-independently, so branch history carried across iterations cannot bias it.
+A ternary on the class, an ``if`` on the class, or a subscript containing the
+class (``[class_idx]``, ``[class_idx * N]``) is a violation wherever it appears
+in that window.  After the timer closes the window the class is unconstrained:
+the next iteration's class is drawn independently, so branch history carried
+across iterations cannot bias it.
+
+That list is enforced POSITIVELY, occurrence by occurrence (see
+``_unsanctioned_use``): each ``class_idx`` in the window must be the trailing
+argument of ``dudect_stage_select``, inside ``memset``'s fill-value argument,
+or in the right-hand side of an assignment to a target the gate can establish
+is an integer VALUE — a declared integer local, or an element of an integer
+array or of a pointer to integers.  Anything else is a violation, including a
+call to any other function (``prepare(&in, class_idx)`` may branch inside), an
+assignment to a pointer (``src = base + class_idx * n``), and a target whose
+type this file does not show.  The rules used to be a list of forbidden
+spellings, and every form missing from the list — ``&keys[class_idx * N]``,
+the class passed to a helper, arithmetic assigned to an existing pointer —
+passed.  ``uintptr_t``/``intptr_t`` do not count as values: an integer whose
+type exists to hold an address is an address.
+
+What the gate does not follow is the class through an intermediate variable:
+``size_t off = class_idx * N;`` is a sanctioned integer value (the lookup
+lane builds its index exactly so), and a later ``p = base + off;`` does not
+mention the class.  It reads spellings, not data flow.
 
 The gate also requires every staging buffer to be declared ``_Alignas(64)``:
 an unaligned staging buffer can straddle a cache line, which reintroduces the
@@ -109,9 +129,11 @@ Exit status
 -----------
 0  every dudect lane reaches its timer with no class-dependent branch or
    address selection in front of it
-1  at least one lane branches on the class or selects an address by it before
-   the timer, a staging buffer is not cache-line aligned, or a class draw is
-   not followed by a timer call at all
+1  at least one lane uses the class before the timer in a form the allowlist
+   above does not sanction (a branch, an address selection, a call it may
+   branch inside, or a target not established as an integer value), a staging
+   buffer is not cache-line aligned, or a class draw is not followed by a
+   timer call at all
 2  a file this gate must examine is missing (fail closed — a gate whose input
    vanished must not pass)
 """
@@ -147,10 +169,6 @@ _TIMER = re.compile(r"\b(?:dudect_)?get_time_ns\s*\(")
 # Any mention of the class at all.
 _CLASS_USE = re.compile(r"\bclass_idx\b")
 
-# The sanctioned staging call: dudect_stage_select(dst, src0, src1, n, class_idx)
-# — both sources read every iteration, merged under a constant-time mask.
-_STAGE_SELECT = re.compile(r"dudect_stage_select\s*\([^;]*,\s*class_idx\s*\)")
-
 # The forbidden class-dependent constructs: a ternary on the class (either
 # spelling the tree has used), an `if` on the class, or an address selected by
 # it.  These are the constructions measured to bias the lane.
@@ -163,16 +181,18 @@ _STAGE_SELECT = re.compile(r"dudect_stage_select\s*\([^;]*,\s*class_idx\s*\)")
 #      `(0 == class_idx) ? a : b` — feeding a ternary
 #   4. a bare ternary on the class
 #   5. a `switch` on the class — a branch table is still a branch
-#   6. an array subscript by the class, which selects an ADDRESS and so biases
-#      the lane even when both arms retire the same instructions
-#   7. the same address selection spelled as pointer arithmetic —
-#      `src + class_idx * n`, `base + n * class_idx`, `p - class_idx`
+#   6. an array subscript CONTAINING the class, which selects an ADDRESS and
+#      so biases the lane even when both arms retire the same instructions.
+#      It used to match only a bare `[class_idx]`, so `&keys[class_idx * N]`
+#      passed.
 #
 # The module rule is broader than any one spelling — "a ternary on the class
-# is a violation wherever it appears in that window" — and alternatives 3, 5
-# and 7 exist because the enforced patterns had drifted narrower than the
-# rule: only `class_idx (==|!=) [01] ?` in that operand order was caught, so
-# every ordinary rewrite of the same branch passed the gate.
+# is a violation wherever it appears in that window" — and alternatives 3 and
+# 5 exist because the enforced patterns had drifted narrower than the rule:
+# only `class_idx (==|!=) [01] ?` in that operand order was caught, so every
+# ordinary rewrite of the same branch passed the gate.  Everything that is not
+# a branch is judged by the positive allowlist in `_unsanctioned_use`, not by
+# more alternatives here.
 #
 # The alternatives are assembled from named parts rather than written as one
 # re.VERBOSE pattern with trailing `#` comments.  Verbose comments read as
@@ -185,7 +205,7 @@ _CLASS_COMPARE_TERNARY = r"\bclass_idx\b\s*(?:==|!=|[<>]=?)[^;?]*\?"
 _YODA_COMPARE_TERNARY = r"(?:==|!=|[<>]=?)\s*\(?\s*class_idx\b[^;?]*\?"
 _CLASS_TERNARY = r"\bclass_idx\b\s*\?"
 _SWITCH_ON_CLASS = r"\bswitch\s*\([^;]*\bclass_idx\b"
-_CLASS_SUBSCRIPT = r"\[\s*class_idx\s*\]"
+_CLASS_SUBSCRIPT = r"\[[^\[\]]*\bclass_idx\b[^\[\]]*\]"
 
 _CLASS_BRANCH = re.compile(
     "|".join(
@@ -201,24 +221,46 @@ _CLASS_BRANCH = re.compile(
     )
 )
 
-# Class arithmetic: `src + class_idx * n`, `base + n * class_idx`,
-# `p - class_idx`.  Unlike the constructs above this is CONTEXTUAL — it is a
-# violation when it selects an ADDRESS (the same bias as a subscript, spelled
-# with pointer arithmetic), but it is exactly the sanctioned branchless form
-# when it computes a classed INPUT VALUE: both harness families build
-# `size_t index = (size_t)class_idx * (TABLE_SIZE / 2) + ...` for the lookup
-# lane, with the measurement that justifies it recorded beside the code
-# (branchy form mean t = -8.68, over threshold 9/10; this form -0.85, 0/10),
-# and the memzero lane computes a fill byte as `0xFFu * (unsigned)class_idx`.
-# So the arithmetic alternative fires only in a statement that ASSIGNS A
-# POINTER — the canonical address-selection spelling `const uint8_t *src =
-# base + class_idx * n;` — where the value reading is impossible.
-_CLASS_ARITH = re.compile(
-    r"[+\-]\s*(?:\(\s*[\w ]+\s*\)\s*)?class_idx\b"
-    r"|\bclass_idx\s*\*"
-    r"|\*\s*(?:\(\s*[\w ]+\s*\)\s*)?class_idx\b"
+# The calls the class may reach, and the argument it may sit in.
+# `dudect_stage_select(dst, src0, src1, n, class_idx)` reads both sources every
+# iteration and merges them under a constant-time mask, so its TRAILING
+# argument — and only that, spelled as the bare class — is sanctioned; a class
+# in a source argument selects an address before the merge.  `memset`'s fill
+# VALUE (argument 1) is the branchless classed-input form the memzero lane
+# uses: `memset(buf, (int)(0xFFu * (unsigned)class_idx), n)`.
+_STAGE_SELECT_NAME = "dudect_stage_select"
+_MEMSET_NAME = "memset"
+
+# Integer types whose values are values.  `uintptr_t`/`intptr_t` are left out
+# on purpose: an integer whose type exists to hold an address is an address.
+_VALUE_TYPE = (
+    r"(?:u?int(?:8|16|32|64)_t|u?int_(?:fast|least)(?:8|16|32|64)_t|u?intmax_t"
+    r"|size_t|ssize_t|ptrdiff_t|int|unsigned|signed|long|short|char|bool|_Bool"
+    r"|float|double)"
 )
-_POINTER_ASSIGN = re.compile(r"\*\s*(?:const\s+)?\w+\s*=[^=]")
+_VALUE_PREFIX = r"\b" + _VALUE_TYPE + r"(?:\s+(?:" + _VALUE_TYPE + r"|const|volatile))*"
+
+# A declaration of the assignment target in the statement itself:
+# `size_t index = ...`.  No `*` is admitted, so `const uint8_t *src = ...` is
+# not a value target.  The integer form is the sanctioned branchless one both
+# harness families use for the lookup lane —
+# `size_t index = (size_t)class_idx * (TABLE_SIZE / 2) + ...` — with the
+# measurement that justifies it recorded beside the code (branchy form mean
+# t = -8.68, over threshold 9/10; this form -0.85, 0/10).
+_VALUE_DECLARATION = re.compile(
+    r"\s*(?:(?:const|volatile|static|register)\s+)*" + _VALUE_PREFIX + r"\s+\w+\s*"
+)
+
+# The shape of a target that is not a declaration: a plain name, optionally
+# subscripted — `index`, `b[pos]`, `probe[0]`.  Member accesses and
+# dereferences are not established as values (their type is not in view).
+_LVALUE = re.compile(r"\s*(?P<name>[A-Za-z_]\w*)\s*(?P<subscript>\[.*\])?\s*")
+
+# C keywords that take a parenthesised operand and are not calls.  Casts are
+# recognised by what precedes the parenthesis (see `_enclosing_call`), not by
+# name; `sizeof`, `while` and `for` are deliberately NOT here, so the class
+# inside one of them is treated like the class inside any other call.
+_NOT_A_CALL = frozenset({"if", "switch", "return"})
 
 # `_Alignas(64) <type> name[...]` / `_Alignas(64) <type> name;`
 _ALIGNED_DECL = re.compile(r"_Alignas\(64\)\s+\w[\w\s]*?\s+(?P<name>\w+)\s*(?:\[|;)")
@@ -264,6 +306,184 @@ _ANY_DECL = re.compile(
     r"^[^\S\n]*(?:_Alignas\(\d+\)[^\S\n]+)?\w[\w ]*?[^\S\n]+\*?(?P<name>\w+)\s*(?:\[|;|=)",
     re.MULTILINE,
 )
+
+
+def _matching_paren(text: str, open_paren: int) -> int:
+    """Offset of the `)` closing `text[open_paren]`, or `len(text)` if unclosed."""
+    depth = 0
+    for index in range(open_paren, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return len(text)
+
+
+def _top_level_spans(text: str, start: int, end: int, separator: str) -> list[tuple[int, int]]:
+    """`[start, end)` split at `separator` characters outside (), [] and {}."""
+    spans: list[tuple[int, int]] = []
+    depth = 0
+    begin = start
+    for index in range(start, end):
+        char = text[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == separator and depth == 0:
+            spans.append((begin, index))
+            begin = index + 1
+    spans.append((begin, end))
+    return spans
+
+
+def _callee(stmt: str, open_paren: int) -> tuple[str, int] | None:
+    """`(name, start)` of the identifier directly before `stmt[open_paren]`.
+
+    A backward scan rather than `re.search(r"(\\w+)\\s*$", ...)`, which
+    retries from every start position and is quadratic on a long word run.
+    """
+    end = open_paren
+    while end > 0 and stmt[end - 1].isspace():
+        end -= 1
+    start = end
+    while start > 0 and (stmt[start - 1].isalnum() or stmt[start - 1] == "_"):
+        start -= 1
+    name = stmt[start:end]
+    if not name or name[0].isdigit():
+        return None
+    return name, start
+
+
+def _enclosing_call(stmt: str, position: int) -> tuple[str, int, int, int] | None:
+    """The innermost CALL whose parentheses enclose `position`.
+
+    Returns `(name, name_start, open_paren, close_paren)`.  A parenthesis not
+    preceded by an identifier — a cast's operand `(int)(...)`, a grouping
+    `(a + b)` — is not a call and is looked through, as is the condition of
+    an `_NOT_A_CALL` keyword.
+    """
+    stack: list[int] = []
+    for index in range(position):
+        if stmt[index] == "(":
+            stack.append(index)
+        elif stmt[index] == ")" and stack:
+            stack.pop()
+    for open_paren in reversed(stack):
+        callee = _callee(stmt, open_paren)
+        if callee is None or callee[0] in _NOT_A_CALL:
+            continue
+        return callee[0], callee[1], open_paren, _matching_paren(stmt, open_paren)
+    return None
+
+
+def _assignment(segment: str) -> tuple[int, int] | None:
+    """`(operator_start, operator_end)` of the top-level assignment, if any.
+
+    `=` and the compound operators (`^=`, `+=`, `<<=`…) count; the comparisons
+    `==`, `!=`, `<=` and `>=` do not.
+    """
+    depth = 0
+    index = 0
+    while index < len(segment):
+        char = segment[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "=" and depth == 0:
+            if segment[index + 1 : index + 2] == "=":
+                index += 2
+                continue
+            previous = segment[index - 1] if index else ""
+            if previous == "!":
+                pass
+            elif previous in "<>":
+                if index >= 2 and segment[index - 2] == previous:
+                    return index - 2, index + 1
+            elif previous and previous in "+-*/%&|^":
+                return index - 1, index + 1
+            else:
+                return index, index + 1
+        index += 1
+    return None
+
+
+def _is_value_target(target: str, declarations: str) -> bool:
+    """Whether the assignment target is established as an integer VALUE.
+
+    Established means: declared as an integer in the statement itself
+    (`size_t index = ...`), or a plain name or an element whose declaration in
+    this file (`declarations`) gives it an integer type — `uint8_t b[N]`, or a
+    pointer to integers `uint8_t *b` whose ELEMENT is a value.  Anything the
+    file does not show that way is not established, and fails closed.
+    """
+    if _VALUE_DECLARATION.fullmatch(target):
+        return True
+    lvalue = _LVALUE.fullmatch(target)
+    if lvalue is None:
+        return False
+    name = re.escape(lvalue.group("name"))
+    if lvalue.group("subscript"):
+        element = (
+            _VALUE_PREFIX + r"\s+" + name + r"\s*\["
+            r"|"
+            + _VALUE_PREFIX
+            + r"\s*\*\s*(?:(?:const|restrict|volatile)\s+)*"
+            + name
+            + r"\s*[=;,)]"
+        )
+        return re.search(element, declarations) is not None
+    return re.search(_VALUE_PREFIX + r"\s+" + name + r"\s*[=;,)]", declarations) is not None
+
+
+def _unsanctioned_use(stmt: str, declarations: str) -> str | None:
+    """The first use of the class in `stmt` the rule does not sanction, if any.
+
+    A branch on the class is reported first (the most specific diagnosis).
+    Then every OTHER occurrence must be one of the sanctioned forms listed in
+    the module docstring: the trailing argument of `dudect_stage_select`,
+    inside `memset`'s fill value, or in the right-hand side of an assignment
+    to an established integer value (`_is_value_target`).  The class being
+    re-drawn (`class_idx = ...`) is not a use.
+    """
+    branch = _CLASS_BRANCH.search(stmt)
+    if branch is not None:
+        return branch.group(0).strip()
+    for use in _CLASS_USE.finditer(stmt):
+        call = _enclosing_call(stmt, use.start())
+        if call is not None:
+            name, name_start, open_paren, close_paren = call
+            arguments = _top_level_spans(stmt, open_paren + 1, close_paren, ",")
+            position = next(
+                (k for k, (begin, end) in enumerate(arguments) if begin <= use.start() < end), -1
+            )
+            argument = stmt[arguments[position][0] : arguments[position][1]].strip()
+            if name == _STAGE_SELECT_NAME and position == len(arguments) - 1:
+                if argument == "class_idx":
+                    continue
+            elif name == _MEMSET_NAME and position == 1:
+                continue
+            return stmt[name_start : close_paren + 1].strip()[:120]
+        segment = next(
+            (begin, end)
+            for begin, end in _top_level_spans(stmt, 0, len(stmt), ",")
+            if begin <= use.start() <= end
+        )
+        text = stmt[segment[0] : segment[1]]
+        assignment = _assignment(text)
+        if assignment is None:
+            return text.strip()[:120]
+        target = text[: assignment[0]]
+        if use.start() - segment[0] < assignment[0]:
+            if target.strip() == "class_idx":
+                continue
+            return text.strip()[:120]
+        if not _is_value_target(target, declarations):
+            return text.strip()[:120]
+    return None
 
 
 def _logical_statements(text: str) -> list[tuple[int, str]]:
@@ -367,31 +587,29 @@ def check_text(text: str, path: str) -> list[str]:
     # violation: the window would otherwise run to end-of-file and the gate
     # would report on statements it has no business judging, or — if the file
     # ends quietly — report nothing at all.
+    # Declarations the value-target test may consult: the file with its line
+    # comments dropped too, so a commented-out declaration establishes nothing.
+    declarations = "\n".join(line.split("//", 1)[0] for line in stripped.split("\n"))
+
     in_window = False
     window_line = 0
     for lineno, stmt in _logical_statements(stripped):
         if in_window:
-            if _CLASS_USE.search(stmt) and not _STAGE_SELECT.search(stmt):
-                branch = _CLASS_BRANCH.search(stmt)
-                if branch is None and _POINTER_ASSIGN.search(stmt):
-                    # Class arithmetic in a pointer assignment selects an
-                    # ADDRESS — a subscript spelled with pointer arithmetic;
-                    # in value context it is the sanctioned branchless
-                    # classed-input form — see _CLASS_ARITH.
-                    branch = _CLASS_ARITH.search(stmt)
-                if branch is not None:
-                    violations.append(
-                        f"{path}:{lineno}: {branch.group(0).strip()!r} lets "
-                        f"the class pick a branch or an address, after the "
-                        f"class draw on line {window_line} and before the "
-                        f"timer opens. Such a branch's direction is perfectly "
-                        f"correlated with the class and its misprediction is "
-                        f"paid inside the measured region: a fixed per-host "
-                        f"bias that no threshold and no round count can tell "
-                        f"apart {_LEAK}. Use dudect_stage_select(dst, class0, "
-                        f"class1, n, class_idx), which reads both class inputs "
-                        f"every iteration and merges them under a mask."
-                    )
+            construct = _unsanctioned_use(stmt, declarations) if _CLASS_USE.search(stmt) else None
+            if construct is not None:
+                violations.append(
+                    f"{path}:{lineno}: {construct!r} lets the class pick a "
+                    f"branch or an address, or reach code this gate cannot "
+                    f"see into, after the class draw on line {window_line} "
+                    f"and before the timer opens. A branch or an address "
+                    f"correlated with the class there is paid inside the "
+                    f"measured region: a fixed per-host bias that no "
+                    f"threshold and no round count can tell apart {_LEAK}. "
+                    f"Use dudect_stage_select(dst, class0, class1, n, "
+                    f"class_idx), which reads both class inputs every "
+                    f"iteration and merges them under a mask, or build the "
+                    f"classed input as an integer value."
+                )
             if _TIMER.search(stmt):
                 in_window = False
             continue
@@ -416,7 +634,7 @@ def class_draw_count(text: str) -> int:
     `main` asserts this is non-zero for every governed harness, because a file
     in which the gate recognised NOTHING is not a clean file.
     `_CLASS_DRAW` is keyed to the literal identifier `class_idx`, and so are
-    `_CLASS_USE`, `_CLASS_BRANCH` and `_STAGE_SELECT`; a harness that names its
+    `_CLASS_USE`, `_CLASS_BRANCH` and `_unsanctioned_use`; a harness that names its
     class variable anything else opens no window, produces no violations, and
     was printed as "every lane reaches its timer with no class-dependent branch
     or address selection in front of it" — over a file the gate had not read a

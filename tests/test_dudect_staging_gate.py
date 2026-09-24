@@ -331,6 +331,173 @@ def test_gate_verdicts(source: str, expect_violation: bool, label: str) -> None:
         assert not violations, f"gate rejected {label}: {violations}"
 
 
+# ---------------------------------------------------------------------------
+# The positive allowlist: every class use in the window must be a sanctioned
+# form, not merely absent from a list of forbidden spellings
+# ---------------------------------------------------------------------------
+
+#: One lane; `{decls}` sits before the loop, `{stmt}` between the draw and the
+#: timer.  Every spelling below passed the gate as it stood (measured): the
+#: forbidden-spelling list matched only a bare `[class_idx]`, consulted class
+#: arithmetic only in a `*name =` declaration, and never looked inside a call.
+_LANE = """
+static double test_lane(uint8_t *b, int iterations) {{
+    _Alignas(64) uint8_t key_use[16];
+    {decls}
+    for (int i = 0; i < iterations; i++) {{
+        int class_idx = rand() & 1;
+        {stmt}
+        uint64_t start = get_time_ns();
+        crypt(key_use, src, b);
+        uint64_t end = get_time_ns();
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    "decls,stmt,expect_violation,label",
+    [
+        # The three spellings the review found.
+        (
+            "",
+            "memcpy(key_use, &keys[class_idx * KEY_LEN], KEY_LEN);",
+            True,
+            "a subscript computed from the class",
+        ),
+        (
+            "const uint8_t *src = keys;",
+            "src = base + class_idx * n;",
+            True,
+            "class arithmetic assigned to an existing pointer",
+        ),
+        ("", "prepare(&in, class_idx);", True, "the class passed to a helper"),
+        # A load from a class-selected address, outside any call: only the
+        # subscript rule sees it.
+        (
+            "",
+            "uint8_t first = keys[class_idx * KEY_LEN];",
+            True,
+            "a value loaded through a class-computed subscript",
+        ),
+        (
+            "",
+            "memcpy(key_use, keys + class_idx * KEY_LEN, KEY_LEN);",
+            True,
+            "class-selected address as a call argument",
+        ),
+        (
+            "",
+            "dudect_stage_select(key_use, keys + class_idx * 16, keys, 16, class_idx);",
+            True,
+            "the class selecting a staging SOURCE",
+        ),
+        (
+            "",
+            "dudect_stage_select(key_use, k0, k1, 16, class_idx ^ 1);",
+            True,
+            "a trailing argument that is not the bare class",
+        ),
+        (
+            "",
+            "memset(base + class_idx * n, 0, n);",
+            True,
+            "the class selecting memset's DESTINATION",
+        ),
+        (
+            "",
+            "uintptr_t a = (uintptr_t)keys + class_idx * KEY_LEN;",
+            True,
+            "an address held in an integer type made for addresses",
+        ),
+        (
+            "const uint8_t *ptrs[2];",
+            "ptrs[0] = keys + class_idx * KEY_LEN;",
+            True,
+            "an element of an array of pointers",
+        ),
+        (
+            "struct in_s in;",
+            "in.flag = (uint8_t)class_idx;",
+            True,
+            "a member whose type this file does not show (fails closed)",
+        ),
+        (
+            "const uint8_t *src = keys;  // was: size_t src;",
+            "src = base + class_idx * n;",
+            True,
+            "a commented-out declaration establishes nothing",
+        ),
+        ("", "while (class_idx--) { }", True, "a loop on the class"),
+        (
+            "",
+            "for (unsigned k = 0; k < (unsigned)class_idx; k++) { pad(); }",
+            True,
+            "a loop bounded by the class",
+        ),
+        # Wrapped as a formatter wraps a long header, the bound is a statement
+        # of its own with no call and no assignment to carry the class.
+        (
+            "",
+            "for (unsigned k = 0;\n"
+            "             k < (unsigned)class_idx;\n"
+            "             k++) { pad(); }",
+            True,
+            "a wrapped loop header bounded by the class",
+        ),
+        ("", "*(base + class_idx * n) = 0;", True, "a store through a class-computed address"),
+        # The sanctioned value forms must stay sanctioned.
+        (
+            "size_t off;",
+            "off = (size_t)class_idx * KEY_LEN;",
+            False,
+            "an integer local reassigned from the class",
+        ),
+        ("", "b[i % 16] ^= (uint8_t)class_idx;", False, "an element of a pointer to bytes"),
+        (
+            "",
+            "uint8_t m = (uint8_t)-(class_idx == 1);",
+            False,
+            "an integer mask declared from the class",
+        ),
+        # `int` inside `myint` is not an integer declaration: `myint` may be a
+        # pointer typedef, so the target is not established.
+        (
+            "myint src = 0;",
+            "src = base + class_idx * n;",
+            True,
+            "a type name that merely ends in an integer type",
+        ),
+    ],
+)
+def test_class_uses_are_allowlisted(
+    decls: str, stmt: str, expect_violation: bool, label: str
+) -> None:
+    violations = gate.check_text(_LANE.format(decls=decls, stmt=stmt), "synthetic.c")
+    if expect_violation:
+        assert violations, f"gate accepted {label}, which it must reject"
+        assert len(violations) == 1, violations
+    else:
+        assert not violations, f"gate rejected {label}: {violations}"
+
+
+def test_a_long_statement_is_scanned_in_linear_time() -> None:
+    """Finding the callee before a `(` is a backward scan, not a `\\w+\\s*$` search.
+
+    That search retries from every start position in a word run; measured on
+    a run of n word characters before a parenthesis it took 57 / 222 / 964 ms
+    at n = 2,000 / 4,000 / 8,000.  The scan takes ~30 ms at n = 100,000.
+    """
+    import time
+
+    lane = _LANE.format(decls="", stmt="x" * 100_000 + " + (class_idx);")
+    start = time.perf_counter()
+    violations = gate.check_text(lane, "synthetic.c")
+    elapsed = time.perf_counter() - start
+    assert violations, "the class in a bare expression statement must be reported"
+    assert elapsed < 1.0, f"a 100k-character statement took {elapsed:.2f}s"
+
+
 def test_multiline_binding_is_not_a_false_positive() -> None:
     """The staged form wraps across lines; a line-at-a-time scan mis-reads it.
 

@@ -30,9 +30,9 @@ later in a job nobody re-reads.
 What counts as a violation
 --------------------------
 Any ``apt-get`` invocation in a workflow's YAML that is not inside a comment
-and does not appear on a line that calls the helper.  ``apt-cache``,
-``apt-key`` and ``dpkg`` are not covered: they do not perform the
-network-bound update-and-install that hangs.
+and is not an argument of the helper, i.e. its shell segment does not have the
+helper as its command word.  ``apt-cache``, ``apt-key`` and ``dpkg`` are not
+covered: they do not perform the network-bound update-and-install that hangs.
 
 Exit status
 -----------
@@ -89,11 +89,31 @@ WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 #: Requiring a non-dash after the dashes leaves exactly one parse per
 #: token and still matches `-y`, `--no-install-recommends`,
 #: `-o Key=Value` and `-t bookworm-backports`.
+#:
+#: A SHELL EXPANSION WHERE THE SUB-COMMAND COULD BE COUNTS AS ONE.  The
+#: option run consumes only tokens starting with `-`, so
+#: `apt-get $APT_OPTS install x` and `apt-get "${OPTS[@]}" update` (the
+#: helper's own idiom) never lined the sub-command up with the pattern and
+#: passed as no call at all.  The gate cannot know what an expansion
+#: (`$VAR`, `${...}`, `$(...)`, `"$VAR"`) holds — options, or the sub-command
+#: itself, as in `apt-get $CMD pkg` — so an expansion in the sub-command slot
+#: is counted as a call rather than guessed to be a harmless one.  Fail
+#: closed: spell the options and the sub-command, or use the helper.
+#:
+#: Teaching the option run to consume expansions as well was tried first and
+#: measured redundant: with the sub-command slot accepting an expansion,
+#: removing it changed no verdict in tests/test_apt_retry_gate.py.  Only the
+#: mechanism the tests pin is kept.  It cannot slow a failing match either: a
+#: line with no `$` token fails exactly as before, and the first reachable
+#: expansion token ends the search in a match.
+_EXPANSION = r"(?:\$|\"\$)\S*"
 _APT_OPTION = r"(?:\s+--?[^\s-][^\s]*(?:\s+[^\s-][^\s]*)?)*"
-_APT_SUBCOMMAND = r"(?:update|install|reinstall|upgrade|dist-upgrade|full-upgrade|build-dep)"
-_APT_CALL = re.compile(
-    r"\b(?:apt|apt-get|aptitude)\b" + _APT_OPTION + r"\s+" + _APT_SUBCOMMAND + r"\b"
+_APT_SUBCOMMAND = (
+    r"(?:(?:update|install|reinstall|upgrade|dist-upgrade|full-upgrade|build-dep)\b|"
+    + _EXPANSION
+    + r")"
 )
+_APT_CALL = re.compile(r"\b(?:apt|apt-get|aptitude)\b" + _APT_OPTION + r"\s+" + _APT_SUBCOMMAND)
 
 
 #: Shell separators that end one command and start another.  A logical line can
@@ -101,9 +121,69 @@ _APT_CALL = re.compile(
 #: helper that ran.
 _SEGMENT_SPLIT = re.compile(r"(?:&&|\|\||;|\|)")
 
+#: What may precede the helper's path in the segment it runs as: the YAML
+#: list marker and `run:` key of a one-line step, `sudo`/`env` and their
+#: options, `VAR=value` assignments, an interpreter (`bash`, `sh`, `pwsh`…)
+#: and its options, the PowerShell call and dot-source operators, and the
+#: shell keywords a command can follow.  No whitespace-terminated token is
+#: matched by two alternatives (a keyword has no `=` and an assignment does; a
+#: lone `-` needs the whitespace an option lacks), so a token has one parse
+#: and a failing match is linear — measured at 4.4 ms for 16,000 tokens.
+_LAUNCHER = (
+    r"(?:-|run:|sudo|env|exec|command|time|then|do|else|bash|sh|pwsh|powershell"
+    r"|\{|\(|&|\.|[A-Za-z_][A-Za-z0-9_]*=\S*|-\S+)"
+)
+
+#: The helper as the COMMAND WORD of its segment — optionally quoted, and
+#: optionally rooted at `./` or a workspace variable (`$GITHUB_WORKSPACE/`,
+#: `${GITHUB_WORKSPACE}/`, `$env:GITHUB_WORKSPACE/`).
+_HELPER_COMMAND = re.compile(
+    r"\s*(?:"
+    + _LAUNCHER
+    + r"\s+)*[\"']?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?/|\./)?"
+    + re.escape(HELPER)
+    + r"[\"']?(?:\s|$)"
+)
+
+
+def _strip_comment(line: str, escape: str, quote: str) -> tuple[str, bool, str]:
+    """Split a physical line at its shell comment: `(code, commented, quote)`.
+
+    `#` opens a comment when it starts a word outside quotes — at the start of
+    the line, after whitespace, or after `;`, `&`, `|` or `(`.  That is the
+    POSIX shell rule, and PowerShell's for a `#` at the start of a token; YAML
+    also ends a plain scalar at ` #`.  `escape` (`\\` for sh, the backtick
+    for PowerShell) protects the character after it.  `quote` carries an open
+    quotation in from a continued line, and the returned one carries it on.
+
+    Only what the shell itself discards is dropped, so stripping can hide no
+    command.  What it removes matters: `_runs_through_helper` used to test the
+    whole segment for the helper's path, and a trailing comment is part of the
+    segment — `apt-get install -y x  # TODO: .github/scripts/apt-install.sh`
+    was exempted by its own TODO.
+    """
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if quote:
+            if char == escape and quote == '"':
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+        elif char == escape:
+            index += 2
+            continue
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace() or line[index - 1] in ";&|("):
+            return line[:index], True, ""
+        index += 1
+    return line, False, quote
+
 
 def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
-    """`(first_physical_line_number, spliced_text)` for each logical line.
+    """`(first_physical_line_number, spliced_code)` for each logical line.
 
     `scan_text` iterated PHYSICAL lines and required the binary and the
     sub-command on the same one, so a POSIX `\\` (or PowerShell backtick)
@@ -111,26 +191,35 @@ def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
     seen.  Splicing first makes the scan see what the shell sees; the reported
     line number stays the first physical line, which is where a reader looks.
 
-    A COMMENT line never continues: the shell's comment runs to the end of the
-    physical line, so a trailing continuation character inside it is comment
-    text, not a continuation.  Splicing it anyway joined `# foo \\` and the
-    `apt-get install x` below it into one logical line starting with `#`,
-    which `scan_text` then skipped while the shell EXECUTED the apt-get — a
-    gate bypass.  Only the first physical line can start the comment; a `#`
-    on a continued line is an ordinary word mid-command.
+    Comments are removed per PHYSICAL line, before splicing (see
+    `_strip_comment`).  A commented line never continues: the shell's comment
+    runs to the end of the physical line, so a trailing continuation character
+    inside it is comment text, not a continuation.  Splicing it anyway joined
+    `# foo \\` and the `apt-get install x` below it into one logical line
+    starting with `#`, which `scan_text` then skipped while the shell EXECUTED
+    the apt-get — a gate bypass.  The same holds for a TRAILING comment after
+    code (`helper cmake  # note \\`), which the previous version spliced onto
+    the next line.
+
+    Correction to the previous docstring, which said only the first physical
+    line can start a comment and that a `#` on a continued line is an ordinary
+    word.  Measured with bash 5.2.21 and dash: `printf '%s\\n' a \\` followed
+    by a line `# b c` prints `a` alone, so a `#` that starts a word on a
+    continued line DOES open a comment.  It is stripped like any other.
     """
     lines: list[tuple[int, str]] = []
     pending: list[str] = []
+    quote = ""
     start = 1
     for number, raw in enumerate(text.split("\n"), start=1):
         if not pending:
             start = number
-        body = raw.rstrip()
-        is_comment = not pending and body.lstrip().startswith("#")
-        if body.endswith(continuation) and not is_comment:
-            pending.append(body[: -len(continuation)])
+            quote = ""
+        code, commented, quote = _strip_comment(raw.rstrip(), continuation, quote)
+        if not commented and code.endswith(continuation):
+            pending.append(code[: -len(continuation)])
             continue
-        pending.append(body)
+        pending.append(code)
         lines.append((start, " ".join(part.strip() for part in pending)))
         pending = []
     if pending:
@@ -143,8 +232,12 @@ def _runs_through_helper(logical: str, match_start: int) -> bool:
 
     `if HELPER in raw: continue` exempted the WHOLE line on substring presence,
     so a compound command that named the helper and then fell back to a raw
-    call was skipped entirely.  The exemption now applies to the segment the
-    match actually sits in.
+    call was skipped entirely.  The exemption then applied to the segment the
+    match sits in, but still on substring presence, so a raw call NAMING the
+    helper anywhere in its segment — a trailing `# see <helper>` comment, or
+    an argument — was exempt.  The helper must now be the segment's command
+    word (`_HELPER_COMMAND`): only then is the matched text an argument the
+    helper receives rather than a command the shell runs.
     """
     boundary = 0
     for separator in _SEGMENT_SPLIT.finditer(logical):
@@ -155,19 +248,18 @@ def _runs_through_helper(logical: str, match_start: int) -> bool:
     for separator in _SEGMENT_SPLIT.finditer(logical, match_start):
         segment_end = separator.start()
         break
-    return HELPER in logical[boundary:segment_end]
+    return _HELPER_COMMAND.match(logical[boundary:segment_end]) is not None
 
 
 def scan_text(text: str, path: str) -> list[str]:
     """Return one message per raw apt call in `text`."""
     violations: list[str] = []
+    # `_logical_lines` has already removed every YAML comment and every shell
+    # comment inside a `run:` block.  The workflows explain this very failure
+    # mode in prose, and a gate that fires on its own rationale is a gate that
+    # gets deleted.
     for lineno, logical in _logical_lines(text, "\\"):
         stripped = logical.strip()
-        # A YAML comment, or a shell comment inside a `run:` block.  The
-        # workflows explain this very failure mode in prose, and a gate that
-        # fires on its own rationale is a gate that gets deleted.
-        if stripped.startswith("#"):
-            continue
         for call in _APT_CALL.finditer(logical):
             if _runs_through_helper(logical, call.start()):
                 continue

@@ -75,6 +75,7 @@ from __future__ import annotations
 import re
 import sys
 from bisect import bisect_right
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple, Sequence
 
@@ -179,6 +180,16 @@ _SECRET_NAME_RE = re.compile(
 #   * The offset tail is `(?:[ \t]*[-+][ \t]*<term>)*` where <term> starts
 #     with a character class disjoint from `[ \t]` and from `[-+]`, so a
 #     whitespace run again has one parse.
+#
+# A PARENTHESIZED offset term was still a miss, and the one it hid was the
+# tree's only SCRUB-BARRIER site: `memset(frame + (sizeof frame - bytes), 0,
+# bytes)` in ama_consttime.c did not match at all, so the gate never looked
+# at its annotation or its barrier -- deleting both left the gate green --
+# and `memset(secret_key + (n - k), 0, k)` passed the secret-name rule the
+# same way.  <term> now also admits `( ... )` with one level of nested
+# parentheses.  It opens with `(`, which the identifier alternative cannot,
+# and inside it `[^()]` and `\(` are disjoint, so it keeps one parse per
+# input.  Widening it added exactly that one match on the tree.
 # tests/test_c_secret_zeroization_gate.py pins the growth ratio at ~2.0x per
 # doubling (linear), which is what caught both earlier regressions.
 #: The destination-argument grammar, shared by the memset and bzero forms so a
@@ -191,8 +202,9 @@ _DST_ARGUMENT = (
     r"(?:(?P<amp>&)\s*)?"
     r"(?P<dst>[A-Za-z_][A-Za-z0-9_]*"
     r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*"
-    r"(?:[ \t]*[-+][ \t]*[A-Za-z0-9_]+"
-    r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)*)"
+    r"(?:[ \t]*[-+][ \t]*(?:[A-Za-z0-9_]+"
+    r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*"
+    r"|\((?:[^()]|\([^()]*\))*\)))*)"
     r"(?:\s*\))?\s*,"
 )
 
@@ -352,7 +364,7 @@ class Finding(NamedTuple):
     #: convention (the original rule).  ``"unannotated"`` — a shipped-tree
     #: memset-zero whose destination the convention does not recognise and
     #: that carries no ``PUBLIC-DATA`` annotation (see
-    #: :func:`_has_public_data_annotation`).
+    #: :func:`_is_annotated`).
     kind: str = "secret-named"
     #: The zeroing call as spelled (``memset``, ``bzero``, ``__builtin_memset``…).
     call: str = "memset"
@@ -433,7 +445,7 @@ def c_sources(root: Path | None = None) -> list[Path]:
     return sorted(set(out))
 
 
-def blank_comments_and_literals(text: str) -> str:
+def blank_comments_and_literals(text: str, *, keep_strings: bool = False) -> str:
     """``text`` with comment and string/char-literal bodies replaced by spaces.
 
     Length and line structure are preserved exactly — every replaced character
@@ -450,6 +462,12 @@ def blank_comments_and_literals(text: str) -> str:
     of a real line.  ``puts("a//b"); memset(secret_key, 0, 32);`` was a silent
     MISS under the previous per-line ``re.sub(r"//.*$", ...)``: an ERROR-severity
     gate failing open on a legal C line.
+
+    ``keep_strings=True`` blanks comments only and passes string literals
+    through, still offset-for-offset.  The SCRUB-BARRIER check needs it: part
+    of an inline-asm barrier's meaning is in a string literal (the
+    ``"memory"`` clobber), and reading it from the raw text instead let a
+    comment that merely quoted a barrier count as one.
 
     A single left-to-right pass, so this is linear in the length of the input.
     """
@@ -498,7 +516,7 @@ def blank_comments_and_literals(text: str) -> str:
             # literal is one character wide, so it cannot hide a call.  A string
             # literal can, so its body goes.
             quote = ch
-            keep = quote == "'"
+            keep = quote == "'" or keep_strings
             out.append(quote if keep else " ")
             i += 1
             while i < n and text[i] != quote:
@@ -786,21 +804,72 @@ _PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105 -- a C-comment annotation token
 #: while the barrier supplies exactly the property the volatile stores exist
 #: for.
 #:
-#: The annotation is not taken on trust: :func:`_barrier_follows` requires a
-#: real barrier within :data:`_BARRIER_WINDOW_LINES` after the call, so
-#: deleting the barrier and keeping the comment fails the gate.
+#: The annotation is not taken on trust: :func:`_has_scrub_barrier` requires
+#: a real barrier within :data:`_BARRIER_WINDOW_LINES` after the call, on
+#: every build, so deleting the barrier and keeping the comment fails the
+#: gate.  That sentence was not true of the one real site until the offset
+#: grammar in :data:`_DST_ARGUMENT` admitted its parenthesized offset: the
+#: call was never matched, so neither its annotation nor its barrier was read.
 _SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105 -- a C-comment annotation token the gate greps for, not a credential (ZERO-012)
 
-#: Compiler barriers that make a preceding plain store non-elidable.
-_BARRIER_RE = re.compile(
-    r"""__asm__\s*(?:__volatile__|volatile)?\s*\(\s*""\s*(?::[^)]*)?\)"""
-    r"""|_ReadWriteBarrier\s*\(\s*\)"""
+#: The opening of a GNU inline-asm statement.  What makes one a BARRIER is
+#: decided by :func:`_is_barrier_asm`, not by this pattern.
+#:
+#: The pattern this replaces accepted ``__asm__`` with its operand and clobber
+#: lists optional, and matched it against RAW source lines.  Three things
+#: therefore vouched for a ``SCRUB-BARRIER`` memset that the compiler was
+#: still free to delete — and because the SCRUB-BARRIER waiver is checked
+#: before the secret-name rule, each one also waived a secret-named finding:
+#:
+#: * ``__asm__ volatile("")``.  Measured with gcc 13.3.0 -O2 on
+#:   ``memset(secret_key, 0, 64)`` after the key was used: the stores are gone.
+#:   ``"" : : "r"(secret_key)`` without ``"memory"`` is also elided by gcc, and
+#:   ``"" ::: "memory"`` without the operand is elided by clang 18.1.3 -O2 for
+#:   a buffer whose address never escapes (``ama_stack_wipe_below``'s frame is
+#:   exactly that).  Only ``"" : : "r"(buf) : "memory"`` kept the stores under
+#:   both compilers, which is the form ``ama_consttime.c`` uses.
+#: * ``#if defined(_MSC_VER) _ReadWriteBarrier(); #endif`` — no barrier at all
+#:   in the gcc/clang builds.
+#: * a COMMENT quoting a barrier, since raw lines include comments.
+_ASM_RE = re.compile(r"\b(?:__asm__|__asm|asm)\s*(?:(?:__volatile__|__volatile|volatile)\s*)?\(")
+
+#: MSVC's compiler barrier.  Accepted as the MSVC arm of a barrier, never as
+#: the only one: see :func:`_has_scrub_barrier`.
+_MSVC_BARRIER_RE = re.compile(r"\b_ReadWriteBarrier\s*\(\s*\)")
+
+#: A preprocessor conditional directive, in comment- and literal-blanked text.
+_CONDITIONAL_RE = re.compile(
+    r"^[ \t]*#[ \t]*(?P<kind>ifdef|ifndef|if|elifdef|elifndef|elif|else|endif)\b",
+    re.MULTILINE,
 )
 
 #: How far after the memset the barrier may sit.  Small on purpose: the
 #: barrier belongs beside the write it protects, and a wide window would let
 #: an unrelated barrier elsewhere in a long function vouch for it.
 _BARRIER_WINDOW_LINES = 12
+
+
+class _Source(NamedTuple):
+    """One file's text in the three views the annotation checks need.
+
+    All three have the same length and the same newlines, so one offset or
+    one line number indexes the same character in each.
+    """
+
+    #: The file as written.
+    text: str
+    #: Comments and string/char literal bodies blanked (``blank_comments_and_literals``).
+    blanked: str
+    #: Comments blanked, string literals kept (``keep_strings=True``).
+    code: str
+    #: Offset of the first character of each line.
+    line_starts: list[int]
+
+    def line(self, view: str, line_no: int) -> str:
+        """Line ``line_no`` (1-based) of ``view``, without its newline."""
+        begin = self.line_starts[line_no - 1]
+        end = self.line_starts[line_no] - 1 if line_no < len(self.line_starts) else len(view)
+        return view[begin:end]
 
 
 def _in_shipped_tree(path: Path) -> bool:
@@ -834,34 +903,225 @@ def _call_end_offset(blanked: str, start: int) -> int:
     return len(blanked) - 1
 
 
-def _has_public_data_annotation(lines: list[str], first_line: int, last_line: int) -> bool:
-    """Whether the call spanning ``first_line..last_line`` (1-based) is annotated.
+def _comment_text(source: _Source, line_no: int) -> str:
+    """The characters of line ``line_no`` that sit inside a comment."""
+    raw = source.line(source.text, line_no)
+    code = source.line(source.code, line_no)
+    return "".join(r if r != c else " " for r, c in zip(raw, code))
 
-    The annotation is accepted on any line the call occupies, or on the line
-    immediately above it — the two places the existing sites put it.
+
+def _is_annotated(source: _Source, token: str, first_line: int, last_line: int) -> bool:
+    """Whether the call spanning ``first_line..last_line`` (1-based) carries ``token``.
+
+    The token must be written in a comment, on a line the call occupies or on
+    the line immediately above it — the two places the existing sites put it.
+
+    The line above counts ONLY when it holds no code.  It used to count
+    unconditionally, so in::
+
+        memset(&input_block, 0, n);  // PUBLIC-DATA: input_block — ...
+        memset(kr, 0, sizeof kr);
+
+    the second call borrowed the first one's annotation and a bare,
+    elidable memset shipped unreported: deleting the comment from
+    ``ama_argon2.c``'s second consecutive annotated memset left the gate
+    green.  A comment-only line above is still an annotation of the call
+    below it; a statement above is annotating itself.
     """
-    lo = max(first_line - 1, 1)
-    hi = min(last_line, len(lines))
-    return any(_PUBLIC_DATA_TOKEN in lines[i - 1] for i in range(lo, hi + 1))
+    candidates = list(range(first_line, last_line + 1))
+    if first_line > 1 and not source.line(source.blanked, first_line - 1).strip():
+        candidates.insert(0, first_line - 1)
+    return any(token in _comment_text(source, number) for number in candidates)
 
 
-def _barrier_follows(lines: list[str], last_line: int) -> bool:
-    """Whether a compiler barrier appears just after the call.
+def _is_barrier_asm(source: _Source, open_paren: int, close_paren: int, names: set[str]) -> bool:
+    """Whether the asm statement whose operands span the parentheses is a barrier.
+
+    A barrier here is an INPUT operand naming the scrubbed object and
+    ``"memory"`` among the clobbers — e.g.
+    ``__asm__ __volatile__("" : : "r"(frame) : "memory")``.  Both are
+    load-bearing, measured (see :data:`_ASM_RE`): without the operand clang
+    deletes the memset of a buffer whose address never escapes; without the
+    clobber (``: "cc"`` in its place included) gcc does.  The template and the
+    ``volatile`` qualifier are deliberately not examined: a ``"nop"`` template
+    and a non-volatile asm with an unused output both kept the stores under
+    gcc 13.3.0 and clang 18.1.3 at -O2, so requiring either would be a rule
+    with no measured property behind it.
+
+    The sections are split at top-level colons in the blanked text (so a colon
+    inside a string or comment cannot split them); the clobbers are read from
+    the comment-blanked text with strings kept, and the operand names from the
+    fully blanked one, so a comment can supply neither.
+
+    That exclusion of comments is REDUNDANT with :func:`_barriers_in`, which
+    already locates the asm in the blanked text, and it is kept deliberately:
+    measured by mutation, either layer alone keeps a commented-out barrier from
+    counting, and only removing both lets it through.  The tests therefore pin
+    the property (a quoted barrier is refused), not either layer.
+    """
+    cuts = [open_paren]
+    depth = 0
+    for index in range(open_paren + 1, close_paren):
+        char = source.blanked[index]
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif char == ":" and depth == 0:
+            cuts.append(index)
+    cuts.append(close_paren)
+    sections = [(cuts[k] + 1, cuts[k + 1]) for k in range(len(cuts) - 1)]
+    if len(sections) < 4:
+        return False
+    inputs, clobbers = sections[2], sections[3]
+    operand_text = source.blanked[inputs[0] : inputs[1]]
+    if not any(re.search(r"\b" + re.escape(name) + r"\b", operand_text) for name in names):
+        return False
+    return '"memory"' in source.code[clobbers[0] : clobbers[1]]
+
+
+def _barriers_in(source: _Source, start: int, end: int, names: set[str]) -> tuple[bool, bool]:
+    """``(any barrier, a gcc/clang barrier)`` in ``[start, end)``, no directives inside."""
+    for asm in _ASM_RE.finditer(source.blanked, start, end):
+        matched = _match_call_arguments(source.blanked, asm.end() - 1)
+        if matched is not None and _is_barrier_asm(source, asm.end() - 1, matched[1] - 1, names):
+            return True, True
+    return _MSVC_BARRIER_RE.search(source.blanked, start, end) is not None, False
+
+
+@dataclass
+class _Group:
+    """A preprocessor conditional group: its arms, and whether they are exhaustive."""
+
+    #: An ``#else`` arm exists, so some arm is compiled on every build.
+    exhaustive: bool = False
+    #: The ``#endif`` was reached inside the window.
+    closed: bool = False
+    #: Each arm's items: ``(begin, end)`` text spans and nested groups.
+    arms: list[list[tuple[int, int] | _Group]] = field(default_factory=list)
+
+
+def _parse_conditionals(
+    directives: list[re.Match[str]], index: int, start: int, end: int
+) -> tuple[list[tuple[int, int] | _Group], int, re.Match[str] | None]:
+    """Parse ``[start, end)`` into text spans and conditional groups.
+
+    Returns ``(items, index, terminator)``: ``terminator`` is the
+    ``#elif``/``#else``/``#endif`` that ended this sequence (``index`` is its
+    position in ``directives``), or None when ``end`` was reached.
+    """
+    items: list[tuple[int, int] | _Group] = []
+    position = start
+    while index < len(directives):
+        directive = directives[index]
+        items.append((position, directive.start()))
+        if directive.group("kind") not in ("if", "ifdef", "ifndef"):
+            return items, index, directive
+        group = _Group()
+        items.append(group)
+        index += 1
+        position = directive.end()
+        while True:
+            arm, index, terminator = _parse_conditionals(directives, index, position, end)
+            group.arms.append(arm)
+            if terminator is None:
+                return items, index, None
+            index += 1
+            position = terminator.end()
+            if terminator.group("kind") == "else":
+                group.exhaustive = True
+            if terminator.group("kind") == "endif":
+                group.closed = True
+                break
+    items.append((position, end))
+    return items, index, None
+
+
+def _covers(
+    source: _Source, items: list[tuple[int, int] | _Group], names: set[str]
+) -> tuple[bool, bool]:
+    """``(every preprocessor path reaches a barrier, some path reaches a gcc/clang one)``.
+
+    A conditional group covers only if it is closed, has an ``#else``, and
+    every arm covers — so ``#if defined(_MSC_VER) _ReadWriteBarrier(); #endif``
+    leaves the other builds bare and does not count.
+    """
+    covered = False
+    native = False
+    for item in items:
+        if isinstance(item, _Group):
+            arms = [_covers(source, arm, names) for arm in item.arms]
+            native = native or any(arm_native for _, arm_native in arms)
+            if item.exhaustive and item.closed and all(arm_covered for arm_covered, _ in arms):
+                covered = True
+            continue
+        any_barrier, gnu_barrier = _barriers_in(source, item[0], item[1], names)
+        covered = covered or any_barrier
+        native = native or gnu_barrier
+    return covered, native
+
+
+def _has_scrub_barrier(source: _Source, call_close: int, last_line: int, names: set[str]) -> bool:
+    """Whether a real compiler barrier follows the call on every build.
 
     What makes ``SCRUB-BARRIER`` a claim the gate checks rather than a comment
-    it believes.
+    it believes.  The window opens just after the call's closing parenthesis
+    (not at the start of its line, whose trailing comment is not code) and
+    runs :data:`_BARRIER_WINDOW_LINES` lines past the call, or to the end of
+    the enclosing block if that comes first — a barrier in the next function
+    does not protect this one's write.
+
+    Every preprocessor path through the window must reach a barrier (a
+    gcc/clang one per :func:`_is_barrier_asm`, or ``_ReadWriteBarrier()`` for
+    an MSVC arm), and at least one path must reach the gcc/clang one.  A
+    ``#else``/``#elif`` of a group the call itself sits in starts a sibling
+    arm the call is never compiled with, so that arm is skipped to its
+    ``#endif``.
     """
-    lo = max(last_line, 1)
-    hi = min(last_line + _BARRIER_WINDOW_LINES, len(lines))
-    return any(_BARRIER_RE.search(lines[i - 1]) for i in range(lo, hi + 1))
-
-
-def _has_scrub_barrier_annotation(lines: list[str], first_line: int, last_line: int) -> bool:
-    """Annotated ``SCRUB-BARRIER`` AND a real barrier after the call."""
-    lo = max(first_line - 1, 1)
-    hi = min(last_line, len(lines))
-    annotated = any(_SCRUB_BARRIER_TOKEN in lines[i - 1] for i in range(lo, hi + 1))
-    return annotated and _barrier_follows(lines, last_line)
+    last = min(last_line + _BARRIER_WINDOW_LINES, len(source.line_starts))
+    end = source.line_starts[last] if last < len(source.line_starts) else len(source.text)
+    depth = 0
+    for index in range(call_close + 1, end):
+        char = source.blanked[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < 0:
+                end = index
+                break
+    directives = list(_CONDITIONAL_RE.finditer(source.blanked, call_close + 1, end))
+    items: list[tuple[int, int] | _Group] = []
+    index = 0
+    position = call_close + 1
+    while True:
+        parsed, index, terminator = _parse_conditionals(directives, index, position, end)
+        items.extend(parsed)
+        if terminator is None:
+            break
+        index += 1
+        position = terminator.end()
+        if terminator.group("kind") == "endif":
+            # The call's own group closed; what follows runs after it.
+            continue
+        # `#else`/`#elif` of the call's own group: the arms up to its `#endif`
+        # are never compiled with the call, so they cannot protect it.
+        nesting = 0
+        while index < len(directives) and (
+            directives[index].group("kind") != "endif" or nesting > 0
+        ):
+            kind = directives[index].group("kind")
+            if kind in ("if", "ifdef", "ifndef"):
+                nesting += 1
+            elif kind == "endif":
+                nesting -= 1
+            index += 1
+        if index == len(directives):
+            break
+        position = directives[index].end()
+        index += 1
+    covered, native = _covers(source, items, names)
+    return covered and native
 
 
 def scan_text(text: str, path: Path) -> list[Finding]:
@@ -907,6 +1167,12 @@ def scan_text(text: str, path: Path) -> list[Finding]:
     for match in re.finditer(r"\n", text):
         line_starts.append(match.end())
 
+    # The annotation checks index lines through `line_starts`, so they read
+    # the same line in all three views whatever line breaks the file uses.
+    source = _Source(
+        text, blanked, blank_comments_and_literals(text, keep_strings=True), line_starts
+    )
+
     findings: list[Finding] = []
     shipped = _in_shipped_tree(path)
     matches = [match for pattern in _ZEROING_CALL_RES for match in pattern.finditer(blanked)]
@@ -918,16 +1184,23 @@ def scan_text(text: str, path: Path) -> list[Finding]:
         line_no = bisect_right(line_starts, match.start())
         raw = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
         expression = ("&" if match.group("amp") else "") + match.group("dst")
-        end_line = bisect_right(line_starts, _call_end_offset(blanked, match.start()))
-        if _has_scrub_barrier_annotation(lines, line_no, end_line):
+        call_close = _call_end_offset(blanked, match.start())
+        end_line = bisect_right(line_starts, call_close)
+        # The barrier's operand may name the object (`frame`) or the member
+        # the naming convention resolves to (`ctx->key` -> `key`).
+        base = re.match(r"[A-Za-z_][A-Za-z0-9_]*", match.group("dst"))
+        names = {dst} | ({base.group(0)} if base else set())
+        if _is_annotated(source, _SCRUB_BARRIER_TOKEN, line_no, end_line) and _has_scrub_barrier(
+            source, call_close, end_line, names
+        ):
             # Secret destination, non-elidable by an explicit barrier that
-            # _barrier_follows() has just confirmed is there.
+            # _has_scrub_barrier() has just confirmed is there.
             continue
         if _SECRET_NAME_RE.match(dst):
             findings.append(Finding(path, line_no, dst, raw, expression, call=call))
             continue
         if shipped:
-            if not _has_public_data_annotation(lines, line_no, end_line):
+            if not _is_annotated(source, _PUBLIC_DATA_TOKEN, line_no, end_line):
                 findings.append(
                     Finding(path, line_no, dst, raw, expression, "unannotated", call=call)
                 )

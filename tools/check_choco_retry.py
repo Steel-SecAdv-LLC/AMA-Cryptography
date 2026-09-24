@@ -41,7 +41,8 @@ broken one, and nothing checked it.
 What counts as a violation
 --------------------------
 Any ``choco install`` (or ``choco.exe install``, or the ``cinst`` alias) in a
-workflow's YAML that is not on a line naming the helper.
+workflow's YAML that is not an argument of the helper, i.e. whose segment does
+not have the helper as its command word.
 
 Two kinds of line are skipped, both because they are prose rather than
 something a runner executes:
@@ -95,13 +96,25 @@ WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 #: Requiring a non-dash after the dashes leaves exactly one parse per
 #: token and still matches `-y`, `--no-install-recommends`,
 #: `-o Key=Value` and `-t bookworm-backports`.
+#:
+#: A POWERSHELL EXPANSION WHERE THE SUB-COMMAND COULD BE COUNTS AS ONE, for
+#: the reason check_apt_retry.py records: the option run consumes only `-`
+#: tokens, so `choco $ChocoArgs install cmake` and
+#: `choco @chocoArgs install cmake` passed as no call at all.  The gate
+#: cannot know what an expansion (`$var`, `$env:X`, `$(...)`, `"$var"`, or an
+#: `@splat`) holds — options, or the sub-command itself (`choco $cmd pkg`) —
+#: so it is counted as a call rather than guessed to be a harmless one.
+_EXPANSION = r"(?:\$|\"\$|@)\S*"
 _CHOCO_OPTION = r"(?:\s+--?[^\s-][^\s]*(?:\s+[^\s-][^\s]*)?)*"
 #: `upgrade` and `install` both reach the feed, so both need the policy.
 #: `uninstall` does not touch the network and is deliberately absent.
-_CHOCO_SUBCOMMAND = r"(?:install|upgrade)"
+_CHOCO_SUBCOMMAND = r"(?:(?:install|upgrade)\b|" + _EXPANSION + r")"
 _CHOCO_CALL = re.compile(
-    r"\b(?:choco|choco\.exe|chocolatey)\b" + _CHOCO_OPTION + r"\s+" + _CHOCO_SUBCOMMAND + r"\b"
-    r"|\bcinst\b"
+    r"\b(?:choco|choco\.exe|chocolatey)\b"
+    + _CHOCO_OPTION
+    + r"\s+"
+    + _CHOCO_SUBCOMMAND
+    + r"|\bcinst\b"
 )
 
 
@@ -114,9 +127,66 @@ _YAML_NAME = re.compile(r"^-?\s*name\s*:")
 #: helper that ran.
 _SEGMENT_SPLIT = re.compile(r"(?:&&|\|\||;|\|)")
 
+#: What may precede the helper's path in the segment it runs as — the same
+#: set check_apt_retry.py documents: the YAML list marker and `run:` key, an
+#: interpreter (`pwsh`, `powershell`…) and its options, the PowerShell call
+#: (`&`) and dot-source (`.`) operators, and `VAR=value` assignments.  No
+#: whitespace-terminated token is matched by two alternatives, so a token has
+#: one parse and a failing match is linear.
+_LAUNCHER = (
+    r"(?:-|run:|sudo|env|exec|command|time|then|do|else|bash|sh|pwsh|powershell"
+    r"|\{|\(|&|\.|[A-Za-z_][A-Za-z0-9_]*=\S*|-\S+)"
+)
+
+#: The helper as the COMMAND WORD of its segment — optionally quoted, and
+#: optionally rooted at `./` or a workspace variable (`$env:GITHUB_WORKSPACE/`,
+#: `$GITHUB_WORKSPACE/`, `${GITHUB_WORKSPACE}/`).
+_HELPER_COMMAND = re.compile(
+    r"\s*(?:"
+    + _LAUNCHER
+    + r"\s+)*[\"']?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?/|\./)?"
+    + re.escape(HELPER)
+    + r"[\"']?(?:\s|$)"
+)
+
+
+def _strip_comment(line: str, escape: str, quote: str) -> tuple[str, bool, str]:
+    """Split a physical line at its comment: `(code, commented, quote)`.
+
+    `#` opens a comment when it starts a token outside quotes — at the start
+    of the line, after whitespace, or after `;`, `&`, `|` or `(` — in
+    PowerShell as in a POSIX shell, and YAML ends a plain scalar at ` #`.
+    `escape` (the backtick for PowerShell) protects the character after it;
+    `quote` carries an open quotation in from a continued line.
+
+    Only what the shell itself discards is dropped, so stripping can hide no
+    command.  What it removes matters: `_runs_through_helper` used to test the
+    whole segment for the helper's path, and a trailing comment is part of the
+    segment — `choco install x  # see .github/scripts/choco-install.ps1` was
+    exempted by its own comment.
+    """
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if quote:
+            if char == escape and quote == '"':
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+        elif char == escape:
+            index += 2
+            continue
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace() or line[index - 1] in ";&|("):
+            return line[:index], True, ""
+        index += 1
+    return line, False, quote
+
 
 def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
-    """`(first_physical_line_number, spliced_text)` for each logical line.
+    """`(first_physical_line_number, spliced_code)` for each logical line.
 
     `scan_text` iterated PHYSICAL lines and required the binary and the
     sub-command on the same one, so a POSIX `\\` (or PowerShell backtick)
@@ -124,23 +194,28 @@ def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
     seen.  Splicing first makes the scan see what the shell sees; the reported
     line number stays the first physical line, which is where a reader looks.
 
-    A COMMENT line never continues.  Neither PowerShell nor a POSIX shell
-    carries a comment across a newline, so a trailing continuation character
-    inside one is comment text, not a splice — and honouring it swallowed the
-    NEXT physical line into a ``#``-prefixed logical line that ``scan_text``
-    skips, so a comment ending in a backtick hid the raw call under it.
+    Comments are removed per PHYSICAL line, before splicing (see
+    `_strip_comment`), and a commented line never continues.  Neither
+    PowerShell nor a POSIX shell carries a comment across a newline, so a
+    trailing continuation character inside one is comment text, not a splice —
+    and honouring it swallowed the NEXT physical line into a ``#``-prefixed
+    logical line that ``scan_text`` skipped, so a comment ending in a backtick
+    hid the raw call under it.  A TRAILING comment after code is the same case
+    and was still being spliced.
     """
     lines: list[tuple[int, str]] = []
     pending: list[str] = []
+    quote = ""
     start = 1
     for number, raw in enumerate(text.split("\n"), start=1):
         if not pending:
             start = number
-        body = raw.rstrip()
-        if body.endswith(continuation) and not body.lstrip().startswith("#"):
-            pending.append(body[: -len(continuation)])
+            quote = ""
+        code, commented, quote = _strip_comment(raw.rstrip(), continuation, quote)
+        if not commented and code.endswith(continuation):
+            pending.append(code[: -len(continuation)])
             continue
-        pending.append(body)
+        pending.append(code)
         lines.append((start, " ".join(part.strip() for part in pending)))
         pending = []
     if pending:
@@ -153,8 +228,10 @@ def _runs_through_helper(logical: str, match_start: int) -> bool:
 
     `if HELPER in raw: continue` exempted the WHOLE line on substring presence,
     so a compound command that named the helper and then fell back to a raw
-    call was skipped entirely.  The exemption now applies to the segment the
-    match actually sits in.
+    call was skipped entirely.  The exemption then applied to the segment the
+    match sits in, but still on substring presence, so a raw call naming the
+    helper anywhere in its segment was exempt.  The helper must now be the
+    segment's command word (`_HELPER_COMMAND`).
     """
     boundary = 0
     for separator in _SEGMENT_SPLIT.finditer(logical):
@@ -165,16 +242,16 @@ def _runs_through_helper(logical: str, match_start: int) -> bool:
     for separator in _SEGMENT_SPLIT.finditer(logical, match_start):
         segment_end = separator.start()
         break
-    return HELPER in logical[boundary:segment_end]
+    return _HELPER_COMMAND.match(logical[boundary:segment_end]) is not None
 
 
 def scan_text(text: str, path: str) -> list[str]:
     """Return one message per raw Chocolatey install in ``text``."""
     violations: list[str] = []
+    # `_logical_lines` has already removed every comment (see the module
+    # docstring for why comments are prose, not commands).
     for lineno, logical in _logical_lines(text, "`"):
         stripped = logical.strip()
-        if stripped.startswith("#"):
-            continue
         # A YAML `name:` is a label, not a command.  See the module docstring:
         # this gate's own step name spells `choco install`.
         if _YAML_NAME.match(stripped):

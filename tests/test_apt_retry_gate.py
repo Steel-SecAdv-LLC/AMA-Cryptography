@@ -165,6 +165,28 @@ def test_missing_helper_fails(tmp_path: Path) -> None:
         # Near misses that must stay accepted.
         ("          echo 'adapt-get install nothing'", False, "a word ending in apt-get"),
         ("          apt-mark hold cmake", False, "apt-mark touches no network"),
+        # A trailing comment is not the helper running.  The exemption was a
+        # substring test over the whole segment, comment included, so a raw
+        # call was exempted by its own TODO.
+        (
+            "          sudo apt-get install -y libfoo"
+            "  # TODO: move to .github/scripts/apt-install.sh",
+            True,
+            "a raw call whose trailing comment names the helper",
+        ),
+        (
+            "          .github/scripts/apt-install.sh cmake  # was: sudo apt-get install cmake",
+            False,
+            "the helper, with a comment quoting the raw call it replaced",
+        ),
+        # Expansions in the option run.  The run consumed only `-` tokens, so
+        # the sub-command never lined up and these were not seen as calls.
+        ("          sudo apt-get $APT_OPTS install -y libfoo", True, "a $VAR option run"),
+        ("          sudo apt-get ${APT_FLAGS} install cmake", True, "a ${VAR} option run"),
+        ('          apt-get "${OPTS[@]}" update', True, "a quoted array expansion"),
+        ('          apt-get -o "Acquire::Retries=3" update', True, "a quoted option value"),
+        ("          apt-get $CMD cmake", True, "a sub-command held in a variable"),
+        ("          sudo apt-get -y remove cmake", False, "remove after an option"),
     ],
 )
 def test_gate_verdicts(line: str, expect_violation: bool, label: str) -> None:
@@ -738,6 +760,63 @@ class TestLogicalLinesAndSegmentScopedExemption:
     def test_the_helper_alone_is_still_exempt(self) -> None:
         text = "  run: .github/scripts/apt-install.sh --no-install-recommends cmake\n"
         assert gate.scan_text(text, "w.yml") == []
+
+    def test_naming_the_helper_as_an_argument_does_not_exempt(self) -> None:
+        """The helper has to be the command the segment runs, not a word in it."""
+        text = "  run: sudo apt-get install -y x --reason .github/scripts/apt-install.sh\n"
+        assert len(gate.scan_text(text, "w.yml")) == 1
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "  run: .github/scripts/apt-install.sh apt $EXTRA\n",
+            '  run: "$GITHUB_WORKSPACE/.github/scripts/apt-install.sh" apt $EXTRA\n',
+            "  run: sudo -E bash ./.github/scripts/apt-install.sh apt ${EXTRA}\n",
+        ],
+    )
+    def test_an_apt_shaped_helper_argument_is_exempt(self, text: str) -> None:
+        """`apt $EXTRA` here is a package list the helper receives.
+
+        It matches the call pattern (an expansion may be the sub-command), so
+        this is what pins the exemption itself: with `_runs_through_helper`
+        returning False it fails, which the plain helper lines above cannot
+        show because they contain no call-shaped text.
+        """
+        assert gate.scan_text(text, "w.yml") == []
+
+    def test_a_trailing_comment_does_not_splice_the_next_line(self) -> None:
+        """A backslash inside a trailing comment is comment text.
+
+        Spliced, the raw call on the next line joined the helper's segment and
+        was exempted by it.
+        """
+        text = (
+            "  run: |\n"
+            "    .github/scripts/apt-install.sh cmake  # see note \\\n"
+            "    sudo apt-get install -y ninja\n"
+        )
+        found = gate.scan_text(text, "w.yml")
+        assert len(found) == 1, found
+        assert found[0].startswith("w.yml:3:"), found[0]
+
+    def test_a_comment_on_a_continued_line_does_not_exempt(self) -> None:
+        """bash and dash both treat a word-initial `#` on a continued line as
+        a comment, so the helper's path there is prose, not the command."""
+        text = (
+            "  run: |\n    sudo apt-get install -y x \\\n      # .github/scripts/apt-install.sh\n"
+        )
+        found = gate.scan_text(text, "w.yml")
+        assert len(found) == 1, found
+        assert found[0].startswith("w.yml:2:"), found[0]
+
+    @pytest.mark.parametrize("token", ["$X", "-o $X", '-o "x', "--x -o y"])
+    def test_expansion_tokens_keep_the_scan_linear(self, token: str) -> None:
+        """Accepting an expansion as the sub-command must keep the scan linear."""
+        line = "  run: apt-get " + " ".join([token] * 96) + " zzz\n"
+        start = time.perf_counter()
+        gate.scan_text(line, "w.yml")
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, f"96 {token!r} tokens took {elapsed:.2f}s"
 
     def test_the_option_run_is_not_exponential(self) -> None:
         """``-{1,2}[^\\s]+`` gave every ``--x`` token two parses, so n had 2^n.

@@ -526,6 +526,26 @@ class TestZeroValueAndDestinationSpellings:
     def test_a_non_secret_destination_with_an_offset_is_still_clean(self) -> None:
         assert gate.scan_text("memset(buffer + 4, 0, 28);", _INLINE) == []
 
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "secret_key + (n - k)",
+            "secret_key + (sizeof secret_key - k)",
+            "secret_key + (sizeof(secret_key) - k)",
+            "ctx->hmac_key + (len - 1)",
+        ],
+    )
+    def test_a_parenthesized_offset_is_matched(self, expression: str) -> None:
+        """The offset term admitted no parentheses, so these were no call at all.
+
+        That is how the tree's one SCRUB-BARRIER site,
+        ``memset(frame + (sizeof frame - bytes), 0, bytes)``, escaped the gate
+        entirely: neither its annotation nor its barrier was ever examined.
+        """
+        findings = gate.scan_text(f"memset({expression}, 0, 32);", _INLINE)
+        assert len(findings) == 1, f"memset({expression}, 0, 32) was not flagged"
+        assert findings[0].dst in ("secret_key", "hmac_key")
+
 
 class TestMemsetBehindAMacro:
     """A function-like macro wrapping memset was a total bypass.
@@ -826,6 +846,7 @@ class TestPatternIsLinear:
         [
             "memset((void",  # a failing cast
             "memset(secret_key +",  # a failing destination offset
+            "memset(secret_key + (",  # a failing parenthesized offset
             "memset(secret_key, ",  # a failing value
         ],
     )
@@ -957,6 +978,13 @@ class TestPatternIsLinear:
         ):
             assert gate._MEMSET_RE.search(line), line
 
+    @pytest.mark.parametrize("filler", [" ", "a", "(a)", "- "])
+    def test_an_unclosed_parenthesized_offset_does_not_blow_up(self, filler: str) -> None:
+        """The parenthesized offset term scans to a `)` that never comes."""
+        pathological = "memset(secret_key + (" + filler * 100_000
+        elapsed = _floor_seconds(lambda: gate._MEMSET_RE.search(pathological))
+        assert elapsed < 1.0, f"an unclosed offset over {filler!r} took {elapsed:.2f}s"
+
     def test_member_chain_does_not_blow_up(self) -> None:
         pathological = "memset(" + "a->" * 50_000 + "!"
         elapsed = _floor_seconds(lambda: gate._MEMSET_RE.search(pathological))
@@ -1086,6 +1114,53 @@ class TestShippedTreeAnnotationRule:
         )
         assert [f.kind for f in gate.scan_text(path.read_text(), path)] == ["unannotated"]
 
+    def test_a_neighbours_annotation_does_not_cover_the_call_below(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The line above counts only when it is a comment, not a statement.
+
+        Two consecutive memsets with only the first annotated: the second read
+        its neighbour's ``PUBLIC-DATA`` from the line above and passed.  That
+        is ``ama_argon2.c``'s pair of annotated memsets with the second
+        comment deleted — measured green on the gate as it stood.
+        """
+        path = self._shipped(
+            tmp_path,
+            monkeypatch,
+            "memset(&input_block, 0, 16);  // PUBLIC-DATA: input_block — pad\n"
+            "memset(kr, 0, sizeof kr);\n",
+        )
+        assert [(f.line_no, f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
+            (2, "kr", "unannotated")
+        ]
+
+    def test_a_block_comment_line_above_still_annotates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A comment-only line is still an annotation of the call below it."""
+        path = self._shipped(
+            tmp_path,
+            monkeypatch,
+            "/* why this is safe:\n * PUBLIC-DATA: sel — pre-use init */\nmemset(sel, 0, 32);\n",
+        )
+        assert gate.scan_text(path.read_text(), path) == []
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # A line holding only a string literal has no code on it, so only
+            # the in-a-comment test tells it apart from an annotation.
+            'static const char m[] =\n    "PUBLIC-DATA: sel"\n;memset(sel, 0, 32);\n',
+            'memset(sel, 0, 32); puts("PUBLIC-DATA: sel");\n',
+        ],
+    )
+    def test_the_token_must_be_in_a_comment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str
+    ) -> None:
+        """An annotation is a comment; the same letters in a string are data."""
+        path = self._shipped(tmp_path, monkeypatch, body)
+        assert [f.kind for f in gate.scan_text(path.read_text(), path)] == ["unannotated"]
+
     def test_a_secret_named_destination_is_flagged_despite_an_annotation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1143,11 +1218,36 @@ void wipe(void) {
     (void)frame;
 }
 """
+    #: The shape ``ama_consttime.c`` uses: MSVC's barrier in the MSVC arm, the
+    #: gcc/clang one in the ``#else``.
+    SRC_BOTH_ARMS = """
+void wipe(void) {
+    unsigned char frame[4096];
+    memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame — dead stack
+#ifdef _MSC_VER
+    _ReadWriteBarrier();
+#else
+    __asm__ __volatile__("" : : "r"(frame) : "memory");
+#endif
+}
+"""
     SRC_MSVC = """
 void wipe(void) {
     unsigned char frame[4096];
     memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame — dead stack
     _ReadWriteBarrier();
+}
+"""
+    #: A secret-named scrub followed by ``{tail}``.  A refused barrier leaves
+    #: the secret-named finding standing, which is the point: the waiver is
+    #: checked before the name rule, so an accepted fake barrier dropped it.
+    SRC_SECRET_TEMPLATE = """
+void wipe(const unsigned char *in) {
+    unsigned char secret_key[64];
+    memcpy(secret_key, in, 64);
+    use(secret_key);
+    memset(secret_key, 0, sizeof secret_key);  // SCRUB-BARRIER: secret_key
+{tail}
 }
 """
     SRC_SECRET_NAMED = """
@@ -1167,8 +1267,147 @@ void wipe(const unsigned char *in) {
     def test_annotated_with_a_real_barrier_passes(self) -> None:
         assert self._shipped(self.SRC_OK) == []
 
-    def test_the_msvc_barrier_also_counts(self) -> None:
-        assert self._shipped(self.SRC_MSVC) == []
+    def test_the_msvc_barrier_counts_as_the_msvc_arm(self) -> None:
+        assert self._shipped(self.SRC_BOTH_ARMS) == []
+
+    def test_the_msvc_barrier_alone_is_refused(self) -> None:
+        """``_ReadWriteBarrier()`` does nothing for a gcc or clang build.
+
+        This test used to assert the opposite (``test_the_msvc_barrier_also_
+        counts``), which pinned the defect: a file whose only barrier is MSVC's
+        ships a plain, elidable memset on every other toolchain.
+        """
+        assert [f.dst for f in self._shipped(self.SRC_MSVC)] == ["frame"]
+
+    @pytest.mark.parametrize(
+        ("tail", "label"),
+        [
+            ('    __asm__ volatile("");', "no operand, no clobber"),
+            ('    __asm__ __volatile__("" : : "r"(secret_key));', "no clobber list"),
+            ('    __asm__ __volatile__("" : : "r"(secret_key) : "cc");', "no memory clobber"),
+            ('    __asm__ __volatile__("" ::: "memory");', "no operand naming the buffer"),
+            ('    __asm__ __volatile__("" : : "r"(other) : "memory");', "operand names another"),
+            (
+                "#if defined(_MSC_VER)\n    _ReadWriteBarrier();\n#endif",
+                "an MSVC-only arm",
+            ),
+            (
+                '#if defined(__GNUC__)\n    __asm__ __volatile__("" : : "r"(secret_key) : '
+                '"memory");\n#endif',
+                "a gcc arm with no #else",
+            ),
+            (
+                '    /* __asm__ __volatile__("" : : "r"(secret_key) : "memory"); */',
+                "a barrier quoted in a comment",
+            ),
+            (
+                '    puts("__asm__ __volatile__(\\"\\" : : \\"r\\"(secret_key) : \\"memory\\")");',
+                "a barrier quoted in a string",
+            ),
+            (
+                '}\nvoid next(unsigned char *secret_key) {\n    __asm__ __volatile__("" : : '
+                '"r"(secret_key) : "memory");',
+                "a barrier in the next function",
+            ),
+        ],
+    )
+    def test_a_barrier_that_does_not_stop_elision_is_refused(self, tail: str, label: str) -> None:
+        """Each of these passed as a barrier and so waived the secret-named finding.
+
+        Measured with gcc 13.3.0 and clang 18.1.3 at -O2 (see the gate's
+        ``_ASM_RE`` comment): the operand-free, clobber-free, ``"cc"``-only and
+        memory-only-without-operand forms each let one of the two compilers
+        delete the memset.  The MSVC-only and ``#if``-without-``#else`` forms
+        leave some build with no barrier; a comment or string is no barrier.
+        """
+        findings = self._shipped(self.SRC_SECRET_TEMPLATE.replace("{tail}", tail))
+        assert [(f.dst, f.kind) for f in findings] == [
+            ("secret_key", "secret-named")
+        ], f"{label}: {findings}"
+
+    def test_a_barrier_quoted_on_the_annotation_line_is_refused(self) -> None:
+        """The window used to start at the memset's own line, comment included."""
+        src = (
+            "void wipe(void) {\n    unsigned char secret_key[64];\n"
+            "    memset(secret_key, 0, 64);  // SCRUB-BARRIER: secret_key; "
+            '__asm__ __volatile__("" : : "r"(secret_key) : "memory")\n}\n'
+        )
+        assert [f.dst for f in self._shipped(src)] == ["secret_key"]
+
+    def test_a_barrier_before_the_call_on_its_line_is_refused(self) -> None:
+        """The window opens at the call's closing parenthesis, not its line.
+
+        A barrier ahead of the write on the same line orders nothing after it.
+        """
+        src = (
+            "void wipe(void) {\n    unsigned char secret_key[64];\n"
+            '    __asm__ __volatile__("" : : "r"(secret_key) : "memory"); '
+            "memset(secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n}\n"
+        )
+        assert [f.dst for f in self._shipped(src)] == ["secret_key"]
+
+    def test_a_barrier_in_a_sibling_arm_is_refused(self) -> None:
+        """An ``#else`` of the call's own group is never compiled with the call."""
+        src = (
+            "void wipe(void) {\n    unsigned char secret_key[64];\n#ifdef A\n"
+            "    memset(secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n#else\n"
+            '    __asm__ __volatile__("" : : "r"(secret_key) : "memory");\n#endif\n}\n'
+        )
+        assert [f.dst for f in self._shipped(src)] == ["secret_key"]
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            # After the call's own group closes, the barrier runs after the call.
+            "void wipe(void) {\n    unsigned char secret_key[64];\n#ifdef A\n"
+            "    memset(secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n#endif\n"
+            '    __asm__ __volatile__("" : : "r"(secret_key) : "memory");\n}\n',
+            # The operand may name the object whose member is scrubbed.
+            "void wipe(struct ctx *c) {\n"
+            "    memset(c->secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n"
+            '    __asm__ __volatile__("" : : "r"(c) : "memory");\n}\n',
+            # A comment-only line above annotates, as it does for PUBLIC-DATA.
+            "void wipe(void) {\n    unsigned char secret_key[64];\n"
+            "    /* SCRUB-BARRIER: secret_key */\n    memset(secret_key, 0, 64);\n"
+            '    __asm__ __volatile__("" : : "r"(secret_key) : "memory");\n}\n',
+        ],
+    )
+    def test_real_barriers_in_other_positions_are_accepted(self, src: str) -> None:
+        assert self._shipped(src) == []
+
+    def test_a_neighbours_scrub_barrier_annotation_does_not_cover_the_call_below(self) -> None:
+        """The same line-above rule as PUBLIC-DATA: a statement annotates itself."""
+        src = (
+            "void wipe(void) {\n    unsigned char frame[64], kr[32];\n"
+            "    memset(frame, 0, sizeof frame);  // SCRUB-BARRIER: frame\n"
+            "    memset(kr, 0, sizeof kr);\n"
+            '    __asm__ __volatile__("" : : "r"(frame), "r"(kr) : "memory");\n}\n'
+        )
+        assert [(f.dst, f.kind) for f in self._shipped(src)] == [("kr", "unannotated")]
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ("// SCRUB-BARRIER: frame", "// frame"),
+            ('"r"(frame) : "memory");', '"r"(frame));'),
+            ('"r"(frame) : "memory");', '"r"(frame) : "cc");'),
+            ('__asm__ __volatile__("" : : "r"(frame) : "memory");', '__asm__ volatile("");'),
+            ('#else\n    __asm__ __volatile__("" : : "r"(frame) : "memory");\n', ""),
+        ],
+    )
+    def test_the_real_scrub_barrier_site_is_checked(self, old: str, new: str) -> None:
+        """``ama_consttime.c``'s stack wipe, mutated: each mutation must fail.
+
+        On the gate as it stood none did — not even deleting the annotation —
+        because the call was never matched (see
+        ``test_a_parenthesized_offset_is_matched``).
+        """
+        path = REPO_ROOT / "src" / "c" / "ama_consttime.c"
+        text = path.read_text(encoding="utf-8")
+        assert gate.scan_text(text, path) == [], "the real site must pass unmutated"
+        assert text.count(old) == 1, f"mutation anchor drifted: {old!r}"
+        findings = gate.scan_text(text.replace(old, new), path)
+        assert [f.dst for f in findings] == ["frame"], findings
 
     def test_the_annotation_without_a_barrier_is_refused(self) -> None:
         """Non-vacuity: deleting the barrier and keeping the comment must fail,
