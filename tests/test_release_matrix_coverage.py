@@ -31,6 +31,7 @@ import pathlib
 import re
 from typing import Any, cast
 
+import pytest
 import yaml
 
 from tools.check_required_contexts import matrix_combinations
@@ -194,26 +195,148 @@ def test_the_gate_is_not_vacuous() -> None:
     )
 
 
+#: A condition runs its step on failure only if it names one of these; any
+#: other condition -- and an absent ``if:``, which GitHub reads as
+#: ``success()`` -- skips the step once an earlier step has failed.
+_RUNS_ON_FAILURE = re.compile(r"\b(?:always|failure)\(\s*\)|!\s*cancelled\(\s*\)")
+
+#: Uploads whose artefact is the deliverable a later consumer outside the
+#: workflow takes, so publishing a failed run's partial output under that name
+#: would be worse than withholding it.  Uploads that a later job of the SAME
+#: workflow downloads are recognised as deliverables from the workflow itself
+#: and need no entry here.
+_EXTERNAL_DELIVERABLES: dict[tuple[str, str, str], str] = {
+    ("auto-docs.yml", "update-docs", "sphinx-html"): (
+        "the built documentation; a failed Sphinx build's partial HTML is not "
+        "evidence of anything and must not be mistaken for the docs"
+    ),
+    ("security.yml", "sbom", "sbom"): (
+        "the SBOM itself (INVARIANT-11); a failed run's partial SBOM published "
+        "under the same name would read as the release's bill of materials"
+    ),
+}
+
+
+def _downloaded_names(jobs: dict[str, Any]) -> list[str]:
+    """``name``/``pattern`` of every download-artifact step in one workflow."""
+    names: list[str] = []
+    for job in jobs.values():
+        for step in job.get("steps") or []:
+            if "download-artifact" in str(step.get("uses", "")):
+                with_ = step.get("with") or {}
+                names.extend(str(with_[key]) for key in ("name", "pattern") if key in with_)
+    return names
+
+
+def _consumed_in_workflow(artifact: str, downloads: list[str]) -> bool:
+    """Whether a later job downloads ``artifact`` (by name or glob pattern).
+
+    A matrix-expanded name (``wheels-${{ matrix.os }}``) is matched with its
+    expression as a wildcard.
+    """
+    import fnmatch
+
+    concrete = re.sub(r"\$\{\{[^}]*\}\}", "*", artifact)
+    return any(
+        fnmatch.fnmatchcase(concrete, want)
+        or fnmatch.fnmatchcase(want, concrete)
+        or concrete == want
+        for want in downloads
+    )
+
+
+def _success_gated_uploads(
+    workflows: dict[str, dict[str, Any]],
+) -> tuple[list[str], set[tuple[str, str, str]]]:
+    """``(offenders, external deliverables witnessed)`` over parsed workflows."""
+    offenders: list[str] = []
+    witnessed: set[tuple[str, str, str]] = set()
+    for name, data in sorted(workflows.items()):
+        jobs = data.get("jobs") or {}
+        downloads = _downloaded_names(jobs)
+        for job_name, job in jobs.items():
+            for step in job.get("steps") or []:
+                if "upload-artifact" not in str(step.get("uses", "")):
+                    continue
+                condition = str(step.get("if") or "")
+                if _RUNS_ON_FAILURE.search(condition):
+                    continue
+                artifact = str((step.get("with") or {}).get("name", ""))
+                key = (name, job_name, artifact)
+                if key in _EXTERNAL_DELIVERABLES:
+                    witnessed.add(key)
+                    continue
+                if artifact and _consumed_in_workflow(artifact, downloads):
+                    continue
+                offenders.append(f"{name}:{job_name}: {step.get('name')}")
+    return offenders, witnessed
+
+
+def _all_workflows() -> dict[str, dict[str, Any]]:
+    return {
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted(WORKFLOWS.glob("*.yml"))
+    }
+
+
 def test_no_artifact_upload_is_gated_on_success() -> None:
-    """`if: success()` on an upload withholds evidence exactly on failure.
+    """A success-gated upload withholds evidence exactly on failure.
 
     ci.yml's Bandit upload documents the defect and the fix (always());
     the benchmark and constant-time uploads carried the same gate for
-    another release.  Pin the property tree-wide rather than per incident:
-    no upload-artifact step in any workflow may be success()-gated.
+    another release.  Pinned tree-wide: an upload that is not a deliverable
+    must run when an earlier step failed.
+
+    "Success-gated" is every condition that does not name ``always()``,
+    ``failure()`` or ``!cancelled()`` -- including NO ``if:``, which GitHub
+    evaluates as ``success()``.  The first revision matched the literal
+    string ``success()`` only, so deleting ``if: always()`` from the Bandit
+    upload, the case cited above, passed.
     """
-    offenders: list[str] = []
-    for path in sorted(WORKFLOWS.glob("*.yml")):
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        for job_name, job in (data.get("jobs") or {}).items():
-            for step in job.get("steps") or []:
-                uses = step.get("uses", "")
-                if "upload-artifact" not in uses:
-                    continue
-                condition = str(step.get("if", "")).strip()
-                if condition == "success()":
-                    offenders.append(f"{path.name}:{job_name}: {step.get('name')}")
+    offenders, witnessed = _success_gated_uploads(_all_workflows())
     assert offenders == [], (
         "artifact uploads gated on success() withhold their evidence exactly "
         f"when a gate fails and somebody needs it: {offenders}"
     )
+    stale = sorted(set(_EXTERNAL_DELIVERABLES) - witnessed)
+    assert stale == [], f"deliverable entries that match no upload: {stale}"
+
+
+@pytest.mark.parametrize(
+    "condition", [None, "", "success()", "${{ success() }}", "github.event_name == 'push'"]
+)
+def test_an_upload_with_a_success_gated_condition_is_reported(condition: str | None) -> None:
+    step: dict[str, Any] = {
+        "name": "Upload report",
+        "uses": "actions/upload-artifact@v4",
+        "with": {"name": "report"},
+    }
+    if condition is not None:
+        step["if"] = condition
+    workflows = {"x.yml": {"jobs": {"check": {"steps": [step]}}}}
+    assert _success_gated_uploads(workflows)[0] == ["x.yml:check: Upload report"]
+
+
+@pytest.mark.parametrize("condition", ["always()", "${{ failure() }}", "!cancelled()"])
+def test_an_upload_that_runs_on_failure_is_accepted(condition: str) -> None:
+    step = {
+        "name": "Upload report",
+        "uses": "actions/upload-artifact@v4",
+        "if": condition,
+        "with": {"name": "report"},
+    }
+    workflows = {"x.yml": {"jobs": {"check": {"steps": [step]}}}}
+    assert _success_gated_uploads(workflows)[0] == []
+
+
+def test_a_deliverable_a_later_job_downloads_is_not_evidence() -> None:
+    upload = {
+        "name": "Upload wheels",
+        "uses": "actions/upload-artifact@v4",
+        "with": {"name": "wheels-${{ matrix.os }}"},
+    }
+    download = {"uses": "actions/download-artifact@v4", "with": {"pattern": "wheels-*"}}
+    workflows = {"r.yml": {"jobs": {"build": {"steps": [upload]}, "sign": {"steps": [download]}}}}
+    assert _success_gated_uploads(workflows)[0] == []
+    del workflows["r.yml"]["jobs"]["sign"]
+    assert _success_gated_uploads(workflows)[0] == ["r.yml:build: Upload wheels"]

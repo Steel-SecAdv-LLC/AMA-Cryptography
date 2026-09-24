@@ -1745,16 +1745,25 @@ class TestContinuousRNGTest:
         finally:
             ms._rng_state["previous"] = saved_previous
 
-    def test_post_seeds_the_health_state_in_digest_form(self) -> None:
+    def test_post_seeds_the_health_state_in_digest_form(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """POST's seed must match what secure_token_bytes compares against.
 
         If POST stored the raw sample while the draw compares digests, the first
         comparison after POST could never match and the very first post-POST
         draw would escape the continuous check entirely.
+
+        The draws are fixed so the stored value can be named: the digest of
+        POST's second sample.  A length check could not tell them apart -- the
+        raw sample is 32 bytes too -- so reverting the seed to the raw sample
+        passed it.
         """
         from ama_cryptography import _module_state as ms
         from ama_cryptography import _self_test as st
 
+        samples = iter([b"\x11" * 32, b"\x22" * 32])
+        monkeypatch.setattr(st.secrets, "token_bytes", lambda n: next(samples)[:n])
         saved_previous = ms._rng_state["previous"]
         saved_results = list(st._SELF_TEST_RESULTS)
         try:
@@ -1763,7 +1772,8 @@ class TestContinuousRNGTest:
             assert passed, reason
             stored = ms._rng_state["previous"]
             assert stored is not None
-            assert len(stored) == 32  # a SHA-256 digest, not a raw token
+            assert stored != b"\x22" * 32, "POST seeded the raw sample, not its digest"
+            assert stored == hashlib.sha256(b"\x22" * 32).digest()
         finally:
             ms._rng_state["previous"] = saved_previous
             st._SELF_TEST_RESULTS[:] = saved_results

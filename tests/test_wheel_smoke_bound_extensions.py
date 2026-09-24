@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The release smoke test's binding-coverage assertion must count, not match.
 
-``tools/wheel_smoke_test.py::check_integrity_and_bindings`` documents itself as
+``tools/wheel_smoke_test.py::check_binding_extensions_are_bound`` documents itself as
 distinguishing three outcomes: a digest MISMATCH (tampering), PARTIAL coverage,
 and "uncovered (the wheel was built without ``--bind-extensions``)".  Its third
 assertion tested ``"binding extension(s) verified" in detail``.
@@ -55,30 +55,45 @@ def test_the_count_is_parsed_out_of_the_sentence(
     assert tool._bound_extension_count(detail) == expected
 
 
-def test_zero_bound_extensions_is_not_a_pass(tool: ModuleType) -> None:
+def _run_binding_check(tool: ModuleType, monkeypatch: pytest.MonkeyPatch, detail: str) -> list[str]:
+    """Run the smoke test's real check over one integrity detail string.
+
+    The first revision of these tests parsed the count and then evaluated a
+    boolean written in the test itself, so reverting the check to the
+    substring test -- or to ``bound is not None`` -- left them green.
+    """
+    stub = SimpleNamespace(module_self_test_results=lambda: [("integrity", True, detail)])
+    monkeypatch.setattr(tool, "ama_cryptography", stub)
+    tool._FAILURES.clear()
+    tool.check_binding_extensions_are_bound()
+    failures = list(tool._FAILURES)
+    tool._FAILURES.clear()
+    return failures
+
+
+def test_zero_bound_extensions_is_not_a_pass(
+    tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The defect, stated as the property it violated.
 
     A substring test cannot tell 0 from 6; a count can, and 0 is the state a
     release wheel must never ship in.
     """
-    zero = tool._bound_extension_count("0 binding extension(s) verified")
-    assert zero == 0
-    assert not (
-        zero is not None and zero > 0
-    ), "an artefact that binds no extension satisfied the 'binds at least one' check"
+    failures = _run_binding_check(tool, monkeypatch, "0 binding extension(s) verified")
+    assert any("binds at least one" in f for f in failures), failures
 
 
-def test_an_unreadable_detail_is_not_a_pass(tool: ModuleType) -> None:
+def test_an_unreadable_detail_is_not_a_pass(
+    tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Fail-closed: a smoke test that cannot read the count must not pass."""
-    missing = tool._bound_extension_count("integrity verified (no count here)")
-    assert missing is None
-    assert not (missing is not None and missing > 0)
+    failures = _run_binding_check(tool, monkeypatch, "integrity verified (no count here)")
+    assert any("binds at least one" in f for f in failures), failures
 
 
-def test_a_real_count_still_passes(tool: ModuleType) -> None:
-    """The control: the assertion must still accept a correctly built wheel."""
-    six = tool._bound_extension_count("6 binding extension(s) verified")
-    assert six is not None and six > 0
+def test_a_real_count_still_passes(tool: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The control: the check must still accept a correctly built wheel."""
+    assert _run_binding_check(tool, monkeypatch, "6 binding extension(s) verified") == []
 
 
 def _install_self_test_stub(

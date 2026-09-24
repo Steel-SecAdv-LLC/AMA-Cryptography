@@ -101,22 +101,54 @@ def test_the_method_still_exists() -> None:
     assert "_integrity_signature.py" in source
 
 
+def _setup_function(name: str) -> ast.FunctionDef:
+    """The ``def name`` in setup.py, parsed -- comments and docstrings are not code."""
+    for node in ast.walk(ast.parse(SETUP_PY.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"setup.py no longer defines {name}")
+
+
+def _method_calls(node: ast.AST, receiver: str, method: str) -> list[ast.Call]:
+    """Every ``<receiver>.<method>(...)`` call under ``node``."""
+    return [
+        sub
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Attribute)
+        and sub.func.attr == method
+        and isinstance(sub.func.value, ast.Name)
+        and sub.func.value.id == receiver
+    ]
+
+
 def test_the_tracked_artefact_is_moved_aside_not_deleted() -> None:
-    source = _signer_source()
-    assert ".rename(" in source, (
-        "the pre-sign artefact is not renamed anywhere; a deletion leaves the "
-        "developer's checkout without its previous build's artefact on any "
-        "signer failure"
+    """The artefact is RENAMED to its side file, and never unlinked.
+
+    Read from the AST of ``_stash_artefacts_aside``, which does the move, and
+    of the signer, which must call it.  The first revision searched the
+    signer's source text only, after the move had been extracted into the
+    helper: its ``.rename(`` was the restore's ``_aside.rename(_artefact)``,
+    and its unlink scan saw only ``_aside.unlink(...)``, so changing the move
+    to ``artefact.unlink()`` passed every test here.
+    """
+    signer = _setup_function("_run_integrity_signer")
+    assert any(
+        isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Attribute)
+        and sub.func.attr == "_stash_artefacts_aside"
+        for sub in ast.walk(signer)
+    ), "the signer no longer moves the previous artefact aside"
+    stash = _setup_function("_stash_artefacts_aside")
+    renames = _method_calls(stash, "artefact", "rename")
+    assert renames and all(
+        len(call.args) == 1 and isinstance(call.args[0], ast.Name) and call.args[0].id == "aside"
+        for call in renames
+    ), "the artefact is not renamed to its side file"
+    assert _method_calls(stash, "artefact", "unlink") == [], (
+        "the artefact is deleted; a signer failure then leaves the checkout "
+        "without its previous build's artefact"
     )
-    # The only unlink of the artefact path itself would be a deletion.  Unlinks
-    # of the `.pre-sign` side file are the cleanup and are fine.
-    for line in source.splitlines():
-        stripped = line.strip()
-        if ".unlink(" not in stripped or stripped.startswith("#"):
-            continue
-        assert (
-            "pre-sign" in stripped or "_aside" in stripped
-        ), f"setup.py unlinks something other than the moved-aside copy: {stripped!r}"
 
 
 def test_a_signer_failure_restores_the_artefact() -> None:
@@ -134,14 +166,39 @@ def test_a_signer_failure_restores_the_artefact() -> None:
     ), "the RuntimeError does not tell the operator the tree was repaired"
 
 
+def _variables_popped_from_the_child_env() -> set[str]:
+    """String constants a ``for x in (...): env.pop(x, ...)`` loop removes.
+
+    Read from the AST, so a name that survives only in a comment or the
+    docstring -- both of which mention the variables -- does not count.
+    """
+    popped: set[str] = set()
+    signer = _setup_function("_run_integrity_signer")
+    for loop in ast.walk(signer):
+        if not (isinstance(loop, ast.For) and isinstance(loop.target, ast.Name)):
+            continue
+        if not isinstance(loop.iter, (ast.Tuple, ast.List)):
+            continue
+        pops_target = any(
+            call.args and isinstance(call.args[0], ast.Name) and call.args[0].id == loop.target.id
+            for statement in loop.body
+            for call in _method_calls(statement, "env", "pop")
+        )
+        if pops_target:
+            popped.update(
+                element.value
+                for element in loop.iter.elts
+                if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            )
+    return popped
+
+
 @pytest.mark.parametrize("variable", STRICTNESS_VARIABLES)
 def test_the_signer_child_does_not_inherit_strictness(variable: str) -> None:
-    source = _signer_source()
-    assert variable in source, (
+    assert variable in _variables_popped_from_the_child_env(), (
         f"{variable} is not scrubbed from the signer child's environment, so a "
         f"developer who exports it cannot `pip install .`"
     )
-    assert "env.pop(" in source, "nothing removes anything from the child env"
 
 
 def test_the_bind_extensions_comment_matches_the_repair_flow() -> None:

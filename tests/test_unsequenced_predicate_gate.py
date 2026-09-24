@@ -104,39 +104,84 @@ def _writes_through_pointer(param: str) -> bool:
     return not re.search(r"\bconst\b\s*[A-Za-z_0-9\s]*[*\[]", param) and "const" not in param
 
 
-def _declared_parameters(sources: dict[pathlib.Path, str]) -> dict[str, list[str]]:
-    """Map every function defined or declared under ``src/c`` to its parameters.
+#: Words that can precede a call without making it a declaration.
+_NOT_A_TYPE = frozenset({"return", "else", "case", "goto", "sizeof", "do"})
 
-    Callees this cannot resolve — function-like macros, compiler builtins,
-    intrinsics — are treated as non-writers, which is the safe direction for a
-    gate whose finding is "this call writes what the other one reads".
+
+def _is_declarator(text: str, name_start: int) -> bool:
+    """Whether the identifier at ``name_start`` is being DECLARED, not called.
+
+    A prototype or definition names a type before the function: the previous
+    token is an identifier (``int``, ``ama_error_t``, ``static``) or a ``*``.
+    A call is preceded by an operator, ``(``, ``,``, ``=``, ``;`` or a brace,
+    or by a keyword such as ``return``.  The first revision took any
+    ``name(...)`` followed by ``;`` as a declaration, so an ordinary call
+    statement could define a callee's "parameters" from its arguments.
     """
+    i = name_start - 1
+    while i >= 0 and text[i] in " \t\n\r":
+        i -= 1
+    if i < 0:
+        return False
+    if text[i] == "*":
+        return True
+    if not (text[i].isalnum() or text[i] == "_"):
+        return False
+    j = i
+    while j >= 0 and (text[j].isalnum() or text[j] == "_"):
+        j -= 1
+    return text[j + 1 : i + 1] not in _NOT_A_TYPE
+
+
+def _declarations(text: str) -> dict[str, list[str]]:
+    """Parameters of every function one source text declares or defines."""
     table: dict[str, list[str]] = {}
-    for text in sources.values():
-        for match in _CALLEE.finditer(text):
-            name = match.group(1)
-            if name in _KEYWORDS:
-                continue
-            depth, i, n = 0, match.end() - 1, len(text)
-            while i < n:
-                if text[i] == "(":
-                    depth += 1
-                elif text[i] == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                elif text[i] == ";":
+    for match in _CALLEE.finditer(text):
+        name = match.group(1)
+        if name in _KEYWORDS or not _is_declarator(text, match.start(1)):
+            continue
+        depth, i, n = 0, match.end() - 1, len(text)
+        while i < n:
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
                     break
-                i += 1
-            if i >= n or text[i] != ")":
-                continue
-            tail = text[i + 1 :].lstrip()
-            if tail[:1] not in ("{", ";"):
-                continue
-            params = _split_params(text[match.end() : i])
-            if params and params != ["void"]:
-                table.setdefault(name, params)
+            elif text[i] == ";":
+                break
+            i += 1
+        if i >= n or text[i] != ")":
+            continue
+        tail = text[i + 1 :].lstrip()
+        if tail[:1] not in ("{", ";"):
+            continue
+        params = _split_params(text[match.end() : i])
+        if params and params != ["void"]:
+            table.setdefault(name, params)
     return table
+
+
+def _declared_parameters(
+    sources: dict[pathlib.Path, str],
+) -> dict[pathlib.Path, dict[str, list[str]]]:
+    """Per translation unit: every function it or any header declares.
+
+    Callees this cannot resolve -- function-like macros, compiler builtins,
+    intrinsics -- are treated as non-writers, which is the safe direction for
+    a gate whose finding is "this call writes what the other one reads".
+
+    Per unit, not one global table: same-named ``static`` helpers in two
+    ``.c`` files have different parameters, and a global ``setdefault`` let
+    whichever file sorted first decide for both.  A unit's own declarations
+    take precedence over a header's.
+    """
+    headers: dict[str, list[str]] = {}
+    for path, text in sources.items():
+        if path.suffix == ".h":
+            for name, params in _declarations(text).items():
+                headers.setdefault(name, params)
+    return {path: {**headers, **_declarations(text)} for path, text in sources.items()}
 
 
 def _arguments(call_text: str, open_paren: int) -> list[str]:
@@ -180,17 +225,42 @@ def _sources() -> dict[pathlib.Path, str]:
     }
 
 
+def _statements(text: str) -> list[tuple[int, str]]:
+    """``(first line, text)`` of every statement-level expression.
+
+    Split at ``;``, ``{`` and ``}`` outside parentheses, so a statement
+    wrapped across lines is one unit and an ``if (...)`` condition ends at its
+    block.  The first revision read one physical line at a time and only the
+    text after its first ``=``, so ``if (...)``, ``return ...`` and any
+    expression wrapped after its operator were never examined.
+    """
+    units: list[tuple[int, str]] = []
+    start, depth = 0, 0
+    for index, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and char in ";{}":
+            chunk = text[start:index]
+            if chunk.strip():
+                first = start + len(chunk) - len(chunk.lstrip())
+                units.append((text.count("\n", 0, first) + 1, chunk))
+            start = index + 1
+    return units
+
+
 def find_unsequenced(sources: dict[pathlib.Path, str]) -> list[str]:
     """Every ``|``/``&`` expression whose operands write and read one object."""
-    params = _declared_parameters(sources)
+    tables = _declared_parameters(sources)
     findings: list[str] = []
     for path, text in sources.items():
-        for number, line in enumerate(text.splitlines(), 1):
-            if "=" not in line:
-                continue
-            rhs = line.split("=", 1)[1]
+        params = tables[path]
+        for number, unit in _statements(text):
+            if "#" in unit.lstrip()[:1]:
+                continue  # a preprocessor line, not an expression
             for pattern in _BINARY.values():
-                operands = pattern.split(rhs)
+                operands = pattern.split(unit)
                 for left, right in itertools.pairwise(operands):
                     if not (_CALLEE.search(left) and _CALLEE.search(right)):
                         continue
@@ -202,7 +272,8 @@ def find_unsequenced(sources: dict[pathlib.Path, str]) -> list[str]:
                             where = path.relative_to(REPO_ROOT)
                         except ValueError:  # pragma: no cover - scratch trees
                             where = path
-                        findings.append(f"{where}:{number}: {sorted(shared)}: {line.strip()}")
+                        compact = " ".join(unit.split())
+                        findings.append(f"{where}:{number}: {sorted(shared)}: {compact}")
     return findings
 
 
@@ -215,6 +286,29 @@ class TestNoPredicateWritesAndReadsOneObjectUnsequenced:
             "reads before the write. Hoist the write into its own statement:\n  "
             + "\n  ".join(findings)
         )
+
+    def test_parameters_are_resolved_per_translation_unit(self, tmp_path: pathlib.Path) -> None:
+        """Same-named ``static`` helpers in two files keep their own signatures.
+
+        One global table let the first file sorted decide: here ``a.c``'s
+        read-only ``load`` would have hidden ``b.c``'s writing one, and the
+        defect in ``b.c`` with it.
+        """
+        a = tmp_path / "a.c"
+        b = tmp_path / "b.c"
+        sources = {
+            a: "static int load(const int *r, const int *b);\n",
+            b: "static int load(int *r, const int *b);\n"
+            "static int is_zero(const int *a);\n"
+            "void f(void) { int bad = (1 ^ load(&d, src)) | is_zero(&d); }\n",
+        }
+        assert find_unsequenced(sources), "b.c's writing load() was resolved as a.c's reader"
+
+    def test_a_call_statement_is_not_a_declaration(self) -> None:
+        text = "int load(int *r, const int *b);\nvoid g(void) { load(&d, s); x = use(buf[0]); }\n"
+        table = _declarations(text)
+        assert table.get("load") == ["int *r", "const int *b"]
+        assert "use" not in table
 
     @pytest.mark.parametrize(
         ("source", "expected"),
@@ -246,6 +340,36 @@ class TestNoPredicateWritesAndReadsOneObjectUnsequenced:
                 "void f(void) { unsigned t = load32(m) | (load32(m + 4) << 16); }\n",
                 False,
                 id="pure-loads-of-one-buffer-are-fine",
+            ),
+            pytest.param(
+                "static int load(int *r, const int *b);\n"
+                "static int is_zero(const int *a);\n"
+                "int f(void) { if ((1 ^ load(&d, src)) | is_zero(&d)) return 1; return 0; }\n",
+                True,
+                id="an-if-condition",
+            ),
+            pytest.param(
+                "static int load(int *r, const int *b);\n"
+                "static int is_zero(const int *a);\n"
+                "int f(void) { return (1 ^ load(&d, src)) | is_zero(&d); }\n",
+                True,
+                id="a-return",
+            ),
+            pytest.param(
+                "static int load(int *r, const int *b);\n"
+                "static int is_zero(const int *a);\n"
+                "int f(void) { if (((1 ^ load(&d, src)) | is_zero(&d)) == 0) return 1;\n"
+                "  return 0; }\n",
+                True,
+                id="a-comparison-after-the-expression",
+            ),
+            pytest.param(
+                "static int load(int *r, const int *b);\n"
+                "static int is_zero(const int *a);\n"
+                "void f(void) { int bad = (1 ^ load(&d, src)) |\n"
+                "                         is_zero(&d); }\n",
+                True,
+                id="wrapped-after-the-operator",
             ),
         ],
     )

@@ -44,6 +44,7 @@ from typing import ClassVar
 
 import pytest
 import pytest as _pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GATE_PATH = REPO_ROOT / "tools" / "check_suppression_hygiene.py"
@@ -187,24 +188,70 @@ class TestCppcheckHasNoSuppressions:
             "per-site suppressions to list."
         )
 
+    #: Every ``--suppress=`` argument, wherever it sits on a command line.
+    _SUPPRESS_ARG = _re.compile(r"--suppress=([^\s\\'\"]+)")
+
+    @classmethod
+    def _command_suppressions(cls, workflow_text: str) -> list[str]:
+        """The ``--suppress=`` bodies of every ``run:`` script, comments dropped.
+
+        Read from the parsed workflow rather than line by line: the first
+        revision inspected only lines that STARTED with ``--suppress=``, so the
+        flag on the ``cppcheck`` line itself, or a one-line invocation, was
+        never read.  Shell comments are dropped so the workflow's prose about
+        past suppressions is not mistaken for one.
+        """
+        found: list[str] = []
+        data = yaml.safe_load(workflow_text) or {}
+        for job in (data.get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                run = step.get("run") if isinstance(step, dict) else None
+                if not isinstance(run, str):
+                    continue
+                code = "\n".join(
+                    line for line in run.splitlines() if not line.lstrip().startswith("#")
+                )
+                found.extend(cls._SUPPRESS_ARG.findall(code))
+        return found
+
+    def _offenders(self, workflow_text: str) -> list[str]:
+        offenders: list[str] = []
+        for body in self._command_suppressions(workflow_text):
+            error_id, _, target = body.partition(":")
+            if target or error_id not in self.RUN_WIDE_IDS:
+                offenders.append(f"--suppress={body}")
+        return offenders
+
     def test_no_file_or_class_wide_suppression_on_the_command_line(self) -> None:
         text = self.WORKFLOW.read_text(encoding="utf-8")
-        offenders: list[str] = []
-        for raw in text.splitlines():
-            line = raw.strip().rstrip("\\").strip()
-            if not line.startswith("--suppress="):
-                continue
-            body = line[len("--suppress=") :]
-            error_id, _, target = body.partition(":")
-            if target:
-                offenders.append(line)  # any file-targeted suppression
-            elif error_id not in self.RUN_WIDE_IDS:
-                offenders.append(line)  # a class-wide ID that is not env noise
+        assert self._command_suppressions(text), "no --suppress= read at all: the scan is broken"
+        offenders = self._offenders(text)
         assert not offenders, (
             f"cppcheck suppressions are back on the command line: {offenders}. "
             "Every finding this project maintains is resolved at source; only the "
             f"run-wide environment IDs {sorted(self.RUN_WIDE_IDS)} may remain."
         )
+
+    @pytest.mark.parametrize(
+        "run",
+        [
+            "cppcheck --suppress=uninitvar:src/c/ama_nistp.c \\\n  --force src/c",
+            "cppcheck --force --suppress=uninitvar src/c",
+            "cppcheck \\\n  --suppress=missingIncludeSystem "
+            "--suppress=knownConditionTrueFalse \\\n  src/c",
+        ],
+        ids=["file-scoped-on-the-invocation-line", "one-line", "second-flag-on-a-line"],
+    )
+    def test_a_suppression_anywhere_on_the_command_is_read(self, run: str) -> None:
+        workflow = yaml.safe_dump({"jobs": {"cppcheck": {"steps": [{"run": run}]}}})
+        assert self._offenders(workflow), run
+
+    def test_prose_about_a_suppression_is_not_one(self) -> None:
+        run = (
+            "# was: --suppress=uninitvar:src/c/x.c\ncppcheck --suppress=missingIncludeSystem src/c"
+        )
+        workflow = yaml.safe_dump({"jobs": {"cppcheck": {"steps": [{"run": run}]}}})
+        assert self._offenders(workflow) == []
 
     def test_array_index_out_of_bounds_needs_no_suppression(self) -> None:
         """-DPATH_MAX=4096 removes it and leaves the bounds check live."""

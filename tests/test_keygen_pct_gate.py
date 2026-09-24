@@ -498,9 +498,46 @@ class TestTheRealTree:
         assert gate.main(["--root", str(REPO_ROOT)]) == 0
         assert "every one reaches a pairwise consistency test" in capsys.readouterr().out
 
-    def test_a_collapsed_scope_fails_closed(self, gate: ModuleType, tmp_path: Path) -> None:
-        root = _module(tmp_path, "def native_alpha_keypair():\n    return None\n")
+    @pytest.mark.parametrize(
+        "body",
+        [TestTheRule.WIRED, "", "def unrelated():\n    return None\n"],
+        ids=["one-wired-keygen", "empty-module", "no-keygen"],
+    )
+    def test_a_collapsed_scope_fails_closed(
+        self,
+        gate: ModuleType,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        body: str,
+    ) -> None:
+        """Only the MIN_ENTRY_POINTS floor can fail these: every keygen present
+        is wired, so the unwired branch has nothing to report.
+
+        The control this replaces used an UNWIRED keygen, which exits 1 from
+        the unwired branch whether or not the floor exists; with the floor
+        deleted, a backend whose keygens stopped matching the markers read
+        "OK: 0 keygen entry point(s)" and exited 0.
+        """
+        root = _module(tmp_path, body)
         assert gate.main(["--root", str(root)]) == 1
+        # Named by file: the .pyx scan has a floor with the same wording, and
+        # this tree has no .pyx at all, so an unqualified match would be
+        # satisfied by the wrong floor.
+        assert f"keygen entry point(s) in {gate.BACKEND} " in capsys.readouterr().err
+
+    def test_a_collapsed_binding_scope_fails_closed(
+        self, gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The .pyx floor, reached with the Python scope satisfied."""
+        wired = "".join(
+            TestTheRule.WIRED.replace("native_alpha_keypair", f"native_k{i}_keypair")
+            for i in range(gate.MIN_ENTRY_POINTS)
+        )
+        root = _module(tmp_path, wired)
+        assert gate.main(["--root", str(root)]) == 1
+        err = capsys.readouterr().err
+        assert f"keygen entry point(s) in {gate.PYX_GLOB} " in err, err
+        assert f"in {gate.BACKEND} " not in err, err
 
     def test_a_missing_backend_fails_closed(
         self, gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
