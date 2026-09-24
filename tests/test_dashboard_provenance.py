@@ -100,3 +100,33 @@ class TestLegacyInputsFallBackLoudly:
         assert "read from the working tree at generation time" in page
         # And in that mode the tree's real version is the only honest label.
         assert "v9.9.9-test" not in page
+
+
+class TestTheTemplateCarriesNoFigureOfItsOwn:
+    """Every number on the page comes from the measurement inputs.
+
+    Until 2026-09-24 the template hard-coded a 3.4.0-era story beside the
+    data it rendered: secp256k1 comb before/after latencies and speed-ups
+    ("4.26×", "355 → 83 µs/op"), a "Tightest re-floor 12.0×" tile, a
+    pre-recalibration floor table, a Welch t-test result and a "Measured on
+    Linux x86-64" footer.  Any render — of any run, on any host — republished
+    them as though they described it.  The literals are the negative control.
+    """
+
+    RETIRED = (
+        "4.26×",
+        "3.13×",
+        "12.0×",
+        "355 → 83",
+        "393 → 126",
+        "OLD_FLOORS",
+        "const SECP",
+        "|t| = 0.29",
+        "0.65 × min(measured, canonical)",
+        "Measured on Linux x86-64",
+    )
+
+    def test_the_rendered_page_carries_none_of_the_retired_figures(self) -> None:
+        page = _render(_bench())
+        for literal in self.RETIRED:
+            assert literal not in page, literal

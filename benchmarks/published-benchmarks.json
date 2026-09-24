@@ -1,10 +1,15 @@
 {
-  "schema": 2,
-  "why": "Every number README.md publishes between the published-bench markers, held as data so tools/check_published_benchmarks.py can detect drift in either direction. Each figure cites a source, and each source states the provenance its kind requires: a measurement names its host, build flags, command, sampling, aggregation and runs (AGENTS.md section 8 item 7, INVARIANT-53).",
+  "schema": 3,
+  "why": "Every number published between the published-bench markers of the documents listed under 'documents', held as data so tools/check_published_benchmarks.py can detect drift in either direction. Each figure names the document it is published in and cites a source, and each source states the provenance its kind requires: a measurement names its host, build flags, command, sampling, aggregation and runs (AGENTS.md section 8 item 7, INVARIANT-53).",
+  "documents": [
+    "README.md",
+    "wiki/Cryptography-Algorithms.md",
+    "wiki/Post-Quantum-Cryptography.md"
+  ],
   "sources": {
     "ci-four-run-2026-09-20": {
       "kind": "measurement",
-      "description": "The four benchmark-regression jobs per runner class that the README table reduces to a median and a min-max span. Per-run figures are in docs/BENCHMARK_HISTORY.md (2026-09-22, four-run re-base section) and in the 2026-09-22 entries of benchmarks/baseline.json and benchmarks/arm-baseline.json metadata.baseline_change_log. The derived percentages the region prints (the fast-class run's margin over the other three, the aarch64 spreads, the medians against their floors) are computed from those per-run figures.",
+      "description": "The four benchmark-regression jobs per runner class that the README table reduces to a median and a min-max span. Per-run figures are in docs/BENCHMARK_HISTORY.md (2026-09-22, four-run re-base section) and in the 2026-09-22 entries of benchmarks/baseline.json and benchmarks/arm-baseline.json metadata.baseline_change_log. The derived percentages the region prints (the fast-class run's margin over the other three, the aarch64 spreads, the medians against their floors) are computed from those per-run figures. The wiki's per-algorithm pages (wiki/Cryptography-Algorithms.md and wiki/Post-Quantum-Cryptography.md) restate the ama_sha3_256_hash, ed25519_* and dilithium_* medians of that table and cite this source for them; they carry no figure the README table does not.",
       "measured": "2026-09-20 to 2026-09-21",
       "host": "GitHub-hosted runners: ubuntu-latest (x86_64, a two-class fleet) and ubuntu-24.04-arm (aarch64), the benchmark-regression job of .github/workflows/ci.yml",
       "build": "cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_ENABLE_AVX512=ON -DAMA_ENABLE_NATIVE_ARCH=ON; Python 3.11; pip install Cython>=3.0.0 and -e .[dev], so the six Cython bindings are built and imported",
@@ -113,1556 +118,2154 @@
   },
   "measurements": [
     {
+      "document": "README.md",
       "heading": "",
       "label": "(prose)",
+      "position": 0,
+      "approx": false,
+      "value": "5.0.0",
+      "unit": "",
+      "source": "regression-floor-ledger"
+    },
+    {
+      "document": "README.md",
+      "heading": "",
+      "label": "(prose)",
+      "position": 1,
       "approx": false,
       "value": "45",
       "unit": "%",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "",
       "label": "(prose)",
+      "position": 2,
       "approx": false,
       "value": "15",
       "unit": "%",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "",
       "label": "(prose)",
+      "position": 3,
       "approx": false,
       "value": "25",
       "unit": "%",
       "source": "regression-floor-ledger"
     },
     {
-      "heading": "",
-      "label": "(prose)",
-      "approx": false,
-      "value": "5.0.0",
-      "unit": "",
-      "source": "regression-floor-ledger"
-    },
-    {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(heading)",
+      "position": 0,
       "approx": false,
       "value": "5.0.0",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(heading)",
+      "position": 1,
       "approx": false,
       "value": "2026-09-20",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(heading)",
+      "position": 2,
       "approx": false,
       "value": "21",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
-      "approx": false,
-      "value": "51",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "1.3",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "1.9",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "2.1",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "3.1",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "13.5",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
+      "position": 0,
       "approx": false,
       "value": "0",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 1,
       "approx": false,
       "value": "3.11",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 2,
       "approx": false,
       "value": "35545407750",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 3,
       "approx": false,
       "value": "35548705329",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 4,
       "approx": false,
       "value": "35608144468",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 5,
       "approx": false,
       "value": "35611329428",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 6,
       "approx": false,
       "value": "106170292775",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 7,
       "approx": false,
       "value": "106179299451",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 8,
       "approx": false,
       "value": "106360245063",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 9,
       "approx": false,
       "value": "106370902549",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 10,
       "approx": false,
       "value": "106170292802",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 11,
       "approx": false,
       "value": "106179299071",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 12,
       "approx": false,
       "value": "106360244481",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 13,
       "approx": false,
       "value": "106370902832",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 14,
       "approx": false,
       "value": "2026-09-20",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 15,
       "approx": false,
       "value": "2026-09-21",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 16,
       "approx": false,
       "value": "35548705329",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 17,
       "approx": false,
       "value": "23",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 18,
+      "approx": false,
+      "value": "51",
+      "unit": "%",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 19,
+      "approx": false,
+      "value": "1.3",
+      "unit": "%",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 20,
+      "approx": false,
+      "value": "1.9",
+      "unit": "%",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 21,
+      "approx": false,
+      "value": "2.1",
+      "unit": "%",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 22,
+      "approx": false,
+      "value": "3.1",
+      "unit": "%",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 23,
+      "approx": false,
+      "value": "13.5",
+      "unit": "%",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 24,
       "approx": false,
       "value": "2026-09-07",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 25,
       "approx": false,
       "value": "34070019745",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 26,
       "approx": false,
       "value": "34082980156",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 27,
       "approx": false,
       "value": "34084425292",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 28,
       "approx": false,
       "value": "34084821515",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 29,
       "approx": false,
       "value": "2026",
       "unit": "",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 30,
       "approx": false,
       "value": "09",
       "unit": "",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 0,
       "approx": false,
       "value": "1",
       "unit": "KB",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 1,
       "approx": false,
       "value": "202",
       "unit": "",
       "source": "specification"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 2,
       "approx": false,
       "value": "363,574",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 3,
       "approx": false,
       "value": "362,192",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 4,
       "approx": false,
       "value": "484,921",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 5,
       "approx": false,
       "value": "436,428",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 6,
       "approx": false,
       "value": "433,513",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ama_sha3_256_hash` — AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
+      "position": 7,
       "approx": false,
       "value": "436,658",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes)",
+      "position": 0,
       "approx": false,
       "value": "248,598",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes)",
+      "position": 1,
       "approx": false,
       "value": "247,946",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes)",
+      "position": 2,
       "approx": false,
       "value": "331,652",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes)",
+      "position": 3,
       "approx": false,
       "value": "303,818",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes)",
+      "position": 4,
       "approx": false,
       "value": "303,360",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hmac_sha3_256` — HMAC-SHA3-256 authentication (native C via ctypes)",
+      "position": 5,
       "approx": false,
       "value": "304,312",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 0,
       "approx": false,
       "value": "140",
       "unit": "",
       "source": "specification"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 1,
       "approx": false,
       "value": "3",
       "unit": "",
       "source": "specification"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 2,
       "approx": false,
       "value": "12,368",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 3,
       "approx": false,
       "value": "12,343",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 4,
       "approx": false,
       "value": "16,618",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 5,
       "approx": false,
       "value": "12,282",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 6,
       "approx": false,
       "value": "12,269",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_keygen` — Ed25519 key pair generation through the Python API: CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify run on every key (native keygen alone is about a sixth of the timed operation)",
+      "position": 7,
       "approx": false,
       "value": "12,315",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_sign` — Ed25519 signature generation (native C, 64-byte `seed \\",
+      "position": 0,
       "approx": false,
       "value": "38,811",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_sign` — Ed25519 signature generation (native C, 64-byte `seed \\",
+      "position": 1,
       "approx": false,
       "value": "38,655",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_sign` — Ed25519 signature generation (native C, 64-byte `seed \\",
+      "position": 2,
       "approx": false,
       "value": "50,286",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_sign` — Ed25519 signature generation (native C, 64-byte `seed \\",
+      "position": 3,
       "approx": false,
       "value": "32,846",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_sign` — Ed25519 signature generation (native C, 64-byte `seed \\",
+      "position": 4,
       "approx": false,
       "value": "32,839",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_sign` — Ed25519 signature generation (native C, 64-byte `seed \\",
+      "position": 5,
       "approx": false,
       "value": "32,852",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_verify` — Ed25519 signature verification (native C)",
+      "position": 0,
       "approx": false,
       "value": "27,934",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_verify` — Ed25519 signature verification (native C)",
+      "position": 1,
       "approx": false,
       "value": "27,759",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_verify` — Ed25519 signature verification (native C)",
+      "position": 2,
       "approx": false,
       "value": "38,799",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_verify` — Ed25519 signature verification (native C)",
+      "position": 3,
       "approx": false,
       "value": "31,066",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_verify` — Ed25519 signature verification (native C)",
+      "position": 4,
       "approx": false,
       "value": "30,719",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`ed25519_verify` — Ed25519 signature verification (native C)",
+      "position": 5,
       "approx": false,
       "value": "31,111",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys)",
+      "position": 0,
       "approx": false,
       "value": "3",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys)",
+      "position": 1,
       "approx": false,
       "value": "166,677",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys)",
+      "position": 2,
       "approx": false,
       "value": "166,598",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys)",
+      "position": 3,
       "approx": false,
       "value": "220,752",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys)",
+      "position": 4,
       "approx": false,
       "value": "209,168",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys)",
+      "position": 5,
       "approx": false,
       "value": "208,684",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`hkdf_derive` — HKDF-SHA3-256 key derivation (3 keys)",
+      "position": 6,
       "approx": false,
       "value": "209,407",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_create` — Complete crypto package creation (with PQC)",
+      "position": 0,
       "approx": false,
       "value": "1,856",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_create` — Complete crypto package creation (with PQC)",
+      "position": 1,
       "approx": false,
       "value": "1,836",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_create` — Complete crypto package creation (with PQC)",
+      "position": 2,
       "approx": false,
       "value": "2,479",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_create` — Complete crypto package creation (with PQC)",
+      "position": 3,
       "approx": false,
       "value": "2,135",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_create` — Complete crypto package creation (with PQC)",
+      "position": 4,
       "approx": false,
       "value": "2,110",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_create` — Complete crypto package creation (with PQC)",
+      "position": 5,
       "approx": false,
       "value": "2,177",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_verify` — Complete crypto package verification (with PQC)",
+      "position": 0,
       "approx": false,
       "value": "2,807",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_verify` — Complete crypto package verification (with PQC)",
+      "position": 1,
       "approx": false,
       "value": "2,793",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_verify` — Complete crypto package verification (with PQC)",
+      "position": 2,
       "approx": false,
       "value": "4,244",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_verify` — Complete crypto package verification (with PQC)",
+      "position": 3,
       "approx": false,
       "value": "3,516",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_verify` — Complete crypto package verification (with PQC)",
+      "position": 4,
       "approx": false,
       "value": "3,482",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`full_package_verify` — Complete crypto package verification (with PQC)",
+      "position": 5,
       "approx": false,
       "value": "3,556",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "position": 0,
       "approx": false,
       "value": "6979",
       "unit": "",
       "source": "specification"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "position": 1,
       "approx": false,
       "value": "9,199",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "position": 2,
       "approx": false,
       "value": "9,179",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "position": 3,
       "approx": false,
       "value": "11,869",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "position": 4,
       "approx": false,
       "value": "10,912",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "position": 5,
       "approx": false,
       "value": "10,897",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_sign` — secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "position": 6,
       "approx": false,
       "value": "10,927",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
+      "position": 0,
       "approx": false,
       "value": "3,723",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
+      "position": 1,
       "approx": false,
       "value": "3,717",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
+      "position": 2,
       "approx": false,
       "value": "4,874",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
+      "position": 3,
       "approx": false,
       "value": "4,524",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
+      "position": 4,
       "approx": false,
       "value": "4,517",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`secp256k1_ecdsa_verify` — secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
+      "position": 5,
       "approx": false,
       "value": "4,532",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C)",
+      "position": 0,
       "approx": false,
       "value": "1,530",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C)",
+      "position": 1,
       "approx": false,
       "value": "1,497",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C)",
+      "position": 2,
       "approx": false,
       "value": "1,907",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C)",
+      "position": 3,
       "approx": false,
       "value": "1,670",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C)",
+      "position": 4,
       "approx": false,
       "value": "1,664",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_keygen` — ML-DSA-65 (Dilithium) key pair generation (native C)",
+      "position": 5,
       "approx": false,
       "value": "1,682",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C)",
+      "position": 0,
       "approx": false,
       "value": "3,135",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C)",
+      "position": 1,
       "approx": false,
       "value": "3,106",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C)",
+      "position": 2,
       "approx": false,
       "value": "3,905",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C)",
+      "position": 3,
       "approx": false,
       "value": "3,604",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C)",
+      "position": 4,
       "approx": false,
       "value": "3,456",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_sign` — ML-DSA-65 (Dilithium) signature generation (native C)",
+      "position": 5,
       "approx": false,
       "value": "3,944",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C)",
+      "position": 0,
       "approx": false,
       "value": "10,381",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C)",
+      "position": 1,
       "approx": false,
       "value": "10,367",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C)",
+      "position": 2,
       "approx": false,
       "value": "13,208",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C)",
+      "position": 3,
       "approx": false,
       "value": "11,675",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C)",
+      "position": 4,
       "approx": false,
       "value": "11,664",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`dilithium_verify` — ML-DSA-65 (Dilithium) signature verification (native C)",
+      "position": 5,
       "approx": false,
       "value": "11,683",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "position": 0,
       "approx": false,
       "value": "3,264",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "position": 1,
       "approx": false,
       "value": "3,238",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "position": 2,
       "approx": false,
       "value": "4,360",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "position": 3,
       "approx": false,
       "value": "3,857",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "position": 4,
       "approx": false,
       "value": "3,842",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_keygen` — ML-KEM-1024 (Kyber) key pair generation (native C)",
+      "position": 5,
       "approx": false,
       "value": "3,861",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "position": 0,
       "approx": false,
       "value": "15,978",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "position": 1,
       "approx": false,
       "value": "15,894",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "position": 2,
       "approx": false,
       "value": "21,394",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "position": 3,
       "approx": false,
       "value": "21,970",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "position": 4,
       "approx": false,
       "value": "21,586",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`kyber_encapsulate` — ML-KEM-1024 (Kyber) encapsulation (native C)",
+      "position": 5,
       "approx": false,
       "value": "21,999",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C)",
+      "position": 0,
       "approx": false,
       "value": "1",
       "unit": "KB",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C)",
+      "position": 1,
       "approx": false,
       "value": "232,699",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C)",
+      "position": 2,
       "approx": false,
       "value": "230,869",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C)",
+      "position": 3,
       "approx": false,
       "value": "315,191",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C)",
+      "position": 4,
       "approx": false,
       "value": "234,335",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C)",
+      "position": 5,
       "approx": false,
       "value": "233,826",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`aes_256_gcm_encrypt` — AES-256-GCM encryption of 1KB data (native C)",
+      "position": 6,
       "approx": false,
       "value": "235,180",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "position": 0,
       "approx": false,
       "value": "1",
       "unit": "KB",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "position": 1,
       "approx": false,
       "value": "235,094",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "position": 2,
       "approx": false,
       "value": "231,429",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "position": 3,
       "approx": false,
       "value": "306,089",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "position": 4,
       "approx": false,
       "value": "195,992",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "position": 5,
       "approx": false,
       "value": "195,505",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`chacha20poly1305_encrypt` — ChaCha20-Poly1305 encryption of 1KB data (native C)",
+      "position": 6,
       "approx": false,
       "value": "197,531",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch)",
+      "position": 0,
       "approx": false,
       "value": "18,984",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch)",
+      "position": 1,
       "approx": false,
       "value": "18,894",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch)",
+      "position": 2,
       "approx": false,
       "value": "24,705",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch)",
+      "position": 3,
       "approx": false,
       "value": "25,400",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch)",
+      "position": 4,
       "approx": false,
       "value": "25,394",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult` — X25519 single-shot scalar-mult (native C, default dispatch)",
+      "position": 5,
       "approx": false,
       "value": "25,410",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate",
+      "position": 0,
       "approx": false,
       "value": "4,551",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate",
+      "position": 1,
       "approx": false,
       "value": "4,540",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate",
+      "position": 2,
       "approx": false,
       "value": "5,906",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate",
+      "position": 3,
       "approx": false,
       "value": "6,066",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate",
+      "position": 4,
       "approx": false,
       "value": "6,053",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "`x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate",
+      "position": 5,
       "approx": false,
       "value": "6,075",
       "unit": "",
       "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
-      "approx": false,
-      "value": "1.7",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "0.1",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "0.02",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
-      "approx": false,
-      "value": "2.2",
-      "unit": "%",
-      "source": "ci-four-run-2026-09-20"
-    },
-    {
-      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
-      "label": "(prose)",
+      "position": 0,
       "approx": false,
       "value": "140",
       "unit": "",
       "source": "specification"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 1,
       "approx": false,
       "value": "3",
       "unit": "",
       "source": "specification"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 2,
       "approx": false,
       "value": "2026",
       "unit": "",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 3,
       "approx": false,
       "value": "09",
       "unit": "",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 4,
       "approx": false,
       "value": "2026-09-07",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 5,
       "approx": false,
       "value": "70,496",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 6,
       "approx": false,
       "value": "58,762",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 7,
       "approx": false,
       "value": "15,370",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 8,
       "approx": false,
       "value": "14,678",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 9,
       "approx": false,
       "value": "30,542",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 10,
       "approx": false,
       "value": "31,270",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 11,
       "approx": false,
       "value": "70,496",
       "unit": "",
       "source": "ci-four-run-2026-09-07"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 12,
       "approx": false,
       "value": "1.8469",
       "unit": "",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 13,
       "approx": false,
       "value": "38,170",
       "unit": "",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 14,
+      "approx": false,
+      "value": "1.7",
+      "unit": "%",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 15,
       "approx": false,
       "value": "2026-09-16",
       "unit": "",
       "source": "ci-single-run-2026-09-16"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 16,
       "approx": false,
-      "value": "45",
+      "value": "0.1",
       "unit": "%",
-      "source": "regression-floor-ledger"
+      "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 17,
       "approx": false,
-      "value": "15",
+      "value": "0.02",
       "unit": "%",
-      "source": "regression-floor-ledger"
+      "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 18,
       "approx": false,
-      "value": "25",
+      "value": "2.2",
       "unit": "%",
-      "source": "regression-floor-ledger"
+      "source": "ci-four-run-2026-09-20"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 0,
       "approx": false,
       "value": "2026-09-22",
       "unit": "",
       "source": "regression-floor-ledger"
     },
     {
+      "document": "README.md",
       "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
       "label": "(prose)",
+      "position": 1,
       "approx": false,
       "value": "2026-09-16",
       "unit": "",
       "source": "ci-single-run-2026-09-16"
     },
     {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 2,
+      "approx": false,
+      "value": "45",
+      "unit": "%",
+      "source": "regression-floor-ledger"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 3,
+      "approx": false,
+      "value": "15",
+      "unit": "%",
+      "source": "regression-floor-ledger"
+    },
+    {
+      "document": "README.md",
+      "heading": "5.0.0 on the CI runner classes — four-run medians (2026-09-20/21)",
+      "label": "(prose)",
+      "position": 4,
+      "approx": false,
+      "value": "25",
+      "unit": "%",
+      "source": "regression-floor-ledger"
+    },
+    {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 0,
       "approx": false,
       "value": "8032",
       "unit": "",
       "source": "specification"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 0,
       "approx": false,
       "value": "4096",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 1,
       "approx": false,
       "value": "1024",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 2,
       "approx": false,
       "value": "1",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
-      "approx": true,
-      "value": "1.9",
-      "unit": "KB",
-      "source": "source-constant"
-    },
-    {
-      "heading": "What the rows measure",
-      "label": "(prose)",
+      "position": 0,
       "approx": false,
       "value": "16",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 1,
+      "approx": true,
+      "value": "1.9",
+      "unit": "KB",
+      "source": "source-constant"
+    },
+    {
+      "document": "README.md",
+      "heading": "What the rows measure",
+      "label": "(prose)",
+      "position": 2,
       "approx": false,
       "value": "256",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 3,
       "approx": false,
       "value": "256",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 4,
       "approx": false,
       "value": "64",
       "unit": "",
       "source": "source-constant"
     },
     {
+      "document": "README.md",
       "heading": "What the rows measure",
       "label": "(prose)",
+      "position": 5,
       "approx": false,
       "value": "2026-07-29",
       "unit": "",
       "source": "regression-floor-ledger"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Key generation (`dilithium_keygen`)",
+      "position": 0,
+      "approx": false,
+      "value": "1,530",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Key generation (`dilithium_keygen`)",
+      "position": 1,
+      "approx": false,
+      "value": "1,670",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Signing (`dilithium_sign`)",
+      "position": 0,
+      "approx": false,
+      "value": "3,135",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Signing (`dilithium_sign`)",
+      "position": 1,
+      "approx": false,
+      "value": "3,604",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Verification (`dilithium_verify`)",
+      "position": 0,
+      "approx": false,
+      "value": "10,381",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Verification (`dilithium_verify`)",
+      "position": 1,
+      "approx": false,
+      "value": "11,675",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Key generation (`ed25519_keygen`)",
+      "position": 0,
+      "approx": false,
+      "value": "12,368",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Key generation (`ed25519_keygen`)",
+      "position": 1,
+      "approx": false,
+      "value": "12,282",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Signing (`ed25519_sign`)",
+      "position": 0,
+      "approx": false,
+      "value": "38,811",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Signing (`ed25519_sign`)",
+      "position": 1,
+      "approx": false,
+      "value": "32,846",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Verification (`ed25519_verify`)",
+      "position": 0,
+      "approx": false,
+      "value": "27,934",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "Verification (`ed25519_verify`)",
+      "position": 1,
+      "approx": false,
+      "value": "31,066",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "(prose)",
+      "position": 0,
+      "approx": false,
+      "value": "1",
+      "unit": "KB",
+      "source": "source-constant"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "(prose)",
+      "position": 1,
+      "approx": false,
+      "value": "363,574",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Cryptography-Algorithms.md",
+      "heading": "",
+      "label": "(prose)",
+      "position": 2,
+      "approx": false,
+      "value": "436,428",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Post-Quantum-Cryptography.md",
+      "heading": "",
+      "label": "Key generation (`dilithium_keygen`, includes the INVARIANT-41 pairwise-consistency test)",
+      "position": 0,
+      "approx": false,
+      "value": "1,530",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Post-Quantum-Cryptography.md",
+      "heading": "",
+      "label": "Key generation (`dilithium_keygen`, includes the INVARIANT-41 pairwise-consistency test)",
+      "position": 1,
+      "approx": false,
+      "value": "1,670",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Post-Quantum-Cryptography.md",
+      "heading": "",
+      "label": "Signing (`dilithium_sign`)",
+      "position": 0,
+      "approx": false,
+      "value": "3,135",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Post-Quantum-Cryptography.md",
+      "heading": "",
+      "label": "Signing (`dilithium_sign`)",
+      "position": 1,
+      "approx": false,
+      "value": "3,604",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Post-Quantum-Cryptography.md",
+      "heading": "",
+      "label": "Verification (`dilithium_verify`)",
+      "position": 0,
+      "approx": false,
+      "value": "10,381",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
+    },
+    {
+      "document": "wiki/Post-Quantum-Cryptography.md",
+      "heading": "",
+      "label": "Verification (`dilithium_verify`)",
+      "position": 1,
+      "approx": false,
+      "value": "11,675",
+      "unit": "",
+      "source": "ci-four-run-2026-09-20"
     }
   ]
 }

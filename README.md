@@ -293,7 +293,7 @@ Additional C sources:
 ### Cython modules (`src/cython/`, 7 files)
 
 - `hmac_binding.pyx`, `sha3_binding.pyx`, `hkdf_binding.pyx`, `ed25519_binding.pyx`, `dilithium_binding.pyx` — thin FFI bindings that call the native C entry points with no per-call ctypes overhead. `ctypes` fallback is used when the extension is not built.
-- `math_engine.pyx` — the 3R monitoring math kernels (Lyapunov exponent, NTT-shaped rotation matrix-vector products, helix evolution). 18–37× over the pure-Python NumPy baseline (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). **This speedup does not apply to the C-implemented cryptographic primitives.**
+- `math_engine.pyx` — the 3R monitoring math kernels (Lyapunov exponent, NTT-shaped rotation matrix-vector products, helix evolution). No speed-up ratio over the pure-Python baseline is published (see *Cython Optimization Results* below); measure it on your host with `python benchmarks/benchmark_suite.py`. **Whatever it is, it does not apply to the C-implemented cryptographic primitives.**
 - `helix_engine_complete.pyx` — a complete-engine reference implementation of all 18+ variants. It is **not** compiled by the default build (`setup.py` builds `math_engine.pyx` and the FFI bindings above, not this file); `math_engine.pyx` is the acceleration that actually ships.
 
 ### Python package (`ama_cryptography/`, 28 modules + `__init__` + `__main__`)
@@ -970,7 +970,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*5,818 test functions across 255 Python test files plus 86 C test suites (88 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*5,836 test functions across 256 Python test files plus 86 C test suites (88 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1110,7 +1110,7 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 
 The module implements technical controls aligned with FIPS 140-3 Security Level 1 requirements:
 
-- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, and Ed25519 run at module import (~260ms). This is a **subset** of the approved primitives, not full per-algorithm coverage — see `CSRC_ALIGN_REPORT.md` §4.1 for the algorithms POST does and does not cover
+- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, and Ed25519 run at module import; the wall-clock of each run is host-dependent and reported by `ama_cryptography._self_test.post_duration_ms()`. This is a **subset** of the approved primitives, not full per-algorithm coverage — see `CSRC_ALIGN_REPORT.md` §4.1 for the algorithms POST does and does not cover
 - **Module Integrity Verification:** SHA3-256 digest of all source files checked at startup
 - **Error State Machine:** OPERATIONAL / ERROR / SELF_TEST with automatic lockout on failure
 - **Repeated-output CSPRNG check:** Detects consecutive identical outputs from the OS CSPRNG (defence-in-depth; not the SP 800-90B health tests FIPS 140-3 specifies — see `CSRC_STANDARDS.md` §3.1(e))
@@ -1387,7 +1387,7 @@ The **3R Mechanism** (Resonance-Recursion-Refactoring) is a runtime monitoring f
 - **Runtime Timing Anomaly Monitoring** via FFT frequency-domain analysis (statistical anomaly detection, not guaranteed timing attack detection)
 - **Pattern Anomaly Detection** through multi-scale hierarchical analysis
 - **Code Complexity Metrics** for security review
-- **Less than 2% Performance Overhead** in production
+- **Overhead is not tracked by CI**: it depends on the host and on which detectors are enabled, so measure it per environment ([MONITORING.md](MONITORING.md))
 
 See [MONITORING.md](MONITORING.md) for complete technical details.
 
@@ -1458,7 +1458,7 @@ AMA Cryptography integrates ethical principles directly into cryptographic opera
 The ethical integration achieves:
 - **Balanced weighting**: Σw = 12.0 across all pillars
 - **SHA3-256 ethical signatures** in key derivation context
-- **Low performance impact**: ~15% overhead on HKDF derivation, <2% on end-to-end package operations
+- **Performance impact not published**: the ethical context enters only HKDF's `info` input, and its end-to-end cost is not tracked by CI — see *Ethical Integration Overhead* above for how to measure it
 - **Survivor-first principles** with bias audits and dynamic compliance
 
 ![Ethical Binding Flow](assets/ethical_binding.png)
@@ -1593,7 +1593,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 5,818 test functions across 255 Python files plus 86 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 5,836 test functions across 256 Python files plus 86 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

@@ -45,10 +45,16 @@ The **primary post-quantum signature algorithm** in AMA Cryptography.
 | Hardness | Module Learning With Errors (MLWE) |
 | Security Model | EUF-CMA in QROM |
 
-**Performance (native C, 2026-04-06):**
-- Key generation: ~0.18 ms (5,536 ops/sec)
-- Signing: ~0.27 ms (3,639 ops/sec)
-- Verification: ~0.15 ms (6,490 ops/sec)
+<!-- published-bench: begin -->
+<!-- Pinned by benchmarks/published-benchmarks.json and
+     tools/check_published_benchmarks.py, like the README table they restate. -->
+**Performance** (ops/sec; CI four-run medians, `ubuntu-latest` x86_64 / `ubuntu-24.04-arm` aarch64):
+- Key generation (`dilithium_keygen`): 1,530 / 1,670 — through the Python API, so every key also pays its INVARIANT-41 pairwise-consistency sign and verify
+- Signing (`dilithium_sign`): 3,135 / 3,604
+- Verification (`dilithium_verify`): 10,381 / 11,675
+<!-- published-bench: end -->
+
+These are rows of the README's [Performance Metrics](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md#performance-metrics) table, which names the workflow runs, jobs, build flags and min–max spans behind them; they describe those runners, not your host.
 
 **Usage:**
 ```python
@@ -151,14 +157,14 @@ assert sphincs_verify(b"message", sig, kp.public_key)
 - Validated against RFC 8032 Test Vector 1 (12 test vectors)
 - MSVC compatibility via volatile fallback for pre-C11 compilers
 
-**Performance** (Python/ctypes on x86-64 Linux, refreshed 2026-04-21):
-- Key generation: ~0.11 ms (≈ 9,100 ops/sec)
-- Signing: ~0.09 ms (≈ 10,600 ops/sec with the expanded `seed || pk` cache)
-- Verification: ~0.14 ms (≈ 7,400 ops/sec)
+<!-- published-bench: begin -->
+**Performance** (ops/sec; CI four-run medians, `ubuntu-latest` x86_64 / `ubuntu-24.04-arm` aarch64):
+- Key generation (`ed25519_keygen`): 12,368 / 12,282 — CSPRNG seed draw, native keygen and the pairwise-consistency sign and verify run on every key
+- Signing (`ed25519_sign`): 38,811 / 32,846 — the 64-byte `seed || A` key, which re-derives `A = [a]B` on every call (INVARIANT-51)
+- Verification (`ed25519_verify`): 27,934 / 31,066
+<!-- published-bench: end -->
 
-Raw C throughput from `benchmark_c_raw` is slightly higher (~10,400
-keygen / 9,700 sign / 7,200 verify ops/sec) because it bypasses the
-ctypes marshaling layer.
+The 64-byte key is RFC 8032's layout, not a cache: a caller signing repeatedly under one key pays the derivation once by loading the key into the 128-byte expanded form (`Ed25519SigningKey`), which has its own `ed25519_sign_expanded` regression floor. The figures are rows of the README's [Performance Metrics](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md#performance-metrics) table, with the runs and build flags behind them.
 
 **Usage:**
 ```python
@@ -419,7 +425,11 @@ not, so the tree is deliberately not interoperable with a BIP32 wallet.
 | Collision Resistance | 128-bit |
 | Preimage Resistance | 256-bit |
 
-**Performance:** ~1,046,450 ops/sec (1 µs per hash).
+<!-- published-bench: begin -->
+**Performance** (`ama_sha3_256_hash`, 1 KB message, ops/sec; CI four-run medians): 363,574 on `ubuntu-latest` x86_64, 436,428 on `ubuntu-24.04-arm` aarch64.
+<!-- published-bench: end -->
+
+A row of the README's [Performance Metrics](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md#performance-metrics) table, with the runs and build flags behind it.
 
 ---
 

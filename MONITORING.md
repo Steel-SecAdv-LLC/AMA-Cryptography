@@ -135,7 +135,7 @@ Ed25519 wall-clock timings through the shipped API):
 
 Read that as a floor, not a guarantee: a periodic component quieter than roughly a third of the ambient jitter is not distinguishable from noise. Square waves whose period does not divide the window leak across bins and score lower for that reason alone (a period-24 square reads 1.8x). Wall-clock timings of sub-millisecond operations on a shared/virtualised host routinely carry their own periodic structure — cache warm-up, allocator growth, scheduler quanta — so a raw resonance score from such a host is not on its own evidence of an attack.
 
-**Performance**: <0.5% overhead per monitored operation
+**Performance**: per-record cost is bounded by `max_ratio_operations` (the pairwise timing-ratio matrix walked on every record); no overhead percentage is published, because none is measured by CI. Measure it per environment.
 
 ---
 
@@ -159,7 +159,7 @@ Read that as a floor, not a guarantee: a periodic component quieter than roughly
 - `max_depth`: Recursion levels (default: 3)  
 - `max_history`: Package history limit (default: 10,000)
 
-**Performance**: O(n log n) for n packages, <1% overhead
+**Performance**: O(n log n) for n packages, and `AmaCryptographyMonitor.record_package_signing()` runs the analysis on every recorded signing. No overhead percentage is published, because none is measured by CI.
 
 ---
 
@@ -208,18 +208,21 @@ pre-INVARIANT-30 security-report shape:
 monitor = create_monitor(detect_volume_spikes=False, detect_note_artifacts=False)
 ```
 
-**Cost of "on by default"** (measured on this repository's CI-class hardware):
+**Cost of "on by default"** — what each item costs, structurally:
 
 | Item | Cost |
 |------|------|
-| Constructing both detectors | ~2.5 µs, once per monitor (marker tables are built once and shared) |
-| `record_operation_event()` | ~1.3 µs enabled, ~0.2 µs when disabled |
-| `inspect()` on a 3309-byte ML-DSA signature | ~6.7 µs (rejected by the printable-ratio gate before tokenising) |
+| Constructing both detectors | Once per monitor; the marker tables are built once and shared |
+| `record_operation_event()` | One event record when enabled; an early return when disabled |
+| `inspect()` on an ML-DSA signature | Rejected by the printable-ratio gate before tokenising |
 | `inspect()` on a large payload | Bounded by `max_scan_bytes`, not by payload size — the head/tail sample is sliced from the caller's buffer before it is materialised, so a 32 MB `bytearray` or `memoryview` costs the same as a small one |
 
-Against an ML-DSA-65 signature at ~200 µs these are sub-percent. The
-`benchmarks/benchmark_runner.py` suite stays within its 10% regression
-threshold on all 19 benchmarks with the detectors active.
+No per-call timing is published for these: the figures this table carried
+named no host, build or run, and the regression-threshold sentence beside them
+cited a tolerance the floors no longer use (the current ones are the
+`tolerance_percent` fields of the two baseline files). The README's
+[Performance Metrics](README.md#performance-metrics) table carries the
+CI-measured ML-DSA-65 signing cost to compare a local measurement against.
 
 **Where they are wired**: `create_crypto_package()` records the volume signal
 at the three sites it already instrumented for timing (primary signature,

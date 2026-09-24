@@ -1297,9 +1297,12 @@ cmake .. \
 AMA Cryptography implements technical controls aligned with FIPS 140-3 Security Level 1 requirements (pending future CMVP validation):
 
 **Power-On Self-Tests (POST):** When `import ama_cryptography` runs, the module
-automatically executes Known Answer Tests for all approved algorithms (SHA3-256,
-HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519) plus
-a module integrity check and RNG health test. This takes ~260ms.
+automatically executes Known Answer Tests for a subset of the approved algorithms
+(SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519 —
+not every approved primitive; see `CSRC_ALIGN_REPORT.md` §4.1) plus
+a module integrity check and RNG health test. How long it takes depends on the
+host and build; `ama_cryptography._self_test.post_duration_ms()` reports each run's
+wall-clock.
 
 **Module State:** After POST, the module is in one of three states:
 - `OPERATIONAL` — all tests passed, crypto operations allowed

@@ -35,7 +35,7 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 +----v----------------------------+   +-----------v-----------+
 |   CYTHON OPTIMIZATION LAYER     |   |  PURE PYTHON FALLBACK |
 |   src/cython/math_engine.pyx    |   |  (for portability)    |
-|   - 18-37x math speedup         |   |                       |
+|   - 3R math kernels             |   |                       |
 |   - NTT O(n log n)              |   |                       |
 |   - Matrix operations           |   |                       |
 +----+----------------------------+   +-----------------------+
@@ -55,8 +55,6 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 ## Performance Enhancements
 
 ### Cython Mathematical Engine
-
-**Measured: 18–37x speedup over pure Python mathematical baseline**
 
 Optimized operations:
 - Polynomial arithmetic (add, sub, multiply)

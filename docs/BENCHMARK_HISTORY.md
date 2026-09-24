@@ -715,3 +715,117 @@ and the correction is recorded here. Recomputed from the per-run columns:
 
 The medians themselves were recomputed from the same columns (mean of the
 middle two, rounded half up) and all thirty-eight agree with the README table.
+
+## 2026-09-24: the unpinned figures outside the README retired, moved here, or pinned
+
+No `baseline_value` changes.
+
+**Why.** The section above retired the README's canonical-host tables and
+pinned what remained. It did not reach the throughput and latency figures other
+documents printed by hand. A sweep of the README, `wiki/`, `docs/`, the
+root-level documents and `benchmarks/*.md` for ops/sec, µs, ns, ms, "× faster",
+"% overhead" and speed-up claims found such figures, outside every gate, in
+the documents listed below. A figure that could not be tied to a host, build flags and
+run for the current code was removed. Where the CI table already measures the
+same thing, the figure was replaced by that measurement, pinned, or by a
+pointer to it. The handful with enough provenance to be worth keeping are kept
+below, dated to when they were taken.
+
+**Removed or replaced**, by document (figures, not lines):
+
+* `wiki/Cryptography-Algorithms.md` — 17: the ML-DSA-65 bullets (2026-04-06),
+  the Ed25519 bullets and raw-C sentence (2026-04-21, which also described the
+  64-byte key as a signing cache that INVARIANT-51 removed), and the SHA3-256
+  line. Replaced by 15 figures restating README rows, now pinned.
+* `wiki/Post-Quantum-Cryptography.md` — 6: an unsourced ML-DSA-65 table.
+  Replaced by 6 pinned figures restating README rows.
+* `docs/compliance/CSRC_ALIGN_REPORT.md` — 24: the §2.7 Cython-versus-ctypes
+  pair, the eighteen §2.8 per-algorithm figures (2026-03-21, v3.0.0, "4-core
+  Linux", no build flags or run), and the §4.1 POST timing and budget. §2.8's
+  statement that `ed25519_sign()` skips the point multiplication for a 64-byte
+  key was also false since INVARIANT-51 and is corrected.
+* `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md` — 25: sub-property 2.3's sign/verify
+  figures and margins, the ethical-overhead "typical results" and conclusions,
+  and the checklist and summary restatements.
+* `MONITORING.md` — 9: the resonance and recursion overhead percentages, the
+  detector cost table, the ML-DSA-65 comparison figure and a 10% regression
+  threshold the floors no longer use.
+* `ARCHITECTURE.md` — 7; `README.md` — 5; `wiki/Architecture.md` — 3;
+  `SECURITY.md` — 3 (an unsourced "roughly doubling" verify claim);
+  `ENHANCED_FEATURES.md` — 2 and `docs/index.rst` — 2 (the "18–37x" ratio the
+  README already said had no measurement); `wiki/Performance-Benchmarks.md`,
+  `wiki/C-API-Reference.md` and `IMPLEMENTATION_GUIDE.md` — 1 each. The POST
+  wall-clock is now pointed at `ama_cryptography._self_test.post_duration_ms()`
+  rather than stated.
+* `benchmarks/README.md` — 6 example-output figures became placeholders.
+* `docs/NIST_PRIME_CURVES.md` — 35 and `docs/KEY_FORMATS.md` — 35, moved to
+  the two records below.
+* The committed dashboard render (`dashboard.html` beside
+  `benchmarks/generate_dashboard.py`) — deleted: a 3.4.0 render (generated
+  2026-07-29) that nothing linked to or regenerated. Its template carried a
+  3.4.0 story of its own — secp256k1 before/after latencies and tiles, a
+  "tightest re-floor" tile, a 19-entry pre-recalibration floor table and a
+  Welch t-test result — that every render republished as though it described
+  the run; those are removed and the template now prints only its inputs.
+* `benchmarks/benchmark_runner.py` — the `run_x25519_batch4_benchmark`
+  docstring's "~13K single / ~12.5K batch-of-4" is four times what four
+  sequential ladders can deliver; the CI medians are 18,984 and 4,551 on
+  x86_64. Corrected to "a little under a quarter of `x25519_scalarmult`".
+
+**Pinned.** `tools/check_published_benchmarks.py` now reads every document its
+record lists under `documents` — `README.md` and the two wiki pages above —
+and every marked region in each. It keys each figure by page, row label and
+position within its line, so a transposed pair of figures fails as well as an
+edited, invented or deleted one. It requires a restated measurement to still
+be one the README publishes, and fails a page that carries the markers without
+being listed. 194 README figures before; 215 figures across three documents
+after.
+
+### Kept: NIST P-curve fixed-base comb, before and after (2026-07-28, #378)
+
+Moved here from `docs/NIST_PRIME_CURVES.md`. Provenance as that document stated
+it: single core, x86-64, `-O3 -flto`, generic Montgomery path, median of 60
+runs, measured before and after the fixed-base comb on the same machine in the
+same session. No CPU model, date or run identifier was recorded; the date is
+that of the commit that introduced the table (`451ffea2`). The code has
+changed since, so this is a record of that change, not a current figure.
+
+| Curve | Operation | Before | After | Change |
+|---|---|---:|---:|---:|
+| P-256 | keygen | 0.334 ms | 0.183 ms | 1.83× |
+| P-256 | public key from private | 0.335 ms | 0.178 ms | 1.88× |
+| P-256 | sign | 0.377 ms | 0.217 ms | 1.74× |
+| P-256 | verify | 0.559 ms | 0.545 ms | — |
+| P-256 | ECDH | 0.340 ms | 0.338 ms | — |
+| P-384 | keygen | 0.811 ms | 0.467 ms | 1.74× |
+| P-384 | sign | 0.874 ms | 0.537 ms | 1.63× |
+| P-384 | verify | 1.360 ms | 1.376 ms | — |
+| P-384 | ECDH | 0.798 ms | 0.803 ms | — |
+| P-521 | keygen | 2.014 ms | 1.189 ms | 1.69× |
+| P-521 | sign | 2.244 ms | 1.398 ms | 1.61× |
+| P-521 | verify | 3.570 ms | 3.661 ms | — |
+| P-521 | ECDH | 2.047 ms | 2.038 ms | — |
+
+### Kept: PQ key-import consistency cost (2026-07-28, #378)
+
+Moved here from `docs/KEY_FORMATS.md`. Provenance as that document stated it:
+one core, x86-64, `-O3 -flto`, `benchmarks/keyformat_import.py`. No CPU model,
+date, sampling statement or run identifier was recorded; the date is that of
+the introducing commit (`451ffea2`). Key generation has since gained the
+INVARIANT-41 pairwise-consistency test, so the last column in particular does
+not describe the current code. Re-run the script for a current figure on your
+host.
+
+| Algorithm | Form | Parse only | Checked (default) | Ratio | Keygen, for scale |
+|---|---|---:|---:|---:|---:|
+| ML-DSA-44 | `expandedKey` | 0.011 ms | 0.099 ms | 8.9× | 0.118 ms |
+| ML-DSA-65 | `expandedKey` | 0.011 ms | 0.155 ms | 13.7× | 0.192 ms |
+| ML-DSA-87 | `expandedKey` | 0.011 ms | 0.287 ms | 26.0× | 0.274 ms |
+| ML-KEM-512 | `expandedKey` | 0.018 ms | 0.127 ms | 7.0× | 0.044 ms |
+| ML-KEM-768 | `expandedKey` | 0.019 ms | 0.204 ms | 10.9× | 0.077 ms |
+| ML-KEM-1024 | `expandedKey` | 0.022 ms | 0.291 ms | 13.3× | 0.116 ms |
+| ML-DSA-87 | `seed` | 0.266 ms | 0.262 ms | 1.0× | 0.274 ms |
+| ML-KEM-1024 | `both` | 0.021 ms | 0.127 ms | 6.0× | 0.116 ms |
+
+The same document gave P-521 import as 1.23 ms against ML-DSA-87's 0.287 ms,
+from the same session.

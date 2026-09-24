@@ -932,15 +932,17 @@ def run_x25519_benchmark(iterations: int = 100) -> Optional[float]:
 def run_x25519_batch4_benchmark(iterations: int = 100) -> Optional[float]:
     """Benchmark X25519 batch-4 DH via native_x25519_scalarmult_batch.
 
-    Reports the per-batch (count=4) ops/sec, NOT the per-op rate.  A
-    canonical-host run that yields ~13K single-shot ops/sec should
-    yield ~12.5K batch-of-4 ops/sec under the default dispatch policy
-    (the batch is four sequential scalar ladders plus the wrapper's
-    per-batch overhead — wrapper overhead is what brings batch-of-4
-    throughput slightly under single-shot, NOT a regression).  A
-    significantly slower number typically means the AVX2 4-way kernel
-    was accidentally selected as the default; that is a regression on
-    every shipped Broadwell+/Zen+ part (see PR #273 design note).
+    Reports the per-batch (count=4) ops/sec, NOT the per-op rate.  Under
+    the default dispatch policy a batch is four sequential scalar ladders
+    plus the wrapper's per-batch overhead, so this row reads a little under
+    a quarter of ``x25519_scalarmult`` on the same host — the CI four-run
+    medians in README's Performance Metrics table show that on
+    both runner classes.  (This docstring used to say a batch-of-4 rate
+    should sit just under the single-shot rate, which is four times what
+    four sequential ladders can deliver.)  A number well below a quarter of
+    the single-shot row typically means the AVX2 4-way kernel was
+    accidentally selected as the default; that is a regression on every
+    shipped Broadwell+/Zen+ part (see PR #273 design note).
     """
     try:
         from ama_cryptography.pqc_backends import (

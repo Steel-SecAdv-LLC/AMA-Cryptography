@@ -148,7 +148,7 @@ crypto call to stderr.
 
 ### 3R Monitoring Overhead
 
-- **Monitoring overhead:** < 2% on typical workloads
+- **Monitoring overhead:** not measured by CI, and no figure is published; the percentage this line carried had no benchmark behind it. It depends on the host and on which detectors are enabled; measure it per environment ([MONITORING.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/MONITORING.md))
 - Anomaly detection runs asynchronously in the background
 - FFT computations use NumPy for batch processing when available
 

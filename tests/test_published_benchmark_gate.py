@@ -51,12 +51,21 @@ def _run(repo: Path) -> int:
     return gate.main(["--repo", str(repo)])
 
 
+def _documents() -> list[str]:
+    """The pages the committed record pins, README first."""
+    documents = json.loads(RECORD_PATH.read_text(encoding="utf-8"))["documents"]
+    assert isinstance(documents, list) and documents[0] == gate.README
+    return [str(name) for name in documents]
+
+
 @pytest.fixture()
 def tree(tmp_path: Path) -> Path:
-    """A copy of the real README and record, for a test to then break."""
-    (tmp_path / "benchmarks").mkdir()
-    (tmp_path / gate.README).write_text(README_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-    (tmp_path / gate.RECORD).write_text(RECORD_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    """A copy of the real record and every page it pins, for a test to then break."""
+    for relative in [*_documents(), gate.RECORD]:
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(
+            (REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8"
+        )
     return tmp_path
 
 
@@ -93,10 +102,13 @@ class TestTheShippedTreeAgrees:
         assert _run(REPO_ROOT) == 0
 
     def test_every_published_figure_is_recorded(self) -> None:
-        region = gate.extract_region(README_PATH.read_text(encoding="utf-8"))
-        assert region is not None
-        published = gate.extract_measurements(region)
-        assert published, "the markers must enclose at least one figure"
+        published = []
+        for document in _documents():
+            regions = gate.extract_regions((REPO_ROOT / document).read_text(encoding="utf-8"))
+            assert regions, document
+            found = [m for region in regions for m in gate.extract_measurements(region, document)]
+            assert found, f"the markers in {document} must enclose at least one figure"
+            published.extend(found)
         recorded = {gate._key(entry) for entry in _record(REPO_ROOT)["measurements"]}
         assert {gate._key(entry) for entry in published} == recorded
 

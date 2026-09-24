@@ -3543,10 +3543,14 @@ the code was what moved.
   its own floor as a units or identity error.
 * `tools/check_published_benchmarks.py` — `security-checks`. The measured
   figures `README.md` writes by hand — the CI four-run medians and every other
-  number between its `published-bench` markers — are recorded in
-  `benchmarks/published-benchmarks.json` and compared in both directions, so
-  an edited, invented or deleted figure fails; every measurement source must
-  name its host, build flags, command, sampling, aggregation and CI runs.
+  number between its `published-bench` markers — and every restatement of
+  them on the other pages the record lists under `documents` (the wiki's
+  per-algorithm pages) are recorded in `benchmarks/published-benchmarks.json`
+  and compared in both directions, keyed by page, row and position, so an
+  edited, invented, deleted or transposed figure fails; a restated measurement
+  must still be one the README publishes; a page carrying the markers without
+  being listed fails; every measurement source must name its host, build
+  flags, command, sampling, aggregation and CI runs.
 
 A **correction note** may quote the wording it retires — a reader cannot
 otherwise tell what changed — but only behind an explicit

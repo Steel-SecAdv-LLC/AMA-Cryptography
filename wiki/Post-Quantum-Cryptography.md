@@ -104,11 +104,17 @@ print(f"Tampered: {is_tampered}")  # False
 
 ### Performance
 
-| Operation | Mean | Ops/sec |
+<!-- published-bench: begin -->
+<!-- Pinned by benchmarks/published-benchmarks.json and
+     tools/check_published_benchmarks.py, like the README table they restate. -->
+| Operation | `ubuntu-latest` x86_64 — ops/sec | `ubuntu-24.04-arm` aarch64 — ops/sec |
 |-----------|------|---------|
-| Key generation | 0.22 ms | 4,554 |
-| Signing | 1.02 ms | 981 |
-| Verification | 0.21 ms | 4,809 |
+| Key generation (`dilithium_keygen`, includes the INVARIANT-41 pairwise-consistency test) | 1,530 | 1,670 |
+| Signing (`dilithium_sign`) | 3,135 | 3,604 |
+| Verification (`dilithium_verify`) | 10,381 | 11,675 |
+<!-- published-bench: end -->
+
+CI four-run medians through the Python API, from the README's [Performance Metrics](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/README.md#performance-metrics) table, which names the workflow runs, jobs, build flags and min–max spans behind them. They describe those runners, not your host.
 
 > **3.0.0 SIMD acceleration:** The native ML-DSA-65 sampling path now
 > packs four SHAKE128 and four SHAKE256 absorptions into a single AVX2

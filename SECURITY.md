@@ -116,18 +116,19 @@ only supported throughput claims; avoid quoting relative speedups unless the
 source artifact and host class are named. Recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
 batching, Ed25519 signed-window combs, merged-layer ML-DSA NTT, and
 Ed25519 verify via Shamir/Straus joint scalar multiplication with a
-width-5 wNAF — roughly doubling verify throughput.
+width-5 wNAF. No before-and-after ratio for that change is published: none
+was recorded with its host and run, and the backend has changed since.
 
-#### What "2× verify" means in practice
+#### What verify throughput means in practice
 
 Ed25519 verify dominates wall-clock time in three protocol families
 that AMA consumers run at scale:
 
 - **X.509 certificate-chain validation** (TLS handshake, code-signing).
   A typical chain is 3–4 certificates deep; each certificate signature
-  is one Ed25519 verify.  Doubling per-verify throughput halves the
-  CPU budget per chain validation, which on a busy gateway is the
-  difference between handling N and 2N concurrent handshakes per core.
+  is one Ed25519 verify, so per-verify cost sets the CPU budget per
+  chain validation and, on a busy gateway, the concurrent handshakes a
+  core can carry.
 - **Noise Protocol Framework handshakes** (WireGuard, Lightning,
   Nym).  The XX, IK and IKpsk2 patterns each do at least one Ed25519
   verify of the responder's static key per handshake; mixed-PQ
@@ -156,8 +157,10 @@ LoC of audit surface.  Readers who value raw speed over supply-chain
 minimalism are unlikely to be the target audience for this library;
 readers who need auditable, small-surface post-quantum primitives
 with headroom to keep improving should find the trade-off
-acceptable.  Measured ops/sec numbers are in `benchmark-report.md`
-and `benchmarks/README.md` — any claim to the contrary elsewhere in
+acceptable.  Measured ops/sec numbers are the CI four-run medians in the
+README's *Performance Metrics* table (pinned by
+`tools/check_published_benchmarks.py`) and the single-run
+`benchmark-report.md` — any claim to the contrary elsewhere in
 the repository should be treated as aspirational and reported as a
 documentation bug.
 

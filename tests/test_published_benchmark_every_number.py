@@ -17,6 +17,7 @@ fails.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -28,8 +29,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture()
 def tree(tmp_path: Path) -> Path:
-    (tmp_path / "benchmarks").mkdir()
-    for relative in (gate.README, gate.RECORD):
+    record = json.loads((REPO_ROOT / gate.RECORD).read_text(encoding="utf-8"))
+    for relative in [*record["documents"], gate.RECORD]:
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / relative).write_text(
             (REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8"
         )

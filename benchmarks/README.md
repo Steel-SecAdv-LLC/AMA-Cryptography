@@ -11,7 +11,7 @@ one of the artifacts below (or to live output regenerated from them):
 
 | Artifact | Scope | Produced by |
 |----------|-------|-------------|
-| [`published-benchmarks.json`](published-benchmarks.json) | Every number in README's *Performance Metrics* section, each citing a source that names its host, build flags, command, sampling, aggregation and CI runs | Written when the published table changes; enforced by `tools/check_published_benchmarks.py` |
+| [`published-benchmarks.json`](published-benchmarks.json) | Every number in README's *Performance Metrics* section and in the pages that restate its rows (the record's `documents`: the wiki's per-algorithm pages), each citing a source that names its host, build flags, command, sampling, aggregation and CI runs | Written when the published table changes; enforced by `tools/check_published_benchmarks.py` |
 | [`baseline.json`](baseline.json) | CI regression FLOORS. `baseline_value` IS a measured median on the runner class named in `metadata.runner_cpu_class` — not a discount of one — and `tolerance_percent` (45 on x86-64, 15/25 on aarch64) is the separate allowance. The pre-5.0.0 "65% of measured, then a 35-70% tolerance on top" convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM regression without firing; both baseline files now say so in their own `metadata.description`. | Re-measured on the canonical runner when primitives land/change |
 | [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
 | `benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
@@ -34,8 +34,12 @@ GitHub-hosted `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (aarch64)
 runners, each figure traceable to named workflow runs and jobs. Every number
 in that section is recorded in [`published-benchmarks.json`](published-benchmarks.json)
 and held there by `tools/check_published_benchmarks.py` in CI: an edited,
-invented or deleted figure fails, and so does a measurement source that does
-not state its host, build flags, command, sampling, aggregation and runs.
+invented, deleted or transposed figure fails, and so does a measurement source
+that does not state its host, build flags, command, sampling, aggregation and
+runs. A page elsewhere that restates a row of that table — the wiki's
+per-algorithm pages do — carries the same markers, is listed under the
+record's `documents`, and must restate a figure the README still publishes, so
+re-basing the table fails every copy not moved with it.
 
 AVX-512-class figures (AVX-512F/VL/BW/DQ/VBMI with VAES and VPCLMULQDQ) will
 be published only when they are measured on such hardware, at the release
@@ -125,14 +129,16 @@ end-to-end primitive cost:
 
 ### Output Format
 
-The default table output includes a comparison-ready format:
+The default table output includes a comparison-ready format (the layout only;
+the harness fills in what it measures on your host, and no figure is published
+from it):
 
 ```
 Operation                      | Raw C ops/sec  | Raw C latency
 -------------------------------|----------------|---------------
-SHA3-256 (32B)                 |        555556  |       1.80 us
-Ed25519 Sign                   |         15625  |      64.00 us
-ML-DSA-65 Sign                 |          1053  |     950.00 us
+SHA3-256 (32B)                 |    <ops/sec>   |    <latency> us
+Ed25519 Sign                   |    <ops/sec>   |    <latency> us
+ML-DSA-65 Sign                 |    <ops/sec>   |    <latency> us
 ```
 
 ## Python/ctypes Benchmarks
