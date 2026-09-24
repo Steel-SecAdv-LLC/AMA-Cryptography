@@ -556,8 +556,13 @@ def check_control_flow_integrity() -> None:
         check(
             f"control-flow integrity: {obj.name} carries {label}",
             not missing,
-            f"missing {missing} from the GNU property note; the toolchain dropped "
-            f"the CFI flag for this object",
+            # Two causes.  Release dry runs 35271971450 and 35296160649 both
+            # failed on the second: the objects carried their landing pads and
+            # the link cleared the note.
+            f"missing {missing} from the GNU property note: either the CFI flag "
+            f"never reached the compiler, or an input object without the marking "
+            f"(the C runtime's crti.o/crtn.o, a libgcc.a member such as an "
+            f"AArch64 outline-atomics helper) cleared the link-time AND",
         )
 
 

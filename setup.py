@@ -482,9 +482,38 @@ def get_compiler_flags() -> tuple[list[str], list[str]]:
             # dlopen/dlsym of an object linked this way still runs both its
             # constructor and its destructor.  Probed, because a toolchain
             # that rejects the flag must still build.
+            #
+            # The C runtime is not the only unmarked input.  libgcc.a is one
+            # too: none of the 398 members of the manylinux_2_28 aarch64
+            # gcc-toolset-14 (14.2.1, EL8) libgcc.a carries a GNU property
+            # note.  A member joins the link only when an object calls it, and
+            # the only calls these extensions make into it are GCC's
+            # outline-atomics helpers: GCC >= 10 defaults to
+            # -moutline-atomics on AArch64, so the typed-memoryview
+            # acquisition counts Cython emits for math_engine's
+            # token_family_counts() compile to `bl __aarch64_ldadd4_relax` /
+            # `bl __aarch64_ldadd4_acq_rel`, and the link pulls ldadd_4_1.o,
+            # ldadd_4_4.o and lse-init.o.  The linker map then reads "Removed
+            # property 0xc0000000 to merge math_engine.o (0x3) and
+            # libgcc.a(ldadd_4_1.o) (not found)".  That is why release dry run
+            # 35296160649 refused math_engine alone once -nostartfiles had
+            # restored the property to the other five binding extensions and
+            # the library (dry run 35271971450, before it, had refused all
+            # nine objects on the crti.o/crtn.o cause).  -mno-outline-atomics
+            # compiles those read-modify-writes inline as LDXR/STXR and
+            # LDAXR/STLXR exclusive loops, which every ARMv8.0 core executes
+            # (a dlopen'd probe object built with these flags counts correctly
+            # under qemu-aarch64 -cpu cortex-a53, which has no LSE), so no
+            # libgcc member is linked and nothing clears the AND.  The counters
+            # are touched once per buffer acquire and release, not per element.
+            # Probed like -nostartfiles: GCC < 10 has no such flag and no
+            # outline atomics either.
             _machine = (_target_arches() or [platform.machine()])[0].lower()
-            if _machine in ("aarch64", "arm64") and _compiler_accepts("-nostartfiles"):
-                link_flags.append("-nostartfiles")
+            if _machine in ("aarch64", "arm64"):
+                if _compiler_accepts("-nostartfiles"):
+                    link_flags.append("-nostartfiles")
+                if _compiler_accepts("-mno-outline-atomics"):
+                    flags.append("-mno-outline-atomics")
 
         if COVERAGE:
             flags.extend(["--coverage"])
