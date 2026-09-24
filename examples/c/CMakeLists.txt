@@ -9,13 +9,27 @@
 
 set(AMA_EXAMPLE_TARGETS "")
 
+# Link whichever production library this configuration builds.  Choosing by
+# AMA_BUILD_SHARED alone named ama_cryptography_static whenever shared was
+# OFF, whether or not the static library existed, so with both OFF every
+# example linked a bare -lama_cryptography_static the linker could not find.
+# With neither production library there is nothing an example may link (the
+# AMA_TESTING_MODE archive is not an API), so none are registered, and the
+# configure says why instead of emitting link commands that cannot succeed.
+if(TARGET ama_cryptography_shared)
+    set(AMA_EXAMPLE_LIBRARY ama_cryptography_shared)
+elseif(TARGET ama_cryptography_static)
+    set(AMA_EXAMPLE_LIBRARY ama_cryptography_static)
+else()
+    message(STATUS
+        "Examples: not built -- AMA_BUILD_SHARED and AMA_BUILD_STATIC are both "
+        "OFF, so there is no production library for them to link")
+    return()
+endif()
+
 function(ama_add_example name)
     add_executable(${name} ${name}.c)
-    if(AMA_BUILD_SHARED)
-        target_link_libraries(${name} ama_cryptography_shared)
-    else()
-        target_link_libraries(${name} ama_cryptography_static)
-    endif()
+    target_link_libraries(${name} ${AMA_EXAMPLE_LIBRARY})
     if(AMA_BUILD_TESTS)
         string(REGEX REPLACE "^example_" "" short ${name})
         add_test(NAME example_${short} COMMAND ${name})

@@ -121,14 +121,31 @@ static void run_vector(const gcm_vector *v) {
         CHECK(memcmp(pt_back, v->pt, v->pt_len) == 0, msg);
     }
 
-    /* A flipped tag bit must be rejected by this kernel too. */
+    /* A flipped tag bit must be rejected by this kernel too -- with the
+     * verification error, not merely "not SUCCESS", and WITHOUT writing any
+     * plaintext.  pt_back is re-poisoned first: it still holds the correct
+     * plaintext from the decrypt above, so a kernel that released
+     * unauthenticated CTR output before its tag compare (the fused one-pass
+     * shape) would write identical bytes and be indistinguishable.  This is
+     * the only published-vector test that runs the AES-NI, VAES and ARMv8
+     * kernels under their per-slot pins; test_aes_gcm_scalar_kat.c asserts
+     * the same property with the scalar path forced. */
     uint8_t bad_tag[16];
     memcpy(bad_tag, v->tag, 16);
     bad_tag[15] ^= 0x01;
+    memset(pt_back, 0x5C, sizeof pt_back);
     rc = ama_aes256_gcm_decrypt(v->key, v->iv, v->pt_len ? v->ct : NULL, v->pt_len,
                                 v->aad, v->aad_len, bad_tag, v->pt_len ? pt_back : NULL);
-    snprintf(msg, sizeof msg, "%s: tampered tag rejected", v->name);
-    CHECK(rc != AMA_SUCCESS, msg);
+    snprintf(msg, sizeof msg, "%s: tampered tag rejected with AMA_ERROR_VERIFY_FAILED", v->name);
+    CHECK(rc == AMA_ERROR_VERIFY_FAILED, msg);
+    {
+        int untouched = 1;
+        for (size_t i = 0; i < sizeof pt_back; i++) {
+            if (pt_back[i] != 0x5C) { untouched = 0; break; }
+        }
+        snprintf(msg, sizeof msg, "%s: rejected tag releases no plaintext", v->name);
+        CHECK(untouched, msg);
+    }
 }
 
 /* The backend a pinned AES-GCM slot must have installed.  Any other pin (or

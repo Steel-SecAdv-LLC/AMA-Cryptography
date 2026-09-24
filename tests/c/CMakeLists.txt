@@ -176,15 +176,32 @@ set_tests_properties(test_dispatch_keccak_revert_target PROPERTIES
     SKIP_RETURN_CODE 77)
 
 # DISP-07: the dispatch function-pointer table must be read-only after init.
-# Linked against the NON-testing library on purpose: ama_cryptography_test
+# Linked against a NON-testing library on purpose: ama_cryptography_test
 # defines AMA_TESTING_MODE, under which the table is deliberately left
 # writable so the force/restore hooks can rewrite slots.  A test built that
-# way would report "not sealed" forever and prove nothing.  Skips (77) where
-# the platform declines to mprotect.
-add_executable(test_dispatch_seal test_dispatch_seal.c)
-target_link_libraries(test_dispatch_seal ama_cryptography_static)
-add_test(NAME test_dispatch_seal COMMAND test_dispatch_seal)
-set_tests_properties(test_dispatch_seal PROPERTIES SKIP_RETURN_CODE 77)
+# way would report "not sealed" forever and prove nothing.  An unsealed table
+# FAILS; the only skips (77) are Windows (the probe forks), a runtime page
+# larger than the 64 KiB the storage owns, and a probe child that could not
+# be started.
+#
+# Either production library is a non-testing build, so the static archive is
+# preferred and the shared library is the fallback: -DAMA_BUILD_STATIC=OFF is
+# a documented configuration, and naming a target that does not exist made
+# CMake emit -lama_cryptography_static and fail the link of the whole test
+# tree.  With neither production library built there is nothing to seal-test.
+if(TARGET ama_cryptography_static)
+    set(_ama_seal_lib ama_cryptography_static)
+elseif(TARGET ama_cryptography_shared)
+    set(_ama_seal_lib ama_cryptography_shared)
+else()
+    set(_ama_seal_lib "")
+endif()
+if(_ama_seal_lib)
+    add_executable(test_dispatch_seal test_dispatch_seal.c)
+    target_link_libraries(test_dispatch_seal ${_ama_seal_lib})
+    add_test(NAME test_dispatch_seal COMMAND test_dispatch_seal)
+    set_tests_properties(test_dispatch_seal PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 # Cryptographic primitive tests
 add_ama_test(test_sha3 test_sha3.c)

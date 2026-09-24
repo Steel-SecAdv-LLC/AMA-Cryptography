@@ -1800,6 +1800,38 @@ static int dispatch_cache_save_at(int dfd, const char *basename,
         return -1;
     }
 
+    /* The DESTINATION must be absent, or a regular file.
+     *
+     * renameat() replaces whatever name is already there, and the reader
+     * refuses every non-regular object -- so a FIFO, a device or a symlink
+     * at the cache name is a guaranteed miss, and each miss lands here.
+     * Measured before this check, as root: AMA_DISPATCH_CACHE_FILE=/dev/zero
+     * made the process re-bench and then rename its verdict text over the
+     * /dev/zero device node, so every later reader of /dev/zero on the host
+     * read cache text; a FIFO at the cache name was likewise silently
+     * replaced, for any user.  The reader's refusal and the writer's must
+     * agree: an object the reader will not load is not one the writer may
+     * replace.  Any fstatat() failure other than "no such name" refuses too
+     * (fail closed; a refusal only costs the cache).
+     *
+     * This is a check, not an atomic guarantee -- the name can change
+     * between the fstatat() and the renameat() -- but only through a write
+     * to this directory, and a party that can write to it can already
+     * replace or remove its entries directly; the check stops the process
+     * itself from being the tool that does it. */
+    {
+        struct stat dst;
+        const int dst_rc = fstatat(dfd, basename, &dst, AT_SYMLINK_NOFOLLOW);
+        if (dst_rc == 0 ? !S_ISREG(dst.st_mode) : errno != ENOENT) {
+            if (dispatch_verbose()) {
+                fprintf(stderr,
+                    "[AMA Dispatch] cache write REFUSED ('%s' is neither "
+                    "absent nor a regular file)\n", basename);
+            }
+            return -1;
+        }
+    }
+
     /* O_EXCL|O_NOFOLLOW, and a post-open fstat, not O_TRUNC.
      *
      * The temp name is predictable (`<base>.tmp.<pid>`), and this directory

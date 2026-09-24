@@ -44,7 +44,8 @@
  *     from the seed.
  *   - Tag-tamper rejection: flipping a single tag bit must cause
  *     decrypt to return AMA_ERROR_VERIFY_FAILED (including for
- *     pt_len == 0, because AES-GCM authenticates empty messages).
+ *     pt_len == 0, because AES-GCM authenticates empty messages) and
+ *     leave the re-poisoned plaintext buffer untouched.
  *
  * If this test fails, the dispatched AES-GCM implementation diverges
  * from the AES-NI reference, which would silently break interop with
@@ -183,11 +184,17 @@ static int check_one_encrypt(const ama_dispatch_table_t *dt,
      * Asserting the exact error code (not just "anything other than AMA_SUCCESS")
      * catches regressions where decrypt fails for the wrong reason (e.g. a new
      * length-check or OOM path masquerading as a tag-mismatch).  Also exercise
-     * pt_len == 0 because AES-GCM authenticates empty-plaintext messages. */
+     * pt_len == 0 because AES-GCM authenticates empty-plaintext messages.
+     *
+     * The rejected decrypt must also write NO plaintext.  pt_back holds the
+     * correct plaintext from the round trip above, so it is re-poisoned
+     * first: a kernel that released CTR output before its tag compare would
+     * otherwise rewrite identical bytes and pass. */
     {
         uint8_t bad_tag[16];
         memcpy(bad_tag, tag_dispatch, 16);
         bad_tag[trial & 15] ^= (uint8_t)(1u << ((trial >> 4) & 7));
+        memset(pt_back, 0x5C, pt_len);
         r = dt->aes_gcm_decrypt(ct_dispatch, pt_len, aad, aad_len,
                                  key, nonce, bad_tag, pt_back);
         if (r != AMA_ERROR_VERIFY_FAILED) {
@@ -195,6 +202,14 @@ static int check_one_encrypt(const ama_dispatch_table_t *dt,
                    label_prefix, trial, pt_len, (int)r, (int)AMA_ERROR_VERIFY_FAILED);
             failed++;
             return 0;
+        }
+        for (size_t i = 0; i < pt_len; i++) {
+            if (pt_back[i] != 0x5C) {
+                printf("  FAIL: %s trial=%d pt_len=%zu rejected tag released plaintext (byte %zu written)\n",
+                       label_prefix, trial, pt_len, i);
+                failed++;
+                return 0;
+            }
         }
     }
 

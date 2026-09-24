@@ -144,7 +144,8 @@ int main(void) {
      *   (c) Compare ct_neon vs ct_ref and tag_neon vs tag_ref.
      *   (d) Round-trip: NEON decrypt of NEON ciphertext.
      *   (e) Tag-tamper rejection: NEON decrypt of mutated tag → expect
-     *       AMA_ERROR_VERIFY_FAILED. */
+     *       AMA_ERROR_VERIFY_FAILED and the re-poisoned pt_back
+     *       untouched (no unauthenticated plaintext released). */
     #define RUN_TRIAL(LABEL, pt_len_v, aad_len_v, trial_id)                    \
     do {                                                                       \
         size_t _pt_len  = (pt_len_v);                                          \
@@ -189,16 +190,30 @@ int main(void) {
             break;                                                             \
         }                                                                      \
                                                                                \
-        /* (e) Tag-tamper rejection — exact error code, INVARIANT-12. */       \
+        /* (e) Tag-tamper rejection — exact error code, INVARIANT-12 — and */  \
+        /*     no plaintext released: pt_back still holds the round trip's */  \
+        /*     correct output, so it is re-poisoned before the call. */        \
         uint8_t bad_tag[16];                                                   \
         memcpy(bad_tag, tag_neon, 16);                                         \
         bad_tag[(trial_id) & 15] ^=                                            \
             (uint8_t)(1u << (((trial_id) >> 4) & 7));                          \
+        memset(pt_back, 0x5C, _pt_len);                                        \
         _r = ama_aes256_gcm_decrypt_neon(                                      \
             ct_neon, _pt_len, aad, _aad_len, key, nonce, bad_tag, pt_back);    \
         if (_r != AMA_ERROR_VERIFY_FAILED) {                                   \
             printf("  FAIL: %s tag-tamper trial=%d pt_len=%zu r=%d\n",         \
                    LABEL, (int)(trial_id), _pt_len, (int)_r);                  \
+            failed++;                                                          \
+            break;                                                             \
+        }                                                                      \
+        size_t _released = _pt_len;                                            \
+        for (size_t _i = 0; _i < _pt_len; _i++) {                              \
+            if (pt_back[_i] != 0x5C) { _released = _i; break; }                \
+        }                                                                      \
+        if (_released != _pt_len) {                                            \
+            printf("  FAIL: %s tag-tamper trial=%d pt_len=%zu released "       \
+                   "plaintext (byte %zu written)\n",                           \
+                   LABEL, (int)(trial_id), _pt_len, _released);                \
             failed++;                                                          \
             break;                                                             \
         }                                                                      \

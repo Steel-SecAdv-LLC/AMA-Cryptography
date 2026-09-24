@@ -15,6 +15,18 @@
  * force/restore hooks rewrite slots by design.  A test built against that
  * configuration would report "not sealed" forever and prove nothing.
  *
+ * An UNSEALED table is a failure, not a skip.  dispatch_seal() fails soft by
+ * design, so every regression that stops it sealing -- the page alignment
+ * dropped from dispatch_storage, the storage shrunk below one page, the call
+ * removed, AMA_TESTING_MODE reaching the production library -- looks from
+ * the outside exactly like "the platform declined".  This test is what
+ * ama_dispatch.c cites as catching that silent regression, and it used to
+ * answer it with exit 77, which CTest counts as Skipped and ctest exits 0
+ * on: no lane failed.  The only unsealed outcome reported as a skip now is
+ * the one the library declines BY DESIGN and this test can establish for
+ * itself: a runtime page larger than the storage is built to own
+ * (AMA_TEST_SEAL_PAGE_MAX below).
+ *
  * The write attempt is made in a forked child, because the expected outcome is
  * a fault.  The child reports through a pipe that it is about to attempt the
  * write, then attempts it; reaching `_exit(0)` is possible only by completing
@@ -43,9 +55,18 @@ int main(void) {
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* The page the sealed storage is built to own on a non-Windows target: the
+ * value of AMA_DISPATCH_SEAL_PAGE in src/c/dispatch/ama_dispatch.c, which is
+ * private to that translation unit.  dispatch_seal() declines on a host whose
+ * runtime page is larger, and that is the only host on which this test
+ * accepts an unsealed table. */
+#define AMA_TEST_SEAL_PAGE_MAX 65536L
+
+static int checks;
 static int failures;
 
 static void check(const char *what, int ok) {
+    checks++;
     printf("  %-58s %s\n", what, ok ? "ok" : "FAIL");
     if (!ok) {
         failures++;
@@ -57,20 +78,33 @@ int main(void) {
 
     ama_dispatch_init();
 
+    const ama_dispatch_table_t *table = ama_get_dispatch_table();
     const int sealed = ama_dispatch_table_is_sealed();
     if (!sealed) {
-        /* Report rather than fail: mprotect can be refused by a sandbox or a
-         * policy, and the library is designed to start anyway.  CI treats the
-         * skip as a signal to look, not as a pass. */
-        printf("SKIP: this platform declined to seal the dispatch table\n");
-        return 77;
+        const long page = sysconf(_SC_PAGESIZE);
+        printf("  table at %p; runtime page size %ld; offset into its page %ld\n",
+               (const void *)table, page,
+               page > 0 ? (long)((uintptr_t)table % (uintptr_t)page) : -1L);
+        if (page > AMA_TEST_SEAL_PAGE_MAX) {
+            printf("SKIP: the runtime page (%ld bytes) is larger than the %ld bytes "
+                   "the sealed storage owns; dispatch_seal() declines on this host "
+                   "by design\n", page, AMA_TEST_SEAL_PAGE_MAX);
+            return 77;
+        }
     }
     check("ama_dispatch_table_is_sealed() reports sealed", sealed != 0);
+    if (!sealed) {
+        printf("    dispatch_seal() declined on a host where it must succeed: the\n"
+               "    storage lost its page alignment or its whole-page size, the seal\n"
+               "    call is gone, AMA_TESTING_MODE reached this library, or mprotect()\n"
+               "    was refused.  The DISP-07 hardening is not in effect.\n");
+        printf("\n%d check(s), %d failure(s)\n", checks, failures);
+        return 1;
+    }
 
     /* The table must still WORK after being sealed: a seal that broke
      * dispatch would be caught by every other test, but proving it here
      * keeps this file self-contained. */
-    const ama_dispatch_table_t *table = ama_get_dispatch_table();
     check("the table is still reachable", table != NULL);
     if (table != NULL) {
         uint8_t digest[32];
@@ -148,7 +182,7 @@ int main(void) {
         }
     }
 
-    printf("\n%d check(s), %d failure(s)\n", 4, failures);
+    printf("\n%d check(s), %d failure(s)\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
 

@@ -3,8 +3,9 @@
 /**
  * @file test_dispatch_cache_hostile.c
  * @brief AMA_DISPATCH_CACHE_FILE against a hostile filesystem: the reader
- *        must not block or spin, and the writer must not follow a
- *        pre-planted symlink.
+ *        must not block or spin, the writer must not follow a pre-planted
+ *        symlink, and the writer must not replace a non-regular object at
+ *        the cache name.
  *
  * Three facts about the cache path that the string sanitizer cannot see,
  * because each is an ordinary-looking path whose OBJECT is hostile:
@@ -31,6 +32,21 @@
  * Against the tree before the hardening, the fifo and devzero children die
  * by SIGALRM and the symlink child leaves the victim overwritten.  Exit 77
  * (skipped) on Windows, where the POSIX cache path is compiled out.
+ *
+ * The object at the cache name must SURVIVE the fifo and devzero scenarios.
+ * The reader refuses both, so the child re-benches and the writer runs, and
+ * renameat() replaces whatever the name holds.  This test used to point the
+ * devzero child at the host's real /dev/zero and check nothing afterwards:
+ * run as root (a container, sudo), the writer renamed its verdict text over
+ * the /dev/zero device node -- a root review sandbox's /dev/zero was found
+ * as an 875-byte regular file holding cache text -- and the FIFO was
+ * replaced by a regular file for every user, both with the test green.  The
+ * writer now refuses a destination that exists and is not a regular file
+ * (dispatch_cache_save_at), and the endless device is a PRIVATE node
+ * cloned into the scratch directory wherever this process may create one,
+ * the host's own node is used only where this process cannot write its
+ * directory, and after each scenario the object must still be the same
+ * FIFO / the same character device.
  */
 #if defined(_WIN32) || defined(_WIN64)
 #include <stdio.h>
@@ -39,10 +55,14 @@ int main(void) {
     return 77;
 }
 #else
-/* symlink(), setenv(), unsetenv(), lstat() are POSIX.1-2008; glibc hides
- * them under strict -std=c99 without this. */
+/* symlink(), setenv(), unsetenv(), lstat(), faccessat() are POSIX.1-2008;
+ * glibc hides them under strict -std=c99 without this.  mknod() of a
+ * character device is XSI. */
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
 #endif
 #include <errno.h>
 #include <fcntl.h>
@@ -161,6 +181,100 @@ static int spawn_and_wait(const char *self, const char *mode, const char *cache_
 /* Set once any scenario reports that the child could not be exec'd. */
 static int exec_unavailable;
 
+/* Identity of a filesystem object, taken with lstat() before a scenario and
+ * compared after it: the writer must not have replaced it. */
+typedef struct {
+    dev_t dev;
+    ino_t ino;
+    mode_t type;
+    dev_t rdev;
+} object_id;
+
+static int object_id_of(const char *path, object_id *out) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    out->dev = st.st_dev;
+    out->ino = st.st_ino;
+    out->type = (mode_t)(st.st_mode & S_IFMT);
+    out->rdev = st.st_rdev;
+    return 0;
+}
+
+/* 0 when `path` is still the object `before` recorded; otherwise reports
+ * what happened to it and returns -1. */
+static int object_survived(const char *label, const char *path, const object_id *before) {
+    object_id after;
+    if (object_id_of(path, &after) != 0) {
+        fprintf(stderr, "FAIL [%s]: %s is gone after the scenario: %s\n",
+                label, path, strerror(errno));
+        return -1;
+    }
+    if (after.dev != before->dev || after.ino != before->ino ||
+        after.type != before->type || after.rdev != before->rdev) {
+        fprintf(stderr, "FAIL [%s]: %s was replaced (%s) -- the cache writer "
+                        "renamed its verdict over a non-regular object\n",
+                label, path,
+                S_ISREG(after.type) ? "now a regular file" : "now a different object");
+        return -1;
+    }
+    return 0;
+}
+
+/* Reads a few bytes from `path` without blocking: the node is usable (not
+ * on a nodev mount, not refused by a device policy) and endless-readable. */
+static int reads_endlessly(const char *path) {
+    unsigned char buf[16];
+    int fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) return 0;
+    ssize_t n = read(fd, buf, sizeof(buf));
+    (void)close(fd);
+    return n == (ssize_t)sizeof(buf);
+}
+
+/* Choose the endless character device the devzero scenario points the cache
+ * at, into `out`.  Returns 0 when one is ready, -1 when this environment
+ * offers none the scenario can use without risking a host device node.
+ *
+ *   1. A private clone (mknod) of the host's endless device inside `dir`.
+ *      Wherever this process can create it -- root in a container, the
+ *      configuration that exposed the defect -- a regressed writer can only
+ *      replace the clone.
+ *   2. Otherwise the host's node itself, but only when this process cannot
+ *      write the directory holding it, so no writer can replace it.
+ *
+ * The source must be a character device that reads endlessly: /dev/zero,
+ * or /dev/urandom on a host whose /dev/zero is no longer a device. */
+static int prepare_endless_device(const char *dir, char *out, size_t outlen) {
+    static const char *const sources[] = { "/dev/zero", "/dev/urandom" };
+    for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
+        struct stat src;
+        if (lstat(sources[i], &src) != 0 || !S_ISCHR(src.st_mode) ||
+            !reads_endlessly(sources[i])) {
+            continue;
+        }
+        snprintf(out, outlen, "%s/endless", dir);
+        if (mknod(out, S_IFCHR | S_IRUSR | S_IWUSR, src.st_rdev) == 0) {
+            if (reads_endlessly(out)) {
+                printf("  devzero: private clone of %s at %s\n", sources[i], out);
+                return 0;
+            }
+            (void)unlink(out);
+        }
+        if (faccessat(AT_FDCWD, "/dev", W_OK, AT_EACCESS) != 0) {
+            snprintf(out, outlen, "%s", sources[i]);
+            printf("  devzero: %s itself (its directory is not writable here)\n", out);
+            return 0;
+        }
+        printf("  devzero: NOT RUN -- cannot create a private device node here, "
+               "and this process can write /dev, so pointing the cache at %s "
+               "could replace the host's device\n", sources[i]);
+        return -1;
+    }
+    printf("  devzero: NOT RUN -- no endless character device (/dev/zero, "
+           "/dev/urandom) is readable here\n");
+    return -1;
+}
+
 /* `spawn_and_wait` with the exec-failure case folded into a single flag, so
  * each call site keeps reading as pass/fail. */
 static int spawn_checked(const char *self, const char *mode, const char *cache_path,
@@ -184,26 +298,42 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* 1. FIFO: must not block. */
+    /* 1. FIFO: must not block, and must still be the FIFO afterwards. */
     {
         char fifo[192];
+        object_id before;
         snprintf(fifo, sizeof(fifo), "%s/fifo", dir);
-        if (mkfifo(fifo, 0600) != 0) {
+        if (mkfifo(fifo, 0600) != 0 || object_id_of(fifo, &before) != 0) {
             fprintf(stderr, "FAIL: mkfifo: %s\n", strerror(errno));
             failures++;
         } else if (spawn_checked(argv[0], "fifo", fifo, NULL, "fifo") != 0) {
             failures++;
+        } else if (object_survived("fifo", fifo, &before) != 0) {
+            failures++;
         } else {
-            printf("  fifo: init returned (did not block)\n");
+            printf("  fifo: init returned (did not block); the FIFO is intact\n");
         }
         (void)unlink(fifo);
     }
 
-    /* 2. /dev/zero: must not spin. */
-    if (spawn_checked(argv[0], "devzero", "/dev/zero", NULL, "devzero") != 0) {
-        failures++;
-    } else {
-        printf("  /dev/zero: init returned (did not spin)\n");
+    /* 2. An endless device: must not spin, and must still be the same
+     *    device node afterwards. */
+    int devzero_unavailable = 0;
+    {
+        char endless[192];
+        object_id before;
+        if (prepare_endless_device(dir, endless, sizeof(endless)) != 0) {
+            devzero_unavailable = 1;
+        } else if (object_id_of(endless, &before) != 0) {
+            fprintf(stderr, "FAIL: lstat(%s): %s\n", endless, strerror(errno));
+            failures++;
+        } else if (spawn_checked(argv[0], "devzero", endless, NULL, "devzero") != 0) {
+            failures++;
+        } else if (object_survived("devzero", endless, &before) != 0) {
+            failures++;
+        } else {
+            printf("  devzero: init returned (did not spin); the device node is intact\n");
+        }
     }
 
     /* 3. Pre-planted symlink at the writer's temp name: victim untouched,
@@ -287,8 +417,15 @@ int main(int argc, char **argv) {
         printf("FAILED: %d scenario(s)\n", failures);
         return 1;
     }
-    printf("OK: hostile cache paths (fifo, /dev/zero, pre-planted symlink) are refused; "
-           "regular cache still round-trips\n");
+    /* After `failures`: whatever did run and fail is reported as a failure;
+     * a scenario that could not run safely is not reported as a pass. */
+    if (devzero_unavailable) {
+        printf("SKIP: the endless-device scenario could not run safely here (see "
+               "above); the fifo, symlink and control scenarios passed\n");
+        return 77;
+    }
+    printf("OK: hostile cache paths (fifo, endless device, pre-planted symlink) are "
+           "refused and survive; regular cache still round-trips\n");
     return 0;
 }
 #endif

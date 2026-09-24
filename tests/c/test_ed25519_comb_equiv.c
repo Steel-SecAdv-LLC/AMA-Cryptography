@@ -93,9 +93,15 @@ static void fill_scalar(uint8_t s[32]) {
 static int test_one(const uint8_t scalar[32], const char *label) {
     uint8_t p_fixed[32], p_var[32];
 
-    if (ama_ed25519_point_from_scalar(p_fixed, scalar) != AMA_SUCCESS) {
-        fprintf(stderr, "  point_from_scalar failed\n");
-        return 0;
+    /* An error from the comb is a FAILURE, not a vector to step over: every
+     * input here is a valid 32-byte scalar, and returning 0 (the pass value)
+     * let a comb that rejected a class of scalars -- s >= l, which the
+     * unclamped batch below is made of and FROST relies on, or s = 0 --
+     * report "PASS: 1287 vectors" having compared nothing for them. */
+    ama_error_t rc_fixed = ama_ed25519_point_from_scalar(p_fixed, scalar);
+    if (rc_fixed != AMA_SUCCESS) {
+        fprintf(stderr, "FAIL: %s — point_from_scalar returned %d\n", label, (int)rc_fixed);
+        return 1;
     }
 
     /* Build a 64-byte reduction buffer: scalar little-endian in the low
