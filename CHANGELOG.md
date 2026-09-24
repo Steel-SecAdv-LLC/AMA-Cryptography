@@ -104,6 +104,22 @@ Every new test below fails against the code it replaces (AGENTS.md §6.2).
   README's Performance Metrics section — an edited CI median previously passed
   every gate. Corrected (§6.6): the fast-class x86 margin is 23–51%, not
   20–45%; the X25519 field-equivalence test covers fe51 against fe64 only.
+- **Unprovenanced performance figures removed across the documentation.**
+  About 180 hand-written throughput, latency, overhead and speed-up figures in
+  17 documents had no host, build flags or run for the current code: the 3R
+  "<2%" overhead, the "18–37x" Cython ratio, the ~262K/~182K HMAC pair, the
+  ~260 ms POST time (355 ms measured here) and CSRC §2.8's statement that a
+  64-byte Ed25519 key skips the point multiplication, false since INVARIANT-51.
+  They are removed or replaced by the CI four-run medians; the P-curve comb and
+  key-import tables move with their provenance to `docs/BENCHMARK_HISTORY.md`.
+  `check_published_benchmarks.py` now pins every page listed under `documents`
+  (README plus two wiki pages, 215 figures), keys figures by page, row and
+  position (a swapped pair used to pass), and requires a restated figure to
+  match the README. The stale 3.4.0 `benchmarks/dashboard.html` is deleted.
+- **Two defects in the new artefact-tracking tests, found by CI.** The sdist
+  test bypassed `FileList.append`'s `convert_path`, so on Windows no
+  `MANIFEST.in` pattern could match it (five Windows legs red); the git-probe
+  helper read a name CodeQL could not prove bound. Both fixed at the test.
 - **The agent-binding timing lane measured the GIL, not the check (§6.6).**
   Its load threads held the GIL, so each sample was a GIL wait of about
   100 µs around a 2.4 µs call. It also alternated the two classes, used two
