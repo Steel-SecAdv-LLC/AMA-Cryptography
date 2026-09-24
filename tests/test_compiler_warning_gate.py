@@ -19,11 +19,13 @@ builds of this tree, not invented text.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -57,6 +59,9 @@ INT128_UTF8 = (
     "/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not "
     "support ‘__int128’ types [-Wpedantic]"
 )
+# The class the allowlist admitted until the MULX kernel's asm literals lost
+# their alignment padding (4,266 characters became 3,142, under the 4,095 C11
+# guarantees).  Like ``__int128`` above, it is now an ordinary finding.
 OVERLENGTH_LITERAL = (
     "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c:120:9: "
     "warning: string literal of length 9001 exceeds maximum length 4095 that "
@@ -80,13 +85,31 @@ def write_log(tmp_path: Path, name: str, *lines: str) -> Path:
     return path
 
 
-class TestAllowlistAdmitsItsOwnClasses:
-    """Each exemption must admit its class — in either quote spelling."""
+def load_gate_module() -> ModuleType:
+    """Import the gate in-process, for the tests that substitute its allowlist."""
+    spec = importlib.util.spec_from_file_location("check_compiler_warnings", GATE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    def test_exempt_line_passes(self, tmp_path: Path) -> None:
+
+class TestAllowlistAdmitsItsOwnClasses:
+    """The allowlist is empty; its machinery must still admit exactly an entry.
+
+    The last entry (``overlength-asm-literal``) was deleted when the MULX
+    kernel's asm literals were unpadded, so no real diagnostic is admitted any
+    more.  The admission and counting code stays — a future entry is a
+    reviewed edit to ``EXEMPTIONS``, not a new mechanism — so it is exercised
+    with an entry substituted in-process rather than left untested.
+    """
+
+    def test_the_overlength_literal_is_no_longer_exempt(self, tmp_path: Path) -> None:
+        """PIN: restoring the deleted entry turns this green-to-red."""
         log = write_log(tmp_path, "build.log", OVERLENGTH_LITERAL)
         result = run_gate(log)
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 1
+        assert OVERLENGTH_LITERAL in result.stderr
 
     def test_clean_log_passes(self, tmp_path: Path) -> None:
         log = write_log(tmp_path, "build.log")
@@ -94,11 +117,19 @@ class TestAllowlistAdmitsItsOwnClasses:
         assert result.returncode == 0, result.stderr
         assert "no compiler warnings outside the frozen allowlist" in result.stdout
 
-    def test_counts_are_reported_so_a_dead_exemption_is_visible(self, tmp_path: Path) -> None:
+    def test_counts_are_reported_so_a_dead_exemption_is_visible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        gate = load_gate_module()
+        entry = gate.Exemption(
+            name="substituted",
+            pattern=re.compile(r"ama_nistp_mont_mulx\.c.*warning:.*string literal of length"),
+            reason="test-only entry exercising the admission and counting code",
+        )
+        monkeypatch.setattr(gate, "EXEMPTIONS", (entry,))
         log = write_log(tmp_path, "build.log", OVERLENGTH_LITERAL, OVERLENGTH_LITERAL)
-        result = run_gate(log)
-        assert result.returncode == 0, result.stderr
-        assert "allowlisted [overlength-asm-literal]: 2" in result.stdout
+        assert gate.check([log]) == 0
+        assert "allowlisted [substituted]: 2" in capsys.readouterr().out
 
 
 class TestAllowlistRejectsEverythingElse:
@@ -128,7 +159,7 @@ class TestAllowlistRejectsEverythingElse:
         assert unit in result.stderr
 
     def test_one_bad_log_among_several_fails(self, tmp_path: Path) -> None:
-        clean = write_log(tmp_path, "clean.log", OVERLENGTH_LITERAL)
+        clean = write_log(tmp_path, "clean.log")
         dirty = write_log(tmp_path, "dirty.log", MISSING_PROTOTYPE)
         result = run_gate(clean, dirty)
         assert result.returncode == 1
@@ -151,7 +182,7 @@ class TestFailsClosedOnAbsentEvidence:
         assert "is empty" in result.stderr
 
     def test_missing_log_beside_a_clean_one_is_still_fatal(self, tmp_path: Path) -> None:
-        clean = write_log(tmp_path, "clean.log", OVERLENGTH_LITERAL)
+        clean = write_log(tmp_path, "clean.log")
         result = run_gate(clean, tmp_path / "never-written.log")
         assert result.returncode == 1
 
@@ -315,14 +346,14 @@ class TestInterleavedParallelOutput:
     Two processes share one pipe, so a single line can carry both
     diagnostics character-interleaved.  Observed verbatim in a clean parallel
     build of this tree: two identical -Woverlength-strings warnings from the
-    shared and static targets merged into one line.  A position-exact
-    allowlist pattern stops matching such a line, so an *allowlisted* warning
-    is reported as a violation and the gate goes red for a reason that has
-    nothing to do with the code.
+    shared and static targets merged into one line.  While that warning was
+    allowlisted, a position-exact pattern stopped matching such a line and the
+    gate went red for a reason unrelated to the code.
 
-    The build steps pass `-Otarget` so Make serialises per-target output;
-    these cases pin the defence in depth that keeps the allowlist working if
-    a generator ever does not.
+    The warning is no longer emitted or admitted, so what these cases pin now
+    is the other direction: an interleaved line is still a diagnostic, and
+    interleaving cannot hide one.  The build steps still pass `-Otarget` so
+    Make serialises per-target output.
     """
 
     #: Verbatim from a clean `make -j` build of this tree.
@@ -335,17 +366,18 @@ class TestInterleavedParallelOutput:
         "compilers are required to support [-Woverlength-strings]"
     )
 
-    def test_interleaved_allowlisted_warning_is_still_allowlisted(self, tmp_path: Path) -> None:
+    def test_an_interleaved_diagnostic_is_still_a_finding(self, tmp_path: Path) -> None:
         log = write_log(tmp_path, "build.log", self.INTERLEAVED_OVERLENGTH)
         result = run_gate(log)
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 1
+        assert "Woverlength-strings" in result.stderr
 
     def test_tolerance_does_not_admit_a_different_warning(self, tmp_path: Path) -> None:
-        """The relaxation is `.*` between name and text, not `name ⇒ exempt`.
+        """Naming the kernel file admits nothing by itself.
 
-        A line naming an allowlisted file but carrying a DIFFERENT diagnostic
-        must still fail — otherwise the exemption would become a per-file
-        blanket.
+        A line naming the once-allowlisted file but carrying a DIFFERENT
+        diagnostic fails, as it did while the entry existed — no exemption
+        is a per-file blanket.
         """
         line = (
             "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c:12:3: "

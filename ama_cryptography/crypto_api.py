@@ -3316,30 +3316,34 @@ def _verify_addon_layers(
         and "KYBER_1024" in package.keypairs
     ):
         try:
-            kyber_provider = KyberProvider()
-            _t0 = time.perf_counter_ns()
-            decapsulated_ss = kyber_provider.decapsulate(
-                package.kem_ciphertext,
-                package.keypairs["KYBER_1024"].secret_key,
-            )
-            _decaps_ns = time.perf_counter_ns() - _t0
-            _monitor.monitor_crypto_operation(
-                "decrypt", _decaps_ns / 1_000_000, input_size=len(package.kem_ciphertext)
-            )
             from ama_cryptography.secure_memory import constant_time_compare as _ct2
 
             # Both the shared secret and the Kyber secret key are unsigned, so
             # decapsulation agreeing with the stored secret proves nothing on
             # its own: the stored secret must also match the signed commitment.
+            # The commitment is checked FIRST.  Until the stored secret matches
+            # it, the key and ciphertext beside that secret are unauthenticated
+            # input, and a package that fails here is refused without running
+            # them through ML-KEM decapsulation.
             committed = package.metadata.get("kem_shared_secret_commitment")
-            results["kem"] = (
-                isinstance(committed, str)
-                and _ct2(
-                    _kem_shared_secret_commitment(package.kem_shared_secret).encode(),
-                    committed.encode(),
-                )
-                and _ct2(decapsulated_ss, package.kem_shared_secret)
+            commitment_ok = isinstance(committed, str) and _ct2(
+                _kem_shared_secret_commitment(package.kem_shared_secret).encode(),
+                committed.encode(),
             )
+            if not commitment_ok:
+                results["kem"] = False
+            else:
+                kyber_provider = KyberProvider()
+                _t0 = time.perf_counter_ns()
+                decapsulated_ss = kyber_provider.decapsulate(
+                    package.kem_ciphertext,
+                    package.keypairs["KYBER_1024"].secret_key,
+                )
+                _decaps_ns = time.perf_counter_ns() - _t0
+                _monitor.monitor_crypto_operation(
+                    "decrypt", _decaps_ns / 1_000_000, input_size=len(package.kem_ciphertext)
+                )
+                results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
         except Exception as exc:
             logger.error("KEM decapsulation verification error: %s", exc)
             results["kem"] = False

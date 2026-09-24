@@ -1036,7 +1036,7 @@ The test suite includes:
 - Edge case testing for error handling
 - Performance regression tests with tiered tolerances
 - NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md)). The 1,215 is the byte-aligned, in-scope subset of the pinned ACVP-Server files, not the whole of them: the harness skips 5,789 further vectors (4,667 filtered inside AFT groups — non-byte-aligned inputs, parameter sets the library does not ship — and 1,122 non-AFT LDT/VOT/MCT groups), each skip class named and counted in [ACVP_SELF_ATTESTATION.md](docs/compliance/ACVP_SELF_ATTESTATION.md)
-- Fuzz harnesses for 16 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, Ascon, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, NIST P-curves, secp256k1, SHA3, SPHINCS+, X25519. (`fuzz_rng.c` is a shared PRNG helper linked into `fuzz_frost`, not a harness of its own — 17 `fuzz_*.c` sources, 16 libFuzzer entry points.) The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
+- Fuzz harnesses for 17 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, Ascon, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, HSS/LMS, Kyber, NIST P-curves, secp256k1, SHA3, SPHINCS+, X25519. (`fuzz_rng.c` is a shared PRNG helper linked into `fuzz_frost`, not a harness of its own — 18 `fuzz_*.c` sources, 17 libFuzzer entry points.) The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
 - Continuous fuzzing on GitHub-hosted runners: [ClusterFuzzLite](.github/workflows/clusterfuzzlite.yml) runs nightly batch campaigns under ASan, UBSan and MSan with a persisted corpus, weekly pruning and coverage reports; the per-PR libFuzzer lane persists and merges its corpus between runs; and the [OSS-Fuzz](docs/oss-fuzz-onboarding.md) submission files are prepared (built and checked by OSS-Fuzz's own driver on every push) but the project is not yet onboarded to OSS-Fuzz
 
@@ -1072,7 +1072,7 @@ GitHub Actions automatically tests:
 | CI - Testing and Code Quality | `ci.yml` | Python test matrix + C build + KAT validation + lint/format/type |
 | CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite across compilers/platforms |
 | Static Analysis (C) | `static-analysis.yml` | cppcheck, clang-analyzer, CodeQL, Werror, ASan+UBSan, MSan-KAT, clang-tidy fail-closed |
-| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (16 targets) + dictionary-validity gate |
+| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (17 targets) + dictionary-validity gate |
 | dudect Constant-Time | `dudect.yml` | Welch's t-test on execution timings |
 | ACVP Vector Validation | `acvp_validation.yml` | 1,215 / 1,215 gate; pushes to `main`/`develop`/`feature/**`/`fix/**` and `v*` tags, PRs to `main`/`develop`, + weekly |
 | Vendored Corpus Provenance | `corpus-provenance.yml` | Wycheproof + NIST digest manifest gate |
@@ -1368,7 +1368,7 @@ sudo cmake --install .
 - `AMA_BUILD_STATIC` - Build static library (default: ON)
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
 - `AMA_BUILD_EXAMPLES` - Build C example programs (default: ON)
-- `AMA_BUILD_FUZZ` - Build coverage-guided libFuzzer harnesses (default: OFF; 16 targets in `fuzz/`)
+- `AMA_BUILD_FUZZ` - Build coverage-guided libFuzzer harnesses (default: OFF; 17 targets in `fuzz/`)
 - `AMA_ENABLE_SIMD` - Master toggle for all SIMD paths (default: ON)
 - `AMA_ENABLE_AVX2` - Enable AVX2 SIMD optimizations (x86-64; default: ON)
 - `AMA_ENABLE_AVX512` - Enable in-house AVX-512 4-way Keccak permutation kernel (`src/c/avx512/ama_sha3_x4_avx512.c`, EVEX YMM-width, XCR0 5+6+7-gated; x86-64 only; default: **OFF**). With this off, the AVX2 4-way Keccak path remains the SHA-3 dispatch ceiling; with it on, the dispatcher promotes the SHA-3 slot to the AVX-512 kernel when `ama_cpuid_has_avx512_keccak()` holds at runtime.

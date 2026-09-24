@@ -44,6 +44,10 @@ repository root:
 A claim naming a file that does not exist is a failure too: a count for a
 deleted corpus is the most misleading kind.
 
+Prose claims are matched across a soft line wrap (``_GAP``): Markdown reflows
+prose, and a claim that escaped this gate because an editor broke a line
+between two of its words is still a claim.
+
 Exit code:
     0  every documented count matches
     1  at least one has drifted
@@ -229,6 +233,24 @@ def check_wycheproof_counts(repo: Path) -> list[str]:
     return problems
 
 
+#: The gap between two words of a count claim.
+#:
+#: Markdown reflows prose, so a claim is the same claim whether or not a soft
+#: line wrap falls inside it — and every prose pattern here used to spell the
+#: gap as one literal space.  A C-suite figure wrapped between "C" and "suite"
+#: in the CHANGELOG's live section, and the same stale figure on one line would
+#: have failed this gate while the wrapped one passed it: the gate missed the
+#: claim it was written for because of where an editor broke a line.  A gap is
+#: now any run of spaces and tabs, a single newline, and the ``>`` that
+#: continues a blockquote line.  A blank line is not a gap: a paragraph break
+#: ends a claim.  Bounded (16, and 64 inside the look-ahead) for the ReDoS
+#: reason recorded on ``_AGGREGATE_RE`` below.
+_GAP = r"(?:[ \t>]|\n(?![ \t>]{0,64}\n)){1,16}"
+
+#: A figure as the prose writes it: digits, optionally with thousands
+#: separators.  Bounded for the same reason as ``_GAP``.
+_FIGURE = r"(\d[\d,]{0,14})"
+
 #: Aggregate claims: "3,099 test functions across 130 Python test files".
 #:
 #: These are the figures docs/METRICS_REPORT.md calls authoritative and README
@@ -245,9 +267,16 @@ def check_wycheproof_counts(repo: Path) -> list[str]:
 #: words is never a kilobyte, so the bounds cost nothing and remove the shape.
 _AGGREGATE_RE = re.compile(
     r"([\d,]{1,15})\s{1,8}(?:static\s{1,8})?(?:Python\s{1,8})?"
-    r"test functions across\s{1,8}([\d,]{1,15})\s{1,8}"
+    r"test\s{1,8}functions\s{1,8}across\s{1,8}([\d,]{1,15})\s{1,8}"
     r"(?:Python\s{1,8})?(?:test\s{1,8})?files?"
 )
+
+#: "248 Python test modules" — AGENTS.md's spelling of the same file count.
+#: It sat nine below the tree (257) because no pattern here matched it and no
+#: pass of ``tools/update_docs.py`` rewrote it, in the one document that calls
+#: itself binding and asks to be read before the first tool call.  Checked
+#: against the same static measure as ``_AGGREGATE_RE``'s file count.
+_PY_TEST_MODULES_RE = re.compile(rf"{_FIGURE}{_GAP}Python{_GAP}test{_GAP}modules\b")
 
 #: Same two numbers, as they appear in the METRICS_REPORT table rows.
 _METRICS_FILES_RE = re.compile(
@@ -265,6 +294,17 @@ _METRICS_FUNCS_RE = re.compile(
 #: check_version_consistency.py). Matching them would make every historically
 #: accurate entry a permanent failure and force the gate to be disabled.
 _HISTORY_ROW_RE = re.compile(r"^\|\s*\d+\.\d+\.\d+[^|]*\|\s*20\d\d-\d\d-\d\d\s*\|")
+
+
+def _without_history_rows(text: str) -> str:
+    """``text`` with every revision-history row blanked.
+
+    Blanked, not deleted: a deleted row would join the lines on either side
+    of it, and a claim pattern that tolerates a soft wrap (``_GAP``) could then
+    read one claim across the gap the row left.  A blank line is a paragraph
+    break, which ``_GAP`` never crosses.
+    """
+    return "\n".join("" if _HISTORY_ROW_RE.match(line) else line for line in text.splitlines())
 
 
 _DEF_TEST_RE = re.compile(r"^\s*def test_", re.MULTILINE)
@@ -562,7 +602,7 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
     for path in _markdown_files(repo):
         rel = str(path.relative_to(repo))
         text = path.read_text(encoding="utf-8")
-        live = "\n".join(line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line))
+        live = _without_history_rows(text)
         for claimed_funcs, claimed_files in _AGGREGATE_RE.findall(live):
             if _num(claimed_funcs) != functions:
                 problems.append(
@@ -580,6 +620,12 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
                 problems.append(
                     f"{rel}: table says {claimed} test files; measured {files} "
                     f"({_REMEASURE_HINT})"
+                )
+        for claimed in _PY_TEST_MODULES_RE.findall(live):
+            if _num(claimed) != files:
+                problems.append(
+                    f"{rel}: claims {claimed} Python test modules; {files} files "
+                    f"under tests/ contain a test function ({_REMEASURE_HINT})"
                 )
         for claimed in _METRICS_FUNCS_RE.findall(live):
             if _num(claimed) != functions:
@@ -668,12 +714,16 @@ def _fuzz_count_claims(text: str) -> list[str]:
 #: INVARIANTS.md and the CHANGELOG publish for the error-state gating surface,
 #: naming `tools/check_error_state_gating.py` as authoritative while carrying a
 #: number that had drifted away from it (85 published, 86 reported).
-_NATIVE_ENTRY_RE = re.compile(r"(\d[\d,]*) native (?:plus \d+ Cython )?entry points")
-_CYTHON_ENTRY_RE = re.compile(r"(\d[\d,]*) Cython (?:binding )?entry points")
+_NATIVE_ENTRY_RE = re.compile(
+    rf"{_FIGURE}{_GAP}native{_GAP}(?:plus{_GAP}\d{{1,9}}{_GAP}Cython{_GAP})?entry{_GAP}points"
+)
+_CYTHON_ENTRY_RE = re.compile(rf"{_FIGURE}{_GAP}Cython{_GAP}(?:binding{_GAP})?entry{_GAP}points")
 
 #: "59 C test suites (62 translation units)" and the bare "59 C test suites".
-_C_SUITE_PAREN_RE = re.compile(r"(\d[\d,]*) C test suites \((\d[\d,]*) translation units\)")
-_C_SUITE_BARE_RE = re.compile(r"(\d[\d,]*) C test suites")
+_C_SUITE_PAREN_RE = re.compile(
+    rf"{_FIGURE}{_GAP}C{_GAP}test{_GAP}suites{_GAP}\({_FIGURE}{_GAP}translation{_GAP}units\)"
+)
+_C_SUITE_BARE_RE = re.compile(rf"{_FIGURE}{_GAP}C{_GAP}test{_GAP}suites")
 
 #: The OTHER spellings of the same claim.  The two patterns above match the
 #: phrasing README.md happens to use; three live documents said the same thing
@@ -697,7 +747,8 @@ _C_SUITE_CTEST_RE = re.compile(r"(\d[\d,]*)\s+`test_\*\.c`\s+registered\s+via\s+
 #: matching, so a document that has not been reworded is still checked rather
 #: than silently skipped.
 _C_SUITE_FILES_UNITS_RE = re.compile(
-    r"C suite is (\d[\d,]*) (?:suite )?files / (\d[\d,]*) translation units"
+    rf"C{_GAP}suite{_GAP}is{_GAP}{_FIGURE}{_GAP}(?:suite{_GAP})?files{_GAP}/{_GAP}{_FIGURE}"
+    rf"{_GAP}translation{_GAP}units"
 )
 
 #: README's version-stamped C library inventory.  Two counts, neither checked:
@@ -706,9 +757,12 @@ _C_SUITE_FILES_UNITS_RE = re.compile(
 #: unconditionally), and "25 modules + `__init__` + `__main__`" against 27.  An
 #: inventory presented with a version number should be measured, not
 #: transcribed.
-_SRC_C_UNITS_RE = re.compile(r"Top-level `src/c/\*\.c`\s*[—-]\s*(\d[\d,]*) translation units")
+_SRC_C_UNITS_RE = re.compile(
+    rf"Top-level{_GAP}`src/c/\*\.c`\s{{0,16}}[—-]\s{{0,16}}{_FIGURE}{_GAP}translation{_GAP}units"
+)
 _PACKAGE_MODULES_RE = re.compile(
-    r"`ama_cryptography/`,\s*(\d[\d,]*) modules \+ `__init__` \+ `__main__`"
+    rf"`ama_cryptography/`,\s{{0,16}}{_FIGURE}{_GAP}modules{_GAP}\+{_GAP}`__init__`{_GAP}\+"
+    rf"{_GAP}`__main__`"
 )
 
 #: README's `src/c/internal/` line, which states both halves of that directory.
@@ -765,6 +819,16 @@ def changelog_unreleased_section(repo: Path) -> str:
     Returns empty when there is no such section — which is the state right
     after a release is dated — so the checks below simply find nothing rather
     than failing on a file shape they did not expect.
+
+    What it reads is the VERSION section still headed ``Unreleased`` — the
+    release notes of the release being built.  It does not read the bare
+    ``## [Unreleased]`` section above it, and that is deliberate rather than an
+    oversight: the bare section holds dated development entries, the same kind
+    that were moved verbatim to ``docs/changelog/`` because a dated entry
+    records the tree on its date, and a correction entry quotes the figure it
+    corrected ("row 1 of the table said 105 native entry points").  Those
+    entries do not ship as they stand: ``tools/check_release_state.py`` refuses
+    a tag while the bare section holds anything.
     """
     path = repo / "CHANGELOG.md"
     if not path.is_file():
@@ -792,7 +856,7 @@ def _live_documents(repo: Path) -> list[tuple[str, str]]:
     docs: list[tuple[str, str]] = []
     for path in _markdown_files(repo):
         text = path.read_text(encoding="utf-8")
-        live = "\n".join(line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line))
+        live = _without_history_rows(text)
         docs.append((str(path.relative_to(repo)), live))
     unreleased = changelog_unreleased_section(repo)
     if unreleased:
@@ -1033,6 +1097,24 @@ _BREAKING_CLAIM_RE = re.compile(
 )
 _CHANGELOG_BREAKING_ROW_RE = re.compile(r"^\|\s*\d+\s*\|\s*\*{0,2}Breaking\*{0,2}\s*\|", re.M)
 
+#: The revision-table spelling of the same total: "BREAKING x11 — see
+#: CHANGELOG `[5.0.0]`" (ARCHITECTURE.md) and "BREAKING x11 — see `[5.0.0]`"
+#: (the CHANGELOG's own Version History Summary), where the "x" is the
+#: multiplication sign U+00D7 in the documents.  ``_BREAKING_CLAIM_RE`` reads
+#: "N breaking changes" and matches neither spelling, the rows carrying it were
+#: skipped as revision history, and the CHANGELOG is not a scanned document at
+#: all — so both rows said x10 for a section whose table enumerates eleven,
+#: and nothing looked.
+_BREAKING_TIMES_RE = re.compile(
+    rf"BREAKING{_GAP}\u00d7\s{{0,4}}(\d{{1,9}}){_GAP}[—-]{_GAP}see{_GAP}(?:CHANGELOG{_GAP})?"
+    r"`?\[(\d{1,9}\.\d{1,9}\.\d{1,9})\]`?"
+)
+
+#: A row of a version table ("| 5.0.0 | Unreleased | … |"): the only lines of
+#: CHANGELOG.md the ``BREAKING xN`` check reads, so an entry that quotes a
+#: superseded row in prose is not mistaken for the row itself.
+_VERSION_ROW_RE = re.compile(r"^\|\s*v?\d+\.\d+\.\d+\s*\|")
+
 
 def _resolve_number(token: str) -> int | None:
     """A digit string or an English number word; ``None`` for prose like
@@ -1058,12 +1140,52 @@ def count_changelog_breaking_rows(repo: Path, version: str) -> int | None:
     return len(_CHANGELOG_BREAKING_ROW_RE.findall(section))
 
 
+def breaking_times_claims(repo: Path) -> list[tuple[str, str, str]]:
+    """``(document, claimed total, cited version)`` for every ``BREAKING xN``.
+
+    Read from every scanned Markdown file with revision-history rows
+    INCLUDED, and from the version rows of CHANGELOG.md's summary table.  The
+    other families skip history rows because such a row records a figure that
+    was true at a past release and has legitimately moved since.  This one
+    cannot move that way: it names the CHANGELOG section it totals, and a
+    dated section's glance table is frozen with its release, so the row and
+    the table are two records of one fact and a disagreement is an error in
+    one of them, never drift.
+    """
+    claims: list[tuple[str, str, str]] = []
+    for path in _markdown_files(repo):
+        rel = str(path.relative_to(repo))
+        for token, version in _BREAKING_TIMES_RE.findall(path.read_text(encoding="utf-8")):
+            claims.append((rel, token, version))
+    changelog = repo / "CHANGELOG.md"
+    if changelog.is_file():
+        rows = "\n".join(
+            line if _VERSION_ROW_RE.match(line) else ""
+            for line in changelog.read_text(encoding="utf-8").splitlines()
+        )
+        for token, version in _BREAKING_TIMES_RE.findall(rows):
+            claims.append(("CHANGELOG.md", token, version))
+    return claims
+
+
 def check_breaking_change_counts(repo: Path) -> list[str]:
     problems: list[str] = []
+    for rel, token, version in breaking_times_claims(repo):
+        actual = count_changelog_breaking_rows(repo, version)
+        if actual is None:
+            problems.append(
+                f"{rel}: says BREAKING \u00d7{token} for {version}, but CHANGELOG has no "
+                f"[{version}] section to count"
+            )
+        elif int(token) != actual:
+            problems.append(
+                f"{rel}: says BREAKING \u00d7{token} for {version}; CHANGELOG "
+                f"[{version}] enumerates {actual} Breaking rows"
+            )
     for path in _markdown_files(repo):
         rel = str(path.relative_to(repo))
         text = path.read_text(encoding="utf-8")
-        live = "\n".join(line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line))
+        live = _without_history_rows(text)
         for token, version in _BREAKING_CLAIM_RE.findall(live):
             claimed = _resolve_number(token)
             if claimed is None:
@@ -1109,6 +1231,7 @@ def count_claim_families(repo: Path = REPO) -> dict[str, int]:
         live_lines = [line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line)]
         counts["fuzz"] += len(_fuzz_count_claims(text))
         counts["breaking"] += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
+        counts["py_test_modules"] += len(_PY_TEST_MODULES_RE.findall(text))
         if path.name == "METRICS_REPORT.md":
             # Each LoC-table row contributes two gated claims (Files, Lines);
             # each Scope Composition row contributes two (Lines, %); the
@@ -1125,6 +1248,7 @@ def count_claim_families(repo: Path = REPO) -> dict[str, int]:
             ):
                 counts["comp_rows"] += 2 * len(_composition_row_re(comp_label).findall(text))
             counts["json_lines"] += len(re.findall(r"\((\d[\d,]*) lines of\s*`\*\.json`", text))
+    counts["breaking_times"] = len(breaking_times_claims(repo))
     return counts
 
 
@@ -1187,6 +1311,8 @@ CLAIM_FAMILY_FLOORS: dict[str, int] = {
     "c_suite_bare": 3,
     "fuzz": 13,
     "breaking": 4,
+    "breaking_times": 4,
+    "py_test_modules": 1,
     "loc_rows": 14,
     "comp_rows": 12,
     "json_lines": 1,

@@ -305,16 +305,12 @@ jobs:
       # bit in ama_cpuid.c, a mask constant in avx2/ama_dilithium_avx2.c) was
       # fixed at source, and the flag is on in every lane.
       #
-      # What legitimately remains is one documented language-extension class
-      # (the `__int128` class is declared with `__extension__` at every site
-      # and no longer emitted):
-      #   x86/ama_nistp_mont_mulx.c  overlength string literal (-Woverlength-
-      #                              strings, clang) — one atomic asm() block;
-      #                              splitting the Montgomery kernel into
-      #                              several asm statements would forfeit the
-      #                              register-state guarantees the kernel
-      #                              depends on, and the warning measures the
-      #                              concatenated literal anyway.
+      # Nothing remains.  The `__int128` class is declared with `__extension__`
+      # at every site and no longer emitted, and the last allowlisted class —
+      # -Woverlength-strings (clang) on x86/ama_nistp_mont_mulx.c's one atomic
+      # asm() block — went when the block's literals lost their alignment
+      # padding (4,266 characters became 3,142, under the 4,095 C11 5.2.4.1
+      # guarantees; object code byte-identical).  The allowlist is empty.
       # The "Enforce the frozen warning allowlist" step below fails this job
       # if ANY other warning appears, so the clean state is now a gate, not a
       # snapshot.
@@ -367,10 +363,11 @@ jobs:
           # -Otarget: without it, two compiler processes under -j N share one
           # pipe and their stderr can interleave INSIDE a single line — observed
           # in a clean parallel build of this tree, where two identical
-          # -Woverlength-strings diagnostics merged into one unparseable line.
-          # An allowlisted warning that no longer matches its pattern turns this
-          # gate red for a reason unrelated to the code.  Make serialises
-          # per-target output with -Otarget; Ninja already buffers per edge.
+          # -Woverlength-strings diagnostics merged into one unparseable line
+          # (while that class was allowlisted, such a line stopped matching its
+          # pattern and turned this gate red for a reason unrelated to the
+          # code).  Make serialises per-target output with -Otarget; Ninja
+          # already buffers per edge.
           cmake --build build-strict -j$(nproc) -- -Otarget 2>&1 | tee build-warnings.log
 
       - name: Build with strict warnings (Release + LTO, the shipped configuration)

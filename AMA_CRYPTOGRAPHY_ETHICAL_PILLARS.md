@@ -458,55 +458,59 @@ assert all(w == 3.0 for w in ethical_vector.values())
 
 ### HKDF Integration with Ethical Context
 
-<!-- example: python-run continues -->
+<!-- example: python-run -->
 ```python
-import hashlib
 import json
 from typing import Dict
 
-def create_ethical_hkdf_context(
-    base_context: bytes,
-    ethical_vector: Dict[str, float]
-) -> bytes:
+from ama_cryptography.legacy_compat import create_ethical_hkdf_context as library_context
+from ama_cryptography.pqc_backends import native_sha3_256
+
+ethical_vector = {
+    "omniscient": 3.0,
+    "omnipotent": 3.0,
+    "omnidirectional": 3.0,
+    "omnibenevolent": 3.0,
+}
+
+
+def create_ethical_hkdf_context(base_context: bytes, ethical_vector: Dict[str, float]) -> bytes:
     """
     Integrates ethical vector into HKDF key derivation context.
 
-    Security: Ethical context affects derived keys without weakening
-    the underlying HKDF security (2^128).
+    The ethical context enters HKDF only through its info parameter, so it
+    changes which key is derived without touching the HKDF construction.
 
     Args:
         base_context: Original HKDF info parameter
-        ethical_vector: 4-pillar ethical weights (Σw = 12.0)
+        ethical_vector: 4-pillar ethical weights (sum 12.0)
 
     Returns:
-        Enhanced context with 128-bit ethical signature
+        base_context followed by a 128-bit ethical signature
     """
     # Canonical JSON encoding (sorted keys)
     ethical_json = json.dumps(ethical_vector, sort_keys=True)
 
-    # SHA3-256 hash of ethical vector
-    ethical_hash = hashlib.sha3_256(ethical_json.encode()).digest()
+    # SHA3-256 of the canonical encoding (AMA's native FIPS 202 kernel)
+    ethical_hash = native_sha3_256(ethical_json.encode())
 
     # Extract 128-bit signature (first 16 bytes)
     ethical_signature = ethical_hash[:16]
 
     # Concatenate with base context
-    enhanced_context = base_context + ethical_signature
+    return base_context + ethical_signature
 
-    return enhanced_context
 
 # Example usage
 base_context = b"AMA-Cryptography-2025"
 enhanced = create_ethical_hkdf_context(base_context, ethical_vector)
 
-# Result: base_context || SHA3-256(ethical_vector)[:16]
+# Result: base_context || SHA3-256(canonical JSON of ethical_vector)[:16]
 # Length: 21 bytes + 16 bytes = 37 bytes total
-assert len(enhanced) == len(base_context) + 16 == 37
+assert len(enhanced) == 37
 
-# This is exactly what the library's own
-# ama_cryptography.legacy_compat.create_ethical_hkdf_context computes.
-from ama_cryptography.legacy_compat import create_ethical_hkdf_context as library_context
-assert library_context(base_context, ethical_vector) == enhanced
+# The function above is the library's own, step for step:
+assert enhanced == library_context(base_context, ethical_vector)
 ```
 
 ### Security Proof: Ethical Integration Maintains Collision Resistance
@@ -539,54 +543,61 @@ Conclusion: Ethical integration is cryptographically safe ∎
 
 ## HKDF Implementation with Ethical Context
 
-<!-- example: python-run continues -->
+<!-- example: python-run -->
 ```python
+from typing import Dict
+
+from ama_cryptography import secure_token_bytes
 from ama_cryptography.legacy_compat import derive_keys
-import os
+
+ethical_vector = {
+    "omniscient": 3.0,
+    "omnipotent": 3.0,
+    "omnidirectional": 3.0,
+    "omnibenevolent": 3.0,
+}
+
 
 def derive_key_with_ethics(
     master_secret: bytes,
     key_type: str,
     ethical_vector: Dict[str, float],
-    salt: bytes,
 ) -> bytes:
     """
-    Derives cryptographic key with ethical context integration.
+    Derives a 32-byte key with the ethical context bound into HKDF's info.
 
     Compliant with:
     - RFC 5869 (HKDF)
-    - NIST SP 800-108 (Key Derivation)
     - NIST FIPS 202 (SHA-3)
 
-    Uses native C HKDF-SHA3-256 (v2.0, zero external dependencies).
+    Uses the native C HKDF-SHA3-256 (zero external dependencies).
+    ``derive_keys`` builds each derivation's info parameter itself, as
+    ``create_ethical_hkdf_context(f"{info}:{i}".encode(), ethical_vector)``,
+    so the caller passes the vector, not a pre-built context.  With no
+    ``salt`` it draws a fresh 32-byte HKDF salt and returns it beside the
+    keys; keep that salt if the key must be derived again.
 
     Args:
-        master_secret: 256-bit master secret from CSPRNG
+        master_secret: At least 256 bits from the CSPRNG
         key_type: Purpose identifier ("hmac", "ed25519", etc.)
         ethical_vector: 4-pillar ethical weights
-        salt: HKDF salt; keep it with the key material, because the same
-            (master_secret, salt) pair is what re-derives the same key
 
     Returns:
         32-byte derived key
     """
-    # derive_keys applies the ethical context itself: key i is HKDF over the
-    # info create_ethical_hkdf_context(f"{info}:{i}".encode(), ethical_vector).
-    # It returns (keys, salt); without a salt argument it draws a fresh one.
     keys, _salt = derive_keys(
         master_secret,
-        f"AMA-Cryptography-{key_type}-2025",
+        f"AMA-Cryptography-{key_type}",
         num_keys=1,
         ethical_vector=ethical_vector,
-        salt=salt,
     )
     return keys[0]
 
+
 # Example: Derive HMAC key with ethical context
-master_secret = os.urandom(32)  # 256-bit CSPRNG
-salt = os.urandom(32)
-hmac_key = derive_key_with_ethics(master_secret, "hmac", ethical_vector, salt)
-assert hmac_key == derive_key_with_ethics(master_secret, "hmac", ethical_vector, salt)
+master_secret = secure_token_bytes(32)  # 256 bits, health-tested CSPRNG
+hmac_key = derive_key_with_ethics(master_secret, "hmac", ethical_vector)
+assert len(hmac_key) == 32
 
 print(f"Derived key: {hmac_key.hex()[:32]}...")
 print("Ethical context applied: OK")
@@ -598,56 +609,79 @@ print("Ethical context applied: OK")
 
 ### Computational Overhead
 
-<!-- example: python-run continues -->
+<!-- example: python-run -->
 ```python
 import time
+from typing import Callable, Dict
 
+from ama_cryptography import secure_token_bytes
 from ama_cryptography.legacy_compat import create_ethical_hkdf_context
 from ama_cryptography.pqc_backends import native_hkdf
 
-def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
-    """Measures performance impact of ethical vector integration."""
+ethical_vector = {
+    "omniscient": 3.0,
+    "omnipotent": 3.0,
+    "omnidirectional": 3.0,
+    "omnibenevolent": 3.0,
+}
 
+
+def benchmark_ethical_integration(iterations: int = 20_000, repeats: int = 5) -> Dict[str, float]:
+    """Per-derivation cost of HKDF-SHA3-256 with and without the ethical context.
+
+    Both sides make the same HKDF call; the enhanced side also builds the
+    context (canonical JSON, SHA3-256, 16-byte truncation) on every call,
+    which is the whole of what the ethical layer adds.  Best of ``repeats``.
+    """
     base_context = b"AMA-Cryptography-hmac-2025"
-    master_secret = os.urandom(32)
-    salt = os.urandom(32)
+    master_secret = secure_token_bytes(32)
+    salt = secure_token_bytes(32)
 
-    # Baseline: native HKDF-SHA3-256 without ethical context.  (derive_keys
-    # always applies the ethical context, so it cannot be the baseline.)
-    start = time.perf_counter()
-    for _ in range(iterations):
-        native_hkdf(ikm=master_secret, length=32, salt=salt, info=base_context)
-    baseline_time = (time.perf_counter() - start) / iterations
+    def per_call(build_info: Callable[[], bytes]) -> float:
+        start = time.perf_counter()
+        for _ in range(iterations):
+            native_hkdf(ikm=master_secret, length=32, salt=salt, info=build_info())
+        return (time.perf_counter() - start) / iterations
 
-    # Enhanced: the same HKDF with the ethical context appended to `info`
-    start = time.perf_counter()
-    for _ in range(iterations):
-        enhanced_context = create_ethical_hkdf_context(base_context, ethical_vector)
-        native_hkdf(ikm=master_secret, length=32, salt=salt, info=enhanced_context)
-    enhanced_time = (time.perf_counter() - start) / iterations
-
-    overhead = enhanced_time - baseline_time
-    overhead_pct = (overhead / baseline_time) * 100
-
+    baseline = min(per_call(lambda: base_context) for _ in range(repeats))
+    enhanced = min(
+        per_call(lambda: create_ethical_hkdf_context(base_context, ethical_vector))
+        for _ in range(repeats)
+    )
     return {
-        "baseline_ms": baseline_time * 1000,
-        "enhanced_ms": enhanced_time * 1000,
-        "overhead_ms": overhead * 1000,
-        "overhead_pct": overhead_pct
+        "baseline_us": baseline * 1e6,
+        "enhanced_us": enhanced * 1e6,
+        "overhead_us": (enhanced - baseline) * 1e6,
+        "overhead_pct": (enhanced - baseline) / baseline * 100,
+        "enhanced_derivations_per_s": 1 / enhanced,
     }
 
-# Prints this host's figures.
-print(benchmark_ethical_integration(iterations=200))
+
+for name, value in benchmark_ethical_integration().items():
+    print(f"{name}: {value:,.2f}")
 ```
 
-**Conclusion:** The ethical context costs one SHA3-256 over a short canonical
-JSON string per derivation, plus the call overhead of reaching it from Python.
-Measured against a bare native HKDF call that is **not** a few percent: the
-context costs about as much again as the HKDF call it is appended to. In
-absolute terms it is small beside a signature or a KEM operation. An earlier revision published "baseline 0.25 ms, enhanced 0.26 ms,
-overhead <4%" with no host or run behind it; the benchmark it showed also
-called `derive_keys` with the wrong arguments, so it could not have produced
-those figures. Run the function above to measure your own host.
+**Measured, 2026-09-24.** Host: a shared 4-vCPU Intel Xeon @ 2.10 GHz VM
+(Linux 6.18) whose load average stood near 30 during the runs, so absolute
+times are inflated and the ratios are the figures to read. CPython 3.11.15;
+native library built by `python setup.py build_ext --inplace` (Release);
+process pinned with `taskset -c 2`; three runs of the block above, best of
+five repeats of 20,000 derivations each:
+
+| Run | Bare HKDF-SHA3-256 call | With ethical context | Added | Added, relative |
+|-----|------------------------:|---------------------:|------:|----------------:|
+| 1 | 11.25 µs | 28.30 µs | 17.04 µs | +151% |
+| 2 | 11.26 µs | 25.10 µs | 13.84 µs | +123% |
+| 3 | 11.24 µs | 26.45 µs | 15.21 µs | +135% |
+
+**Conclusion:** per derivation, building the context (canonical JSON,
+SHA3-256, truncation, all through the Python layer) costs more than the
+native HKDF call it feeds. This page used to state "<0.01 ms overhead
+(<4%)"; that figure had no recorded host or method, and it is not what a
+derivation costs. Per *package* the layer is small: the ethical-hash
+computation `legacy_compat.create_crypto_package` performs took 11.5–12.4 µs
+of a 1,728–1,744 µs package creation (0.66–0.72%) in two runs of 200
+packages, best of five, on the same host.
 
 ---
 
@@ -709,18 +743,14 @@ those figures. Run the function above to measure your own host.
 
 <!-- example: python-run -->
 ```python
-import hashlib
+import dataclasses
 import json
-from dataclasses import asdict
 
-# legacy_compat carries the ethical-vector key management this page
-# describes.  Its package functions emit a DeprecationWarning pointing at
-# ama_cryptography.crypto_api, whose package API has no ethical vector.
+from ama_cryptography import MASTER_CODES, MASTER_HELIX_PARAMS
 from ama_cryptography.legacy_compat import (
-    MASTER_CODES,
-    MASTER_HELIX_PARAMS,
     create_crypto_package,
     generate_key_management_system,
+    recompute_ethical_hash,
     verify_crypto_package,
 )
 
@@ -732,67 +762,74 @@ ethical_vector = {
     "omnibenevolent": 3.0,
 }
 
-# 2. Generate keys with ethical context.  The KMS derives its HMAC key with
-#    derive_keys(..., ethical_vector=ethical_vector), so the vector's
-#    SHA3-256 is in the HKDF context of every key it holds, and it generates
-#    the Ed25519 and ML-DSA-65 keypairs on AMA's native C backend.
+# 2. Generate keys with ethical context.
+#    generate_key_management_system draws the master secret from the
+#    health-tested CSPRNG, derives the HMAC key and the Ed25519 seed with
+#    HKDF-SHA3-256 under create_ethical_hkdf_context(..., ethical_vector),
+#    and generates the ML-DSA-65 keypair.  Call it; do not assemble a
+#    KeyManagementSystem by hand.
 kms = generate_key_management_system("Steel-SecAdv-LLC", ethical_vector=ethical_vector)
 
-# 3. Create the cryptographic package.  It records the ethical vector and
-#    SHA3-256(canonical JSON of the vector) itself.
-pkg = create_crypto_package(
+# 3. Create the package.  It carries the ethical vector and its SHA3-256
+#    hash, and both are covered by the Ed25519 and ML-DSA-65 signatures.
+package = create_crypto_package(
     MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms,
-    author="Steel-SecAdv-LLC"
+    author="Steel-SecAdv-LLC",
 )
-assert pkg.ethical_vector == ethical_vector
-assert pkg.ethical_hash == hashlib.sha3_256(
-    json.dumps(ethical_vector, sort_keys=True).encode()
-).hexdigest()
+assert package.ethical_vector == ethical_vector
+assert package.ethical_hash == recompute_ethical_hash(ethical_vector).hex()
 
-# ... and it verifies, ethical binding included (None = not applicable,
-# here the RFC 3161 checks for a package created without a timestamp).
-results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-assert results["ethical_vector"] is True
-assert all(verdict is not False for verdict in results.values())
+# 4. Verify every layer.  "ethical_vector" is recomputed from the vector the
+#    package carries, not taken from the stored hash.
+results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, package, kms.hmac_key)
+checked = ("content_hash", "hmac", "ed25519", "dilithium", "ethical_vector")
+assert all(results[name] is True for name in checked), results
 
-# 4. Save package with ethical context
-with open("CRYPTO_PACKAGE_ETHICAL.json", "w") as f:
-    json.dump(asdict(pkg), f, indent=2)
+# 5. Save the package.  It is public material: signatures, public keys, the
+#    ethical vector and its hash, and no secret.
+with open("CRYPTO_PACKAGE_ETHICAL.json", "w", encoding="utf-8") as f:
+    json.dump(dataclasses.asdict(package), f, indent=2)
 
-print("OK: package created with the 4 Omni-Code Ethical Pillars")
-print(f"OK: ethical hash: {pkg.ethical_hash[:16]}...")
+# ASCII only: a Windows console defaults to cp1252 (INVARIANT-43).
+print("OK: package created and verified with the 4 Omni-Code Ethical Pillars")
+print(f"OK: ethical hash {package.ethical_hash[:16]}...")
 ```
 
 ---
 
 ## Property Checklist
 
-Each box below is a property this document asserts and the repository tests for. The heading used to read "Formal Verification Checklist", which claimed a method that has not been applied to this library — see the verification-status block above: it has not been formally verified, and these are testing and design claims, not machine-checked proofs.
+The heading used to read "Formal Verification Checklist", which claimed a method that has not been applied to this library — see the verification-status block above: it has not been formally verified. An earlier revision of this section then said every box below is "a property this document asserts and the repository tests for", which was not true either: a security level cannot be tested, and several boxes had no test. The list is therefore split by what stands behind each item.
 
-### Cryptographic Properties
+### Tested — each names the test that fails when the property breaks
 
-- [x] **Collision Resistance:** SHA3-256 maintains 2^128 security with ethical context
-- [x] **PRF Security:** HKDF-SHA3-256 remains secure PRF with extended info parameter
-- [x] **Key Independence:** Derived keys remain computationally independent
-- [x] **Signature Security:** Ed25519 + Dilithium dual-signature security preserved
-- [x] **Quantum Resistance:** Dilithium 2^192 quantum security unchanged
+- [x] **Balanced Weighting:** Σwᵢ = 12.0, each wᵢ = 3.0, four pillars — `tests/test_comprehensive_system.py::TestEthicalVectorIntegration` (`test_ethical_vector_sum_equals_twelve`, `test_ethical_vector_all_weights_equal_three`, `test_ethical_vector_has_four_pillars`)
+- [x] **Context Construction:** the HKDF info is the base context followed by 16 bytes of SHA3-256 over the vector, deterministically — `tests/test_hkdf_sha3_256.py::TestEthicalHKDFContext::test_ethical_context_creation`, `::test_ethical_context_deterministic`, `::TestProjectSpecificVectors::test_ethical_signature_golden_vector`
+- [x] **Vector Binding:** a different vector gives a different context and a different derived key — `tests/test_hkdf_sha3_256.py::TestEthicalHKDFContext::test_ethical_context_different_vectors_produce_different_contexts`, `::test_ethical_vector_affects_derived_keys`
+- [x] **Canonical Encoding:** sorted-key JSON, so key order does not change the context or the package's ethical hash — `tests/test_hkdf_sha3_256.py::TestEthicalHKDFContext::test_ethical_context_ignores_key_order`
+- [x] **Distinct Derived Keys:** keys derived at different indices differ — `tests/test_hkdf_sha3_256.py::TestHKDFSHA3256::test_hkdf_sha3_256_key_independence` (distinctness is what a test can show; computational independence is the design claim below)
+- [x] **Package Binding:** a package's ethical vector is recomputed at verification, not taken from its stored hash, and tampering with any signed field fails verification — `tests/test_crypto_package_transcript.py::TestTheLegacyPackageBindsItsOwnIdentity` (`test_the_ethical_vector_is_derived_not_trusted`, `test_tampering_is_detected`)
+- [x] **The examples on this page run:** every Python block above is executed by `tools/check_doc_examples.py` (INVARIANT-53)
 
-### Ethical Properties
+### Design claims — argued from the cited standards, not tested
 
-- [x] **Balanced Weighting:** Σwᵢ = 12.0, each wᵢ = 3.0
-- [x] **Pillar Structure:** 4 pillars × 3 sub-properties = 12 ethical dimensions
-- [x] **Canonical Encoding:** JSON with sorted keys ensures unique representation
-- [x] **Auditability:** All pillars map to verifiable cryptographic operations
-- [x] **Transparency:** Ethical context publicly documented and verifiable
+- **Collision Resistance:** SHA3-256 offers 128-bit collision resistance (FIPS 202, Appendix A.1); appending a 16-byte ethical signature to HKDF's info input does not change the hash function.
+- **PRF Security:** HKDF-SHA3-256 remains a secure KDF with the extended info parameter; info is public context in the HKDF analysis (RFC 5869; Krawczyk 2010).
+- **Key Independence:** keys derived under distinct info strings are computationally independent under the same analysis.
+- **Signature Security:** the Ed25519 + ML-DSA-65 dual signature is as strong as the stronger of its two schemes against a forger who must break both.
+- **Quantum Resistance:** ML-DSA-65 is FIPS 204's NIST security category 3 parameter set. Category 3 is defined relative to the cost of a key search on AES-192; it is not a claim of 2^192 quantum work.
+- **Pillar Structure:** 4 pillars × 3 sub-properties = 12 ethical dimensions — a property of this framework's definition.
+- **Auditability and Transparency:** the vector and its hash travel in the package and are publicly documented here.
+- **No Security Trade-off:** the ethical layer changes only HKDF's info input and the signed package metadata; no primitive in Part A is modified.
 
-### Performance Properties
+### Measured — re-run the Performance Analysis block to re-measure
 
-- [x] **Low Overhead:** <0.01ms additional latency (<4%)
-- [x] **Scalability:** Linear scaling with input size
-- [x] **High Throughput:** >1,000 ops/sec throughput maintained
-- [x] **Zero Security Trade-off:** No weakening of cryptographic guarantees
+- **Overhead per derivation:** +13.8 to +17.0 µs on an 11.2 µs native HKDF call (+123% to +151%); see the table under Performance Analysis for the host and method. The "<0.01ms additional latency (<4%)" this box used to carry was not a measurement of anything recorded.
+- **Overhead per package:** 0.66–0.72% of `legacy_compat.create_crypto_package` on the same host.
+- **Throughput:** 35,300–39,800 context-bound derivations per second, and 574–579 legacy packages per second, on that loaded host. The ">1,000 ops/sec" this box used to carry named neither the operation nor a measurement.
+- **Scaling:** the context is computed from a fixed four-entry vector, so its cost is constant; it does not grow with the size of the protected content.
 
 ---
 
@@ -849,9 +886,10 @@ The 4 Omni-Code Ethical Pillars provide a mathematically rigorous framework for 
 - **Clean structure:** 4 pillars × 3 sub-properties = 12 ethical dimensions, Σw = 12.0
 - **Primitives consumed:** NIST FIPS 202, 203, 204, 205; IETF RFC 2104,
   3161, 5869 (see Part A for the authoritative list).
-- **Measured overhead:** <4% per package operation in the reference
-  benchmark (generic C path); throughput >1,000 ops/sec on the CI
-  runner. Actual overhead varies by hardware and input size.
+- **Measured overhead:** 0.66–0.72% of a legacy package creation, and
+  +123% to +151% on a single HKDF derivation, measured 2026-09-24 on the
+  host and with the method recorded under Performance Analysis. Actual
+  overhead varies by hardware.
 - **Validation status:** Validated against NIST ACVP test vectors;
   see [`CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md) for the
   authoritative, versioned totals. The ACVP validation covers the FIPS

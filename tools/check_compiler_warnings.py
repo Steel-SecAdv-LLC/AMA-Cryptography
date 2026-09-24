@@ -54,14 +54,21 @@ Both configurations and both architectures now feed this one allowlist.
 
 What is allowed, and why
 ------------------------
-(There is no vendored C source: the tree's one vendored backend was removed
-in the twenty-first maintenance pass, and its exemption with it.)
+Nothing.  ``EXEMPTIONS`` is empty: every warning in every log fails the gate.
 
-``x86/ama_nistp_mont_mulx.c`` — ``string literal of length``
-    ``-Woverlength-strings`` under clang.  One atomic ``asm()`` block:
-    splitting the Montgomery kernel into several ``asm`` statements would
-    forfeit the register-state guarantees the kernel depends on, and the
-    warning measures the concatenated literal anyway.
+Every class once admitted was driven to zero at source.  The tree's one
+vendored backend was removed in the twenty-first maintenance pass, and its
+exemption with it.  ``__int128`` under ``-Wpedantic`` went when every site
+declared the type with ``__extension__``.  ``x86/ama_nistp_mont_mulx.c`` emitted
+``-Woverlength-strings`` under clang: its one atomic ``asm()`` block
+concatenated to a 4,266-character literal against the 4,095 that C11
+5.2.4.1 guarantees.  The block cannot be split (separate ``asm`` statements
+forfeit the register-state guarantees the kernel depends on), but 1,124 of
+those characters were column-alignment padding inside the literals.  With
+the padding removed the literal is 3,142 characters, the object code is
+byte-identical under gcc and clang at ``-O0``/``-O2``/``-O3``, and the file
+compiles clean under ``-Wpedantic -Werror`` — which is what AGENTS.md §9
+requires of every modified C file, and what this gate can now hold it to.
 
 Tightening (a class driven to zero) means deleting its entry below.
 Loosening requires editing this file in review — which is the point.
@@ -114,27 +121,9 @@ class Exemption(NamedTuple):
     reason: str
 
 
-EXEMPTIONS: tuple[Exemption, ...] = (
-    Exemption(
-        name="overlength-asm-literal",
-        # `.*` between the file name and the diagnostic text rather than the
-        # exact `:LINE:COL: warning: ` bridge.  Under `make -j N` two compiler
-        # processes share one pipe and their stderr can INTERLEAVE inside a
-        # single line — observed verbatim in a clean parallel build of this
-        # tree, where two identical diagnostics merged into
-        # `...mont_mulx.c...mont_mulx.c::161161::99::  warning: warning:
-        # string literal...`.  The build steps pass `-Otarget` to serialise
-        # Make's output; this is the defence for any generator that does not.
-        # It is not loose: the file name AND `warning:` AND the specific
-        # diagnostic text must all still appear on the line.
-        pattern=re.compile(r"ama_nistp_mont_mulx\.c.*warning:.*string literal of length"),
-        reason=(
-            "-Woverlength-strings under clang.  One atomic asm() block; "
-            "splitting the Montgomery kernel would forfeit the register-state "
-            "guarantees it depends on."
-        ),
-    ),
-)
+#: Empty: see "What is allowed, and why" above.  The machinery stays so that a
+#: future entry is a reviewed edit to this tuple, not a new mechanism.
+EXEMPTIONS: tuple[Exemption, ...] = ()
 
 
 class Finding(NamedTuple):

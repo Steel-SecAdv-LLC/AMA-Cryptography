@@ -61,6 +61,12 @@ jobs:
           # fail-closed contract, and hash determinism.  Core (non-PQC) —
           # ama_ascon.c depends on no other primitive in this library.
           - fuzz_ascon
+          # HSS/LMS verification (RFC 8554): an attacker-supplied signature
+          # and public key drive every length the verifier parses.  Asserts
+          # the verdict contract (INVALID_PARAM exactly for a malformed key),
+          # determinism, message binding of an accepted signature, and the
+          # length walker's self-consistency.  Core (non-PQC) — SHA-256 only.
+          - fuzz_lms
 
     steps:
       - name: Checkout code
@@ -309,7 +315,7 @@ jobs:
           exit $rc
 
       - name: Generated seed corpora must match their generators
-        # Three corpora are produced by a script rather than by hand, so that
+        # Four corpora are produced by a script rather than by hand, so that
         # what each seed covers is stated and reproducible.  Each script has
         # a --check mode and NONE was wired to anything, which makes the
         # generator and the committed bytes free to drift apart silently —
@@ -320,6 +326,7 @@ jobs:
           python3 tools/build_ascon_seed_corpus.py --check
           python3 tools/build_kyber_seed_corpus.py --check
           python3 tools/build_pqc_verify_seed_corpus.py --check
+          python3 tools/build_lms_seed_corpus.py --check
 
       - name: Every harness branch must be reachable by its own lane
         # Registration (check_fuzz_target_registration.py) says a harness

@@ -359,6 +359,30 @@ class TestAggregateTestCounts:
         )
         assert tool.check_aggregate_test_counts(repo) == []
 
+    def test_a_wrapped_aggregate_claim_is_checked(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = _synthetic_repo(tool, tmp_path, test_files=4)
+        (repo / "OVERVIEW.md").write_text(
+            "- 9,999 test\n  functions across 42 Python test files.\n", encoding="utf-8"
+        )
+        assert len(tool.check_aggregate_test_counts(repo)) == 2
+
+    def test_a_stale_python_test_module_count_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        """PIN: AGENTS.md said 248 against 257, with no pattern that could see it."""
+        repo = _synthetic_repo(tool, tmp_path, test_files=4)
+        (repo / "AGENTS.md").write_text(
+            "| `tests/c/`, `tests/` | 86 C test suites, 3 Python test modules |\n",
+            encoding="utf-8",
+        )
+        problems = tool.check_aggregate_test_counts(repo)
+        assert len(problems) == 1 and "3 Python test modules" in problems[0], problems
+
+    def test_a_current_python_test_module_count_passes(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = _synthetic_repo(tool, tmp_path, test_files=4)
+        (repo / "AGENTS.md").write_text("4 Python test\nmodules\n", encoding="utf-8")
+        assert tool.check_aggregate_test_counts(repo) == []
+
 
 class TestFuzzTargetCounts:
     """``check_fuzz_target_counts`` — the prose count vs the number built."""
@@ -541,6 +565,80 @@ class TestBreakingChangeCounts:
         assert tool.check_breaking_change_counts(repo) == []
 
 
+class TestBreakingTimesClaims:
+    """``BREAKING ×N — see [CHANGELOG] `[X.Y.Z]``` — the revision-table spelling.
+
+    ARCHITECTURE.md's and the CHANGELOG's 5.0.0 rows said ×10 against a table
+    of eleven Breaking rows: the "N breaking changes" pattern could not read
+    the spelling, the rows were skipped as history, and the CHANGELOG is not
+    a scanned document.
+    """
+
+    _CHANGELOG = TestBreakingChangeCounts._CHANGELOG
+
+    @staticmethod
+    def _repo(tmp_path: Path, changelog_tail: str, doc: str) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        (repo / "CHANGELOG.md").write_text(
+            TestBreakingTimesClaims._CHANGELOG + changelog_tail, encoding="utf-8"
+        )
+        (repo / "docs" / "A.md").write_text(doc, encoding="utf-8")
+        return repo
+
+    def test_a_matching_history_row_is_clean(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            "",
+            "| 4.0.0 | 2026-08-01 | x | Trust anchors. BREAKING ×2 — see CHANGELOG `[4.0.0]`. |\n",
+        )
+        assert tool.check_breaking_change_counts(repo) == []
+
+    def test_a_wrong_history_row_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        """PIN: a dated row is read too — its section is frozen with it."""
+        repo = self._repo(
+            tmp_path,
+            "",
+            "| 4.0.0 | 2026-08-01 | x | Trust anchors. BREAKING ×1 — see CHANGELOG `[4.0.0]`. |\n",
+        )
+        problems = tool.check_breaking_change_counts(repo)
+        assert len(problems) == 1 and "docs/A.md" in problems[0], problems
+        assert "enumerates 2" in problems[0]
+
+    def test_a_wrong_row_in_the_changelog_summary_fails(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """PIN: the CHANGELOG's own Version History Summary is read."""
+        repo = self._repo(
+            tmp_path,
+            "\n## Version History Summary\n\n| Version | Date | Description |\n|---|---|---|\n"
+            "| 4.0.0 | Unreleased | Trust anchors. BREAKING ×3 — see `[4.0.0]` |\n",
+            "nothing here\n",
+        )
+        problems = tool.check_breaking_change_counts(repo)
+        assert len(problems) == 1 and problems[0].startswith("CHANGELOG.md:"), problems
+
+    def test_changelog_prose_quoting_an_old_row_is_not_read(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Only version rows are read from the CHANGELOG, so an entry recording
+        the correction ("the row said BREAKING ×3 — see `[4.0.0]`") does not
+        fail the gate it describes."""
+        repo = self._repo(
+            tmp_path,
+            "\n- the summary row said BREAKING ×3 — see `[4.0.0]`, against two rows\n",
+            "nothing here\n",
+        )
+        assert tool.check_breaking_change_counts(repo) == []
+
+    def test_a_claim_about_a_missing_section_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path, "", "| 9.9.9 | Unreleased | x | BREAKING ×2 — see CHANGELOG `[9.9.9]` |\n"
+        )
+        problems = tool.check_breaking_change_counts(repo)
+        assert problems and "no [9.9.9] section" in problems[0], problems
+
+
 class TestEntryPointCounts:
     """The gated-surface figures must track the tool the documents cite.
 
@@ -582,6 +680,16 @@ class TestEntryPointCounts:
         )
         problems = tool.check_entry_point_counts(repo)
         assert any("Cython binding entry points" in p for p in problems), problems
+
+    def test_a_wrapped_native_count_is_reported(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        native, _cython = tool.count_error_state_entry_points()
+        (repo / "docs" / "SURFACE.md").write_text(
+            f"The ERROR state inhibits {native + 7} native\nentry points.\n", encoding="utf-8"
+        )
+        problems = tool.check_entry_point_counts(repo)
+        assert any("native entry points" in p for p in problems), problems
 
 
 class TestCSuiteCounts:
@@ -644,6 +752,48 @@ class TestCSuiteCounts:
         (repo / "docs" / "M.md").write_text("anchored in 3 C test suites\n", encoding="utf-8")
         problems = tool.check_c_suite_counts(repo)
         assert any("C test suites" in p for p in problems), problems
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "covered by 4 C\ntest suites (9 translation\nunits).\n",
+            "- the C\n  suite is 4 files / 9 translation units.\n",
+            "> the C\n> suite is 4 suite files / 9 translation units.\n",
+        ],
+        ids=["paren-wrapped", "list-continuation", "blockquote-continuation"],
+    )
+    def test_a_claim_wrapped_across_lines_is_still_checked(
+        self, tool: ModuleType, tmp_path: Path, text: str
+    ) -> None:
+        """PIN: the stale "C\\nsuite is 85 files / 87 translation units" passed
+        the gate because the break fell between two words of the claim."""
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "M.md").write_text(text, encoding="utf-8")
+        problems = tool.check_c_suite_counts(repo)
+        assert any("4" in p for p in problems), problems
+        assert any("9" in p for p in problems), problems
+
+    def test_a_paragraph_break_ends_a_claim(self, tool: ModuleType, tmp_path: Path) -> None:
+        """The wrap tolerance is a soft wrap, not any whitespace."""
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "M.md").write_text(
+            "The list below has 4\n\nC test suites in it.\n", encoding="utf-8"
+        )
+        assert tool.check_c_suite_counts(repo) == []
+
+    def test_a_history_row_does_not_join_its_neighbours(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The skipped row is blanked, not deleted, so the lines either side of
+        it do not become one soft-wrapped claim."""
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "M.md").write_text(
+            "count 4\n| 3.5.0 | 2026-07-30 | history |\nC test suites\n", encoding="utf-8"
+        )
+        assert tool.check_c_suite_counts(repo) == []
 
 
 class TestTheChangelogUnreleasedSectionIsLive:

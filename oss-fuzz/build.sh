@@ -61,6 +61,7 @@ FUZZ_TARGETS=(
     fuzz_consttime
     fuzz_agent_binding
     fuzz_ascon
+    fuzz_lms
     fuzz_dilithium
     fuzz_kyber
     fuzz_sphincs

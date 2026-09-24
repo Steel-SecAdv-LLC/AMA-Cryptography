@@ -66,7 +66,15 @@ def _canonical_version() -> str:
 def _unreleased_tree(root: Path, version: str) -> None:
     (root / "docs").mkdir(parents=True, exist_ok=True)
     (root / "CHANGELOG.md").write_text(
-        f"# Changelog\n\n## [{version}] - Unreleased\n\n- pending\n", encoding="utf-8"
+        f"# Changelog\n\n## [{version}] - Unreleased\n\n- pending\n\n"
+        "## Version History Summary\n\n| Version | Date | Description |\n|---|---|---|\n"
+        f"| {version} | Unreleased | the release |\n",
+        encoding="utf-8",
+    )
+    (root / "ARCHITECTURE.md").write_text(
+        "# Architecture\n\n| Version | Date | Author | Changes |\n|---|---|---|---|\n"
+        f"| {version} | Unreleased | Steel Security Advisors LLC | the release |\n",
+        encoding="utf-8",
     )
     (root / "README.md").write_text(
         "# AMA\n\n"
@@ -87,8 +95,18 @@ def _unreleased_tree(root: Path, version: str) -> None:
 
 def _released_tree(root: Path, version: str) -> None:
     (root / "docs").mkdir(parents=True, exist_ok=True)
+    # Keep a Changelog keeps an empty [Unreleased] heading above the release;
+    # a thematic break in it is not content.
     (root / "CHANGELOG.md").write_text(
-        f"# Changelog\n\n## [{version}] - 2026-08-24\n\n- released\n", encoding="utf-8"
+        f"# Changelog\n\n## [Unreleased]\n\n---\n\n## [{version}] - 2026-08-24\n\n"
+        "- released\n\n## Version History Summary\n\n| Version | Date | Description |\n"
+        f"|---|---|---|\n| {version} | 2026-08-24 | the release |\n",
+        encoding="utf-8",
+    )
+    (root / "ARCHITECTURE.md").write_text(
+        "# Architecture\n\n| Version | Date | Author | Changes |\n|---|---|---|---|\n"
+        f"| {version} | 2026-08-24 | Steel Security Advisors LLC | the release |\n",
+        encoding="utf-8",
     )
     (root / "README.md").write_text(
         "# AMA\n\n"
@@ -120,6 +138,53 @@ class TestUnreleasedTree:
         assert "README.md" in blob and "not tagged yet" in blob
         assert "SECURITY.md" in blob and "not yet tagged" in blob
         assert "index.rst" in blob and "not tagged yet" in blob
+
+    def test_an_undated_version_row_is_flagged_in_every_table(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """PIN: the CHANGELOG summary row and the ARCHITECTURE revision row.
+
+        Each is checked with every other marker cleared, so neither can pass
+        on the strength of the CHANGELOG heading.
+        """
+        _released_tree(tmp_path, "5.0.0")
+        for rel in ("CHANGELOG.md", "ARCHITECTURE.md"):
+            path = tmp_path / rel
+            released = path.read_text(encoding="utf-8")
+            path.write_text(
+                released.replace("| 5.0.0 | 2026-08-24 |", "| 5.0.0 | Unreleased |"),
+                encoding="utf-8",
+            )
+            problems, _ = tool.scan(tmp_path, "5.0.0", require_published=False)
+            flagged = [p for p in problems if f"{rel}:" in p and "version-table row" in p]
+            assert flagged, (rel, problems)
+            path.write_text(released, encoding="utf-8")
+
+    def test_entries_under_the_bare_unreleased_heading_are_flagged(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """PIN: the tag ships them, so they are release content filed as post-release."""
+        _released_tree(tmp_path, "5.0.0")
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "## [Unreleased]\n\n---\n", "## [Unreleased]\n\n---\n\n- a late fix\n"
+            ),
+            encoding="utf-8",
+        )
+        problems, _ = tool.scan(tmp_path, "5.0.0", require_published=False)
+        assert any("[Unreleased]" in p and "a late fix" in p for p in problems), problems
+
+    def test_a_version_row_about_another_version_is_not_flagged(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _released_tree(tmp_path, "5.0.0")
+        path = tmp_path / "ARCHITECTURE.md"
+        path.write_text(
+            path.read_text(encoding="utf-8") + "| 6.0.0 | Unreleased | x | planned |\n",
+            encoding="utf-8",
+        )
+        assert tool.scan(tmp_path, "5.0.0", require_published=False)[0] == []
 
     def test_pypi_rows_not_flagged_by_default(self, tool: ModuleType, tmp_path: Path) -> None:
         # PyPI publication is decoupled from the tag; on a non-publishing release
@@ -168,6 +233,41 @@ class TestReleasedTree:
 # --------------------------------------------------------------------------
 # Version scoping and missing files.
 # --------------------------------------------------------------------------
+class TestPrematureReleaseDates:
+    """A version row may not date a release the CHANGELOG still calls unreleased.
+
+    The 5.0.0 rows in the CHANGELOG's Version History Summary, ARCHITECTURE.md
+    and SECURITY.md read ``2026-09-10`` for a tag that was never cut.  The tag
+    preflight cannot see that — it runs only on a tag — so this half runs here,
+    on every CI run.
+    """
+
+    def test_a_dated_row_under_an_unreleased_heading_is_reported(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _unreleased_tree(tmp_path, "5.0.0")
+        path = tmp_path / "ARCHITECTURE.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "| 5.0.0 | Unreleased |", "| 5.0.0 | 2026-09-10 |"
+            ),
+            encoding="utf-8",
+        )
+        problems = tool.premature_release_dates(tmp_path, "5.0.0")
+        assert len(problems) == 1 and "ARCHITECTURE.md" in problems[0], problems
+        assert "2026-09-10" in problems[0]
+
+    def test_undated_rows_under_an_unreleased_heading_pass(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _unreleased_tree(tmp_path, "5.0.0")
+        assert tool.premature_release_dates(tmp_path, "5.0.0") == []
+
+    def test_dated_rows_under_a_dated_heading_pass(self, tool: ModuleType, tmp_path: Path) -> None:
+        _released_tree(tmp_path, "5.0.0")
+        assert tool.premature_release_dates(tmp_path, "5.0.0") == []
+
+
 class TestVersionScopingAndMissing:
     def test_changelog_heading_is_version_scoped(self, tool: ModuleType, tmp_path: Path) -> None:
         # A CHANGELOG heading for 5.0.0 must not be flagged when 6.0.0 is being
@@ -356,6 +456,11 @@ class TestRealTree:
                 "release-state gate found nothing to flag"
             )
 
+    def test_no_version_row_dates_a_release_that_has_not_happened(self, tool: ModuleType) -> None:
+        """Phase-robust: vacuous once the heading is dated, binding until then."""
+        problems = tool.premature_release_dates(REPO_ROOT, _canonical_version())
+        assert problems == [], "\n" + "\n".join(problems)
+
 
 # --------------------------------------------------------------------------
 # Inventory guard: the set of release-state documents must not silently shrink.
@@ -367,4 +472,5 @@ class TestInventory:
             "README.md",
             "SECURITY.md",
             "docs/index.rst",
+            "ARCHITECTURE.md",
         )

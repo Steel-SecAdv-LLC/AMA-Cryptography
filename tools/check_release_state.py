@@ -37,6 +37,26 @@ direction:
   markers are therefore enforced ONLY when ``--require-published`` is passed —
   which ``release.yml`` does exactly when ``AMA_PUBLISH_TO_PYPI`` is true.
 
+Three more statements the tag makes false
+-----------------------------------------
+* **A version-table row still reading ``Unreleased``** — ``| 5.0.0 |
+  Unreleased | … |`` in the CHANGELOG's Version History Summary and in the
+  revision tables of ARCHITECTURE.md and SECURITY.md.  Those rows used to
+  carry ``2026-09-10``, a release date for a tag that was never cut, and
+  nothing checked them in either direction.  They now say ``Unreleased``
+  until the release, and this gate refuses the tag while any still does.
+* **A non-empty ``## [Unreleased]`` section.**  Everything in the tagged tree
+  ships in the tag, so an entry still under ``[Unreleased]`` at tag time is
+  release content filed as post-release: a reader of the release notes would
+  not find it under the version that contains it.  The section must be empty
+  (its heading may stay, per Keep a Changelog) — its entries folded into the
+  version's notes or moved to its development journal.
+* **A row dated before the release** is the opposite error, and it is caught
+  before the tag rather than at it: :func:`premature_release_dates` reports a
+  version row carrying a date while the CHANGELOG still heads that version
+  ``Unreleased``, and ``tests/test_release_state.py`` runs it against the real
+  tree on every CI run.
+
 This gate is meant to run in preflight ONLY on a tag push
 (``github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')``): on a
 development branch the markers are correct and must not be flagged, so the
@@ -76,7 +96,12 @@ RELEASE_STATE_FILES = (
     "README.md",
     "SECURITY.md",
     "docs/index.rst",
+    # Its revision table carries a row per release with the release's date.
+    "ARCHITECTURE.md",
 )
+
+#: A date as the version tables write it.
+_ISO_DATE = r"\d{4}-\d{2}-\d{2}"
 
 
 def tag_state_markers(version: str) -> list[tuple[re.Pattern[str], str]]:
@@ -116,6 +141,14 @@ def tag_state_markers(version: str) -> list[tuple[re.Pattern[str], str]]:
         ),
         (scoped(tagged_yet), f"'not tagged yet' about {version}"),
         (scoped(yet_tagged), f"'not yet tagged' about {version}"),
+        (
+            # A version-table row (CHANGELOG summary, ARCHITECTURE.md and
+            # SECURITY.md revision tables) whose date cell still reads
+            # Unreleased.  Anchored to the row's first cell, so prose that
+            # mentions the version and the word is not swept up.
+            re.compile(rf"^\|[ \t]*v?{v}[ \t]*\|[ \t]*Unreleased[ \t]*\|", re.IGNORECASE | re.M),
+            f"a version-table row still dates {version} 'Unreleased'",
+        ),
     ]
 
 
@@ -173,6 +206,36 @@ def changelog_problems(text: str, version: str) -> list[str]:
                     f"ships in {version}, so move them under its dated heading."
                 )
                 break
+
+
+def premature_release_dates(repo: Path, version: str) -> list[str]:
+    """Version rows that date a release the CHANGELOG still heads ``Unreleased``.
+
+    The pre-tag half of the version-row rule, run by the test suite rather
+    than by the tag preflight: a row may not claim a release date before the
+    release commit dates the CHANGELOG heading.  Empty when the heading is
+    already dated, or when there is no CHANGELOG to read.
+    """
+    changelog = repo / "CHANGELOG.md"
+    if not changelog.is_file():
+        return []
+    v = re.escape(version)
+    heading = re.compile(rf"^##\s*\[{v}\][^\n]*Unreleased", re.IGNORECASE | re.M)
+    if not heading.search(changelog.read_text(encoding="utf-8")):
+        return []
+    dated_row = re.compile(rf"^\|[ \t]*v?{v}[ \t]*\|[ \t]*({_ISO_DATE})[ \t]*\|", re.M)
+    problems: list[str] = []
+    for rel in RELEASE_STATE_FILES:
+        path = repo / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for m in dated_row.finditer(text):
+            line = text[: m.start()].count("\n") + 1
+            problems.append(
+                f"  - {rel}:{line}: dates {version} {m.group(1)}, but the CHANGELOG "
+                f"heading still reads '## [{version}] - Unreleased'"
+            )
     return problems
 
 
@@ -248,10 +311,10 @@ def main(argv: list[str] | None = None) -> int:
             print(problem, file=sys.stderr)
         print(
             "\nUpdate these before pushing the tag: move the CHANGELOG heading to a "
-            "dated release, file every '## [Unreleased]' entry under it, and flip the "
-            "availability rows and the Sphinx landing page to 'released'. A tag that "
-            "ships while the docs say it has not happened is the defect this gate "
-            "exists to stop.",
+            "dated release, date the version-table rows, file every '## [Unreleased]' "
+            "entry under it, and flip the availability rows and the Sphinx landing page "
+            "to 'released'. A tag that ships while the docs say it has not happened is "
+            "the defect this gate exists to stop.",
             file=sys.stderr,
         )
         return 1

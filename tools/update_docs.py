@@ -68,7 +68,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -1013,12 +1013,39 @@ def update_loc_metrics(dry_run: bool = False) -> bool:
 #: the reason recorded on the gate's copy.
 _AGGREGATE_REWRITE_RE = re.compile(
     r"([\d,]{1,15})(\s{1,8}(?:static\s{1,8})?(?:Python\s{1,8})?"
-    r"test functions across\s{1,8})([\d,]{1,15})(\s{1,8}"
+    r"test\s{1,8}functions\s{1,8}across\s{1,8})([\d,]{1,15})(\s{1,8}"
     r"(?:Python\s{1,8})?(?:test\s{1,8})?files?)"
 )
 
-#: Documents carrying a gated static-test-count claim.
-_TEST_COUNT_DOCUMENTS = ("README.md", "ARCHITECTURE.md", "docs/METRICS_REPORT.md")
+#: Documents carrying a gated static-test-count claim.  AGENTS.md carries the
+#: file count as "N Python test modules", which nothing rewrote (or checked)
+#: until ``check_documented_counts._PY_TEST_MODULES_RE`` existed.
+_TEST_COUNT_DOCUMENTS = ("README.md", "ARCHITECTURE.md", "AGENTS.md", "docs/METRICS_REPORT.md")
+
+
+def _rewrite_outside_history(
+    text: str, history: re.Pattern[str], rewrite: Callable[[str], str]
+) -> str:
+    """Apply ``rewrite`` to each run of consecutive non-history lines.
+
+    Per run rather than per line, because the gate's prose patterns tolerate a
+    soft line wrap inside a claim (``check_documented_counts._GAP``): a
+    regenerator working line by line would leave exactly the wrapped claims the
+    gate fails on.  History rows split the runs and are returned verbatim.
+    """
+    out: list[str] = []
+    run: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if history.match(line):
+            if run:
+                out.append(rewrite("".join(run)))
+                run = []
+            out.append(line)
+        else:
+            run.append(line)
+    if run:
+        out.append(rewrite("".join(run)))
+    return "".join(out)
 
 
 def update_static_test_counts(dry_run: bool = False, root: Optional[Path] = None) -> bool:
@@ -1058,24 +1085,22 @@ def update_static_test_counts(dry_run: bool = False, root: Optional[Path] = None
         if not path.is_file():
             continue
         original = path.read_text(encoding="utf-8")
-        rewritten_lines = []
-        for line in original.splitlines(keepends=True):
-            if counts._HISTORY_ROW_RE.match(line):
-                rewritten_lines.append(line)
-                continue
-            line = _AGGREGATE_REWRITE_RE.sub(
-                lambda m: f"{functions:,}{m.group(2)}{files:,}{m.group(4)}", line
+
+        def _rewrite(chunk: str) -> str:
+            chunk = _AGGREGATE_REWRITE_RE.sub(
+                lambda m: f"{functions:,}{m.group(2)}{files:,}{m.group(4)}", chunk
             )
-            line = counts._METRICS_FILES_RE.sub(
+            chunk = counts._METRICS_FILES_RE.sub(
                 "| Python test files under `tests/` matching the static regex " f"| {files:,} |",
-                line,
+                chunk,
             )
-            line = counts._METRICS_FUNCS_RE.sub(
+            chunk = counts._METRICS_FUNCS_RE.sub(
                 "| Syntactic `def test_` matches under `tests/**/*.py` " f"| **{functions:,}** |",
-                line,
+                chunk,
             )
-            rewritten_lines.append(line)
-        text = "".join(rewritten_lines)
+            return _rewrite_groups(counts._PY_TEST_MODULES_RE, (files,), chunk)
+
+        text = _rewrite_outside_history(original, counts._HISTORY_ROW_RE, _rewrite)
         if text == original:
             continue
         changed = True
@@ -1138,15 +1163,15 @@ def update_inventory_counts(dry_run: bool = False, root: Optional[Path] = None) 
         (counts._SRC_C_INTERNAL_RE, (internal_c, internal_h)),
     )
     changed: list[str] = []
+
+    def _rewrite(chunk: str) -> str:
+        for pattern, values in rules:
+            chunk = _rewrite_groups(pattern, values, chunk)
+        return chunk
+
     for path in counts._markdown_files(tree):
         original = path.read_text(encoding="utf-8")
-        lines = []
-        for line in original.splitlines(keepends=True):
-            if not counts._HISTORY_ROW_RE.match(line):
-                for pattern, values in rules:
-                    line = _rewrite_groups(pattern, values, line)
-            lines.append(line)
-        text = "".join(lines)
+        text = _rewrite_outside_history(original, counts._HISTORY_ROW_RE, _rewrite)
         if text != original:
             changed.append(str(path.relative_to(tree)))
             if not dry_run:
@@ -1161,6 +1186,42 @@ def update_inventory_counts(dry_run: bool = False, root: Optional[Path] = None) 
         f"{modules} modules, internal {internal_c} .c / {internal_h} .h) {verb} in: "
         + ", ".join(changed)
     )
+    return True
+
+
+def update_fuzz_target_counts(dry_run: bool = False, root: Optional[Path] = None) -> bool:
+    """Re-measure and rewrite every fuzz-target count the gate checks.
+
+    ``check_documented_counts.check_fuzz_target_counts`` holds eleven prose
+    counts across six documents to the number of libFuzzer entry points, and
+    nothing rewrote them: adding a harness meant finding each by hand.  The
+    count is imported from the registration gate (``count_libfuzzer_entry_points``)
+    and the lines are selected by the gate's own rule — a line that mentions
+    fuzzing, outside a revision-history row — so the regenerator and the gate
+    cannot disagree about which claims exist or what they should say.
+    """
+    counts = _counts_module()
+    tree = ROOT if root is None else root
+    authoritative = counts.count_libfuzzer_entry_points(tree)
+    changed: list[str] = []
+    for path in counts._markdown_files(tree):
+        original = path.read_text(encoding="utf-8")
+        lines = []
+        for line in original.splitlines(keepends=True):
+            if not counts._HISTORY_ROW_RE.match(line) and "fuzz" in line.lower():
+                line = _rewrite_groups(counts._FUZZ_COUNT_RE, (authoritative,), line)
+            lines.append(line)
+        text = "".join(lines)
+        if text != original:
+            changed.append(str(path.relative_to(tree)))
+            if not dry_run:
+                path.write_text(text, encoding="utf-8", newline="")
+
+    if not changed:
+        print("   fuzz-target counts: already current")
+        return False
+    verb = "would be rewritten" if dry_run else "rewritten"
+    print(f"   fuzz-target counts ({authoritative}) {verb} in: " + ", ".join(changed))
     return True
 
 
@@ -1187,8 +1248,9 @@ def main() -> None:
         action="store_true",
         help="Only re-measure and rewrite every count the documented-counts "
         "gate checks: the Lines-of-Code figures, the static "
-        "test-function/file claims, and the C-suite and source-inventory "
-        "counts (the one-command fix for a red counts gate)",
+        "test-function/file claims, the C-suite and source-inventory "
+        "counts, and the fuzz-target counts (the one-command fix for a red "
+        "counts gate)",
     )
     args = parser.parse_args()
 
@@ -1211,6 +1273,8 @@ def main() -> None:
             any_changed |= update_static_test_counts(dry_run=args.dry_run)
             print("\nInventory counts")
             any_changed |= update_inventory_counts(dry_run=args.dry_run)
+            print("\nFuzz-target counts")
+            any_changed |= update_fuzz_target_counts(dry_run=args.dry_run)
         print(
             "\n✓ Documentation updated" + (" (dry run)" if args.dry_run else "")
             if any_changed

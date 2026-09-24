@@ -28,6 +28,11 @@ set(FUZZ_CORE_TARGETS
     # primitive in this library, so it fuzzes in the AMA_USE_NATIVE_PQC=OFF
     # configuration too — which is the configuration its target devices use.
     fuzz_ascon
+    # HSS/LMS verification (RFC 8554).  Core, not PQC: ama_lms.c consumes
+    # only SHA-256 and is compiled in every configuration, and it parses
+    # attacker-supplied signatures and public keys — the parser class
+    # CRYPTO_REVIEW_CHECKLIST.md requires a target for.
+    fuzz_lms
 )
 
 # PQC fuzz targets — only when AMA_USE_NATIVE_PQC is ON

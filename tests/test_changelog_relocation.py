@@ -18,9 +18,10 @@ message:
   that stayed and the spans that moved;
 * the journal after its header is exactly the moved spans, in order, under two
   grouping headings, and no moved entry is left behind in the CHANGELOG;
-* every retained span is unchanged — with one named exception, the figure
+* every retained span is unchanged — with named exceptions only: the figure
   ``tools/check_documented_counts.py`` refused once the heading stopped
-  claiming a release date (see :data:`GLANCE_CORRECTION`);
+  claiming a release date (see :data:`GLANCE_CORRECTION`), and the 5.0.0 row
+  of the Version History Summary (see :data:`SUMMARY_ROW_CORRECTIONS`);
 * reassembling the pre-relocation file from the two files as they stand gives
   back the pinned SHA-256 of the original, which holds without git history.
 
@@ -70,6 +71,16 @@ V4_HEADING = "## [4.0.0] - 2026-08-01\n"
 #: the figure.  Named here so the exception is exactly one substitution.
 GLANCE_CORRECTION = ("105 native entry points", "107 native entry points")
 
+#: The two edits inside the retained tail, both on the 5.0.0 row of the
+#: Version History Summary.  The row dated a release that was never tagged
+#: (2026-09-10, the same false date the heading carried), and it totalled
+#: ten breaking changes against a glance table of eleven.  Each substitution
+#: must occur exactly once in the tail, so neither can widen into a licence.
+SUMMARY_ROW_CORRECTIONS = (
+    ("| 5.0.0 | 2026-09-10 |", "| 5.0.0 | Unreleased |"),
+    ("BREAKING \u00d710 \u2014 see `[5.0.0]`", "BREAKING \u00d711 \u2014 see `[5.0.0]`"),
+)
+
 
 def _journal_body(journal: str) -> str:
     start = journal.index(UNRELEASED_GROUP)
@@ -118,6 +129,10 @@ class TestTheTwoFilesReassembleTheOriginal:
         glance = glance_and_classic[:split_at].replace(after, before)
         classic = glance_and_classic[split_at:]
         completion = _line_index(moved_release, COMPLETION_ENTRY)
+        tail = changelog[_line_index(changelog, V4_HEADING) :]
+        for original, corrected in SUMMARY_ROW_CORRECTIONS:
+            assert tail.count(corrected) == 1, corrected
+            tail = tail.replace(corrected, original)
 
         rebuilt = (
             changelog[:preamble_end]
@@ -130,7 +145,7 @@ class TestTheTwoFilesReassembleTheOriginal:
             + moved_release[completion:]
             + "\n"
             + classic
-            + changelog[_line_index(changelog, V4_HEADING) :]
+            + tail
         )
         assert hashlib.sha256(rebuilt.encode("utf-8")).hexdigest() == BASE_CHANGELOG_SHA256
 

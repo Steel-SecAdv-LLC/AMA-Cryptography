@@ -78,6 +78,26 @@ def test_ascon_is_registered_everywhere() -> None:
     assert "fuzz_ascon" in _workflow_targets(REPO_ROOT)
 
 
+def test_the_hss_lms_parser_has_a_harness_in_every_lane() -> None:
+    """``src/c/ama_lms.c`` parses attacker-supplied RFC 8554 signatures and keys.
+
+    CRYPTO_REVIEW_CHECKLIST.md requires a fuzz target for every parser, and
+    ARCHITECTURE.md said the targets covered "all C implementations" while no
+    harness linked this file.  The generic audit above cannot see that gap —
+    a parser with no harness registers nowhere and so drifts nowhere — so the
+    harness is pinned by name, with the seed corpus that reaches its
+    accepting path.
+    """
+    assert "fuzz_lms" in _sources(REPO_ROOT)
+    assert "fuzz_lms" in _cmake_targets(REPO_ROOT)
+    assert "fuzz_lms" in _ossfuzz_targets(REPO_ROOT)
+    assert "fuzz_lms" in _workflow_targets(REPO_ROOT)
+    harness = (REPO_ROOT / "fuzz" / "fuzz_lms.c").read_text(encoding="utf-8")
+    assert "ama_hss_verify" in harness and "ama_lms_verify" in harness
+    seeds = {p.name for p in (REPO_ROOT / "fuzz" / "seed_corpus" / "fuzz_lms").iterdir()}
+    assert {"hss-case-1.bin", "hss-case-2.bin", "lms-case-1.bin", "lms-case-2.bin"} <= seeds
+
+
 def test_sphincs_actually_runs_in_the_per_pr_lane() -> None:
     """``fuzz_sphincs`` ran in no mechanism at all, and this gate said it did.
 

@@ -446,6 +446,98 @@ class TestEveryFieldIsUnderTheSignature:
         assert verdict["all_valid"] is False
 
 
+def _drop_kem_commitment(package: Any) -> None:
+    del package.metadata["kem_shared_secret_commitment"]
+
+
+def _rewrite_kem_commitment(package: Any) -> None:
+    package.metadata["kem_shared_secret_commitment"] = "00" * 32
+
+
+#: Every way the stored secret can fail the signed commitment.  The Kyber key
+#: and ciphertext beside such a secret are unauthenticated input.
+COMMITMENT_FAILURES: tuple[tuple[str, Callable[[Any], None]], ...] = (
+    ("kem_shared_secret replaced", lambda p: setattr(p, "kem_shared_secret", b"\x02" * 32)),
+    (
+        "kyber secret key and shared secret swapped consistently",
+        _swap_kyber_key_and_secret_consistently,
+    ),
+    ("commitment removed", _drop_kem_commitment),
+    ("commitment rewritten", _rewrite_kem_commitment),
+)
+
+
+class TestTheKemCommitmentIsCheckedBeforeDecapsulation:
+    """The KEM layer checks the signed commitment first and decapsulates second.
+
+    The stored ``kem_shared_secret``, the Kyber secret key and the ciphertext
+    are all outside the signature; only ``metadata["kem_shared_secret_commitment"]``
+    is under it.  A package whose stored secret does not match that commitment
+    is refused without its key and ciphertext being run through ML-KEM
+    decapsulation — which is the order the 2026-09-23 journal entry states.
+    The verdict alone cannot see the order (it is False either way), so these
+    tests count the decapsulations.
+    """
+
+    @staticmethod
+    def _spy_decapsulate(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+        from ama_cryptography import crypto_api
+
+        seen: list[bytes] = []
+        original = crypto_api.KyberProvider.decapsulate
+
+        def spy(self: Any, ciphertext: bytes, secret_key: Any) -> bytes:
+            seen.append(bytes(ciphertext))
+            return original(self, ciphertext, secret_key)
+
+        monkeypatch.setattr(crypto_api.KyberProvider, "decapsulate", spy)
+        return seen
+
+    @pytest.mark.parametrize(
+        "name,mutate", COMMITMENT_FAILURES, ids=[row[0] for row in COMMITMENT_FAILURES]
+    )
+    def test_a_secret_failing_its_commitment_is_never_decapsulated(
+        self,
+        full_package: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        name: str,
+        mutate: Callable[[Any], None],
+    ) -> None:
+        from ama_cryptography.crypto_api import verify_crypto_package
+
+        package = _clone(full_package)
+        mutate(package)
+        seen = self._spy_decapsulate(monkeypatch)
+        verdict = verify_crypto_package(CONTENT, package)
+        assert verdict["kem"] is False, name
+        assert seen == [], f"{name}: decapsulated before the commitment was checked"
+
+    def test_a_secret_matching_its_commitment_is_decapsulated_once(
+        self, full_package: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: the spy sees the call when the commitment holds."""
+        from ama_cryptography.crypto_api import verify_crypto_package
+
+        seen = self._spy_decapsulate(monkeypatch)
+        verdict = verify_crypto_package(CONTENT, _clone(full_package))
+        assert verdict["kem"] is True
+        assert seen == [bytes(full_package.kem_ciphertext)]
+
+    def test_a_replaced_ciphertext_still_fails_after_decapsulation(
+        self, full_package: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The commitment pins the secret, not the ciphertext: decapsulation
+        remains the check that the ciphertext yields that secret."""
+        from ama_cryptography.crypto_api import verify_crypto_package
+
+        package = _clone(full_package)
+        package.kem_ciphertext = b"\x01" * len(full_package.kem_ciphertext)
+        seen = self._spy_decapsulate(monkeypatch)
+        verdict = verify_crypto_package(CONTENT, package)
+        assert verdict["kem"] is False
+        assert seen == [package.kem_ciphertext]
+
+
 # ---------------------------------------------------------------------------
 # The legacy package, whose HMAC covered the content hash and nothing else.
 # ---------------------------------------------------------------------------

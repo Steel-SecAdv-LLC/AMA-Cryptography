@@ -344,6 +344,7 @@ class TestStaticTestCountRegenerator:
             "4,085 test functions across 173 Python test files",
             "4,085 Python test functions across 173 test files",
             "4085 static Python test functions across 127 files",
+            "4,085 test\nfunctions across 173 Python test files",
         ]
         for sample in samples:
             gate_hits = counts._AGGREGATE_RE.findall(sample)
@@ -408,6 +409,35 @@ class TestStaticTestCountRegenerator:
         assert f"| Python test files under `tests/` matching the static regex | {files} |" in text
         assert f"| Syntactic `def test_` matches under `tests/**/*.py` | **{functions}** |" in text
 
+    def test_a_wrapped_claim_is_rewritten_like_an_unwrapped_one(self, tmp_path: Path) -> None:
+        """The gate reads a claim across a soft wrap, so the regenerator must too:
+        otherwise the command the gate names leaves the claim it fails on."""
+        functions, files = self._tree(tmp_path)
+        readme = tmp_path / "README.md"
+        readme.write_text("- 1 test\n  functions across 9 Python files\n", encoding="utf-8")
+        assert update_docs.update_static_test_counts(root=tmp_path) is True
+        text = readme.read_text(encoding="utf-8")
+        assert text == f"- {functions} test\n  functions across {files} Python files\n"
+        counts = update_docs._counts_module()
+        assert counts.check_aggregate_test_counts(tmp_path) == []
+
+    def test_the_agents_md_module_count_is_rewritten(self, tmp_path: Path) -> None:
+        """AGENTS.md's "N Python test modules" drifted to nine below the tree
+        with no pattern checking it and no pass rewriting it."""
+        _functions, files = self._tree(tmp_path)
+        agents = tmp_path / "AGENTS.md"
+        agents.write_text(
+            "| `tests/c/`, `tests/` | 86 C test suites, 248 Python test modules |\n",
+            encoding="utf-8",
+        )
+        counts = update_docs._counts_module()
+        assert counts.check_aggregate_test_counts(tmp_path), "the stale figure must be caught"
+        assert update_docs.update_static_test_counts(root=tmp_path) is True
+        assert f"86 C test suites, {files} Python test modules" in agents.read_text(
+            encoding="utf-8"
+        )
+        assert counts.check_aggregate_test_counts(tmp_path) == []
+
     def test_the_real_tree_is_current_after_a_regeneration(self) -> None:
         """Meta-check: this repository's own aggregate claims are current, so
         the command the gate recommends does leave the gate green."""
@@ -463,10 +493,73 @@ class TestInventoryCountsAreRegenerated:
         assert update_docs.update_inventory_counts(root=tmp_path) is False
         assert doc.read_text(encoding="utf-8") == row
 
+    def test_a_wrapped_claim_is_rewritten(self, tmp_path: Path) -> None:
+        self._tree(tmp_path)
+        doc = tmp_path / "README.md"
+        doc.write_text(
+            "- plus 9 C\n  test suites (9 translation\n  units); the C\n"
+            "  suite is 9 files / 9 translation units\n"
+            "| 3.5.0 | 2026-07-30 | 9 C test suites |\n",
+            encoding="utf-8",
+        )
+        assert update_docs.update_inventory_counts(root=tmp_path) is True
+        assert doc.read_text(encoding="utf-8") == (
+            "- plus 2 C\n  test suites (3 translation\n  units); the C\n"
+            "  suite is 2 files / 3 translation units\n"
+            "| 3.5.0 | 2026-07-30 | 9 C test suites |\n"
+        )
+        counts = update_docs._counts_module()
+        assert counts.check_c_suite_counts(tmp_path) == []
+
     def test_the_real_tree_is_current(self) -> None:
         counts = update_docs._counts_module()
         assert counts.check_c_suite_counts(REPO_ROOT) == []
         assert counts.check_source_inventory_counts(REPO_ROOT) == []
+
+
+class TestFuzzTargetCountsAreRegenerated:
+    """`update_docs.py --counts` rewrites the fuzz-target counts the gate checks.
+
+    Eleven prose counts across six documents restate the number of libFuzzer
+    harnesses, the gate held them to it, and nothing rewrote them — so adding
+    a harness (fuzz_lms) meant finding each by hand.
+    """
+
+    @staticmethod
+    def _tree(root: Path, harnesses: int) -> None:
+        (root / "fuzz").mkdir(parents=True)
+        for i in range(harnesses):
+            (root / "fuzz" / f"fuzz_t{i}.c").write_text(
+                "int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long n) {\n"
+                "    (void)d; (void)n; return 0;\n}\n",
+                encoding="utf-8",
+            )
+        # A support unit that names the entry point without defining it.
+        (root / "fuzz" / "fuzz_rng.c").write_text(
+            "/* linked into a harness; not an LLVMFuzzerTestOneInput */\n", encoding="utf-8"
+        )
+
+    def test_every_fuzz_line_is_rewritten_and_history_is_not(self, tmp_path: Path) -> None:
+        self._tree(tmp_path, harnesses=3)
+        doc = tmp_path / "README.md"
+        doc.write_text(
+            "- 9 libFuzzer fuzz targets run in CI\n"
+            "Fuzz harnesses: 9 targets, plus 9 sources.\n"
+            "| 3.5.0 | 2026-07-30 | 9 fuzz targets |\n"
+            "9 targets on a line that never mentions the word\n",
+            encoding="utf-8",
+        )
+        counts = update_docs._counts_module()
+        assert counts.check_fuzz_target_counts(tmp_path, 3), "the stale counts must be caught"
+        assert update_docs.update_fuzz_target_counts(root=tmp_path) is True
+        assert doc.read_text(encoding="utf-8") == (
+            "- 3 libFuzzer fuzz targets run in CI\n"
+            "Fuzz harnesses: 3 targets, plus 9 sources.\n"
+            "| 3.5.0 | 2026-07-30 | 9 fuzz targets |\n"
+            "9 targets on a line that never mentions the word\n"
+        )
+        assert counts.check_fuzz_target_counts(tmp_path, 3) == []
+        assert update_docs.update_fuzz_target_counts(root=tmp_path) is False
 
 
 class TestThePublishedBenchmarkTableTracksTheRecord:
