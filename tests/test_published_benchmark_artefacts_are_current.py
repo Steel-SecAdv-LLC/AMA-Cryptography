@@ -102,6 +102,9 @@ def test_every_published_floor_matches_the_baseline_ledger(
     results: dict[str, Any],
 ) -> None:
     floors = _floors()
+    published = {row["name"] for row in cast("list[dict[str, Any]]", results["results"])}
+    # A rename on either side would leave the loop below comparing nothing.
+    assert len(published & set(floors)) >= 15, sorted(published ^ set(floors))
     drift = []
     for row in cast("list[dict[str, Any]]", results["results"]):
         name = row["name"]
@@ -132,19 +135,59 @@ def test_the_snapshot_names_a_commit_this_repository_contains(
         pytest.skip(f"commit {commit[:12]} is not in this checkout (shallow clone)")
 
 
+def _report_results_rows(text: str) -> dict[str, list[str]]:
+    """The Results table of benchmark-report.md, keyed by its Primitive cell.
+
+    The generator writes ``| description | ops | baseline | regression |
+    tolerance | status |`` with ``|`` inside a description escaped, so the
+    rows are split the way GFM splits them and the escapes undone.
+    """
+    rows: dict[str, list[str]] = {}
+    in_results = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            in_results = line.strip() == "## Results"
+            continue
+        if not in_results or not line.startswith("|"):
+            continue
+        cells = [c.replace("\\|", "|") for c in _cells(line)]
+        if len(cells) != 6 or cells[0] == "Primitive" or set(cells[1]) <= {"-", ":"}:
+            continue
+        rows[cells[0]] = cells[1:]
+    return rows
+
+
 def test_the_report_and_the_json_agree_on_every_floor() -> None:
-    """The markdown is generated; a hand-edited row is caught here."""
+    """The markdown is generated; a hand-edited row is caught here.
+
+    Every JSON result must have a Results-table row, joined on its
+    description, whose Ops/sec, Baseline, Regression and Tolerance cells are
+    the values the generator renders from the JSON.  The first revision only
+    asked whether each snake_case NAME occurred anywhere in the report -- and
+    every one did, in the ASCII throughput chart -- so an edited Baseline
+    cell, or a deleted Results table, passed.
+    """
     report = REPO_ROOT / "benchmark-report.md"
     if not report.is_file():
         pytest.skip("benchmark-report.md is not committed")
-    text = report.read_text(encoding="utf-8")
+    rows = _report_results_rows(report.read_text(encoding="utf-8"))
     doc = json.loads(RESULTS.read_text(encoding="utf-8"))
-    missing = [
-        row["name"]
-        for row in doc["results"]
-        if row["name"].replace("_", " ") not in text and row["name"] not in text
-    ]
-    assert missing == [], f"these rows are in the JSON but not the report: {missing}"
+    assert len(rows) >= 15, f"the Results table has {len(rows)} rows"
+    drift: list[str] = []
+    for result in doc["results"]:
+        cells = rows.get(result["description"])
+        if cells is None:
+            drift.append(f"{result['name']}: no Results row")
+            continue
+        expected = [
+            f"{result['ops_per_second']:,.0f}",
+            f"{result['baseline_value']:,.0f}",
+            f"{result['regression_percent']:+.1f}%",
+            f"{result['tolerance_percent']:.0f}%",
+        ]
+        if cells[:4] != expected:
+            drift.append(f"{result['name']}: report {cells[:4]} vs JSON {expected}")
+    assert drift == [], "benchmark-report.md disagrees with the JSON:\n  " + "\n  ".join(drift)
 
 
 def test_every_published_row_carries_the_ledgers_description_and_tolerance(

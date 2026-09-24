@@ -440,12 +440,82 @@ static int part_b_acvp_internal_sigver(void) {
     return 0;
 }
 
+/* ===========================================================================
+ * Part C — the generic context API (ama_sign / ama_verify) is §10.2 too
+ * ===========================================================================
+ *
+ * ama_core.c's AMA_ALG_SPHINCS_256F branches are correct because they delegate
+ * to the wrapped legacy functions; nothing entered them until this part.  The
+ * §9 verifier this test build carries decides what ama_sign signed, and the
+ * §10.2 signer decides what ama_verify accepts. */
+
+static void part_c_generic_context_api(void) {
+    uint8_t pk[AMA_SPHINCS_256F_PUBLIC_KEY_BYTES];
+    uint8_t sk[AMA_SPHINCS_256F_SECRET_KEY_BYTES];
+    static uint8_t sig[AMA_SPHINCS_256F_SIGNATURE_BYTES];
+    static uint8_t sig_x[AMA_SPHINCS_256F_SIGNATURE_BYTES];
+    static uint8_t probe[64];
+    size_t sig_len = sizeof sig;
+    size_t sig_x_len = sizeof sig_x;
+    const uint8_t msg[] = "transfer 1000 to mallory";
+    const size_t msg_len = sizeof(msg) - 1;
+    const uint8_t ctx_x[] = {'x'};
+    ama_context_t *ctx = ama_context_init(AMA_ALG_SPHINCS_256F);
+
+    if (ctx == NULL) {
+        fprintf(stderr, "FAIL: ama_context_init(AMA_ALG_SPHINCS_256F)\n");
+        failures++;
+        return;
+    }
+    check(ama_keypair_generate(ctx, pk, sizeof pk, sk, sizeof sk) == AMA_SUCCESS,
+          "generic: ama_keypair_generate");
+    check(ama_sign(ctx, msg, msg_len, sk, sizeof sk, sig, &sig_len) == AMA_SUCCESS,
+          "generic: ama_sign");
+
+    /* What ama_sign signed: 0x00 || 0x00 || M, never the raw M. */
+    probe[0] = 0x00;
+    probe[1] = 0x00;
+    memcpy(probe + 2, msg, msg_len);
+    check(ama_slhdsa_verify_internal(AMA_SLHDSA_SHA2_256F, sig, sig_len,
+                                     probe, msg_len + 2, pk) == AMA_SUCCESS,
+          "generic: ama_sign signs 0x00 || 0x00 || M");
+    check(ama_slhdsa_verify_internal(AMA_SLHDSA_SHA2_256F, sig, sig_len,
+                                     msg, msg_len, pk) == AMA_ERROR_VERIFY_FAILED,
+          "generic: ama_sign does NOT sign the raw M");
+
+    /* What ama_verify accepts: the empty-context signature over M, and not a
+     * ctx = "x" signature presented as a raw reading of 0x00 0x01 x || M. */
+    check(ama_verify(ctx, msg, msg_len, sig, sig_len, pk, sizeof pk) == AMA_SUCCESS,
+          "generic: ama_verify accepts ama_sign's signature");
+    check(ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, sig_x, &sig_x_len,
+                          msg, msg_len, ctx_x, sizeof ctx_x, sk) == AMA_SUCCESS,
+          "generic: ama_slhdsa_sign(ctx = \"x\")");
+    probe[0] = 0x00;
+    probe[1] = 0x01;
+    probe[2] = 'x';
+    memcpy(probe + 3, msg, msg_len);
+    check(ama_verify(ctx, probe, msg_len + 3, sig_x, sig_x_len, pk, sizeof pk)
+              == AMA_ERROR_VERIFY_FAILED,
+          "generic: ama_verify does not read 0x00 0x01 x || M raw");
+    check(ama_verify(ctx, msg, msg_len, sig_x, sig_x_len, pk, sizeof pk)
+              == AMA_ERROR_VERIFY_FAILED,
+          "generic: ama_verify does not accept a ctx = \"x\" signature as ctx = \"\"");
+
+    ama_secure_memzero(sk, sizeof sk);
+    ama_context_free(ctx);
+}
+
 int main(void) {
     KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
 
     printf("SLH-DSA context separation (FIPS 205 §9 vs §10.2)\n");
     part_a_context_separation();
     printf("    part A: %d checks\n", checks);
+    {
+        const int before = checks;
+        part_c_generic_context_api();
+        printf("    part C: %d checks\n", checks - before);
+    }
     part_b_acvp_internal_sigver();
 
     if (failures != 0) {

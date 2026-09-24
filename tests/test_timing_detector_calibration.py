@@ -18,6 +18,7 @@ returns.
 from __future__ import annotations
 
 import random
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -261,21 +262,65 @@ class TestSustainedShift:
 
 
 class TestProfilesMatchProduction:
+    #: The instrumentation calls whose first argument names an operation.
+    _EMITTERS = frozenset({"monitor_crypto_operation", "record_timing"})
+
+    @classmethod
+    def _emitted_operation_names(cls) -> tuple[set[str], list[str]]:
+        """``(names, unresolvable sites)`` over every shipped module, by AST.
+
+        A call whose operation name is not a string literal cannot be checked
+        against the profiles, so it is reported -- except inside
+        ``monitoring.py``'s own ``monitor_crypto_operation``, the wrapper that
+        forwards its caller's ``operation`` to ``record_timing`` and is
+        covered by the callers' literals.
+        """
+        import ast
+
+        package = Path(__file__).resolve().parent.parent / "ama_cryptography"
+        names: set[str] = set()
+        unresolvable: list[str] = []
+
+        def visit(node: ast.AST, path: Path, function: str | None) -> None:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                function = node.name
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in cls._EMITTERS
+                and node.args
+            ):
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    names.add(first.value)
+                elif not (path.name == "monitoring.py" and function == "monitor_crypto_operation"):
+                    unresolvable.append(f"{path.name}:{node.lineno}")
+            for child in ast.iter_child_nodes(node):
+                visit(child, path, function)
+
+        for path in sorted(package.rglob("*.py")):
+            visit(ast.parse(path.read_text(encoding="utf-8")), path, None)
+        return names, unresolvable
+
     def test_emitted_operation_names_are_profiled(self) -> None:
-        """8d72b8c profiled aes_gcm_encrypt/decrypt — names no production
-        call site emits — while crypto_api's actual names fell to the
+        """8d72b8c profiled aes_gcm_encrypt/decrypt -- names no production
+        call site emits -- while crypto_api's actual names fell to the
         global default.  Every name the in-tree instrumentation emits must
-        have an explicit profile."""
-        emitted_by_crypto_api = {"sign", "verify", "encrypt", "decrypt", "sphincs_sign"}
-        emitted_by_legacy_compat = {
-            "ed25519_sign",
-            "ed25519_verify",
-            "dilithium_sign",
-            "dilithium_verify",
-        }
-        profiled = set(ResonanceTimingMonitor.DEFAULT_ANOMALY_PROFILES)
-        assert emitted_by_crypto_api <= profiled
-        assert emitted_by_legacy_compat <= profiled
+        have an explicit profile.
+
+        The names are read from the source, not typed here: the first
+        revision listed nine by hand and missed three that legacy_compat
+        emits (``sha3_256_hash``, ``hmac_auth``, ``hmac_verify``), so deleting
+        any of their profiles left this green.
+        """
+        emitted, unresolvable = self._emitted_operation_names()
+        assert unresolvable == [], (
+            "an instrumentation call names its operation with a non-literal, so "
+            f"its profile cannot be checked: {unresolvable}"
+        )
+        assert len(emitted) >= 12, sorted(emitted)
+        missing = sorted(emitted - set(ResonanceTimingMonitor.DEFAULT_ANOMALY_PROFILES))
+        assert missing == [], f"emitted operation names with no anomaly profile: {missing}"
 
     def test_every_profile_declares_a_budget(self) -> None:
         for name, profile in ResonanceTimingMonitor.DEFAULT_ANOMALY_PROFILES.items():

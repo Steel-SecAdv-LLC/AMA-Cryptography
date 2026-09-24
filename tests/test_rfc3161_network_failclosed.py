@@ -140,19 +140,18 @@ class TestTsaNetworkFailsClosed:
 
     def test_get_timestamp_wrapper_also_fails_closed(self) -> None:
         """The high-level get_timestamp() surface fails closed on the same
-        faults (it must not swallow the error into a fake-valid result)."""
-        result = None
-        raised = False
-        try:
-            result = ts.get_timestamp(
+        faults (it must not swallow the error into a fake-valid result).
+
+        ``get_timestamp`` is documented never to return ``None``, so only a
+        raise is fail-closed.  The first revision accepted any return whose
+        ``success`` attribute was falsy -- an attribute ``TimestampResult``
+        does not have, so every returned result passed, including an empty
+        token.  ``.invalid`` is reserved (RFC 6761), so the name resolves
+        nowhere and the request fails on every host.
+        """
+        with pytest.raises(ts.TimestampError, match="failed"):
+            ts.get_timestamp(
                 DIGEST,
                 tsa_url="https://tsa.this-host-does-not-resolve.invalid/tsr",
                 hash_algorithm="sha256",
             )
-        except (ts.TimestampError, ts.TimestampUnavailableError, ValueError):
-            raised = True
-        # Either it raised, or it returned a result that is NOT a valid token.
-        if not raised:
-            assert result is None or not getattr(
-                result, "success", False
-            ), "get_timestamp returned a success result for an unresolvable TSA"

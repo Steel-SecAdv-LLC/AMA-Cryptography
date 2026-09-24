@@ -23,11 +23,12 @@ be fetched.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -151,10 +152,30 @@ def _truthful_table(manifest: dict[str, Any]) -> dict[str, bytes]:
     return table
 
 
-#: Digests are one-way, so a stub cannot produce a real preimage.  The tests
-#: that need a MATCHING derived source patch the comparison input instead.
-def _preimage_for(_digest: str) -> bytes:
-    return b"stub"
+#: Digests are one-way, so a stub cannot produce a real preimage.  A payload
+#: carrying this marker stands for "the file whose digest is <rest>", and
+#: :func:`_stub_digests` makes the gate's own hashing honour that.
+_PREIMAGE_MARKER = b"preimage-of:"
+
+
+def _preimage_for(digest: str) -> bytes:
+    return _PREIMAGE_MARKER + digest.encode("ascii")
+
+
+def _stub_digests(gate: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hash every payload for real, except a marked stand-in for a preimage."""
+    real = hashlib.sha256
+
+    class _Digest:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def hexdigest(self) -> str:
+            if self._data.startswith(_PREIMAGE_MARKER):
+                return self._data[len(_PREIMAGE_MARKER) :].decode("ascii")
+            return real(self._data).hexdigest()
+
+    monkeypatch.setattr(gate, "hashlib", SimpleNamespace(sha256=_Digest))
 
 
 def test_a_vendored_file_that_does_not_match_upstream_fails(
@@ -197,19 +218,57 @@ def test_a_fetch_failure_is_never_a_pass(
 
 
 def test_the_real_manifest_verifies_against_truthful_upstreams(
-    gate: ModuleType, manifest: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    gate: ModuleType,
+    manifest: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The verbatim half passes when upstream really is the vendored bytes.
+    """Against upstreams that really published the vendored bytes, it passes.
 
-    The derived half cannot be stubbed truthfully (a digest has no cheap
-    preimage), so this asserts the verbatim comparisons succeed and that the
-    only reported problems are the derived ones.
+    Every verbatim file and every derived source must be reported OK, and the
+    run must exit 0.  The first revision asserted only ``rc == 1`` (the
+    derived half could not match a stub), so a broken verbatim comparison --
+    every file reported as not matching -- still exited 1 and passed.
     """
     table = _truthful_table(manifest)
     _stub_fetch(gate, monkeypatch, table)
+    _stub_digests(gate, monkeypatch)
     rc = gate.verify_upstream()
-    assert rc == 1  # only because the stubbed derived sources cannot match
-    # ...and every verbatim file is reported OK rather than as a problem.
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    for relative in manifest["verbatim"]:
+        assert f"verbatim   OK  {relative}" in out.out, relative
+    derived_sources = 0
+    for relative, entry in manifest["derived"].items():
+        for source in entry["sources"]:
+            derived_sources += 1
+            assert f"derived    OK  {relative} <- {source['digest_field']}" in out.out
+    assert manifest["verbatim"] and derived_sources, "nothing was compared"
+
+
+def test_a_run_that_compares_nothing_is_not_a_pass(
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Coverage satisfied, zero fetchable files: exit 2, not 0."""
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "files": {"v.json": "00" * 32},
+                "verbatim": {},
+                "derived": {},
+                "verified_elsewhere": {},
+                "unverifiable": {"v.json": "no public source"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gate, "MANIFEST_PATH", manifest_path)
+    assert gate.verify_upstream() == 2
+    assert "no upstream comparison was actually performed" in capsys.readouterr().err
 
 
 def test_the_offline_check_is_unaffected(gate: ModuleType) -> None:

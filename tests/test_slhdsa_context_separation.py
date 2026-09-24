@@ -93,23 +93,68 @@ class TestCrossVerificationOracleClosed:
         assert not pb.slhdsa_verify(_MESSAGE, sig, keypair.public_key, b"", param_set="SHA2-256f")
         assert not pb.sphincs_verify(_MESSAGE, sig, keypair.public_key)
 
-    def test_generic_context_api_inherits_the_fix(self) -> None:
-        """ama_sign/ama_verify with AMA_ALG_SPHINCS_256F go through the wrapper.
+    @staticmethod
+    def _generic_keypair() -> tuple[bytes, bytes]:
+        """A key pair from ``ama_keypair_generate`` itself."""
+        import ctypes
+
+        alg = pb.AmaContext.ALG_SPHINCS_256F
+        pk_size, sk_size = pb.AmaContext._KEY_SIZES[alg]
+        pk = ctypes.create_string_buffer(pk_size)
+        sk = ctypes.create_string_buffer(sk_size)
+        with pb.AmaContext(alg) as ctx:
+            assert ctx.keypair_generate(pk, pk_size, sk, sk_size) == 0
+        return pk.raw, sk.raw
+
+    @staticmethod
+    def _generic_sign(message: bytes, secret_key: bytes) -> bytes:
+        """``ama_sign`` with AMA_ALG_SPHINCS_256F."""
+        import ctypes
+
+        alg = pb.AmaContext.ALG_SPHINCS_256F
+        size = pb.AmaContext._SIG_SIZES[alg]
+        sig = ctypes.create_string_buffer(size)
+        sig_len = ctypes.c_size_t(size)
+        with pb.AmaContext(alg) as ctx:
+            assert ctx.sign(message, secret_key, sig, ctypes.pointer(sig_len)) == 0
+        return sig.raw[: sig_len.value]
+
+    @staticmethod
+    def _generic_verifies(message: bytes, signature: bytes, public_key: bytes) -> bool:
+        """``ama_verify`` with AMA_ALG_SPHINCS_256F."""
+        with pb.AmaContext(pb.AmaContext.ALG_SPHINCS_256F) as ctx:
+            return bool(ctx.verify_rc(message, signature, public_key) == 0)
+
+    def test_generic_ama_sign_is_section_10_2_with_the_empty_context(self) -> None:
+        """``ama_sign`` with AMA_ALG_SPHINCS_256F signs the wrapper, and only it.
 
         This is the entry point a caller reaches with no algorithm-specific
-        knowledge, and it was the same raw signer.  Driven here through
-        ``crypto_api``, which is the Python face of ``ama_core.c``'s dispatch.
+        knowledge, and it was the same raw signer.  An earlier revision of this
+        test drove ``crypto_api.AmaCryptography``, whose SPHINCS provider calls
+        ``sphincs_sign`` -- the legacy entry point the tests above already
+        cover -- so ``ama_core.c``'s ``ama_sign`` branch was never entered.
+        This drives ``ama_sign`` itself, through :class:`AmaContext`.
         """
-        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
+        pk, sk = self._generic_keypair()
+        sig = self._generic_sign(_MESSAGE, sk)
+        assert pb.slhdsa_verify(_MESSAGE, sig, pk, b"", param_set="SHA2-256f")
+        # Probe one through ama_sign: a raw §9 reading of 0x00 0x00 || M fails.
+        assert not pb.sphincs_verify(b"\x00\x00" + _MESSAGE, sig, pk)
+        # Probe two through ama_sign: signing a forged wrapper does not yield a
+        # ctx="x" signature over M.
+        forged = self._generic_sign(b"\x00\x01x" + _MESSAGE, sk)
+        assert not pb.slhdsa_verify(_MESSAGE, forged, pk, b"x", param_set="SHA2-256f")
 
-        crypto = AmaCryptography(algorithm=AlgorithmType.SPHINCS_256F)
-        kp = crypto.generate_keypair()
-        sig = crypto.sign(_MESSAGE, kp.secret_key)
-        assert crypto.verify(_MESSAGE, sig.signature, kp.public_key)
-        # The bytes it signed carry the empty-context wrapper: the §10.2
-        # verifier accepts them, and a raw reading of 0x00 0x00 || M does not.
-        assert pb.slhdsa_verify(_MESSAGE, sig.signature, kp.public_key, b"", param_set="SHA2-256f")
-        assert not pb.sphincs_verify(b"\x00\x00" + _MESSAGE, sig.signature, kp.public_key)
+    def test_generic_ama_verify_is_section_10_2_with_the_empty_context(self) -> None:
+        """``ama_verify`` accepts an empty-context signature over M, and no other."""
+        pk, sk = self._generic_keypair()
+        empty = pb.slhdsa_sign(_MESSAGE, sk, b"", param_set="SHA2-256f")
+        assert self._generic_verifies(_MESSAGE, empty, pk)
+        # A ctx="x" signature over M is a §9 signature over 0x00 0x01 x || M;
+        # a raw verifier would accept it for that input.
+        with_ctx = pb.slhdsa_sign(_MESSAGE, sk, b"x", param_set="SHA2-256f")
+        assert not self._generic_verifies(b"\x00\x01x" + _MESSAGE, with_ctx, pk)
+        assert not self._generic_verifies(_MESSAGE, with_ctx, pk)
 
 
 class TestSection9InterfaceIsNotShipped:

@@ -131,14 +131,25 @@ class TestMadMemoization:
         assert recomputed == naive
 
     def test_reset_invalidates(self) -> None:
+        """A memo taken before reset() must not answer for the new window.
+
+        The memo is keyed on the sample count alone, so the stale-memo defect
+        shows only when the new window reaches the SAME count as the memoised
+        one.  The first revision never memoised anything before the reset and
+        refilled to a different count, so dropping the invalidation from
+        reset() left it green.
+        """
         stats = EWMAStats(window_size=64)
         for i in range(40):
             stats.update(float(i))
+        before = stats._median_and_mad()  # memoised at n == 40
         stats.reset()
-        for _ in range(5):
-            stats.update(3.0)
-        median, mad = stats._median_and_mad()
-        assert (median, mad) == (3.0, 0.0)
+        fresh = [1000.0 + 3.0 * i for i in range(40)]
+        for value in fresh:
+            stats.update(value)
+        after = stats._median_and_mad()
+        assert after == _naive_median_and_mad(fresh)
+        assert after != before
 
 
 class TestAnomalyBehaviourUnchanged:
