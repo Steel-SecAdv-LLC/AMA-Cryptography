@@ -66,16 +66,19 @@ The shapes, as widened after measuring what the first patterns let through
 
 What is deliberately NOT checked
 --------------------------------
-``CHANGELOG.md`` is out of SCOPE — it is not in :data:`SCANNED_ROOT_FILES` —
-and that is the point rather than a convenience: it is a historical record.
-Its entries describe the tree as it stood when they were written, and editing
-them to satisfy a present-day linter would falsify the one file whose value is
-that it was not revised. A stale reference in a changelog is a fact about the
-past; the same reference in ``ama_cryptography/session.py`` is a defect in the
-present.  (It used to be listed in :data:`EXEMPT` as well.  That entry could
-never take effect — the file is not scanned — so it was a dead exemption, and
-it is gone; the test now requires every exemption to sit inside the scanned
-scope.)
+The historical record is out of SCOPE, and that is the point rather than a
+convenience.  ``CHANGELOG.md`` is not in :data:`SCANNED_ROOT_FILES`, and the
+development journals under ``docs/changelog/`` — the dated per-pass entries
+moved out of it verbatim — are dropped from ``docs/`` by
+``tools/_repo.py``'s ``is_historical_record``, the one definition of which
+files those are.  Their entries describe the tree as it stood when they were
+written, and editing them to satisfy a present-day linter would falsify the
+documents whose value is that they were not revised. A stale reference in a
+changelog is a fact about the past; the same reference in
+``ama_cryptography/session.py`` is a defect in the present.  (``CHANGELOG.md``
+used to be listed in :data:`EXEMPT` as well.  That entry could never take
+effect — the file is not scanned — so it was a dead exemption, and it is gone;
+the test now requires every exemption to sit inside the scanned scope.)
 
 This module and its test are exempt for a duller reason: both have to quote the
 rejected shapes in order to reject them.  That is still a hole, so the test
@@ -191,8 +194,22 @@ CHECKS: tuple[tuple[re.Pattern[str], str, re.Pattern[str] | None], ...] = (
 )
 
 
+def _is_historical_record(name: str) -> bool:
+    """CHANGELOG.md and ``docs/changelog/``: out of scope, see the module docstring."""
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record
+
+    return is_historical_record(name)
+
+
 def _tracked_files(repo_root: Path) -> list[Path]:
-    """Every tracked file in scope, via ``git ls-files``."""
+    """Every tracked file in scope, via ``git ls-files``.
+
+    The historical record is not in scope: ``CHANGELOG.md`` is never listed,
+    and the journals under ``docs/changelog/`` are dropped here.
+    """
     out = subprocess.run(
         ["git", "ls-files", "-z", *SCANNED_DIRS, *SCANNED_ROOT_FILES],
         cwd=repo_root,
@@ -206,6 +223,8 @@ def _tracked_files(repo_root: Path) -> list[Path]:
             continue
         path = repo_root / name
         if name in EXEMPT or path.suffix not in SUFFIXES or not path.is_file():
+            continue
+        if _is_historical_record(name):
             continue
         files.append(path)
     return files
@@ -252,8 +271,9 @@ def main(argv: list[str] | None = None) -> int:
             "reference is correct.  Ambiguous phrasings ('a previous session', "
             '"the audit\'s") are left to review: in this package they also '
             "match correct prose.\n"
-            "not scanned: CHANGELOG.md, a historical record that is not revised "
-            "to satisfy a linter (it is outside the scanned scope).\n"
+            "not scanned: CHANGELOG.md and the development journals under "
+            "docs/changelog/, the historical record, which is not revised to "
+            "satisfy a linter (it is outside the scanned scope).\n"
             "exempt: this tool and its test, which must quote the rejected "
             "shapes in order to define them."
         ),

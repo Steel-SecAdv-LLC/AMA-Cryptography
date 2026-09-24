@@ -34,6 +34,7 @@ from tools.check_reference_integrity import (  # noqa: E402 -- repo-root path in
     EXEMPT,
     SCANNED_DIRS,
     SCANNED_ROOT_FILES,
+    _tracked_files,
     check,
     main,
     scan_text,
@@ -176,6 +177,21 @@ class TestTheExemptionsAreHonest:
     def test_the_changelog_is_out_of_scope_rather_than_exempt(self) -> None:
         assert "CHANGELOG.md" not in SCANNED_ROOT_FILES
         assert "CHANGELOG.md" not in EXEMPT
+
+    def test_the_development_journal_is_out_of_scope_rather_than_exempt(self) -> None:
+        """The dated entries moved out of the CHANGELOG are the same record.
+
+        They sit under ``docs/``, which is scanned, so they are dropped from the
+        scope by ``tools/_repo.py``'s ``is_historical_record`` rather than
+        listed in ``EXEMPT``, whose entries must each be load-bearing.
+        """
+        journal = "docs/changelog/5.0.0-development-journal.md"
+        assert (REPO_ROOT / journal).is_file()
+        assert journal.split("/", 1)[0] in SCANNED_DIRS
+        assert journal not in EXEMPT
+        scanned = {p.relative_to(REPO_ROOT).as_posix() for p in _tracked_files(REPO_ROOT)}
+        assert journal not in scanned
+        assert "docs/METRICS_REPORT.md" in scanned, "docs/ itself fell out of scope"
 
     def test_an_exempt_file_is_not_scanned(self) -> None:
         _, problems = check(REPO_ROOT)

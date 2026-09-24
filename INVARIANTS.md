@@ -1618,9 +1618,11 @@ An install instruction is API surface. A reader cannot verify it without
 running it, and running it reports success either way.
 
 **Enforcement.** `tools/check_documented_extras.py`, run in the `security-checks`
-job of `ci.yml`. `CHANGELOG.md` is excluded by design: it is a historical
-record, and an extra that genuinely existed in an earlier release must remain
-readable in the entry that introduced or removed it.
+job of `ci.yml`. `CHANGELOG.md` and the development journals under
+`docs/changelog/` are excluded by design (`is_historical_record()` in
+`tools/_repo.py`): they are the historical record, and an extra that genuinely
+existed in an earlier release must remain readable in the entry that introduced
+or removed it.
 
 **Verification.** `tests/test_documented_extras.py` pins both directions:
 detection of the historical defect in its single-extra and comma-separated

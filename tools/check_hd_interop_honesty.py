@@ -47,8 +47,10 @@ which contains no "compatible" and no "compliant", yet asserts conformance
 more strongly than either: it is a standards-conformance table, and the
 Standard column is the claim.  Prose rules do not catch structured claims.
 
-``CHANGELOG.md`` is exempt: it is a historical record, and KM-HD-001's own
-entry necessarily quotes the wording it retired.
+``CHANGELOG.md`` and the development journals under ``docs/changelog/`` are
+exempt: they are the historical record (``tools/_repo.py``'s
+``is_historical_record``), and KM-HD-001's own entry necessarily quotes the
+wording it retired.
 
 Exit status
 -----------
@@ -71,9 +73,20 @@ SCAN_ROOTS: tuple[str, ...] = ("", "wiki", "docs")
 
 SCAN_SUFFIXES: frozenset[str] = frozenset({".md", ".rst", ".txt"})
 
-#: CHANGELOG.md records history, including the retired wording KM-HD-001
-#: names. Excluding it is what lets the gate be strict everywhere else.
-EXEMPT_FILES: frozenset[str] = frozenset({"CHANGELOG.md"})
+
+def _is_historical_record(relative: str) -> bool:
+    """CHANGELOG.md and ``docs/changelog/``: history, including KM-HD-001's wording.
+
+    Excluding the historical record is what lets the gate be strict everywhere
+    else.  Which files that is has one definition, in ``tools/_repo.py``.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record
+
+    return is_historical_record(relative)
+
 
 EXCLUDED_DIRS: frozenset[str] = frozenset(
     {".git", "build", "dist", "node_modules", "__pycache__", ".venv", "venv"}
@@ -164,7 +177,7 @@ def scanned_files(repo: Path = REPO) -> list[Path]:
                 continue
             if any(part in EXCLUDED_DIRS for part in path.relative_to(repo).parts):
                 continue
-            if path.relative_to(repo).as_posix() in EXEMPT_FILES:
+            if _is_historical_record(path.relative_to(repo).as_posix()):
                 continue
             seen.add(path)
     return sorted(seen)

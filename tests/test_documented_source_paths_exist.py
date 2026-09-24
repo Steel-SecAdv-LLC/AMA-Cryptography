@@ -54,7 +54,10 @@ Each entry there says which of those it is.
 ``CHANGELOG.md`` is excluded, and deliberately: it is a historical record, and
 an entry describing a file that a later release renamed or deleted is accurate
 about the past.  Rewriting it to satisfy a gate would falsify the history the
-document exists to keep.
+document exists to keep.  The development journals under ``docs/changelog/``
+are the same record — the dated per-pass entries moved out of the CHANGELOG
+verbatim — and are excluded with it, through ``tools/_repo.py``'s
+``is_historical_record``, the one definition of which files those are.
 """
 
 from __future__ import annotations
@@ -64,6 +67,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from tools._repo import is_historical_record
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -168,15 +173,12 @@ NOT_IN_TREE = {
 }
 
 
-#: Historical record; see the module docstring.
-EXCLUDED_FILES = {"CHANGELOG.md"}
-
-
 def _tracked_markdown() -> list[Path]:
     out = subprocess.run(
         ["git", "ls-files", "*.md"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
-    return [REPO_ROOT / f for f in out if Path(f).name not in EXCLUDED_FILES]
+    # The historical record is excluded; see the module docstring.
+    return [REPO_ROOT / f for f in out if not is_historical_record(f)]
 
 
 DOCS = _tracked_markdown()

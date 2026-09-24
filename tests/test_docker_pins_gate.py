@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 
 from tools import check_docker_pins as gate
+from tools._repo import is_historical_record
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -295,8 +296,8 @@ class TestDocumentedBaseImagesMatchTheDockerfiles:
     def _documented(cls) -> dict[Path, set[str]]:
         found: dict[Path, set[str]] = {}
         for doc in cls._tracked("*.md"):
-            if doc.name == "CHANGELOG.md":  # historical record; see the path gate
-                continue
+            if is_historical_record(doc.relative_to(REPO_ROOT)):
+                continue  # CHANGELOG.md, docs/changelog/; see the path gate
             text = doc.read_text(encoding="utf-8", errors="replace")
             for base in cls._FROM.findall(text):
                 # A stage reference (``FROM builder``) is not an image claim.

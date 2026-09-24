@@ -602,6 +602,16 @@ def extract_floor_claims(text: str, path: str, benchmarks: set[str]) -> list[Flo
     return claims
 
 
+def _is_historical_record(relative: Path) -> bool:
+    """CHANGELOG.md and ``docs/changelog/``; one definition, in ``tools/_repo.py``."""
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record
+
+    return is_historical_record(relative)
+
+
 def check_documented_floors(
     report: Report, repo: Path, x86: dict[str, Any], arm: dict[str, Any]
 ) -> None:
@@ -624,8 +634,8 @@ def check_documented_floors(
     benchmarks = {name for _, name in floors}
 
     for path in sorted(list(repo.glob("*.md")) + list(repo.glob("wiki/*.md"))):
-        if path.name == "CHANGELOG.md":
-            continue
+        if _is_historical_record(path.relative_to(repo)):
+            continue  # a past release's floor, accurate about that release
         relative = str(path.relative_to(repo))
         for claim in extract_floor_claims(path.read_text(encoding="utf-8"), relative, benchmarks):
             where = f"{claim.path}:{claim.line}"

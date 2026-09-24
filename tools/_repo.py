@@ -30,6 +30,20 @@ than a regular file (a directory, a dangling symlink, a submodule), or that is
 missing without git agreeing it was deleted, is not — skipping it would be the
 same silent narrowing this module removes.
 
+Historical records
+------------------
+Several gates and tests leave the project's historical record alone: its
+entries describe the tree as it stood when they were written, so a stale count,
+a retired claim or a deleted path inside one is accurate about the past, and
+editing it to satisfy a present-day check would falsify the one kind of document
+whose value is that it is not revised.  That record used to be one file,
+``CHANGELOG.md``, and each of those sites named it by file name.  Since the
+5.0.0 development journal moved to ``docs/changelog/`` it is a file and a
+directory, so :func:`is_historical_record` is the one definition every such
+site asks, rather than each carrying its own copy of the list.  It is
+deliberately exact: the root ``CHANGELOG.md`` and the files under
+``docs/changelog/``, nothing matched by name or pattern anywhere else.
+
 Import
 ------
 Gates run both as scripts (``python3 tools/check_X.py``, where ``tools/`` —
@@ -43,12 +57,16 @@ and ``build_post_kats.py`` already use for their sibling imports.
 from __future__ import annotations
 
 import os
+import posixpath
 import subprocess
 from pathlib import Path
 from typing import Sequence
 
 __all__ = [
+    "HISTORICAL_RECORD_DIRS",
+    "HISTORICAL_RECORD_FILES",
     "TrackedFilesError",
+    "is_historical_record",
     "repo_root",
     "staged_files",
     "tracked_files",
@@ -56,6 +74,43 @@ __all__ = [
 ]
 
 _GIT_TIMEOUT_SECONDS = 60
+
+#: Repository-relative files that are historical records.
+HISTORICAL_RECORD_FILES: frozenset[str] = frozenset({"CHANGELOG.md"})
+
+#: Repository-relative directories every file under which is a historical
+#: record: a release's dated development journal, moved out of
+#: ``CHANGELOG.md`` so the changelog reads as release notes.
+HISTORICAL_RECORD_DIRS: tuple[str, ...] = ("docs/changelog",)
+
+
+def is_historical_record(path: str | os.PathLike[str], repo: Path | None = None) -> bool:
+    """Whether ``path`` is one of the project's historical records.
+
+    True for the root ``CHANGELOG.md`` and for any file under
+    ``docs/changelog/``; False for everything else, including a file named
+    ``CHANGELOG.md`` in any other directory.  See the module docstring for why
+    the sites that exempt these files ask this rather than naming them.
+
+    A relative ``path`` is read as relative to the repository root.  An
+    absolute one is made relative to ``repo`` (default: :func:`repo_root`), so
+    a gate scanning a fixture repository passes that repository; a path
+    outside it is not a record of that repository and the answer is False.
+    """
+    candidate = Path(path)
+    if candidate.is_absolute():
+        base = repo if repo is not None else repo_root()
+        try:
+            candidate = candidate.relative_to(base)
+        except ValueError:
+            try:
+                candidate = candidate.resolve().relative_to(base.resolve())
+            except ValueError:
+                return False
+    relative = posixpath.normpath(candidate.as_posix())
+    if relative in HISTORICAL_RECORD_FILES:
+        return True
+    return any(relative.startswith(f"{directory}/") for directory in HISTORICAL_RECORD_DIRS)
 
 
 class TrackedFilesError(RuntimeError):

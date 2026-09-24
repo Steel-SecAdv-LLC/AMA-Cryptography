@@ -83,8 +83,9 @@ and issues a barrier. Only the symbol-existence rule is prose-only — in Python
 source ``from ama_cryptography import adaptive_posture`` is a valid submodule
 import that a prose-shaped rule would misread.
 
-``CHANGELOG.md`` is exempt throughout: it is a historical record and must be
-able to quote the wording it retired.
+``CHANGELOG.md`` and the development journals under ``docs/changelog/`` are
+exempt throughout: they are the historical record (``tools/_repo.py``'s
+``is_historical_record``) and must be able to quote the wording they retired.
 
 Exit status
 -----------
@@ -119,9 +120,20 @@ PROSE_SUFFIXES: frozenset[str] = frozenset({".md", ".rst", ".txt"})
 #: file — correctly said the native kernel writes once and issues a barrier.
 SCAN_SUFFIXES: frozenset[str] = PROSE_SUFFIXES | frozenset({".py", ".pyx"})
 
-#: CHANGELOG.md records history, including retired wording. Excluding it is
-#: what lets the gate be strict everywhere else.
-EXEMPT_FILES: frozenset[str] = frozenset({"CHANGELOG.md"})
+
+def _is_historical_record(relative: Path) -> bool:
+    """CHANGELOG.md and ``docs/changelog/``: history, including retired wording.
+
+    Excluding the historical record is what lets the gate be strict everywhere
+    else.  Which files that is has one definition, in ``tools/_repo.py``.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record
+
+    return is_historical_record(relative)
+
 
 EXCLUDED_DIRS: frozenset[str] = frozenset(
     {".git", "build", "build-consumer", "dist", "node_modules", "__pycache__", ".venv", "venv"}
@@ -694,7 +706,7 @@ def scanned_files(repo: Path = REPO) -> list[Path]:
         relative = path.relative_to(repo)
         if any(part in EXCLUDED_DIRS for part in relative.parts):
             continue
-        if relative.as_posix() in EXEMPT_FILES or relative.as_posix() in SELF_REFERENTIAL:
+        if _is_historical_record(relative) or relative.as_posix() in SELF_REFERENTIAL:
             continue
         seen.append(path)
     return seen

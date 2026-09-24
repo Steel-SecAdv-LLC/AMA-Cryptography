@@ -59,6 +59,21 @@ def repo_relative(path: PurePath, repo: PurePath) -> str:
     return path.relative_to(repo).as_posix()
 
 
+def _is_historical_record(path: Path, repo: Path) -> bool:
+    """CHANGELOG.md and ``docs/changelog/``: one definition, in ``tools/_repo.py``.
+
+    A historical record legitimately names old versions — an entry pinning the
+    tag of the release it describes, a heading for a past release — so the
+    sweeps below that would read those as stale skip it.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record
+
+    return is_historical_record(path.absolute(), repo=repo.absolute())
+
+
 _C_VERSION_LITERAL_RE = re.compile(r'"\d+\.\d+\.\d+"')
 _C_VERSION_IDENT_RE = re.compile(
     # Two alternatives:
@@ -524,10 +539,11 @@ def scan_soname_literals(repo: Path, canonical: str) -> tuple[list[str], int]:
 def scan_tag_pins(repo: Path, canonical: str) -> tuple[list[str], int]:
     """``(problems, pins checked)`` over the docs that carry an AMA git-tag pin.
 
-    Reads ``docs/**/*.rst`` AND every ``*.md`` except ``CHANGELOG.md`` and
-    ``docs/compliance/**`` — a historical changelog entry or a dated attestation
-    may legitimately pin an OLD tag, exactly as the document-header sweep
-    excludes them.  The predecessor read ``docs/**/*.rst`` only, so README's own
+    Reads ``docs/**/*.rst`` AND every ``*.md`` except the historical record
+    (``CHANGELOG.md`` and ``docs/changelog/**``) and ``docs/compliance/**`` — a
+    historical changelog entry or a dated attestation may legitimately pin an
+    OLD tag, exactly as the document-header sweep excludes them.  The
+    predecessor read ``docs/**/*.rst`` only, so README's own
     install commands (``pip install "git+...AMA-Cryptography.git@vX.Y.Z"`` and
     the requirements-style ``ama-cryptography @ git+...@vX.Y.Z``) went
     unchecked, though its comment claimed "the same contract as the README
@@ -538,7 +554,7 @@ def scan_tag_pins(repo: Path, canonical: str) -> tuple[list[str], int]:
     for md in repo.rglob("*.md"):
         if any(part in {".git", "build", "node_modules"} for part in md.parts):
             continue
-        if md.name == "CHANGELOG.md" or "compliance" in md.parts:
+        if _is_historical_record(md, repo) or "compliance" in md.parts:
             continue
         docs.append(md)
     problems: list[str] = []
@@ -797,8 +813,8 @@ def main() -> int:
     for md in sorted(REPO.rglob("*.md")):
         if any(part in {".git", "build", "node_modules"} for part in md.parts):
             continue
-        if md.name == "CHANGELOG.md":
-            continue  # historical by definition
+        if _is_historical_record(md, REPO):
+            continue  # historical by definition: CHANGELOG.md, docs/changelog/
         if "compliance" in md.parts:
             # docs/compliance/** are DATED ATTESTATION RECORDS.  Their
             # "Version" field names the library version the attestation was

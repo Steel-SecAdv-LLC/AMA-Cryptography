@@ -79,6 +79,16 @@ _WYCHEPROOF_RE = re.compile(r"`wycheproof_vectors/`\s*[—-]\s*(\d+)\s+vectors\s
 _BACKTICKED = re.compile(r"`([A-Za-z0-9_.-]+)`")
 
 
+def _is_historical_record(path: Path, repo: Path) -> bool:
+    """``tools/_repo.py``'s one definition of the project's historical record."""
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record
+
+    return is_historical_record(path.absolute(), repo=repo.absolute())
+
+
 def _markdown_files(repo: Path) -> list[Path]:
     seen: dict[Path, None] = {}
     for root in DOC_ROOTS:
@@ -89,8 +99,12 @@ def _markdown_files(repo: Path) -> list[Path]:
         for path in sorted(base.glob(pattern)):
             if any(part in {".git", "build", "node_modules"} for part in path.parts):
                 continue
-            if path.name == "CHANGELOG.md":
-                continue  # historical by definition, like the version checker
+            if _is_historical_record(path, repo):
+                # CHANGELOG.md and the development journals under
+                # docs/changelog/: historical by definition, like the version
+                # checker.  The CHANGELOG's live section is read separately,
+                # by changelog_unreleased_section().
+                continue
             seen.setdefault(path.resolve(), None)
     return list(seen)
 
@@ -691,11 +705,12 @@ def measure_c_suite_counts(repo: Path) -> tuple[int, int]:
 
 
 #: The CHANGELOG is excluded from ``_markdown_files`` as "historical by
-#: definition", which is right for released sections and wrong for the one at
-#: the top: ``## [X.Y.Z] - Unreleased`` describes the release being built, and
-#: a wrong figure there is a wrong figure in the release notes, not a record of
-#: what was once true.  Both drifted counts this pair of checks was written for
-#: had an occurrence in exactly that section.
+#: definition" (as are the development journals under ``docs/changelog/``,
+#: which hold only dated history), which is right for released sections and
+#: wrong for the one at the top: ``## [X.Y.Z] - Unreleased`` describes the
+#: release being built, and a wrong figure there is a wrong figure in the
+#: release notes, not a record of what was once true.  Both drifted counts this
+#: pair of checks was written for had an occurrence in exactly that section.
 _UNRELEASED_HEADING_RE = re.compile(r"^##\s*\[[^\]]+\]\s*-\s*Unreleased\s*$", re.I)
 _ANY_VERSION_HEADING_RE = re.compile(r"^##\s*\[")
 

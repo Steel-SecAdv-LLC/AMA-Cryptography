@@ -54,9 +54,10 @@ in ``pyproject.toml`` using PEP 685 normalisation (case-folded, with runs of
 itself performs, so a name that differs only in punctuation is correctly
 accepted rather than reported.
 
-``CHANGELOG.md`` is excluded by design: it is a historical record, and an
-extra that genuinely existed in an earlier release must remain readable in
-the entry that introduced or removed it.
+``CHANGELOG.md`` and the development journals under ``docs/changelog/`` are
+excluded by design: they are the historical record (``tools/_repo.py``'s
+``is_historical_record``), and an extra that genuinely existed in an earlier
+release must remain readable in the entry that introduced or removed it.
 
 Both directions are pinned by ``tests/test_documented_extras.py``, so this
 gate cannot silently degrade into a no-op.
@@ -100,8 +101,20 @@ else:  # pragma: no cover - exercised only on Python 3.10
 # Directories and files scanned for install instructions.
 DOC_GLOBS = ("*.md", "*.rst", "wiki/*.md", "docs/**/*.md", "docs/**/*.rst")
 
-# A historical record, not an instruction to a current reader.
-EXCLUDED = {"CHANGELOG.md"}
+
+def _is_historical_record(relative: str) -> bool:
+    """A historical record, not an instruction to a current reader.
+
+    CHANGELOG.md and ``docs/changelog/``; the one definition is in
+    ``tools/_repo.py``.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record
+
+    return is_historical_record(relative)
+
 
 # An extras group attached to a requirement: the bracket must directly follow
 # `.` (as in `-e ".[dev]"`) or a package-name character (as in
@@ -196,7 +209,7 @@ def scan(root: Path) -> dict[str, list[tuple[str, int, str]]]:
                 continue
             seen.add(path)
             relative = path.relative_to(root).as_posix()
-            if relative in EXCLUDED:
+            if _is_historical_record(relative):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")

@@ -253,6 +253,9 @@ class TestThisRepository:
             "IMPLEMENTATION_GUIDE.md",
             "INVARIANTS.md",
             "CHANGELOG.md",
+            # Compared byte-for-byte against the CHANGELOG it was cut from by
+            # tests/test_changelog_relocation.py.
+            "docs/changelog/5.0.0-development-journal.md",
         ):
             value = (
                 subprocess.run(  # nosec B603 -- fixed argv, no shell, trusted git binary (EOL-001)

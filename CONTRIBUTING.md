@@ -359,7 +359,10 @@ class TestEd25519Signatures:
    - Update README.md if adding features
    - Update SECURITY.md if affecting security
    - Update IMPLEMENTATION_GUIDE.md if changing deployment
-   - Add entries to CHANGELOG.md
+   - Add entries to CHANGELOG.md, and keep them release-notes grade: a
+     detailed per-pass narrative (measurements, rationale, dated figures) goes
+     in the release's development journal under `docs/changelog/`, as
+     `docs/changelog/5.0.0-development-journal.md` does for 5.0.0
 
 4. **Commit with clear messages:**
    ```bash
