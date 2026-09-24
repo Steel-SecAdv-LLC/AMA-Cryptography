@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1086,
       "Key Management\n& Rotation": 281,
       "Memory Security\n& Fuzzing": 339,
-      "Other": 3556,
+      "Other": 3564,
       "PQC Backends\n& Integration": 776,
       "Performance\n& Monitoring": 378
     },
-    "n_files": 267,
-    "total_tests": 6416,
+    "n_files": 268,
+    "total_tests": 6424,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -124,6 +124,7 @@
       "test_pkgconfig_install_dirs.py",
       "test_post_failclosed.py",
       "test_pqc_param_sets.py",
+      "test_pr_touches_watched_paths.py",
       "test_precommit_mypy_scope.py",
       "test_precommit_verbatim_bytes.py",
       "test_preload_native_digest.py",

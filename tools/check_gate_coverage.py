@@ -115,7 +115,9 @@ WORKFLOW_DIR = Path(".github/workflows")
 #: and 83), so four workflows could disappear without tripping anything --
 #: the drift the floor exists to catch.  Adding or removing a workflow or a job
 #: now means changing these two numbers in the same change, under review.
-MIN_WORKFLOWS = 20
+#: 15 since the five no-op twin workflows were removed (see
+#: check_pr_relevance); each gate they twinned now decides relevance itself.
+MIN_WORKFLOWS = 15
 MIN_JOBS_INSPECTED = 84
 
 
@@ -647,9 +649,13 @@ def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
         # single-job workflow is its own status context, and a workflow that
         # never runs on a pull request produces no context branch protection
         # could require.
-        if on_pull_request and len(jobs) > 1:
+        # The `changes` job (see check_pr_relevance) decides relevance for the
+        # job beside it and reports no context anyone requires, so a guard plus
+        # its `changes` job is still a single-context workflow.
+        context_jobs = [job_id for job_id in jobs if job_id != CHANGES_JOB]
+        if on_pull_request and len(context_jobs) > 1:
             failures.append(
-                f"{name}: {len(jobs)} jobs run on pull_request but the workflow "
+                f"{name}: {len(context_jobs)} jobs run on pull_request but the workflow "
                 f"defines no aggregating gate job (expected a job id ending in "
                 f"'{GATE_SUFFIX}'). Branch protection would have to require each "
                 f"job by name, which is the required-context drift this "
@@ -719,107 +725,105 @@ def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
     return failures
 
 
-def check_path_filtered_gates(parsed: dict[str, dict[Any, Any]]) -> list[str]:
-    """Every path-filtered gate workflow needs a complementary no-op twin.
+#: The job that decides pull-request relevance, and the env key its watched
+#: patterns live in (tools/pr_touches_watched_paths.py reads the same key).
+CHANGES_JOB = "changes"
+WATCHED_PATHS_KEY = "WATCHED_PATHS"
+
+
+def _watched_paths(changes_job: dict[str, Any]) -> list[str] | None:
+    """The WATCHED_PATHS patterns a `changes` job's steps declare, if any."""
+    for step in changes_job.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        value = (step.get("env") or {}).get(WATCHED_PATHS_KEY)
+        if isinstance(value, str):
+            return [line.strip() for line in value.splitlines() if line.strip()]
+    return None
+
+
+def check_pr_relevance(parsed: dict[str, dict[Any, Any]]) -> list[str]:
+    """No gate is path-filtered on pull_request; relevance is decided in-workflow.
 
     GitHub creates no check run for a workflow that path filtering skipped, so
     a required context coming from one leaves every non-matching pull request
-    on "Expected — waiting for status" forever.  The context therefore cannot
-    be required at all, and a red gate does not block a merge — which is what
-    ``dudect.yml`` (the KyberSlash secret-division gate, the AVX/ISA scoping
-    gate, the dudect lanes, GHASH scalar invariance, the secret-taint lanes,
-    AEAD verify invariance), ``arm-qemu.yml`` and ``corpus-provenance.yml``
-    were in, each while carrying a comment telling the operator to require its
-    gate context.
+    on "Expected -- waiting for status".  This tree's first remedy was
+    GitHub's documented no-op twin (same names, complementary
+    ``paths-ignore:``), which this check used to hold complementary.  A twin is
+    not exclusive: ``paths:`` fires when ANY changed file matches and
+    ``paths-ignore:`` fires when ANY changed file is not ignored, so a pull
+    request touching a watched and an unwatched file ran both, and the twin's
+    trivial green arrived minutes before the real lanes reported.  No list
+    arithmetic fixes that, so the twins were removed.
 
-    GitHub's documented remedy is a twin workflow with the same ``name:``, a
-    job with the same ``name:``, and the complementary ``paths-ignore:`` list,
-    so exactly one of the pair reports the context on any pull request.  This
-    check requires the twin to exist and holds the two lists complementary in
-    BOTH directions:
+    The rule now:
 
-    * a path the real workflow watches and the twin does not ignore makes
-      BOTH run on a pull request touching it — confusing, and two reports of
-      one context;
-    * a path the twin ignores and the real workflow does not watch makes
-      NEITHER run on a pull request touching only it, so the context is never
-      reported — the failure this exists to prevent.
-
-    Only the first direction used to be checked.  The second was named here
-    as the one that matters and never computed, and five twins carried it:
-    each ignored its own ``-skip.yml`` (and baseline-guard-skip.yml also the
-    guard's own file), which the real workflow did not watch, so a pull
-    request editing only the twin — or only baseline-guard.yml, the guard
-    itself — reported no context at all.  The resolution is that the real
-    workflow watches its twin's file: editing the twin re-runs the real gate,
-    and the pair stays one-or-the-other on every mix of paths.
+    * no workflow filters ``pull_request`` by ``paths:`` or ``paths-ignore:``;
+    * a workflow that decides relevance does it in a ``changes`` job whose
+      step env carries ``WATCHED_PATHS`` -- non-empty, including the
+      workflow's own file -- and every other job depends on ``changes``;
+    * where ``push`` is path-filtered, its list equals ``WATCHED_PATHS``, so a
+      change is gated the same however it arrives;
+    * a job that is not a gate and depends on relevance must also run when
+      ``changes`` did not succeed (its condition names
+      ``needs.changes.result``): otherwise a crashed detector skips it, and a
+      skipped job reports a passing check.  Gates read ``changes`` like any
+      other dependency (see :func:`check_parsed`).
     """
     failures: list[str] = []
     for name, workflow in sorted(parsed.items()):
+        triggers = _triggers(workflow)
+        pull_request = triggers.get("pull_request")
+        if isinstance(pull_request, dict):
+            filtered = [key for key in ("paths", "paths-ignore") if pull_request.get(key)]
+            if filtered:
+                failures.append(
+                    f"{name}: `pull_request` is filtered by {filtered}. A path-filtered "
+                    f"workflow reports no check on a non-matching pull request, and a "
+                    f"no-op twin is not exclusive. Run on every pull request and decide "
+                    f"relevance in a `{CHANGES_JOB}` job (tools/pr_touches_watched_paths.py)."
+                )
         jobs = workflow.get("jobs") or {}
-        pull_request = _triggers(workflow).get("pull_request") or {}
-        if not isinstance(pull_request, dict) or not pull_request.get("paths"):
-            continue  # unfiltered: the context is reported on every PR already
-        # A workflow with an aggregating gate reports the gate's context; one
-        # without a gate reports each job's context (check_parsed already
-        # requires such a workflow to be single-job on pull_request).  Either
-        # way the reported context has to arrive on every pull request, so the
-        # twin must carry it.  This used to consider only gate workflows,
-        # which left baseline-guard.yml and integrity-anchor-check.yml -- one
-        # job each, path-filtered -- with no twin and an unrequirable context
-        # while their headers said so and told the operator not to require them.
-        gate_ids = {job_id for job_id in jobs if job_id.endswith(GATE_SUFFIX)}
-        context_ids = gate_ids or set(jobs)
-        if not context_ids:
+        changes = jobs.get(CHANGES_JOB)
+        if not isinstance(changes, dict):
             continue
-        paths = set(pull_request["paths"])
-        twin = None
-        for other_name, other in parsed.items():
-            if other_name == name or other.get("name") != workflow.get("name"):
+        watched = _watched_paths(changes)
+        if not watched:
+            failures.append(f"{name}: the `{CHANGES_JOB}` job declares no {WATCHED_PATHS_KEY}.")
+            continue
+        own = f".github/workflows/{name}"
+        if own not in watched:
+            failures.append(
+                f"{name}: {WATCHED_PATHS_KEY} omits the workflow's own file, so a pull "
+                f"request editing only this workflow would skip every job it defines."
+            )
+        push = triggers.get("push")
+        if isinstance(push, dict) and push.get("paths") and list(push["paths"]) != watched:
+            failures.append(
+                f"{name}: `push.paths` and {WATCHED_PATHS_KEY} differ "
+                f"({sorted(set(push['paths']) ^ set(watched))}); the same change would "
+                f"be gated differently by how it arrived."
+            )
+        for job_id, job in jobs.items():
+            if job_id == CHANGES_JOB or not isinstance(job, dict):
                 continue
-            other_pr = _triggers(other).get("pull_request") or {}
-            if isinstance(other_pr, dict) and other_pr.get("paths-ignore"):
-                twin = (other_name, other, set(other_pr["paths-ignore"]))
-                break
-        if twin is None:
-            failures.append(
-                f"{name}: job(s) {sorted(context_ids)} run under a path-filtered "
-                f"`pull_request` trigger, so GitHub reports no check for a pull "
-                f"request that touches none of those paths and the context "
-                f"cannot be a required status check. Add a no-op twin workflow "
-                f"with the same `name:`, the same job `name:`, and the "
-                f"complementary `paths-ignore:` list."
-            )
-            continue
-        twin_name, twin_wf, ignored = twin
-        missing = paths - ignored
-        if missing:
-            failures.append(
-                f"{twin_name}: does not ignore {sorted(missing)}, which "
-                f"{name} watches — both workflows would run on a pull request "
-                f"touching them."
-            )
-        unwatched = ignored - paths
-        if unwatched:
-            failures.append(
-                f"{twin_name}: ignores {sorted(unwatched)}, which {name} does not "
-                f"watch — a pull request touching only those paths runs NEITHER "
-                f"workflow, so the context is never reported. Add them to {name}'s "
-                f"`pull_request.paths:` (a twin's own file belongs there: editing "
-                f"the twin should re-run the real gate) or drop them from the "
-                f"twin's `paths-ignore:`."
-            )
-        gate_names = {(jobs[j] or {}).get("name") or j for j in context_ids}
-        twin_names = {
-            (job or {}).get("name") or job_id for job_id, job in (twin_wf.get("jobs") or {}).items()
-        }
-        unreported = gate_names - twin_names
-        if unreported:
-            failures.append(
-                f"{twin_name}: its job names {sorted(twin_names)} do not include "
-                f"{name}'s context(s) {sorted(unreported)}, so the twin reports a "
-                f"DIFFERENT context and the required one still never arrives."
-            )
+            if CHANGES_JOB not in _needs(job):
+                failures.append(
+                    f"{name}: job {job_id!r} does not depend on `{CHANGES_JOB}`, so it "
+                    f"ignores the relevance decision the workflow makes."
+                )
+                continue
+            condition = str(job.get("if", ""))
+            if (
+                not job_id.endswith(GATE_SUFFIX)
+                and not any(job_id in _needs(other or {}) for other in jobs.values())
+                and "needs.changes.result" not in condition
+            ):
+                failures.append(
+                    f"{name}: job {job_id!r} reports its own context but its condition "
+                    f"does not run it when `{CHANGES_JOB}` failed; a crashed detector "
+                    f"would skip it, and a skipped job is a passing check."
+                )
     return failures
 
 
@@ -834,7 +838,7 @@ def audit(workflow_dir: Path = WORKFLOW_DIR) -> tuple[list[str], int]:
         parsed[path.name] = workflow
         total_jobs += len(workflow.get("jobs") or {})
         failures.extend(check_parsed(path.name, workflow))
-    failures.extend(check_path_filtered_gates(parsed))
+    failures.extend(check_pr_relevance(parsed))
 
     # Non-vacuity floors (H7).  Proven two ways: `rm .github/workflows/*.yml`
     # left `examined` 0 and the run PASS, and a partial deletion would shrink the

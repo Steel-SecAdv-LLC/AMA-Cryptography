@@ -4,8 +4,8 @@ name: CI - dudect Constant-Time Verification
 
 # RULESET / REQUIRED-CHECKS NOTE
 # ------------------------------
-# This workflow is path-filtered to PRs that touch C source / dudect
-# harness code (see `paths:` blocks below).  Audit Issue 11 widened the
+# This workflow's lanes run on PRs that touch C source / dudect
+# harness code (the push `paths:` and the `changes` job below).  Audit Issue 11 widened the
 # trigger to also include include/** (where ama_dispatch.h declares
 # which SIMD slot is taken) and ama_cryptography/** (the Python-side
 # nonce state and ctypes shims that select between scalar / SIMD code
@@ -14,17 +14,13 @@ name: CI - dudect Constant-Time Verification
 # file under src/c/ — and before this widening the dudect gate would
 # silently skip such PRs.
 #
-# PRs that don't touch any of those paths still won't trigger this
-# workflow, so on its own its `Constant-Time Gate` context would never be
-# reported on such PRs and could not be a required status check.
-# `.github/workflows/dudect-skip.yml` is the no-op twin (same workflow
-# `name:`, same gate job `name:`, complementary `paths-ignore:`), so
-# exactly one of the pair reports the context on every pull request and
-# the context CAN be required; tools/check_gate_coverage.py holds the two
-# path lists complementary.  baseline-guard.yml and
-# integrity-anchor-check.yml carry twins on the same pattern.  (This note
-# used to say the opposite, citing baseline-guard.yml as the reason not
-# to require the gate, after the twin had already been added.)
+# Every pull request runs this workflow, so its `Constant-Time Gate` context
+# is always reported and can be a required status check.  The `changes` job
+# decides whether the change touches those paths; when it does not, every lane
+# is skipped by its own condition and the gate passes.  This replaced the
+# path-filtered workflow plus no-op twin (dudect-skip.yml), which were not
+# exclusive: a pull request touching src/c/ and anything else ran both, and
+# the twin's green arrived minutes before the real lanes finished.
 #
 # The dudect gate still fails closed when it DOES run (no
 # `continue-on-error`, no silent skips inside the harness), which is
@@ -35,10 +31,11 @@ name: CI - dudect Constant-Time Verification
 # fires, so the per-PR coverage shrinks to "changed code" and the
 # full SIMD dispatch-table sweep happens out of the critical path.
 on:
-  # The push and pull_request filters are deliberately IDENTICAL.  They were
-  # not: push carried six patterns and pull_request nine, so the three gate
-  # scripts were re-verified on a PR and skipped on a direct push to main,
-  # develop or a feature branch — the same change, gated on how it arrived.
+  # The push filter and the `changes` job's WATCHED_PATHS are deliberately
+  # IDENTICAL (tools/check_gate_coverage.py holds them so).  The two once
+  # diverged -- push carried six patterns and pull_request nine -- so the gate
+  # scripts were re-verified on a PR and skipped on a direct push: the same
+  # change, gated on how it arrived.
   push:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
     paths:
@@ -63,36 +60,9 @@ on:
       - 'tools/check_avx_scoping.py'
       - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
-      # The no-op twin: it ignores its own file, so a change to it must run
-      # THIS workflow or the Constant-Time Gate context is reported by neither.
-      - '.github/workflows/dudect-skip.yml'
+      - 'tools/pr_touches_watched_paths.py'
   pull_request:
     branches: [ main, develop ]
-    paths:
-      - 'src/c/**'
-      - 'include/**'
-      - 'ama_cryptography/**'
-      - 'tests/c/test_dudect.c'
-      - 'tests/c/dudect/**'
-      # tests/c/CMakeLists.txt registers test_dudect and sets its build flags;
-      # the root CMakeLists.txt is where the per-file ISA scoping this
-      # workflow's `check_avx_scoping.py` step verifies is actually set.  A PR
-      # that reintroduces a library-wide `-mavx2` or `-maes` touches ONLY that
-      # file — so without it here, the gate written for exactly that regression
-      # did not run on the change that causes it.
-      - 'tests/c/CMakeLists.txt'
-      - 'CMakeLists.txt'
-      # The constant-time gate scripts and the workflow itself: a PR that only
-      # raises a threshold, edits a lane, or changes this file must still
-      # re-run dudect, or the change ships unexercised (audit Low).
-      - 'tools/check_ghash_constant_time.py'
-      - 'tools/check_secret_division.py'
-      - 'tools/check_avx_scoping.py'
-      - 'tools/constant_time/**'
-      - '.github/workflows/dudect.yml'
-      # The no-op twin: it ignores its own file, so a change to it must run
-      # THIS workflow or the Constant-Time Gate context is reported by neither.
-      - '.github/workflows/dudect-skip.yml'
   schedule:
     # Run weekly on Sundays at 02:00 UTC (existing schedule).
     - cron: '0 2 * * 0'
@@ -116,11 +86,50 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
 
 jobs:
+  # Every pull request runs this workflow, and this job decides whether the
+  # change touches anything the jobs below verify.  It replaced a path-filtered
+  # workflow plus a no-op twin that reported the same context: the two were not
+  # exclusive (paths: fires when ANY changed file matches, paths-ignore: when ANY
+  # is not ignored), so a mixed pull request ran both and the twin's green
+  # arrived first.  tools/pr_touches_watched_paths.py has the full account.  A
+  # failed detection is a failure, never "not relevant".
+  changes:
+    name: Relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.match.outputs.relevant }}
+    steps:
+      - name: Checkout (the merge commit and its base parent)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Does this change touch a watched path?
+        id: match
+        env:
+          EVENT: ${{ github.event_name }}
+          WATCHED_PATHS: |
+            src/c/**
+            include/**
+            ama_cryptography/**
+            tests/c/test_dudect.c
+            tests/c/dudect/**
+            tests/c/CMakeLists.txt
+            CMakeLists.txt
+            tools/check_ghash_constant_time.py
+            tools/check_secret_division.py
+            tools/check_avx_scoping.py
+            tools/constant_time/**
+            .github/workflows/dudect.yml
+            tools/pr_touches_watched_paths.py
+        run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
+
   dudect-utility:
     name: dudect - Utility Functions
     # The four legacy dudect lanes (utility / pqc / legacy-harnesses /
     # x25519-avx2-batch) only fire on:
-    #   - push / pull_request (path-filtered above)
+    #   - push (path-filtered above) / pull_request (the `changes` job)
     #   - workflow_dispatch (operator-triggered)
     #   - the WEEKLY schedule '0 2 * * 0' (Sunday 02:00 UTC)
     # The new NIGHTLY schedule '30 3 * * *' (audit Issue 3) is for the
@@ -128,9 +137,12 @@ jobs:
     # run would also re-execute the four legacy lanes — wasted compute
     # the SIMD sweep doesn't need and explicit operational cost the
     # weekly schedule already covers.  Copilot review #322 follow-up.
+    needs: [changes]
     if: |
+      needs.changes.outputs.relevant == 'true' && (
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
+      )
     runs-on: ubuntu-latest
     # 20, matching dudect-pqc: the measurement budget is now 600 s and
     # install + build takes 3-6 min on a hosted runner, so 15 left no
@@ -198,9 +210,12 @@ jobs:
     name: dudect - PQC Primitives
     # Same legacy-lane schedule guard as dudect-utility — see that
     # job's header for rationale.
+    needs: [changes]
     if: |
+      needs.changes.outputs.relevant == 'true' && (
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
+      )
     runs-on: ubuntu-latest
     # The weekly schedule run does a high-N reading (see the run step) and needs
     # more wall-clock than a PR run; 40 min covers build + the 30-min test cap.
@@ -250,9 +265,12 @@ jobs:
   dudect-legacy-harnesses:
     name: dudect - Legacy Harnesses (tools/constant_time)
     # Same legacy-lane schedule guard as dudect-utility.
+    needs: [changes]
     if: |
+      needs.changes.outputs.relevant == 'true' && (
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -304,9 +322,12 @@ jobs:
     # kernel's constant-time signal is never sampled in CI.
     name: dudect - X25519 AVX2 4-way (opt-in)
     # Same legacy-lane schedule guard as dudect-utility.
+    needs: [changes]
     if: |
+      needs.changes.outputs.relevant == 'true' && (
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
+      )
     runs-on: ubuntu-latest
     # 20, matching dudect-pqc: the measurement budget is now 600 s and
     # install + build takes 3-6 min on a hosted runner, so 15 left no
@@ -392,9 +413,12 @@ jobs:
     # The WEEKLY '0 2 * * 0' schedule is reserved for the four legacy
     # lanes above; running the sweep on both weekly and nightly would
     # double-bill compute without adding coverage.
+    needs: [changes]
     if: |
+      needs.changes.outputs.relevant == 'true' && (
       (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') ||
       github.event_name == 'workflow_dispatch'
+      )
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -635,6 +659,8 @@ jobs:
     # no quiet machine to wait for.  A few minutes on each PR buys a verdict
     # that does not depend on runner load.
     name: Scalar AES-GCM instruction-count invariance
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     # 20 covered the callgrind targets alone; the secret-taint lane (fifteen
     # Memcheck runs, `slhdsa-sign` the longest at roughly a minute of CPU for
@@ -1117,6 +1143,8 @@ jobs:
     # requirement — and unconditional on every trigger for the same
     # reason.
     name: AEAD verify instruction-count invariance
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
@@ -1163,6 +1191,7 @@ jobs:
     # stuck "waiting for status".
     if: always()
     needs:
+      - changes
       - dudect-utility
       - dudect-pqc
       - dudect-legacy-harnesses
@@ -1197,6 +1226,8 @@ jobs:
       env:
         EVENT:    ${{ github.event_name }}
         SCHEDULE: ${{ github.event.schedule }}
+        R_CHANGES: ${{ needs.changes.result }}
+        RELEVANT:  ${{ needs.changes.outputs.relevant }}
         R_UTILITY: ${{ needs.dudect-utility.result }}
         R_PQC:     ${{ needs.dudect-pqc.result }}
         R_LEGACY:  ${{ needs.dudect-legacy-harnesses.result }}
@@ -1223,6 +1254,21 @@ jobs:
           sweep_expected="skipped"
         fi
 
+        # Relevance (the `changes` job): a pull request touching none of the
+        # watched paths skips every lane by its own condition, and then every
+        # lane -- the unconditional ones included -- must be skipped.  An
+        # undecided relevance is a failure, never "not relevant".
+        always_expected="success"
+        if [ "${R_CHANGES}" != "success" ]; then
+          echo "::error::changes did not succeed (${R_CHANGES}): relevance is unknown."
+          exit 1
+        fi
+        if [ "${RELEVANT}" != "true" ]; then
+          legacy_expected="skipped"
+          sweep_expected="skipped"
+          always_expected="skipped"
+        fi
+
         check() {
           job="$1"; actual="$2"; expected="$3"
           if [ "${actual}" = "${expected}" ]; then
@@ -1240,16 +1286,17 @@ jobs:
         }
 
         echo "event=${EVENT} schedule='${SCHEDULE}'"
-        echo "expected: legacy lanes=${legacy_expected}, simd sweep=${sweep_expected}"
+        echo "relevant=${RELEVANT}"
+        echo "expected: legacy lanes=${legacy_expected}, simd sweep=${sweep_expected}, others=${always_expected}"
         check dudect-utility            "${R_UTILITY}" "${legacy_expected}"
         check dudect-pqc                "${R_PQC}"     "${legacy_expected}"
         check dudect-legacy-harnesses   "${R_LEGACY}"  "${legacy_expected}"
         check dudect-x25519-avx2-batch  "${R_X25519}"  "${legacy_expected}"
         check dudect-simd-sweep         "${R_SWEEP}"   "${sweep_expected}"
-        # Unconditional job: it carries no `if:`, so the only acceptable
-        # result on every trigger is success.
-        check ghash-scalar-invariance   "${R_GHASH}"   "success"
-        check aead-verify-invariance    "${R_AEADVER}" "success"
+        # No trigger condition of their own: success whenever the change is
+        # relevant, skipped when it is not.
+        check ghash-scalar-invariance   "${R_GHASH}"   "${always_expected}"
+        check aead-verify-invariance    "${R_AEADVER}" "${always_expected}"
 
         if [ "${rc}" -ne 0 ]; then
           echo "::error::Constant-Time Gate failed."

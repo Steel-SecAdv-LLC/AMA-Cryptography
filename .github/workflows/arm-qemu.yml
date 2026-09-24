@@ -31,35 +31,53 @@ on:
       # it, or the change ships unexercised.
       - "tools/check_secret_division.py"
       - ".github/workflows/arm-qemu.yml"
-      # The no-op twin: it ignores its own file, so a change to it must run
-      # THIS workflow or the ARM QEMU Gate context is reported by neither.
-      - ".github/workflows/arm-qemu-skip.yml"
+      - "tools/pr_touches_watched_paths.py"
   pull_request:
-    paths:
-      - "src/c/**"
-      - "include/**"
-      - "tests/c/**"
-      - "CMakeLists.txt"
-      - "cmake/toolchains/**"
-      # The linker version script shapes the .so this workflow objdumps and
-      # symbol-checks; an export-map change must re-run these gates.
-      - "cmake/ama_exports.map"
-      # This workflow is the ONLY place check_secret_division.py runs against
-      # an AArch64 object; a change to the gate must re-run the lane that uses
-      # it, or the change ships unexercised.
-      - "tools/check_secret_division.py"
-      - ".github/workflows/arm-qemu.yml"
-      # The no-op twin: it ignores its own file, so a change to it must run
-      # THIS workflow or the ARM QEMU Gate context is reported by neither.
-      - ".github/workflows/arm-qemu-skip.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Every pull request runs this workflow, and this job decides whether the
+  # change touches anything the jobs below verify.  It replaced a path-filtered
+  # workflow plus a no-op twin that reported the same context: the two were not
+  # exclusive (paths: fires when ANY changed file matches, paths-ignore: when ANY
+  # is not ignored), so a mixed pull request ran both and the twin's green
+  # arrived first.  tools/pr_touches_watched_paths.py has the full account.  A
+  # failed detection is a failure, never "not relevant".
+  changes:
+    name: Relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.match.outputs.relevant }}
+    steps:
+      - name: Checkout (the merge commit and its base parent)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Does this change touch a watched path?
+        id: match
+        env:
+          EVENT: ${{ github.event_name }}
+          WATCHED_PATHS: |
+            src/c/**
+            include/**
+            tests/c/**
+            CMakeLists.txt
+            cmake/toolchains/**
+            cmake/ama_exports.map
+            tools/check_secret_division.py
+            .github/workflows/arm-qemu.yml
+            tools/pr_touches_watched_paths.py
+        run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
+
   arm-qemu-ctest:
     name: AArch64 cross-compile + QEMU ctest
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -113,6 +131,8 @@ jobs:
 
   arm-qemu-no-crypto-ext:
     name: AArch64 without ARM Crypto Extensions (the MSVC ARM64 condition)
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     # Bounded like its siblings: without this a hang runs to the 360-minute
     # default and leaves the ARM QEMU Gate pending for six hours.
@@ -202,6 +222,8 @@ jobs:
 
   arm-qemu-sve2:
     name: AArch64 SVE2 kernels (VL=128 and VL=256)
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # AMA_ENABLE_SVE2 defaults OFF and no workflow turned it on, so the SVE2
@@ -304,6 +326,8 @@ jobs:
 
   arm-qemu-ubsan:
     name: AArch64 UBSan (ARM SIMD kernels sanitized under QEMU)
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     # UBSan-instrumented ctest under QEMU is slow: the full 68-case suite
     # measured ~17.5 min locally (SPHINCS-256f KATs dominate), plus the
@@ -368,11 +392,13 @@ jobs:
 
   arm-qemu-gate:
     name: ARM QEMU Gate
-    # Single aggregating status check for this workflow (see the matching gate
-    # in ci.yml). if: always() so it resolves to a definitive red/green even
-    # when the worker job fails, instead of sitting "waiting for status".
+    # Reads every dependency by name.  On a pull request that touches none of
+    # the watched paths the lanes are skipped by their own condition and the
+    # gate passes; on every other run each lane must succeed.  `changes` must
+    # succeed either way: an undecided relevance is a failure.
     if: always()
     needs:
+      - changes
       - arm-qemu-ctest
       - arm-qemu-sve2
       - arm-qemu-no-crypto-ext
@@ -380,17 +406,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Fail unless every AArch64 job succeeded
-        # STRICT. skipped/cancelled also fail. `skipped` means the dependency
-        # failed or a future if: drifted so it silently stopped running;
-        # `cancelled` also covers a job that reached its timeout-minutes, which
-        # GitHub reports as `cancelled`, not `failure` (measured on
-        # ci-build-test.yml run 35955250803; see the comment on ci.yml's CI
-        # Gate), so tolerating it would pass a hung emulated lane.
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
+      - name: Fail unless every lane reached the state this change requires
+        env:
+          R_CHANGES: ${{ needs.changes.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          R_0: ${{ needs['arm-qemu-ctest'].result }}
+          R_1: ${{ needs['arm-qemu-sve2'].result }}
+          R_2: ${{ needs['arm-qemu-no-crypto-ext'].result }}
+          R_3: ${{ needs['arm-qemu-ubsan'].result }}
         run: |
-          echo "::error::ARM QEMU Gate failed — an AArch64 cross-test job did not succeed (baseline ctest, the SVE2 kernels at VL=128/256, or the UBSan sanitizer lane)."
-          echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
-          exit 1
-      - name: AArch64 cross-tests succeeded
-        run: echo "ARM QEMU Gate passed — AArch64 ctest is green under QEMU, including the SVE2 kernels at VL=128 and VL=256."
+          set -euo pipefail
+          rc=0
+          if [ "${R_CHANGES}" != "success" ]; then
+            echo "::error::changes did not succeed (${R_CHANGES}): relevance is unknown."
+            exit 1
+          fi
+          if [ "${RELEVANT}" = "true" ]; then expected="success"; else expected="skipped"; fi
+          echo "relevant=${RELEVANT}: every lane must be ${expected}"
+          check() {
+            if [ "$2" = "${expected}" ]; then
+              echo "  OK    $1: $2"
+            else
+              echo "::error::$1 is $2, expected ${expected}"
+              rc=1
+            fi
+          }
+          check arm-qemu-ctest           "${R_0}"
+          check arm-qemu-sve2            "${R_1}"
+          check arm-qemu-no-crypto-ext   "${R_2}"
+          check arm-qemu-ubsan           "${R_3}"
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::ARM QEMU Gate failed."
+            exit 1
+          fi
+          echo "ARM QEMU Gate passed."
+

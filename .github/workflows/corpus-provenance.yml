@@ -23,30 +23,50 @@ on:
     # 1st of each month, 06:00 UTC — upstream drift / silent-modification watch.
     - cron: '0 6 1 * *'
   pull_request:
-    paths:
-      - "wycheproof_vectors/**"
-      - "tools/refresh_wycheproof_corpus.py"
-      - "tests/kat/keyformats/**"
-      - "tools/build_keyformat_corpus.py"
-      # The gate this workflow runs over those corpora.  Listed for the same
-      # reason its two builders are.
-      - "tools/check_vector_provenance.py"
-      # The NIST/Ascon vector trees themselves: `vector-upstream` below now
-      # fetches their recorded upstreams, so a change to any of them must
-      # re-run that comparison rather than only the offline digest check.
-      - "tests/kat/**"
-      - ".github/workflows/corpus-provenance.yml"
-      # The no-op twin: it ignores its own file, so a change to it must run
-      # THIS workflow or the Corpus Provenance Gate context is reported by neither.
-      - ".github/workflows/corpus-provenance-skip.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Every pull request runs this workflow, and this job decides whether the
+  # change touches anything the jobs below verify.  It replaced a path-filtered
+  # workflow plus a no-op twin that reported the same context: the two were not
+  # exclusive (paths: fires when ANY changed file matches, paths-ignore: when ANY
+  # is not ignored), so a mixed pull request ran both and the twin's green
+  # arrived first.  tools/pr_touches_watched_paths.py has the full account.  A
+  # failed detection is a failure, never "not relevant".
+  changes:
+    name: Relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.match.outputs.relevant }}
+    steps:
+      - name: Checkout (the merge commit and its base parent)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Does this change touch a watched path?
+        id: match
+        env:
+          EVENT: ${{ github.event_name }}
+          WATCHED_PATHS: |
+            wycheproof_vectors/**
+            tools/refresh_wycheproof_corpus.py
+            tests/kat/keyformats/**
+            tools/build_keyformat_corpus.py
+            tools/check_vector_provenance.py
+            tests/kat/**
+            .github/workflows/corpus-provenance.yml
+            tools/pr_touches_watched_paths.py
+        run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
+
   provenance:
     name: Verify corpus against upstream
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -64,6 +84,8 @@ jobs:
 
   keyformat-provenance:
     name: Verify key-format corpus against its source documents
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -86,6 +108,8 @@ jobs:
 
   vector-provenance:
     name: Verify the published test vectors have not been rewritten
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -151,6 +175,8 @@ jobs:
 
   vector-upstream:
     name: Verify the NIST/Ascon vectors against what upstream published
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -180,10 +206,13 @@ jobs:
 
   corpus-provenance-gate:
     name: Corpus Provenance Gate
-    # if: always() so it resolves to a definitive red/green even when the worker
-    # job fails, instead of sitting "waiting for status".
+    # Reads every dependency by name.  On a pull request that touches none of
+    # the watched paths the lanes are skipped by their own condition and the
+    # gate passes; on every other run each lane must succeed.  `changes` must
+    # succeed either way: an undecided relevance is a failure.
     if: always()
     needs:
+      - changes
       - provenance
       - keyformat-provenance
       - vector-provenance
@@ -191,11 +220,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Fail unless provenance verified
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
+      - name: Fail unless every lane reached the state this change requires
+        env:
+          R_CHANGES: ${{ needs.changes.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          R_0: ${{ needs['provenance'].result }}
+          R_1: ${{ needs['keyformat-provenance'].result }}
+          R_2: ${{ needs['vector-provenance'].result }}
+          R_3: ${{ needs['vector-upstream'].result }}
         run: |
-          echo "::error::Corpus Provenance Gate failed — the vendored corpus did not verify against upstream."
-          echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
-          exit 1
-      - name: Provenance verified
-        run: echo "Corpus Provenance Gate passed — vendored corpus matches upstream."
+          set -euo pipefail
+          rc=0
+          if [ "${R_CHANGES}" != "success" ]; then
+            echo "::error::changes did not succeed (${R_CHANGES}): relevance is unknown."
+            exit 1
+          fi
+          if [ "${RELEVANT}" = "true" ]; then expected="success"; else expected="skipped"; fi
+          echo "relevant=${RELEVANT}: every lane must be ${expected}"
+          check() {
+            if [ "$2" = "${expected}" ]; then
+              echo "  OK    $1: $2"
+            else
+              echo "::error::$1 is $2, expected ${expected}"
+              rc=1
+            fi
+          }
+          check provenance               "${R_0}"
+          check keyformat-provenance     "${R_1}"
+          check vector-provenance        "${R_2}"
+          check vector-upstream          "${R_3}"
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::Corpus Provenance Gate failed."
+            exit 1
+          fi
+          echo "Corpus Provenance Gate passed."
+

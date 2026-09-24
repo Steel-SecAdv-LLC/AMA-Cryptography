@@ -47,7 +47,7 @@ from tools.check_gate_coverage import (
     MIN_WORKFLOWS,
     audit,
     check_parsed,
-    check_path_filtered_gates,
+    check_pr_relevance,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -430,7 +430,7 @@ def test_env_bound_dependency_never_read_in_run_is_reported() -> None:
 
 
 # --------------------------------------------------------------------------
-# Path-filtered workflows need a no-op twin, gate or no gate
+# Relevance is decided in-workflow; no pull_request trigger is path-filtered
 # --------------------------------------------------------------------------
 
 
@@ -438,131 +438,106 @@ def _parsed(**sources: str) -> dict[str, Any]:
     return {name: yaml.safe_load(textwrap.dedent(src)) for name, src in sources.items()}
 
 
-_GUARD = """
+_CHANGES = """
+      changes:
+        name: Relevant changes
+        runs-on: ubuntu-latest
+        outputs:
+          relevant: ${{ steps.match.outputs.relevant }}
+        steps:
+          - id: match
+            env:
+              WATCHED_PATHS: |
+                benchmarks/baseline.json
+                .github/workflows/baseline-guard.yml
+            run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
+"""
+
+_GUARD = (
+    """
     name: Baseline Change Guard
     on:
       pull_request:
-        paths: ['benchmarks/baseline.json', 'benchmarks/check_baseline_justification.py']
-    jobs:
+    jobs:"""
+    + _CHANGES
+    + """
       baseline-justification:
         name: Enforce baseline JSON justification
+        needs: [changes]
+        if: >-
+          always() && (needs.changes.result != 'success'
+          || needs.changes.outputs.relevant == 'true')
         runs-on: ubuntu-latest
     """
+)
 
 
-def test_a_single_job_path_filtered_guard_without_a_twin_is_reported() -> None:
-    """baseline-guard.yml and integrity-anchor-check.yml were in exactly this
-    state: one job, path-filtered, no twin, so their context could never be a
-    required status check and a red guard did not block a merge.  The rule
-    used to inspect gate workflows only, so it never saw them."""
-    failures = check_path_filtered_gates(_parsed(**{"baseline-guard.yml": _GUARD}))
-    assert len(failures) == 1
-    assert "baseline-guard.yml" in failures[0]
-    assert "baseline-justification" in failures[0]
-    assert "no-op twin" in failures[0]
+def test_the_guard_shape_the_tree_uses_satisfies_the_rule() -> None:
+    assert check_pr_relevance(_parsed(**{"baseline-guard.yml": _GUARD})) == []
 
 
-def test_a_twin_with_the_same_context_and_complementary_paths_satisfies_it() -> None:
-    twin = """
-        name: Baseline Change Guard
-        on:
-          pull_request:
-            paths-ignore: ['benchmarks/baseline.json', 'benchmarks/check_baseline_justification.py']
-        jobs:
-          baseline-justification:
-            name: Enforce baseline JSON justification
-            runs-on: ubuntu-latest
-        """
-    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
-    assert check_path_filtered_gates(parsed) == []
+@pytest.mark.parametrize("key", ["paths", "paths-ignore"])
+def test_a_path_filtered_pull_request_trigger_is_reported(key: str) -> None:
+    """Neither half of the twin pattern is acceptable any more: a filtered
+    workflow reports nothing on a non-matching PR, and its twin was not
+    exclusive with it."""
+    source = _GUARD.replace(
+        "      pull_request:\n", f"      pull_request:\n        {key}: ['x/**']\n"
+    )
+    failures = check_pr_relevance(_parsed(**{"baseline-guard.yml": source}))
+    assert any("is filtered by" in f and key in f for f in failures), failures
 
 
-def test_a_twin_reporting_a_different_context_is_reported() -> None:
-    twin = """
-        name: Baseline Change Guard
-        on:
-          pull_request:
-            paths-ignore: ['benchmarks/baseline.json', 'benchmarks/check_baseline_justification.py']
-        jobs:
-          baseline-justification:
-            name: Baseline guard (skipped)
-            runs-on: ubuntu-latest
-        """
-    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
-    failures = check_path_filtered_gates(parsed)
-    assert len(failures) == 1
-    assert "Enforce baseline JSON justification" in failures[0]
-    assert "DIFFERENT context" in failures[0]
+def test_a_job_that_ignores_the_decision_is_reported() -> None:
+    source = _GUARD.replace("        needs: [changes]\n", "")
+    failures = check_pr_relevance(_parsed(**{"baseline-guard.yml": source}))
+    assert any("does not depend on `changes`" in f for f in failures), failures
 
 
-def test_a_twin_that_ignores_fewer_paths_than_the_guard_watches_is_reported() -> None:
-    twin = """
-        name: Baseline Change Guard
-        on:
-          pull_request:
-            paths-ignore: ['benchmarks/baseline.json']
-        jobs:
-          baseline-justification:
-            name: Enforce baseline JSON justification
-            runs-on: ubuntu-latest
-        """
-    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
-    failures = check_path_filtered_gates(parsed)
-    assert len(failures) == 1
-    assert "check_baseline_justification.py" in failures[0]
+def test_a_guard_a_crashed_detector_would_skip_is_reported() -> None:
+    """A skipped job is a passing check, so `changes` failing must not skip it."""
+    source = _GUARD.replace(
+        "if: >-\n          always() && (needs.changes.result != 'success'\n"
+        "          || needs.changes.outputs.relevant == 'true')",
+        "if: needs.changes.outputs.relevant == 'true'",
+    )
+    assert source != _GUARD
+    failures = check_pr_relevance(_parsed(**{"baseline-guard.yml": source}))
+    assert any("a crashed detector" in f for f in failures), failures
 
 
-def test_a_twin_that_ignores_a_path_the_guard_does_not_watch_is_reported() -> None:
-    """The direction the docstring called the failure, and never computed.
-
-    A pull request touching only ``.github/workflows/baseline-guard.yml`` ran
-    neither workflow: the guard does not watch that path and the twin ignores
-    it, so the required context was never reported and the check passed."""
-    twin = """
-        name: Baseline Change Guard
-        on:
-          pull_request:
-            paths-ignore:
-              - 'benchmarks/baseline.json'
-              - 'benchmarks/check_baseline_justification.py'
-              - '.github/workflows/baseline-guard.yml'
-        jobs:
-          baseline-justification:
-            name: Enforce baseline JSON justification
-            runs-on: ubuntu-latest
-        """
-    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
-    failures = check_path_filtered_gates(parsed)
-    assert len(failures) == 1, failures
-    assert ".github/workflows/baseline-guard.yml" in failures[0]
-    assert "NEITHER" in failures[0]
+def test_watched_paths_must_include_the_workflow_itself() -> None:
+    source = _GUARD.replace("                .github/workflows/baseline-guard.yml\n", "")
+    failures = check_pr_relevance(_parsed(**{"baseline-guard.yml": source}))
+    assert any("omits the workflow's own file" in f for f in failures), failures
 
 
-def test_every_twin_in_the_repository_is_complementary_both_ways() -> None:
-    """Regression pin for the five live twins that ignored their own file (and,
-    for baseline-guard, the guard's own file) while the real workflow watched
-    neither.  The real workflows now watch their twin's file, so the pair is
-    one-or-the-other on every pull request."""
+def test_push_paths_must_equal_the_watched_paths() -> None:
+    source = _GUARD.replace(
+        "      pull_request:\n",
+        "      push:\n        paths: ['benchmarks/baseline.json']\n      pull_request:\n",
+    )
+    failures = check_pr_relevance(_parsed(**{"baseline-guard.yml": source}))
+    assert any("`push.paths` and WATCHED_PATHS differ" in f for f in failures), failures
+
+
+def test_the_repository_has_no_twins_and_decides_relevance_in_workflow() -> None:
+    """The five twins are gone, and each gate they twinned carries `changes`."""
     workflows = REPO_ROOT / ".github" / "workflows"
     parsed = {
         path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
         for path in sorted(workflows.glob("*.yml"))
     }
-    twins = [name for name in parsed if name.endswith("-skip.yml")]
-    assert len(twins) >= 5, twins  # non-vacuity: the twins this pins exist
-    assert check_path_filtered_gates(parsed) == []
-
-
-def test_the_two_guards_have_twins_in_the_repository() -> None:
-    """Regression pin for the two workflows the rule was widened for."""
-    workflows = REPO_ROOT / ".github" / "workflows"
-    for guard in ("baseline-guard", "integrity-anchor-check"):
-        real = yaml.safe_load((workflows / f"{guard}.yml").read_text(encoding="utf-8"))
-        twin = yaml.safe_load((workflows / f"{guard}-skip.yml").read_text(encoding="utf-8"))
-        assert real["name"] == twin["name"]
-        real_names = {job.get("name") for job in real["jobs"].values()}
-        twin_names = {job.get("name") for job in twin["jobs"].values()}
-        assert real_names <= twin_names, (guard, real_names, twin_names)
+    assert not [name for name in parsed if name.endswith("-skip.yml")]
+    for name in (
+        "baseline-guard.yml",
+        "integrity-anchor-check.yml",
+        "dudect.yml",
+        "arm-qemu.yml",
+        "corpus-provenance.yml",
+    ):
+        assert "changes" in parsed[name]["jobs"], name
+    assert check_pr_relevance(parsed) == []
 
 
 def test_the_non_vacuity_floors_equal_the_live_counts() -> None:
