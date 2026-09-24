@@ -2002,7 +2002,11 @@ must be **derivable from the library**, and a gate must derive it:
    manager and exported symbol matches what a user can reach.
 4. **Measurements.** Every published performance figure is re-derivable from a
    record that states the command, host, units, sampling and aggregation behind
-   it.
+   it. A benchmark acceptance threshold, and any overhead stated as a
+   percentage, is a measurement claim too: it is taken against a denominator
+   measured in the same run, never a constant, and it times the code the
+   library actually executes per operation. Exempting a claim from measurement
+   requires showing that the exempted code does not run on the measured path.
 
 Do **not** weaken the implementation to make a document true: where claim and
 code disagree, the code and the invariants are authoritative unless testing
@@ -2022,7 +2026,8 @@ a waiver that can be inferred arrives by accident.
   `equations.py`, `legacy_compat.py`, `src/c/ama_consttime.c` and
   `src/c/ama_lms.c`, scans source comments and docstrings as well as prose,
   fails closed (exit 2) on a partial derivation, and checks its name-exempted
-  gate files at startup.
+  gate files at startup. Its `RETIRED_CLAIMS` pin the retired 3R-overhead and
+  Cython speed-up wordings.
 - `tools/check_public_api_docs.py` — `security-checks`, `--require-library`:
   bare-import reachability in a fresh subprocess, signatures, return types,
   `__enter__` values, the version script against `nm --dynamic` in both

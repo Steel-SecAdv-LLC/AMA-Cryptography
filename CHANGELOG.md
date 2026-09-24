@@ -424,6 +424,26 @@ Documentation corrected against the code (INVARIANT-53):
   so BIP32 wallets do not derive these keys), and constant-time claims narrowed
   to what the ML-DSA and SLH-DSA rejection loops allow. (`078af92f`,
   `1f43143f`, `2739795f`)
+- **3R monitoring: the per-package pattern check was O(history) and its
+  overhead was measured on code that does not run.** `record_package_signing`
+  re-ran the full `analyze_patterns` on every monitored package (5.0–5.2 ms,
+  657–742% of a package, at a full 10,000-entry history), while
+  `benchmarks/validation_suite.py` exempted that row as "on-demand", timed one
+  timing call against a hard-coded 0.30 ms, and cited a `BENCHMARKS.md` that
+  does not exist. `RecursionPatternMonitor` keeps exact running sums and
+  `detect_anomalies()` is O(1): 13–17 µs (1.7–2.3%), anomaly results pinned
+  against the 5.0.0 analyzer. The suite replays the monitor calls of 64 real
+  packages and divides by the same run's package time; timing records measure
+  23–27%. Non-finite pattern metadata is refused at record time. The "<2%"
+  overhead, "disabled by default" and 10–100x Cython claims are corrected and
+  pinned in `RETIRED_CLAIMS` (Intel Xeon @ 2.80GHz, CPython 3.11.15, Release,
+  2026-09-24). (`044f5e7c`)
+- **Two stale acceptance rows in `validation_suite.py`**: `full_kms` claimed
+  0.45 ms, below the suite's own `dilithium_keygen` row that it contains; it
+  measures 1.18–1.29 ms since the INVARIANT-41 pairwise tests. `code_hash`
+  claimed 0.01 ms against a measured 0.0186–0.0214 ms, so its bound sat inside
+  the spread and the row failed intermittently. Both now state the
+  measurement; `--require-complete` passes on this host.
 
 ### Changed
 

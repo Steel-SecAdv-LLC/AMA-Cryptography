@@ -119,7 +119,15 @@ class BenchmarkValidator:
             "hkdf_derivation": (0.06, "ms", 100.0),  # ~0.06ms (native SHA3 HKDF)
             "ed25519_keygen": (0.13, "ms", 50.0),  # ~0.13ms (native C, no asm)
             "dilithium_keygen": (0.85, "ms", 100.0),  # ~0.85ms slow CI (canonical ~0.28ms)
-            "full_kms": (0.45, "ms", 100.0),  # ~0.45ms (all key types)
+            # full_kms: generate_key_management_system(), i.e. an Ed25519 and an
+            # ML-DSA-65 keypair, each with its INVARIANT-41 pairwise test, plus
+            # the HD master and HMAC key.  Measured 1.18-1.29 ms over four runs
+            # (Intel Xeon @ 2.80GHz, 4 vCPU container, CPython 3.11.15, Release
+            # build, 2026-09-24); the components were ed25519_keygen 0.089 ms
+            # and dilithium_keygen 0.984 ms in the same run.  The earlier
+            # 0.45 ms predates the pairwise tests and was below this table's
+            # own dilithium_keygen row, which full_kms contains.
+            "full_kms": (1.25, "ms", 100.0),
             # Section 1.2 - Cryptographic Operations (ms) - native C backend
             "sha3_256_hash": (0.002, "ms", 100.0),  # ~0.002ms
             "hmac_sha3_auth": (0.030, "ms", 100.0),  # ~0.03ms slow CI (canonical ~0.008ms)
@@ -129,7 +137,11 @@ class BenchmarkValidator:
             "dilithium_verify": (0.75, "ms", 100.0),  # ~0.75ms slow CI (canonical ~0.13ms)
             # Section 1.3 - Code Package Operations (ms)
             "canonical_encoding": (0.003, "ms", 100.0),  # ~0.003ms
-            "code_hash": (0.01, "ms", 100.0),  # ~0.01ms
+            # code_hash: measured 0.0186-0.0214 ms over seven runs, same host
+            # and build as full_kms above.  The earlier 0.01 ms put the bound
+            # (0.02 ms) inside the measured spread, so the row failed on some
+            # runs and passed on others with no code change.
+            "code_hash": (0.019, "ms", 100.0),
             "package_creation": (1.10, "ms", 100.0),  # ~1.10ms (with PQC)
             "package_verification": (0.56, "ms", 100.0),  # ~0.56ms
             # Section 2.1 - 3R Monitoring Overhead (% of package_creation
