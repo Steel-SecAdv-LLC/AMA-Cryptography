@@ -1861,28 +1861,60 @@ class TestThePeExportTableIsStatedNotInherited:
     What works is removing the attribute so the ``.def`` is the sole authority
     (``AMA_EXPORTS_FROM_DEF``), and generating that ``.def`` from the AMA_API
     declarations so it can never name a clone — nothing declares one.
+
+    The declarations alone are not enough, though: the headers declare every
+    entry point in every configuration, GNU ld refuses a ``.def`` entry nothing
+    defines, and with ``AMA_USE_NATIVE_PQC=OFF`` that was 92 names and no DLL.
+    So the list is also restricted to what the configuration's translation
+    units define (``AMA_DEF_SOURCES``). ``ci-build-test.yml`` links that
+    configuration's DLL with MinGW and reads its export table back.
     """
 
     GENERATOR = REPO_ROOT / "cmake" / "generate_pe_def.cmake"
 
-    def _generate(self, tmp_path: Path, repo: Path) -> list[str]:
+    @staticmethod
+    def _tree_sources(repo: Path) -> list[str]:
+        """Every translation unit under ``src/c`` -- a superset of any configuration."""
+        return sorted(p.relative_to(repo).as_posix() for p in (repo / "src" / "c").rglob("*.c"))
+
+    def _invoke(
+        self, tmp_path: Path, repo: Path, sources: Optional[Sequence[str]]
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
         output = tmp_path / "ama_cryptography.def"
-        completed = subprocess.run(
-            [
-                "cmake",
-                f"-DAMA_SOURCE_DIR={repo}",
-                f"-DAMA_DEF_OUTPUT={output}",
-                "-P",
-                str(self.GENERATOR),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
+        argv = ["cmake", f"-DAMA_SOURCE_DIR={repo}", f"-DAMA_DEF_OUTPUT={output}"]
+        if sources is not None:
+            # One argument, semicolons and all: `-P` reads it back as a list,
+            # exactly as CMakeLists.txt passes the target's SOURCES.
+            argv.append(f"-DAMA_DEF_SOURCES={';'.join(sources)}")
+        argv += ["-P", str(self.GENERATOR)]
+        completed = subprocess.run(argv, capture_output=True, text=True, check=False)
+        return completed, output
+
+    def _generate(
+        self, tmp_path: Path, repo: Path, sources: Optional[Sequence[str]] = None
+    ) -> list[str]:
+        completed, output = self._invoke(
+            tmp_path, repo, self._tree_sources(repo) if sources is None else sources
         )
         assert completed.returncode == 0, completed.stderr
         body = output.read_text(encoding="utf-8")
         assert "EXPORTS" in body
         return [line.strip() for line in body.splitlines() if line.startswith("    ama_")]
+
+    @staticmethod
+    def _synthetic_repo(tmp_path: Path, header: str, sources: dict[str, str], local: str) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "cmake").mkdir(parents=True)
+        (repo / "include").mkdir()
+        (repo / "src" / "c").mkdir(parents=True)
+        (repo / "include" / "x.h").write_text(header, encoding="utf-8")
+        for name, body in sources.items():
+            (repo / "src" / "c" / name).write_text(body, encoding="utf-8")
+        (repo / "cmake" / "ama_exports.map").write_text(
+            "{\n    global:\n        ama_*;\n    local:\n        " + local + ";\n};\n",
+            encoding="utf-8",
+        )
+        return repo
 
     @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
     def test_the_generated_list_is_the_declared_abi(self, tmp_path: Path) -> None:
@@ -1930,20 +1962,124 @@ class TestThePeExportTableIsStatedNotInherited:
         happens not to exercise. Built here on purpose: without the subtraction
         the internal name lands in EXPORTS and is published.
         """
-        repo = tmp_path / "repo"
-        (repo / "cmake").mkdir(parents=True)
-        (repo / "include").mkdir()
-        (repo / "include" / "x.h").write_text(
+        repo = self._synthetic_repo(
+            tmp_path,
             "AMA_API int ama_public_entry(void);\n"
             "AMA_API void ama_internal_kernel_avx2(void);\n",
-            encoding="utf-8",
-        )
-        (repo / "cmake" / "ama_exports.map").write_text(
-            "{\n    global:\n        ama_*;\n"
-            "    local:\n        ama_internal_kernel_avx2;\n};\n",
-            encoding="utf-8",
+            {
+                "x.c": "\nint ama_public_entry(void) { return 0; }\n"
+                "\nvoid ama_internal_kernel_avx2(void) {\n}\n"
+            },
+            local="ama_internal_kernel_avx2",
         )
         assert self._generate(tmp_path, repo) == ["ama_public_entry"]
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_a_configuration_exports_only_what_it_compiles(self, tmp_path: Path) -> None:
+        """The PIN on the configuration dependence.
+
+        The headers declare every entry point unconditionally, and GNU ld stops
+        on a .def entry nothing defines ("cannot export ama_argon2id: symbol not
+        defined"). With the list derived from the headers alone, the MinGW DLL
+        with AMA_USE_NATIVE_PQC=OFF named 92 functions it does not compile and
+        did not link. Here a header declares two entry points in two files and
+        the configuration compiles one of them.
+        """
+        repo = self._synthetic_repo(
+            tmp_path,
+            "AMA_API int ama_always(void);\nAMA_API int ama_optional(const unsigned char *k);\n",
+            {
+                "always.c": "/* built everywhere */\nint ama_always(void)\n{\n    return 0;\n}\n",
+                "optional.c": "\nAMA_API int ama_optional(\n    const unsigned char *k) {\n"
+                "    return k[0];\n}\n",
+            },
+            local="ama_never_declared",
+        )
+        assert self._generate(tmp_path, repo, ["src/c/always.c"]) == ["ama_always"]
+        assert self._generate(tmp_path, repo, ["src/c/always.c", "src/c/optional.c"]) == [
+            "ama_always",
+            "ama_optional",
+        ]
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_a_call_or_a_prototype_is_not_a_definition(self, tmp_path: Path) -> None:
+        """What would put an undefined name back in the list.
+
+        The compiled file mentions ``ama_optional`` three ways -- a prototype, a
+        call in a condition, a call statement -- and defines it in none of them.
+        """
+        repo = self._synthetic_repo(
+            tmp_path,
+            "AMA_API int ama_always(void);\nAMA_API int ama_optional(void);\n",
+            {
+                "always.c": "\nextern int ama_optional(void);\n"
+                "int ama_optional(void);\n"
+                "int ama_always(void) {\n"
+                "    if (ama_optional() != 0) {\n        return 1;\n    }\n"
+                "    ama_optional();\n    return 0;\n}\n",
+                "optional.c": "\nint ama_optional(void) { return 0; }\n",
+            },
+            local="ama_never_declared",
+        )
+        assert self._generate(tmp_path, repo, ["src/c/always.c"]) == ["ama_always"]
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_leaving_out_a_translation_unit_drops_exactly_its_definitions(
+        self, tmp_path: Path
+    ) -> None:
+        """The real tree, with one of the AMA_USE_NATIVE_PQC=OFF sources left out.
+
+        Independent of the generator's CMake regex: the dropped set is computed
+        here with a Python regex over the file that is left out. The three
+        Argon2id entry points are among the 92 names that stopped the MinGW
+        link with native PQC off.
+        """
+        left_out = REPO_ROOT / "src" / "c" / "ama_argon2.c"
+        text = left_out.read_text(encoding="utf-8")
+        defined_there = set(
+            re.findall(r"(?m)^(?:[A-Za-z_][\w \t*]*[ \t*])?(ama_\w+)[ \t]*\([^;{}]*\)\s*\{", text)
+        )
+        full = self._generate(tmp_path, REPO_ROOT)
+        dropped = set(full) & defined_there
+        assert {"ama_argon2id", "ama_argon2id_legacy", "ama_argon2id_legacy_verify"} <= dropped
+        sources = [s for s in self._tree_sources(REPO_ROOT) if s != "src/c/ama_argon2.c"]
+        assert sorted(self._generate(tmp_path, REPO_ROOT, sources)) == sorted(set(full) - dropped)
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_a_declaration_defined_nowhere_fails_the_configure(self, tmp_path: Path) -> None:
+        """Fail-closed where dropping a name would be silent.
+
+        A declared name whose definition the scan cannot find anywhere in the
+        tree -- a header lie, or a definition written in a form the scan does
+        not read -- must stop the configure, not quietly leave the DLL without
+        an entry point its header promises.
+        """
+        repo = self._synthetic_repo(
+            tmp_path,
+            "AMA_API int ama_always(void);\nAMA_API int ama_phantom(void);\n",
+            {"always.c": "\nint ama_always(void) { return 0; }\n"},
+            local="ama_never_declared",
+        )
+        completed, output = self._invoke(tmp_path, repo, ["src/c/always.c"])
+        assert completed.returncode != 0
+        assert "ama_phantom" in completed.stderr
+        assert not output.exists()
+
+    @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+    def test_no_source_list_fails_the_configure(self, tmp_path: Path) -> None:
+        """Without the configuration's sources the list cannot be right; say so."""
+        completed, output = self._invoke(tmp_path, REPO_ROOT, None)
+        assert completed.returncode != 0
+        assert "AMA_DEF_SOURCES" in completed.stderr
+        assert not output.exists()
+
+    def test_cmake_passes_the_shared_targets_own_sources(self) -> None:
+        """The list the generator reads is the DLL's, not a restatement of it."""
+        cmakelists = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        assert "get_target_property(_ama_def_sources ama_cryptography_shared SOURCES)" in (
+            cmakelists
+        )
+        assert '"-DAMA_DEF_SOURCES=${_ama_def_sources}"' in cmakelists
 
     @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
     def test_a_clone_cannot_appear_in_the_generated_list(self, tmp_path: Path) -> None:
@@ -1959,51 +2095,31 @@ class TestThePeExportTableIsStatedNotInherited:
         This is the failure the macOS list had — an export control that silently
         covers nothing reads exactly like one that works.
         """
-        repo = tmp_path / "repo"
-        (repo / "cmake").mkdir(parents=True)
-        (repo / "include").mkdir()
-        (repo / "include" / "x.h").write_text("AMA_API int ama_thing(void);\n", encoding="utf-8")
-        (repo / "cmake" / "ama_exports.map").write_text("{ global: ama_*; };\n", encoding="utf-8")
-        completed = subprocess.run(
-            [
-                "cmake",
-                f"-DAMA_SOURCE_DIR={repo}",
-                f"-DAMA_DEF_OUTPUT={tmp_path / 'out.def'}",
-                "-P",
-                str(self.GENERATOR),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
+        repo = self._synthetic_repo(
+            tmp_path,
+            "AMA_API int ama_thing(void);\n",
+            {"x.c": "\nint ama_thing(void) { return 0; }\n"},
+            local="ama_placeholder",
         )
+        (repo / "cmake" / "ama_exports.map").write_text("{ global: ama_*; };\n", encoding="utf-8")
+        completed, output = self._invoke(tmp_path, repo, ["src/c/x.c"])
         assert completed.returncode != 0
         assert "local:" in completed.stderr
-        assert not (tmp_path / "out.def").exists()
+        assert not output.exists()
 
     @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
     def test_no_declarations_fails_the_configure(self, tmp_path: Path) -> None:
         """An empty EXPORTS section links a DLL that exports nothing."""
-        repo = tmp_path / "repo"
-        (repo / "cmake").mkdir(parents=True)
-        (repo / "include").mkdir()
-        (repo / "include" / "x.h").write_text("int plain_function(void);\n", encoding="utf-8")
-        (repo / "cmake" / "ama_exports.map").write_text(
-            "{ global: ama_*; local: ama_secret; };\n", encoding="utf-8"
+        repo = self._synthetic_repo(
+            tmp_path,
+            "int plain_function(void);\n",
+            {"x.c": "\nint plain_function(void) { return 0; }\n"},
+            local="ama_secret",
         )
-        completed = subprocess.run(
-            [
-                "cmake",
-                f"-DAMA_SOURCE_DIR={repo}",
-                f"-DAMA_DEF_OUTPUT={tmp_path / 'out.def'}",
-                "-P",
-                str(self.GENERATOR),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        completed, output = self._invoke(tmp_path, repo, ["src/c/x.c"])
         assert completed.returncode != 0
         assert "AMA_API" in completed.stderr
+        assert not output.exists()
 
     def test_the_def_is_the_sole_authority_on_mingw(self) -> None:
         """A .def beside dllexport would be decoration.

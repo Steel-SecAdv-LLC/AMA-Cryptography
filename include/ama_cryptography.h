@@ -287,6 +287,11 @@ AMA_API ama_error_t ama_keypair_generate(
  * Signs a message using the algorithm specified in the context.
  * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
  *
+ * ML-DSA-65 and SPHINCS+-256f sign under the EMPTY FIPS 204 / FIPS 205
+ * context: the signature is the one ama_dilithium_sign() / ama_sphincs_sign()
+ * produce. Before 5.0.0 both signed the raw message (INVARIANT-50), so a 4.x
+ * signature from this function does not verify with 5.x ama_verify().
+ *
  * @param ctx Initialized context
  * @param message Message to sign
  * @param message_len Length of message
@@ -311,6 +316,11 @@ AMA_API ama_error_t ama_sign(
  *
  * Verifies a signature using the algorithm specified in the context.
  * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
+ *
+ * ML-DSA-65 and SPHINCS+-256f verify under the EMPTY FIPS 204 / FIPS 205
+ * context, as ama_dilithium_verify() / ama_sphincs_verify() do; a signature
+ * made by a 4.x ama_sign() is rejected with AMA_ERROR_VERIFY_FAILED
+ * (INVARIANT-50).
  *
  * @param ctx Initialized context
  * @param message Message to verify
@@ -3047,7 +3057,8 @@ AMA_API int ama_x25519_get_mulx_override(void);
  * `bench_dilithium_sign()` measures end-to-end.
  *
  * Not part of the production ML-DSA API; production callers go through
- * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2).
+ * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §5.2 / §5.3,
+ * ML-DSA.Sign / ML-DSA.Verify with the empty context).
  */
 AMA_API void ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch);
 
@@ -3517,7 +3528,23 @@ AMA_API ama_error_t ama_dilithium_keypair(
 );
 
 /**
- * @brief Sign message with ML-DSA-65 (Dilithium)
+ * @brief Sign message with ML-DSA-65 (Dilithium, FIPS 204, empty context)
+ *
+ * FIPS 204 §5.2 ML-DSA.Sign (Algorithm 2) with `ctx = ""`: the bytes signed
+ * are M' = 0x00 || 0x00 || M, identical to
+ * ama_ml_dsa_sign_ctx(AMA_ML_DSA_65, ..., ctx = NULL, ctx_len = 0), which is
+ * what this entry point calls. ama_dilithium_sign_ctx() is the same function
+ * with a caller-supplied context.
+ *
+ * **Wire-format break (5.0.0).** Through 4.x this entry point was FIPS 204
+ * Algorithm 7, ML-DSA.Sign_internal over the RAW message, with no domain
+ * separator: an interface FIPS 204 restricts to testing and to protocols that
+ * do their own domain separation, whose signatures a conforming ML-DSA.Verify
+ * rejects, and which under one key was a signing oracle for context
+ * signatures on attacker-chosen (ctx, M) pairs. See INVARIANT-50.
+ * A signature made by the previous behaviour -- here, or through ama_sign()
+ * with AMA_ALG_ML_DSA_65 -- does not verify with ama_dilithium_verify(), and
+ * it returns AMA_ERROR_VERIFY_FAILED.
  *
  * @param signature     Output: signature buffer
  * @param signature_len Output: actual signature length
@@ -3535,10 +3562,14 @@ AMA_API ama_error_t ama_dilithium_sign(
 /**
  * @brief Sign message with ML-DSA-65 (Dilithium) using FIPS 204 §5.2 binding context
  *
- * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
- * before delegating to ama_dilithium_sign(). This is the symmetric
- * counterpart of ama_dilithium_verify_ctx() — identical wrapper, so
- * sign/verify round-trip with the same ctx always succeeds.
+ * FIPS 204 §5.2 ML-DSA.Sign over M' = 0x00 || len(ctx) || ctx || M: this
+ * delegates to ama_ml_dsa_sign_ctx() with AMA_ML_DSA_65, which applies the
+ * wrapper exactly once. ama_dilithium_sign() is the `ctx = ""` case of this
+ * function, not a step inside it -- routing through it would sign
+ * 0x00 || 0x00 || (0x00 || len(ctx) || ctx || M), which no FIPS 204
+ * verifier accepts. This is the symmetric counterpart of
+ * ama_dilithium_verify_ctx() — identical wrapper, so sign/verify round-trip
+ * with the same ctx always succeeds.
  *
  * Per FIPS 204 §5.2 line 4, ctx_len > 255 is rejected with a non-zero error.
  *
@@ -3559,7 +3590,18 @@ AMA_API ama_error_t ama_dilithium_sign_ctx(
 );
 
 /**
- * @brief Verify ML-DSA-65 (Dilithium) signature
+ * @brief Verify ML-DSA-65 (Dilithium) signature (FIPS 204, empty context)
+ *
+ * FIPS 204 §5.3 ML-DSA.Verify (Algorithm 3) with `ctx = ""` -- the exact
+ * counterpart of ama_dilithium_sign(), and identical to
+ * ama_ml_dsa_verify_ctx(AMA_ML_DSA_65, ..., ctx = NULL, ctx_len = 0).
+ *
+ * **Wire-format break (5.0.0).** Through 4.x this verified with FIPS 204
+ * Algorithm 8, ML-DSA.Verify_internal over the RAW message (INVARIANT-50).
+ * A signature made by the previous ama_dilithium_sign(), or by ama_sign()
+ * with AMA_ALG_ML_DSA_65 before 5.0.0, is rejected here with
+ * AMA_ERROR_VERIFY_FAILED; such signatures have to be re-issued, not
+ * re-verified.
  *
  * @param message       Message to verify
  * @param message_len   Length of message
@@ -3577,8 +3619,10 @@ AMA_API ama_error_t ama_dilithium_verify(
 /**
  * @brief Verify ML-DSA-65 signature with context (FIPS 204 external/pure)
  *
- * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
- * before delegating to ama_dilithium_verify().
+ * FIPS 204 §5.3 ML-DSA.Verify over M' = 0x00 || len(ctx) || ctx || M: this
+ * delegates to ama_ml_dsa_verify_ctx() with AMA_ML_DSA_65, which applies the
+ * wrapper exactly once. ama_dilithium_verify() is the `ctx = ""` case of this
+ * function, not a step inside it.
  *
  * @param message       Message to verify
  * @param message_len   Length of message
@@ -3979,7 +4023,7 @@ AMA_API ama_error_t ama_sphincs_sign(
 /**
  * @brief Verify SPHINCS+-256f signature (SLH-DSA-SHA2-256f, empty context)
  *
- * FIPS 205 §10.2 `slh_verify` with `ctx = ""` — the exact counterpart of
+ * FIPS 205 §10.3 `slh_verify` with `ctx = ""` — the exact counterpart of
  * ama_sphincs_sign(). Equivalent to ama_sphincs_verify_ctx() with a
  * zero-length context. Like ama_sphincs_sign() this verified the RAW message
  * before the context-separation fix (INVARIANT-50).
@@ -4000,8 +4044,10 @@ AMA_API ama_error_t ama_sphincs_verify(
 /**
  * @brief Verify SPHINCS+-256f signature with context (FIPS 205 external/pure)
  *
- * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
- * before delegating to ama_sphincs_verify().
+ * FIPS 205 §10.3 slh_verify over M' = 0x00 || len(ctx) || ctx || M: this
+ * delegates to ama_slhdsa_verify() with AMA_SLHDSA_SHA2_256F, which applies
+ * the wrapper exactly once. ama_sphincs_verify() is the `ctx = ""` case of
+ * this function, not a step inside it.
  *
  * @param message       Message to verify
  * @param message_len   Length of message

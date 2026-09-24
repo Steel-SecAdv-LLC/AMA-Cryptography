@@ -205,6 +205,55 @@ jobs:
       - name: Test
         run: cd build-nopqc && ctest --output-on-failure
 
+      - name: Cross-link the MinGW DLL (native PQC disabled)
+        # The PE export table is a generated .def (cmake/generate_pe_def.cmake),
+        # and GNU ld refuses a .def entry that nothing defines: "cannot export
+        # ama_argon2id: symbol not defined".  The headers declare every entry
+        # point whatever the configuration, so while the list was derived from
+        # them alone it named 92 functions this configuration does not compile
+        # and the DLL did not link -- measured with this exact configure on
+        # 2026-09-24.  The Linux build above cannot see that: ELF has no .def,
+        # and no other lane links a MinGW DLL with native PQC off.  This is a
+        # compile-and-link check; the PE32+ image does not run on this host.
+        # The export directory is then read back and must be exactly the .def,
+        # which is the property AMA_EXPORTS_FROM_DEF exists to give.
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/apt-install.sh gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          cmake -S . -B build-mingw-nopqc \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-w64-mingw32.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=OFF \
+            -DAMA_BUILD_SHARED=ON \
+            -DAMA_BUILD_STATIC=OFF \
+            -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-mingw-nopqc --target ama_cryptography_shared -j4
+          python3 - <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location("gate", "tools/check_public_api_docs.py")
+          gate = importlib.util.module_from_spec(spec)
+          sys.modules["gate"] = gate
+          spec.loader.exec_module(gate)
+          dll = Path("build-mingw-nopqc/bin/libama_cryptography.dll")
+          listed = {
+              line.strip()
+              for line in Path("build-mingw-nopqc/ama_cryptography.def").read_text().splitlines()
+              if line.startswith("    ama_")
+          }
+          exported = set(gate.pe_export_names(dll))
+          print(f"{dll}: {len(exported)} exports, .def lists {len(listed)}")
+          if not listed or exported != listed:
+              print("::error::the DLL export table is not the generated .def")
+              print("  exported, not listed:", sorted(exported - listed))
+              print("  listed, not exported:", sorted(listed - exported))
+              sys.exit(1)
+          PY
+
       - name: Assert the default is still ON
         # A regression that flipped the default would make the job above green
         # for the wrong reason (it would test the default path twice).  Assert

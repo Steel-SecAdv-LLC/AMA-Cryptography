@@ -1078,10 +1078,19 @@ if(AMA_BUILD_SHARED)
         # attribute left on, the .def cannot remove the clone that inherits it.
         target_compile_definitions(ama_cryptography_shared PRIVATE AMA_EXPORTS_FROM_DEF)
         set(_ama_def_file "${CMAKE_CURRENT_BINARY_DIR}/ama_cryptography.def")
+        # The list is restricted to the entry points THIS configuration
+        # defines.  The headers declare every one unconditionally, and a .def
+        # naming a function nothing compiles is a hard GNU ld error ("cannot
+        # export ama_argon2id: symbol not defined"): with AMA_USE_NATIVE_PQC=OFF
+        # that was 92 names and no DLL.  The target's own SOURCES are passed
+        # rather than a restatement of which files the PQC block adds, so the
+        # two cannot drift.
+        get_target_property(_ama_def_sources ama_cryptography_shared SOURCES)
         execute_process(
             COMMAND "${CMAKE_COMMAND}"
                     "-DAMA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                     "-DAMA_DEF_OUTPUT=${_ama_def_file}"
+                    "-DAMA_DEF_SOURCES=${_ama_def_sources}"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_pe_def.cmake"
             RESULT_VARIABLE _ama_def_result
             OUTPUT_VARIABLE _ama_def_output
@@ -1096,11 +1105,14 @@ if(AMA_BUILD_SHARED)
             LINK_DEPENDS "${_ama_def_file}")
         # Re-run the configure when anything the list is derived from changes,
         # so adding an AMA_API entry point cannot silently leave it unexported.
+        # The .c files are inputs too: the list keeps a declared name only
+        # where a compiled source defines it.
         # tools/check_public_api_docs.py is the backstop: it fails when a
         # declared entry point is neither exported nor deliberately localised.
         file(GLOB_RECURSE _ama_def_inputs
             "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/c/*.h")
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/c/*.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/c/*.c")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             ${_ama_def_inputs}
             "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"

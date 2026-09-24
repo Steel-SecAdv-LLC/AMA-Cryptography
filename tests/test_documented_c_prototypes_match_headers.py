@@ -46,6 +46,11 @@ A declaration whose header is not under ``include/`` must be listed in
 :data:`INTERNAL_HEADER_DOCUMENTED`, whose value names the header it comes from.
 There is exactly one, and the page says out loud that the public header does not
 declare it.
+
+The header's own doc comments are held to the C bodies they describe as well
+(the section at the end of this file): a "delegates to X()" claim must name a
+function the body calls, and an entry point whose body signs or verifies under
+the empty FIPS 204/205 context must say so and cite INVARIANT-50.
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -351,3 +357,115 @@ def test_the_internal_allowlist_is_spelled_with_forward_slashes() -> None:
             f"slashes, which is what Path.as_posix() produces on every platform"
         )
         assert not header.startswith("/"), f"{header!r} must be repo-relative"
+
+
+# ---------------------------------------------------------------------------
+# The header's own prose must describe the body it documents.
+#
+# include/ama_cryptography.h is the page a C consumer reads most, and its doc
+# comments make claims about the code the prototypes above cannot see.  Two of
+# them outlived the 5.0.0 context-separation change (INVARIANT-50):
+#
+# * ama_dilithium_sign_ctx / ama_dilithium_verify_ctx / ama_sphincs_verify_ctx
+#   were documented as applying 0x00 || len(ctx) || ctx || M "before
+#   delegating to" ama_dilithium_sign() / _verify() / ama_sphincs_verify().
+#   Those functions now apply the empty-context wrapper themselves, so the
+#   sentence describes a double wrapper no FIPS 204/205 verifier accepts; the
+#   bodies call ama_ml_dsa_sign_ctx / ama_ml_dsa_verify_ctx / ama_slhdsa_verify
+#   directly and wrap once.
+# * ama_dilithium_sign / ama_dilithium_verify changed wire format -- raw-M
+#   Algorithm 7/8 to empty-context Algorithm 2/3 -- and their header entries
+#   still said only "Sign message with ML-DSA-65", so a consumer whose 4.x
+#   signatures stopped verifying had nothing to read.  ama_sphincs_sign, the
+#   same change on the SLH-DSA side, did carry the note.
+#
+# Both checks take their expectation from the C body, not from a list here.
+# ---------------------------------------------------------------------------
+
+_DOC_THEN_DECL = re.compile(
+    r"/\*\*((?:(?!\*/).)*)\*/\s*AMA_API\s+[A-Za-z_][\w \*]*?\b(ama_[A-Za-z0-9_]+)\s*\(",
+    re.S,
+)
+_DELEGATION = re.compile(r"\bdelegat\w*\s+to\s+`?(ama_[A-Za-z0-9_]+)\(\)")
+#: A body that signs or verifies under the EMPTY FIPS 204 / 205 context: the
+#: external wrapper called with `NULL, 0` for (ctx, ctx_len), or the two-byte
+#: 0x00 || 0x00 prefix the SLH-DSA legacy entry points pass to the internal core.
+_EMPTY_CONTEXT = re.compile(
+    r"\b(?:ama_ml_dsa_(?:sign|verify)_ctx|ama_slhdsa_(?:sign|verify))\s*\([^;]*?"
+    r"\bNULL\s*,\s*0\s*,"
+    r"|\bempty_ctx_prefix\b"
+)
+
+
+def _header_docs() -> dict[str, str]:
+    """Each AMA_API function in the public header -> its doc comment, one line."""
+    text = (PUBLIC_INCLUDE / "ama_cryptography.h").read_text(encoding="utf-8")
+    return {
+        m.group(2): " ".join(re.sub(r"(?m)^\s*\*", " ", m.group(1)).split())
+        for m in _DOC_THEN_DECL.finditer(text)
+    }
+
+
+def _definition_body(name: str) -> Optional[tuple[Path, str]]:
+    """The body of ``name``'s definition under ``src/c``, comments removed."""
+    head = re.compile(
+        r"(?m)^(?:[A-Za-z_][\w \t\*]*[ \t\*])?" + re.escape(name) + r"[ \t]*\([^;{}]*\)\s*\{"
+    )
+    for source in sorted((REPO_ROOT / "src" / "c").rglob("*.c")):
+        text = _strip_comments(source.read_text(encoding="utf-8", errors="replace"))
+        m = head.search(text)
+        if m is None:
+            continue
+        depth, i = 1, m.end()
+        while depth and i < len(text):
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            i += 1
+        assert depth == 0, f"unbalanced braces after {name} in {source}"
+        return source, text[m.end() : i - 1]
+    return None
+
+
+HEADER_DOCS = _header_docs()
+DELEGATION_CLAIMS = sorted(
+    (name, callee) for name, doc in HEADER_DOCS.items() for callee in _DELEGATION.findall(doc)
+)
+EMPTY_CONTEXT_ENTRY_POINTS = sorted(
+    name
+    for name in HEADER_DOCS
+    if (found := _definition_body(name)) is not None and _EMPTY_CONTEXT.search(found[1])
+)
+
+
+def test_the_header_claims_are_actually_being_read() -> None:
+    """Non-vacuity for the two checks below, on both signature families."""
+    assert len(HEADER_DOCS) > 120, f"only {len(HEADER_DOCS)} documented AMA_API functions parsed"
+    assert DELEGATION_CLAIMS, "no 'delegates to X()' claim parsed from the header"
+    families = {name.split("_")[1] for name in EMPTY_CONTEXT_ENTRY_POINTS}
+    assert {"dilithium", "sphincs"} <= families, EMPTY_CONTEXT_ENTRY_POINTS
+
+
+@pytest.mark.parametrize("claim", DELEGATION_CLAIMS, ids=lambda c: f"{c[0]}->{c[1]}")
+def test_a_delegation_claim_names_the_function_the_body_calls(claim: tuple[str, str]) -> None:
+    name, callee = claim
+    found = _definition_body(name)
+    assert found is not None, f"{name} is documented but no definition was found under src/c"
+    source, body = found
+    assert re.search(r"\b" + re.escape(callee) + r"\s*\(", body), (
+        f"include/ama_cryptography.h says {name}() delegates to {callee}(), but its "
+        f"body in {source.relative_to(REPO_ROOT).as_posix()} never calls it. A reader "
+        f"who re-implements the documented composition gets a different construction."
+    )
+
+
+@pytest.mark.parametrize("name", EMPTY_CONTEXT_ENTRY_POINTS)
+def test_an_empty_context_entry_point_says_so_in_the_header(name: str) -> None:
+    doc = HEADER_DOCS[name]
+    assert "empty context" in doc, (
+        f"{name}() signs or verifies under the empty FIPS 204/205 context, and its "
+        f"header entry does not say so."
+    )
+    assert "INVARIANT-50" in doc, (
+        f"{name}() changed wire format in 5.0.0 (raw message -> empty context); its "
+        f"header entry must say so and cite INVARIANT-50, or a consumer whose 4.x "
+        f"signatures stop verifying has nothing to read."
+    )

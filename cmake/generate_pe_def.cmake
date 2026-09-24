@@ -50,13 +50,82 @@
 # pins it on a tree built to.)  The clone is excluded by construction: a
 # compiler never declares one in a header.
 #
+# Why the list also depends on the configuration
+# ----------------------------------------------
+# The headers declare every entry point unconditionally, but the build does not
+# compile every definition: with -DAMA_USE_NATIVE_PQC=OFF, CMakeLists.txt leaves
+# out ama_kyber.c, ama_dilithium.c, ama_slhdsa.c, ama_x25519.c, ama_argon2.c,
+# ama_chacha20poly1305.c, ama_secp256k1.c, ama_nistp.c and ama_frost.c.  A .def
+# that names a function nothing defines is a hard link error for GNU ld ("cannot
+# export ama_argon2id: symbol not defined") -- measured 2026-09-24 on the MinGW
+# cross-build with native PQC off: 92 such names, so the DLL did not link at all
+# in a configuration ci-build-test.yml calls supported.
+#
+# So the exported set is: the AMA_API declarations, minus the localised names,
+# restricted to the names DEFINED in the translation units this configuration
+# compiles into the DLL (AMA_DEF_SOURCES, which CMakeLists.txt reads from the
+# target's own SOURCES property rather than restating).  A definition is found
+# lexically: at the start of a line, an optional return type, the name, a
+# parameter list, then the opening brace -- the form every AMA_API definition
+# in src/c is written in.  A declaration (`...);`) and a call (indented, inside
+# a body) do not match.
+#
+# The scan is fail-closed in the direction that would otherwise be silent.  A
+# declared name the scan cannot find defined ANYWHERE under src/c stops the
+# configure: either the header declares something that does not exist, or the
+# definition is written in a form the scan does not recognise, and dropping it
+# quietly would publish a DLL without an entry point its header promises.  A
+# name defined only in a source this configuration does not compile is left
+# out, which is the point.  What the scan cannot see is the preprocessor: a
+# definition inside an `#if` that is false for this target still counts as
+# defined, and the link then fails loudly exactly as it did before -- the
+# failure mode is unchanged, never inverted into a silent omission.
+#
+# Measured on the x86-64 MinGW cross-build after this change (2026-09-24, gcc
+# 13.2 / binutils 2.41.90): with native PQC on, the .def is the same 190 names
+# as before and the DLL exports exactly those; with it off, the .def names 98
+# and the DLL links and exports exactly those 98.
+#
 # Usage:
-#   cmake -DAMA_SOURCE_DIR=<repo> -DAMA_DEF_OUTPUT=<path> -P generate_pe_def.cmake
+#   cmake -DAMA_SOURCE_DIR=<repo> -DAMA_DEF_OUTPUT=<path> \
+#         "-DAMA_DEF_SOURCES=<source>;<source>;..." -P generate_pe_def.cmake
+#
+# AMA_DEF_SOURCES entries are absolute or relative to AMA_SOURCE_DIR.
 
 if(NOT DEFINED AMA_SOURCE_DIR OR NOT DEFINED AMA_DEF_OUTPUT)
     message(FATAL_ERROR
         "generate_pe_def.cmake needs -DAMA_SOURCE_DIR=<repo> and -DAMA_DEF_OUTPUT=<path>")
 endif()
+if(NOT DEFINED AMA_DEF_SOURCES OR "${AMA_DEF_SOURCES}" STREQUAL "")
+    message(FATAL_ERROR
+        "generate_pe_def.cmake needs -DAMA_DEF_SOURCES=<the DLL's source list>. "
+        "Without it the export list cannot know which declared entry points this "
+        "configuration defines, and a .def naming an undefined symbol does not "
+        "link.")
+endif()
+
+# The names a C source file defines at file scope, by the lexical rule above.
+# Square brackets are blanked first: CMake treats an unbalanced `[` in a list
+# element as opening a bracket that swallows the following separators, and a
+# parameter list is free to contain one.
+function(_ama_defined_names _source _out)
+    file(READ "${_source}" _text)
+    string(REPLACE "[" " " _text "${_text}")
+    string(REPLACE "]" " " _text "${_text}")
+    string(REGEX MATCHALL
+        "\n([A-Za-z_][A-Za-z0-9_ \t*]*[ \t*])?ama_[A-Za-z0-9_]+[ \t]*\\([^;{}]*\\)[ \t\r\n]*{"
+        _definitions "${_text}")
+    set(_names "")
+    foreach(_definition IN LISTS _definitions)
+        # The first `ama_...(` is the function: the return type before it has
+        # no parenthesis, and an ama_-prefixed return type is followed by a
+        # space or `*`, not by `(`.
+        string(REGEX MATCH "ama_[A-Za-z0-9_]+[ \t]*\\(" _hit "${_definition}")
+        string(REGEX REPLACE "[ \t]*\\($" "" _name "${_hit}")
+        list(APPEND _names "${_name}")
+    endforeach()
+    set(${_out} "${_names}" PARENT_SCOPE)
+endfunction()
 
 # Every header that can declare an entry point: the public ABI in include/ and
 # the internal headers, because AMA_API is what decides export, not location --
@@ -129,12 +198,76 @@ if(_ama_count EQUAL 0)
         "the resulting DLL would export nothing")
 endif()
 
+# What this configuration defines: the DLL's own translation units.
+set(_ama_defined_here "")
+foreach(_source IN LISTS AMA_DEF_SOURCES)
+    if(NOT _source MATCHES "\\.c$")
+        continue()
+    endif()
+    if(NOT IS_ABSOLUTE "${_source}")
+        set(_source "${AMA_SOURCE_DIR}/${_source}")
+    endif()
+    if(NOT EXISTS "${_source}")
+        message(FATAL_ERROR
+            "generate_pe_def.cmake: AMA_DEF_SOURCES names ${_source}, which does "
+            "not exist. The export list is derived from these files; a missing "
+            "one would silently drop every entry point it defines.")
+    endif()
+    _ama_defined_names("${_source}" _names)
+    list(APPEND _ama_defined_here ${_names})
+endforeach()
+
+# What the tree defines at all, so a scan miss fails instead of dropping an
+# entry point.  Only the declared names this configuration does not define need
+# a second look, and the ON configuration has none.
+set(_ama_not_here ${_ama_declared})
+if(_ama_defined_here)
+    list(REMOVE_ITEM _ama_not_here ${_ama_defined_here})
+endif()
+if(_ama_not_here)
+    file(GLOB_RECURSE _ama_tree_sources "${AMA_SOURCE_DIR}/src/c/*.c")
+    list(SORT _ama_tree_sources)
+    set(_ama_defined_anywhere "")
+    foreach(_source IN LISTS _ama_tree_sources)
+        _ama_defined_names("${_source}" _names)
+        list(APPEND _ama_defined_anywhere ${_names})
+    endforeach()
+    set(_ama_undefined ${_ama_not_here})
+    if(_ama_defined_anywhere)
+        list(REMOVE_ITEM _ama_undefined ${_ama_defined_anywhere})
+    endif()
+    if(_ama_undefined)
+        list(JOIN _ama_undefined ", " _ama_undefined_text)
+        message(FATAL_ERROR
+            "generate_pe_def.cmake: declared AMA_API but defined nowhere under "
+            "src/c that this scan can see: ${_ama_undefined_text}. Either the "
+            "header declares an entry point that does not exist, or its "
+            "definition does not start at column 0 as `<type> name(<params>) {`. "
+            "Leaving it out would publish a DLL without an entry point its header "
+            "promises, so the configure stops instead.")
+    endif()
+    # Declared, defined elsewhere in the tree, not compiled here: not exported.
+    list(REMOVE_ITEM _ama_declared ${_ama_not_here})
+    list(LENGTH _ama_not_here _ama_skipped)
+    message(STATUS
+        "PE export definition: ${_ama_skipped} declared entry point(s) are "
+        "defined only in sources this configuration does not compile")
+endif()
+
+list(LENGTH _ama_declared _ama_count)
+if(_ama_count EQUAL 0)
+    message(FATAL_ERROR
+        "no declared entry point is defined by the sources this configuration "
+        "compiles; the resulting DLL would export nothing")
+endif()
+
 set(_ama_def "; Generated by cmake/generate_pe_def.cmake. Do not edit.\n")
 string(APPEND _ama_def
     "; The MinGW export table, stated outright: the AMA_API-declared ama_*\n"
-    "; entry points, minus what cmake/ama_exports.map localises. A .def has no\n"
-    "; wildcard, which is the point -- a compiler-generated clone of a public\n"
-    "; entry point cannot appear here, because nothing declares one.\n"
+    "; entry points this configuration defines, minus what\n"
+    "; cmake/ama_exports.map localises. A .def has no wildcard, which is the\n"
+    "; point -- a compiler-generated clone of a public entry point cannot\n"
+    "; appear here, because nothing declares one.\n"
     "EXPORTS\n")
 foreach(_name IN LISTS _ama_declared)
     string(APPEND _ama_def "    ${_name}\n")
