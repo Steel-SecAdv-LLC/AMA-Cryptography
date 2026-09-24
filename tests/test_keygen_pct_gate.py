@@ -509,3 +509,68 @@ class TestTheRealTree:
         """
         assert gate.main(["--root", str(tmp_path)]) == 1
         assert "missing" in capsys.readouterr().err
+
+
+class TestCythonBindingKeygens:
+    """The ``.pyx`` keygens are read by indentation (Cython is not Python)."""
+
+    _OK = (
+        "def cy_x_keygen():\n"
+        "    check_crypto_permitted()\n"
+        "    try:\n"
+        "        pk, sk = make()\n"
+        "    finally:\n"
+        "        wipe()\n"
+        "    pairwise_test_signature(sign, verify, sk, pk, 'x')\n"
+        "    return (pk, sk)\n"
+    )
+
+    def test_an_unconditional_test_before_the_return_passes(self, gate: ModuleType) -> None:
+        assert gate.pyx_keygens_without_pct(self._OK) == ([], 1)
+
+    def test_a_keygen_without_the_test_is_reported(self, gate: ModuleType) -> None:
+        text = "def cy_x_keypair(bytes seed):\n    pk, sk = make(seed)\n    return (pk, sk)\n"
+        problems, examined = gate.pyx_keygens_without_pct(text)
+        assert examined == 1
+        assert problems == [("cy_x_keypair", 1, "no unconditional pairwise test")]
+
+    def test_a_return_before_the_test_is_reported(self, gate: ModuleType) -> None:
+        text = self._OK.replace("        pk, sk = make()\n", "        return make()\n")
+        problems, _ = gate.pyx_keygens_without_pct(text)
+        assert [why for _, _, why in problems] == ["returns before the pairwise test"]
+
+    def test_a_test_inside_a_conditional_is_not_unconditional(self, gate: ModuleType) -> None:
+        text = self._OK.replace(
+            "    pairwise_test_signature(", "    if fips:\n        pairwise_test_signature("
+        )
+        problems, _ = gate.pyx_keygens_without_pct(text)
+        assert [why for _, _, why in problems] == ["no unconditional pairwise test"]
+
+    def test_non_keygen_functions_are_not_examined(self, gate: ModuleType) -> None:
+        assert gate.pyx_keygens_without_pct("def cy_sign(m):\n    return m\n") == ([], 0)
+
+    def test_the_shipped_bindings_are_wired(self, gate: ModuleType) -> None:
+        root = Path(__file__).resolve().parent.parent
+        examined = 0
+        for pyx in sorted(root.glob(gate.PYX_GLOB)):
+            problems, count = gate.pyx_keygens_without_pct(pyx.read_text(encoding="utf-8"))
+            assert problems == [], pyx.name
+            examined += count
+        assert examined >= gate.MIN_PYX_ENTRY_POINTS
+
+    def test_the_cli_fails_on_an_unwired_binding(self, gate: ModuleType, tmp_path: Path) -> None:
+        root = Path(__file__).resolve().parent.parent
+        (tmp_path / "ama_cryptography").mkdir()
+        (tmp_path / gate.BACKEND).write_text(
+            (root / gate.BACKEND).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        (tmp_path / "src" / "cython").mkdir(parents=True)
+        for pyx in root.glob(gate.PYX_GLOB):
+            (tmp_path / "src" / "cython" / pyx.name).write_text(
+                pyx.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        assert gate.main(["--root", str(tmp_path)]) == 0
+        target = tmp_path / "src" / "cython" / "ed25519_binding.pyx"
+        text = target.read_text(encoding="utf-8")
+        target.write_text(text.replace("    pairwise_test_signature(", "    _no_test(", 1))
+        assert gate.main(["--root", str(tmp_path)]) == 1

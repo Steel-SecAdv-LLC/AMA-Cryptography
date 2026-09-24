@@ -2547,7 +2547,9 @@ They are **not** properties of `libama_cryptography.so` linked directly:
 `check_crypto_permitted` appears throughout `pqc_backends.py` and nowhere in
 `src/c/`, and the C library's `ama_ed25519_keypair()` performs no pairwise test
 (C-side PCT exists for ML-KEM only). `tools/check_keygen_pct.py` enforces this
-over `pqc_backends.py`'s AST — the Python surface — alone. A C consumer that
+over the Python surface: `pqc_backends.py`'s AST and the keygens of the Cython
+binding extensions (`src/cython/*.pyx`), which are importable,
+`check_crypto_permitted`-gated entry points of the package too. A C consumer that
 links the shared object directly — the audience the SONAME, the pkg-config file
 and `Dockerfile.c-api` serve — gets the constant-time primitives but **not**
 POST, the error-state inhibition, or the PCT; those are supplied by the Python
@@ -2572,7 +2574,12 @@ further output (INVARIANT-39).
 entry point from `ama_cryptography/pqc_backends.py`'s own AST — 19 today — and
 fails on any that does not reach `pairwise_test_signature` / `_kem` /
 `_agreement`, directly or through one level of delegation. Exemptions must
-name a reason and are checked for staleness. It runs in `ci.yml` and both
+name a reason and are checked for staleness. It also reads the Cython binding
+sources (`src/cython/*.pyx`) by indentation and requires each keygen there to
+call a pairwise test as a top-level statement before any `return`: until
+2026-09-24 it read `pqc_backends.py` alone, and `cy_dilithium_keygen` and
+`cy_ed25519_keypair` released untested keypairs (found by the partitioned
+review of PR #394; both now run the test). It runs in `ci.yml` and both
 directions are pinned by `tests/test_keygen_pct_gate.py`.
 
 `tests/test_keygen_pct.py` is the behaviour half: both failure directions (a

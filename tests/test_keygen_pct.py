@@ -691,3 +691,57 @@ class TestOutputBufferHelpers:
         assert pb._output_buffer_capacity(pointer) is None
         assert pb._declared_length_fits(pointer, pb.DILITHIUM_SIGNATURE_BYTES) is True
         assert pb._out_buffer_is_writable(pointer) is True
+
+
+# ---------------------------------------------------------------------------
+# The Cython bindings are keygen surfaces too.
+# ---------------------------------------------------------------------------
+
+
+def _binding(name: str) -> Any:
+    try:
+        return __import__(f"ama_cryptography.{name}", fromlist=["_"])
+    except ImportError:
+        pytest.skip(f"native {name} binding is not built in this environment")
+
+
+class TestCythonBindingKeygens:
+    """``cy_dilithium_keygen`` and ``cy_ed25519_keypair`` are importable,
+    ``check_crypto_permitted``-gated keygen entry points of the package, and
+    released keypairs with no pairwise test until 2026-09-24 (found by the
+    partitioned review of PR #394).  They now run the same helper as
+    ``pqc_backends``: wired, failing closed, and passing on real keys."""
+
+    CASES = (
+        ("dilithium_binding", "cy_dilithium_verify", lambda b: b.cy_dilithium_keygen()),
+        ("ed25519_binding", "cy_ed25519_verify", lambda b: b.cy_ed25519_keypair(bytes(32))),
+    )
+
+    @pytest.mark.parametrize(("module", "_verify", "keygen"), CASES)
+    def test_the_keygen_invokes_the_pairwise_helper(
+        self, monkeypatch: pytest.MonkeyPatch, module: str, _verify: str, keygen: Any
+    ) -> None:
+        binding = _binding(module)
+        seen: list[str] = []
+
+        def recorder(sign: Any, verify: Any, sk: Any, pk: Any, algo: str) -> None:
+            seen.append(algo)
+            ms.pairwise_test_signature(sign, verify, sk, pk, algo)
+
+        monkeypatch.setattr(binding, "pairwise_test_signature", recorder)
+        public_key, secret_key = keygen(binding)
+        assert len(seen) == 1 and module in seen[0]
+        assert public_key and secret_key
+
+    @pytest.mark.parametrize(("module", "verify", "keygen"), CASES)
+    def test_a_failing_pairwise_test_enters_the_error_state(
+        self, monkeypatch: pytest.MonkeyPatch, module: str, verify: str, keygen: Any
+    ) -> None:
+        binding = _binding(module)
+        monkeypatch.setattr(binding, verify, lambda sig, msg, pk: False)
+        try:
+            with pytest.raises(CryptoModuleError, match="Pairwise test failed"):
+                keygen(binding)
+            assert ms.module_status() == "ERROR"
+        finally:
+            ms._set_operational()

@@ -130,6 +130,17 @@ EXEMPT: dict[str, str] = {
 #: reporting a clean run over it is the failure this gate exists to prevent.
 MIN_ENTRY_POINTS = 10
 
+#: The Cython binding sources.  Their keygens are importable, gated entry
+#: points of the package like the ones above, and two of them released
+#: keypairs with no pairwise test until 2026-09-24 because this gate read
+#: ``pqc_backends.py`` alone.  Cython is not Python, so they are read by
+#: indentation rather than by ``ast`` (see :func:`pyx_keygens_without_pct`).
+PYX_GLOB = "src/cython/*.pyx"
+
+#: The binding keygens known to exist; discovery finding fewer means the scan
+#: of the ``.pyx`` sources broke, not that the keygens went away.
+MIN_PYX_ENTRY_POINTS = 2
+
 
 def _calls(node: ast.AST) -> set[str]:
     """Every plain function name called anywhere under ``node``."""
@@ -385,6 +396,55 @@ def audit(path: Path) -> tuple[list[tuple[str, int]], int]:
     return sorted(unwired, key=lambda item: (item[1], item[0])), len(entry_points)
 
 
+def pyx_keygens_without_pct(text: str) -> tuple[list[tuple[str, int, str]], int]:
+    """``(problems, examined)`` for one Cython source.
+
+    A keygen is a top-level ``def`` whose name carries a keygen marker.  It
+    passes when a pairwise-test call is one of its TOP-LEVEL statements (so it
+    runs on every path that reaches it, never inside an ``if``) and every
+    ``return`` in the function comes after that call (so no path leaves with
+    the keypair first).  Indentation is Cython's block structure, so reading
+    it is exact for the one shape these functions have; anything the rule
+    cannot see as unconditional is reported, not assumed.
+    """
+    lines = text.splitlines()
+    problems: list[tuple[str, int, str]] = []
+    examined = 0
+    i = 0
+    while i < len(lines):
+        header = lines[i]
+        if not header.startswith("def ") or not any(m in header for m in _KEYGEN_MARKERS):
+            i += 1
+            continue
+        name = header[4:].split("(", 1)[0].strip()
+        start = i + 1
+        end = start
+        while end < len(lines) and (
+            not lines[end].strip() or lines[end][0] in " \t" or lines[end].startswith("#")
+        ):
+            end += 1
+        examined += 1
+        body = list(enumerate(lines[start:end], start=start + 1))
+        helpers = tuple(f"{h}(" for h in PCT_HELPERS)
+        pct_line = next(
+            (
+                n
+                for n, line in body
+                if line.startswith("    ")
+                and not line.startswith("     ")
+                and line.strip().startswith(helpers)
+            ),
+            None,
+        )
+        returns = [n for n, line in body if line.strip().startswith("return")]
+        if pct_line is None:
+            problems.append((name, i + 1, "no unconditional pairwise test"))
+        elif any(n < pct_line for n in returns):
+            problems.append((name, i + 1, "returns before the pairwise test"))
+        i = end
+    return problems, examined
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=str(REPO), help="repository root")
@@ -431,9 +491,39 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    pyx_problems: list[tuple[str, str, int, str]] = []
+    pyx_examined = 0
+    for pyx in sorted(root.glob(PYX_GLOB)):
+        found, count = pyx_keygens_without_pct(pyx.read_text(encoding="utf-8"))
+        pyx_examined += count
+        rel = pyx.relative_to(root).as_posix()
+        pyx_problems.extend((rel, name, line, why) for name, line, why in found)
+    if pyx_examined < MIN_PYX_ENTRY_POINTS:
+        print(
+            f"FATAL: discovered only {pyx_examined} keygen entry point(s) in {PYX_GLOB} "
+            f"(expected at least {MIN_PYX_ENTRY_POINTS}); the binding scan broke.",
+            file=sys.stderr,
+        )
+        return 1
+    if pyx_problems:
+        print(
+            f"INVARIANT-41 violation: {len(pyx_problems)} Cython keygen(s) release a "
+            "keypair without an unconditional pairwise consistency test:",
+            file=sys.stderr,
+        )
+        for rel, name, line, why in pyx_problems:
+            print(f"  {rel}:{line}: {name}() — {why}", file=sys.stderr)
+        print(
+            "\nCall pairwise_test_signature / pairwise_test_kem / "
+            "pairwise_test_agreement as a top-level statement of the function, "
+            "after the keypair is built and before any return.",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
-        f"OK: {examined} keygen entry point(s) in {BACKEND}; every one reaches a "
-        f"pairwise consistency test."
+        f"OK: {examined} keygen entry point(s) in {BACKEND} and {pyx_examined} in "
+        f"{PYX_GLOB}; every one reaches a pairwise consistency test."
     )
     return 0
 
