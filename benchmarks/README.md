@@ -76,7 +76,7 @@ make -C benchmarks benchmark_c_raw
 | Password hashing | Argon2id (m=64 KiB, m=1 MiB) |
 | Key Exchange | X25519 (keygen, DH exchange, batch×{1,4,8,16}); X25519 DH with MULX/ADX kernel **off** vs **on** (BMI2+ADX gate quantification) |
 | Elliptic curves (Bitcoin) | secp256k1 pubkey-from-privkey (SEC1 compressed); ECDSA sign (RFC 6979) and verify |
-| Threshold signatures | FROST 2-of-3 round1 commit / round2 sign / aggregate (RFC 9591) |
+| Threshold signatures | FROST 2-of-3 round1 commit / round2 sign / aggregate (RFC 9591-style) |
 
 #### Kernel-isolation rows
 
@@ -186,7 +186,7 @@ output:
 | MULX/ADX on-vs-off X25519 ratio                     | ✅ closed | `X25519 DH (MULX off)`, `X25519 DH (MULX on)` |
 | SLH-DSA / SPHINCS+ (FIPS 205)                       | ✅ closed | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` (NIST L1) |
 | secp256k1                                            | ✅ closed | `secp256k1 pubkey` (compressed SEC1), `secp256k1 ecdsa sign` (RFC 6979), `secp256k1 ecdsa verify` |
-| FROST                                                | ✅ closed | `FROST round1 commit` / `round2 sign` / `aggregate` (2-of-3, RFC 9591) |
+| FROST                                                | ✅ closed | `FROST round1 commit` / `round2 sign` / `aggregate` (2-of-3, RFC 9591-style) |
 | Dilithium NTT kernel isolation                       | ✅ closed | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
 | ML-KEM-1024 decapsulate                              | ✅ already covered | `ML-KEM-1024 Decaps` (`benchmark_c_raw.c` decaps row) |
 | X25519 batch×4 (no env gating)                       | ✅ already covered | `X25519 DH Batch×4` (unconditional) |

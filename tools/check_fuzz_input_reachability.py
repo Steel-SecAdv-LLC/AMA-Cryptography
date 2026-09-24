@@ -104,7 +104,7 @@ MANUAL_BOUNDS: dict[str, ManualBound] = {
         200,
         (
             "payload_len < 2u * nb",
-            "payload_len < pub_len + 1u",
+            "payload_len < 32u + pub_len + 1u",
             "payload_len < pub_len",
             "payload_len < nb",
             "payload_len >= nb + pub_len",
@@ -116,8 +116,8 @@ MANUAL_BOUNDS: dict[str, ManualBound] = {
         "nb <= 66 (AMA_NISTP_MAX_FIELD_BYTES) and pub_len <= 132 "
         "(AMA_NISTP_MAX_PUBKEY_BYTES). Guard by guard: `2u * nb` <= 132 "
         "(case 1, raw r || s); `pub_len` <= 132 (case 4, a public key); "
-        "`pub_len + 1u` <= 133 (case 3, a public key plus at least one "
-        "signature octet); `nb` <= 66 (default case, a private scalar); and "
+        "`32u + pub_len + 1u` <= 165 (case 3, a digest, a public key and at "
+        "least one signature octet); `nb` <= 66 (default case, a private scalar); and "
         "the widest, `nb + pub_len` <= 198 (default case, scalar plus peer "
         "key). 198 plus the 2-byte header -- data[0] curve selector, data[1] "
         "case selector -- before the payload gives 200. The sixth, "

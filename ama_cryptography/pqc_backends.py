@@ -79,7 +79,7 @@ __all__ = [
     "SecurityWarning",
     # Context-based API
     "AmaContext",
-    # FROST threshold Ed25519 (RFC 9591)
+    # FROST threshold Ed25519 (RFC 9591-style)
     "FROST_AVAILABLE",
     "FROST_BACKEND",
     "FROST_SHARE_BYTES",
@@ -2747,7 +2747,7 @@ def _setup_deterministic_keygen_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
-# FROST threshold Ed25519 (RFC 9591) availability
+# FROST threshold Ed25519 (RFC 9591-style) availability
 _FROST_AVAILABLE = False
 _FROST_BACKEND: Optional[str] = None
 FROST_SHARE_BYTES = 64  # 32 secret + 32 public
@@ -9339,7 +9339,7 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
 
 
 # ============================================================================
-# FROST THRESHOLD ED25519 (RFC 9591) — NATIVE WRAPPERS
+# FROST THRESHOLD ED25519 (RFC 9591-STYLE) — NATIVE WRAPPERS
 # ============================================================================
 
 # Module-level availability aliases

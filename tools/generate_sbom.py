@@ -70,7 +70,7 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_chacha20poly1305", "ChaCha20-Poly1305 AEAD (RFC 8439)"),
     ("ama_dilithium", "ML-DSA-44/-65/-87 post-quantum signatures (NIST FIPS 204)"),
     ("ama_ed25519", "Ed25519 digital signatures (RFC 8032)"),
-    ("ama_frost", "FROST threshold Ed25519 signatures (RFC 9591)"),
+    ("ama_frost", "FROST threshold Ed25519 signatures (RFC 9591-style)"),
     ("ama_hkdf", "HKDF-SHA3-256 key derivation (RFC 5869)"),
     ("ama_kyber", "ML-KEM-512/-768/-1024 key encapsulation (NIST FIPS 203)"),
     ("ama_lms", "HSS/LMS hash-based signature verification (RFC 8554)"),

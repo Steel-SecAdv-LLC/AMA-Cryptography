@@ -54,7 +54,10 @@ Native C cryptographic core with a Python application layer and zero external
 cryptographic dependencies. ML-KEM-1024, ML-DSA-65, SLH-DSA, Ed25519, X25519,
 secp256k1, P-256/384/521, AES-256-GCM, ChaCha20-Poly1305, SHA-3, HKDF, Argon2id
 and FROST are implemented under `src/c/`. The Python layer calls those kernels.
-`hashlib` is confined to the gate-pinned pre-execution trust bootstrap.
+`hashlib` is confined to the five files `tools/check_stdlib_hash_boundary.py` pins
+with exact reference counts: the pre-execution trust bootstrap, plus two
+comparators whose output the library never emits (POST's hashlib cross-check of
+the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 
 | Path | Contents |
 |---|---|
@@ -63,7 +66,7 @@ and FROST are implemented under `src/c/`. The Python layer calls those kernels.
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 91 C test suites, 266 Python test modules |
+| `tests/c/`, `tests/` | 91 C test suites, 267 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:

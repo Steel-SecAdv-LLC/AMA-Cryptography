@@ -334,7 +334,7 @@ entire field.</p>
 <tr><td class="p">ML-DSA-65 keygen<div class="note">Within 20%; signing and verification both lead.</div></td><td class="n">3,956</td><td class="n">4,831</td><td class="n">0.82× OpenSSL 4.0.1</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
 <tr><td class="p">ML-DSA-65 sign</td><td class="n">2,665</td><td class="n">1,054</td><td class="n">2.53× OpenSSL 4.0.1</td><td><span class="b b-win">fastest of 2</span></td></tr>
 <tr><td class="p">ML-DSA-65 verify</td><td class="n">8,241</td><td class="n">5,211</td><td class="n">1.58× OpenSSL 4.0.1</td><td><span class="b b-win">fastest of 2</span></td></tr>
-<tr><td class="p">ML-KEM-1024 keygen<div class="note">Within 10% — the narrowest of the three ML-KEM operations.</div></td><td class="n">6,327</td><td class="n">7,033</td><td class="n">0.90× OpenSSL 4.0.1</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
+<tr><td class="p">ML-KEM-1024 keygen<div class="note">The narrowest of the three ML-KEM gaps.</div></td><td class="n">6,327</td><td class="n">7,033</td><td class="n">0.90× OpenSSL 4.0.1</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
 <tr><td class="p">ML-KEM-1024 encaps<div class="note">The known lattice gap. AMA&#x27;s ML-KEM is SIMD-accelerated (1.28x over scalar, AVX-512 adding a further 1.22x) but is not vectorised across the breadth OpenSSL 4.0.1 reaches. Closing it is a multi-week vectorisation project, not a tuning pass, and it is not claimed as done.</div></td><td class="n">13,225</td><td class="n">32,701</td><td class="n">0.40× OpenSSL 4.0.1</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
 <tr><td class="p">ML-KEM-1024 decaps<div class="note">Same vectorisation breadth gap as encapsulation.</div></td><td class="n">11,667</td><td class="n">21,462</td><td class="n">0.54× OpenSSL 4.0.1</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
 </tbody></table></div>
@@ -418,7 +418,7 @@ python benchmarks/pqc_comparative_bench.py  # -> pqc_results.json
 python benchmarks/generate_competitive.py   # -> this page</pre>
 
 <p class="meta">
-Generated 2026-08-30 17:38 UTC · message size 65,536 bytes · measured clock 2.801 GHz<br>
+Generated 2026-09-24 22:57 UTC · message size 65,536 bytes · measured clock 2.801 GHz<br>
 Measured at commit <code>66d207396c3bb5645486f28ffa084dda0c12799f</code> (2026-07-29T19:09:37-05:00), AMA 3.4.0<br>
 Host: Intel(R) Xeon(R) Processor @ 2.80GHz · aes_ni, pclmulqdq, avx2, avx512f, bmi2, adx · <b>absent:</b> vaes, vpclmulqdq, sha_ni<br>
 AMA 3.4.0 · OpenSSL 3.0.13 · OpenSSL 4.0.1 (via cryptography 49.0.0) · libsodium 1.0.18 · wolfSSL 5.6.6 · Botan 2.19.3 · Nettle 3.9 · libgcrypt 1.10.3 · mbedTLS 2.28.8<br>

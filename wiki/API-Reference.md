@@ -487,7 +487,7 @@ metadata:  dict           = mgr.export_metadata(filepath: Path | None = None)
 
 #### `SecureKeyStorage`
 
-Defined in `ama_cryptography/key_management.py:537`. The constructor takes
+Defined in `ama_cryptography/key_management.py` (`class SecureKeyStorage`). The constructor takes
 a **storage directory** and an optional master password — not a raw
 encryption key. `retrieve_key()` returns the ciphertext-decrypted key
 material as `Optional[bytes]` (or `None` if the id is missing); metadata

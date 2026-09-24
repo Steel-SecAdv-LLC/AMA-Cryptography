@@ -130,7 +130,7 @@ DILITHIUM_NTT = {
     "invNTT (dispatch)": {"ops_sec": 597_080, "latency_us": 1.68},
 }
 
-# FROST 2-of-3 (RFC 9591) per-row per-signer cost. Anchor:
+# FROST 2-of-3 (RFC 9591-style) per-row per-signer cost. Anchor:
 # `benchmark_c_raw` rows, 2026-09-22.
 FROST_OPS = {
     "round1 commit": {"ops_sec": 44_635, "latency_us": 22.40},
@@ -735,7 +735,7 @@ def generate_charts(output_dir: str) -> None:
         style="italic",
     )
 
-    # Panel (1,1): FROST 2-of-3 (RFC 9591) per-role cost
+    # Panel (1,1): FROST 2-of-3 (RFC 9591-style) per-role cost
     ax = axes[1, 1]
     frost_names = list(FROST_OPS.keys())
     frost_vals = [FROST_OPS[n]["ops_sec"] for n in frost_names]
@@ -748,7 +748,9 @@ def generate_charts(output_dir: str) -> None:
         width=0.5,
     )
     ax.set_ylabel("Operations/sec", fontsize=10)
-    ax.set_title("FROST 2-of-3 (RFC 9591) — Per-Role Cost", fontsize=12, fontweight="bold", pad=8)
+    ax.set_title(
+        "FROST 2-of-3 (RFC 9591-style) — Per-Role Cost", fontsize=12, fontweight="bold", pad=8
+    )
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     for bar, val, lat in zip(bars, frost_vals, frost_lats):
         ax.text(

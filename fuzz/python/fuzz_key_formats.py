@@ -254,10 +254,9 @@ def target_pkcs8(data: bytes) -> None:
     """
     key = kf.load_pkcs8(data)
     if data.startswith(PEM_PREFIX):
-        # PEM handed in as bytes — canonical form is the PEM (see PEM_PREFIX).
-        # The DER inside it is checked by _pkcs8_der_is_an_encoder_output via
-        # the pem_private target (which extracts the base64 body), so PEM
-        # inputs are not exempt from the canonicality contract on any path.
+        # PEM handed in as bytes: the pem_private target holds it to the same
+        # contract, on the DER body and on the armor (see target_pem_private).
+        target_pem_private(data)
         return
 
     _pkcs8_der_is_an_encoder_output(data, key, "load_pkcs8")
@@ -276,28 +275,46 @@ def target_pem_public(data: bytes) -> None:
 
 
 def target_pem_private(data: bytes) -> None:
-    text = data.decode("utf-8", "replace")
-    key = kf.load_pkcs8(text)
-    # Same canonicality contract as target_pkcs8, applied to the DER body the
-    # PEM carries: extract the base64 between the markers the way RFC 7468
-    # lays it out.  Extraction is best-effort — if the accepted text does not
-    # yield a decodable body here, the acceptance itself was through the
-    # loader's own tolerant path and exception hygiene remains the check.
+    """A private-key PEM the loader accepted must be the encoder's PEM of one
+    of the encoder's DER forms for that key: body and armor both.
+
+    The body is checked with the same contract as :func:`target_pkcs8`.  The
+    armor -- label, 64-column wrapping, markers -- must be exactly what
+    ``encode_pem`` writes for that DER, after the one normalisation
+    ``decode_pem`` documents (CRLF to LF, RFC 7468 whitespace around the
+    block).  An accepted input whose markers or base64 this target cannot
+    read strictly is itself a finding: an earlier revision returned early on
+    both, so the comment in :func:`target_pkcs8` claiming PEM was checked "on
+    any path" was not true of them, and armor canonicality was never checked.
+    """
     import base64
     import re as _re
 
-    match = _re.search(
-        r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(.*?)-----END",
-        text,
-        _re.S,
+    text = data.decode("utf-8", "replace")
+    key = kf.load_pkcs8(text)
+    normalised = text.replace("\r\n", "\n").strip(" \t\r\n") + "\n"
+    match = _re.fullmatch(
+        r"-----BEGIN PRIVATE KEY-----\n(.*)\n-----END PRIVATE KEY-----\n", normalised, _re.S
     )
     if match is None:
-        return
+        raise FindingError(
+            "load_pkcs8(pem): accepted text that is not one PRIVATE KEY block", data, "pem_private"
+        )
     try:
-        der = base64.b64decode("".join(match.group(1).split()), validate=True)
-    except (ValueError, TypeError):
-        return
+        der = base64.b64decode("".join(match.group(1).split("\n")), validate=True)
+    except (ValueError, TypeError) as exc:
+        raise FindingError(
+            f"load_pkcs8(pem): accepted a body that is not strict base64 ({exc})",
+            data,
+            "pem_private",
+        ) from exc
     _pkcs8_der_is_an_encoder_output(der, key, "load_pkcs8(pem)")
+    if kf.encode_pem(der, "PRIVATE KEY") != normalised:
+        raise FindingError(
+            "load_pkcs8(pem): accepted a non-canonical PEM armor for its own DER",
+            data,
+            "pem_private",
+        )
 
 
 #: The COSE_Key labels this module emits: kty(1), crv(-1), x(-2), y(-3), d(-4).

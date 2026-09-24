@@ -187,6 +187,7 @@ def _assignment_parts(node: ast.stmt, path: Path) -> Optional[Tuple[List[ast.exp
         "generated artefact contains only literal assignments"
     )
 
+
 #: Largest artefact the reader will parse, in characters.  The signer writes a
 #: few kilobytes (3,234 bytes with six bindings, measured 2026-09-24), so this is
 #: about twenty times that.  It exists because of CPython 3.10: its AST

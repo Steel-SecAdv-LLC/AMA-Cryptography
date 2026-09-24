@@ -608,7 +608,7 @@
       },
       {
         "path": "src/c/avx2/ama_sha3_avx2.c",
-        "reason": "ama_sha3_256_avx2 deleted with the dispatch slot that was its only caller. Measured before removal at 4.4x-4.7x SLOWER than the ama_sha3_256 path that replaces it, so no benchmarked call gets slower; ama_keccak_f1600_avx2, which the floors do describe, is untouched."
+        "reason": "ama_sha3_256_avx2 deleted with the dispatch slot that was its only caller. Measured before removal at 4.4x-4.7x SLOWER than the ama_sha3_256 path that replaces it, so no benchmarked call gets slower. Corrected 2026-09-24 (AGENTS.md 6.6): this entry said ama_keccak_f1600_avx2 was untouched; a later pass of the same PR deleted it too. It was 4.4-4.8x slower than the BMI1/BMI2 scalar Keccak on every host measured, the Phase-3 auto-tune reverts the single-state slot off a kernel measured slower, and the slot now stays on the scalar kernel by construction, so the SHA3 rows run the kernel they were floored on (src/c/dispatch/ama_dispatch.c records the measurements)."
       },
       {
         "path": "src/c/internal/ama_ed25519_canonical.h",

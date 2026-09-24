@@ -154,6 +154,42 @@ def test_a_non_canonical_acceptance_is_a_finding(
         harness.run_one("spki", spki + b"\x00")
 
 
+def test_a_private_pem_is_held_to_body_and_armor(
+    harness: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every accepted private-key PEM is checked; none is waved through.
+
+    The pem_private target returned early when it could not read the markers
+    or the base64 strictly, and never compared the armor, so a loader that
+    accepted a re-wrapped or corrupted PEM for a valid key reported nothing.
+    """
+    import base64
+
+    import ama_cryptography.key_formats as kf
+
+    _, private = _make_ed25519()
+    pem = private.to_pem().encode()
+    harness.run_one("pem_private", pem)  # honest input passes
+    harness.run_one("pkcs8", pem)  # and the pkcs8 target now checks it too
+
+    der = private.to_pkcs8()
+    b64 = base64.b64encode(der).decode()
+    rewrapped = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        + "\n".join(b64[i : i + 32] for i in range(0, len(b64), 32))
+        + "\n-----END PRIVATE KEY-----\n"
+    ).encode()
+    corrupted = pem.replace(b"\n", b"*\n", 1).replace(b"-----*\n", b"-----\n*", 1)
+
+    monkeypatch.setattr(kf, "load_pkcs8", lambda _data: private)
+    assert rewrapped != pem, "the re-wrap must change the armor"
+    for target in ("pem_private", "pkcs8"):
+        with pytest.raises(harness.FindingError, match="non-canonical PEM armor"):
+            harness.run_one(target, rewrapped)
+        with pytest.raises(harness.FindingError, match="not strict base64"):
+            harness.run_one(target, corrupted)
+
+
 def test_a_slow_parse_is_a_finding(harness: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """A quadratic blowup on a crafted length field should be attributable, not
     a CI timeout nobody explains."""

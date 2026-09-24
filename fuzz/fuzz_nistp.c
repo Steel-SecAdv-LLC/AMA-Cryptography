@@ -174,19 +174,24 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     }
     case 3: {
         /* Fully fuzzed verify: digest, public key and DER signature all
-         * attacker-controlled.  Drives nistp_load_point and the DER parser
-         * together, which is how they are reached in the field. */
-        const uint8_t *pub, *sig;
+         * attacker-controlled, each from its own region of the input --
+         * digest (32) || public key (pub_len) || DER signature.  Drives
+         * nistp_load_point and the DER parser together, which is how they are
+         * reached in the field.  The digest used to be read from the first 32
+         * bytes of the public key itself, so the two were never independent
+         * and every verifying input signed its own key's x coordinate. */
+        const uint8_t *digest, *pub, *sig;
         size_t sig_len;
 
-        if (payload_len < pub_len + 1u) break;
-        pub = payload;
-        sig = payload + pub_len;
-        sig_len = payload_len - pub_len;
+        if (payload_len < 32u + pub_len + 1u) break;
+        digest = payload;
+        pub = payload + 32u;
+        sig = pub + pub_len;
+        sig_len = payload_len - 32u - pub_len;
 
         /* Any outcome is legal here; what matters is memory safety and that
          * the two entry points do not disagree (property 2). */
-        if (ama_nistp_ecdsa_verify(curve, payload, 32u, pub, sig, sig_len)
+        if (ama_nistp_ecdsa_verify(curve, digest, 32u, pub, sig, sig_len)
                 == AMA_SUCCESS) {
             uint8_t raw[AMA_NISTP_MAX_PUBKEY_BYTES];
             size_t raw_len = sizeof(raw);
@@ -195,7 +200,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                     != AMA_SUCCESS)
                 fail("a DER signature that verified could not be converted to "
                      "raw");
-            if (ama_nistp_ecdsa_verify_raw(curve, payload, 32u, pub,
+            if (ama_nistp_ecdsa_verify_raw(curve, digest, 32u, pub,
                                            raw, raw_len) != AMA_SUCCESS)
                 fail("a signature accepted in DER was rejected as raw r || s");
         }

@@ -108,7 +108,7 @@
       "type": "library",
       "name": "ama_frost",
       "version": "5.0.0",
-      "description": "FROST threshold Ed25519 signatures (RFC 9591)",
+      "description": "FROST threshold Ed25519 signatures (RFC 9591-style)",
       "scope": "required",
       "purl": "pkg:generic/ama_frost@5.0.0"
     },

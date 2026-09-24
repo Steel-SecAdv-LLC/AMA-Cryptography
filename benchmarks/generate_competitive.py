@@ -263,7 +263,7 @@ NOTES = {
         "done."
     ),
     "ML-KEM-1024 decaps": "Same vectorisation breadth gap as encapsulation.",
-    "ML-KEM-1024 keygen": "Within 10% — the narrowest of the three ML-KEM operations.",
+    "ML-KEM-1024 keygen": "The narrowest of the three ML-KEM gaps.",
     "ML-DSA-65 keygen": "Within 20%; signing and verification both lead.",
 }
 

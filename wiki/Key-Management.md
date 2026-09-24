@@ -89,7 +89,7 @@ should_rotate = mgr.should_rotate("signing-key-v1")     # bool
 active_id     = mgr.get_active_key()                    # Optional[str]
 
 # Rotation lifecycle: old key -> ROTATING -> DEPRECATED.
-# IMPORTANT (key_management.py:435): initiate_rotation() raises
+# IMPORTANT (KeyRotationManager.initiate_rotation): initiate_rotation() raises
 # ValueError("Key not found") if either key_id is missing from the
 # manager. Register the replacement key first — the manager tracks
 # metadata only, so you still provision the actual key material in
@@ -309,14 +309,15 @@ active_meta = mgr.export_metadata()
 ### Key Storage Security
 
 - **In-Memory:** the derived encryption key is held as a `bytearray`
-  (`key_management.py:867`, `:1179`, `:1211`) so it can be zeroed in place.
+  (every assignment to `SecureKeyStorage.encryption_key`) so it can be zeroed in place.
 - **At-Rest:** key material is sealed with AES-256-GCM
-  (`SecureKeyStorage.store_key` → `native_aes256_gcm_encrypt`,
-  `key_management.py:1440-1477`), with a fresh 96-bit nonce per record
-  (INVARIANT-41) and the record's own metadata bound as AAD.
+  (`SecureKeyStorage.store_key` → `native_aes256_gcm_encrypt`), with a fresh
+  96-bit nonce per record, drawn through the health-tested CSPRNG (INVARIANT-41's
+  rule for every draw that mints key material: a repeated GCM nonce under one key
+  is catastrophic), and the record's own metadata bound as AAD.
 - **Zeroing:** `SecureKeyStorage.__exit__` calls
-  `ama_cryptography.secure_memory.secure_memzero` on the encryption key
-  (`key_management.py:1655-1657`). That is the native barrier-backed wipe —
+  `ama_cryptography.secure_memory.secure_memzero` on the encryption key.
+  That is the native barrier-backed wipe —
   one pass through `volatile` stores followed by a compiler barrier
   (`src/c/ama_consttime.c`), not a multi-pass Python loop.
 - **Memory lock: not performed.** `key_management.py` contains no reference to
@@ -429,7 +430,7 @@ def check_and_rotate(
     """Rotate `key_id` → `new_key_id` if policy says so; return the active id.
 
     Note: `mgr.initiate_rotation()` raises `ValueError("Key not found")`
-    (key_management.py:435) unless both key ids are already registered
+    (`KeyRotationManager.initiate_rotation`) unless both key ids are already registered
     with the manager. We register the replacement id first so the call
     site can't accidentally rotate into a key the manager has never
     seen. Key *material* still lives in the caller's keystore.

@@ -162,7 +162,7 @@ close the gap list audited in the May 2026 review:
 |--------------------------------------------|---------------------------------|
 | SLH-DSA (FIPS 205 L1, SHAKE-128s)          | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` |
 | secp256k1 pubkey-from-privkey              | `secp256k1 pubkey` |
-| FROST 2-of-3 (RFC 9591)                    | `FROST round1 commit` / `round2 sign` / `aggregate` |
+| FROST 2-of-3 (RFC 9591-style)              | `FROST round1 commit` / `round2 sign` / `aggregate` |
 | Dilithium NTT kernel isolation             | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
 | X25519 MULX/ADX kernel on-vs-off ratio     | `X25519 DH (MULX off)` / `X25519 DH (MULX on)` |
 

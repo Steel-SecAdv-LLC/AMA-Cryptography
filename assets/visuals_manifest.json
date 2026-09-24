@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1086,
       "Key Management\n& Rotation": 281,
       "Memory Security\n& Fuzzing": 339,
-      "Other": 3553,
+      "Other": 3556,
       "PQC Backends\n& Integration": 776,
       "Performance\n& Monitoring": 378
     },
-    "n_files": 266,
-    "total_tests": 6413,
+    "n_files": 267,
+    "total_tests": 6416,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -82,6 +82,7 @@
       "test_fe51_lazy_reduction_bounds.py",
       "test_fuzz_corpus_persistence_gate.py",
       "test_fuzz_input_reachability_gate.py",
+      "test_fuzz_nistp_seed_corpus.py",
       "test_fuzz_target_registration.py",
       "test_gap_closure_review.py",
       "test_gate_coverage.py",
