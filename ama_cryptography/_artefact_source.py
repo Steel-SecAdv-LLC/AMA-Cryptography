@@ -187,11 +187,54 @@ def _assignment_parts(node: ast.stmt, path: Path) -> Optional[Tuple[List[ast.exp
         "generated artefact contains only literal assignments"
     )
 
+#: Largest artefact the reader will parse, in characters.  The signer writes a
+#: few kilobytes (3,234 bytes with six bindings, measured 2026-09-24), so this is
+#: about twenty times that.  It exists because of CPython 3.10: its AST
+#: construction has no recursion guard, and a long chain of additions crashes the
+#: interpreter inside ``ast.parse`` (measured: 140,000 ``+1`` terms, about
+#: 280 KB, on an 8 MB main-thread stack) instead of raising anything this
+#: module could turn into a refusal.  An input this size is refused before it
+#: reaches the parser, on every version.
+ARTEFACT_MAX_CHARS = 64 * 1024
+
 
 def artefact_path(package_dir: Optional[Path] = None) -> Path:
     """Where the artefact lives.  ``package_dir`` defaults to this package."""
     base = Path(__file__).resolve().parent if package_dir is None else Path(package_dir)
     return base / ARTEFACT_NAME
+
+
+def _read_artefact_text(path: Path) -> Optional[str]:
+    """The artefact's text, ``None`` if absent, or ``ArtefactSourceError``.
+
+    Split out of :func:`load_artefact_fields` so each refusal before the
+    parser -- unreadable, not UTF-8, too large -- is stated in one place.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ArtefactSourceError(f"{path}: cannot be read ({exc})") from exc
+    except UnicodeDecodeError as exc:
+        # NOT an OSError — UnicodeDecodeError derives from ValueError, so the
+        # handler above does not catch it and a non-UTF-8 artefact escaped this
+        # function raw, past the one exception type every caller of the trust
+        # bootstrap is written to expect.  An artefact that is not text is
+        # exactly as unusable as one that cannot be opened, and the callers
+        # that treat ArtefactSourceError as "no usable artefact, refuse" must
+        # see it as such rather than as an unhandled exception.
+        raise ArtefactSourceError(f"{path}: is not UTF-8 text ({exc})") from exc
+
+    # CPython 3.10's parser crashes, rather than raising, on a long enough
+    # expression chain (see ARTEFACT_MAX_CHARS), so that input is refused here,
+    # before the parser runs, on every version.
+    if len(text) > ARTEFACT_MAX_CHARS:
+        raise ArtefactSourceError(
+            f"{path}: is {len(text):,} characters, larger than any artefact the "
+            f"signer writes (limit {ARTEFACT_MAX_CHARS:,}); refused before parsing"
+        )
+    return text
 
 
 def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[ArtefactFields]:
@@ -201,12 +244,16 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
     nothing to check against and every caller already has a documented
     behaviour for that state.
 
-    Raises :class:`ArtefactSourceError` when the file is present but does not
-    parse, when a top-level assignment is not a literal, or when it does not
-    define ``INTEGRITY_DIGEST_HEX``.  A generated file of constants that has
-    stopped being a generated file of constants is tampering, and refusing is
-    the same fail-closed rule the callers apply to a digest that does not
-    match.
+    Raises :class:`ArtefactSourceError` when the file is present but cannot be
+    read, is not UTF-8, does not parse (whichever of ``SyntaxError``,
+    ``ValueError``, ``RecursionError`` or ``MemoryError`` the parser raises for
+    it), when a top-level assignment is not a literal (including a dict or set
+    literal with an unhashable key), or when it does not define
+    ``INTEGRITY_DIGEST_HEX``, or when it is larger than ``ARTEFACT_MAX_CHARS``
+    (refused before the parser sees it).
+    A generated file of constants that has stopped being a generated file of
+    constants is tampering, and refusing is the same fail-closed rule the
+    callers apply to a digest that does not match.
 
     That last case is the one that was silent.  An empty (or literal-free)
     artefact parses cleanly to zero values, and the ``ArtefactFields`` it used
@@ -230,26 +277,28 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
     construct this reader does not model.
     """
     path = artefact_path(package_dir)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    text = _read_artefact_text(path)
+    if text is None:
         return None
-    except OSError as exc:
-        raise ArtefactSourceError(f"{path}: cannot be read ({exc})") from exc
-    except UnicodeDecodeError as exc:
-        # NOT an OSError — UnicodeDecodeError derives from ValueError, so the
-        # handler above does not catch it and a non-UTF-8 artefact escaped this
-        # function raw, past the one exception type every caller of the trust
-        # bootstrap is written to expect.  An artefact that is not text is
-        # exactly as unusable as one that cannot be opened, and the callers
-        # that treat ArtefactSourceError as "no usable artefact, refuse" must
-        # see it as such rather than as an unhandled exception.
-        raise ArtefactSourceError(f"{path}: is not UTF-8 text ({exc})") from exc
 
+    # ``SyntaxError`` is not the only way ``ast.parse`` refuses text, and the
+    # others escaped this function raw — past the one exception type every
+    # caller of the trust bootstrap handles, so ``__init__`` failed with a bare
+    # traceback instead of its refusal and remediation text.  Measured on
+    # CPython 3.10-3.13 before this handler was widened: a NUL byte raises
+    # ``ValueError`` on 3.10 (``SyntaxError`` from 3.11); 100,000 chained
+    # unary minuses raise ``MemoryError`` ("parser stack overflow") on every
+    # version; 20,000 chained additions raise ``RecursionError`` during AST
+    # construction on 3.11-3.13.  None of them is an out-of-memory condition
+    # or a bug in this reader: each is the parser declining a shape the
+    # generator never emits.  The type is kept in the message so a genuine
+    # MemoryError is still recognisable as one.
     try:
         tree = ast.parse(text, filename=str(path))
-    except SyntaxError as exc:
-        raise ArtefactSourceError(f"{path}: is not parseable Python ({exc})") from exc
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        raise ArtefactSourceError(
+            f"{path}: is not parseable Python ({type(exc).__name__}: {exc})"
+        ) from exc
 
     values: Dict[str, Any] = {}
     for node in tree.body:
@@ -268,10 +317,16 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
                 )
             names.append(target.id)
 
+        # ``TypeError`` is ``literal_eval`` building a dict or set around an
+        # unhashable key (``X = {[]: 1}``), and escaped this function raw
+        # until it was listed here; ``RecursionError`` and ``MemoryError`` are
+        # listed for the same reason as at the parse above.
         try:
             literal = ast.literal_eval(value)
-        except (ValueError, SyntaxError) as exc:
-            raise ArtefactSourceError(f"{path}: {names[0]} is not a literal ({exc})") from exc
+        except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError) as exc:
+            raise ArtefactSourceError(
+                f"{path}: {names[0]} is not a literal ({type(exc).__name__}: {exc})"
+            ) from exc
         for name in names:
             values[name] = literal
 

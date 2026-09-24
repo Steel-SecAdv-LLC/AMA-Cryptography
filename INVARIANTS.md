@@ -3262,7 +3262,11 @@ The Python surface enforces the same contract in
 pair as a `bytearray` (an immutable `bytes` cannot be consumed, and writing
 through a pointer into one is undefined behaviour in CPython),
 `frost_round2_sign` requires a writable buffer and scrubs it in a `finally`
-so the Python-side argument refusals consume it too, and `frost_aggregate`
+so the Python-side argument refusals consume it too — every one of them,
+and the module-state and backend refusals, since 2026-09-24: until then the
+view was taken only after the `num_signers`, `participant_share`,
+`participant_index` and nonce-length checks, so those refusals returned with
+the pair intact — and `frost_aggregate`
 raises `FrostShareRejected` carrying `participant_index`. Callers updated in
 the same change: the dealer's pairwise-consistency round trip in
 `frost_keygen_trusted_dealer` (INVARIANT-41), `benchmarks/benchmark_c_raw.c`
@@ -3291,8 +3295,10 @@ channel, rejects mismatched public key shares, and an honest ceremony still
 aggregates to a signature `ama_ed25519_verify` accepts.
 `tests/test_frost.py` mirrors both on the Python surface
 (`TestFROSTNonceSingleUse`, including
-`test_attack_three_signings_under_one_nonce` and the `TypeError` on an
-immutable nonce pair; `TestFROSTShareVerification`, including the
+`test_attack_three_signings_under_one_nonce`, the `TypeError` on an
+immutable nonce pair, and `test_nonce_is_zeroed_on_every_python_side_refusal`
+with one row per refusal the wrapper makes before the native call;
+`TestFROSTShareVerification`, including the
 parametrised attribution test and the end-to-end RFC 8032 check).
 `tools/check_ctypes_abi.py` holds the new arities against the header
 (INVARIANT-42).

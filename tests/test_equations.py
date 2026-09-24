@@ -275,7 +275,7 @@ class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
     """``max_x sigma(x)`` is the largest ALGEBRAIC eigenvalue, not the largest
     by magnitude — and power iteration finds the second one.
 
-    ``_dominant_eigenvector`` is plain power iteration, so it converges to the
+    ``_dominant_eigenvector`` was plain power iteration, so it converged to the
     eigenvector of the largest-magnitude eigenvalue.  Its docstring asserted
     that this equals ``max_x sigma_quadratic(x)``, which holds only for a
     positive semi-definite matrix; ``enforce_sigma_quadratic_threshold`` then
@@ -343,69 +343,34 @@ class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
                     f"{data}: a swept direction beat the reported maximiser",
                 )
 
-    @staticmethod
-    def _iterated_operators(data: object) -> list[list[list[float]]]:
-        """Every matrix ``_dominant_eigenvector`` multiplies a vector by.
+    def test_the_documented_matrix_is_bounded_below_at_zero_soundly(self) -> None:
+        """Gershgorin bounds the documented matrix below at >= 0, and soundly.
 
-        Read off ``Mat.__matmul__`` itself, so it is the operator the power
-        iteration really applied, not one reconstructed from the source.
-        """
-        from unittest import mock
-
-        from ama_cryptography._numeric import Mat, Vec, asmat
-        from ama_cryptography.equations import _dominant_eigenvector
-
-        seen: list[list[list[float]]] = []
-        real = Mat.__matmul__
-
-        def spy(self: Mat, other: Mat | Vec) -> Mat | Vec:
-            if isinstance(other, Vec):
-                seen.append(self.tolist())
-                return real(self, other)
-            return real(self, other)
-
-        with mock.patch.object(Mat, "__matmul__", spy):
-            _dominant_eigenvector(asmat(data))
-        return seen
-
-    def test_a_positive_definite_matrix_is_unaffected(self) -> None:
-        """No shift is applied whenever Gershgorin already bounds below at >= 0.
-
-        Asserted on what the iteration does, not only on its precondition:
-        every ``M @ v`` inside ``_dominant_eigenvector`` must multiply by
-        exactly the symmetric part of ``E``, entry for entry.  An identical
-        operator from an identical start vector is identical arithmetic, so
-        the returned direction is the unshifted iteration's, bit for bit.
-
-        The first version asserted the Gershgorin bound and stopped, so it
-        could not fail for the property its name states: a shift applied to
-        every matrix changes no eigenvector, hence no maximiser any other test
-        here compares, and it passed.  ``[[1, 2], [2, 5]]`` is the control —
-        positive definite with a bound of -1, so there the operator MUST
-        differ, which is what shows the spy can see a shift at all.
+        This test used to be named ``..._is_unaffected`` and assert only the
+        bound, a precondition standing in for the behaviour its name claimed
+        (review note tests-py-3#150).  The behaviour it named was the power
+        iteration's Gershgorin shift, which no longer exists: the eigensolver
+        is now Householder tridiagonalisation with Sturm bisection, and the
+        bound is only the lower end of the bisection bracket.  What remains to
+        pin is exactly that: the bound is non-negative on the documented input
+        and is a true lower bound — no direction's Rayleigh quotient of the
+        matrix falls below it.  A bound set too high would narrow the bracket
+        past the spectrum; the sweep below fails on one.
         """
         from ama_cryptography._numeric import asmat
-        from ama_cryptography.equations import _gershgorin_lower_bound, _symmetric_part
+        from ama_cryptography.equations import _gershgorin_lower_bound
 
         matrix = asmat(initialize_ethical_matrix(6))
-        self.assertGreaterEqual(_gershgorin_lower_bound(matrix), 0.0)
-        operators = self._iterated_operators(matrix)
-        self.assertTrue(operators, "the iteration multiplied by nothing")
-        unshifted = _symmetric_part(matrix).tolist()
-        for step, operator in enumerate(operators):
-            self.assertEqual(
-                operator, unshifted, f"iteration {step} multiplied by a shifted operator"
+        bound = _gershgorin_lower_bound(matrix)
+        self.assertGreaterEqual(bound, 0.0)
+        n = len(matrix.tolist())
+        for k in range(600):
+            probe = Vec([math.sin((k + 1) * (i + 1) * 0.7361) for i in range(n)])
+            self.assertGreaterEqual(
+                calculate_sigma_quadratic(probe, matrix),
+                bound - 1e-12,
+                f"probe {k}: a Rayleigh quotient below the Gershgorin lower bound",
             )
-
-        control = asmat([[1.0, 2.0], [2.0, 5.0]])
-        self.assertLess(_gershgorin_lower_bound(control), 0.0)
-        shifted = self._iterated_operators(control)
-        self.assertTrue(shifted, "the iteration multiplied by nothing")
-        self.assertNotEqual(
-            shifted[0],
-            _symmetric_part(control).tolist(),
-            "a negative Gershgorin bound applied no shift, or the spy cannot see one",
-        )
 
     def test_gershgorin_is_a_bound_not_the_spectrum(self) -> None:
         """A positive-definite matrix can still have a negative bound.
@@ -416,7 +381,10 @@ class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
         has eigenvalues ~5.83 and ~0.17 — positive definite — and a Gershgorin
         lower bound of -1, so a shift IS applied.  Harmless, because shifting
         preserves eigenvectors exactly, but the claim of bit-identity was not.
-        This test exists so that claim cannot come back.
+        This test exists so that claim cannot come back.  (The shift has since
+        been retired with the power iteration; the same bound now opens the
+        bisection bracket, where "a bound, not the spectrum" is exactly the
+        property a bracket needs.)
         """
         from ama_cryptography._numeric import asmat
         from ama_cryptography.equations import _gershgorin_lower_bound
@@ -430,6 +398,140 @@ class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
         self.assertGreater(psd[0][0], 0.0)
         self.assertGreater(psd[0][0] * psd[1][1] - psd[0][1] * psd[1][0], 0.0)
         self.assertLess(_gershgorin_lower_bound(psd), 0.0)
+
+
+def _orthonormal_basis_from(first: list[float]) -> list[list[float]]:
+    """Gram-Schmidt over ``first`` then the standard basis: a basis whose
+    first vector is ``first`` normalised.  Deterministic, so the matrices
+    built from it are the same on every run."""
+    n = len(first)
+    basis: list[list[float]] = []
+    for candidate in [first] + [[1.0 if i == k else 0.0 for i in range(n)] for k in range(n)]:
+        w = list(candidate)
+        for q in basis:
+            c = sum(a * b for a, b in zip(w, q))
+            w = [a - c * b for a, b in zip(w, q)]
+        norm = math.sqrt(sum(a * a for a in w))
+        if norm > 1e-9:
+            basis.append([a / norm for a in w])
+        if len(basis) == n:
+            break
+    return basis
+
+
+def _with_spectrum(basis: list[list[float]], values: list[float]) -> list[list[float]]:
+    """``sum_k values[k] * basis[k] basis[k]^T`` — a symmetric matrix whose
+    eigenpairs are known exactly by construction."""
+    n = len(basis)
+    return [
+        [sum(values[k] * basis[k][i] * basis[k][j] for k in range(n)) for j in range(n)]
+        for i in range(n)
+    ]
+
+
+class TestTheMaximiserDoesNotDependOnAStartVector(unittest.TestCase):
+    """``argmax sigma`` must not depend on where an iteration starts, nor on
+    how closely the top eigenvalues are spaced.
+
+    ``_dominant_eigenvector`` used to run power iteration from the fixed start
+    ``[1 + (i % 3) / 4 for i in range(n)]``.  Two measured failures, both of
+    which made ``enforce_sigma_quadratic_threshold`` call a reachable
+    threshold unreachable:
+
+    * On a matrix for which that start vector is a NON-dominant eigenvector
+      the iterate never moved, the convergence test passed after one step,
+      and the function returned the wrong eigenvector: on ``TRAP`` below it
+      returned sigma = 1.0 against lambda_max = 2.0, and threshold 1.5 came
+      back "unreachable" with the state unchanged.
+    * On a clustered spectrum — which ``initialize_ethical_matrix`` produces
+      by construction, every eigenvalue near phi^3 — 512 steps were not
+      enough: sigma fell short of lambda_max by 3.9e-9 to 1.5e-2 depending on
+      the draw and the dimension.
+
+    The replacement is a direct method (tridiagonal reduction, Sturm
+    bisection, twisted factorisation) with no start vector and no dependence
+    on eigenvalue gaps.  Every matrix here has a spectrum known by
+    construction, so the expected maximum is exact rather than computed.
+    """
+
+    #: Eigenpairs (1, [1, 1.25]) and (2, [1.25, -1]).  The retired start
+    #: vector for n = 2 is [1, 1.25] — the NON-dominant eigenvector.
+    TRAP: ClassVar[list[list[float]]] = [
+        [4.125 / 2.5625, -1.25 / 2.5625],
+        [-1.25 / 2.5625, 3.5625 / 2.5625],
+    ]
+
+    @staticmethod
+    def _retired_start(n: int) -> list[float]:
+        return [1.0 + (i % 3) * 0.25 for i in range(n)]
+
+    def _assert_reaches(self, data: list[list[float]], lambda_max: float, label: str) -> None:
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        direction = _dominant_eigenvector(asmat(data))
+        self.assertIsNotNone(direction, label)
+        assert direction is not None
+        sigma = calculate_sigma_quadratic(direction, data)
+        self.assertLessEqual(
+            abs(sigma - lambda_max),
+            1e-12 * max(1.0, abs(lambda_max)),
+            f"{label}: sigma {sigma!r} is not lambda_max {lambda_max!r}",
+        )
+
+    def test_the_audit_matrix(self) -> None:
+        self._assert_reaches(self.TRAP, 2.0, "TRAP")
+
+    def test_a_reachable_threshold_is_reached_from_the_trap(self) -> None:
+        state = Vec([1.0, 1.25])
+        met, corrected = enforce_sigma_quadratic_threshold(state, self.TRAP, threshold=1.5)
+        self.assertFalse(met, "sigma(state) is 1.0, below the 1.5 threshold")
+        sigma = calculate_sigma_quadratic(corrected, self.TRAP)
+        self.assertGreaterEqual(sigma + 1e-9, 1.5, f"1.5 <= lambda_max = 2 was left at {sigma}")
+        self.assertAlmostEqual(
+            math.sqrt(corrected @ corrected), math.sqrt(state @ state), places=12
+        )
+
+    def test_the_trap_in_every_dimension(self) -> None:
+        """The retired start vector as the SMALLEST eigenvector, n = 2..7,
+        with distinct and with degenerate dominant eigenvalues."""
+        for n in range(2, 8):
+            basis = _orthonormal_basis_from(self._retired_start(n))
+            distinct = [1.0] + [2.0 + k for k in range(n - 1)]
+            self._assert_reaches(_with_spectrum(basis, distinct), max(distinct), f"n={n} distinct")
+            degenerate = [1.0] + [3.0] * (n - 1)
+            self._assert_reaches(_with_spectrum(basis, degenerate), 3.0, f"n={n} degenerate")
+
+    def test_a_clustered_spectrum_reaches_its_top(self) -> None:
+        """Twenty eigenvalues 1e-3 apart around phi^3 — the shape
+        ``initialize_ethical_matrix`` produces — with a basis unrelated to
+        the retired start vector, so only the spacing is under test."""
+        n = 20
+        seed = [math.sin(0.7 * (i + 1)) + 0.1 * i for i in range(n)]
+        basis = _orthonormal_basis_from(seed)
+        values = [PHI_CUBED + 1e-3 * k for k in range(n)]
+        self._assert_reaches(_with_spectrum(basis, values), max(values), "clustered")
+
+    def test_a_reducible_matrix_takes_the_top_block(self) -> None:
+        """Block-diagonal input: the tridiagonal form splits, and the answer
+        must come from whichever block holds lambda_max."""
+        self._assert_reaches([[4.0, 1.0, 0.0], [1.0, 4.0, 0.0], [0.0, 0.0, 1.0]], 5.0, "top 2x2")
+        self._assert_reaches([[2.0, 1.0, 0.0], [1.0, 2.0, 0.0], [0.0, 0.0, 5.0]], 5.0, "top 1x1")
+        self._assert_reaches([[1.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 2.0]], 3.0, "diagonal")
+
+    def test_a_non_finite_matrix_has_no_maximiser(self) -> None:
+        """No direction is computable, and the caller must not blend toward a
+        NaN vector: the state comes back unchanged."""
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        for bad in (math.nan, math.inf):
+            data = [[bad, 0.0], [0.0, 1.0]]
+            self.assertIsNone(_dominant_eigenvector(asmat(data)), repr(bad))
+        state = Vec([0.0, 1.0])
+        met, corrected = enforce_sigma_quadratic_threshold(state, [[math.nan, 0.0], [0.0, 1.0]])
+        self.assertFalse(met)
+        self.assertEqual(list(corrected), list(state))
 
 
 class TestSigmaIsBlindToTheSkewPart(unittest.TestCase):

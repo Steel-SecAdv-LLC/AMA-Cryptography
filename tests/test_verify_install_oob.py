@@ -641,6 +641,20 @@ class TestArtefactIsLiteralDataOnly:
         tree = ast.parse(f"X: {annotation} = {{}}\n")
         assert oob.artefact_shape_violation(tree) is None
 
+    def test_an_oversized_artefact_is_refused_before_the_parser_runs(self, tmp_path: Path) -> None:
+        """Valid Python past the bound: only the size check can refuse it."""
+        artefact = tmp_path / "_integrity_signature.py"
+        digest = "0" * (oob.ARTEFACT_MAX_CHARS + 1)
+        artefact.write_text(f'INTEGRITY_DIGEST_HEX = "{digest}"\n', encoding="utf-8")
+        fields, error = oob.parse_artefact_fields(artefact)
+        assert fields is None
+        assert error is not None and "larger than any artefact" in error
+
+    def test_the_size_bound_matches_the_in_package_reader(self) -> None:
+        from ama_cryptography._artefact_source import ARTEFACT_MAX_CHARS
+
+        assert oob.ARTEFACT_MAX_CHARS == ARTEFACT_MAX_CHARS
+
     def test_the_check_runs_before_the_fields_are_trusted(self, tmp_path: Path) -> None:
         """A malformed artefact yields no fields, not fields-plus-a-warning."""
         artefact = tmp_path / "_integrity_signature.py"

@@ -360,6 +360,47 @@ class TestPreloadRefusal:
         new_errors = pb._LOAD_DIAGNOSTICS["errors"][errors_before:]
         assert any("refused before mapping" in err for _p, err in new_errors), new_errors
 
+    @pytest.mark.parametrize("grant", ["override", "signer-identity"])
+    def test_the_mapping_warning_names_the_grant_that_applied(
+        self,
+        tampered_so: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        grant: str,
+    ) -> None:
+        """An unverified mapping is logged with the reason it was permitted.
+
+        Two grants exist: the in-process override a signing tool enters
+        (``unverified_load_for_signing``) and the launch-identity test
+        (``_process_is_the_integrity_signer``).  The warning used to say "the
+        in-process signing override is active" for both — false on the path
+        every signing run takes first, where
+        ``python -m ama_cryptography.integrity --update --sign`` maps the
+        rebuilt library while importing the package, before any code has
+        entered the override.  Measured on that run before the fix: the
+        warning named the override, and the override was False.
+        """
+        import contextlib
+        import logging
+
+        monkeypatch.setattr(pb, "_in_secure_execution_mode", lambda: False)
+        monkeypatch.setattr(
+            pb, "_process_is_the_integrity_signer", lambda: grant == "signer-identity"
+        )
+        scope = (
+            pb.unverified_load_for_signing() if grant == "override" else contextlib.nullcontext()
+        )
+        with caplog.at_level(logging.WARNING, logger=pb.__name__), scope:
+            assert pb._try_load_library(tampered_so) is not None
+        messages = [r.getMessage() for r in caplog.records if "mapping it anyway" in r.getMessage()]
+        assert len(messages) == 1, messages
+        if grant == "override":
+            assert "in-process signing override" in messages[0], messages[0]
+            assert "_process_is_the_integrity_signer" not in messages[0], messages[0]
+        else:
+            assert "_process_is_the_integrity_signer" in messages[0], messages[0]
+            assert "in-process signing override" not in messages[0], messages[0]
+
     def test_a_refusal_is_recorded_structurally_not_only_in_prose(
         self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

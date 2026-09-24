@@ -862,9 +862,29 @@ SIGNATURE_DOMAIN_PREFIX = b"AMA-PKG-v2"
 SIGNATURE_FORMAT_V1 = "1.0.0"
 SIGNATURE_FORMAT_V2 = "2.0.0"
 
-#: The format this module PRODUCES.  V1 and V2 remain verifiable — a package
-#: already written down does not become unreadable because a weakness was
-#: found in what it left unsigned — but nothing new is minted in them.
+#: The format this module PRODUCES.  ``verify_crypto_package`` still accepts
+#: V1 and V2 — it rebuilds their transcripts exactly as they were built, since
+#: a package already written down does not become unreadable because a
+#: weakness was found in what it left unsigned — but nothing new is minted in
+#: them.
+#:
+#: What "still accepts" covers, measured on 2026-09-24 against a V2 package
+#: minted by v4.0.0 (``tests/test_legacy_package_compat.py`` pins it): the
+#: content hash, the HMAC and the Ed25519 signature verify exactly as they did.
+#: The ML-DSA-65 signature does NOT.  4.x's ``dilithium_sign`` was the FIPS 204
+#: internal interface (Algorithm 7); 5.0's ``dilithium_verify`` is the
+#: external, empty-context one — the 5.0.0 wire-format break documented on
+#: ``pqc_backends.dilithium_sign`` — so every pre-5.0 ML-DSA-65 signature
+#: verifies False.  Under the default policy (``require_quantum_signatures``
+#: defaults to ``DILITHIUM_AVAILABLE``, True on a normal build) verification
+#: of such a package therefore raises ``QuantumSignatureRequiredError``; a
+#: caller who passes ``require_quantum_signatures=False`` gets ``hmac`` and
+#: ``ed25519`` True and ``dilithium`` False.  A pre-5.0 package minted without
+#: the quantum layer fails the default policy too, for lacking one.  The
+#: 4.x signatures cannot be made verifiable again without shipping the
+#: internal interface, which INVARIANT-50 forbids and which names "legacy" and
+#: "compatibility" entry points as no exemption.  This comment said, until
+#: that date, that V1 and V2 "remain verifiable" without qualification.
 #:
 #: What V3 changes, and why (2026-09 audit, A-2, legacy half).  Under V2 the
 #: signature covered ``content_hash`` and ``ethical_hash``, and the HMAC
@@ -878,19 +898,31 @@ SIGNATURE_FORMAT_V2 = "2.0.0"
 #: the field that was changed.  V3 signs and MACs a transcript of all of them.
 SIGNATURE_FORMAT_V3 = "3.0.0"
 
-# The RFC 3161 token is deliberately outside both transcripts: it is acquired
-# AFTER the signature exists (it timestamps the content), so it cannot be
-# inside it.  It is not left unbound — RFC 3161 §2.4.2 binds the token to
-# ``content_hash`` through its own message imprint, and
-# ``_verify_rfc3161_token`` checks exactly that binding.  See INVARIANT-37 for
-# what that check does and does not assert.
+# The RFC 3161 token is INSIDE both V3 transcripts: `build_package_transcript`
+# binds `timestamp_token` into the "signature" transcript and the "hmac"
+# transcript alike.  It can be, because it timestamps `content_hash`, not the
+# signature — `create_crypto_package` requests it before either authenticator
+# is computed.  Measured on a V3 package carrying a token: stripping it,
+# replacing it, or injecting one into a package created without one turns
+# `hmac`, `ed25519` and `dilithium` all False (`content_hash` stays True), and
+# under the default policy the ML-DSA-65 failure raises
+# QuantumSignatureRequiredError.  `tests/test_crypto_package_transcript.py`
+# pins that every one of the three moves.  Separately, RFC 3161 §2.4.2 binds
+# the token to `content_hash` through its own message imprint, which
+# `_verify_rfc3161_token` checks; see INVARIANT-37 for what that check does
+# and does not assert.  V1 and V2 transcripts do not contain the token, so
+# under those formats adding, stripping or replacing it moves only
+# `rfc3161_binding`; `tests/test_legacy_package_compat.py` pins the addition
+# case on a package minted by v4.0.0.
 #
-# Recorded as a comment rather than a module constant: the assignment it
-# replaces (`_V3_EXCLUDES_TIMESTAMP_TOKEN = True`) was read by nothing, so the
-# `True` asserted nothing and only the prose carried the decision.  A comment
-# keeps the reasoning where the next reader needs it without pretending to be
-# a checked invariant — the same correction this branch already applied to
-# `docs/conf.py`'s no-op Sphinx defaults.
+# Corrected 2026-09-24.  Until then this comment said the opposite — that the
+# token was "deliberately outside both transcripts" because it was "acquired
+# AFTER the signature exists".  That described the V3 design as first written
+# (9b860868, 2026-09-16, as `_V3_EXCLUDES_TIMESTAMP_TOKEN = True`, turned into
+# this comment by 9566c2f the same day); 0cf4fc0 (2026-09-23) moved the token
+# inside both transcripts and requested it before signing, because leaving it
+# out let it be stripped with every layer still passing, and this comment was
+# not updated with it.
 
 
 def build_signature_message(

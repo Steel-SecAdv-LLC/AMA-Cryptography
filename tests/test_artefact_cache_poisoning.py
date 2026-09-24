@@ -54,7 +54,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -364,6 +364,34 @@ class TestTheParserFailsWithTheOneExceptionCallersHandle:
         with pytest.raises(ArtefactSourceError, match="is not UTF-8 text"):
             load_artefact_fields(pkg)
 
+    def test_an_oversized_artefact_is_refused_before_the_parser_runs(self, tmp_path: Path) -> None:
+        """Past the bound the artefact is refused by size, not handed to the parser.
+
+        The payload is valid Python a parser accepts on every version, so the
+        only thing that can refuse it is the size bound; the shape that matters
+        (CPython 3.10 crashes inside ``ast.parse`` on ~280 KB of chained
+        additions) is exactly what the bound keeps away from the parser.
+        """
+        from ama_cryptography._artefact_source import (
+            ARTEFACT_MAX_CHARS,
+            ArtefactSourceError,
+            load_artefact_fields,
+        )
+
+        digest = "0" * (ARTEFACT_MAX_CHARS + 1)
+        pkg = self._staged(tmp_path, f'INTEGRITY_DIGEST_HEX = "{digest}"\n'.encode())
+        with pytest.raises(ArtefactSourceError, match="refused before parsing"):
+            load_artefact_fields(pkg)
+
+    def test_the_real_artefact_is_far_inside_the_size_bound(self) -> None:
+        """The bound refuses nothing the signer writes, with room to grow."""
+        from ama_cryptography._artefact_source import ARTEFACT_MAX_CHARS, artefact_path
+
+        path = artefact_path(REPO_ROOT / "ama_cryptography")
+        if not path.is_file():
+            pytest.skip("no signed artefact in this checkout (it is a build output)")
+        assert len(path.read_text(encoding="utf-8")) * 4 < ARTEFACT_MAX_CHARS
+
     def test_an_unparseable_artefact_raises_artefact_source_error(self, tmp_path: Path) -> None:
         from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
 
@@ -409,6 +437,130 @@ class TestTheParserFailsWithTheOneExceptionCallersHandle:
         pkg.mkdir(parents=True, exist_ok=True)
         assert load_artefact_fields(pkg) is None
 
+    #: Artefacts the parser or ``literal_eval`` refuses with an exception its
+    #: handler did not list (the parse caught only ``SyntaxError``, the
+    #: literal only ``ValueError``/``SyntaxError``) — each of which escaped
+    #: ``load_artefact_fields`` raw until 2026-09-24, so ``__init__`` died with
+    #: a bare traceback instead of its refusal text.  ``raw`` maps each CPython
+    #: version to the type that escaped there; a version absent from a row
+    #: already refused that payload through a handled type, so the refusal is
+    #: still asserted on it but the chained cause is not.  Sizes are chosen to
+    #: trigger the refusal on 3.11-3.13 while staying far below the depth at
+    #: which 3.10's parser crashes outright (see ``_artefact_source``: 130,000
+    #: chained additions still parse there).
+    NON_SYNTAX_REFUSALS: ClassVar[tuple[tuple[str, bytes, dict[tuple[int, int], str]], ...]] = (
+        (
+            "unhashable-dict-key",
+            b'INTEGRITY_DIGEST_HEX = "ab"\nX = {[]: 1}\n',
+            {
+                (3, 10): "TypeError",
+                (3, 11): "TypeError",
+                (3, 12): "TypeError",
+                (3, 13): "TypeError",
+            },
+        ),
+        (
+            "unhashable-set-member",
+            b'INTEGRITY_DIGEST_HEX = "ab"\nX = {1, []}\n',
+            {
+                (3, 10): "TypeError",
+                (3, 11): "TypeError",
+                (3, 12): "TypeError",
+                (3, 13): "TypeError",
+            },
+        ),
+        ("nul-byte", b'INTEGRITY_DIGEST_HEX = "ab"\x00\n', {(3, 10): "ValueError"}),
+        (
+            "unary-chain",
+            b'INTEGRITY_DIGEST_HEX = "ab"\nX = ' + b"-" * 10_000 + b"1\n",
+            {
+                (3, 10): "MemoryError",
+                (3, 11): "MemoryError",
+                (3, 12): "MemoryError",
+                (3, 13): "MemoryError",
+            },
+        ),
+        (
+            "addition-chain",
+            b'INTEGRITY_DIGEST_HEX = "ab"\nX = 1' + b"+1" * 12_000 + b"\n",
+            {(3, 11): "RecursionError", (3, 12): "RecursionError", (3, 13): "RecursionError"},
+        ),
+    )
+
+    @pytest.mark.parametrize(
+        "payload,raw",
+        [row[1:] for row in NON_SYNTAX_REFUSALS],
+        ids=[row[0] for row in NON_SYNTAX_REFUSALS],
+    )
+    def test_a_non_syntax_refusal_is_an_artefact_source_error(
+        self, tmp_path: Path, payload: bytes, raw: dict[tuple[int, int], str]
+    ) -> None:
+        """Each refusal arrives as ``ArtefactSourceError``, naming and chaining
+        the parser's own exception so an out-of-memory condition is still
+        recognisable as one."""
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        pkg = self._staged(tmp_path, payload)
+        with pytest.raises(ArtefactSourceError) as caught:
+            load_artefact_fields(pkg)
+        expected = raw.get(sys.version_info[:2])
+        if expected is not None:
+            cause = caught.value.__cause__
+            assert type(cause).__name__ == expected, (
+                f"expected the chained cause to be the {expected} that used to "
+                f"escape, got {type(cause).__name__}"
+            )
+            assert expected in str(caught.value)
+
+    #: Every exception type each handler in ``load_artefact_fields`` lists.
+    #: The payload rows above show which are REACHABLE from text; this pins
+    #: each listed type at each site independently, because two of them
+    #: (``RecursionError`` and ``MemoryError`` out of ``literal_eval``) have no
+    #: payload that reaches them without also tripping the parser first — a
+    #: literal nested past the tokenizer's 200-bracket limit never gets there.
+    HANDLED_AT: ClassVar[tuple[tuple[str, type[BaseException]], ...]] = (
+        ("parse", SyntaxError),
+        ("parse", ValueError),
+        ("parse", RecursionError),
+        ("parse", MemoryError),
+        ("literal_eval", ValueError),
+        ("literal_eval", TypeError),
+        ("literal_eval", SyntaxError),
+        ("literal_eval", RecursionError),
+        ("literal_eval", MemoryError),
+    )
+
+    @pytest.mark.parametrize(
+        "site,exc_type", HANDLED_AT, ids=[f"{site}-{exc.__name__}" for site, exc in HANDLED_AT]
+    )
+    def test_each_listed_type_is_handled_at_its_site(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        site: str,
+        exc_type: type[BaseException],
+    ) -> None:
+        import ast
+        import types
+
+        from ama_cryptography import _artefact_source
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        def _raise(*_args: Any, **_kwargs: Any) -> Any:
+            raise exc_type("injected")
+
+        # Patch the reader's OWN reference to ``ast``, not the ``ast`` module:
+        # pytest's reporting parses source too, and a global patch turns an
+        # escaped exception into an INTERNALERROR instead of a test failure.
+        fake_ast = types.ModuleType("ast")
+        fake_ast.__dict__.update(ast.__dict__)
+        setattr(fake_ast, site, _raise)
+        pkg = self._staged(tmp_path, b'INTEGRITY_DIGEST_HEX = "ab"\n')
+        monkeypatch.setattr(_artefact_source, "ast", fake_ast)
+        with pytest.raises(ArtefactSourceError) as caught:
+            load_artefact_fields(pkg)
+        assert type(caught.value.__cause__) is exc_type
+
     def test_every_failure_mode_is_one_exception_type(self, tmp_path: Path) -> None:
         """Swept, so a new decode path cannot reintroduce a second type.
 
@@ -423,6 +575,7 @@ class TestTheParserFailsWithTheOneExceptionCallersHandle:
             b"X = (\n",
             b"import os\nX = os.environ\n",
             b"",
+            *(payload for _label, payload, _raw in self.NON_SYNTAX_REFUSALS),
         )
         for i, payload in enumerate(payloads):
             pkg = self._staged(tmp_path / f"case{i}", payload)

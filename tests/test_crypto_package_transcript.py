@@ -697,3 +697,53 @@ class TestTheLegacyPackageBindsItsOwnIdentity:
         assert lc.build_package_transcript(
             "signature", package, digest, ethical
         ) != lc.build_package_transcript("hmac", package, digest, ethical)
+
+    @pytest.mark.parametrize("change", ["stripped", "replaced", "injected"])
+    def test_the_rfc3161_token_is_under_every_authenticator(
+        self, legacy_pair: Any, monkeypatch: pytest.MonkeyPatch, change: str
+    ) -> None:
+        """The token is inside BOTH V3 transcripts, so each authenticator moves.
+
+        The comment beside ``SIGNATURE_FORMAT_V3`` said the opposite until
+        2026-09-24 — "deliberately outside both transcripts" — while
+        ``build_package_transcript`` bound it into both.  The
+        ``timestamp_token injected`` row of ``test_tampering_is_detected`` only
+        asks that SOME layer moves, which a token bound into one transcript
+        would satisfy; this asks that the HMAC, the Ed25519 signature and (when
+        present) the ML-DSA-65 signature each do, for a token stripped from,
+        replaced in, and injected into a package.
+        """
+        import warnings
+
+        lc, kms, package = legacy_pair
+        if change == "injected":
+            base = dataclasses.replace(package, ethical_vector=dict(package.ethical_vector))
+            assert base.timestamp_token is None, "precondition: created without a token"
+            new_token: Any = "AAAA"
+        else:
+            # No TSA is contacted: the token's bytes are opaque to the
+            # transcript, and the binding to content_hash is a separate check.
+            monkeypatch.setattr(lc, "get_rfc3161_timestamp", lambda *_a, **_k: b"TSR")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                base = lc.create_crypto_package(
+                    LEGACY_CODES, LEGACY_HELIX, kms, "real-author", use_rfc3161=True
+                )
+            assert base.timestamp_token is not None, "precondition: created with a token"
+            new_token = None if change == "stripped" else "QUFBQQ=="
+        tampered = dataclasses.replace(
+            base, ethical_vector=dict(base.ethical_vector), timestamp_token=new_token
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            before = lc.verify_crypto_package(
+                LEGACY_CODES, LEGACY_HELIX, base, kms.hmac_key, require_quantum_signatures=False
+            )
+            after = lc.verify_crypto_package(
+                LEGACY_CODES, LEGACY_HELIX, tampered, kms.hmac_key, require_quantum_signatures=False
+            )
+        layers = ["hmac", "ed25519"] + (["dilithium"] if base.quantum_signatures_enabled else [])
+        for layer in layers:
+            assert before[layer] is True, f"{layer}: the untampered package must verify"
+            assert after[layer] is False, f"{layer} did not move when the token was {change}"
+        assert after["content_hash"] is True, "only the token changed, not the content"

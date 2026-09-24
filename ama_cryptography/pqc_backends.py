@@ -846,18 +846,31 @@ def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
             # weight of the boundary rests on the identity/mode test beside
             # it.  See that function's docstring for why the build pipeline
             # needs the map at all.
-            if (
-                _SIGNING_LOAD_OVERRIDE and not _in_secure_execution_mode()
-            ) or _process_is_the_integrity_signer():
+            override_grant = _SIGNING_LOAD_OVERRIDE and not _in_secure_execution_mode()
+            if override_grant or _process_is_the_integrity_signer():
                 # The signing tool is explicitly blessing this object. It is
                 # about to become the signed digest, so mapping it is the
                 # operator's stated intent rather than an inherited default.
+                #
+                # The warning names the grant that actually applied.  It used
+                # to say "the in-process signing override is active" for both,
+                # which was false on the path every signing run takes first:
+                # `python -m ama_cryptography.integrity --update --sign` maps
+                # the library while importing the package, before any code
+                # enters `unverified_load_for_signing`, so the grant there is
+                # the launch-identity test and the override is still False.
+                grant = (
+                    "the in-process signing override (unverified_load_for_signing) is active"
+                    if override_grant
+                    else "this process is the integrity signer running its writing "
+                    "subcommand (_process_is_the_integrity_signer)"
+                )
                 logging.getLogger(__name__).warning(
                     "Native library %s does not match the signed digest; "
-                    "mapping it anyway because the in-process signing "
-                    "override is active (the artefact is being re-signed for "
-                    "this build).",
+                    "mapping it anyway because %s (the artefact is being "
+                    "re-signed for this build).",
                     lib_path,
+                    grant,
                 )
             else:
                 _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), _PRELOAD_MISMATCH_HINT))
@@ -9528,18 +9541,29 @@ def frost_round2_sign(
     participant's long-term secret share.  So an immutable argument is a
     ``TypeError``, not a silently weaker mode.
 
-    This wrapper also scrubs the buffer for the failures it detects BEFORE
-    calling C (bad lengths, bad indices), so "round 2 consumes the nonce,
-    whatever the outcome" holds at the Python boundary exactly as it does at
-    the C boundary, and a caller never has to ask which layer refused.
+    This wrapper also scrubs the buffer for every refusal it makes BEFORE
+    calling C, so "round 2 consumes the nonce, whatever the outcome" holds at
+    the Python boundary exactly as it does at the C boundary, and a caller
+    never has to ask which layer refused.  The writable view is taken as the
+    first statement, before the module-state check, the backend check and
+    every argument check (``num_signers``, ``participant_share``,
+    ``participant_index``, the nonce pair's own length, ``commitments``,
+    ``signer_indices``, ``group_public_key``), so each of those refusals runs
+    inside the scrubbing ``finally``.  The whole buffer is scrubbed, whatever
+    its length: a 63- or 65-byte buffer is refused as the wrong size AND
+    zeroized, because a truncated or padded copy of a nonce pair is still a
+    nonce pair's worth of secret.  The one refusal that cannot scrub is the
+    ``TypeError`` for an argument that is not a writable buffer — there is
+    nothing this function may write to.
 
     Args:
         message: Message to sign.
         participant_share: 64-byte share.
         participant_index: 1-based participant index.
         nonce_pair: 64-byte WRITABLE nonce pair from ``frost_round1_commit``
-            (SECRET, SINGLE-USE).  Zeroized in place before this function
-            returns or raises.
+            (SECRET, SINGLE-USE).  Zeroized in place, every byte of it,
+            before this function returns or raises — unless it is not a
+            writable buffer, which is the ``TypeError`` below.
         commitments: Concatenated commitments (num_signers * 64 bytes).
         signer_indices: Byte array of 1-based signer indices.
         num_signers: Number of signers in this session.
@@ -9554,21 +9578,19 @@ def frost_round2_sign(
         RuntimeError: the native call refused — including the refusal of an
             already-consumed nonce pair.
     """
-    check_crypto_permitted()
-    if not _FROST_AVAILABLE or _native_lib is None:
-        raise NativeBackendUnavailableError("FROST native library not available")
-    if not (2 <= num_signers <= 255):
-        raise ValueError("num_signers must be in [2, 255]")
-    if len(participant_share) != FROST_SHARE_BYTES:
-        raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
-    if not (1 <= participant_index <= 255):
-        raise ValueError("participant_index must be in [1, 255]")
-    if len(nonce_pair) != FROST_NONCE_BYTES:
-        raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
-
-    # Take the writable view first: everything below this point can scrub.
+    # Take the writable view FIRST — before the module-state check, the
+    # backend check and every argument check — so that every refusal below is
+    # inside the scrubbing ``finally``.  The view spans the caller's whole
+    # buffer (its ``nbytes``, not a fixed 64), so a wrong-length buffer is
+    # zeroized as well as refused.  This ordering is what the docstring's
+    # "whatever the outcome" rests on: a review of an earlier revision found
+    # the ``num_signers``, ``participant_share``, ``participant_index`` and
+    # nonce-length checks running before the view existed, so each of those
+    # refusals returned with the caller's nonce pair intact.
     try:
-        nonce_view = (ctypes.c_char * FROST_NONCE_BYTES).from_buffer(nonce_pair)
+        with memoryview(nonce_pair) as nonce_probe:
+            nonce_nbytes = nonce_probe.nbytes
+        nonce_view = (ctypes.c_char * nonce_nbytes).from_buffer(nonce_pair)
     except TypeError as exc:
         raise TypeError(
             "nonce_pair must be a writable buffer (bytearray / memoryview), not "
@@ -9578,6 +9600,21 @@ def frost_round2_sign(
         ) from exc
 
     try:
+        check_crypto_permitted()
+        if not _FROST_AVAILABLE or _native_lib is None:
+            raise NativeBackendUnavailableError("FROST native library not available")
+        if not (2 <= num_signers <= 255):
+            raise ValueError("num_signers must be in [2, 255]")
+        if len(participant_share) != FROST_SHARE_BYTES:
+            raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
+        if not (1 <= participant_index <= 255):
+            raise ValueError("participant_index must be in [1, 255]")
+        # Both measures, so accepting the whole-buffer view loosens nothing:
+        # ``len`` is what this check always compared (a 16-item ``array('I')``
+        # stays refused), and ``nbytes`` refuses a 64-item buffer of wider
+        # items that the fixed 64-byte view used to accept by truncation.
+        if len(nonce_pair) != FROST_NONCE_BYTES or nonce_nbytes != FROST_NONCE_BYTES:
+            raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
         if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
             raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
         if len(signer_indices) != num_signers:
@@ -9601,12 +9638,12 @@ def frost_round2_sign(
         )
     finally:
         # Belt and braces.  The C side already scrubbed on every path it
-        # reached; this covers the paths it did not (the argument checks
-        # above) and makes the consumption unconditional at this boundary too.
+        # reached; this covers the paths it did not (every check above) and
+        # makes the consumption unconditional at this boundary too.
         # `del` releases the exported buffer so the caller's bytearray can be
         # resized again — ctypes keeps a buffer export alive for the life of
         # the view.
-        ctypes.memset(nonce_view, 0, FROST_NONCE_BYTES)
+        ctypes.memset(nonce_view, 0, nonce_nbytes)
         del nonce_view
     if rc != 0:
         raise RuntimeError(

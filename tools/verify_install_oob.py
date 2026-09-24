@@ -603,6 +603,12 @@ def artefact_shape_violation(tree: ast.Module) -> Optional[str]:
     return None
 
 
+#: Mirror of ama_cryptography._artefact_source.ARTEFACT_MAX_CHARS.  This tool
+#: must not import the package it verifies, so the value is restated and a test
+#: pins the two equal.
+ARTEFACT_MAX_CHARS = 64 * 1024
+
+
 def parse_artefact_fields(path: Path) -> tuple[Optional[dict[str, object]], Optional[str]]:
     """Read the artefact's fields from its TEXT — never import/exec it.
 
@@ -619,10 +625,19 @@ def parse_artefact_fields(path: Path) -> tuple[Optional[dict[str, object]], Opti
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return None, f"cannot read {path.name}: {exc}"
+    # The same bound as ama_cryptography._artefact_source.ARTEFACT_MAX_CHARS
+    # (pinned equal by a test): CPython 3.10's parser crashes on a long enough
+    # expression chain instead of raising, so the size is refused first, and
+    # every exception the parser can raise is a refusal, not a traceback.
+    if len(text) > ARTEFACT_MAX_CHARS:
+        return None, (
+            f"{path.name} is {len(text):,} characters, larger than any artefact "
+            f"the signer writes (limit {ARTEFACT_MAX_CHARS:,})"
+        )
     try:
         tree = ast.parse(text, filename=str(path))
-    except SyntaxError as exc:
-        return None, f"{path.name} is not parseable Python: {exc}"
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        return None, f"{path.name} is not parseable Python ({type(exc).__name__}: {exc})"
 
     violation = artefact_shape_violation(tree)
     if violation is not None:

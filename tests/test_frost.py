@@ -522,6 +522,105 @@ class TestFROSTNonceSingleUse:
             )
         assert not any(nonce), "nonce pair must be zeroed after a FAILED round 2"
 
+    #: Every refusal ``frost_round2_sign`` makes BEFORE the native call, as
+    #: (id, keyword overrides, expected exception, message fragment).  Each
+    #: override replaces one argument of an otherwise valid round 2.  The
+    #: nonce-length rows pass a buffer one byte short and one byte long, built
+    #: from a real nonce pair, so "scrubbed" means every byte of it.
+    PYTHON_SIDE_REFUSALS: tuple[tuple[str, dict[str, Any], type, str], ...] = (
+        ("num_signers-low", {"num_signers": 1}, ValueError, "num_signers"),
+        ("num_signers-high", {"num_signers": 256}, ValueError, "num_signers"),
+        ("share-short", {"participant_share": b"\x00" * 63}, ValueError, "participant_share"),
+        ("index-zero", {"participant_index": 0}, ValueError, "participant_index"),
+        ("index-256", {"participant_index": 256}, ValueError, "participant_index"),
+        ("index-not-int", {"participant_index": "1"}, TypeError, "not supported"),
+        ("nonce-63", {"nonce_pair": "short"}, ValueError, "nonce_pair"),
+        ("nonce-65", {"nonce_pair": "long"}, ValueError, "nonce_pair"),
+        # 64 bytes in 16 four-byte items, and 64 items in 128 bytes: the check
+        # compares both the item count and the byte count, so neither shape
+        # reaches the native call.
+        ("nonce-16-uint32", {"nonce_pair": "uint32"}, ValueError, "nonce_pair"),
+        ("nonce-64-uint16", {"nonce_pair": "uint16x2"}, ValueError, "nonce_pair"),
+        ("commitments", {"commitments": b"\x00" * 32}, ValueError, "commitments"),
+        ("signer_indices", {"signer_indices": b"\x01"}, ValueError, "signer_indices"),
+        ("group_public_key", {"group_public_key": b"\x00" * 31}, ValueError, "group_public_key"),
+    )
+
+    @pytest.mark.parametrize(
+        "overrides,exc_type,match",
+        [row[1:] for row in PYTHON_SIDE_REFUSALS],
+        ids=[row[0] for row in PYTHON_SIDE_REFUSALS],
+    )
+    def test_nonce_is_zeroed_on_every_python_side_refusal(
+        self, overrides: dict[str, Any], exc_type: type, match: str
+    ) -> None:
+        """INVARIANT-49's "whatever the outcome", for each check the wrapper makes.
+
+        The docstring promises the pair is "zeroized in place before this
+        function returns or raises".  Until 2026-09-24 the ``num_signers``,
+        ``participant_share``, ``participant_index`` and nonce-length checks
+        ran BEFORE the writable view was taken, so each of those refusals
+        returned with the caller's nonce pair intact; only the three checks
+        after the view (commitments, signer_indices, group_public_key) were
+        covered, and those are the ones the older test above exercises.
+        """
+        import array
+
+        from ama_cryptography.pqc_backends import frost_round2_sign
+
+        ctx = _ceremony()
+        nonce: Any = ctx["nonces"][0]
+        if overrides.get("nonce_pair") == "short":
+            nonce = bytearray(nonce[:63])
+        elif overrides.get("nonce_pair") == "long":
+            nonce = bytearray(nonce) + bytearray(b"\x5a")
+        elif overrides.get("nonce_pair") == "uint32":
+            nonce = array.array("I", bytes(nonce))
+        elif overrides.get("nonce_pair") == "uint16x2":
+            nonce = array.array("H", bytes(nonce) * 2)
+        assert any(nonce), "precondition: the buffer starts non-zero"
+        kwargs: dict[str, Any] = {
+            "message": ctx["message"],
+            "participant_share": ctx["shares"][0],
+            "participant_index": 1,
+            "commitments": ctx["commitments"],
+            "signer_indices": ctx["signer_indices"],
+            "num_signers": ctx["threshold"],
+            "group_public_key": ctx["gpk"],
+        }
+        kwargs.update({k: v for k, v in overrides.items() if k != "nonce_pair"})
+        size = len(nonce)
+        with pytest.raises(exc_type, match=match):
+            frost_round2_sign(nonce_pair=nonce, **kwargs)
+        assert len(nonce) == size
+        assert not any(nonce), f"nonce buffer not zeroed after the {overrides} refusal"
+
+    @pytest.mark.parametrize("state", ["module-error", "backend-unavailable"])
+    def test_nonce_is_zeroed_when_the_module_refuses_before_any_argument_check(
+        self, state: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two refusals that are not about the arguments at all."""
+        from ama_cryptography import pqc_backends as pb
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        ctx = _ceremony()
+        nonce = ctx["nonces"][0]
+        assert any(nonce)
+        expected: type[BaseException]
+        if state == "module-error":
+
+            def _refuse() -> None:
+                raise CryptoModuleError("module is in the ERROR state (test)")
+
+            monkeypatch.setattr(pb, "check_crypto_permitted", _refuse)
+            expected = CryptoModuleError
+        else:
+            monkeypatch.setattr(pb, "_FROST_AVAILABLE", False)
+            expected = pb.NativeBackendUnavailableError
+        with pytest.raises(expected):
+            _sign_one(ctx, 0, ctx["message"])
+        assert not any(nonce), f"nonce pair not zeroed on the {state} refusal"
+
     def test_nonce_is_zeroed_when_the_native_call_refuses(self) -> None:
         """The other failure path: refused inside C, not by the Python checks.
 
