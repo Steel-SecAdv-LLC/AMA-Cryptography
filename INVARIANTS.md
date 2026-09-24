@@ -853,6 +853,14 @@ Required properties:
   verifies the resulting public key against the compiled trust anchor.
 - The only shipped integrity artifact should contain public verification data
   such as digest, public key, and signature.
+- The signed artefact (`ama_cryptography/_integrity_signature.py`) is a build
+  output and is not tracked in the repository: every build signs its own with
+  a fresh ephemeral key over its own native and binding digests, so a
+  committed copy describes one machine's build and nothing else (AGENTS.md
+  §8.4). `.gitignore` and `MANIFEST.in` exclude it; the tracked source-drift
+  check is `_integrity_digest.txt`, a pure function of the `.py` sources.
+  `tests/test_setup_signer_contract.py` fails if the artefact becomes tracked
+  or ships in an sdist.
 - Missing, mismatched, malformed, or untrusted integrity artifacts must produce
   an observable failure state and must not silently bless modified Python
   modules as trusted runtime code.
@@ -1050,7 +1058,8 @@ directions.
 
 **Why.** AMA Cryptography is a public repository whose tracked content is
 largely *published high-entropy material*: NIST KAT vectors, ACVP responses,
-fuzz seed corpora, and the Ed25519 public key plus detached signature in
+fuzz seed corpora, and, in every built tree though no longer in the repository,
+the Ed25519 public key plus detached signature in
 `ama_cryptography/_integrity_signature.py`. That combination is the worst case
 for an off-the-shelf secret scanner — it produces so many false positives that
 teams reach for a blanket ignore file, and the blanket is what lets a real key

@@ -1379,12 +1379,21 @@ def native_backend_load_summary() -> str:
         if diag["override_ignored_reason"]
         else ""
     )
+    # The remedy names the package build first.  `cmake --build` alone yields
+    # the library but neither the binding extensions nor the signed integrity
+    # artefact, and the artefact is not tracked in git (AGENTS.md section 8.4):
+    # a checkout that followed the cmake-only advice imported at digest-only
+    # strength, "NOT fully verified", with no pointer to the step it skipped.
     return (
         f"no native library found in any of {n_dirs} searched directories "
-        f"(first: {shown}).{ignored} Build it with: "
-        "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build — or "
-        "point AMA_CRYPTO_LIB_PATH at the signed library's location (it "
-        "relocates the signed library; it cannot substitute another build)."
+        f"(first: {shown}).{ignored} Build this checkout with: "
+        "pip install -e .  (or: python setup.py build_ext --inplace), which "
+        "builds the native library and the binding extensions and generates "
+        "the signed integrity artefact, which a fresh clone does not carry. "
+        "A bare `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build` "
+        "builds the library only. Or point AMA_CRYPTO_LIB_PATH at the signed "
+        "library's location (it relocates the signed library; it cannot "
+        "substitute another build)."
     )
 
 

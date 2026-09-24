@@ -124,10 +124,12 @@ RUN pip3 install --no-cache-dir /tmp/*.whl && \
     ldconfig
 
 # Re-sign the module-integrity artefact for the native library THIS image loads.
-# The wheel ships the committed artefact, whose signed native digest is specific
-# to the exact build it was signed against; this image compiles its own native
-# library (gcc-12, LTO, its own SIMD flags), so the loaded .so hashes differently
-# and POST would fail-close — the HEALTHCHECK and CMD below both `import
+# The wheel ships the artefact its own build signed (the artefact is a per-build
+# output and not tracked in the repository, AGENTS.md section 8.4; this comment
+# used to call it "the committed artefact"), whose signed native digest is
+# specific to the library that build bundled; this image compiles its own native
+# library (gcc-12, LTO, its own SIMD flags) into /usr/local/lib, which can hash
+# differently, and POST would fail-close — the HEALTHCHECK and CMD below both `import
 # ama_cryptography`. Re-signing here binds the artefact to whatever the runtime
 # discovery actually loads (the wheel's bundled .so or /usr/local/lib), exactly
 # as the wheel signer does per platform. Run as root, before dropping to `ama`,

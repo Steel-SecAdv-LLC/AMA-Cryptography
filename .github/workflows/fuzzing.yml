@@ -553,11 +553,14 @@ jobs:
           cmake --build build -j$(nproc)
 
       - name: Bind the freshly-built library into the integrity artefact
-        # A library built here is not the library the committed artefact was
-        # signed over, and since 5.0.0 a digest mismatch is refused BEFORE the
-        # object is mapped rather than reported after — so without this step
-        # the harness cannot import the package it is meant to fuzz, and the
-        # job fails on the import rather than on a parser defect.
+        # The signed artefact is a per-build output that is not tracked in the
+        # repository (AGENTS.md section 8.4), so this step generates the one
+        # that binds the library built above.  It used to RE-sign over a
+        # committed artefact whose native digest described a different build —
+        # and since 5.0.0 a digest mismatch is refused BEFORE the object is
+        # mapped — so without it the harness could not import the package it
+        # is meant to fuzz.  With no artefact committed the import would now
+        # succeed at digest-only strength; the step keeps it at full strength.
         #
         # Every other job that builds the library and then imports the package
         # already does this (ci.yml, ci-build-test.yml, integrity-anchor-

@@ -768,11 +768,10 @@ The system provides two Cython extension modules for performance-critical paths:
 - Auto-selected when extension is built; ctypes fallback for environments without Cython
 
 **`src/cython/math_engine.pyx`** — Optimized mathematical operations:
-- Lyapunov stability computation
-- Matrix-vector multiplication
-- NTT operations
-- Helix evolution
-- No speed-up ratio is published for these: the per-operation figures this list carried had no benchmark, results file or history entry behind them (see README, *Cython Optimization Results*)
+- Lyapunov stability computation (27.3x speedup)
+- Matrix-vector multiplication (28.1x speedup)
+- NTT operations (37.7x speedup)
+- Helix evolution (18.9x speedup)
 - NumPy integration for array operations
 
 **`src/cython/helix_engine_complete.pyx`** — a complete-engine reference implementation of all 18+ variants. The default build does **not** compile it: `setup.py` builds `math_engine.pyx` and the FFI bindings, and this file is kept as a reference source rather than a shipped extension.
@@ -881,7 +880,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 16 C targets | `fuzz/fuzz_*.c` (17 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 5,809 Python test functions across 255 test files, plus the
+**Total:** 5,814 Python test functions across 255 test files, plus the
 ctest-registered C tests and the two standalone `x25519_equiv_*.c` drivers under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,

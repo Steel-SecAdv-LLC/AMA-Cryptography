@@ -1416,7 +1416,17 @@ def _artefact_or_error() -> Tuple[Optional[Any], Optional[Tuple[Optional[bool], 
     except ArtefactSourceError as exc:
         return None, (False, f"signature module malformed: {exc}")
     if fields is None:
-        return None, (None, "no signed-integrity artefact (digest-only fallback)")
+        # The artefact is a build output, not a tracked file (AGENTS.md
+        # section 8.4), so "absent" in a checkout means "not built by
+        # setup.py yet".  The detail names the command that produces it,
+        # because this string reaches the operator verbatim in the
+        # digest-only WARNING and the POST table.
+        return None, (
+            None,
+            "no signed-integrity artefact (digest-only fallback); every "
+            "package build generates it — pip install -e . or python setup.py "
+            "build_ext --inplace — and it is not tracked in git",
+        )
     return fields, None
 
 
@@ -1478,9 +1488,11 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     signer_anchor_mismatch: Optional[str] = None
     if trust_anchor_error is not None:
         # An artefact whose key does not match the compiled anchor is the
-        # DOCUMENTED starting state of every wheel build: the committed
-        # artefact is dev-signed with a per-build ephemeral key by design,
-        # and the build-time signer's whole job is to replace it with one
+        # DOCUMENTED starting state of a wheel build that finds one: an
+        # artefact left by an earlier build is dev-signed with a per-build
+        # ephemeral key by design (this used to say "the committed artefact";
+        # the artefact is no longer tracked in the repository, AGENTS.md
+        # section 8.4), and the build-time signer's whole job is to replace it with one
         # minted from the release seed whose anchor-match the pipeline
         # verifies separately.  The first exercised dry run at the previous
         # head only survived this comparison by an accident of blindness —
@@ -1568,8 +1580,8 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
             "integrity artefact is signed by a key that does not match the "
             "compiled trust anchor, in a process launched as the integrity "
             "signer with AMA_BUILD_PIPELINE=1. This is the documented "
-            "pre-signing state of a wheel build (the committed artefact is "
-            "dev-signed by design); the stage fails, the import may complete "
+            "pre-signing state of a wheel build (an artefact left by an earlier "
+            "build is dev-signed by design); the stage fails, the import may complete "
             "for the signer only, and the signing run replaces the artefact. "
             f"Cause: {signer_anchor_mismatch}"
         )

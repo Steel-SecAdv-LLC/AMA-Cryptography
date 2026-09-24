@@ -161,6 +161,34 @@ def tree_without_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="module")
+def fresh_clone_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The package as ``git clone`` delivers it: sources only, nothing built.
+
+    ``tree_without_native`` keeps the signed artefact, which a clone no longer
+    has: ``_integrity_signature.py`` is a per-build output that is not tracked
+    (AGENTS.md section 8.4).  This drops it too, with every compiled object and
+    bytecode cache, so the import sees exactly what a developer who has not yet
+    run the build sees.
+    """
+    root = tmp_path_factory.mktemp("fresh_clone")
+    shutil.copytree(
+        PKG_DIR,
+        root / "ama_cryptography",
+        ignore=shutil.ignore_patterns(
+            "__pycache__",
+            "*.so",
+            "*.so.*",
+            "*.dylib",
+            "*.dll",
+            "*.pyd",
+            "_integrity_signature.py",
+            "_integrity_signature.py.pre-sign",
+        ),
+    )
+    return root
+
+
+@pytest.fixture(scope="module")
 def tree_with_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A copy of the package with whatever native library the tree has."""
     root = tmp_path_factory.mktemp("with_native")
@@ -274,6 +302,32 @@ class TestImportFailsClosed:
         assert (
             "not built — cannot verify signature" not in combined
         ), "the misleading legacy diagnostic is back"
+
+    def test_a_fresh_clone_fails_closed_and_is_told_to_build(self, fresh_clone_tree: Path) -> None:
+        """An unbuilt clone must refuse to import, and say which build fixes it.
+
+        A clone carries neither the native library nor the signed artefact —
+        the artefact is a build output, not a tracked file — so the import must
+        fail closed, and the remedy must name the package build that produces
+        BOTH.  The remedy used to name only ``cmake --build``, which yields the
+        library but no bindings and no artefact: a developer who followed it
+        got a tree that imports at digest-only strength, "NOT fully verified".
+        """
+        assert not (fresh_clone_tree / "ama_cryptography" / "_integrity_signature.py").exists()
+        result = _run_python(
+            """
+            import ama_cryptography
+            print("imported")
+            """,
+            cwd=fresh_clone_tree,
+            isolated=True,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, "an unbuilt clone imported:\n" + combined
+        assert "imported" not in result.stdout
+        assert "CryptoModuleError" in result.stderr
+        assert "pip install -e ." in combined, combined
+        assert "python setup.py build_ext --inplace" in combined, combined
 
     def test_healthy_tree_imports_and_is_fully_verified(self, tree_with_native: Path) -> None:
         """The fix must not make a good build unusable."""
@@ -1296,6 +1350,13 @@ class TestIntegrityTriState:
             verdict is None
         ), f"a missing artefact must be 'cannot verify' (None), got {verdict!r}: {detail}"
         assert "no signed-integrity artefact" in detail
+        # The artefact is a build output that is not tracked in git (AGENTS.md
+        # section 8.4), so in a checkout "absent" means "not built by setup.py
+        # yet".  This string reaches the operator verbatim in the digest-only
+        # WARNING and the POST table, so it must name the command that
+        # produces the artefact rather than leave them to infer it.
+        assert "pip install -e ." in detail, detail
+        assert "build_ext --inplace" in detail, detail
 
     def test_absent_verifier_is_not_a_tamper_verdict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The reported bug: a missing native library read as tampering.
@@ -1405,6 +1466,14 @@ class TestNativeBackendDiagnostics:
             absent_summary = pb.native_backend_load_summary()
             assert "no native library found" in absent_summary
             assert "cmake" in absent_summary
+            # The package build comes first in the remedy: a cmake-only build
+            # yields the library but neither the bindings nor the signed
+            # integrity artefact, which a fresh clone does not carry.
+            assert "pip install -e ." in absent_summary, absent_summary
+            assert "build_ext --inplace" in absent_summary, absent_summary
+            assert absent_summary.index("pip install -e .") < absent_summary.index(
+                "cmake"
+            ), absent_summary
         finally:
             pb._LOAD_DIAGNOSTICS.clear()
             pb._LOAD_DIAGNOSTICS.update(saved)
