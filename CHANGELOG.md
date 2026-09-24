@@ -120,6 +120,15 @@ Every new test below fails against the code it replaces (AGENTS.md §6.2).
   test bypassed `FileList.append`'s `convert_path`, so on Windows no
   `MANIFEST.in` pattern could match it (five Windows legs red); the git-probe
   helper read a name CodeQL could not prove bound. Both fixed at the test.
+- **Four repo-wide gates checked files outside the repository.**
+  `check_docker_pins`, `check_crypto_construction_docs` (whose docstring
+  already said "tracked"), `check_version_consistency` (tag-pin,
+  invariant-range and doc-header sweeps) and `check_vendor_isolation
+  --build-config` walked the filesystem from the root, so any untracked nested
+  checkout failed them on files that are not part of the tree. They now
+  enumerate the tracked tree through `tools/_repo.py` and fail closed when git
+  cannot enumerate; each has a stray-versus-tracked test, and reverting each
+  gate's enumeration fails its test.
 - **The agent-binding timing lane measured the GIL, not the check (§6.6).**
   Its load threads held the GIL, so each sample was a GIL wait of about
   100 µs around a 2.4 µs call. It also alternated the two classes, used two
