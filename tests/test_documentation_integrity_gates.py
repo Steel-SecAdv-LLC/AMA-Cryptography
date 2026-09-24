@@ -623,6 +623,27 @@ class TestCryptoConstructionDocs:
                 "multi-pass",
             ),
             ("- **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)", "4.20 ms"),
+            # The 3R overhead pass: each line below shipped, and none had a
+            # measurement behind it.
+            ("    - Lightweight: <2% performance overhead when enabled", "sub-2%"),
+            ("**Total Impact**: <2% when all components enabled", "sub-2%"),
+            (
+                "    recalculation on every update. This optimization reduces 3R monitoring\n"
+                "    overhead from <2% to <1% without any change in detection capability.",
+                "sub-2%",
+            ),
+            ('    print("    • Disabled by default for zero-cost operation")', "enabled=True"),
+            (
+                '            print("  Note: Pattern analysis runs on-demand for security reports")',
+                "EVERY monitored package",
+            ),
+            ("    Achieves 30-100x speedup through:", "Cython speed-up"),
+            ("Targets 10-50x speedup over pure Python through:", "Cython speed-up"),
+            ("    10-20x faster than pure Python implementation.", "Cython speed-up"),
+            (
+                "— Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64",
+                "Cython speed-up",
+            ),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -653,7 +674,13 @@ class TestCryptoConstructionDocs:
             "    assert len(pkg_v2.ethical_vector) == 4\n\n"
             "AMA implements HSS/LMS verification; only signing is withheld.\n\n"
             "| C Compiler | GCC 12 / Clang 15 | GCC 13+ / Clang 17+ |\n\n"
-            "`secure_memzero()` writes zeros once and issues a compiler barrier.\n",
+            "`secure_memzero()` writes zeros once and issues a compiler barrier.\n\n"
+            "| Pattern check — one `record_package_signing` call | 1.7–2.3% | 4% |\n\n"
+            "The per-package pattern check is O(1); the feature extraction in\n"
+            "`analyze_patterns()` runs on demand.\n\n"
+            "Enabled by default (enabled=True); pass enabled=False to switch it off.\n\n"
+            "No speed-up ratio is published; performance_suite.py measured 4.34x,\n"
+            "4.22x and 4.51x against the NumPy baseline.\n",
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))

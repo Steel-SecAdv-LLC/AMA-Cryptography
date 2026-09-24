@@ -467,6 +467,42 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
         "is generated from benchmarks/benchmark-results.json by "
         "tools/update_docs.py; do not type the figure.",
     ),
+    # The 3R overhead pass.  Each was shipped wording with no measurement
+    # behind it; `python benchmarks/validation_suite.py --only-3r` now measures
+    # what one monitored package adds.
+    (
+        re.compile(
+            r"<\s?2\s?%\s+(?:performance\s+)?overhead|overhead\s+from\s+<\s?2\s?%"
+            r"|Total Impact\W+<\s?2\s?%",
+            re.IGNORECASE,
+        ),
+        "No measurement ever backed a sub-2% monitoring overhead. "
+        "benchmarks/validation_suite.py --only-3r measures a monitored package; "
+        "MONITORING.md (Performance Impact) records one host's figures with "
+        "their provenance, and the timing records alone exceed 20% there.",
+    ),
+    (
+        re.compile(r"Disabled by default for zero-cost", re.IGNORECASE),
+        "AmaCryptographyMonitor defaults to enabled=True (monitoring.py, the "
+        "__init__ signature); the demo now derives this line from it.",
+    ),
+    (
+        re.compile(r"pattern analysis\W+(?:runs|is run)\s+on[- ]demand", re.IGNORECASE),
+        "AmaCryptographyMonitor.record_package_signing runs the pattern-anomaly "
+        "check on EVERY monitored package (legacy create_crypto_package calls "
+        "it whenever a monitor is attached). Only the hierarchical feature "
+        "extraction in analyze_patterns() is on-demand.",
+    ),
+    (
+        re.compile(
+            r"\b\d+\s*[-\u2013]\s*\d+\s*[x\u00d7]\s+(?:speedup|faster than (?:the )?pure[- ]python)",
+            re.IGNORECASE,
+        ),
+        "A Cython speed-up range with no measurement behind it. "
+        "benchmarks/performance_suite.py measures the math_engine kernels "
+        "against their NumPy baselines (Lyapunov: ~4.2-4.5x on the host "
+        "recorded in math_engine.pyx); state a figure only with its provenance.",
+    ),
 )
 
 

@@ -13,7 +13,9 @@ AMA Cryptography Complete Double-Helix Engine (Cython)
 =====================================================
 
 Optimized implementation of ALL 18+ AMA Equation variants.
-Targets 30-100x speedup over pure Python through complete Cython optimization.
+No speed-up figure is stated for this module: the default build does not
+compile it and nothing in the tree times it.  The range this docstring
+carried until now was a target with no measurement behind it.
 
 Complete Helix_1 Terms (Discovery/Exploration):
     𝔄_t, β𝐐, γ𝐏, δ𝐃, ε𝐄, ν𝐕, ω𝐖, 𝐑₃, κ𝐀_n, λ𝚲, θ𝚯, φ𝚽,
@@ -52,7 +54,7 @@ cdef class AmaEngineOptimized:
     """
     Ultra-optimized AMA Equation Engine with all 18+ variants.
 
-    Achieves 30-100x speedup through:
+    Unmeasured (see the module docstring); the design aims at speed through:
     - Cython C-level compilation
     - Cache-friendly memory access
     - SIMD-ready data layouts

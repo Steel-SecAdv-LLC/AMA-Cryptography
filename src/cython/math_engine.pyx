@@ -11,8 +11,13 @@
 AMA Cryptography High-Performance Mathematical Engine (Cython)
 =============================================================
 
-Optimized mathematical operations for cryptographic primitives.
-Targets 10-50x speedup over pure Python through:
+Optimized mathematical operations for the 3R monitoring engine
+(ama_cryptography.monitoring is its only in-package caller); the
+cryptographic primitives are C under src/c/ and do not use it.  No
+module-wide speed-up is claimed -- the range this docstring used to
+state was a target nothing measured.  Per-function measurements, where
+one exists, are in that function's docstring.  The design aims at
+speed through:
 - C-level array operations
 - Elimination of Python overhead
 - Memory-efficient algorithms
@@ -304,7 +309,13 @@ def lyapunov_function_fast(
     """
     Fast Lyapunov function: V(x) = ||x - x*||²
 
-    10-20x faster than pure Python implementation.
+    Measured, not promised: ``benchmarks/performance_suite.py`` (Lyapunov
+    section: 1,000-element vectors, 10,000 calls) times this against the
+    NumPy expression ``float(np.sum((s - t) ** 2))`` -- the tree has no
+    pure-Python-loop baseline.  2026-09-24, Intel Xeon @ 2.80GHz (4 vCPU
+    Linux container), CPython 3.11.15, ``setup.py build_ext --inplace``:
+    4.34x, 4.22x and 4.51x over three runs.  The figure this docstring
+    stated before had no measurement behind it and is withdrawn.
     """
     cdef size_t n = state.shape[0]
     cdef double result = 0.0

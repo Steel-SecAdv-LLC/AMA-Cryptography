@@ -135,7 +135,7 @@ Ed25519 wall-clock timings through the shipped API):
 
 Read that as a floor, not a guarantee: a periodic component quieter than roughly a third of the ambient jitter is not distinguishable from noise. Square waves whose period does not divide the window leak across bins and score lower for that reason alone (a period-24 square reads 1.8x). Wall-clock timings of sub-millisecond operations on a shared/virtualised host routinely carry their own periodic structure — cache warm-up, allocator growth, scheduler quanta — so a raw resonance score from such a host is not on its own evidence of an attack.
 
-**Performance**: per-record cost is bounded by `max_ratio_operations` (the pairwise timing-ratio matrix walked on every record); no overhead percentage is published, because none is measured by CI. Measure it per environment.
+**Performance**: per-record cost is bounded by `max_ratio_operations` (the pairwise timing-ratio matrix walked on every record). CI does not measure it; `python benchmarks/validation_suite.py --only-3r` does, per monitored package — see [Performance Impact](#performance-impact).
 
 ---
 
@@ -159,7 +159,7 @@ Read that as a floor, not a guarantee: a periodic component quieter than roughly
 - `max_depth`: Recursion levels (default: 3)  
 - `max_history`: Package history limit (default: 10,000)
 
-**Performance**: O(n log n) for n packages, and `AmaCryptographyMonitor.record_package_signing()` runs the analysis on every recorded signing. No overhead percentage is published, because none is measured by CI.
+**Performance**: `AmaCryptographyMonitor.record_package_signing()` runs the anomaly check on every recorded signing, and that check is O(1) in the history length: `record_package()` keeps exact running sums of the window's inter-package intervals and code counts, and `detect_anomalies()` reads them. The hierarchical `features` are extracted only by `analyze_patterns()` — the on-demand security report — in O(n). Through 5.0.0 the per-signing path ran that whole O(n) analysis on every package (this line called it O(n log n); nothing in it sorts). Measured cost: [Performance Impact](#performance-impact).
 
 ---
 
@@ -406,14 +406,29 @@ monitor.patterns.max_depth = 4  # Deeper recursion
 
 ### Performance Impact
 
-| Scenario | Overhead | Recommendation |
-|----------|----------|----------------|
-| Light monitoring (timing only) | <1% | Safe for production |
-| Full monitoring (3R active) | 1-2% | Acceptable for most cases |
-| Resonance analysis enabled | <0.5% | Minimal added cost |
-| Pattern analysis (1000+ packages) | <1% | Scales well |
+What one monitored `create_crypto_package(..., monitor=monitor)` adds, as a
+percentage of an unmonitored one timed in the same run. The figures are from one
+host and are not measured by CI; the command reproduces them on yours.
 
-**Total Impact**: <2% when all components enabled
+| Per monitored package | Measured (five runs) | Bound the suite enforces |
+|-----------------------|----------------------|--------------------------|
+| Timing records — the package's four `monitor_crypto_operation` calls | 23.0–27.3% | 37.5% |
+| Pattern check — one `record_package_signing` call, full 10,000-entry history | 1.7–2.3% | 4% |
+| Total | 24.7–29.6% | 40.5% |
+
+- **Command:** `python benchmarks/validation_suite.py --only-3r` — 1,000 timed
+  iterations after 100 warm-up per row, mean. The workload is captured from 64 real
+  monitored packages and replayed, so it is the calls the library makes, not a
+  synthetic one.
+- **Host:** 2026-09-24, Intel Xeon @ 2.80GHz, 4 vCPU Linux container, CPython
+  3.11.15, gcc 13.3.0 Release build (`-DAMA_USE_NATIVE_PQC=ON`) plus
+  `python setup.py build_ext --inplace`.
+- **The pattern check before its O(1) rewrite:** 657–742% on the same host — the
+  per-signing path re-ran the full-history analysis on every package.
+- The bounds and their provenance live in the acceptance table of
+  `benchmarks/validation_suite.py`, which fails a row that exceeds them.
+
+The timing records dominate. Passing no `monitor` removes all of it; with `enabled=False` each call returns before doing any work.
 
 ---
 

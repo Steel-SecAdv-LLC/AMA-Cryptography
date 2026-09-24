@@ -13,7 +13,7 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 ### Cython Acceleration
 
 When built with Cython (`python setup.py build_ext --inplace`), mathematical operations in the 3R monitoring engine (Lyapunov stability, helical computations, NTT polynomial operations) show:
-- **No published speed-up ratio.** The "18–37x over the pure Python mathematical baseline" figure this bullet carried until 5.0.0 has no benchmark, results file or history entry behind it anywhere in the tree; it was removed rather than restated, because this repository does not publish numbers it did not measure. Measure it on your own host with `python benchmarks/benchmark_suite.py`
+- **No published speed-up ratio.** The "18–37x over the pure Python mathematical baseline" figure this bullet carried until 5.0.0 has no benchmark, results file or history entry behind it anywhere in the tree; it was removed rather than restated, because this repository does not publish numbers it did not measure. Measure it on your own host with `python benchmarks/performance_suite.py`
 - NumPy-integrated batch operations
 
 Cython acceleration does **not** affect C-implemented cryptographic primitives (they are already native). The speedup comparison baseline is pure Python loops — not the native C library.
@@ -148,9 +148,9 @@ crypto call to stderr.
 
 ### 3R Monitoring Overhead
 
-- **Monitoring overhead:** not measured by CI, and no figure is published; the percentage this line carried had no benchmark behind it. It depends on the host and on which detectors are enabled; measure it per environment ([MONITORING.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/MONITORING.md))
-- Anomaly detection runs asynchronously in the background
-- FFT computations use NumPy for batch processing when available
+- **Monitoring overhead:** not measured by CI; the percentage this line carried had no benchmark behind it. `python benchmarks/validation_suite.py --only-3r` measures what one monitored package adds on your host; one host's figures, with their provenance, are in [MONITORING.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/MONITORING.md#performance-impact)
+- Anomaly detection runs synchronously, inside the monitored call: the timing records and the per-package pattern check both execute before `create_crypto_package` returns
+- The resonance FFT is a pure-Python radix-2 transform, run on demand by `get_security_report()`, not per operation
 
 ---
 
