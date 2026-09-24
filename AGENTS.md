@@ -242,7 +242,11 @@ until measurement establishes otherwise.
 2. Skipping, quarantining, or deleting a test to obtain a passing build.
 3. Adding a suppression to `src/c/` or `include/` under any justification.
 4. Committing `ama_cryptography/_integrity_signature.py` from a local build; it
-   carries a per-build ephemeral key and local artifact digests.
+   carries a per-build ephemeral key and local artifact digests. The file is
+   not tracked and is listed in `.gitignore`; every build that imports the
+   package generates its own, and `tests/test_setup_signer_contract.py` fails
+   if it is tracked again. A `.py` source change commits
+   `ama_cryptography/_integrity_digest.txt`, the tracked source digest, only.
 5. Empty commits, or closing and reopening a pull request, to re-trigger CI.
 6. Asserting that a CI lane passed without observing it complete.
 7. Publishing a performance figure without its host, build flags, and run

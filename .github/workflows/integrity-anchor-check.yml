@@ -98,12 +98,15 @@ jobs:
 
       - name: Re-sign the integrity artefact for this build's native library
         # The derive step below calls into the native Ed25519 kernel, which
-        # requires POST to have passed. The committed artefact's native digest
-        # is specific to the build it was signed against and does not match the
-        # library this job just compiled, so POST would fail-close on a native
-        # digest mismatch before the seed/anchor check ever ran. Re-sign for
-        # this build (the wheel signer does the same per platform); the seed and
-        # anchor being compared are independent of the integrity signing key.
+        # requires POST to have passed. The signed artefact is a per-build
+        # output that is not tracked in the repository (AGENTS.md section
+        # 8.4), so a checkout carries none: this step generates the one that
+        # binds the library this job just compiled, and POST verifies it at
+        # full strength rather than at digest-only strength. (This comment
+        # used to describe re-signing over a committed artefact whose native
+        # digest did not match; that artefact is no longer committed.) The
+        # wheel signer does the same per platform; the seed and anchor being
+        # compared are independent of the integrity signing key.
         env:
           AMA_BUILD_PIPELINE: "1"
         run: python -m ama_cryptography.integrity --update --sign

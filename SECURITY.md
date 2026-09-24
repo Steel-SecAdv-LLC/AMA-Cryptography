@@ -687,9 +687,20 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
     `ama_integrity_trust_anchor_pubkey_hex()`, calls
     `ama_ed25519_verify` via ctypes with the embedded pubkey and
     signature, and accepts only on a positive verify plus trust-anchor
-    match when configured.  When the artefact is absent (editable
-    installs, source checkouts, wheels built without
-    `AMA_BUILD_PIPELINE=1`), the behaviour depends on
+    match when configured.  The artefact is a **build output, not a
+    tracked file**: `setup.py` signs every build (editable installs and
+    `build_ext --inplace` included) with a fresh ephemeral key and binds
+    that build's native library and binding extensions, so no copy of it is
+    meaningful outside the tree that produced it.  It is listed in
+    `.gitignore`, excluded from the sdist by `MANIFEST.in`, and never
+    committed (AGENTS.md §8.4); `_integrity_digest.txt`, a pure function of
+    the `.py` sources, is the tracked half.  A fresh clone therefore has no
+    artefact, and no native library either: its import fails closed at the
+    `native-backend` POST stage with a message naming
+    `pip install -e .` / `python setup.py build_ext --inplace`.  When the
+    artefact is absent from a tree that does have a native library (a
+    `cmake`-only build, or an unbuilt checkout under the documented
+    `AMA_SPHINX_BUILD=1` docs override), the behaviour depends on
     `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`:
     - **Unset (developer / editable / source-checkout path):** the
       module falls back to digest-only verification against

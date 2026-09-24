@@ -132,6 +132,12 @@ _BARE_RE = re.compile(r"`([A-Za-z0-9_.+-]+\.(?:" + "|".join(_BARE_EXTENSIONS) + 
 #: Bare filenames a document names that are deliberately not files in this
 #: repository.  The value says which kind, so the entry is reviewable.
 NOT_IN_TREE = {
+    "_integrity_signature.py": (
+        "build output: written into ama_cryptography/ by every package build "
+        "(setup.py's CMakeBuild runs ama_cryptography._build_sign) with a "
+        "per-build ephemeral key, and deliberately untracked (AGENTS.md "
+        "section 8.4; .gitignore)"
+    ),
     ".kdf_metadata.json": (
         "runtime artefact: written under the caller's storage_path by "
         "ama_cryptography/key_management.py"

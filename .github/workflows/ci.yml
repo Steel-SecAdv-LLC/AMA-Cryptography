@@ -364,13 +364,13 @@ jobs:
 
     # The signed integrity artefact binds two digests: the .py sources
     # (platform-independent) and the built native library (specific to the exact
-    # OS/arch/toolchain/flags it was compiled with). This job builds the native
-    # library itself, so its .so/.dll/.dylib hashes differently from the one the
-    # committed artefact was signed against — the native digest cannot match, on
-    # Windows/macOS/ARM by binary format and even across Linux build configs. The
-    # verification therefore splits: check the .py half (which every runner can
-    # verify identically), then re-sign the native half for this build — exactly
-    # what setup.py's _run_integrity_signer already does for each wheel.
+    # OS/arch/toolchain/flags it was compiled with). Only the .py half is
+    # tracked, as _integrity_digest.txt; the artefact itself is a per-build
+    # output that is not in the repository (AGENTS.md section 8.4) and that the
+    # install above generated for this job's own library. The verification
+    # therefore splits: check the tracked .py half against the commit (which
+    # every runner can verify identically), then sign the native half for this
+    # build — exactly what setup.py's _run_integrity_signer does for each wheel.
     - name: Verify committed .py integrity digest is current (platform-independent)
       shell: bash
       # Catches the real thing the old committed-artefact check protected: a .py
@@ -964,9 +964,11 @@ jobs:
         cmake --build build -j"$(nproc)"
 
     - name: Bind the freshly-built library into the integrity artefact
-      # Same reason as every other build-then-import job: a library built here
-      # is not the one the committed artefact was signed over, and the digest
-      # mismatch is refused before the object is mapped.
+      # Same reason as every other build-then-import job: the signed artefact
+      # is a per-build output, not tracked in the repository (AGENTS.md
+      # section 8.4), so this generates the one that binds the library built
+      # above and POST verifies at full strength.  (It used to re-sign over a
+      # committed artefact whose native digest described another build.)
       env:
         AMA_BUILD_PIPELINE: "1"
       run: python -m ama_cryptography.integrity --update --sign
