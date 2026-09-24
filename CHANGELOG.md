@@ -65,6 +65,45 @@ Every new test below fails against the code it replaces (AGENTS.md §6.2).
   descriptor is now opened `O_BINARY`, and the test overwrites with all-0x0A
   so it fails on every Windows run without the flag, not only when the random
   bytes happen to contain a newline.
+- **Security — `AMA_CRYPTO_LIB_PATH` relocates the signed native library; it
+  can no longer substitute one.** The override was mapped with the pre-load
+  digest check skipped and reported UNVERIFIED by POST, so one environment
+  variable executed arbitrary native code in the crypto process. Its object now
+  passes the same pre-load SHA3-256 check as every other candidate (the
+  `verify_digest` parameter is gone), and the search is confined to it: a
+  refused, unloadable or absent override fails the import with no fallback to
+  the shipped library (INVARIANT-7), with the reason in
+  `native_backend_diagnostics()["override_refusal"]`. **Behaviour change:** an
+  operator who substituted a different library through the variable is now
+  refused; deliberate substitution remains the signer's in-process opt-in.
+  Mutation-pinned: reverting the check fails 5 tests, re-adding the fallback 7.
+- **The signed integrity artefact is a build output, no longer a tracked file
+  (AGENTS.md §8.4).** `ama_cryptography/_integrity_signature.py` is untracked,
+  ignored and excluded from the sdist; every build signs its own, and
+  `_integrity_digest.txt` stays tracked as the source-drift check. The Sphinx
+  lane had forced a locally built artefact into every package edit, because it
+  rejected a stale committed one as tampering. An unbuilt clone's import error
+  now names `pip install -e .` / `python setup.py build_ext --inplace`. Tests
+  fail if the artefact is tracked, un-ignored or shipped, or if the remedy text
+  regresses.
+- **CI: each pytest lane runs once per head.** `ci-build-test.yml::python-package`
+  keeps its macOS legs only; its ubuntu-latest and windows-latest legs
+  duplicated `ci.yml::test` cell for cell (10 jobs, 161.7 of 720.1 job-minutes
+  per head at `d6270f2`). Coverage upload moved to `ci.yml::test`
+  (ubuntu-latest / 3.11). Push triggers in seven workflows are scoped to
+  `main`/`develop` (tags unchanged), so `feature/**` and `fix/**` PRs no longer
+  run them twice. The SoftHSM2 provisioning test is now per job and
+  matrix-aware; the old file grep was satisfied by a comment.
+- **The 4.x-era canonical-host benchmark tables are retired.** They measured
+  code 5.0.0 changed, on AVX-512 VBMI + VAES + VPCLMULQDQ hardware CI cannot
+  reach. README publishes only the CI four-run medians, each with runs, jobs
+  and build flags; AVX-512-class figures will be published only when measured
+  on such hardware at the release commit (`benchmarks/README.md`).
+  `tools/check_canonical_benchmarks.py` becomes `tools/check_published_benchmarks.py`
+  (record `benchmarks/published-benchmarks.json`) and now pins every number in
+  README's Performance Metrics section — an edited CI median previously passed
+  every gate. Corrected (§6.6): the fast-class x86 margin is 23–51%, not
+  20–45%; the X25519 field-equivalence test covers fe51 against fe64 only.
 - **The agent-binding timing lane measured the GIL, not the check (§6.6).**
   Its load threads held the GIL, so each sample was a GIL wait of about
   100 µs around a 2.4 µs call. It also alternated the two classes, used two
