@@ -175,8 +175,9 @@ reason*. An unanswered item blocks merge.
 
 - [ ] **Security-relevant behaviour change is documented** in `SECURITY.md`
       and/or `THREAT_MODEL.md`.
-- [ ] **`CHANGELOG.md` records the change** under `[Unreleased]`, with the
-      security impact stated plainly.
+- [ ] **`CHANGELOG.md` records the change** in the section of the version
+      being prepared (`## [X.Y.Z] - Unreleased`), with the security impact
+      stated plainly.
 - [ ] **Claims match reality.** No documented guarantee (forward secrecy,
       constant-time, authenticity) is asserted that the code does not deliver;
       where a property is intentionally *not* provided, that is stated.
