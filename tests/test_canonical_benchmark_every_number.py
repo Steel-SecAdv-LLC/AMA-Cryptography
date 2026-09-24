@@ -57,7 +57,7 @@ class TestNumbersWithoutAnAdjacentUnit:
         [
             ("~16,117 Decaps", "~19,117 Decaps"),
             ("~9,358 KeyGen", "~8,358 KeyGen"),
-            ("~6,023 Sign", "~8,023 Sign"),
+            ("Sign ~3,360", "Sign ~3,860"),
             (
                 "measured 2026-09-24; median of five runs, min–max KeyGen 3,402",
                 "measured 2026-09-25; median of five runs, min–max KeyGen 3,402",

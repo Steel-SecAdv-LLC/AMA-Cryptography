@@ -944,6 +944,17 @@ if(NOT WIN32)
              COMMAND test_platform_rand_device_symlink)
 endif()
 
+# The raw-C harness's ML-DSA-65 Sign row, pinned by what it signs rather than
+# by a timing.  The test compiles benchmarks/benchmark_c_raw.c itself (main
+# renamed) with the signer routed through a recording wrapper, runs the row's
+# own function, and requires one key, 256 distinct messages per pass, the same
+# 256 in every pass, and one sample per pass.  Built exactly where the harness
+# is built (POSIX timing, native PQC; see the top-level CMakeLists.txt).
+if(NOT WIN32 AND AMA_USE_NATIVE_PQC)
+    add_ama_test(test_benchmark_mldsa_sign_pool test_benchmark_mldsa_sign_pool.c)
+    target_link_libraries(test_benchmark_mldsa_sign_pool m $<$<PLATFORM_ID:Linux>:rt>)
+endif()
+
 # ===========================================================================
 # Per-slot known-answer sweep.
 #

@@ -97,7 +97,11 @@ SIGNATURE_OPS = {
 # (the SLH-DSA sign row is 5 iterations by design of the harness).
 PQC_SIGN_LATENCY = {
     "Ed25519 Sign": {"latency_ms": 0.0227},
-    "ML-DSA-65 Sign": {"latency_ms": 0.2376},
+    # The pooled row (a whole pass over 256 messages per sample, see
+    # bench_dilithium_sign): median of five rounds on the canonical bench
+    # host, 2026-09-24 at 352fb916.  The 0.2376 ms it replaces timed one fixed
+    # (key, message) pair, so it was that pair's rejection count.
+    "ML-DSA-65 Sign": {"latency_ms": 0.2976},
     "SLH-DSA-SHAKE-128s Sign": {"latency_ms": 934.67},
 }
 
@@ -144,15 +148,18 @@ KEM_OPS = {
 # kyber_encapsulate, ctypes path) for ML-KEM.  Speedup = raw_C_ops_sec /
 # python_ops_sec, rounded to 1 decimal place.  The ratios are what the FFI
 # costs on this host: about 1.2 µs per call, which is 30% of a 1 KB SHA3-256
-# and noise on a 200 µs ML-DSA-65 sign.  The ML-DSA-65 row reads below 1.0
-# because signing is rejection-sampled and the two harnesses' medians (100
-# and 200 iterations over different keys) differ by more than the FFI cost;
-# it is reported as measured rather than smoothed.
+# and noise on a 300 µs ML-DSA-65 sign.  The ML-DSA-65 row has its own
+# source: both figures are canonical-bench-host medians of five rounds from
+# 2026-09-24 (raw C: the pooled row, 256 messages per sample, at 352fb916;
+# Python: the README's canonical Sign figure).  Its earlier pair, 4,208 raw C
+# against 5,301 ctypes, read below 1.0 because the raw-C row then timed one
+# fixed (key, message) pair and the Python runner a 256-message pool: two
+# estimators, not an FFI cost.
 C_VS_PYTHON = {
     "SHA3-256 (1KB)": {"c": 413_223, "python": 315_259, "speedup": 1.3},
     "HKDF (96B)": {"c": 189_000, "python": 145_433, "speedup": 1.3},
     "Ed25519 Sign": {"c": 44_150, "python": 39_539, "speedup": 1.1},
-    "ML-DSA-65 Sign": {"c": 4_208, "python": 5_301, "speedup": 0.8},
+    "ML-DSA-65 Sign": {"c": 3_360, "python": 3_171, "speedup": 1.1},
     "ML-KEM Encap": {"c": 17_998, "python": 16_227, "speedup": 1.1},
 }
 

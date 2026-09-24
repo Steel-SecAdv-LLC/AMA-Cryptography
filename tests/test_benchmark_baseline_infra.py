@@ -1038,14 +1038,23 @@ class TestProvenanceRecordsTheMeasuredTree:
         assert "Commit" in block and "Aggregation" in block
 
     def test_git_failures_degrade_rather_than_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def _boom(*args: str) -> str:
+        """An unavailable git is neither a modified tree nor a clean one.
+
+        This asserted ``dirty is False`` — which pinned the defect along with
+        the property: False renders as ``"tree": "clean"``, a statement about
+        a tree nothing had inspected.  The property it named ("must not be
+        reported as a modified tree") still holds; the state is now ``None``.
+        """
+
+        def _boom(*args: str, **_kwargs: Any) -> str:
             raise OSError("no git here")
 
         monkeypatch.setattr(subprocess, "run", _boom)
         monkeypatch.setattr(br, "_TREE_STATE", None)
         commit, dirty, paths = br.capture_tree_state()
         assert commit == "unknown"
-        assert dirty is False, "an unavailable git must not be reported as a modified tree"
+        assert dirty is not True, "an unavailable git must not be reported as a modified tree"
+        assert dirty is None, "an unavailable git must not be reported as a clean tree either"
         assert paths == ()
 
 
@@ -1074,6 +1083,9 @@ class TestTheTreeRowNamesWhatIsDirty:
         class _Completed:
             def __init__(self, stdout: str) -> None:
                 self.stdout = stdout
+                # A real CompletedProcess always carries one, and _git reads
+                # it: a failed command is not an empty answer.
+                self.returncode = 0
 
         def fake_run(argv: list[str], **kwargs: Any) -> _Completed:
             if argv[1] == "status":
@@ -2100,3 +2112,450 @@ class TestPythonBindingsSummaryReadsWhatWasImported:
         for stem in _BINDING_STEMS:
             monkeypatch.delitem(sys.modules, f"ama_cryptography.{stem}", raising=False)
         assert _BINDING_STEMS[0] not in br._python_bindings_summary()
+
+
+# The sabotages below break the FIXTURE, never the library: a keypair whose
+# public half belongs to another keypair, a public key that is another point,
+# a package field that no longer matches.  Patching a signer instead would also
+# reach the keygen's pairwise-consistency test, which calls the same module
+# attribute — and a failed pairwise test puts the whole module into its FIPS
+# error state for the rest of the process (INVARIANT-39/41).
+
+
+def _mismatched_pair(generate: Callable[[], Any], public: str, secret: str) -> Any:
+    """A keypair object whose public half is another keypair's."""
+    import types
+
+    ours, theirs = generate(), generate()
+    return types.SimpleNamespace(**{public: getattr(theirs, public), secret: getattr(ours, secret)})
+
+
+def _sabotage_ed25519(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ama_cryptography.legacy_compat as lc
+
+    real = lc.generate_ed25519_keypair
+    monkeypatch.setattr(
+        lc,
+        "generate_ed25519_keypair",
+        lambda: _mismatched_pair(real, "public_key", "private_key"),
+    )
+
+
+def _sabotage_dilithium(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ama_cryptography.pqc_backends as pb
+
+    real = pb.generate_dilithium_keypair
+    monkeypatch.setattr(
+        pb,
+        "generate_dilithium_keypair",
+        lambda: _mismatched_pair(real, "public_key", "secret_key"),
+    )
+
+
+def _sabotage_secp256k1(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A valid curve point that is not the signer's key: (x, p - y)."""
+    real = br._secp256k1_uncompressed_pubkey
+
+    def negated(privkey: bytes) -> bytes:
+        point = real(privkey)
+        y = int.from_bytes(point[32:], "big")
+        return point[:32] + (br._SECP256K1_P - y).to_bytes(32, "big")
+
+    monkeypatch.setattr(br, "_secp256k1_uncompressed_pubkey", negated)
+
+
+def _sabotage_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The package's recorded content hash no longer matches its content."""
+    import dataclasses
+
+    import ama_cryptography.crypto_api as api
+
+    real_create = api.create_crypto_package
+
+    def tampered(content: bytes, config: Any) -> Any:
+        package = real_create(content, config)
+        return dataclasses.replace(package, content_hash="00" * 32)
+
+    monkeypatch.setattr(api, "create_crypto_package", tampered)
+
+
+_VERIFY_ROWS: list[tuple[str, Callable[..., Any], Callable[[pytest.MonkeyPatch], None]]] = [
+    ("ed25519_verify", br.run_ed25519_verify_benchmark, _sabotage_ed25519),
+    ("dilithium_verify", br.run_dilithium_verify_benchmark, _sabotage_dilithium),
+    ("secp256k1_ecdsa_verify", br.run_secp256k1_ecdsa_verify_benchmark, _sabotage_secp256k1),
+    ("full_package_verify", br.run_full_package_verify_benchmark, _sabotage_package),
+]
+
+
+class TestVerifyRowsRefuseAFixtureTheyReject:
+    """A verify row must not time a verifier that rejects its own fixture.
+
+    Every verifier the runner times returns its verdict and does not raise, and
+    the rows discarded it — the secp256k1 row's "probe confirms the fixture
+    verifies" included.  A change that made a verifier reject EARLY therefore
+    left the row timing the reject path, faster than a verification, so the
+    floor passed.  Each case below breaks the fixture the way a real defect
+    would (a signature, a public key, a package field) and requires the row to
+    raise instead of returning a number; the dilithium and secp256k1 rows also
+    prove the refusal is not swallowed by their "primitive absent" skip.
+    """
+
+    @pytest.mark.parametrize(
+        "row,func,sabotage", _VERIFY_ROWS, ids=[row for row, _f, _s in _VERIFY_ROWS]
+    )
+    def test_a_rejected_fixture_ends_the_row(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        row: str,
+        func: Callable[..., Any],
+        sabotage: Callable[[pytest.MonkeyPatch], None],
+    ) -> None:
+        timed: list[int] = []
+
+        def timer(op: Any, *_a: Any, **_k: Any) -> float:
+            timed.append(1)
+            return 12345.0
+
+        monkeypatch.setattr(br, "benchmark_operation", timer)
+        sabotage(monkeypatch)
+        with pytest.raises(br.BenchmarkFixtureRejectedError, match=row):
+            func()
+        assert not timed, f"{row} reached the timer with a fixture its verifier rejects"
+
+    @pytest.mark.parametrize(
+        "row,func,sabotage", _VERIFY_ROWS, ids=[row for row, _f, _s in _VERIFY_ROWS]
+    )
+    def test_a_sound_fixture_is_still_timed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        row: str,
+        func: Callable[..., Any],
+        sabotage: Callable[[pytest.MonkeyPatch], None],
+    ) -> None:
+        """Non-vacuity: the check must not fire on the fixture the row really uses."""
+        monkeypatch.setattr(br, "benchmark_operation", lambda op, *a, **k: 12345.0)
+        assert func() == 12345.0, f"{row} refused its own sound fixture"
+
+    def test_a_truthy_non_bool_verdict_is_not_trusted(self) -> None:
+        for verdict in (1, "True", [True], None, False):
+            with pytest.raises(br.BenchmarkFixtureRejectedError):
+                br._require_accepted(verdict, "row")
+        br._require_accepted(True, "row")
+
+    def test_the_refusal_fails_the_run_instead_of_skipping_the_row(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Through main(): exit 2 with the cause named, not a skipped floor."""
+        _sabotage_dilithium(monkeypatch)
+        monkeypatch.setattr(br, "benchmark_operation", lambda op, *a, **k: 12345.0)
+        monkeypatch.setattr(br, "capture_dispatch_report", lambda: "stub")
+        monkeypatch.setattr(br, "_DISPATCH_REPORT", None)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "metadata": {"runner_cpu_class": "x86_64"},
+                    "thresholds": {"regression_threshold_percent": 10},
+                    "benchmarks": {},
+                    "pqc_benchmarks": {
+                        "dilithium_verify": {
+                            "description": "synthetic",
+                            "baseline_value": 1000.0,
+                            "tolerance_percent": 15,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--baseline", str(path)])
+        assert br.main() == 2
+        out = capsys.readouterr().out
+        assert "dilithium_verify: the verifier returned False" in out
+
+
+class TestEverySkipNamesItsCause:
+    """The unmeasured-floor report prints what each benchmark recorded.
+
+    The three ML-DSA benchmarks ended ``except (ImportError, Exception):
+    return None`` without calling ``_unavailable``, and ``main()`` printed
+    "skipped — the primitive is absent from this build" for every unmeasured
+    name — the misdiagnosis ``_unavailable`` was written to remove.
+    """
+
+    @pytest.mark.parametrize(
+        "func",
+        [
+            br.run_dilithium_keygen_benchmark,
+            br.run_dilithium_sign_benchmark,
+            br.run_dilithium_verify_benchmark,
+        ],
+        ids=["keygen", "sign", "verify"],
+    )
+    def test_a_raising_ml_dsa_binding_is_recorded(
+        self, monkeypatch: pytest.MonkeyPatch, func: Callable[..., Any]
+    ) -> None:
+        import ama_cryptography.pqc_backends as pb
+
+        def boom(*_a: Any, **_k: Any) -> Any:
+            raise RuntimeError("binding exploded")
+
+        monkeypatch.setattr(pb, "generate_dilithium_keypair", boom)
+        monkeypatch.setattr(br, "_LAST_UNAVAILABLE", None)
+        assert func() is None
+        assert br._unavailable_reason() == "RuntimeError: binding exploded"
+
+    @pytest.mark.parametrize(
+        "func,flag",
+        [
+            (br.run_dilithium_keygen_benchmark, "DILITHIUM_AVAILABLE"),
+            (br.run_dilithium_sign_benchmark, "DILITHIUM_AVAILABLE"),
+            (br.run_dilithium_verify_benchmark, "DILITHIUM_AVAILABLE"),
+            (br.run_kyber_keygen_benchmark, "KYBER_AVAILABLE"),
+            (br.run_kyber_encapsulate_benchmark, "KYBER_AVAILABLE"),
+            (br.run_secp256k1_ecdsa_sign_benchmark, "_SECP256K1_NATIVE_AVAILABLE"),
+            (br.run_secp256k1_ecdsa_verify_benchmark, "_SECP256K1_NATIVE_AVAILABLE"),
+            (br.run_x25519_batch4_benchmark, "_X25519_NATIVE_AVAILABLE"),
+        ],
+    )
+    def test_a_backend_flag_that_reads_false_is_named(
+        self, monkeypatch: pytest.MonkeyPatch, func: Callable[..., Any], flag: str
+    ) -> None:
+        import ama_cryptography.pqc_backends as pb
+
+        monkeypatch.setattr(pb, flag, False)
+        monkeypatch.setattr(br, "_LAST_UNAVAILABLE", None)
+        assert func() is None
+        assert flag in br._unavailable_reason()
+
+    def test_the_strict_report_prints_each_recorded_cause(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """An under-sampled row is reported as under-sampled, not as absent."""
+        cause = "benchmark_operation completed 1 of 3 full-window batches"
+
+        def undersampled() -> None:
+            br._unavailable(RuntimeError(cause))
+            return None
+
+        measured = next(iter(br.BENCHMARK_FUNCTIONS))
+        monkeypatch.setitem(br.BENCHMARK_FUNCTIONS, measured, lambda: 1000.0)
+        monkeypatch.setitem(br.PQC_BENCHMARK_FUNCTIONS, "dilithium_sign", undersampled)
+        monkeypatch.setattr(br, "capture_dispatch_report", lambda: "stub")
+        monkeypatch.setattr(br, "_DISPATCH_REPORT", None)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        entry = {"description": "synthetic", "baseline_value": 1000.0, "tolerance_percent": 15}
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "metadata": {"runner_cpu_class": "x86_64"},
+                    "thresholds": {"regression_threshold_percent": 10},
+                    "benchmarks": {measured: entry},
+                    "pqc_benchmarks": {"dilithium_sign": entry},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["benchmark_runner.py", "--baseline", str(path), "--require-populated-baseline"],
+        )
+        assert br.main() == 2
+        out = capsys.readouterr().out
+        assert f"dilithium_sign: skipped — RuntimeError: {cause}" in out
+        assert "absent from this build" not in out
+
+
+class TestTheTreeRowNeverClaimsAnUninspectedTree:
+    """``tree: clean`` must mean git looked and found nothing.
+
+    ``_git`` returned ``text or "unknown"`` without reading the exit status, so
+    a failed query and a clean tree were the same value, and
+    ``capture_tree_state`` read both as "not dirty".  Run from a directory that
+    is not a checkout — which is how the wheel-only CI lane runs the runner —
+    the record said ``"commit": "unknown"`` beside ``"tree": "clean"``.
+    """
+
+    def test_a_query_git_cannot_answer_reads_unknown_in_both_records(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Real git, pointed at a directory that is not a repository."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(br, "_REPO_ROOT", tmp_path, raising=False)
+        state = br.capture_tree_state()
+        monkeypatch.setattr(br, "_TREE_STATE", state)
+        tree = dict(br._provenance())["Tree"]
+        assert tree != "clean", "a tree nothing inspected was reported clean"
+        assert tree.startswith("unknown")
+        provenance = br.generate_report([])["provenance"]
+        assert provenance["tree"] == tree
+        assert provenance["commit"] == "unknown"
+
+    def test_the_runner_inspects_its_own_repository_from_any_directory(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The wheel-only lane's shape: cwd outside the checkout the runner is in."""
+        monkeypatch.chdir(tmp_path)
+        commit, dirty, _paths = br.capture_tree_state()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert commit == head
+        assert dirty is not None, "git status of the runner's own checkout was not read"
+
+    def test_an_empty_status_is_still_clean(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-vacuity: success with no output is the clean answer."""
+
+        class _Completed:
+            def __init__(self, stdout: str) -> None:
+                self.stdout = stdout
+                self.returncode = 0
+
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda argv, **_k: _Completed("" if argv[1] == "status" else "abc123\n"),
+        )
+        assert br.capture_tree_state() == ("abc123", False, ())
+        assert br._tree_row(False, ()) == "clean"
+
+
+class TestTheDispatchRowDescribesTheMeasuringProcess:
+    """The Dispatch row is the measuring process's own dispatcher report.
+
+    It was produced by a separate interpreter spawned after the measurements,
+    which ran its own initialisation — and its own auto-tune — so the record
+    published another process's wiring as the one the numbers ran on.
+    """
+
+    def test_the_row_is_this_processes_report_not_a_later_ones(self) -> None:
+        """A process whose environment changes after it initialised.
+
+        ``AMA_DISPATCH_ONLY`` is read once, at initialisation, and an
+        unrecognised value leaves every kernel at its scalar fallback with an
+        unconditional ``[AMA Dispatch] ERROR`` line.  The measuring process
+        initialises with it set, then drops it: its own report still names it;
+        a report produced afterwards by any other process cannot.
+        """
+        import os
+
+        code = (
+            "import json, os\n"
+            "import benchmarks.benchmark_runner as br\n"
+            "br._DISPATCH_REPORT = br.capture_dispatch_report()\n"
+            "del os.environ['AMA_DISPATCH_ONLY']\n"
+            "print('ROW=' + json.dumps(br.generate_report([])['provenance']['dispatch']))\n"
+        )
+        env = dict(os.environ)
+        env.pop("AMA_DISPATCH_VERBOSE", None)
+        env.update(
+            AMA_DISPATCH_ONLY="not-a-real-slot",
+            AMA_DISPATCH_NO_AUTOTUNE="1",
+            PYTHONPATH=str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", ""),
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        rows = [line for line in proc.stdout.splitlines() if line.startswith("ROW=")]
+        assert rows, proc.stdout[-2000:]
+        row = json.loads(rows[-1][len("ROW=") :])
+        assert "AMA_DISPATCH_ONLY='not-a-real-slot'" in row, row
+        # The wiring lines exist only under AMA_DISPATCH_VERBOSE=1, which the
+        # capture sets for the initialisation it observes (the ERROR line
+        # above is unconditional, so it alone would not show that).
+        assert "keccak_f1600 ->" in row, row
+        # The capture hides nothing: what the window swallowed went back out.
+        assert "[AMA Dispatch] ERROR: AMA_DISPATCH_ONLY='not-a-real-slot'" in proc.stderr
+
+    def test_no_process_is_spawned_to_describe_the_wiring(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _no_children(*_a: Any, **_k: Any) -> Any:
+            raise AssertionError("the Dispatch row spawned a process to re-probe the wiring")
+
+        monkeypatch.setattr(br, "_DISPATCH_REPORT", "captured in-process")
+        monkeypatch.setattr(br, "_TREE_STATE", ("a" * 40, False, ()))
+        monkeypatch.setattr(subprocess, "run", _no_children)
+        assert br.generate_report([])["provenance"]["dispatch"] == "captured in-process"
+        monkeypatch.setattr(br, "_DISPATCH_REPORT", None)
+        assert br._dispatch_wiring_summary().startswith("not captured")
+
+    def test_an_already_initialised_dispatcher_is_reported_as_not_captured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No report in the window means none — never a substitute."""
+        import os
+
+        import ama_cryptography.pqc_backends as pb
+
+        pb.native_sha3_256(b"initialise the dispatcher in this process first")
+
+        def _no_children(*_a: Any, **_k: Any) -> Any:
+            raise AssertionError("capture_dispatch_report spawned a process")
+
+        monkeypatch.setattr(subprocess, "run", _no_children)
+        monkeypatch.delenv("AMA_DISPATCH_VERBOSE", raising=False)
+        report = br.capture_dispatch_report()
+        assert report.startswith("not captured"), report
+        assert "AMA_DISPATCH_VERBOSE" not in os.environ, "the capture must restore the variable"
+
+    def test_main_captures_before_the_first_measurement(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        events: list[str] = []
+
+        def capture() -> str:
+            events.append("capture")
+            return "captured"
+
+        def measure(name: str, func: Any) -> float:
+            events.append(f"measure:{name}")
+            return 1000.0
+
+        monkeypatch.setattr(br, "capture_dispatch_report", capture)
+        monkeypatch.setattr(br, "_measure_benchmark", measure)
+        monkeypatch.setattr(br, "_DISPATCH_REPORT", None)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        name = next(iter(br.BENCHMARK_FUNCTIONS))
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "metadata": {"runner_cpu_class": "x86_64"},
+                    "thresholds": {"regression_threshold_percent": 10},
+                    "benchmarks": {
+                        name: {
+                            "description": "synthetic",
+                            "baseline_value": 1000.0,
+                            "tolerance_percent": 15,
+                        }
+                    },
+                    "pqc_benchmarks": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--baseline", str(path)])
+        assert br.main() == 0
+        assert events[0] == "capture", events
+        assert br._DISPATCH_REPORT == "captured"

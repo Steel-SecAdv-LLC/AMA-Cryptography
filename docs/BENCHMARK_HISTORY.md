@@ -437,6 +437,14 @@ The `README.md` canonical-bench region and `benchmarks/canonical-host.json` carr
 
 Four raw-C PQC rows were not stable across rounds: ML-KEM-1024 KeyGen and Encaps were slow in rounds 3 and 5 and Decaps in round 3, ML-DSA-65 Verify in round 5, and ML-DSA-65 Sign ranged 2,826–7,713 (its signing time varies by design with rejection sampling, and 200 iterations per round do not average that out). The Python-API rows of the same rounds stayed within 4.3–13.6% (max–min over median). The median is what is published; the spread is stated here rather than trimmed.
 
+*Added 2026-09-24, after these runs.* The ML-DSA-65 Sign spread above was not noise, and 200 iterations could not average it out, because all 200 did the same work: the row signed one fixed message under one per-run key, and `ama_dilithium_sign` is FIPS 204's deterministic signer, whose rejection count is a constant per (key, message) pair. Measured with callgrind on the development host (retired instructions per signature of the harness's message, sixteen seeded keys): 2,153,304 to 10,761,001, a 5.00x spread from the key alone. The row now times whole passes over a pool of 256 distinct messages — the pool `benchmark_runner.py` cycles — and reports the pass time per signature, which puts a run on its key's pool-mean cost: 4,442,497 to 5,176,191 instructions per signature over the same sixteen keys (1.17x). The ML-DSA-65 Sign column in the table above was measured with the one-pair row and is left as measured; it is not comparable with the row's output from this change on. The row was re-measured on the canonical host the same day, and the README's raw-C Sign figure now quotes that measurement instead of this table's:
+
+| Row | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|
+| ML-DSA-65 Sign (pooled, per signature) | 3,435 | 3,199 | 3,360 | 3,880 | 3,356 | **3,360** |
+
+`build/bin/benchmark_c_raw --json` built at `352fb916` (gcc 13.3.0, CMake Release, `-DAMA_USE_NATIVE_PQC=ON`), five consecutive rounds on an otherwise idle host, each pinned with `taskset -c 0`; 25 passes of 256 signatures per round. The one-pair median it replaces, 6,023, sat inside a 2,826–7,713 spread; the pooled rounds span 3,199–3,880. `tests/c/test_benchmark_mldsa_sign_pool.c` pins what the row signs.
+
 ### X25519 through the Python harness, kernel pinned, ops/sec
 
 | Configuration | 2026-04 (4.x) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |

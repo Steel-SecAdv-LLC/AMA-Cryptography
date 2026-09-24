@@ -7,6 +7,11 @@
       "measured": "2026-09-24, five interleaved rounds, each process pinned with taskset -c 0; published figure = median of five, ranges = min-max",
       "command": "python benchmarks/benchmark_runner.py --output <round>.json; build/bin/benchmark_c_raw --json; the X25519 pair via ama_x25519_set_mulx_override(0/1) around benchmark_runner.run_x25519_benchmark"
     },
+    "canonical-bench-host-pooled-sign": {
+      "description": "The canonical bench host as defined in canonical-bench-host (same VM, CPU, kernel, compiler and CMake Release -DAMA_USE_NATIVE_PQC=ON build flags), running build/bin/benchmark_c_raw built at 352fb916, after the raw-C ML-DSA-65 Sign row moved from one fixed (key, message) pair to whole passes over a 256-message pool (25 passes per round, reported per signature).",
+      "measured": "2026-09-24, five consecutive rounds on an otherwise idle host, each pinned with taskset -c 0; published figure = median of five, range = min-max. Per round: 3,435 / 3,199 / 3,360 / 3,880 / 3,356 ops/sec.",
+      "command": "taskset -c 0 build/bin/benchmark_c_raw --json (row \"ML-DSA-65 Sign\")"
+    },
     "sandbox-host": {
       "description": "The secp256k1 fixed-base comb measurement host, raw C, reported alongside the Welch t-test in docs/BENCHMARK_HISTORY.md.",
       "measured": "2026-07-29",
@@ -182,9 +187,25 @@
       "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
       "label": "(prose)",
       "approx": true,
-      "value": "6,023",
+      "value": "3,360",
+      "unit": "ops/sec",
+      "source": "canonical-bench-host-pooled-sign"
+    },
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "3,199",
       "unit": "",
-      "source": "canonical-bench-host"
+      "source": "canonical-bench-host-pooled-sign"
+    },
+    {
+      "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",
+      "label": "(prose)",
+      "approx": false,
+      "value": "3,880",
+      "unit": "",
+      "source": "canonical-bench-host-pooled-sign"
     },
     {
       "heading": "ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)",

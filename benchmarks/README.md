@@ -98,8 +98,13 @@ end-to-end primitive cost:
 
 - Timer: `clock_gettime(CLOCK_MONOTONIC)` (nanosecond resolution)
 - Warmup: 50 iterations discarded before measurement
-- Iterations: 200–5,000 depending on operation speed
-- Statistics: mean, median, stddev, min, max, ops/sec
+- Iterations: 5–5,000 depending on operation speed (`ITERS_*` in
+  `benchmark_c_raw.c`)
+- ML-DSA-65 Sign: each sample is one whole pass over 256 distinct messages,
+  reported per signature, and `iterations` counts passes.  The signer is
+  deterministic, so one fixed message under one key would time that pair's
+  rejection count on every sample (see the comment on `bench_dilithium_sign`)
+- Statistics: mean, median, stddev, min, max, ops/sec (ops/sec from the median)
 
 ### Output Format
 

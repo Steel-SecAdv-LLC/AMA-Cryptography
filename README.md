@@ -437,7 +437,7 @@ These are the only 5.0.0 throughput measurements this repository publishes, and 
 | **Sign** | 3,171 ops/sec | ~315µs | Rejection sampling — intentional, by-design timing variation (leaks no key); NTT/arithmetic constant-time, NTT q=8380417 |
 | **Verify** | 10,817 ops/sec | ~92µs | Verified against NIST ACVP test vectors (self-attested) |
 
-*Source: canonical bench host (see the host note below), measured 2026-09-24; median of five interleaved runs, min–max KeyGen 1,578–1,699, Sign 3,028–3,244, Verify 10,630–11,444 ops/sec. Raw C on the same host and runs, `build/bin/benchmark_c_raw --json`, no ctypes and no pairwise test: ~9,358 KeyGen, ~6,023 Sign, ~11,532 Verify ops/sec (medians). The checked-in `benchmarks/benchmark-results.json` carries a measured run on the host its own provenance names plus the slow-runner CI regression floors in `baseline_value` — neither column is these canonical numbers; see [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the per-run record and the 4.x figures these replace.*
+*Source: canonical bench host (see the host note below), measured 2026-09-24; median of five interleaved runs, min–max KeyGen 1,578–1,699, Sign 3,028–3,244, Verify 10,630–11,444 ops/sec. Raw C on the same host and runs, `build/bin/benchmark_c_raw --json`, no ctypes and no pairwise test: ~9,358 KeyGen, ~11,532 Verify ops/sec (medians); Sign ~3,360 ops/sec, re-measured on the same host the same day in five further rounds (3,199–3,880) after the raw-C Sign row moved from one fixed (key, message) pair to a 256-message pool, which the one-pair median of those runs did not measure. The checked-in `benchmarks/benchmark-results.json` carries a measured run on the host its own provenance names plus the slow-runner CI regression floors in `baseline_value` — neither column is these canonical numbers; see [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the per-run record and the 4.x figures these replace.*
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
@@ -1042,7 +1042,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*6,249 test functions across 264 Python test files plus 90 C test suites (92 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*6,263 test functions across 264 Python test files plus 91 C test suites (93 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1665,7 +1665,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 6,249 test functions across 264 Python files plus 90 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 6,263 test functions across 264 Python files plus 91 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

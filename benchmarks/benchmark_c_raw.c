@@ -61,7 +61,11 @@
  * bench_require() ends the run at the first failure with the call, the code
  * and the source location, and exits non-zero so a runner notices.  Inside the
  * timed loops the check is evaluated AFTER the closing now_ns(), so it is
- * outside every measurement window and cannot perturb a sample.
+ * outside every measurement window and cannot perturb a sample.  The one row
+ * whose sample spans many calls, ML-DSA-65 Sign (a whole pass over its message
+ * pool), keeps the first failing status in a local inside the window -- one
+ * compare per signature, each of which retires millions of instructions --
+ * and checks it after the window closes.
  * ============================================================================ */
 
 static void bench_require(ama_error_t rc, const char *what,
@@ -236,7 +240,13 @@ enum {
      * the harness emits min / median / max / stddev so a 5-sample median
      * still surfaces a gross regression even if it is not statistically
      * tight. */
-    ITERS_SLH_SIGN   = 5       /* seconds-scale ops (SLH-DSA Sign only) */
+    ITERS_SLH_SIGN   = 5,      /* seconds-scale ops (SLH-DSA Sign only) */
+    /* ML-DSA-65 Sign times whole passes over a pool of distinct messages (see
+     * bench_dilithium_sign), so its tier counts PASSES, each of
+     * MLDSA_SIGN_POOL signatures: 25 x 256 = 6,400 signatures per run.  Odd,
+     * so the median is one pass rather than the mean of two. */
+    MLDSA_SIGN_POOL         = 256,
+    ITERS_MLDSA_SIGN_PASSES = 25
 };
 
 _Static_assert(ITERS_FAST <= MAX_SAMPLES, "ITERS_FAST overruns g_samples");
@@ -245,6 +255,10 @@ _Static_assert(ITERS_SLOW <= MAX_SAMPLES, "ITERS_SLOW overruns g_samples");
 _Static_assert(ITERS_VSLOW <= MAX_SAMPLES, "ITERS_VSLOW overruns g_samples");
 _Static_assert(ITERS_SLH_SIGN <= MAX_SAMPLES,
                "ITERS_SLH_SIGN overruns g_samples");
+_Static_assert(ITERS_MLDSA_SIGN_PASSES <= MAX_SAMPLES,
+               "ITERS_MLDSA_SIGN_PASSES overruns g_samples");
+_Static_assert(MLDSA_SIGN_POOL > 0 && MLDSA_SIGN_POOL <= 65536,
+               "the ML-DSA pool index is appended to the message as two bytes");
 
 /* ============================================================================
  * INDIVIDUAL BENCHMARKS
@@ -579,27 +593,84 @@ static bench_result_t bench_dilithium_keygen(int iters, int warmup) {
     return compute_stats("ML-DSA-65 KeyGen", g_samples, iters);
 }
 
-static bench_result_t bench_dilithium_sign(int iters, int warmup) {
+/* ML-DSA-65 signing, timed over a POOL of distinct messages, one pass per
+ * sample.
+ *
+ * ama_dilithium_sign is FIPS 204's deterministic signer (rnd = 0), so the
+ * number of rejection-loop attempts -- and with it the running time -- is a
+ * constant for each (key, message) pair.  This row used to sign ONE fixed
+ * message under ONE per-run key, so all of its 200 samples did identical work
+ * and the median published that single pair's luck.  Measured with callgrind
+ * (retired instructions per ama_dilithium_sign on this harness's message,
+ * keys from ama_dilithium_keypair_from_seed with sixteen fixed seeds,
+ * AMA_DISPATCH_NO_AUTOTUNE=1): 2,153,304 to 10,761,001, a 5.00x spread from
+ * the key alone.  docs/BENCHMARK_HISTORY.md shows the same effect in wall
+ * clock on the canonical host, 2,826 to 7,713 ops/sec across five runs of
+ * one build.
+ *
+ * Signing msg || i instead, i in [0, MLDSA_SIGN_POOL) as two big-endian
+ * bytes -- the 256-message pool benchmarks/benchmark_runner.py cycles for the
+ * same reason -- puts each run's figure on the pool's MEAN cost under its key:
+ * 4,442,497 to 5,176,191 instructions per signature over the same sixteen
+ * keys (1.17x, coefficient of variation 3.6 %).
+ *
+ * Each sample is a WHOLE pass over the pool, reported per signature, rather
+ * than one signature cycling the pool.  The attempt count is geometric, so
+ * the median signature is much cheaper than the mean one -- for seed 0,
+ * 3,598,339 against 4,698,982 instructions -- and a rate derived from a
+ * per-signature median (this harness's basis, see compute_stats) would
+ * overstate the expected signing throughput by 1.31x.  When every sample is
+ * the same 256 signatures under the same key, every sample does identical
+ * work, the median over passes filters nothing but the host's noise, and the
+ * rate is 1 / (the pool's mean cost): the expected rate a floor can be set
+ * against, and the quantity benchmark_runner.py's batches-over-the-pool
+ * estimator reports, so the C / Python ratio for this row is the FFI cost
+ * and not a difference in estimators.
+ *
+ * `iterations` in the output therefore counts passes (ITERS_MLDSA_SIGN_PASSES)
+ * for this row; each is MLDSA_SIGN_POOL signatures.  The per-signature status
+ * check stays out of the measurement window as everywhere else: inside the
+ * pass only the first failing status is recorded, and it is acted on after
+ * the closing now_ns(). */
+static bench_result_t bench_dilithium_sign(int passes, int warmup) {
     uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
     uint8_t sig[AMA_ML_DSA_65_SIGNATURE_BYTES];
     size_t sig_len = sizeof(sig);
-    const uint8_t msg[] = "ML-DSA-65 benchmark message for sign/verify operations";
-    size_t msg_len = sizeof(msg) - 1;
+    const uint8_t base[] = "ML-DSA-65 benchmark message for sign/verify operations";
+    const size_t base_len = sizeof(base) - 1;
+    const size_t msg_len = base_len + 2;
+    static uint8_t pool[MLDSA_SIGN_POOL][sizeof(base) + 1];
+
+    for (size_t j = 0; j < MLDSA_SIGN_POOL; j++) {
+        memcpy(pool[j], base, base_len);
+        pool[j][base_len] = (uint8_t)(j >> 8);
+        pool[j][base_len + 1] = (uint8_t)(j & 0xFFu);
+    }
 
     BENCH_REQUIRE(ama_dilithium_keypair(pk, sk));
 
-    for (int i = 0; i < warmup; i++)
-        BENCH_REQUIRE(ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk));
-
-    for (int i = 0; i < iters; i++) {
+    for (int i = 0; i < warmup; i++) {
         sig_len = sizeof(sig);
-        double t0 = now_ns();
-        ama_error_t rc = ama_dilithium_sign(sig, &sig_len, msg, msg_len, sk);
-        g_samples[i] = now_ns() - t0;
-        BENCH_CHECK(rc, "ama_dilithium_sign");
+        BENCH_REQUIRE(ama_dilithium_sign(sig, &sig_len,
+                                         pool[(size_t)i % MLDSA_SIGN_POOL],
+                                         msg_len, sk));
     }
-    return compute_stats("ML-DSA-65 Sign", g_samples, iters);
+
+    for (int p = 0; p < passes; p++) {
+        ama_error_t first_failure = AMA_SUCCESS;
+        double t0 = now_ns();
+        for (size_t j = 0; j < MLDSA_SIGN_POOL; j++) {
+            sig_len = sizeof(sig);
+            ama_error_t rc = ama_dilithium_sign(sig, &sig_len, pool[j], msg_len, sk);
+            if (rc != AMA_SUCCESS && first_failure == AMA_SUCCESS) {
+                first_failure = rc;
+            }
+        }
+        g_samples[p] = (now_ns() - t0) / (double)MLDSA_SIGN_POOL;
+        BENCH_CHECK(first_failure, "ama_dilithium_sign");
+    }
+    return compute_stats("ML-DSA-65 Sign", g_samples, passes);
 }
 
 static bench_result_t bench_dilithium_verify(int iters, int warmup) {
@@ -1681,6 +1752,7 @@ int main(int argc, char **argv) {
     const int iters_slow  = ITERS_SLOW;
     const int iters_vslow = ITERS_VSLOW;
     const int iters_slh_sign = ITERS_SLH_SIGN;
+    const int mldsa_sign_passes = ITERS_MLDSA_SIGN_PASSES;
 
     /* Collect all results.  BENCH_ROW() is used instead of a bare
      * `results[n++] = ...` so that adding a row past MAX_RESULTS ends the run
@@ -1787,7 +1859,7 @@ int main(int argc, char **argv) {
 
     /* --- ML-DSA-65 --- */
     BENCH_ROW(bench_dilithium_keygen(iters_slow, warmup));
-    BENCH_ROW(bench_dilithium_sign(iters_slow, warmup));
+    BENCH_ROW(bench_dilithium_sign(mldsa_sign_passes, warmup));
     BENCH_ROW(bench_dilithium_verify(iters_slow, warmup));
 
     /* --- ML-DSA-65 NTT kernel isolation (scalar vs dispatched) ---

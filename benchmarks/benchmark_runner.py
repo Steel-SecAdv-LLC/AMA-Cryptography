@@ -223,15 +223,29 @@ _ROUNDS = 3
 #: unlucky and the other two were not".  Since these numbers become FLOORS, a
 #: more robust estimate tightens the gate rather than loosening it.
 #:
-#: The listed primitives are exactly those whose cross-run spread exceeded 7%
-#: over those five runs — 7% being the point at which the spread of the
-#: measurement starts to be comparable to the tightest tolerance any baseline
-#: carries (15%, on the ARM lane).  Two shapes appear in the list, and both are
-#: real: the rejection-sampled ML-DSA family and the composites containing one
-#: (under FIPS 204's deterministic variant the rejection count is a constant
-#: per (key, message) pair, and the 256-input pool fixes only the message
-#: half — the key is redrawn per run), and the very cheap primitives, whose
-#: short windows make them the most exposed to a scheduling burst.
+#: The list was drawn from those five runs, with 7% cross-run spread as the
+#: line — 7% being the point at which the spread of the measurement starts to
+#: be comparable to the tightest tolerance any baseline carries (15%, on the
+#: ARM lane).  It is NOT exactly the set that crossed it, and an earlier
+#: revision of this paragraph said it was: the result below counts nine
+#: primitives over 7% before the change, while the list carried thirteen
+#: entries at the time (eleven primitives and the two composites).  The
+#: per-primitive spreads of those runs are not recorded in the tree, so which
+#: entries were admitted by their own measured spread and which by their class
+#: cannot be reconstructed; the classes are the rationale that survives.  Two
+#: shapes appear in the list, and both are real: the rejection-sampled ML-DSA
+#: family and the composites containing one (under FIPS 204's deterministic
+#: variant the rejection count is a constant per (key, message) pair, and the
+#: 256-input pool fixes only the message half — the key is redrawn per run),
+#: and the very cheap primitives, whose short windows make them the most
+#: exposed to a scheduling burst.
+#:
+#: One entry was not drawn from those runs at all: ``ed25519_sign_expanded``
+#: is a row added on 2026-09-22 (24341f89), after the five runs, so it has no
+#: five-run spread to have crossed anything.  It was registered by analogy
+#: with ``ed25519_sign`` — the same key source, the same message and the same
+#: signing core minus one fixed-base multiplication, so an equally short
+#: window — and its entry rests on that analogy, not on a measurement.
 #:
 #: Result, five more runs after the change, same host and conditions:
 #: primitives over 7% cross-run spread went from 9 to 4, and every cheap
@@ -251,9 +265,9 @@ _ROUNDS = 3
 #: ``benchmarks/*.json`` are measured there and are deliberately NOT
 #: recalibrated from a developer VM.
 #:
-#: Cost is bounded and paid where it buys something: 11 primitives x 2 extra
-#: repeats plus 2 composites x 4, at ~0.5 s of window each, is roughly 15 s
-#: added to a run.
+#: Cost is bounded and paid where it buys something: 12 primitives x 2 extra
+#: repeats plus 2 composites x 4 — 32 extra whole measurements, at ~0.5 s of
+#: window each — is roughly 16 s added to a run.
 #:
 #: ``tests/test_benchmark_baseline_infra.py`` pins that every name here is a
 #: registered benchmark, so a rename cannot silently drop one back to a single
@@ -311,13 +325,79 @@ def _unavailable(exc: BaseException) -> None:
     unmeasured (INVARIANT-47).  What changes is that the run now says which
     exception produced it.
     """
+    _unavailable_because(f"{type(exc).__name__}: {exc}")
+
+
+def _unavailable_because(reason: str) -> None:
+    """Record a skip whose cause is a STATE rather than an exception.
+
+    A benchmark that returns ``None`` because a backend flag reads False
+    (``DILITHIUM_AVAILABLE``, ``KYBER_AVAILABLE`` ...) raised nothing, so
+    :func:`_unavailable` had nothing to record and the skip line read "no
+    exception recorded" — true, and useless to whoever has to find out why a
+    floor went unmeasured.  The flag that decided it is the cause; say so.
+    """
     global _LAST_UNAVAILABLE
-    _LAST_UNAVAILABLE = f"{type(exc).__name__}: {exc}"
+    _LAST_UNAVAILABLE = reason
 
 
 def _unavailable_reason() -> str:
     """The recorded cause, formatted for a skip line."""
-    return _LAST_UNAVAILABLE or "no exception recorded"
+    return _LAST_UNAVAILABLE or "no cause recorded"
+
+
+#: ``name -> cause`` for every benchmark the last :func:`run_all_benchmarks`
+#: skipped.  ``main()`` prints these in its unmeasured-floor report.  That
+#: report used to print one fixed sentence for every name, "skipped — the
+#: primitive is absent from this build", which is the exact misdiagnosis
+#: :func:`_unavailable` was written to remove: a binding that raised, or a
+#: ``benchmark_operation`` that could not collect enough full-window batches,
+#: was announced as an absent primitive on the one line CI prints about it.
+_SKIP_REASONS: dict[str, str] = {}
+
+
+class BenchmarkFixtureRejectedError(RuntimeError):
+    """A verify benchmark's own fixture did not verify.
+
+    Deliberately NOT caught by the "primitive absent from this build" skip:
+    the primitive is present, and it rejected a signature this process made a
+    moment earlier for the key it was handed.  Either the verifier or the
+    fixture is wrong, and in both cases the timed call would be the rejection
+    path, so the run must end on it rather than publish a number.  See
+    :func:`_require_accepted`.
+    """
+
+
+def _require_accepted(verdict: object, row: str) -> None:
+    """Refuse to time a verifier that rejects its own benchmark fixture.
+
+    Every verify function this runner times returns its verdict — a ``bool``,
+    or a result dict carrying ``all_valid`` — and does not raise on a
+    rejection.  The rows discarded that verdict, so a change that made a
+    verifier reject the fixture EARLY (a strict public-key or small-order
+    check misfiring before the scalar multiplications; a pinned-key mismatch
+    that skips the package signature) left the row timing the parse-and-reject
+    path, reporting a multiple of the true rate, and clearing its floor every
+    time.  ``benchmarks/benchmark_c_raw.c`` refuses exactly that failure mode
+    for its own verify rows ("a harness whose numbers get better the more
+    broken the library is cannot serve as evidence"); this is the same refusal
+    for the lane that actually gates CI.
+
+    The verdict is checked once, before timing: every input to the timed call
+    is fixed, and the verifiers are deterministic functions of their inputs,
+    so the verdict of the probe is the verdict of every timed call.  ``is not
+    True`` rather than falsiness, so a verifier that started returning a
+    truthy non-bool is questioned rather than trusted.
+    """
+    if verdict is not True:
+        raise BenchmarkFixtureRejectedError(
+            f"{row}: the verifier returned {verdict!r} for the benchmark's own "
+            "freshly made fixture. Timing it would publish the cost of the "
+            "rejection path under the name of a verification, and an early "
+            "rejection is FASTER than a verification, so the floor would pass. "
+            "The verifier or the fixture is wrong; the run refuses to measure "
+            "either."
+        )
 
 
 def _measure_benchmark(name: str, func: "Callable[[], Optional[float]]") -> Optional[float]:
@@ -647,6 +727,7 @@ def run_ed25519_verify_benchmark(iterations: int = 50) -> float:
     keypair = generate_ed25519_keypair()
     message = b"Test message for signing" * 10
     signature = ed25519_sign(message, keypair.private_key)
+    _require_accepted(ed25519_verify(message, signature, keypair.public_key), "ed25519_verify")
 
     def operation() -> None:
         ed25519_verify(message, signature, keypair.public_key)
@@ -716,9 +797,11 @@ def run_full_package_create_benchmark(iterations: int = 20) -> float:
     # docstring was out by ~4x for it.  Measured on this change: 17.7 s -> 5.5 s
     # for the row, and the reported rate moves 1,446.8 -> 1,371.7 ops/sec
     # (-5.2%) because the maximum is now taken over 15 windows rather than 75.
-    # The floor is 1,983 with a 45% tolerance, i.e. a 1,091 ops/sec minimum, so
-    # both numbers clear it with room; the two composites are now sampled
-    # identically, which is what makes them comparable at all.
+    # The x86-64 floor in benchmarks/baseline.json is 1,856 with a 45%
+    # tolerance, i.e. a 1,021 ops/sec minimum (it was 1,983 / 1,091 when this
+    # was measured; the 2026-09-22 re-base moved it), so both numbers clear it
+    # with room; the two composites are now sampled identically, which is what
+    # makes them comparable at all.
     return benchmark_operation(operation, iterations, warmup=2)
 
 
@@ -743,6 +826,13 @@ def run_full_package_verify_benchmark(iterations: int = 20) -> float:
     config = CryptoPackageConfig(signing_keypair=(public_key, secret_key))
     content = b"Benchmark package content for verification " * 4
     package = create_crypto_package(content, config)
+    # `all_valid`, not any one layer: a pinned-key mismatch skips the hybrid
+    # signature entirely (primary_signature False), and that is the cheapest
+    # of the early exits this row must not time.
+    _require_accepted(
+        verify_crypto_package(content, package, expected_public_key=public_key).get("all_valid"),
+        "full_package_verify",
+    )
 
     def operation() -> None:
         verify_crypto_package(content, package, expected_public_key=public_key)
@@ -759,13 +849,17 @@ def run_dilithium_keygen_benchmark(iterations: int = 20) -> Optional[float]:
         )
 
         if not DILITHIUM_AVAILABLE:
+            _unavailable_because(
+                "pqc_backends.DILITHIUM_AVAILABLE is False: no ML-DSA-65 backend was loaded"
+            )
             return None
 
         def operation() -> None:
             generate_dilithium_keypair()
 
         return benchmark_operation(operation, iterations, warmup=2)
-    except (ImportError, Exception):
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -779,6 +873,9 @@ def run_dilithium_sign_benchmark(iterations: int = 20) -> Optional[float]:
         )
 
         if not DILITHIUM_AVAILABLE:
+            _unavailable_because(
+                "pqc_backends.DILITHIUM_AVAILABLE is False: no ML-DSA-65 backend was loaded"
+            )
             return None
 
         kp = generate_dilithium_keypair()
@@ -793,7 +890,8 @@ def run_dilithium_sign_benchmark(iterations: int = 20) -> Optional[float]:
             dilithium_sign(next_message(), kp.secret_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
-    except (ImportError, Exception):
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -808,17 +906,24 @@ def run_dilithium_verify_benchmark(iterations: int = 20) -> Optional[float]:
         )
 
         if not DILITHIUM_AVAILABLE:
+            _unavailable_because(
+                "pqc_backends.DILITHIUM_AVAILABLE is False: no ML-DSA-65 backend was loaded"
+            )
             return None
 
         kp = generate_dilithium_keypair()
         message = b"Test message for ML-DSA-65 signing" * 10
         signature = dilithium_sign(message, kp.secret_key)
+        _require_accepted(dilithium_verify(message, signature, kp.public_key), "dilithium_verify")
 
         def operation() -> None:
             dilithium_verify(message, signature, kp.public_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
-    except (ImportError, Exception):
+    except BenchmarkFixtureRejectedError:
+        raise
+    except Exception as exc:
+        _unavailable(exc)
         return None
 
 
@@ -831,6 +936,9 @@ def run_kyber_keygen_benchmark(iterations: int = 20) -> Optional[float]:
         )
 
         if not KYBER_AVAILABLE:
+            _unavailable_because(
+                "pqc_backends.KYBER_AVAILABLE is False: no ML-KEM-1024 backend was loaded"
+            )
             return None
 
         def operation() -> None:
@@ -852,6 +960,9 @@ def run_kyber_encapsulate_benchmark(iterations: int = 20) -> Optional[float]:
         )
 
         if not KYBER_AVAILABLE:
+            _unavailable_because(
+                "pqc_backends.KYBER_AVAILABLE is False: no ML-KEM-1024 backend was loaded"
+            )
             return None
 
         kp = generate_kyber_keypair()
@@ -949,11 +1060,16 @@ def run_x25519_batch4_benchmark(iterations: int = 100) -> Optional[float]:
             native_x25519_scalarmult_batch,
         )
 
-        if (
-            _native_lib is None
-            or not _X25519_NATIVE_AVAILABLE
-            or not hasattr(_native_lib, "ama_x25519_scalarmult_batch")
-        ):
+        if _native_lib is None:
+            _unavailable_because("pqc_backends._native_lib is None: no native library was loaded")
+            return None
+        if not _X25519_NATIVE_AVAILABLE:
+            _unavailable_because("pqc_backends._X25519_NATIVE_AVAILABLE is False")
+            return None
+        if not hasattr(_native_lib, "ama_x25519_scalarmult_batch"):
+            _unavailable_because(
+                "the loaded native library does not export ama_x25519_scalarmult_batch"
+            )
             return None
 
         scalars = [secrets.token_bytes(32) for _ in range(4)]
@@ -1009,6 +1125,7 @@ def run_secp256k1_ecdsa_sign_benchmark(iterations: int = 100) -> Optional[float]
         )
 
         if not _SECP256K1_NATIVE_AVAILABLE:
+            _unavailable_because("pqc_backends._SECP256K1_NATIVE_AVAILABLE is False")
             return None
 
         # Probe once — surfaces any availability error before timing.
@@ -1033,18 +1150,26 @@ def run_secp256k1_ecdsa_verify_benchmark(iterations: int = 100) -> Optional[floa
         )
 
         if not _SECP256K1_NATIVE_AVAILABLE:
+            _unavailable_because("pqc_backends._SECP256K1_NATIVE_AVAILABLE is False")
             return None
 
         signature = native_secp256k1_ecdsa_sign(_SECP256K1_BENCH_DIGEST, _SECP256K1_BENCH_PRIVKEY)
         pubkey = _secp256k1_uncompressed_pubkey(_SECP256K1_BENCH_PRIVKEY)
 
-        # Probe once — confirms the fixture verifies before timing.
-        native_secp256k1_ecdsa_verify(signature, _SECP256K1_BENCH_DIGEST, pubkey)
+        # Probe once — confirms the fixture verifies before timing.  The
+        # verdict is a bool and a rejection does not raise, so the probe only
+        # confirms anything if its result is checked.
+        _require_accepted(
+            native_secp256k1_ecdsa_verify(signature, _SECP256K1_BENCH_DIGEST, pubkey),
+            "secp256k1_ecdsa_verify",
+        )
 
         def operation() -> None:
             native_secp256k1_ecdsa_verify(signature, _SECP256K1_BENCH_DIGEST, pubkey)
 
         return benchmark_operation(operation, iterations, warmup=5)
+    except BenchmarkFixtureRejectedError:
+        raise
     except Exception as exc:
         _unavailable(exc)
         return None
@@ -1097,8 +1222,10 @@ PQC_BENCHMARK_FUNCTIONS: dict[str, Callable[[], Optional[float]]] = {
 
 def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[BenchmarkResult]:
     """Run all benchmarks and compare against baseline."""
+    global _LAST_UNAVAILABLE
     results = []
     threshold = baseline["thresholds"]["regression_threshold_percent"]
+    _SKIP_REASONS.clear()
 
     # Run standard benchmarks
     for name, func in BENCHMARK_FUNCTIONS.items():
@@ -1109,6 +1236,9 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         if verbose:
             print(f"Running {name}...", end=" ", flush=True)
 
+        # Cleared here as well as inside _measure_benchmark, so the cause read
+        # below can only have been recorded by THIS benchmark.
+        _LAST_UNAVAILABLE = None
         ops_per_sec = _measure_benchmark(name, func)
         # A core benchmark whose primitive is genuinely absent from this build
         # (returns None) is skipped rather than crashing the run. The shipped
@@ -1116,8 +1246,9 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         # entry on a non-native-PQC build. In the benchmark CI job (always
         # AMA_USE_NATIVE_PQC=ON) the number is present and hard-gated below.
         if ops_per_sec is None:
+            _SKIP_REASONS[name] = _unavailable_reason()
             if verbose:
-                print(f"SKIPPED ({_unavailable_reason()})")
+                print(f"SKIPPED ({_SKIP_REASONS[name]})")
             continue
 
         baseline_value = config["baseline_value"]
@@ -1163,11 +1294,13 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         if verbose:
             print(f"Running {name}...", end=" ", flush=True)
 
+        _LAST_UNAVAILABLE = None
         pqc_ops_per_sec = _measure_benchmark(name, pqc_func)
 
         if pqc_ops_per_sec is None:
+            _SKIP_REASONS[name] = _unavailable_reason()
             if verbose:
-                print(f"SKIPPED ({_unavailable_reason()})")
+                print(f"SKIPPED ({_SKIP_REASONS[name]})")
             continue
 
         baseline_value = config["baseline_value"]
@@ -1360,11 +1493,32 @@ def _provenance_key(label: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in label.strip().lower()).strip("_")
 
 
-def _git(*args: str, keep_leading_whitespace: bool = False) -> str:
-    """Run a read-only git command, or return ``"unknown"``.
+#: The repository this runner file belongs to.  Every provenance git query runs
+#: HERE, not in the process's working directory: the wheel-only CI lane runs
+#: the runner from ``$RUNNER_TEMP/wheel-bench`` precisely so the source tree
+#: cannot shadow the installed package, and a query from there inspected no
+#: repository at all.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
-    Guarded on every axis that can fail, so producing a report never fails
-    because the host has no git, no repository, or a slow filesystem.
+
+def _git(*args: str, keep_leading_whitespace: bool = False) -> Optional[str]:
+    """Run a read-only git command in the runner's repository.
+
+    Returns the command's output — possibly EMPTY, which for ``status
+    --porcelain`` is the answer "clean" — or ``None`` when git could not
+    answer at all: no git on ``PATH``, no repository at ``_REPO_ROOT``, a
+    non-zero exit, a timeout.  Never raises, so producing a report never fails
+    because the host withheld a detail.
+
+    The two used to be one value.  This returned ``text or "unknown"`` with
+    the exit status unread, so a clean tree's empty status and a failed query
+    both came back as ``"unknown"``, and the caller could only treat both as
+    "not dirty".  Measured: run from a directory that is not a checkout, or
+    with no git on ``PATH``, ``capture_tree_state()`` returned ``("unknown",
+    False, ())`` and the record said ``"tree": "clean"`` beside ``"commit":
+    "unknown"`` — an assertion of cleanliness about a tree nothing had
+    inspected, which is the misleading-provenance failure this block exists
+    to prevent.
 
     ``keep_leading_whitespace`` is for ``status --porcelain``, whose first
     column is a SPACE for an unstaged change: stripping the whole output
@@ -1375,15 +1529,21 @@ def _git(*args: str, keep_leading_whitespace: bool = False) -> str:
     """
     try:
         out = subprocess.run(
-            ["git", *args], capture_output=True, text=True, check=False, timeout=10
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            cwd=_REPO_ROOT,
         )
-        text = out.stdout.rstrip() if keep_leading_whitespace else out.stdout.strip()
-        return text or "unknown"
     except Exception:
-        return "unknown"
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.rstrip() if keep_leading_whitespace else out.stdout.strip()
 
 
-def capture_tree_state() -> "tuple[str, bool, tuple[str, ...]]":
+def capture_tree_state() -> "tuple[str, Optional[bool], tuple[str, ...]]":
     """Snapshot ``(commit, dirty, dirty_paths)`` for the tree the measurements come from.
 
     Called once, **before** the first measurement.  Sampling it later is what
@@ -1407,17 +1567,23 @@ def capture_tree_state() -> "tuple[str, bool, tuple[str, ...]]":
     indistinguishable, in the record, from a tree carrying uncommitted
     changes to a primitive.  Naming the paths lets a reader tell the two
     apart without the checkout the record was made on.
+
+    ``dirty`` is ``None`` when git could not report a status at all: the tree
+    was not inspected, and the record says so instead of calling it clean.
     """
     status = _git("status", "--porcelain", keep_leading_whitespace=True)
-    dirty = status not in ("", "unknown")
+    commit = _git("rev-parse", "HEAD") or "unknown"
+    if status is None:
+        return (commit, None, ())
+    dirty = status != ""
     paths: tuple[str, ...] = ()
     if dirty:
         # Porcelain v1: two status columns, a space, then the path.
         paths = tuple(line[3:].strip() for line in status.splitlines() if len(line) > 3)
-    return (_git("rev-parse", "HEAD"), dirty, paths)
+    return (commit, dirty, paths)
 
 
-_TREE_STATE: "tuple[str, bool, tuple[str, ...]] | None" = None
+_TREE_STATE: "tuple[str, Optional[bool], tuple[str, ...]] | None" = None
 
 #: Dirty paths named in the Tree row before the list is truncated.  A record is
 #: read by a person; a tree with hundreds of modified files is described by
@@ -1425,8 +1591,16 @@ _TREE_STATE: "tuple[str, bool, tuple[str, ...]] | None" = None
 _MAX_DIRTY_PATHS_LISTED = 12
 
 
-def _tree_row(dirty: bool, paths: "tuple[str, ...]") -> str:
-    """The Tree provenance value: ``clean``, or DIRTY with the paths named."""
+#: The Tree row when git could not report a status.  Not "clean": nothing
+#: inspected the tree, and a provenance field that asserts what it did not
+#: check is worse than one that says it could not.
+_TREE_UNKNOWN = "unknown (git status unavailable: the tree was not inspected)"
+
+
+def _tree_row(dirty: Optional[bool], paths: "tuple[str, ...]") -> str:
+    """The Tree provenance value: ``clean``, DIRTY with the paths named, or unknown."""
+    if dirty is None:
+        return _TREE_UNKNOWN
     if not dirty:
         return "clean"
     if not paths:
@@ -1496,43 +1670,119 @@ def _native_backend_summary() -> str:
         return "unavailable"
 
 
-def _dispatch_wiring_summary() -> str:
-    """The native dispatcher's own account of what these numbers measured.
+#: The dispatcher's own initialisation report, captured in the MEASURING
+#: process by :func:`capture_dispatch_report` before the first benchmark runs.
+#: ``None`` means nothing captured it (a direct call from a test, or an
+#: embedding that skips ``main``).
+_DISPATCH_REPORT: Optional[str] = None
+
+_DISPATCH_NOT_CAPTURED = (
+    "not captured: capture_dispatch_report() did not run in this process " "before its measurements"
+)
+
+
+def _flush_stderr() -> None:
+    if sys.stderr is not None:
+        sys.stderr.flush()
+
+
+def capture_dispatch_report() -> str:
+    """Initialise the native dispatcher in THIS process and keep its own report.
 
     Which kernel each slot resolved to, and what the Phase-3 auto-tune decided
     about it, is the second most load-bearing variable behind a figure after
     the binary itself: the same library on the same host runs the Kyber NTT
-    pair through AVX2 or through the scalar path depending on that verdict,
-    and until this row existed nothing in either published record said which.
-    Captured from a fresh interpreter with ``AMA_DISPATCH_VERBOSE=1`` (the
-    dispatcher reports once, at initialisation, on stderr), so the row
-    reflects this host and this build rather than a hand-maintained claim.
-    Never raises: a host that cannot produce the report gets a marker.
+    pair through AVX2 or through the scalar path depending on that verdict.
+    The verdict is a timing microbenchmark that every process runs for itself
+    at initialisation, and ``src/c/dispatch/ama_dispatch.c`` records that it
+    is not stable across processes: "with a concurrent CPU-bound load, 7 of 12
+    process starts demoted an NTT slot that 12 of 12 idle starts kept", at a
+    cost of 30-40 % on every NTT.
+
+    This row used to be produced by a SEPARATE interpreter spawned after the
+    measurements, with ``AMA_DISPATCH_VERBOSE=1`` set for it alone.  That
+    child ran its own auto-tune, at a different moment and under different
+    contention, and the record published the child's verdicts as the wiring
+    the numbers had run on.  On a contended runner the measuring process could
+    demote ``kyber_ntt`` while the quieter child kept it, and the record would
+    send whoever diagnosed a slow ``kyber_*`` row the wrong way.  The child's
+    report is a function of the child's own initialisation, and nothing else.
+
+    So the report is now taken where the numbers are: ``main()`` calls this
+    before the first measurement, while the package is still unimported, with
+    ``AMA_DISPATCH_VERBOSE=1`` set in this process's environment and file
+    descriptor 2 redirected, and imports the package and makes one SHA3 call
+    — which is what initialises the dispatcher (``dispatch_verbose()`` reads
+    the variable once, at that point, and caches it).  Everything the window
+    captured is written back to stderr afterwards, so the redirect hides
+    nothing, and the variable is restored to its previous state.
+
+    When no ``[AMA Dispatch]`` line arrives the row says so and why it can
+    happen, rather than falling back to a re-probe: a report about another
+    process is the defect being removed, not a degraded form of the answer.
+    Never raises.
     """
+    import tempfile
+
+    previous = os.environ.get("AMA_DISPATCH_VERBOSE")
+    failure: Optional[Exception] = None
+    captured = b""
     try:
-        env = dict(os.environ, AMA_DISPATCH_VERBOSE="1")
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import ama_cryptography.pqc_backends as pb; pb.native_sha3_256(b'provenance')",
-            ],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
+        os.environ["AMA_DISPATCH_VERBOSE"] = "1"
+        _flush_stderr()
+        saved_fd = os.dup(2)
+        try:
+            with tempfile.TemporaryFile() as sink:
+                os.dup2(sink.fileno(), 2)
+                try:
+                    import ama_cryptography.pqc_backends as pb
+
+                    pb.native_sha3_256(b"provenance")
+                except Exception as exc:
+                    failure = exc
+                finally:
+                    _flush_stderr()
+                    os.dup2(saved_fd, 2)
+                sink.seek(0)
+                captured = sink.read()
+        finally:
+            os.close(saved_fd)
+    except Exception as exc:  # pragma: no cover - provenance must never raise
+        return f"unavailable: the capture itself failed ({type(exc).__name__}: {exc})"
+    finally:
+        if previous is None:
+            os.environ.pop("AMA_DISPATCH_VERBOSE", None)
+        else:
+            os.environ["AMA_DISPATCH_VERBOSE"] = previous
+
+    text = captured.decode("utf-8", errors="replace")
+    if text and sys.stderr is not None:
+        sys.stderr.write(text)
+        _flush_stderr()
+    if failure is not None:
+        return f"unavailable: initialising the package raised {type(failure).__name__}: {failure}"
+    lines = [
+        line.strip().replace("[AMA Dispatch] ", "", 1)
+        for line in text.splitlines()
+        if "[AMA Dispatch]" in line
+    ]
+    if not lines:
+        return (
+            "not captured: no [AMA Dispatch] line reached stderr while this process "
+            "initialised the package (the dispatcher had already initialised in "
+            "this process, or the native library writes stderr through a "
+            "different C runtime)"
         )
-        lines = [
-            line.strip().replace("[AMA Dispatch] ", "", 1)
-            for line in proc.stderr.splitlines()
-            if "[AMA Dispatch]" in line
-        ]
-        if not lines:
-            return "no [AMA Dispatch] report captured"
-        return "; ".join(lines)
-    except Exception:  # pragma: no cover - provenance must never raise
-        return "unavailable"
+    return "; ".join(lines)
+
+
+def _dispatch_wiring_summary() -> str:
+    """The measuring process's own dispatcher report, or why there is none.
+
+    Reads what :func:`capture_dispatch_report` captured; never spawns a
+    process to ask again (see there for why a re-probe is not an answer).
+    """
+    return _DISPATCH_REPORT if _DISPATCH_REPORT is not None else _DISPATCH_NOT_CAPTURED
 
 
 def _provenance() -> "list[tuple[str, str]]":
@@ -1576,7 +1826,8 @@ def _provenance() -> "list[tuple[str, str]]":
         # Which native binary produced the numbers — the digest pins the build.
         ("Native backend", _native_backend_summary()),
         # Which kernels that binary actually ran, per the dispatcher's own
-        # report, auto-tune verdicts included.
+        # report, auto-tune verdicts included — captured in THIS process,
+        # before its first measurement (capture_dispatch_report).
         ("Dispatch", _dispatch_wiring_summary()),
         # Whether the Python-API rows went through the compiled bindings or
         # ctypes — the third variable behind a figure, after the binary and
@@ -1759,8 +2010,12 @@ def main() -> int:
     # Before anything is measured and before any output file is written, so
     # the recorded commit and cleanliness describe the tree the numbers came
     # from rather than the tree after this run edited it.
-    global _TREE_STATE
+    global _TREE_STATE, _DISPATCH_REPORT
     _TREE_STATE = capture_tree_state()
+    # Also before anything is measured, and before anything else imports the
+    # package: the dispatcher initialises once per process, and its report —
+    # auto-tune verdicts included — must be this process's, not a later one's.
+    _DISPATCH_REPORT = capture_dispatch_report()
 
     print("=" * 60)
     print("AMA CRYPTOGRAPHY - BENCHMARK REGRESSION DETECTION")
@@ -1905,19 +2160,26 @@ def main() -> int:
     if unmeasured and args.require_populated_baseline:
         print("BASELINE ENTRIES WERE NOT MEASURED!")
         print("-" * 60)
+        # Each name with the cause its own benchmark recorded.  This line used
+        # to read "the primitive is absent from this build" for every name,
+        # whatever had happened — including a binding that raised and a
+        # benchmark_operation that could not collect its full-window batches.
         for name in unmeasured:
-            print(f"  {name}: skipped — the primitive is absent from this build")
+            print(f"  {name}: skipped — {_SKIP_REASONS.get(name, 'no cause recorded')}")
         print()
         print("--require-populated-baseline says this run must be worth trusting,")
-        print("and a floor that was skipped cannot fire. Build with the backend")
-        print("these benchmarks need, or drop --require-populated-baseline for a")
-        print("local run that knowingly covers less.")
+        print("and a floor that was skipped cannot fire. Fix the cause named above")
+        print("(build with the backend a benchmark needs, or repair what raised),")
+        print("or drop --require-populated-baseline for a local run that knowingly")
+        print("covers less.")
         return 2
     if unmeasured:
         print(
             f"NOTE: {len(unmeasured)} baseline entr(y/ies) not measured on this build: "
             f"{', '.join(unmeasured)}"
         )
+        for name in unmeasured:
+            print(f"  {name}: {_SKIP_REASONS.get(name, 'no cause recorded')}")
         print()
 
     # Check for failures
