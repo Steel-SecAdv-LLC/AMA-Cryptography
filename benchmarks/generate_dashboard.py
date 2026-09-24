@@ -132,6 +132,18 @@ def parse_raw_c(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _utc_minute(timestamp: object) -> str | None:
+    """``timestamp`` as ``YYYY-MM-DD HH:MM UTC``, or None when it is not an
+    ISO-8601 string."""
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str, Any]) -> str:
     results = bench["results"]
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -153,20 +165,9 @@ def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str,
         # newer ones carry a separate "tree" row. Honour both.
         commit_id = raw_commit.split()[0]
         dirty = "DIRTY" in raw_commit or "DIRTY" in str(provenance.get("tree", ""))
-        measured_when = "an unrecorded time"
-        timestamp = bench.get("timestamp")
-        if isinstance(timestamp, str):
-            try:
-                measured_when = (
-                    datetime.fromisoformat(timestamp)
-                    .astimezone(timezone.utc)
-                    .strftime("%Y-%m-%d %H:%M UTC")
-                )
-            except ValueError:
-                # A timestamp that does not parse is still a measurement; the
-                # page keeps the pre-set "an unrecorded time" rather than
-                # failing the whole dashboard over one malformed string.
-                pass
+        # A timestamp that does not parse is still a measurement: the page
+        # says the time is unrecorded rather than failing over one string.
+        measured_when = _utc_minute(bench.get("timestamp")) or "an unrecorded time"
         measured_html = (
             f"Measured at commit <code>{html.escape(commit_id[:12])}</code> "
             f"(v{html.escape(version)}), {html.escape(measured_when)}"

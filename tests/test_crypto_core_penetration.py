@@ -796,67 +796,42 @@ class TestMalformedInputHandling:
         return generate_key_management_system("test")
 
     def test_invalid_hex_in_content_hash(self, kms: Any) -> None:
-        """Invalid hex in content_hash should not crash."""
-        pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
-        pkg.content_hash = "not_valid_hex!!!"
-        # The contract is "does not crash": a typed refusal from this API is a
-        # rejection, not a crash.  QuantumSignatureRequiredError joins the list
-        # because the field is now inside the signed transcript (A-2), so
-        # rewriting it breaks the ML-DSA-65 signature before anything tries to
-        # parse the hex.
+        """Invalid hex in content_hash is refused by the signature, not parsed.
+
+        The field is inside the signed transcript (A-2), so rewriting it fails
+        the ML-DSA-65 signature before anything reaches the hex.  Pinning the
+        refusal (rather than accepting "returns False or raises") also pins
+        that order: verification precedes parsing.
+        """
         from ama_cryptography.exceptions import QuantumSignatureRequiredError
 
-        try:
-            results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-            assert results["content_hash"] is False
-        except (ValueError, QuantumSignatureRequiredError):
-            # Both are the PASS condition, which is why this handler is empty:
-            # the test asserts the API does not crash on malformed hex, and a
-            # typed refusal is the API declining, not crashing.  The `except
-            # Exception` below is what fails the test, so swallowing these two
-            # here narrows what counts as a crash rather than hiding one.
-            pass
-        except Exception as exc:
-            pytest.fail(f"Unexpected exception for invalid hex: {exc!r}")
+        pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
+        pkg.content_hash = "not_valid_hex!!!"
+        with pytest.raises(
+            QuantumSignatureRequiredError, match="Dilithium signature verification failed"
+        ):
+            verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
 
     def test_invalid_hex_in_hmac_tag(self, kms: Any) -> None:
-        """Invalid hex in hmac_tag should not crash."""
+        """Invalid hex in hmac_tag is a typed ValueError, not a crash."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.hmac_tag = "ZZZZ_invalid"
-        try:
-            results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-            assert results["hmac"] is False
-        except ValueError:
-            # ValueError is acceptable for invalid HMAC hex — the function rejects bad input
-            pass
-        except Exception as exc:
-            pytest.fail(f"Unexpected exception for invalid HMAC hex: {exc!r}")
+        with pytest.raises(ValueError, match="non-hexadecimal"):
+            verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
 
     def test_truncated_signature(self, kms: Any) -> None:
-        """Truncated signature should not crash."""
+        """A truncated Ed25519 signature is refused on length."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.ed25519_signature = pkg.ed25519_signature[:32]  # Truncate to half
-        try:
-            results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-            assert results["ed25519"] is False
-        except ValueError:
-            # ValueError is acceptable for truncated signature — the function rejects bad input
-            pass
-        except Exception as exc:
-            pytest.fail(f"Unexpected exception for truncated signature: {exc!r}")
+        with pytest.raises(ValueError, match="Ed25519 signature must be 64 bytes"):
+            verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
 
     def test_empty_signature(self, kms: Any) -> None:
-        """Empty signature should not crash."""
+        """An empty Ed25519 signature is refused on length."""
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test")
         pkg.ed25519_signature = ""
-        try:
-            results = verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
-            assert results["ed25519"] is False
-        except ValueError:
-            # ValueError is acceptable for empty signature — the function rejects bad input
-            pass
-        except Exception as exc:
-            pytest.fail(f"Unexpected exception for empty signature: {exc!r}")
+        with pytest.raises(ValueError, match="Ed25519 signature must be 64 bytes"):
+            verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
 
 
 class TestKeySecurityProperties:

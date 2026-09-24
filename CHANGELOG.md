@@ -19,6 +19,36 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Code scanning: the one open CodeQL alert fixed, and two comment-justified empty handlers made explicit — 2026-09-24
+
+The PR's `CodeQL` check on `e0dcc42` reported "1 new alert (1 note)":
+`py/mixed-returns` (alert 690) in `tests/test_keygen_pct.py::_binding`, which
+`5e577cc` introduced. The check passes on notes, but `main`'s ruleset blocks
+a merge on alerts of every severity, so it was a merge blocker. `_binding` now
+has a single explicit return; its skip path is unchanged (re-verified: it
+skips, and escalates to a failure under `AMA_CI_REQUIRE_BACKENDS=1`).
+
+Every bot review thread on the PR was re-read (75: 72 CodeQL, 3 Copilot).
+Seventy-four are resolved; six of those are still attached to current code,
+and each was re-checked at the head. Four were fixed by restructuring.
+Two empty `except` handlers (alerts 649 and 670) cleared the query only
+because a comment explained them; they are now explicit:
+
+- `benchmarks/generate_dashboard.py` parses the provenance timestamp in
+  `_utc_minute`, which returns `None` for a non-ISO-8601 value; the page keeps
+  "an unrecorded time" as before.
+- `tests/test_crypto_core_penetration.py::TestMalformedInputHandling` accepted
+  "returns False, or raises a typed refusal" and discarded the refusal. The
+  behaviour was measured (three runs each, deterministic) and each test now
+  pins it exactly: a rewritten `content_hash` fails the ML-DSA-65 transcript
+  signature before any hex is parsed (`QuantumSignatureRequiredError`), a
+  non-hex `hmac_tag` raises `ValueError`, and a truncated or empty Ed25519
+  signature raises `ValueError` on length. Mutation: a verifier that returns
+  all-False instead of refusing fails all four (the previous form passed it).
+
+Local CodeQL 2.27.0 `python-security-and-quality` over the head reports no
+other result.
+
 ### The four decisions the 2026-09-24 revert reopened, re-decided; canonical-host tables re-measured; the Cython keygens get their pairwise test — 2026-09-24
 
 `dfd35dcb` reverted fourteen commits at the maintainer's request. Four of the

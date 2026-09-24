@@ -25,6 +25,7 @@ the session.
 from __future__ import annotations
 
 import ctypes
+import importlib
 import subprocess
 import sys
 from pathlib import Path
@@ -699,10 +700,12 @@ class TestOutputBufferHelpers:
 
 
 def _binding(name: str) -> Any:
+    module = None
     try:
-        return __import__(f"ama_cryptography.{name}", fromlist=["_"])
+        module = importlib.import_module(f"ama_cryptography.{name}")
     except ImportError:
         pytest.skip(f"native {name} binding is not built in this environment")
+    return module
 
 
 class TestCythonBindingKeygens:
