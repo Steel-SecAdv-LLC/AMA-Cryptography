@@ -470,6 +470,52 @@ _ARTEFACT_FIELDS = frozenset(
 )
 
 
+#: Names an annotation in the artefact may use: the builtin types a literal can
+#: have, plus ``object``.  MUST equal ``_artefact_source._INERT_ANNOTATION_NAMES``;
+#: duplicated rather than imported, for the reason every mirror in this tool is.
+_INERT_ANNOTATION_NAMES = frozenset(
+    {
+        "bool",
+        "bytes",
+        "complex",
+        "dict",
+        "float",
+        "frozenset",
+        "int",
+        "list",
+        "object",
+        "set",
+        "str",
+        "tuple",
+    }
+)
+
+
+def _inert_annotation(node: ast.expr) -> bool:
+    """Whether evaluating annotation ``node`` can do nothing but look up a type.
+
+    Accepted: a string, ``None`` or ``...`` constant (a string annotation is
+    never evaluated), a builtin type name, a tuple of accepted parts, and a
+    subscript of a builtin type name by an accepted part — ``dict[str, str]``,
+    ``tuple[int, ...]``.
+    Everything else — a call, an attribute, an operator, a lambda, a walrus —
+    is refused, because it is an expression the module executes on import.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value is None or node.value is Ellipsis or isinstance(node.value, str)
+    if isinstance(node, ast.Name):
+        return node.id in _INERT_ANNOTATION_NAMES
+    if isinstance(node, ast.Tuple):
+        return all(_inert_annotation(element) for element in node.elts)
+    if isinstance(node, ast.Subscript):
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id in _INERT_ANNOTATION_NAMES
+            and _inert_annotation(node.slice)
+        )
+    return False
+
+
 def artefact_shape_violation(tree: ast.Module) -> Optional[str]:
     """Why ``_integrity_signature.py`` is not pure data, or ``None``.
 
@@ -503,6 +549,17 @@ def artefact_shape_violation(tree: ast.Module) -> Optional[str]:
     (import, call, def, class, if, loop, comprehension with a call in it) is
     refused.  ``ast.literal_eval`` is what draws that line, and it is the same
     function whose result this module already trusts.
+
+    ``ast.literal_eval`` draws it for the VALUE only.  An annotated assignment
+    carries a second expression, and at module scope with a plain-name target
+    CPython 3.10-3.13 evaluates the annotation when the module runs (it is
+    stored in ``__annotations__``).  Until the annotation was checked too,
+    appending ``_x: __import__("os").system("...") = 0`` — target a name,
+    value a literal — passed this rule and earned the same "RESULT: PASS" for
+    a file that runs attacker code on import.  An annotation must therefore be
+    a type expression over builtin types (see :func:`_inert_annotation`),
+    which is what the signer emits (``dict[str, str]``) and evaluates without
+    calling anything.
     """
     for node in tree.body:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
@@ -518,6 +575,11 @@ def artefact_shape_violation(tree: ast.Module) -> Optional[str]:
                 targets, value = [node.target], node.value
             if value is None:
                 return f"line {node.lineno}: an annotation with no value"
+            if isinstance(node, ast.AnnAssign) and not _inert_annotation(node.annotation):
+                return (
+                    f"line {node.lineno}: an annotation that is not a builtin "
+                    "type expression — it is evaluated when the module runs"
+                )
             for target in targets:
                 if not isinstance(target, ast.Name):
                     return (

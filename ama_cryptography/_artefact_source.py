@@ -75,7 +75,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class ArtefactSourceError(Exception):
@@ -113,6 +113,81 @@ class ArtefactFields:
             raise AttributeError(name) from exc
 
 
+#: Names an annotation in the artefact may use: the builtin types a literal can
+#: have, plus ``object``.  MUST equal ``tools/verify_install_oob.py``'s
+#: ``_INERT_ANNOTATION_NAMES``; that tool imports nothing from this package, so
+#: the two copies are held equal by ``tests/test_verify_install_oob.py``.
+_INERT_ANNOTATION_NAMES = frozenset(
+    {
+        "bool",
+        "bytes",
+        "complex",
+        "dict",
+        "float",
+        "frozenset",
+        "int",
+        "list",
+        "object",
+        "set",
+        "str",
+        "tuple",
+    }
+)
+
+
+def _inert_annotation(node: ast.expr) -> bool:
+    """Whether evaluating annotation ``node`` can do nothing but look up a type.
+
+    Accepted: a string, ``None`` or ``...`` constant (a string annotation is
+    never evaluated), a builtin type name, a tuple of accepted parts, and a
+    subscript of a builtin type name by an accepted part — ``dict[str, str]``,
+    which is what the signer emits.  A call, an attribute, an operator, a
+    lambda or a walrus is refused: each is code the module runs on import.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value is None or node.value is Ellipsis or isinstance(node.value, str)
+    if isinstance(node, ast.Name):
+        return node.id in _INERT_ANNOTATION_NAMES
+    if isinstance(node, ast.Tuple):
+        return all(_inert_annotation(element) for element in node.elts)
+    if isinstance(node, ast.Subscript):
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id in _INERT_ANNOTATION_NAMES
+            and _inert_annotation(node.slice)
+        )
+    return False
+
+
+def _assignment_parts(node: ast.stmt, path: Path) -> Optional[Tuple[List[ast.expr], ast.expr]]:
+    """``(targets, value)`` of one top-level artefact statement.
+
+    ``None`` for a bare annotation, which binds nothing.  Anything that is not
+    a plain or annotated assignment raises :class:`ArtefactSourceError`.
+    """
+    if isinstance(node, ast.Assign):
+        return list(node.targets), node.value
+    if isinstance(node, ast.AnnAssign):
+        # The annotation is an expression of its own, and at module scope with
+        # a plain-name target CPython 3.10-3.13 evaluates it when the module
+        # runs — `_x: __import__("os").system("...") = 0` carries a literal
+        # value and a call.  Checked BEFORE the bare-annotation case, which
+        # binds nothing but is still evaluated.
+        if not _inert_annotation(node.annotation):
+            raise ArtefactSourceError(
+                f"{path}: line {node.lineno}: an annotation that is not a "
+                "builtin type expression — it is evaluated when the module "
+                "runs, and the generated artefact contains only literals"
+            )
+        if node.value is None:
+            return None
+        return [node.target], node.value
+    raise ArtefactSourceError(
+        f"{path}: unexpected top-level {type(node).__name__} — the "
+        "generated artefact contains only literal assignments"
+    )
+
+
 def artefact_path(package_dir: Optional[Path] = None) -> Path:
     """Where the artefact lives.  ``package_dir`` defaults to this package."""
     base = Path(__file__).resolve().parent if package_dir is None else Path(package_dir)
@@ -147,7 +222,9 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
     is now atomic.
 
     Only module-level ``NAME = <literal>`` and ``NAME: ann = <literal>`` forms
-    are collected.  Anything else in the file — imports, functions, conditionals
+    are collected, and ``ann`` must be a builtin type expression (see
+    :func:`_inert_annotation`): an annotation is evaluated when the module
+    runs, so an arbitrary one is code even when the value is a literal.  Anything else in the file — imports, functions, conditionals
     — is a shape the generator never emits, and is rejected rather than skipped:
     silently ignoring it would let an attacker hide the real assignment behind a
     construct this reader does not model.
@@ -178,19 +255,10 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
     for node in tree.body:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
             continue  # the module docstring
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-            value = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if node.value is None:
-                continue  # a bare annotation binds nothing
-            targets = [node.target]
-            value = node.value
-        else:
-            raise ArtefactSourceError(
-                f"{path}: unexpected top-level {type(node).__name__} — the "
-                "generated artefact contains only literal assignments"
-            )
+        assignment = _assignment_parts(node, path)
+        if assignment is None:
+            continue  # a bare annotation binds nothing
+        targets, value = assignment
 
         names = []
         for target in targets:

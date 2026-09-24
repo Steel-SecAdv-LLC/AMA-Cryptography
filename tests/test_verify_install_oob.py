@@ -558,6 +558,11 @@ class TestArtefactIsLiteralDataOnly:
             ("if True:\n    import os\n", "If"),
             ("for _i in range(1):\n    pass\n", "For"),
             ("EXTRA = __import__('os').name\n", "not assigned a plain literal"),
+            # The value is a literal and the target a name; the ANNOTATION is
+            # the code.  CPython 3.10-3.13 evaluates it when the module runs.
+            ('_X: __import__("os").system("true") = 0\n', "not a builtin type expression"),
+            ("_X: str.join = 'a'\n", "not a builtin type expression"),
+            ("_X: (dict | list) = 1\n", "not a builtin type expression"),
         ],
     )
     def test_executable_content_is_refused(
@@ -586,6 +591,19 @@ class TestArtefactIsLiteralDataOnly:
     def test_a_new_literal_field_is_still_accepted(self) -> None:
         """A future signer may add a literal; that must not need a code change."""
         tree = ast.parse('"""doc"""\nA = "x"\nB: dict = {"k": 1}\nC = (1, 2, None, True)\n')
+        assert oob.artefact_shape_violation(tree) is None
+
+    @pytest.mark.parametrize(
+        "annotation",
+        ["dict[str, str]", "tuple[int, ...]", "list[bytes]", "'any string'", "None", "object"],
+    )
+    def test_a_builtin_type_annotation_is_accepted(self, annotation: str) -> None:
+        """The signer writes ``INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str]``.
+
+        The annotation rule must admit type expressions over builtin types, or
+        it refuses every artefact the signer produces.
+        """
+        tree = ast.parse(f"X: {annotation} = {{}}\n")
         assert oob.artefact_shape_violation(tree) is None
 
     def test_the_check_runs_before_the_fields_are_trusted(self, tmp_path: Path) -> None:
@@ -655,3 +673,57 @@ class TestTamperDetection:
         assert result.returncode != 0
         assert "native library digest MISMATCH" in result.stdout
         assert "RESULT: FAIL" in result.stdout
+
+
+class TestBothArtefactReadersRefuseExecutableAnnotations:
+    """The out-of-band tool and the in-process reader apply ONE annotation rule.
+
+    ``tools/verify_install_oob.py`` imports nothing from the tree it verifies,
+    so ``_inert_annotation`` exists twice.  Measured before the rule existed:
+    ``_x: __import__("os").system("...") = 0`` appended to an artefact was
+    accepted by ``artefact_shape_violation`` (``None``) and by
+    ``_artefact_source.load_artefact_fields`` (which returned ``_x = 0`` among
+    the fields), and the bare ``_y: __import__("os").system("...")`` was
+    skipped by the latter as "binds nothing" — while CPython 3.10-3.13 runs
+    both annotations on import.
+    """
+
+    PAYLOADS = (
+        '_x: __import__("os").system("true") = 0\n',
+        '_y: __import__("os").system("true")\n',
+        "_z: dict[str, print] = {}\n",
+        "_w: str.join = 'a'\n",
+    )
+
+    def test_the_allowed_names_are_the_same_set(self) -> None:
+        from ama_cryptography import _artefact_source
+
+        assert oob._INERT_ANNOTATION_NAMES == _artefact_source._INERT_ANNOTATION_NAMES
+
+    @pytest.mark.parametrize("payload", PAYLOADS)
+    def test_the_out_of_band_rule_refuses_it(self, payload: str) -> None:
+        tree = ast.parse('INTEGRITY_DIGEST_HEX = "00"\n' + payload)
+        assert oob.artefact_shape_violation(tree) is not None
+
+    @pytest.mark.parametrize("payload", PAYLOADS)
+    def test_the_in_process_reader_refuses_it(self, tmp_path: Path, payload: str) -> None:
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        (tmp_path / "_integrity_signature.py").write_text(
+            'INTEGRITY_DIGEST_HEX = "00"\n' + payload, encoding="utf-8"
+        )
+        with pytest.raises(ArtefactSourceError, match="not a builtin type expression"):
+            load_artefact_fields(tmp_path)
+
+    def test_the_in_process_reader_accepts_the_signers_annotation(self, tmp_path: Path) -> None:
+        from ama_cryptography._artefact_source import load_artefact_fields
+
+        (tmp_path / "_integrity_signature.py").write_text(
+            'INTEGRITY_DIGEST_HEX = "00"\n'
+            'INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {"a.so": "11"}\n'
+            "_bare: int\n",
+            encoding="utf-8",
+        )
+        fields = load_artefact_fields(tmp_path)
+        assert fields is not None
+        assert fields.INTEGRITY_BINDING_DIGESTS_HEX == {"a.so": "11"}

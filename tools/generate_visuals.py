@@ -30,7 +30,9 @@ function AND adding the document reference that justifies it.
 import argparse
 import json
 import re
+import struct
 import sys
+import zlib
 from pathlib import Path
 from typing import Optional
 
@@ -352,6 +354,15 @@ def create_test_coverage() -> None:
         bbox_inches="tight",
         facecolor="white",
         edgecolor="none",
+        # The numbers drawn above, written into the PNG itself so `--check`
+        # can compare the chart's own bytes with the tree (see
+        # `_check_rendered_inputs`).  Built from the same locals the chart
+        # drew, not recomputed, so the record is what was rendered.
+        metadata={
+            _CHART_INPUTS_KEY: _encode_chart_inputs(
+                _test_coverage_inputs(categories, test_counts, total_tests, n_files)
+            )
+        },
     )
     plt.close()
     print(f"Created: {ASSETS_DIR / 'test_coverage.png'}")
@@ -832,6 +843,131 @@ MANIFEST_PATH = ASSETS_DIR / "visuals_manifest.json"
 _OWNED_OUTPUTS = ("test_coverage.png", "ethical_binding.png", "quantum_comparison.png")
 
 
+#: PNG text-chunk keyword under which a chart records the numbers it drew.
+_CHART_INPUTS_KEY = "AMA-Chart-Inputs"
+
+
+def _test_coverage_inputs(
+    categories: list[str], counts: list[int], total_tests: int, n_files: int
+) -> dict[str, object]:
+    """Every number ``test_coverage.png`` draws, and the version it stamps."""
+    return {
+        "version": _PKG_VERSION,
+        "counts": dict(zip(categories, counts)),
+        "total_tests": total_tests,
+        "n_files": n_files,
+    }
+
+
+def _live_test_coverage_inputs() -> dict[str, object]:
+    """What ``test_coverage.png`` would draw if rendered from the tree now."""
+    counts, total_tests, _unbucketed = _count_test_functions_by_category()
+    labels = [label for label, _ in _TEST_CATEGORY_RULES] + [_OTHER_LABEL]
+    return _test_coverage_inputs(
+        labels, counts, total_tests, len(list(TESTS_DIR.glob("test_*.py")))
+    )
+
+
+def _encode_chart_inputs(inputs: dict[str, object]) -> str:
+    """Canonical ASCII JSON, which a PNG ``tEXt`` chunk (Latin-1) can carry."""
+    return json.dumps(inputs, sort_keys=True, ensure_ascii=True)
+
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _png_text_chunks(path: Path) -> dict[str, str]:
+    """The ``tEXt`` / ``zTXt`` / ``iTXt`` entries of a PNG, read with the stdlib.
+
+    Every chunk's CRC is verified, so a chart whose recorded inputs were edited
+    by hand, or a file truncated mid-chunk, raises instead of being read.
+    """
+    data = path.read_bytes()
+    if not data.startswith(_PNG_SIGNATURE):
+        raise ValueError(f"{path.name} is not a PNG file")
+    entries: dict[str, str] = {}
+    offset = len(_PNG_SIGNATURE)
+    while offset < len(data):
+        if offset + 8 > len(data):
+            raise ValueError(f"{path.name}: truncated chunk header at byte {offset}")
+        length, kind = struct.unpack(">I4s", data[offset : offset + 8])
+        body = data[offset + 8 : offset + 8 + length]
+        crc = data[offset + 8 + length : offset + 12 + length]
+        if len(body) != length or len(crc) != 4:
+            raise ValueError(f"{path.name}: truncated {kind!r} chunk at byte {offset}")
+        if zlib.crc32(kind + body) != int.from_bytes(crc, "big"):
+            raise ValueError(f"{path.name}: {kind!r} chunk at byte {offset} fails its CRC")
+        if kind == b"tEXt":
+            keyword, _, text = body.partition(b"\0")
+            entries[keyword.decode("latin-1")] = text.decode("latin-1")
+        elif kind == b"zTXt":
+            keyword, _, rest = body.partition(b"\0")
+            entries[keyword.decode("latin-1")] = zlib.decompress(rest[1:]).decode("latin-1")
+        elif kind == b"iTXt":
+            keyword, _, rest = body.partition(b"\0")
+            compressed, rest = rest[0], rest[2:]
+            _language, _, rest = rest.partition(b"\0")
+            _translated, _, text = rest.partition(b"\0")
+            raw = zlib.decompress(text) if compressed else text
+            entries[keyword.decode("latin-1")] = raw.decode("utf-8")
+        elif kind == b"IEND":
+            break
+        offset += 12 + length
+    return entries
+
+
+def _check_rendered_inputs() -> list[str]:
+    """Whether the committed ``test_coverage.png`` draws the tree's numbers.
+
+    The manifest check above compares ``visuals_manifest.json`` with the tree,
+    and the PNGs were checked only for existence — the chart's bytes were
+    bound to nothing.  Its failure message prints the exact expected JSON, so
+    the cheapest way to turn it green in an environment that cannot render
+    (the one ``--check`` exists for) was to paste that JSON into the manifest,
+    leaving a chart that still draws the old totals certified as current.
+
+    The chart now records the numbers it drew in its own ``AMA-Chart-Inputs``
+    text chunk, written at render time, and this compares them with the tree.
+    Editing the manifest cannot change a PNG.  ``ethical_binding.png`` and
+    ``quantum_comparison.png`` draw no tree-derived number, so existence is
+    all there is to check for them.
+    """
+    path = ASSETS_DIR / "test_coverage.png"
+    if not path.is_file():
+        return []  # reported as missing by check_manifest
+    regenerate = (
+        "Re-render with `python tools/generate_visuals.py` (or "
+        "`python tools/refresh_derived_docs.py`) and commit the PNG with the manifest."
+    )
+    try:
+        recorded_text = _png_text_chunks(path).get(_CHART_INPUTS_KEY)
+    except (OSError, ValueError, zlib.error, IndexError) as exc:
+        return [f"assets/test_coverage.png cannot be read as a PNG: {exc}. {regenerate}"]
+    if recorded_text is None:
+        return [
+            f"assets/test_coverage.png records no {_CHART_INPUTS_KEY} — it was not "
+            f"rendered by this version of the tool, so nothing binds what it "
+            f"draws to the tree. {regenerate}"
+        ]
+    try:
+        recorded = json.loads(recorded_text)
+    except ValueError as exc:
+        return [f"assets/test_coverage.png {_CHART_INPUTS_KEY} is not JSON: {exc}. {regenerate}"]
+    live = _live_test_coverage_inputs()
+    if recorded != live:
+        changed = sorted(
+            key
+            for key in set(live) | set(recorded)
+            if not isinstance(recorded, dict) or recorded.get(key) != live.get(key)
+        )
+        return [
+            f"assets/test_coverage.png draws numbers the tree no longer has "
+            f"(differs in: {', '.join(changed)}); the manifest cannot vouch for a "
+            f"chart that was not re-rendered. {regenerate}"
+        ]
+    return []
+
+
 def _live_manifest_entry() -> dict[str, object]:
     """What this tool's charts assert, computed from the working tree now."""
     counts, total_tests, unbucketed = _count_test_functions_by_category()
@@ -870,6 +1006,7 @@ def check_manifest() -> list[str]:
     for name in _OWNED_OUTPUTS:
         if not (ASSETS_DIR / name).is_file():
             problems.append(f"assets/{name} is missing while the manifest describes it.")
+    problems.extend(_check_rendered_inputs())
     # The dashboards' entry is measurement-derived and cannot be recomputed on
     # a clean checkout, but its VERSION can be held to the package's: the
     # committed performance dashboard carried a v3.4.0 title into a 5.0.0
@@ -905,7 +1042,8 @@ def main(argv: list[str] | None = None) -> int:
         "--check",
         action="store_true",
         help=(
-            "verify the committed charts' manifest against the tree instead of "
+            "verify the committed charts' manifest, and the numbers "
+            "test_coverage.png records it drew, against the tree instead of "
             "rendering; works without matplotlib, for CI"
         ),
     )
@@ -918,7 +1056,10 @@ def main(argv: list[str] | None = None) -> int:
             for problem in problems:
                 print(f"  - {problem}", file=sys.stderr)
             return 1
-        print("OK: committed visual assets match the numbers the tree produces.")
+        print(
+            "OK: committed visual assets match the numbers the tree produces "
+            "(manifest, and the numbers test_coverage.png records it drew)."
+        )
         return 0
 
     if not _HAVE_MATPLOTLIB:

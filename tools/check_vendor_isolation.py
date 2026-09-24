@@ -98,9 +98,18 @@ Checks
     subscript forms) must name its library by a value the same resolver can
     prove — a literal, ``None`` (the process handle), ``find_library(<literal>)``,
     or a name bound once to one of those — and a proven name must not be a
-    vendor's.  A load whose library is chosen at run time is a violation: the
-    gate cannot tell the project's own library from ``libcrypto`` by reading
-    it, and an exemption list would be the suppression INVARIANT-13 forbids.
+    vendor's.  A load whose library is chosen at run time cannot be decided
+    by reading it — the gate cannot tell the project's own library from
+    ``libcrypto`` in source — and an exemption list would be the suppression
+    INVARIANT-13 forbids, so such a load is printed as a reviewed inventory
+    entry and does not fail this check.  (This paragraph used to call it "a
+    violation"; ``main`` has never failed on one.)  It is decided instead by
+    ``--runtime``, which records what every ``ctypes`` load actually asked
+    for while the package imported.  A run-time-chosen load that does not
+    execute during import is decided by neither, and the inventory is the
+    only control on it: ``tests/test_vendor_isolation_gate.py`` pins the
+    shipped package's inventory to the one function that loads the native
+    library, so a new such site anywhere else fails review.
 
 ``--build-config``
     No ``CMakeLists.txt``, ``cmake/**.cmake`` or ``setup.py`` outside
@@ -111,8 +120,22 @@ Checks
     the documentation of the boundary it is enforcing.
 
 ``--runtime``
-    Imports the package in a clean subprocess and fails if any forbidden
-    top-level module is resident afterwards.
+    Imports the package in a clean subprocess (which runs POST, so every
+    algorithm executes) and fails if any forbidden top-level module is
+    resident afterwards, if any ``ctypes`` load made during the import asked
+    for a vendor library by name — or named a file that links or defines a
+    vendor's symbols — or if the import newly mapped a shared object whose
+    name is a vendor's.  Loads are read from the interpreter's
+    ``ctypes.dlopen`` audit event; mapped objects from ``/proc/self/maps``,
+    dyld's image list or ``EnumProcessModules``.  Where the mapped set cannot
+    be enumerated the check fails rather than skipping.
+
+``--bindings``
+    Runs the library check on every compiled object in ``--package`` — the
+    Cython binding extensions and the bundled native library — and fails if
+    there are none.  ``setup.py`` builds those extensions itself, so a vendor
+    added to one of their link lines never reaches the CMake library that
+    ``--library`` is usually given.
 
 ``--library PATH``
     Parses the native library's own linkage records — ELF ``DT_NEEDED`` plus
@@ -136,7 +159,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import json
+import os
 import re
 import struct
 import subprocess
@@ -158,6 +183,10 @@ class Vendor(NamedTuple):
     #: Header roots that identify it in a C `#include` — `<openssl/sha.h>`,
     #: `<sodium.h>`, and so on.  Empty for a vendor with no C surface.
     include_roots: tuple[str, ...] = ()
+    #: PyPI distribution names that install a binding to it, where they differ
+    #: from the module name: `pip install pynacl` installs `nacl`.  The
+    #: container-recipe scan reads `pip install` lines by distribution name.
+    distributions: tuple[str, ...] = ()
 
 
 VENDORS: tuple[Vendor, ...] = (
@@ -176,6 +205,7 @@ VENDORS: tuple[Vendor, ...] = (
         library_names=("libcrypto", "libssl", "libeay32", "ssleay32"),
         symbol_prefixes=("EVP_", "OPENSSL_", "SSL_", "X509_", "RAND_bytes"),
         include_roots=("openssl",),
+        distributions=("cryptography", "pyOpenSSL"),
     ),
     Vendor(
         name="libsodium",
@@ -183,6 +213,7 @@ VENDORS: tuple[Vendor, ...] = (
         library_names=("libsodium",),
         symbol_prefixes=("sodium_", "crypto_sign_ed25519", "crypto_box_"),
         include_roots=("sodium",),
+        distributions=("PyNaCl", "libnacl", "pysodium"),
     ),
     Vendor(
         name="wolfSSL",
@@ -218,6 +249,7 @@ VENDORS: tuple[Vendor, ...] = (
         library_names=("libmbedcrypto", "libmbedtls", "libmbedx509"),
         symbol_prefixes=("mbedtls_",),
         include_roots=("mbedtls", "psa"),
+        distributions=("python-mbedtls",),
     ),
     # Not in the owner's forbidden list, but they are peer implementations
     # pinned by benchmarks/requirements-bench.txt and would be exactly as
@@ -227,6 +259,7 @@ VENDORS: tuple[Vendor, ...] = (
         modules=frozenset({"Crypto", "Cryptodome"}),
         library_names=(),
         symbol_prefixes=(),
+        distributions=("pycryptodome", "pycryptodomex", "pycrypto"),
     ),
 )
 
@@ -606,19 +639,24 @@ def _dynamic_source_violations(tree: ast.Module, path: Path, package_dir: Path) 
             # Inventory, not a verdict (AGENTS.md §10).  A loader that searches
             # for the project's own library cannot name it with a literal, so a
             # blocking rule here could only be met with an exemption list.
-            # What such a load maps is checked where it can be decided: the
-            # runtime check inspects every library the imported package has
-            # actually loaded, and the pre-load digest check refuses a
-            # searched candidate whose bytes are not the signed library's —
-            # an AMA_CRYPTO_LIB_PATH override included, which may relocate
-            # the signed library but not substitute it.
+            # What such a load asks for is checked where it can be decided,
+            # IF it runs during import: check_runtime records every
+            # `ctypes.dlopen` the import makes (by audit hook) and fails on a
+            # vendor name, or on a named file that links or defines a vendor's
+            # symbols.  This comment used to say the runtime check "inspects
+            # every library the imported package has actually loaded"; it
+            # listed sys.modules names and nothing else, so a site like this
+            # one loading libcrypto passed every leg.  The pre-load digest
+            # check separately refuses a searched candidate whose bytes are not
+            # the signed library's — an AMA_CRYPTO_LIB_PATH override included,
+            # which may relocate the signed library but not substitute it.
             violations.append(
                 Violation(
                     INVENTORY,
                     where,
                     f"ctypes {form}({shown}) — the library is chosen at run time and "
-                    f"cannot be resolved from the source; what it maps is covered "
-                    f"by the runtime check, not proven here.",
+                    f"cannot be resolved from the source; the runtime check decides "
+                    f"it if it runs during import, and nothing does otherwise.",
                 )
             )
             continue
@@ -729,6 +767,188 @@ def _vendor_link_tokens() -> dict[str, str]:
     return tokens
 
 
+#: The ``Extension`` arguments that put something on a binding's link line,
+#: with their positions in the distutils signature
+#: ``Extension(name, sources, include_dirs, define_macros, undef_macros,
+#: library_dirs, libraries, runtime_library_dirs, extra_objects,
+#: extra_compile_args, extra_link_args, ...)``.
+_EXTENSION_LINK_ARGUMENTS = {"libraries": 6, "extra_objects": 8, "extra_link_args": 10}
+
+#: Separators inside one link value: ``-Wl,-lcrypto``, ``/DEFAULTLIB:libcrypto``.
+_LINK_VALUE_SPLIT_RE = re.compile(r"[\s,=:]+")
+
+
+def _call_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+class _PythonStrings:
+    """Every string literal a ``setup.py`` expression can evaluate to or contain.
+
+    Not an evaluator: it over-approximates, following names to every value
+    they are assigned, extended, appended or ``+=``-ed with in their scope, and
+    calls of the module's own functions to what those return (by tuple
+    position when the call is unpacked).  Over-approximation is the safe
+    direction for a scan whose finding is "a vendor name reaches this link
+    argument"; an expression it cannot follow contributes nothing, and the
+    built extensions are screened by ``--bindings`` for exactly that reason.
+    """
+
+    _MUTATORS = frozenset({"append", "extend", "insert"})
+
+    def __init__(self, tree: ast.Module) -> None:
+        self._tree = tree
+        self._functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self._parents: dict[ast.AST, ast.AST] = {
+            child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+        }
+
+    def scope_of(self, node: ast.AST) -> ast.AST:
+        current = self._parents.get(node)
+        while current is not None and not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
+        ):
+            current = self._parents.get(current)
+        return current if current is not None else self._tree
+
+    def strings(self, expr: ast.AST | None, scope: ast.AST, depth: int = 0) -> set[str]:
+        if expr is None or depth > 12:
+            return set()
+        if isinstance(expr, ast.Constant):
+            return {expr.value} if isinstance(expr.value, str) else set()
+        if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+            return set().union(*(self.strings(e, scope, depth + 1) for e in expr.elts))
+        if isinstance(expr, ast.BinOp):
+            return self.strings(expr.left, scope, depth + 1) | self.strings(
+                expr.right, scope, depth + 1
+            )
+        if isinstance(expr, ast.IfExp):
+            return self.strings(expr.body, scope, depth + 1) | self.strings(
+                expr.orelse, scope, depth + 1
+            )
+        if isinstance(expr, ast.Starred):
+            return self.strings(expr.value, scope, depth + 1)
+        if isinstance(expr, ast.JoinedStr):
+            fixed = "".join(
+                part.value
+                for part in expr.values
+                if isinstance(part, ast.Constant) and isinstance(part.value, str)
+            )
+            return {fixed} if fixed else set()
+        if isinstance(expr, ast.Name):
+            return self._name(expr.id, scope, depth + 1)
+        if isinstance(expr, ast.Call):
+            called = _call_name(expr.func)
+            if isinstance(expr.func, ast.Name) and called in self._functions:
+                return self._returns(self._functions[called], None, depth + 1)
+            return set().union(*(self.strings(a, scope, depth + 1) for a in expr.args))
+        return set()
+
+    def _returns(self, function: ast.AST, index: int | None, depth: int) -> set[str]:
+        found: set[str] = set()
+        for node in ast.walk(function):
+            if isinstance(node, ast.Return) and node.value is not None:
+                value: ast.AST = node.value
+                if index is not None and isinstance(value, ast.Tuple):
+                    if index < len(value.elts):
+                        found |= self.strings(value.elts[index], function, depth)
+                    continue
+                found |= self.strings(value, function, depth)
+        return found
+
+    def _name(self, name: str, scope: ast.AST, depth: int) -> set[str]:
+        found: set[str] = set()
+        for node in ast.walk(scope):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == name:
+                        found |= self.strings(node.value, scope, depth)
+                    elif isinstance(target, ast.Tuple):
+                        for index, element in enumerate(target.elts):
+                            if not (isinstance(element, ast.Name) and element.id == name):
+                                continue
+                            if isinstance(node.value, ast.Tuple) and index < len(node.value.elts):
+                                found |= self.strings(node.value.elts[index], scope, depth)
+                            elif (
+                                isinstance(node.value, ast.Call)
+                                and isinstance(node.value.func, ast.Name)
+                                and node.value.func.id in self._functions
+                            ):
+                                found |= self._returns(
+                                    self._functions[node.value.func.id], index, depth
+                                )
+            elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+                if isinstance(node.target, ast.Name) and node.target.id == name:
+                    found |= self.strings(node.value, scope, depth)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                owner = node.func.value
+                if (
+                    node.func.attr in self._MUTATORS
+                    and isinstance(owner, ast.Name)
+                    and owner.id == name
+                ):
+                    arguments = node.args[1:] if node.func.attr == "insert" else node.args
+                    found |= set().union(*(self.strings(a, scope, depth) for a in arguments))
+        if not found and not isinstance(scope, ast.Module):
+            return self._name(name, self._tree, depth + 1)
+        return found
+
+
+def _python_link_values(tree: ast.Module) -> list[tuple[int, str, str]]:
+    """``(line, context, string)`` for every string that can reach a binding's link line.
+
+    ``setup.py`` links its Cython extensions itself —
+    ``Extension(..., libraries=["ama_cryptography"], extra_link_args=linker_flags)``
+    — and none of that is a CMake command or a ``-l`` flag, so the scan above
+    could not see ``libraries=["ama_cryptography", "crypto"]`` or
+    ``extra_objects=["/usr/lib/x86_64-linux-gnu/libcrypto.a"]``.  Read here:
+    the ``libraries``, ``extra_objects`` and ``extra_link_args`` arguments of
+    every ``Extension(...)`` call, and every assignment, ``+=``, ``append``,
+    ``extend`` or ``insert`` on an attribute of those names.
+    """
+    strings = _PythonStrings(tree)
+    found: list[tuple[int, str, str]] = []
+
+    def _add(node: ast.AST, context: str, expr: ast.AST | None) -> None:
+        lineno = getattr(node, "lineno", 0)
+        for value in sorted(strings.strings(expr, strings.scope_of(node))):
+            found.append((lineno, context, value))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            called = _call_name(node.func)
+            if called == "Extension":
+                for keyword in node.keywords:
+                    if keyword.arg in _EXTENSION_LINK_ARGUMENTS:
+                        _add(node, f"Extension({keyword.arg}=...)", keyword.value)
+                for argument, position in _EXTENSION_LINK_ARGUMENTS.items():
+                    if position < len(node.args):
+                        _add(node, f"Extension({argument}=...)", node.args[position])
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and called in _PythonStrings._MUTATORS
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr in _EXTENSION_LINK_ARGUMENTS
+            ):
+                arguments = node.args[1:] if called == "insert" else node.args
+                for argument_node in arguments:
+                    _add(node, f".{node.func.value.attr}.{called}()", argument_node)
+        elif isinstance(node, (ast.Assign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Attribute) and target.attr in _EXTENSION_LINK_ARGUMENTS:
+                    _add(node, f".{target.attr} assignment", node.value)
+    return found
+
+
 def check_build_config(repo_root: Path) -> list[Violation]:
     """No build file may search for, find, or link a forbidden vendor.
 
@@ -834,6 +1054,25 @@ def check_build_config(repo_root: Path) -> list[Violation]:
             if hit is not None:
                 _report(where, f"-l{match.group(1)}", hit[1], "linker flag")
 
+        if path.suffix == ".py":
+            try:
+                tree = ast.parse(text, filename=str(path))
+            except SyntaxError as exc:
+                violations.append(
+                    Violation(
+                        "build-config",
+                        where,
+                        f"could not parse, so its link lines were not read: {exc}",
+                    )
+                )
+                continue
+            for lineno, context, value in _python_link_values(tree):
+                for piece in _LINK_VALUE_SPLIT_RE.split(value):
+                    candidate = piece[2:] if piece.startswith("-l") and len(piece) > 2 else piece
+                    hit = _vendor_for_argument(candidate) if candidate else None
+                    if hit is not None:
+                        _report(f"{where}:{lineno}", hit[0], hit[1], context)
+
     if not paths:
         violations.append(
             Violation(
@@ -855,7 +1094,14 @@ def check_build_config(repo_root: Path) -> list[Violation]:
 #: runtime half of the thing its builder stage says is absent.  The
 #: build-config scan globbed CMake and setup.py only, so it reported clean
 #: over all three.
-_CONTAINER_GLOBS = ("docker/Dockerfile*", "oss-fuzz/Dockerfile*", "Dockerfile*")
+#:
+#: Matched by file name anywhere in the tree, not by three fixed directory
+#: globs.  The fixed list named ``oss-fuzz/Dockerfile`` and not its twin
+#: ``.clusterfuzzlite/Dockerfile`` — same base-builder image, same
+#: ``apt-get install`` block — so a ``libssl-dev`` added there was invisible.
+#: A recipe is a recipe wherever it sits; the directories skipped are the
+#: generated and third-party ones the build-config scan skips.
+_CONTAINER_NAME_PATTERNS = ("Dockerfile*", "Containerfile*")
 
 #: Package-manager invocations that put a library into an image.
 #: The line-continuation alternative comes FIRST.  With ``[^\n]`` first the
@@ -872,6 +1118,107 @@ _PACKAGE_INSTALL_RE = re.compile(
 
 #: One package name inside such an invocation.
 _PACKAGE_NAME_RE = re.compile(r"[A-Za-z0-9_.+-]+")
+
+#: ``pip`` / ``pip3`` / ``pip3.12`` / ``python3 -m pip`` installs.  The vendor
+#: table's ``modules`` ARE Python bindings, and ``docker/Dockerfile``'s runtime
+#: stage installs Python packages with ``pip3 install``; the distribution
+#: package-manager pattern above could not see one.  The invocation ends at
+#: the first shell separator, so ``pip3 install x && openssl version`` is read
+#: as installing ``x`` and the next ``&& pip3 install`` is matched on its own.
+_PIP_INSTALL_RE = re.compile(
+    r"(?:\bpip(?:3(?:\.\d+)?)?|\bpython(?:3(?:\.\d+)?)?\s+-m\s+pip)\s+install\b"
+    r"(?P<rest>(?:\\\n|[^\n&|;])*)",
+    re.IGNORECASE,
+)
+
+#: pip options whose NEXT token is a value (a file, URL or directory), not a
+#: requirement.  Only the ones whose values could otherwise parse as a name.
+_PIP_VALUE_OPTIONS = frozenset(
+    {
+        "-r",
+        "--requirement",
+        "-c",
+        "--constraint",
+        "-e",
+        "--editable",
+        "-i",
+        "--index-url",
+        "--extra-index-url",
+        "-f",
+        "--find-links",
+        "-t",
+        "--target",
+        "--prefix",
+        "--root",
+    }
+)
+
+#: The distribution name at the head of a requirement: ``cryptography==43``,
+#: ``PyNaCl>=1.5``, ``cryptography[ssh]``.
+_REQUIREMENT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+#: Distribution packages of a Python binding (``python3-cryptography``,
+#: ``py3-cryptography``, ``python3-nacl``) carry the binding's name behind an
+#: interpreter prefix, which the library-affix stripping above does not remove.
+_PYTHON_PACKAGE_PREFIX_RE = re.compile(r"^(?:python3?|py3)-")
+
+
+def _normalise_distribution(name: str) -> str:
+    """PEP 503 normalisation: case-folded, runs of ``-_.`` collapsed to ``-``."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _vendor_distributions() -> dict[str, str]:
+    """``normalised distribution name -> vendor`` for every Python binding.
+
+    A binding installs under its distribution name (``PyNaCl``) or, for most,
+    its module name (``cryptography``); both are screened.
+    """
+    table: dict[str, str] = {}
+    for vendor in VENDORS:
+        for name in (*vendor.distributions, *vendor.modules):
+            table.setdefault(_normalise_distribution(name), vendor.name)
+    return table
+
+
+def _pip_requirement_names(rest: str) -> list[str]:
+    """The distribution names a ``pip install`` argument list asks for."""
+    names: list[str] = []
+    tokens = rest.replace("\\\n", " ").split()
+    skip_next = False
+    for raw in tokens:
+        token = raw.strip("\"'")
+        if skip_next:
+            skip_next = False
+            continue
+        if token.startswith("-"):
+            skip_next = token in _PIP_VALUE_OPTIONS
+            continue
+        base = token.rsplit("/", 1)[-1]
+        if base.endswith((".whl", ".tar.gz", ".zip")):
+            # A local wheel or sdist is named <distribution>-<version>-...;
+            # `/tmp/*.whl` yields `*.whl`, which names nothing.
+            token = base.split("-", 1)[0]
+        elif "/" in token or token.startswith("."):
+            continue  # a directory or URL: names no distribution by itself
+        match = _REQUIREMENT_NAME_RE.match(token)
+        if match is not None:
+            names.append(match.group(0))
+    return names
+
+
+def _container_recipes(repo_root: Path) -> list[Path]:
+    """Every container recipe under ``repo_root``, skipping generated trees."""
+    found: list[Path] = []
+    for directory, subdirectories, files in os.walk(repo_root):
+        subdirectories[:] = sorted(d for d in subdirectories if d not in _BUILD_CONFIG_SKIP_DIRS)
+        for name in sorted(files):
+            if any(fnmatch.fnmatchcase(name, pattern) for pattern in _CONTAINER_NAME_PATTERNS):
+                path = Path(directory) / name
+                if path.is_file():
+                    found.append(path)
+    return found
+
 
 #: Package-name affixes a distribution adds around the library it wraps:
 #: ``libssl-dev``, ``libssl3``, ``openssl-dev``, ``libsodium-dev``,
@@ -890,19 +1237,9 @@ def check_container_recipes(repo_root: Path) -> list[Violation]:
     find one.  The rule the Dockerfiles already state in prose is now checked.
     """
     tokens = _vendor_link_tokens()
+    distributions = _vendor_distributions()
     violations: list[Violation] = []
-    paths: list[Path] = []
-    seen: set[Path] = set()
-    for pattern in _CONTAINER_GLOBS:
-        for path in sorted(repo_root.glob(pattern)):
-            resolved = path.resolve()
-            if not path.is_file() or resolved in seen:
-                continue
-            relative = path.relative_to(repo_root)
-            if set(relative.parts) & _BUILD_CONFIG_SKIP_DIRS:
-                continue
-            seen.add(resolved)
-            paths.append(path)
+    paths = _container_recipes(repo_root)
 
     if not paths:
         return [
@@ -924,13 +1261,34 @@ def check_container_recipes(repo_root: Path) -> list[Violation]:
                 if name.startswith("-"):
                     continue  # an option (--no-cache, -y), not a package
                 base = _PACKAGE_AFFIX_RE.sub(r"\g<base>", name.lower())
-                vendor = tokens.get(name.lower()) or tokens.get(base)
+                binding = _PYTHON_PACKAGE_PREFIX_RE.sub("", name.lower())
+                vendor = (
+                    tokens.get(name.lower())
+                    or tokens.get(base)
+                    or (
+                        distributions.get(_normalise_distribution(binding))
+                        if binding != name.lower()
+                        else None
+                    )
+                )
                 if vendor is not None:
                     violations.append(
                         Violation(
                             "container",
                             where,
                             f"installs package {name!r} — {vendor} may not be "
+                            f"present in a shipped image (INVARIANT-1)",
+                        )
+                    )
+        for match in _PIP_INSTALL_RE.finditer(scanned):
+            for name in _pip_requirement_names(match.group("rest")):
+                vendor = distributions.get(_normalise_distribution(name))
+                if vendor is not None:
+                    violations.append(
+                        Violation(
+                            "container",
+                            where,
+                            f"pip installs {name!r} — {vendor} binding, which may not be "
                             f"present in a shipped image (INVARIANT-1)",
                         )
                     )
@@ -941,15 +1299,173 @@ def check_container_recipes(repo_root: Path) -> list[Violation]:
 # Runtime check
 # --------------------------------------------------------------------------
 
-_RUNTIME_PROBE = """
-import json, sys
+#: Runs in a clean interpreter.  Three kinds of evidence, all taken around ONE
+#: ``import ama_cryptography`` — which runs POST, so every algorithm's
+#: known-answer test executes and every backend the package loads at import is
+#: loaded:
+#:
+#: ``modules``
+#:     top-level names resident in ``sys.modules`` afterwards (a vendor binding
+#:     imported transitively, which no ``import`` statement here names);
+#: ``dlopen``
+#:     every library a ``ctypes`` load asked for while the package imported,
+#:     from the interpreter's own ``ctypes.dlopen`` audit event, with a
+#:     ``/proc/self/fd/N`` name resolved to the file the descriptor holds.
+#:     This is the evidence the source check's inventory defers to: a load
+#:     whose name is chosen at run time is decided here, by what it asked for;
+#: ``mapped``
+#:     shared objects mapped after the import that were not mapped before it.
+#:
+#: Why the audit event and not the mapped set alone: the interpreter's own
+#: ``_hashlib`` maps ``libcrypto`` the moment ``hashlib`` is imported (measured:
+#: ``/usr/lib/x86_64-linux-gnu/libcrypto.so.3`` appears on ``import hashlib``
+#: with a stock CPython 3.11), and the trust bootstrap imports ``hashlib``.  So
+#: "fail if any vendor library is mapped" fails every stock interpreter, and
+#: "fail if one is newly mapped" misses a package ``dlopen`` of that same
+#: library, which returns the existing mapping and adds nothing.  The audit
+#: event sees the request itself, mapped already or not, loaded or failed.
+#: The baseline imports the interpreter's OpenSSL-backed accelerators first so
+#: that their mappings are not attributed to the package.
+_RUNTIME_PROBE = r"""
+import json, os, sys
+
+def _mapped_enumerator():
+    # Built before the audit hook is installed: the handles it opens are the
+    # probe's own, not the package's, and must not be recorded as its loads.
+    if sys.platform.startswith("linux"):
+        def enumerate_mapped():
+            paths = set()
+            with open("/proc/self/maps", encoding="utf-8", errors="replace") as maps:
+                for line in maps:
+                    fields = line.split(None, 5)
+                    if len(fields) == 6 and fields[5].startswith("/"):
+                        paths.add(fields[5].strip())
+            return paths
+        return enumerate_mapped
+    if sys.platform == "darwin":
+        import ctypes
+        process = ctypes.CDLL(None)
+        count = process._dyld_image_count
+        count.argtypes = []
+        count.restype = ctypes.c_uint32
+        name = process._dyld_get_image_name
+        name.argtypes = [ctypes.c_uint32]
+        name.restype = ctypes.c_char_p
+        def enumerate_mapped():
+            paths = set()
+            for index in range(count()):
+                image = name(index)
+                if image:
+                    paths.add(os.fsdecode(image))
+            return paths
+        return enumerate_mapped
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        current = kernel32.GetCurrentProcess
+        current.argtypes = []
+        current.restype = wintypes.HANDLE
+        enum_modules = kernel32.K32EnumProcessModules
+        enum_modules.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.HMODULE),
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        enum_modules.restype = wintypes.BOOL
+        file_name = kernel32.GetModuleFileNameW
+        file_name.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+        file_name.restype = wintypes.DWORD
+        def enumerate_mapped():
+            handle_size = ctypes.sizeof(wintypes.HMODULE)
+            capacity = 512
+            while True:
+                modules = (wintypes.HMODULE * capacity)()
+                needed = wintypes.DWORD(0)
+                if not enum_modules(
+                    current(), modules, ctypes.sizeof(modules), ctypes.byref(needed)
+                ):
+                    raise OSError(ctypes.get_last_error(), "K32EnumProcessModules failed")
+                if needed.value <= ctypes.sizeof(modules):
+                    break
+                capacity = needed.value // handle_size + 64
+            buffer = ctypes.create_unicode_buffer(32768)
+            paths = set()
+            for index in range(needed.value // handle_size):
+                if modules[index] and file_name(modules[index], buffer, len(buffer)):
+                    paths.add(buffer.value)
+            return paths
+        return enumerate_mapped
+    return None
+
+import ctypes  # its own _ctypes mapping belongs to the baseline, not the package
+for _accelerator in ("_hashlib", "_ssl"):
+    try:
+        __import__(_accelerator)
+    except ImportError:
+        pass
+
+_mapped_error = None
+try:
+    _enumerate = _mapped_enumerator()
+    _before = _enumerate() if _enumerate is not None else None
+    if _enumerate is None:
+        _mapped_error = "no shared-object enumeration for platform " + sys.platform
+except Exception as exc:
+    _enumerate, _before = None, None
+    _mapped_error = "shared-object enumeration failed: %r" % (exc,)
+
+_dlopen = []
+
+def _audit(event, args):
+    if event != "ctypes.dlopen":
+        return
+    name = args[0] if args else None
+    if name is None:
+        _dlopen.append({"name": None, "target": None})
+        return
+    try:
+        name = os.fsdecode(name)
+    except TypeError:
+        name = repr(name)
+    target = None
+    if name.startswith("/proc/self/fd/"):
+        try:
+            target = os.readlink(name)
+        except OSError:
+            target = None
+    elif os.path.isabs(name):
+        target = name
+    _dlopen.append({"name": name, "target": target})
+
+sys.addaudithook(_audit)
+
 import ama_cryptography  # noqa: F401
-print("@@AMA@@" + json.dumps(sorted({m.split(".", 1)[0] for m in sys.modules})))
+
+_after = None
+if _enumerate is not None and _mapped_error is None:
+    try:
+        _after = _enumerate()
+    except Exception as exc:
+        _mapped_error = "shared-object enumeration failed: %r" % (exc,)
+
+print("@@AMA@@" + json.dumps({
+    "modules": sorted({m.split(".", 1)[0] for m in sys.modules}),
+    "dlopen": _dlopen,
+    "mapped": sorted(_after - _before) if _after is not None else None,
+    "mapped_error": _mapped_error,
+}))
 """
 
 
-def check_runtime(repo_root: Path) -> list[Violation]:
-    """After importing the package, no forbidden binding may be resident."""
+def _library_basename(name: str) -> str:
+    """The file name of a library path, on either separator convention."""
+    return re.split(r"[\\/]", name)[-1]
+
+
+def runtime_evidence(repo_root: Path) -> dict[str, object] | Violation:
+    """Run :data:`_RUNTIME_PROBE` under ``repo_root``; its evidence, or why not."""
     proc = subprocess.run(
         [sys.executable, "-c", _RUNTIME_PROBE],
         capture_output=True,
@@ -957,15 +1473,13 @@ def check_runtime(repo_root: Path) -> list[Violation]:
         cwd=repo_root,
     )
     if proc.returncode != 0:
-        return [
-            Violation(
-                "runtime",
-                "import ama_cryptography",
-                "the package could not be imported, so no runtime evidence "
-                "exists; build the native library first "
-                f"(exit {proc.returncode}): {proc.stderr.strip()[-400:]}",
-            )
-        ]
+        return Violation(
+            "runtime",
+            "import ama_cryptography",
+            "the package could not be imported, so no runtime evidence "
+            "exists; build the native library first "
+            f"(exit {proc.returncode}): {proc.stderr.strip()[-400:]}",
+        )
 
     marker = "@@AMA@@"
     line = next(
@@ -973,6 +1487,31 @@ def check_runtime(repo_root: Path) -> list[Violation]:
         None,
     )
     if line is None:
+        return Violation(
+            "runtime",
+            "import ama_cryptography",
+            "the probe produced no module inventory — refusing to report clean",
+        )
+    evidence: dict[str, object] = json.loads(line[len(marker) :])
+    return evidence
+
+
+def check_runtime(repo_root: Path) -> list[Violation]:
+    """After importing the package, no forbidden binding or library may be present.
+
+    Screens the three kinds of evidence :data:`_RUNTIME_PROBE` collects: the
+    resident modules, every ``ctypes`` load the import requested (by the name
+    requested, and — when that name is a file — by what the file links and
+    defines, so a vendor library copied under an innocent name is still a
+    vendor library), and every shared object the import newly mapped.  An
+    enumeration that could not run is a violation, not a skip.
+    """
+    evidence = runtime_evidence(repo_root)
+    if isinstance(evidence, Violation):
+        return [evidence]
+
+    modules = evidence.get("modules")
+    if not isinstance(modules, list):
         return [
             Violation(
                 "runtime",
@@ -980,8 +1519,7 @@ def check_runtime(repo_root: Path) -> list[Violation]:
                 "the probe produced no module inventory — refusing to report clean",
             )
         ]
-
-    resident = set(json.loads(line[len(marker) :]))
+    resident = {str(module) for module in modules}
     violations = [
         Violation(
             "runtime",
@@ -998,6 +1536,65 @@ def check_runtime(repo_root: Path) -> list[Violation]:
                 f"{COMPARATOR_PACKAGE!r} is resident after importing the package",
             )
         )
+
+    loads = evidence.get("dlopen")
+    if not isinstance(loads, list):
+        violations.append(
+            Violation(
+                "runtime",
+                "ctypes.dlopen",
+                "the probe recorded no library-load evidence — refusing to report clean",
+            )
+        )
+        loads = []
+    parsed: set[str] = set()
+    for load in loads:
+        requested = [load.get("name"), load.get("target")]
+        for value in [v for v in requested if isinstance(v, str)]:
+            vendor_name = _vendor_for_library_name(_library_basename(value))
+            if vendor_name is not None:
+                violations.append(
+                    Violation(
+                        "runtime",
+                        "ctypes.dlopen",
+                        f"importing the package loaded (or tried to load) {value!r} "
+                        f"— {vendor_name}",
+                    )
+                )
+                break
+        target = load.get("target")
+        if isinstance(target, str) and target not in parsed and Path(target).is_file():
+            parsed.add(target)
+            for finding in check_library(Path(target)):
+                violations.append(
+                    Violation(
+                        "runtime",
+                        "ctypes.dlopen",
+                        f"importing the package loaded {target!r}: {finding.detail}",
+                    )
+                )
+
+    mapped_error = evidence.get("mapped_error")
+    mapped = evidence.get("mapped")
+    if mapped_error or not isinstance(mapped, list):
+        violations.append(
+            Violation(
+                "runtime",
+                "mapped shared objects",
+                f"{mapped_error or 'no mapped-object evidence'} — refusing to report clean",
+            )
+        )
+    else:
+        for path in mapped:
+            vendor_name = _vendor_for_library_name(_library_basename(str(path)))
+            if vendor_name is not None:
+                violations.append(
+                    Violation(
+                        "runtime",
+                        "mapped shared objects",
+                        f"importing the package mapped {path!r} — {vendor_name}",
+                    )
+                )
     return violations
 
 
@@ -1457,6 +2054,51 @@ def check_library(path: Path) -> list[Violation]:
     return violations
 
 
+#: File-name shapes of a compiled object the package ships: a binding extension
+#: (``hkdf_binding.cpython-311-x86_64-linux-gnu.so``, ``….pyd``) or the bundled
+#: native library (``libama_cryptography.so.5.0.0``, ``….dylib``, ``….dll``).
+_PACKAGE_BINARY_RE = re.compile(r"\.(?:so|pyd|dylib|dll)(?:\.[0-9.]+)?$", re.IGNORECASE)
+
+
+def package_binaries(package_dir: Path) -> list[Path]:
+    """Every compiled object under ``package_dir``, each file once.
+
+    A versioned soname and the symlinks to it are one file; they are resolved
+    and de-duplicated so the same bytes are not reported three times.
+    """
+    found: dict[Path, Path] = {}
+    for path in sorted(package_dir.rglob("*")):
+        if "__pycache__" in path.parts or not _PACKAGE_BINARY_RE.search(path.name):
+            continue
+        if path.is_file():
+            found.setdefault(path.resolve(), path)
+    return sorted(found.values())
+
+
+def check_bindings(package_dir: Path) -> list[Violation]:
+    """The library check over every compiled object the package ships.
+
+    ``--library`` was only ever given ``build/lib/libama_cryptography.so``,
+    the CMake product.  The six Cython binding extensions are linked by
+    ``setup.py``, not CMake, execute at import, and ship in every wheel, and
+    no invocation of this gate had parsed one.
+    """
+    binaries = package_binaries(package_dir)
+    if not binaries:
+        return [
+            Violation(
+                "library",
+                str(package_dir),
+                "no compiled objects found — refusing to report clean having "
+                "examined nothing (build the extensions first)",
+            )
+        ]
+    violations: list[Violation] = []
+    for binary in binaries:
+        violations += check_library(binary)
+    return violations
+
+
 # --------------------------------------------------------------------------
 
 
@@ -1476,6 +2118,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         default=[],
         help="built native library to inspect; repeatable",
+    )
+    parser.add_argument(
+        "--bindings",
+        action="store_true",
+        help=(
+            "also run the library check on every compiled object in --package "
+            "(binding extensions and the bundled native library); fails if there are none"
+        ),
     )
     parser.add_argument("--source", action="store_true", help="run only the source check")
     parser.add_argument(
@@ -1522,6 +2172,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     for library in args.library:
         violations += check_library(library)
         ran.append(f"library ({library})")
+    if args.bindings:
+        violations += check_bindings(args.package)
+        for binary in package_binaries(args.package):
+            ran.append(f"library ({binary})")
 
     if not ran:
         print("ERROR: no check was selected.", file=sys.stderr)

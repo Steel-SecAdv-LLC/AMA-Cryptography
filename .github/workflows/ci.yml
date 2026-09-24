@@ -444,6 +444,19 @@ jobs:
         print('All crypto backends verified.')
         "
 
+    - name: "INVARIANT-1: every compiled object the package ships links no vendor"
+      shell: bash
+      # The security-checks job gives the vendor-isolation gate one library:
+      # build/lib/libama_cryptography.so, the CMake product.  The Cython
+      # binding extensions are linked by setup.py, not CMake — built here by
+      # the editable install above, executed at import, shipped in every wheel
+      # — and no invocation of the gate had ever parsed one, so a vendor on a
+      # binding's link line passed.  --bindings runs the library check on
+      # every compiled object in the package (each extension and the bundled
+      # native library), on every OS and interpreter in this matrix, and fails
+      # if it finds nothing to check.
+      run: python tools/check_vendor_isolation.py --bindings
+
     - name: Verify cross-implementation reference libraries are importable
       shell: bash
       # The differential / interop suites validate AMA's native C primitives
@@ -990,10 +1003,15 @@ jobs:
       #              authorised to use peer implementations and must not enter
       #              the shipped package's import graph)
       #   runtime  — no vendor binding is resident in sys.modules after
-      #              `import ama_cryptography`
+      #              `import ama_cryptography`, no ctypes load made during that
+      #              import asks for a vendor library (or opens a file that
+      #              links or defines a vendor's symbols), and the import maps
+      #              no new shared object with a vendor's name
       #   library  — the built shared object names no vendor in its DT_NEEDED /
       #              LC_LOAD_DYLIB / PE import table, and imports no undefined
-      #              symbol with a vendor's prefix
+      #              symbol with a vendor's prefix.  The binding extensions
+      #              setup.py builds are checked by the test matrix's
+      #              `--bindings` step, which is where they are built.
       #
       # All three are verified to FAIL under mutation by
       # tests/test_vendor_isolation_gate.py, including the ELF parser against

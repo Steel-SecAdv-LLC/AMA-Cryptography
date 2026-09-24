@@ -27,8 +27,10 @@ import importlib.util
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 from types import ModuleType
 
@@ -79,6 +81,49 @@ class TestTheChartAccountsForEveryFile:
         assert "METRICS_REPORT" in doc
 
 
+def _png(text: dict[str, str] | None = None) -> bytes:
+    """A valid 1x1 greyscale PNG carrying ``text`` as ``tEXt`` chunks."""
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    out = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0))
+    for keyword, value in (text or {}).items():
+        out += chunk(b"tEXt", keyword.encode("latin-1") + b"\0" + value.encode("latin-1"))
+    return out + chunk(b"IDAT", zlib.compress(b"\x00\x00")) + chunk(b"IEND", b"")
+
+
+def _stage_assets(
+    gv: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: dict[str, object] | None,
+) -> None:
+    """A faithful manifest beside PNGs; ``test_coverage.png`` records ``chart_inputs``.
+
+    The real ``assets/`` directory is left alone: these tests are about what
+    the check does, not about whether the committed charts are current (that
+    is ``test_the_committed_chart_draws_the_trees_numbers``).
+    """
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    recorded = gv._live_manifest_entry()
+    recorded["dashboards"] = {"version": gv._PKG_VERSION}
+    (assets / "visuals_manifest.json").write_text(json.dumps(recorded), encoding="utf-8")
+    for name in gv._OWNED_OUTPUTS:
+        (assets / name).write_bytes(_png())
+    text = (
+        {}
+        if chart_inputs is None
+        else {gv._CHART_INPUTS_KEY: gv._encode_chart_inputs(chart_inputs)}
+    )
+    (assets / "test_coverage.png").write_bytes(_png(text))
+    monkeypatch.setattr(gv, "ASSETS_DIR", assets)
+    monkeypatch.setattr(gv, "MANIFEST_PATH", assets / "visuals_manifest.json")
+
+
 class TestManifestCheck:
     def _manifest_with(self, gv: ModuleType, tmp_path: Path, **overrides: object) -> Path:
         recorded = gv._live_manifest_entry()
@@ -91,7 +136,7 @@ class TestManifestCheck:
     def test_a_faithful_manifest_passes(
         self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(gv, "MANIFEST_PATH", self._manifest_with(gv, tmp_path))
+        _stage_assets(gv, tmp_path, monkeypatch, gv._live_test_coverage_inputs())
         assert gv.check_manifest() == []
 
     def test_a_drifted_count_fails(
@@ -139,6 +184,78 @@ class TestManifestCheck:
                 f"regenerate with `python tools/generate_visuals.py` and commit "
                 f"the PNGs and manifest together"
             )
+
+
+class TestTheChartIsBoundToItsNumbers:
+    """``--check`` validated the manifest, never the PNG it describes.
+
+    Measured before the fix: with a manifest faithful to the tree and
+    ``test_coverage.png`` replaced by a different chart altogether (a copy of
+    ``quantum_comparison.png``), ``check_manifest()`` returned ``[]``.  The
+    failure message prints the exact expected JSON, so an environment without
+    matplotlib — the one ``--check`` is for — could turn the gate green by
+    pasting it into the manifest while the chart still drew the old totals.
+    Recording a PNG digest in the manifest would not have closed that: the
+    pasted numbers leave the old digest matching the old PNG.  The chart now
+    records the numbers it drew in its own ``AMA-Chart-Inputs`` text chunk.
+    """
+
+    def test_a_chart_drawing_other_numbers_fails(
+        self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stale = gv._live_test_coverage_inputs()
+        total = stale["total_tests"]
+        assert isinstance(total, int)
+        stale["total_tests"] = total - 1
+        _stage_assets(gv, tmp_path, monkeypatch, stale)
+        problems = gv.check_manifest()
+        assert any("draws numbers the tree no longer has" in p for p in problems), problems
+        assert any("total_tests" in p for p in problems), problems
+
+    def test_a_chart_recording_nothing_fails(
+        self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _stage_assets(gv, tmp_path, monkeypatch, None)
+        problems = gv.check_manifest()
+        assert any("records no AMA-Chart-Inputs" in p for p in problems), problems
+
+    def test_a_hand_edited_chunk_fails_its_crc(
+        self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _stage_assets(gv, tmp_path, monkeypatch, gv._live_test_coverage_inputs())
+        chart = gv.ASSETS_DIR / "test_coverage.png"
+        data = bytearray(chart.read_bytes())
+        at = data.index(b'"total_tests": ') + len(b'"total_tests": ')
+        data[at] = ord("9") if data[at] != ord("9") else ord("8")
+        chart.write_bytes(bytes(data))
+        problems = gv.check_manifest()
+        assert any("fails its CRC" in p for p in problems), problems
+
+    def test_the_manifest_alone_cannot_vouch_for_the_chart(
+        self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pasted-JSON path, end to end, through the command line."""
+        stale = gv._live_test_coverage_inputs()
+        n_files = stale["n_files"]
+        assert isinstance(n_files, int)
+        stale["n_files"] = n_files + 3
+        _stage_assets(gv, tmp_path, monkeypatch, stale)
+        assert gv.main(["--check"]) == 1
+
+    def test_the_renderer_records_what_it_drew(
+        self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("matplotlib")
+        if not gv._HAVE_MATPLOTLIB:
+            pytest.skip("the plotting stack did not import in the tool")
+        monkeypatch.setattr(gv, "ASSETS_DIR", tmp_path)
+        gv.create_test_coverage()
+        recorded = gv._png_text_chunks(tmp_path / "test_coverage.png")[gv._CHART_INPUTS_KEY]
+        assert json.loads(recorded) == gv._live_test_coverage_inputs()
+
+    def test_the_committed_chart_draws_the_trees_numbers(self, gv: ModuleType) -> None:
+        """The real chart, held to the real tree, as ``--check`` does in CI."""
+        assert gv._check_rendered_inputs() == []
 
 
 class TestWiredIntoCI:

@@ -516,7 +516,7 @@
       },
       {
         "path": "ama_cryptography/_artefact_source.py",
-        "reason": "Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
+        "reason": "2026-09-24: load_artefact_fields now also refuses an annotation that is not a builtin type expression; it runs once per import in the trust bootstrap, never inside a benchmarked call, so no floored operation moves. Python wrapper module. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the changes in this file are import-time integrity, self-test, posture, docs tooling or error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39. Itemised per file rather than acknowledged as the `ama_cryptography` prefix, which pre-approved every future change to every module in the package — including one that does run inside a benchmarked call."
       },
       {
         "path": "ama_cryptography/_build_sign.py",
