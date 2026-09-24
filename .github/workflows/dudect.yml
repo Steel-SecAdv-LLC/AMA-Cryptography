@@ -882,8 +882,18 @@ jobs:
         # recorded in CHANGELOG.md against the commit that produced them.
         # Instructions rule out a branch or skipped work; the data-reference
         # and miss figures rule out a secret-dependent access, which an
-        # instruction count alone cannot see. The dudect wall-clock lane is
-        # INFO for that reason and THIS is what blocks.
+        # instruction count alone cannot see.
+        #
+        # What this step CANNOT see is a difference that lives only in
+        # operand-dependent latency: same instructions, same addresses, a
+        # slower execution of one of them. Measured 2026-09-24 with a planted
+        # branch-free leak on the FO verdict (a floating-point multiply fed a
+        # subnormal on the reject path and 1.0 on the accept path): this step
+        # reported every count identical across all eight classes and PASSED.
+        # So it blocks alongside the wall-clock lane, not instead of it.  An
+        # earlier revision of this comment said the lane was INFO because
+        # this step was the more sensitive instrument; that measurement
+        # refutes it, and the lane is strict again (tests/c/test_dudect.c).
         #
         # The excursion that prompted this target has since been traced to the
         # lane rather than to ML-KEM: it selected its ciphertext with a
@@ -926,10 +936,12 @@ jobs:
         # output when ANY lane rejects.  The step above reaches none of it.
         #
         # Its dudect lane (`X25519 scalarmult batch x4`) is info-only, and
-        # info-only is defensible exactly where a deterministic gate blocks
-        # instead — the pairing `Kyber-1024 decaps` and `secp256k1 ECDSA sign`
-        # both cite.  This lane had no such counterpart, so nothing could fail
-        # on a batch-path regression.
+        # info-only needs a deterministic gate that blocks in its place — the
+        # pairing `secp256k1 ECDSA sign` cites.  This lane had no such
+        # counterpart, so nothing could fail on a batch-path regression.  (A
+        # counterpart covers instruction-sequence and memory-access
+        # differences only; see the `kyber-decaps` step above for the class
+        # it cannot see.)
         #
         # Both wirings are measured, because which one runs is an environment
         # choice: the second run opts the AVX2 4-way kernel in, and that kernel

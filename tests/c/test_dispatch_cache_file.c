@@ -23,8 +23,10 @@
  *      verdict log displayed `simd=0 ns vs generic=0 ns` because the
  *      load path ignored timing fields.  Post-fix, the timings round-
  *      trip through the file.  Checked by re-reading the cache file
- *      after a write and asserting the timing keys carry non-empty
- *      integer values.
+ *      after a write and asserting the Keccak timing keys carry
+ *      positive measurements exactly where a SIMD single-state Keccak
+ *      was installed for the auto-tune bench to judge, and the -1
+ *      "not measured" sentinel exactly where none was.
  *
  * The test is build-config-aware: it must run with
  * `AMA_DISPATCH_NO_AUTOTUNE` unset (so the bench actually runs and
@@ -49,6 +51,7 @@
 #include <sys/stat.h>
 
 #include "ama_dispatch.h"
+#include "../../src/c/internal/ama_testing_exports.h"
 
 #if defined(_MSC_VER)
 int main(void) {
@@ -172,7 +175,8 @@ int main(void) {
     /* Timing fields must be NUMERIC integers so the cache-hit verbose log
      * reports the cached readings rather than zeros (Copilot alert #10), and
      * every reading must be either a real measurement (> 0) or the explicit
-     * "not measured" sentinel (-1).
+     * "not measured" sentinel (-1) — and WHICH of the two is decided below,
+     * not left to the file.
      *
      * ZERO is the state this pins out, and it is the interesting one: it used
      * to mean both "the bench never ran" and "the bench ran and the clock
@@ -187,9 +191,11 @@ int main(void) {
      * the whole file, which removed the coverage instead of the ambiguity.
      *
      * dispatch_init_internal now seeds the timings to -1, so the states are
-     * distinguishable at the source and this test can assert the real
-     * invariant on every host and every build configuration — no branch on
-     * dispatch info, no build-specific skip.
+     * distinguishable at the source, and this test asserts the real
+     * invariant on every host and every build configuration with no
+     * build-specific skip.  The loop below rejects the two readings that are
+     * never admissible (0, and anything below -1); the block after it decides
+     * between the two that are, from an exact record rather than a guess.
      *
      * `ama_get_dispatch_info()` is safe to call here because
      * `ama_dispatch_init()` already ran above to populate the cache. */
@@ -236,7 +242,25 @@ int main(void) {
 
     /* Both readings describe the same bench, so they must agree about whether
      * it ran. One measured and one sentinel would mean the pair was written
-     * from two different states. */
+     * from two different states.
+     *
+     * And whether it ran is not the file's to say.  Accepting "-1/-1 or both
+     * positive" on every host, which is all the checks above do, holds the
+     * cache to its own account of the bench.  Measured against this test
+     * before the check below existed, with the slot-1 bench gate in
+     * dispatch_init_internal mutated: forced shut on aarch64 (under QEMU,
+     * NEON Keccak installed) it wrote -1/-1 — the auto-tune no longer
+     * guarding that host against a regressed kernel — and the test passed;
+     * forced open on x86-64, which has no SIMD single-state Keccak, it
+     * benched the scalar baseline against itself, wrote two positive
+     * readings, and the test passed again.
+     *
+     * ama_test_keccak_simd_before_autotune() reports whether a kernel other
+     * than the scalar baseline held the single-state slot when the auto-tune
+     * phase began, recorded before the bench gate reads the table.  This
+     * process unset AMA_DISPATCH_NO_AUTOTUNE and unlinked the cache file, so
+     * the phase ran with a cache miss: the bench ran iff that is 1, and the
+     * readings must say exactly that. */
     long long keccak_simd_ns_reported = 0;
     {
         long long simd_ns = 0, generic_ns = 0;
@@ -252,10 +276,36 @@ int main(void) {
             (void)unlink(cache_path);
             return 1;
         }
+        const int simd_installed = ama_test_keccak_simd_before_autotune();
+        if (simd_installed && (simd_ns <= 0 || generic_ns <= 0)) {
+            fprintf(stderr,
+                "FAIL: a SIMD single-state Keccak was installed when the "
+                "auto-tune phase began, so the slot-1 bench had to run, but "
+                "the cache records keccak_simd_ns=%lld keccak_generic_ns=%lld. "
+                "The bench gate in dispatch_init_internal did not run it, and "
+                "the auto-tune no longer guards this host against a regressed "
+                "kernel.\n",
+                simd_ns, generic_ns);
+            (void)unlink(cache_path);
+            return 1;
+        }
+        if (!simd_installed && (simd_ns != -1 || generic_ns != -1)) {
+            fprintf(stderr,
+                "FAIL: no SIMD single-state Keccak was installed when the "
+                "auto-tune phase began, so there was nothing for the slot-1 "
+                "bench to judge and both readings must be the -1 sentinel, but "
+                "the cache records keccak_simd_ns=%lld keccak_generic_ns=%lld. "
+                "The bench gate ran the scalar baseline against itself.\n",
+                simd_ns, generic_ns);
+            (void)unlink(cache_path);
+            return 1;
+        }
         keccak_simd_ns_reported = simd_ns;
         const ama_dispatch_info_t *info = ama_get_dispatch_info();
-        printf("  keccak timings: simd=%lld generic=%lld (dispatch sha3 level=%d)\n",
-               simd_ns, generic_ns, info ? (int)info->sha3 : -1);
+        printf("  keccak timings: simd=%lld generic=%lld (SIMD Keccak at "
+               "auto-tune: %s; dispatch sha3 level=%d)\n",
+               simd_ns, generic_ns, simd_installed ? "yes" : "no",
+               info ? (int)info->sha3 : -1);
     }
 
     /* Setuid-safety contract — passing a setuid binary an env-var

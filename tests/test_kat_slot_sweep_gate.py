@@ -21,6 +21,9 @@ These tests pin the sweep's structure, in both directions:
 * the mandated / optional split matches dudect.yml's, so a wiring regression on
   a mandated slot is red on the same runner classes in both sweeps;
 * both negative-control cells exist and match the guard's verdict lines;
+* the sweep's header comment names every cell whose executable is not a
+  published-answer KAT, so the comment cannot describe the table as more
+  than it is;
 * both MemorySanitizer lanes build the SIMD kernels.
 """
 
@@ -51,6 +54,23 @@ _CELL_RE = re.compile(
 #: Slots whose CPU feature is silicon-dependent on the hosted runners, and so
 #: may skip (must equal dudect.yml's OPTIONAL_SLOTS).
 OPTIONAL_SLOTS = {"sha3-avx512x4", "aes-gcm-vaes", "kyber-sve2", "sha3-sve2", "dilithium-ntt-sve2"}
+
+#: Executables whose answers are published (FIPS 202/203/204, SP 800-38D,
+#: RFC 7748/8439/9106, NIST ACVP) and reach the pinned kernel.  Every other
+#: swept executable proves something weaker, and the sweep's header comment in
+#: tests/c/CMakeLists.txt must say what, on a ``not-published <exe>:`` line.
+PUBLISHED_KATS = {
+    "test_kat",
+    "test_ml_kem_acvp_encaps",
+    "test_sha3",
+    "test_sha3_512_stream",
+    "test_chacha20poly1305",
+    "test_argon2_rfc9106",
+    "test_x25519",
+    "test_aes_gcm_kat",
+}
+
+_NOT_PUBLISHED_RE = re.compile(r"^#\s+not-published\s+(?P<exe>test_\w+):", re.M)
 
 
 def _c_string_list(source: str, array_name: str) -> list[str]:
@@ -126,21 +146,39 @@ def test_every_slot_has_a_sweep_cell_and_every_cell_names_a_real_slot() -> None:
 def test_every_slot_has_a_published_vector_kat_not_only_an_equivalence_run() -> None:
     """Equivalence runs prove agreement with the scalar path; only a published
     vector proves the kernel computes the standard."""
-    published = {
-        "test_kat",
-        "test_ml_kem_acvp_encaps",
-        "test_sha3",
-        "test_sha3_512_stream",
-        "test_chacha20poly1305",
-        "test_argon2_rfc9106",
-        "test_x25519",
-        "test_aes_gcm_kat",
-    }
     by_slot: dict[str, set[str]] = {}
     for c in _cells():
         by_slot.setdefault(c["slot"], set()).add(c["exe"])
     for slot, exes in sorted(by_slot.items()):
-        assert exes & published, f"{slot}: every cell is an equivalence run ({sorted(exes)})"
+        assert exes & PUBLISHED_KATS, f"{slot}: every cell is an equivalence run ({sorted(exes)})"
+
+
+def test_the_sweep_comment_names_every_cell_that_is_not_a_published_kat() -> None:
+    """The comment above the sweep is what a reader takes a cell to prove.
+
+    It used to say the table held "only" published-answer KATs plus the AES-GCM
+    and X25519 equivalence runs, while test_sha3_x4, test_argon2id,
+    test_hybrid_sig and test_agent_binding sat in it as well -- so a cell such
+    as ``argon2-g-avx2 test_argon2id`` read as published-vector evidence for
+    the AVX2 G kernel, which it is not.  The per-slot test above could not see
+    that: it asks only that each slot have ONE published cell.  This one holds
+    the comment's ``not-published`` list equal to the cells whose executable is
+    not a published KAT, in both directions.
+    """
+    text = CMAKE.read_text(encoding="utf-8")
+    listed = [m.group("exe") for m in _NOT_PUBLISHED_RE.finditer(text)]
+    assert listed, "the sweep comment carries no not-published list"
+    assert len(listed) == len(set(listed)), f"an executable is listed twice: {sorted(listed)}"
+    assert not set(listed) & PUBLISHED_KATS, (
+        f"listed as not published, but PUBLISHED_KATS says otherwise: "
+        f"{sorted(set(listed) & PUBLISHED_KATS)}"
+    )
+    swept_unpublished = {c["exe"] for c in _cells()} - PUBLISHED_KATS
+    assert set(listed) == swept_unpublished, (
+        "the sweep comment's not-published list disagrees with the table: "
+        f"cells nobody classified {sorted(swept_unpublished - set(listed))}, "
+        f"listed but not swept {sorted(set(listed) - swept_unpublished)}"
+    )
 
 
 # ---------------------------------------------------------------------------

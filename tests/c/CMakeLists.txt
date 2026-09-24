@@ -973,12 +973,39 @@ endif()
 # AMA_KAT_SWEEP_STRICT=OFF turns the mandated cells into skips for a host
 # outside that class (an x86-64 VM without AVX2).
 #
-# Executable choice per slot: only KATs whose primitive routes through the
-# pinned slot and whose answers are published (FIPS 202/203/204, SP 800-38D,
-# RFC 7748/8439/9106, NIST ACVP), plus the AES-GCM and X25519 equivalence
-# runs whose "dispatched" side IS the pinned kernel.  The Python gate
-# tests/test_kat_slot_sweep_gate.py holds this table, the dispatcher's
-# inventory, the contract test, the header and dudect.yml to one list.
+# Executable choice per slot.  Every cell's primitive routes through the
+# pinned slot, and every slot has at least one cell whose answers are
+# published (FIPS 202/203/204, SP 800-38D, RFC 7748/8439/9106, NIST ACVP):
+# test_kat, test_ml_kem_acvp_encaps, test_sha3, test_sha3_512_stream,
+# test_chacha20poly1305, test_argon2_rfc9106, test_aes_gcm_kat and
+# test_x25519, whose RFC 7748 vectors also go through the batch entry point
+# the x25519-avx2 pin serves.  The other cells are NOT published-answer
+# evidence for the pinned kernel.  Each is named below with what it does
+# prove, because an earlier revision of this paragraph said the table held
+# "only" published KATs plus the AES-GCM and X25519 equivalence runs, and
+# four of these executables are neither:
+#
+#   not-published test_sha3_x4: equivalence -- the pinned 4-way kernel
+#     against four scalar SHAKE128 streams.
+#   not-published test_aes_gcm_scalar_kat: equivalence -- the pinned kernel
+#     against the forced scalar reference over a length lattice; its
+#     SP 800-38D cases run on the scalar path, not on the kernel.
+#   not-published test_argon2id: equivalence -- the pinned G against the
+#     scalar G over six parameter sets -- plus three tags the tree did not
+#     produce: the upstream reference implementation (phc-winner-argon2, via
+#     argon2-cffi 25.1.0) reproduces all three byte for byte, but RFC 9106
+#     publishes none of them.  test_argon2_rfc9106 is the published answer.
+#   not-published test_hybrid_sig: self-consistency -- sign/verify round
+#     trip and tamper rejection under the pinned NTT; no fixed answer.
+#   not-published test_agent_binding: self-consistency of a construction
+#     specific to this repository; its one pinned byte string is the
+#     canonical encoding, which no Keccak call produces.
+#
+# tests/test_kat_slot_sweep_gate.py fails when a slot has no published cell,
+# and when a cell's executable is neither a published KAT nor listed above
+# (so this list cannot drift from the table again); it also holds this
+# table, the dispatcher's inventory, the contract test, the header and
+# dudect.yml to one list.
 # ===========================================================================
 option(AMA_KAT_SWEEP_STRICT
        "Fail (rather than skip) a per-slot KAT cell whose slot this build's CI runner class mandates"

@@ -407,6 +407,14 @@ static const char *dispatch_active_slot_label = "all-default-dispatch";
  * re-enabling the AVX2 pointer.  Test-only.
  */
 static ama_dispatch_table_t dispatch_table_post_init;
+
+/* The single-state Keccak kernel that held the slot when the auto-tune phase
+ * began: after CPU-feature selection and the AMA_DISPATCH_NO_* opt-outs,
+ * before the slot-1 bench gate reads the table and before any revert.
+ * Recorded separately from that gate's own comparison so that a test can
+ * hold the gate to it -- see ama_test_keccak_simd_before_autotune().
+ * NULL until the phase runs.  Test-only. */
+static ama_keccak_f1600_fn dispatch_keccak_pre_autotune = NULL;
 #endif
 
 /* ============================================================================
@@ -2525,6 +2533,9 @@ static void dispatch_init_internal(void) {
 #if !defined(_WIN32)
     const char *no_autotune = dispatch_getenv("AMA_DISPATCH_NO_AUTOTUNE");
     int autotune_disabled = (no_autotune && no_autotune[0] == '1');
+#ifdef AMA_TESTING_MODE
+    dispatch_keccak_pre_autotune = dispatch_table.keccak_f1600;
+#endif
 
     /* Per-slot regression verdicts.  Default = "SIMD kept".  Each bench
      * below sets its own field; the cache layer can also populate them
@@ -3070,6 +3081,8 @@ const ama_dispatch_table_t *ama_get_dispatch_table(void) {
 }
 
 #ifdef AMA_TESTING_MODE
+#include "../internal/ama_testing_exports.h"
+
 /* Test-only canonical surface for tests/c/test_dispatch_cache_file.c. */
 const char *dispatch_cache_path_sanitize_for_tests(const char *path);
 const char *dispatch_cache_path_sanitize_for_tests(const char *path) {
@@ -3087,6 +3100,23 @@ const char *dispatch_cache_path_sanitize_for_tests(const char *path) {
     }
     if (wrote < 0 || (size_t)wrote >= sizeof(canonical)) return NULL;
     return canonical;
+}
+
+/* 1 iff a kernel other than the scalar baseline held the single-state Keccak
+ * slot when the auto-tune phase began -- i.e. iff the slot-1 bench had a SIMD
+ * kernel to judge, and so, with auto-tune enabled and no cache hit, iff it
+ * must have run and written positive keccak_simd_ns / keccak_generic_ns.
+ *
+ * tests/c/test_dispatch_cache_file.c reads it to decide which of the two
+ * admissible timing states applies instead of accepting either on every host.
+ * Without it that test passed with the bench gate forced shut on a NEON host
+ * (both timings -1, the "not measured" sentinel) and with it forced open on
+ * an x86-64 host that has no SIMD single-state Keccak (both positive).
+ * Declared in src/c/internal/ama_testing_exports.h. */
+int ama_test_keccak_simd_before_autotune(void) {
+    ama_dispatch_init();
+    return dispatch_keccak_pre_autotune != NULL
+        && dispatch_keccak_pre_autotune != keccak_scalar_baseline;
 }
 
 /* ============================================================================

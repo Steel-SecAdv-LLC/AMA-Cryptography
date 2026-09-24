@@ -326,17 +326,22 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: `x25519-batch` is the thirteenth of the twenty, and it exists because a
 #: lane can be
 #: informational only where something else blocks.  `tests/c/test_dudect.c`
-#: registers eight info-only wall-clock lanes, and each one that names a reason
-#: names a deterministic counterpart: `Kyber-1024 decaps` cites `kyber-decaps`,
-#: `secp256k1 ECDSA sign` cites `ecdsa`.  Two had none — `ML-DSA-65 sign`,
-#: which drives a rejection loop whose iteration count is a function of the
-#: secret, so a zero-delta instruction count is not merely absent but
-#: impossible (see CONSTANT_TIME_VERIFICATION.md, "Rejection sampling and what
-#: these gates cannot cover"), and `SLH-DSA-SHA2-256f sign`, whose count is
-#: impossible for a different reason (its work varies with values the signature
-#: publishes; FIPS 205 has no rejection loop, and an earlier revision of this
-#: paragraph said it did) and which now has the taint-only `slhdsa-sign`
-#: target (see _TAINT_ONLY) — and a third,
+#: registers seven info-only wall-clock lanes, and each one that names a reason
+#: names a deterministic counterpart: `secp256k1 ECDSA sign` cites `ecdsa`.
+#: (It registered eight until 2026-09-24, when `Kyber-1024 decaps` — which
+#: cited `kyber-decaps` — was made strict again.  A counterpart here sees
+#: instruction-sequence and memory-access differences; it cannot see one that
+#: lives only in operand-dependent latency, and a planted leak of exactly that
+#: kind on the FO verdict passed `kyber-decaps` with every count identical.
+#: See the lane's comment.)  Two had none — `ML-DSA-65 sign`, which drives a
+#: rejection loop whose iteration count is a function of the secret, so a
+#: zero-delta instruction count is not merely absent but impossible (see
+#: CONSTANT_TIME_VERIFICATION.md, "Rejection sampling and what these gates
+#: cannot cover"), and `SLH-DSA-SHA2-256f sign`, whose count is impossible for
+#: a different reason (its work varies with values the signature publishes;
+#: FIPS 205 has no rejection loop, and an earlier revision of this paragraph
+#: said it did) and which now has the taint-only `slhdsa-sign` target (see
+#: _TAINT_ONLY) — and a third,
 #: `X25519 scalarmult batch x4`, had none for no reason at all: the property is
 #: the same one `x25519` states, over a DIFFERENT entry point.
 #:

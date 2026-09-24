@@ -370,4 +370,21 @@ ama_error_t ama_argon2id_kat_for_test(
     uint8_t *output, size_t out_len,
     uint8_t *h0_out);
 
+/* --- src/c/dispatch/ama_dispatch.c -------------------------------------- */
+
+/**
+ * Test-only: 1 iff a kernel other than the scalar baseline held the
+ * single-state Keccak slot when the dispatcher's auto-tune phase began, else
+ * 0 (and 0 where that phase is compiled out).
+ *
+ * That is the condition under which the slot-1 bench has a SIMD kernel to
+ * judge, so tests/c/test_dispatch_cache_file.c uses it to require positive
+ * `keccak_simd_ns` / `keccak_generic_ns` exactly where the bench must have run
+ * and the -1 "not measured" sentinel exactly where it must not.  The value is
+ * a snapshot taken before the bench gate reads the dispatch table, not a copy
+ * of that gate's verdict, so a gate that stops running the bench (or starts
+ * running it with no SIMD kernel installed) disagrees with it.
+ */
+int ama_test_keccak_simd_before_autotune(void);
+
 #endif /* AMA_TESTING_EXPORTS_H */

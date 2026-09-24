@@ -2895,9 +2895,11 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
      * sequential scalar ladders and the same constant-time argument
      * applies.
      *
-     * Info-only is defensible where a deterministic gate blocks instead —
-     * that is the pairing `Kyber-1024 decaps` and `secp256k1 ECDSA sign`
-     * both cite below.  This lane had no such counterpart: the `x25519`
+     * Info-only needs a deterministic gate that blocks in its place — the
+     * pairing `secp256k1 ECDSA sign` cites below — and such a gate covers
+     * instruction-sequence and memory-access differences only; see
+     * `Kyber-1024 decaps` below for the class it cannot see, measured.  This
+     * lane had no such counterpart: the `x25519`
      * target measures `ama_x25519_key_exchange`, and the batch entry point
      * carries its own four-lane chunker, AVX2 4-way kernel, scalar tail and
      * aggregated low-order rejection that the single-shot path never
@@ -2956,7 +2958,9 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
         test_secp256k1_ecdsa_sign(iterations), 1);
 
     printf("\n--- Post-Quantum Cryptography ---\n");
-    /* INFO, and the blocking authority moved rather than disappeared.
+    /* STRICT.  This lane was INFO from 80a05f2d until 2026-09-24, on a claim
+     * that measurement refutes (see WHY INFO WAS WRONG, at the end).  The
+     * history is kept because every part of it is still evidence.
      *
      * This lane compares decapsulating a valid ciphertext against one whose
      * first byte is flipped — the FIPS 203 Sec 6.3 implicit-rejection path — and
@@ -3011,18 +3015,59 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
      * therefore available from the harness alone, and the +5.630 ns is not
      * evidence about ML-KEM one way or the other.
      *
-     * The deterministic identity is what settles the primitive, and it is
-     * unaffected — it never depended on the wall-clock lane.
+     * The deterministic identity is what settles the primitive's instruction
+     * sequence and memory accesses, and it is unaffected — it never depended
+     * on the wall-clock lane.
      *
-     * So the wall-clock statistic is reported here and the deterministic gate
-     * decides.  That is a STRICTLY MORE SENSITIVE instrument for the property
-     * that matters — it resolves a single instruction, where this lane cannot
-     * resolve 2 ns — and it fails the build on its own.  The same reasoning and
-     * the same pairing already apply to `secp256k1 ECDSA sign` (INFO, with the
-     * `ecdsa` target blocking). */
+     * WHY INFO WAS WRONG.  The lane was made INFO on the argument that the
+     * `kyber-decaps` gate is "a STRICTLY MORE SENSITIVE instrument for the
+     * property that matters — it resolves a single instruction, where this
+     * lane cannot resolve 2 ns".  The premise is true and the conclusion does
+     * not follow, because the two instruments measure different things and
+     * neither contains the other.  Callgrind counts retired instructions, data
+     * references and simulated misses.  A difference that lives only in
+     * operand-dependent LATENCY — the same instructions touching the same
+     * addresses, one of them slower on the reject path — moves none of those
+     * at any size, as dudect/dudect_rounds.h already stated.  Measured on
+     * 2026-09-24 by planting exactly that on the FO verdict in
+     * kyber_decapsulate_internal, after the ama_consttime_memcmp: a
+     * branch-free mask selects a subnormal on the reject path and 1.0 on the
+     * accept path as the operand of a floating-point multiply (x86-64 takes a
+     * microcode assist on the subnormal: about 43 ns per multiply against
+     * about 3 ns, measured on the same host).  With one multiply and with 64,
+     * `kyber-decaps` PASSED: 62,277,610 and 62,293,630 retired instructions
+     * against 62,276,470 unmutated, identical in all eight classes, with data
+     * references and both miss counts identical too.  This lane, at 100,000
+     * measurements, read the 64-multiply leak over the threshold in 3 of 3
+     * rounds in each of two runs, |t| 134 to 169, every round the same sign:
+     * a FAIL as a strict lane — and, run with the INFO flag it carried, a
+     * green run over the same reading (|t| = 131, reported INFO).  The
+     * one-multiply leak was not resolved there (|t| 4.38 and 1.64): that host
+     * was a shared 4-vCPU VM at load average ~45, where this lane's per-class
+     * noise is in microseconds, so that is a statement about the host rather
+     * than about the 2 ns floor.  While this lane was INFO, a latency leak
+     * on the one path where a timing difference is the IND-CCA2 oracle had
+     * no instrument that could fail the build.
+     *
+     * And the reason for INFO is gone: the +5.630 ns came from the lane's own
+     * class-select branch, which dudect_stage_select removed (above).
+     * Measured after the change, unmutated and strict, on the same host at
+     * the same load: five runs at 100,000 measurements, every one PASS in a
+     * single round, |t| between 1.59 and 2.24 with both signs present; and
+     * the whole suite at 100,000 measurements, this lane strict, read
+     * Overall: PASS in one round with this lane at |t| = 2.36.
+     *
+     * So both gates block, for different classes of difference:
+     * `kyber-decaps` for any change in instruction sequence or memory access,
+     * down to one instruction; this lane for any difference of 2 ns or more
+     * (DUDECT_MIN_EFFECT_NS), including one that lives only in latency.  Below
+     * 2 ns a latency-only difference is measured by neither, as
+     * dudect_rounds.h states.  `secp256k1 ECDSA sign` stays INFO with `ecdsa`
+     * blocking, and the same limit applies to that pairing: `ecdsa` does not
+     * see a latency-only difference either. */
     DUDECT_REGISTER_LANE(results, idx,
         "Kyber-1024 decaps",
-        test_kyber_decaps(iterations), 1);
+        test_kyber_decaps(iterations), 0);
     /* INFO, and — unlike every other info-only lane in this file — with no
      * deterministic counterpart, because none can exist.  Stated here rather
      * than left to be inferred from the flag.

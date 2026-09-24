@@ -16,9 +16,19 @@
  * dispatch via the test-only hook ama_test_force_argon2_g_scalar(),
  * and asserts the tag bytes match exactly.
  *
- * A second block fixes the KAT: a known tag computed from the scalar
- * implementation is hard-coded, so the test also catches scalar
- * regressions — not just AVX2/scalar mismatches.
+ * A second block pins three tags this implementation did not produce:
+ * each is the upstream reference implementation's output
+ * (phc-winner-argon2, via argon2-cffi) for the stated parameters, so the
+ * test also catches a regression the scalar and SIMD G paths share — which
+ * the parity block above cannot see.  Re-derived on 2026-09-24 with
+ * argon2-cffi 25.1.0 / argon2-cffi-bindings 26.1.0
+ * (`argon2.low_level.hash_secret_raw(..., type=Type.ID, version=0x13)`):
+ * all three byte-identical to the arrays below.  None of the three is a
+ * vector RFC 9106 publishes; its one Argon2id answer (§5.3, with secret and
+ * associated data) is replayed by test_argon2_rfc9106.c.  An earlier
+ * revision of this paragraph said the pinned tag was "computed from the
+ * scalar implementation"; the blocks' own provenance notes and the
+ * re-derivation both contradict that.
  */
 
 #include <stdio.h>
