@@ -293,9 +293,10 @@ def target_pem_private(data: bytes) -> None:
     text = data.decode("utf-8", "replace")
     key = kf.load_pkcs8(text)
     normalised = text.replace("\r\n", "\n").strip(" \t\r\n") + "\n"
-    match = _re.fullmatch(
-        r"-----BEGIN PRIVATE KEY-----\n(.*)\n-----END PRIVATE KEY-----\n", normalised, _re.S
-    )
+    # The markers are built from the label, as kf.encode_pem builds them.
+    label = "PRIVATE KEY"
+    begin, end = f"-----BEGIN {label}-----\n", f"\n-----END {label}-----\n"
+    match = _re.fullmatch(_re.escape(begin) + "(.*)" + _re.escape(end), normalised, _re.S)
     if match is None:
         raise FindingError(
             "load_pkcs8(pem): accepted text that is not one PRIVATE KEY block", data, "pem_private"
@@ -309,7 +310,7 @@ def target_pem_private(data: bytes) -> None:
             "pem_private",
         ) from exc
     _pkcs8_der_is_an_encoder_output(der, key, "load_pkcs8(pem)")
-    if kf.encode_pem(der, "PRIVATE KEY") != normalised:
+    if kf.encode_pem(der, label) != normalised:
         raise FindingError(
             "load_pkcs8(pem): accepted a non-canonical PEM armor for its own DER",
             data,

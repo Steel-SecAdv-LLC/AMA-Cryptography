@@ -1450,11 +1450,12 @@ def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report)
     dependencies evaluates a skip.  It does so in one of two ways, and the
     difference matters: the wildcard gates (a step on
     ``contains(needs.*.result, 'skipped')`` that exits 1) fail on ANY skipped
-    need, while ``dudect-gate`` and ``static-analysis-gate`` re-derive each
-    dependency's trigger condition and fail on a skip that condition does not
-    expect — accepting exactly the skips their schedule- and dispatch-only
-    lanes produce by design, and failing a lane that ran when it should have
-    skipped.  This docstring used to say every gate "already fails on a
+    need, while ``dudect-gate``, ``static-analysis-gate``, ``arm-qemu-gate``
+    and ``corpus-provenance-gate`` re-derive each dependency's trigger
+    condition and fail on a skip that condition does not expect — accepting
+    exactly the skips their schedule- and dispatch-only lanes, or a pull
+    request their ``changes`` job found irrelevant, produce by design, and
+    failing a lane that ran when it should have skipped.  This docstring used to say every gate "already fails on a
     ``skipped`` need"; those two do not, deliberately, and
     ``tests/test_workflow_command_checks.py`` pins which gates are which.
     Either way the skip is seen and judged; it is never counted as work done.
@@ -1479,8 +1480,8 @@ def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report)
         if "if" in job:
             # Job-level condition: when it is false the whole job is `skipped`,
             # and the gate sees that — the wildcard gates fail it outright,
-            # dudect-gate and static-analysis-gate fail it unless their
-            # re-derived trigger expects the skip (see the docstring).
+            # the re-deriving gates fail it unless their re-derived trigger
+            # expects the skip (see the docstring).
             continue
         steps = job.get("steps")
         if not isinstance(steps, list):

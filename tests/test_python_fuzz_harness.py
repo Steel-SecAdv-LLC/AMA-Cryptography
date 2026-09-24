@@ -174,10 +174,12 @@ def test_a_private_pem_is_held_to_body_and_armor(
 
     der = private.to_pkcs8()
     b64 = base64.b64encode(der).decode()
+    # Markers from the label, as kf.encode_pem builds them.
+    label = "PRIVATE KEY"
     rewrapped = (
-        "-----BEGIN PRIVATE KEY-----\n"
+        f"-----BEGIN {label}-----\n"
         + "\n".join(b64[i : i + 32] for i in range(0, len(b64), 32))
-        + "\n-----END PRIVATE KEY-----\n"
+        + f"\n-----END {label}-----\n"
     ).encode()
     corrupted = pem.replace(b"\n", b"*\n", 1).replace(b"-----*\n", b"-----\n*", 1)
 

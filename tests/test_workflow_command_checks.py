@@ -1561,6 +1561,8 @@ class TestEveryGateJudgesASkip:
         {
             ("dudect.yml", "dudect-gate"),
             ("static-analysis.yml", "static-analysis-gate"),
+            ("arm-qemu.yml", "arm-qemu-gate"),
+            ("corpus-provenance.yml", "corpus-provenance-gate"),
         }
     )
 
@@ -1600,7 +1602,9 @@ class TestEveryGateJudgesASkip:
         by_key = {(name, job_id): job for name, job_id, job in self._gates()}
         for key in sorted(self.RE_DERIVING):
             job = by_key[key]
-            run = coverage._run_text(job)
+            steps = job.get("steps")
+            assert isinstance(steps, list), key
+            run = "\n".join(str(s.get("run", "")) for s in steps if isinstance(s, dict))
             assert (
                 "was SKIPPED but this trigger requires it to run" in run
             ), f"{key}: no branch fails a dependency that skipped where it should run"

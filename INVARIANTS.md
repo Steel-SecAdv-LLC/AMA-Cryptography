@@ -2032,7 +2032,9 @@ scope (the gate scans `ama_cryptography/`, `tests/` and `tools/`, not
 The second is the interoperability oracles: the tests carrying
 `@pytest.mark.requires_interop_oracle` in `tests/test_aes_gcm_native.py`,
 `tests/test_hkdf_sha3_256.py`, `tests/test_ed25519_native.py`,
-`tests/test_ed25519_expanded_key.py` and `tests/test_differential.py` import
+`tests/test_ed25519_expanded_key.py`, `tests/test_differential.py` and
+`tests/test_vendor_isolation_gate.py` (which plants PyCA as a resident binding
+to prove the vendor-isolation gate flags one — the control, not an oracle) import
 PyCA cryptography, PyNaCl or pycryptodome
 and check that AMA and a second implementation agree — PyCA encrypts and AMA
 decrypts, libsodium signs and AMA verifies, and the reverse. That is

@@ -240,8 +240,14 @@ jobs:
           check() {
             if [ "$2" = "${expected}" ]; then
               echo "  OK    $1: $2"
+            elif [ "${expected}" = "success" ] && [ "$2" = "skipped" ]; then
+              echo "::error::$1 was SKIPPED but this trigger requires it to run."
+              rc=1
+            elif [ "${expected}" = "skipped" ]; then
+              echo "::error::$1 ran ($2) but this trigger should skip it — its condition drifted."
+              rc=1
             else
-              echo "::error::$1 is $2, expected ${expected}"
+              echo "::error::$1 did not succeed: $2"
               rc=1
             fi
           }
