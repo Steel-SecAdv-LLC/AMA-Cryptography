@@ -3123,8 +3123,18 @@ register holds elsewhere — the claim must match the artefact — is met by
 correcting the claim, not by silently changing the artefact.
 
 **Enforcement.** `src/c/ama_frost.c`. `ama_frost_round2_sign` takes
-`uint8_t *nonce_pair`, routes every exit through a single `consume:` label
-that scrubs it, and gates entry on `frost_is_all_zero`. `verify_share_core`
+`uint8_t *nonce_pair` and, right after its NULL check and before any other
+validation or any hashing, claims it: `frost_claim_nonce_pair` copies the
+pair into a local and zeroes the caller's buffer under one process-wide lock,
+and the call is refused unless the copy is non-zero (`frost_is_all_zero`).
+Every later read of the nonces is from the local copy, which the single
+`consume:` label scrubs on every exit. The claim replaced an entry check plus
+an exit scrub with the nonces read from the caller's buffer in between: two
+calls on one buffer that overlapped in time both passed the check and both
+signed, and eight threads released together onto one buffer measured 7 or 8
+`AMA_SUCCESS` per round (2026-09-24). Zeroing at entry without the lock still
+leaves a two-statement window in which two callers can both copy before either
+zeroes; the lock closes it. `verify_share_core`
 implements the §5.3 relation; `ama_frost_verify_share` is the new public
 entry point over it; `ama_frost_aggregate` calls it per share with the
 session values computed once, sets `*bad_participant_index` on rejection, and
@@ -3148,6 +3158,13 @@ failed one, a second call with it is refused, an all-zero pair supplied
 directly is refused without a prior round 2 (so the entry check is pinned
 independently of the scrub), and `ATTACK BLOCKED` runs the audit's
 three-signings-under-one-nonce sequence and asserts only the first succeeds.
+`tests/c/test_frost_round2_concurrent.c` pins the same property for calls
+that overlap: eight threads on one nonce buffer over distinct 1 MiB messages,
+sixteen rounds, exactly one `AMA_SUCCESS` per round, the buffer zero after,
+and the one share verifying. Against the exit-scrub code it fails every round;
+it cannot see the two-statement window the lock closes, which the
+ThreadSanitizer lane reports as a data race in `frost_claim_nonce_pair` when
+the lock is removed (both measured by mutation, 2026-09-24).
 Test 9 pins part 2: `ama_frost_verify_share` accepts honest shares and
 rejects a corrupted one, aggregation rejects a corrupted share with the
 culprit's index — asserted for two different culprits, so a constant cannot

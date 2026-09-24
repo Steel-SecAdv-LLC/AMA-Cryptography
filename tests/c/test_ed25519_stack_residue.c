@@ -31,6 +31,17 @@
  * pins the property -- no scalar or prefix on the dead stack -- and not any
  * one of the scrubs that together produce it.
  *
+ * `ama_ed25519_point_from_scalar` is probed too.  It is the raw [s]B
+ * primitive FROST calls with secrets -- the group secret, each dealt share,
+ * and both round-1 nonces -- and it runs the same reduce-then-comb path as
+ * keypair, so it leaves the same spilled limbs.  It is probed twice: with the
+ * clamped scalar (the keypair-equivalent input, whose reduction mod l is not
+ * the identity) and with that scalar reduced mod l, the shape every FROST
+ * secret has.  Measured 2026-09-24, x86-64 gcc 13.3 Release with LTO, against
+ * the shared library: before point_from_scalar called `ama_stack_wipe_below`
+ * each probe found 1 hit, limb 8 (bits 168..188, which the scalar and its
+ * reduction share), and removing that one call restores exactly that.
+ *
  * ONE SCAN PER POISON.  The scanning function is not exempt from the
  * defect it measures: a compiler may spill the needle it is comparing
  * against into the scanner's own frame, below the anchor, inside the window
@@ -116,6 +127,13 @@ static uint8_t g_prefix[32];
  * skipped as needles; they are too likely to occur by chance. */
 static int64_t g_limbs[12];
 
+/* The scalar reduced mod l, and its limbs: the form every FROST secret takes
+ * (a nonce, a share, the group secret), fed to point_from_scalar below.  The
+ * reduction inside the comb path of keypair and sign produces this value as
+ * well, so every verdict counts it. */
+static uint8_t g_reduced[32];
+static int64_t g_reduced_limbs[12];
+
 static void scalar_limbs(const uint8_t s[32], int64_t out[12]) {
     int i;
     for (i = 0; i < 12; i++) {
@@ -168,11 +186,18 @@ __attribute__((noinline))
 #endif
 static int secret_residue_count(void) {
     int hits = residue_count(g_scalar, 16) + residue_count(g_scalar + 16, 16)
-             + residue_count(g_prefix, 16) + residue_count(g_prefix + 16, 16);
+             + residue_count(g_prefix, 16) + residue_count(g_prefix + 16, 16)
+             + residue_count(g_reduced, 16) + residue_count(g_reduced + 16, 16);
     int i;
     for (i = 0; i < 12; i++) {
         if (g_limbs[i] > 0xFFFF) {
             hits += residue_count((const uint8_t *)&g_limbs[i], sizeof g_limbs[i]);
+        }
+        /* The reduction subtracts a small multiple of l, so the upper limbs
+         * of the two forms coincide; a shared limb is counted once. */
+        if (g_reduced_limbs[i] > 0xFFFF && g_reduced_limbs[i] != g_limbs[i]) {
+            hits += residue_count((const uint8_t *)&g_reduced_limbs[i],
+                                  sizeof g_reduced_limbs[i]);
         }
     }
     return hits;
@@ -223,6 +248,18 @@ static void run_sign(void) {
           "sign succeeds");
 }
 
+/* The raw FROST primitive, on a scalar whose [s]B is known: the clamped
+ * scalar gives the public key, and so does its reduction mod l. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static void run_point_from_scalar(const uint8_t *scalar) {
+    static uint8_t point[32];
+    CHECK(ama_ed25519_point_from_scalar(point, scalar) == AMA_SUCCESS &&
+          memcmp(point, g_pk, 32) == 0,
+          "point_from_scalar succeeds and [s]B is the public key");
+}
+
 /* A message above the 4 KiB stack threshold takes the heap path of the sign
  * core, whose scrub covers a different buffer than the small-message path. */
 #if defined(__GNUC__) || defined(__clang__)
@@ -270,6 +307,17 @@ int main(void) {
     memcpy(g_scalar, g_expanded, 32);
     memcpy(g_prefix, g_expanded + 32, 32);
     scalar_limbs(g_scalar, g_limbs);
+    {
+        static uint8_t wide[64];
+        memcpy(wide, g_scalar, 32);
+        memset(wide + 32, 0, 32);
+        ama_ed25519_sc_reduce(wide);
+        memcpy(g_reduced, wide, 32);
+        ama_secure_memzero(wide, sizeof wide);
+    }
+    scalar_limbs(g_reduced, g_reduced_limbs);
+    CHECK(memcmp(g_reduced, g_scalar, 32) != 0,
+          "the clamped scalar exceeds l, so its reduction is a distinct needle");
     CHECK((g_scalar[0] & 7u) == 0u && (g_scalar[31] & 0xC0u) == 0x40u,
           "needle is the clamped scalar");
 
@@ -343,7 +391,26 @@ int main(void) {
     CHECK(ama_ed25519_verify(g_sig, g_msg, MSG_BYTES, g_pk) == AMA_SUCCESS,
           "sign signature verifies");
 
+    /* --- point_from_scalar: the FROST secret-scalar primitive, first on the
+     * keypair-equivalent input, then on a scalar already reduced mod l. */
+    poison_stack();
+    run_point_from_scalar(g_scalar);
+    hits = secret_residue_count();
+    printf("  point_from_scalar (clamped scalar): %d hit(s)\n", hits);
+    CHECK(hits == 0,
+          "point_from_scalar (clamped scalar) leaves no copy of the scalar on "
+          "the dead stack");
+
+    poison_stack();
+    run_point_from_scalar(g_reduced);
+    hits = secret_residue_count();
+    printf("  point_from_scalar (reduced scalar): %d hit(s)\n", hits);
+    CHECK(hits == 0,
+          "point_from_scalar (scalar < l, the FROST shape) leaves no copy of "
+          "the scalar on the dead stack");
+
     free(big);
+    ama_secure_memzero(g_reduced, sizeof g_reduced);
     ama_secure_memzero(g_scalar, sizeof g_scalar);
     ama_secure_memzero(g_prefix, sizeof g_prefix);
     ama_secure_memzero(g_expanded, sizeof g_expanded);

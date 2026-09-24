@@ -285,8 +285,9 @@ endif()
 
 # The same probe applied to the Ed25519 signing path: the clamped scalar and
 # the nonce prefix must not survive `ama_ed25519_expand_secret_key`,
-# `ama_ed25519_sign_expanded` (stack and heap paths) or `ama_ed25519_sign`.
-# Links in both PQC lanes.
+# `ama_ed25519_sign_expanded` (stack and heap paths), `ama_ed25519_keypair`,
+# `ama_ed25519_sign` or `ama_ed25519_point_from_scalar` (the secret-scalar
+# primitive FROST calls with its nonces and shares).  Links in both PQC lanes.
 add_ama_residue_probe(test_ed25519_stack_residue test_ed25519_stack_residue.c)
 
 # The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
@@ -499,6 +500,14 @@ if(AMA_USE_NATIVE_PQC)
     # when native PQC is enabled — see the top-level CMakeLists.txt).
     add_ama_test(test_secp256k1 test_secp256k1.c)
     add_ama_test(test_frost test_frost.c)
+    # Round 2's nonce claim under concurrency (INVARIANT-49): eight threads
+    # released together onto ONE nonce buffer, and exactly one may sign.
+    # Before the claim, every call that started while another was hashing
+    # passed the consumed check and signed.  POSIX threads, so not on Windows.
+    if(NOT WIN32)
+        add_ama_test(test_frost_round2_concurrent test_frost_round2_concurrent.c)
+        target_link_libraries(test_frost_round2_concurrent Threads::Threads)
+    endif()
     # NIST prime curves (src/c/ama_nistp.c) plus the FIPS 203/204 parameter
     # tables.  Covers the three things the Python suite and the Wycheproof
     # corpus structurally cannot reach: the hardcoded Montgomery constants
@@ -872,6 +881,28 @@ if(NOT WIN32)
     target_compile_options(test_platform_rand_generic PRIVATE
         -U__linux__ -U__APPLE__)
     add_test(NAME test_platform_rand_generic COMMAND test_platform_rand_generic)
+
+    # The same arm on the device-path shapes a BSD host presents: FreeBSD's
+    # /dev/urandom is a devfs symlink to `random`, which the arm must follow,
+    # and a regular file (or a symlink to one) in the device's place, which it
+    # must refuse.  AMA_PLATFORM_RAND_DEVICE points the arm at a path in the
+    # build tree that the test turns into each shape.  _POSIX_C_SOURCE makes
+    # glibc declare what a BSD's headers declare by default: under the
+    # project's strict -std=c11 glibc hides O_NOFOLLOW and O_CLOEXEC, the
+    # arm's `#ifndef ... #define ... 0` fallbacks then compile them as 0, and
+    # O_NOFOLLOW's failure on a symlink -- the defect this target pins -- was
+    # invisible on this host (measured: without the definition the pre-fix
+    # arm passed every case).
+    add_executable(test_platform_rand_device_symlink
+        test_platform_rand_device_symlink.c
+        ${CMAKE_SOURCE_DIR}/src/c/ama_platform_rand.c)
+    target_compile_options(test_platform_rand_device_symlink PRIVATE
+        -U__linux__ -U__APPLE__)
+    target_compile_definitions(test_platform_rand_device_symlink PRIVATE
+        _POSIX_C_SOURCE=200809L
+        AMA_PLATFORM_RAND_DEVICE="${CMAKE_CURRENT_BINARY_DIR}/ama_rand_device_probe")
+    add_test(NAME test_platform_rand_device_symlink
+             COMMAND test_platform_rand_device_symlink)
 endif()
 
 # ===========================================================================

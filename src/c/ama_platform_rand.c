@@ -35,10 +35,18 @@
     #pragma comment(lib, "bcrypt.lib")
 #else
     /* BSD / generic POSIX fallback */
-    #include <fcntl.h>          /* open, O_RDONLY, O_CLOEXEC, O_NOFOLLOW */
+    #include <fcntl.h>          /* open, O_RDONLY, O_CLOEXEC, O_NOCTTY */
     #include <unistd.h>         /* read, close */
     #include <sys/stat.h>       /* fstat, S_ISCHR */
     #include <errno.h>
+    /* The device the generic arm opens.  Overridable for one purpose only:
+     * tests/c/test_platform_rand_device_symlink.c points it at a path it
+     * controls, so the FreeBSD devfs shape (/dev/urandom is a symlink to
+     * random) and a replaced device can be executed on a host whose
+     * /dev/urandom is neither.  No production build defines it. */
+    #ifndef AMA_PLATFORM_RAND_DEVICE
+    #define AMA_PLATFORM_RAND_DEVICE "/dev/urandom"
+    #endif
 #endif
 
 /* ============================================================================
@@ -132,21 +140,30 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     #ifndef O_CLOEXEC
     #define O_CLOEXEC 0
     #endif
-    #ifndef O_NOFOLLOW
-    #define O_NOFOLLOW 0
-    #endif
     #ifndef O_NOCTTY
     #define O_NOCTTY 0
     #endif
-    /* O_NOFOLLOW|O_NOCTTY and an fstat(2) that the descriptor is a
-     * character device: on a host where /dev/urandom has been replaced by a
-     * symlink to a regular file, a FIFO, or a terminal, the previous
-     * open+read produced "random" bytes from whatever was there.  A
-     * device-node check is the cheapest fact the descriptor can prove about
-     * itself; the major/minor numbers are not portable across the BSDs this
-     * branch serves, so the check stops at "character device".  Any refusal
-     * fails closed: the caller receives AMA_ERROR_CRYPTO, never bytes. */
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY);
+    /* An fstat(2) that the OPENED descriptor is a character device: on a host
+     * where /dev/urandom has been replaced by a regular file, or by a symlink
+     * to one, the previous open+read produced "random" bytes from whatever
+     * was there.  The check inspects the object actually opened, so it holds
+     * however the path resolved.  A FIFO blocks in open(2) until a writer
+     * appears and is then refused by the same check.  A device-node check is
+     * the cheapest fact the descriptor can prove about itself; the
+     * major/minor numbers are not portable across the BSDs this branch
+     * serves, so the check stops at "character device" -- any character
+     * device passes it, a terminal included, and O_NOCTTY only keeps a
+     * terminal from becoming the controlling one.  Any refusal fails closed:
+     * the caller receives AMA_ERROR_CRYPTO, never bytes.
+     *
+     * NOT O_NOFOLLOW.  It was here, and it made this arm fail on every call
+     * on FreeBSD: devfs registers urandom as an alias of random
+     * (make_dev_alias) and presents the alias as a symlink,
+     * /dev/urandom -> random, and O_NOFOLLOW refuses a symlink in the final
+     * component (ELOOP).  It bought nothing the fstat check does not: a
+     * symlink to a regular file is refused below either way.
+     * tests/c/test_platform_rand_device_symlink.c executes both shapes. */
+    int fd = open(AMA_PLATFORM_RAND_DEVICE, O_RDONLY | O_CLOEXEC | O_NOCTTY);
     if (fd < 0) {
         return AMA_ERROR_CRYPTO;
     }

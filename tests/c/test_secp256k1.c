@@ -196,8 +196,83 @@ int main(void) {
     ama_secure_memzero(privkey, 32);
     rc = ama_secp256k1_pubkey_from_privkey(privkey, pub33);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "zero privkey rejected by pubkey_from_privkey");
+    memset(out_x, 0xAA, 32);
+    memset(out_y, 0xAA, 32);
     rc = ama_secp256k1_point_mul(privkey, Gx, Gy, out_x, out_y);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "zero scalar rejected by point_mul");
+    TEST_ASSERT(memcmp(out_x, FE_ZERO, 32) == 0 && memcmp(out_y, FE_ZERO, 32) == 0,
+                "zero scalar: point_mul wipes both caller-prefilled output coordinates");
+
+    /* Test 6a: the ladder-result-at-infinity refusal.
+     *
+     * point_mul decides its two scalar-dependent refusals without a branch:
+     * a zero scalar and a ladder result at infinity are each a mask, the
+     * masks wipe the outputs, and they select the return code with the
+     * zero-scalar code taking precedence (Test 6 above pins that precedence:
+     * a zero scalar ALSO lands at infinity).  The infinity mask had no
+     * executed coverage.  With the point validated (cofactor 1), the only
+     * scalars that reach it are multiples of the group order, and the one
+     * multiple of n that fits in 32 bytes other than zero is n itself.
+     *
+     * Measured by mutation (2026-09-24, AGENTS.md section 6.3):
+     *   - infinity mask forced to 0: every assertion that predates this
+     *     block passes; n * G returns AMA_SUCCESS here.  PIN.
+     *   - the two masks' precedence swapped: Test 6 fails (a zero scalar
+     *     returns CRYPTO), with or without this block.
+     *   - the output wipe removed (or the infinity mask dropped from it):
+     *     NOTHING fails, here or elsewhere.  The wipe is redundant on every
+     *     reachable input -- the Fermat-chain inversion maps Z = 0 to 0, so
+     *     infinity already serialises as (0, 0) before the wipe runs.  The
+     *     zero-output assertions pin that property, not the wipe.
+     *   - point validation removed: (b) below fails, and so does Test 6b;
+     *     (b) states the ordering, 6b already pinned the guard. */
+    {
+        /* n, the group order (SEC 2 section 2.4.1), big-endian, and n - 1. */
+        static const uint8_t N_BE[32] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+            0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
+            0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+        };
+        static const uint8_t N_MINUS_1_BE[32] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+            0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
+            0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x40,
+        };
+        /* -G = (Gx, p - Gy). */
+        static const uint8_t NEG_Gy[32] = {
+            0xB7, 0xC5, 0x25, 0x88, 0xD9, 0x5C, 0x3B, 0x9A,
+            0xA2, 0x5B, 0x04, 0x03, 0xF1, 0xEE, 0xF7, 0x57,
+            0x02, 0xE8, 0x4B, 0xB7, 0x59, 0x7A, 0xAB, 0xE6,
+            0x63, 0xB8, 0x2F, 0x6F, 0x04, 0xEF, 0x27, 0x77,
+        };
+        uint8_t off_curve_y[32];
+
+        /* Accepting control, one below the refusal: (n - 1) G = -G. */
+        rc = ama_secp256k1_point_mul(N_MINUS_1_BE, Gx, Gy, out_x, out_y);
+        TEST_ASSERT(rc == AMA_SUCCESS, "(n - 1) * G succeeds");
+        TEST_ASSERT(memcmp(out_x, Gx, 32) == 0 && memcmp(out_y, NEG_Gy, 32) == 0,
+                    "(n - 1) * G is -G = (Gx, p - Gy)");
+
+        /* (a) n * G is the point at infinity, which has no affine encoding. */
+        memset(out_x, 0xAA, 32);
+        memset(out_y, 0xAA, 32);
+        rc = ama_secp256k1_point_mul(N_BE, Gx, Gy, out_x, out_y);
+        TEST_ASSERT(rc == AMA_ERROR_CRYPTO,
+                    "n * G (the point at infinity) is refused with AMA_ERROR_CRYPTO");
+        TEST_ASSERT(memcmp(out_x, FE_ZERO, 32) == 0 && memcmp(out_y, FE_ZERO, 32) == 0,
+                    "n * G: point_mul wipes both caller-prefilled output coordinates");
+
+        /* (b) Point validation precedes the scalar masks: n with an
+         * off-curve point is an invalid point, not an infinity. */
+        memcpy(off_curve_y, Gy, 32);
+        off_curve_y[31] = (uint8_t)(off_curve_y[31] + 1u);
+        rc = ama_secp256k1_point_mul(N_BE, Gx, off_curve_y, out_x, out_y);
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                    "n with an off-curve point is refused as INVALID_PARAM, "
+                    "before the scalar masks");
+    }
 
     /* Test 6b: the caller-supplied point is validated, not trusted.
      *

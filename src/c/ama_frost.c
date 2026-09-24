@@ -37,12 +37,15 @@
  * failures against the shipped library:
  *
  *   1. A nonce pair is SINGLE-USE and is consumed by the library.
- *      ama_frost_round2_sign() takes it non-`const` and zeroizes it on every
- *      exit, success and failure alike, and refuses an all-zero (already
- *      consumed) pair.  The audit's sub-review called round 2 three times
- *      with one nonce pair over three different messages, solved the
- *      resulting 3x3 linear system mod l, and recovered the hiding nonce,
- *      the binding nonce AND the participant's long-term secret share.
+ *      ama_frost_round2_sign() takes it non-`const`, claims it on entry
+ *      (copies it out and zeroizes the caller's buffer under a lock, so
+ *      overlapping calls on one buffer cannot both sign), leaves it zeroed
+ *      on every exit, success and failure alike, and refuses an all-zero
+ *      (already consumed) pair.  The audit's sub-review called round 2
+ *      three times with one nonce pair over three different messages,
+ *      solved the resulting 3x3 linear system mod l, and recovered the
+ *      hiding nonce, the binding nonce AND the participant's long-term
+ *      secret share.
  *      Nothing exotic was required: a cached round-1 result or a retry of a
  *      failed round 2 against a different message reaches it.
  *
@@ -65,6 +68,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+/* The round-2 nonce claim lock (see frost_claim_nonce_pair).  `_WIN32`, not
+ * `_MSC_VER`, for the reason internal/ama_once.h gives: the question is which
+ * OS supplies the primitive.  Both are statically initialised, so there is no
+ * one-time setup to race on. */
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>
+#else
+    #include <pthread.h>
+#endif
 
 /* SHA-512 via the wrapper in ama_ed25519.c (avoids pulling in header-only
  * internal/ama_sha2.h which triggers -Werror=unused-function). */
@@ -576,10 +592,10 @@ static int validate_signer_indices(const uint8_t *signer_indices,
  *
  * WHY THIS IS CONSTANT-TIME, stated because the opposite conclusion is the
  * tempting one (INVARIANT-49).  The only caller is the consumed-nonce check
- * at the top of ama_frost_round2_sign(), and the buffer it reads is the
- * participant's live hiding/binding nonce pair — the most damaging secret in
- * the protocol, because two partial signatures under one nonce disclose the
- * long-term share by subtraction (audit A-4).
+ * in frost_claim_nonce_pair() at the top of ama_frost_round2_sign(), and the
+ * buffer it reads is the participant's live hiding/binding nonce pair — the
+ * most damaging secret in the protocol, because two partial signatures under
+ * one nonce disclose the long-term share by subtraction (audit A-4).
  *
  * The argument for NOT bothering runs: the buffer belongs to the caller, the
  * caller can read it whenever it likes, and the answer — "has this nonce
@@ -605,6 +621,56 @@ static int frost_is_all_zero(const uint8_t *buf, size_t len) {
     uint8_t acc = 0;
     for (size_t i = 0; i < len; i++) acc |= buf[i];
     return acc == 0;
+}
+
+/* Claim the caller's nonce pair: copy it into `local` and zero the caller's
+ * buffer as ONE step under a process-wide lock.  Returns 1 when this call now
+ * owns a nonce pair, 0 when the pair was already consumed (all zero) or the
+ * lock could not be taken.  `local` holds the pair either way and the caller
+ * scrubs it.
+ *
+ * WHY A LOCK AND NOT JUST AN EARLY ZERO (INVARIANT-49).  Round 2 used to test
+ * the buffer at entry and zero it at exit, reading the nonces from the
+ * caller's buffer in between.  Two calls on one buffer that overlapped in
+ * time -- a participant service answering a coordinator's retries on a
+ * thread pool, or Python threads sharing one bytearray, since ctypes drops
+ * the GIL for the call -- both passed the test, both signed, and three such
+ * calls are the 3x3 system that recovers the long-term share.  The window
+ * was the whole signing computation.  Copying and zeroing at entry shrinks
+ * it to two statements but does not close it: two threads can both copy
+ * before either zeroes.  Holding one lock across copy-and-zero closes it,
+ * because the second holder finds the zeros the first one wrote.
+ * tests/c/test_frost_round2_concurrent.c releases eight threads onto one
+ * buffer together and requires exactly one AMA_SUCCESS.
+ *
+ * The lock is process-wide rather than per buffer because the buffer is
+ * 64 bytes the caller owns and has no room for one.  It is held for a 64-byte
+ * copy and a 64-byte scrub, so round-2 calls on different buffers serialise
+ * for that long and no longer -- against a signing computation of several
+ * scalar multiplications and SHA-512 passes. */
+static int frost_claim_nonce_pair(uint8_t local[AMA_FROST_NONCE_BYTES],
+                                  uint8_t *nonce_pair) {
+    int locked;
+#if defined(_WIN32)
+    static SRWLOCK claim_lock = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&claim_lock);
+    locked = 1;
+#else
+    static pthread_mutex_t claim_lock = PTHREAD_MUTEX_INITIALIZER;
+    locked = (pthread_mutex_lock(&claim_lock) == 0);
+#endif
+    memcpy(local, nonce_pair, AMA_FROST_NONCE_BYTES);
+    ama_secure_memzero(nonce_pair, AMA_FROST_NONCE_BYTES);
+    if (locked) {
+#if defined(_WIN32)
+        ReleaseSRWLockExclusive(&claim_lock);
+#else
+        (void)pthread_mutex_unlock(&claim_lock);
+#endif
+    }
+    /* A lock that could not be taken is a claim that cannot be proved
+     * exclusive: the pair is consumed and the call refused (fail closed). */
+    return locked && !frost_is_all_zero(local, AMA_FROST_NONCE_BYTES);
 }
 
 /* ======================================================================
@@ -776,7 +842,11 @@ AMA_API ama_error_t ama_frost_round1_commit(
  * ONE-SHOT NONCE CONTRACT (INVARIANT-49) — THE NONCE PAIR IS CONSUMED HERE.
  * `nonce_pair` is an IN/OUT parameter, not an input: on return it is 64 zero
  * bytes, whatever this function returned.  A second call with the same buffer
- * sees the all-zero pair and fails closed with AMA_ERROR_INVALID_PARAM.
+ * sees the all-zero pair and fails closed with AMA_ERROR_INVALID_PARAM.  The
+ * pair is claimed -- copied out and the caller's buffer zeroed, under a lock
+ * -- before anything else reads it, so this holds for calls that overlap in
+ * time as well as for calls in sequence: of any number of concurrent calls on
+ * one buffer, at most one signs (frost_claim_nonce_pair).
  *
  * WHY THE LIBRARY AND NOT THE CALLER.  Until 2026-09 this parameter was
  * `const uint8_t *`, the function held no state, and calling it repeatedly
@@ -829,11 +899,19 @@ AMA_API ama_error_t ama_frost_round2_sign(
 
     /* Declared before the first `goto consume` so no jump crosses an
      * initialisation. */
+    uint8_t nonce_local[AMA_FROST_NONCE_BYTES];
     uint8_t rho[32], R[32], challenge[32], lambda[32], tmp1[32], tmp2[32];
-    const uint8_t *hiding_nonce  = nonce_pair;
-    const uint8_t *binding_nonce = nonce_pair + 32;
+    const uint8_t *hiding_nonce  = nonce_local;
+    const uint8_t *binding_nonce = nonce_local + 32;
     const uint8_t *secret_share  = participant_share;
     ama_error_t rc = AMA_SUCCESS;
+
+    /* THE CONSUMPTION POINT (INVARIANT-49): claim the pair before any
+     * validation can return, so every path past the NULL check leaves the
+     * caller's buffer zeroed, and before any hashing, so no concurrent call
+     * can find it unconsumed while this one signs.  From here on the nonces
+     * are read from `nonce_local` only. */
+    const int claimed = frost_claim_nonce_pair(nonce_local, nonce_pair);
 
     if (!sig_share || !message || !participant_share ||
         !commitments || !signer_indices || !group_public_key) {
@@ -854,7 +932,7 @@ AMA_API ama_error_t ama_frost_round2_sign(
      * the identity point twice over), so this check fails closed on both the
      * replay and the degenerate-input reading.  See frost_is_all_zero() for
      * why the fold is constant-time. */
-    if (frost_is_all_zero(nonce_pair, AMA_FROST_NONCE_BYTES)) {
+    if (!claimed) {
         rc = AMA_ERROR_INVALID_PARAM;
         goto consume;
     }
@@ -891,15 +969,15 @@ AMA_API ama_error_t ama_frost_round2_sign(
     ama_ed25519_sc_muladd(sig_share, tmp1, tmp2, challenge);
 
 consume:
-    /* THE CONSUMPTION POINT (INVARIANT-49).  `ama_secure_memzero` is the
-     * non-elidable write (src/c/ama_consttime.c), so no separate barrier
-     * annotation applies here.  Reached from every exit past the NULL check,
-     * which is what makes a repeat call find 64 zero bytes and be refused
-     * above.  `rho`, `challenge`, `lambda`, `tmp1`, `tmp2` may be
-     * uninitialised on the early paths; scrubbing an uninitialised automatic
-     * object is defined (it is only a write) and is cheaper and less
-     * error-prone than tracking which of them are live on which path. */
-    ama_secure_memzero(nonce_pair, AMA_FROST_NONCE_BYTES);
+    /* The caller's buffer was zeroed by the claim at entry; what is left is
+     * this frame's copy of the pair and everything derived from it.
+     * `ama_secure_memzero` is the non-elidable write (src/c/ama_consttime.c),
+     * so no separate barrier annotation applies here.  `rho`, `challenge`,
+     * `lambda`, `tmp1`, `tmp2` may be uninitialised on the early paths;
+     * scrubbing an uninitialised automatic object is defined (it is only a
+     * write) and is cheaper and less error-prone than tracking which of them
+     * are live on which path. */
+    ama_secure_memzero(nonce_local, sizeof(nonce_local));
     ama_secure_memzero(rho, sizeof(rho));
     ama_secure_memzero(R, sizeof(R));
     ama_secure_memzero(challenge, sizeof(challenge));

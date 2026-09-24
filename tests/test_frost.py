@@ -494,7 +494,8 @@ class TestFROSTNonceSingleUse:
 
         A duplicate signer index passes every length check this wrapper makes
         and is rejected by ``validate_signer_indices`` in the C entry point,
-        so this exercises the ``consume:`` label rather than the wrapper's
+        so this exercises the native claim (the pair is zeroed on entry to
+        round 2, before that validation) rather than the wrapper's
         ``finally``.
         """
         from ama_cryptography.pqc_backends import frost_round2_sign

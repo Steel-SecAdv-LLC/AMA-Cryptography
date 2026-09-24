@@ -1922,7 +1922,12 @@ AMA_API ama_error_t ama_frost_round1_commit(
  * path and on **every** failure path alike, including the argument-validation
  * refusals.  Presenting the same buffer again yields AMA_ERROR_INVALID_PARAM
  * (the all-zero pair is refused), so a second signature under one nonce pair
- * is not obtainable through this API.
+ * is not obtainable through this API.  That holds for calls that overlap in
+ * time too: the pair is claimed on entry -- copied out, and the caller's
+ * buffer zeroed, under one process-wide lock -- before anything reads it, so
+ * of any number of concurrent calls on one buffer (a thread pool answering a
+ * coordinator's retries, Python threads sharing one bytearray) at most one
+ * returns AMA_SUCCESS and the rest are refused.
  *
  * BREAKING (unreleased; 2026-09 audit finding A-4): `nonce_pair` changed from
  * `const uint8_t *` to `uint8_t *` and must now point at WRITABLE memory.
@@ -1947,8 +1952,9 @@ AMA_API ama_error_t ama_frost_round1_commit(
  * @param participant_share  64-byte participant share
  * @param participant_index  1-based participant index
  * @param nonce_pair         IN/OUT: 64-byte WRITABLE nonce pair from round 1.
- *                           Zeroized before this function returns, on every
- *                           path.  An all-zero pair is rejected with
+ *                           Zeroized on entry, before any other argument is
+ *                           checked, so it is zero whatever this function
+ *                           returns.  An all-zero pair is rejected with
  *                           AMA_ERROR_INVALID_PARAM.
  * @param commitments        num_signers * 64 bytes of commitments.
  *                           MUST be ordered to match signer_indices:
@@ -2183,14 +2189,19 @@ AMA_API ama_error_t ama_aes256_gcm_decrypt(
  * chosen by whoever supplied the point — the invalid-curve attack — under
  * the one secret scalar this file's public API takes.  secp256k1's cofactor
  * is 1, so on-curve is also in-group.  A zero scalar is rejected the same
- * way.
+ * way.  A nonzero scalar that is a multiple of the group order n (in 32 bytes,
+ * n itself) yields the point at infinity, which has no affine encoding, and
+ * returns AMA_ERROR_CRYPTO.  On both scalar refusals out_x and out_y are
+ * written as zeros; on a NULL argument or an invalid point they are not
+ * written.
  *
  * @param scalar    32-byte big-endian scalar
  * @param point_x   32-byte big-endian X coordinate of input point
  * @param point_y   32-byte big-endian Y coordinate of input point
  * @param out_x     Output: 32-byte big-endian X coordinate of result
  * @param out_y     Output: 32-byte big-endian Y coordinate of result
- * @return AMA_SUCCESS or error code
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM for a NULL argument, an invalid
+ *         point or a zero scalar; AMA_ERROR_CRYPTO for a result at infinity.
  */
 AMA_API ama_error_t ama_secp256k1_point_mul(
     const uint8_t scalar[32],

@@ -1469,7 +1469,10 @@ ama_error_t ama_ed25519_batch_verify(
  * protocol that needs algebraic linearity:
  *   point_from_scalar(a) + point_from_scalar(b) == point_from_scalar(a+b)
  *
- * Constant-time in the scalar.
+ * Constant-time in the scalar.  The scalar is SECRET on its main caller:
+ * ama_frost.c passes the group secret, each dealt share and both round-1
+ * nonces through here, so this entry point scrubs the dead stack exactly as
+ * keypair and sign do (INVARIANT-6).
  *
  * @param point   Output: 32-byte compressed Ed25519 point
  * @param scalar  Input:  32-byte little-endian scalar
@@ -1481,6 +1484,11 @@ AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
      * rather than a segfault.  See include/ama_cryptography.h. */
     if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     ed25519_scalarmult_base(point, scalar);
+    /* Same backstop as ama_ed25519_keypair, and for the same measured reason:
+     * without it a 21-bit limb of the scalar survived in a dead frame of the
+     * reduction (tests/c/test_ed25519_stack_residue.c), and a FROST nonce
+     * plus the published share z_i gives the long-term share s_i. */
+    ama_stack_wipe_below(AMA_ED25519_STACK_WIPE_BYTES);
     return AMA_SUCCESS;
 }
 
