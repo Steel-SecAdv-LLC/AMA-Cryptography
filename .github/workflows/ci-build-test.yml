@@ -259,7 +259,22 @@ jobs:
     # stops turning a green suite red.  Raise it again only with the same
     # kind of evidence: the per-leg durations of one run, not a single
     # sample.
-    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 20 }}
+    #
+    # The other legs outgrew their flat 20 the same way.  Per-leg job wall
+    # clock of ONE run (35955250803, head dfd35dcb, check-runs API):
+    #
+    #     windows-latest  3.11 18m07s  3.12 19m43s  3.13 18m46s  3.14 17m03s
+    #                     3.10 cancelled at 20m07s, pytest at 94% (7,798
+    #                          passed, 0 failed) when the deadline hit
+    #     ubuntu-latest   3.10 16m48s  3.11 15m22s  3.12 16m02s  3.13 15m41s
+    #                     3.14 10m48s
+    #
+    # The cancelled leg failed `Build and Test Gate` with no test failing, and
+    # the slowest completed Windows leg used 98.6% of the budget.  30 is the
+    # budget ci.yml::test already gives the same suite on windows-latest
+    # (evidence recorded there): 1.6x this run's Windows median and 52% over
+    # its slowest completed leg.  macOS arm64 (9m37s-12m38s) is well inside it.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 30 }}
     strategy:
       fail-fast: false
       matrix:
