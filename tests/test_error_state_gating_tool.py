@@ -910,6 +910,58 @@ class TestTheCythonBindingScan:
             == [("cy_one", 1)]
         )
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            """
+            def cy_one(bytes buf, bint fast):
+                if not fast:
+                    check_crypto_permitted()
+                return ama_one(buf)
+            """,
+            """
+            def cy_one(bytes buf):
+                try:
+                    check_crypto_permitted()
+                except Exception:
+                    pass
+                return ama_one(buf)
+            """,
+            """
+            def cy_one(bytes buf, bint fast):
+                if not fast: check_crypto_permitted()
+                return ama_one(buf)
+            """,
+        ],
+        ids=["if-branch", "try-swallow", "one-line-if"],
+    )
+    def test_a_guard_some_path_skips_is_reported(
+        self, tool: ModuleType, tmp_path: Path, source: str
+    ) -> None:
+        """The Python half's rule, by indentation: a guard nested in a block,
+        or sharing its line with a condition, guards only some paths."""
+        assert self._pyx(tool, tmp_path, source) == [("cy_one", 1)]
+
+    def test_a_module_qualified_guard_at_the_body_indentation_is_accepted(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Non-vacuity for the indentation rule, with a ``cdef`` before it."""
+        assert (
+            self._pyx(
+                tool,
+                tmp_path,
+                '''
+                def cy_one(bytes buf):
+                    """Doc."""
+                    cdef int rc
+                    _module_state.check_crypto_permitted()
+                    rc = ama_one(buf)
+                    return rc
+                ''',
+            )
+            == []
+        )
+
     def test_a_docstring_mentioning_a_native_symbol_is_not_a_call(
         self, tool: ModuleType, tmp_path: Path
     ) -> None:
@@ -1341,8 +1393,29 @@ class TestTheGuardMustDominateTheNativeCall:
             # a call in a with item runs before the body
             "def f(data):\n    with _native_lib.ama_x(data):\n"
             "        check_crypto_permitted()\n    return b''\n",
+            # a context manager can swallow the guard's raise
+            "def f(data):\n    with contextlib.suppress(Exception):\n"
+            "        check_crypto_permitted()\n    return _native_lib.ama_x(data)\n",
+            # the guard's arguments are evaluated before the guard runs
+            "def _require_native(_token):\n    check_crypto_permitted()\n"
+            "    return _native_lib\n\n\n"
+            "def f(data):\n    lib = _require_native(_native_lib.ama_x(data))\n"
+            "    return lib.ama_x(data)\n",
+            # a delegating helper on one arm of a conditional expression
+            "def _require_native():\n    check_crypto_permitted()\n    return _native_lib\n\n\n"
+            "def f(data, fast=False):\n    lib = _native_lib if fast else _require_native()\n"
+            "    return lib.ama_x(data)\n",
         ],
-        ids=["except-handler", "finally", "other-branch", "if-test", "with-item"],
+        ids=[
+            "except-handler",
+            "finally",
+            "other-branch",
+            "if-test",
+            "with-item",
+            "with-suppress",
+            "guard-arguments",
+            "helper-in-ifexp",
+        ],
     )
     def test_a_guard_in_a_block_the_call_is_not_in_is_reported(
         self, tool: ModuleType, tmp_path: Path, source: str

@@ -680,7 +680,14 @@ def unguarded_native_line(
         """
         for stmt in block:
             if _is_guard_statement(stmt, delegating):
-                return None
+                # The guard's own arguments are evaluated before it runs.
+                early: list[int] = []
+                if isinstance(stmt, (ast.Expr, ast.Assign, ast.AnnAssign)) and isinstance(
+                    stmt.value, ast.Call
+                ):
+                    for arg in (*stmt.value.args, *stmt.value.keywords):
+                        early.extend(native_in(arg))
+                return early or None
             native = native_in(stmt)
             if not native:
                 continue
@@ -948,14 +955,20 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
     """Return ``[(funcname, lineno), ...]`` for ungated ``cy_*`` binding funcs.
 
     A line-based scan because ``.pyx`` is not valid Python.  Every module-level
-    ``def cy_...`` must call ``check_crypto_permitted()`` somewhere in its body,
-    and before the first native ``ama_`` call, so the guard cannot be placed
-    after cryptographic output has already been produced.
+    ``def cy_...`` must call ``check_crypto_permitted()`` as a statement of its
+    own at the body's indentation -- not inside an ``if``/``try``/``with``/loop,
+    where it guards only some paths -- and before the first native ``ama_``
+    call, so the guard cannot be placed after cryptographic output has already
+    been produced.  This is the Python half's dominance rule
+    (:func:`unguarded_native_line`) restricted to the function's own block,
+    which is all a line scan can establish.
     """
     lines = path.read_text(encoding="utf-8").splitlines()
     def_re = re.compile(r"^def (cy_\w+)\s*\(")
     guard_alt = "|".join(re.escape(g) for g in GUARDS)
-    guard_re = re.compile(rf"\b(?:{guard_alt})\s*\(\s*\)")
+    # The whole line is the guard call -- optionally module-qualified -- and
+    # nothing else, so ``if fast: check_crypto_permitted()`` is not a guard.
+    guard_re = re.compile(rf"\s*(?:[A-Za-z_]\w*\.)*(?:{guard_alt})\s*\(\s*\)\s*")
     ungated: list[tuple[str, int]] = []
 
     starts = [(i, m.group(1)) for i, line in enumerate(lines) if (m := def_re.match(line))]
@@ -966,7 +979,13 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
         # is not mistaken for a native call.  Require the guard as a real, no-arg call
         # (optional inner whitespace), not a bare substring.
         body = [_strip_comment(ln) for ln in _strip_leading_docstring(lines[start + 1 : end])]
-        guard_line = next((j for j, ln in enumerate(body) if guard_re.search(ln)), None)
+        # At the body's own indentation; indented further, the guard sits in a
+        # block some path skips.
+        base = next((_indent(ln) for ln in body if ln.strip()), None)
+        guard_line = next(
+            (j for j, ln in enumerate(body) if _indent(ln) == base and guard_re.fullmatch(ln)),
+            None,
+        )
         native_line = next(
             (j for j, ln in enumerate(body) if re.search(r"\bama_\w+\s*\(", ln)), None
         )
@@ -976,6 +995,11 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
             # Guard present but after a native call — output already produced.
             ungated.append((name, start + 1))
     return ungated
+
+
+def _indent(line: str) -> int:
+    """Leading-whitespace width of one ``.pyx`` source line."""
+    return len(line) - len(line.lstrip())
 
 
 def _strip_comment(line: str) -> str:
