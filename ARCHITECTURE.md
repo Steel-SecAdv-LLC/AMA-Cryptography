@@ -629,17 +629,26 @@ enc(b) = 0x11 || "AMA-AGENT-BIND-v1"
        || version || lifetime || capabilities || reserved
        || 0x20 || instance_id[32] || 0x20 || ethical_profile[32]     (88 bytes)
 
-HKDF info      := enc(b) || u32be(info_len) || info      (ama_hkdf_agent_bound)
-signature ctx  := SHA3-256(0x02 || enc(b))               (ama_agent_binding_context)
-authorization  := HMAC-SHA3-256(K_auth, 0x01 || enc(b))  (operator-held K_auth)
+HKDF info      := enc(b) || binder(0x03) || u32be(info_len) || info   (ama_hkdf_agent_bound)
+signature ctx  := SHA3-256(0x02 || enc(b) || binder(0x04))            (ama_agent_binding_context)
+authorization  := HMAC-SHA3-256(K_auth, 0x01 || enc(b))                (operator-held K_auth)
+
+binder(s)      := HMAC-SHA3-256(K_auth, s || enc(b))   if the binding requires authorization
+               := 0^32                                  otherwise (unrestricted)
 ```
 
-The two sub-domain tags (`0x01` authorization, `0x02` signature context) keep an
-authorization tag from ever being replayable as a signature context. Because
-`enc(b)` is folded into the KDF and the signature context, material derived
-under one binding is cryptographically unrelated to the same input under any
-other — an agent cannot relabel ephemeral material as persistent after the
-fact; it would have to derive it again, which is the call the policy refuses.
+The four sub-domain tags (`0x01` authorization, `0x02` signature context,
+`0x03` / `0x04` the HKDF and context binders) keep any one of those values from
+ever being replayable as another. Because `enc(b)` is folded into the KDF and
+the signature context, material derived under one binding is cryptographically
+unrelated to the same input under any other — an agent cannot relabel
+ephemeral material as persistent after the fact; it would have to derive it
+again, which is the call the policy refuses. The binder makes `K_auth` an input
+to a restricted binding's derivations rather than only to the gate in front of
+them (2026-09 audit, A-6). These are the 5.0.0 layouts: earlier releases had no
+binder for any binding, so every derived key and signature context differs
+from 4.x for the same inputs, unrestricted bindings included.
+`tests/c/test_agent_binding.c` pins both layouts with byte KATs.
 
 Policy: any lifetime other than `EPHEMERAL`, or any capability in
 `{PERSISTENCE, SELF_REPLICATE, DELEGATE}`, requires a non-zero ethical-profile

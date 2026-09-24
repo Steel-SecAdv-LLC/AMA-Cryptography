@@ -16,6 +16,7 @@
 
 #include "ama_hmac_sha256.h"
 #include "ama_sha256.h"
+#include <stdlib.h>
 #include <string.h>
 
 /* Scrub sensitive stack data */
@@ -31,16 +32,23 @@ extern void ama_secure_memzero(void *ptr, size_t len);
  *
  * A `void` function cannot report a caller bug, and the return type is not
  * changed here because eighteen internal call sites pass stack arrays and
- * would gain a return value nobody could act on.  What it CAN do is decline
- * to dereference: the guard below is damage limitation for a caller bug, not
- * an error channel.  The one place an error can actually be reported is the
- * Python boundary, and `native_hmac_sha256` / `native_hmac_sha256_2` now
- * reject these arguments before they arrive.
+ * would gain a return value nobody could act on.  The one place an error can
+ * actually be reported is the Python boundary, and `native_hmac_sha256` /
+ * `native_hmac_sha256_2` reject these arguments before they arrive.
  *
- * On refusal the output is zeroed rather than left as the caller found it, so
- * a caller that ignores its own bug gets a value that is not the MAC of
- * anything it asked for, instead of whatever the output buffer happened to
- * contain.
+ * Everywhere else a refusal must neither dereference nor RETURN, because
+ * every value a MAC function can leave in `out` is a value some caller will
+ * compare a received tag against.  The previous revision zeroed `out` and
+ * returned; 0^32 is a public constant, so a verifier whose expected-tag
+ * computation hit this branch accepted the tag 00..00 for any message it was
+ * handed (2026-09-24 review of PR #394, c-sym-core#1).  Filling `out` with
+ * CSPRNG bytes instead is not available to this translation unit: it is in
+ * the unconditional source list, and ama_platform_rand.c is linked only when
+ * AMA_USE_NATIVE_PQC=ON.  So a contract violation ends the process with
+ * abort(): fail-closed and defined, which is the outcome the 4.x releases
+ * reached through the SIGSEGV, without the undefined behaviour.  abort() is
+ * declared noreturn by every C library this builds against, so no path
+ * falls through from the refusal into the dereference.
  */
 static int hmac_args_are_dereferenceable(const uint8_t *key, size_t key_len,
                                           const uint8_t *data, size_t data_len) {
@@ -67,8 +75,7 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
         return;  /* nowhere to write; nothing else is safe to touch either */
     }
     if (!hmac_args_are_dereferenceable(key, key_len, data, data_len)) {
-        ama_secure_memzero(out, AMA_SHA256_DIGEST_SIZE);
-        return;
+        abort();  /* never returns a tag for a call it could not compute */
     }
 
     /* Step 1: Derive K' from key.  `k_prime` will hold the HMAC key
@@ -131,8 +138,7 @@ void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
     }
     if (!hmac_args_are_dereferenceable(key, key_len, data1, data1_len) ||
         !hmac_args_are_dereferenceable(key, key_len, data2, data2_len)) {
-        ama_secure_memzero(out, AMA_SHA256_DIGEST_SIZE);
-        return;
+        abort();  /* never returns a tag for a call it could not compute */
     }
 
     /* Derive K' — see ama_hmac_sha256() for INVARIANT-6 rationale. */

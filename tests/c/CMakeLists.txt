@@ -192,6 +192,13 @@ if(AMA_ENABLE_AVX512 AND AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2 AND CMAKE_SYSTEM_PR
     set_tests_properties(test_sha3_avx512_kat PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 add_ama_test(test_hkdf test_hkdf.c)
+# ama_hmac_sha256 / _2 have no error channel: a NULL buffer with a non-zero
+# length must abort() rather than dereference or return a predictable tag.
+# Forked-child probe, POSIX-only like test_dispatch_seal (77 = skip on
+# Windows or a host that refuses fork/pipe).  HMAC-SHA-256 is in the
+# unconditional source list, so this runs with AMA_USE_NATIVE_PQC=OFF too.
+add_ama_test(test_hmac_sha256_contract test_hmac_sha256_contract.c)
+set_tests_properties(test_hmac_sha256_contract PROPERTIES SKIP_RETURN_CODE 77)
 # INVARIANT-30 — agent-instance binding: canonical-encoding KAT, fail-closed
 # capability policy, and cross-binding domain separation.  Built
 # unconditionally, like test_hkdf above: the binding layer calls only

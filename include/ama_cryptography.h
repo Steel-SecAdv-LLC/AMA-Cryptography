@@ -438,6 +438,12 @@ AMA_API void ama_secure_stack_wipe(void);
  * would have taken this one with it.  A zero-length key is permitted (RFC
  * 2104); `key` may then be NULL.
  *
+ * Contract violation: the function has no error channel, so a NULL @p key
+ * with a non-zero @p key_len, or a NULL @p data with a non-zero @p data_len,
+ * calls abort().  It neither dereferences the NULL nor returns, because any
+ * value it left in @p out (a zeroed buffer included) is a predictable tag a
+ * verifier would compare against.  A NULL @p out writes nothing and returns.
+ *
  * @param key      HMAC key (may be NULL when @p key_len is 0)
  * @param key_len  Key length in bytes
  * @param data     Message (may be NULL when @p data_len is 0)
@@ -452,7 +458,9 @@ AMA_API void ama_hmac_sha256(const uint8_t *key, size_t key_len,
  * @brief HMAC-SHA-256 over the concatenation of two buffers.
  *
  * Equivalent to :c:func:`ama_hmac_sha256` over `data1 || data2` without
- * materialising the concatenation.  Same ABI note as above.
+ * materialising the concatenation.  Same ABI note and the same contract
+ * violation as above: a NULL buffer with a non-zero length (@p key, @p data1
+ * or @p data2) calls abort().
  */
 AMA_API void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
                                const uint8_t *data1, size_t data1_len,
@@ -1041,7 +1049,8 @@ AMA_API ama_error_t ama_hkdf_sha512(
  *
  * enc(b) is folded into HKDF's `info` (ama_hkdf_agent_bound) and hashed into
  * a 32-byte signature context string (ama_agent_binding_context) that callers
- * pass as the ML-DSA / SLH-DSA `ctx` argument.  Consequence: a key or a
+ * pass as the ML-DSA / SLH-DSA `ctx` argument; the exact layouts are under
+ * "Derivations" below.  Consequence: a key or a
  * signature produced under one binding is cryptographically unrelated to the
  * same input under any other binding, INCLUDING a binding that differs only
  * in its lifetime or capability bits.  An agent cannot relabel ephemeral
@@ -1071,12 +1080,50 @@ AMA_API ama_error_t ama_hkdf_sha512(
  * drives this API can `authorize()` a binding under ITS OWN key and `check()`
  * it under that same key — a self-consistent but empty act: such a binding
  * verifies only against the agent's key, is rejected by any verifier pinning
- * K_auth, and confers nothing, since the derived key (ama_hkdf_agent_bound) and
- * signing context (ama_agent_binding_context) are public functions of enc(b)
- * that the agent could compute without this library and that do not
- * incorporate `authorization`.  A caller MUST verify a binding under the
- * supervisor's K_auth (never under a key the untrusted producer chose) for the
- * check to mean "the supervisor authorized this".
+ * K_auth, and confers nothing.  For a binding that requires authorization the
+ * derived key (ama_hkdf_agent_bound) and signing context
+ * (ama_agent_binding_context) are keyed by the authority key the caller passes
+ * (the binder, below), so the self-authorized binding yields material under
+ * the agent's own key, unrelated to what the same binding yields under the
+ * supervisor's K_auth — and those values the agent cannot compute, through
+ * this library or around it, because it does not hold K_auth.  Holding a
+ * genuine `authorization` tag does not help either: the tag is not an input to
+ * either derivation, and the binders are MACs under their own sub-domains
+ * (0x03, 0x04), so the tag (0x01) cannot stand in for one.  A caller MUST
+ * verify a binding under the supervisor's K_auth (never under a key the
+ * untrusted producer chose) for the check to mean "the supervisor authorized
+ * this".
+ *
+ * Derivations
+ * -----------
+ * Both derivations take a 32-byte binder beside enc(b):
+ *
+ *   ama_hkdf_agent_bound:       info' = enc(b) || binder_kdf || u32be(info_len) || info
+ *   ama_agent_binding_context:  ctx   = SHA3-256(0x02 || enc(b) || binder_ctx)
+ *
+ *   binder_kdf = HMAC-SHA3-256(K_auth, 0x03 || enc(b))   } the binding requires
+ *   binder_ctx = HMAC-SHA3-256(K_auth, 0x04 || enc(b))   } authorization
+ *   binder_kdf = binder_ctx = 0^32                          otherwise
+ *
+ * K_auth here is the authority key passed to the derivation, which
+ * ama_agent_binding_check() has just verified the tag under.  The binder is
+ * what makes K_auth an input to a restricted binding's outputs rather than
+ * only to the gate in front of them: without it both outputs are public
+ * functions of enc(b), reproducible by anyone who can call ama_hkdf() or
+ * ama_sha3_256() directly.  An unrestricted binding has no operator secret;
+ * its binder is 32 zero bytes whatever key is passed, so it derives one value
+ * rather than one per key argument, and its outputs remain public functions of
+ * enc(b) and the caller's inputs — which is what "unrestricted" means.
+ *
+ * Compatibility.  These are the 5.0.0 layouts.  Every release before 5.0.0
+ * derived without a binder for EVERY binding — info' = enc(b) ||
+ * u32be(info_len) || info and ctx = SHA3-256(0x02 || enc(b)) — so for the same
+ * inputs 5.0.0 produces a different key and a different signature context for
+ * all bindings, unrestricted ones included: 4.x-derived keys cannot be
+ * re-derived and ML-DSA / SLH-DSA signatures made under a 4.x context do not
+ * verify under a 5.0.0 one.  enc(b), its "AMA-AGENT-BIND-v1" label and the
+ * authorization tag are unchanged, so nothing in the record tells the two
+ * derivations apart; the library version does.
  *
  * Everything here is fail-closed: a NULL argument, a malformed record, a
  * reserved byte that is not zero, an absent authority key, or a tag mismatch
@@ -1237,9 +1284,13 @@ AMA_API ama_error_t ama_agent_binding_check(
  * @brief Derive the signature-context string for a binding.
  *
  * Runs ama_agent_binding_check() first and writes nothing on refusal.  The
- * result is SHA3-256(0x02 || enc(b)) and is intended to be passed verbatim as
- * the `ctx` argument of ama_dilithium_sign_ctx() / ama_sphincs_verify_ctx(),
- * binding the signature to the agent instance and its capability set.
+ * result is SHA3-256(0x02 || enc(b) || binder), where binder is
+ * HMAC-SHA3-256(authority_key, 0x04 || enc(b)) for a binding that requires
+ * authorization and 32 zero bytes for an unrestricted one (see "Derivations"
+ * above — releases before 5.0.0 hashed 0x02 || enc(b) alone, for every
+ * binding).  It is intended to be passed verbatim as the `ctx` argument of
+ * ama_dilithium_sign_ctx() / ama_sphincs_verify_ctx(), binding the signature
+ * to the agent instance and its capability set.
  *
  * @param b            Binding
  * @param authority_key Operator authority key, or NULL for unrestricted bindings
@@ -1258,9 +1309,13 @@ AMA_API ama_error_t ama_agent_binding_context(
  * @brief HKDF-SHA3-256 with the agent binding folded into `info`.
  *
  * Equivalent to ama_hkdf() with
- *   info' = enc(b) || u32be(info_len) || info
- * after ama_agent_binding_check() passes.  On refusal @p okm is left
- * untouched and AMA_ERROR_ETHICAL_BINDING is returned.
+ *   info' = enc(b) || binder || u32be(info_len) || info
+ * after ama_agent_binding_check() passes, where binder is
+ * HMAC-SHA3-256(authority_key, 0x03 || enc(b)) for a binding that requires
+ * authorization and 32 zero bytes for an unrestricted one (see "Derivations"
+ * above — releases before 5.0.0 used enc(b) || u32be(info_len) || info, for
+ * every binding).  On refusal @p okm is left untouched and
+ * AMA_ERROR_ETHICAL_BINDING is returned.
  *
  * @param b            Binding
  * @param authority_key Operator authority key, or NULL for unrestricted bindings
