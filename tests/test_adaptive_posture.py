@@ -1309,3 +1309,131 @@ class TestTheDocumentedSnippetRuns:
         doc = (REPO_ROOT / "MONITORING.md").read_text(encoding="utf-8")
         for absent in ("evaluator.record_timing_anomaly(", "evaluator.record_pattern_anomaly("):
             assert doc.count(absent) == 0, f"MONITORING.md still calls {absent}"
+
+
+class TestTheWikiMonitoringLoopActs:
+    """wiki/Adaptive-Posture.md's production loop must actually respond.
+
+    The page's "typical production monitoring loop" built
+    ``CryptoPostureController()`` with no monitor, evaluated a separate signal
+    dict with its own ``PostureEvaluator``, and called ``evaluate_and_respond()``
+    when that evaluation looked bad.  A monitorless controller answers every
+    call with NOMINAL / NONE (``signals["reason"] == "no_monitor"``,
+    ``test_no_monitor_returns_nominal`` above), so a reader who copied it got a
+    loop that logged ``Action: ROTATE_AND_SWITCH`` and rotated nothing, on every
+    cycle, silently.  And the evaluation that triggered the branch was
+    discarded anyway: the controller acts on its own monitor's report.
+
+    The block is executed as written (definitions only; its ``__main__`` guard
+    keeps the one-cycle demo out of it), its monitor is made to report a
+    sustained critical signal, and the documented ``monitoring_loop`` is run.
+    The property pinned is the one the page promises: the documented
+    controller rotates the documented key manager's active key and switches the
+    application's ``AmaCryptography`` instance.  The block's names —
+    ``monitor``, ``controller``, ``key_manager``, ``active`` and
+    ``monitoring_loop`` — are the contract this reads.
+    """
+
+    PAGE = REPO_ROOT / "wiki" / "Adaptive-Posture.md"
+
+    @classmethod
+    def _block(cls) -> Any:
+        from tools import check_doc_examples
+
+        text = cls.PAGE.read_text(encoding="utf-8")
+        heading = text.find("## Monitoring Integration Loop")
+        assert heading >= 0, "the page no longer has a Monitoring Integration Loop section"
+        heading_line = text.count("\n", 0, heading) + 1
+        blocks = [
+            block
+            for block in check_doc_examples.extract_blocks(cls.PAGE, REPO_ROOT)
+            if block.language == "python" and block.line > heading_line
+        ]
+        assert blocks, "the Monitoring Integration Loop section has no python block"
+        return blocks[0]
+
+    @staticmethod
+    def _critical_reports() -> Any:
+        """A fresh saturated report per call: a continuing attack, not a replay.
+
+        The evaluator ignores alerts it has already scored, so each call carries
+        new timestamps — the same construction ``test_critical_threshold`` uses.
+        """
+        rounds = itertools.count()
+        anomaly = MagicMock()
+        anomaly.severity = "critical"
+        anomaly.deviation_sigma = 10.0
+
+        def report() -> dict[str, Any]:
+            base = 1000.0 + 100.0 * next(rounds)
+            return {
+                "recent_alerts": [
+                    {"type": "timing", "timestamp": base + i, "anomaly": anomaly} for i in range(5)
+                ]
+                + [
+                    {
+                        "type": "pattern",
+                        "timestamp": base + 10 + i,
+                        "anomaly": {"z_score": 12.0, "severity": "critical"},
+                    }
+                    for i in range(5)
+                ],
+                "resonance_analysis": {"sign": {"resonance_ratio": 10.0}},
+                "total_alerts": 50,
+            }
+
+        return report
+
+    def test_the_block_is_declared_runnable(self) -> None:
+        """The directive is what tools/check_doc_examples.py executes it by."""
+        assert self._block().mode == "python-run"
+
+    def test_the_block_runs_as_written(self) -> None:
+        from tools import check_doc_examples
+
+        block = self._block()
+        report = check_doc_examples.Report()
+        check_doc_examples.check_python_encodability(block, report)
+        check_doc_examples.run_python(block, report, REPO_ROOT)
+        assert not report.findings, [finding.detail for finding in report.findings]
+        assert report.ran == 1
+
+    def test_the_documented_loop_rotates_and_switches_under_a_critical_signal(
+        self, tmp_path: Path
+    ) -> None:
+        import runpy
+
+        from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
+
+        # Run as a module that is not __main__, so the block defines its
+        # objects and the one-cycle demo under its __main__ guard stays out.
+        script = tmp_path / "adaptive_posture_wiki_example.py"
+        script.write_text(self._block().code, encoding="utf-8")
+        namespace = runpy.run_path(str(script), run_name="adaptive_posture_wiki_example")
+
+        key_manager = namespace["key_manager"]
+        controller = namespace["controller"]
+        first_key = key_manager.get_active_key()
+        first_algorithm = namespace["active"]["crypto"].algorithm
+        assert first_key is not None
+        assert first_algorithm == AlgorithmType.ML_DSA_65
+
+        # The documented monitor object, reporting an attack.  Patched on the
+        # instance, so a controller the page built WITHOUT this monitor never
+        # sees it.
+        namespace["monitor"].get_security_report = self._critical_reports()
+        namespace["monitoring_loop"](
+            controller,
+            interval_seconds=0.0,
+            cycles=controller.evaluator.escalation_count + 1,
+        )
+
+        assert controller.get_posture_summary()["current_threat_level"] == "CRITICAL"
+        assert (
+            key_manager.get_active_key() != first_key
+        ), "the documented controller never rotated the documented key manager's key"
+        crypto = namespace["active"]["crypto"]
+        assert isinstance(crypto, AmaCryptography)
+        assert (
+            crypto.algorithm != first_algorithm
+        ), "the documented controller never switched the application's algorithm"

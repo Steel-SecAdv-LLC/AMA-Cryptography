@@ -83,7 +83,7 @@ flowchart TD
         hkdf["ama_hkdf.c\nHKDF-SHA3-256, HMAC"]:::gold
         dil["ama_dilithium.c\nML-DSA-65 (FIPS 204)"]:::gold
         kyber["ama_kyber.c\nML-KEM-1024 (FIPS 203)"]:::gold
-        ed["ama_ed25519.c\nEd25519 C11 atomics"]:::gold
+        ed["ama_ed25519.c\nEd25519 constant-time comb"]:::gold
         sha3["ama_sha3.c\nSHA3-256 / SHAKE128 / SHAKE256"]:::black
         sphincs["ama_slhdsa.c\nSLH-DSA-SHA2-256f"]:::black
         aesgcm["ama_aes_gcm.c\nAES-256-GCM"]:::black

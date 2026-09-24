@@ -23,7 +23,9 @@ Updates documentation targets from source-of-truth data:
                        runner class named in ``metadata.runner_cpu_class``,
                        not a fraction of the headline, so the two columns are
                        different hosts and the floor may legitimately exceed
-                       the measured figure.
+                       the measured figure.  A single figure quoted in prose
+                       between ``<!-- AUTO-RECORD-OPS:<name> -->`` markers is
+                       rewritten from the same record.
   4. wiki/*.md       — update version and date stamps
 
 Usage:
@@ -107,6 +109,23 @@ BENCH_END = "<!-- AUTO-BENCHMARK-TABLE-END -->"
 # makes the contradiction impossible to write.
 LATENCY_START = "<!-- AUTO-PIPELINE-LATENCY-START -->"
 LATENCY_END = "<!-- AUTO-PIPELINE-LATENCY-END -->"
+
+#: A single measured figure quoted in prose, derived from the same record.
+#: The generated tables cover rows; a sentence that quotes one figure out of
+#: that record needs the same guarantee, and did not have it:
+#: wiki/Performance-Benchmarks.md quoted "~241k ops/sec" for the HMAC row of a
+#: record that says 205,641, in a paragraph that then promised it "cannot drift
+#: from the JSON again" — because only the floors beside it were re-derived.
+#: The figure between the two markers is written by
+#: :func:`update_record_figures` and re-derived by
+#: tools/check_benchmark_claims.py; the name after the colon is the benchmark
+#: whose ``ops_per_second`` it is.  The markers are HTML comments, so the page
+#: renders the bare number.
+RECORD_OPS_FIGURE = re.compile(
+    r"(?P<open><!-- AUTO-RECORD-OPS:(?P<name>[a-z0-9_]+) -->)"
+    r"(?P<value>[^<]*)"
+    r"(?P<close><!-- /AUTO-RECORD-OPS -->)"
+)
 
 #: Benchmark name -> (display label, target latency in ms).  The target is the
 #: design budget this repository holds itself to; the measured column is
@@ -433,6 +452,82 @@ def _baseline_index() -> dict[str, dict[str, Any]]:
     return flat
 
 
+def format_measured_ops(ops: float) -> str:
+    """How a measured throughput is written everywhere it is derived.
+
+    One definition, so a figure quoted in prose and the same row of the
+    generated table cannot be rendered differently.
+    """
+    if ops >= 10_000:
+        return f"{ops:,.0f}"
+    # Sub-10k benchmarks (e.g. PQC sign / verify, full_package_*) benefit from
+    # one decimal place — readers cite these numbers in marketing copy, so
+    # 3,727.6 is more useful than 3,728.
+    return f"{ops:,.1f}"
+
+
+def record_ops_figures(results_path: Path = BENCHMARK_RESULTS_JSON) -> dict[str, str]:
+    """``{benchmark name: rendered ops/sec}`` for every row of the record."""
+    if not results_path.exists():
+        return {}
+    measured = json.loads(results_path.read_text(encoding="utf-8"))
+    return {
+        str(row["name"]): format_measured_ops(float(row["ops_per_second"]))
+        for row in measured.get("results", [])
+        if row.get("name") and row.get("ops_per_second") is not None
+    }
+
+
+def rewrite_record_figures(text: str, figures: dict[str, str]) -> str:
+    """Replace every AUTO-RECORD-OPS figure in ``text`` with the record's value.
+
+    A marker naming a benchmark the record does not carry is left untouched;
+    tools/check_benchmark_claims.py fails on it, which is the right place for
+    that to be loud.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        value = figures.get(match.group("name"))
+        if value is None:
+            return match.group(0)
+        return f"{match.group('open')}{value}{match.group('close')}"
+
+    return RECORD_OPS_FIGURE.sub(_replace, text)
+
+
+def update_record_figures(dry_run: bool = False) -> bool:
+    """Rewrite every AUTO-RECORD-OPS figure from ``benchmark-results.json``."""
+    figures = record_ops_figures()
+    if not figures:
+        print(
+            "  RECORD FIGURES: benchmarks/benchmark-results.json missing or empty — "
+            "refusing to rewrite quoted figures"
+        )
+        return False
+    changed = False
+    carrying = 0
+    for md_file in list(ROOT.glob("*.md")) + list(ROOT.glob("wiki/*.md")):
+        text = md_file.read_text(encoding="utf-8")
+        if not RECORD_OPS_FIGURE.search(text):
+            continue
+        carrying += 1
+        new_text = rewrite_record_figures(text, figures)
+        if new_text != text:
+            if dry_run:
+                print(f"  RECORD FIGURES: would update {md_file.name}")
+            else:
+                md_file.write_text(new_text, encoding="utf-8", newline="")
+                print(f"  RECORD FIGURES: updated {md_file.name}")
+            changed = True
+    if not changed:
+        print(
+            f"  RECORD FIGURES: {carrying} file(s) already match {BENCHMARK_RESULTS_JSON.name}"
+            if carrying
+            else "  RECORD FIGURES: no files with AUTO-RECORD-OPS markers found"
+        )
+    return changed
+
+
 def _generate_benchmark_table() -> str:
     """Emit the canonical-host throughput table.
 
@@ -488,15 +583,7 @@ def _generate_benchmark_table() -> str:
         name = row.get("name", "")
         display = name.replace("_", " ").title()
         ops = row.get("ops_per_second")
-        if ops is None:
-            measured_cell = "—"
-        elif ops >= 10_000:
-            measured_cell = f"{ops:,.0f}"
-        else:
-            # Sub-10k benchmarks (e.g. PQC sign / verify, full_package_*)
-            # benefit from one decimal place — readers cite these numbers
-            # in marketing copy, so 3,727.6 is more useful than 3,728.
-            measured_cell = f"{ops:,.1f}"
+        measured_cell = "—" if ops is None else format_measured_ops(ops)
 
         floor_entry = floor_for.get(name) or {}
         floor_value = floor_entry.get("baseline_value", row.get("baseline_value"))
@@ -1325,6 +1412,9 @@ def main() -> None:
 
         print("\n3b. Pipeline latency (ARCHITECTURE.md)")
         any_changed |= update_pipeline_latency_docs(dry_run=args.dry_run)
+
+        print("\n3c. Record figures quoted in prose")
+        any_changed |= update_record_figures(dry_run=args.dry_run)
 
         print("\n4. Wiki pages")
         any_changed |= update_wiki(dry_run=args.dry_run)

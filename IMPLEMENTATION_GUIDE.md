@@ -1546,9 +1546,13 @@ nor an approved SP 800-90A DRBG — see `CSRC_STANDARDS.md` §3.1(e).
 
 > **Note:** This implementation has NOT been submitted for CMVP validation and is NOT FIPS 140-3 certified. These controls represent design alignment with FIPS 140-3 Level 1 technical requirements.
 
-**Pairwise Consistency Tests:** Functions `pairwise_test_signature()` and
-`pairwise_test_kem()` in `ama_cryptography._self_test` can be called after
-any key generation to verify the keypair is consistent.
+**Pairwise Consistency Tests:** Every asymmetric key generation in the package
+runs its pairwise consistency test itself, before the keypair is returned
+(`pairwise_test_signature()`, `pairwise_test_kem()` or
+`pairwise_test_agreement()`, INVARIANT-41). There is nothing for application
+code to call and no way to switch it off; a failure enters the ERROR state and
+raises `CryptoModuleError` instead of returning the keypair. See
+`docs/compliance/CSRC_ALIGN_REPORT.md` §4.4.
 
 ### Contact
 

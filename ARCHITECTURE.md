@@ -779,15 +779,24 @@ The system provides two Cython extension modules for performance-critical paths:
 
 **`src/cython/hmac_binding.pyx`** — Direct binding to native `ama_hmac_sha3_256()`:
 - Compiles to C, calls the native function directly with zero Python marshaling
-- Throughput: ~262K ops/sec (vs ~182K ops/sec for ctypes fallback)
+- Throughput: the `hmac_sha3_256` row of `benchmarks/benchmark-results.json`
+  times whichever path the measuring build had (its provenance lists the
+  bindings it imported); no Cython-versus-ctypes ratio has been measured in
+  this tree, so none is published
 - Auto-selected when extension is built; ctypes fallback for environments without Cython
 
 **`src/cython/math_engine.pyx`** — Optimized mathematical operations:
-- Lyapunov stability computation (27.3x speedup)
-- Matrix-vector multiplication (28.1x speedup)
-- NTT operations (37.7x speedup)
-- Helix evolution (18.9x speedup)
+- Lyapunov stability computation
+- Matrix-vector multiplication
+- NTT operations
+- Helix evolution
 - NumPy integration for array operations
+
+No speed-up ratio is published for these kernels: the per-kernel figures this
+list carried until 5.0.0 had no benchmark, results file or history entry behind
+them, and were removed rather than restated (INVARIANT-36).
+`python benchmarks/performance_suite.py` measures the Lyapunov and
+matrix-vector kernels against their NumPy baselines on the host it runs on.
 
 **`src/cython/helix_engine_complete.pyx`** — a complete-engine reference implementation of all 18+ variants. The default build does **not** compile it: `setup.py` builds `math_engine.pyx` and the FFI bindings, and this file is kept as a reference source rather than a shipped extension.
 
@@ -798,13 +807,15 @@ The compiled Cython `.so` modules — `math_engine` and the FFI bindings — are
 `ama_hmac_sha3_256()` is exposed to Python through two binding layers:
 
 **Primary path: Cython (`cy_hmac_sha3_256`)**
-Compiles to C and calls `ama_hmac_sha3_256()` directly. Zero Python marshaling
-overhead. Throughput: ~262K ops/sec.
+Compiles to C and calls `ama_hmac_sha3_256()` directly, with no ctypes
+argument marshaling.
 
 **Fallback path: ctypes (`native_hmac_sha3_256`)**
-Available when the Cython extension is not built. Incurs per-call Python
-marshaling overhead. Throughput: ~182K ops/sec. Functionally correct; not for
-high-frequency use.
+Available when the Cython extension is not built. Incurs per-call ctypes
+marshaling overhead. Functionally correct. (Until 2026-09-24 this section
+quoted ~262K and ~182K ops/sec for the two paths; no host, run or results file
+stood behind either figure, and the published record for the operation is the
+`hmac_sha3_256` row cited above.)
 
 The Cython path is selected automatically when the extension is built (standard
 install). The ctypes fallback is available for environments where Cython cannot

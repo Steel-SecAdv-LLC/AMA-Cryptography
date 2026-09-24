@@ -49,7 +49,7 @@
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
 
-The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations. 3R overhead is not part of the CI regression gate; measure it locally with `python benchmarks/benchmark_suite.py` before relying on an environment-specific figure. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. On that specific workload — Lyapunov exponent, NTT-shaped rotation matrix-vector products, and helix evolution kernels in `src/cython/math_engine.pyx` — Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64 (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). This speedup is for 3R monitoring math and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
+The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations. 3R overhead is not part of the CI regression gate; measure it locally with `python benchmarks/validation_suite.py` (its 3R monitoring section times the per-call instrumentation) before relying on an environment-specific figure. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. That workload is the Lyapunov exponent, NTT-shaped rotation matrix-vector product and helix evolution kernels in `src/cython/math_engine.pyx`; no speed-up ratio over the pure-Python NumPy baseline is published for it, because none has been measured in this tree (`python benchmarks/performance_suite.py` measures the Lyapunov and matrix-vector kernels against their NumPy baselines on your host — see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md)). The Cython engine accelerates 3R monitoring math only and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
@@ -124,7 +124,7 @@ AMA Cryptography addresses all three challenges through:
 
 - **Quantum Resistance**: NIST-standardized ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203), and SLH-DSA parameter sets (FIPS 205) designed for long-term protection against quantum threats
 - **Transparent Security**: 3R monitoring (Resonance-Recursion-Refactoring) provides real-time cryptographic operation analysis
-- **Optimized Performance**: Cython acceleration for the 3R math engine (manual build required). No speed-up ratio is published: the "18–37x vs pure Python" figure this line used to carry has no benchmark, results file or history entry behind it anywhere in the tree, and this repository does not publish numbers it did not measure (INVARIANT-36). Measure it on your own host with `python benchmarks/benchmark_suite.py`
+- **Optimized Performance**: Cython acceleration for the 3R math engine (manual build required). No speed-up ratio is published: the ratio this line used to carry had no benchmark, results file or history entry behind it anywhere in the tree, and this repository does not publish numbers it did not measure (INVARIANT-36). `python benchmarks/performance_suite.py` measures the Lyapunov and matrix-vector kernels against their NumPy baselines on your own host
 
 ### Target Use Cases
 
@@ -183,7 +183,7 @@ Two optional agentic-abuse detectors (on by default, advisory-only) extend the R
 - **Volume-spike detector** (`VolumeSpikeDetector`): statistical detection of anomalous KEM/signature bursts, scored in the Anscombe variance-stabilising transform so a quiet baseline cannot manufacture false spikes; an optional key fingerprint separates ephemeral-key churn from a hot loop over one key.
 - **Note-like artifact detector** (`NoteArtifactDetector`): surfaces signed payloads shaped like instructions addressed to a later instance ("notes for future versions"). Calibrated against the repository's own text as a hard-negative corpus.
 
-- **Performance overhead**: Not tracked in the CI regression suite; measure locally with `python benchmarks/benchmark_suite.py`
+- **Performance overhead**: Not tracked in the CI regression suite; measure locally with `python benchmarks/validation_suite.py` (3R monitoring section)
 - **Visibility**: Runtime insight into cryptographic operation behavior
 
 > **Note:** The 3R system is a runtime anomaly monitoring framework. It surfaces statistical anomalies for security review but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities. The agentic-abuse detectors are advisory heuristics: they flag payloads and bursts for human review and never block a cryptographic operation.
@@ -293,7 +293,7 @@ Additional C sources:
 ### Cython modules (`src/cython/`, 7 files)
 
 - `hmac_binding.pyx`, `sha3_binding.pyx`, `hkdf_binding.pyx`, `ed25519_binding.pyx`, `dilithium_binding.pyx` — thin FFI bindings that call the native C entry points with no per-call ctypes overhead. `ctypes` fallback is used when the extension is not built.
-- `math_engine.pyx` — the 3R monitoring math kernels (Lyapunov exponent, NTT-shaped rotation matrix-vector products, helix evolution). 18–37× over the pure-Python NumPy baseline (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). **This speedup does not apply to the C-implemented cryptographic primitives.**
+- `math_engine.pyx` — the 3R monitoring math kernels (Lyapunov exponent, NTT-shaped rotation matrix-vector products, helix evolution). No speed-up ratio over the pure-Python NumPy baseline is published: none has been measured in this tree ([`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) says how to measure it). **The acceleration does not apply to the C-implemented cryptographic primitives.**
 - `helix_engine_complete.pyx` — a complete-engine reference implementation of all 18+ variants. It is **not** compiled by the default build (`setup.py` builds `math_engine.pyx` and the FFI bindings above, not this file); `math_engine.pyx` is the acceleration that actually ships.
 
 ### Python package (`ama_cryptography/`, 28 modules + `__init__` + `__main__`)
@@ -508,16 +508,9 @@ Public-key derivation and the ECDSA signing nonce both compute `d·G` against th
 </details>
 
 <details>
-<summary><strong>Cython Optimization Results</strong></summary>
+<summary><strong>Cython Optimization (3R math engine)</strong></summary>
 
-| Operation | Pure Python | Cython | Speedup |
-|-----------|-------------|--------|---------|
-| Lyapunov function | 12.3ms | 0.45ms | **27.3x** |
-| Matrix-vector (500x500) | 8.7ms | 0.31ms | **28.1x** |
-| NTT (degree 256) | 45.2ms | 1.2ms | **37.7x** |
-| Helix evolution | 3.4ms | 0.18ms | **18.9x** |
-
-**Cython optimization for the 3R math engine** (Lyapunov, NTT, helix computations — does not affect C-implemented cryptographic primitives). The speed-up is host-specific and this repository publishes no ratio for it: the "18–37x" figure carried here until 5.0.0 had no measurement behind it in any benchmark, results file or history entry. `python benchmarks/benchmark_suite.py` measures it where you run it.
+**Cython optimization for the 3R math engine** (Lyapunov, NTT, helix computations — does not affect C-implemented cryptographic primitives). The speed-up is host-specific and this repository publishes no ratio for it. The per-kernel table and the range this section carried until 5.0.0 had no measurement behind them in any benchmark, results file or history entry, and were removed rather than restated. `python benchmarks/performance_suite.py` measures the Lyapunov and matrix-vector kernels against their NumPy baselines where you run it; nothing in the tree compares the NTT or helix evolution against a Python implementation.
 
 </details>
 
@@ -1092,7 +1085,7 @@ GitHub Actions automatically tests:
 |-------|------------|
 | Defense-in-Depth | Multi-layer cryptographic protection |
 | Quantum Resistance | NIST-standardized ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203), SLH-DSA (FIPS 205) |
-| Side-Channel Protection | Constant-time operations, C11 atomics, data-independent control flow |
+| Side-Channel Protection | Constant-time operations, masked table selection, data-independent control flow |
 | Memory Safety | Secure wiping, bounds checking, magic number validation |
 | 3R Monitoring | Runtime security analysis; overhead must be measured per environment |
 

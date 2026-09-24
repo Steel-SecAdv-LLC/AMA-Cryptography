@@ -1530,6 +1530,67 @@ class TestTheTwoPublishedArtefactsCannotDisagreeByARounding:
         assert "-23.4%" in from_live
 
 
+class TestADescriptionIsOneTableCell:
+    """A ``|`` in a description must not split its row of the report.
+
+    ``ed25519_sign``'s ledger description names the ``seed || A`` key layout.
+    Rendered raw, the two pipes made the description three cells, and every
+    figure after it — Ops/sec, Baseline, Regression — sat two columns to the
+    right of its header.  Pinned on the property (the row has exactly as many
+    cells as the header) rather than on one escaping spelling.
+    """
+
+    @staticmethod
+    def _cells(row: str) -> list[str]:
+        # Split on the pipes Markdown treats as separators: unescaped ones.
+        inner = row.strip()
+        assert inner.startswith("|") and inner.endswith("|"), row
+        cells: list[str] = []
+        current = ""
+        escaped = False
+        for character in inner[1:-1]:
+            if character == "|" and not escaped:
+                cells.append(current)
+                current = ""
+            else:
+                current += character
+            escaped = character == "\\" and not escaped
+        cells.append(current)
+        return cells
+
+    def test_a_piped_description_renders_as_one_cell(self) -> None:
+        description = "signature generation with the 64-byte seed || A key"
+        result = br.BenchmarkResult(
+            name="row0",
+            description=description,
+            ops_per_second=35287.0,
+            baseline_value=38811.0,
+            tolerance_percent=45.0,
+            regression_percent=9.08,
+            passed=True,
+        )
+        page = br.generate_markdown_report([result], br.generate_report([result]))
+        header = next(line for line in page.splitlines() if line.startswith("| Primitive |"))
+        row = next(line for line in page.splitlines() if "seed" in line and "35,287" in line)
+        assert len(self._cells(row)) == len(self._cells(header)), row
+        assert self._cells(row)[1].strip() == "35,287", row
+
+    def test_the_published_report_has_no_split_row(self) -> None:
+        """Every row of the committed report has the header's column count."""
+        page = (REPO_ROOT / "benchmark-report.md").read_text(encoding="utf-8")
+        lines = page.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith("| Primitive |"))
+        width = len(self._cells(lines[start]))
+        rows: list[str] = []
+        for line in lines[start + 2 :]:
+            if not line.startswith("|"):
+                break  # the results table ends at its first non-row line
+            rows.append(line)
+        assert len(rows) >= 10, rows
+        for row in rows:
+            assert len(self._cells(row)) == width, row
+
+
 class TestTheJsonProvenanceIsMachineReadable:
     """The JSON block's values must be values, not rendered markdown.
 
@@ -2548,8 +2609,10 @@ class TestEverySkipNamesItsCause:
             return None
 
         measured = next(iter(br.BENCHMARK_FUNCTIONS))
-        monkeypatch.setitem(br.BENCHMARK_FUNCTIONS, measured, lambda: 1000.0)
-        monkeypatch.setitem(br.PQC_BENCHMARK_FUNCTIONS, "dilithium_sign", undersampled)
+        # Exactly the rows the synthetic baseline floors: main() refuses a run
+        # in which a benchmark function has no floor.
+        monkeypatch.setattr(br, "BENCHMARK_FUNCTIONS", {measured: lambda: 1000.0})
+        monkeypatch.setattr(br, "PQC_BENCHMARK_FUNCTIONS", {"dilithium_sign": undersampled})
         monkeypatch.setattr(br, "capture_dispatch_report", lambda: "stub")
         monkeypatch.setattr(br, "_DISPATCH_REPORT", None)
         monkeypatch.setattr(br, "_TREE_STATE", None)
@@ -2739,6 +2802,9 @@ class TestTheDispatchRowDescribesTheMeasuringProcess:
         monkeypatch.setattr(br, "_DISPATCH_REPORT", None)
         monkeypatch.setattr(br, "_TREE_STATE", None)
         name = next(iter(br.BENCHMARK_FUNCTIONS))
+        # Exactly the row the synthetic baseline floors (see above).
+        monkeypatch.setattr(br, "BENCHMARK_FUNCTIONS", {name: br.BENCHMARK_FUNCTIONS[name]})
+        monkeypatch.setattr(br, "PQC_BENCHMARK_FUNCTIONS", {})
         path = tmp_path / "baseline.json"
         path.write_text(
             json.dumps(

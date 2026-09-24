@@ -819,6 +819,53 @@ class TestCryptoConstructionDocs:
         assert authority.native_memzero_has_barrier is True
         assert authority.lms_verify_implemented and authority.hss_verify_implemented
         assert authority.secure_wipe_delegates_to_memzero is True
+        # Read out of the C sources, comments stripped: the Ed25519 path, the
+        # constant-time utilities and the CPUID/dispatch initialisation use no
+        # C11 atomics; ama_nistp.c's MULX gate does.
+        assert authority.ed25519_uses_atomics is False
+        assert authority.consttime_uses_atomics is False
+        assert authority.dispatch_init_uses_atomics is False
+        assert authority.nistp_uses_atomics is True
+
+    def test_the_atomics_derivation_reads_code_not_comments(self, tmp_path: Path) -> None:
+        """ama_x25519.c explains why it is NOT ``_Atomic``; that is not a use."""
+        gate = _load(CONSTRUCTION_DOCS)
+        commented = tmp_path / "commented.c"
+        commented.write_text(
+            "/* Storage is a plain `int`, not `_Atomic int`, by design. */\n"
+            "// atomic_load_explicit(&x, memory_order_relaxed) would cost a fence\n"
+            "static int flag = -1;\n",
+            encoding="utf-8",
+        )
+        used = tmp_path / "used.c"
+        used.write_text("#include <stdatomic.h>\nstatic _Atomic int flag = -1;\n", encoding="utf-8")
+        assert gate._uses_c11_atomics(tmp_path, ("commented.c",)) is False
+        assert gate._uses_c11_atomics(tmp_path, ("used.c",)) is True
+        assert gate._uses_c11_atomics(tmp_path, ("absent.c",)) is None
+
+    def test_an_atomics_claim_passes_where_the_source_has_them(self) -> None:
+        """Derived, not a denylist: were the Ed25519 path to use atomics, the claim is true."""
+        gate = _load(CONSTRUCTION_DOCS)
+        authority = gate.build_authority(REPO_ROOT)
+        claim = "3. **Ed25519 Digital Signatures** (RFC 8032, C11 atomics hardened)"
+        assert gate._rule_c11_atomics(claim, authority)
+        import dataclasses
+
+        with_atomics = dataclasses.replace(authority, ed25519_uses_atomics=True)
+        assert gate._rule_c11_atomics(claim, with_atomics) is None
+
+    def test_denying_atomics_is_not_crediting_them(self) -> None:
+        """ "No `_Atomic`" states what the source shows; the same line asserting
+        them does not pass by sharing its words."""
+        gate = _load(CONSTRUCTION_DOCS)
+        authority = gate.build_authority(REPO_ROOT)
+        denial = (
+            "- No run-time initialisation and no `_Atomic` or lock on the Ed25519 "
+            "path: the base-point tables are `static const`"
+        )
+        assert gate._rule_c11_atomics(denial, authority) is None
+        assertion = "- The Ed25519 path guards its tables with `_Atomic` flags"
+        assert gate._rule_c11_atomics(assertion, authority)
 
     def test_the_composite_weights_are_read_in_source_order(self) -> None:
         """A permutation would make the gate reject the correct documentation.
@@ -857,6 +904,56 @@ class TestCryptoConstructionDocs:
                 "multi-pass",
             ),
             ("- **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)", "4.20 ms"),
+            (
+                "| Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` (secret scalar) "
+                "| \u2713 Constant-time |",
+                "fe25519_sq",
+            ),
+            # Caught by the derived C-symbol rule, which names the missing function.
+            (
+                "- Dedicated `fe25519_sq()` field squaring (~55 multiplications vs ~100)",
+                "fe25519_sq",
+            ),
+            (
+                "- C11 `_Atomic` with `memory_order_acquire`/`memory_order_release` for "
+                "thread-safe initialization",
+                "pthread_once",
+            ),
+            ("3. **Ed25519 Digital Signatures** (RFC 8032, C11 atomics hardened)", "static const"),
+            ("| `ama_ed25519.c` | Ed25519 (C11 atomics) | RFC 8032 |", "C11 atomics"),
+            (
+                "1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c` "
+                "(C11 atomics for thread safety)",
+                "file-scope mutable state",
+            ),
+            (
+                "| Side-Channel Protection | Constant-time operations, C11 atomics, "
+                "data-independent control flow |",
+                "C11 atomics",
+            ),
+            (
+                "- Signing: ~0.09 ms (\u2248 10,600 ops/sec with the expanded `seed || pk` cache)",
+                "layout, not a cache",
+            ),
+            (
+                "**Measured: 18\u201337x speedup over pure Python mathematical baseline**",
+                "speed-up range",
+            ),
+            (
+                "- **High Performance**: 18-37x speedup via Cython mathematical engine",
+                "speed-up range",
+            ),
+            ("| NTT (degree 256) | 45.2ms | 1.2ms | **37.7x** |", "per-kernel"),
+            ("- Lyapunov stability computation (27.3x speedup)", "per-kernel"),
+            (
+                "| X25519 (batch) | `ama_x25519_avx2.c` | 4-way ladder. Ed25519 has no AVX2 "
+                "translation unit at all; its fast path is the fe51 comb table. |",
+                "ama_ed25519_select_avx2.c",
+            ),
+            (
+                "ClusterFuzzLite runs them nightly on OSS-Fuzz's infrastructure with a",
+                "GitHub-hosted runners",
+            ),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -888,7 +985,14 @@ class TestCryptoConstructionDocs:
             "    assert len(pkg_v2.ethical_vector) == 4\n\n"
             "AMA implements HSS/LMS verification; only signing is withheld.\n\n"
             "| C Compiler | GCC 12 / Clang 15 | GCC 13+ / Clang 17+ |\n\n"
-            "`secure_memzero()` writes zeros once and issues a compiler barrier.\n",
+            "`secure_memzero()` writes zeros once and issues a compiler barrier.\n\n"
+            "Ed25519's field squaring is `fe51_sq()`: 15 limb products against 25.\n\n"
+            "There is no `_Atomic` and no lock on the Ed25519 path.\n\n"
+            "The only C11 atomic in src/c is ama_nistp.c's relaxed MULX gate (`_Atomic int`).\n\n"
+            "The 64-byte `seed || A` key is a layout, not a cache.\n\n"
+            "No speed-up ratio is published for the Cython math engine.\n\n"
+            "Ed25519's AVX2 unit is `ama_ed25519_select_avx2.c`.\n\n"
+            "ClusterFuzzLite runs them nightly on GitHub-hosted runners.\n",
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
@@ -1729,6 +1833,84 @@ class TestBenchmarkClaims:
         )
         completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
         assert completed.returncode == 0, completed.stderr
+
+    def test_a_typed_copy_of_a_record_figure_fails(self, tmp_path: Path) -> None:
+        """The ~241k defect: a record figure typed into prose, beside a record of 205,641.
+
+        The sentence is the one wiki/Performance-Benchmarks.md shipped.  Only its
+        floors were checked, so it survived the paragraph's own promise that it
+        could not drift.
+        """
+        scratch = _scratch_repo(tmp_path)
+        (scratch / "STALE.md").write_text(
+            "> - Pure ctypes on a 1 KB message: ~241k ops/sec on the canonical record's host\n"
+            ">   (`benchmarks/benchmark_runner.py` \u2192 `benchmarks/benchmark-results.json`).\n",
+            encoding="utf-8",
+            newline="",
+        )
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 1, completed.stdout
+        assert "~241k" in completed.stderr
+        assert "AUTO-RECORD-OPS" in completed.stderr
+
+    def test_a_marked_figure_that_disagrees_with_the_record_fails(self, tmp_path: Path) -> None:
+        scratch = _scratch_repo(tmp_path)
+        (scratch / "STALE.md").write_text(
+            "Measured: <!-- AUTO-RECORD-OPS:hmac_sha3_256 -->241,000<!-- /AUTO-RECORD-OPS -->"
+            " ops/sec.\n",
+            encoding="utf-8",
+            newline="",
+        )
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 1, completed.stdout
+        assert "241,000" in completed.stderr
+
+    def test_a_marked_figure_naming_no_record_row_fails(self, tmp_path: Path) -> None:
+        scratch = _scratch_repo(tmp_path)
+        (scratch / "STALE.md").write_text(
+            "Measured: <!-- AUTO-RECORD-OPS:no_such_row -->1,000<!-- /AUTO-RECORD-OPS -->"
+            " ops/sec.\n",
+            encoding="utf-8",
+            newline="",
+        )
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 1, completed.stdout
+        assert "no_such_row" in completed.stderr
+
+    def test_update_docs_writes_the_figure_the_gate_demands(self, tmp_path: Path) -> None:
+        """Non-vacuity: the generator's output is what the gate accepts."""
+        scratch = _scratch_repo(tmp_path)
+        update_docs = _load(scratch / "tools" / "update_docs.py")
+        figures = update_docs.record_ops_figures(scratch / "benchmarks" / "benchmark-results.json")
+        stale = (
+            "Measured: <!-- AUTO-RECORD-OPS:hmac_sha3_256 -->241,000<!-- /AUTO-RECORD-OPS -->"
+            " ops/sec.\n"
+        )
+        rewritten = update_docs.rewrite_record_figures(stale, figures)
+        assert rewritten != stale
+        (scratch / "CURRENT.md").write_text(rewritten, encoding="utf-8", newline="")
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 0, completed.stderr
+
+    def test_the_wiki_quotes_the_hmac_record_figure_through_the_marker(self) -> None:
+        """The page this rule was written for still carries its figure derived."""
+        page = (REPO_ROOT / "wiki" / "Performance-Benchmarks.md").read_text(encoding="utf-8")
+        assert "<!-- AUTO-RECORD-OPS:hmac_sha3_256 -->" in page
+        assert "~241k" not in page
+
+    def test_a_record_label_the_ledger_corrected_fails(self, tmp_path: Path) -> None:
+        """``ed25519_sign`` was published as the expanded-key path it is not."""
+        scratch = _scratch_repo(tmp_path)
+        record_path = scratch / "benchmarks" / "benchmark-results.json"
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        for row in record["results"]:
+            if row["name"] == "ed25519_sign":
+                row["description"] = "Ed25519 signature generation (native C, expanded key)"
+        record_path.write_text(json.dumps(record, indent=2), encoding="utf-8", newline="")
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 1, completed.stdout
+        assert "ed25519_sign" in completed.stderr
+        assert "expanded key" in completed.stderr
 
     def test_the_ed25519_sign_floor_tracks_invariant_51(self) -> None:
         """The floor must be a post-INVARIANT-51 value, not the old one.

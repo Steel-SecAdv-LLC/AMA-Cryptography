@@ -322,3 +322,40 @@ def test_the_not_in_tree_allowlist_has_no_stale_entry() -> None:
             f"NOT_IN_TREE lists {name!r} as absent from the tree, but a tracked file "
             f"has that name; remove the entry so it is checked like any other"
         )
+
+
+def _enhanced_features_avx2_section() -> str:
+    text = (REPO_ROOT / "ENHANCED_FEATURES.md").read_text(encoding="utf-8")
+    start = text.find("#### AVX2 (x86-64)")
+    assert start >= 0, "ENHANCED_FEATURES.md no longer has its AVX2 inventory section"
+    end = text.find("\n#### ", start + 1)
+    return text[start : end if end >= 0 else len(text)]
+
+
+def test_the_avx2_inventory_names_every_avx2_translation_unit() -> None:
+    """The AVX2 table is an inventory, so it must name every unit in ``src/c/avx2/``.
+
+    The path tests above catch a document naming a file that does not exist.
+    The opposite failure is invisible to them: ENHANCED_FEATURES.md's AVX2 table
+    said there was no AVX2 translation unit for Ed25519 at all, while
+    ``src/c/avx2/ama_ed25519_select_avx2.c`` — the constant-time fold that
+    selects the Ed25519 comb's table entry by the SECRET digit, and so the one
+    kernel on that path whose correctness is purely a side-channel property —
+    was compiled and dispatched.  A reviewer scoping the SIMD constant-time
+    surface from that table skipped it.  The VAES AES-GCM kernel was missing
+    too.  The list is derived from the directory, so a new kernel is required
+    here the day it lands.
+    """
+    units = sorted(path.name for path in (REPO_ROOT / "src" / "c" / "avx2").glob("*.c"))
+    assert len(units) >= 9, f"only {len(units)} AVX2 units found; the glob has stopped seeing them"
+    section = _enhanced_features_avx2_section()
+    missing = [
+        name
+        for name in units
+        if not re.search(r"`(?:src/c/avx2/)?" + re.escape(name) + "`", section)
+    ]
+    assert not missing, (
+        f"ENHANCED_FEATURES.md's AVX2 inventory does not name {missing}. Every "
+        "translation unit in src/c/avx2/ is part of the SIMD surface a reviewer "
+        "scopes from this table; add a row saying what it does and how it is gated."
+    )

@@ -55,6 +55,20 @@ than no gate. What it enforces instead is everything that is *not* hardware:
    it is not a slow one; both are mistakes. A measured figure that is not a
    positive, finite number is not a measurement at all and is rejected with
    the provenance (rule 3), for every row, whether or not it has a floor.
+6. **A figure quoted from the record is the record's figure.** Prose that
+   quotes one measured value carries it between
+   ``<!-- AUTO-RECORD-OPS:<benchmark> -->`` markers, and the value must be what
+   tools/update_docs.py renders from ``benchmark-results.json``.
+   wiki/Performance-Benchmarks.md quoted "~241k ops/sec" for an HMAC row the
+   record gives as 205,641, one sentence before promising the paragraph could
+   not drift — only its floors were checked.
+7. **A record's labels are the ledger's labels.** ``benchmark_runner.py``
+   copies each row's description from the baseline entry it measured against,
+   so a record whose description differs from ``baseline.json``'s is carrying
+   a label the ledger has since corrected. ``ed25519_sign`` was published as
+   "native C, expanded key" — the per-call 64-byte path INVARIANT-51 makes
+   re-derive ``A`` — while ``ed25519_sign_expanded``, the separate row, is the
+   expanded-key path; the two rows exist to show that difference.
 
 Exit status
 -----------
@@ -311,8 +325,8 @@ def _extract_block(text: str, start: str, end: str) -> Optional[str]:
     return text.split(start, 1)[1].split(end, 1)[0]
 
 
-def check_generated_tables(report: Report, repo: Path, results: dict[str, Any]) -> None:
-    """Re-derive every cell of the generated blocks and compare."""
+def _load_update_docs(report: Report, repo: Path) -> Optional[Any]:
+    """tools/update_docs.py from ``repo``, or None after reporting why not."""
     # Loaded by path rather than by name: this tool lives in tools/ but is run
     # from the repository root, and `--repo` may point elsewhere entirely (the
     # gate's own tests drive it against a fixture tree).
@@ -321,12 +335,20 @@ def check_generated_tables(report: Report, repo: Path, results: dict[str, Any]) 
     )
     if spec is None or spec.loader is None:  # pragma: no cover - unreachable on a real tree
         report.fail("cannot load tools/update_docs.py to re-derive the tables")
-        return
+        return None
     update_docs = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(update_docs)
     except Exception as exc:  # pragma: no cover
         report.fail(f"cannot import tools/update_docs.py to re-derive the tables: {exc!r}")
+        return None
+    return update_docs
+
+
+def check_generated_tables(report: Report, repo: Path, results: dict[str, Any]) -> None:
+    """Re-derive every cell of the generated blocks and compare."""
+    update_docs = _load_update_docs(report, repo)
+    if update_docs is None:
         return
 
     for start, end, generator, label in (
@@ -703,6 +725,121 @@ def check_documented_floors(
             report.ok()
 
 
+#: A throughput figure as prose writes one: ``205,641 ops/sec``, ``~241k
+#: ops/sec``, ``4,268 batches/sec``.
+_QUOTED_THROUGHPUT = re.compile(
+    r"(?<![\w.,-])~?(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?\s?[kK]|\d{4,})(?:\.\d+)?"
+    r"\s*(?:ops/s(?:ec)?|batches/sec)"
+)
+
+
+def _unmarked_record_quotes(text: str, marker: re.Pattern[str]) -> list[tuple[int, str, str]]:
+    """``(line, figure, sentence)`` for each unmarked figure attributed to the record.
+
+    A sentence that names ``benchmark-results.json`` as its source and quotes a
+    throughput is quoting the record, so the figure must be a marked one that
+    this gate re-derives.  Figures the sentence asserts to be FLOORS are the
+    floor rule's business and are skipped here.
+    """
+    found: list[tuple[int, str, str]] = []
+    for block in _blocks(text):
+        joined, marks = _join(block)
+        for offset, sentence in _sentences(joined):
+            if "benchmark-results.json" not in sentence:
+                continue
+            unmarked = marker.sub(lambda m: " " * len(m.group(0)), sentence)
+            floors = {
+                match.start("value")
+                for pattern in _FLOOR_CLAIMS
+                for match in pattern.finditer(unmarked)
+            }
+            for match in _QUOTED_THROUGHPUT.finditer(unmarked):
+                digits = match.start() + (1 if match.group(0).startswith("~") else 0)
+                if digits in floors:
+                    continue
+                found.append((_line_at(marks, offset + match.start()), match.group(0), sentence))
+    return found
+
+
+def check_record_figures(report: Report, repo: Path) -> None:
+    """Every figure quoted from the record must be the record's own figure.
+
+    Two halves.  A figure between AUTO-RECORD-OPS markers must equal what
+    tools/update_docs.py renders from the record — the expected text comes from
+    that module's own renderer, so the rule and the generator cannot disagree
+    about formatting.  And a throughput a sentence attributes to
+    ``benchmark-results.json`` WITHOUT the markers fails: it is a typed copy of
+    a measurement, which is how "~241k" came to stand beside a record of
+    205,641.
+    """
+    update_docs = _load_update_docs(report, repo)
+    if update_docs is None:
+        return
+    figures: dict[str, str] = update_docs.record_ops_figures(repo / RESULTS_JSON)
+    pattern: re.Pattern[str] = update_docs.RECORD_OPS_FIGURE
+    for path in sorted(list(repo.glob("*.md")) + list(repo.glob("wiki/*.md"))):
+        relative = path.relative_to(repo)
+        if _is_historical_record(relative):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line, figure, sentence in _unmarked_record_quotes(text, pattern):
+            report.fail(
+                f"{relative}:{line} quotes {figure!r} from {RESULTS_JSON} as typed "
+                "text. Put the figure between `<!-- AUTO-RECORD-OPS:<benchmark> -->` "
+                "and `<!-- /AUTO-RECORD-OPS -->` and run `python tools/update_docs.py`, "
+                "so it is derived from the record rather than copied from it."
+                f"\n      {sentence[:200]}"
+            )
+        for match in pattern.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            name = match.group("name")
+            quoted = match.group("value").strip()
+            expected = figures.get(name)
+            if expected is None:
+                report.fail(
+                    f"{relative}:{line} quotes the record figure of {name!r}, which "
+                    f"{RESULTS_JSON} does not carry. A quoted measurement must name "
+                    "a row of the record it claims to come from."
+                )
+                continue
+            if quoted != expected:
+                report.fail(
+                    f"{relative}:{line} quotes {name} at {quoted!r} ops/sec; "
+                    f"{RESULTS_JSON} records {expected}. Run "
+                    "`python tools/update_docs.py` rather than typing the figure."
+                )
+                continue
+            report.ok()
+
+
+def check_record_descriptions(report: Report, results: dict[str, Any], x86: dict[str, Any]) -> None:
+    """A record row's description must be its ledger entry's description.
+
+    ``benchmark_runner.py`` writes ``config["description"]`` from the baseline
+    it ran against, so at the moment of recording the two are equal.  A later
+    correction to the ledger that is not carried into the committed record
+    leaves the record — and ``benchmark-report.md``, rendered from it —
+    publishing the label the ledger retracted.
+    """
+    ledger = _floors(x86)
+    for row in results.get("results", []):
+        name = row.get("name")
+        entry = ledger.get(name) if name else None
+        if entry is None or "description" not in entry:
+            continue
+        if row.get("description") != entry["description"]:
+            report.fail(
+                f"{RESULTS_JSON}: {name!r} is labelled {row.get('description')!r}; "
+                f"{X86_BASELINE_JSON} describes that benchmark as "
+                f"{entry['description']!r}. The record's label is copied from the "
+                "ledger at run time, so a mismatch is a correction the record never "
+                "received; carry it into the record and regenerate "
+                "benchmark-report.md from it."
+            )
+            continue
+        report.ok()
+
+
 def check_measured_against_floor(
     report: Report, results: dict[str, Any], x86: dict[str, Any]
 ) -> None:
@@ -774,6 +911,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     check_architecture_labels(report, x86, arm)
     check_generated_tables(report, repo, results)
     check_documented_floors(report, repo, x86, arm)
+    check_record_figures(report, repo)
+    check_record_descriptions(report, results, x86)
     check_measured_against_floor(report, results, x86)
 
     if report.failures:

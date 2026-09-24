@@ -43,7 +43,7 @@ AMA Cryptography implements defense-in-depth with multiple independent security 
 
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
-3. **Ed25519 Digital Signatures** (RFC 8032, C11 atomics hardened)
+3. **Ed25519 Digital Signatures** (RFC 8032; constant-time fixed-base comb over `static const` tables — no run-time initialisation, so no atomics or locks)
 4. **ML-DSA-65 Quantum-Resistant Signatures** (NIST FIPS 204)
 5. **HKDF-SHA3-256 Key Derivation** (RFC 5869)
 6. **RFC 3161 Timestamp Binding** — *not an independent layer.* AMA verifies the §2.4.2 message-imprint binding only. It does not verify the TSA's CMS `SignerInfo` signature or validate its certificate chain, so an adversary who can supply a token satisfies this check unaided, with any `genTime` they choose, using no key. It contributes no adversarial resistance and must not be counted toward the security bound. See [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform) and [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).

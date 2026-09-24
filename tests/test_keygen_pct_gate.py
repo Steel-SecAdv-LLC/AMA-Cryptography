@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -574,3 +576,92 @@ class TestCythonBindingKeygens:
         text = target.read_text(encoding="utf-8")
         target.write_text(text.replace("    pairwise_test_signature(", "    _no_test(", 1))
         assert gate.main(["--root", str(tmp_path)]) == 1
+
+
+#: Wording that describes the pairwise test as something application code
+#: runs.  Each alternative is a phrase the documentation shipped.
+_CALLER_INVOKED = re.compile(
+    r"responsible for invoking|not\*{0,2} automatically intercept|called explicitly"
+    r"|\b(?:must|can|should|may) be (?:called|invoked)\b",
+    re.IGNORECASE,
+)
+
+
+def _caller_invoked_paragraphs(text: str) -> list[str]:
+    return [
+        " ".join(paragraph.split())[:200]
+        for paragraph in re.split(r"\n\s*\n", text)
+        if re.search(r"pairwise", paragraph, re.IGNORECASE) and _CALLER_INVOKED.search(paragraph)
+    ]
+
+
+class TestNoDocumentDescribesThePairwiseTestAsCallerInvoked:
+    """The gate proves the wiring; the documents must not deny it.
+
+    ``docs/compliance/CSRC_ALIGN_REPORT.md`` §4.4 — the document that states
+    the FIPS 140-3 control inventory — said callers "are responsible for
+    invoking these helpers", that they "do **not** automatically intercept every
+    key generation" and "must be called explicitly", and listed three
+    algorithms.  ``IMPLEMENTATION_GUIDE.md`` said the helpers "can be called
+    after any key generation".  Both were accurate before INVARIANT-41 wired
+    the test into every keygen and false after it, while the invariant, README
+    and SECURITY.md said the opposite: a compliance reviewer reading the report
+    records the §4.9.2 conditional self-test as absent and caller-dependent.
+
+    This reads every tracked Markdown document except the historical record,
+    and fails on a paragraph that names the pairwise test and describes it as
+    caller-invoked — so the claim cannot move to another page either.
+    """
+
+    @staticmethod
+    def _documents() -> list[Path]:
+        from tools._repo import is_historical_record
+
+        listed = subprocess.run(
+            ["git", "ls-files", "*.md"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        return [REPO_ROOT / name for name in listed if not is_historical_record(Path(name))]
+
+    def test_the_shipped_wording_is_recognised(self) -> None:
+        """Non-vacuity: the two paragraphs that shipped must both be caught."""
+        csrc = (
+            "The library provides helper functions (`pairwise_test_signature()`,\n"
+            "`pairwise_test_kem()`) that perform a sign-verify or encaps-decaps\n"
+            "roundtrip on a fixed test message. Callers (e.g. key-generation wrappers)\n"
+            "are responsible for invoking these helpers after generating a keypair.\n"
+        )
+        guide = (
+            "**Pairwise Consistency Tests:** Functions `pairwise_test_signature()` and\n"
+            "`pairwise_test_kem()` in `ama_cryptography._self_test` can be called after\n"
+            "any key generation to verify the keypair is consistent.\n"
+        )
+        assert _caller_invoked_paragraphs(csrc)
+        assert _caller_invoked_paragraphs(guide)
+
+    def test_the_corrected_wording_passes(self) -> None:
+        corrected = (
+            "Every asymmetric key generation in the package runs its pairwise\n"
+            "consistency test itself, before the keypair is returned. There is nothing\n"
+            "for application code to call and no way to switch it off.\n"
+        )
+        assert _caller_invoked_paragraphs(corrected) == []
+
+    def test_no_tracked_document_says_it(self) -> None:
+        documents = self._documents()
+        assert len(documents) > 40, "git ls-files returned too few documents to be the tree"
+        offenders = [
+            f"{path.relative_to(REPO_ROOT)}: {paragraph}"
+            for path in documents
+            for paragraph in _caller_invoked_paragraphs(
+                path.read_text(encoding="utf-8", errors="replace")
+            )
+        ]
+        assert not offenders, (
+            "these paragraphs describe the INVARIANT-41 pairwise test as something "
+            "the caller runs; tools/check_keygen_pct.py proves every keygen runs it "
+            "itself:\n" + "\n".join(offenders)
+        )

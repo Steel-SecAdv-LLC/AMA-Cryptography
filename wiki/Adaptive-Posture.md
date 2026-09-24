@@ -208,44 +208,77 @@ if evaluation.action in (PostureAction.SWITCH_ALGORITHM, PostureAction.ROTATE_AN
 
 ## Monitoring Integration Loop
 
-A typical production monitoring loop:
+A typical production monitoring loop. The controller acts only on what **its
+own monitor** reports, so it must be constructed with one: a controller built
+without `monitor=` answers every `evaluate_and_respond()` with `NOMINAL` /
+`NONE` (`signals["reason"] == "no_monitor"`) and never rotates or switches
+anything. Do not evaluate a separate signal dict and then call the controller
+because that evaluation looked bad — the controller re-reads its monitor and
+acts on that report, not on the one you computed beside it. One call per cycle
+reads, evaluates and responds; the rotation manager and the algorithm-switch
+hook are where your keys and your `AmaCryptography` instance are changed.
 
 <!-- example: python-run -->
 ```python
 import time
-from ama_cryptography.adaptive_posture import (
-    PostureEvaluator,
-    CryptoPostureController,
-    PostureAction,
-    ThreatLevel,
+
+from ama_cryptography.adaptive_posture import CryptoPostureController
+from ama_cryptography.crypto_api import AlgorithmType, AmaCryptography
+from ama_cryptography.key_management import KeyRotationManager
+from ama_cryptography.monitor import AmaCryptographyMonitor
+
+# The key manager the controller rotates through, and the crypto object the
+# application signs with.  Both are changed by the controller, not by the loop.
+key_manager = KeyRotationManager()
+key_manager.register_key("signing-2026-09", purpose="signing")
+active = {"crypto": AmaCryptography(algorithm=AlgorithmType.ML_DSA_65)}
+
+
+def on_algorithm_switch(new_algorithm: str) -> None:
+    # Names on the controller's ladder are AlgorithmType member names.
+    active["crypto"] = AmaCryptography(algorithm=AlgorithmType[new_algorithm])
+
+
+monitor = AmaCryptographyMonitor(enabled=True)
+controller = CryptoPostureController(
+    monitor=monitor,  # required: without it the controller never acts
+    rotation_manager=key_manager,  # a rotation registers and activates a new key here
+    current_algorithm="ML_DSA_65",
+    on_algorithm_switch=on_algorithm_switch,
 )
 
-evaluator = PostureEvaluator()
-controller = CryptoPostureController()
 
-def monitoring_loop(crypto_api, key_manager, interval_seconds=60):
-    """Continuous threat evaluation loop."""
-    while True:
-        # Collect monitoring signals
-        signals = collect_monitoring_signals()
+def monitoring_loop(controller, interval_seconds=60.0, cycles=None):
+    """Read, evaluate and respond every interval; forever when cycles is None."""
+    completed = 0
+    while cycles is None or completed < cycles:
+        # The one entry point: it reads the monitor, evaluates the report and
+        # applies the action (subject to rotation_cooldown and
+        # confirmation_mode).  There is no public execute_action().
+        evaluation = controller.evaluate_and_respond()
+        summary = controller.get_posture_summary()
+        print(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+            f"Threat: {evaluation.threat_level.name} | "
+            f"Action: {evaluation.action.name} | "
+            f"Algorithm: {summary['current_algorithm']} | "
+            f"Active key: {key_manager.get_active_key()}"
+        )
+        completed += 1
+        if cycles is None or completed < cycles:
+            time.sleep(interval_seconds)
 
-        # Evaluate threat level
-        evaluation = evaluator.evaluate(signals)
 
-        # Log current posture.  The field is `action`; there is no
-        # `.recommended_action` — see the API note earlier on this page.
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-              f"Threat: {evaluation.threat_level.name} | "
-              f"Action: {evaluation.action.name}")
-
-        # Execute actions if needed.  There is no public
-        # `execute_action(evaluation, ...)`; `evaluate_and_respond()` is the
-        # entry point, and it evaluates and dispatches in one call.
-        if evaluation.action != PostureAction.NONE:
-            controller.evaluate_and_respond()
-
-        time.sleep(interval_seconds)
+if __name__ == "__main__":
+    # Production runs monitoring_loop(controller) until the process stops.
+    # One cycle here, so the example terminates when it is run as written.
+    monitoring_loop(controller, cycles=1)
 ```
+
+`tests/test_adaptive_posture.py::TestTheWikiMonitoringLoopActs` executes this
+block with its monitor reporting a sustained critical signal and requires the
+key manager's active key and the application's `AmaCryptography` algorithm to
+have changed; the loop this section used to show fails it.
 
 ---
 

@@ -61,7 +61,10 @@ What is checked
    does a documented signal *count* that disagrees with the number of weights.
 3. **Construction descriptions.** The native memory-zeroing kernel writes once
    and issues a barrier; "multi-pass" descriptions of the *native* path fail.
-   ``ETHICAL_VECTOR``'s length is read from ``equations.py``.
+   ``ETHICAL_VECTOR``'s length is read from ``equations.py``. A document that
+   credits C11 atomics to a component whose source uses none — the Ed25519
+   path, ``ama_consttime.c``, the CPUID/dispatch initialisation — fails; which
+   components use them is read from the C sources, comments stripped.
 4. **Removed or nonexistent symbols.** Every ``ama_cryptography``-namespaced
    identifier a document imports must exist in the package, and every C
    function a document names in inline code (a backticked ``name(...)``) must
@@ -226,6 +229,14 @@ class Authority:
     #: ``include/`` defines or calls.  A documented bare call with one of these
     #: prefixes is a claim about a C symbol; anything else is left alone.
     c_call_prefixes: frozenset[str]
+    #: Whether each component's C source uses C11 atomics, comments stripped.
+    #: ``None`` when none of the component's files could be read, so a
+    #: collapsed derivation fails closed in ``main`` instead of reading as
+    #: "no atomics".
+    ed25519_uses_atomics: Optional[bool] = None
+    consttime_uses_atomics: Optional[bool] = None
+    dispatch_init_uses_atomics: Optional[bool] = None
+    nistp_uses_atomics: Optional[bool] = None
 
 
 def _parse(path: Path) -> ast.Module:
@@ -419,6 +430,38 @@ def _implementation_identifiers(repo: Path) -> tuple[frozenset[str], frozenset[s
     return frozenset(identifiers), prefixes
 
 
+_C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+_C11_ATOMICS_IN_CODE = re.compile(
+    r"\b_Atomic\b|<stdatomic\.h>|\batomic_(?:load|store|exchange|compare_exchange|fetch)\w*\s*\("
+)
+
+#: The C sources of each component a document might credit with atomics.
+#: Globs, so a new Ed25519 translation unit is covered the day it is added.
+_ATOMICS_COMPONENT_SOURCES: dict[str, tuple[str, ...]] = {
+    "ed25519": ("src/c/**/*ed25519*.c", "src/c/**/*ed25519*.h", "src/c/fe51.h"),
+    "consttime": ("src/c/ama_consttime.c",),
+    "dispatch_init": ("src/c/ama_cpuid.c", "src/c/dispatch/ama_dispatch.c"),
+    "nistp": ("src/c/ama_nistp.c",),
+}
+
+
+def _uses_c11_atomics(repo: Path, patterns: Sequence[str]) -> Optional[bool]:
+    """True if any matched C source uses C11 atomics in code, not in a comment.
+
+    Comments are stripped first: ``ama_x25519.c`` explains at length why its
+    flag is a plain ``int`` and not ``_Atomic int``, and that explanation is
+    not a use.
+    """
+    paths = sorted({path for pattern in patterns for path in repo.glob(pattern) if path.is_file()})
+    if not paths:
+        return None
+    for path in paths:
+        code = _C_COMMENT.sub(" ", path.read_text(encoding="utf-8", errors="replace"))
+        if _C11_ATOMICS_IN_CODE.search(code):
+            return True
+    return False
+
+
 def build_authority(repo: Path = REPO) -> Authority:
     package = repo / "ama_cryptography"
 
@@ -474,6 +517,12 @@ def build_authority(repo: Path = REPO) -> Authority:
         c_symbols=c_symbols,
         implementation_identifiers=implementation_identifiers,
         c_call_prefixes=c_call_prefixes,
+        ed25519_uses_atomics=_uses_c11_atomics(repo, _ATOMICS_COMPONENT_SOURCES["ed25519"]),
+        consttime_uses_atomics=_uses_c11_atomics(repo, _ATOMICS_COMPONENT_SOURCES["consttime"]),
+        dispatch_init_uses_atomics=_uses_c11_atomics(
+            repo, _ATOMICS_COMPONENT_SOURCES["dispatch_init"]
+        ),
+        nistp_uses_atomics=_uses_c11_atomics(repo, _ATOMICS_COMPONENT_SOURCES["nistp"]),
     )
 
 
@@ -702,6 +751,38 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
         "is generated from benchmarks/benchmark-results.json by "
         "tools/update_docs.py; do not type the figure.",
     ),
+    (
+        re.compile(r"seed\s*(?:\|\||\u2016)\s*(?:pk|A)`?\s+cache", re.IGNORECASE),
+        "the 64-byte `seed || A` key is a layout, not a cache. INVARIANT-51: "
+        "ama_ed25519_sign re-derives A = [a]B on every call and refuses a key "
+        "whose stored half disagrees; only ama_ed25519_sign_expanded skips the "
+        "derivation, under a tag bound at load.",
+    ),
+    (
+        re.compile("\\b18\\s*[-\u2013\u2014]\\s*37\\s*(?:x|\u00d7)", re.IGNORECASE),
+        "the Cython math-engine speed-up range has no benchmark, results file "
+        "or history entry behind it anywhere in the tree (INVARIANT-36). "
+        "benchmarks/performance_suite.py measures two kernels on the reader's "
+        "own host; this repository publishes no ratio for them.",
+    ),
+    (
+        re.compile("(?<![\\d.])(?:27\\.3|28\\.1|37\\.7|18\\.9)\\s*(?:x|\u00d7)(?![A-Za-z0-9])"),
+        "the per-kernel Cython speed-up table (Lyapunov / matrix-vector / NTT / "
+        "helix) was never measured in this tree and was removed rather than "
+        "restated (INVARIANT-36).",
+    ),
+    (
+        re.compile(r"Ed25519[^.\n]{0,40}\bno AVX2 (?:translation unit|kernel|TU)\b", re.IGNORECASE),
+        "src/c/avx2/ama_ed25519_select_avx2.c is compiled in AMA_AVX2_SOURCES and "
+        "performs the constant-time Niels-row fold of the Ed25519 signing comb "
+        "for the SECRET digit (CPUID-gated by ama_has_avx2()).",
+    ),
+    (
+        re.compile(r"ClusterFuzzLite[^.\n]{0,80}\bOSS-Fuzz'?s infrastructure", re.IGNORECASE),
+        "ClusterFuzzLite runs on GitHub-hosted runners (runs-on: ubuntu-latest in "
+        ".github/workflows/clusterfuzzlite.yml), building in OSS-Fuzz's base-builder "
+        "image; the project is not onboarded to OSS-Fuzz.",
+    ),
 )
 
 
@@ -908,6 +989,61 @@ def _rule_lms(line: str, authority: Authority) -> Optional[str]:
     )
 
 
+_ATOMICS_CLAIM = re.compile(
+    r"C11 atomics?|\b_Atomic\b|stdatomic|memory_order_\w+|atomics? hardened", re.IGNORECASE
+)
+
+#: (component a line can name, the Authority field saying whether its source
+#: uses atomics, what the source does instead).  Checked in order; the first
+#: component the line names whose source has no atomics decides.
+_ATOMICS_COMPONENTS: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (
+        re.compile(r"ed25519", re.IGNORECASE),
+        "ed25519_uses_atomics",
+        "the Ed25519 path has no run-time initialisation to guard: its base-point "
+        "tables are `static const` (src/c/internal/ama_ed25519_tables.h) and no "
+        "function on it writes file-scope state",
+    ),
+    (
+        re.compile(r"ama_consttime|consttime|constant[- ]time", re.IGNORECASE),
+        "consttime_uses_atomics",
+        "src/c/ama_consttime.c holds no file-scope mutable state, so it needs no "
+        "atomics to be thread-safe, and atomics are no part of any constant-time "
+        "mechanism",
+    ),
+    (
+        re.compile(r"thread[- ]safe init\w*|initiali[sz]ation|\bdispatch\b|\bcpuid\b", re.I),
+        "dispatch_init_uses_atomics",
+        "one-time initialisation uses the platform once-primitive — pthread_once "
+        "on POSIX, InitOnceExecuteOnce on Windows (src/c/ama_cpuid.c, "
+        "src/c/dispatch/ama_dispatch.c; INVARIANT-15)",
+    ),
+)
+
+#: A line about a component whose source DOES use atomics is not this rule's
+#: business: ``ama_nistp.c``'s MULX gate is a relaxed ``_Atomic int``.
+_ATOMICS_USER = re.compile(r"nistp|\bP-(?:256|384|521)\b|mulx gate", re.IGNORECASE)
+
+
+def _rule_c11_atomics(line: str, authority: Authority) -> Optional[str]:
+    # A denial is not a credit: "no `_Atomic` and no lock on the Ed25519 path"
+    # states exactly what the source shows.
+    if not _asserted(_ATOMICS_CLAIM, line):
+        return None
+    if authority.nistp_uses_atomics and _ATOMICS_USER.search(line):
+        return None
+    for component, field_name, instead in _ATOMICS_COMPONENTS:
+        if component.search(line) and getattr(authority, field_name) is False:
+            return (
+                "credits C11 atomics to a component whose source uses none — "
+                f"{instead}. The only C11 atomic in src/c is ama_nistp.c's "
+                "relaxed MULX gate."
+                if authority.nistp_uses_atomics
+                else f"credits C11 atomics to a component whose source uses none — {instead}."
+            )
+    return None
+
+
 def _rule_retired(line: str, authority: Authority) -> Optional[str]:
     for pattern, why in RETIRED_CLAIMS:
         if pattern.search(line):
@@ -930,6 +1066,7 @@ RULES: tuple[Callable[[str, Authority], Optional[str]], ...] = (
     _rule_posture_thresholds,
     _rule_ethical_vector,
     _rule_lms,
+    _rule_c11_atomics,
     _rule_retired,
 )
 
@@ -1189,6 +1326,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             ("C function-name prefixes", authority.c_call_prefixes),
         )
         if not value
+    ] + [
+        f"whether the {name} sources use C11 atomics"
+        for name, value in (
+            ("Ed25519", authority.ed25519_uses_atomics),
+            ("ama_consttime.c", authority.consttime_uses_atomics),
+            ("CPUID/dispatch", authority.dispatch_init_uses_atomics),
+            ("ama_nistp.c", authority.nistp_uses_atomics),
+        )
+        if value is None
     ]
     if missing:
         print(

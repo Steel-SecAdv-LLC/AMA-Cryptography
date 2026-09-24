@@ -454,19 +454,44 @@ Recovery: `ama_cryptography.reset_module()` re-runs all self-tests.
 
 ### 4.4 Pairwise Consistency Tests
 
-The library provides helper functions (`pairwise_test_signature()`,
-`pairwise_test_kem()`) that perform a sign-verify or encaps-decaps
-roundtrip on a fixed test message. Callers (e.g. key-generation wrappers)
-are responsible for invoking these helpers after generating a keypair.
-On failure, the module enters ERROR state and the caller should discard
-the keypair. Covered algorithms:
+Every asymmetric key generation in the Python package runs the §4.9.2
+pairwise consistency test **itself**, unconditionally, before the keypair
+leaves the function (INVARIANT-41). The caller does not invoke it and cannot
+switch it off; there is no environment flag or opt-out. The helpers live in
+`ama_cryptography/_module_state.py`:
 
-- Ed25519: sign + verify
-- ML-DSA-65: sign + verify
-- ML-KEM-1024: encaps + decaps
+- `pairwise_test_signature()` — sign a fixed test message and verify it:
+  Ed25519, ML-DSA-65, SLH-DSA / SPHINCS+, ECDSA over the NIST P-curves and
+  over secp256k1 (including the BIP32 keys), and the FROST trusted dealer
+  (a full t-of-n round aggregated and verified against the group key).
+- `pairwise_test_kem()` — encapsulate and decapsulate: ML-KEM-1024.
+- `pairwise_test_agreement()` — X25519, as a Diffie-Hellman roundtrip against
+  a fresh ephemeral peer (SP 800-56A rev. 3 §5.6.2.1.4).
 
-These helpers do **not** automatically intercept every key generation;
-they must be called explicitly by application code or wrapper functions.
+The rule is the same for random and seed-derived generation and on every
+surface: the `native_*` entry points, the `generate_*` wrappers,
+`AmaContext.keypair_generate`, the keygens of the Cython binding extensions,
+and the BIP32 master and child derivations in `key_management`. A failed test
+enters the module ERROR state, raises `CryptoModuleError`, and the keypair is
+never returned; while in ERROR every further operation is refused
+(INVARIANT-39). Where a test's counterpart operation is not built, the keygen
+refuses with an availability error rather than releasing an untested keypair.
+
+**Enforcement.** `tools/check_keygen_pct.py` discovers the keygen entry points
+from `ama_cryptography/pqc_backends.py`'s AST and from `src/cython/*.pyx` —
+19 and 2 on this tree — and fails, in `ci.yml`, on any that does not reach a
+pairwise test on every path. `tests/test_keygen_pct.py` pins the behaviour
+(both failure directions and the positive path per family).
+
+**Scope.** This is a property of the `ama_cryptography` Python package, not of
+`libama_cryptography` linked directly: a C consumer calling
+`ama_ed25519_keypair()` gets no pairwise test (the C library runs one for
+ML-KEM only). See INVARIANT-41's scope statement.
+
+Until 5.0.0 this section said the helpers covered Ed25519, ML-DSA-65 and
+ML-KEM-1024 only and had to be called explicitly by application code. That was
+accurate when written — the helpers were wired into no key-generation path —
+and it stopped being accurate when INVARIANT-41 wired them into every one.
 
 ### 4.5 Repeated-output check on the OS CSPRNG
 

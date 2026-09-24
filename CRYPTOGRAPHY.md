@@ -288,7 +288,7 @@ All cryptographic primitives are implemented natively in C with zero external de
 |-------------|-----------|----------|
 | `ama_sha3.c` | SHA3-256, SHAKE128/256 | FIPS 202 |
 | `ama_hkdf.c` | HKDF-SHA3-256 | RFC 5869 |
-| `ama_ed25519.c` | Ed25519 (C11 atomics) | RFC 8032 |
+| `ama_ed25519.c` | Ed25519 (static tables, no run-time init) | RFC 8032 |
 | `ama_aes_gcm.c` | AES-256-GCM | SP 800-38D |
 | `ama_dilithium.c` | ML-DSA-65 | FIPS 204 |
 | `ama_kyber.c` | ML-KEM-1024 | FIPS 203 |

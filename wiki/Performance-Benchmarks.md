@@ -95,10 +95,10 @@ Benchmark results for AMA Cryptography on Linux x86-64. All measurements use the
 ### Cython Acceleration
 
 When built with Cython (`python setup.py build_ext --inplace`), mathematical operations in the 3R monitoring engine (Lyapunov stability, helical computations, NTT polynomial operations) show:
-- **No published speed-up ratio.** The "18–37x over the pure Python mathematical baseline" figure this bullet carried until 5.0.0 has no benchmark, results file or history entry behind it anywhere in the tree; it was removed rather than restated, because this repository does not publish numbers it did not measure. Measure it on your own host with `python benchmarks/benchmark_suite.py`
+- **No published speed-up ratio.** The ratio this bullet carried until 5.0.0 had no benchmark, results file or history entry behind it anywhere in the tree; it was removed rather than restated, because this repository does not publish numbers it did not measure. `python benchmarks/performance_suite.py` measures two kernels on your own host and prints the ratio: `lyapunov_function_fast` against a NumPy sum of squares, and the 500 x 500 `matrix_vector_multiply` against NumPy's `@`. It times helix evolution in Python only, and nothing in the tree compares the NTT against a Python implementation. `benchmarks/benchmark_suite.py` does not exercise the Cython math engine at all.
 - NumPy-integrated batch operations
 
-Cython acceleration does **not** affect C-implemented cryptographic primitives (they are already native). The speedup comparison baseline is pure Python loops — not the native C library.
+Cython acceleration does **not** affect C-implemented cryptographic primitives (they are already native). The comparison baseline in `performance_suite.py` is NumPy — not the native C library.
 
 ### Algorithm Comparison
 
@@ -273,26 +273,32 @@ python3 benchmarks/benchmark_runner.py -v
 
 *\* HMAC-SHA3-256 uses the Cython binding when built (`python setup.py build_ext --inplace`) — zero marshaling overhead calling native C `ama_hmac_sha3_256`. Falls back to ctypes when the extension is absent.*
 
-> **Why HMAC numbers look different across paths.** Three measurement paths
-> produce three different figures for the same primitive:
+> **Why HMAC numbers look different across pages.** Three figures for the same
+> primitive appear in this repository, each measured on a different host:
 >
-> - Cython microbenchmark on a 32 B message: ~250k ops/sec on this host
->   (`benchmarks/benchmark_suite.py` "hmac_auth" column above).
-> - Pure ctypes on a 1 KB message: ~241k ops/sec on the canonical record's host
->   (`benchmarks/benchmark_runner.py` → `benchmarks/benchmark-results.json`).
+> - The canonical-host tables at the top of this page: the `hmac_auth` row of
+>   `benchmarks/benchmark_suite.py`, measured on the 2026-04-25 canonical bench
+>   host.
+> - The committed regression record on a 1 KB message:
+>   <!-- AUTO-RECORD-OPS:hmac_sha3_256 -->205,641<!-- /AUTO-RECORD-OPS --> ops/sec on the host that record's
+>   provenance names (`benchmarks/benchmark_runner.py` →
+>   `benchmarks/benchmark-results.json`). `hmac_authenticate` takes the Cython
+>   binding when it is built and ctypes otherwise, and that record's provenance
+>   lists `hmac_binding` among the imported bindings.
 >   The **enforced floor** is 215,299 ops/sec on x86-64
 >   (`benchmarks/baseline.json`) and 285,176 on aarch64
 >   (`benchmarks/arm-baseline.json`) — not 76,215, which was a floor from a
->   4.x-era baseline and had been stale here for two majors. Both floors are
->   re-derived by `tools/check_benchmark_claims.py` on every CI run, so this
->   sentence cannot drift from the JSON again.
-> - Shared GitHub Actions runner under CI: ~12k ops/sec (much slower, noisier
->   hardware). The `benchmarks/baseline.json` value is set for the CI host and
->   is not a statement about the primitive's performance in general.
+>   4.x-era baseline and had been stale here for two majors.
+> - The shared GitHub Actions runners the floors come from: each floor is the
+>   measured median of its runner class (the slow class, on x86-64), which is
+>   why a developer machine can land on either side of it. It is not a
+>   statement about the primitive's performance in general.
 >
-> All three are measurements of `ama_hmac_sha3_256`. The right number to quote
-> depends on which environment the reader cares about; cite the measurement
-> command alongside the number.
+> `tools/check_benchmark_claims.py` re-derives the record figure and both
+> floors from the JSON on every CI run, so none of them can drift from the
+> records again; `python tools/update_docs.py` rewrites the record figure when
+> the record moves. All three are measurements of `ama_hmac_sha3_256`; cite the
+> measurement command alongside any number you quote.
 
 ---
 

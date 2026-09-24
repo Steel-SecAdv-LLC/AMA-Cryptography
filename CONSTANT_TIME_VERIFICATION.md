@@ -17,7 +17,7 @@ This document describes the constant-time verification methodology and tooling f
 
 Constant-time implementations are critical for preventing timing side-channel attacks. AMA Cryptography employs a defense-in-depth approach to constant-time security:
 
-1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c` (C11 atomics for thread safety)
+1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c` (stateless — the file holds no file-scope mutable state, so it needs no atomics or locks to be thread-safe)
 2. **Python Layer**: `secure_memory.constant_time_compare()`, which calls AMA's
    own `ama_consttime_memcmp` through ctypes (INVARIANT-1: no third-party
    crypto) and **raises `RuntimeError` when that backend is unavailable**

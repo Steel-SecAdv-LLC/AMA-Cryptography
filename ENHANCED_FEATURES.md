@@ -35,7 +35,7 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 +----v----------------------------+   +-----------v-----------+
 |   CYTHON OPTIMIZATION LAYER     |   |  PURE PYTHON FALLBACK |
 |   src/cython/math_engine.pyx    |   |  (for portability)    |
-|   - 18-37x math speedup         |   |                       |
+|   - 3R monitoring math kernels  |   |                       |
 |   - NTT O(n log n)              |   |                       |
 |   - Matrix operations           |   |                       |
 +----+----------------------------+   +-----------------------+
@@ -46,7 +46,7 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 |  - Constant-time cryptographic primitives                   |
 |  - ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f (FIPS 203/204/205)  |
 |  - AES-256-GCM, Ed25519, SHA3-256, HKDF-SHA3-256            |
-|  - C11 atomics for thread-safe initialization                |
+|  - pthread_once / InitOnceExecuteOnce dispatch init         |
 |  - Memory-safe context management                           |
 |  - SIMD optimizations (AVX2)                                |
 +-------------------------------------------------------------+
@@ -56,7 +56,15 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 
 ### Cython Mathematical Engine
 
-**Measured: 18–37x speedup over pure Python mathematical baseline**
+No speed-up ratio is published for this engine. The range and the
+per-kernel table this section carried until 5.0.0 had no benchmark, results
+file or history entry behind them anywhere in the tree, and were removed
+rather than restated (INVARIANT-36). `python benchmarks/performance_suite.py`
+measures two of the kernels against their NumPy baselines on your own host —
+the Lyapunov function (`lyapunov_function_fast`) and the 500 x 500
+matrix-vector product (`matrix_vector_multiply`) — and prints the ratio; it
+times helix evolution in Python only, and nothing in the tree compares the
+NTT against a Python implementation.
 
 Optimized operations:
 - Polynomial arithmetic (add, sub, multiply)
@@ -64,16 +72,6 @@ Optimized operations:
 - Matrix-vector multiplication
 - Lyapunov function evaluation
 - Helix evolution steps
-
-Example speedup measurements:
-```
-Operation                  Python      Cython     Speedup
-─────────────────────────────────────────────────────────
-Lyapunov function         12.3 ms     0.45 ms    27.3x
-Matrix-vector (500x500)   8.7 ms      0.31 ms    28.1x
-NTT (degree 256)          45.2 ms     1.2 ms     37.7x
-Helix evolution step      3.4 ms      0.18 ms    18.9x
-```
 
 ### C Constant-Time Primitives
 
@@ -104,8 +102,10 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 | ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT and inverse NTT (q=8380417, 8 coefficients/YMM), pointwise multiplication, rejection sampling |
 | SLH-DSA-SHA2-256f | — | No vector kernel is shipped. The SHA2 parameter sets' SHA-256 compressions go through `src/c/ama_sha256.c`'s runtime-selected compress (SHA-NI where the CPU has it); their SHA-512 calls are scalar. The SHAKE sets accelerate indirectly through the dispatched `keccak_f1600` slot. `src/c/avx2/ama_sphincs_avx2.c` is a placeholder TU; its header records what it used to hold and why that was removed. |
 | SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
-| AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
-| X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomery ladder (RFC 7748), radix-2^25.5 field arithmetic packed as 10 x `__m256i`. Opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and additive: only full 4-lane chunks of `ama_x25519_scalarmult_batch` reach it — `ama_x25519_key_exchange` and short batches stay on the scalar fe64/fe51 path. Ed25519 has no AVX2 translation unit at all; its fast path is the fe51 comb table in `src/c/ama_ed25519.c`. |
+| AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH. Needs no AVX2 — no 256-bit intrinsic appears in it; it is built with `-maes -mpclmul -mssse3 -msse4.1` from `AMA_X86_AESNI_SOURCES` and lives in `src/c/avx2/` for historical layout only |
+| AES-256-GCM (VAES) | `ama_aes_gcm_vaes_avx2.c` | VAES + VPCLMULQDQ on YMM registers, no AVX-512: four counter blocks per iteration packed two per YMM, 4-lane Karatsuba GHASH. Dispatched only when `ama_cpuid_has_vaes_aesgcm()` reports VAES, VPCLMULQDQ, PCLMULQDQ, AVX2 and AES-NI with OS-enabled AVX state |
+| X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomery ladder (RFC 7748), radix-2^25.5 field arithmetic packed as 10 x `__m256i`. Opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and additive: only full 4-lane chunks of `ama_x25519_scalarmult_batch` reach it — `ama_x25519_key_exchange` and short batches stay on the scalar fe64/fe51 path. Ed25519's AVX2 unit is the next row. |
+| Ed25519 (signing comb) | `ama_ed25519_select_avx2.c` | Constant-time row fold for the fixed-base comb: selects one of the sixteen precomputed Niels points of a table row by the **secret** 5-bit digit, reading and masking every entry on YMM registers. Called from `src/c/ama_ed25519.c` when `ama_has_avx2()` reports AVX2 with OS-enabled AVX state; otherwise the 128-bit SSE2 fold in `src/c/internal/ama_ed25519_ge.h` does the same operation. `ama_ed25519_active_fold()` reports which one runs |
 | ChaCha20-Poly1305 | `ama_chacha20poly1305_avx2.c` | 8-way parallel quarter-rounds, vectorized Poly1305 with lazy reduction |
 | Argon2 | `ama_argon2_avx2.c` | Vectorized block compression G: each BlaMka round's four column-like G operations, then its four diagonal-like ones, run as one 4-lane 256-bit G sequence apiece (RFC 9106 §3.5). Blake2b (H, H') stays scalar |
 
@@ -479,8 +479,11 @@ Location: `fuzz/`
 
 The OSS-Fuzz submission files in `oss-fuzz/` are built and checked by
 OSS-Fuzz's own driver on every push (`tools/test_oss_fuzz_build.sh`), and
-ClusterFuzzLite runs them nightly on OSS-Fuzz's infrastructure with a
-persisted corpus. See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md).
+ClusterFuzzLite runs them nightly on GitHub-hosted runners (`ubuntu-latest`,
+`.github/workflows/clusterfuzzlite.yml`), building the fuzzers in OSS-Fuzz's
+`base-builder` image, with the corpus persisted between runs as workflow
+artifacts. The project is not onboarded to OSS-Fuzz itself, so nothing runs on
+OSS-Fuzz's infrastructure. See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md).
 
 ### Python Test Suite
 
