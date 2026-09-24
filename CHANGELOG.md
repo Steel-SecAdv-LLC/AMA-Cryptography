@@ -19,6 +19,49 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Head `dfd35dcb`: a timed-out leg, a CodeQL comparison that could not run, and two vulnerable dependency floors — 2026-09-24
+
+- **`Build and Test Gate` was red with no test failing.** `Python 3.10 on
+  windows-latest` (`ci-build-test.yml::python-package`) was cancelled at its
+  20-minute budget with pytest at 94% (7,798 passed, 0 failed); the slowest
+  completed Windows leg of the same run used 19m43s. Per-leg durations of run
+  35955250803 are recorded beside the new budget: 30 minutes for the
+  ubuntu-latest, windows-latest and macos-latest legs (the budget `ci.yml::test`
+  already gives the same suite on Windows), 50 for macos-15-intel as before.
+- **CodeQL could not compute the alerts this PR introduces.** The analysis step
+  had dropped `category: "/language:c-cpp"` on the belief that the action then
+  files one category per language. Measured otherwise at `dfd35dcb`: the
+  action merges `cpp.sarif` and `python.sarif` into one upload under an
+  automation id derived from the analysis key, and the PR's CodeQL check
+  reported "1 configuration not found: /language:c-cpp" — the comparison the
+  default-branch `code_scanning` rule reads. The category is restored and
+  pinned by `tests/test_codeql_severity_gate.py`.
+- **The one CodeQL result on the head is fixed at source.** CodeQL 2.27.0 with
+  the CI suite and config, run locally on both trees: `main` 0 results, the
+  head 1 (`cpp/missing-header-guard`, note, `src/c/internal/ama_ed25519_ge.h`).
+  The header is an x-macro template instantiated twice; it now `#undef`s the
+  includer's `GE_*` contract and its own helper macros at the end of each
+  instantiation, which is both hygiene (nothing leaks into the next
+  instantiation or the rest of the unit) and the form CodeQL recognises. The
+  disassembly of both instantiation units is byte-identical before and after
+  (x86-64, gcc 13.3.0, non-LTO objects); both baseline ledgers record it. Head
+  after the change: 0 results in either language.
+- **`tools/check_codeql_severity.py` now prints every result**, not only the
+  count of non-blocking ones, so the findings are reviewable from the job log
+  by anyone who can read the run, without `security-events: read`.
+- **Two declared dependency floors admitted published advisories.**
+  `cryptography>=46.0.7` (the `[legacy]` and `[benchmark]` extras and
+  `benchmarks/requirements-bench.txt`) admitted GHSA-537c-gmf6-5ccf,
+  GHSA-jwv3-5hgf-82ww, GHSA-m2h6-j472-rp4c and GHSA-g6cj-pr64-35w5, fixed in
+  48.0.1-50.0.0; `flask>=3.1.1` (`[examples]`) admitted GHSA-68rp-wp8r-4726,
+  fixed in 3.1.3. Floors raised to 50.0.0 and 3.1.3. Dependabot could not have
+  raised the first: `.github/dependabot.yml` ignored `cryptography` major
+  versions, and every fix above 46 is a major. The ignore is removed (the
+  package is test/benchmark-only under INVARIANT-1, and CI resolves its newest
+  release on every run). Checked against OSV/GHSA for every pinned version and
+  range floor in every tracked manifest and every pinned action: 0 advisories
+  (62 tuples); `pip-audit` over the CI-equivalent environment: none.
+
 ### Third review pass: two signing oracles closed, four boundary defects — 2026-09-23
 
 Every new test below fails against the code it replaces (AGENTS.md §6.2).
