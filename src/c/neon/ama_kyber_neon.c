@@ -2,13 +2,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_kyber_neon.c
- * @brief ARM NEON-optimized ML-KEM-1024 (Kyber) NTT and polynomial ops
+ * @brief ARM NEON-optimized ML-KEM (Kyber) NTT and inverse NTT
  *
- * Hand-written ARM NEON intrinsics for ML-KEM-1024 (FIPS 203):
- *   - Vectorized NTT butterfly operations (8 coefficients at once)
- *   - Montgomery reduction across 128-bit NEON vectors
- *   - Scalar fallback for sub-register layers (len < 8)
- *   - Vectorized CBD sampling
+ * Hand-written ARM NEON intrinsics for ML-KEM (FIPS 203).  The two kernels
+ * this file defines, and nothing else:
+ *   - ama_kyber_ntt_neon / ama_kyber_invntt_neon: NTT butterflies 8
+ *     coefficients at once, with Montgomery and Barrett reduction across
+ *     128-bit NEON vectors, and a scalar fallback for the sub-register layers
+ *     (len < 8)
+ *
+ * There is no NEON CBD sampler (the dispatch table's kyber_cbd2 slot is
+ * AVX2-only; see include/ama_dispatch.h) and no NEON compression kernel:
+ * both run in src/c/ama_kyber.c on this tier.
  *
  * Kyber uses q = 3329, 16-bit coefficients => 8 per NEON register.
  *

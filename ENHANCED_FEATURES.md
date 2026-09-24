@@ -101,13 +101,13 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 | Algorithm | File | Key Optimizations |
 |-----------|------|-------------------|
 | ML-KEM-1024 | `ama_kyber_avx2.c` | Vectorized NTT butterfly (16 coefficients/cycle), Barrett reduction, CBD sampling |
-| ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT (q=8380417, 8 coefficients/YMM), rejection sampling, power2round |
-| SLH-DSA-SHA2-256f | — | No vector kernel is shipped: the SHA2 parameter sets run the scalar inner loop end to end. The SHAKE sets accelerate indirectly through the dispatched `keccak_f1600` slot. `src/c/avx2/ama_sphincs_avx2.c` is a placeholder TU; its header records what it used to hold and why that was removed. |
+| ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT and inverse NTT (q=8380417, 8 coefficients/YMM), pointwise multiplication, rejection sampling |
+| SLH-DSA-SHA2-256f | — | No vector kernel is shipped. The SHA2 parameter sets' SHA-256 compressions go through `src/c/ama_sha256.c`'s runtime-selected compress (SHA-NI where the CPU has it); their SHA-512 calls are scalar. The SHAKE sets accelerate indirectly through the dispatched `keccak_f1600` slot. `src/c/avx2/ama_sphincs_avx2.c` is a placeholder TU; its header records what it used to hold and why that was removed. |
 | SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
 | AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
 | X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomery ladder (RFC 7748), radix-2^25.5 field arithmetic packed as 10 x `__m256i`. Opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and additive: only full 4-lane chunks of `ama_x25519_scalarmult_batch` reach it — `ama_x25519_key_exchange` and short batches stay on the scalar fe64/fe51 path. Ed25519 has no AVX2 translation unit at all; its fast path is the fe51 comb table in `src/c/ama_ed25519.c`. |
 | ChaCha20-Poly1305 | `ama_chacha20poly1305_avx2.c` | 8-way parallel quarter-rounds, vectorized Poly1305 with lazy reduction |
-| Argon2 | `ama_argon2_avx2.c` | Vectorized Blake2b compression, vectorized G function, parallel lane processing |
+| Argon2 | `ama_argon2_avx2.c` | Vectorized block compression G: each BlaMka round's four column-like G operations, then its four diagonal-like ones, run as one 4-lane 256-bit G sequence apiece (RFC 9106 §3.5). Blake2b (H, H') stays scalar |
 
 #### ARM NEON (AArch64) — `src/c/neon/`
 
@@ -120,13 +120,13 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 #### ARM SVE2 (AArch64) — `src/c/sve2/`
 
 Scalable Vector Extension 2 implementations (stretch goal).  Wired
-surface as of release 3.1.0:
+surface in this release:
 
 | Slot | Source | Status |
 |------|--------|--------|
 | `keccak_f1600` | `ama_sha3_sve2.c` | wired (single-state Keccak permutation) |
-| `sha3_256` | `ama_sha3_sve2.c` | wired (FIPS 202 sponge over the permutation above; PR #312) |
-| `kyber_ntt` / `kyber_invntt` / `kyber_pointwise` | `ama_kyber_sve2.c` | wired (ML-KEM-1024 hot loop) |
+| `sha3_256` | — | removed in 5.0.0 with the dispatch table's `sha3_256` member: `ama_sha3_256` absorbs inline and dispatches only `keccak_f1600` |
+| `kyber_ntt` / `kyber_invntt` | `ama_kyber_sve2.c` | wired (ML-KEM hot loop). `kyber_pointwise` is NULL on every tier: no basemul kernel ships |
 | `kyber_poly_add` / `kyber_poly_sub` / `kyber_poly_reduce` | `ama_kyber_sve2.c` | wired (VL-agnostic `svadd_s16_x` / `svsub_s16_x` plus the Barrett reduction reused from the wired NTT path; auto-tune lockstep-reverts these slots if the SVE2 codegen tier regresses on a particular host) |
 | `dilithium_ntt` / `dilithium_invntt` / `dilithium_pointwise` | `ama_dilithium_sve2.c` | wired (ML-DSA-65 hot loop) |
 | AES-GCM / ChaCha20 / Argon2 / SPHINCS+ / Ed25519 | placeholder TUs | **not wired** — see below |

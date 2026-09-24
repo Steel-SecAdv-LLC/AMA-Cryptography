@@ -13,8 +13,6 @@ Cython>=3.3.0
 # NumPy for the optional math / monitoring extensions.
 numpy>=1.24.0
 
-# SciPy for the monitoring extension (1.11+ supports the 3.10+ floor).
-
 # Testing
 pytest>=9.1.1
 pytest-cov>=4.0.0

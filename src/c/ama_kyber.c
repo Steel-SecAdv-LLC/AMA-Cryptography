@@ -160,9 +160,45 @@ static ama_error_t kyber_pubkey_check(const kyber_params* P,
 static int16_t montgomery_reduce(int32_t a);
 static int16_t coeff_normalize(int16_t a);
 /* Division-free FIPS 203 Compress_d — defined beside coeff_normalize, whose
- * [0, q-1] output is its documented input domain. */
-static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d);
+ * [0, q-1] output is its documented input domain.  No production call site
+ * names it: every one goes through the kyber_compress_d() macro below, which
+ * refuses an out-of-range width at compile time.  The one direct caller is the
+ * AMA_TESTING_MODE export ama_kyber_compress_d_for_test(), which exists to
+ * drive the run-time width guard with widths the macro would not compile. */
+static inline uint32_t kyber_compress_d_impl(uint32_t x_normalized, unsigned d);
 static void poly_tomont(poly* r);
+
+/* Widest Compress_d width FIPS 203 defines: §4.2.1 defines it only for
+ * d < 12.  ML-KEM itself uses d in {1, 4, 5, 10, 11}. */
+#define AMA_KYBER_COMPRESS_FIPS203_MAX_D 11u
+
+/* The width contract, enforced where the width is written.
+ *
+ * A call site whose width is outside [1, AMA_KYBER_COMPRESS_FIPS203_MAX_D]
+ * is not computing an ML-KEM Compress_d, whatever it returns: a mistyped
+ * d = 12 gets an exact round(2^12 * x / q) mod 2^12 that no FIPS 203 encoding
+ * contains, and from d = 19 the reciprocal in kyber_compress_d_impl is no
+ * longer exact.  kyber_compress_d_impl refuses d = 0 and d > 18 at run time,
+ * but the only value it can refuse with is a coefficient — 0, which is inside
+ * [0, 2^d) and which no caller range-checks — so either way a wrong width
+ * would pack a silently wrong ciphertext that fails only at the peer's
+ * decapsulation.  This check turns that into a build failure instead.  A
+ * bit-field's width must be an integer constant expression and must not be
+ * negative (C11 6.7.2.1p4), so a literal outside the interval is a
+ * constraint violation every C compiler rejects, and a width that is not a
+ * compile-time constant (a variable, a parameter-block field) does not
+ * compile at all.  It generates no code: the operand of sizeof is not
+ * evaluated.  tests/test_kyber_compress_width_contract.py compiles this
+ * translation unit with out-of-range and run-time widths and requires every
+ * one of them to fail. */
+#define AMA_KYBER_COMPRESS_WIDTH_CHECK(d)                                     \
+    ((void)sizeof(struct {                                                    \
+        unsigned int compress_width_not_a_fips203_constant_in_1_to_11 :       \
+            (((d) >= 1u && (d) <= AMA_KYBER_COMPRESS_FIPS203_MAX_D) ? 1 : -1); \
+    }))
+#define kyber_compress_d(x_normalized, d)                                     \
+    (AMA_KYBER_COMPRESS_WIDTH_CHECK(d),                                       \
+     kyber_compress_d_impl((x_normalized), (d)))
 
 /* Public wrapper prototypes (called from ama_core.c via extern) */
 AMA_API ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
@@ -323,9 +359,22 @@ static void polyvec_decompress(polyvec* r, const uint8_t* a, const kyber_params*
 
 /* The initial squeeze, in blocks.  4 blocks = 672 octets = 224 candidate
  * groups = 448 candidates; at ML-KEM's 3329/4096 acceptance rate the expected
- * yield is 364.2 with sd 8.25, so 256 is 13.1 sd below the mean.  This is the
- * same first-window budget the pq-crystals reference uses (its
- * GEN_MATRIX_NBLOCKS rounds up to 4 for a 168-octet rate) — but a budget is
+ * yield is 364.1 with sd 8.26, so 256 is 13.1 sd below the mean, and the exact
+ * binomial probability that the window yields fewer than 256 accepts is
+ * 2.2e-32 per polynomial.  (The binomial's lower tail is heavier than a
+ * normal one at this acceptance rate; the normal approximation gives about
+ * 1e-39, the figure these comments used to carry.)
+ *
+ * This is NOT the pq-crystals reference's first window, and it need not be.
+ * The reference's GEN_MATRIX_NBLOCKS is
+ * (12*KYBER_N/8*(1 << 12)/KYBER_Q + XOF_BLOCKBYTES)/XOF_BLOCKBYTES
+ * = (472 + 168)/168 = 3 in integer arithmetic: 504 octets, 336 candidates,
+ * expected yield 273.1, and a 0.83% chance per polynomial of needing its
+ * continuation.  Because both samplers continue until 256 coefficients are
+ * accepted, the output does not depend on the first-window size —
+ * tests/c/test_kyber_sample_ntt.c derives byte-identical ML-KEM-512/768/1024
+ * keypairs at first windows of 1, 2, 3 and 4 blocks — so 4 is this
+ * implementation's own sizing, not a compatibility requirement.  A budget is
  * not a guarantee, which is what the continuation loops below exist for. */
 #define KYBER_XOF_INITIAL_BLOCKS 4u
 
@@ -377,7 +426,7 @@ static unsigned int kyber_rej_uniform_from_stream(poly *a, unsigned int ctr,
 #ifdef AMA_TESTING_MODE
 /* Test-only window size for the initial squeeze, so the continuation path can
  * be reached on EVERY seed rather than on none.  See the header declaration in
- * src/c/internal/ama_testing_exports.h for why a probability-1e-39 branch
+ * src/c/internal/ama_testing_exports.h for why a probability-2.2e-32 branch
  * needs a deterministic way in. */
 static unsigned int kyber_sample_initial_blocks = KYBER_XOF_INITIAL_BLOCKS;
 
@@ -430,7 +479,8 @@ unsigned int ama_kyber_test_rej_uniform_from_stream(int16_t coeffs[256],
  * derives from the same public rho, so keygen and encapsulation would agree
  * with nobody; and because rho is public, an adversary can search seeds for
  * the condition offline.  The event needs 448 candidates to yield fewer than
- * 256 accepts (p is about 1e-39 for a well-behaved XOF), but "improbable" is
+ * 256 accepts (p = 2.2e-32 per polynomial for a well-behaved XOF — the exact
+ * binomial tail; see KYBER_XOF_INITIAL_BLOCKS), but "improbable" is
  * not the property FIPS 203 states, and the reference implementations all
  * loop here.  Termination is certain for any XOF with a non-degenerate output
  * distribution: each additional block contributes 112 candidates, each
@@ -2849,11 +2899,19 @@ static int16_t coeff_normalize(int16_t a) {
  * first thing the function does and it names the real bound.
  *
  * FIPS 203 §4.2.1 defines Compress_d only for d < 12, and every call site in
- * this file passes a literal in {1, 4, 5, 10, 11}, so the refusal arm is dead
- * code that constant-folds away.  It exists so that a width outside the
- * proven interval yields a value the callers' own range checks reject rather
- * than a coefficient that is wrong by one — the failure mode that makes an
- * interoperability break look like a decapsulation failure.
+ * this file passes a literal in {1, 4, 5, 10, 11}.  The width is enforced
+ * where it is written, not here: every call site goes through the
+ * kyber_compress_d() macro declared near the top of this file, which makes a
+ * width outside FIPS 203's [1, 11], or one that is not a compile-time
+ * constant, a build error.  That is the only place the check can work.  The
+ * refusal arm below cannot signal anything to a caller: it returns
+ * AMA_KYBER_COMPRESS_REFUSED, which is 0 — a valid coefficient, inside
+ * [0, 2^d), and one no caller range-checks — so a width that reached it would
+ * yield a silently wrong ciphertext that fails only at the peer's
+ * decapsulation.  (This note used to say the callers' range checks reject the
+ * value; none exists.)  The arm stays because it keeps the shift and the mask
+ * below defined for any `d` the AMA_TESTING_MODE export passes, and it
+ * constant-folds away at every production call site.
  * tests/c/test_kyber_compress.c enumerates the ENTIRE declared domain
  * (3_329 coefficients x 18 widths = 59_922 pairs, plus the refused widths),
  * so the bound below is a result rather than an assertion. */
@@ -2862,11 +2920,15 @@ static int16_t coeff_normalize(int16_t a) {
 /* Widest d for which the reciprocal above is exact for every x in [0, q-1].
  * Verified by enumeration, not by the sufficient condition alone. */
 #define AMA_KYBER_COMPRESS_MAX_D 18u
-/* Returned for a width outside [1, AMA_KYBER_COMPRESS_MAX_D].  Unreachable at
- * every call site; see the contract note above. */
+_Static_assert(AMA_KYBER_COMPRESS_FIPS203_MAX_D <= AMA_KYBER_COMPRESS_MAX_D,
+               "every width the kyber_compress_d() macro admits must lie inside "
+               "the interval where the Compress_d reciprocal is exact");
+/* Returned for a width outside [1, AMA_KYBER_COMPRESS_MAX_D].  Reachable only
+ * through ama_kyber_compress_d_for_test(); a production call site with such a
+ * width does not compile.  See the contract note above. */
 #define AMA_KYBER_COMPRESS_REFUSED 0u
 
-static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
+static inline uint32_t kyber_compress_d_impl(uint32_t x_normalized, unsigned d) {
     uint64_t n;
     uint32_t quotient;
 
@@ -2901,15 +2963,18 @@ static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
 /**
  * Test-only export of Compress_d.
  *
- * `kyber_compress_d` is `static inline`, so tests/c/test_kyber_compress.c
+ * `kyber_compress_d_impl` is `static inline`, so tests/c/test_kyber_compress.c
  * cannot link it directly, and a copy of the implementation in the test would
  * verify the copy rather than the code that ships.  This forwards to the real
  * definition, so the exhaustive equivalence proof for the Granlund-Montgomery
- * reciprocal is executed against the shipped translation unit.
+ * reciprocal is executed against the shipped translation unit.  It calls the
+ * function rather than the kyber_compress_d() macro because its width is a
+ * run-time value — the test sweeps it, refused widths included — and the
+ * macro, by design, does not compile one.
  * Not declared in any public header — visible only to AMA_TESTING_MODE builds.
  */
 uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d) {
-    return kyber_compress_d(x_normalized, d);
+    return kyber_compress_d_impl(x_normalized, d);
 }
 #endif
 

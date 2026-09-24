@@ -83,6 +83,13 @@ class TestTheShapesItMustCatch:
             "# Lifted byte-for-byte from src/c/ama_argon2.c lines 380-466.",
             "> `.gitignore` line 178 excludes the generated sources",
             "# hooked at `src/c/dispatch/ama_dispatch.c` lines 596-599",
+            # A citation wrapped onto the next comment line.  Both of these
+            # sat in src/c and passed while the gap before "line" was a bare
+            # \s+, which cannot cross the continuation's ` * `.
+            " * wired at `src/c/dispatch/ama_dispatch.c`\n * line 588-589).",
+            " *     host (see\n *     lines 354-357 above).",
+            "# hooked in src/c/ama_argon2.c\n# lines 380-466",
+            "// wired in ama_dispatch.c\n// line 588",
         ],
     )
     def test_a_source_line_citation_is_reported(self, text: str) -> None:
@@ -133,6 +140,10 @@ class TestTheShapesItMustNotCatch:
             "# closes CodeQL findings #504/#505/#506",
             "# until the 2026-09 audit (A-2) it could not",
             "# kept in line with the header",
+            # Wrapping onto a comment continuation cites nothing by itself.
+            " * the layout of `foo.c`\n * lines up with the header",
+            " * kept in\n * line with the header",
+            " * defined in FIPS 204 §5.2 (see\n * lines 5-6) before invoking",
         ],
     )
     def test_correct_prose_is_left_alone(self, text: str) -> None:

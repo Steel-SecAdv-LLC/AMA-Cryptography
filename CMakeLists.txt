@@ -1007,8 +1007,10 @@ if(AMA_BUILD_SHARED)
     # two-level namespace and the exported-symbols list for parity.
     if(APPLE)
         # cmake/ama_exports.macos.sym listed `_ama_*` and nothing else, so the
-        # dylib published EVERY ama_* symbol, including the thirty the version
-        # script above localises.  Measured on the macOS lanes the moment the
+        # dylib published EVERY ama_* symbol, including every one the version
+        # script above localises (thirty names at the time; the `local:` block
+        # has grown since, and the list generated below grows with it).
+        # Measured on the macOS lanes the moment the
         # export check reached them: ama_randombytes, ama_sha256_init and
         # ama_keccak_f1600_generic -- a raw Keccak permutation with no NULL
         # checks and no CPUID gate -- were resolvable by name from the shipped
@@ -1065,8 +1067,11 @@ if(AMA_BUILD_SHARED)
         # The list is GENERATED from the AMA_API declarations and the version
         # script's `local:` block -- never written by hand, which is the failure
         # cmake/ama_exports.macos.sym already had.  Measured equivalence on the
-        # cross-built DLL: the derived set is EXACTLY the 190 real exports, and
-        # the clone is excluded by construction because nothing declares one.
+        # cross-built DLL (2026-09-20): the derived set was EXACTLY the real
+        # export table, and the clone is excluded by construction because
+        # nothing declares one.  The count is not fixed here; it moves with the
+        # headers, and tests/test_documentation_integrity_gates.py re-derives
+        # the list (test_the_generated_list_is_the_declared_abi).
         # AMA_API must expand to NOTHING here: GNU ld unions a .def with the
         # dllexport'd set rather than restricting to it (measured -- a .def
         # naming one of two dllexport'd functions exports both), so with the
@@ -1279,6 +1284,24 @@ if(AMA_BUILD_STATIC)
 endif()
 
 # pkg-config
+#
+# GNUInstallDirs lets CMAKE_INSTALL_LIBDIR / CMAKE_INSTALL_INCLUDEDIR be
+# absolute -- Nix's CMake setup hook passes them that way, pointing into
+# separate output paths -- and the template used to prefix them
+# unconditionally, which wrote `libdir=${exec_prefix}//nix/store/.../lib`: a
+# -L path that does not exist.  A relative value keeps the relocatable
+# ${exec_prefix}/ and ${prefix}/ forms; an absolute one is written as given.
+# tests/test_pkgconfig_install_dirs.py configures both ways and reads the .pc.
+if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+    set(AMA_PC_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+else()
+    set(AMA_PC_LIBDIR "\${exec_prefix}/${CMAKE_INSTALL_LIBDIR}")
+endif()
+if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+    set(AMA_PC_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+else()
+    set(AMA_PC_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+endif()
 configure_file(
     ${CMAKE_SOURCE_DIR}/ama_cryptography.pc.in
     ${CMAKE_BINARY_DIR}/ama_cryptography.pc

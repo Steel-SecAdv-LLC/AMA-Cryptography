@@ -2445,9 +2445,11 @@ static void dispatch_init_internal(void) {
      *     would be speculative API.
      *   - Ed25519 (`ama_ed25519_sve2.c`): the dispatcher reports
      *     `ed25519 = AMA_IMPL_GENERIC` on every AArch64 host (see
-     *     lines 354-357 above).  A vector-wide Ed25519 path only
-     *     pays off in a batched API which AMA Cryptography
-     *     intentionally does not expose.
+     *     the `dispatch_info.ed25519` assignment in the AArch64 branch
+     *     of `dispatch_init_internal` above; the line numbers this
+     *     note used to cite had drifted onto unrelated code).  A
+     *     vector-wide Ed25519 path only pays off in a batched API
+     *     which AMA Cryptography intentionally does not expose.
      *   - AES-GCM (`ama_aes_gcm_sve2.c`): PR #308 precedent.  AES-GCM
      *     on SVE2 dispatches through the NEON PMULL kernel above,
      *     which carries the ARMv8 Crypto Extensions.

@@ -60,6 +60,10 @@ The shapes, as widened after measuring what the first patterns let through
   ``(line N)`` (any number but 1 — line 1 is a fixed position, a shebang or a
   file-level pragma, and cannot drift), and a FILE NAME followed by a line
   number (``ama_argon2.c lines 380-466``, ``.gitignore`` line 178``);
+* each of those wrapped before the word "line" onto a comment continuation
+  (`` * line 588`` after a line ending in a file name) -- two such citations
+  sat in ``src/c`` while the gap was a bare ``\\s+``, which cannot cross the
+  continuation's comment leader;
 * EXCEPT a line of a published algorithm (``FIPS 204 §5.2 (lines 5-6)``,
   ``Algorithm 7 line 3``): those are stable, numbered by the standard, and
   resolve in a document anyone can open.
@@ -198,16 +202,33 @@ PROCESS_CITATION = re.compile(r"""(?xi)
     | (?<!CodeQL\s)\bfindings?\s+\#\s*\d+        # (finding #7)
     """)
 
+#: The gap before the word "line" in a citation: whitespace, or -- where the
+#: citation wraps -- a line break followed by the next line's comment leader
+#: (`*` in a C block comment, `#`, `//`, `>`).  With a bare `\s+` here a wrapped
+#: citation passed, because `\s` cannot cross the ` * `: measured on the tree,
+#: src/c/sve2/ama_sphincs_sve2.c carried "wired at
+#: `src/c/dispatch/ama_dispatch.c`" / " * line 588-589" and the gate reported
+#: every citation resolved.
+_GAP = r"(?:[ \t]*\n[ \t]*(?:\*|\#|//|>)[ \t]*|\s+)"
+
 #: Citations to a line number: unverifiable, and stale the moment code moves.
 #: Requires literal digits, so runtime messages ("at line %d") do not match.
-LINE_CITATION = re.compile(r"""(?xi)
+LINE_CITATION = re.compile(
+    r"""(?xi)
     (?:
-        \b(?:at|on|per|in|from|near)\s+lines?\s+\d{2,5}\b          # at line 632
-      | (?:\bsee\s+|\(\s*)lines?\s+(?!1\b)\d{1,5}\b              # see line 7, (line 632)
+        \b(?:at|on|per|in|from|near)"""
+    + _GAP
+    + r"""lines?\s+\d{2,5}\b                                        # at line 632
+      | (?:\bsee"""
+    + _GAP
+    + r"""|\(\s*)lines?\s+(?!1\b)\d{1,5}\b                          # see line 7, (line 632)
       | \.(?:py|pyx|pyi|c|h|md|sh|ya?ml|txt|toml|cfg|json|gitignore)
-        `{0,2},?\s+(?:now\s+)?lines?\s+\d{1,5}\b                   # foo.c lines 380-466
+        `{0,2},?"""
+    + _GAP
+    + r"""(?:now\s+)?lines?\s+\d{1,5}\b                             # foo.c lines 380-466
     )
-    """)
+    """
+)
 
 #: A line of a published algorithm, cited by the standard's own numbering
 #: (``FIPS 204 §5.2 (lines 5-6)``, ``Algorithm 7 line 3``).  Checked against

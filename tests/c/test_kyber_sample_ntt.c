@@ -26,8 +26,10 @@
  *
  * Why the test needs a switch
  * ---------------------------
- * 448 candidates yielding fewer than 256 accepts has probability about 1e-39,
- * so no seed a test can search for will ever reach the continuation.  A branch
+ * 448 candidates yielding fewer than 256 accepts has probability 2.2e-32 per
+ * polynomial (the exact binomial tail — this comment used to quote the normal
+ * approximation's 1e-39), so no seed a test can search for will ever reach the
+ * continuation.  A branch
  * that cannot be reached cannot be tested, which is exactly how a truncating
  * sampler passed every KAT in this tree.  `ama_kyber_test_set_sample_initial_blocks()`
  * (AMA_TESTING_MODE only) shrinks the FIRST window so the continuation runs on

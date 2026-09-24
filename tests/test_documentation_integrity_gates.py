@@ -1528,11 +1528,12 @@ class TestThePeExportTableIsStatedNotInherited:
     def test_no_localised_symbol_is_in_the_real_export_table(self, tmp_path: Path) -> None:
         """SMOKE, and labelled so deliberately.
 
-        Measured: on this tree none of the thirty localised names is
-        AMA_API-declared, so ``declared - localised`` equals ``declared`` and
-        this holds with or without the subtraction — removing it from the
-        generator leaves this test passing. It stays as a standing check on the
-        real tree; ``test_a_localised_declaration_is_subtracted`` is what
+        Measured: on this tree none of the localised names is AMA_API-declared
+        (not one of the thirty the map held when this was first written, nor
+        of the larger set it holds now), so ``declared - localised`` equals
+        ``declared`` and this holds with or without the subtraction — removing
+        it from the generator leaves this test passing. It stays as a standing
+        check on the real tree; ``test_a_localised_declaration_is_subtracted`` is what
         actually constrains the subtraction.
         """
         module = _load(PUBLIC_API)

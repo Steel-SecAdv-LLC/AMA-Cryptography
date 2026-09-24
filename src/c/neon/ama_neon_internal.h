@@ -33,12 +33,23 @@
  *    undefined behaviour at the indirect call.  One declaration, included by
  *    both the definition and every consumer, makes that drift impossible.
  *
- * Symbols with no in-tree caller today are declared here too rather than
- * being made `static`: they are dispatch-graph material kept in-tree (the
- * lane-local add/sub/carry/compress routines), and turning them static
- * would remove symbols from the shipped shared library — an ABI change made
- * for a lint's convenience.  Declaring them is the fix for the missing
- * prototype; whether to wire them into dispatch is a separate question.
+ * Every name declared below has external linkage because another
+ * translation unit reaches it — the dispatch table in
+ * src/c/dispatch/ama_dispatch.c, src/c/ama_sha256.c, src/c/sve2/ama_sha3_sve2.c,
+ * or a C test through the static test archive — with one exception:
+ * ama_chacha20_block_x4_neon, whose only caller is ama_chacha20_block_x8_neon
+ * in the same file.  None of them is part of the shared library's ABI: every
+ * one is named in the `local:` block of cmake/ama_exports.map, from which the
+ * macOS unexported-symbols list is also generated.  A NEON kernel with no
+ * caller is removed rather than kept for a future wiring; the Kyber,
+ * Dilithium and SHA-256 notes below record the ones that were.
+ *
+ * (This paragraph used to say that uncalled routines were declared here
+ * rather than made `static` because making them static "would remove symbols
+ * from the shipped shared library — an ABI change".  That was false twice
+ * over: the version script had localised every NEON name, so none was ever
+ * exported, and the routines it defended have since been deleted as dead
+ * code.)
  */
 
 #ifndef AMA_NEON_INTERNAL_H
@@ -136,8 +147,10 @@ ama_error_t ama_aes256_gcm_decrypt_neon(const uint8_t *ciphertext,
 /* ============================================================================
  * ChaCha20
  *
- * The x8 form is dispatch-facing.  The x4 form is the two-block building
- * block kept beside it; nothing calls it today.
+ * The x8 form is dispatch-facing.  The x4 form is the four-block kernel it is
+ * built from: ama_chacha20_block_x8_neon calls it twice, for blocks
+ * [counter, counter+3] and [counter+4, counter+7].  (This note used to call
+ * it a two-block building block that nothing calls.)
  * ============================================================================ */
 void ama_chacha20_block_x4_neon(const uint8_t key[32],
                                 const uint8_t nonce[12],

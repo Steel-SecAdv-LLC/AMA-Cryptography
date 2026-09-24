@@ -238,14 +238,23 @@ static int32_t dil_montgomery_reduce(int64_t a) {
  * header used to claim [0, q), and every bound derived from that claim would
  * have been wrong by a factor of two in the wrong direction.
  *
- * Image, enumerated rather than quoted: over |a| <= 7q — which covers every
- * value this file passes it, the widest being the l-fold accumulator bounded
- * by l*q with l = 7 on ML-DSA-87 — the result lies in [-4243450, 4243449],
- * i.e. |t| <= 0.507q.  (An earlier revision enumerated |a| <= 6q, giving
- * [-4235259, 4235258], and claimed that band covered every caller; it did
- * not cover ML-DSA-87's seven-fold accumulator.)  Over the whole int32
- * domain it widens to [-6283009, 6283008], |t| <= 0.750q.  The inverse-NTT
- * precondition argued at the keygen call site rests on the 7q-band figure.
+ * Image, enumerated rather than quoted: over |a| <= 8q the result lies in
+ * [-4251641, 4251640], i.e. |t| <= 0.508q.  8q is the widest value this file
+ * passes it: verification's w1' = A*z - c*t1*2^d is l Montgomery products
+ * minus one more, each in (-q, q), so it is bounded by (l+1)*q — 8q on
+ * ML-DSA-87 (l = 7) — one product wider than the l-fold accumulators of
+ * keygen, the secret-key check and signing.  (Two earlier revisions each
+ * claimed a narrower band covered every caller: |a| <= 6q, giving
+ * [-4235259, 4235258], missed ML-DSA-87's seven-fold accumulator; |a| <= 7q,
+ * giving [-4243450, 4243449], missed the verification accumulator's extra
+ * product.)
+ *
+ * The function is defined only for a <= INT32_MAX - 2^22 (= 2^31 - 2^22 - 1):
+ * above that, `a + (1 << 22)` is signed overflow, which is undefined
+ * behaviour.  No caller comes near it — 8q is under 2^26.  Over that defined
+ * domain, every int32 from INT32_MIN up to INT32_MAX - 2^22, the image widens
+ * to [-6283009, 6283008], |t| <= 0.750q.  The inverse-NTT precondition argued
+ * at the keygen call site rests on the 8q-band figure.
  */
 static int32_t dil_reduce32(int32_t a) {
     int32_t t;
@@ -1850,13 +1859,14 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
      * bound, and this project does not rest a memory-safety property on it.
      *
      * `dil_reduce32`'s image was enumerated rather than quoted: over
-     * |a| <= 7q — the widest input any caller produces, ML-DSA-87's l = 7
-     * accumulator — it lands in [-4243450, 4243449], so after this call the
-     * worst case is 256 * 4243450 = 1,086,323,200 — inside int32 with a
-     * 1.98x margin, and provable rather than probabilistic.  (Its image over
-     * the whole int32 domain is wider, |t| <= 6283009, which still gives
-     * 256 * 6283009 = 1,608,450,304 and a 1.33x margin; the tighter figure
-     * is the one that applies here.)
+     * |a| <= 8q — the widest input any caller produces, verification's
+     * (l+1)-product accumulator on ML-DSA-87, one product wider than this
+     * l-fold one — it lands in [-4251641, 4251640], so after this call the
+     * worst case is 256 * 4251641 = 1,088,420,096 — inside int32 with a
+     * 1.97x margin, and provable rather than probabilistic.  (Its image over
+     * its whole defined domain, a <= INT32_MAX - 2^22, is wider,
+     * |t| <= 6283009, which still gives 256 * 6283009 = 1,608,450,304 and a
+     * 1.33x margin; the tighter figure is the one that applies here.)
      *
      * The three single-pointwise-product sites in signing need no such call:
      * a lone `dil_montgomery_reduce` output is already in (-q, q), and 256 *
@@ -1872,7 +1882,7 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
      * round-trips 64/64 either way, and the C suite passes either way.
      *
      * The verify path below already does this (see `dil_polyveck_reduce`
-     * immediately before the invNTT in `ama_dilithium_verify`), as do the
+     * immediately before the invNTT in `dil_verify_internal`), as do the
      * three single-pointwise-product sites in signing whose inputs are already
      * < q by construction.  These three call sites — keygen, the secret-key
      * consistency check, and w = A*NTT(y) in signing — were the only ones that
@@ -2332,14 +2342,19 @@ static ama_error_t dil_sign_internal(const dil_params *P,
      * FIPS 204 Section 6.2 Algorithm 7 (ML-DSA.Sign_internal) line 3:
      *   rho' = H(K || rnd || mu, 64)
      *
-     * This entry point is the FIPS 204 *deterministic* signer - the variant
-     * exercised by every NIST ACVP-Server "deterministic" sigGen group - so
-     * we pin rnd = 0^256 here. Pre-3.1.0 AMA omitted the rnd field entirely,
-     * which silently diverged from the FIPS 204 spec and from every NIST
-     * deterministic ACVP vector. Round-trip self-tests still passed because
-     * verify recomputes mu from the signature's c-tilde head, so the defect
-     * could only be caught by byte-exact ACVP-Server replay; this fix lands
-     * together with the FIPS 204/205 KAT pin.
+     * This body serves both FIPS 204 signing variants, selected by the `rnd`
+     * argument.  NULL gives the *deterministic* variant, rnd = 0^256 — what
+     * ama_ml_dsa_sign_ctx() (and through it ama_dilithium_sign()) and the
+     * AMA_TESTING_MODE ama_ml_dsa_sign_internal() pass, and the variant every
+     * NIST ACVP-Server "deterministic" sigGen group exercises.  A non-NULL
+     * `rnd` is copied in as given: ama_ml_dsa_sign_hedged() passes 32 fresh
+     * bytes from the platform CSPRNG per signature (the hedged variant).
+     * Pre-3.1.0 AMA omitted the rnd field entirely, which silently diverged
+     * from the FIPS 204 spec and from every NIST deterministic ACVP vector.
+     * Round-trip self-tests still passed because verify recomputes mu from
+     * the signature's c-tilde head, so the defect could only be caught by
+     * byte-exact ACVP-Server replay; that fix landed together with the
+     * FIPS 204/205 KAT pin.
      */
     memcpy(hashbuf, key, DIL_SEEDBYTES);
     if (rnd) {
@@ -2632,7 +2647,11 @@ static ama_error_t dil_verify_internal(const dil_params *P,
         dil_poly_pointwise_montgomery(&h_vec.vec[i], &cp, &t1.vec[i]);
     }
 
-    /* w1' = Az - ct1*2^d */
+    /* w1' = Az - ct1*2^d.  l Montgomery products minus one more, each in
+     * (-q, q), so bounded by (l+1)*q — 8q on ML-DSA-87, the widest value
+     * `dil_reduce32` receives anywhere in this file (see its header for the
+     * enumerated image and the keygen path for why the reduce must precede
+     * the inverse NTT). */
     dil_polyveck_sub(&w1prime, &w1prime, &h_vec, P->k);
     dil_polyveck_reduce(&w1prime, P->k);
     dil_polyveck_invntt(&w1prime, P->k);
@@ -3030,7 +3049,10 @@ AMA_API ama_error_t ama_dilithium_verify_ctx(
  * production hot path.
  *
  * Not for production use. ML-DSA-65 production callers go through
- * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2).
+ * `ama_dilithium_sign()` / `ama_dilithium_verify()`: the FIPS 204 external
+ * interface, ML-DSA.Sign / ML-DSA.Verify (Algorithms 2 and 3) with the empty
+ * context, i.e. M' = 0x00 || 0x00 || M.  The internal interface
+ * (Algorithms 7 and 8) is built only into the AMA_TESTING_MODE archive.
  * ============================================================================ */
 
 /* Last-used trackers: -1 = wrapper has not been called yet in this process,

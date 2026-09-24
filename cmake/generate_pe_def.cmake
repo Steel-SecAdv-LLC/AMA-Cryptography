@@ -34,14 +34,21 @@
 # `.gnu.lto_ama_hmac_sha256.17.<hash>` rather than the symbol.  The headers are
 # the declaration of intent and are readable without a toolchain, on any host.
 #
-# Measured equivalence on the cross-built DLL (2026-09-20): the 190 AMA_API-
-# declared ama_* functions across the 28 headers, minus the 30 names
-# cmake/ama_exports.map localises, were EXACTLY the 190 real exports -- no
-# symbol in one set and not the other, in either direction.  The count moves
-# with the headers; the derivation below is what keeps the .def current, and
-# tools/check_public_api_docs.py counts the same set.  The clone is excluded
-# by construction: a compiler never
-# declares one in a header.
+# Measured equivalence on the cross-built DLL (2026-09-20): the set this script
+# derives was EXACTLY the DLL's real export table -- no symbol in one set and
+# not the other, in either direction.  The figures behind it are not repeated
+# here, because they move with the headers and the version script: the header
+# count, the declared names and the localised names are derived afresh by
+# tests/test_documentation_integrity_gates.py
+# (test_the_generated_list_is_the_declared_abi compares this script's output
+# with an independent parse of the same headers), and
+# tools/check_public_api_docs.py counts the same set.  (This note used to give
+# them as 190 declared functions across 28 headers minus 30 localised names.
+# Those are not this tree's figures, and the subtraction never removed
+# anything: no localised name was AMA_API-declared then, and none is now, so
+# the real tree cannot exercise it -- test_a_localised_declaration_is_subtracted
+# pins it on a tree built to.)  The clone is excluded by construction: a
+# compiler never declares one in a header.
 #
 # Usage:
 #   cmake -DAMA_SOURCE_DIR=<repo> -DAMA_DEF_OUTPUT=<path> -P generate_pe_def.cmake
@@ -52,10 +59,16 @@ if(NOT DEFINED AMA_SOURCE_DIR OR NOT DEFINED AMA_DEF_OUTPUT)
 endif()
 
 # Every header that can declare an entry point: the public ABI in include/ and
-# the internal headers, because AMA_API is what decides export, not location.
-# `ama_sha256` is declared in src/c/ama_sha256.h and ctypes-bound by
-# ama_cryptography/pqc_backends.py, so restricting this to include/ would break
-# the Python layer on Windows.
+# the internal headers, because AMA_API is what decides export, not location --
+# an AMA_API declaration in an internal header is dllexport'ed on MSVC, and the
+# MinGW table has to match it.  Measured 2026-09-24, scanning include/ alone
+# gives the same list: the three AMA_API names src/c/ headers declare
+# (`ama_sha256` in src/c/ama_sha256.h, `ama_hmac_sha256` and
+# `ama_hmac_sha256_2` in src/c/ama_hmac_sha256.h, all ctypes-bound by the
+# Python layer) are declared in include/ama_cryptography.h as well.  (This
+# note used to say restricting the scan to include/ would break the Python
+# layer on Windows; that stopped being true when `ama_sha256` gained its
+# public declaration.)
 file(GLOB_RECURSE _ama_headers
     "${AMA_SOURCE_DIR}/include/*.h"
     "${AMA_SOURCE_DIR}/src/c/*.h")

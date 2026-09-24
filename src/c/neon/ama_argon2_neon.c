@@ -2,12 +2,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_argon2_neon.c
- * @brief ARM NEON-optimized Argon2 memory-hard function
+ * @brief ARM NEON-optimized Argon2 block compression G
  *
- * NEON intrinsics for Argon2id (RFC 9106):
- *   - Vectorized Blake2b compression
- *   - NEON-accelerated G mixing function
- *   - Parallel memory operations
+ * NEON intrinsics for Argon2id (RFC 9106).  One kernel, and nothing else:
+ *   - ama_argon2_g_neon, the 1024-byte block compression G: R = X ^ Y and
+ *     the final Z ^ R run on NEON 2-wide u64 vectors; the BlaMka rounds
+ *     between them run scalar (see STATUS below)
+ *
+ * There is no NEON Blake2b compression: Argon2's H and H' use the scalar
+ * Blake2b in src/c/ama_argon2.c on this tier.
  *
  * -------------------------------------------------------------------
  * STATUS: WIRED INTO DISPATCH (BlaMka-correct, NEON-vectorised XOR).
@@ -44,11 +47,8 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
-#include "ama_neon_internal.h"
-
-/* Defined in ama_consttime.c; forward-declared to avoid pulling the full
- * public header into this kernel TU (mirrors src/c/ama_sha256.c). */
-extern void ama_secure_memzero(void *ptr, size_t len);
+#include "ama_neon_internal.h"  /* includes ama_cryptography.h, which
+                                  * declares ama_secure_memzero */
 
 /* ============================================================================
  * BlaMka building blocks (mirrors scalar reference in ama_argon2.c).

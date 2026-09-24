@@ -5,11 +5,14 @@
  * @brief x86-64 AVX2 SLH-DSA / SPHINCS+ placeholder TU (no kernels wired)
  *
  * AVX2 SLH-DSA (FIPS 205 / SPHINCS+) acceleration is not currently shipped.
- * SLH-DSA on x86-64 uses the same scalar SHA-256 / SHAKE inner loop as the
- * rest of the family (`src/c/ama_slhdsa.c`, `src/c/ama_sphincs.c`), with the
- * underlying Keccak permutation accelerated through the dispatch table's
- * `keccak_f1600` slot — which is what gives the SHAKE-128s parameter sets
- * their speed-up.  The SHA2-256f path is scalar end to end.
+ * SLH-DSA on x86-64 runs the one SLH-DSA implementation in the tree,
+ * `src/c/ama_slhdsa.c` (the former standalone `ama_sphincs.c`, whose signer
+ * was byte-identical to it, has been removed), with no algorithm-level SIMD.
+ * The SHAKE-128s parameter sets get their speed-up underneath it, from the
+ * Keccak permutation the dispatch table's `keccak_f1600` slot accelerates.
+ * The SHA2-256f path's SHA-256 compressions go through `src/c/ama_sha256.c`'s
+ * runtime-selected compress, which uses SHA-NI where the CPU has it; its
+ * SHA-512 calls are scalar.
  *
  * WHAT THIS FILE USED TO CONTAIN, AND WHY IT IS GONE
  *

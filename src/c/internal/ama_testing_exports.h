@@ -125,7 +125,9 @@ uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d);
  *
  * FIPS 203 Algorithm 7 squeezes until 256 coefficients are accepted.  The
  * first window is four SHAKE128 blocks (448 candidates), which falls short
- * with probability about 1e-39 — small enough that no seed a test can search
+ * with probability 2.2e-32 per polynomial (the exact binomial tail; the
+ * normal approximation's 1e-39, quoted here before, understates it by seven
+ * orders of magnitude) — small enough that no seed a test can search
  * for will ever exercise the loop that finishes the polynomial, and small
  * enough that the previous implementation shipped without that loop at all.
  * A branch that cannot be reached cannot be tested, and an untested branch on

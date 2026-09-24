@@ -247,12 +247,13 @@ typedef void (*ama_x25519_scalarmult_x4_fn)(uint8_t out[4][32],
  *     kernel or to ama_keccak_f1600_x4_generic, which invokes the
  *     single-state keccak four times.
  *     Wired when SIMD detected: kyber_ntt, kyber_invntt,
- *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
- *     dilithium_pointwise.  kyber_cbd2 is
+ *     dilithium_ntt, dilithium_invntt, dilithium_pointwise.  kyber_cbd2 is
  *     AVX2-only today — it remains NULL on NEON and SVE2 tiers
  *     until a corresponding implementation is wired.
  *   - NULL: no dispatch available; caller must use its own inline generic
- *     implementation.
+ *     implementation.  kyber_pointwise is NULL on every tier and every
+ *     host: no tier ships a basemul kernel (see its field below).  This
+ *     banner used to list it among the slots wired when SIMD is detected.
  *
  * Callers MUST NULL-check before calling any field except keccak_f1600
  * and keccak_f1600_x4 (both always non-NULL after init).
@@ -274,11 +275,18 @@ typedef struct {
     ama_chacha20_block_x8_fn  chacha20_block_x8;     /**< Non-NULL when AVX2 ChaCha20 detected; emits 8 blocks / 512 B */
     ama_argon2_g_fn           argon2_g;              /**< Non-NULL when AVX2 Argon2 G detected; 1024 B compression */
     ama_x25519_scalarmult_x4_fn x25519_x4;           /**< Non-NULL when AVX2 X25519 4-way ladder detected; callers MUST NULL-check */
-    /* --- Appended slots (ABI rule: append-only at the end of this
-     *     struct).  ama_dispatch.h is installed as a PUBLIC_HEADER, so
-     *     inserting fields in the middle would shift every later
-     *     field's offset and break any consumer compiled against an
-     *     older header.  New slots go here. ------------------------ */
+    /* --- Appended slots (ABI rule: append-only within a SONAME major
+     *     version).  ama_dispatch.h is installed as a PUBLIC_HEADER, so
+     *     inserting or removing a field anywhere but the end shifts every
+     *     later field's offset and breaks any consumer compiled against an
+     *     older header.  Within one SONAME major, new slots go here and no
+     *     slot is removed; any other layout change needs a SONAME major
+     *     bump.  5.0.0 made one: it removed the third slot, `sha3_256`
+     *     (every later field moved up one pointer), and ships as
+     *     libama_cryptography.so.5.  A consumer built against a 4.x header
+     *     must be rebuilt against this one — including one that loads the
+     *     unversioned libama_cryptography.so rather than the .so.4 its
+     *     SONAME names. ------------------------------------------------ */
     ama_kyber_poly_add_fn     kyber_poly_add;       /**< Appended 2026-05 (SVE2 wiring PR).  Non-NULL when SVE2 detected (today: SVE2 only — AVX2/NEON paths let the compiler auto-vectorise the trivial int16 add loop); callers MUST NULL-check */
     ama_kyber_poly_sub_fn     kyber_poly_sub;       /**< Appended 2026-05.  Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */
     ama_kyber_poly_reduce_fn  kyber_poly_reduce;    /**< Appended 2026-05.  Non-NULL when SVE2 detected (today: SVE2 only — see kyber_poly_add); callers MUST NULL-check */

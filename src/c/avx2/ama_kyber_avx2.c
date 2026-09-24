@@ -2,14 +2,19 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_kyber_avx2.c
- * @brief AVX2-optimized ML-KEM-1024 (Kyber) NTT and polynomial operations
+ * @brief AVX2-optimized ML-KEM (Kyber) NTT, inverse NTT and CBD2 sampling
  *
- * Hand-written AVX2 intrinsics for the core computational bottlenecks of
- * ML-KEM-1024 (FIPS 203):
- *   - Vectorized NTT butterfly operations (16 coefficients at once)
- *   - Barrett reduction across 256-bit vectors
- *   - Vectorized CBD (Centered Binomial Distribution) sampling
- *   - Vectorized encode/decode for compression
+ * Hand-written AVX2 intrinsics for ML-KEM (FIPS 203).  The three kernels this
+ * file defines, and nothing else:
+ *   - ama_kyber_ntt_avx2 / ama_kyber_invntt_avx2: NTT butterflies 16
+ *     coefficients at once for the layers with len >= 16 (the len < 16
+ *     layers run scalar), with a vectorized Barrett reduction
+ *   - ama_kyber_cbd2_avx2: CBD sampling for eta = 2, the bit-count phase
+ *     vectorized
+ *
+ * There is no SIMD compression or encode/decode kernel on any tier: FIPS 203
+ * Compress_d runs in src/c/ama_kyber.c (division-free — see
+ * kyber_compress_d_impl there) whatever the dispatch table holds.
  *
  * Kyber uses q = 3329, 16-bit coefficients => 16 coefficients per YMM register.
  *
@@ -78,10 +83,18 @@ static inline int16_t barrett_reduce_scalar(int16_t a) {
 /* ============================================================================
  * AVX2 Barrett reduction for Kyber (q = 3329)
  *
- * For each 16-bit coefficient x in [-q, 2q):
+ * For each 16-bit coefficient x:
  *   t = floor(x * v / 2^26)
  *   r = x - t * q
  * where v = 20159.
+ *
+ * Domain is the whole int16_t range, as for barrett_reduce_scalar above, not
+ * [-q, 2q) as this block used to say — and a wider range is what it is
+ * given: the forward NTT applies it to butterfly output whose structural
+ * bound (seven layers, each adding a Montgomery product in (-q, q)) is well
+ * past 2q, and the inverse NTT to unreduced sums.  Measured by enumerating
+ * all 65,536 int16 inputs through this routine (2026-09-24): every lane equals
+ * barrett_reduce_scalar on the same input, and the image is [0, q].
  *
  * Uses mulhi_epi16 (arithmetic >>16) followed by srai_epi16(..., 10)
  * for a total >>26 shift, matching the pqcrystals-kyber AVX2 approach.
