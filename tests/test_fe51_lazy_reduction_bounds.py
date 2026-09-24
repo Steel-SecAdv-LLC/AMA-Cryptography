@@ -23,11 +23,24 @@ must be mirrored here — the pinned numbers below will say so.
 Reproduces the figures cited in ``src/c/fe51.h``: zero precondition
 violations, and a worst-case fold of ``0xF0780000000164B2`` at ge_dbl's
 ``X = E * F`` (6.1% below 2^64).
+
+The model is held to the C, not only to itself.  An earlier revision said a
+change to the formulas or the biases "must be mirrored here" and nothing
+enforced it: the biases were typed in and the group law transcribed, so
+changing ``ge_dbl``'s ``E = t0 - H`` from ``GE_FE_SUB_S`` to ``GE_FE_SUB_M``
+-- a real limb underflow, since H is a sum of two products -- left every test
+green.  :class:`TestTheModelIsTheCode` now reads the three bias vectors out of
+``fe51.h``, the ordered ``GE_FE_*`` operation sequence of every modelled
+function out of ``ama_ed25519_ge.h``, and the quoted fold and margin out of
+``fe51.h``'s comment, and requires each to match the model.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import re
+from collections.abc import Callable
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -60,10 +73,15 @@ bias8 = [2**54 - 152, 2**54 - 8, 2**54 - 8, 2**54 - 8, 2**54 - 8]
 bias4 = [2**53 - 76, 2**53 - 4, 2**53 - 4, 2**53 - 4, 2**53 - 4]  # fe51_sub (carried)
 worst = Worst()
 viol: list[tuple[str, str]] = []
+#: The field operations the model performs, in order, spelled as the
+#: ``GE_FE_*`` macro each one models (``GE_FE_SQ`` is recorded as ``MUL``: the
+#: model bounds a square as the product it is).
+trace: list[str] = []
 
 
 def mul_out_bound(f: Bounds, g: Bounds, site: str) -> Bounds:
     """f, g: lists of (lo, hi).  Returns output interval and checks."""
+    trace.append("MUL")
     cols = []
     for k in range(5):
         s = 0
@@ -95,6 +113,7 @@ def mul_out_bound(f: Bounds, g: Bounds, site: str) -> Bounds:
 
 
 def add(f: Bounds, g: Bounds) -> Bounds:
+    trace.append("ADD")
     return [(f[i][0] + g[i][0], f[i][1] + g[i][1]) for i in range(5)]
 
 
@@ -114,10 +133,12 @@ def sub_bias(f: Bounds, g: Bounds, bias: list[int], name: str, site: str) -> Bou
 
 
 def sub2(f: Bounds, g: Bounds, site: str) -> Bounds:
+    trace.append("SUB_M")
     return sub_bias(f, g, bias2, "sub_2p", site)
 
 
 def sub8(f: Bounds, g: Bounds, site: str) -> Bounds:
+    trace.append("SUB_S")
     return sub_bias(f, g, bias8, "sub_8p", site)
 
 
@@ -319,3 +340,95 @@ def test_sum_of_two_products_exceeds_the_sub_2p_bias(limb: int) -> None:
     if limb in (0, 1):
         assert two[limb][1] > bias2[limb]
     assert two[limb][1] <= bias8[limb]
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+FE51_H = REPO_ROOT / "src" / "c" / "fe51.h"
+GE_H = REPO_ROOT / "src" / "c" / "internal" / "ama_ed25519_ge.h"
+
+
+def _c_function_body(text: str, pattern: str) -> str:
+    """The brace-balanced body of the first definition matching ``pattern``."""
+    match = re.search(pattern, text)
+    assert match, f"no definition matches {pattern!r}"
+    start = text.index("{", match.end())
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1 : index]
+    raise AssertionError(f"unbalanced body after {pattern!r}")
+
+
+def _c_bias(name: str) -> list[int]:
+    """The five limb constants ``name`` adds before subtracting, from fe51.h."""
+    body = _c_function_body(FE51_H.read_text(encoding="utf-8"), rf"\bvoid\s+{name}\s*\(")
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    constants = [int(c, 16) for c in re.findall(r"\+\s*(0x[0-9A-Fa-f]+)ULL\s*\)", body)]
+    assert len(constants) == 5, f"{name}: expected five limb biases, found {constants}"
+    return constants
+
+
+#: The ``GE_FE_*`` operations the model accounts for.  COPY, 0 and 1 move or
+#: set values without changing any bound the model tracks.
+_MODELLED = re.compile(r"\bGE_FE_(MUL|SQ|ADD|SUB_M|SUB_S|SUB|NEG)\s*\(")
+
+
+def _c_sequence(function: str) -> list[str]:
+    text = GE_H.read_text(encoding="utf-8")
+    body = _c_function_body(text, rf"\bGE_SYM\({function}\)\s*\(")
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", body, flags=re.S)
+    return ["MUL" if op == "SQ" else op for op in _MODELLED.findall(body)]
+
+
+def _model_sequence(run: Callable[[], object]) -> list[str]:
+    trace.clear()
+    viol.clear()
+    run()
+    return list(trace)
+
+
+_MODEL_RUNS: dict[str, Callable[[], object]] = {
+    "ge_dbl": lambda: ge_dbl(M, M, M),
+    "ge_add": lambda: ge_add(P3, P3),
+    "ge_nielsadd": lambda: ge_nielsadd(M, M, M, M, *niels),
+    "ge_nielssub": lambda: ge_nielsadd(M, M, M, M, *niels, site="ge_nielssub", sub=True),
+    "ge_pnielsadd": lambda: ge_pnielsadd(M, M, M, M, pn_ypx, pn_ymx, pn_z, pn_t2d),
+    "ge_pnielssub": lambda: ge_pnielsadd(
+        M, M, M, M, pn_ypx, pn_ymx, pn_z, pn_t2d, site="ge_pnielssub", sub=True
+    ),
+    "ge_p1p1_to_p3": lambda: p1p1_to_p3(M, M, M, M, "ge_p1p1_to_p3"),
+    "ge_p3_to_pniels": lambda: (
+        add(M, M),
+        sub2(M, M, "ge_p3_to_pniels/ymx"),
+        mul_out_bound(M, reduced(), "ge_p3_to_pniels/t2d"),
+    ),
+}
+
+
+class TestTheModelIsTheCode:
+    """Each constant and each operation the model assumes, read from the C."""
+
+    @pytest.mark.parametrize(
+        ("name", "model"),
+        [("fe51_sub_2p", bias2), ("fe51_sub_8p", bias8), ("fe51_sub", bias4)],
+    )
+    def test_the_biases_are_fe51_hs(self, name: str, model: list[int]) -> None:
+        assert _c_bias(name) == model, name
+
+    @pytest.mark.parametrize("function", sorted(_MODEL_RUNS))
+    def test_each_group_operation_is_transcribed_in_order(self, function: str) -> None:
+        """Same operations, same order, same subtraction bias at every site."""
+        c_ops = _c_sequence(function)
+        assert c_ops, f"{function}: no GE_FE_* operation parsed"
+        assert _model_sequence(_MODEL_RUNS[function]) == c_ops, function
+
+    def test_the_quoted_fold_and_margin_are_the_models(self) -> None:
+        _, w = _run_model()
+        comment = FE51_H.read_text(encoding="utf-8")
+        assert f"19*c4 = {w.c4x19:#018X}".replace("0X", "0x") in comment
+        below = round((1 - w.c4x19 / 2**64) * 100, 1)
+        assert f"{below}% below 2^64" in comment

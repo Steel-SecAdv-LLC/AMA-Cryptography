@@ -71,7 +71,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent.parent / "ama_cryptography"
 #: which is precisely why a name-based sweep has to name them all.
 #: The stdlib modules a bare draw can come from.  Used to resolve IMPORT
 #: BINDINGS, so an alias cannot hide a draw — see `call_name`.
-_DRAW_MODULES = frozenset({"os", "secrets", "random"})
+_DRAW_MODULES = frozenset({"os", "secrets", "random", "uuid"})
 
 BARE_DRAW_CALLS = frozenset(
     {
@@ -82,6 +82,10 @@ BARE_DRAW_CALLS = frozenset(
         "secrets.randbelow",
         "secrets.choice",
         "os.urandom",
+        # getrandom(2) directly: the same kernel source as os.urandom.
+        "os.getrandom",
+        # uuid4 is 16 bytes of os.urandom with six bits fixed.
+        "uuid.uuid4",
         "random.randbytes",
         "random.getrandbits",
         "secrets.SystemRandom",
@@ -103,6 +107,12 @@ ALLOWED_BARE_DRAWS: dict[tuple[str, str], tuple[int, str]] = {
         1,
         "the health-tested wrapper itself — this call IS the entropy source "
         "the continuous check wraps",
+    ),
+    ("adaptive_posture.py", "CryptoPostureController.evaluate_and_respond"): (
+        1,
+        "uuid4 names a PendingAction: an identifier that is logged in clear and "
+        "only addresses the queued action through confirm_action(); it is not "
+        "key material and nothing derives from it",
     ),
     ("_self_test.py", "_run_rng_stage"): (
         2,
@@ -211,23 +221,29 @@ def _bare_draw_sites(tree: ast.AST) -> list[tuple[int, str, str, bool]]:
     sites: list[tuple[int, str, str, bool]] = []
     aliases = _resolve_draw_aliases(tree)
 
-    def walk(node: ast.AST, stack: list[str], in_main: bool) -> None:
+    def visit(node: ast.AST, stack: list[str], in_main: bool) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            stack = [*stack, node.name]
+        if isinstance(node, ast.Call):
+            name = _call_name(node, aliases)
+            if name in BARE_DRAW_CALLS:
+                sites.append((node.lineno, name, ".".join(stack) or "<module>", in_main))
+        if isinstance(node, ast.If) and _is_main_guard(node):
+            # Only the guard's BODY is script-entry code.  Its test and its
+            # else/elif arm run on every import, so they keep the parent's
+            # status: walking the whole If as guarded exempted a draw in the
+            # else arm that every import executes.
+            visit(node.test, stack, in_main)
+            for statement in node.body:
+                visit(statement, stack, True)
+            for statement in node.orelse:
+                visit(statement, stack, in_main)
+            return
         for child in ast.iter_child_nodes(node):
-            child_stack = stack
-            child_main = in_main
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                child_stack = [*stack, child.name]
-            if isinstance(child, ast.stmt) and _is_main_guard(child):
-                child_main = True
-            if isinstance(child, ast.Call):
-                name = _call_name(child, aliases)
-                if name in BARE_DRAW_CALLS:
-                    sites.append(
-                        (child.lineno, name, ".".join(child_stack) or "<module>", child_main)
-                    )
-            walk(child, child_stack, child_main)
+            visit(child, stack, in_main)
 
-    walk(tree, [], False)
+    for top in ast.iter_child_nodes(tree):
+        visit(top, [], False)
     return sites
 
 
@@ -433,6 +449,20 @@ class TestTheSweepResolvesBindingsNotSpellings:
         sites = _bare_draw_sites(ast.parse(source))
         assert sites, f"the sweep missed an aliased draw:\n{source}"
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "import os\n\ndef f():\n    return os.getrandom(32)\n",
+            "from os import getrandom\n\ndef f():\n    return getrandom(32)\n",
+            "import uuid\n\ndef f():\n    return uuid.uuid4()\n",
+            "from uuid import uuid4 as _u4\n\ndef f():\n    return _u4()\n",
+        ],
+        ids=["os.getrandom", "from-os-getrandom", "uuid.uuid4", "aliased-uuid4"],
+    )
+    def test_the_other_os_entropy_spellings_are_draws(self, source: str) -> None:
+        """getrandom(2) directly, and uuid4 (16 bytes of os.urandom)."""
+        assert _bare_draw_sites(ast.parse(source)), source
+
     def test_an_unaliased_draw_is_still_found(self) -> None:
         """The control: the ordinary spelling must keep working."""
         source = "import os\n\ndef f():\n    return os.urandom(32)\n"
@@ -461,6 +491,30 @@ class TestTheMainGuardExemptionIsTheScriptIdiomAndNothingElse:
     def test_the_real_idiom_exempts(self) -> None:
         sites = _bare_draw_sites(ast.parse(self.DRAW.format(guard='if __name__ == "__main__":')))
         assert sites and all(under_main for *_, under_main in sites)
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'import os\n\nif __name__ == "__main__":\n    pass\n'
+            "else:\n    KEY = os.urandom(32)\n",
+            'import os\n\nif __name__ == "__main__":\n    pass\n'
+            "elif True:\n    KEY = os.urandom(32)\n",
+        ],
+        ids=["else-arm", "elif-arm"],
+    )
+    def test_the_guards_other_arms_run_on_import_and_are_swept(self, source: str) -> None:
+        """Only the guard's body is script-entry code; ``else``/``elif`` run on
+        every import."""
+        sites = _bare_draw_sites(ast.parse(source))
+        assert sites and not any(under_main for *_, under_main in sites), sites
+
+    def test_the_guards_body_still_exempts_beside_an_else(self) -> None:
+        source = (
+            'import os\n\nif __name__ == "__main__":\n    DEMO = os.urandom(32)\n'
+            "else:\n    pass\n"
+        )
+        sites = _bare_draw_sites(ast.parse(source))
+        assert sites and all(under_main for *_, under_main in sites), sites
 
     @pytest.mark.parametrize(
         "guard",

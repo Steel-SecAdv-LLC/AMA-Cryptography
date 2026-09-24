@@ -173,32 +173,65 @@ class TestModuleInvocation:
 
         Without this the assertion above is satisfied by a command that always
         returns 0.
+
+        The copy is verified twice under the same cwd, ``PYTHONPATH`` and
+        environment: untampered first, where it must report OK, then with one
+        byte appended to a signed ``.py`` file, where it must fail with a
+        digest mismatch.  The control is what makes the second verdict about
+        the tamper.  Without it any failure would do, and one was always
+        available: the copy cannot find a native library that lives outside
+        the package (``build/lib``), so an anchored build refused it for want
+        of a verifier whatever the digest said.  ``AMA_CRYPTO_LIB_PATH`` pins
+        the library the package itself resolved, as
+        ``tests/test_integrity_repair_gate.py`` does.
         """
         if not (PACKAGE_DIR / "_integrity_signature.py").exists():
             pytest.skip("unsigned tree: nothing to tamper with")
         import os
         import shutil
 
+        from ama_cryptography.pqc_backends import _find_native_library_path
+
+        native = _find_native_library_path()
+        if native is None:
+            pytest.skip("no native library discoverable by the package loader")
+
         root = tmp_path / "tree"
         root.mkdir()
         shutil.copytree(PACKAGE_DIR, root / "ama_cryptography")
         shutil.rmtree(root / "ama_cryptography" / "__pycache__", ignore_errors=True)
+        env = dict(
+            os.environ,
+            PYTHONPATH=str(root),
+            AMA_POST_DIAGNOSTIC_IMPORT="1",
+            AMA_CRYPTO_LIB_PATH=str(native),
+        )
+
+        def verify() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [sys.executable, "-m", "ama_cryptography.integrity", "--verify"],
+                capture_output=True,
+                text=True,
+                cwd=str(root),
+                env=env,
+                timeout=120,
+            )
+
+        control = verify()
+        assert control.returncode == 0, (control.stdout + control.stderr)[-2000:]
+        assert "Module integrity: OK" in control.stdout, control.stdout[-2000:]
 
         # Change one signed .py file, leaving the artefact untouched.
         victim = root / "ama_cryptography" / "exceptions.py"
         victim.write_text(victim.read_text(encoding="utf-8") + "\n# tampered\n", encoding="utf-8")
+        shutil.rmtree(root / "ama_cryptography" / "__pycache__", ignore_errors=True)
 
-        result = subprocess.run(
-            [sys.executable, "-m", "ama_cryptography.integrity", "--verify"],
-            capture_output=True,
-            text=True,
-            cwd=str(root),
-            env=dict(os.environ, PYTHONPATH=str(root), AMA_POST_DIAGNOSTIC_IMPORT="1"),
-            timeout=120,
-        )
+        result = verify()
         combined = result.stdout + result.stderr
-        assert result.returncode != 0, combined[-2000:]
-        assert "Module integrity: OK" not in result.stdout, combined[-2000:]
+        assert result.returncode == 1, combined[-2000:]
+        assert "Module integrity: FAILED" in result.stderr, combined[-2000:]
+        verdict = result.stderr.split("Module integrity: FAILED", 1)[1]
+        assert "signed digest mismatch" in verdict, combined[-2000:]
 
 
 # ---------------------------------------------------------------------------
