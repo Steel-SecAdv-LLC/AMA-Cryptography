@@ -24,6 +24,12 @@ jobs:
     # Skip runs triggered by our own [auto-docs] commits
     if: "!contains(github.event.head_commit.message, '[auto-docs]')"
     runs-on: ubuntu-latest
+    # This job holds `contents: write` and `pull-requests: write`; without a
+    # bound a hung step would keep both for GitHub's 360-minute default.
+    # Measured over all 93 runs of this workflow (2026-03-23 to 2026-08-13):
+    # the longest successful run took 2.9 minutes, the median 0.6.  Ten
+    # minutes is over three times the longest.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository

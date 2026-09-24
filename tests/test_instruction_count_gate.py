@@ -19,18 +19,24 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GATE_PATH = REPO_ROOT / "tools" / "check_instruction_counts.py"
 BASELINE_PATH = REPO_ROOT / "benchmarks" / "instruction-baseline.json"
 MEASURE_PATH = REPO_ROOT / "benchmarks" / "measure_instruction_counts.py"
 DRIVER_PATH = REPO_ROOT / "benchmarks" / "ic_driver.c"
+CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci-build-test.yml"
+AB_JOB = "instruction-count-regression"
 
 FINGERPRINT = "arch=x86-64 sha3=AVX2 kyber=AVX2"
 OTHER_FINGERPRINT = "arch=aarch64 sha3=NEON kyber=NEON"
@@ -309,6 +315,154 @@ def test_a_stale_acknowledgement_fails(
     assert "stale" in capsys.readouterr().err
 
 
+# --------------------------------------------------------------------------
+# After the branch that wrote an acknowledgement merges
+#
+# The file records moves between a merge-base and a branch head. Once that
+# branch merges, the next pull request's merge-base already contains every
+# move, the A/B comparison shows none of them, and an entry is no longer
+# "out of tolerance". Treating that as stale failed the first unrelated pull
+# request after a merge on every entry in the file — fifteen of them for the
+# 5.0.0 branch — until somebody edited a file the pull request never touched.
+# --------------------------------------------------------------------------
+
+
+def _reference(tmp_path: Path, operations: dict[str, int]) -> Path:
+    """An A/B reference measurement (what CI measures on the merge-base)."""
+    return _write(
+        tmp_path / "base.json",
+        {"fingerprint": FINGERPRINT, "operations": operations},
+    )
+
+
+def test_an_acknowledgement_whose_change_has_landed_passes(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The reference measures the entry's ``to``: the change is in the base."""
+    landed = dict(BASE_OPS)
+    landed["sha3_256"] = 12_000
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 12_000, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _reference(tmp_path, landed),
+        _measured(tmp_path, dict(landed)),  # an unrelated pull request
+        "--acknowledgements",
+        str(acks),
+    )
+    out = capsys.readouterr().out
+    assert result == 0, out
+    assert "Landed (L): 1" in out and "sha3_256" in out
+
+
+def test_the_shipped_acknowledgements_do_not_fail_the_next_pull_request(
+    gate: ModuleType, tmp_path: Path
+) -> None:
+    """The real file, in the state it is in once this branch has merged.
+
+    Every acknowledged operation is at its recorded ``to`` on BOTH sides —
+    the merge-base contains the change and the next pull request does not
+    touch it. This is the exact input the first A/B run after the merge sees.
+    """
+    shipped = json.loads(ACK_PATH.read_text(encoding="utf-8"))["acknowledgements"]
+    after_merge = dict(BASE_OPS)
+    after_merge.update({name: int(entry["to"]) for name, entry in shipped.items()})
+    result = _run(
+        gate,
+        _reference(tmp_path, after_merge),
+        _measured(tmp_path, dict(after_merge)),
+        "--acknowledgements",
+        str(ACK_PATH),
+    )
+    assert result == 0
+
+
+def test_a_landed_acknowledgement_excuses_no_later_move(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Landed is only ever a verdict on an operation INSIDE tolerance.
+
+    With the change in the base, a later pull request that moves the same
+    operation again is compared against the entry's ``from`` — which the base
+    no longer measures — and fails until it is re-acknowledged.
+    """
+    landed = dict(BASE_OPS)
+    landed["sha3_256"] = 12_000
+    moved = dict(landed)
+    moved["sha3_256"] = 15_000  # +25% on top of the landed change
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 12_000, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _reference(tmp_path, landed),
+        _measured(tmp_path, moved),
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 1
+    assert "different comparison" in capsys.readouterr().err
+
+
+def test_an_acknowledgement_still_matching_its_from_is_stale_not_landed(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The ``from`` test comes first, so an entry that moves nothing is stale.
+
+    An entry whose ``from`` and ``to`` lie within tolerance of each other
+    matches the reference on BOTH sides. Classified as landed, it would stay
+    in the file forever explaining nothing; the reference still measuring its
+    ``from`` is what says the acknowledged move is not there.
+    """
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 38_500, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _reference(tmp_path, dict(BASE_OPS)),
+        _measured(tmp_path),  # nothing moved
+        "--acknowledgements",
+        str(acks),
+    )
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "still measures its 'from'" in captured.err
+    assert "Landed" not in captured.out
+
+
+def test_an_acknowledgement_the_reference_matches_on_neither_side_fails(
+    gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The reference measures neither ``from`` nor ``to``: the entry is stale.
+
+    The numbers are chosen so that the HEAD value is within tolerance of the
+    entry's ``to`` while the REFERENCE is not (12,400 is 3.3% from 12,000;
+    12,200 is 1.7% from it and 1.6% from 12,400). A gate that asked the head
+    rather than the reference whether the change had landed would pass this.
+    """
+    reference = dict(BASE_OPS)
+    reference["sha3_256"] = 12_400
+    head = dict(BASE_OPS)
+    head["sha3_256"] = 12_200
+    acks = _acks(
+        tmp_path,
+        {"sha3_256": {"from": 38_072, "to": 12_000, "reason": LONG_REASON}},
+    )
+    result = _run(
+        gate,
+        _reference(tmp_path, reference),
+        _measured(tmp_path, head),
+        "--acknowledgements",
+        str(acks),
+    )
+    assert result == 1
+    assert "neither" in capsys.readouterr().err
+
+
 def test_an_acknowledgement_without_a_reason_is_rejected(
     gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -556,3 +710,181 @@ def test_the_driver_pins_autotune_off() -> None:
     assert (
         "AMA_DISPATCH_NO_AUTOTUNE" in source
     ), "the measurement tool no longer disables dispatch auto-tune"
+
+
+# --------------------------------------------------------------------------
+# The A/B lane's reference step, run for real
+#
+# ci-build-test.yml triggers on push to main, where HEAD IS the merge-base.
+# The lane's handling of that case was `cp head.json base.json` under
+# `set -e`, executed before head.json existed, so every push to main failed
+# the job with "cp: cannot stat 'head.json'". Skipping the comparison is not
+# a fix open to this job — ci-gate fails a skipped job, and a step skipped on
+# a self-probe inside a gated job is what check_workflow_commands rejects —
+# so on a push the lane compares HEAD against what the push advanced from.
+# A workflow step is shell, and the only honest test of shell is to run it:
+# these tests take the step out of the workflow file as it stands and
+# execute it against real git repositories in each state.
+# --------------------------------------------------------------------------
+
+_POSIX_SHELL = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None or shutil.which("git") is None,
+    reason=(
+        "the A/B lane runs this step under bash on ubuntu-latest; the Windows "
+        "runners have no POSIX bash guaranteed on PATH"
+    ),
+)
+
+_ZERO_SHA = "0" * 40
+
+
+def _ab_steps() -> list[dict[str, Any]]:
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    steps = workflow["jobs"][AB_JOB]["steps"]
+    assert isinstance(steps, list) and steps, f"{AB_JOB} has no steps"
+    return steps
+
+
+def _reference_step() -> dict[str, Any]:
+    """The step that decides what the head is compared against."""
+    matches = [s for s in _ab_steps() if "git merge-base FETCH_HEAD HEAD" in str(s.get("run", ""))]
+    assert len(matches) == 1, f"expected one reference step in {AB_JOB}, found {len(matches)}"
+    return matches[0]
+
+
+def _git(cwd: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+class _Repo:
+    """A bare ``origin`` whose ``main`` has ``history`` commits, and a clone."""
+
+    def __init__(self, tmp_path: Path, history: int) -> None:
+        self.tmp_path = tmp_path
+        self.origin = tmp_path / "origin.git"
+        self.work = tmp_path / "work"
+        _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(self.origin))
+        _git(tmp_path, "init", "-q", "-b", "main", str(self.work))
+        self.main: list[str] = []
+        for index in range(history):
+            _git(self.work, "commit", "-q", "--allow-empty", "-m", f"main {index}")
+            self.main.append(_git(self.work, "rev-parse", "HEAD"))
+        _git(self.work, "remote", "add", "origin", str(self.origin))
+        _git(self.work, "push", "-q", "origin", "main")
+
+    def commit_ahead(self, count: int) -> None:
+        for index in range(count):
+            _git(self.work, "commit", "-q", "--allow-empty", "-m", f"ahead {index}")
+
+    def run_step(self, *, before: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        """Run the step as a push event would; ``before`` is the push's old tip."""
+        step = _reference_step()
+        known = {"${{ github.event.before }}": before}
+        env = dict(os.environ)
+        for name, value in dict(step.get("env") or {}).items():
+            assert str(value) in known, f"the step reads {value!r}, which this harness does not set"
+            env[str(name)] = known[str(value)]
+        script = str(step["run"])
+        # A push event: no pull_request payload, so the step falls back to the
+        # default branch -- the path a push to main takes.
+        script = script.replace("${{ github.event.pull_request.base.sha }}", "")
+        script = script.replace("${{ github.event.repository.default_branch }}", "main")
+        assert "${{" not in script, "the step grew an expression this harness does not substitute"
+        script_path = self.tmp_path / "step.sh"
+        script_path.write_text(script, encoding="utf-8")
+        output_path = self.tmp_path / "github_output"
+        output_path.write_text("", encoding="utf-8")
+        env["GITHUB_OUTPUT"] = str(output_path)
+        # GitHub runs a `run:` block as `bash -e {0}`.
+        completed = subprocess.run(
+            ["bash", "-e", str(script_path)], cwd=self.work, capture_output=True, text=True, env=env
+        )
+        outputs: dict[str, str] = {}
+        for line in output_path.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            outputs[key] = value
+        return completed, outputs
+
+
+@_POSIX_SHELL
+def test_a_push_to_main_is_compared_against_what_it_advanced_from(tmp_path: Path) -> None:
+    """HEAD is the merge-base. The reference is the push's old tip, not HEAD.
+
+    Three commits pushed at once (a rebase merge): the old tip is main~3, and
+    comparing against it covers all three, where the first parent would
+    cover only the last.
+    """
+    repo = _Repo(tmp_path, history=4)
+    completed, outputs = repo.run_step(before=repo.main[0])
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert outputs.get("sha") == repo.main[0], outputs
+    assert not (repo.work / "base.json").exists(), "a reference measurement was fabricated"
+
+
+@_POSIX_SHELL
+@pytest.mark.parametrize(
+    "before",
+    ["", _ZERO_SHA, "1" * 40],
+    ids=["dispatch-no-before", "new-branch-zero-sha", "force-push-unknown-sha"],
+)
+def test_without_a_usable_old_tip_the_first_parent_is_the_reference(
+    tmp_path: Path, before: str
+) -> None:
+    repo = _Repo(tmp_path, history=3)
+    completed, outputs = repo.run_step(before=before)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert outputs.get("sha") == repo.main[1], outputs
+
+
+@_POSIX_SHELL
+def test_an_old_tip_that_is_head_itself_is_not_a_reference(tmp_path: Path) -> None:
+    """A re-run where ``before`` equals HEAD would compare HEAD with HEAD."""
+    repo = _Repo(tmp_path, history=3)
+    completed, outputs = repo.run_step(before=repo.main[-1])
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert outputs.get("sha") == repo.main[1], outputs
+
+
+@_POSIX_SHELL
+def test_a_root_commit_with_nothing_to_compare_fails(tmp_path: Path) -> None:
+    """No old tip and no parent: a failure, never a comparison of nothing."""
+    repo = _Repo(tmp_path, history=1)
+    completed, outputs = repo.run_step(before="")
+    assert completed.returncode != 0
+    assert "nothing to compare" in completed.stdout + completed.stderr
+    assert "sha" not in outputs, outputs
+
+
+@_POSIX_SHELL
+def test_a_branch_ahead_of_main_is_compared_against_the_merge_base(tmp_path: Path) -> None:
+    """The old tip is ignored off main: the branch's whole change is measured."""
+    repo = _Repo(tmp_path, history=2)
+    repo.commit_ahead(2)
+    completed, outputs = repo.run_step(before=repo.main[0])
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert outputs.get("sha") == repo.main[-1], outputs
+
+
+def test_the_reference_is_built_and_compared_on_every_run() -> None:
+    """No step of the comparison may be skipped, and the build uses the step's sha.
+
+    The job sits in ci-gate's ``needs:``; a comparison step skipped inside it
+    would let the job report success having compared nothing.
+    """
+    step = _reference_step()
+    step_id = step.get("id")
+    assert step_id, "the reference step has no id, so the build cannot read its sha"
+    names = {str(s.get("name")): s for s in _ab_steps()}
+    build = names.get("Build the reference and measure")
+    compare = names.get("Compare head against the reference")
+    assert build is not None and compare is not None, sorted(names)
+    for s in (step, build, compare):
+        assert "if" not in s, f"step {s.get('name')!r} is conditional: {s.get('if')!r}"
+    assert (build.get("env") or {}).get("BASE") == f"${{{{ steps.{step_id}.outputs.sha }}}}"

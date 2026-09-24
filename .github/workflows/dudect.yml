@@ -266,7 +266,9 @@ jobs:
 
       - name: Build C library
         # The harnesses below do NOT link this build — tools/constant_time's
-        # own Makefile compiles the sources it needs at -O2.  The build type is
+        # own Makefile compiles the sources it needs with the Release flags
+        # (-O3 -DNDEBUG -fomit-frame-pointer -funroll-loops, its CFLAGS; no
+        # LTO).  The build type is
         # pinned anyway so the configuration is stated rather than inherited
         # from a default this project does not set.
         run: |

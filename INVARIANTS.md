@@ -1232,6 +1232,23 @@ false-positive.
 (an `inputs.*` expression, a matrix it cannot expand) is reported separately
 and excluded from the verified count. It is never quietly counted as passing.
 
+**A fifth class: a skip inherited through the job graph.** A job-level `if:`
+that calls no status function is evaluated as `success() && ...`, and GitHub
+evaluates that `success()` over the job's *transitive* `needs:` — a skipped
+ancestor anywhere above makes it false. `release.yml` shipped the consequence:
+`verify-anchor` is skipped on the supported unanchored path and `build-wheels`
+proceeds past it with `!cancelled()`, but `hash-artefacts`, `sign`,
+`provenance` and `publish-pypi` carried the implicit check, so on that path
+the release signed, attested and published nothing, in a green run. The
+checker fails a job below a conditional job that relies on the implicit (or an
+explicit) `success()`, and a `!cancelled()` job that does not test each job in
+its `needs:` by `needs.<id>.result`. It also requires `timeout-minutes` on
+every job that runs on a runner: GitHub's default is 360 minutes, which is how
+long a hung `auto-docs.yml` or `wiki-sync.yml` job would have held its
+`contents: write` token. Both are pinned in both directions by
+`tests/test_workflow_command_checks.py`, the first against the pre-fix
+`release.yml` job graph replanted verbatim.
+
 **Stated limitation.** GitHub publishes no API enumerating available hosted
 labels, so `SUPPORTED_LABELS` is a curated table carrying the date and source
 it was verified against. It catches an already-retired label, a typo, and a

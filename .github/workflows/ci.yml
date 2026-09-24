@@ -1569,8 +1569,9 @@ jobs:
       # The .semgrep.yml rule `bare-memset-zero-secret-named-buffer` states this
       # property at ERROR severity, and the Semgrep step above names it as one
       # of its blocking rules — but that rule is scoped to `src/c/**` while
-      # every semgrep invocation here scans `ama_cryptography/` only, so it
-      # matched nothing and could never fail.  Widening the semgrep scope is not
+      # the Semgrep step's scan covers `ama_cryptography/`, `setup.py` and
+      # `tools/` and nothing under `src/c/`, so it matched nothing and could
+      # never fail.  Widening the semgrep scope is not
       # the fix either: semgrep's C parser does not know the AMA_API export
       # macro and errors on every file that uses it, which the severity gate
       # (correctly) treats as a failed scan.  This tool enforces the same rule,
@@ -1776,7 +1777,9 @@ jobs:
         mkdir -p build
         cd build
         # The harnesses below do NOT link this build — tools/constant_time's own
-        # Makefile compiles the sources it needs at -O2.  The build type is
+        # Makefile compiles the sources it needs with the Release flags (-O3
+        # -DNDEBUG -fomit-frame-pointer -funroll-loops, its CFLAGS; no LTO).
+        # The build type is
         # pinned anyway so the configuration is stated rather than inherited
         # from a default this project does not set (a bare configure yields
         # C_FLAGS with no -O flag at all).

@@ -7,10 +7,11 @@ Why this exists as a tool rather than a semgrep rule
 ----------------------------------------------------
 ``.semgrep.yml`` carries ``bare-memset-zero-secret-named-buffer`` at ERROR
 severity, scoped to ``src/c/**``, and both ``tools/check_semgrep_severity.py``
-and the CI step name it as one of the blocking rules.  It never ran.  Every
-semgrep invocation in this repository scans ``ama_cryptography/`` only, so a
-rule restricted to ``src/c/**`` matched nothing and could not fail the gate —
-an ERROR-severity control that was, in practice, decorative.
+and the CI step name it as one of the blocking rules.  It never ran.  The
+one semgrep invocation in this repository (``ci.yml``'s Semgrep step) scans
+``ama_cryptography/``, ``setup.py`` and ``tools/`` and nothing under
+``src/c/``, so a rule restricted to ``src/c/**`` matched nothing and could not
+fail the gate — an ERROR-severity control that was, in practice, decorative.
 
 Adding ``src/c/`` to the scan target does not fix it either: semgrep's C parser
 does not know this codebase's ``AMA_API`` export macro and reports a syntax

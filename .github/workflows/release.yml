@@ -365,7 +365,9 @@ jobs:
   #
   # Skipped when no anchor is configured, which is the supported unanchored
   # path (forks, and repositories before the key is installed); `build-wheels`
-  # below treats "skipped" as permission to proceed.  The check itself lives in
+  # below treats "skipped" as permission to proceed, and every job below it
+  # tests its dependencies by name so the skip does not propagate down the
+  # signing chain (see `hash-artefacts`).  The check itself lives in
   # integrity-anchor-check.yml so the dispatchable job and this gate cannot
   # drift apart.
   verify-anchor:
@@ -827,6 +829,23 @@ jobs:
   hash-artefacts:
     name: Hash artefacts for SLSA subject set
     needs: [build-wheels, build-sdist]
+    # Explicit, like every job below `verify-anchor`.  A job with no status
+    # function in its `if:` gets an implicit `success()`, and GitHub evaluates
+    # that over the TRANSITIVE `needs:` chain: a skipped ancestor anywhere
+    # above makes it false (actions/runner#2205).  `verify-anchor` is skipped
+    # on the supported unanchored path, so with the implicit check this job,
+    # `provenance`, `sign`, `publish-pypi` and `github-release` were all
+    # skipped on that path — a green run that signed, attested and released
+    # nothing — even though `build-wheels` had been told a skipped anchor
+    # check is permission to proceed.  `!cancelled()` replaces the implicit
+    # check and the direct results are tested by name;
+    # tools/check_workflow_commands.py (check_skip_propagation) fails any job
+    # that inherits a conditional ancestor's skip implicitly, or that uses
+    # `!cancelled()` without testing each job it needs.
+    if: >-
+      !cancelled()
+      && needs['build-wheels'].result == 'success'
+      && needs['build-sdist'].result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -885,6 +904,10 @@ jobs:
   provenance:
     name: SLSA v1 provenance attestation
     needs: [hash-artefacts]
+    # Explicit for the reason recorded on `hash-artefacts`.
+    if: >-
+      !cancelled()
+      && needs['hash-artefacts'].result == 'success'
     permissions:
       id-token: write       # OIDC for the keyless attestation
       # The slsa-github-generator reusable workflow's internal upload-assets
@@ -911,6 +934,11 @@ jobs:
   sign:
     name: Sigstore sign (wheels + sdist)
     needs: [build-wheels, build-sdist]
+    # Explicit for the reason recorded on `hash-artefacts`.
+    if: >-
+      !cancelled()
+      && needs['build-wheels'].result == 'success'
+      && needs['build-sdist'].result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -985,10 +1013,20 @@ jobs:
     # Actions -> Variables) once the PyPI trusted publisher and the `pypi`
     # environment both exist. Leaving it unset skips publishing; the skip is
     # stated in the release notes rather than passing silently.
+    #
+    # Every dependency is tested by name under `!cancelled()`, for the reason
+    # recorded on `hash-artefacts`: the implicit `success()` this job used to
+    # carry was false on the unanchored path, because `verify-anchor` — an
+    # ancestor through build-wheels — is skipped there.
     if: >-
-      github.event_name == 'push'
+      !cancelled()
+      && github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
       && vars.AMA_PUBLISH_TO_PYPI == 'true'
+      && needs.preflight.result == 'success'
+      && needs.sign.result == 'success'
+      && needs.provenance.result == 'success'
+      && needs['verify-reproducible-wheel'].result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -1052,21 +1090,29 @@ jobs:
     #   * verify-reproducible-wheel not successful -> no release.  It is in
     #     `needs`, but `!cancelled()` replaces the implicit success() check,
     #     so without this line a failed rebuild comparison skipped PyPI
-    #     (publish-pypi has no status function, so it needs every dependency
-    #     green), and that SKIP then read as "PyPI not configured" here: the
-    #     unreproducible artefacts shipped as a GitHub Release.
+    #     (publish-pypi now tests it by name as well), and that SKIP then read
+    #     as "PyPI not configured" here: the unreproducible artefacts shipped
+    #     as a GitHub Release.
+    #   * preflight not successful -> no release.  Implied already (sign
+    #     cannot succeed without it), and tested by name anyway: under
+    #     `!cancelled()` every job in `needs:` is checked explicitly, which
+    #     is what tools/check_workflow_commands.py requires.
     #
-    # Bracket indexing, not dot notation: `needs.publish-pypi.result` asks an
-    # expression grammar in which `-` is also subtraction to read a hyphenated
-    # job id as a single identifier.  No other workflow here dereferences a
-    # hyphenated job name, so there is no in-repo evidence the dot form is
-    # safe, and this file only ever executes on a tag push — the one place a
-    # wrong guess is discovered at the worst moment.  `needs['publish-pypi']`
-    # is unambiguous under any reading.
+    # Bracket indexing for hyphenated job ids.  The dot form is valid too —
+    # GitHub's expression syntax admits `-` in a property name ("must start
+    # with a letter or _ and contain only alphanumeric characters, -, or _"),
+    # and the gate jobs of static-analysis.yml and dudect.yml dereference
+    # hyphenated ids with it on every run of those workflows
+    # (`needs.clang-analyzer.result` resolved to `success` and
+    # `needs.valgrind-memcheck.result` to `skipped` in run 35970161919), as
+    # does `provenance` above (`needs.hash-artefacts.outputs.subjects`).
+    # Brackets are kept because they read the same under any grammar, in the
+    # one file that executes only on a tag push.
     if: >-
       !cancelled()
       && github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
+      && needs.preflight.result == 'success'
       && needs.sign.result == 'success'
       && needs.provenance.result == 'success'
       && needs['verify-reproducible-wheel'].result == 'success'

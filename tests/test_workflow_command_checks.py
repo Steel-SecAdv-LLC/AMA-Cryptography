@@ -1265,6 +1265,282 @@ class TestGatedJobsRunTheirPayload:
         assert report.gate_required_jobs_checked == 0
 
 
+def skip_findings(source: str, name: str = "test.yml") -> wf.Report:
+    report = wf.Report()
+    wf.check_skip_propagation(Path(name), yaml.safe_load(textwrap.dedent(source)), report)
+    return report
+
+
+class TestSkipPropagation:
+    """A job below a conditional job must not inherit its skip implicitly.
+
+    The pre-fix ``release.yml`` graph is replanted below, ``needs:`` and
+    ``if:`` verbatim.  ``verify-anchor`` is skipped on the unanchored path;
+    ``build-wheels`` proceeds past it with ``!cancelled()``; and the implicit
+    ``success()`` on everything after it — evaluated over the TRANSITIVE
+    ``needs:`` — skipped the signing chain in a green run.
+    """
+
+    PRE_FIX_RELEASE = """
+        jobs:
+          preflight:
+            runs-on: ubuntu-latest
+          verify-anchor:
+            needs: [preflight]
+            if: vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != ''
+            uses: ./.github/workflows/integrity-anchor-check.yml
+          build-wheels:
+            needs: [preflight, verify-anchor]
+            if: >-
+              !cancelled()
+              && needs.preflight.result == 'success'
+              && needs['verify-anchor'].result != 'failure'
+          build-sdist:
+            needs: [preflight]
+          verify-reproducible-wheel:
+            needs: [preflight, build-wheels]
+            if: >-
+              !cancelled()
+              && needs.preflight.result == 'success'
+              && needs['build-wheels'].result == 'success'
+          hash-artefacts:
+            needs: [build-wheels, build-sdist]
+          provenance:
+            needs: [hash-artefacts]
+          sign:
+            needs: [build-wheels, build-sdist]
+          publish-pypi:
+            needs: [preflight, sign, provenance, verify-reproducible-wheel]
+            if: >-
+              github.event_name == 'push'
+              && startsWith(github.ref, 'refs/tags/v')
+              && vars.AMA_PUBLISH_TO_PYPI == 'true'
+          github-release:
+            needs: [preflight, sign, provenance, publish-pypi, verify-reproducible-wheel]
+            if: >-
+              !cancelled()
+              && github.event_name == 'push'
+              && startsWith(github.ref, 'refs/tags/v')
+              && needs.sign.result == 'success'
+              && needs.provenance.result == 'success'
+              && needs['verify-reproducible-wheel'].result == 'success'
+              && needs['publish-pypi'].result != 'failure'
+        """
+
+    def test_the_pre_fix_release_graph_is_reported_job_by_job(self) -> None:
+        report = skip_findings(self.PRE_FIX_RELEASE, "release.yml")
+        by_job = {f.location: f.message for f in report.findings}
+        for job in ("hash-artefacts", "provenance", "sign", "publish-pypi"):
+            assert "implicit `success()`" in by_job.get(f"jobs.{job}", ""), messages(report)
+            assert "`verify-anchor`" in by_job[f"jobs.{job}"]
+        # The one job that already used `!cancelled()` left preflight untested.
+        assert "never tests `preflight`" in by_job.get("jobs.github-release", ""), messages(report)
+        assert len(report.findings) == 5, messages(report)
+
+    def test_the_repository_release_graph_is_clean_and_was_inspected(self) -> None:
+        release = REPO_ROOT / ".github" / "workflows" / "release.yml"
+        report = wf.Report()
+        wf.check_skip_propagation(
+            release, yaml.safe_load(release.read_text(encoding="utf-8")), report
+        )
+        assert report.ok, messages(report)
+        # build-wheels, verify-reproducible-wheel, hash-artefacts, provenance,
+        # sign, publish-pypi and github-release all sit below verify-anchor.
+        assert report.skip_chains_checked >= 7
+
+    def test_a_skip_propagates_through_a_job_that_ran(self) -> None:
+        """Transitive: the conditional job is a grandparent, not a need."""
+        report = skip_findings("""
+            jobs:
+              a:
+                if: github.event_name == 'push'
+              b:
+                needs: [a]
+                if: "!cancelled() && needs.a.result != 'failure'"
+              c:
+                needs: [b]
+            """)
+        assert [f.location for f in report.findings] == ["jobs.c"], messages(report)
+        assert "`a`" in report.findings[0].message
+
+    def test_an_explicit_success_is_the_same_hazard(self) -> None:
+        report = skip_findings("""
+            jobs:
+              a:
+                if: github.event_name == 'push'
+              b:
+                needs: [a]
+                if: success() && github.ref == 'refs/heads/main'
+            """)
+        assert [f.location for f in report.findings] == ["jobs.b"], messages(report)
+
+    def test_not_cancelled_with_every_need_tested_is_clean(self) -> None:
+        report = skip_findings("""
+            jobs:
+              a:
+                if: github.event_name == 'push'
+              z-y:
+                runs-on: ubuntu-latest
+              b:
+                needs: [a, z-y]
+                if: >-
+                  !cancelled()
+                  && needs.a.result != 'failure'
+                  && needs["z-y"].result == 'success'
+            """)
+        assert report.ok, messages(report)
+        assert report.skip_chains_checked == 1
+
+    def test_not_cancelled_with_an_untested_need_is_reported(self) -> None:
+        report = skip_findings("""
+            jobs:
+              a:
+                if: github.event_name == 'push'
+              other:
+                runs-on: ubuntu-latest
+              b:
+                needs: [a, other]
+                if: "!cancelled() && needs.a.result != 'failure'"
+            """)
+        assert len(report.findings) == 1, messages(report)
+        assert "never tests `other`" in report.findings[0].message
+
+    def test_always_and_failure_jobs_are_left_to_their_own_contract(self) -> None:
+        """A gate or a failure notifier means to run past a failure."""
+        report = skip_findings("""
+            jobs:
+              a:
+                if: github.event_name == 'push'
+              gate:
+                needs: [a]
+                if: always()
+              notify:
+                needs: [a]
+                if: failure()
+            """)
+        assert report.ok, messages(report)
+
+    def test_no_conditional_ancestor_means_no_finding(self) -> None:
+        report = skip_findings("""
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+              b:
+                needs: [a]
+            """)
+        assert report.ok, messages(report)
+        assert report.skip_chains_checked == 0
+
+    @pytest.mark.parametrize(
+        ("condition", "job_id", "expected"),
+        [
+            ("needs.preflight.result == 'success'", "preflight", True),
+            ("needs['verify-anchor'].result != 'failure'", "verify-anchor", True),
+            ("needs[\"verify-anchor\"].result != 'failure'", "verify-anchor", True),
+            ("needs . sign . result == 'success'", "sign", True),
+            ("needs.preflight.outputs.version == '1'", "preflight", False),
+            ("needs.preflight-x.result == 'success'", "preflight", False),
+            ("needs.pre.result == 'success'", "preflight", False),
+        ],
+    )
+    def test_what_counts_as_testing_a_need(
+        self, condition: str, job_id: str, expected: bool
+    ) -> None:
+        assert wf._needs_result_referenced(condition, job_id) is expected
+
+
+def timeout_findings(source: str, name: str = "test.yml") -> wf.Report:
+    report = wf.Report()
+    wf.check_job_timeouts(Path(name), yaml.safe_load(textwrap.dedent(source)), report)
+    return report
+
+
+class TestJobTimeouts:
+    """GitHub's default job timeout is 360 minutes; every job states its own."""
+
+    def test_a_job_without_a_timeout_is_reported(self) -> None:
+        report = timeout_findings("""
+            permissions:
+              contents: write
+            jobs:
+              update-docs:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: python tools/update_docs.py
+            """)
+        assert len(report.findings) == 1, messages(report)
+        assert "declares no `timeout-minutes`" in report.findings[0].message
+
+    @pytest.mark.parametrize("value", ["5", "0.5", "${{ inputs.minutes }}"])
+    def test_a_positive_bound_or_an_expression_is_accepted(self, value: str) -> None:
+        report = timeout_findings(f"""
+            jobs:
+              b:
+                runs-on: ubuntu-latest
+                timeout-minutes: {value}
+                steps:
+                  - run: echo hi
+            """)
+        assert report.ok, messages(report)
+        assert report.job_timeouts_checked == 1
+
+    @pytest.mark.parametrize("value", ["0", "-5", "true", "soon"])
+    def test_a_bound_that_is_not_positive_is_reported(self, value: str) -> None:
+        report = timeout_findings(f"""
+            jobs:
+              b:
+                runs-on: ubuntu-latest
+                timeout-minutes: {value}
+                steps:
+                  - run: echo hi
+            """)
+        assert len(report.findings) == 1, messages(report)
+        assert "not a positive bound" in report.findings[0].message
+
+    def test_a_reusable_workflow_call_cannot_carry_one(self) -> None:
+        """GitHub rejects ``timeout-minutes`` on a ``uses:`` job."""
+        report = timeout_findings("""
+            jobs:
+              verify-anchor:
+                uses: ./.github/workflows/integrity-anchor-check.yml
+            """)
+        assert report.ok, messages(report)
+        assert report.job_timeouts_checked == 0
+
+    def test_the_two_write_token_jobs_that_had_none_now_have_one(self) -> None:
+        for name, job in (("auto-docs.yml", "update-docs"), ("wiki-sync.yml", "sync-wiki")):
+            document = yaml.safe_load(
+                (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            )
+            value = document["jobs"][job].get("timeout-minutes")
+            assert isinstance(value, int) and 0 < value <= 15, f"{name}::{job} -> {value!r}"
+
+    def test_the_sweep_runs_both_new_checks(self, tmp_path: Path) -> None:
+        for index in range(wf.MIN_WORKFLOWS):
+            (tmp_path / f"ok-{index}.yml").write_text(_valid_workflow(index), encoding="utf-8")
+        (tmp_path / "defects.yml").write_text(
+            textwrap.dedent("""
+                jobs:
+                  a:
+                    if: github.event_name == 'push'
+                    runs-on: ubuntu-latest
+                    timeout-minutes: 5
+                    steps:
+                      - run: echo a
+                  b:
+                    needs: [a]
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo b
+                """),
+            encoding="utf-8",
+        )
+        report = wf.sweep(tmp_path)
+        found = sorted(f.message.split(";")[0] for f in report.findings)
+        assert any("implicit `success()`" in f for f in found), messages(report)
+        assert any("declares no `timeout-minutes`" in f for f in found), messages(report)
+
+
 def _valid_workflow(index: int) -> str:
     """A minimal, structurally valid workflow — enough to clear the floor."""
     return textwrap.dedent(f"""
@@ -1273,6 +1549,7 @@ def _valid_workflow(index: int) -> str:
         jobs:
           noop:
             runs-on: ubuntu-latest
+            timeout-minutes: 5
             steps:
               - run: echo {index}
         """).lstrip()
@@ -2061,7 +2338,8 @@ class TestTheCommandLineContract:
     ) -> None:
         for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
-                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
+                "    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
             )
         assert wf.main(["--workflows-dir", str(tmp_path)]) == 0
@@ -2070,7 +2348,8 @@ class TestTheCommandLineContract:
     def test_a_directory_with_a_defect_exits_one(self, tmp_path: Path) -> None:
         for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
-                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
+                "    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
             )
         (tmp_path / "bad.yml").write_text(
@@ -2084,7 +2363,8 @@ class TestTheCommandLineContract:
     ) -> None:
         for index in range(wf.MIN_WORKFLOWS):
             (tmp_path / f"w{index}.yml").write_text(
-                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+                "jobs:\n  b:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
+                "    steps:\n      - run: echo hi\n",
                 encoding="utf-8",
             )
         (tmp_path / "dyn.yml").write_text(

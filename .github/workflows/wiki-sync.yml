@@ -31,6 +31,13 @@ concurrency:
 jobs:
   sync-wiki:
     runs-on: ubuntu-latest
+    # This job holds `contents: write`; without a bound a hung clone or push
+    # would keep it for GitHub's 360-minute default.  Measured over all 42
+    # runs of this workflow (2026-03-10 to 2026-08-02): the longest took 0.9
+    # minutes, the median 0.2.  Five minutes is over five times the longest.
+    # The push updates the wiki's single ref in one step, so a timeout that
+    # lands mid-push leaves the old pages or the new ones, not a mixture.
+    timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

@@ -78,9 +78,27 @@ MEASURED VALUES and a reason, the same shape as
 ``benchmarks/check_baseline_justification.py`` requires of the wall-clock
 floors. An acknowledgement is checked against the measurement, so it cannot
 be written once and left to cover later drift: if the operation moves again,
-the recorded ``to`` no longer matches and the gate fails. A stale
-acknowledgement — one whose operation is back within tolerance — also fails,
-so the file cannot accumulate entries that explain nothing.
+the recorded ``to`` no longer matches and the gate fails.
+
+An entry whose operation is within tolerance is classified by what the
+REFERENCE measures, because that is what tells a change that never happened
+from one that has already merged:
+
+* the reference measures the entry's ``from`` — the acknowledged move is not
+  in this comparison at all. That is a stale entry, and it FAILS.
+* the reference measures the entry's ``to`` (and not its ``from``) — the
+  change has LANDED: it is part of the reference build, so the comparison
+  shows no move. This is the state of every entry on the first pull request
+  after the branch that wrote it merges, and failing it would turn every
+  unrelated pull request red until someone edited a file it never touched.
+  A landed entry is reported by name and excuses nothing: it can only be
+  landed while its operation is inside tolerance.
+* the reference measures neither — the entry describes neither this
+  comparison nor the reference it runs against. It FAILS.
+
+So every entry in the file is checked against a measurement on every run and
+stays a true statement about either the comparison or its reference; the
+moment its operation moves again it must be re-measured or removed.
 
 Fail-closed behaviour
 ---------------------
@@ -223,11 +241,18 @@ def compare(
     tolerance_percent: float,
     allow_subset: bool = False,
     acknowledgements: dict[str, dict[str, Any]] | None = None,
-) -> tuple[list[str], list[tuple[str, int, int, float]], int]:
-    """Returns (problems, rows, compared)."""
+) -> tuple[list[str], list[tuple[str, int, int, float]], int, list[str]]:
+    """Returns (problems, rows, compared, landed).
+
+    ``landed`` names the acknowledged operations whose change the reference
+    already contains (see the module docstring).  They are never problems,
+    and they never excuse a move: an operation is only landed while it is
+    inside tolerance.
+    """
     acknowledged = acknowledgements or {}
     problems: list[str] = []
     rows: list[tuple[str, int, int, float]] = []
+    landed: list[str] = []
 
     missing = sorted(set(baseline_ops) - set(measured_ops))
     if not allow_subset:
@@ -278,17 +303,33 @@ def compare(
                     f"acknowledged; re-measure and re-acknowledge."
                 )
         elif entry is not None:
-            problems.append(
-                f"{operation} carries an acknowledgement but is within "
-                f"tolerance ({delta_percent:+.2f}%). Remove the stale entry — "
-                f"a file of acknowledgements that no longer apply explains "
-                f"nothing and hides the ones that do."
-            )
+            ack_from, ack_to = int(entry["from"]), int(entry["to"])
+            if _within(expected, ack_from, tolerance_percent):
+                problems.append(
+                    f"{operation} carries an acknowledgement but is within "
+                    f"tolerance ({delta_percent:+.2f}%), and the reference still "
+                    f"measures its 'from' ({ack_from:,} Ir), so the acknowledged "
+                    f"move is not in this comparison. Remove the stale entry — "
+                    f"a file of acknowledgements that no longer apply explains "
+                    f"nothing and hides the ones that do."
+                )
+            elif _within(expected, ack_to, tolerance_percent):
+                # The reference already contains the acknowledged change: the
+                # branch that recorded the entry has merged into it.
+                landed.append(operation)
+            else:
+                problems.append(
+                    f"{operation} is acknowledged from {ack_from:,} Ir to "
+                    f"{ack_to:,} Ir, but the reference measures {expected:,} Ir "
+                    f"— neither value — and this comparison is within tolerance "
+                    f"({delta_percent:+.2f}%). The entry describes neither this "
+                    f"comparison nor its reference; remove the stale entry."
+                )
     for operation in sorted(set(acknowledged) - set(baseline_ops) - set(measured_ops)):
         problems.append(
             f"{operation} is acknowledged but is not an operation in either " f"measurement."
         )
-    return problems, rows, compared
+    return problems, rows, compared, landed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -360,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
 
-    problems, rows, compared = compare(
+    problems, rows, compared, landed = compare(
         baseline_ops,
         measured_ops,
         args.tolerance_percent,
@@ -377,7 +418,9 @@ def main(argv: list[str] | None = None) -> int:
     print()
     width = max((len(r[0]) for r in rows), default=10)
     for operation, expected, actual, delta in rows:
-        if abs(delta) <= args.tolerance_percent:
+        if operation in landed:
+            flag = "L"
+        elif abs(delta) <= args.tolerance_percent:
             flag = " "
         elif operation in acknowledgements:
             flag = "A"
@@ -385,6 +428,13 @@ def main(argv: list[str] | None = None) -> int:
             flag = "!"
         print(
             f" {flag} {operation:<{width}}  {expected:>12,} -> {actual:>12,} " f"({delta:+6.2f}%)"
+        )
+    if landed:
+        print(
+            f"\nLanded (L): {len(landed)} acknowledgement(s) describe a change "
+            f"the reference already contains — it measures their 'to' — so "
+            f"there is no move to excuse: {', '.join(landed)}. They stay true "
+            f"until the operation moves again and may be removed."
         )
 
     if problems:

@@ -91,6 +91,22 @@ What is checked
     completes the import with cryptography still refused.  See
     :func:`check_pytest_prerequisites`.
 
+``skip propagation``
+    A job whose ``if:`` names no status function carries an implicit
+    ``success()``, and GitHub evaluates it over the job's TRANSITIVE
+    ``needs:``: a skipped ancestor anywhere above makes it false.  Below a
+    job that is skipped by design, such a job — and everything after it — is
+    skipped too, and the run still reports success.  That is how
+    ``release.yml``'s unanchored path signed, attested and released nothing
+    while ``build-wheels`` had been told the skipped anchor check was
+    permission to proceed.  See :func:`check_skip_propagation`.
+
+``job timeouts``
+    Every job that runs on a runner declares ``timeout-minutes``.  GitHub's
+    default is 360 minutes, so a hung step otherwise holds its runner — and
+    whatever token the job was granted, ``contents: write`` included — for six
+    hours.  See :func:`check_job_timeouts`.
+
 Known limitation, stated plainly
 --------------------------------
 The runner-label set is curated, not queried: GitHub publishes no API that
@@ -271,6 +287,8 @@ class Report:
     cmake_configures_checked: int = 0
     pytest_steps_checked: int = 0
     gate_required_jobs_checked: int = 0
+    skip_chains_checked: int = 0
+    job_timeouts_checked: int = 0
 
     @property
     def ok(self) -> bool:
@@ -1482,6 +1500,167 @@ def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report)
             )
 
 
+#: A status-check function call in a job-level ``if:``.
+_STATUS_FUNCTION_RE = re.compile(r"\b(success|failure|always|cancelled)\s*\(")
+
+
+def _needs_result_referenced(condition: str, job_id: str) -> bool:
+    """Whether ``condition`` tests ``needs.<job_id>.result`` in either syntax."""
+    ident = re.escape(job_id)
+    return bool(
+        re.search(
+            rf"needs\s*(?:\.\s*{ident}|\[\s*['\"]{ident}['\"]\s*\])\s*\.\s*result\b",
+            condition,
+        )
+    )
+
+
+def check_skip_propagation(path: Path, document: Any, report: Report) -> None:
+    """A job below a conditional job must not inherit its skip implicitly.
+
+    A job-level ``if:`` that calls no status function is evaluated as
+    ``success() && <condition>``, and ``success()`` there is false when ANY
+    job in the transitive ``needs:`` chain was skipped — not only the direct
+    ones (actions/runner#2205, community discussion 45058).  So below a job
+    that is skipped by design, every job relying on the implicit check is
+    skipped too, the jobs after it follow, and the run reports success with
+    the work never done.  An explicit ``success()`` has the same semantics and
+    the same effect.
+
+    ``release.yml`` shipped exactly that: ``verify-anchor`` is skipped on the
+    supported unanchored path and ``build-wheels`` proceeds past it with
+    ``!cancelled()``, but ``hash-artefacts``, ``sign``, ``provenance`` and
+    ``publish-pypi`` carried the implicit check, so on that path the release
+    signed, attested and published nothing — in a green run.
+
+    Two findings:
+
+    * a job with a conditional ancestor whose ``if:`` calls no status function
+      other than ``success()`` — the skip propagates into it;
+    * a job with a conditional ancestor that uses ``!cancelled()`` (the fix
+      for the first) but does not test every job in its own ``needs:`` by
+      ``needs.<id>.result`` — ``!cancelled()`` drops the implicit failure
+      check too, so an untested dependency can fail and the job still runs.
+
+    Jobs using ``always()`` or ``failure()`` state their intent to run past a
+    failure; aggregating gates are held to their own contract by
+    ``tools/check_gate_coverage.py``.
+    """
+    jobs = dict(_iter_jobs(document))
+    conditional = {job_id for job_id, job in jobs.items() if "if" in job}
+    if not conditional:
+        return
+
+    def ancestors(job_id: str) -> set[str]:
+        seen: set[str] = set()
+        stack = list(_normalize_needs(jobs[job_id].get("needs")))
+        while stack:
+            current = stack.pop()
+            if current in seen or current not in jobs:
+                continue
+            seen.add(current)
+            stack.extend(_normalize_needs(jobs[current].get("needs")))
+        return seen
+
+    for job_id, job in jobs.items():
+        skippable = sorted(ancestors(job_id) & conditional)
+        if not skippable:
+            continue
+        report.skip_chains_checked += 1
+        condition = str(job.get("if", ""))
+        functions = set(_STATUS_FUNCTION_RE.findall(condition))
+        named = ", ".join(f"`{a}`" for a in skippable)
+        if functions <= {"success"}:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=f"jobs.{job_id}",
+                    message=(
+                        f"job `{job_id}` relies on the implicit `success()`, which is "
+                        f"false when any job in its transitive `needs:` was skipped; "
+                        f"{named} can be skipped by its own `if:`, and then "
+                        f"`{job_id}` and everything after it are skipped while the "
+                        f"run reports success."
+                    ),
+                    remedy=(
+                        "start the job's `if:` with `!cancelled()` and test each job "
+                        "in its `needs:` by name — `needs['<id>'].result == "
+                        "'success'`, or `!= 'failure'` where a skip is acceptable."
+                    ),
+                )
+            )
+            continue
+        if "cancelled" not in functions or functions & {"always", "failure"}:
+            continue
+        untested = [
+            need
+            for need in _normalize_needs(job.get("needs"))
+            if not _needs_result_referenced(condition, need)
+        ]
+        if untested:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=f"jobs.{job_id}",
+                    message=(
+                        f"job `{job_id}` replaces the implicit `success()` with "
+                        f"`!cancelled()` but never tests "
+                        f"{', '.join(f'`{n}`' for n in untested)}; `!cancelled()` "
+                        f"also drops the failure check, so the job runs after that "
+                        f"dependency fails."
+                    ),
+                    remedy=(
+                        "test every job in `needs:` by name in the `if:` — "
+                        "`needs['<id>'].result == 'success'` (or `!= 'failure'`)."
+                    ),
+                )
+            )
+
+
+def check_job_timeouts(path: Path, document: Any, report: Report) -> None:
+    """Every job that runs on a runner declares ``timeout-minutes``.
+
+    GitHub's default is 360 minutes.  A job without its own bound that hangs —
+    a network fetch that never completes, a push waiting on a lock — holds its
+    runner, and the token it was granted, for six hours.  ``auto-docs.yml`` and
+    ``wiki-sync.yml`` were the two jobs in the tree without one, and both hold
+    ``contents: write``.
+
+    A job that calls a reusable workflow (``uses:``) cannot carry
+    ``timeout-minutes``; the called workflow's own jobs are checked where they
+    are defined when that workflow is in this directory.
+    """
+    for job_id, job in _iter_jobs(document):
+        if "uses" in job:
+            continue
+        report.job_timeouts_checked += 1
+        value = job.get("timeout-minutes")
+        if value is None:
+            problem = "declares no `timeout-minutes`"
+        elif isinstance(value, bool) or not (
+            (isinstance(value, (int, float)) and value > 0)
+            or (isinstance(value, str) and value.strip().startswith("${{"))
+        ):
+            problem = f"declares `timeout-minutes: {value!r}`, which is not a positive bound"
+        else:
+            continue
+        report.findings.append(
+            Finding(
+                workflow=path.name,
+                location=f"jobs.{job_id}",
+                message=(
+                    f"job `{job_id}` {problem}; GitHub's default is 360 minutes, "
+                    f"so a hung step holds the runner and the job's token for six "
+                    f"hours."
+                ),
+                remedy=(
+                    "set `timeout-minutes` from the job's measured run time with "
+                    "headroom, and say where the figure came from."
+                ),
+            )
+        )
+
+
 #: Non-vacuity floor (H7): the repository ships 14 workflow files.  Pinned so a
 #: deleted or wrong-path workflow set cannot leave the sweep reporting PASS over
 #: nothing -- the same zero-input vacuity the aggregating-gate audit carried.
@@ -1515,6 +1694,8 @@ def sweep(workflows_dir: Path) -> Report:
         check_expression_syntax(path, document, report)
         check_pytest_prerequisites(path, document, report)
         check_gate_jobs_run_their_payload(path, document, report)
+        check_skip_propagation(path, document, report)
+        check_job_timeouts(path, document, report)
 
     # Non-vacuity floor (H7): an empty (or near-empty) workflow directory left
     # this sweep with no findings and reporting PASS -- the same zero-input
@@ -1561,7 +1742,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"{report.cmake_configures_checked} cmake configure(s), "
         f"{report.expressions_checked} expression(s) (`${{{{ }}}}` and bare `if:`), "
         f"{report.pytest_steps_checked} pytest invocation(s), "
-        f"{report.gate_required_jobs_checked} gate-required job(s)."
+        f"{report.gate_required_jobs_checked} gate-required job(s), "
+        f"{report.skip_chains_checked} job(s) below a conditional job, "
+        f"{report.job_timeouts_checked} job timeout(s)."
     )
     if report.labels_unresolved:
         # Reported, never counted as verified.  Silence here would read as

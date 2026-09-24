@@ -8,16 +8,21 @@ on:
   pull_request:
     branches: [ main, develop ]
   schedule:
-    # Nightly extended sanitizer matrix at 04:00 UTC (audit Issue 9
-    # close-out, promoted from weekly to nightly).  MSan and TSan have
-    # higher false-positive rates than ASan+UBSan and a per-PR latency
-    # cost we're not willing to pay, so we run them out of the
-    # merge-critical path.  Nightly cadence shortens the regression
-    # window from up-to-7-days to up-to-24-hours — the operational
-    # cost is one extra runner-hour per night for the four scheduled
-    # jobs (MSan, TSan, Valgrind, reproducible-build), which is in
-    # the noise compared with the bounded-bisect benefit when a real
-    # sanitiser regression does land.
+    # Nightly at 04:00 UTC (audit Issue 9 close-out, promoted from weekly to
+    # nightly).  The schedule fires on the default branch and runs every job
+    # in this file.  What differs by trigger, as the jobs' `if:` conditions
+    # and the Static Analysis Gate's expectations have it:
+    #   * valgrind-memcheck runs ONLY here and on workflow_dispatch — its ~5x
+    #     slowdown keeps it off the per-PR path;
+    #   * clang-tidy and reproducible-build run here, on workflow_dispatch and
+    #     on pull_request, not on push;
+    #   * memory-sanitizer, thread-sanitizer and memory-sanitizer-kat carry
+    #     no `if:` and run on every trigger, pull requests included, so MSan
+    #     and TSan ARE on the merge-critical path (they used to be
+    #     schedule/dispatch only, which left nothing on a pull request able
+    #     to fail on an uninitialised read or a data race).
+    # For the default branch the nightly therefore adds Valgrind, plus a
+    # re-run of everything else against whatever landed that day.
     - cron: '0 4 * * *'
   # workflow_dispatch enables on-demand runs of the extended matrix —
   # several jobs below predicate on `github.event_name ==
@@ -34,7 +39,7 @@ permissions:
   contents: read
 
 # Collapse overlapping runs on the same ref; main and scheduled runs
-# (the weekly extended sanitizer matrix) are preserved.
+# (the nightly run described above) are preserved.
 concurrency:
   group: static-analysis-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}

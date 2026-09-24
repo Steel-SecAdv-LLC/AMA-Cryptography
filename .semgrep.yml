@@ -303,8 +303,10 @@ rules:
   - id: bare-memset-zero-secret-named-buffer
     # ENFORCEMENT NOTE — this rule does not run, and cannot.
     #
-    # It is scoped to `src/c/**` (below), while every semgrep invocation in this
-    # repository scans `ama_cryptography/` only, so it has never matched a file.
+    # It is scoped to `src/c/**` (below), while the one semgrep invocation in
+    # this repository (ci.yml's Semgrep step) scans `ama_cryptography/`,
+    # `setup.py` and `tools/` -- Python only, nothing under `src/c/` -- so it
+    # has never matched a file.
     # Widening the scan target does not help either: semgrep's C parser does not
     # know this codebase's AMA_API export macro and reports a syntax error on
     # every file that uses it, which tools/check_semgrep_severity.py correctly

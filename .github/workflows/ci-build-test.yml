@@ -930,7 +930,27 @@ jobs:
               -o ic_driver_head benchmarks/ic_driver.c \
               build-head/lib/libama_cryptography_static.a -lm
 
-      - name: Build merge-base and measure
+      - name: Resolve the reference commit
+        id: base
+        # The reference is the merge-base with the default branch, except
+        # where HEAD IS that merge-base -- every push to main, and a push of a
+        # branch sitting exactly on main's tip. There the lane measures what
+        # the push changed: HEAD against the commit the push advanced from
+        # (`github.event.before`, when it is an ancestor of HEAD, which covers
+        # every commit of a multi-commit push), else HEAD's first parent. A
+        # HEAD with neither is a failure, not a pass.
+        #
+        # This used to run `cp head.json base.json` in that case -- before
+        # head.json existed -- so under `set -e` every push to main failed the
+        # job with "cp: cannot stat 'head.json'". Skipping the comparison
+        # instead is not open to this job: ci-gate fails a `skipped` job, and
+        # a step skipped on a self-probe inside a gated job is what
+        # tools/check_workflow_commands.py (check_gate_jobs_run_their_payload)
+        # rejects, because the job would report success having compared
+        # nothing. tests/test_instruction_count_gate.py runs this script
+        # against real git repositories in each of these states.
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           # Prefer the PR's own base sha, as baseline-guard.yml does: it needs
@@ -947,10 +967,30 @@ jobs:
             exit 1
           fi
           echo "merge-base: $BASE"
-          if [ "$BASE" = "$(git rev-parse HEAD)" ]; then
-            echo "HEAD is the merge-base; nothing to compare. Skipping."
-            cp head.json base.json
-            exit 0
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$BASE" = "$HEAD_SHA" ]; then
+            if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$HEAD_SHA" ] \
+               && git merge-base --is-ancestor "$PUSH_BEFORE" HEAD 2>/dev/null; then
+              BASE="$PUSH_BEFORE"
+              echo "HEAD is its own merge-base; comparing against the commit this push advanced from: $BASE"
+            elif BASE=$(git rev-parse --verify --quiet "HEAD^1"); then
+              echo "HEAD is its own merge-base; comparing against its first parent: $BASE"
+            else
+              echo "::error::HEAD is its own merge-base and has no parent, so there is nothing to compare it against." >&2
+              exit 1
+            fi
+          fi
+          echo "reference: $BASE"
+          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Build the reference and measure
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE" ]; then
+            echo "::error::the reference step recorded no sha." >&2
+            exit 1
           fi
           git worktree add ../base-tree "$BASE"
           cmake -S ../base-tree -B build-base -DCMAKE_BUILD_TYPE=Release \
@@ -985,13 +1025,16 @@ jobs:
             --driver ./ic_driver_head --iterations 10 \
             --operations $COMMON --output head.json
 
-      - name: Compare head against merge-base
+      - name: Compare head against the reference
         run: |
           # An out-of-tolerance operation passes only if
           # benchmarks/instruction-count-acknowledgements.json records it with
           # matching measured values and a reason. A stale entry, or one whose
           # operation has moved again since, fails — so the file cannot become
-          # a blanket exemption.
+          # a blanket exemption. An entry whose change the merge-base already
+          # contains (the reference measures its `to`) is reported as landed
+          # and excuses nothing, so the first pull request after a merge is
+          # not failed for an entry it never touched.
           python3 tools/check_instruction_counts.py \
             --baseline base.json --measured head.json --tolerance-percent 2 \
             --acknowledgements benchmarks/instruction-count-acknowledgements.json
