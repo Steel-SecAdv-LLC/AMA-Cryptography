@@ -158,6 +158,61 @@ static void *run_job(void *arg) {
     return NULL;
 }
 
+/* Sized to hold a full temporary-file path plus two errno strings. */
+static char harness_error[PATH_MAX + 256];
+
+static size_t harness_failed(const char *step, int err) {
+    snprintf(harness_error, sizeof(harness_error), "%s: %s", step, strerror(err));
+    return (size_t)-1;
+}
+
+/* A REGION_BYTES-long object with no name left in any namespace, open
+ * read-write, or -1 with `harness_error` set. */
+static int open_region_object(unsigned kind) {
+    static int fallback_reported = 0;
+    char shm_name[64];
+    char path[PATH_MAX];
+    const char *dir;
+    int fd, shm_err;
+
+    snprintf(shm_name, sizeof(shm_name), "/ama-pqstack-%ld-%u", (long)getpid(), kind);
+    shm_unlink(shm_name); /* stale object from a crashed earlier run */
+    fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0) {
+        /* Unlink immediately: the two mappings keep the object alive, and
+         * nothing is left behind if this process dies. */
+        shm_unlink(shm_name);
+        return fd;
+    }
+    shm_err = errno;
+
+    dir = getenv("TMPDIR");
+    if (dir == NULL || dir[0] == '\0') {
+        dir = "/tmp";
+    }
+    if ((size_t)snprintf(path, sizeof(path), "%s/ama-pqstack-XXXXXX", dir) >= sizeof(path)) {
+        snprintf(harness_error, sizeof(harness_error),
+                 "shm_open(%s): %s; TMPDIR is too long for a fallback file",
+                 shm_name, strerror(shm_err));
+        return -1;
+    }
+    fd = mkstemp(path);
+    if (fd < 0) {
+        const int tmp_err = errno;
+        snprintf(harness_error, sizeof(harness_error),
+                 "shm_open(%s): %s; fallback mkstemp(%s): %s",
+                 shm_name, strerror(shm_err), path, strerror(tmp_err));
+        return -1;
+    }
+    unlink(path); /* same reason as shm_unlink above */
+    if (!fallback_reported) {
+        fallback_reported = 1;
+        printf("NOTE: shm_open(%s) failed (%s); measuring on an unlinked "
+               "temporary file under %s instead\n", shm_name, strerror(shm_err), dir);
+    }
+    return fd;
+}
+
 /* Two mappings of ONE shared object: the thread runs on `stack_map`, and the
  * paint is read back through `read_map`.
  *
@@ -177,9 +232,16 @@ static void *run_job(void *arg) {
  * suppression file and no client-request annotation — the reads become
  * genuinely unremarkable rather than merely excused.
  *
- * shm_open + ftruncate + two mmaps is the POSIX spelling; the anonymous
- * mapping the previous version used cannot be aliased.  A harness that cannot
- * set this up returns SIZE_MAX, which main() reports as a SKIP.
+ * Two MAP_SHARED mappings of one object is what the aliasing needs, and the
+ * anonymous mapping the previous version used cannot be aliased.  POSIX shared
+ * memory (shm_open) is the first choice; where it is unavailable — a container
+ * without /dev/shm, a sandbox that refuses it — an unlinked temporary file is
+ * the same arrangement through a different namespace, so the measurement is
+ * kept rather than lost.  It used to be lost: a failed shm_open returned
+ * SIZE_MAX, and main() reported that as "could not create a thread on a
+ * caller-supplied stack", a reason that named neither the step nor the error.
+ * Every harness failure now records both in `harness_error`, and main()
+ * prints it.
  *
  * Returns the high-water mark in bytes, or SIZE_MAX on a harness failure. */
 static size_t measure(job_t *job) {
@@ -189,31 +251,27 @@ static size_t measure(job_t *job) {
     uint64_t *words;
     const uint64_t *paint;
     size_t count, i;
-    char shm_name[64];
-    int fd;
+    int fd, rc;
 
-    snprintf(shm_name, sizeof(shm_name), "/ama-pqstack-%ld-%u",
-             (long)getpid(), (unsigned)job->kind);
-    shm_unlink(shm_name); /* stale object from a crashed earlier run */
-    fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    fd = open_region_object((unsigned)job->kind);
     if (fd < 0) {
         return (size_t)-1;
     }
-    /* Unlink immediately: the two mappings keep the object alive, and nothing
-     * is left behind if this process dies. */
-    shm_unlink(shm_name);
     if (ftruncate(fd, (off_t)REGION_BYTES) != 0) {
+        const int err = errno;
         close(fd);
-        return (size_t)-1;
+        return harness_failed("ftruncate", err);
     }
     stack_map = mmap(NULL, REGION_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     read_map = mmap(NULL, REGION_BYTES, PROT_READ, MAP_SHARED, fd, 0);
-    close(fd);
     if (stack_map == MAP_FAILED || read_map == MAP_FAILED) {
+        const int err = errno;
+        close(fd);
         if (stack_map != MAP_FAILED) munmap(stack_map, REGION_BYTES);
         if (read_map != MAP_FAILED) munmap(read_map, REGION_BYTES);
-        return (size_t)-1;
+        return harness_failed("mmap of the stack region", err);
     }
+    close(fd);
 
     words = (uint64_t *)stack_map;
     paint = (const uint64_t *)read_map;
@@ -222,13 +280,22 @@ static size_t measure(job_t *job) {
         words[i] = PAINT;
     }
 
-    if (pthread_attr_init(&attr) != 0) {
+    rc = pthread_attr_init(&attr);
+    if (rc != 0) {
         munmap(stack_map, REGION_BYTES);
         munmap(read_map, REGION_BYTES);
-        return (size_t)-1;
+        return harness_failed("pthread_attr_init", rc);
     }
-    if (pthread_attr_setstack(&attr, stack_map, REGION_BYTES) != 0 ||
-        pthread_create(&tid, &attr, run_job, job) != 0) {
+    rc = pthread_attr_setstack(&attr, stack_map, REGION_BYTES);
+    if (rc == 0) {
+        rc = pthread_create(&tid, &attr, run_job, job);
+        if (rc != 0) {
+            (void)harness_failed("pthread_create on the caller-supplied stack", rc);
+        }
+    } else {
+        (void)harness_failed("pthread_attr_setstack", rc);
+    }
+    if (rc != 0) {
         pthread_attr_destroy(&attr);
         munmap(stack_map, REGION_BYTES);
         munmap(read_map, REGION_BYTES);
@@ -255,6 +322,13 @@ static size_t measure(job_t *job) {
 
 static int fail(const char *msg) {
     printf("FAIL: %s\n", msg);
+    return 1;
+}
+
+/* The baseline measurement succeeded, so the harness works on this host; a
+ * later failure is a failure, and it names its step. */
+static int fail_harness(void) {
+    printf("FAIL: measurement harness: %s\n", harness_error);
     return 1;
 }
 
@@ -389,7 +463,7 @@ int main(int argc, char **argv) {
     memset(&baseline_job, 0, sizeof(baseline_job));
     baseline = measure(&baseline_job);
     if (baseline == (size_t)-1) {
-        printf("SKIP: could not create a thread on a caller-supplied stack\n");
+        printf("SKIP: the measurement harness could not be set up: %s\n", harness_error);
         return 77;
     }
     printf("baseline (empty thread on a caller-supplied stack): %zu bytes\n", baseline);
@@ -408,7 +482,7 @@ int main(int argc, char **argv) {
         job.pk_out = out;
         used = measure(&job);
         if (used == (size_t)-1) {
-            return fail("measurement harness");
+            return fail_harness();
         }
         if (job.rc != AMA_SUCCESS) {
             return fail("ML-DSA pubkey_from_privkey did not succeed under measurement");
@@ -441,7 +515,7 @@ int main(int argc, char **argv) {
         job.pk_len = pk_len;
         used = measure(&job);
         if (used == (size_t)-1) {
-            return fail("measurement harness");
+            return fail_harness();
         }
         if (job.rc != AMA_SUCCESS) {
             return fail("ML-KEM pubkey_from_privkey did not succeed under measurement");
@@ -485,7 +559,7 @@ int main(int argc, char **argv) {
             job.pk_out = dsa_pk;
             used = measure(&job);
             if (used == (size_t)-1) {
-                return fail("measurement harness");
+                return fail_harness();
             }
             if (job.rc != AMA_SUCCESS) {
                 return fail("ML-DSA keygen did not succeed under measurement");
@@ -508,7 +582,7 @@ int main(int argc, char **argv) {
             job.msg_len = sizeof(msg);
             used = measure(&job);
             if (used == (size_t)-1) {
-                return fail("measurement harness");
+                return fail_harness();
             }
             if (job.rc != AMA_SUCCESS) {
                 return fail("ML-DSA sign did not succeed under measurement");
@@ -535,7 +609,7 @@ int main(int argc, char **argv) {
                 used = measure(&job);
             }
             if (used == (size_t)-1) {
-                return fail("measurement harness");
+                return fail_harness();
             }
             if (job.rc != AMA_SUCCESS) {
                 return fail("ML-DSA verify rejected a signature it had just produced");

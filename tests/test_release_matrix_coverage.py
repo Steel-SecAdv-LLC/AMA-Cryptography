@@ -14,9 +14,15 @@ the two sides, so the drift was invisible; this module is that comparison.
 
 Parsed from the workflows rather than restated, so a matrix edit on either
 side fails here instead of shipping an untested wheel: the release side is
-build-wheels' os list crossed with CIBW_BUILD's cp tags; the test side is
-the union of ci.yml's `test` matrix (os x python-version plus its include
-entries) and ci-build-test.yml's `python-package` matrix.
+build-wheels' runner labels crossed with CIBW_BUILD's cp tags; the test side is
+the union of ci.yml's `test` matrix and ci-build-test.yml's `python-package`
+matrix.  Every matrix is expanded by the same reader
+``tools/check_required_contexts.py`` uses for the ruleset contexts —
+GitHub's documented rules: the product of the base keys, minus every
+``exclude`` entry, with each ``include`` merged or appended.  This module used
+to read ``os`` x ``python-version`` plus the include entries and nothing else,
+so an ``exclude:`` added to a test matrix would have removed a lane from CI
+while it went on being counted here as coverage.
 """
 
 from __future__ import annotations
@@ -26,6 +32,8 @@ import re
 from typing import Any, cast
 
 import yaml
+
+from tools.check_required_contexts import matrix_combinations
 
 WORKFLOWS = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
@@ -64,48 +72,72 @@ def _cibw_pythons() -> set[str]:
     return {f"{major}.{minor}" for major, minor in tags}
 
 
+def _combinations(matrix: Any, where: str) -> list[dict[str, Any]]:
+    """The cells a ``strategy.matrix`` really runs, ``exclude`` honoured."""
+    combos = matrix_combinations(matrix)
+    assert combos is not None, (
+        f"{where}: the matrix is an expression that cannot be read statically, "
+        f"so this gate cannot say which lanes it runs"
+    )
+    return combos
+
+
+def _arch(label: Any, where: str) -> str:
+    assert label in RUNNER_ARCH, (
+        f"{where} uses runner label {label!r} that RUNNER_ARCH does not "
+        f"classify; add it (with its real architecture) so this gate keeps "
+        f"comparing the right sides"
+    )
+    return RUNNER_ARCH[label]
+
+
 def _release_archs() -> set[str]:
     jobs = _load("release.yml")["jobs"]
-    os_list = jobs["build-wheels"]["strategy"]["matrix"]["os"]
-    archs = set()
-    for label in os_list:
-        assert label in RUNNER_ARCH, (
-            f"release.yml build-wheels uses runner label {label!r} that "
-            f"RUNNER_ARCH does not classify; add it (with its real "
-            f"architecture) so this gate keeps comparing the right sides"
-        )
-        archs.add(RUNNER_ARCH[label])
-    return archs
+    where = "release.yml build-wheels"
+    return {
+        _arch(combo["os"], where)
+        for combo in _combinations(jobs["build-wheels"]["strategy"]["matrix"], where)
+        if "os" in combo
+    }
 
 
-def _matrix_lanes(workflow: str, job: str) -> set[tuple[str, str]]:
-    """(arch, python) pairs a job's matrix actually runs."""
-    matrix = _load(workflow)["jobs"][job]["strategy"]["matrix"]
+def _lanes(matrix: Any, where: str) -> set[tuple[str, str]]:
+    """(arch, python) pairs a matrix actually runs."""
     lanes: set[tuple[str, str]] = set()
-    for label in matrix.get("os", []):
-        assert label in RUNNER_ARCH, (
-            f"{workflow} {job} uses runner label {label!r} that RUNNER_ARCH "
-            f"does not classify; add it so this gate keeps counting its lanes"
-        )
-        for version in matrix.get("python-version", []):
-            lanes.add((RUNNER_ARCH[label], str(version)))
-    for entry in matrix.get("include", []):
-        label = entry.get("os")
-        version = entry.get("python-version")
+    for combo in _combinations(matrix, where):
+        label = combo.get("os")
+        version = combo.get("python-version")
         if label is None or version is None:
             continue
-        assert label in RUNNER_ARCH, (
-            f"{workflow} {job} include entry uses unclassified runner " f"label {label!r}"
-        )
-        lanes.add((RUNNER_ARCH[label], str(version)))
+        lanes.add((_arch(label, where), str(version)))
     return lanes
+
+
+def _matrix_lanes(
+    workflow: str, job: str, parsed: dict[str, Any] | None = None
+) -> set[tuple[str, str]]:
+    data = parsed if parsed is not None else _load(workflow)
+    return _lanes(data["jobs"][job]["strategy"]["matrix"], f"{workflow} {job}")
+
+
+def _covered(
+    ci: dict[str, Any] | None = None, ci_build_test: dict[str, Any] | None = None
+) -> set[tuple[str, str]]:
+    return _matrix_lanes("ci.yml", "test", ci) | _matrix_lanes(
+        "ci-build-test.yml", "python-package", ci_build_test
+    )
+
+
+def _uncovered(
+    ci: dict[str, Any] | None = None, ci_build_test: dict[str, Any] | None = None
+) -> list[tuple[str, str]]:
+    required = {(arch, python) for arch in _release_archs() for python in _cibw_pythons()}
+    return sorted(required - _covered(ci, ci_build_test))
 
 
 def test_every_released_wheel_has_a_pytest_lane() -> None:
     """The set difference that was 8/25 must stay empty."""
-    required = {(arch, python) for arch in _release_archs() for python in _cibw_pythons()}
-    covered = _matrix_lanes("ci.yml", "test") | _matrix_lanes("ci-build-test.yml", "python-package")
-    missing = sorted(required - covered)
+    missing = _uncovered()
     assert missing == [], (
         "release.yml builds wheels for platform+interpreter combinations no "
         "pytest lane exercises — each of these ships with only cibuildwheel's "
@@ -115,13 +147,45 @@ def test_every_released_wheel_has_a_pytest_lane() -> None:
     )
 
 
+def test_an_excluded_cell_is_not_a_lane() -> None:
+    """``exclude`` removes a cell from CI, so it must remove it from coverage."""
+    matrix = {
+        "os": ["ubuntu-latest", "windows-latest"],
+        "python-version": ["3.10", "3.11"],
+        "exclude": [{"os": "windows-latest", "python-version": "3.11"}],
+    }
+    assert _lanes(matrix, "synthetic") == {
+        ("linux-x86_64", "3.10"),
+        ("linux-x86_64", "3.11"),
+        ("windows-x86_64", "3.10"),
+    }
+
+
+def test_excluding_a_released_cell_from_every_test_matrix_is_caught() -> None:
+    """End to end on the real workflows: the gate names the wheel an exclude strands.
+
+    Windows x86-64 on the newest released interpreter is exercised by both
+    ``ci.yml::test`` and ``ci-build-test.yml::python-package``; excluding it
+    from both leaves that wheel with no pytest lane, and the comparison above
+    has to say exactly that.
+    """
+    newest = max(_cibw_pythons(), key=lambda v: tuple(int(p) for p in v.split(".")))
+    ci = _load("ci.yml")  # a fresh parse each call, so editing it touches nothing shared
+    ci_build_test = _load("ci-build-test.yml")
+    for data, job in ((ci, "test"), (ci_build_test, "python-package")):
+        matrix = data["jobs"][job]["strategy"]["matrix"]
+        matrix.setdefault("exclude", []).append({"os": "windows-latest", "python-version": newest})
+    assert _uncovered() == [], "precondition: the real tree has full coverage"
+    assert _uncovered(ci, ci_build_test) == [("windows-x86_64", newest)]
+
+
 def test_the_gate_is_not_vacuous() -> None:
     """Both sides must be non-trivially populated for the comparison to mean
     anything: five interpreters, five release architectures, and strictly
     more covered lanes than release architectures."""
     pythons = _cibw_pythons()
     archs = _release_archs()
-    covered = _matrix_lanes("ci.yml", "test") | _matrix_lanes("ci-build-test.yml", "python-package")
+    covered = _covered()
     assert len(pythons) >= 5, pythons
     assert len(archs) >= 5, archs
     assert len(covered) >= len(archs) * len(pythons), (

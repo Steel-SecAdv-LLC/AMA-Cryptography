@@ -18,10 +18,13 @@ pins for the pieces.
 
 from __future__ import annotations
 
+import copy
 import os
 import platform
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -34,6 +37,59 @@ PKG_DIR = REPO_ROOT / "ama_cryptography"
 _REAL_SO = native_library_path(PKG_DIR)
 
 needs_native = pytest.mark.skipif(_REAL_SO is None, reason="native library not built in this tree")
+
+
+@pytest.fixture(autouse=True)
+def restore_diagnostics() -> Iterator[None]:
+    """Give every test here the loader's scratch record back exactly as it was.
+
+    ``_try_load_library`` appends to ``candidates``, ``errors`` and
+    ``digest_refused`` and rewrites ``preload_digest_hex`` and
+    ``preload_digest_is_of_mapped_bytes``; ``_disown_rejected_native_library``
+    appends to ``errors`` and rewrites ``abi_rejection``, ``loaded``, ``path``
+    and both preload fields; and several tests assign keys outright to set up
+    a case.  That record is process-wide: ``native_backend_diagnostics()``
+    publishes it, and ``native_backend_refused_on_digest()`` and
+    ``native_backend_load_summary()`` classify on it.
+
+    Restoration used to be per class and per key.  ``TestPreloadRefusal`` had
+    none at all — four of its tests replaced ``errors`` and ``digest_refused``
+    (three of them ``abi_rejection`` too) outright, and every test that drove
+    the loader left its appends behind — and a class that did restore named a
+    subset of what it touched: ``TestARejectedLibraryLeavesNoDigestBehind``
+    drives ``_disown_rejected_native_library``, which clears
+    ``preload_digest_is_of_mapped_bytes``, and did not restore that key.
+    Measured with a per-test snapshot of the record: 11 of this module's tests
+    left it changed, so the module's order decided what a later test in the
+    same process read.
+
+    One fixture, every test, every key, by value: a deep copy is taken before
+    and the whole record replaced from it after, so a list that was mutated in
+    place comes back too.  ``copy.deepcopy`` returns strings and tuples of
+    strings as the same objects, which matters: ``native_backend_refused_on_digest``
+    recognises a refusal by the identity of ``_PRELOAD_MISMATCH_HINT``.
+    """
+    saved = copy.deepcopy(pb._LOAD_DIAGNOSTICS)
+    yield
+    pb._LOAD_DIAGNOSTICS.clear()
+    pb._LOAD_DIAGNOSTICS.update(saved)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _the_module_leaves_the_record_as_it_found_it() -> Iterator[None]:
+    """The property the fixture above exists for, checked where it can fail.
+
+    Compared at module teardown against a snapshot taken at module setup, so
+    removing or narrowing the per-test restoration fails the run here rather
+    than surfacing as an order-dependent failure somewhere else.
+    """
+    before: dict[str, Any] = copy.deepcopy(pb._LOAD_DIAGNOSTICS)
+    yield
+    assert pb._LOAD_DIAGNOSTICS == before, {
+        key: (before.get(key), pb._LOAD_DIAGNOSTICS.get(key))
+        for key in set(before) | set(pb._LOAD_DIAGNOSTICS)
+        if before.get(key) != pb._LOAD_DIAGNOSTICS.get(key)
+    }
 
 
 def _artefact_stub(tmp_path: Path, body: str) -> Path:
@@ -429,18 +485,8 @@ class TestARejectedLibraryLeavesNoDigestBehind:
     wrong-ABI library is the wrong remedy; rebuilding it is.
     """
 
-    _SCRATCH_KEYS = ("errors", "abi_rejection", "loaded", "path", "preload_digest_hex")
-
-    @pytest.fixture()
-    def restore_diagnostics(self) -> object:
-        """Save and restore the shared scratch record this branch writes to."""
-        saved = {key: pb._LOAD_DIAGNOSTICS[key] for key in self._SCRATCH_KEYS}
-        saved["errors"] = list(saved["errors"])
-        yield
-        pb._LOAD_DIAGNOSTICS.update(saved)
-
     def test_the_preload_digest_is_cleared_with_everything_else(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         sentinel = object()
         monkeypatch.setattr(pb, "_native_lib", sentinel, raising=False)
@@ -467,7 +513,7 @@ class TestARejectedLibraryLeavesNoDigestBehind:
         assert pb._LOAD_DIAGNOSTICS["errors"], "the rejection was not recorded per-candidate"
 
     def test_the_published_diagnostics_record_is_self_consistent(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No loaded library means no digest — the record cannot claim both."""
         monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
@@ -487,9 +533,7 @@ class TestARejectedLibraryLeavesNoDigestBehind:
             "of the object that was refused"
         )
 
-    def test_a_rejection_never_reads_as_tampering(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_rejection_never_reads_as_tampering(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The POST integrity stage must not call an ABI reject a MISMATCH.
 
         This is the downstream consequence the cleared digest exists to
@@ -535,18 +579,8 @@ class TestDigestRefusalNeedsThisRunsEvidence:
     ``_reset_digest_refusals()`` that has never existed.
     """
 
-    _SCRATCH_KEYS = ("digest_refused", "errors", "abi_rejection")
-
-    @pytest.fixture
-    def restore_diagnostics(self) -> object:
-        saved = {key: pb._LOAD_DIAGNOSTICS[key] for key in self._SCRATCH_KEYS}
-        saved["errors"] = list(saved["errors"])
-        saved["digest_refused"] = list(saved["digest_refused"])
-        yield
-        pb._LOAD_DIAGNOSTICS.update(saved)
-
     def test_a_stale_refusal_with_no_errors_this_run_is_not_a_digest_refusal(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(pb, "_native_lib", None, raising=False)
         pb._LOAD_DIAGNOSTICS["digest_refused"] = ["/opt/stale/libama_cryptography.so"]
@@ -559,7 +593,7 @@ class TestDigestRefusalNeedsThisRunsEvidence:
         )
 
     def test_a_refusal_recorded_this_run_still_answers(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The control: the real case must keep working."""
         monkeypatch.setattr(pb, "_native_lib", None, raising=False)
@@ -571,9 +605,7 @@ class TestDigestRefusalNeedsThisRunsEvidence:
 
         assert pb.native_backend_refused_on_digest() is True
 
-    def test_a_mixed_run_is_still_a_broken_build(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_mixed_run_is_still_a_broken_build(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(pb, "_native_lib", None, raising=False)
         pb._LOAD_DIAGNOSTICS["digest_refused"] = ["/opt/stale/libama_cryptography.so"]
         pb._LOAD_DIAGNOSTICS["errors"] = [
@@ -606,15 +638,6 @@ class TestPostReReadsWhenThePreloadDigestIsNotOfMappedBytes:
     real stage.
     """
 
-    _SCRATCH_KEYS = ("preload_digest_hex", "preload_digest_is_of_mapped_bytes", "errors")
-
-    @pytest.fixture
-    def restore_diagnostics(self) -> object:
-        saved = {key: pb._LOAD_DIAGNOSTICS[key] for key in self._SCRATCH_KEYS}
-        saved["errors"] = list(saved["errors"])
-        yield
-        pb._LOAD_DIAGNOSTICS.update(saved)
-
     @staticmethod
     def _library(tmp_path: Path, payload: bytes) -> Path:
         path = tmp_path / "libama_cryptography.so"
@@ -622,7 +645,7 @@ class TestPostReReadsWhenThePreloadDigestIsNotOfMappedBytes:
         return path
 
     def test_a_stale_recorded_digest_is_re_read_when_it_is_not_of_mapped_bytes(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The macOS / Windows / no-procfs case: re-read, and pass on the truth."""
         from ama_cryptography import _self_test
@@ -645,7 +668,7 @@ class TestPostReReadsWhenThePreloadDigestIsNotOfMappedBytes:
         assert "verified" in note, note
 
     def test_a_swapped_file_is_caught_by_the_re_read(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The defect itself: bytes nothing verified must not read as verified.
 
@@ -671,7 +694,7 @@ class TestPostReReadsWhenThePreloadDigestIsNotOfMappedBytes:
         assert "MISMATCH" in note, note
 
     def test_the_recorded_digest_is_trusted_when_it_is_of_mapped_bytes(
-        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The Linux/procfs case, and the control for the two above.
 

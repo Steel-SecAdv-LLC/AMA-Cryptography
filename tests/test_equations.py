@@ -343,13 +343,69 @@ class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
                     f"{data}: a swept direction beat the reported maximiser",
                 )
 
-    def test_a_positive_definite_matrix_is_unaffected(self) -> None:
-        """The shift is zero whenever Gershgorin already bounds below at >= 0."""
-        from ama_cryptography._numeric import asmat
-        from ama_cryptography.equations import _gershgorin_lower_bound
+    @staticmethod
+    def _iterated_operators(data: object) -> list[list[list[float]]]:
+        """Every matrix ``_dominant_eigenvector`` multiplies a vector by.
 
-        matrix = initialize_ethical_matrix(6)
-        self.assertGreaterEqual(_gershgorin_lower_bound(asmat(matrix)), 0.0)
+        Read off ``Mat.__matmul__`` itself, so it is the operator the power
+        iteration really applied, not one reconstructed from the source.
+        """
+        from unittest import mock
+
+        from ama_cryptography._numeric import Mat, Vec, asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        seen: list[list[list[float]]] = []
+        real = Mat.__matmul__
+
+        def spy(self: Mat, other: Mat | Vec) -> Mat | Vec:
+            if isinstance(other, Vec):
+                seen.append(self.tolist())
+                return real(self, other)
+            return real(self, other)
+
+        with mock.patch.object(Mat, "__matmul__", spy):
+            _dominant_eigenvector(asmat(data))
+        return seen
+
+    def test_a_positive_definite_matrix_is_unaffected(self) -> None:
+        """No shift is applied whenever Gershgorin already bounds below at >= 0.
+
+        Asserted on what the iteration does, not only on its precondition:
+        every ``M @ v`` inside ``_dominant_eigenvector`` must multiply by
+        exactly the symmetric part of ``E``, entry for entry.  An identical
+        operator from an identical start vector is identical arithmetic, so
+        the returned direction is the unshifted iteration's, bit for bit.
+
+        The first version asserted the Gershgorin bound and stopped, so it
+        could not fail for the property its name states: a shift applied to
+        every matrix changes no eigenvector, hence no maximiser any other test
+        here compares, and it passed.  ``[[1, 2], [2, 5]]`` is the control —
+        positive definite with a bound of -1, so there the operator MUST
+        differ, which is what shows the spy can see a shift at all.
+        """
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _gershgorin_lower_bound, _symmetric_part
+
+        matrix = asmat(initialize_ethical_matrix(6))
+        self.assertGreaterEqual(_gershgorin_lower_bound(matrix), 0.0)
+        operators = self._iterated_operators(matrix)
+        self.assertTrue(operators, "the iteration multiplied by nothing")
+        unshifted = _symmetric_part(matrix).tolist()
+        for step, operator in enumerate(operators):
+            self.assertEqual(
+                operator, unshifted, f"iteration {step} multiplied by a shifted operator"
+            )
+
+        control = asmat([[1.0, 2.0], [2.0, 5.0]])
+        self.assertLess(_gershgorin_lower_bound(control), 0.0)
+        shifted = self._iterated_operators(control)
+        self.assertTrue(shifted, "the iteration multiplied by nothing")
+        self.assertNotEqual(
+            shifted[0],
+            _symmetric_part(control).tolist(),
+            "a negative Gershgorin bound applied no shift, or the spy cannot see one",
+        )
 
     def test_gershgorin_is_a_bound_not_the_spectrum(self) -> None:
         """A positive-definite matrix can still have a negative bound.

@@ -1240,8 +1240,19 @@ class TestAttestation:
         the documented consequence is an integrity SKIP and below-full
         strength.  Asserting on the ambient state therefore tested the
         environment, not ``module_attestation`` — and failed on every CI job
-        that installs the package.  Substituting a passing row for that stage
-        keeps the property this test is named for.
+        that installs the package.
+
+        So EVERY skipped row (``passed is None``) is replaced by a pass, not
+        only the integrity stage's.  The integrity skip is the one CI hits, but
+        it is not the only one the ambient run can carry: a KAT whose backend is
+        absent, the timing oracle without its native backend, and the
+        native-backend stage under the docs-build override all record a skip
+        the same way, and substituting one stage would leave the test hostage
+        to whichever other stage the host skipped.  A FAILED row is left as it
+        is, and there is none to leave: ``fresh_post`` asserts that POST
+        completed, which it does not with a failed row.  What is constructed is
+        therefore exactly "a run in which every row passed", which is the
+        property this test is named for.
         """
         st = fresh_post
         saved = list(st._SELF_TEST_RESULTS)

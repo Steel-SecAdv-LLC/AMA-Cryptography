@@ -90,6 +90,33 @@ static void small_scalar(uint8_t s[32], uint8_t v) {
     s[0] = v;
 }
 
+/* 8^-1 mod l, little-endian: (3l + 1) / 8.  Checked against
+ * ama_ed25519_sc_muladd in section [3] before it is used, so a wrong constant
+ * fails the run instead of quietly projecting to the wrong point. */
+static const uint8_t INV8[32] = {
+    0x79, 0x2f, 0xdc, 0xe2, 0x29, 0xe5, 0x06, 0x61,
+    0xd0, 0xda, 0x1c, 0x7d, 0xb3, 0x9d, 0xd3, 0x07,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06
+};
+
+/* The prime-order component of P = Q + T (T in the 8-torsion):
+ * [8^-1 mod l]([8]P).  Multiplying by 8 annihilates T and leaves [8]Q, and
+ * 8^-1 mod l undoes the 8 on the order-l part, so this is exactly Q.  [8]P is
+ * built from three doublings through the public addition, not through
+ * scalarmult_public, because that routine reduces its scalar mod l — the very
+ * behaviour under test — and must not be what separates Q from T.  Returns 0,
+ * or -1 if any step reports an error; none is expected, since P has already
+ * decoded and these entry points accept the identity and small-order points
+ * (measured), but a failure must not be counted as a projection. */
+static int prime_order_part(uint8_t Q[32], const uint8_t P[32]) {
+    uint8_t p2[32], p4[32], p8[32];
+    if (ama_ed25519_point_add(p2, P, P) != AMA_SUCCESS) return -1;
+    if (ama_ed25519_point_add(p4, p2, p2) != AMA_SUCCESS) return -1;
+    if (ama_ed25519_point_add(p8, p4, p4) != AMA_SUCCESS) return -1;
+    return ama_ed25519_scalarmult_public(Q, INV8, p8) == AMA_SUCCESS ? 0 : -1;
+}
+
 int main(void) {
     uint8_t B[32], one[32];
     small_scalar(one, 1);
@@ -175,17 +202,37 @@ int main(void) {
 
     /* ---------------------------------------------------------------- *
      * 3. The reduction contract, stated directly: the result depends on *
-     *    the scalar only through s mod l.  Uses random point encodings  *
-     *    as well as prime-order points, so the cofactor-8 torsion       *
-     *    components that make [s]P and [s mod l]P differ as integers    *
-     *    are actually present.                                          *
+     *    the scalar only through s mod l.  Checked on two populations    *
+     *    drawn from the same stream:                                     *
+     *                                                                    *
+     *    - random 32-byte encodings that decode.  These carry a non-     *
+     *      trivial 8-torsion component, which is what makes [s]P and     *
+     *      [s mod l]P differ as group elements when s is not reduced —   *
+     *      and that presence is MEASURED below, not assumed;             *
+     *    - the prime-order component Q of each such point, on which      *
+     *      [s]Q == [s mod l]Q holds as mathematics, so a mismatch there  *
+     *      is a recoding defect (the fe51 carry-out lost 2^256) rather   *
+     *      than a missing reduction.                                     *
+     *                                                                    *
+     *    This comment once said the section used "prime-order points"    *
+     *    alongside the random encodings; it drew only the encodings, and *
+     *    whether they carried torsion was never checked.                 *
      * ---------------------------------------------------------------- */
-    printf("\n[3] Reduction contract on decodable point encodings\n");
+    printf("\n[3] Reduction contract on decodable encodings and their prime-order parts\n");
     {
+        uint8_t zero[32], eight[32], inv_check[32], QB[32];
+        small_scalar(zero, 0);
+        small_scalar(eight, 8);
+        ama_ed25519_sc_muladd(inv_check, zero, INV8, eight); /* 0 + INV8*8 mod l */
+        CHECK(memcmp(inv_check, one, 32) == 0, "SMOKE: 8 * INV8 == 1 mod l");
+        CHECK(prime_order_part(QB, B) == 0 && memcmp(QB, B, 32) == 0,
+              "SMOKE: the prime-order projection fixes B (B has no torsion)");
+
         rng_reset();
-        int checked = 0, mismatches = 0;
+        int checked = 0, mismatches = 0, with_torsion = 0;
+        int prime_checked = 0, prime_mismatches = 0;
         for (int i = 0; i < 512 && checked < 128; i++) {
-            uint8_t P[32], s[32], red[32], x[32], y[32];
+            uint8_t P[32], Q[32], s[32], red[32], x[32], y[32];
             rng_bytes(P, 32);
             rng_bytes(s, 32);
             reduce32(red, s);
@@ -193,10 +240,27 @@ int main(void) {
             if (ama_ed25519_scalarmult_public(y, red, P) != AMA_SUCCESS) continue;
             checked++;
             if (memcmp(x, y, 32) != 0) mismatches++;
+
+            if (prime_order_part(Q, P) != 0) continue;
+            if (memcmp(Q, P, 32) != 0) with_torsion++;
+            if (ama_ed25519_scalarmult_public(x, s, Q) != AMA_SUCCESS) continue;
+            if (ama_ed25519_scalarmult_public(y, red, Q) != AMA_SUCCESS) continue;
+            prime_checked++;
+            if (memcmp(x, y, 32) != 0) prime_mismatches++;
         }
+        printf("  decoded %d encodings, %d with a torsion component; "
+               "%d prime-order parts\n", checked, with_torsion, prime_checked);
         CHECK(checked >= 32, "SMOKE: at least 32 encodings decoded");
+        /* A uniformly random group element has trivial torsion with
+         * probability 1/8; demanding half keeps the claim above honest
+         * without depending on the exact draw. */
+        CHECK(2 * with_torsion >= checked,
+              "SMOKE: at least half the decoded encodings carry torsion");
+        CHECK(prime_checked >= 32, "SMOKE: at least 32 prime-order points exercised");
         CHECK(mismatches == 0,
               "PIN(fe51): [s]P == [s mod l]P on every decoded point");
+        CHECK(prime_mismatches == 0,
+              "PIN(fe51): [s]Q == [s mod l]Q on every prime-order point");
     }
 
     /* ---------------------------------------------------------------- *

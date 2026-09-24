@@ -30,7 +30,15 @@ What each group proves:
 * ``decapsulationKeyCheck`` (30): 15 well-formed keys and 15 with a modified
   ``H(ek)`` field.  FIPS 203 Sec 7.3 hash check: decapsulation must refuse the
   latter, which is the check ``kyber_decapsulate_internal`` gained in this
-  pass.
+  pass.  Every vector's ACVP verdict is asserted against the library's own
+  verdict (``native_ml_kem_privkey_check``), for the well-formed keys as much as
+  the modified ones; a well-formed key must also yield the ``ek`` the vector
+  pairs it with and decapsulate to the secret that was encapsulated under that
+  ``ek``.  The first version asserted only that a well-formed key's
+  decapsulation returned 32 bytes — which a decapsulation that implicitly
+  rejected every ciphertext also does — and never consulted the key check's
+  own verdict, so ``native_ml_kem_privkey_check`` answering True for every key,
+  or False for every key, passed it.
 """
 
 from __future__ import annotations
@@ -125,9 +133,17 @@ def test_decapsulation_key_check_matches_acvp_verdict(t: dict[str, Any]) -> None
     ps = _ps(t["parameterSet"])
     dk = bytes.fromhex(t["dk"])
     ek = bytes.fromhex(t["ek"])
-    ct, _ = pb.native_ml_kem_encapsulate(ps, ek)
+    # The verdict itself, on every vector: the library's key check must say
+    # what ACVP says, in both directions.
+    assert pb.native_ml_kem_privkey_check(ps, dk) is bool(t["testPassed"]), t.get("reason")
+    ct, ss = pb.native_ml_kem_encapsulate(ps, ek)
     if t["testPassed"]:
-        assert len(pb.native_ml_kem_decapsulate(ps, ct, dk)) == 32
+        # Accepted means usable as the key ACVP pairs it with: it carries that
+        # ek, and it decapsulates to the secret encapsulated under that ek.
+        assert pb.native_ml_kem_pubkey_from_privkey(ps, dk) == ek
+        assert pb.native_ml_kem_decapsulate(ps, ct, dk) == ss
     else:
         with pytest.raises(ValueError, match=r"FIPS 203 Sec 7\.3"):
             pb.native_ml_kem_decapsulate(ps, ct, dk)
+        with pytest.raises(ValueError, match="internally inconsistent"):
+            pb.native_ml_kem_pubkey_from_privkey(ps, dk)

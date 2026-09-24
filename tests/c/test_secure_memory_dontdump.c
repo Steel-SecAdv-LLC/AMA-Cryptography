@@ -25,8 +25,27 @@
  * unprivileged process) is reported, not skipped on: the "dd" requirement
  * holds on both branches.
  *
- * Exit codes: 0 pass, 1 fail, 77 skip (non-Linux, or the environment
- * cannot mlock at all).
+ * The two cases are independent, and case 2 runs whatever case 1 did.  It
+ * used not to: case 1 returned 77 when ama_secure_mlock() reported
+ * AMA_ERROR_MEMORY, before case 2 was reached, so on exactly the host case
+ * 2 exists for — an unprivileged process whose memlock limit is spent — the
+ * allocator's "dd" requirement was never measured.  Measured with
+ * CAP_IPC_LOCK dropped and RLIMIT_MEMLOCK=0 and the allocator's advice
+ * deleted: the old sequence exited 77, this one fails in case 2.
+ *
+ * Case 1's skip is also no longer a guess.  AMA_ERROR_MEMORY from
+ * ama_secure_mlock() means EITHER that mlock(2) failed OR that mlock
+ * succeeded and the MADV_DONTDUMP advice then failed (the function fails
+ * closed on the advice, undoing the lock).  The second is the defect case
+ * 1 exists to catch — reverting the page rounding makes madvise return
+ * EINVAL — and it was reported as "SKIP ... (memlock limit?)": measured
+ * with the rounding reverted, the old sequence exited 77 even as root.
+ * Case 1 now asks mlock(2) directly on the same range and skips only when
+ * that fails too; when mlock(2) works, AMA_ERROR_MEMORY is a failure.
+ *
+ * Exit codes: 0 pass, 1 fail, 77 skip (non-Linux; an environment that
+ * cannot record MADV_DONTDUMP at all; or case 1 unable to mlock(2) here
+ * while case 2 passed — case 2 has run, and would have failed the test).
  */
 
 /* madvise() and MADV_DONTDUMP need _DEFAULT_SOURCE visibility under the
@@ -47,6 +66,7 @@ int main(void) {
 }
 #else
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -150,14 +170,18 @@ static int alloc_keeps_dontdump_without_memlock(size_t page) {
     return 0;
 }
 
-int main(void) {
-    const long page_l = sysconf(_SC_PAGESIZE);
-    if (page_l <= 0) { printf("FAIL: sysconf(_SC_PAGESIZE)\n"); return 1; }
-    const size_t page = (size_t)page_l;
+/* Outcomes of one case. */
+#define CASE_PASS 0
+#define CASE_FAIL 1
+#define CASE_SKIP 77
 
+/* Case 1: ama_secure_mlock() on a page-UNALIGNED malloc buffer must leave
+ * every page covering it recorded "dd".  Returns CASE_PASS, CASE_FAIL, or
+ * CASE_SKIP when this process cannot mlock(2) the range at all. */
+static int mlock_marks_unaligned_range_dontdump(size_t page) {
     /* Three pages of raw space so an unaligned window of two pages fits. */
     unsigned char *raw = (unsigned char *)malloc(4 * page);
-    if (!raw) { printf("FAIL: malloc\n"); return 1; }
+    if (!raw) { printf("FAIL: malloc\n"); return CASE_FAIL; }
 
     /* Force a page-UNALIGNED start — the realistic malloc case and the one
      * a bare madvise(ptr, ...) rejects with EINVAL. */
@@ -168,6 +192,68 @@ int main(void) {
 
     const uintptr_t lo = (uintptr_t)target & ~((uintptr_t)page - 1u);
     const uintptr_t hi = ((uintptr_t)target + len + page - 1) & ~((uintptr_t)page - 1u);
+
+    /* Baseline: a fresh anonymous allocation must not already be marked,
+     * otherwise this case proves nothing on this host. */
+    int pre = range_has_dontdump(lo, hi);
+    if (pre < 0) { printf("FAIL: smaps parse (pre)\n"); free(raw); return CASE_FAIL; }
+    if (pre == 1) {
+        printf("SKIP (case 1): region already non-dumpable before lock\n");
+        free(raw); return CASE_SKIP;
+    }
+
+    ama_error_t rc = ama_secure_mlock(target, len);
+    if (rc == AMA_ERROR_MEMORY) {
+        /* Two different events share this code: mlock(2) failed, or mlock
+         * succeeded and the advice failed (ama_secure_mlock undoes the lock
+         * and fails closed).  Only the first is the environment.  Ask
+         * mlock(2) itself, on the same range. */
+        if (mlock(target, len) == 0) {
+            (void)munlock(target, len);
+            printf("FAIL: ama_secure_mlock returned AMA_ERROR_MEMORY although "
+                   "mlock(2) succeeds on the same unaligned range — the "
+                   "MADV_DONTDUMP advice failed (page rounding lost?)\n");
+            free(raw); return CASE_FAIL;
+        }
+        const int err = errno;
+        printf("SKIP (case 1): mlock(2) itself fails here (%s), so "
+               "ama_secure_mlock cannot be exercised; case 2 still runs\n",
+               strerror(err));
+        free(raw); return CASE_SKIP;
+    }
+    if (rc != AMA_SUCCESS) {
+        printf("FAIL: ama_secure_mlock rc=%d\n", (int)rc);
+        free(raw); return CASE_FAIL;
+    }
+
+    int post = range_has_dontdump(lo, hi);
+    if (post < 0) {
+        printf("FAIL: smaps parse (post)\n");
+        (void)ama_secure_munlock(target, len);
+        free(raw); return CASE_FAIL;
+    }
+    if (post != 1) {
+        printf("FAIL: locked range is still dumpable — no 'dd' VmFlag on "
+               "[%#lx, %#lx) after ama_secure_mlock of an unaligned buffer\n",
+               (unsigned long)lo, (unsigned long)hi);
+        (void)ama_secure_munlock(target, len);
+        free(raw); return CASE_FAIL;
+    }
+
+    if (ama_secure_munlock(target, len) != AMA_SUCCESS) {
+        printf("FAIL: ama_secure_munlock\n"); free(raw); return CASE_FAIL;
+    }
+    ama_secure_memzero(target, len);
+    free(raw);
+    printf("PASS: unaligned ama_secure_mlock yields kernel-recorded 'dd' "
+           "(MADV_DONTDUMP) over the full range\n");
+    return CASE_PASS;
+}
+
+int main(void) {
+    const long page_l = sysconf(_SC_PAGESIZE);
+    if (page_l <= 0) { printf("FAIL: sysconf(_SC_PAGESIZE)\n"); return 1; }
+    const size_t page = (size_t)page_l;
 
     /* Instrument calibration: prove this environment can RECORD the
      * property before measuring the library against it.  A page-aligned
@@ -180,10 +266,11 @@ int main(void) {
      * Exit 77 exactly like this suite's other environment-gated skips.
      * On a real Linux kernel this probe always sees the flag, so the
      * test proceeds at full strength everywhere the measurement means
-     * something (the x86 lanes exercise it on real kernels every run). */
+     * something (the x86 lanes exercise it on real kernels every run).
+     * Both cases read the same record, so this one skip covers both. */
     void *probe = mmap(NULL, page, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (probe == MAP_FAILED) { printf("FAIL: mmap calibration probe\n"); free(raw); return 1; }
+    if (probe == MAP_FAILED) { printf("FAIL: mmap calibration probe\n"); return 1; }
     int probe_dd = -1;
     if (madvise(probe, page, MADV_DONTDUMP) == 0) {
         probe_dd = range_has_dontdump((uintptr_t)probe, (uintptr_t)probe + page);
@@ -194,45 +281,22 @@ int main(void) {
                "/proc/self/smaps for a direct page-aligned madvise "
                "(qemu-user address-space translation?); the kernel-record "
                "verification is impossible here\n");
-        free(raw);
         return 77;
     }
 
-    /* Baseline: a fresh anonymous allocation must not already be marked,
-     * otherwise this test proves nothing on this host. */
-    int pre = range_has_dontdump(lo, hi);
-    if (pre < 0) { printf("FAIL: smaps parse (pre)\n"); free(raw); return 1; }
-    if (pre == 1) { printf("SKIP: region already non-dumpable before lock\n"); free(raw); return 77; }
+    const int case1 = mlock_marks_unaligned_range_dontdump(page);
+    if (case1 == CASE_FAIL) return 1;
 
-    ama_error_t rc = ama_secure_mlock(target, len);
-    if (rc == AMA_ERROR_MEMORY) {
-        /* mlock genuinely unavailable (RLIMIT_MEMLOCK exhausted): the
-         * property under test cannot be exercised here at all. */
-        printf("SKIP: ama_secure_mlock reports AMA_ERROR_MEMORY (memlock limit?)\n");
-        free(raw); return 77;
-    }
-    if (rc != AMA_SUCCESS) { printf("FAIL: ama_secure_mlock rc=%d\n", (int)rc); free(raw); return 1; }
-
-    int post = range_has_dontdump(lo, hi);
-    if (post < 0) { printf("FAIL: smaps parse (post)\n"); free(raw); return 1; }
-    if (post != 1) {
-        printf("FAIL: locked range is still dumpable — no 'dd' VmFlag on "
-               "[%#lx, %#lx) after ama_secure_mlock of an unaligned buffer\n",
-               (unsigned long)lo, (unsigned long)hi);
-        free(raw); return 1;
-    }
-
-    if (ama_secure_munlock(target, len) != AMA_SUCCESS) {
-        printf("FAIL: ama_secure_munlock\n"); free(raw); return 1;
-    }
-    ama_secure_memzero(target, len);
-    free(raw);
-    printf("PASS: unaligned ama_secure_mlock yields kernel-recorded 'dd' "
-           "(MADV_DONTDUMP) over the full range\n");
-
-    /* Case 2 runs last: it lowers RLIMIT_MEMLOCK to 0 for the rest of the
-     * process, which the ama_secure_mlock case above must not see. */
+    /* Case 2 runs last, and runs whatever case 1 did: it lowers
+     * RLIMIT_MEMLOCK to 0 for the rest of the process, which case 1 must
+     * not see, and it is the case that matters most on exactly the hosts
+     * where case 1 cannot lock. */
     if (alloc_keeps_dontdump_without_memlock(page) != 0) return 1;
+
+    if (case1 == CASE_SKIP) {
+        printf("SKIP: case 2 passed; case 1 could not run here (see above)\n");
+        return 77;
+    }
     return 0;
 }
 #endif /* __linux__ */

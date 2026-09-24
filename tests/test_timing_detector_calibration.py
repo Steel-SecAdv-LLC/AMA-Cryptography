@@ -423,16 +423,32 @@ class TestThePairwiseBarDoesNotDependOnArrivalOrder:
         SAME values: reordering an inline RNG loop would also reassign which
         draws each operation receives, and the comparison would no longer
         isolate arrival order.
+
+        Drawn from a private generator, like every other stream in this file.
+        This one used to call ``random.seed(seed)``, which reseeds the
+        interpreter-wide generator: every later test in the process that drew
+        from ``random`` got a stream fixed by whichever of these tests ran
+        last, so their behaviour depended on test order.  ``random.Random(n)``
+        and ``random.seed(n)`` seed the same algorithm identically, so the
+        values — and the figures measured from them above — are unchanged.
         """
         import math
-        import random
 
-        random.seed(seed)
+        rng = random.Random(seed)  # noqa: S311 -- test stream, not key material (TDC-001)
         out: list[tuple[str, float]] = []
         for _ in range(records):
             for op, mu in (("strict", 10.0), ("loose", 25.0)):
-                out.append((op, random.lognormvariate(math.log(mu), 0.25)))
+                out.append((op, rng.lognormvariate(math.log(mu), 0.25)))
         return out
+
+    def test_the_sample_stream_leaves_the_global_generator_alone(self) -> None:
+        """Materialising the stream must not reseed ``random`` for the process."""
+        before = random.getstate()
+        self._samples(records=8)
+        assert random.getstate() == before, (
+            "_samples() reseeded the interpreter-wide generator; later tests "
+            "that draw from `random` would see a stream fixed by this one"
+        )
 
     @staticmethod
     def _warmed_from(

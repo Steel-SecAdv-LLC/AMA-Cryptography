@@ -44,8 +44,11 @@ add_ama_test(test_core test_core.c)
 # case lowers RLIMIT_MEMLOCK to 0 in-process and requires ama_secure_alloc()
 # to keep "dd" whether or not its mlock() succeeds (root: CAP_IPC_LOCK
 # bypasses the limit; unprivileged: mlock fails) — the advice must not be
-# coupled to the lock.  Linux-only; skips (77) elsewhere or when mlock is
-# impossible from the start (RLIMIT_MEMLOCK already exhausted).
+# coupled to the lock.  Linux-only; skips (77) elsewhere, where the kernel
+# does not surface the "dd" record, or when mlock(2) itself fails here
+# (RLIMIT_MEMLOCK already exhausted) — and in that last case only after the
+# second case has run and passed.  An AMA_ERROR_MEMORY from
+# ama_secure_mlock() while mlock(2) succeeds is a failure, not a skip.
 add_ama_test(test_secure_memory_dontdump test_secure_memory_dontdump.c)
 set_tests_properties(test_secure_memory_dontdump PROPERTIES SKIP_RETURN_CODE 77)
 # Post-free scrub (commit 17e5d79): memory inspection via

@@ -40,10 +40,19 @@ basename against the tracked file list.
 WHAT IT ENFORCES
 
 Every backtick-quoted path under a real source directory, in every tracked
-``.md`` file, resolves on disk — unless it is in :data:`RUN_PRODUCED`, which is
-for paths a document correctly describes as the OUTPUT of a command rather than
-a file in the tree.  Each entry there names the command that writes it, so the
-allowlist is a statement about the tree rather than a place to hide a typo.
+``.md`` file, names a TRACKED file — unless it is in :data:`RUN_PRODUCED`, which
+is for paths a document correctly describes as the OUTPUT of a command rather
+than a file in the tree.  Each entry there names the command that writes it, so
+the allowlist is a statement about the tree rather than a place to hide a typo.
+
+Tracked, not "present on disk", and for the same reason the bare-filename check
+below already used ``git ls-files``: the claim a document makes is about the
+repository a reader clones, and a working tree also holds whatever the last
+build, benchmark or editor left behind.  The path check used to ask the
+filesystem, so an untracked local file satisfied a citation that fails on every
+fresh checkout — and, in the other direction, running
+``benchmarks/performance_suite.py`` once made the stale-allowlist check fail on
+a file that is correctly not in the tree.
 
 Every backtick-quoted bare filename with a source-ish extension must match the
 basename of a tracked file, unless it is in :data:`NOT_IN_TREE` — for the
@@ -173,12 +182,28 @@ NOT_IN_TREE = {
 }
 
 
-def _tracked_markdown() -> list[Path]:
+def _tracked_files() -> frozenset[str]:
+    """Every path ``git ls-files`` reports, repository-relative, ``/``-separated.
+
+    NUL-separated so a path is never split on whitespace.  This is the one
+    definition of "in the tree" for every check in this module.
+    """
     out = subprocess.run(
-        ["git", "ls-files", "*.md"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
-    ).stdout.split()
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout
+    return frozenset(f for f in out.split("\0") if f)
+
+
+TRACKED_FILES = _tracked_files()
+
+
+def _tracked_markdown() -> list[Path]:
     # The historical record is excluded; see the module docstring.
-    return [REPO_ROOT / f for f in out if not is_historical_record(f)]
+    return [
+        REPO_ROOT / f
+        for f in sorted(TRACKED_FILES)
+        if f.endswith(".md") and not is_historical_record(f)
+    ]
 
 
 DOCS = _tracked_markdown()
@@ -204,14 +229,10 @@ def test_the_corpus_of_cited_paths_is_substantial() -> None:
 def test_every_source_path_a_document_cites_exists(doc: Path) -> None:
     text = doc.read_text(encoding="utf-8", errors="replace")
     missing = sorted(
-        {
-            m
-            for m in _PATH_RE.findall(text)
-            if m not in RUN_PRODUCED and not (REPO_ROOT / m).exists()
-        }
+        {m for m in _PATH_RE.findall(text) if m not in RUN_PRODUCED and m not in TRACKED_FILES}
     )
     assert not missing, (
-        f"{doc.relative_to(REPO_ROOT)} cites {missing}, which do not exist. A document "
+        f"{doc.relative_to(REPO_ROOT)} cites {missing}, which are not tracked files. A document "
         f"that names a source file must name one that exists — a reader following the "
         f"citation finds nothing, and a reviewer cannot check the claim beside it. "
         f"Correct the path, or add it to RUN_PRODUCED with the command that writes it "
@@ -226,24 +247,21 @@ def test_the_allowlist_has_no_stale_entry() -> None:
     }
     for path, why in RUN_PRODUCED.items():
         assert path in cited, f"RUN_PRODUCED lists {path!r} but no document cites it ({why})"
-        assert not (REPO_ROOT / path).exists(), (
-            f"RUN_PRODUCED lists {path!r} as run-produced, but it exists in the tree; "
+        assert path not in TRACKED_FILES, (
+            f"RUN_PRODUCED lists {path!r} as run-produced, but it is tracked; "
             f"remove the entry so the path is checked like any other"
         )
 
 
-def _tracked_basenames() -> set[str]:
-    out = subprocess.run(
-        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
-    ).stdout.split()
-    return {Path(f).name for f in out}
-
-
-TRACKED_BASENAMES = _tracked_basenames()
+TRACKED_BASENAMES = {Path(f).name for f in TRACKED_FILES}
 
 
 def test_the_tracked_basename_set_is_substantial() -> None:
-    """Non-vacuity: an empty set would make the bare-filename check pass on anything."""
+    """Non-vacuity: an empty set would make the bare-filename check pass on anything.
+
+    Derived from :data:`TRACKED_FILES`, so this also holds the path check to a
+    populated tree.
+    """
     assert len(TRACKED_BASENAMES) > 400, (
         f"only {len(TRACKED_BASENAMES)} tracked basenames; git ls-files is not "
         f"returning the tree"
