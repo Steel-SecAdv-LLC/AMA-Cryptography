@@ -708,6 +708,79 @@ class TestFROSTNonceSingleUse:
 
 
 @skip_no_frost
+class TestFROSTOwnCommitmentCheck:
+    """RFC 9591 section 5.2 — round 2 checks its own row of the commitment list.
+
+    "Each participant MUST ensure that its identifier and commitments (from the
+    first round) appear in commitment_list."  Until 2026-09-24 the native
+    round 2 took the coordinator's list on trust: a list whose row for this
+    signer held a different, well-formed commitment still produced a share.
+    These pin the refusal at the Python boundary, and that the refusal
+    consumes the nonce pair like every other one.
+    """
+
+    @staticmethod
+    def _substituted(ctx: dict[str, Any], row: bytes, half: slice) -> bytes:
+        """``ctx``'s list with ``half`` of signer 1's row replaced from ``row``."""
+        listed: bytes = ctx["commitments"]
+        own = bytearray(listed[:64])
+        own[half] = row[half]
+        return bytes(own) + listed[64:]
+
+    @pytest.mark.parametrize(
+        "half",
+        [slice(0, 64), slice(0, 32), slice(32, 64)],
+        ids=["whole-row", "hiding-D", "binding-E"],
+    )
+    def test_a_substituted_own_commitment_is_refused_and_consumes(self, half: slice) -> None:
+        from ama_cryptography.pqc_backends import frost_round1_commit, frost_round2_sign
+
+        ctx = _ceremony()
+        # A real round-1 commitment of the same participant, from a nonce pair
+        # this test then discards: well-formed, so only the own-row comparison
+        # can refuse it.
+        _other_nonce, other_row = frost_round1_commit(ctx["shares"][0])
+        nonce = ctx["nonces"][0]
+        assert any(nonce)
+        with pytest.raises(RuntimeError, match="round2"):
+            frost_round2_sign(
+                message=ctx["message"],
+                participant_share=ctx["shares"][0],
+                participant_index=1,
+                nonce_pair=nonce,
+                commitments=self._substituted(ctx, other_row, half),
+                signer_indices=ctx["signer_indices"],
+                num_signers=2,
+                group_public_key=ctx["gpk"],
+            )
+        assert not any(nonce), "the refusal must consume the nonce pair"
+
+    def test_own_commitment_at_another_position_is_refused(self) -> None:
+        """Rows swapped: signer 1's commitment IS in the list, at signer 2's slot."""
+        from ama_cryptography.pqc_backends import frost_round2_sign
+
+        ctx = _ceremony()
+        swapped = ctx["commitments"][64:] + ctx["commitments"][:64]
+        with pytest.raises(RuntimeError, match="round2"):
+            frost_round2_sign(
+                message=ctx["message"],
+                participant_share=ctx["shares"][0],
+                participant_index=1,
+                nonce_pair=ctx["nonces"][0],
+                commitments=swapped,
+                signer_indices=ctx["signer_indices"],
+                num_signers=2,
+                group_public_key=ctx["gpk"],
+            )
+
+    def test_the_honest_list_still_signs(self) -> None:
+        """Control: the refusal is specific to a substituted row."""
+        ctx = _ceremony()
+        assert len(_sign_one(ctx, 0, ctx["message"])) == 32
+        assert len(_sign_one(ctx, 1, ctx["message"])) == 32
+
+
+@skip_no_frost
 class TestFROSTShareVerification:
     """INVARIANT-49 part 2 — aggregation verifies and attributes (audit A-5)."""
 

@@ -9564,7 +9564,12 @@ def frost_round2_sign(
             (SECRET, SINGLE-USE).  Zeroized in place, every byte of it,
             before this function returns or raises — unless it is not a
             writable buffer, which is the ``TypeError`` below.
-        commitments: Concatenated commitments (num_signers * 64 bytes).
+        commitments: Concatenated commitments (num_signers * 64 bytes), row
+            ``i`` belonging to ``signer_indices[i]``.  The row at this
+            participant's own position must be the commitment
+            ``frost_round1_commit`` returned with ``nonce_pair`` (RFC 9591
+            section 5.2); the native call re-derives it from the nonces and
+            refuses the list otherwise.
         signer_indices: Byte array of 1-based signer indices.
         num_signers: Number of signers in this session.
         group_public_key: 32-byte group public key.
@@ -9576,7 +9581,9 @@ def frost_round2_sign(
         TypeError: ``nonce_pair`` is not a writable buffer.
         ValueError: any argument has the wrong length or range.
         RuntimeError: the native call refused — including the refusal of an
-            already-consumed nonce pair.
+            already-consumed nonce pair and of a commitment list whose row for
+            this participant is not its own round-1 commitment.  The nonce
+            pair is consumed on every one of these refusals.
     """
     # Take the writable view FIRST — before the module-state check, the
     # backend check and every argument check — so that every refusal below is

@@ -830,13 +830,17 @@ _SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105 -- a C-comment annotation t
 #:   exactly that).  Only ``"" : : "r"(buf) : "memory"`` kept the stores under
 #:   both compilers, which is the form ``ama_consttime.c`` uses.
 #: * ``#if defined(_MSC_VER) _ReadWriteBarrier(); #endif`` — no barrier at all
-#:   in the gcc/clang builds.
+#:   in the gcc/clang builds.  Nor is ``_ReadWriteBarrier()`` one in the MSVC
+#:   build: it orders accesses and does not make a local's address escape.
+#:   The compiler-only fence it is documented to be,
+#:   ``__atomic_signal_fence(__ATOMIC_SEQ_CST)``, measured with clang 18.1.3
+#:   -O2/-O3 on an 8 KiB local, compiled the preceding ``memset`` to no store
+#:   at all.  MSVC has no inline asm on x64 or ARM64, so no MSVC spelling
+#:   qualifies: an MSVC site must not be a bare ``memset``
+#:   (``ama_stack_wipe_below`` calls ``memset`` through a ``volatile``
+#:   function pointer there).
 #: * a COMMENT quoting a barrier, since raw lines include comments.
 _ASM_RE = re.compile(r"\b(?:__asm__|__asm|asm)\s*(?:(?:__volatile__|__volatile|volatile)\s*)?\(")
-
-#: MSVC's compiler barrier.  Accepted as the MSVC arm of a barrier, never as
-#: the only one: see :func:`_has_scrub_barrier`.
-_MSVC_BARRIER_RE = re.compile(r"\b_ReadWriteBarrier\s*\(\s*\)")
 
 #: A preprocessor conditional directive, in comment- and literal-blanked text.
 _CONDITIONAL_RE = re.compile(
@@ -987,7 +991,7 @@ def _barriers_in(source: _Source, start: int, end: int, names: set[str]) -> tupl
         matched = _match_call_arguments(source.blanked, asm.end() - 1)
         if matched is not None and _is_barrier_asm(source, asm.end() - 1, matched[1] - 1, names):
             return True, True
-    return _MSVC_BARRIER_RE.search(source.blanked, start, end) is not None, False
+    return False, False
 
 
 @dataclass
@@ -1044,8 +1048,8 @@ def _covers(
     """``(every preprocessor path reaches a barrier, some path reaches a gcc/clang one)``.
 
     A conditional group covers only if it is closed, has an ``#else``, and
-    every arm covers — so ``#if defined(_MSC_VER) _ReadWriteBarrier(); #endif``
-    leaves the other builds bare and does not count.
+    every arm covers — so ``#if defined(_MSC_VER) ... #endif`` leaves the
+    other builds bare and does not count.
     """
     covered = False
     native = False
@@ -1072,9 +1076,9 @@ def _has_scrub_barrier(source: _Source, call_close: int, last_line: int, names: 
     the enclosing block if that comes first — a barrier in the next function
     does not protect this one's write.
 
-    Every preprocessor path through the window must reach a barrier (a
-    gcc/clang one per :func:`_is_barrier_asm`, or ``_ReadWriteBarrier()`` for
-    an MSVC arm), and at least one path must reach the gcc/clang one.  A
+    Every preprocessor path through the window must reach a barrier per
+    :func:`_is_barrier_asm`.  ``_ReadWriteBarrier()`` is not one (see
+    :data:`_ASM_RE`), so a memset in an MSVC arm cannot be vouched for here.  A
     ``#else``/``#elif`` of a group the call itself sits in starts a sibling
     arm the call is never compiled with, so that arm is skipped to its
     ``#endif``.

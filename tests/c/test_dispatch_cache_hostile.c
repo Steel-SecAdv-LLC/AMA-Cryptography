@@ -22,6 +22,10 @@
  *            the process could write; measured before the fix, the target
  *            was truncated and overwritten with the verdict text.
  *
+ * And one fact about its CONTENT (scenario 5): a file with the right
+ * fingerprint but a missing or malformed timing line.  The loader used to
+ * read both as a 0 ns measurement; they must read as -1, "not measured".
+ *
  * Each scenario runs in a CHILD PROCESS started with execv(), because the
  * dispatch table initialises once per process image (pthread_once), and a
  * fork()ed child inherits the parent's "already initialised" state and
@@ -105,6 +109,12 @@ static int run_child(const char *mode, const char *cache_path, const char *victi
             fprintf(stderr, "child: symlink(%s) failed: %s\n", tmpname, strerror(errno));
             return 3;
         }
+    }
+    if (strcmp(mode, "verbose") == 0) {
+        /* Scenario 5: the parent reads the verdict line the loader produced,
+         * so this child's stderr goes to the file named in the third slot. */
+        if (freopen(victim, "w", stderr) == NULL) return 3;
+        setenv("AMA_DISPATCH_VERBOSE", "1", 1);
     }
     setenv("AMA_DISPATCH_CACHE_FILE", cache_path, 1);
     unsetenv("AMA_DISPATCH_NO_AUTOTUNE");
@@ -394,6 +404,92 @@ int main(int argc, char **argv) {
         (void)unlink(cache);
     }
 
+    /* 5. A cache file whose fingerprint matches but whose timing lines are
+     *    incomplete: `keccak_fallback_ns` deleted, `keccak_x4_simd_ns` set to
+     *    a non-number.  Both must load as -1 ("not measured"), never as 0 ns.
+     *
+     *    keccak_fallback_ns is not only diagnostic: after a top-tier Keccak
+     *    regression the loader's verdict installs the intermediate tier only
+     *    when that field is >= 0.  Before 2026-09-24 the loader started from
+     *    a zeroed record and parsed with strtoll(val, NULL, 10), so the
+     *    verbose verdict line read `tier=0 ns` for the deleted key and
+     *    `simd=0 ns` for the garbage one — a hand-edited or truncated file
+     *    reported, and acted on, measurements nobody took.  The verdict line
+     *    is the loader's own report of what it parsed, so it is what this
+     *    scenario reads. */
+    {
+        char cache[192], log[192], body[8192], edited[8192], out[8192];
+        out[0] = '\0';
+        snprintf(cache, sizeof(cache), "%s/partial", dir);
+        snprintf(log, sizeof(log), "%s/partial.log", dir);
+        int ok = 1;
+        int dropped = 0, garbled = 0;
+        if (spawn_checked(argv[0], "plain", cache, NULL, "partial-write") != 0) {
+            ok = 0;
+        } else if (read_all(cache, body, sizeof(body)) <= 0) {
+            fprintf(stderr, "FAIL [partial]: no cache file was written\n");
+            ok = 0;
+        } else {
+            /* Rebuild the file line by line. */
+            size_t used = 0;
+            char *save = NULL;
+            edited[0] = '\0';
+            for (char *line = strtok_r(body, "\n", &save); line != NULL;
+                 line = strtok_r(NULL, "\n", &save)) {
+                const char *emit = line;
+                if (strncmp(line, "keccak_fallback_ns=", 19) == 0) {
+                    dropped = 1;
+                    continue;
+                }
+                if (strncmp(line, "keccak_x4_simd_ns=", 18) == 0) {
+                    emit = "keccak_x4_simd_ns=garbage";
+                    garbled = 1;
+                }
+                int w = snprintf(edited + used, sizeof(edited) - used, "%s\n", emit);
+                if (w < 0 || (size_t)w >= sizeof(edited) - used) { ok = 0; break; }
+                used += (size_t)w;
+            }
+            /* Non-vacuity: both keys were in the file this build wrote. */
+            if (!dropped || !garbled) {
+                fprintf(stderr, "FAIL [partial]: the written cache lacked %s%s\n",
+                        dropped ? "" : "keccak_fallback_ns ",
+                        garbled ? "" : "keccak_x4_simd_ns");
+                ok = 0;
+            }
+            FILE *f = ok ? fopen(cache, "wb") : NULL;
+            if (ok && (!f || fputs(edited, f) == EOF)) ok = 0;
+            if (f && fclose(f) != 0) ok = 0;
+        }
+        if (ok && spawn_checked(argv[0], "verbose", cache, log, "partial-read") != 0) {
+            ok = 0;
+        }
+        if (ok) {
+            const char *fb, *x4;
+            if (read_all(log, out, sizeof(out)) <= 0 || !strstr(out, "cache HIT")) {
+                fprintf(stderr, "FAIL [partial]: the edited cache was not loaded "
+                                "(no cache HIT in the verbose log):\n%s\n", out);
+                ok = 0;
+            } else if ((fb = strstr(out, "keccak_fallback=")) == NULL
+                       || (fb = strstr(fb, "(tier=")) == NULL
+                       || strncmp(fb, "(tier=-1 ns", 11) != 0) {
+                fprintf(stderr, "FAIL [partial]: an absent keccak_fallback_ns loaded "
+                                "as a reading, not -1:\n%s\n", out);
+                ok = 0;
+            } else if ((x4 = strstr(out, "keccak_x4=")) == NULL
+                       || (x4 = strstr(x4, "(simd=")) == NULL
+                       || strncmp(x4, "(simd=-1 ns", 11) != 0) {
+                fprintf(stderr, "FAIL [partial]: a malformed keccak_x4_simd_ns loaded "
+                                "as a reading, not -1:\n%s\n", out);
+                ok = 0;
+            } else {
+                printf("  partial cache: absent and malformed timings load as -1\n");
+            }
+        }
+        if (!ok) failures++;
+        (void)unlink(cache);
+        (void)unlink(log);
+    }
+
     /* Best-effort cleanup of the planted temp link(s). */
     {
         char cmd[256];
@@ -421,11 +517,13 @@ int main(int argc, char **argv) {
      * a scenario that could not run safely is not reported as a pass. */
     if (devzero_unavailable) {
         printf("SKIP: the endless-device scenario could not run safely here (see "
-               "above); the fifo, symlink and control scenarios passed\n");
+               "above); the fifo, symlink, malformed-timing and control scenarios "
+               "passed\n");
         return 77;
     }
     printf("OK: hostile cache paths (fifo, endless device, pre-planted symlink) are "
-           "refused and survive; regular cache still round-trips\n");
+           "refused and survive; absent or malformed timings load as not measured; "
+           "regular cache still round-trips\n");
     return 0;
 }
 #endif

@@ -159,6 +159,14 @@ static inline int validate_context(const ama_context_t* ctx) {
     return (ctx != NULL && ctx->magic == AMA_CONTEXT_MAGIC);
 }
 
+#ifdef AMA_USE_NATIVE_PQC
+/* Everything from here to the matching #endif serves AMA_ALG_HYBRID, which is
+ * Ed25519 + ML-DSA-65 and so exists only with the native PQC sources.
+ * hybrid_wrap() sat above this guard until 2026-09-24 while its only two
+ * callers sat inside it, so an AMA_USE_NATIVE_PQC=OFF build compiled a static
+ * function nothing called: -Wunused-function under gcc 13.3.0 and clang
+ * 18.1.3, and a hard error with -Werror (or the strict CI job's
+ * -Werror=unused-function). */
 /**
  * The bytes the Ed25519 component of a hybrid signature signs:
  * 0x00 || len(domain) || domain || message — the FIPS 204 Sec 5.2 pure-mode
@@ -186,7 +194,6 @@ static uint8_t *hybrid_wrap(const uint8_t *message, size_t message_len, size_t *
     return buf;
 }
 
-#ifdef AMA_USE_NATIVE_PQC
 /**
  * AMA_ALG_HYBRID signing: Ed25519 over the domain-wrapped message, ML-DSA-65
  * with the domain as its FIPS 204 context.  See AMA_HYBRID_SIG_DOMAIN.  The

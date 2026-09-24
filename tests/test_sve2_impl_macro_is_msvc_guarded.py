@@ -128,6 +128,36 @@ class TestTheMacroIsInsideTheFlagGuard:
             "define — LNK2019 (audit H5)."
         )
 
+    def test_the_cmake_comment_counts_the_declared_kernels(self) -> None:
+        """The SVE2 block's comment states how many kernel symbols the macro
+        lets the dispatcher reference; that number must be the header's.
+
+        It said "ten" (twice) while the header declared nine — the count this
+        file's own docstring and MIN_SVE2_KERNELS already carried — because
+        the comment was written before ``ama_kyber_poly_pointwise_sve2`` was
+        deleted and nothing tied the prose to the header.  INVARIANT-53: a
+        documented claim must resolve against the implementation.
+        """
+        words = {
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+            "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+            "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+        }  # fmt: skip
+        block = _cmake_block(CMAKELISTS, "if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)")
+        prose = " ".join(line.strip().lstrip("#").strip() for line in block.splitlines())
+        claims = re.findall(
+            r"\b(\w+)\s+SVE2 kernel symbols\b|\ball (\w+) under AMA_HAVE_SVE2_IMPL\b", prose
+        )
+        stated = [a or b for a, b in claims]
+        assert stated, "the SVE2 block no longer states the kernel count; update this test"
+        for token in stated:
+            count = int(token) if token.isdigit() else words.get(token.lower())
+            assert count == len(SVE2_DECLARED_SYMBOLS), (
+                f"CMakeLists.txt's SVE2 comment says {token!r} kernel symbols; "
+                f"src/c/sve2/ama_sve2_internal.h declares "
+                f"{len(SVE2_DECLARED_SYMBOLS)}: {list(SVE2_DECLARED_SYMBOLS)}"
+            )
+
     def test_the_flag_and_the_macro_share_the_one_guard(self) -> None:
         """Both the flag and the macro must be under the SAME NOT-MSVC block, so
         they can never drift apart — the macro true while the flag is absent."""

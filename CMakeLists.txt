@@ -700,8 +700,9 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
             set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-march=armv9-a+sve2")
             # AMA_HAVE_SVE2_IMPL says "the SVE2 kernels exist in this build", so
-            # src/c/dispatch/ama_dispatch.c may take the addresses of the ten
-            # SVE2 kernel symbols.  It MUST sit inside this NOT-MSVC guard,
+            # src/c/dispatch/ama_dispatch.c may take the addresses of the nine
+            # SVE2 kernel symbols src/c/sve2/ama_sve2_internal.h declares.  It
+            # MUST sit inside this NOT-MSVC guard,
             # beside the +sve2 flag, for the same reason the NEON block above
             # conditions AMA_HAVE_NEON_CRYPTO_EXT_IMPL: every SVE2 TU guards its
             # whole body on __ARM_FEATURE_SVE2, which ONLY -march=...+sve2
@@ -709,7 +710,7 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
             # macro, yet CMAKE_SYSTEM_PROCESSOR ARM64 reached this block — so
             # with the definition outside the guard every SVE2 TU compiled to an
             # object with zero defined symbols while the dispatcher still
-            # referenced all ten under AMA_HAVE_SVE2_IMPL: LNK2019 unresolved
+            # referenced all nine under AMA_HAVE_SVE2_IMPL: LNK2019 unresolved
             # externals, the exact MSVC ARM64 break the NEON rewrite removed
             # (audit H5).  Reproduced with the equivalent GCC condition:
             # compiling any SVE2 TU for aarch64 WITHOUT +sve2 yields an object
@@ -1118,11 +1119,34 @@ if(AMA_BUILD_SHARED)
             "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"
             "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_pe_def.cmake")
     elseif(NOT MSVC)
+        # The script the linker sees is cmake/ama_exports.map with every local:
+        # name THIS build does not define removed, generated from the objects
+        # just before the link (cmake/filter_exports_map.cmake says why and
+        # how).  The source map names the kernels of every architecture and
+        # configuration; lld >= 16 refuses a version-script name that matches
+        # nothing (--no-undefined-version is its default), and measured with
+        # ld.lld 18.1.3 the library did not link at all.  GNU ld's result is
+        # unchanged: the names dropped are exactly the ones it was ignoring.
+        set(_ama_elf_map "${CMAKE_CURRENT_BINARY_DIR}/ama_exports.elf.map")
+        if(CMAKE_C_COMPILER_AR)
+            set(_ama_map_ar "${CMAKE_C_COMPILER_AR}")
+        else()
+            set(_ama_map_ar "${CMAKE_AR}")
+        endif()
+        add_custom_command(TARGET ama_cryptography_shared PRE_LINK
+            COMMAND "${CMAKE_COMMAND}"
+                    "-DAMA_MAP_IN=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"
+                    "-DAMA_MAP_OUT=${_ama_elf_map}"
+                    "-DAMA_AR=${_ama_map_ar}"
+                    "-DAMA_OBJECTS=$<TARGET_OBJECTS:ama_cryptography_shared>"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/filter_exports_map.cmake"
+            VERBATIM)
         target_link_options(ama_cryptography_shared PRIVATE
-            "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"
+            "-Wl,--version-script=${_ama_elf_map}"
             "-Wl,-Bsymbolic-functions")
         set_property(TARGET ama_cryptography_shared APPEND PROPERTY
-            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map")
+            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/filter_exports_map.cmake")
     endif()
 endif()
 

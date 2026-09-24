@@ -331,6 +331,28 @@ endif()
 # primitive FROST calls with its nonces and shares).  Links in both PQC lanes.
 add_ama_residue_probe(test_ed25519_stack_residue test_ed25519_stack_residue.c)
 
+# The two in-house Ed25519 instantiations (fe51 and fe64-mulx) must be
+# byte-identical.  Drives both through the public API under
+# ama_ed25519_set_mulx_override(); skips (77) where the host lacks BMI2+ADX or
+# the unit is not compiled, and refuses to compare an instantiation with
+# itself.  This is the differential that replaced the CI job comparing the two
+# former backends.
+#
+# Registered under the SAME condition that compiles the unit — the top-level
+# AMA_ED25519_MULX_SOURCES block (x86-64, not MSVC) — and deliberately NOT
+# under AMA_USE_NATIVE_PQC.  Ed25519 and src/c/x86/ama_ed25519_fe64_mulx.c are
+# in the unconditional source list, and this test calls only Ed25519 entry
+# points.  Until 2026-09-24 the registration sat inside the PQC block beside
+# the X25519 tests, so an AMA_USE_NATIVE_PQC=OFF build shipped the MULX
+# instantiation and the runtime selector that installs it with no test
+# comparing it to fe51.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
+    add_executable(test_ed25519_fe51_mulx_equiv test_ed25519_fe51_mulx_equiv.c)
+    target_link_libraries(test_ed25519_fe51_mulx_equiv ama_cryptography_test)
+    add_test(NAME test_ed25519_fe51_mulx_equiv COMMAND test_ed25519_fe51_mulx_equiv)
+    set_tests_properties(test_ed25519_fe51_mulx_equiv PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
 # "exactly 32 / 64 readable bytes" — and nothing about alignment, so an
 # unaligned caller buffer is a legal call.  Until this test, every test in the
@@ -496,19 +518,6 @@ if(AMA_USE_NATIVE_PQC)
                  COMMAND test_x25519_fe64_mulx_equiv)
         set_tests_properties(test_x25519_fe64_mulx_equiv PROPERTIES
                              SKIP_RETURN_CODE 77)
-    endif()
-
-    # The two in-house Ed25519 instantiations (fe51 and fe64-mulx) must be
-    # byte-identical.  Drives both through the public API under
-    # ama_ed25519_set_mulx_override(); skips (77) where the host lacks
-    # BMI2+ADX or the unit is not compiled, and refuses to compare an
-    # instantiation with itself.  This is the differential that replaced the
-    # CI job comparing the two former backends.
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
-        add_executable(test_ed25519_fe51_mulx_equiv test_ed25519_fe51_mulx_equiv.c)
-        target_link_libraries(test_ed25519_fe51_mulx_equiv ama_cryptography_test)
-        add_test(NAME test_ed25519_fe51_mulx_equiv COMMAND test_ed25519_fe51_mulx_equiv)
-        set_tests_properties(test_ed25519_fe51_mulx_equiv PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 
     # 2026-05 — public-API regression for `ama_x25519_set_mulx_override()`.

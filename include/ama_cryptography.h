@@ -2024,13 +2024,18 @@ AMA_API ama_error_t ama_frost_round1_commit(
  * @param commitments        num_signers * 64 bytes of commitments.
  *                           MUST be ordered to match signer_indices:
  *                           commitments[i*64..(i+1)*64] is the commitment
- *                           from participant signer_indices[i].
+ *                           from participant signer_indices[i].  The row at
+ *                           this participant's own position MUST be the
+ *                           commitment ama_frost_round1_commit() returned
+ *                           with `nonce_pair` (RFC 9591 section 5.2); it is
+ *                           re-derived from the nonces and compared.
  * @param signer_indices     num_signers participant indices (1-based, unique)
  * @param num_signers        Number of signers in this session
  * @param group_public_key   32-byte group public key
  * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM (NULL argument, bad signer
- *         set, or an already-consumed/all-zero nonce pair).  The nonce pair
- *         is consumed either way.
+ *         set, an already-consumed/all-zero nonce pair, or a commitment list
+ *         whose row for this participant is not its own round-1
+ *         commitment).  The nonce pair is consumed either way.
  */
 AMA_API ama_error_t ama_frost_round2_sign(
     uint8_t *sig_share,

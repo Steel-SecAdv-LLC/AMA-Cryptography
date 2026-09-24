@@ -24,6 +24,10 @@
  *   - INVARIANT-49 part 2 (Test 9): aggregation verifies every share against
  *     the RFC 9591 section 5.3 relation, reports the offending participant
  *     index, and verifies the assembled signature under the group key
+ *   - RFC 9591 section 5.2 (Test 10): round 2 refuses a commitment list whose
+ *     row at the signer's own position is not the commitment its nonce pair
+ *     derives — whole row, either half, or its own row at another position —
+ *     and consumes the nonce pair on that refusal too
  */
 
 #include <stdio.h>
@@ -910,6 +914,101 @@ int main(void) {
                                      msg, msg_len, group_pk, &bad_index);
             TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM && bad_index == 2,
                         "aggregate attributes an undecodable commitment to participant 2");
+        }
+    }
+
+    /* Test 10: RFC 9591 section 5.2 — "each participant MUST ensure that its
+     * identifier and commitments (from the first round) appear in
+     * commitment_list."  Round 2 re-derives this signer's (D, E) from its
+     * nonce pair and refuses a list whose row at this signer's position is
+     * anything else.
+     *
+     * Before 2026-09-24 every case below returned AMA_SUCCESS and emitted a
+     * share: the list was taken on trust.  Each substitute is a WELL-FORMED
+     * commitment (a real round-1 output of the same participant), so nothing
+     * but the own-row comparison can refuse it — decoding, small-order and
+     * index checks all pass.  Each refusal must also consume the nonce pair
+     * (the INVARIANT-49 contract holds on this path too) and emit no share. */
+    {
+        uint8_t group_pk[32];
+        uint8_t shares[3 * 64];
+        uint8_t signer_indices[] = {1, 2};
+        uint8_t honest[2 * 64];      /* the list round 1 actually produced */
+        uint8_t other_c1[64];        /* another round-1 commitment of signer 1 */
+        uint8_t discard_nonce[64];
+        const uint8_t msg[] = "FROST own-commitment test (RFC 9591 5.2)";
+        const size_t msg_len = sizeof(msg) - 1;
+
+        rc = ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares,
+                                             FIXED_GROUP_SECRET);
+        TEST_ASSERT(rc == AMA_SUCCESS, "keygen for the own-commitment tests");
+        rc = ama_frost_round1_commit(discard_nonce, other_c1, shares + 0 * 64);
+        TEST_ASSERT(rc == AMA_SUCCESS,
+                    "a second, unrelated round-1 commitment for participant 1");
+        ama_secure_memzero(discard_nonce, sizeof discard_nonce);  /* never used: only its commitment is */
+
+        /* case: which row(s) of the list round 2 is shown, and for whom.
+         *   0  row 1 replaced wholesale by other_c1
+         *   1  only D_1 replaced (E_1 intact) — both halves must be compared
+         *   2  only E_1 replaced (D_1 intact)
+         *   3  rows swapped, signer 1 signing — its own commitment IS in the
+         *      list, but at signer 2's position
+         *   4  rows swapped, signer 2 signing — the position is per signer,
+         *      not always row 0 */
+        static const char *const labels[] = {
+            "round 2 refuses a list whose row for this signer is a different commitment",
+            "round 2 refuses a substituted hiding commitment D_i (E_i intact)",
+            "round 2 refuses a substituted binding commitment E_i (D_i intact)",
+            "round 2 refuses its own commitment at another signer's position (signer 1)",
+            "round 2 refuses its own commitment at another signer's position (signer 2)",
+        };
+        for (int c = 0; c < 5; c++) {
+            uint8_t nonces[2 * 64], list[2 * 64], sig_share[32];
+            ama_frost_round1_commit(nonces,      honest,      shares + 0 * 64);
+            ama_frost_round1_commit(nonces + 64, honest + 64, shares + 1 * 64);
+            memcpy(list, honest, sizeof list);
+            switch (c) {
+            case 0: memcpy(list, other_c1, 64); break;
+            case 1: memcpy(list, other_c1, 32); break;
+            case 2: memcpy(list + 32, other_c1 + 32, 32); break;
+            default:
+                memcpy(list, honest + 64, 64);
+                memcpy(list + 64, honest, 64);
+                break;
+            }
+            const uint8_t signer = (c == 4) ? 2 : 1;
+            uint8_t *nonce = nonces + (size_t)(signer - 1) * 64;
+            memset(sig_share, 0xEE, sizeof sig_share);
+            rc = ama_frost_round2_sign(sig_share, msg, msg_len,
+                                       shares + (size_t)(signer - 1) * 64, signer,
+                                       nonce, list, signer_indices, 2, group_pk);
+            int consumed = 1, untouched = 1;
+            for (int i = 0; i < 64; i++) if (nonce[i] != 0) consumed = 0;
+            for (int i = 0; i < 32; i++) if (sig_share[i] != 0xEE) untouched = 0;
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM && consumed && untouched,
+                        labels[c]);
+        }
+
+        /* Control, same keys and message: the list round 1 produced is
+         * accepted for both signers, and both shares verify — the check
+         * refuses substitutions, not ceremonies. */
+        {
+            uint8_t nonces[2 * 64], sig_shares[2 * 32];
+            ama_frost_round1_commit(nonces,      honest,      shares + 0 * 64);
+            ama_frost_round1_commit(nonces + 64, honest + 64, shares + 1 * 64);
+            for (int i = 0; i < 2; i++) {
+                rc = ama_frost_round2_sign(sig_shares + i * 32, msg, msg_len,
+                                           shares + i * 64, signer_indices[i],
+                                           nonces + i * 64, honest,
+                                           signer_indices, 2, group_pk);
+                TEST_ASSERT(rc == AMA_SUCCESS,
+                            "round 2 accepts the list carrying its own commitment");
+                rc = ama_frost_verify_share(sig_shares + i * 32, signer_indices[i],
+                                            shares + i * 64 + 32, honest,
+                                            signer_indices, 2, msg, msg_len, group_pk);
+                TEST_ASSERT(rc == AMA_SUCCESS,
+                            "the share round 2 accepted verifies (RFC 9591 5.3)");
+            }
         }
     }
 

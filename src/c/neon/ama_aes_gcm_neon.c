@@ -183,8 +183,8 @@ static inline uint8x16_t ghash_mul_neon(uint8x16_t a_gcm, uint8x16_t b_gcm) {
  * Uses vaeseq_u8 with a zero block to access the SubBytes look-up, which
  * is equivalent to calling _mm_aeskeygenassist_si128 on x86.
  * ============================================================================ */
-/* Why these two helpers never touch memory
- * ----------------------------------------
+/* Why these helpers keep the schedule out of the stack
+ * ----------------------------------------------------
  * Both previously staged the key schedule through `uint8_t[16]` locals
  * (`vst1q_u8` out, index the bytes, `vld1q_u8` back).  `out` is a complete
  * AES-256 round key and its neighbours hold the adjacent one — and two
@@ -207,6 +207,20 @@ static inline uint8x16_t ghash_mul_neon(uint8x16_t a_gcm, uint8x16_t b_gcm) {
  * already had ("their schedule stays in XMM registers").  A scrub can only
  * erase a secret after it has been written down; not writing it down is the
  * stronger guarantee.
+ *
+ * That guarantee is a property of OPTIMISED code, and an earlier heading here
+ * ("never touch memory") stated it unconditionally.  Measured on 2026-09-24
+ * (aarch64-linux-gnu-gcc 13.3.0 and clang 18.1.3, -march=armv8-a+crypto):
+ * at -O1, -O2 and -O3 under gcc, and at -O2 under clang, every helper below
+ * is inlined and the key expansion makes no store to its own stack frame —
+ * its only stores are the round keys into the caller's rk[], which the
+ * caller scrubs.  At -O0 nothing is inlined and each helper spills its
+ * arguments and locals to its own frame (gcc: 9 stack stores in
+ * aes_subword_neon, 18 in aes_key_cascade_neon; clang: 10 and 30), so a
+ * debug build does write schedule words to dead stack.  The backstop there
+ * is the 4 KiB dead-frame wipe the public entry point runs after every
+ * dispatched GCM call (ama_secure_stack_wipe in src/c/ama_aes_gcm.c), whose
+ * reach was measured on the x86-64 kernels, not on an -O0 AArch64 build.
  *
  * The one subtlety is SubWord.  AESE(state, key) computes
  * ShiftRows(SubBytes(state ^ key)), which is why the old code hid a 4-byte

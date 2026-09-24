@@ -1478,13 +1478,27 @@ ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
      * so the ladder always runs, the affine conversion always runs (Z = 0
      * inverts to 0 through the Fermat chain, so infinity serialises as
      * (0, 0) with no special case), and the masks then wipe the outputs and
-     * select the return code. */
-    uint32_t zero_mask = 0u - (uint32_t)secp256k1_scalar_is_zero(scalar);
+     * select the return code.
+     *
+     * Both masks are laundered through the value barrier, like every other
+     * secret-derived select mask in this file (internal/ama_ct_barrier.h).
+     * They were not until 2026-09-24, and the shape below is the one that
+     * header names: `keep` is 0xFF exactly when both masks are zero, the
+     * 64-byte AND loop is then the identity, and an optimiser that proves
+     * the {0, ~0} range may branch over it on the scalar's zero-ness.
+     * Measured on this tree with gcc 13.3.0 and clang 18.1.3 at -O3: neither
+     * does so today (the only conditional jumps after the ladder are the
+     * vectoriser's out_x/out_y alias check, on pointer values, and loop
+     * control); the barrier is the file's rule applied as forward insurance,
+     * not a response to an observed branch. */
+    uint32_t zero_mask = (uint32_t)ama_ct_value_barrier_u64(
+        (uint64_t)0 - (uint64_t)secp256k1_scalar_is_zero(scalar));
 
     /* Perform scalar multiplication using Montgomery ladder */
     secp256k1_point_mul_ladder(&R, scalar, &P);
 
-    uint32_t inf_mask = 0u - (uint32_t)secp256k1_jac_is_infinity(&R);
+    uint32_t inf_mask = (uint32_t)ama_ct_value_barrier_u64(
+        (uint64_t)0 - (uint64_t)secp256k1_jac_is_infinity(&R));
 
     /* Convert to affine and serialize */
     secp256k1_jac_to_affine(&result_aff, &R);

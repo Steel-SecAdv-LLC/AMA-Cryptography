@@ -13,6 +13,7 @@
 #include "../include/ama_cryptography.h"
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_stack_wipe.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 #ifdef _MSC_VER
@@ -99,8 +100,31 @@ int ama_consttime_memcmp(const void* a, const void* b, size_t len) {
  * against 29 ns for this form, which on a 16-byte AEAD call is the difference
  * between +50% and +17%; at 1 KiB and above it is not measurable.
  *
+ * WHAT MAKES THE WRITE NON-ELIDABLE, per toolchain.  `frame` is a local whose
+ * address would otherwise never leave this function, and a store to an object
+ * nobody can read again is exactly what dead-store elimination removes.
+ *   - GCC / Clang: the empty asm takes `frame`'s address as an input operand
+ *     and clobbers memory, so the compiler must assume the asm reads the
+ *     array: the address escapes and the memset is live.
+ *   - MSVC (x64 and ARM64 have no inline asm): until 2026-09-24 this branch
+ *     was `memset` followed by `_ReadWriteBarrier()`.  That intrinsic orders
+ *     memory accesses across the point of the call; it does not make the
+ *     array's address escape, so nothing in it obliges the optimiser to keep
+ *     a store to an array no one can read.  (clang in MSVC mode happens to
+ *     keep it; cl.exe's behaviour is not documented and could not be measured
+ *     here.)  The write now goes through a `volatile` pointer to `memset`:
+ *     reading a volatile object is an observable side effect whose value the
+ *     compiler cannot know, so it cannot know which function it is calling,
+ *     and an unknown callee handed `frame`'s address may read it.  This is
+ *     the construction OpenSSL's OPENSSL_cleanse uses for the same reason,
+ *     and it keeps `memset`'s wide-store path.
+ *
  * This is a backstop, not a substitute for scrubbing named buffers.
  */
+#ifdef _MSC_VER
+static void *(*const volatile ama_stack_wipe_memset)(void *, int, size_t) = memset;
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #elif defined(_MSC_VER)
@@ -115,12 +139,14 @@ void ama_stack_wipe_below(size_t bytes) {
     if (bytes > sizeof frame) {
         bytes = sizeof frame;
     }
+#ifdef _MSC_VER
+    /* Opaque callee (see above): the call and the frame it is handed are
+     * both live by construction. */
+    ama_stack_wipe_memset(frame + (sizeof frame - bytes), 0, bytes);
+#else
     memset(frame + (sizeof frame - bytes), 0, bytes);  // SCRUB-BARRIER: frame — dead stack, possibly secret; the barrier below makes the write non-elidable, and memset keeps the wide-store path (29 ns here against 90-127 ns for the volatile word loop)
     /* Make the write observable so it survives dead-store elimination, and
      * keep the array's address escaping so the frame is really allocated. */
-#ifdef _MSC_VER
-    _ReadWriteBarrier();
-#else
     __asm__ __volatile__("" : : "r"(frame) : "memory");
 #endif
 }
@@ -165,6 +191,17 @@ void ama_secure_memzero(void* ptr, size_t len) {
  * Swaps two buffers if condition is non-zero, in constant time.
  * Uses XOR swap to avoid branching.
  *
+ * The mask goes through ama_ct_value_barrier_u64 (internal/ama_ct_barrier.h
+ * lists "conditional swap" among the shapes it exists for).  Without it,
+ * measured on 2026-09-24, clang 18.1.3 at -O3 proved the mask is 0x00 or 0xFF
+ * and unswitched the loop: `test %edi,%edi; je` on `condition` at entry, then
+ * two copies of the loop.  The only shipped caller is the Montgomery ladder of
+ * ama_secp256k1_point_mul, where `condition` is a bit of the secret scalar,
+ * and the Memcheck secret-taint gate (tools/check_ghash_constant_time.py
+ * --target secp256k1-scalarmult --taint) failed on a clang build with 16
+ * reports in this function.  gcc 13.3.0 does not unswitch it, which is why
+ * the gcc-built CI lane never saw it.
+ *
  * @param condition Swap if non-zero (constant time in condition value)
  * @param a First buffer
  * @param b Second buffer
@@ -177,8 +214,8 @@ void ama_consttime_swap(int condition, void* a, void* b, size_t len) {
     uint8_t mask;
     uint8_t tmp;
 
-    /* Convert condition to mask: 0x00 or 0xFF */
-    mask = (uint8_t)(-(int8_t)(condition != 0));
+    /* Convert condition to mask: 0x00 or 0xFF, opaquely (see above). */
+    mask = (uint8_t)ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)(condition != 0));
 
     /* XOR-based conditional swap */
     for (i = 0; i < len; i++) {

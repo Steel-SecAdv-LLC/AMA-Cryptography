@@ -613,9 +613,11 @@ static int validate_signer_indices(const uint8_t *signer_indices,
  * bit.  That single branch IS on a public event — the consumed/not-consumed
  * protocol state — which is the same reject-and-fail-closed structure
  * scalar_random() and ama_frost_keygen_trusted_dealer() already use for
- * their zero-scalar checks.  Measured cost: 64 byte-ORs, against the eight
- * scalar multiplications and three SHA-512 passes the rest of round 2
- * performs.  It is not worth reasoning about the saving.
+ * their zero-scalar checks.  Measured cost: 64 byte-ORs, against a round 2
+ * that retires ~2.09 million instructions (2-of-3, callgrind, x86-64 gcc
+ * 13.3.0 -O3; ~1.84 million before the 2026-09-24 own-commitment check added
+ * two fixed-base multiplications).  It is not worth reasoning about the
+ * saving.
  */
 static int frost_is_all_zero(const uint8_t *buf, size_t len) {
     uint8_t acc = 0;
@@ -837,7 +839,9 @@ AMA_API ama_error_t ama_frost_round1_commit(
  *
  * NOTE: The commitments buffer MUST be ordered to match signer_indices:
  * commitments[i*64..(i+1)*64] is the commitment from participant
- * signer_indices[i].
+ * signer_indices[i].  The row at this participant's own position is CHECKED
+ * (RFC 9591 section 5.2): it must equal the commitment round 1 derived from
+ * `nonce_pair`, or the call is refused with AMA_ERROR_INVALID_PARAM.
  *
  * ONE-SHOT NONCE CONTRACT (INVARIANT-49) — THE NONCE PAIR IS CONSUMED HERE.
  * `nonce_pair` is an IN/OUT parameter, not an input: on return it is 64 zero
@@ -901,6 +905,7 @@ AMA_API ama_error_t ama_frost_round2_sign(
      * initialisation. */
     uint8_t nonce_local[AMA_FROST_NONCE_BYTES];
     uint8_t rho[32], R[32], challenge[32], lambda[32], tmp1[32], tmp2[32];
+    uint8_t own_commitment[AMA_FROST_COMMITMENT_BYTES];
     const uint8_t *hiding_nonce  = nonce_local;
     const uint8_t *binding_nonce = nonce_local + 32;
     const uint8_t *secret_share  = participant_share;
@@ -935,6 +940,53 @@ AMA_API ama_error_t ama_frost_round2_sign(
     if (!claimed) {
         rc = AMA_ERROR_INVALID_PARAM;
         goto consume;
+    }
+
+    /* RFC 9591 section 5.2: "each participant MUST ensure that its
+     * identifier and commitments (from the first round) appear in
+     * commitment_list."  Until 2026-09-24 this function did not: it took the
+     * coordinator's list on trust, so a list whose row for this signer held
+     * some OTHER (D, E) — substituted, stale, or another participant's row
+     * under a permuted order — still produced a share.  That share is computed
+     * with this signer's real nonces against a binding factor and group
+     * commitment derived from the substituted points, which is exactly the
+     * input the binding factor exists to pin down: the signer no longer knows
+     * what it is signing into.
+     *
+     * The nonce pair is 64 bytes by ABI and carries no copy of the commitment
+     * round 1 published, so the commitment is re-derived from the nonces
+     * with the same fixed-base multiplication round 1 used (deterministic, so
+     * an honest row matches byte for byte) and compared with the row at this
+     * participant's position.  validate_signer_indices() has already proved
+     * the index occurs exactly once, so the position search always succeeds.
+     * The position is public (a function of the public index list); the
+     * multiplication is the fixed-base routine round 1 and keygen already run
+     * on these same secret scalars; and the comparison runs over all 64 bytes
+     * with ama_consttime_memcmp.  Its OUTCOME is published by the return
+     * code — a mismatch is a protocol event, not a secret — so the single
+     * branch on it is on public data.
+     *
+     * A refusal here CONSUMES the nonce pair, like every other refusal in this
+     * function (see the contract above): a mismatched list is either a
+     * coordinator bug or a coordinator probing this signer, and in neither
+     * case should the same nonces be offered to a second, corrected list the
+     * same coordinator chooses after seeing the refusal.  Round 1 is cheap. */
+    {
+        size_t pos = 0;
+        for (size_t i = 0; i < (size_t)num_signers; i++) {
+            if (signer_indices[i] == participant_index) { pos = i; break; }
+        }
+        if (ama_ed25519_point_from_scalar(own_commitment, hiding_nonce) != AMA_SUCCESS ||
+            ama_ed25519_point_from_scalar(own_commitment + 32, binding_nonce) != AMA_SUCCESS) {
+            rc = AMA_ERROR_INVALID_PARAM;
+            goto consume;
+        }
+        if (ama_consttime_memcmp(own_commitment,
+                                 commitments + pos * AMA_FROST_COMMITMENT_BYTES,
+                                 AMA_FROST_COMMITMENT_BYTES) != 0) {
+            rc = AMA_ERROR_INVALID_PARAM;
+            goto consume;
+        }
     }
 
     rc = compute_binding_factor(rho, participant_index, message,
@@ -984,6 +1036,10 @@ consume:
     ama_secure_memzero(lambda, sizeof(lambda));
     ama_secure_memzero(tmp1, sizeof(tmp1));
     ama_secure_memzero(tmp2, sizeof(tmp2));
+    /* Public once published (it is what round 1 handed the coordinator), but
+     * it shares this frame with the nonces it was derived from; scrubbed for
+     * the reason rho and R are. */
+    ama_secure_memzero(own_commitment, sizeof(own_commitment));
     return rc;
 }
 

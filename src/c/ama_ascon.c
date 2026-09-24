@@ -639,19 +639,24 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
  * raw permutation in a FIPS-aligned module's public surface invites
  * non-approved constructions.
  *
- * That reasoning was enforced on ELF only.  `cmake/ama_exports.macos.sym` is a
- * Mach-O exported-symbols list, and a Mach-O list is an ALLOW-list with no
- * exclusion form: its single `_ama_*` entry matches
- * `_ama_ascon_permutation_for_test` and would publish from the .dylib exactly
- * the symbol the version script withholds from the .so.  Two platform-specific
- * export mechanisms encoding one security decision is a divergence waiting to
- * happen, and it had happened.
+ * That reasoning was once enforced on ELF only.  macOS then linked with
+ * `cmake/ama_exports.macos.sym`, a Mach-O exported-symbols list — an
+ * ALLOW-list with no exclusion form — whose single `_ama_*` entry matched
+ * `_ama_ascon_permutation_for_test` and would have published from the .dylib
+ * exactly the symbol the version script withheld from the .so.  Two
+ * platform-specific export mechanisms encoding one security decision had
+ * diverged.
  *
- * Adding an `-unexported_symbols_list` would have patched the macOS side and
- * left the class intact.  Not compiling the function outside the test archive
- * removes it: there is nothing for either mechanism to publish, on any
- * platform, and no way for the two to disagree again.  The `local:` entry in
- * the version script stays as defence in depth.
+ * Two changes closed it, and this comment used to describe only the first as
+ * if the second had been rejected.  First, the function is not compiled
+ * outside the test archive, so no shipped library contains it and there is
+ * nothing for any export mechanism to publish, on any platform.  Second, the
+ * macOS link was later moved to exactly the control this comment once called
+ * a mere patch: CMakeLists.txt now GENERATES an `-unexported_symbols_list`
+ * from the `local:` block of `cmake/ama_exports.map` (and the .sym file is
+ * gone), so ELF and Mach-O read one list and cannot disagree about any name
+ * on it.  The `local:` entry for this function therefore localises it on
+ * both platforms; with the first change in place it is defence in depth.
  *
  * `tests/c/test_ascon.c` is the only caller in the repository and links
  * `ama_cryptography_test`, which is the one target CMake gives

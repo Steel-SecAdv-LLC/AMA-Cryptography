@@ -1127,6 +1127,26 @@ static int bench_confirms_regression(int64_t simd_first_ns, int64_t generic_firs
 }
 
 #if !defined(_WIN32)
+/* The verdict record with nothing measured: every regression flag 0 ("SIMD
+ * kept") and every timing -1, this file's "not measured" sentinel (see the
+ * comment where dispatch_init_internal() calls this).  One statement of that
+ * state, used both by the initialiser and by the cache loader, because the
+ * loader used to start from a bare memset instead: a cache file lacking a
+ * timing line — hand-edited, truncated, or written by a build that did not
+ * know the key — then read that timing as 0 ns, a "measurement", and for
+ * keccak_fallback_ns the value is load-bearing (`>= 0` is part of the test
+ * that installs the intermediate Keccak tier after a top-tier regression). */
+static void dispatch_verdicts_reset(dispatch_autotune_verdicts_t *v) {
+    memset(v, 0, sizeof(*v));  // PUBLIC-DATA: v — verdict record: regression flags and bench timings, no secret material
+    v->keccak_simd_ns = v->keccak_generic_ns = -1;
+    v->keccak_fallback_ns = v->keccak_fallback_generic_ns = -1;
+    v->keccak_x4_simd_ns = v->keccak_x4_generic_ns = -1;
+    v->kyber_ntt_simd_ns = v->kyber_ntt_generic_ns = -1;
+    v->kyber_invntt_simd_ns = v->kyber_invntt_generic_ns = -1;
+    v->dilithium_ntt_simd_ns = v->dilithium_ntt_generic_ns = -1;
+    v->dilithium_invntt_simd_ns = v->dilithium_invntt_generic_ns = -1;
+}
+
 static int64_t timespec_delta_ns(struct timespec a, struct timespec b) {
     return (int64_t)(b.tv_sec - a.tv_sec) * INT64_C(1000000000)
          + (int64_t)(b.tv_nsec - a.tv_nsec);
@@ -1649,6 +1669,21 @@ static void rstrip(char *s) {
     }
 }
 
+/* A cache-file timing value: an integer >= -1 (a best-of-N reading in ns, or
+ * the -1 "not measured" sentinel), with nothing after it.  Anything else
+ * leaves *out as it was — which, from dispatch_verdicts_reset(), is -1 — so a
+ * malformed line can never become a 0 ns "measurement".  Same endpoint and
+ * errno discipline as the regression flags (CERT ERR34-C). */
+static void dispatch_parse_ns(const char *val, int64_t *out) {
+    char *endptr = NULL;
+    errno = 0;
+    long long parsed = strtoll(val, &endptr, 10);
+    if (endptr != NULL && endptr != val && *endptr == '\0' && errno == 0
+        && parsed >= -1) {
+        *out = (int64_t)parsed;
+    }
+}
+
 static int dispatch_cache_load_at(int dfd, const char *basename,
                                   const char *fingerprint,
                                   dispatch_autotune_verdicts_t *v) {
@@ -1705,11 +1740,18 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
 
     /* Per-slot regression flags are written as literal "0" or "1";
      * parse via strtol with full endpoint + errno validation rather
-     * than atoi() (CERT ERR34-C).  Timing fields round-trip for
-     * diagnostic verbose logs only; they never drive security state. */
+     * than atoi() (CERT ERR34-C).  Timing fields round-trip for the
+     * verbose log, and one of them is also read by the verdict: the
+     * intermediate Keccak tier is installed after a top-tier regression only
+     * when keccak_fallback_ns >= 0 (it was measured).  So a timing line that
+     * is ABSENT, or does not parse as an integer >= -1, must leave that field
+     * at the -1 "not measured" sentinel dispatch_verdicts_reset() seeds —
+     * never at 0, which is a reading.  Until 2026-09-24 this started from a
+     * bare memset and parsed with strtoll(val, NULL, 10), so both an absent
+     * key and a value like "garbage" read as a 0 ns measurement. */
     int fp_matched = 0;
     dispatch_autotune_verdicts_t tmp;
-    memset(&tmp, 0, sizeof(tmp));  // PUBLIC-DATA: tmp — zero-init cache parsing scratch (PUBLIC)
+    dispatch_verdicts_reset(&tmp);
 
     char *cursor = cache_buf;
     while (*cursor != '\0') {
@@ -1754,33 +1796,33 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
             else if (strcmp(key, "dilithium_ntt_regressed")     == 0) tmp.dilithium_ntt_regressed     = flag;
             else if (strcmp(key, "dilithium_invntt_regressed")  == 0) tmp.dilithium_invntt_regressed  = flag;
         } else if (strcmp(key, "keccak_simd_ns") == 0) {
-            tmp.keccak_simd_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.keccak_simd_ns);
         } else if (strcmp(key, "keccak_generic_ns") == 0) {
-            tmp.keccak_generic_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.keccak_generic_ns);
         } else if (strcmp(key, "keccak_fallback_ns") == 0) {
-            tmp.keccak_fallback_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.keccak_fallback_ns);
         } else if (strcmp(key, "keccak_fallback_generic_ns") == 0) {
-            tmp.keccak_fallback_generic_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.keccak_fallback_generic_ns);
         } else if (strcmp(key, "keccak_x4_simd_ns") == 0) {
-            tmp.keccak_x4_simd_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.keccak_x4_simd_ns);
         } else if (strcmp(key, "keccak_x4_generic_ns") == 0) {
-            tmp.keccak_x4_generic_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.keccak_x4_generic_ns);
         } else if (strcmp(key, "kyber_ntt_simd_ns") == 0) {
-            tmp.kyber_ntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.kyber_ntt_simd_ns);
         } else if (strcmp(key, "kyber_ntt_generic_ns") == 0) {
-            tmp.kyber_ntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.kyber_ntt_generic_ns);
         } else if (strcmp(key, "kyber_invntt_simd_ns") == 0) {
-            tmp.kyber_invntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.kyber_invntt_simd_ns);
         } else if (strcmp(key, "kyber_invntt_generic_ns") == 0) {
-            tmp.kyber_invntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.kyber_invntt_generic_ns);
         } else if (strcmp(key, "dilithium_ntt_simd_ns") == 0) {
-            tmp.dilithium_ntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.dilithium_ntt_simd_ns);
         } else if (strcmp(key, "dilithium_ntt_generic_ns") == 0) {
-            tmp.dilithium_ntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.dilithium_ntt_generic_ns);
         } else if (strcmp(key, "dilithium_invntt_simd_ns") == 0) {
-            tmp.dilithium_invntt_simd_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.dilithium_invntt_simd_ns);
         } else if (strcmp(key, "dilithium_invntt_generic_ns") == 0) {
-            tmp.dilithium_invntt_generic_ns = (int64_t)strtoll(val, NULL, 10);
+            dispatch_parse_ns(val, &tmp.dilithium_invntt_generic_ns);
         }
     }
 
@@ -2541,9 +2583,9 @@ static void dispatch_init_internal(void) {
      * below sets its own field; the cache layer can also populate them
      * before the benches run, in which case the benches are skipped. */
     dispatch_autotune_verdicts_t v;
-    memset(&v, 0, sizeof(v));  // PUBLIC-DATA: v — zero-init verdict struct (PUBLIC; no secret material)
-    /* The regression flags default to 0 ("SIMD kept"), which the memset above
-     * gives them.  The TIMINGS must not: 0 ns is a real reading that would mean
+    /* The regression flags default to 0 ("SIMD kept"), which
+     * dispatch_verdicts_reset() gives them.  The TIMINGS must not be 0: 0 ns
+     * is a real reading that would mean
      * "the bench ran and the clock returned nothing", and it is
      * indistinguishable from "the bench never ran" once the struct is zeroed.
      *
@@ -2563,14 +2605,10 @@ static void dispatch_init_internal(void) {
      * dispatch_bench_* initialise their locals to, and bench_slot_regressed()
      * documents negative inputs as "bench never ran".  Using it here makes the
      * cache file say the same thing, so 0 means only what it should — a
-     * measurement that came back zero, which is always a bug. */
-    v.keccak_simd_ns = v.keccak_generic_ns = -1;
-    v.keccak_fallback_ns = v.keccak_fallback_generic_ns = -1;
-    v.keccak_x4_simd_ns = v.keccak_x4_generic_ns = -1;
-    v.kyber_ntt_simd_ns = v.kyber_ntt_generic_ns = -1;
-    v.kyber_invntt_simd_ns = v.kyber_invntt_generic_ns = -1;
-    v.dilithium_ntt_simd_ns = v.dilithium_ntt_generic_ns = -1;
-    v.dilithium_invntt_simd_ns = v.dilithium_invntt_generic_ns = -1;
+     * measurement that came back zero, which is always a bug.  The cache
+     * loader starts from the same state (dispatch_verdicts_reset), so a
+     * cache file that omits a timing says "not measured" too. */
+    dispatch_verdicts_reset(&v);
 
     /* Suppress AMA_DISPATCH_CACHE_FILE in setuid/setgid (or otherwise
      * "tainted") processes — environment-controlled file writes are a

@@ -249,9 +249,10 @@ jobs:
   compiler-warnings:
     name: Strict Compiler Warnings
     runs-on: ubuntu-latest
-    # Two full builds per compiler now (unoptimized and Release+LTO), so the
-    # 10-minute budget that covered one no longer fits.
-    timeout-minutes: 30
+    # Three full builds per compiler now (unoptimized, Release+LTO, and the
+    # AMA_USE_NATIVE_PQC=OFF configuration), so the 10-minute budget that
+    # covered one no longer fits.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -396,20 +397,49 @@ jobs:
             -DAMA_ENABLE_LTO=ON
           cmake --build build-strict-release -j$(nproc) -- -Otarget 2>&1 | tee build-warnings-release.log
 
+      - name: Build with strict warnings (AMA_USE_NATIVE_PQC=OFF)
+        # The two builds above are both AMA_USE_NATIVE_PQC=ON, so code that
+        # exists only in the OFF configuration was compiled under this flag
+        # set by nothing.  ci-build-test.yml's c-library-no-native-pqc job
+        # builds OFF, but with default flags: it proves OFF links, not that it
+        # is warning-clean.  Found by review, not by a gate: src/c/ama_core.c
+        # defined hybrid_wrap() above its AMA_USE_NATIVE_PQC guard while both
+        # callers sat inside it, so every OFF build compiled a static function
+        # nothing called — fatal under -Werror=unused-function in gcc 13.3.0
+        # and clang 18.1.3 — and no lane could fail on it.  Measured with this
+        # exact flag set once that was fixed: the OFF build emits no warning
+        # at all.
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -o pipefail
+          cmake -B build-strict-nopqc \
+            -DCMAKE_BUILD_TYPE=None \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wsign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
+            -DAMA_USE_NATIVE_PQC=OFF \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build-strict-nopqc -j$(nproc) -- -Otarget 2>&1 | tee build-warnings-nopqc.log
+
       - name: Enforce the frozen warning allowlist
         # The allowlist itself now lives in tools/check_compiler_warnings.py
         # rather than in a chain of `grep -v` here, for one reason: it has to
-        # be applied to more than one log.  Three build configurations across
-        # two jobs (unoptimized, Release+LTO, and the AArch64 cross-build
-        # below) each need the identical decision, and three transcriptions of
-        # an allowlist is how a gate ends up enforcing three different things.
+        # be applied to more than one log.  Four build configurations across
+        # two jobs (unoptimized, Release+LTO, AMA_USE_NATIVE_PQC=OFF, and the
+        # AArch64 cross-build below) each need the identical decision, and four
+        # transcriptions of an allowlist is how a gate ends up enforcing four
+        # different things.
         # The script is covered by tests/test_compiler_warning_gate.py, which
         # pins that it fails on a real out-of-allowlist warning and that a
         # missing or empty log is fatal rather than vacuously clean.
         shell: bash
         run: |
           python3 tools/check_compiler_warnings.py \
-            build-warnings.log build-warnings-release.log
+            build-warnings.log build-warnings-release.log build-warnings-nopqc.log
 
       - name: Run tests
         run: cd build-strict && ctest --output-on-failure

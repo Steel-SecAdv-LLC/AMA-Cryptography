@@ -3206,7 +3206,9 @@ has leading zero bytes. That is a repeatable per-round measurement of a
 secret scalar's high-order structure, available to any observer co-resident
 with the signer, and the caller owning the buffer does not licence the
 library to leak it to a third party in the same address space. The fold costs
-64 byte-ORs against round 2's eight scalar multiplications.
+64 byte-ORs against a round 2 that retires ~2.09 million instructions (2-of-3,
+callgrind, x86-64 gcc 13.3.0 -O3, measured 2026-09-24 after the section 5.2
+own-commitment check below added two fixed-base multiplications to it).
 
 **Why part 2 — measured.** Aggregation summed `z_i` mod `l`, concatenated
 with `R`, and returned `AMA_SUCCESS` unconditionally: it checked nothing.
@@ -3242,7 +3244,11 @@ verifications; it scales linearly in the number of signers. Round 2 is
 unchanged — 165.2 µs → 163.7 µs, i.e. within noise: the OR-fold and the extra
 `ama_secure_memzero` do not register. Aggregation is the once-per-ceremony
 operation and the one whose result is published, so ~4x on it to buy
-identifiable abort and a verified output is the right side of that trade.
+identifiable abort and a verified output is the right side of that trade. The
+later section 5.2 own-commitment check is not free the same way: it re-derives
+two points, and round 2 went from 1,837,532 to 2,085,691 retired instructions
+(+13.5%; callgrind difference method, 2-of-3, x86-64 gcc 13.3.0 -O3,
+2026-09-24).
 
 **The header now says what the implementation does.** The same change
 retitled the public header's section from "FROST THRESHOLD ED25519 SIGNATURES
@@ -3272,7 +3278,12 @@ calls on one buffer that overlapped in time both passed the check and both
 signed, and eight threads released together onto one buffer measured 7 or 8
 `AMA_SUCCESS` per round (2026-09-24). Zeroing at entry without the lock still
 leaves a two-statement window in which two callers can both copy before either
-zeroes; the lock closes it. `verify_share_core`
+zeroes; the lock closes it. Since 2026-09-24 it also refuses — and consumes the pair
+on — a commitment list whose row at the signer's own position is not the
+`(D, E)` its nonce pair derives, re-derived from the local copy with the
+fixed-base multiplication round 1 used: RFC 9591 section 5.2 makes that check
+a MUST, and before it a coordinator could hand a signer a substituted row and
+still obtain a share. `verify_share_core`
 implements the §5.3 relation; `ama_frost_verify_share` is the new public
 entry point over it; `ama_frost_aggregate` calls it per share with the
 session values computed once, sets `*bad_participant_index` on rejection, and
@@ -3307,6 +3318,10 @@ and the one share verifying. Against the exit-scrub code it fails every round;
 it cannot see the two-statement window the lock closes, which the
 ThreadSanitizer lane reports as a data race in `frost_claim_nonce_pair` when
 the lock is removed (both measured by mutation, 2026-09-24).
+Test 10 pins the section 5.2 own-row check: a substituted row, a substituted
+`D` alone, a substituted `E` alone, and the signer's own row at the other
+signer's position (for each signer) are each refused with the nonce pair
+consumed and no share written, and the honest list still signs.
 Test 9 pins part 2: `ama_frost_verify_share` accepts honest shares and
 rejects a corrupted one, aggregation rejects a corrupted share with the
 culprit's index — asserted for two different culprits, so a constant cannot
@@ -3318,6 +3333,7 @@ aggregates to a signature `ama_ed25519_verify` accepts.
 `test_attack_three_signings_under_one_nonce`, the `TypeError` on an
 immutable nonce pair, and `test_nonce_is_zeroed_on_every_python_side_refusal`
 with one row per refusal the wrapper makes before the native call;
+`TestFROSTOwnCommitmentCheck` for the section 5.2 refusal;
 `TestFROSTShareVerification`, including the
 parametrised attribution test and the end-to-end RFC 8032 check).
 `tools/check_ctypes_abi.py` holds the new arities against the header

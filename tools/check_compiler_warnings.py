@@ -50,7 +50,8 @@ file exists.
     flattened into the same empty result as "no warnings found".  That is
     handled here by refusing to run against a missing or empty log.
 
-Both configurations and both architectures now feed this one allowlist.
+Both optimisation levels, both architectures and both ``AMA_USE_NATIVE_PQC``
+settings now feed this one allowlist.
 
 What is allowed, and why
 ------------------------
