@@ -396,15 +396,33 @@ only the ones imported so far, so a poisoned `.pyc` for a lazily-imported
 module is caught at POST rather than on first use; a source-only run
 (no `.pyc` on disk) has nothing to poison and is reported as such. A
 second pass rejects any loaded `ama_cryptography` module served from
-outside the verified package directory (module substitution). Pinned by
+anything but a signed source file or a top-level binding extension
+(module substitution). Pinned by
 `tests/test_execution_integrity.py`, including an end-to-end case where a
 poisoned-but-loadable `.pyc` fails the import while the source digest
 stays valid. This is INVARIANT-40.
 
+Those checks key on file sets; the import system resolves names. A
+package directory `<name>/` with an importable `__init__` is resolved
+before `<name>.py`, an extension before source, and a `.pyc` outside
+`__pycache__` loads sourceless, so a single planted
+`crypto_api/__init__.pyc` (or `__init__<extension-suffix>`) used to
+replace a signed module with every check above green — no checker
+poisoning required. The package now refuses, in `__init__.py` before any
+submodule is imported and again in the `execution-integrity` stage, any
+tree holding a `.pyc` outside `__pycache__`, an extension below the top
+level, an extension beside a same-named `.py`, a package directory beside
+a same-named module, or a symlinked package directory
+(`ama_cryptography._find_import_shadowing`). The check reads the file
+system, not the loaded module, because planted code can rewrite its own
+`__file__`.
+
 **Boundary (shared with the trust anchor).** A self-check written in
 Python cannot vouch for the bytecode of *its own* module if that was
 already poisoned before the check ran, just as the trust anchor lives in
-a shared object the same attacker could swap. This stage raises the cost
+a shared object the same attacker could swap — and an extension
+`__init__<suffix>` beside the package's own `__init__.py` replaces the
+checker outright, since the import system resolves it first. This stage raises the cost
 from "poison any `.pyc`" to "poison the checker's own `.pyc` without
 tripping the source signature its source is bound by", but the residual
 class is real and is not something an in-process check can eliminate. The

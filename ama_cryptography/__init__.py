@@ -78,6 +78,163 @@ if _sys.platform == "win32":
 
 
 # ---------------------------------------------------------------------------
+# PRE-IMPORT import-shadowing gate.  Runs FIRST: before the binding gate below,
+# and before any ``ama_cryptography.*`` submodule is imported by anything.
+#
+# Every integrity layer in this package keys on a FILE SET: the signed digest
+# covers ``rglob("*.py")``, the execution-integrity stage binds each of those
+# files' ``__pycache__`` bytecode, the binding map covers the top-level
+# extensions.  The import system does not key on that set.  CPython's
+# ``FileFinder`` resolves ``ama_cryptography.<name>`` by looking for a
+# DIRECTORY ``<name>/`` holding an ``__init__`` with any importable suffix
+# (extension, then source, then bytecode) BEFORE it looks for ``<name>.py``;
+# among module files an extension beats source; and a ``.pyc`` outside
+# ``__pycache__`` is loaded sourceless.  So one planted file — e.g.
+# ``crypto_api/__init__.pyc`` compiled with ``py_compile``, or an extension
+# ``crypto_api/__init__<suffix>`` — replaced a signed module while every
+# layer stayed green: the ``.py`` digest and its signature were unchanged,
+# the bytecode check walked only ``*.py``, the loaded-module check returned
+# early on a ``__file__`` not ending in ``.py`` (and a module can rewrite its
+# own ``__file__`` anyway), and the binding checks listed only the top level.
+# Reproduced with a sourceless ``__init__.pyc`` for ``crypto_api``,
+# ``pqc_backends`` and ``_artefact_source`` and an extension ``__init__`` for
+# ``crypto_api``: POST OPERATIONAL, ``fully_verified`` True, the planted code
+# imported.
+#
+# The rule enforced here is on the FILE SYSTEM, which the planted code cannot
+# rewrite before it runs, and it is checked before anything could import it.
+# A tree is refused when it holds:
+#
+#   * a ``.pyc`` outside ``__pycache__`` — sourceless bytecode is importable
+#     and no integrity layer covers it; this package never ships any;
+#   * an extension module below the top level — the binding map and both of
+#     its gates cover the package directory itself and nothing under it;
+#   * an extension beside a ``.py`` of the same name — the extension is
+#     imported in its place;
+#   * a package directory (any importable ``__init__``) beside a module file
+#     of the same name — the directory is imported in its place;
+#   * a symlinked package directory — the digest walk does not follow
+#     directory symlinks, so nothing in it is signed.
+#
+# None of these is drift a rebuild can produce, so every build refuses, and
+# ``AMA_POST_DIAGNOSTIC_IMPORT`` does not demote it: importing the planted
+# module "for diagnosis" executes it.
+#
+# The boundary is the one INVARIANT-40 already states: this file is the
+# checker.  An extension ``__init__<suffix>`` beside THIS ``__init__.py`` is
+# resolved before it and replaces it, so nothing here ever runs; that, like a
+# poisoned ``__pycache__/__init__.*.pyc``, is the checker-poisoning class only
+# out-of-band code signing closes (SECURITY.md, "Execution integrity").
+def _find_import_shadowing(pkg_dir: str) -> list[str]:
+    """Every file under ``pkg_dir`` that the import system would load in place
+    of, or outside of, the signed source set.  Empty for a clean tree.
+
+    Pure file-system inspection — nothing is imported or executed — so it is
+    safe to run before any submodule exists.  ``_self_test``'s
+    execution-integrity stage runs the same function at POST (and on
+    :func:`reset_module`).
+    """
+    from importlib.machinery import BYTECODE_SUFFIXES, EXTENSION_SUFFIXES, SOURCE_SUFFIXES
+
+    # FileFinder's resolution order.  EXTENSION_SUFFIXES lists the specific
+    # tag first (".cpython-311-x86_64-linux-gnu.so" before ".so"), so the
+    # first match also yields the import name.
+    ordered = [*EXTENSION_SUFFIXES, *SOURCE_SUFFIXES, *BYTECODE_SUFFIXES]
+    root = _os.path.abspath(pkg_dir)
+    faults: list[str] = []
+
+    def _rel(path: str) -> str:
+        return _os.path.relpath(path, root).replace(_os.sep, "/")
+
+    def _unlistable(exc: OSError) -> None:
+        where = _rel(exc.filename) if isinstance(exc.filename, str) else "?"
+        faults.append(
+            f"{where}: directory cannot be listed ({exc.strerror}) — "
+            "cannot establish that it holds nothing importable"
+        )
+
+    for dirpath, dirnames, filenames in _os.walk(root, onerror=_unlistable):
+        # A .pyc INSIDE __pycache__ is bound to its signed source by the
+        # execution-integrity stage, and ignored by the import system when that
+        # source is absent (PEP 3147), so the caches are not walked.
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        by_name: dict[str, list[tuple[str, str]]] = {}
+        for filename in sorted(filenames):
+            suffix = next(
+                (s for s in ordered if filename.endswith(s) and len(filename) > len(s)),
+                None,
+            )
+            if suffix is None:
+                continue
+            rel = _rel(_os.path.join(dirpath, filename))
+            if suffix in BYTECODE_SUFFIXES:
+                faults.append(
+                    f"{rel}: sourceless bytecode outside __pycache__ — importable, "
+                    "and covered by no integrity layer"
+                )
+            elif suffix in EXTENSION_SUFFIXES and dirpath != root:
+                faults.append(
+                    f"{rel}: extension module below the package's top level — "
+                    "outside the signed binding map"
+                )
+            by_name.setdefault(filename[: -len(suffix)].casefold(), []).append((suffix, rel))
+
+        for entries in by_name.values():
+            sources = [rel for s, rel in entries if s in SOURCE_SUFFIXES]
+            extensions = [rel for s, rel in entries if s in EXTENSION_SUFFIXES]
+            if sources and extensions:
+                faults.append(
+                    f"{extensions[0]}: extension module shadows {sources[0]} — "
+                    "the import system loads the extension in its place"
+                )
+
+        for dirname in dirnames:
+            full = _os.path.join(dirpath, dirname)
+            init = next(
+                (
+                    "__init__" + s
+                    for s in ordered
+                    if _os.path.isfile(_os.path.join(full, "__init__" + s))
+                ),
+                None,
+            )
+            if init is None:
+                # A directory with no __init__ is at most a namespace portion,
+                # which FileFinder uses only when no module file matched.
+                continue
+            rel = _rel(full)
+            shadowed = by_name.get(dirname.casefold())
+            if shadowed:
+                faults.append(
+                    f"{rel}/{init}: package directory shadows {shadowed[0][1]} — "
+                    "the import system resolves a package directory first"
+                )
+            if _os.path.islink(full):
+                faults.append(
+                    f"{rel}/{init}: symlinked package directory — the signed "
+                    "digest does not walk directory symlinks"
+                )
+    return faults
+
+
+def _refuse_import_shadowing_before_import() -> None:
+    faults = _find_import_shadowing(_os.path.dirname(_os.path.abspath(__file__)))
+    if faults:
+        raise ImportError(
+            "ama_cryptography refused to initialise: the package directory "
+            "holds files the import system would load in place of, or outside "
+            "of, the signed sources, and no integrity check covers them.\n\n"
+            "  " + "\n  ".join(faults) + "\n\n"
+            "  Refused BEFORE any submodule was imported.\n"
+            "  None of these is produced by a build.  Remove them, or reinstall "
+            "the wheel (pip install --force-reinstall)."
+        )
+
+
+_refuse_import_shadowing_before_import()
+
+
+# ---------------------------------------------------------------------------
 # PRE-IMPORT binding-extension gate.
 #
 # The POST integrity stage verifies every compiled binding extension against

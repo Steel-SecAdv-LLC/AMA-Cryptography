@@ -2468,17 +2468,48 @@ single altered instruction, even inside a nested function, is still caught. A
 constant swapped for an equal-valued one of another type (`1` for `1.0`, `1` for
 `True`) is caught by a type guard, because `==` alone would pass it.
 
-The stage covers the **same file set the digest signs** (every top-level
-`*.py`), not merely the modules imported so far, so a poisoned `.pyc` for a
-lazily-imported module is caught at POST rather than when that module is first
-used. Where no `.pyc` exists (a source-only run, or `PYTHONDONTWRITEBYTECODE`),
+The stage covers the **same file set the digest signs** (every `*.py` below
+the package directory, recursively), not merely the modules imported so far,
+so a poisoned `.pyc` for a lazily-imported module is caught at POST rather
+than when that module is first used. Where no `.pyc` exists (a source-only run, or `PYTHONDONTWRITEBYTECODE`),
 there is nothing to poison — the interpreter compiled the signed source
 directly — and the stage records that honestly rather than reporting a check it
 did not perform. A `.pyc` from a different interpreter version (magic-number
 mismatch) is skipped because the running interpreter will not load it either. A
-complementary pass flags any loaded `ama_cryptography` module whose source
-resolves outside the verified package directory — module substitution, whatever
-its bytecode says.
+complementary pass flags any loaded `ama_cryptography` module served from
+anything but a source file inside the verified package directory or a
+top-level binding extension — module substitution, whatever its bytecode says.
+
+**A file set is not an import resolution.** Every layer above keys on a file
+set — the digest on `*.py`, this stage on those files' caches, the binding map
+on the top-level extensions — and the import system does not. CPython's
+`FileFinder` resolves `ama_cryptography.<name>` to a *directory* `<name>/`
+holding an `__init__` with any importable suffix before it considers
+`<name>.py`; among module files an extension wins over source; and a `.pyc`
+outside `__pycache__` is loaded sourceless. So one planted file —
+`crypto_api/__init__.pyc` compiled with `py_compile`, or an extension
+`crypto_api/__init__<suffix>` — replaced a signed module while the digest,
+its signature and this stage all stayed green, and the substitution pass
+returned early on any `__file__` not ending in `.py`. Reproduced with a
+sourceless `__init__.pyc` for `crypto_api`, `pqc_backends` and
+`_artefact_source` and an extension `__init__` for `crypto_api`: POST
+`OPERATIONAL`, `fully_verified` true, the planted code imported. That attack needed no
+checker poisoning, so the "raises the bar to poisoning the checker's own
+`.pyc`" statement below was overstated until this was closed.
+
+The rule is enforced on the **file system**, which planted code cannot rewrite
+before it runs, by `ama_cryptography._find_import_shadowing`: a tree is refused
+when it holds a `.pyc` outside `__pycache__`, an extension module below the top
+level, an extension beside a `.py` of the same name, a package directory beside
+a module file of the same name, or a symlinked package directory (the digest
+does not walk directory symlinks). `__init__.py` runs the scan before any
+submodule is imported, so the refusal precedes the planted code; the
+execution-integrity stage runs it again, so `reset_module()` refuses a tree
+changed after import. No build produces any of these states, so every build
+refuses and `AMA_POST_DIAGNOSTIC_IMPORT` does not demote it. The
+loaded-module pass now also rejects sourceless and nested or `__init__`
+extension origins, but it is defence in depth only: the reproduction's planted
+module rewrote its own `__file__` and passed it.
 
 **Bounded, and stated rather than implied.** A self-check written in Python
 cannot vouch for the bytecode of *its own* module if that was already poisoned
@@ -2488,7 +2519,10 @@ so without tripping the source signature that the checker's source is bound by",
 but it does not eliminate the class. The out-of-band control that does is OS /
 package-manager code signing, which verifies files before the interpreter loads
 them; this is documented in [`SECURITY.md`](SECURITY.md) under *Execution
-integrity* alongside the trust-anchor boundary it shares.
+integrity* alongside the trust-anchor boundary it shares. The same boundary
+covers the package's own `__init__`: an extension `__init__<suffix>` beside
+`__init__.py` is resolved first and replaces the checker, so no in-package scan
+runs to see it.
 
 **Enforcement.** `tests/test_execution_integrity.py` pins the bytecode
 comparator (a changed instruction, a nested-function change and a
@@ -2497,7 +2531,12 @@ per-file check (a poisoned `.pyc` whose header still matches its pristine
 source is a fault; a corrupt or foreign-magic `.pyc` is handled), the
 substitution guard, and the end-to-end path: on a copied tree, a poisoned
 but still-loadable `.pyc` fails POST and the import while the source digest
-stays valid.
+stays valid. The shadowing scan is pinned rule by rule on scratch trees (each
+rule has a test that fails when that rule alone is removed, and the shipped
+layout scans clean), and end to end: a planted `_artefact_source/__init__.pyc`
+is refused before it executes, a planted `crypto_api/__init__<suffix>` fails
+the import, and a directory planted after a clean import fails
+`reset_module()`.
 
 **Measured cost.** One `compile()` per signed source file, once per import —
 tens of milliseconds over the package, on the same one-time POST path as the

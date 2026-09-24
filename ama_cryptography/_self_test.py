@@ -758,9 +758,11 @@ def _compute_module_digest() -> str:
 
     Two sections, in a fixed order:
 
-    1. Every top-level ``*.py`` file, excluding ``_integrity_signature.py`` (the
-       build-time-generated signature artefact — hashing it would make the
-       construction self-referential and unverifiable).
+    1. Every ``*.py`` file below the package directory (recursively, keyed by
+       package-relative path, ``__pycache__`` excluded), excluding
+       ``_integrity_signature.py`` (the build-time-generated signature
+       artefact — hashing it would make the construction self-referential and
+       unverifiable).
     2. Every file under ``_post_kats/`` — the Known Answer vectors the
        self-tests check against.  Covering these closes a gap: without it, an
        attacker could swap a KAT vector for one a broken implementation happens
@@ -1096,10 +1098,10 @@ def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[s
 def _verify_source_file_bytecode(py_file: Path) -> Tuple[str, Optional[str]]:
     """Bind one signed source file's cached bytecode to a fresh compile of it.
 
-    Iterates the SAME set the module-integrity digest signs (top-level
-    ``*.py``), not just the modules imported so far, so a poisoned ``.pyc`` for
-    a lazily-imported module is caught at POST rather than when that module is
-    first used.
+    Its caller iterates the SAME set the module-integrity digest signs (every
+    ``*.py``, recursively), not just the modules imported so far, so a
+    poisoned ``.pyc`` for a lazily-imported module is caught at POST rather
+    than when that module is first used.
 
     Returns ``(status, error)``: ``"verified"`` with ``error=None`` when a cache
     existed and matched; ``"verified"`` with a fault string when it existed and
@@ -1143,17 +1145,42 @@ def _verify_source_file_bytecode(py_file: Path) -> Tuple[str, Optional[str]]:
 
 
 def _detect_module_substitution(name: str, module: Any, pkg_dir: Path) -> Optional[str]:
-    """Flag a loaded ``ama_cryptography`` module served from outside ``pkg_dir``.
+    """Flag a loaded ``ama_cryptography`` module not served from signed files.
 
     The file-scan above binds the source files that ARE in the verified package
     directory; this catches the complementary attack of a covered module name
-    resolved to a ``.py`` somewhere else on ``sys.path`` — module substitution,
-    whatever that file's bytecode says.  Native ``.so`` submodules and
-    namespace packages (no source ``__file__``) are left to the native-library
-    digest and the source-digest stage respectively.
+    resolved to a file somewhere else — module substitution, whatever that
+    file's bytecode says.  A module is accepted only when its ``__file__`` is
+
+    * a source file inside ``pkg_dir`` (the set the signed digest covers), or
+    * an extension module directly in ``pkg_dir`` and not a package
+      ``__init__`` (the set the binding map and its two gates cover).
+
+    Sourceless bytecode is never accepted, and neither is an extension in a
+    subdirectory or serving as a package ``__init__``.  This function used to
+    return early for every ``__file__`` not ending in ``.py`` — its docstring
+    said native submodules were "left to the native-library digest", which
+    covers ``libama_cryptography`` only — so a planted
+    ``crypto_api/__init__.pyc`` or ``crypto_api/__init__<suffix>`` was
+    accepted here while the import system served it in place of the signed
+    ``crypto_api.py``.
+
+    This is defence in depth, NOT the control.  It reads attributes the loaded
+    module's own code can rewrite before this runs, and the reproduction did
+    exactly that (a planted ``__init__.pyc`` that set ``__file__`` back to the
+    ``.py`` path passed).  The load-bearing check is
+    ``ama_cryptography._find_import_shadowing``, which inspects the file
+    system — run by ``__init__`` before any submodule is imported, and again by
+    :func:`_check_execution_integrity`.  Modules with no ``__file__``
+    (namespace packages, synthetic modules) are left to that scan.
     """
     src_path = getattr(module, "__file__", None)
-    if not isinstance(src_path, str) or not src_path.endswith(".py"):
+    if not isinstance(src_path, str):
+        return None
+    if src_path.endswith(tuple(importlib.machinery.BYTECODE_SUFFIXES)):
+        return f"{name}: loaded from sourceless bytecode {src_path} — no integrity layer covers it"
+    is_extension = src_path.endswith(tuple(importlib.machinery.EXTENSION_SUFFIXES))
+    if not is_extension and not src_path.endswith(tuple(importlib.machinery.SOURCE_SUFFIXES)):
         return None
     try:
         resolved = Path(src_path).resolve()
@@ -1164,26 +1191,50 @@ def _detect_module_substitution(name: str, module: Any, pkg_dir: Path) -> Option
             f"{name}: loaded from {resolved}, outside the verified package "
             f"directory {pkg_dir} — module substitution"
         )
+    if is_extension and (resolved.parent != pkg_dir or resolved.name.startswith("__init__.")):
+        return (
+            f"{name}: loaded from extension {resolved}, which is not a top-level "
+            f"binding of {pkg_dir} — outside the signed binding map"
+        )
     return None
 
 
 def _check_execution_integrity() -> Tuple[bool, int, int, List[str]]:
     """Bind executed bytecode to signed source across the whole package.
 
-    Two complementary passes:
+    Three complementary passes:
 
-    1. every signed ``*.py`` file's cached bytecode must recompile-match its
+    1. nothing in the tree may be importable in place of, or outside of, the
+       signed source set — a sourceless ``.pyc``, a package directory or
+       extension shadowing a module, a nested extension, a symlinked package
+       (``ama_cryptography._find_import_shadowing``; ``__init__`` runs the
+       same scan before any submodule is imported, and this pass repeats it
+       for :func:`reset_module` and for a tree changed since);
+    2. every signed ``*.py`` file's cached bytecode must recompile-match its
        source (catches a poisoned/stale ``.pyc``, loaded or not yet);
-    2. no loaded ``ama_cryptography`` module may be served from outside the
-       package directory (catches module substitution).
+    3. no loaded ``ama_cryptography`` module may be served from anything but a
+       signed source or a top-level binding (catches module substitution).
+
+    Pass 2 alone covered the ``*.py`` set, and pass 3 accepted any module
+    whose ``__file__`` did not end in ``.py``, so a planted
+    ``<module>/__init__.pyc`` or ``<module>/__init__<extension-suffix>`` —
+    which the import system resolves BEFORE ``<module>.py`` — ran in place of
+    signed source with this stage, the digest and the signature all green.
+    Pass 1 is what closes that; pass 3 is defence in depth, because a loaded
+    module can rewrite its own ``__file__``.
 
     Returns ``(ok, verified, skipped, problems)``.  ``ok`` is False as soon as
     any check fails; ``problems`` lists the faults (capped when logged).
     """
+    # The scan lives in the package ``__init__`` because it must run there
+    # before any submodule — this one included — is imported; importing it
+    # from a submodule would let that submodule be the thing it inspects.
+    from ama_cryptography import _find_import_shadowing
+
     pkg_dir = Path(__file__).resolve().parent
     verified = 0
     skipped = 0
-    problems: List[str] = []
+    problems: List[str] = list(_find_import_shadowing(str(pkg_dir)))
 
     # Recursive, matching _compute_module_digest: a subpackage .py outside
     # this walk would be outside the bytecode-poisoning check as well as the
