@@ -1114,4 +1114,44 @@ GE_LINKAGE int GE_SYM(ama_ed25519_ge_table_entry)(int which, int i, int j, uint8
 #undef GE_SELECT_SSE2
 #undef GE_WNAF_A_COUNT
 
+/* End of one instantiation: this header consumes the includer's macro
+ * contract and leaves nothing of it, or of its own helpers, defined.  A
+ * second instantiation in the same unit therefore starts from a clean slate
+ * (a stale GE_NIELS_FOLD_AVX2 or GE_OP_INLINE cannot carry over), nothing
+ * after the #include can bind to a template-private name, and the header
+ * reads as what it is — an x-macro template, not a header that forgot its
+ * include guard (CodeQL cpp/missing-header-guard exempts a header that
+ * #undefs the macros its includers define). */
+#undef GE_CAT2
+#undef GE_CAT
+#undef GE_SYM
+#undef GE_INLINE
+#undef GE_HOT
+#undef GE_OP_INLINE
+#undef GE_HAVE_AVX2
+#undef GE_NIELS_FOLD_AVX2
+#undef GE_LINKAGE
+#undef GE_FE
+#undef GE_FE_LIMBS
+#undef GE_FE_0
+#undef GE_FE_1
+#undef GE_FE_COPY
+#undef GE_FE_ADD
+#undef GE_FE_SUB
+#undef GE_FE_SUB_M
+#undef GE_FE_SUB_S
+#undef GE_FE_NEG
+#undef GE_FE_MUL
+#undef GE_FE_SQ
+#undef GE_FE_FROMBYTES
+#undef GE_FE_TOBYTES
+#undef GE_NIELS
+#undef GE_TABLE_COMB
+#undef GE_TABLE_ODD
+#undef GE_TABLE_ODD128
+#undef GE_CONST_D
+#undef GE_CONST_D2
+#undef GE_CONST_SQRTM1
+#undef GE_SUFFIX
+
 #endif /* GE_SUFFIX */

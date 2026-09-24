@@ -162,6 +162,28 @@ def audit(paths: Iterable[Path]) -> tuple[list[str], int, int]:
     return failures, blocking, total
 
 
+def non_blocking(paths: Iterable[Path]) -> list[str]:
+    """Every readable result that does not block, one line each.
+
+    Code scanning's own view of these results needs ``security-events: read``,
+    which a pull request's reviewers, and an agent working the PR, may not
+    hold; the job log is readable by anyone who can read the run.  Printing the
+    whole result set there makes each finding reviewable where the PR is
+    reviewed, not only its count.
+    """
+    rows: list[str] = []
+    for path in paths:
+        try:
+            sarif = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue  # already reported as a failure by audit()
+        for level, rule_id, location, message, rating in findings(sarif):
+            if not blocks(level, rating):
+                tag = f"{level}" if rating is None else f"{level}, security-severity {rating:g}"
+                rows.append(f"{location}: [{tag}] {rule_id}: {message}")
+    return rows
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -189,6 +211,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     failures, blocking, total = audit(paths)
     print(f"CodeQL severity gate: {total} result(s) across {len(paths)} report(s)")
+    reported = non_blocking(paths)
+    if reported:
+        print(f"\n{len(reported)} non-blocking result(s):")
+        for row in reported:
+            print(f"  {row}")
     if failures:
         print(
             f"\nCODEQL SEVERITY GATE FAILED — {blocking} blocking result(s) (error level, "

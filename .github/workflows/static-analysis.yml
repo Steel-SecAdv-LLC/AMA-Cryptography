@@ -207,14 +207,25 @@ jobs:
           cmake --build build -j$(nproc)
 
       - name: Perform CodeQL Analysis
-        # No explicit category: this job initializes TWO languages, and the
-        # action derives a distinct per-language category for each SARIF it
-        # uploads when none is pinned.  The previous
-        # `category: "/language:c-cpp"` stamped the python run's upload with
-        # the c-cpp label as well, so both languages' alerts filed under one
-        # analysis identity.
+        # The category is pinned to the identity main's code-scanning
+        # configuration carries.  An earlier revision dropped it on the belief
+        # that the action then derives one category per language; measured
+        # otherwise (AGENTS.md 6.6).  At dfd35dcb (job 107492096028) the
+        # action merged cpp.sarif and python.sarif into ONE upload
+        # (`codeql github merge-results --sarif-merge-runs-from-equal-category`)
+        # under the automation id derived from the analysis key
+        # `.github/workflows/static-analysis.yml:codeql`, and the PR's CodeQL
+        # check reported "1 configuration not found: /language:c-cpp" — so
+        # code scanning could not compute the alerts the PR introduces, which
+        # is the comparison the repository's code_scanning merge rule reads.
+        # Both languages still file under this one category, exactly as they
+        # do on main; splitting them into per-language categories would
+        # rename this job's required status context (a matrix) and re-file
+        # main's Python alerts under a new configuration, so it is a change
+        # to make on main together with the ruleset, not inside this PR.
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd  # v4.38.1
         with:
+          category: "/language:c-cpp"
           # Also write the SARIF locally so the severity gate below can read
           # it.  `upload: always` keeps the alerts going to code scanning as
           # before; the local copy is what makes the finding actionable in

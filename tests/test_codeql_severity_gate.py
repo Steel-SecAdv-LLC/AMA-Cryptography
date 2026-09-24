@@ -139,3 +139,46 @@ def test_the_static_analysis_workflow_invokes_the_gate() -> None:
         Path(__file__).resolve().parent.parent / ".github" / "workflows" / "static-analysis.yml"
     ).read_text(encoding="utf-8")
     assert "tools/check_codeql_severity.py" in workflow
+
+
+def test_a_non_blocking_result_is_printed_not_only_counted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The log is where a reviewer without ``security-events: read`` sees the
+    findings; a count alone ("1 result(s)") names nothing to review."""
+    report = _write(tmp_path, _sarif(("py/unused-import", "note", None)))
+    assert gate.main([str(report)]) == 0
+    out = capsys.readouterr().out
+    assert "1 non-blocking result(s):" in out
+    assert "src/c/x.c:1: [note] py/unused-import: finding 0" in out
+
+
+def test_a_blocking_result_is_not_listed_twice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report = _write(tmp_path, _sarif(("cpp/r", "error", None)))
+    assert gate.main([str(report)]) == 1
+    captured = capsys.readouterr()
+    assert "non-blocking" not in captured.out
+    assert "cpp/r" in captured.err
+
+
+def test_the_upload_keeps_mains_code_scanning_category() -> None:
+    """Without the pinned category the PR's analysis files under a different
+    configuration from main's, and code scanning cannot compute the alerts the
+    PR introduces (measured at dfd35dcb: "1 configuration not found:
+    /language:c-cpp")."""
+    import yaml
+
+    workflow = yaml.safe_load(
+        (
+            Path(__file__).resolve().parent.parent / ".github" / "workflows" / "static-analysis.yml"
+        ).read_text(encoding="utf-8")
+    )
+    analyze = [
+        step
+        for step in workflow["jobs"]["codeql"]["steps"]
+        if str(step.get("uses", "")).startswith("github/codeql-action/analyze@")
+    ]
+    assert len(analyze) == 1
+    assert analyze[0]["with"]["category"] == "/language:c-cpp"
