@@ -31,6 +31,9 @@ on:
       # it, or the change ships unexercised.
       - "tools/check_secret_division.py"
       - ".github/workflows/arm-qemu.yml"
+      # The no-op twin: it ignores its own file, so a change to it must run
+      # THIS workflow or the ARM QEMU Gate context is reported by neither.
+      - ".github/workflows/arm-qemu-skip.yml"
   pull_request:
     paths:
       - "src/c/**"
@@ -46,6 +49,9 @@ on:
       # it, or the change ships unexercised.
       - "tools/check_secret_division.py"
       - ".github/workflows/arm-qemu.yml"
+      # The no-op twin: it ignores its own file, so a change to it must run
+      # THIS workflow or the ARM QEMU Gate context is reported by neither.
+      - ".github/workflows/arm-qemu-skip.yml"
   workflow_dispatch:
 
 permissions:

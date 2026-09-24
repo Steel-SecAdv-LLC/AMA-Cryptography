@@ -158,9 +158,15 @@ class TestTheFourSilentBypassesAreClosed:
     def test_getattr_on_a_guarded_root_counts(self) -> None:
         """Old walker: 1 (the import) — the receiver was a Call argument,
         not an Attribute value, so ``getattr(hashlib, "sha3_256")()`` was
-        free.  The bare load of the root is the reference."""
+        free.  The bare load of the root is the reference.
+
+        And ``f`` is bound to an object read out of the module, so each use
+        through it is a reference too: import (1) + the load (1) + ``f(...)``
+        (1) = 3.  This read 2 while ``f`` was untracked, which left every
+        further ``f(...)`` free — the member-alias form of the fifth bypass.
+        """
         tree = ast.parse("import hashlib\nf = getattr(hashlib, 'sha3_256')\nd = f(b'x')\n")
-        assert gate.count_hash_references(tree) == 2
+        assert gate.count_hash_references(tree) == 3
 
     def test_an_attribute_use_is_still_one_reference_not_two(self) -> None:
         """Counting root loads must not double-count ``hashlib.sha256``:
@@ -329,3 +335,193 @@ class TestRunTimeModuleNamesAreResolvedOrRefused:
         )
         failures = self._rogue(self._scan(tmp_path, source))
         assert any("not in the trust-bootstrap allowlist" in f for f in failures), failures
+
+
+class TestAReExportIsNotAFreshStart:
+    """The ninth bypass: OpenSSL obtained from a sibling that already has it.
+
+    ``pqc_backends.py``, ``_self_test.py``, ``hybrid_combiner.py`` and
+    ``_build_sign.py`` all bind ``hashlib`` at module scope.  Before this,
+    ``from .pqc_backends import hashlib`` in ``crypto_api.py`` — or
+    ``pqc_backends.hashlib.sha256(...)`` — counted zero: the ImportFrom's
+    source was not a guarded module, and ``hashlib`` never became a root.  A
+    file with count 0 and no allowlist entry passes, so the gate printed OK
+    while OpenSSL computed an AMA primitive in-process.
+    """
+
+    @staticmethod
+    def _package(tmp_path: Path, files: dict[str, str]) -> Path:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        for name, body in files.items():
+            (package / name).write_text(body)
+        return package
+
+    @staticmethod
+    def _about(failures: list[str], name: str) -> list[str]:
+        return [f for f in failures if f.startswith(name)]
+
+    def _rogue_failures(self, tmp_path: Path, provider: str, rogue: str) -> list[str]:
+        package = self._package(tmp_path, {"pqc_backends.py": provider, "rogue.py": rogue})
+        return self._about(gate.scan_package(package), "rogue.py")
+
+    def test_from_import_of_the_guarded_name_from_a_sibling_counts(self, tmp_path: Path) -> None:
+        failures = self._rogue_failures(
+            tmp_path,
+            "import hashlib\n",
+            "from .pqc_backends import hashlib\nX = hashlib.sha3_256(b'x').digest()\n",
+        )
+        assert any("2 guarded-module reference(s)" in f for f in failures), failures
+
+    def test_reading_the_guarded_attribute_off_a_sibling_counts(self, tmp_path: Path) -> None:
+        failures = self._rogue_failures(
+            tmp_path,
+            "import hashlib\n",
+            "from . import pqc_backends\nX = pqc_backends.hashlib.sha256(b'x').digest()\n",
+        )
+        assert any("1 guarded-module reference(s)" in f for f in failures), failures
+
+    def test_a_renamed_module_scope_binding_is_an_export(self, tmp_path: Path) -> None:
+        """``_h`` is not a guarded spelling; only the export analysis sees it."""
+        failures = self._rogue_failures(
+            tmp_path,
+            "import hashlib as _h\n",
+            "from .pqc_backends import _h\nX = _h.sha256(b'x').digest()\n",
+        )
+        assert any("2 guarded-module reference(s)" in f for f in failures), failures
+
+    def test_a_member_alias_is_an_export(self, tmp_path: Path) -> None:
+        failures = self._rogue_failures(
+            tmp_path,
+            "import hashlib\n_sha = hashlib.sha256\n",
+            "import pkg.pqc_backends as pb\nX = pb._sha(b'x').digest()\n",
+        )
+        assert any("1 guarded-module reference(s)" in f for f in failures), failures
+
+    def test_a_re_export_is_followed_through_every_hop(self, tmp_path: Path) -> None:
+        package = self._package(
+            tmp_path,
+            {
+                "a.py": "import hashlib as _h\n",
+                "b.py": "from .a import _h as _k\n",
+                "c.py": "from .b import _k\nX = _k.sha256(b'x').digest()\n",
+            },
+        )
+        failures = gate.scan_package(package)
+        assert self._about(failures, "b.py") and self._about(failures, "c.py"), failures
+
+    def test_getattr_of_a_guarded_name_off_a_sibling_counts(self, tmp_path: Path) -> None:
+        failures = self._rogue_failures(
+            tmp_path,
+            "import hashlib\n",
+            "from . import pqc_backends\nh = getattr(pqc_backends, 'hash' + 'lib')\n",
+        )
+        assert any("guarded-module reference(s)" in f for f in failures), failures
+
+    def test_getattr_off_a_sibling_by_an_unprovable_name_fails_outright(
+        self, tmp_path: Path
+    ) -> None:
+        failures = self._rogue_failures(
+            tmp_path,
+            "import hashlib\n",
+            "from . import pqc_backends\n"
+            "\n"
+            "def get(name):\n"
+            "    return getattr(pqc_backends, name)\n",
+        )
+        assert any("rogue.py:4:" in f and "not allowlistable" in f for f in failures), failures
+
+    def test_a_star_import_from_a_sibling_with_exports_fails_outright(self, tmp_path: Path) -> None:
+        failures = self._rogue_failures(
+            tmp_path, "import hashlib\n", "from .pqc_backends import *\nX = hashlib.md5()\n"
+        )
+        assert any("from .pqc_backends import *" in f for f in failures), failures
+
+    def test_a_star_import_from_a_guarded_module_fails_outright(self, tmp_path: Path) -> None:
+        """``from hashlib import *`` counted once and then every bare
+        ``sha256(...)`` was free: the star is not a name that can be tracked."""
+        package = self._package(tmp_path, {"__init__.py": "from hashlib import *\n"})
+        failures = gate.scan_package(package)
+        assert any(f.startswith("__init__.py:1: from hashlib import *") for f in failures), failures
+
+    def test_the_real_siblings_uses_stay_clean(self, tmp_path: Path) -> None:
+        """Control: importing a sibling's NON-guarded names is not a reference."""
+        failures = self._rogue_failures(
+            tmp_path,
+            "import hashlib\n_native_lib = None\ndef native_sha256(d):\n    return d\n",
+            "from . import pqc_backends as _pb\n"
+            "from .pqc_backends import native_sha256\n"
+            "X = native_sha256(b'x')\n"
+            "L = getattr(_pb, '_native_lib', None)\n",
+        )
+        assert failures == [], failures
+
+    def test_the_real_package_exports_what_its_bootstrap_binds(self) -> None:
+        """Non-vacuity: the export analysis sees the real re-export surface."""
+        trees = {
+            path: ast.parse(path.read_text(encoding="utf-8"))
+            for path in sorted(gate.PACKAGE_DIR.rglob("*.py"))
+            if "__pycache__" not in path.parts
+        }
+        exports = gate.package_exports(gate.PACKAGE_DIR, trees)
+        assert "hashlib" in exports["ama_cryptography.pqc_backends"]
+        assert {name for name, bound in exports.items() if bound} == {
+            "ama_cryptography.pqc_backends",
+            "ama_cryptography._self_test",
+            "ama_cryptography.hybrid_combiner",
+            "ama_cryptography._build_sign",
+        }
+
+
+class TestTheGuardedNameIsEnoughOnItsOwn:
+    """Pins for the two rules that need no knowledge of the package.
+
+    Inside the package, ``from .pqc_backends import hashlib`` and
+    ``pqc_backends.hashlib`` are caught twice over — by the guarded NAME and by
+    the sibling's exports.  These cases have no exports to consult (a module
+    outside the package, or a count taken without the package map), so each
+    rule is pinned on its own rather than masked by the other.
+    """
+
+    def test_importing_the_guarded_name_from_any_module_counts(self) -> None:
+        tree = ast.parse("from some_vendor.compat import hashlib\nx = hashlib.sha256(b'x')\n")
+        assert gate.count_hash_references(tree) == 2
+
+    def test_reading_the_guarded_name_off_any_object_counts(self) -> None:
+        tree = ast.parse(
+            "import ama_cryptography.pqc_backends as pb\nx = pb.hashlib.sha256(b'x')\n"
+        )
+        assert gate.count_hash_references(tree) == 1
+
+
+class TestSourceOrderIsNotABinding:
+    def test_a_use_above_the_import_it_relies_on_counts(self) -> None:
+        """Old walker: 1.  The module body has run before any function in it
+        is called, so the function may sit above ``import hashlib``; counting
+        in one source-order pass never saw ``hashlib`` as a root there."""
+        tree = ast.parse("def f(d):\n    return hashlib.sha3_256(d).digest()\n\nimport hashlib\n")
+        assert gate.count_hash_references(tree) == 2
+
+    def test_an_alias_bound_before_its_source_is_followed(self) -> None:
+        """``b = a`` sits above (shallower than) the ``a = hashlib`` it relies
+        on, so one pass over the tree meets it before ``a`` is known; binding
+        is resolved to a fixpoint.  import (1) + ``hashlib`` load (1) + ``a``
+        load (1) + ``b.sha256`` (1) = 4; one pass would give 3."""
+        tree = ast.parse(
+            "import hashlib\n"
+            "def setup():\n"
+            "    global a\n"
+            "    a = hashlib\n"
+            "setup()\n"
+            "b = a\n"
+            "x = b.sha256(b'x')\n"
+        )
+        assert gate.count_hash_references(tree) == 4
+
+    def test_a_member_alias_is_followed(self) -> None:
+        """Old walker: 2.  ``_s = hashlib.sha256`` then ``_s(...)`` any number
+        of times — the fifth bypass with a member instead of the module."""
+        tree = ast.parse(
+            "import hashlib\n_s = hashlib.sha256\na = _s(b'x').digest()\nb = _s(b'y').digest()\n"
+        )
+        assert gate.count_hash_references(tree) == 4

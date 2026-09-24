@@ -32,6 +32,11 @@ on:
       # The script that adjudicates those two files.  Without it, a change that
       # weakens the justification check runs against nothing.
       - "benchmarks/check_baseline_justification.py"
+      # The guard itself and its no-op twin.  The twin ignores both files, so
+      # without them here a pull request editing only the guard (or only the
+      # twin) ran NEITHER workflow and the context was never reported.
+      - ".github/workflows/baseline-guard.yml"
+      - ".github/workflows/baseline-guard-skip.yml"
 
 permissions:
   contents: read

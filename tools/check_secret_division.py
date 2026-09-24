@@ -63,10 +63,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: else, or more of them here, fails.
 #:
 #: These are EXACT measured counts, not measured+tolerance.  ``count > ceiling``
-#: is the failure condition (see below), so the clean object passes at equality
-#: and a single added divide trips the gate.  "Fewer is fine" still holds -- a
-#: compiler that folds a PUBLIC divide only lowers the count, and a divide on
-#: secret operands cannot be constant-folded -- so only an INCREASE fails.
+#: is the failure condition (see below), with ``count`` summed over every
+#: emitted body of the symbol (:func:`pooled_divides`), so the clean object
+#: passes at equality and a single added divide trips the gate.  "Fewer is
+#: fine" still holds -- a compiler that folds a PUBLIC divide only lowers the
+#: count, and a divide on secret operands cannot be constant-folded -- so only
+#: an INCREASE fails.
 #:
 #: History (audit H1): these first sat far above the measured counts
 #: (dil_sign_internal 24 vs 14, lms_verify_parsed 16 vs 11, ama_argon2id_core
@@ -162,6 +164,14 @@ REQUIRED_CLEAN = (
 #: the SAME source function with a different emitted name, so its divides
 #: belong to the base symbol's allowlist entry.
 #:
+#: Because a clone IS the base function, its divides are POOLED with every
+#: other emitted body of the same base before the ceiling is applied.  They
+#: were not: each body was compared against the whole base ceiling on its own,
+#: so ``dil_sign_internal: 14`` beside ``dil_sign_internal.part.0: 2`` read as
+#: two in-budget symbols -- 16 divides against a recorded 14, exit 0 -- and the
+#: "a single added divide trips the gate" guarantee failed exactly where GCC
+#: splits functions.  ``pooled_divides`` is the one place the sum is taken.
+#:
 #: Matching ``ALLOWED`` by the raw name meant a refactor that merely caused a
 #: clone turned a correctly-recorded symbol into "not allowlisted".  That is
 #: how `ama_argon2id_core` — allowlisted at 6 divides with its reasoning —
@@ -180,6 +190,21 @@ _CLONE_SUFFIX_RE = re.compile(
 def base_symbol(name: str) -> str:
     """The source-level symbol a (possibly cloned) emitted name belongs to."""
     return _CLONE_SUFFIX_RE.sub("", name)
+
+
+def pooled_divides(divides: dict[str, int]) -> dict[str, tuple[int, list[str]]]:
+    """``{base symbol: (total divides, [emitted bodies])}``.
+
+    Every emitted body -- the function itself and each ``.part``/``.cold``/
+    ``.constprop``/... clone of it -- is the same source function, so the
+    ceiling in :data:`ALLOWED` bounds their SUM, not each one separately.
+    """
+    pooled: dict[str, tuple[int, list[str]]] = {}
+    for symbol, count in divides.items():
+        base = base_symbol(symbol)
+        total, bodies = pooled.get(base, (0, []))
+        pooled[base] = (total + count, sorted([*bodies, symbol]))
+    return pooled
 
 
 _SYMBOL_RE = re.compile(r"^[0-9a-f]+ <(?P<name>[^>]+)>:$")
@@ -204,7 +229,19 @@ _INSN_RE = re.compile(r"^\s+[0-9a-f]+:\s+(?P<mnemonic>[a-z][a-z0-9.]*)")
 #: roots are the other operand-dependent-latency arithmetic on both
 #: architectures and are covered for the same reason; like ``fdiv`` they have
 #: no legitimate use in this library at all.
-_DIVIDE_RE = re.compile(r"^(v?i?div[a-z]*|udiv|sdiv|v?fdiv[a-z]*|v?sqrt[a-z]*|fsqrt[a-z]*)$")
+#:
+#: SVE's reversed integer divides too.  SVE ``sdiv``/``udiv`` on Z registers
+#: are destructive (``Zdn = Zdn / Zm``), so the compiler emits ``sdivr`` /
+#: ``udivr`` (``Zdn = Zm / Zdn``) when register allocation leaves the divisor
+#: in the destination register.  The anchored ``udiv|sdiv`` arm matched
+#: neither, so a vector divide in an SVE2 kernel -- the build the arm-qemu SVE2
+#: lane runs this gate on -- was invisible whenever it came out reversed.
+#: ``fdivr`` was already covered by the ``fdiv[a-z]*`` arm.  Measured
+#: 2026-09-24 with clang 18 -O3 ``--target=aarch64-linux-gnu
+#: -march=armv9-a+sve2`` (no aarch64 gcc on that host): no ``sdivr``/``udivr``
+#: in the three src/c/sve2 objects that carry code (ML-KEM, ML-DSA, SHA-3; the
+#: other five are empty stubs), so the widening changes no verdict today.
+_DIVIDE_RE = re.compile(r"^(v?i?div[a-z]*|udivr?|sdivr?|v?fdiv[a-z]*|v?sqrt[a-z]*|fsqrt[a-z]*)$")
 
 
 #: Disassemblers to try, in order.  Every one of them is tried until one
@@ -314,13 +351,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"is not there."
             )
 
-    for symbol, count in sorted(divides.items()):
-        base = base_symbol(symbol)
+    pooled = pooled_divides(divides)
+    for base, (count, bodies) in sorted(pooled.items()):
         allowed = ALLOWED.get(base)
-        via = "" if base == symbol else f" (compiler clone of {base})"
+        via = (
+            ""
+            if bodies == [base]
+            else " (emitted bodies, summed: "
+            + ", ".join(f"{body} {divides[body]}" for body in bodies)
+            + ")"
+        )
         if allowed is None:
             problems.append(
-                f"{symbol}{via}: {count} divide instruction(s), and this symbol is not "
+                f"{base}{via}: {count} divide instruction(s), and this symbol is not "
                 f"allowlisted. If its operands are public, add it to ALLOWED with "
                 f"the reasoning. If they are not, this is the KyberSlash defect "
                 f"class and the division must be replaced with a reciprocal "
@@ -328,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif count > allowed[0]:
             problems.append(
-                f"{symbol}: {count} divide instruction(s), above the {allowed[0]} "
+                f"{base}{via}: {count} divide instruction(s), above the {allowed[0]} "
                 f"recorded. The recorded ones are public ({allowed[1].split('.')[0]}); "
                 f"a new one is not covered by that and must be justified before it "
                 f"can pass."
@@ -344,6 +387,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             note = f"ALLOWLISTED (clone of {base})"
         print(f"{symbol:<34}{count:>9}  {note}")
+    for base, (count, bodies) in sorted(pooled.items()):
+        if len(bodies) > 1 and base in ALLOWED:
+            print(
+                f"  {base}: {count} divide(s) pooled across {len(bodies)} emitted "
+                f"bodies (ceiling {ALLOWED[base][0]})"
+            )
     print(
         f"\nread {len(symbols):,} symbol(s), {instructions:,} instruction(s); "
         f"{sum(divides.values())} divide(s) in {len(divides)} symbol(s)"
@@ -353,8 +402,7 @@ def main(argv: list[str] | None = None) -> int:
             # Sum across every emitted body that resolves to this symbol: the
             # claim is that ML-KEM decapsulation contains no divide, and a
             # clone carrying one would be exactly the thing being denied.
-            total = sum(c for s, c in divides.items() if base_symbol(s) == symbol)
-            print(f"  {symbol}: {total} divide(s)")
+            print(f"  {symbol}: {pooled.get(symbol, (0, []))[0]} divide(s)")
 
     if problems:
         print("\nSECRET-DIVISION CHECK FAILED:", file=sys.stderr)

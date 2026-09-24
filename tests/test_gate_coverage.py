@@ -511,6 +511,47 @@ def test_a_twin_that_ignores_fewer_paths_than_the_guard_watches_is_reported() ->
     assert "check_baseline_justification.py" in failures[0]
 
 
+def test_a_twin_that_ignores_a_path_the_guard_does_not_watch_is_reported() -> None:
+    """The direction the docstring called the failure, and never computed.
+
+    A pull request touching only ``.github/workflows/baseline-guard.yml`` ran
+    neither workflow: the guard does not watch that path and the twin ignores
+    it, so the required context was never reported and the check passed."""
+    twin = """
+        name: Baseline Change Guard
+        on:
+          pull_request:
+            paths-ignore:
+              - 'benchmarks/baseline.json'
+              - 'benchmarks/check_baseline_justification.py'
+              - '.github/workflows/baseline-guard.yml'
+        jobs:
+          baseline-justification:
+            name: Enforce baseline JSON justification
+            runs-on: ubuntu-latest
+        """
+    parsed = _parsed(**{"baseline-guard.yml": _GUARD, "baseline-guard-skip.yml": twin})
+    failures = check_path_filtered_gates(parsed)
+    assert len(failures) == 1, failures
+    assert ".github/workflows/baseline-guard.yml" in failures[0]
+    assert "NEITHER" in failures[0]
+
+
+def test_every_twin_in_the_repository_is_complementary_both_ways() -> None:
+    """Regression pin for the five live twins that ignored their own file (and,
+    for baseline-guard, the guard's own file) while the real workflow watched
+    neither.  The real workflows now watch their twin's file, so the pair is
+    one-or-the-other on every pull request."""
+    workflows = REPO_ROOT / ".github" / "workflows"
+    parsed = {
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted(workflows.glob("*.yml"))
+    }
+    twins = [name for name in parsed if name.endswith("-skip.yml")]
+    assert len(twins) >= 5, twins  # non-vacuity: the twins this pins exist
+    assert check_path_filtered_gates(parsed) == []
+
+
 def test_the_two_guards_have_twins_in_the_repository() -> None:
     """Regression pin for the two workflows the rule was widened for."""
     workflows = REPO_ROOT / ".github" / "workflows"

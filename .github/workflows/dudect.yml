@@ -63,6 +63,9 @@ on:
       - 'tools/check_avx_scoping.py'
       - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
+      # The no-op twin: it ignores its own file, so a change to it must run
+      # THIS workflow or the Constant-Time Gate context is reported by neither.
+      - '.github/workflows/dudect-skip.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
@@ -87,6 +90,9 @@ on:
       - 'tools/check_avx_scoping.py'
       - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
+      # The no-op twin: it ignores its own file, so a change to it must run
+      # THIS workflow or the Constant-Time Gate context is reported by neither.
+      - '.github/workflows/dudect-skip.yml'
   schedule:
     # Run weekly on Sundays at 02:00 UTC (existing schedule).
     - cron: '0 2 * * 0'

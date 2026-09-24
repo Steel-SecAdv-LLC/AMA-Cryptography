@@ -572,11 +572,24 @@ def check_path_filtered_gates(parsed: dict[str, dict[Any, Any]]) -> list[str]:
     GitHub's documented remedy is a twin workflow with the same ``name:``, a
     job with the same ``name:``, and the complementary ``paths-ignore:`` list,
     so exactly one of the pair reports the context on any pull request.  This
-    check requires the twin to exist and holds the two lists complementary —
-    a path added to the real workflow and not to the twin would make BOTH run
-    on a pull request touching it, which is confusing but safe; a path added
-    to the twin's ignore list and not to the real one leaves the context
-    unreported, which is the failure this exists to prevent.
+    check requires the twin to exist and holds the two lists complementary in
+    BOTH directions:
+
+    * a path the real workflow watches and the twin does not ignore makes
+      BOTH run on a pull request touching it — confusing, and two reports of
+      one context;
+    * a path the twin ignores and the real workflow does not watch makes
+      NEITHER run on a pull request touching only it, so the context is never
+      reported — the failure this exists to prevent.
+
+    Only the first direction used to be checked.  The second was named here
+    as the one that matters and never computed, and five twins carried it:
+    each ignored its own ``-skip.yml`` (and baseline-guard-skip.yml also the
+    guard's own file), which the real workflow did not watch, so a pull
+    request editing only the twin — or only baseline-guard.yml, the guard
+    itself — reported no context at all.  The resolution is that the real
+    workflow watches its twin's file: editing the twin re-runs the real gate,
+    and the pair stays one-or-the-other on every mix of paths.
     """
     failures: list[str] = []
     for name, workflow in sorted(parsed.items()):
@@ -622,6 +635,16 @@ def check_path_filtered_gates(parsed: dict[str, dict[Any, Any]]) -> list[str]:
                 f"{twin_name}: does not ignore {sorted(missing)}, which "
                 f"{name} watches — both workflows would run on a pull request "
                 f"touching them."
+            )
+        unwatched = ignored - paths
+        if unwatched:
+            failures.append(
+                f"{twin_name}: ignores {sorted(unwatched)}, which {name} does not "
+                f"watch — a pull request touching only those paths runs NEITHER "
+                f"workflow, so the context is never reported. Add them to {name}'s "
+                f"`pull_request.paths:` (a twin's own file belongs there: editing "
+                f"the twin should re-run the real gate) or drop them from the "
+                f"twin's `paths-ignore:`."
             )
         gate_names = {(jobs[j] or {}).get("name") or j for j in context_ids}
         twin_names = {

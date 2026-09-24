@@ -97,6 +97,38 @@ A seventh and eighth, closed since:
 :func:`dynamic_imports` is the shared walker for 7 and 8, and
 ``tools/check_vendor_isolation.py`` imports it (rather than copying it) to
 apply the same resolution to the vendor modules it forbids.
+
+A ninth, closed since, with two of the same species found beside it:
+
+9. ``from .pqc_backends import hashlib`` — OpenSSL re-exported by a sibling.
+   Four bootstrap files bind ``hashlib`` at module scope, so any other file
+   could import it from one of them (or read ``pqc_backends.hashlib``) with
+   no ``import hashlib`` of its own.  Only imports whose SOURCE was a guarded
+   module counted, so the file's count stayed 0, a count of 0 needs no
+   allowlist entry, and the gate printed OK.  Now the guarded object counts
+   however it is reached: importing a guarded NAME from any module, reading
+   an attribute NAMED ``hashlib``/``_hashlib``/``hmac`` off any object, and —
+   through :func:`package_exports`, a fixpoint over the whole package —
+   importing or reading any name a sibling binds to a guarded object at
+   module scope, under whatever name it was re-exported.  A star import from a
+   guarded module or from a sibling with exports, and a ``getattr`` on such a
+   sibling by an unprovable name, fail outright like an unresolvable dynamic
+   import: the names they bind cannot be enumerated.
+10. ``_s = hashlib.sha256`` / ``f = getattr(hashlib, "sha3_256")`` — a MEMBER
+    bound to a plain name, then called any number of times.  Bypass 5 followed
+    ``_h = hashlib`` only.  Any name assigned from a guarded expression is now
+    a root.
+11. A function defined ABOVE the ``import hashlib`` it uses.  Counting ran in
+    source order, so the root was unknown when the use was visited; a module
+    body has finished by the time its functions run, so the order proves
+    nothing.  Bindings are now collected over the whole file, to a fixpoint,
+    before anything is counted.
+
+What is still not followed: a sibling module object obtained DYNAMICALLY
+(``import_module("ama_cryptography.pqc_backends")``, ``sys.modules[...]``) is
+not traced to its exports, so only its guarded NAMES (``.hashlib``) are caught
+through it, not a renamed export.  Adding a renamed export to a bootstrap file
+moves that file's pinned count, so it cannot arrive unreviewed.
 """
 
 from __future__ import annotations
@@ -104,7 +136,7 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import Mapping, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DIR = REPO_ROOT / "ama_cryptography"
@@ -581,69 +613,274 @@ def module_name_for(path: Path, package_dir: Path) -> str:
     return ".".join(parts)
 
 
+#: ``{dotted package module: the names it binds, at module scope, to a guarded
+#: object}``.  Every module of the scanned package has a key (most with an empty
+#: set), so membership also answers "is this dotted name a package module?".
+Exports = Mapping[str, frozenset[str]]
+
+
+def _resolve_from(node: ast.ImportFrom, module_name: str | None, is_package: bool) -> str | None:
+    """The absolute dotted module an ``ImportFrom`` reads from, or ``None``."""
+    if node.level == 0:
+        return node.module
+    if module_name is None:
+        return None
+    parts = module_name.split(".")
+    if not is_package:
+        parts = parts[:-1]
+    keep = len(parts) - (node.level - 1)
+    if keep <= 0:
+        return None
+    base = parts[:keep]
+    if node.module:
+        base += node.module.split(".")
+    return ".".join(base)
+
+
+def _binding_nodes(tree: ast.Module) -> list[ast.AST]:
+    """Every node that can bind a guarded name: imports and assignments."""
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.NamedExpr))
+    ]
+
+
+def _is_getattr(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+    )
+
+
 class _GuardedModuleVisitor(ast.NodeVisitor):
     """Count references to a guarded module, resolving bindings not spellings.
 
-    Three binding forms are tracked:
+    The binding forms tracked:
 
     * ``import hashlib`` / ``import hashlib as h`` binds a *module root*.
       Every attribute read off that root counts, whatever the alias.
     * ``from hashlib import sha256 as s`` binds a *direct name*.  Every load
       of that name counts, because the call site no longer mentions the
       module at all.
+    * ``from <any module> import hashlib`` (``_hashlib``, ``hmac``) binds a
+      module root too: the guarded object is the thing imported, whichever
+      module it is read out of.  So does ``from <package module> import x``
+      when that module binds ``x`` to a guarded object at module scope (its
+      *exports*, see :func:`package_exports`).
+    * ``x = <guarded expression>`` binds a module root: ``h = hashlib``,
+      ``s = hashlib.sha256``, ``f = getattr(hashlib, "sha3_256")``,
+      ``h = pqc_backends.hashlib``.
+    * ``import <package module> [as m]`` / ``from . import m`` binds a
+      *package module*, so ``m.<export>`` and ``getattr(m, "<export>")`` are
+      recognised as reads of a guarded object.
     * ``importlib.import_module("hashlib")`` / ``__import__("hashlib")``
       counts at the call, since the resulting object is bound to a name this
       gate cannot follow.  Flagging the call is what keeps it from being free.
+
+    Bindings are collected over the whole file before anything is counted
+    (:meth:`bind`), so a use in a function defined ABOVE the import or alias it
+    relies on is still a use: a module body has finished running by the time
+    any of its functions is called, so source order proves nothing.  Counting
+    in one source-order pass missed exactly that.
+
+    Any attribute read NAMED ``hashlib`` / ``_hashlib`` / ``hmac``, off any
+    object, counts: ``pqc_backends.hashlib.sha256(...)`` is OpenSSL whichever
+    module object it was reached through.  Two shapes cannot be bounded and are
+    reported in :attr:`unbounded` instead of counted: a star import from a
+    guarded module or from a package module with exports, and ``getattr`` on a
+    package module with exports by a name this gate cannot resolve.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        module_name: str | None = None,
+        *,
+        is_package: bool = False,
+        exports: Exports | None = None,
+        resolver: StringResolver | None = None,
+        binders: list[ast.AST] | None = None,
+    ) -> None:
         self.count = 0
+        self._binders = binders
         self._module_roots: set[str] = set()
         self._direct_names: set[str] = set()
+        self._package_modules: dict[str, str] = {}
         #: Name nodes already counted as part of an enclosing Attribute, so
         #: `hashlib.sha256` is one reference, not two.
         self._consumed: set[int] = set()
+        self._module_name = module_name
+        self._is_package = is_package
+        self._exports: Exports = exports if exports is not None else {}
+        self._resolver = resolver
+        #: ``(line, source)`` of each reference this gate cannot bound.
+        self.unbounded: list[tuple[int, str]] = []
+
+    # -- binding resolution ------------------------------------------------
+
+    def bind(self, tree: ast.Module) -> None:
+        """Collect every guarded binding in ``tree``, to a fixpoint."""
+        if self._resolver is None:
+            self._resolver = StringResolver(tree, self._module_name)
+        binders = self._binders if self._binders is not None else _binding_nodes(tree)
+        while True:
+            before = (
+                frozenset(self._module_roots),
+                frozenset(self._direct_names),
+                frozenset(self._package_modules.items()),
+            )
+            for node in binders:
+                if isinstance(node, ast.Import):
+                    self._bind_import(node)
+                elif isinstance(node, ast.ImportFrom):
+                    self._bind_import_from(node)
+                elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                    self._bind_assignment(node)
+            after = (
+                frozenset(self._module_roots),
+                frozenset(self._direct_names),
+                frozenset(self._package_modules.items()),
+            )
+            if after == before:
+                return
+
+    def _bind_import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            if alias.name in GUARDED_MODULES:
+                self._module_roots.add(alias.asname or alias.name)
+            elif alias.name in self._exports:
+                if alias.asname:
+                    self._package_modules[alias.asname] = alias.name
+                else:
+                    top = alias.name.split(".", 1)[0]
+                    if top in self._exports:
+                        self._package_modules[top] = top
+
+    def _bind_import_from(self, node: ast.ImportFrom) -> None:
+        if node.module in GUARDED_MODULES:
+            for alias in node.names:
+                if alias.name != "*":
+                    self._direct_names.add(alias.asname or alias.name)
+            return
+        source = _resolve_from(node, self._module_name, self._is_package)
+        exported = self._exports.get(source or "", frozenset())
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            bound = alias.asname or alias.name
+            if alias.name in GUARDED_MODULES or alias.name in exported:
+                self._module_roots.add(bound)
+            elif source is not None and f"{source}.{alias.name}" in self._exports:
+                self._package_modules[bound] = f"{source}.{alias.name}"
+
+    def _bind_assignment(self, node: ast.Assign | ast.AnnAssign | ast.NamedExpr) -> None:
+        if node.value is None:
+            return
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if not names:
+            return
+        if self._is_guarded_expr(node.value):
+            self._module_roots.update(names)
+            return
+        module = self._package_module_of(node.value)
+        if module is not None:
+            for name in names:
+                self._package_modules[name] = module
+
+    def _package_module_of(self, expr: ast.AST) -> str | None:
+        """The package module ``expr`` evaluates to, when it is a name chain."""
+        if isinstance(expr, ast.Name):
+            return self._package_modules.get(expr.id)
+        if isinstance(expr, ast.Attribute):
+            base = self._package_module_of(expr.value)
+            if base is not None and f"{base}.{expr.attr}" in self._exports:
+                return f"{base}.{expr.attr}"
+        return None
+
+    def _exported_by(self, expr: ast.AST) -> frozenset[str]:
+        module = self._package_module_of(expr)
+        return self._exports.get(module, frozenset()) if module is not None else frozenset()
+
+    def _getattr_reads_guarded(self, obj: ast.AST, key: ast.AST) -> bool | None:
+        """Whether ``getattr(obj, key)`` reads a guarded object.
+
+        ``None`` when ``key`` is not provable and ``obj`` is a package module
+        that has something guarded to hand out.
+        """
+        if self._resolver is None:
+            raise RuntimeError("bind() must run before a getattr key can be resolved")
+        names = self._resolver.resolve(key)
+        exported = self._exported_by(obj)
+        if names is None:
+            return None if exported else False
+        return any(
+            name is not None and (name in GUARDED_MODULES or name in exported) for name in names
+        )
+
+    def _is_guarded_expr(self, expr: ast.AST) -> bool:
+        """Whether ``expr`` evaluates to a guarded module or an object read out of one."""
+        if isinstance(expr, ast.Name):
+            return expr.id in self._module_roots or expr.id in self._direct_names
+        if isinstance(expr, ast.Attribute):
+            if expr.attr in GUARDED_MODULES or self._is_guarded_expr(expr.value):
+                return True
+            return expr.attr in self._exported_by(expr.value)
+        if isinstance(expr, ast.Call) and _is_getattr(expr):
+            obj, key = expr.args[0], expr.args[1]
+            return self._is_guarded_expr(obj) or bool(self._getattr_reads_guarded(obj, key))
+        return False
+
+    def exports(self, tree: ast.Module) -> frozenset[str]:
+        """Names bound at module scope to a guarded object (call after :meth:`bind`)."""
+        at_module_scope = {name for node in _scope_nodes(tree) for name in _binding_names(node)}
+        return frozenset(at_module_scope & (self._module_roots | self._direct_names))
+
+    # -- counting ------------------------------------------------------------
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             if alias.name in GUARDED_MODULES:
                 self.count += 1
-                self._module_roots.add(alias.asname or alias.name)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        spelled = f"from {'.' * node.level}{node.module or ''} import *"
         if node.module in GUARDED_MODULES:
             self.count += 1
+            if any(alias.name == "*" for alias in node.names):
+                self.unbounded.append((node.lineno, spelled))
+        else:
+            source = _resolve_from(node, self._module_name, self._is_package)
+            exported = self._exports.get(source or "", frozenset())
             for alias in node.names:
-                self._direct_names.add(alias.asname or alias.name)
-        self.generic_visit(node)
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        # `h = hashlib` rebinds the module root to another name.  The RHS is
-        # a plain Name load (counted by visit_Name below), and without
-        # following the binding every later `h.sha3_256(...)` was invisible:
-        # inside an allowlisted file one aliasing line bought an unlimited
-        # number of extra uses with the pinned count unchanged — the fifth
-        # bypass, closed like the four the docstring already enumerates.
-        if isinstance(node.value, ast.Name) and node.value.id in self._module_roots:
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    self._module_roots.add(target.id)
-        self.generic_visit(node)
-
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        if (
-            isinstance(node.value, ast.Name)
-            and node.value.id in self._module_roots
-            and isinstance(node.target, ast.Name)
-        ):
-            self._module_roots.add(node.target.id)
+                if alias.name == "*":
+                    if exported:
+                        self.unbounded.append((node.lineno, spelled))
+                elif alias.name in GUARDED_MODULES or alias.name in exported:
+                    self.count += 1
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.value, ast.Name) and node.value.id in self._module_roots:
             self.count += 1
             self._consumed.add(id(node.value))
+        elif node.attr in GUARDED_MODULES or node.attr in self._exported_by(node.value):
+            # `<anything>.hashlib`, or `<package module>.<export>`: the guarded
+            # object read out of another module object.
+            self.count += 1
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if _is_getattr(node) and not self._is_guarded_expr(node.args[0]):
+            # A guarded receiver is already counted at its own load.
+            verdict = self._getattr_reads_guarded(node.args[0], node.args[1])
+            if verdict is None:
+                self.unbounded.append((node.lineno, ast.unparse(node)))
+            elif verdict:
+                self.count += 1
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
@@ -664,21 +901,48 @@ def _is_guarded(name: str) -> bool:
     return name.split(".", 1)[0] in GUARDED_MODULES
 
 
-def count_hash_references(tree: ast.Module, module_name: str | None = None) -> int:
+def _analyse(
+    tree: ast.Module,
+    module_name: str | None = None,
+    *,
+    is_package: bool = False,
+    exports: Exports | None = None,
+    resolver: StringResolver | None = None,
+    binders: list[ast.AST] | None = None,
+) -> _GuardedModuleVisitor:
+    visitor = _GuardedModuleVisitor(
+        module_name, is_package=is_package, exports=exports, resolver=resolver, binders=binders
+    )
+    visitor.bind(tree)
+    visitor.visit(tree)
+    return visitor
+
+
+def count_hash_references(
+    tree: ast.Module,
+    module_name: str | None = None,
+    *,
+    is_package: bool = False,
+    exports: Exports | None = None,
+) -> int:
     """Guarded-module references: imports, aliased uses, and dynamic imports.
 
     A dynamic import or ``sys.modules`` lookup counts once when ANY value its
     argument resolves to names a guarded module.  Unresolvable ones are not
     counted here; :func:`unresolved_dynamic_imports` fails them outright.
+    ``exports`` (from :func:`package_exports`) lets a re-export from a sibling
+    module be recognised; without it only the guarded names themselves are.
     """
-    visitor = _GuardedModuleVisitor()
-    visitor.visit(tree)
-    dynamic = sum(
+    visitor = _analyse(tree, module_name, is_package=is_package, exports=exports)
+    return visitor.count + _dynamic_guarded_count(dynamic_imports(tree, module_name))
+
+
+def _dynamic_guarded_count(sites: list[DynamicImport]) -> int:
+    return sum(
         1
-        for site in dynamic_imports(tree, module_name)
+        for site in sites
         if site.names is not None and any(_is_guarded(name) for name in site.names)
     )
-    return visitor.count + dynamic
 
 
 def unresolved_dynamic_imports(
@@ -688,6 +952,45 @@ def unresolved_dynamic_imports(
     return [site for site in dynamic_imports(tree, module_name) if site.names is None]
 
 
+def package_exports(
+    package_dir: Path,
+    trees: Mapping[Path, ast.Module],
+    resolvers: Mapping[Path, StringResolver] | None = None,
+    binders: Mapping[Path, list[ast.AST]] | None = None,
+) -> dict[str, frozenset[str]]:
+    """Every package module's guarded exports, to a fixpoint across the package.
+
+    ``pqc_backends.py`` binds ``hashlib`` at module scope, so
+    ``from .pqc_backends import hashlib`` in any sibling hands that sibling
+    OpenSSL without an ``import hashlib`` of its own.  The fixpoint follows a
+    re-export through any number of hops (``a`` exports it, ``b`` imports it
+    from ``a`` under another name, ``c`` imports that name from ``b``).
+    """
+    names = {path: module_name_for(path, package_dir) for path in trees}
+    exports: dict[str, frozenset[str]] = {name: frozenset() for name in names.values()}
+    if resolvers is None:
+        resolvers = {path: StringResolver(tree, names[path]) for path, tree in trees.items()}
+    if binders is None:
+        binders = {path: _binding_nodes(tree) for path, tree in trees.items()}
+    changed = True
+    while changed:
+        changed = False
+        for path, tree in trees.items():
+            visitor = _GuardedModuleVisitor(
+                names[path],
+                is_package=path.name == "__init__.py",
+                exports=exports,
+                resolver=resolvers[path],
+                binders=binders[path],
+            )
+            visitor.bind(tree)
+            found = visitor.exports(tree)
+            if found != exports[names[path]]:
+                exports[names[path]] = found
+                changed = True
+    return exports
+
+
 def scan_package(package_dir: Path) -> list[str]:
     """Return failure messages; empty means the boundary holds."""
     failures: list[str] = []
@@ -695,24 +998,47 @@ def scan_package(package_dir: Path) -> list[str]:
     py_files = sorted(path for path in package_dir.rglob("*.py") if "__pycache__" not in path.parts)
     if not py_files:
         return [f"{package_dir}: no Python files found — refusing to pass an empty scan"]
+    trees: dict[Path, ast.Module] = {}
     for path in py_files:
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            trees[path] = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError as exc:  # pragma: no cover - a broken tree fails elsewhere
             failures.append(
                 f"{path.relative_to(package_dir).as_posix()}: unparseable ({exc}); cannot verify the boundary"
             )
-            continue
+    resolvers = {
+        path: StringResolver(tree, module_name_for(path, package_dir))
+        for path, tree in trees.items()
+    }
+    binders = {path: _binding_nodes(tree) for path, tree in trees.items()}
+    exports = package_exports(package_dir, trees, resolvers, binders)
+    for path, tree in trees.items():
         key = path.relative_to(package_dir).as_posix()
         module_name = module_name_for(path, package_dir)
-        count = count_hash_references(tree, module_name)
-        for site in unresolved_dynamic_imports(tree, module_name):
+        visitor = _analyse(
+            tree,
+            module_name,
+            is_package=path.name == "__init__.py",
+            exports=exports,
+            resolver=resolvers[path],
+            binders=binders[path],
+        )
+        sites = dynamic_imports(tree, module_name)
+        count = visitor.count + _dynamic_guarded_count(sites)
+        for site in (site for site in sites if site.names is None):
             failures.append(
                 f"{key}:{site.lineno}: {site.kind}({site.argument}) — the module is "
                 "chosen at run time and cannot be resolved from the source, so this "
                 "gate cannot bound it (it could be hashlib/_hashlib/hmac under any "
                 "spelling). Name the module with a literal, or iterate a literal "
                 "tuple of module names; this is not allowlistable."
+            )
+        for lineno, source in visitor.unbounded:
+            failures.append(
+                f"{key}:{lineno}: {source} — this can bind hashlib/_hashlib/hmac, or "
+                "an object a sibling module read out of one, under names this gate "
+                "cannot enumerate. Import the names you use explicitly; this is not "
+                "allowlistable."
             )
         entry = ALLOWLIST.get(key)
         if count and entry is None:

@@ -410,3 +410,78 @@ def test_ml_kem_is_required_to_be_divide_free(gate: ModuleType) -> None:
     assert not set(gate.REQUIRED_CLEAN) & set(
         gate.ALLOWED
     ), "a symbol cannot be both required-clean and allowed to divide"
+
+
+# --------------------------------------------------------------------------
+# A split function is one function: its bodies share one ceiling
+# --------------------------------------------------------------------------
+#
+# The ceiling in ALLOWED was applied to each emitted body separately.  GCC's
+# `.part.N` / `.cold` / `.constprop.N` clones are the same source function, so
+# `dil_sign_internal: 14` beside `dil_sign_internal.part.0: 2` is 16 divides
+# against a recorded 14 -- and the gate printed both as ALLOWLISTED and exited
+# 0.  A new divide landed in a clone was exactly as free as the docstring said
+# it could not be.
+
+
+def _object_with(gate: ModuleType, *bodies: tuple[str, int]) -> list[tuple[str, list[str]]]:
+    blocks = [(f"filler_{i}", ["mov"] * 300) for i in range(gate.MIN_SYMBOLS)]
+    for symbol, count in bodies:
+        blocks.append((symbol, ["div"] * count + ["ret"]))
+    for symbol in gate.REQUIRED_CLEAN:
+        blocks.append((symbol, ["mov", "ret"]))
+    return blocks
+
+
+def test_divides_split_across_a_function_and_its_clone_share_one_ceiling(
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    library = tmp_path / "lib.so"
+    library.write_bytes(b"\x7fELF")
+    recorded = gate.ALLOWED["dil_sign_internal"][0]
+    blocks = _object_with(gate, ("dil_sign_internal", recorded), ("dil_sign_internal.part.0", 2))
+    monkeypatch.setattr(gate, "disassemble", lambda _p: _disassembly(*blocks))
+    assert gate.main(["--lib", str(library)]) == 1
+    err = capsys.readouterr().err
+    assert f"{recorded + 2} divide instruction(s), above the {recorded}" in err, err
+    assert "dil_sign_internal.part.0 2" in err, err
+
+
+def test_a_function_split_within_its_ceiling_still_passes(
+    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control: pooling must not turn an honest split into a failure."""
+    library = tmp_path / "lib.so"
+    library.write_bytes(b"\x7fELF")
+    recorded = gate.ALLOWED["dil_sign_internal"][0]
+    blocks = _object_with(
+        gate,
+        ("dil_sign_internal", recorded - 3),
+        ("dil_sign_internal.part.0", 2),
+        ("dil_sign_internal.cold", 1),
+    )
+    monkeypatch.setattr(gate, "disassemble", lambda _p: _disassembly(*blocks))
+    assert gate.main(["--lib", str(library)]) == 0
+
+
+def test_pooled_divides_sums_every_body_of_a_base(gate: ModuleType) -> None:
+    pooled = gate.pooled_divides(
+        {"f": 3, "f.part.0": 2, "f.cold": 1, "g.constprop.0": 4, "not.a.clone.5": 1}
+    )
+    assert pooled == {
+        "f": (6, ["f", "f.cold", "f.part.0"]),
+        "g": (4, ["g.constprop.0"]),
+        "not.a.clone.5": (1, ["not.a.clone.5"]),
+    }
+
+
+def test_sve_reversed_integer_divides_are_counted(gate: ModuleType) -> None:
+    """SVE `sdiv`/`udiv` are destructive, so compilers also emit the reversed
+    `sdivr`/`udivr`.  The anchored `udiv|sdiv` arm matched neither, so a vector
+    divide in an SVE2 kernel was invisible whenever it came out reversed."""
+    text = _disassembly(("sve_kernel", ["mov", "sdivr", "udivr", "fdivr", "ret"]))
+    divides, _symbols, _instructions = gate.inventory(text)
+    assert divides == {"sve_kernel": 3}

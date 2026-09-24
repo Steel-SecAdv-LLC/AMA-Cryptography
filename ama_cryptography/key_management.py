@@ -289,8 +289,8 @@ class HDKeyDerivation:
 
     The wording is corrected rather than the derivation: changing the
     master HMAC key would silently move every key any existing deployment
-    has derived.  A caller that needs true BIP32 interoperability needs a
-    BIP32 implementation, not this class.
+    has derived.  A caller that needs keys a BIP32 wallet can reproduce
+    needs a BIP32 implementation, not this class.
 
     Derivation Path Format:
         m/purpose'/coin_type'/account'/change/address_index

@@ -127,8 +127,8 @@ derivation. The child KDF follows BIP32's formulae exactly, but the MASTER
 key is derived with the HMAC key `"AMA Cryptography Master Key"` where BIP32
 specifies `"Bitcoin seed"`. Every key therefore descends from a different
 root: **no BIP32 test vector passes here and no BIP32 wallet or library
-derives the same keys from the same seed.** A caller that needs true BIP32
-interoperability needs a BIP32 implementation, not this class.
+derives the same keys from the same seed.** A caller that needs keys a BIP32
+wallet can reproduce needs a BIP32 implementation, not this class.
 
 The PRF is **HMAC-SHA-512** (BIP32-standard, delegated to
 the native C backend via `ama_cryptography.pqc_backends.native_hmac_sha512`

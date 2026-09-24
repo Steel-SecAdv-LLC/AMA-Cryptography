@@ -95,6 +95,19 @@ def test_the_master_key_really_does_diverge_from_bip32() -> None:
         "The implementation is BIP-32 compliant.",
         "Fully BIP32 interoperable with standard wallets.",
         "This conforms to BIP-32.",
+        # A negation elsewhere on the line used to exempt all of these: the
+        # cue denied something else, and the claim went through with it.
+        "HDKeyDerivation is BIP32-compatible, so you do not need a separate wallet library.",
+        "Deliberately BIP32-compliant for wallet migration.",
+        "It is BIP32-compatible and no longer needs a conversion shim.",
+        "BIP32-compatible derivation; nothing is interoperable with SLIP-10, not yet.",
+        "It is not only BIP32-compatible but fast.",
+        "Not BIP32-style: it is BIP32-compliant.",
+        "The derived tree is not SLIP-10 but is BIP32-compatible.",
+        # One denied occurrence must not cover a second, affirmed one.
+        "Earlier releases were not BIP32-compliant; this one is BIP32-compliant.",
+        # The noun: `compatible` alone let this through.
+        "Full BIP32 compatibility with hardware wallets.",
     ],
 )
 def test_each_false_claim_shape_fails(gate: ModuleType, tmp_path: Path, line: str) -> None:
@@ -135,6 +148,14 @@ def test_the_standards_table_row_fails(gate: ModuleType, tmp_path: Path) -> None
         "so the tree is NOT BIP32-compatible and no test vector applies",
         '`HDKeyDerivation` was documented "BIP32-compliant" while its master key',
         "2. Verify hardened-only BIP32 derivation is maintained",
+        # Denials that govern the phrase itself.
+        "The tree is no longer BIP32-compatible, and never was.",
+        "this is a non-BIP32-compatible tree",
+        'So "BIP32-style" is true and "BIP32-compatible" is false.',
+        "It does not conform to BIP32: the master key differs.",
+        "a tree without BIP32 compatibility",
+        "It isn't BIP32 compliant.",
+        "The tree cannot be BIP32-compatible while the master key differs.",
     ],
 )
 def test_accurate_wording_passes(gate: ModuleType, tmp_path: Path, line: str) -> None:
@@ -145,6 +166,96 @@ def test_accurate_wording_passes(gate: ModuleType, tmp_path: Path, line: str) ->
     """
     repo = _fake_repo(tmp_path, {"DOC.md": f"# Title\n\n{line}\n"})
     assert not gate.find_claims(repo), f"false positive on accurate wording: {line}"
+
+
+# --------------------------------------------------------------------------
+# Where the claim can live — the package's own docstrings included
+# --------------------------------------------------------------------------
+
+
+def test_the_km_hd_001_docstring_is_caught(gate: ModuleType, tmp_path: Path) -> None:
+    """KM-HD-001's false claim lived in a Python docstring, which the scan
+    never read: restoring it passed the gate that was written for it."""
+    source = (
+        "class HDKeyDerivation:\n"
+        '    """Hierarchical Deterministic Key Derivation (BIP32-compliant)"""\n'
+        "\n"
+        "    def derive_child_key(self):\n"
+        '        """\n'
+        "        Child Key Derivation (Private) - BIP32 Compliant\n"
+        '        """\n'
+    )
+    repo = _fake_repo(tmp_path, {"DOC.md": "# Title\n"})
+    (repo / "ama_cryptography" / "key_management.py").write_text(source, encoding="utf-8")
+    found = {(relative, number) for relative, number, _line, _why in gate.find_claims(repo)}
+    assert found == {
+        ("ama_cryptography/key_management.py", 2),
+        ("ama_cryptography/key_management.py", 6),
+    }
+
+
+def test_package_comments_and_messages_are_read_but_code_is_not(
+    gate: ModuleType, tmp_path: Path
+) -> None:
+    """Prose is read; code is not.  Line 3 is ``BIP32 - compatible`` on two
+    names, which the banned pattern matches as text: reading the file whole
+    would report it, and an expression is not a claim."""
+    source = (
+        "# HD keys here are BIP32-compatible.\n"
+        'ERROR = "derivation is BIP32 compliant"\n'
+        "margin = BIP32-compatible  # arithmetic on two names\n"
+    )
+    repo = _fake_repo(tmp_path, {"DOC.md": "# Title\n"})
+    (repo / "ama_cryptography" / "hd.py").write_text(source, encoding="utf-8")
+    found = sorted(number for _relative, number, _line, _why in gate.find_claims(repo))
+    assert found == [1, 2]
+
+
+def test_documentation_at_any_depth_is_read(gate: ModuleType, tmp_path: Path) -> None:
+    """The root was scanned non-recursively and only wiki/ and docs/ below it,
+    so a README under examples/ or benchmarks/ was never read."""
+    repo = _fake_repo(
+        tmp_path,
+        {
+            "DOC.md": "# Title\n",
+            "examples/README.md": "These examples are BIP32-compatible.\n",
+            "benchmarks/notes/hd.rst": "HD derivation conforms to BIP32.\n",
+        },
+    )
+    found = sorted(relative for relative, _number, _line, _why in gate.find_claims(repo))
+    assert found == ["benchmarks/notes/hd.rst", "examples/README.md"]
+
+
+def test_the_real_tree_scan_reaches_the_package_and_nested_docs(gate: ModuleType) -> None:
+    """Non-vacuity for the widened scope on the real tree."""
+    sources = {path.relative_to(REPO_ROOT).as_posix() for path in gate.scanned_sources()}
+    assert "ama_cryptography/key_management.py" in sources
+    docs = {path.relative_to(REPO_ROOT).as_posix() for path in gate.scanned_files()}
+    assert any(relative.count("/") >= 2 for relative in docs), sorted(docs)
+    assert not any(relative.startswith("docs/changelog/") for relative in docs)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "HD derivation here is BIP32\ncompatible with hardware wallets.\n",
+        "HD derivation here is BIP32-\ncompatible with hardware wallets.\n",
+        "The derived tree conforms\nto BIP32.\n",
+    ],
+)
+def test_a_claim_wrapped_across_two_lines_is_caught(
+    gate: ModuleType, tmp_path: Path, text: str
+) -> None:
+    """Matching one physical line at a time never saw a phrase split by a wrap."""
+    repo = _fake_repo(tmp_path, {"DOC.md": f"# Title\n\n{text}"})
+    assert [number for _r, number, _l, _w in gate.find_claims(repo)] == [3]
+
+
+def test_a_denial_wrapped_across_two_lines_passes(gate: ModuleType, tmp_path: Path) -> None:
+    repo = _fake_repo(
+        tmp_path, {"DOC.md": "# Title\n\nThe tree is not BIP32\ncompatible, by design.\n"}
+    )
+    assert gate.find_claims(repo) == []
 
 
 def test_the_changelog_is_exempt(gate: ModuleType, tmp_path: Path) -> None:

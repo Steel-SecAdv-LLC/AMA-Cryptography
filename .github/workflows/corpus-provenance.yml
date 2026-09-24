@@ -36,6 +36,9 @@ on:
       # re-run that comparison rather than only the offline digest check.
       - "tests/kat/**"
       - ".github/workflows/corpus-provenance.yml"
+      # The no-op twin: it ignores its own file, so a change to it must run
+      # THIS workflow or the Corpus Provenance Gate context is reported by neither.
+      - ".github/workflows/corpus-provenance-skip.yml"
   workflow_dispatch:
 
 permissions:
