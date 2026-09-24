@@ -698,6 +698,15 @@ jobs:
       run: |
         python tools/check_suppression_hygiene.py
 
+    - name: "Required status contexts: each still produced by a pull-request job"
+      # main's ruleset requires 55 individual job contexts
+      # (.github/required-status-checks.json).  Renaming a job or dropping a
+      # matrix cell removes one without failing any check, and the pull request
+      # then waits on a context that never reports.  The step also lists the
+      # aggregating gates the ruleset does not require.
+      run: |
+        python tools/check_required_contexts.py
+
     - name: "Uniform license headers (SPDX)"
       # The tree carried five different header shapes at once — a two-line
       # Apache note, the full thirteen-line boilerplate block, a bare SPDX

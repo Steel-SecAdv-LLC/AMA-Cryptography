@@ -10,13 +10,21 @@ blocking that pull request.
 
 Why this exists
 ---------------
-Branch protection on this repository requires the *aggregating gate* context
-of each primary workflow (``ci-gate``, ``static-analysis-gate``,
-``fuzzing-gate``, …) rather than the individual job names.  That design is
-deliberate and documented in each gate's own comment: it means adding,
-renaming, or matrix-expanding a job updates a ``needs:`` list under code
-review instead of drifting the branch-protection configuration out of sync
-(*required-context drift*).
+Branch protection on this repository was designed to require the
+*aggregating gate* context of each primary workflow (``ci-gate``,
+``static-analysis-gate``, ``fuzzing-gate``, …) rather than the individual job
+names.  That design is deliberate and documented in each gate's own comment:
+it means adding, renaming, or matrix-expanding a job updates a ``needs:`` list
+under code review instead of drifting the branch-protection configuration out
+of sync (*required-context drift*).
+
+Correction (AGENTS.md section 6.6), measured 2026-09-24 against the public
+rules endpoint: the ruleset on ``main`` requires 55 individual job contexts and
+none of the gates, so the design above is not what is enforced.  This checker
+still proves every job can fail its gate; whether the gate can block a merge
+is a ruleset setting, reported on every CI run by
+``tools/check_required_contexts.py`` until an administrator adds the gate
+contexts.
 
 The design has one failure mode, and it is silent in the worst possible
 direction.  A job that is **not** listed in its workflow's gate ``needs:``
