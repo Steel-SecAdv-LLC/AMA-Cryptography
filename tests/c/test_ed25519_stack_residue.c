@@ -17,9 +17,13 @@
  *
  * The probe: fill a stack region with a pattern, call the entry point at the
  * same depth, then read that region back and count occurrences of the
- * scalar and of the prefix.  Either one recovers signing capability on its
- * own — the scalar signs directly, and the prefix makes every nonce
- * predictable — so each is a needle in its own right.
+ * scalar, of the prefix and of the per-message nonce `r`.  Each recovers
+ * signing capability on its own — the scalar signs directly, the prefix
+ * makes every nonce predictable, and `r` with the public signature gives the
+ * scalar back as a = (S - r) * h^-1 mod l — so each is a needle in its own
+ * right.  `r` is derived here from public data and the prefix, exactly as
+ * the signer derives it (SHA-512(prefix || M) reduced mod l), once for each
+ * message the probe signs.
  *
  * WHAT IS LOAD-BEARING (measured by mutation, AGENTS.md section 6.3).
  * Removing the `hash` scrub in `ama_ed25519_expand_secret_key` fails the
@@ -27,9 +31,16 @@
  * fails the sign verdict (2 hits).  Removing the sign core's scrub of its
  * message buffer fails nothing here: the prefix it copies into that buffer
  * is overwritten by R || A for the second hash before the function returns,
- * so on this needle that scrub is redundant with the overwrite.  This test
- * pins the property -- no scalar or prefix on the dead stack -- and not any
- * one of the scrubs that together produce it.
+ * so on this needle that scrub is redundant with the overwrite.  The nonce
+ * needle is held the same way (gcc 13.3.0, Release, LTO, x86-64, against the
+ * shared library): removing the sign core's `r` scrub alone fails nothing,
+ * and removing the `ama_stack_wipe_below` backstop from ama_ed25519_sign and
+ * ama_ed25519_sign_expanded alone fails no nonce verdict either (it fails
+ * the sign verdict on a scalar limb, as before); removing both leaves `r` in
+ * the dead core frame and fails the sign and both sign_expanded verdicts
+ * with 2 nonce hits each.  This test pins the property -- no scalar, prefix
+ * or nonce on the dead stack -- and not any one of the scrubs that together
+ * produce it.
  *
  * `ama_ed25519_point_from_scalar` is probed too.  It is the raw [s]B
  * primitive FROST calls with secrets -- the group secret, each dealt share,
@@ -119,13 +130,21 @@ static uint8_t g_sentinel[32];
 static uint8_t g_scalar[32];
 static uint8_t g_prefix[32];
 
+/* The per-message nonce r = SHA-512(prefix || M) mod l, for the two
+ * messages the probe signs (the MSG_BYTES stack-path message and the 8 KiB
+ * heap-path one).  Bytes 32..63 of each are the reducer's scratch. */
+static uint8_t g_r[2][64];
+
 /* The scalar again, in the form the scalar arithmetic holds it: twelve signed
  * 64-bit limbs of 21 bits (sc25519_muladd / sc25519_reduce).  A spilled limb
  * is not a byte-form copy, so the 16-byte needles above cannot see it — and
  * one was left behind: limb 8 after sign and keypair under LTO, limb 9 after
  * sign and sign_expanded without.  Limbs whose value fits in 16 bits are
- * skipped as needles; they are too likely to occur by chance. */
+ * skipped as needles; they are too likely to occur by chance.  The nonces
+ * are held the same way by the same two routines, so their limbs are
+ * needles too. */
 static int64_t g_limbs[12];
+static int64_t g_r_limbs[2][12];
 
 /* The scalar reduced mod l, and its limbs: the form every FROST secret takes
  * (a nonce, a share, the group secret), fed to point_from_scalar below.  The
@@ -178,29 +197,66 @@ static int residue_count(const uint8_t *needle, size_t len) {
     return hits;
 }
 
-/* Either secret, in either 16-byte half: a compiler need not spill a value as
+/* The last count, by needle: the scalar (bytes and limbs), the prefix, and
+ * the two nonces (bytes and limbs).  Printed with each verdict so a failure
+ * names what survived; written by the one evaluation per poison. */
+static int g_hits_scalar, g_hits_prefix, g_hits_nonce;
+
+/* Every secret, in either 16-byte half: a compiler need not spill a value as
  * one object, and the AVX2 AES kernel demonstrably does not (see the AEAD
- * harness).  Half a scalar or half a prefix is 128 bits of secret. */
+ * harness).  Half a scalar, half a prefix or half a nonce is 128 bits of
+ * secret. */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #endif
 static int secret_residue_count(void) {
-    int hits = residue_count(g_scalar, 16) + residue_count(g_scalar + 16, 16)
-             + residue_count(g_prefix, 16) + residue_count(g_prefix + 16, 16)
-             + residue_count(g_reduced, 16) + residue_count(g_reduced + 16, 16);
-    int i;
+    int i, m;
+    g_hits_scalar = residue_count(g_scalar, 16) + residue_count(g_scalar + 16, 16)
+                  + residue_count(g_reduced, 16) + residue_count(g_reduced + 16, 16);
     for (i = 0; i < 12; i++) {
         if (g_limbs[i] > 0xFFFF) {
-            hits += residue_count((const uint8_t *)&g_limbs[i], sizeof g_limbs[i]);
+            g_hits_scalar += residue_count((const uint8_t *)&g_limbs[i], sizeof g_limbs[i]);
         }
         /* The reduction subtracts a small multiple of l, so the upper limbs
          * of the two forms coincide; a shared limb is counted once. */
         if (g_reduced_limbs[i] > 0xFFFF && g_reduced_limbs[i] != g_limbs[i]) {
-            hits += residue_count((const uint8_t *)&g_reduced_limbs[i],
-                                  sizeof g_reduced_limbs[i]);
+            g_hits_scalar += residue_count((const uint8_t *)&g_reduced_limbs[i],
+                                           sizeof g_reduced_limbs[i]);
         }
     }
-    return hits;
+    g_hits_prefix = residue_count(g_prefix, 16) + residue_count(g_prefix + 16, 16);
+    g_hits_nonce = 0;
+    for (m = 0; m < 2; m++) {
+        g_hits_nonce += residue_count(g_r[m], 16) + residue_count(g_r[m] + 16, 16);
+        for (i = 0; i < 12; i++) {
+            if (g_r_limbs[m][i] > 0xFFFF) {
+                g_hits_nonce += residue_count((const uint8_t *)&g_r_limbs[m][i],
+                                              sizeof g_r_limbs[m][i]);
+            }
+        }
+    }
+    return g_hits_scalar + g_hits_prefix + g_hits_nonce;
+}
+
+static void print_verdict(const char *what, int hits) {
+    printf("  %s: %d hit(s) (scalar %d, prefix %d, nonce %d)\n", what, hits,
+           g_hits_scalar, g_hits_prefix, g_hits_nonce);
+}
+
+/* r = SHA-512(prefix || msg) mod l, as the signer computes it, through the
+ * library's exported hash and reducer. */
+static int derive_nonce(uint8_t out[64], const uint8_t *msg, size_t msg_len) {
+    uint8_t *buf = (uint8_t *)malloc(32 + msg_len);
+    if (!buf) {
+        return -1;
+    }
+    memcpy(buf, g_prefix, 32);
+    memcpy(buf + 32, msg, msg_len);
+    ama_ed25519_sha512(buf, 32 + msg_len, out);
+    ama_ed25519_sc_reduce(out);
+    ama_secure_memzero(buf, 32 + msg_len);
+    free(buf);
+    return 0;
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -320,6 +376,24 @@ int main(void) {
           "the clamped scalar exceeds l, so its reduction is a distinct needle");
     CHECK((g_scalar[0] & 7u) == 0u && (g_scalar[31] & 0xC0u) == 0x40u,
           "needle is the clamped scalar");
+    CHECK(derive_nonce(g_r[0], g_msg, MSG_BYTES) == 0 &&
+          derive_nonce(g_r[1], big, big_len) == 0,
+          "the per-message nonces are derived");
+    scalar_limbs(g_r[0], g_r_limbs[0]);
+    scalar_limbs(g_r[1], g_r_limbs[1]);
+    /* The nonce needle must be the one the signer used: R = [r]B is the
+     * first half of the signature it produces. */
+    {
+        uint8_t R[32];
+        CHECK(ama_ed25519_sign(g_sig, g_msg, MSG_BYTES, g_sk) == AMA_SUCCESS &&
+              ama_ed25519_point_from_scalar(R, g_r[0]) == AMA_SUCCESS &&
+              memcmp(R, g_sig, 32) == 0,
+              "needle is the signer's nonce: [r]B equals the signature's R");
+        CHECK(ama_ed25519_sign_expanded(g_sig, big, big_len, g_expanded) == AMA_SUCCESS &&
+              ama_ed25519_point_from_scalar(R, g_r[1]) == AMA_SUCCESS &&
+              memcmp(R, g_sig, 32) == 0,
+              "needle is the heap-path signer's nonce: [r]B equals R");
+    }
 
     /* --- control: the probe must be able to see a value left behind. */
     poison_stack();
@@ -337,17 +411,17 @@ int main(void) {
      * against a fresh poison so the two cannot be confused. */
     poison_stack();
     CHECK(secret_residue_count() == 0,
-          "probe baseline: no copy of the scalar or prefix is in the scan "
-          "window before any probed call");
+          "probe baseline: no copy of the scalar, prefix or nonce is in the "
+          "scan window before any probed call");
 
     /* --- expand_secret_key: its `hash` holds both needles and is scrubbed. */
     poison_stack();
     run_expand();
     hits = secret_residue_count();
-    printf("  expand_secret_key: %d hit(s)\n", hits);
+    print_verdict("expand_secret_key", hits);
     CHECK(hits == 0,
-          "expand_secret_key leaves neither the scalar nor the prefix on the "
-          "dead stack");
+          "expand_secret_key leaves no scalar, prefix or nonce on the dead "
+          "stack");
     CHECK(memcmp(g_expanded, g_scalar, 32) == 0 &&
           memcmp(g_expanded + 32, g_prefix, 32) == 0,
           "expand_secret_key is deterministic");
@@ -356,10 +430,10 @@ int main(void) {
     poison_stack();
     run_sign_expanded();
     hits = secret_residue_count();
-    printf("  sign_expanded (stack path): %d hit(s)\n", hits);
+    print_verdict("sign_expanded (stack path)", hits);
     CHECK(hits == 0,
-          "sign_expanded (stack path) leaves neither the scalar nor the "
-          "prefix on the dead stack");
+          "sign_expanded (stack path) leaves no scalar, prefix or nonce on "
+          "the dead stack");
     CHECK(ama_ed25519_verify(g_sig, g_msg, MSG_BYTES, g_pk) == AMA_SUCCESS,
           "sign_expanded signature verifies");
 
@@ -367,10 +441,10 @@ int main(void) {
     poison_stack();
     run_sign_expanded_large(big, big_len);
     hits = secret_residue_count();
-    printf("  sign_expanded (heap path): %d hit(s)\n", hits);
+    print_verdict("sign_expanded (heap path)", hits);
     CHECK(hits == 0,
-          "sign_expanded (heap path) leaves neither the scalar nor the "
-          "prefix on the dead stack");
+          "sign_expanded (heap path) leaves no scalar, prefix or nonce on "
+          "the dead stack");
     CHECK(ama_ed25519_verify(g_sig, big, big_len, g_pk) == AMA_SUCCESS,
           "sign_expanded (heap path) signature verifies");
 
@@ -378,16 +452,16 @@ int main(void) {
     poison_stack();
     run_keypair();
     hits = secret_residue_count();
-    printf("  keypair: %d hit(s)\n", hits);
-    CHECK(hits == 0, "keypair leaves neither the scalar nor the prefix on the dead stack");
+    print_verdict("keypair", hits);
+    CHECK(hits == 0, "keypair leaves no scalar, prefix or nonce on the dead stack");
 
     /* --- sign from the 64-byte key: derives `hash` itself, then signs. */
     poison_stack();
     run_sign();
     hits = secret_residue_count();
-    printf("  sign: %d hit(s)\n", hits);
+    print_verdict("sign", hits);
     CHECK(hits == 0,
-          "sign leaves neither the scalar nor the prefix on the dead stack");
+          "sign leaves no scalar, prefix or nonce on the dead stack");
     CHECK(ama_ed25519_verify(g_sig, g_msg, MSG_BYTES, g_pk) == AMA_SUCCESS,
           "sign signature verifies");
 
@@ -413,6 +487,8 @@ int main(void) {
     ama_secure_memzero(g_reduced, sizeof g_reduced);
     ama_secure_memzero(g_scalar, sizeof g_scalar);
     ama_secure_memzero(g_prefix, sizeof g_prefix);
+    ama_secure_memzero(g_r, sizeof g_r);
+    ama_secure_memzero(g_r_limbs, sizeof g_r_limbs);
     ama_secure_memzero(g_expanded, sizeof g_expanded);
     ama_secure_memzero(g_sk, sizeof g_sk);
 

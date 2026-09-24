@@ -711,49 +711,138 @@ int main(void) {
                         "aggregate refuses a zero signer index");
         }
 
-        /* 9h — a SMALL-ORDER commitment point is refused on its way in.
+        /* 9h — a SMALL-ORDER point from a participant is refused on its way
+         * in, by the admissibility check and not by the arithmetic.
          *
-         * The relation would reject it anyway and no forgery is known through
-         * this path, but "the arithmetic happens to fail" is a property a
-         * reader has to re-derive, while refusing the input is a property of
-         * the code.  An order-8 E_i contributes nothing the binding factor can
-         * bind, which is the standing hazard in every Schnorr-family threshold
-         * scheme.  The encoding used is the identity, y = 1. */
+         * An order-8 E_i contributes nothing the binding factor can bind,
+         * which is the standing hazard in every Schnorr-family threshold
+         * scheme; the encoding used is the identity, y = 1.  Replacing a
+         * point under an HONEST share does not test that refusal: it changes
+         * rho, R and c (or the right-hand side), the section 5.3 relation
+         * then fails on its own with the same AMA_ERROR_VERIFY_FAILED, and
+         * frost_point_is_admissible() could be deleted with every assertion
+         * still passing -- which is what this block used to do.
+         *
+         * So the shares below are built to SATISFY the relation with the
+         * small-order point in place.  The identity is [0]B, so round 2 is
+         * run over the doctored commitment list with the matching nonce set
+         * to 0 (d_i = 0 for D_i, e_i = 0 for E_i), and, for the key share,
+         * with a secret share of 0 (PK_i = [0]B).  The relation holds for
+         * each of them; the only thing that can refuse them is the
+         * small-order clause of frost_point_is_admissible().  Measured with
+         * that clause deleted: ama_frost_verify_share accepts all three, and
+         * ama_frost_aggregate returns AMA_SUCCESS -- a signature that
+         * verifies -- over a small-order D_2 or E_2.  Every case gets a
+         * fresh round 1, so no nonce pair signs twice.
+         *
+         * Aggregation reaches that clause twice: in the loop that admits
+         * every commitment before R is built, and in verify_share_core().
+         * Either one alone names participant 2 for a commitment, so the
+         * aggregate assertions hold while either survives (measured by
+         * deleting each); the key-share case goes through verify_share_core()
+         * only, and without it the ceremony reaches the final RFC 8032 check,
+         * which refuses anonymously (index 0) instead of naming the
+         * participant. */
         {
-            uint8_t bad_commitments[2 * 64];
             static const uint8_t IDENTITY[32] = { 1 };
+            uint8_t hc_nonces[2 * 64], hc_commitments[2 * 64];
+            uint8_t crafted[2 * 32];
 
-            /* D_1 replaced by the identity encoding. */
-            memcpy(bad_commitments, commitments, sizeof bad_commitments);
-            memcpy(bad_commitments, IDENTITY, 32);
-            rc = ama_frost_verify_share(sig_shares, 1, public_shares,
-                                        bad_commitments, signer_indices, 2,
-                                        msg, msg_len, group_pk);
-            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
-                        "a small-order D_i is refused");
+            for (int part = 0; part <= 32; part += 32) {
+                const char *const point = part == 0 ? "D_2" : "E_2";
+                char what[160];
 
-            /* E_1 replaced by the identity encoding. */
-            memcpy(bad_commitments, commitments, sizeof bad_commitments);
-            memcpy(bad_commitments + 32, IDENTITY, 32);
-            rc = ama_frost_verify_share(sig_shares, 1, public_shares,
-                                        bad_commitments, signer_indices, 2,
-                                        msg, msg_len, group_pk);
-            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
-                        "a small-order E_i is refused");
+                for (int i = 0; i < 2; i++) {
+                    rc = ama_frost_round1_commit(hc_nonces + i * 64,
+                                                 hc_commitments + i * 64,
+                                                 shares + i * 64);
+                    TEST_ASSERT(rc == AMA_SUCCESS, "round 1 for a small-order case");
+                }
+                /* Participant 2's point becomes [0]B, and the nonce it
+                 * commits to becomes 0, so its share stays consistent. */
+                memcpy(hc_commitments + 64 + part, IDENTITY, 32);
+                memset(hc_nonces + 64 + part, 0, 32);
+                for (int i = 0; i < 2; i++) {
+                    rc = ama_frost_round2_sign(crafted + i * 32, msg, msg_len,
+                                               shares + i * 64, signer_indices[i],
+                                               hc_nonces + i * 64, hc_commitments,
+                                               signer_indices, 2, group_pk);
+                    TEST_ASSERT(rc == AMA_SUCCESS,
+                                "round 2 signs over the doctored commitment list");
+                }
 
-            /* And a small-order public key share. */
-            {
-                uint8_t bad_shares[2 * 32];
-                memcpy(bad_shares, public_shares, sizeof bad_shares);
-                memcpy(bad_shares, IDENTITY, 32);
-                rc = ama_frost_verify_share(sig_shares, 1, bad_shares,
-                                            commitments, signer_indices, 2,
+                /* The construction is sound: participant 1's share over the
+                 * same doctored list (same rho, R and c) verifies. */
+                rc = ama_frost_verify_share(crafted, 1, public_shares,
+                                            hc_commitments, signer_indices, 2,
                                             msg, msg_len, group_pk);
-                TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
-                            "a small-order public key share is refused");
+                snprintf(what, sizeof what,
+                         "control: participant 1's share over a list with "
+                         "small-order %s verifies", point);
+                TEST_ASSERT(rc == AMA_SUCCESS, what);
+
+                rc = ama_frost_verify_share(crafted + 32, 2, public_shares + 32,
+                                            hc_commitments, signer_indices, 2,
+                                            msg, msg_len, group_pk);
+                snprintf(what, sizeof what,
+                         "a small-order %s is refused although the relation "
+                         "holds for its share", point);
+                TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED, what);
+
+                bad_index = 0xFF;
+                rc = ama_frost_aggregate(signature, crafted, hc_commitments,
+                                         public_shares, signer_indices, 2,
+                                         msg, msg_len, group_pk, &bad_index);
+                snprintf(what, sizeof what,
+                         "aggregate refuses a small-order %s and names "
+                         "participant 2", point);
+                TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED && bad_index == 2, what);
             }
 
-            /* The control: the untouched inputs still verify, so the three
+            /* A small-order public key share: PK_1 = [0]B, signed with a
+             * secret share of 0, so z_1 = d_1 + rho_1 * e_1 satisfies the
+             * relation exactly. */
+            {
+                uint8_t zero_share[64];
+                uint8_t bad_public[2 * 32];
+
+                memset(zero_share, 0, sizeof zero_share);
+                memcpy(zero_share + 32, IDENTITY, 32);
+                memcpy(bad_public, IDENTITY, 32);
+                memcpy(bad_public + 32, public_shares + 32, 32);
+                for (int i = 0; i < 2; i++) {
+                    rc = ama_frost_round1_commit(hc_nonces + i * 64,
+                                                 hc_commitments + i * 64,
+                                                 shares + i * 64);
+                    TEST_ASSERT(rc == AMA_SUCCESS, "round 1 for a small-order case");
+                }
+                rc = ama_frost_round2_sign(crafted, msg, msg_len, zero_share, 1,
+                                           hc_nonces, hc_commitments,
+                                           signer_indices, 2, group_pk);
+                TEST_ASSERT(rc == AMA_SUCCESS, "round 2 signs under a zero key share");
+                rc = ama_frost_round2_sign(crafted + 32, msg, msg_len,
+                                           shares + 64, 2, hc_nonces + 64,
+                                           hc_commitments, signer_indices, 2,
+                                           group_pk);
+                TEST_ASSERT(rc == AMA_SUCCESS, "round 2 for the honest participant");
+
+                rc = ama_frost_verify_share(crafted, 1, bad_public,
+                                            hc_commitments, signer_indices, 2,
+                                            msg, msg_len, group_pk);
+                TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                            "a small-order public key share is refused although "
+                            "the relation holds for its share");
+
+                bad_index = 0xFF;
+                rc = ama_frost_aggregate(signature, crafted, hc_commitments,
+                                         bad_public, signer_indices, 2,
+                                         msg, msg_len, group_pk, &bad_index);
+                TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED && bad_index == 1,
+                            "aggregate refuses a small-order public key share "
+                            "and names participant 1");
+            }
+
+            /* The control: the untouched inputs still verify, so the
              * refusals above are not a function that has started saying no. */
             rc = ama_frost_verify_share(sig_shares, 1, public_shares,
                                         commitments, signer_indices, 2,

@@ -1084,7 +1084,16 @@ GE_LINKAGE int GE_SYM(ama_ed25519_ge_double_scalarmult_vartime)(uint8_t out[32],
  * from its Niels form (x = (ypx - ymx)/2, y = (ypx + ymx)/2), so the
  * committed constants can be checked against the library's own variable-base
  * arithmetic.  which: 0 = comb[i][j], 1 = odd[i] = (2i+1) B,
- * 2 = odd128[i] = (2i+1) 2^128 B.  -1 on a bad index. */
+ * 2 = odd128[i] = (2i+1) 2^128 B.  -1 on a bad index.
+ *
+ * The third coordinate, t2d, never enters (x, y), yet it is what the mixed
+ * addition multiplies by; a t2d emitted wrong decodes to the right point.
+ * So it is checked here against 2*d*x*y and the entry is refused with -2
+ * when it disagrees (out is still written).  2d is taken from its
+ * definition, 2d = -243330/121666 (RFC 8032 section 5.1: d = -121665/121666),
+ * not from the generated GE_CONST_D2, so a table and a constant emitted
+ * wrong in the same way cannot vouch for each other; the check is the
+ * inversion-free 121666 * t2d + 243330 * x * y == 0. */
 GE_LINKAGE int GE_SYM(ama_ed25519_ge_table_entry)(int which, int i, int j, uint8_t out[32]) {
     const ge_niels *n;
     GE_FE x, y, two, half;
@@ -1110,6 +1119,24 @@ GE_LINKAGE int GE_SYM(ama_ed25519_ge_table_entry)(int which, int i, int j, uint8
     GE_FE_MUL(r.Y, y, half);
     GE_FE_1(r.Z);
     GE_SYM(ge_xyz_tobytes)(out, r.X, r.Y, r.Z);
+    {
+        uint8_t k[32] = { 0x42, 0xdb, 0x01 };           /* 121666 */
+        GE_FE c, lhs, rhs;
+        unsigned acc = 0;
+        int b;
+        GE_FE_FROMBYTES(c, k);
+        GE_FE_MUL(lhs, n->t2d, c);
+        k[0] = 0x82; k[1] = 0xb6; k[2] = 0x03;          /* 243330 = 2 * 121665 */
+        GE_FE_FROMBYTES(c, k);
+        GE_FE_MUL(rhs, r.X, r.Y);
+        GE_FE_MUL(rhs, rhs, c);
+        GE_FE_ADD(lhs, lhs, rhs);
+        GE_FE_1(c);
+        GE_FE_MUL(lhs, lhs, c);                         /* back to multiply-output bounds */
+        GE_FE_TOBYTES(k, lhs);
+        for (b = 0; b < 32; b++) acc |= k[b];
+        if (acc != 0) return -2;
+    }
     return 0;
 }
 #endif

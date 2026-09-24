@@ -67,8 +67,10 @@ void ama_frost_test_scalar_add(uint8_t c[32], const uint8_t a[32], const uint8_t
  * tables, recovered from its Niels form by the named instantiation
  * (backend 0 = fe51, 1 = fe64-mulx; which 0 = comb[i][j], 1 = odd[i]).
  * Returns 0 and writes out, or -1 for an index out of range or a backend this
- * build does not carry.  tests/c/test_ed25519_static_tables.c compares every
- * entry against ama_ed25519_scalarmult_public over the RFC 8032 base point.
+ * build does not carry, or -2 (out still written) when the entry's t2d
+ * coordinate is not 2*d*x*y.  tests/c/test_ed25519_static_tables.c compares
+ * every entry against ama_ed25519_scalarmult_public over the RFC 8032 base
+ * point.
  */
 int ama_ed25519_test_table_entry(int backend, int which, int i, int j, uint8_t out[32]);
 

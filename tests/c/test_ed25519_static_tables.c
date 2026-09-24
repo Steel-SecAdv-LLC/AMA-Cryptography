@@ -17,6 +17,14 @@
  *
  *   comb[i][j] == (j + 1) * 2^(STRIDE * i) * B      for every i, j
  *   odd[i]     == (2 i + 1) * B                     for every i
+ *   odd128[i]  == (2 i + 1) * 2^ODD_SHIFT * B       for every i
+ *
+ * The point is recovered from two of the three stored coordinates (ypx and
+ * ymx).  The third, t2d = 2*d*x*y, is what the mixed addition consuming the
+ * table multiplies by, and a wrong one decodes to the right point, so the
+ * export also checks it against 2*d*x*y -- with 2d taken from its definition,
+ * not from the generated constant -- and refuses the entry with -2 when it
+ * disagrees.  Every entry must pass both.
  */
 
 #include <stdint.h>
@@ -49,9 +57,22 @@ static void shifted_scalar(uint8_t out[32], unsigned value, unsigned shift_bits)
     memcpy(out, wide, 32);
 }
 
+/* The export's verdict on one entry, reported: 0 all well, 1 the t2d
+ * coordinate is wrong (the point was still written and is still compared),
+ * -1 refused (nothing to compare). */
+static int entry_status(int rc, const char *name, const char *table, int i, int j) {
+    if (rc == 0) return 0;
+    if (rc == -2) {
+        fprintf(stderr, "  FAIL %s %s[%d][%d]: t2d is not 2*d*x*y\n", name, table, i, j);
+        return 1;
+    }
+    fprintf(stderr, "  FAIL %s %s[%d][%d]: export refused\n", name, table, i, j);
+    return -1;
+}
+
 static int check_backend(int backend, const char *name) {
     int tables, entries, stride, odd_count, odd_shift;
-    int i, j;
+    int i, j, st;
     int failures = 0;
     int compared = 0;
     uint8_t got[32], want[32], scalar[32];
@@ -66,11 +87,10 @@ static int check_backend(int backend, const char *name) {
 
     for (i = 0; i < tables; i++) {
         for (j = 0; j < entries; j++) {
-            if (ama_ed25519_test_table_entry(backend, 0, i, j, got) != 0) {
-                fprintf(stderr, "  FAIL %s comb[%d][%d]: export refused\n", name, i, j);
-                failures++;
-                continue;
-            }
+            st = entry_status(ama_ed25519_test_table_entry(backend, 0, i, j, got),
+                              name, "comb", i, j);
+            if (st != 0) failures++;
+            if (st < 0) continue;
             shifted_scalar(scalar, (unsigned)(j + 1), (unsigned)(stride * i));
             if (ama_ed25519_scalarmult_public(want, scalar, base_compressed) != AMA_SUCCESS) {
                 fprintf(stderr, "  FAIL %s comb[%d][%d]: reference scalarmult refused\n", name, i, j);
@@ -86,11 +106,10 @@ static int check_backend(int backend, const char *name) {
         }
     }
     for (i = 0; i < odd_count; i++) {
-        if (ama_ed25519_test_table_entry(backend, 1, i, 0, got) != 0) {
-            fprintf(stderr, "  FAIL %s odd[%d]: export refused\n", name, i);
-            failures++;
-            continue;
-        }
+        st = entry_status(ama_ed25519_test_table_entry(backend, 1, i, 0, got),
+                          name, "odd", i, 0);
+        if (st != 0) failures++;
+        if (st < 0) continue;
         shifted_scalar(scalar, (unsigned)(2 * i + 1), 0);
         if (ama_ed25519_scalarmult_public(want, scalar, base_compressed) != AMA_SUCCESS) {
             fprintf(stderr, "  FAIL %s odd[%d]: reference scalarmult refused\n", name, i);
@@ -104,11 +123,10 @@ static int check_backend(int backend, const char *name) {
         }
     }
     for (i = 0; i < odd_count; i++) {
-        if (ama_ed25519_test_table_entry(backend, 2, i, 0, got) != 0) {
-            fprintf(stderr, "  FAIL %s odd128[%d]: export refused\n", name, i);
-            failures++;
-            continue;
-        }
+        st = entry_status(ama_ed25519_test_table_entry(backend, 2, i, 0, got),
+                          name, "odd128", i, 0);
+        if (st != 0) failures++;
+        if (st < 0) continue;
         shifted_scalar(scalar, (unsigned)(2 * i + 1), (unsigned)odd_shift);
         if (ama_ed25519_scalarmult_public(want, scalar, base_compressed) != AMA_SUCCESS) {
             fprintf(stderr, "  FAIL %s odd128[%d]: reference scalarmult refused\n", name, i);
@@ -124,11 +142,11 @@ static int check_backend(int backend, const char *name) {
     }
 
     /* Out-of-range indices must be refused, not read past the table. */
-    if (ama_ed25519_test_table_entry(backend, 0, tables, 0, got) == 0 ||
-        ama_ed25519_test_table_entry(backend, 0, 0, entries, got) == 0 ||
-        ama_ed25519_test_table_entry(backend, 1, odd_count, 0, got) == 0 ||
-        ama_ed25519_test_table_entry(backend, 2, odd_count, 0, got) == 0 ||
-        ama_ed25519_test_table_entry(backend, 3, 0, 0, got) == 0) {
+    if (ama_ed25519_test_table_entry(backend, 0, tables, 0, got) != -1 ||
+        ama_ed25519_test_table_entry(backend, 0, 0, entries, got) != -1 ||
+        ama_ed25519_test_table_entry(backend, 1, odd_count, 0, got) != -1 ||
+        ama_ed25519_test_table_entry(backend, 2, odd_count, 0, got) != -1 ||
+        ama_ed25519_test_table_entry(backend, 3, 0, 0, got) != -1) {
         fprintf(stderr, "  FAIL %s: an out-of-range index was accepted\n", name);
         failures++;
     }
@@ -163,7 +181,8 @@ int main(void) {
         fprintf(stderr, "FAIL: %d table entr%s wrong\n", failures, failures == 1 ? "y is" : "ies are");
         return 1;
     }
-    printf("PASS: every static table entry is the multiple of B it claims to be (%d backend%s)\n",
+    printf("PASS: every static table entry is the multiple of B it claims to be, "
+           "with t2d = 2*d*x*y (%d backend%s)\n",
            present, present == 1 ? "" : "s");
     return 0;
 }

@@ -1638,7 +1638,8 @@ int ama_ed25519_test_table_geometry(int backend, int *tables, int *entries,
 /* Test-only: compressed encoding of a static table entry of the selected
  * backend (0 = fe51, 1 = fe64-mulx), so tests/c/test_ed25519_static_tables.c
  * can check the committed constants against the variable-base arithmetic.
- * Returns -1 for a backend this build does not carry or a bad index. */
+ * Returns -1 for a backend this build does not carry or a bad index, and -2
+ * when the entry's t2d coordinate is not 2*d*x*y (out is still written). */
 int ama_ed25519_test_table_entry(int backend, int which, int i, int j, uint8_t out[32]) {
     if (backend == 0) {
         return ama_ed25519_ge_table_entry_fe51(which, i, j, out);

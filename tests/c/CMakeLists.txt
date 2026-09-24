@@ -48,12 +48,18 @@ add_ama_test(test_core test_core.c)
 # impossible from the start (RLIMIT_MEMLOCK already exhausted).
 add_ama_test(test_secure_memory_dontdump test_secure_memory_dontdump.c)
 set_tests_properties(test_secure_memory_dontdump PROPERTIES SKIP_RETURN_CODE 77)
-# Post-free scrub (commit 17e5d79): heap inspection via
-# /proc/self/mem proving ama_secure_free() leaves no copy of a planted
-# 32-byte sentinel key anywhere in anonymous rw memory.  Its negative mode
-# (plain free, no scrub) PASSES only when the sentinel IS still found: it is
-# registered as a CTest case of its own so every lane proves the inspector
-# can see an unscrubbed secret before the clean run's "not found" counts.
+# Post-free scrub (commit 17e5d79): memory inspection via
+# /proc/self/mem proving ama_secure_free() erases a planted 32-byte sentinel
+# key.  The decisive count is taken inside ama_secure_free()'s own munmap()
+# (interposed by the test), while the mapping still exists: after munmap the
+# pages are not in /proc/self/maps, so a scan taken only after release could
+# not see a missing scrub, and did not.  A second scan after release requires
+# no copy anywhere else in anonymous rw memory.  Its negative mode PASSES
+# only when both inspections see a secret that was NOT erased (the same
+# release path with the scrub's effect undone, and a plain free() of a heap
+# chunk): it is registered as a CTest case of its own so every lane proves
+# the inspector can see an unscrubbed secret before the clean run's
+# "not found" counts.
 add_ama_test(test_secure_free_scrub test_secure_free_scrub.c)
 set_tests_properties(test_secure_free_scrub PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME test_secure_free_scrub_negative
@@ -818,15 +824,13 @@ if(AMA_USE_NATIVE_PQC)
         ENVIRONMENT "AMA_DISPATCH_NO_AUTOTUNE=1")
 
     # SIMD-equivalence PR (2026-05) — SPHINCS+ / SLH-DSA SIMD parity.
-    # Two lanes in a single binary:
-    #   1. SLH-DSA-SHAKE-128s deterministic sign / verify byte-identity
-    #      under the dispatched (SIMD) Keccak vs the forced-scalar
-    #      Keccak (via AMA_TESTING_MODE override hook).
-    #   2. SPHINCS+ AVX2 / NEON wots_chain helper byte-identity against
-    #      an inlined scalar SHA-256 reference matching the helper's
-    #      exact block-build pattern.
-    # SKIPs with 77 only when neither lane is exercisable on the
-    # current build/CPU.
+    # One lane: SLH-DSA-SHAKE-128s deterministic sign / verify
+    # byte-identity under the dispatched (SIMD) Keccak vs the
+    # forced-scalar Keccak (via AMA_TESTING_MODE override hook).  The
+    # former second lane (AVX2 / NEON wots_chain helpers against a
+    # scalar transcription) is retired with the helpers it drove.
+    # SKIPs with 77 when that lane is not exercisable on the current
+    # build/CPU (no SIMD Keccak wired).
     add_executable(test_sphincs_simd_equiv test_sphincs_simd_equiv.c)
     target_link_libraries(test_sphincs_simd_equiv ama_cryptography_test)
     add_test(NAME test_sphincs_simd_equiv COMMAND test_sphincs_simd_equiv)

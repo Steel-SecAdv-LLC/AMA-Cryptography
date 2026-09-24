@@ -27,10 +27,10 @@
  *       (s1, P1, s2, P2) tuples, assert
  *           ama_ed25519_double_scalarmult_public(out, s1, P1, s2, P2)
  *       produces byte-for-byte the same compressed Edwards point as the
- *       legacy split layout reconstructed from the public primitives
- *       ama_ed25519_scalarmult_public + ama_ed25519_point_add.  This
- *       locks cross-path equivalence in every CI run rather than
- *       requiring the SHAMIR=1 / SHAMIR=0 build matrix.
+ *       split composition of the public primitives
+ *       ama_ed25519_scalarmult_public + ama_ed25519_point_add.  Both are
+ *       compiled into every build, so the comparison runs in every CI run;
+ *       there is no build switch selecting between them.
  *
  *   (C) Zero-scalar / l-1 edge cases for the joint scalar mult:
  *       (s1=0, s2!=0), (s1!=0, s2=0), (s1=0, s2=0), and scalar = l-1
@@ -138,16 +138,16 @@ static const uint8_t rfc8032_sig[64] = {
 };
 
 /* ============================================================================
- * Layer (B): byte-identity of the joint Shamir scalar mult vs the legacy
- * split layout, reconstructed from the existing public primitives.
+ * Layer (B): byte-identity of the joint Shamir scalar mult vs the split
+ * composition of the existing public primitives.
  *
- * Legacy layout: out_compressed = compress(decompress(P1)·s1
- *                                          + decompress(P2)·s2)
+ * Split composition: out_compressed = compress(decompress(P1)·s1
+ *                                              + decompress(P2)·s2)
  * via two independent ama_ed25519_scalarmult_public calls plus one
  * ama_ed25519_point_add.  Note that ama_ed25519_scalarmult_public uses
- * the variable-base wNAF code path (ge25519_scalarmult); the Shamir
- * joint pass uses the same wNAF digit recoding interleaved across both
- * scalars.  Mathematically both must produce identical compressed
+ * the variable-base wNAF code path (ama_ed25519_ge_scalarmult_vartime);
+ * the Shamir joint pass (ama_ed25519_ge_double_scalarmult_vartime) uses
+ * the same wNAF digit recoding interleaved across both scalars.  Mathematically both must produce identical compressed
  * output for any (s1, P1, s2, P2) tuple.
  *
  * For arbitrary 32-byte test inputs we feed both paths the
@@ -356,7 +356,7 @@ int main(void) {
 
     /* ====================================================================
      * Layer (B): cross-path BYTE-IDENTITY of the joint Shamir scalar mult
-     * vs the legacy split layout, on 256 random (s1, P1, s2, P2) tuples.
+     * vs the split composition, on 256 random (s1, P1, s2, P2) tuples.
      * Closes the gap that (A) only pins accept/reject parity — this layer
      * pins R_check at the compressed-group-element level.
      * ==================================================================== */
@@ -368,9 +368,9 @@ int main(void) {
             uint8_t pk1[32], pk2[32], sk_unused[64];
             char label[80];
 
-            /* Random scalars (reduced mod l so the legacy split path,
-             * which dispatches to ge25519_scalarmult with its <2^253
-             * precondition, agrees with the Shamir helper). */
+            /* Random scalars, reduced mod l.  Redundant, not load-bearing:
+             * both entry points reduce through sc25519_to_wnaf themselves
+             * (see the Layer (B) block comment above). */
             fill_random_bytes(s1_raw, 32);
             fill_random_bytes(s2_raw, 32);
             reduce_scalar_32(s1, s1_raw);
@@ -401,7 +401,8 @@ int main(void) {
     }
 
     /* ====================================================================
-     * Layer (C): zero-scalar / l-1 edge cases for ge25519_double_scalarmult.
+     * Layer (C): zero-scalar / l-1 edge cases for the joint scalar mult
+     * (ama_ed25519_ge_double_scalarmult_vartime).
      * Pins the explicit `top < 0` identity-handling branch and the
      * most-significant-bit boundary of sc25519_to_wnaf.  All cases use
      * the Shamir public API and must agree byte-for-byte with the split

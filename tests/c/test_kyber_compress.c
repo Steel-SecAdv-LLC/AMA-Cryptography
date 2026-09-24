@@ -155,6 +155,19 @@ static int test_mod_2d_contract(void) {
     return failures;
 }
 
+/* Bit length of v, 0 for v == 0.  A loop rather than __builtin_clzll, which
+ * is a GCC/Clang builtin: this target is registered for every compiler, and
+ * an MSVC build of the C suite failed to compile it for the sake of a printed
+ * figure. */
+static int bit_length_u64(uint64_t v) {
+    int b = 0;
+    while (v) {
+        v >>= 1;
+        b++;
+    }
+    return b;
+}
+
 static int test_no_intermediate_overflow(void) {
     unsigned wi;
     int failures = 0;
@@ -177,7 +190,7 @@ static int test_no_intermediate_overflow(void) {
         }
         printf("  d=%-2u  n_max=%-9llu  n_max*M=%-20llu  headroom=2^%d  OK\n",
                d, (unsigned long long)n_max, (unsigned long long)product,
-               (int)(64 - 1 - (product ? 63 - __builtin_clzll(product) : 0)));
+               product ? 64 - bit_length_u64(product) : 63);
     }
     printf("\n");
     return failures;

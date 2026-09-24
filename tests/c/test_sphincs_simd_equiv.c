@@ -4,7 +4,8 @@
  * @file test_sphincs_simd_equiv.c
  * @brief SPHINCS+ / SLH-DSA SIMD-vs-scalar parity test.
  *
- * Two independent surfaces are pinned:
+ * One surface is pinned; the second lane this file used to carry is retired
+ * and runs nothing:
  *
  *   1. **SLH-DSA-SHAKE-128s end-to-end**.  The dispatched Keccak
  *      kernel feeds SHAKE-128/256 inside every SLH-DSA-SHAKE
@@ -30,17 +31,13 @@
  *      header no longer describes a comparison that does not run.
  *
  * SKIP semantics:
- *   - Lane 1 SKIPs (informational) when the dispatched Keccak
- *     pointer is already the scalar reference (no SIMD Keccak built
- *     in — comparison is tautological) or when SLH-DSA is not
- *     present in the build.
- *   - Lane 2 SKIPs the AVX2 sub-lane when `AMA_HAVE_AVX2_IMPL` is
- *     not defined at build time OR when the runtime CPU lacks AVX2
- *     (`ama_has_avx2()` returns 0) — calling the AVX2 entry point
- *     without that runtime check would SIGILL on a non-AVX2 CPU
- *     even though the production dispatcher would safely fall back.
- *   - Returns code 77 if no lane was exercised; 0 on success; 1 on
- *     mismatch.
+ *   - Lane 1 is the only lane that runs.  It SKIPs (informational) when
+ *     the dispatched Keccak pointer is already the scalar reference (no
+ *     SIMD Keccak built in — comparison is tautological).
+ *   - Returns code 77 when lane 1 skipped, because then no SPHINCS+ /
+ *     SLH-DSA SIMD surface was exercised at all; 0 on success; 1 on
+ *     mismatch.  No AVX2 or NEON SPHINCS+ helper is pinned on any host:
+ *     none exists.
  */
 
 #include <stdint.h>
@@ -57,42 +54,11 @@ extern void ama_keccak_f1600_generic(uint64_t state[25]);
 extern void ama_test_force_keccak_f1600_scalar(void);
 extern void ama_test_restore_keccak_f1600(void);
 
-/* Direct symbol references for the SPHINCS+ SIMD WOTS+ helpers. */
-#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-#endif
-/* (Previously: `extern void ama_sphincs_wots_chain_neon(...)`.  Removed
- * along with the NEON wots_chain test lane in `run_wots_chain_parity`
- * — see the inline rationale there.  The NEON helper itself has since
- * been deleted from src/c/neon/ama_sphincs_neon.c: no caller, no test,
- * and a block layout that matched neither FIPS 205 F nor the scalar
- * reference described below.) */
-
-/* --------------------------------------------------------------
- * Scalar reference for the SPHINCS+ AVX2 `wots_chain` helper.
- *
- * Mirrors the block construction used by the AVX2 helper in
- * `src/c/avx2/ama_sphincs_avx2.c`: each step builds a 64-byte SHA-256
- * block as [chain-value || addr[0] || addr[6]] padded with zeros,
- * then runs a single FIPS 180-4 SHA-256 compression seeded with the
- * standard IV.  No padding bytes are appended (the helper's write
- * pattern is non-spec — it emits only a single compression per step,
- * matching the helper byte-for-byte which is what this test pins).
- * `pub_seed` is unused, consistent with the helper; suppressed via
- * `(void)pub_seed`.
- *
- * Note: the NEON helper that used to live in
- * `src/c/neon/ama_sphincs_neon.c` (now deleted) used a different
- * block-build pattern (it wrote only `addr[0]` into the block, never
- * `addr[6]`).  This scalar reference did NOT mirror the NEON pattern —
- * when the NEON `wots_chain` lane was pinned here it used a separate
- * `scalar_wots_chain_no_hash_addr` reference, which was removed
- * alongside the NEON lane itself.
- * -------------------------------------------------------------- */
 /* The scalar SHA-256 reference (`SHA256_K`, `SHA256_H`,
- * `sha256_compress_one_block`) and the `wots_chain` references built on it
- * lived here to drive lane 2.  Lane 2 is gone — see run_wots_chain_parity()
- * below — and with it the last consumer, so they are removed rather than
- * left compiled-but-unused.
+ * `sha256_compress_one_block`), the `wots_chain` references built on it and
+ * the extern declarations of the AVX2 and NEON `wots_chain` helpers lived
+ * here to drive lane 2.  Both helpers are deleted and lane 2 is retired —
+ * see run_wots_chain_parity() below — so nothing of it is left compiled.
  */
 
 static int run_slhdsa_simd_parity(int *exercised) {
