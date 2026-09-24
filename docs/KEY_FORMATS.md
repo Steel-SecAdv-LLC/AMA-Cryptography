@@ -31,6 +31,7 @@ The two dashes are not gaps in the implementation — see
 
 ## Using it
 
+<!-- example: python-run -->
 ```python
 from pathlib import Path
 
@@ -239,6 +240,7 @@ the only place it is visible.
 
 Both checks are exposed on the backend as well:
 
+<!-- example: pseudocode: a signature sketch in which sk stands for a key the reader already has -->
 ```python
 # doc-example: not runnable — a signature sketch, not a program. `sk` stands
 # for a key the reader already has, and tests/test_documented_examples.py skips

@@ -780,6 +780,7 @@ ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases
 native backend is actually present at start-up instead of discovering it at
 first use:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography import pqc_backends as p
 
@@ -868,6 +869,7 @@ RFC 3161 is implemented in-tree on AMA's own DER codec and requires no third-par
 
 > **What a verified token does and does not establish.** AMA verifies the RFC 3161 §2.4.2 *message-imprint binding* — that a token refers to this data — plus the `PKIStatusInfo` verdict and the TSA's nonce echo. It does **not** verify the TSA's CMS `SignerInfo` signature and does **not** validate the TSA certificate chain, so a token that binds your data is not evidence that a trusted authority issued it, and `TSTInfo.genTime` is unauthenticated. The binding check is meaningful only when the token's origin is established by a separate control. See [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform).
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.rfc3161_timestamp import (
     allow_mock_tsa,
@@ -890,7 +892,11 @@ For a record of what a check did *not* establish — for an audit log or a
 compliance profile — use `describe_token_verification`, whose result cannot be
 collapsed into a single truthy value:
 
+<!-- example: pseudocode: needs the DER TimeStampToken a live TSA returns, and a mock token is not DER; tests/test_rfc3161_api_honesty.py pins the fields shown -->
 ```python
+# `token` is the DER TimeStampToken an online TSA returned — for example
+# get_timestamp(b"document data").token.  Mock-mode tokens are HMAC-keyed
+# test fixtures, not DER, and this call rejects them.
 record = describe_token_verification(b"document data", token)
 record.binding_verified          # True
 sorted(record.not_verified)      # ['gen_time', 'tsa_certificate_chain', 'tsa_signature']
@@ -905,6 +911,7 @@ The online timestamp feature contacts external TSA (Time Stamping Authority) ser
 
 ### Simple Example
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
@@ -924,6 +931,7 @@ print(f"Signature valid: {valid}")  # True
 
 ### Advanced Example with 3R Monitoring
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 from ama_cryptography_monitor import AmaCryptographyMonitor
@@ -1593,11 +1601,11 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 AMA Cryptography v5.0.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C, and the Python layer's production hashing and key derivation run on those C kernels rather than stdlib `hashlib` (which is OpenSSL-backed in every libcrypto-linked CPython). The one deliberate exception is the pre-execution trust bootstrap — the code that hashes the shared object and sources *before* the native library may be trusted — which is pinned file-by-file with exact reference counts by `tools/check_stdlib_hash_boundary.py` and fails CI if it grows.
 
-**Algorithm implementations (all native, public domain references):**
+**Algorithm implementations (all native, written in this repository from the published standards; one file adapted under the MIT licence):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
 - **ML-KEM-1024** (Kyber): Public domain (NIST FIPS 203)
 - **SPHINCS+-SHA2-256f**: Public domain (NIST FIPS 205)
-- **Ed25519**: Public domain (ref10 implementation, RFC 8032)
+- **Ed25519**: in-house (RFC 8032), not ref10. Its constant-time field inversion (`src/c/internal/ama_fe25519_safegcd.h`) is **adapted** from libsecp256k1's safegcd `modinv64` reference implementation, **MIT licence** — the notice is in [`NOTICE`](NOTICE) and must accompany redistributed binaries; the C-library SBOM records it as the `ama_ed25519` pedigree (`Apache-2.0 AND MIT`)
 - **AES-256-GCM**: Public domain (NIST SP 800-38D)
 - **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
 

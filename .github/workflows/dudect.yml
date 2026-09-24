@@ -634,9 +634,10 @@ jobs:
     # that does not depend on runner load.
     name: Scalar AES-GCM instruction-count invariance
     runs-on: ubuntu-latest
-    # 20 covered the callgrind targets alone; the secret-taint lane (twelve
-    # Memcheck runs) and the shipped-shared-object lane (an LTO build plus
-    # eight more Memcheck runs) below roughly double the job.
+    # 20 covered the callgrind targets alone; the secret-taint lane (fifteen
+    # Memcheck runs, `slhdsa-sign` the longest at roughly a minute of CPU for
+    # its two parameter sets) and the shipped-shared-object lane (an LTO build
+    # plus nine more Memcheck runs) below roughly double the job.
     timeout-minutes: 45
     steps:
       - name: Checkout code
@@ -967,13 +968,22 @@ jobs:
       # declassified at its site with the argument stated
       # (src/c/internal/ama_ct_declassify.h;
       # `grep -rn AMA_CT_DECLASSIFY src/c` is the complete list).
+      #
+      # slhdsa-sign is taint-only: SLH-DSA signing does different work per key
+      # by construction, so there is no instruction-count target to pair it
+      # with.  Its declassification points are R, the FORS public key and each
+      # XMSS root -- the published values that decide that work -- so it
+      # belongs here and not in the shipped-shared-object loop below, where
+      # AMA_CT_DECLASSIFY is a no-op.  It replaces the INVARIANT-12 carve-out
+      # SLH-DSA used to carry on the false premise of a rejection loop.
       - name: Secret-taint - no control flow or memory address depends on a secret
         run: |
           set -euo pipefail
           for target in x25519 x25519-batch ed25519-sign ed25519-sign-sse2fold \
                         ed25519-sign-expanded \
                         secp256k1-scalarmult ecdsa nistp-ecdsa kyber-decaps \
-                        consttime ghash ascon-encrypt agent-binding aead-verify; do
+                        consttime ghash ascon-encrypt agent-binding aead-verify \
+                        slhdsa-sign; do
             python tools/check_ghash_constant_time.py \
               --lib build/lib/libama_cryptography_test.a --target "$target" --taint
           done

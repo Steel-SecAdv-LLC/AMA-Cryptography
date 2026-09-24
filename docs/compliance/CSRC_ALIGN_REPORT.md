@@ -87,7 +87,11 @@ Ed25519 (`src/c/ama_ed25519.c` + `src/c/internal/ama_ed25519_ge.h`) is
 **in-house**: the field arithmetic, the group arithmetic and the static
 base-point tables (generated in-tree by `tools/gen_ed25519_tables.py` into
 `src/c/internal/ama_ed25519_tables.h`) are written against RFC 8032 with no
-upstream code copied. Earlier revisions of this report described a vendored
+upstream code copied, except the constant-time field inversion
+(`src/c/internal/ama_fe25519_safegcd.h`), which is adapted from libsecp256k1's
+safegcd `modinv64` reference implementation under its MIT licence (attributed
+in `NOTICE`; `src/c/PROVENANCE.md` classifies it "Adapted (safegcd)"; the
+C-library SBOM records the pedigree). Earlier revisions of this report described a vendored
 public-domain x86-64 backend; it was removed in the twenty-first maintenance
 pass (see CHANGELOG). The AMA wrapper above it (API contract, FROST
 integration, expanded-key fast path) is likewise in-house.
@@ -193,8 +197,9 @@ Section 11.2 Table 5, security category 5 (n=32) requires:
     PRF_msg(SK.prf, opt_rand, M) = Trunc_n(HMAC-SHA-512(SK.prf, opt_rand || M))
 
 **Fix:** Implemented `ama_hmac_sha512_3()` in `src/c/internal/ama_sha2.h` (FIPS
-198-1 compliant HMAC with SHA-512). Updated `spx_prf_msg()` to use HMAC-SHA-512
-with Trunc_n output truncation.
+198-1 compliant HMAC with SHA-512). Updated PRF_msg — today `sha2_PRF_msg()` in
+`src/c/ama_slhdsa.c`, the file the SHA2-256f signer now lives in — to use
+HMAC-SHA-512 with Trunc_n output truncation.
 
 **Fail-closed error paths:** `ama_hmac_sha512_3()` returns `int` (`0` on
 success, `-1` on `calloc` allocation failure, `-2` on `size_t` overflow

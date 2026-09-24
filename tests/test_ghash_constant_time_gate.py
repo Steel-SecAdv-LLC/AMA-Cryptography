@@ -891,14 +891,99 @@ class TestEveryTargetMeasuresItsEntryPoint:
         only witness for that branch.  Iterated, not parametrized: the set of
         targets that have a taint driver is the tool's to define, and a
         parametrized version would need a skip for every one that does not.
+
+        A taint-ONLY target (no count driver, see TAINT_ONLY_ENTRY_POINTS) is
+        held to the same rule through its own table.
         """
-        assert set(tool._TAINT_DRIVERS) <= set(ENTRY_POINTS)
+        entry_points = {**ENTRY_POINTS, **TAINT_ONLY_ENTRY_POINTS}
+        assert set(tool._TAINT_DRIVERS) <= set(entry_points)
         wrong = {
-            target: ENTRY_POINTS[target]
+            target: entry_points[target]
             for target, taint in tool._TAINT_DRIVERS.items()
-            if ENTRY_POINTS[target] not in _calls(taint)
+            if entry_points[target] not in _calls(taint)
         }
         assert not wrong, f"taint drivers that never call their entry point: {wrong}"
+
+    def test_taint_only_targets_are_exactly_the_declared_ones(self, tool: ModuleType) -> None:
+        """A target with a taint driver and no count driver must say why.
+
+        ``_TAINT_ONLY`` carries the reason a count cannot be the blocking
+        instrument; a taint driver with no count driver and no entry there
+        would be a target whose missing count nobody justified.
+        """
+        taint_only = set(tool._TAINT_DRIVERS) - set(tool._DRIVERS)
+        assert taint_only == set(tool._TAINT_ONLY) == set(TAINT_ONLY_ENTRY_POINTS)
+        assert not set(tool._TAINT_ONLY) & set(tool.THRESHOLDS)
+        for target, reason in tool._TAINT_ONLY.items():
+            assert len(reason.split()) > 20, f"{target}: the reason is a sentence, not a flag"
+
+    def test_a_taint_only_target_refuses_to_run_without_taint(
+        self, tool: ModuleType, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Exit 2 (inconclusive), never a silent fall back to something else."""
+        for target in tool._TAINT_ONLY:
+            assert tool.main(["--lib", "does-not-matter.a", "--target", target]) == 2
+            assert "run it with --taint" in capsys.readouterr().err
+
+
+#: Targets with a taint driver and deliberately no instruction-count driver,
+#: and the entry point each measures.  SLH-DSA signing does different work per
+#: key BY CONSTRUCTION (WOTS+ chain lengths are digits of SK.seed-derived
+#: values the signature publishes), so a count target demanding equality would
+#: fail a correct implementation; the taint target is its blocking instrument.
+TAINT_ONLY_ENTRY_POINTS: dict[str, str] = {
+    "slhdsa-sign": "ama_slhdsa_sign",
+}
+
+
+class TestTheSlhDsaTaintTarget:
+    """INVARIANT-12 used to exempt SLH-DSA signing on the premise of a
+    reject-and-resample loop FIPS 205 does not have.  The exemption is gone,
+    and this target is what holds SLH-DSA signing to the rule instead."""
+
+    def test_the_driver_taints_both_secret_seeds_for_both_parameter_sets(
+        self, tool: ModuleType
+    ) -> None:
+        source = tool._TAINT_DRIVERS["slhdsa-sign"]
+        assert source.startswith(tool._TAINT_PRELUDE)
+        driver = _strip_c_comments(source[len(tool._TAINT_PRELUDE) :])
+        assert "TAINT(sk_seed, n)" in driver and "TAINT(sk_prf, n)" in driver
+        assert "AMA_SLHDSA_SHA2_256F" in driver and "AMA_SLHDSA_SHAKE_128S" in driver
+        # Only public outputs are untainted: the return code, the public key,
+        # the PK.seed || PK.root half of the secret key, and the signature.
+        untainted = set(re.findall(r"UNTAINT\(([^,]+),", driver))
+        assert untainted == {"&rc", "pk", "sk + 2 * n", "sig"}
+
+    def test_the_library_declassifies_only_what_the_signature_publishes(self) -> None:
+        """``grep -rn AMA_CT_DECLASSIFY src/c`` is the reviewable list of
+        values asserted public.  For SLH-DSA it is R, the FORS public key and
+        each XMSS root; declassifying anything else (SK.seed, a WOTS+ chain
+        value) would make the taint lane pass by fiat, and fails here."""
+        source = _strip_c_comments(
+            (REPO_ROOT / "src" / "c" / "ama_slhdsa.c").read_text(encoding="utf-8")
+        )
+        declassified = re.findall(r"AMA_CT_DECLASSIFY\((\w+),\s*p->n\)", source)
+        assert sorted(declassified) == ["R", "fors_pk", "root", "root"]
+        assert len(re.findall(r"AMA_CT_DECLASSIFY\(", source)) == 4
+
+    def test_the_dudect_workflow_runs_every_taint_driver(self, tool: ModuleType) -> None:
+        """A taint driver no CI step runs is a gate over nothing.
+
+        Only the AMA_TESTING_MODE loop is required to list every driver: the
+        shipped-shared-object loop leaves out, by design, the drivers whose
+        library-side declassification points are no-ops outside testing mode.
+        """
+        text = DUDECT_WORKFLOW.read_text(encoding="utf-8")
+        step = next(
+            s
+            for job in yaml.safe_load(text)["jobs"].values()
+            for s in job.get("steps", [])
+            if s.get("name", "").startswith("Secret-taint - no control flow")
+        )
+        loop = re.search(r"for target in (.*?); do", step["run"], re.DOTALL)
+        assert loop is not None
+        listed = set(loop.group(1).replace("\\", " ").split())
+        assert set(tool._TAINT_DRIVERS) <= listed, set(tool._TAINT_DRIVERS) - listed
 
     def test_the_expanded_signer_has_a_taint_driver(self, tool: ModuleType) -> None:
         """INVARIANT-51's expanded form is verified by a masked tag compare.

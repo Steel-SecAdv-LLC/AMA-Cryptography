@@ -33,6 +33,7 @@ import json
 import re
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,138 @@ INTERNAL_SUPPORT: frozenset[str] = frozenset(
         "ama_sha256_ni",  # SHA-NI accelerated SHA-256 backend
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Adapted third-party source (CycloneDX pedigree)
+#
+# NOTICE lists source that is compiled into the library and ADAPTED from a
+# third-party implementation under that implementation's licence.  Until
+# this registry existed the SBOM recorded none of it: ama_ed25519 was
+# rendered as an in-house Apache-2.0 component while NOTICE carried an MIT
+# attribution for the safegcd inversion it compiles in, and the README and
+# the INVARIANT-1 addendum told a licence reviewer there was no third-party
+# code at all.  A downstream redistributor reading the SBOM or those pages
+# would have shipped binaries without the MIT notice NOTICE says applies.
+#
+# The registry is checked three ways, so it cannot drift from the tree:
+#   * every src/c or include/ file whose comments say "see NOTICE" must be
+#     registered here (a new adaptation cannot land unrecorded);
+#   * every registered file must exist and still say "see NOTICE";
+#   * NOTICE must name every registered file and its licence, and the
+#     component it is attributed to must be a C_COMPONENTS entry.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AdaptedSource:
+    """One compiled-in file adapted from a third-party implementation."""
+
+    component: str  # the C_COMPONENTS entry that compiles it in
+    licence: str  # SPDX identifier of the upstream licence
+    upstream_name: str
+    upstream_supplier: str
+    upstream_purl: str
+    upstream_file: str  # the upstream file its structure follows
+    what: str  # one line: what was adapted
+
+
+ADAPTED_SOURCES: dict[str, AdaptedSource] = {
+    "src/c/internal/ama_fe25519_safegcd.h": AdaptedSource(
+        component="ama_ed25519",
+        licence="MIT",
+        upstream_name="secp256k1",
+        upstream_supplier="The Bitcoin Core developers",
+        upstream_purl="pkg:github/bitcoin-core/secp256k1",
+        upstream_file="src/modinv64_impl.h",
+        what=(
+            "Constant-time inversion modulo 2^255 - 19 (Bernstein-Yang safegcd, "
+            "batched 62-bit divsteps); its structure follows libsecp256k1's "
+            "modinv64 reference implementation."
+        ),
+    ),
+}
+
+#: A comment that points the reader at NOTICE for this file's licence.  Comment
+#: leaders (``*``, ``//``) and line breaks between the words are tolerated, as
+#: in the safegcd header's "MIT licence — see\n * NOTICE".
+_SEE_NOTICE = re.compile(r"\bsee(?:[\s*/]|\\)+NOTICE\b")
+
+
+def _cites_notice(text: str) -> bool:
+    return bool(_SEE_NOTICE.search(text))
+
+
+def check_adapted_sources(repo: Path = REPO) -> list[str]:
+    """Problems with the adapted-source registry; empty when it holds."""
+    problems: list[str] = []
+    citing: set[str] = set()
+    for root in ("src/c", "include"):
+        base = repo / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.suffix not in (".c", ".h", ".S", ".s", ".asm") or not path.is_file():
+                continue
+            if _cites_notice(path.read_text(encoding="utf-8", errors="replace")):
+                citing.add(path.relative_to(repo).as_posix())
+    for name in sorted(citing - set(ADAPTED_SOURCES)):
+        problems.append(
+            f"{name} cites NOTICE for its licence but is not in ADAPTED_SOURCES, so "
+            "the SBOM carries no pedigree or licence for it"
+        )
+    notice_path = repo / "NOTICE"
+    notice = notice_path.read_text(encoding="utf-8") if notice_path.is_file() else ""
+    components = {name for name, _ in C_COMPONENTS}
+    for name, adapted in sorted(ADAPTED_SOURCES.items()):
+        if name not in citing:
+            problems.append(
+                f"ADAPTED_SOURCES lists {name}, which does not exist or no longer cites "
+                "NOTICE; remove the entry or restore the attribution"
+            )
+        if name not in notice:
+            problems.append(f"NOTICE does not name {name}")
+        if not re.search(rf"\b{re.escape(adapted.licence)}\b", notice):
+            problems.append(f"NOTICE does not state the {adapted.licence} licence for {name}")
+        if adapted.component not in components:
+            problems.append(
+                f"ADAPTED_SOURCES attributes {name} to {adapted.component!r}, which is "
+                "not a C_COMPONENTS entry"
+            )
+    return problems
+
+
+def _component_record(name: str, description: str, version: str) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "type": "library",
+        "name": name,
+        "version": version,
+        "description": description,
+        "scope": "required",
+        "purl": f"pkg:generic/{name}@{version}",
+    }
+    adapted = {path: a for path, a in sorted(ADAPTED_SOURCES.items()) if a.component == name}
+    if adapted:
+        licences = sorted({"Apache-2.0", *(a.licence for a in adapted.values())})
+        record["licenses"] = [{"expression": " AND ".join(licences)}]
+        record["pedigree"] = {
+            "ancestors": [
+                {
+                    "type": "library",
+                    "name": a.upstream_name,
+                    "supplier": {"name": a.upstream_supplier},
+                    "purl": a.upstream_purl,
+                    "licenses": [{"license": {"id": a.licence}}],
+                    "description": f"{a.upstream_file}: the reference {path} adapts",
+                }
+                for path, a in adapted.items()
+            ],
+            "notes": " ".join(
+                f"{path} is adapted source ({a.licence}, attributed in NOTICE): {a.what}"
+                for path, a in adapted.items()
+            ),
+        }
+    return record
 
 
 def check_component_completeness() -> None:
@@ -183,22 +316,16 @@ def render_sbom(version: str) -> dict[str, Any]:
     rolling cache of random UUIDs.
     """
     check_component_completeness()
+    adapted_problems = check_adapted_sources()
+    if adapted_problems:
+        raise SystemExit("ERROR: tools/generate_sbom.py: " + "; ".join(adapted_problems))
 
     deterministic_namespace = uuid.UUID("c1c7d2bc-1c1f-4e29-9b5a-c3a7e1f4b8d2")
     serial_uuid = uuid.uuid5(deterministic_namespace, f"ama-cryptography-c-library@{version}")
 
-    components = []
-    for name, description in C_COMPONENTS:
-        components.append(
-            {
-                "type": "library",
-                "name": name,
-                "version": version,
-                "description": description,
-                "scope": "required",
-                "purl": f"pkg:generic/{name}@{version}",
-            }
-        )
+    components = [
+        _component_record(name, description, version) for name, description in C_COMPONENTS
+    ]
 
     return {
         "bomFormat": "CycloneDX",

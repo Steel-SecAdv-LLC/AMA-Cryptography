@@ -152,6 +152,7 @@ To add a new function to the dudect test suite:
 
 1. **Edit `tests/c/test_dudect.c`**:
 
+<!-- example: pseudocode: a template for a new lane inside tests/c/test_dudect.c, where my_function is a placeholder -->
 ```c
 static double test_my_function(int iterations) {
     dudect_ctx_t ctx;
@@ -239,7 +240,12 @@ instruction count and was reported by the taint gate at the jump.
 `--taint` drivers exist for `x25519`, `x25519-batch`, `ed25519-sign`,
 `ed25519-sign-expanded`, `ed25519-sign-sse2fold`, `secp256k1-scalarmult`,
 `ecdsa`, `nistp-ecdsa`, `kyber-decaps`, `consttime`, `ghash`, `ascon-encrypt`,
-`agent-binding` and `aead-verify`.
+`agent-binding`, `slhdsa-sign` and `aead-verify`.
+`slhdsa-sign` is the one target with a taint driver and no instruction-count
+driver: SLH-DSA signing does different work per key by construction (the
+WOTS+ chain lengths are digits of values derived from SK.seed), so a count
+target would fail a correct implementation, and the tool refuses to run it
+without `--taint`.
 On its first run over the tree the gate reported, and the tree then removed:
 
 - the RFC 7748 all-zero-output branch in `ama_x25519_key_exchange` and its
@@ -262,12 +268,16 @@ On its first run over the tree the gate reported, and the tree then removed:
   now declassified exactly as on the key-derivation and signing paths, and
   the driver reports none.
 
-The branches that remain on secret-derived values are in ECDSA and ECDH, on
-values the function returns: an out-of-range private key (the verdict is the
-return code), `r == 0` / `s == 0` (the emitted signature), a scalar multiple
-at infinity (impossible for a key in range, on the fixed generator or on a
-validated prime-order peer point), and the RFC 6979 candidate rejection that
-every conforming signer shares.  Each is declassified at its
+The branches that remain on secret-derived values are in ECDSA, ECDH and
+SLH-DSA signing, on values the function returns.  In SLH-DSA they are the
+randomizer R (the signature's first n bytes), the FORS public key and each
+layer's XMSS root, all of which verification recomputes from the signature, and
+from which every chain length and leaf position is computed.  In ECDSA and ECDH
+they are an out-of-range private key (the verdict is the return code), `r == 0`
+/ `s == 0` (the emitted signature), a scalar multiple at infinity (impossible
+for a key in range, on the fixed generator or on a validated prime-order peer
+point), and the RFC 6979 candidate rejection that every conforming signer
+shares.  Each is declassified at its
 site with `AMA_CT_DECLASSIFY` (`src/c/internal/ama_ct_declassify.h`), a
 no-op in production and a Memcheck client request in `AMA_TESTING_MODE`
 builds — the construction libsecp256k1 and BoringSSL use.

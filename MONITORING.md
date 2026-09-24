@@ -197,13 +197,17 @@ Both detectors are **on by default**, matching this module's existing posture
 that production-ready anomaly detection ships out of the box. A deployment gets
 the protection with no opt-in step:
 
+<!-- example: python-run -->
 ```python
+from ama_cryptography.monitoring import create_monitor
+
 monitor = create_monitor()            # both detectors active
 ```
 
 Opting out drops the detector objects entirely and restores the
 pre-INVARIANT-30 security-report shape:
 
+<!-- example: python-run continues -->
 ```python
 monitor = create_monitor(detect_volume_spikes=False, detect_note_artifacts=False)
 ```
@@ -340,6 +344,7 @@ fail-closed policy properties rather than merely the absence of crashes. See
 
 ### Basic Usage
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography_monitor import AmaCryptographyMonitor
 from ama_cryptography.legacy_compat import *
@@ -367,6 +372,7 @@ print(f"Total alerts: {report['total_alerts']}")
 
 ### Advanced Configuration
 
+<!-- example: python-run continues -->
 ```python
 # Custom thresholds
 monitor = AmaCryptographyMonitor(
@@ -435,6 +441,7 @@ Monitoring data can contain sensitive information:
 
 Prevent denial-of-service via alert spam:
 
+<!-- example: python-run continues -->
 ```python
 # Built-in: max 1000 alerts retained by default
 monitor = AmaCryptographyMonitor(alert_retention=1000)
@@ -476,6 +483,7 @@ gates against.)
 
 The 3R monitor feeds into the **Adaptive Cryptographic Posture System**, which evaluates anomaly scores and triggers automated responses:
 
+<!-- example: python-run continues -->
 ```python
 from ama_cryptography.adaptive_posture import PostureEvaluator, CryptoPostureController
 

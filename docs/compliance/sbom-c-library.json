@@ -76,7 +76,33 @@
       "version": "5.0.0",
       "description": "Ed25519 digital signatures (RFC 8032)",
       "scope": "required",
-      "purl": "pkg:generic/ama_ed25519@5.0.0"
+      "purl": "pkg:generic/ama_ed25519@5.0.0",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 AND MIT"
+        }
+      ],
+      "pedigree": {
+        "ancestors": [
+          {
+            "type": "library",
+            "name": "secp256k1",
+            "supplier": {
+              "name": "The Bitcoin Core developers"
+            },
+            "purl": "pkg:github/bitcoin-core/secp256k1",
+            "licenses": [
+              {
+                "license": {
+                  "id": "MIT"
+                }
+              }
+            ],
+            "description": "src/modinv64_impl.h: the reference src/c/internal/ama_fe25519_safegcd.h adapts"
+          }
+        ],
+        "notes": "src/c/internal/ama_fe25519_safegcd.h is adapted source (MIT, attributed in NOTICE): Constant-time inversion modulo 2^255 - 19 (Bernstein-Yang safegcd, batched 62-bit divsteps); its structure follows libsecp256k1's modinv64 reference implementation."
+      }
     },
     {
       "type": "library",

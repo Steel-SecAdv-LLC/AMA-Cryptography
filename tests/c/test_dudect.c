@@ -2632,7 +2632,7 @@ static int budget_would_overrun(uint64_t elapsed_ns, uint64_t round_ns, int time
     if (timeout_sec <= 0) {
         return 0;
     }
-    return elapsed_ns + round_ns > (uint64_t)timeout_sec * 1000000000ULL;
+    return elapsed_ns + round_ns > (uint64_t)timeout_sec * UINT64_C(1000000000);
 }
 
 static int budget_schedule_self_test(void) {
@@ -3064,9 +3064,11 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
     DUDECT_REGISTER_LANE(results, idx,
         "ML-DSA-65 sign",
         test_dilithium_sign(iterations), 1);
-    /* INFO, and — like `ML-DSA-65 sign` above — with no deterministic
-     * counterpart, because none can exist.  Stated here rather than left to
-     * be inferred from the flag.
+    /* INFO.  Unlike `ML-DSA-65 sign` above, this lane HAS a blocking
+     * counterpart -- `--target slhdsa-sign --taint` in
+     * tools/check_ghash_constant_time.py -- but not an instruction-count one,
+     * because none can exist.  Stated here rather than left to be inferred
+     * from the flag.
      *
      * The previous revision of this comment said SLH-DSA signing is
      * "dominated by SHAKE-based WOTS+/FORS/Merkle tree construction" whose
@@ -3078,17 +3080,13 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
      *      SHA-256 / SHA-512 (src/c/ama_slhdsa.c includes ama_sha256.h);
      *      SHAKE belongs to the OTHER parameter set, SLH-DSA-SHAKE-128s.
      *      The stated mechanism named a hash this lane never calls.
-     *   2. WRONG CLAIM.  The hot loops DO branch on the message digest, in
-     *      six places that a taint run (valgrind memcheck over a signing
-     *      call with SK.seed || SK.prf marked undefined) reports by name:
-     *        slh_wots_chain      ama_slhdsa.c:637  (x2) loop bound is
-     *                            `steps` = basew[i], the base-w digit of the
-     *                            root being signed;
-     *        slh_fors_treehash   ama_slhdsa.c:744  `(leaf_idx ^ 1) == i`
-     *                            and :754 the auth-path sibling test, both
-     *                            on leaf_idx, which comes from the digest;
-     *        slh_xmss_treehash   ama_slhdsa.c:868 and :879, the same
-     *                            auth-path selection one tree up.
+     *   2. WRONG CLAIM.  The hot loops DO branch on the message digest.  A
+     *      taint run with SK.seed || SK.prf marked undefined and nothing
+     *      declassified reports the chain loop bound in slh_wots_chain
+     *      (`steps` = basew[i], a base-w digit of the value being signed)
+     *      and the auth-path selections in slh_fors_treehash and
+     *      slh_xmss_treehash (`(leaf_idx ^ 1) == i` and the sibling test,
+     *      on indices taken from the digest).
      *   3. WRONG REASON.  The flag is not about CI cache noise.  The work
      *      is data-dependent BY CONSTRUCTION, and the deterministic
      *      instrument says so without statistics: under callgrind at -O3,
@@ -3101,30 +3099,36 @@ static void run_all_tests(int iterations, test_result_t *results, int *num_resul
      *      provably identical, still moves the count by up to 2,566,843:
      *      each hypertree layer's WOTS signs the ROOT of the layer below,
      *      and those roots are SK.seed-derived, so the chain lengths are
-     *      too.  A `slh-dsa-sign` target in
-     *      tools/check_ghash_constant_time.py with a limit of 0 is
-     *      therefore not merely missing, it is unachievable.
+     *      too.  An instruction-count target with a limit of 0 is therefore
+     *      not merely missing, it is unachievable.
      *
      * What IS covered, and by what:
+     *   - Every value those branches depend on is PUBLISHED in the
+     *     signature: R is its first n bytes, the digest is H_msg(R, PK, M'),
+     *     and the FORS public key and every XMSS root are what verification
+     *     recomputes from the signature.  src/c/ama_slhdsa.c declassifies
+     *     exactly those (AMA_CT_DECLASSIFY, a no-op outside
+     *     AMA_TESTING_MODE), and the `slhdsa-sign` taint target then checks,
+     *     for SHA2-256f and SHAKE-128s, that NOTHING ELSE derived from
+     *     SK.seed or SK.prf -- no WOTS+ or FORS secret, no tree node --
+     *     decides a branch, a conditional move or an address.  That is a
+     *     blocking, deterministic answer to the question this lane can only
+     *     sample.
      *   - Every primitive the loops call (SHA-256/SHA-512 compression, the
      *     PRF, the tree hashes) is branch-free on its own operands, which
      *     the KAT suite and the `sha3-256` / AES targets pin.
-     *   - The quantities the branches above depend on are all PUBLISHED in
-     *     the signature: R is its first n bytes, and every intermediate root
-     *     is reconstructible from the WOTS signatures and auth paths — that
-     *     reconstruction IS verification.  So the timing reveals what the
-     *     signature hands the attacker anyway, which is the standard
-     *     argument for SLH-DSA and the reason FIPS 205 specifies the scheme
-     *     this way.  AMA does not claim more than the standard does.
      *   - Secret ZEROIZATION on these paths is pinned by
      *     tools/check_c_secret_zeroization.py.
      *
-     * Why taint cannot gate it either: memcheck cannot tell "secret" from
-     * "secret-derived but published", so all six sites report.  Separating
-     * them would need UNTAINT points at R and at each root, inside the
-     * library, which a driver in tools/check_ghash_constant_time.py cannot
-     * reach.  That is the honest reason this lane has no blocking gate, and
-     * it is a property of the scheme, not an omission in this suite. */
+     * An earlier revision closed this comment with "Why taint cannot gate it
+     * either: ... Separating them would need UNTAINT points at R and at each
+     * root, inside the library, which a driver in
+     * tools/check_ghash_constant_time.py cannot reach."  The first half was
+     * right and the conclusion was not: the declassification points belong
+     * in the library, as they already did for ECDSA, and that is where they
+     * now are.  INVARIANT-12's carve-out for SLH-DSA, which rested on a
+     * "reject and resample" loop FIPS 205 does not have, was withdrawn with
+     * it. */
     DUDECT_REGISTER_LANE(results, idx,
         "SLH-DSA-SHA2-256f sign",
         test_slhdsa_sign(iterations), 1);

@@ -115,7 +115,9 @@ with no gate looks like.
 ### INVARIANT-1 Addendum — Vendoring Policy
 
 No cryptographic source is vendored. Every primitive the library ships is
-written in this repository, and `src/c/vendor/` **must not exist**:
+written in this repository — one file of it adapted from a third-party
+reference under that reference's licence, named below — and `src/c/vendor/`
+**must not exist**:
 `tools/check_vendor_isolation.py` fails the build if the directory reappears
 or if any file under `src/c/` includes a forbidden vendor header, in a fallback
 arm or anywhere else, and `tests/test_vendor_isolation_gate.py` pins both
@@ -128,10 +130,24 @@ selected by a CMake option on x86-64 and MSVC builds. The twenty-first
 maintenance pass replaced it with the in-house Ed25519 backend
 (`src/c/ama_ed25519.c`, `src/c/internal/ama_ed25519_ge.h`), which is measured
 faster than it was on every row, and removed the option, the shim, the
-differential CI job and the tree itself. The only third-party code left in
-the repository is the dudect timing harness under `tests/c/dudect/`, which is
-test tooling, not a cryptographic primitive, and is outside `src/c/`. The
-**Vendored Dependencies** appendix at the end of this document records the
+differential CI job and the tree itself. The only third-party code copied
+into the repository is the dudect timing harness under `tests/c/dudect/`,
+which is test tooling, not a cryptographic primitive, and is outside `src/c/`.
+
+One compiled-in file is **adapted**, not written from the standard alone:
+the constant-time field inversion in `src/c/internal/ama_fe25519_safegcd.h`,
+which every Ed25519 keygen and sign runs, follows the batched 62-bit structure
+of libsecp256k1's safegcd `modinv64` reference implementation (MIT
+licence). It is attributed under that licence in
+`NOTICE`, and the C-library SBOM records it as the `ama_ed25519` component's
+pedigree with the licence expression `Apache-2.0 AND MIT`. An earlier revision
+of this addendum called the dudect harness "the only third-party code left in
+the repository", which a licence review would have read as "the Ed25519 path
+carries no third-party licence obligation"; it does. `tools/generate_sbom.py`
+now fails closed if a file under `src/c/` or `include/` cites `NOTICE` without
+an SBOM pedigree entry, if a registered file stops citing it, or if `NOTICE`
+stops naming the file or its licence (`tests/test_sbom_adapted_sources.py`).
+The **Vendored Dependencies** appendix at the end of this document records the
 history.
 
 ## INVARIANT-2 — Fail-Closed CI
@@ -566,14 +582,33 @@ attacker-observable.
 4. **No secret-dependent branching:** Branching, table indexing, loop counts,
    and memory access patterns dependent on secret data are **prohibited** in
    both C and Python cryptographic paths, with one carve-out mandated by the
-   standards themselves: **the FIPS 204 (ML-DSA) and FIPS 205 (SLH-DSA)
-   signing loops reject and resample by construction, so their iteration count
-   is secret-dependent.** This is not a defect and not fixable without
-   diverging from the standard; `CONSTANT_TIME_VERIFICATION.md` §"ML-DSA /
-   SLH-DSA signing" documents it, the dudect lane measures it (info-only, with
-   its deterministic counterpart gate), and it leaks no private-key material —
-   only a timing signal on the number of rejections for a given message. Every
+   standard itself: **the FIPS 204 (ML-DSA) signing loop rejects and resamples
+   by construction, so its iteration count is secret-dependent.** This is not
+   a defect and not fixable without diverging from the standard;
+   `CONSTANT_TIME_VERIFICATION.md` §"Rejection sampling and what these gates
+   cannot cover" documents it, the dudect lane measures it (info-only — no
+   deterministic counterpart can exist, because a correct signer does
+   different work per key), and it leaks no private-key material — only a
+   timing signal on the number of rejections for a given message. Every
    *other* secret-dependent construct remains prohibited.
+
+   **SLH-DSA is not in the carve-out.** An earlier revision of this rule said
+   the FIPS 205 (SLH-DSA) signing loop also "rejects and resamples by
+   construction" and exempted it. FIPS 205 has no rejection loop. SLH-DSA
+   signing does a variable amount of work — WOTS+ chain lengths, FORS and XMSS
+   leaf positions — but every value that decides it is published in the
+   signature: the randomizer R (its first n bytes) and the digest computed
+   from it, the FORS public key, and each layer's XMSS root, which verification
+   recomputes. That is variation on public data, which this rule does not
+   prohibit, and the exemption pre-excused the thing it does prohibit: a
+   branch or index on an SK.seed-derived WOTS+ or FORS secret would have shipped
+   under it with no blocking instrument watching. SLH-DSA signing is now held
+   to this rule by `tools/check_ghash_constant_time.py --target slhdsa-sign
+   --taint` in `dudect.yml`: SK.seed and SK.prf are marked secret under
+   Memcheck for both shipped parameter sets, `src/c/ama_slhdsa.c` declassifies
+   exactly those published values (`AMA_CT_DECLASSIFY`, a no-op outside
+   `AMA_TESTING_MODE`), and any conditional jump, conditional move or address
+   that depends on anything else derived from the secret fails the lane.
 
 **Enforcement:** CI runs constant-time verification checks (dudect, ctgrind,
 custom timing harnesses, static structural scans) and **must** fail on
@@ -1024,7 +1059,10 @@ not as recoverable telemetry loss.
 ## Vendored Dependencies
 
 **None.** `src/c/vendor/` does not exist and the vendor-isolation gate fails
-the build if it reappears (INVARIANT-1 Addendum — Vendoring Policy).
+the build if it reappears (INVARIANT-1 Addendum — Vendoring Policy). One
+compiled-in file is *adapted* from a third-party reference rather than vendored
+— the MIT-licensed safegcd inversion the addendum names — and carries its
+attribution in `NOTICE` and its pedigree in the C-library SBOM.
 
 ### History: the removed x86-64 Ed25519 backend
 
@@ -1669,7 +1707,7 @@ running it. The checker distinguishes a *deliberate, documented* exclusion
 from silent drift.
 
 **The Python lane, and why it exists.** `ama_cryptography/_asn1.py` and
-`key_formats.py` are hostile-input parsers in exactly the sense the fifteen C
+`key_formats.py` are hostile-input parsers in exactly the sense the sixteen C
 harnesses are — anyone who can hand you a key file reaches them — and they had
 no harness at all. What they had was a deterministic mutation sweep inside
 pytest: 120 fixed mutations per algorithm from one seed, which explores the same
@@ -2842,7 +2880,7 @@ it so there is one build integration.
 
 **Measured cost.** One cache restore and save per matrix cell (corpora are
 tens of KB to a few MB); a merge of a few seconds; the OSS-Fuzz job pulls
-`base-builder` and `base-runner` and builds fifteen fuzzers, roughly ten
+`base-builder` and `base-runner` and builds sixteen fuzzers, roughly ten
 minutes in parallel with the other lanes.
 
 ---
@@ -3298,6 +3336,7 @@ signatures. `cmake/ama_exports.map` localises both §9 names as defence in
 depth, and `tools/check_ctypes_abi.py` refuses a ctypes declaration for a
 symbol the public header no longer declares.
 
+<!-- claim-check: quoting-retired-wording -->
 **ML-DSA, the same finding one scheme over (2026-09-23).** FIPS 204 §5.2
 restricts `ML-DSA.Sign_internal` (Algorithm 7) the same way, and the library
 still shipped it as `ama_ml_dsa_sign` / `ama_ml_dsa_verify`, with the Python
@@ -3546,6 +3585,7 @@ not provide — and both are defects in the deployment, not typos in a file.
 The 2026-09 documentation-integrity pass found every one of those four kinds,
 and the worst of them was an example:
 
+<!-- example: pseudocode: quotes the retired defective example verbatim; running it is the defect it records -->
 ```c
 uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES];   /* 64 */
 ama_ed25519_keypair(pk, sk);
@@ -3590,12 +3630,34 @@ the code was what moved.
 * `tools/check_doc_examples.py` — `security-checks` (Python and C against the
   build tree) and `c-consumer` (C against an *installed* prefix, under gcc and
   clang, which is the only place the documented `#include <ama_cryptography.h>`
-  and pkg-config flags are the ones a downstream consumer gets). Every
-  `python`/`c` block on a covered page must declare its mode; an unmarked block
-  fails, which is what stops coverage decaying as pages grow. `c-run` blocks
+  and pkg-config flags are the ones a downstream consumer gets). The pages it
+  covers are **every Markdown file the repository tracks** except the
+  historical record (`CHANGELOG.md` and `docs/changelog/`), derived from
+  `git ls-files` rather than listed, so a new page is covered by the commit
+  that adds it. Every `python`/`c` block on a covered page must declare its
+  mode; an unmarked block fails, which is what stops coverage decaying as pages
+  grow. A block that is the next step of the page's running example is
+  `python-run continues` and executes after the one before it. `c-run` blocks
   execute under `valgrind --track-origins=yes`, because compiling is not enough
   — the uninitialised-seed example compiles and succeeds, and only a memory
   checker can see it.
+
+  <!-- claim-check: quoting-retired-wording -->
+  Until 2026-09-24 this bullet was true of seven wiki pages only. The gate
+  carried a fixed seven-entry list while the Statement above said "every fenced
+  block on a user-facing page", and 83 blocks on seventeen other pages ran
+  under nothing. Bringing them under the gate found what an unchecked example
+  accumulates: `wiki/Adaptive-Posture.md` called `compute_resonance`,
+  `compute_recursion`, `compute_refactoring`, `get_current_state` and
+  `get_monitoring_metrics`, none of which exist, and compared an unordered
+  `ThreatLevel` with `>=`; `IMPLEMENTATION_GUIDE.md`'s encrypted keystore
+  imported a `PBKDF2` class PyCA does not have and read back 16 bytes of the
+  32-byte salt it wrote, its migration test asserted `all(results.values())`
+  over a result that is `None` for a check that does not apply, and its
+  parallel-verification example had no `__main__` guard;
+  `wiki/Cryptography-Algorithms.md` passed `p_cost=` to a function whose
+  parameter is `parallelism`; and `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`'s
+  worked example built a `KeyManagementSystem` from fields it has never had.
 * `tools/check_crypto_construction_docs.py` — `security-checks`. Derives its
   authority with `ast` from `hybrid_combiner.py`, `adaptive_posture.py`,
   `equations.py`, `legacy_compat.py`, `src/c/ama_consttime.c` and
@@ -3607,7 +3669,15 @@ the code was what moved.
   same people — and the four gate scripts and their test module are exempt by
   name, because a gate cannot be written without quoting what it rejects. That
   exemption list is checked at startup, so an entry outliving its file fails
-  rather than quietly widening.
+  rather than quietly widening. Symbol existence is checked for both
+  languages: a documented `from ama_cryptography… import` must name something
+  the package binds, and a documented C function — a backticked bare call whose
+  prefix is the prefix of some function `src/c/` or `include/` defines or calls
+  — must appear in the implementation's code, comments and strings excluded.
+  The header's symbol set was derived and printed for as long as the gate
+  existed and compared against nothing, so `wiki/Security-Model.md` and
+  `wiki/Cryptography-Algorithms.md` could name a `fe25519_sq` squaring
+  function that has never existed (it is `fe51_sq`).
 * `tools/check_public_api_docs.py` — `security-checks`, with
   `--require-library`. Bare-import reachability (measured in a fresh
   subprocess, because Python binds a submodule as a package attribute the

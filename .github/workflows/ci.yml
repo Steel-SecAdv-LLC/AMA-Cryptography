@@ -1330,6 +1330,10 @@ jobs:
       # JSON object when it returns an enum; MASTER_OMNI_CODES, a name that
       # has never existed; and the uninitialised Ed25519 seed above.
       #
+      # The covered pages are every Markdown file git tracks except the
+      # historical record (CHANGELOG.md, docs/changelog/), derived rather than
+      # listed -- the list this gate used to carry held seven wiki pages while
+      # 83 blocks elsewhere ran under nothing.
       # Every python/c block on a covered page must declare what it claims
       # (python-run, python-signature, python-names, c-run, c-decl, c-const,
       # or `pseudocode: <reason>`); an unmarked block fails, which is what

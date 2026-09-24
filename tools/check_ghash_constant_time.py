@@ -328,11 +328,15 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: informational only where something else blocks.  `tests/c/test_dudect.c`
 #: registers eight info-only wall-clock lanes, and each one that names a reason
 #: names a deterministic counterpart: `Kyber-1024 decaps` cites `kyber-decaps`,
-#: `secp256k1 ECDSA sign` cites `ecdsa`.  Two had none — `ML-DSA-65 sign` and
-#: `SLH-DSA-SHA2-256f sign`, both of which drive a rejection loop whose
-#: iteration count is a function of the secret, so a zero-delta instruction
-#: count is not merely absent but impossible (see CONSTANT_TIME_VERIFICATION.md,
-#: "Rejection sampling and what these gates cannot cover") — and a third,
+#: `secp256k1 ECDSA sign` cites `ecdsa`.  Two had none — `ML-DSA-65 sign`,
+#: which drives a rejection loop whose iteration count is a function of the
+#: secret, so a zero-delta instruction count is not merely absent but
+#: impossible (see CONSTANT_TIME_VERIFICATION.md, "Rejection sampling and what
+#: these gates cannot cover"), and `SLH-DSA-SHA2-256f sign`, whose count is
+#: impossible for a different reason (its work varies with values the signature
+#: publishes; FIPS 205 has no rejection loop, and an earlier revision of this
+#: paragraph said it did) and which now has the taint-only `slhdsa-sign`
+#: target (see _TAINT_ONLY) — and a third,
 #: `X25519 scalarmult batch x4`, had none for no reason at all: the property is
 #: the same one `x25519` states, over a DIFFERENT entry point.
 #:
@@ -2173,6 +2177,81 @@ int main(void) {
     return 0;
 }
 """,
+    "slhdsa-sign": _TAINT_PRELUDE
+    + r"""
+/* Secret: SK.seed and SK.prf, for BOTH parameter sets the library ships
+ * (SLH-DSA-SHA2-256f, the one the info-only dudect lane times, and
+ * SLH-DSA-SHAKE-128s).  Key generation runs under taint too; the public key,
+ * and the PK.seed || PK.root half of the secret key, are public outputs and
+ * are untainted, as is the signature.
+ *
+ * SLH-DSA signing does variable work -- WOTS+ chain lengths, FORS and XMSS
+ * leaf positions -- but every quantity that decides it is published in the
+ * signature: R (its first n bytes) and the digest derived from it, the FORS
+ * public key, and each layer's XMSS root, all of which verification
+ * recomputes.  The library marks exactly those three as public at their
+ * computation (AMA_CT_DECLASSIFY in src/c/ama_slhdsa.c, a no-op outside
+ * AMA_TESTING_MODE).  Every other value derived from SK.seed or SK.prf --
+ * the WOTS+ and FORS secrets, the tree nodes -- stays tainted, so a branch,
+ * conditional move or address on any of them is reported. */
+static int sign_one(ama_slhdsa_param_set_t ps, size_t n, size_t pk_len, size_t sig_len) {
+    static uint8_t pk[AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES];
+    static uint8_t sk[AMA_SLHDSA_SHA2_256F_SECRET_KEY_BYTES];
+    static uint8_t sig[AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES];
+    static const uint8_t message[64] = "AMA Cryptography SLH-DSA taint driver.";
+    uint8_t sk_seed[32], sk_prf[32], pk_seed[32];
+    static volatile uint8_t sink;
+    for (unsigned i = 0; i < 32u; i++) {
+        sk_seed[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+        sk_prf[i] = (uint8_t)(0x29u + i * 101u);
+        pk_seed[i] = (uint8_t)(0x07u + i);
+    }
+    TAINT(sk_seed, n);
+    TAINT(sk_prf, n);
+    {
+        ama_error_t rc = ama_slhdsa_keygen_from_seed(ps, sk_seed, sk_prf, pk_seed, pk, sk);
+        UNTAINT(&rc, sizeof rc);
+        if (rc != AMA_SUCCESS) return 1;
+    }
+    UNTAINT(pk, pk_len);
+    UNTAINT(sk + 2 * n, 2 * n);
+    {
+        size_t len = sig_len;
+        ama_error_t rc = ama_slhdsa_sign(ps, sig, &len, message, sizeof message, NULL, 0, sk);
+        UNTAINT(&rc, sizeof rc);
+        if (rc != AMA_SUCCESS) return 1;
+        UNTAINT(sig, sig_len);
+        sink = (uint8_t)(sink ^ sig[0]);
+    }
+    return 0;
+}
+int main(void) {
+    if (sign_one(AMA_SLHDSA_SHA2_256F, 32, AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES,
+                 AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES) != 0) return 1;
+    if (sign_one(AMA_SLHDSA_SHAKE_128S, 16, AMA_SLHDSA_SHAKE_128S_PUBLIC_KEY_BYTES,
+                 AMA_SLHDSA_SHAKE_128S_SIGNATURE_BYTES) != 0) return 1;
+    return 0;
+}
+""",
+}
+
+#: Targets that have a taint driver and NO instruction-count driver, each with
+#: the reason a count cannot be the blocking instrument.  A count target
+#: demands that every key class retire the same instructions; for these the
+#: standard itself makes the work vary with published values, so a correct
+#: implementation would fail it.  Taint asks the question that remains -- does
+#: any branch, conditional move or address depend on a value that is NOT
+#: published -- and answers it without a threshold.  ``main`` refuses to run
+#: one of these without ``--taint`` rather than falling back to anything.
+_TAINT_ONLY: dict[str, str] = {
+    "slhdsa-sign": (
+        "SLH-DSA signing does a different amount of work per (key, message) BY "
+        "CONSTRUCTION: WOTS+ chain lengths are the base-w digits of the FORS "
+        "public key and of each XMSS root, which derive from SK.seed, so no two "
+        "key classes retire the same count (the callgrind spread is recorded "
+        "in tests/c/test_dudect.c). Every such value is published in the signature; the taint "
+        "driver checks that nothing else decides a branch or an address."
+    ),
 }
 
 _TAINT_REPORT_RE = re.compile(
@@ -2587,7 +2666,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--cc", default="cc", help="Compiler for the driver.")
     parser.add_argument(
         "--target",
-        choices=sorted(_DRIVERS),
+        choices=sorted(set(_DRIVERS) | set(_TAINT_DRIVERS)),
         default="ghash",
         help="Which constant-time property to measure.",
     )
@@ -2641,7 +2720,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
-    if args.threshold is None:
+    if not args.taint and args.target in _TAINT_ONLY:
+        print(
+            f"CONSTANT-TIME CHECK INCONCLUSIVE — {args.target!r} has no "
+            f"instruction-count driver; run it with --taint.\n"
+            f"  {_TAINT_ONLY[args.target]}",
+            file=sys.stderr,
+        )
+        return 2
+    if args.threshold is None and not args.taint:
         args.threshold = THRESHOLDS[args.target]
 
     for tool in ("valgrind", args.cc):

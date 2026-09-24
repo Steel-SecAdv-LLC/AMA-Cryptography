@@ -56,6 +56,7 @@ All 5 constant-time functions are implemented and verified:
 Every secret comparison in the Python layer goes through
 `constant_time_compare()`, which calls AMA's own C primitive:
 
+<!-- example: python-signature module=ama_cryptography.secure_memory -->
 ```python
 def constant_time_compare(a: bytes, b: bytes) -> bool:
     # ama_consttime_memcmp from the native library, or RuntimeError.
@@ -344,8 +345,9 @@ The native C implementations provide constant-time operations:
 - All NTT and polynomial arithmetic use constant-time primitives
 - No secret-dependent branches or memory accesses **inside a primitive** —
   see *Rejection sampling and what these gates cannot cover* immediately
-  below for the one place this does not extend to, which is the signing
-  loop the standards themselves define as variable-iteration
+  below for the one place this does not extend to, which is the ML-DSA
+  signing loop FIPS 204 itself defines as variable-iteration (SLH-DSA
+  signing varies only with values it publishes, and is taint-gated)
 - Validated through NIST KAT (Known Answer Test) vectors (FIPS 203/204/205)
 - Rejection sampling uses constant-time comparisons
 
@@ -368,23 +370,52 @@ one of those predicates is a function of the secret vectors `s1`, `s2`, `t0`
 and of the message. Both the number of attempts and the point at which an
 attempt aborts are therefore secret-dependent control flow, **by the
 standard's construction** and identically to the pq-crystals reference
-implementation. SLH-DSA's WOTS+ chain lengths depend on the message digest,
-which depends on the secret PRF key through the randomiser `R`, in the same
-way. Neither is an AMA defect; both are properties of the algorithms as
-standardised.
+implementation. That is not an AMA defect; it is a property of the algorithm
+as standardised, and it is the one carve-out INVARIANT-12 makes.
+
+**SLH-DSA is a different case, and is not in the carve-out.** An earlier
+revision of this section filed it under the same heading ("in the same way"),
+and INVARIANT-12 exempted "the FIPS 204 (ML-DSA) and FIPS 205 (SLH-DSA) signing
+loops [that] reject and resample by construction". FIPS 205 has no rejection
+loop. Signing does a variable amount of work — WOTS+ chain lengths, FORS and
+XMSS leaf positions — but everything that decides it is **published in the
+signature**: the randomizer `R` (its first n bytes) and the digest computed
+from it, the FORS public key, and each layer's XMSS root, which verification
+recomputes. Variation on public data is not what INVARIANT-12 prohibits, so
+SLH-DSA needs no exemption — and it is now held to the rule instead of excused
+from it: `--target slhdsa-sign --taint` (below).
 
 **What follows for the gates.** A deterministic zero-delta instruction count
 is not merely absent for these two primitives, it is *impossible*: the code
 does a different amount of work by design, so a target that demanded equality
-would fail on a correct implementation. `ML-DSA-65 sign` and
-`SLH-DSA-SHA2-256f sign` are consequently the only two info-only wall-clock
-lanes in `tests/c/test_dudect.c` whose blocking counterpart in
-`tools/check_ghash_constant_time.py` is IMPOSSIBLE rather than unwanted, and
-that is stated rather than left to be inferred from a flag.  There are three
-such lanes without a counterpart: the table below lists `Ed25519 verify` as
-the third, with "**none, and none is wanted**" — a different reason, and the
-sentence used to say "the only two ... with no blocking counterpart", which
-the table it introduces contradicts five lines later.
+would fail on a correct implementation. For `ML-DSA-65 sign` that leaves no
+blocking instrument at all — the attempt count is a function of the secret —
+so it is the one info-only wall-clock lane in `tests/c/test_dudect.c` whose
+blocking counterpart in `tools/check_ghash_constant_time.py` is IMPOSSIBLE
+rather than unwanted, and that is stated rather than left to be inferred from
+a flag. `Ed25519 verify` is the other lane without a counterpart, with
+"**none, and none is wanted**" — a different reason.
+
+`SLH-DSA-SHA2-256f sign` used to be listed beside ML-DSA as "none possible".
+The count is impossible for it too, but the question a count cannot answer —
+does anything *other than* the published values decide a branch or an
+address? — is exactly what the Memcheck taint mode answers. `--target
+slhdsa-sign --taint` taints SK.seed and SK.prf for both shipped parameter sets
+(SHA2-256f and SHAKE-128s), and `src/c/ama_slhdsa.c` declassifies `R`, the
+FORS public key and each XMSS root at the point it computes them
+(`AMA_CT_DECLASSIFY`, a no-op outside `AMA_TESTING_MODE`). Everything else
+derived from the secret — every WOTS+ and FORS secret value, every tree node —
+stays tainted and must decide nothing. It does not: the lane passes (gcc
+13.3, Release, LTO off, the `AMA_TESTING_MODE` archive). Both directions were
+checked by mutation: with the declassification of `R` removed it fails with
+16 reports in `slh_sign_internal` and `slh_xmss_treehash`, and with a branch
+planted on a WOTS+ chain secret in `slh_wots_sign` it fails at that branch.
+Before the declassification points existed, a taint run over SHA2-256f signing
+reported 14 distinct sites in `slh_wots_sign`, `slh_xmss_treehash` and
+`slh_sign_internal` — the chain loop bound and the auth-path and index
+selections — all on values this list now declassifies. That is why
+`tests/c/test_dudect.c` used to say taint "cannot gate it": the missing piece
+was the declassification points inside the library, not the instrument.
 
 `tests/c/test_dudect.c` registers **eight** info-only lanes, and here is every
 one of them with its counterpart, because a paragraph that lists some of them
@@ -402,7 +433,7 @@ reads as listing all of them:
   public key, both public), so a target demanding equality would be asserting
   a property the algorithm does not claim |
 | `ML-DSA-65 sign` | **none possible** — see above |
-| `SLH-DSA-SHA2-256f sign` | **none possible** — see above |
+| `SLH-DSA-SHA2-256f sign` | `--target slhdsa-sign --taint` (taint, not count; see above) |
 
 An earlier version of this paragraph named six of the eight and asserted that
 `X25519 scalarmult batch x4` was "the third lane with no counterpart, and the
@@ -428,7 +459,7 @@ address per class. Staging the scalar into one aligned buffer with a branchless
 select — the same thing `dudect_stage_select` does in `tests/c/test_dudect.c` —
 took all four columns to zero.
 
-**What remains covered for ML-DSA and SLH-DSA.** Every primitive the loop
+**What remains covered for ML-DSA.** Every primitive the loop
 calls — NTT, pointwise Montgomery multiplication, the norm checks, SHAKE — is
 branch-free on its own operands; the FIPS 203/204/205 KAT suites pin
 functional correctness; `tools/check_secret_division.py` proves no divide

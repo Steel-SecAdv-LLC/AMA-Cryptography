@@ -51,6 +51,7 @@ The **primary post-quantum signature algorithm** in AMA Cryptography.
 - Verification: ~0.15 ms (6,490 ops/sec)
 
 **Usage:**
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair,
@@ -82,6 +83,7 @@ assert dilithium_verify(b"message", sig, kp.public_key)
 | Security Model | IND-CCA2 in QROM |
 
 **Usage:**
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_kyber_keypair,
@@ -113,6 +115,7 @@ assert recovered == enc.shared_secret
 | State | Stateless (no key state required) |
 
 **Usage:**
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_sphincs_keypair,
@@ -145,11 +148,11 @@ assert sphincs_verify(b"message", sig, kp.public_key)
 | Signature | 64 bytes |
 | Signing | Deterministic (RFC 8032) |
 
-**C Implementation Features (`ama_ed25519.c`):**
-- Dedicated `fe25519_sq()` field squaring (~55 multiplications vs ~100)
-- C11 `_Atomic` with `memory_order_acquire`/`memory_order_release` for thread-safe initialization
+**C Implementation Features (`ama_ed25519.c` + `internal/ama_ed25519_ge.h`):**
+- Dedicated `fe51_sq()` field squaring in the radix-2^51 arithmetic (the group template calls it through `GE_FE_SQ`)
+- No lazy initialisation and so no initialisation guard: the base-point tables are static, generated in-tree by `tools/gen_ed25519_tables.py` into `internal/ama_ed25519_tables.h`
 - Validated against RFC 8032 Test Vector 1 (12 test vectors)
-- MSVC compatibility via volatile fallback for pre-C11 compilers
+- MSVC builds the same fe51 arithmetic through a 128-bit accumulator on `_umul128` / `__shiftright128` (x64) or `__umulh` (ARM64) — no separate backend
 
 **Performance** (Python/ctypes on x86-64 Linux, refreshed 2026-04-21):
 - Key generation: ~0.11 ms (≈ 9,100 ops/sec)
@@ -161,6 +164,7 @@ keygen / 9,700 sign / 7,200 verify ops/sec) because it bypasses the
 ctypes marshaling layer.
 
 **Usage:**
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
@@ -188,6 +192,7 @@ assert crypto.verify(b"message", sig, kp.public_key)
 > **Side-Channel Note:** The default build uses the constant-time bitsliced AES S-box (`AMA_AES_CONSTTIME=ON`). Disabling it (e.g., `-DAMA_AES_CONSTTIME=OFF`) reverts to a 256-byte lookup table S-box that is **not** constant-time with respect to cache-timing and is unsafe in shared-tenant environments (cloud VMs, containers).
 
 **Usage:**
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AESGCMProvider
 import os
@@ -251,6 +256,7 @@ Used in hybrid KEM constructions (paired with ML-KEM-1024 for post-quantum hybri
 | Domain Separation | Via `info` parameter |
 
 **Usage:**
+<!-- example: python-run -->
 ```python
 # HKDF-SHA3-256 is driven through HDKeyDerivation for deterministic seeds,
 # and through the native-C HKDF binding when derivation is invoked via
@@ -323,6 +329,7 @@ verify stored tags without forking the old code.
 
 **C API** (`include/ama_cryptography.h`):
 
+<!-- example: c-decl -->
 ```c
 /* Derive using the pre-2.1.5 buggy blake2b_long loop. */
 ama_error_t ama_argon2id_legacy(
@@ -341,24 +348,37 @@ ama_error_t ama_argon2id_legacy_verify(
 
 **Python API** (`ama_cryptography.pqc_backends`):
 
+<!-- example: python-run -->
 ```python
+import warnings
+
 from ama_cryptography.pqc_backends import (
     native_argon2id,
     native_argon2id_legacy,
     native_argon2id_legacy_verify,
 )
 
+# What your password store holds for one user: the salt, the cost
+# parameters, and a tag an AMA <= 2.1.5 release derived.  (Recreated here
+# with the legacy path so the example runs; it warns by design.)
+password, salt = b"correct horse battery staple", b"per-user-salt-16"
+t, m, p = 2, 1024, 1
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    expected_tag = native_argon2id_legacy(password, salt, t_cost=t, m_cost=m, parallelism=p)
+
 # 1. On the next successful login, verify against the stored legacy tag.
 ok = native_argon2id_legacy_verify(
     password, salt, expected_tag,
-    t_cost=t, m_cost=m, p_cost=p,
+    t_cost=t, m_cost=m, parallelism=p,
 )
 
-# 2. On match, re-derive with the post-fix path and rewrite the store
-#    in the same transaction.
+# 2. On match, re-derive with the post-fix path and rewrite the store in
+#    the same transaction, e.g. storage.update_password_hash(user_id,
+#    new_tag, kdf_version=3) in your persistence layer.
 if ok:
-    new_tag = native_argon2id(password, salt, t_cost=t, m_cost=m, p_cost=p)
-    storage.update_password_hash(user_id, new_tag, kdf_version=3)
+    new_tag = native_argon2id(password, salt, t_cost=t, m_cost=m, parallelism=p)
+    assert new_tag != expected_tag   # the RFC 9106 tag differs from the legacy one
 ```
 
 `native_argon2id_legacy` emits an

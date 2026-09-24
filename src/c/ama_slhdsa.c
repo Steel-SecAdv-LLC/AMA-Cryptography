@@ -59,6 +59,7 @@
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_sha2.h"
+#include "internal/ama_ct_declassify.h"
 /* No <stdlib.h>: this translation unit allocates nothing.  The last heap use
  * was the §10.2 wrapper's whole-message calloc in the three external entry
  * points, and absorbing the wrapper as its own hash segment removed it — so
@@ -982,6 +983,16 @@ static void slh_ht_sign(const slhdsa_params_t *p, uint8_t *sig,
 
     slh_set_type(addr, SLH_ADDR_TYPE_HASHTREE);
     slh_xmss_treehash(p, root, sig, sk_seed, pub_seed, leaf_idx, addr);
+    /* Declassified (src/c/internal/ama_ct_declassify.h): `root` is the XMSS
+     * root the next layer's WOTS+ key signs, and its base-w digits are that
+     * layer's chain lengths.  It is computed here from SK.seed, but it is
+     * PUBLIC BY CONTRACT: FIPS 205 Algorithm 13 (ht_verify) recomputes it
+     * from the WOTS+ signature and authentication path this layer has just
+     * written into the signature (xmss_pkFromSig, Algorithm 11), and the
+     * top layer's root is PK.root itself.  Branching on it reveals nothing
+     * the signature does not.  Every other SK.seed-derived value -- the
+     * WOTS+ and tree-node secrets -- stays tainted and must decide nothing. */
+    AMA_CT_DECLASSIFY(root, p->n);
     sig += p->tree_height * p->n;
 
     for (layer = 1; layer < p->d; ++layer) {
@@ -998,6 +1009,7 @@ static void slh_ht_sign(const slhdsa_params_t *p, uint8_t *sig,
 
         slh_set_type(addr, SLH_ADDR_TYPE_HASHTREE);
         slh_xmss_treehash(p, root, sig, sk_seed, pub_seed, leaf_idx, addr);
+        AMA_CT_DECLASSIFY(root, p->n);  /* public by contract; see above */
         sig += p->tree_height * p->n;
     }
     ama_secure_memzero(root, sizeof(root));
@@ -1178,6 +1190,18 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
                    message, message_len) != 0) {
         return AMA_ERROR_MEMORY;
     }
+    /* Declassified (src/c/internal/ama_ct_declassify.h): R is derived from
+     * SK.prf, but it is the first n bytes of the signature (FIPS 205
+     * Algorithm 19 starts SIG with R), so it is PUBLIC BY CONTRACT.  The
+     * digest it feeds, and the FORS indices, idx_tree and idx_leaf split out
+     * of it, are H_msg(R, PK.seed, PK.root, M') -- functions of public data.
+     * With the FORS public key and each layer's XMSS root (declassified
+     * below, same argument), those are everything the signing work varies
+     * with.  That is why SLH-DSA signing is variable-work WITHOUT being a
+     * secret-dependent construct, and why it needs no carve-out from
+     * INVARIANT-12: FIPS 205 has no rejection loop.  SK.seed and SK.prf
+     * themselves stay tainted. */
+    AMA_CT_DECLASSIFY(R, p->n);
     memcpy(sig_ptr, R, p->n);
     sig_ptr += p->n;
 
@@ -1194,6 +1218,11 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     slh_set_type(fors_addr, SLH_ADDR_TYPE_FORSTREE);
     slh_set_keypair(fors_addr, leaf_idx);
     slh_fors_sign(p, sig_ptr, fors_pk, fors_msg, sk_seed, pub_seed, fors_addr);
+    /* Declassified: the FORS public key is what the hypertree signs, so its
+     * base-w digits are layer 0's chain lengths.  It is PUBLIC BY CONTRACT --
+     * the verifier recomputes it from SIG_FORS (fors_pkFromSig, FIPS 205
+     * Algorithm 17), which was just written into the signature. */
+    AMA_CT_DECLASSIFY(fors_pk, p->n);
     sig_ptr += p->fors_bytes;
 
     /* HT sign over FORS pk. */

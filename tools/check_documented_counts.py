@@ -606,18 +606,62 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
 #
 # ``fuzz_rng.c`` is a support translation unit — it supplies
 # ``__wrap_ama_randombytes`` to ``fuzz_frost`` — not a harness, which is why the
-# authority is "libFuzzer entry points" (15), not "``fuzz_*.c`` files" (16). A
-# document may legitimately state either, so only the entry-point figure — the
-# one that says how many fuzzers actually run — is gated; the source-file count
-# is left to the prose.
+# authority is "libFuzzer entry points" (16 today), not "``fuzz_*.c`` files"
+# (17). A document may legitimately state either, so only the entry-point
+# figure — the one that says how many fuzzers actually run — is gated; the
+# source-file count is left to the prose.
+#
+# A count is a count however it is spelled and wherever the line breaks.  The
+# rule used to match digits only, one physical line at a time, and only lines
+# that themselves said "fuzz".  INVARIANTS.md said the OSS-Fuzz job "builds
+# fifteen fuzzers" and called the harnesses "the fifteen C / harnesses" (wrapped
+# at the slash, in a paragraph whose fuzz mention is three lines further down)
+# against a tree that builds sixteen, and both sentences passed.  The claim is
+# therefore read per PARAGRAPH (consecutive non-blank lines, joined), the
+# number may be written as a word, and "fuzzers" is a noun it recognises.
+_WORD_NUMBERS = {
+    word: value
+    for value, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve "
+        "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+}
+#: Longest word first, so "sixteen" is never read as "six" and a remainder.
+_NUMBER_WORD_ALTERNATION = "|".join(sorted(_WORD_NUMBERS, key=len, reverse=True))
+
 #: Bounded for the same reason as _AGGREGATE_RE above: ``\d+``, ``[\w-]*``
 #: and ``\s+`` were all unbounded (4.1x per doubling, 363 ms at 6,000 chars).
 #: Two adjectives of at most 40 characters each is the shape this is for
-#: ("15 libFuzzer entry points", "16 fuzz targets").
+#: ("15 libFuzzer entry points", "16 fuzz targets", "sixteen C harnesses").
+#: The leading ``\b`` is load-bearing once words are accepted: without it
+#: "standalone libFuzzer targets" reads as "one libFuzzer targets".  "fuzzers"
+#: is accepted only in the plural, because "non-zero causes the fuzzer to
+#: abort" is an instruction, not a count.
 _FUZZ_COUNT_RE = re.compile(
-    r"(\d{1,9})\s{1,8}(?:[A-Za-z][\w-]{0,40}\s{1,8}){0,2}(?:targets?|harnesses?)\b",
+    rf"\b(\d{{1,9}}|{_NUMBER_WORD_ALTERNATION})\s{{1,8}}"
+    r"(?:[A-Za-z][\w-]{0,40}\s{1,8}){0,2}(?:targets?|harnesses?|fuzzers)\b",
     re.IGNORECASE,
 )
+
+
+def _fuzz_count_claims(text: str) -> list[str]:
+    """The number token of every fuzz-target count claim in ``text``.
+
+    One paragraph at a time — consecutive non-blank lines, whitespace-joined —
+    and only paragraphs that mention fuzzing, so an unrelated "N targets"
+    elsewhere is not swept in while a claim wrapped across a line break is
+    still seen.  Revision-history rows are dropped before joining, for the same
+    reason ``check_aggregate_test_counts`` skips them: they record what was
+    true at a past release and are meant to read stale.
+    """
+    claims: list[str] = []
+    for paragraph in re.split(r"\n[ \t]*\n", text):
+        live = [line.strip() for line in paragraph.splitlines() if not _HISTORY_ROW_RE.match(line)]
+        joined = " ".join(live)
+        if "fuzz" not in joined.lower():
+            continue
+        claims.extend(match.group(1) for match in _FUZZ_COUNT_RE.finditer(joined))
+    return claims
 
 
 #: "85 native entry points" / "10 Cython binding entry points" — the figures
@@ -950,24 +994,19 @@ def count_libfuzzer_entry_points(repo: Path) -> int:
 def check_fuzz_target_counts(repo: Path, authoritative: int) -> list[str]:
     """Every prose fuzz-target count must equal the number actually built.
 
-    Scoped to lines that mention fuzzing so an unrelated "N targets" elsewhere
-    is not swept in, and skips revision-history rows for the same reason
-    ``check_aggregate_test_counts`` does — they record what was true at a past
-    release and are meant to read stale.
+    Scoped to paragraphs that mention fuzzing (see :func:`_fuzz_count_claims`),
+    with the count accepted as digits or as an English number word.
     """
     problems: list[str] = []
     for path in _markdown_files(repo):
         rel = str(path.relative_to(repo))
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if _HISTORY_ROW_RE.match(line) or "fuzz" not in line.lower():
-                continue
-            for match in _FUZZ_COUNT_RE.finditer(line):
-                claimed = int(match.group(1))
-                if claimed != authoritative:
-                    problems.append(
-                        f"{rel}: says {claimed} fuzz target(s)/harness(es); the "
-                        f"repository builds {authoritative} libFuzzer entry point(s)"
-                    )
+        for token in _fuzz_count_claims(path.read_text(encoding="utf-8")):
+            claimed = _resolve_number(token)
+            if claimed is not None and claimed != authoritative:
+                problems.append(
+                    f"{rel}: says {token} fuzz target(s)/harness(es); the "
+                    f"repository builds {authoritative} libFuzzer entry point(s)"
+                )
     return problems
 
 
@@ -980,14 +1019,8 @@ def check_fuzz_target_counts(repo: Path, authoritative: int) -> list[str]:
 # by v4.0 (three breaking changes — see CHANGELOG [4.0.0])" — and both said
 # three against a table that lists six. The claim names the section to check, so
 # this follows that reference and counts the Breaking rows it points at rather
-# than trusting a hand-maintained number beside it.
-_WORD_NUMBERS = {
-    word: value
-    for value, word in enumerate(
-        "zero one two three four five six seven eight nine ten eleven twelve "
-        "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
-    )
-}
+# than trusting a hand-maintained number beside it.  Number words are resolved
+# with the ``_WORD_NUMBERS`` table the fuzz-target count also uses (above).
 #: Bounded for the same reason as the two patterns above; this one was the
 #: worst of the three (4.0x per doubling, 842 ms at 6,000 chars), because
 #: ``[^)\n]*?`` rescans the tail from every start offset.  The claim it
@@ -1074,9 +1107,7 @@ def count_claim_families(repo: Path = REPO) -> dict[str, int]:
         counts["cython_entry"] += len(_CYTHON_ENTRY_RE.findall(text))
         counts["c_suite_bare"] += len(_C_SUITE_BARE_RE.findall(text))
         live_lines = [line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line)]
-        for line in live_lines:
-            if "fuzz" in line.lower():
-                counts["fuzz"] += len(_FUZZ_COUNT_RE.findall(line))
+        counts["fuzz"] += len(_fuzz_count_claims(text))
         counts["breaking"] += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
         if path.name == "METRICS_REPORT.md":
             # Each LoC-table row contributes two gated claims (Files, Lines);
@@ -1154,7 +1185,7 @@ CLAIM_FAMILY_FLOORS: dict[str, int] = {
     "native_entry": 1,
     "cython_entry": 1,
     "c_suite_bare": 3,
-    "fuzz": 11,
+    "fuzz": 13,
     "breaking": 4,
     "loc_rows": 14,
     "comp_rows": 12,

@@ -28,6 +28,7 @@ single largest interoperability gap in the library.
 C: `include/ama_cryptography.h`, the `ama_nistp_*` family.
 Python: `ama_cryptography.pqc_backends`, the `native_nistp_*` family.
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     native_nistp_keypair, native_nistp_ecdsa_sign, native_nistp_ecdsa_verify,

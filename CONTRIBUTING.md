@@ -208,6 +208,7 @@ ruff check .
 
 All functions must include comprehensive type hints:
 
+<!-- example: python-run -->
 ```python
 from typing import Union
 
@@ -305,6 +306,7 @@ All tests must:
 
 ### Example Test Structure
 
+<!-- example: python-run -->
 ```python
 import pytest
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType

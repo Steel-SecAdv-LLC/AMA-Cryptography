@@ -349,16 +349,20 @@ Centralized key management with support for key derivation, rotation, and export
 - Public key export for distribution
 
 **Data Structure**:
+<!-- example: python-names module=ama_cryptography.legacy_compat -->
 ```python
 @dataclass
 class KeyManagementSystem:
     master_secret: bytes        # 256-bit root secret
     hmac_key: bytes            # Derived HMAC key
+    hkdf_salt: bytes           # Salt the derivation used
     ed25519_keypair: Ed25519KeyPair
-    dilithium_keypair: DilithiumKeyPair
-    creation_date: datetime
+    dilithium_keypair: Optional[DilithiumKeyPair]
+    creation_date: str         # ISO 8601 UTC timestamp
     rotation_schedule: str     # "quarterly", "monthly", "annually"
     version: str
+    ethical_vector: Dict[str, float]
+    quantum_signatures_enabled: bool = True
 ```
 
 #### CryptoPackage
@@ -366,23 +370,25 @@ class KeyManagementSystem:
 Self-contained cryptographic package with embedded verification materials.
 
 **Data Structure**:
+<!-- example: python-names module=ama_cryptography.legacy_compat -->
 ```python
 @dataclass
 class CryptoPackage:
     content_hash: str          # SHA3-256 hex digest
     hmac_tag: str             # HMAC-SHA3-256 hex tag
     ed25519_signature: str    # Ed25519 signature hex
-    dilithium_signature: str  # ML-DSA-65 signature hex
+    dilithium_signature: Optional[str]  # ML-DSA-65 signature hex
     timestamp: str            # ISO 8601 UTC timestamp
     timestamp_token: Optional[str]  # RFC 3161 token (base64)
     author: str               # Signer identifier
     ed25519_pubkey: str       # Embedded public key
-    dilithium_pubkey: str     # Embedded public key
+    dilithium_pubkey: Optional[str]  # Embedded public key
     version: str              # Package format version
     ethical_vector: Dict[str, float]  # 4 Ethical Pillar scores
     ethical_hash: str         # SHA3-256 hash of ethical vector
     quantum_signatures_enabled: bool  # Whether PQC signatures are present
     signature_format_version: str     # Signature format version tag
+    hash_format_version: str          # Content-hash format version tag
 ```
 
 ### Component Interactions
@@ -851,6 +857,7 @@ See [`INVARIANTS.md`](INVARIANTS.md) for the complete set (INVARIANT-1 through I
 ### Deployment Models
 
 **Library Integration**: Import directly into Python applications
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 ```

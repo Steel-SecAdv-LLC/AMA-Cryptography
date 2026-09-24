@@ -70,6 +70,7 @@ Features:
 
 ### Python API
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair,
@@ -163,6 +164,7 @@ Features:
 
 ### Python API
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_kyber_keypair,
@@ -229,6 +231,7 @@ Features:
 
 ### Python API
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_sphincs_keypair,
@@ -247,6 +250,7 @@ print(f"Signature size: {len(sig)} bytes")        # 49856
 
 ## Checking PQC Availability
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     get_pqc_status,
@@ -302,13 +306,16 @@ AMA Cryptography combines Ed25519 + ML-DSA-65 in a dual-signature scheme,
 driven through the unified `AmaCryptography` dispatcher with
 `AlgorithmType.HYBRID_SIG`:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
+message = b"hybrid-signed payload"
 crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
 kp = crypto.generate_keypair()             # KeyPair: pk = Ed25519_pk || ML-DSA_pk
 sig = crypto.sign(message, kp.secret_key)  # Signature: Ed25519_sig || ML-DSA_sig
 valid = crypto.verify(message, sig, kp.public_key)   # both layers must verify
+assert valid
 ```
 
 For direct access to the provider (same inputs/outputs, no

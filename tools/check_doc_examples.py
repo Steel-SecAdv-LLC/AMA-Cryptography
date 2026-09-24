@@ -30,9 +30,23 @@ are pointed at carried, among others:
 
 Every one of those was in a document whose whole purpose is to be copied.
 
+Which pages
+-----------
+Every Markdown file the repository tracks (``git ls-files '*.md'``), except the
+historical record (``tools/_repo.py``'s ``is_historical_record``: the root
+``CHANGELOG.md`` and ``docs/changelog/``, which must be able to quote the
+examples they retired).  The set is DERIVED, not listed.  It used to be a
+seven-entry tuple of wiki pages while INVARIANT-53 promised "every fenced
+``python`` or ``c`` block on a user-facing page", and 83 blocks on seventeen
+other pages ran under nothing: ``IMPLEMENTATION_GUIDE.md``,
+``wiki/Adaptive-Posture.md`` (whose examples called ``compute_resonance``,
+``get_current_state`` and friends, none of which exist),
+``wiki/Cryptography-Algorithms.md``, ``MONITORING.md``, ``README.md`` and the
+rest.  A new page is covered the moment it is tracked.
+
 How it works
 ------------
-Each fenced ``python`` or ``c`` block in a COVERED file must carry a directive
+Each fenced ``python`` or ``c`` block in a covered file must carry a directive
 in an HTML comment on the line before its opening fence::
 
     <!-- example: python-run -->
@@ -51,6 +65,13 @@ The modes
     Executed in a fresh interpreter.  Non-zero exit, any traceback, fails.
     Catches invalid imports, missing required arguments, invalid attribute
     access and incorrect context-manager behaviour, because all four raise.
+
+``python-run continues``
+    The block is the next step of the page's running example: it is executed
+    AFTER the code of the python-run block before it on the same page (and
+    that block's predecessors, if it continues too), in one interpreter, the
+    way a reader following the page runs it.  A ``continues`` block with no
+    python-run block before it on its page fails.
 
 ``python-signature``
     The block is an API listing.  Every declaration of the shape
@@ -122,18 +143,23 @@ from typing import Callable, Iterable, Optional, Sequence
 
 REPO = Path(__file__).resolve().parent.parent
 
-#: The user-facing pages whose examples are promised to work.  Priority 1 of
-#: the 2026-09 documentation-integrity pass names the first four explicitly;
-#: the rest are the other pages that carry copy-pasteable package code.
-COVERED_FILES: tuple[str, ...] = (
-    "wiki/Quick-Start.md",
-    "wiki/Installation.md",
-    "wiki/API-Reference.md",
-    "wiki/C-API-Reference.md",
-    "wiki/Hybrid-Cryptography.md",
-    "wiki/Key-Management.md",
-    "wiki/Secure-Memory.md",
-)
+
+def covered_files(repo: Path = REPO) -> tuple[str, ...]:
+    """Every tracked Markdown page except the historical record.
+
+    Derived from ``git ls-files`` through ``tools/_repo.py`` rather than
+    listed, so the promise INVARIANT-53 makes — every ``python``/``c`` block on
+    a page runs, compiles or says why not — covers a page from the commit that
+    adds it.  Raises ``tools._repo.TrackedFilesError`` if git cannot enumerate
+    the tree; ``main`` turns that into exit 2 rather than checking nothing.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import is_historical_record, tracked_names
+
+    return tuple(name for name in tracked_names(repo, "*.md") if not is_historical_record(name))
+
 
 #: Fence languages this gate is responsible for.  ``bash`` install commands are
 #: covered by tools/check_documented_extras.py (INVARIANT-32) and are not
@@ -145,14 +171,18 @@ _DIRECTIVE = re.compile(r"<!--\s*example:\s*(?P<body>.+?)\s*-->\s*$")
 
 #: ``name(params) -> Return`` with an optional ``var: T = `` prefix and an
 #: optional trailing comment.  Deliberately strict: anything else in a
-#: ``python-signature`` block is prose or a comment and is ignored.
+#: ``python-signature`` block is prose or a comment and is ignored.  A ``def``
+#: header may end in ``: ...`` or in a bare ``:`` (the body elided or given as
+#: comments, as CONSTANT_TIME_VERIFICATION.md writes ``constant_time_compare``);
+#: without the bare form the colon was read into the return annotation and a
+#: correct ``-> bool:`` was reported as returning ``'bool:'``.
 _DECL = re.compile(
     r"^(?:def\s+)?"
     r"(?:(?P<lhs>[A-Za-z_][\w.]*)\s*(?::\s*[^=]+?)?\s*=\s*)?"
     r"(?P<name>[A-Za-z_][\w.]*)\s*"
     r"\((?P<params>.*)\)\s*"
     r"(?:->\s*(?P<ret>.+?))?"
-    r"\s*(?::\s*\.\.\.)?\s*$"
+    r"\s*(?::\s*(?:\.\.\.)?)?\s*$"
 )
 
 
@@ -206,6 +236,13 @@ class Block:
         if self.directive is None or self.mode == "pseudocode":
             return {}
         return dict(part.split("=", 1) for part in self.directive.split()[1:] if "=" in part)
+
+    @property
+    def continues(self) -> bool:
+        """``python-run continues``: run after the page's previous example."""
+        if self.directive is None or self.mode != "python-run":
+            return False
+        return "continues" in self.directive.split()[1:]
 
     @property
     def reason(self) -> str:
@@ -398,10 +435,11 @@ def check_python_encodability(block: Block, report: Report) -> None:
         )
 
 
-def run_python(block: Block, report: Report, repo: Path) -> None:
+def run_python(block: Block, report: Report, repo: Path, code: Optional[str] = None) -> None:
+    """Run ``code`` (default: the block's own) in a fresh interpreter."""
     with tempfile.TemporaryDirectory() as workdir:
         script = Path(workdir) / "example.py"
-        script.write_text(block.code, encoding="utf-8")
+        script.write_text(block.code if code is None else code, encoding="utf-8")
         environment = dict(os.environ)
         environment.setdefault("PYTHONPATH", str(repo))
         environment["PYTHONWARNINGS"] = "ignore"
@@ -1115,6 +1153,9 @@ def check_blocks(
 ) -> Report:
     report = Report()
     exported: Optional[frozenset[str]] = None
+    #: Per page: the code the last python-run block executed, for the
+    #: ``continues`` blocks that follow it.
+    running_example: dict[str, str] = {}
     if library_dir is not None:
         library = find_library(library_dir)
         if library is not None and sys.platform != "win32":
@@ -1161,7 +1202,19 @@ def check_blocks(
             # a UTF-8 runner, so running the block on Linux would report green
             # on the exact example that breaks for a Windows reader.
             check_python_encodability(block, report)
-            run_python(block, report, repo)
+            code = block.code
+            if block.continues:
+                previous = running_example.get(block.path)
+                if previous is None:
+                    report.fail(
+                        block,
+                        "`python-run continues` but no python-run block precedes it "
+                        "on this page, so there is nothing for it to continue",
+                    )
+                    continue
+                code = previous + "\n" + block.code
+            running_example[block.path] = code
+            run_python(block, report, repo, code)
         elif mode == "python-signature":
             check_python_signatures(block, report)
         elif mode == "python-names":
@@ -1188,9 +1241,9 @@ def check_blocks(
     return report
 
 
-def collect(repo: Path = REPO, files: Sequence[str] = COVERED_FILES) -> list[Block]:
+def collect(repo: Path = REPO, files: Optional[Sequence[str]] = None) -> list[Block]:
     blocks: list[Block] = []
-    for relative in files:
+    for relative in files if files is not None else covered_files(repo):
         path = repo / relative
         if not path.is_file():
             raise FileNotFoundError(f"covered documentation file is missing: {relative}")
@@ -1224,10 +1277,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if str(repo) not in sys.path:
         sys.path.insert(0, str(repo))
 
-    files = tuple(args.files) if args.files else COVERED_FILES
     try:
+        files = tuple(args.files) if args.files else covered_files(repo)
         blocks = collect(repo, files)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, RuntimeError) as exc:
+        # RuntimeError covers tools._repo.TrackedFilesError: a tree git cannot
+        # enumerate is a gate that cannot run, not a gate with nothing to check.
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
     if not blocks:

@@ -414,7 +414,7 @@
       },
       {
         "path": "src/c/ama_slhdsa.c",
-        "reason": "Call-site renames only (d14ad84): two ama_sha512 -> ama_sha512_oneshot calls. Same function, same instructions; SLH-DSA floors describe unchanged code."
+        "reason": "2026-09-24: four AMA_CT_DECLASSIFY points (R, the FORS public key, each XMSS root) for the slhdsa-sign secret-taint gate; the macro expands to nothing outside AMA_TESTING_MODE, and measured on x86-64 (gcc 13.3.0, Release, non-LTO static object) the disassembly of ama_slhdsa.c.o is byte-identical before and after, so no benchmarked row can move. Earlier acknowledgement, retained: Call-site renames only (d14ad84): two ama_sha512 -> ama_sha512_oneshot calls. Same function, same instructions; SLH-DSA floors describe unchanged code."
       },
       {
         "path": "src/c/ama_secp256k1.c",

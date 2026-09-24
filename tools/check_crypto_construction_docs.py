@@ -63,8 +63,19 @@ What is checked
    and issues a barrier; "multi-pass" descriptions of the *native* path fail.
    ``ETHICAL_VECTOR``'s length is read from ``equations.py``.
 4. **Removed or nonexistent symbols.** Every ``ama_cryptography``-namespaced
-   identifier a document names in a code context must exist in the package or
-   in the public C header.
+   identifier a document imports must exist in the package, and every C
+   function a document names in inline code (a backticked ``name(...)``) must
+   exist in the implementation. "A C function" is decided from the source, not
+   from a list: a bare call whose prefix (the text before its first ``_``) is
+   the prefix of some function ``src/c`` or ``include/`` defines or calls --
+   ``ama_``, ``fe51_``, ``ge25519_``, ``slh_``, ``spx_``, and the rest. Such a
+   name must appear in the code (comments and strings stripped) of ``src/c``,
+   ``include/``, the Python package, the top-level modules or ``src/cython``.
+   ``wiki/Security-Model.md`` and ``wiki/Cryptography-Algorithms.md`` named a
+   ``fe25519_sq()`` that has never existed (the squaring is ``fe51_sq``), and
+   ``CSRC_ALIGN_REPORT.md`` a ``spx_prf_msg()`` that left with
+   ``ama_sphincs.c``; the header-symbol set this gate derived was printed and
+   never compared against anything, so both passed.
 5. **Contradictions with INVARIANTS.** A document may not assert a behaviour
    an invariant forbids where the implementation agrees with the invariant.
 6. **Reintroduction elsewhere.** Every rule runs over the whole tracked
@@ -83,9 +94,10 @@ more: ``crypto_api.py`` carried "Import HMAC and HKDF from pqc_backends
 INVARIANT-7 guard, and ``secure_memory.py``'s module docstring described
 ``secure_memzero`` as a "Multi-pass byte-level overwrite" while the function's
 own docstring, in the same file, correctly said the native kernel writes once
-and issues a barrier. Only the symbol-existence rule is prose-only — in Python
-source ``from ama_cryptography import adaptive_posture`` is a valid submodule
-import that a prose-shaped rule would misread.
+and issues a barrier. Only the two symbol-existence rules are prose-only — in
+Python source ``from ama_cryptography import adaptive_posture`` is a valid
+submodule import that a prose-shaped rule would misread, and a docstring's
+``hashlib.sha3_512(data)`` names a standard-library call, not a C symbol.
 
 ``CHANGELOG.md`` and the development journals under ``docs/changelog/`` are
 exempt throughout: they are the historical record (``tools/_repo.py``'s
@@ -103,9 +115,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import itertools
 import re
 import sys
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
@@ -203,6 +217,15 @@ class Authority:
     secure_wipe_delegates_to_memzero: bool
     package_symbols: frozenset[str]
     c_symbols: frozenset[str]
+    #: Every identifier the implementation's CODE uses — ``src/c`` and
+    #: ``include/`` with comments and string literals stripped, and the NAME
+    #: tokens of the Python package, the top-level modules and ``src/cython``.
+    #: A documented C function must be one of these.
+    implementation_identifiers: frozenset[str]
+    #: The prefix (text before the first ``_``) of every function ``src/c`` or
+    #: ``include/`` defines or calls.  A documented bare call with one of these
+    #: prefixes is a claim about a C symbol; anything else is left alone.
+    c_call_prefixes: frozenset[str]
 
 
 def _parse(path: Path) -> ast.Module:
@@ -335,6 +358,66 @@ def _module_level_names(path: Path) -> set[str]:
 
 _C_SYMBOL = re.compile(r"\b(ama_[a-z0-9_]+)\s*\(")
 
+_C_COMMENT_OR_STRING = re.compile(
+    r"/\*.*?\*/|//[^\n]*|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.DOTALL
+)
+_IDENTIFIER_TOKEN = re.compile(r"[A-Za-z_]\w*")
+_C_CALLABLE = re.compile(r"\b([a-z][a-z0-9]*_[a-z0-9_]*)\s*\(")
+
+#: Where the implementation lives, for the C-symbol existence rule.
+C_SOURCE_ROOTS: tuple[str, ...] = ("src/c", "include")
+C_SOURCE_SUFFIXES: frozenset[str] = frozenset({".c", ".h"})
+
+
+def _c_code(text: str) -> str:
+    """C source with comments and string/character literals blanked.
+
+    A name that appears only in a comment is not evidence it exists — the
+    comment may be the very drift this rule looks for.
+    """
+    return _C_COMMENT_OR_STRING.sub(" ", text)
+
+
+def _python_names(text: str) -> set[str]:
+    """NAME tokens of Python (or Cython) source: no strings, no comments."""
+    names: set[str] = set()
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type == tokenize.NAME:
+                names.add(token.string)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        # A file tokenize cannot finish still contributes what it lexed;
+        # a Cython construct it rejects is not a reason to learn nothing.
+        pass
+    return names
+
+
+def _implementation_identifiers(repo: Path) -> tuple[frozenset[str], frozenset[str]]:
+    """(identifiers the implementation's code uses, C function-name prefixes)."""
+    identifiers: set[str] = set()
+    callables: set[str] = set()
+    for root in C_SOURCE_ROOTS:
+        base = repo / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.suffix not in C_SOURCE_SUFFIXES or not path.is_file():
+                continue
+            code = _c_code(path.read_text(encoding="utf-8", errors="replace"))
+            identifiers.update(_IDENTIFIER_TOKEN.findall(code))
+            callables.update(_C_CALLABLE.findall(code))
+    python_sources = [
+        *sorted((repo / "ama_cryptography").rglob("*.py")),
+        *sorted(repo.glob("*.py")),
+        *sorted((repo / "src" / "cython").rglob("*.pyx")),
+        *sorted((repo / "src" / "cython").rglob("*.pxd")),
+    ]
+    for path in python_sources:
+        if path.is_file():
+            identifiers |= _python_names(path.read_text(encoding="utf-8", errors="replace"))
+    prefixes = frozenset(name.split("_", 1)[0] for name in callables)
+    return frozenset(identifiers), prefixes
+
 
 def build_authority(repo: Path = REPO) -> Authority:
     package = repo / "ama_cryptography"
@@ -361,6 +444,7 @@ def build_authority(repo: Path = REPO) -> Authority:
 
     header = (repo / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
     c_symbols = frozenset(_C_SYMBOL.findall(header))
+    implementation_identifiers, c_call_prefixes = _implementation_identifiers(repo)
 
     return Authority(
         combine_raises_on_missing_native=bool(combine and _raises_invariant7(combine)),
@@ -388,6 +472,8 @@ def build_authority(repo: Path = REPO) -> Authority:
         ),
         package_symbols=frozenset(package_symbols),
         c_symbols=c_symbols,
+        implementation_identifiers=implementation_identifiers,
+        c_call_prefixes=c_call_prefixes,
     )
 
 
@@ -539,7 +625,11 @@ _THRESHOLD_ROW = re.compile(
     # U+2013 EN DASH is written as an escape rather than as a literal: the
     # corrected threshold tables render their ranges with one, and a literal
     # en dash is indistinguishable from a hyphen when this file is read.
-    "\\|\\s*(NOMINAL|ELEVATED|HIGH|CRITICAL)\\s*\\|\\s*([0-9.]+)"
+    #
+    # The level may be written as inline code.  wiki/Adaptive-Posture.md's
+    # table spelled it `` `ELEVATED` `` and published 0.2 / 0.5 / 0.8 against
+    # 0.15 / 0.45 / 0.80, and the bare-word pattern never saw the row.
+    "\\|\\s*`?(NOMINAL|ELEVATED|HIGH|CRITICAL)`?\\s*\\|\\s*([0-9.]+)"
     "\\s*[-\u2013]\\s*([0-9.]+)\\s*\\|",
     re.IGNORECASE,
 )
@@ -897,6 +987,56 @@ def _rule_symbols(line: str, authority: Authority, repo: Path) -> Optional[str]:
     return None
 
 
+#: An inline code span, and a BARE call inside it.  Dotted calls are skipped
+#: deliberately: C has none, and ``hashlib.sha3_512(...)`` or
+#: ``request.get_json()`` name another library's API, which is not this
+#: rule's claim.  The lookbehind keeps ``obj.method(`` from matching at
+#: ``method``.
+_INLINE_CODE = re.compile(r"`([^`\n]+)`")
+_BARE_CALL = re.compile(r"(?<![\w.])([A-Za-z_]\w*)\s*\(")
+
+
+#: A function or class the DOCUMENT ITSELF defines in one of its code blocks
+#: (an integration guide's ``def store_master_secret_hsm(...)``).  Naming it in
+#: the prose is not a claim about the library, and the reader can see it exists.
+_DOC_DEFINITION = re.compile(r"^\s*(?:async\s+)?(?:def|class)\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+
+def _defined_in_document(text: str) -> frozenset[str]:
+    return frozenset(_DOC_DEFINITION.findall(text))
+
+
+def _rule_c_symbols(
+    line: str, authority: Authority, defined_here: frozenset[str] = frozenset()
+) -> Optional[str]:
+    """A documented C function must exist in the implementation.
+
+    Which names are C functions is derived (``Authority.c_call_prefixes``), so
+    no list of "known" names is kept here: a prefix the source stops using
+    stops being checked, and a new family is checked the moment it lands.
+    """
+    for span in _INLINE_CODE.findall(line):
+        for match in _BARE_CALL.finditer(span):
+            name = match.group(1)
+            stem = name.lstrip("_")
+            if "_" not in stem:
+                continue
+            if stem.split("_", 1)[0] not in authority.c_call_prefixes:
+                continue
+            if name in authority.c_symbols or name in authority.implementation_identifiers:
+                continue
+            if name in defined_here:
+                continue
+            return (
+                f"names `{name}()`, which no code under src/c/, include/, "
+                "ama_cryptography/, the top-level modules or src/cython/ defines "
+                "or calls (comments and strings excluded). A reader who looks for "
+                "it finds nothing, and a reviewer reasoning about the construction "
+                "it describes reasons about code that is not there."
+            )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -983,6 +1123,7 @@ def find_claims(
         if text is None:
             continue
         source_lines = text.splitlines()
+        defined_here = _defined_in_document(text)
         waived = False
         for number, raw in enumerate(source_lines, start=1):
             line = raw.strip()
@@ -1005,7 +1146,9 @@ def find_claims(
             else:
                 if path.suffix.lower() not in PROSE_SUFFIXES:
                     continue
-                why = _rule_symbols(line, authority, repo)
+                why = _rule_symbols(line, authority, repo) or _rule_c_symbols(
+                    line, authority, defined_here
+                )
                 if why:
                     findings.append(Finding(relative, number, line[:160], why))
     return findings
@@ -1042,6 +1185,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             ("ETHICAL_VECTOR length", authority.ethical_vector_length),
             ("package symbols", authority.package_symbols),
             ("C header symbols", authority.c_symbols),
+            ("implementation identifiers", authority.implementation_identifiers),
+            ("C function-name prefixes", authority.c_call_prefixes),
         )
         if not value
     ]

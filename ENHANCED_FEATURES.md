@@ -761,6 +761,7 @@ See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for onboarding de
 
 The new multi-language architecture is fully backward compatible:
 
+<!-- example: python-run -->
 ```python
 # Old code still works
 from ama_cryptography import AmaEquationEngine

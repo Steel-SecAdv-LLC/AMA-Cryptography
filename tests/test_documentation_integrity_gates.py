@@ -305,6 +305,113 @@ class TestDocExamples:
         assert completed.returncode == 1
         assert "MASTER_OMNI_CODES" in completed.stderr
 
+    def test_every_tracked_page_is_covered_and_the_record_is_not(self, tmp_path: Path) -> None:
+        """Coverage is derived from ``git ls-files``, not listed.
+
+        INVARIANT-53 promises every ``python``/``c`` block on a page; the gate
+        covered a seven-entry tuple of wiki pages, and 83 blocks on seventeen
+        other pages ran under nothing.  Here a fresh repository tracks one new
+        page with an unmarked block — which must fail — and a CHANGELOG.md
+        with one, which is the historical record and must not.
+        """
+        if shutil.which("git") is None:
+            pytest.skip("git is required to enumerate the tracked pages")
+        repo = tmp_path / "repo"
+        (repo / "ama_cryptography").mkdir(parents=True)
+        (repo / "ama_cryptography" / "__init__.py").write_text("", encoding="utf-8")
+        (repo / "docs").mkdir()
+        (repo / "docs" / "NEW-PAGE.md").write_text(
+            "# new\n\n```python\nprint('never marked')\n```\n", encoding="utf-8"
+        )
+        (repo / "CHANGELOG.md").write_text(
+            "# history\n\n```python\nretired_example()\n```\n", encoding="utf-8"
+        )
+        (repo / "UNTRACKED.md").write_text("```python\nnot tracked\n```\n", encoding="utf-8")
+        for argv in (
+            ["git", "init", "-q"],
+            ["git", "add", "ama_cryptography/__init__.py", "docs/NEW-PAGE.md", "CHANGELOG.md"],
+        ):
+            subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+
+        gate = _load(DOC_EXAMPLES)
+        assert gate.covered_files(repo) == ("docs/NEW-PAGE.md",)
+
+        completed = _run(DOC_EXAMPLES, "--repo", str(repo), "--lang", "python")
+        assert completed.returncode == 1, completed.stdout + completed.stderr
+        assert "docs/NEW-PAGE.md" in completed.stderr
+        assert "no `<!-- example:" in completed.stderr
+        assert "CHANGELOG.md" not in completed.stderr
+
+    def test_the_real_pages_that_were_uncovered_are_covered_now(self) -> None:
+        gate = _load(DOC_EXAMPLES)
+        covered = set(gate.covered_files(REPO_ROOT))
+        assert {
+            "IMPLEMENTATION_GUIDE.md",
+            "wiki/Adaptive-Posture.md",
+            "wiki/Cryptography-Algorithms.md",
+            "MONITORING.md",
+            "README.md",
+            "wiki/Post-Quantum-Cryptography.md",
+            "CRYPTOGRAPHY.md",
+            "wiki/Quick-Start.md",
+        } <= covered
+        assert "CHANGELOG.md" not in covered
+        assert not any(name.startswith("docs/changelog/") for name in covered)
+
+    def test_a_continuing_block_runs_after_the_one_before_it(self, doc_fixture: Path) -> None:
+        """``python-run continues``: the next step of the page's running example."""
+        doc_fixture.write_text(
+            "<!-- example: python-run -->\n"
+            "```python\nvalue = 41\n```\n\n"
+            "<!-- example: python-run continues -->\n"
+            "```python\nassert value + 1 == 42\n```\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 0, completed.stderr
+        assert "2 executed" in completed.stdout
+
+    def test_without_continues_the_same_block_fails(self, doc_fixture: Path) -> None:
+        """Non-vacuity for the test above: each block is its own interpreter."""
+        doc_fixture.write_text(
+            "<!-- example: python-run -->\n"
+            "```python\nvalue = 41\n```\n\n"
+            "<!-- example: python-run -->\n"
+            "```python\nassert value + 1 == 42\n```\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 1
+        assert "NameError" in completed.stderr
+
+    def test_continues_with_nothing_before_it_fails(self, doc_fixture: Path) -> None:
+        doc_fixture.write_text(
+            "<!-- example: python-run continues -->\n```python\nprint('first')\n```\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 1
+        assert "nothing for it to continue" in completed.stderr
+
+    @pytest.mark.parametrize(("ret", "passes"), [("bool", True), ("int", False)])
+    def test_a_def_header_with_a_bare_colon_is_a_declaration(
+        self, doc_fixture: Path, ret: str, passes: bool
+    ) -> None:
+        """CONSTANT_TIME_VERIFICATION.md writes ``def constant_time_compare(a:
+        bytes, b: bytes) -> bool:`` with a comment body.  The colon used to be
+        read into the return annotation, so the correct listing reported
+        ``'bool:'``; the wrong one must still fail."""
+        doc_fixture.write_text(
+            "<!-- example: python-signature module=ama_cryptography.secure_memory -->\n"
+            "```python\n"
+            f"def constant_time_compare(a: bytes, b: bytes) -> {ret}:\n"
+            "    # delegates to ama_consttime_memcmp\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture))
+        assert (completed.returncode == 0) is passes, completed.stderr
+
     def test_pseudocode_needs_a_reason(self, doc_fixture: Path) -> None:
         """The escape hatch has to cost something, or everything uses it."""
         doc_fixture.write_text(
@@ -609,6 +716,9 @@ class TestCryptoConstructionDocs:
             ),
             ("| ELEVATED | 0.3-0.6 | Increase monitoring |", "ELEVATED row"),
             ("| HIGH | 0.6-0.8 | Rotate keys |", "HIGH row"),
+            # wiki/Adaptive-Posture.md wrote the level as inline code, which
+            # the bare-word row pattern did not match.
+            ("| `ELEVATED` | 0.2 \u2013 0.5 | Increase 3R monitoring frequency |", "ELEVATED row"),
             ("    assert len(pkg_v2.ethical_vector) == 12", "ETHICAL_VECTOR has 4 keys"),
             ("**AMA does not implement HSS/LMS.** This corpus is the answer key.", "HSS/LMS"),
             ("pkg = sign_codes(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms)", "MASTER_OMNI_CODES"),
@@ -644,7 +754,8 @@ class TestCryptoConstructionDocs:
             "- **PostureEvaluator** — four signals: timing 0.45, pattern 0.25,\n"
             "  resonance 0.15, Lyapunov 0.15.\n\n"
             "| ELEVATED | 0.15 – 0.45 | Increase monitoring |\n"
-            "| HIGH | 0.45 – 0.80 | Rotate keys |\n\n"
+            "| HIGH | 0.45 – 0.80 | Rotate keys |\n"
+            "| `HIGH` | 0.45 – 0.8 | Rotate keys (`ROTATE_KEYS`) |\n\n"
             "    assert len(pkg_v2.ethical_vector) == 4\n\n"
             "AMA implements HSS/LMS verification; only signing is withheld.\n\n"
             "| C Compiler | GCC 12 / Clang 15 | GCC 13+ / Clang 17+ |\n\n"
@@ -878,6 +989,83 @@ class TestCryptoConstructionDocs:
         assert completed.returncode == 1, completed.stdout
         assert "absent.md" in completed.stderr
         assert "cannot be read" in completed.stderr
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            # wiki/Security-Model.md and wiki/Cryptography-Algorithms.md, as
+            # they shipped: the squaring function is fe51_sq, and nothing
+            # named fe25519_sq has existed in this tree.
+            "| Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` (secret scalar) | OK |",
+            "- Dedicated `fe25519_sq()` field squaring (~55 multiplications vs ~100)",
+            # CSRC_ALIGN_REPORT.md section 2.4: the function left with ama_sphincs.c.
+            "Updated `spx_prf_msg()` to use HMAC-SHA-512 with Trunc_n output truncation.",
+            # An ama_-prefixed name the header never declared.  Before this
+            # rule the gate derived the header's symbol set, printed it, and
+            # compared nothing against it.
+            "Call `ama_ed25519_sign_prehashed(sig, digest, sk)` for Ed25519ph.",
+        ],
+    )
+    def test_a_named_c_function_that_does_not_exist_fails(self, tmp_path: Path, claim: str) -> None:
+        fixture = tmp_path / "c_symbol.md"
+        fixture.write_text(f"# fixture\n\n{claim}\n", encoding="utf-8")
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert "which no code under src/c/" in completed.stderr
+
+    def test_c_functions_that_exist_pass(self, tmp_path: Path) -> None:
+        """Positive control: the corrected names, a header symbol, a Python
+        function with a C-family prefix, and the calls this rule deliberately
+        does not read (dotted, and a caller's own helper)."""
+        fixture = tmp_path / "c_symbol_ok.md"
+        fixture.write_text(
+            "# fixture\n\n"
+            "| Ed25519 signing | `ama_ed25519.c` with `fe51_sq()` (secret scalar) |\n\n"
+            "PRF_msg is `sha2_PRF_msg()`; the header exports `ama_ed25519_sign()`.\n\n"
+            "`secure_memzero(buf)` delegates to the native kernel.\n\n"
+            "Byte-identical to `hashlib.sha3_512(data).digest()`, and a helper this\n"
+            "page defines for you, `store_master_secret_hsm(secret)`, is the page's.\n\n"
+            "```python\n"
+            "def store_master_secret_hsm(secret: bytes) -> str:\n"
+            "    ...\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 0, completed.stderr
+
+    def test_a_helper_the_page_does_not_define_is_still_checked(self, tmp_path: Path) -> None:
+        """The document-local exception is exactly that: remove the definition
+        and the same sentence is a claim about the library again."""
+        fixture = tmp_path / "c_symbol_helper.md"
+        fixture.write_text(
+            "# fixture\n\nCall `store_master_secret_hsm(secret)` after keygen.\n",
+            encoding="utf-8",
+        )
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert "store_master_secret_hsm" in completed.stderr
+
+    def test_a_c_symbol_mentioned_only_in_a_comment_does_not_count(self) -> None:
+        """Existence is read from CODE.  A comment that names a function is
+        not evidence the function exists — the comment may be the drift."""
+        gate = _load(CONSTRUCTION_DOCS)
+        code = gate._c_code(
+            "/* fe25519_sq(h, f) was the old name */\n"
+            '// see "fe25519_sq(" too\n'
+            "static void fe51_sq(fe51 h, const fe51 f) { (void)h; (void)f; }\n"
+        )
+        assert "fe25519_sq" not in code and "fe51_sq" in code
+
+    def test_the_c_symbol_authority_is_derived_from_the_tree(self) -> None:
+        gate = _load(CONSTRUCTION_DOCS)
+        authority = gate.build_authority(REPO_ROOT)
+        assert {"ama", "fe51", "slh", "spx", "sha2"} <= authority.c_call_prefixes
+        assert {"fe51_sq", "sha2_PRF_msg", "ama_ed25519_sign"} <= (
+            authority.implementation_identifiers
+        )
+        assert "fe25519_sq" not in authority.implementation_identifiers
+        assert authority.c_symbols <= authority.implementation_identifiers
 
     def test_the_self_referential_exemptions_all_exist(self) -> None:
         """An exemption that outlives its file is a silently widened exemption."""

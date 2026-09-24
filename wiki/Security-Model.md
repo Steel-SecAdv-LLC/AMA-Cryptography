@@ -117,7 +117,7 @@ The following operations are implemented in constant time:
 | Operation | Implementation | Status |
 |-----------|---------------|--------|
 | HMAC / tag comparison | `ama_consttime_memcmp()` (C); Python `constant_time_compare()` calls it via ctypes and raises if the native backend is unavailable — no pure-Python fallback | ✓ Constant-time |
-| Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` (secret scalar) | ✓ Constant-time |
+| Ed25519 signing | `ama_ed25519.c` with `fe51_sq()` (secret scalar) | ✓ Constant-time |
 | Ed25519 verification | Half-size four-scalar wNAF ladder (`src/c/internal/ama_ed25519_halfsize.h`) over **public** inputs (public key, signature, message) | Variable-time by design — inputs are public, so timing carries no secret (INVARIANT-12) |
 | AES-256-GCM (default) | Bitsliced S-box (`AMA_AES_CONSTTIME=ON`) | ✓ Constant-time |
 | AES-256-GCM (opt-out) | Table-based S-box (`-DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON`) | ⚠ NOT constant-time |

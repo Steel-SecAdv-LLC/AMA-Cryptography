@@ -122,7 +122,12 @@ Ed25519 is **in-house** on every platform: the radix-2^51 field arithmetic,
 the group arithmetic (`src/c/internal/ama_ed25519_ge.h`) and the static
 base-point tables (generated in-tree by `tools/gen_ed25519_tables.py` into
 `src/c/internal/ama_ed25519_tables.h`) are written against RFC 8032, with no
-upstream code copied. Earlier revisions described a vendored public-domain
+upstream code copied — with one exception, which is adapted rather than
+written from the standard alone: the constant-time field inversion
+(`src/c/internal/ama_fe25519_safegcd.h`) follows the batched 62-bit structure
+of libsecp256k1's safegcd `modinv64` reference implementation, under its MIT
+licence, attributed in [`NOTICE`](NOTICE) and recorded as the `ama_ed25519`
+pedigree in the C-library SBOM. Earlier revisions described a vendored public-domain
 x86-64 backend; it was removed in the twenty-first maintenance pass (see
 CHANGELOG), and its recorded behaviour is replayed against the in-house code
 by the frozen oracle `tests/oracle/ed25519_frozen_oracle.txt`. The AMA API
@@ -343,6 +348,7 @@ PQC is provided by the native C library (`libama_cryptography.so`):
 
 Check availability with:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import PQCStatus, get_pqc_status, get_pqc_backend_info
 

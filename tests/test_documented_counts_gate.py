@@ -401,6 +401,57 @@ class TestFuzzTargetCounts:
         repo = self._repo(tmp_path, "| 2.1.0 | 2026-03-25 | fuzz testing (12 targets) |\n")
         assert tool.check_fuzz_target_counts(repo, 15) == []
 
+    def test_a_count_written_as_a_word_is_checked(self, tool: ModuleType, tmp_path: Path) -> None:
+        """The literal INVARIANTS.md sentence (INVARIANT-46): "builds fifteen
+        fuzzers" against a tree that builds sixteen.  Digits only, and a noun
+        list without "fuzzers", let it through."""
+        repo = self._repo(
+            tmp_path,
+            "the OSS-Fuzz job pulls `base-builder` and `base-runner` and builds "
+            "fifteen fuzzers, roughly ten minutes.\n",
+        )
+        problems = tool.check_fuzz_target_counts(repo, 16)
+        assert len(problems) == 1 and "fifteen" in problems[0]
+        assert tool.check_fuzz_target_counts(repo, 15) == []
+
+    def test_a_count_wrapped_across_lines_is_checked(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The other INVARIANTS.md sentence: "the fifteen C" / "harnesses are",
+        wrapped at the line break, in a paragraph that says "fuzz" only on a
+        later line.  Per-line matching never saw either half as a claim."""
+        repo = self._repo(
+            tmp_path,
+            "`key_formats.py` are hostile-input parsers in exactly the sense the fifteen C\n"
+            "harnesses are — anyone who can hand you a key file reaches them — and\n"
+            "they had no harness at all.  So `fuzz/python/fuzz_key_formats.py` was added.\n",
+        )
+        problems = tool.check_fuzz_target_counts(repo, 16)
+        assert len(problems) == 1 and "fifteen" in problems[0]
+
+    def test_a_count_in_a_paragraph_without_fuzzing_is_ignored(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Paragraph scope, not file scope: a blank line ends the fuzz context."""
+        repo = self._repo(
+            tmp_path,
+            "The fuzz lane is described elsewhere.\n\nThe constant-time gate has twenty targets.\n",
+        )
+        assert tool.check_fuzz_target_counts(repo, 16) == []
+
+    def test_a_word_inside_another_word_is_not_a_count(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """ "standalone libFuzzer targets" ends in "one"; "non-zero causes the
+        fuzzer" contains "zero".  Neither is a claim, and a gate that read them
+        as one would be red on correct prose."""
+        repo = self._repo(
+            tmp_path,
+            "Each harness defines LLVMFuzzerTestOneInput and builds as standalone "
+            "libFuzzer targets.  Return 0; non-zero causes the fuzzer to abort.\n",
+        )
+        assert tool.check_fuzz_target_counts(repo, 16) == []
+
     def test_the_count_is_imported_from_the_registration_gate(self, tool: ModuleType) -> None:
         """The authority is the same tool that enforces registration, so the
         two can never disagree about how many harnesses exist.
