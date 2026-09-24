@@ -151,6 +151,50 @@ def test_below_the_floor_passes(tool: ModuleType, tmp_path: Path, severity: str)
     assert "2 lower-severity advisory finding(s)" in out
 
 
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("no severity key", lambda r: r["extra"].pop("severity")),
+        ("no extra object at all", lambda r: r.pop("extra")),
+        ("a null severity", lambda r: r["extra"].__setitem__("severity", None)),
+        ("an unrecognised severity", lambda r: r["extra"].__setitem__("severity", "CRITICAL")),
+    ],
+)
+def test_a_result_the_gate_cannot_rank_blocks(
+    tool: ModuleType, tmp_path: Path, label: str, mutate: Any
+) -> None:
+    """A result with no rankable severity is not an advisory.
+
+    The read was ``extra.get("severity", "INFO")``: a result carrying no
+    severity was labelled INFO by the gate itself — a level Semgrep never
+    assigned — and passed a merge-blocking check as a tracked advisory.  The
+    rule that fires is the config's own ERROR rule, so a pass here would clear
+    exactly the finding the gate exists to block.
+    """
+    finding = _finding("ERROR", "insecure-random-usage")
+    mutate(finding)
+    rc, out = _run(tmp_path, tool, _report(finding))
+    assert rc == 1, (label, out)
+    assert "insecure-random-usage" in out, (label, out)
+
+
+@pytest.mark.parametrize(
+    ("label", "results"),
+    [
+        ("results is an object", {"a": 1}),
+        ("a result is a string", ["not a result"]),
+    ],
+)
+def test_a_results_value_that_is_not_a_list_of_results_fails(
+    tool: ModuleType, tmp_path: Path, label: str, results: Any
+) -> None:
+    report = _report()
+    report["results"] = results
+    rc, out = _run(tmp_path, tool, report)
+    assert rc == 1, (label, out)
+    assert "SEMGREP GATE FAILED" in out, (label, out)
+
+
 def test_a_clean_scan_passes(tool: ModuleType, tmp_path: Path) -> None:
     rc, out = _run(tmp_path, tool, _report())
     assert rc == 0, out

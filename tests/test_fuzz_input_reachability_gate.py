@@ -65,20 +65,22 @@ def test_the_two_known_deep_targets_are_above_the_floor(gate: ModuleType) -> Non
     assert gate.max_len_for("fuzz_sphincs") > gate.DEFAULT_MAX_LEN
 
     # The GUARD-derived part, which is what this test was written for.
-    # 3,309 signature + 1,952 public key + 1 selector byte, past a `<` guard.
+    # 3,309 signature + 1,952 public key + 1 selector byte: a `<` guard is
+    # false AT its bound, so the bound itself is enough (the docstring's
+    # 5,262 — this used to assert 5,263, one byte more than needed).
     required_dilithium, _ = gate._bound_for(gate.FUZZ_DIR / "fuzz_dilithium.c")
-    assert required_dilithium == 3309 + 1952 + 1 + 1
+    assert required_dilithium == 3309 + 1952 + 1
     # 49,856 signature + 64 public key + 1 selector byte, past a `<` guard.
     required_sphincs, _ = gate._bound_for(gate.FUZZ_DIR / "fuzz_sphincs.c")
-    assert required_sphincs == 49856 + 64 + 1 + 1
+    assert required_sphincs == 49856 + 64 + 1
 
     # And the CEILING is the larger of that and the committed corpus, because
     # libFuzzer applies -max_len to corpus files as well as to mutations.  The
-    # PQC verify seeds are `1 + bound + MESSAGE_BYTES`, 15 bytes past the
+    # PQC verify seeds are `1 + bound + MESSAGE_BYTES`, 16 bytes past the
     # guard-derived ceiling, so every one of them used to be truncated on load
     # — landing just short of the branch it was built to reach.
-    assert gate.max_len_for("fuzz_dilithium") == required_dilithium + 15
-    assert gate.max_len_for("fuzz_sphincs") == required_sphincs + 15
+    assert gate.max_len_for("fuzz_dilithium") == required_dilithium + 16
+    assert gate.max_len_for("fuzz_sphincs") == required_sphincs + 16
 
 
 def test_a_shallow_target_keeps_the_floor(gate: ModuleType) -> None:
@@ -130,8 +132,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     )
     required, unresolved = gate.required_max_len(harness)
     assert not unresolved
-    # 9,000 to pass a `<` guard is 9,001, plus the 1-byte payload offset.
-    assert required == 9002
+    # `payload_len < 9000` is false AT 9,000, plus the 1-byte payload offset.
+    assert required == 9001
 
 
 def test_a_macro_sum_resolves_against_the_public_header(gate: ModuleType, tmp_path: Path) -> None:
@@ -150,7 +152,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     )
     required, unresolved = gate.required_max_len(harness)
     assert not unresolved
-    assert required == 3309 + 1952 + 1 + 1
+    assert required == 3309 + 1952 + 1
 
 
 def test_an_equality_guard_needs_exactly_the_bound(gate: ModuleType, tmp_path: Path) -> None:
@@ -225,8 +227,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     )
     required, unresolved = gate.required_max_len(harness)
     assert not unresolved
-    # 9,000 to pass a `<` guard is 9,001, plus the 8-byte offset.
-    assert required == 9009
+    # `tail_len < 9000` is false AT 9,000, plus the 8-byte offset.
+    assert required == 9008
 
 
 def test_a_data_dependent_length_is_reported_not_modeled(gate: ModuleType, tmp_path: Path) -> None:
@@ -277,7 +279,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     )
     required, unresolved = gate.required_max_len(harness)
     assert not unresolved
-    assert required == 9002
+    assert required == 9001
 
     harness = _write_harness(
         tmp_path,
@@ -315,7 +317,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     monkeypatch.setitem(
         gate.MANUAL_BOUNDS,
         "fuzz_synthetic",
-        (777, "`needed` is a runtime value bounded by construction; worked out by hand"),
+        gate.ManualBound(
+            777,
+            ("payload_len < needed",),
+            "`needed` is a runtime value bounded by construction; worked out by hand",
+        ),
     )
     assert gate.main([]) == 0
     assert gate.max_len_for("fuzz_synthetic") == gate.DEFAULT_MAX_LEN
@@ -327,9 +333,10 @@ def test_frost_is_declared_because_its_bound_is_a_runtime_value(gate: ModuleType
     Its entry must carry the reasoning, not just a number, or the next reader
     cannot check it.
     """
-    bound, reason = gate.MANUAL_BOUNDS["fuzz_frost"]
-    assert bound == 780
-    assert "FROST_FUZZ_MAX_N" in reason
+    entry = gate.MANUAL_BOUNDS["fuzz_frost"]
+    assert entry.bound == 780
+    assert entry.guards == ("payload_len < needed",)
+    assert "FROST_FUZZ_MAX_N" in entry.reason
 
 
 def test_a_hardcoded_max_len_in_the_workflow_fails(
@@ -390,9 +397,10 @@ class TestEveryComparisonOperatorIsSeen:
     @pytest.mark.parametrize(
         ("operator", "expected"),
         [
-            ("<", 9002),
+            ("<", 9001),
             ("<=", 9002),
             ("==", 9001),
+            ("!=", 9001),
             (">", 9002),
             (">=", 9001),
         ],
@@ -455,7 +463,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         monkeypatch.setitem(
             gate.MANUAL_BOUNDS,
             "fuzz_synthetic",
-            (1234, "the guard on DECLARED_IN_THE_REASON is bounded by construction"),
+            gate.ManualBound(
+                1234,
+                ("size < DECLARED_IN_THE_REASON",),
+                "the guard on DECLARED_IN_THE_REASON is bounded by construction",
+            ),
         )
         _required, unresolved = gate._bound_for(harness)
         assert unresolved, "the manual bound silenced a guard its reason never mentions"
@@ -468,7 +480,8 @@ class TestTheCeilingCoversTheCommittedSeeds:
 
     The ceiling was derived from the deepest guard alone.  The PQC verify
     seeds are built as `1 + bound + MESSAGE_BYTES` — 5,278 and 49,937 bytes —
-    against derived ceilings of 5,263 and 49,922, so EVERY seed the corpus
+    against the ceilings then derived, 5,263 and 49,922 (one byte above the
+    true minimum through the `<` off-by-one since corrected), so EVERY seed the corpus
     builder writes for those two targets was truncated on load, by 15 bytes,
     landing just short of the branch it was constructed to reach.  Same defect
     the derivation was introduced to fix, from the other side.
@@ -496,3 +509,152 @@ class TestTheCeilingCoversTheCommittedSeeds:
     def test_a_target_without_a_corpus_is_unaffected(self, gate: ModuleType) -> None:
         """The control: the seed rule must not raise a ceiling on its own."""
         assert gate.largest_seed("fuzz_no_such_target") == 0
+
+
+def _body(*guards: str) -> str:
+    lines = "\n".join(f"    {guard}" for guard in guards)
+    return (
+        "\nint LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n"
+        "    if (size < 2) return 0;\n"
+        "    size_t payload_len = size - 1;\n"
+        f"{lines}\n"
+        "    return 0;\n"
+        "}\n"
+    )
+
+
+class TestALengthOnEitherSideOfTheOperatorIsSeen:
+    """The variable had to sit IMMEDIATELY LEFT of the operator.
+
+    ``9000 > payload_len``, ``payload_len - 1 < 9000`` and ``(payload_len) <
+    9000`` matched nowhere, so each contributed neither a bound nor an
+    unresolved entry.  Measured against the previous revision: every guard in
+    the first parametrisation below except the cast returned ``(3, [])`` — the
+    3 of ``size < 2`` (then with the ``<`` off-by-one) and nothing else — and
+    so did ``payload_len != 9000``.  ``(size_t)payload_len < 9000`` was already
+    modeled and stays as the control.  ``payload_len + payload_len > 9000``
+    was worse than invisible: it read as ``payload_len > 9000``.
+    """
+
+    @pytest.mark.parametrize(
+        ("guard", "expected"),
+        [
+            ("if (9000 > payload_len) return 0;", 9001),
+            ("if (9000 >= payload_len) return 0;", 9002),
+            ("if (9000 <= payload_len) { data = 0; }", 9001),
+            ("if (9000 + 1 > payload_len) return 0;", 9002),
+            ("if (AMA_ML_DSA_65_SIGNATURE_BYTES > payload_len) return 0;", 3309 + 1),
+            ("if ((payload_len) < 9000) return 0;", 9001),
+            ("if ((size_t)payload_len < 9000) return 0;", 9001),
+        ],
+    )
+    def test_a_reversed_or_wrapped_guard_is_modeled(
+        self, gate: ModuleType, tmp_path: Path, guard: str, expected: int
+    ) -> None:
+        required, unresolved = gate.required_max_len(_write_harness(tmp_path, _body(guard)))
+        assert not unresolved, unresolved
+        assert required == expected
+
+    @pytest.mark.parametrize(
+        "guard",
+        [
+            "if (payload_len - 1 < 9000) return 0;",
+            "if (9000 < payload_len * 2) return 0;",
+            "if (payload_len + payload_len > 9000) return 0;",
+        ],
+    )
+    def test_arithmetic_on_the_length_side_fails_closed(
+        self, gate: ModuleType, tmp_path: Path, guard: str
+    ) -> None:
+        """Not modeled — this tool adds, it does not solve — so declared or failed."""
+        _required, unresolved = gate.required_max_len(_write_harness(tmp_path, _body(guard)))
+        assert unresolved, f"{guard!r} produced no signal at all"
+
+    def test_a_length_passed_to_a_call_is_not_a_comparison_of_it(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """Non-detection: ``f(payload, payload_len) != 0`` compares f's result."""
+        source = _body(
+            "if (consume(data, payload_len) != 0) return 0;",
+            "if (data[payload_len - 1] == 0) return 0;",
+        )
+        required, unresolved = gate.required_max_len(_write_harness(tmp_path, source))
+        assert (required, unresolved) == (2, [])
+
+    def test_a_length_in_an_or_condition_fails_closed(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """``A || B`` is reachable with ``A`` false: the policy is unchanged."""
+        source = _body("if (payload_len != 9000 || data[0] == 1) return 0;")
+        _required, unresolved = gate.required_max_len(_write_harness(tmp_path, source))
+        assert unresolved == ["payload_len != 9000 (in a || condition)"]
+
+
+class TestAManualBoundMatchesItsGuardsExactly:
+    """An entry used to clear any guard whose expression occurred in its prose.
+
+    ``_guard_expression(guard) not in reason`` is a SUBSTRING test: a new
+    ``payload_len < n`` was cleared by any reason containing the letter n.
+    """
+
+    def test_a_guard_named_only_in_the_prose_is_not_cleared(
+        self, gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _write_harness(
+            tmp_path, _body("if (payload_len < needed) return 0;", "if (payload_len < n) return 0;")
+        )
+        monkeypatch.setitem(
+            gate.MANUAL_BOUNDS,
+            "fuzz_synthetic",
+            gate.ManualBound(
+                777,
+                ("payload_len < needed",),
+                "`needed` is bounded by construction; n is any count at all",
+            ),
+        )
+        _required, unresolved = gate._bound_for(harness)
+        assert unresolved == ["payload_len < n"]
+
+    def test_a_declaration_with_no_subject_fails_the_gate(
+        self,
+        gate: ModuleType,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A stale entry would clear the next guard that renders the same."""
+        _write_harness(tmp_path, _body("if (payload_len < 9000) return 0;"))
+        monkeypatch.setattr(gate, "FUZZ_DIR", tmp_path)
+        monkeypatch.setitem(
+            gate.MANUAL_BOUNDS,
+            "fuzz_synthetic",
+            gate.ManualBound(777, ("payload_len < needed",), "the guard was deleted"),
+        )
+        assert gate.main([]) == 1
+        assert "not an unresolved guard" in capsys.readouterr().err
+
+    def test_every_real_declaration_has_a_subject(self, gate: ModuleType) -> None:
+        for name in gate.MANUAL_BOUNDS:
+            harness = gate.FUZZ_DIR / f"{name}.c"
+            assert harness.is_file(), name
+            assert gate.stale_declarations(harness) == [], name
+
+
+def test_a_less_than_guard_needs_exactly_its_bound(gate: ModuleType) -> None:
+    """The ``<`` row of the table: ``var < N`` is false AT N.
+
+    Measured with clang 18's libFuzzer rather than argued: a harness that traps
+    past ``if (payload_len < 100) return 0;`` (1-byte selector) traps under
+    ``-max_len=101`` from a 101-byte seed and cannot under ``-max_len=100``.
+    The rule added one here, contradicting the comment that stated it, so every
+    ``<``-derived ceiling was a byte above the smallest one that works.
+    """
+    assert gate._needed("<", 100) + 1 == 101
+    assert [gate._needed(op, 100) for op in ("<", "<=", "==", "!=", ">", ">=")] == [
+        100,
+        101,
+        100,
+        100,
+        101,
+        100,
+    ]

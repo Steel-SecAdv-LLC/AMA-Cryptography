@@ -46,8 +46,8 @@ rest.  A new page is covered the moment it is tracked.
 
 How it works
 ------------
-Each fenced ``python`` or ``c`` block in a covered file must carry a directive
-in an HTML comment on the line before its opening fence::
+Each fenced Python or C block in a COVERED file must carry a directive in an
+HTML comment on the line before its opening fence::
 
     <!-- example: python-run -->
     <!-- example: python-signature module=ama_cryptography.secure_memory -->
@@ -58,6 +58,21 @@ in an HTML comment on the line before its opening fence::
 An unmarked block is a failure.  That is the point: the directive is how an
 author states what the block claims, and "this one is illustrative" has to be
 written down rather than assumed.
+
+"Fenced block" means what the renderer means (CommonMark, which GitHub
+follows): a run of three or more backticks OR tildes, optionally followed by
+whitespace, then an info string whose first word names the language; closed
+by the same character repeated at least as many times.  The Python family is
+the tags ``python``, ``py``, ``python3``, ``py3``, ``pyi`` and ``pycon`` (an
+interactive transcript); the C family is ``c`` and ``h``.  The first version
+recognised only a three-backtick fence tagged exactly ``python``, ``py`` or
+``c``, so an example in a ``~~~`` fence, a four-backtick fence, a fence
+written ``` python``, or one tagged ``python3`` or ``pycon`` was invisible:
+not run, and not even required to carry a directive.
+
+A ``pycon`` block is a transcript: its ``>>>`` / ``...`` lines are the code
+every mode reads, and under ``python-run`` it is executed by ``doctest``, so
+each output line the page shows must be what the line above it prints.
 
 The modes
 ~~~~~~~~~
@@ -91,11 +106,14 @@ The modes
 
 ``c-run``
     Compiled against ``include/`` and linked against the built library with
-    ``-Wall -Wextra -Werror``, then run.  When ``valgrind`` is present the run
-    happens under ``memcheck --track-origins=yes --error-exitcode``, which is
-    what turns "passes uninitialised stack memory as a seed" from an invisible
-    defect into a red build: the uninitialised bytes reach a conditional inside
-    the library and memcheck reports the stack allocation in ``main``.
+    ``-Wall -Wextra -Werror``, then run.  With no built library to link, a
+    ``c-run`` block cannot be run, and the gate says so with exit 2 — it used
+    to count the block as "skipped" and exit 0.  When ``valgrind`` is present
+    the run happens under ``memcheck --track-origins=yes --error-exitcode``,
+    which is what turns "passes uninitialised stack memory as a seed" from an
+    invisible defect into a red build: the uninitialised bytes reach a
+    conditional inside the library and memcheck reports the stack allocation
+    in ``main``.
 
 ``c-decl``
     The block declares public prototypes.  Each must appear in
@@ -118,7 +136,8 @@ Exit status
 -----------
 0  every covered example ran, compiled, linked or matched
 1  at least one example failed, or a block carries no directive
-2  the check could not run
+2  the check could not run — including C examples to compile or export-check
+   with no built library found (pass ``--library-dir``, or ``--lang python``)
 """
 
 from __future__ import annotations
@@ -126,6 +145,7 @@ from __future__ import annotations
 import argparse
 import ast
 import builtins
+import doctest
 import importlib
 import importlib.util
 import inspect
@@ -161,13 +181,41 @@ def covered_files(repo: Path = REPO) -> tuple[str, ...]:
     return tuple(name for name in tracked_names(repo, "*.md") if not is_historical_record(name))
 
 
-#: Fence languages this gate is responsible for.  ``bash`` install commands are
-#: covered by tools/check_documented_extras.py (INVARIANT-32) and are not
-#: re-checked here.
-CHECKED_LANGUAGES: frozenset[str] = frozenset({"python", "py", "c"})
+#: Fence languages this gate is responsible for, by family: the tags that name
+#: Python source (or, ``pycon``, a Python console transcript) and C source.
+#: ``bash`` install commands are covered by tools/check_documented_extras.py
+#: (INVARIANT-32) and are not re-checked here.
+PYTHON_LANGUAGES: frozenset[str] = frozenset({"python", "py", "python3", "py3", "pyi", "pycon"})
+C_LANGUAGES: frozenset[str] = frozenset({"c", "h"})
+CHECKED_LANGUAGES: frozenset[str] = PYTHON_LANGUAGES | C_LANGUAGES
 
-_FENCE = re.compile(r"^(?P<indent>\s*)```(?P<info>[^\s`]*)\s*(?P<rest>.*)$")
+#: A CommonMark fence line: 3+ backticks or 3+ tildes, then an optional info
+#: string (a backtick fence's info string may not contain a backtick).  The
+#: first word of the info string is the language.
+_FENCE = re.compile(r"^(?P<indent>\s*)(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>.*?)[ \t]*$")
 _DIRECTIVE = re.compile(r"<!--\s*example:\s*(?P<body>.+?)\s*-->\s*$")
+
+
+def _opening_fence(line: str) -> Optional[tuple[str, str, str]]:
+    """``(indent, fence, language)`` when ``line`` opens a fenced block."""
+    match = _FENCE.match(line)
+    if match is None:
+        return None
+    fence, info = match.group("fence"), match.group("info")
+    if fence[0] == "`" and "`" in info:
+        return None  # CommonMark: not a fence (it is inline code)
+    words = info.split()
+    return match.group("indent"), fence, (words[0].lower() if words else "")
+
+
+def _closes(line: str, fence: str) -> bool:
+    """True when ``line`` closes a block opened by ``fence``.
+
+    Same character, at least as long, and nothing after it but whitespace.
+    """
+    stripped = line.strip()
+    return len(stripped) >= len(fence) and set(stripped) == {fence[0]}
+
 
 #: ``name(params) -> Return`` with an optional ``var: T = `` prefix and an
 #: optional trailing comment.  Deliberately strict: anything else in a
@@ -219,6 +267,15 @@ class Block:
     language: str
     directive: Optional[str]  # raw directive body, or None when unmarked
     code: str
+    #: A ``pycon`` block's text as written — prompts and the output lines —
+    #: which ``python-run`` executes under doctest.  ``code`` holds only its
+    #: source lines, prompts stripped.  None for every other language.
+    transcript: Optional[str] = None
+
+    @property
+    def family(self) -> str:
+        """``"c"`` or ``"python"``: which lane and which modes apply."""
+        return "c" if self.language in C_LANGUAGES else "python"
 
     @property
     def mode(self) -> str:
@@ -290,40 +347,57 @@ def _display_path(path: Path, repo: Path) -> str:
 
 
 def extract_blocks(path: Path, repo: Path = REPO) -> list[Block]:
-    """Every fenced block in ``path`` whose language this gate checks."""
+    """Every fenced block in ``path`` whose language this gate checks.
+
+    Every fenced block is PARSED — an untagged one, or one in a language this
+    gate does not check, still owns its body up to its own closing fence — so
+    a fence-like line inside another block is content, not a block.
+    """
     relative = _display_path(path, repo)
     lines = path.read_text(encoding="utf-8").splitlines()
     blocks: list[Block] = []
     index = 0
     while index < len(lines):
-        match = _FENCE.match(lines[index])
-        if not match or not match.group("info"):
+        opened = _opening_fence(lines[index])
+        if opened is None:
             index += 1
             continue
-        language = match.group("info").lower()
-        fence_indent = match.group("indent")
+        fence_indent, fence, language = opened
         opening = index
         index += 1
         body: list[str] = []
-        while index < len(lines):
-            closing = _FENCE.match(lines[index])
-            if closing and not closing.group("info"):
-                break
+        while index < len(lines) and not _closes(lines[index], fence):
             body.append(lines[index])
             index += 1
-        index += 1  # step past the closing fence
+        index += 1  # step past the closing fence (or the end of the file)
         if language not in CHECKED_LANGUAGES:
             continue
+        text = "\n".join(_dedent(body, fence_indent)) + "\n"
+        transcript: Optional[str] = None
+        if language == "pycon":
+            transcript, text = text, pycon_source(text)
         blocks.append(
             Block(
                 path=relative,
                 line=opening + 1,
                 language=language,
                 directive=_directive_above(lines, opening),
-                code="\n".join(_dedent(body, fence_indent)) + "\n",
+                code=text,
+                transcript=transcript,
             )
         )
     return blocks
+
+
+def pycon_source(transcript: str) -> str:
+    """The Python source of a console transcript: its ``>>>`` / ``...`` lines.
+
+    Parsed by :class:`doctest.DocTestParser`, the same reader that executes
+    the transcript under ``python-run``, so "what the transcript runs" has one
+    definition.  Output lines are not source and are dropped.
+    """
+    examples = doctest.DocTestParser().get_examples(transcript)
+    return "".join(example.source for example in examples)
 
 
 def _dedent(body: Sequence[str], indent: str) -> list[str]:
@@ -435,11 +509,46 @@ def check_python_encodability(block: Block, report: Report) -> None:
         )
 
 
-def run_python(block: Block, report: Report, repo: Path, code: Optional[str] = None) -> None:
-    """Run ``code`` (default: the block's own) in a fresh interpreter."""
+#: How a ``pycon`` transcript runs: under doctest, which executes each ``>>>``
+#: line and compares what it prints with the output line the page shows.
+#: ``ELLIPSIS`` lets a page elide a value that legitimately varies (an address,
+#: a random key) with ``...``; nothing else is relaxed.
+_PYCON_RUNNER = """\
+import doctest
+import sys
+
+TRANSCRIPT = {transcript!r}
+GLOBS = {{"__name__": "__main__"}}
+# A `python-run continues` transcript runs after the page's earlier example.
+exec(compile({prelude!r}, "prelude", "exec"), GLOBS)
+test = doctest.DocTestParser().get_doctest(TRANSCRIPT, GLOBS, "example", {where!r}, 0)
+runner = doctest.DocTestRunner(optionflags=doctest.ELLIPSIS)
+runner.run(test)
+sys.exit(1 if runner.failures else 0)
+"""
+
+
+def run_python(
+    block: Block, report: Report, repo: Path, code: Optional[str] = None, prelude: str = ""
+) -> None:
+    """Run the block in a fresh interpreter.
+
+    ``code`` is what a ``python`` block runs (default: its own source; a
+    ``continues`` block passes its predecessors' source joined to its own).  A
+    ``pycon`` transcript runs under doctest instead, after ``prelude`` -- its
+    predecessors' source -- has run in the same namespace.
+    """
     with tempfile.TemporaryDirectory() as workdir:
         script = Path(workdir) / "example.py"
-        script.write_text(block.code if code is None else code, encoding="utf-8")
+        if block.transcript is not None:
+            script.write_text(
+                _PYCON_RUNNER.format(
+                    transcript=block.transcript, where=block.where(), prelude=prelude
+                ),
+                encoding="utf-8",
+            )
+        else:
+            script.write_text(block.code if code is None else code, encoding="utf-8")
         environment = dict(os.environ)
         environment.setdefault("PYTHONPATH", str(repo))
         environment["PYTHONWARNINGS"] = "ignore"
@@ -1165,7 +1274,7 @@ def check_blocks(
             exported = exported_symbols(library)
 
     for block in blocks:
-        family = "c" if block.language == "c" else "python"
+        family = block.family
         if block.directive is None:
             report.fail(
                 block,
@@ -1203,6 +1312,7 @@ def check_blocks(
             # on the exact example that breaks for a Windows reader.
             check_python_encodability(block, report)
             code = block.code
+            previous = None
             if block.continues:
                 previous = running_example.get(block.path)
                 if previous is None:
@@ -1214,7 +1324,7 @@ def check_blocks(
                     continue
                 code = previous + "\n" + block.code
             running_example[block.path] = code
-            run_python(block, report, repo, code)
+            run_python(block, report, repo, code, prelude=previous or "")
         elif mode == "python-signature":
             check_python_signatures(block, report)
         elif mode == "python-names":
@@ -1225,7 +1335,15 @@ def check_blocks(
             check_c_constants(block, report, repo)
         elif mode == "c-run":
             if include_dir is None or library_dir is None:
-                report.skipped += 1
+                # Not a skip: an example that was never compiled, linked or run
+                # has not been shown to do anything.  main() refuses the whole
+                # run (exit 2) before reaching here; this is the same verdict
+                # for a caller that drives check_blocks() directly.
+                report.fail(
+                    block,
+                    "c-run example was not run: no built library to link it "
+                    "against (pass --library-dir, or --lang python)",
+                )
                 continue
             run_c(
                 block,
@@ -1309,6 +1427,30 @@ def main(argv: Optional[list[str]] = None) -> int:
             if find_library(candidate) is not None:
                 library_dir = candidate.resolve()
                 break
+
+    # The C lane links and export-checks against a BUILT library.  Without
+    # one, every c-run block used to be counted "skipped" and every c-decl
+    # block checked against the header only, and the run exited 0 — a C lane
+    # that examined nothing looked exactly like one that passed.
+    needs_library = sorted(
+        block.where()
+        for block in blocks
+        if block.family == "c" and block.mode in ("c-run", "c-decl")
+    )
+    if "c" in languages and needs_library and find_library(library_dir) is None:
+        searched = (
+            str(library_dir) if library_dir is not None else "build/lib, ama_cryptography/, build/"
+        )
+        print(
+            f"FATAL: {len(needs_library)} C example(s) must be compiled, linked "
+            f"or export-checked ({', '.join(needs_library[:3])}"
+            f"{', ...' if len(needs_library) > 3 else ''}), and no built "
+            f"libama_cryptography was found in {searched}. Build it, pass "
+            "--library-dir, or run --lang python to check only the Python "
+            "examples.",
+            file=sys.stderr,
+        )
+        return 2
 
     report = check_blocks(
         blocks,

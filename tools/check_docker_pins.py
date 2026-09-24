@@ -65,7 +65,10 @@ What is checked
     ``runs.image: docker://…`` all pull a registry image by reference and run
     it with the job's token.  The scan globbed ``Dockerfile*`` only, so a
     tag-only ``container: image: quay.io/pypa/manylinux_2_28_x86_64:<tag>`` in
-    ``static-analysis.yml`` was never examined.  Each of these must carry
+    ``static-analysis.yml`` was never examined.  Action definitions are read
+    from anywhere in the repository — ``action.yml`` / ``action.yaml``, as
+    ``tools/check_action_pins.py`` enumerates them — not only from
+    ``.github/actions``.  Each of these must carry
     ``@sha256:<64 hex>`` too; an image computed by a ``${{ }}`` expression
     cannot be verified and fails the same way.  The workflows are PARSED
     (``yaml.compose``) so every YAML spelling of those keys is seen.  No
@@ -80,6 +83,7 @@ finds no Dockerfiles is an error, not a pass.
 from __future__ import annotations
 
 import datetime as _dt
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -188,18 +192,39 @@ def dockerfiles(root: Path | None = None) -> list[Path]:
     return out
 
 
+def _action_definition_files(root: Path) -> list[Path]:
+    """Every ``action.yml`` / ``action.yaml`` in the repository at ``root``.
+
+    One definition of "where an action can live", owned by
+    ``tools/check_action_pins.py`` (INVARIANT-4's other half) and loaded from
+    it by path, so the two gates cannot disagree about which files are
+    actions.  ``uses: ./tools/setup`` runs ``tools/setup/action.yml``: this
+    scan used to stop at ``.github/actions/**``, so a container action's
+    ``runs.image`` one directory to the side was never examined.
+    """
+    path = Path(__file__).resolve().parent / "check_action_pins.py"
+    spec = importlib.util.spec_from_file_location("_action_pins_for_docker_pins", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable on a real tree
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before execution: the module defines dataclasses under
+    # `from __future__ import annotations`, which resolve their own module
+    # through sys.modules while the class is being built.
+    sys.modules.setdefault(spec.name, module)
+    spec.loader.exec_module(module)
+    found: list[Path] = module.action_definition_files(root)
+    return found
+
+
 def workflow_files(root: Path | None = None) -> list[Path]:
-    """Every workflow and composite/container action definition under ``.github``."""
+    """Every workflow, and every action definition anywhere in the repository."""
     base = REPO_ROOT if root is None else root
-    github = base / ".github"
     out: list[Path] = []
-    workflows = github / "workflows"
+    workflows = base / ".github" / "workflows"
     if workflows.is_dir():
         out.extend(sorted(workflows.glob("*.yml")) + sorted(workflows.glob("*.yaml")))
-    actions = github / "actions"
-    if actions.is_dir():
-        for pattern in ("action.yml", "action.yaml"):
-            out.extend(sorted(path for path in actions.rglob(pattern) if path.is_file()))
+    seen = {path.resolve() for path in out}
+    out.extend(path for path in _action_definition_files(base) if path.resolve() not in seen)
     return out
 
 
@@ -468,7 +493,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
     else:
         docker = dockerfiles()
-        workflows = workflow_files()
+        try:
+            workflows = workflow_files()
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
         # Fail closed PER KIND: an empty scan of either is a broken scan, and
         # the other kind's files must not carry it to a pass.
         if not docker:

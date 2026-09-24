@@ -98,6 +98,28 @@ def test_x86_floating_point_divides_are_counted(gate: ModuleType) -> None:
     assert divides == {"fp_function": 2}
 
 
+def test_sve_reversed_divides_are_counted(gate: ModuleType) -> None:
+    """SVE's ``sdivr``/``udivr`` are divides with their operands swapped.
+
+    The integer arm matched ``udiv``/``sdiv`` exactly, so both reversed forms
+    passed uncounted while ``fdivr`` (through ``v?fdiv[a-z]*``) was counted.
+    The lines below are verbatim ``llvm-objdump -d --no-show-raw-insn`` output
+    for an SVE object (GNU ``aarch64-linux-gnu-objdump`` spells them the same):
+    five divides, of which the old pattern counted three.
+    """
+    text = (
+        "\n0000000000000000 <ama_sve_kernel>:\n"
+        "       0:      \tsdivr\tz0.s, p0/m, z0.s, z1.s\n"
+        "       4:      \tudivr\tz0.d, p0/m, z0.d, z1.d\n"
+        "       8:      \tsdiv\tz2.s, p0/m, z2.s, z3.s\n"
+        "       c:      \tfdivr\tz4.s, p0/m, z4.s, z5.s\n"
+        "      10:      \tsdiv\tx0, x1, x2\n"
+    )
+    divides, _symbols, instructions = gate.inventory(text)
+    assert instructions == 5
+    assert divides == {"ama_sve_kernel": 5}
+
+
 def test_aarch64_fdiv_is_counted(gate: ModuleType) -> None:
     """`fdiv` matched neither the ``i?div`` arm nor ``udiv``/``sdiv``.
 

@@ -432,6 +432,135 @@ class TestDocExamples:
         assert completed.returncode == 0, completed.stderr
         assert "1 skipped" in completed.stdout
 
+    #: Every fence spelling GitHub renders as a Python code block.  The gate
+    #: recognised exactly three backticks followed immediately by ``python``,
+    #: ``py`` or ``c``; measured before the fix, a page holding one passing
+    #: block plus any one of these — raising ``SystemExit(3)`` and carrying no
+    #: directive — exited 0 with "1 executed/checked, 0 skipped".
+    _FENCES: tuple[tuple[str, str], ...] = (
+        ("~~~python", "~~~"),
+        ("~~~~python", "~~~~"),
+        ("````python", "````"),
+        ("``` python", "```"),
+        ("```python3", "```"),
+        ("```py3", "```"),
+        ("```pyi", "```"),
+    )
+
+    @pytest.mark.parametrize(("opening", "closing"), _FENCES)
+    def test_every_python_fence_spelling_needs_a_directive(
+        self, doc_fixture: Path, opening: str, closing: str
+    ) -> None:
+        doc_fixture.write_text(
+            f"# fixture\n\n{opening}\nraise SystemExit(3)\n{closing}\n", encoding="utf-8"
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture))
+        assert completed.returncode == 1, (opening, completed.stdout, completed.stderr)
+        assert "no `<!-- example:" in completed.stderr
+
+    @pytest.mark.parametrize(("opening", "closing"), _FENCES)
+    def test_every_python_fence_spelling_is_executed(
+        self, doc_fixture: Path, opening: str, closing: str
+    ) -> None:
+        doc_fixture.write_text(
+            f"<!-- example: python-run -->\n{opening}\nraise SystemExit(3)\n{closing}\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 1, (opening, completed.stdout, completed.stderr)
+
+    def test_a_pycon_block_needs_a_directive(self, doc_fixture: Path) -> None:
+        """Measured before the fix: invisible, like the fences above."""
+        doc_fixture.write_text(
+            "<!-- example: python-run -->\n```python\nprint('ok')\n```\n\n"
+            "```pycon\n>>> raise SystemExit(3)\n```\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 1, completed.stdout
+        assert "no `<!-- example:" in completed.stderr
+
+    def test_a_c_block_in_a_tilde_fence_needs_a_directive(self, doc_fixture: Path) -> None:
+        doc_fixture.write_text(
+            "<!-- example: python-run -->\n```python\nprint('ok')\n```\n\n"
+            "~~~c\nint main(void) { return 3; }\n~~~\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 1, completed.stdout
+        assert "no `<!-- example:" in completed.stderr
+
+    def test_a_fence_inside_a_longer_fence_is_content_not_a_block(self, doc_fixture: Path) -> None:
+        """A page that SHOWS how to write a fence is not an example.
+
+        GitHub renders the inner lines as text inside the four-backtick block;
+        treating them as a block would demand a directive for prose.
+        """
+        doc_fixture.write_text(
+            "<!-- example: python-run -->\n```python\nprint('ok')\n```\n\n"
+            "````markdown\n```python\nraise SystemExit(3)\n```\n````\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 0, completed.stderr
+        assert "1 example block(s)" in completed.stdout
+
+    def test_a_pycon_transcript_is_run_and_its_output_checked(self, doc_fixture: Path) -> None:
+        """A transcript's output lines are claims: doctest holds it to them."""
+        doc_fixture.write_text(
+            "<!-- example: python-run -->\n```pycon\n>>> 1 + 1\n3\n```\n", encoding="utf-8"
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 1, completed.stdout
+        assert "Expected" in completed.stderr and "Got" in completed.stderr
+
+    def test_a_true_pycon_transcript_passes(self, doc_fixture: Path) -> None:
+        doc_fixture.write_text(
+            "<!-- example: python-run -->\n```pycon\n>>> x = [1, 2]\n"
+            ">>> for item in x:\n...     print(item)\n1\n2\n>>> len(x)\n2\n```\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--file", str(doc_fixture), "--lang", "python")
+        assert completed.returncode == 0, completed.stderr
+
+    def test_a_pycon_block_reads_as_its_source_lines(self) -> None:
+        """Every other mode reads a transcript's code, prompts stripped."""
+        module = _load(DOC_EXAMPLES)
+        source = module.pycon_source(">>> import os\n>>> for c in 'ab':\n...     print(c)\na\nb\n")
+        assert source == "import os\nfor c in 'ab':\n    print(c)\n"
+
+    def test_a_c_run_block_with_no_library_is_not_a_skip(self, tmp_path: Path) -> None:
+        """No library to link means the example was never run: exit 2, not 0.
+
+        Measured before the fix: against a tree with no built library this
+        page exited 0 with "0 executed/checked, 1 skipped" — a C example that
+        was never compiled reported the same as one that ran.
+        """
+        repo = tmp_path / "repo"
+        (repo / "ama_cryptography").mkdir(parents=True)
+        (repo / "ama_cryptography" / "__init__.py").write_text("", encoding="utf-8")
+        page = tmp_path / "page.md"
+        page.write_text(
+            "<!-- example: c-run -->\n```c\nint main(void) { return 3; }\n```\n",
+            encoding="utf-8",
+        )
+        completed = _run(DOC_EXAMPLES, "--repo", str(repo), "--file", str(page))
+        assert completed.returncode == 2, (completed.stdout, completed.stderr)
+        assert "no built" in completed.stderr
+        # Asking for the Python lane only is the explicit way to not need one.
+        completed = _run(DOC_EXAMPLES, "--repo", str(repo), "--file", str(page), "--lang", "python")
+        assert completed.returncode == 0, completed.stderr
+
+    def test_check_blocks_fails_a_c_run_block_it_cannot_link(self) -> None:
+        """The same verdict for a caller that drives check_blocks() itself."""
+        module = _load(DOC_EXAMPLES)
+        block = module.Block(
+            path="page.md", line=1, language="c", directive="c-run", code="int main(void){}\n"
+        )
+        report = module.check_blocks([block], include_dir=REPO_ROOT / "include", library_dir=None)
+        assert report.skipped == 0
+        assert len(report.findings) == 1 and "was not run" in report.findings[0].detail
+
     @requires_c_lane
     def test_the_uninitialised_ed25519_seed_example_fails(self, doc_fixture: Path) -> None:
         """The defect this gate was built for.
@@ -1294,8 +1423,35 @@ class TestThePublicApiGateReadsTheImageInFrontOfIt:
 
 class TestPublicApiDocs:
     def test_the_real_package_matches_its_documentation(self) -> None:
+        """Positive control, whatever this runner built.
+
+        With a findable library every claim, the exported ABI included, must
+        hold (exit 0).  Without one the export checks are SKIPPED, and the
+        gate must say so in its exit status (3) rather than exit 0 — which is
+        what its docstring always promised and what it did not do.
+        """
         completed = _run(PUBLIC_API)
-        assert completed.returncode == 0, completed.stderr
+        library = _load(PUBLIC_API).find_library(REPO_ROOT)
+        expected = 0 if library is not None else 3
+        assert completed.returncode == expected, (library, completed.stdout, completed.stderr)
+
+    def test_a_skipped_export_check_is_not_exit_zero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The docstring: "the exit status distinguishes the two".
+
+        ``main`` returned 0 whether or not the C export checks ran, so a caller
+        could not tell a verified ABI from an unexamined one.  Driven with the
+        library search forced empty, so this pins the skip path on every
+        runner, including the ones that do have a library.
+        """
+        module = _load(PUBLIC_API)
+        monkeypatch.setattr(module, "find_library", lambda *_args, **_kwargs: None)
+        rc = module.main([])
+        out = capsys.readouterr().out
+        assert rc == 3, out
+        assert "SKIP  C export verification" in out
+        assert module.main(["--require-library"]) == 2
 
     def test_the_documented_bare_import_set_is_the_real_one(self) -> None:
         """The wiki's list and the gate's list must be the same list.

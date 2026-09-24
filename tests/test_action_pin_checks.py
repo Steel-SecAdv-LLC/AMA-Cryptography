@@ -29,6 +29,7 @@ with the legitimate shape it must not fire on:
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -456,3 +457,73 @@ class TestEveryYamlSpellingAndEveryActionFileIsRead:
             tmp_path, "      - run: |\n          echo 'uses: actions/checkout@v4'\n"
         )
         assert tool.find_unpinned(directory) == []
+
+
+class TestAnActionDefinitionAnywhereIsScanned:
+    """``uses: ./tools/setup`` runs ``tools/setup/action.yml``.
+
+    The scan read ``.github/actions/**`` and nothing else, so a composite
+    action one directory to the side — or an ``action.yml`` at the repository
+    root, which is where a published action keeps it — carried an unpinned
+    ``uses:`` past INVARIANT-4.  Measured before the fix: both fixtures below
+    produced no finding.
+    """
+
+    @staticmethod
+    def _tree(tmp_path: Path) -> Path:
+        workflows = tmp_path / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "ci.yml").write_text(
+            f"jobs:\n  a:\n    steps:\n      - uses: actions/checkout@{GOOD_SHA}\n"
+            "      - uses: ./tools/setup\n",
+            encoding="utf-8",
+        )
+        return workflows
+
+    @staticmethod
+    def _action(path: Path, ref: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"runs:\n  using: composite\n  steps:\n    - uses: {ref}\n", encoding="utf-8"
+        )
+
+    def test_a_composite_action_outside_github_actions_is_scanned(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        workflows = self._tree(tmp_path)
+        self._action(tmp_path / "tools" / "setup" / "action.yml", "actions/setup-python@v5")
+        found = tool.find_unpinned(workflows)
+        assert [(u.workflow, u.ref, u.line_no) for u in found] == [
+            ("tools/setup/action.yml", "actions/setup-python@v5", 4)
+        ]
+
+    def test_a_root_level_action_yaml_is_scanned(self, tool: ModuleType, tmp_path: Path) -> None:
+        workflows = self._tree(tmp_path)
+        self._action(tmp_path / "action.yaml", "actions/cache@v4")
+        assert [(u.workflow, u.ref) for u in tool.find_unpinned(workflows)] == [
+            ("action.yaml", "actions/cache@v4")
+        ]
+
+    def test_main_fails_on_it(self, tool: ModuleType, tmp_path: Path) -> None:
+        """The gate, not only the collector: exit 1 before any network call."""
+        self._tree(tmp_path)
+        self._action(tmp_path / "ci" / "lint" / "action.yml", "actions/setup-node@v4")
+        assert tool.main(["--root", str(tmp_path)]) == 1
+
+    def test_in_a_work_tree_git_decides_what_is_in_the_repository(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """An ignored build tree is not the repository; an unadded file is.
+
+        A vendored checkout under an ignored ``build/`` can hold any number of
+        third-party actions; none of them runs in this repository's CI.  A new
+        composite action the author has not ``git add``-ed yet is about to.
+        """
+        workflows = self._tree(tmp_path)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        (tmp_path / ".gitignore").write_text("build/\n", encoding="utf-8")
+        self._action(tmp_path / "build" / "_deps" / "x" / "action.yml", "actions/ignored@v1")
+        self._action(tmp_path / "tools" / "new" / "action.yml", "actions/unadded@v1")
+        assert [(u.workflow, u.ref) for u in tool.find_unpinned(workflows)] == [
+            ("tools/new/action.yml", "actions/unadded@v1")
+        ]

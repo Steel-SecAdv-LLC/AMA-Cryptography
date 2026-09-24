@@ -31,23 +31,32 @@ Registration says a harness RUNS.  This says its branches can be ENTERED.
 What it does
 ------------
 For each harness it extracts every length guard — ``size < N``,
-``payload_len < N``, ``payload_len == N`` — resolves ``N`` against the
-harness's own ``#define``s and the public header's, adds the payload's offset
-within the input, and takes the maximum.  That is the smallest ``-max_len``
-under which every branch is reachable.  ``--max-len TARGET`` prints it, which
-is what the workflow uses, so the fuzzer's ceiling is derived from the
-harness instead of written down twice.
+``payload_len < N``, ``payload_len == N``, ``payload_len != N``, and the same
+comparisons written the other way round (``N > payload_len``) — resolves ``N``
+against the harness's own ``#define``s and the public header's, adds the
+payload's offset within the input, and takes the maximum.  That is the
+smallest ``-max_len`` under which every branch is reachable.  ``--max-len
+TARGET`` prints it, which is what the workflow uses, so the fuzzer's ceiling
+is derived from the harness instead of written down twice.
 
-An expression it cannot resolve statically is NOT ignored.  It must be listed
-in :data:`MANUAL_BOUNDS` with the bound and the reasoning, or this gate fails
-— because a guard the tool silently skipped is exactly the branch that would
-go unreachable again.
+Every comparison is split into its two operands (see :func:`_comparisons`),
+so a length variable is found on EITHER side and under any arithmetic.
+Every earlier revision matched the variable only immediately left of the
+operator, so ``9000 > payload_len``, ``payload_len - 1 < N`` and
+``(payload_len) < N`` produced neither a bound nor an unresolved entry: the
+guard simply vanished.
+
+A guard it cannot resolve statically is NOT ignored.  It must be listed in
+:data:`MANUAL_BOUNDS` — by its exact rendered form, with the bound and the
+reasoning — or this gate fails, because a guard the tool silently skipped is
+exactly the branch that would go unreachable again.
 
 Exit status
 -----------
 0  every branch in every harness is reachable under the lane's ``-max_len``
 1  a branch is unreachable, or a guard could not be resolved and is not
-   declared, or the workflow stopped deriving its ceiling from this tool
+   declared, or a MANUAL_BOUNDS declaration names a guard the harness no
+   longer has, or the workflow stopped deriving its ceiling from this tool
 2  an input this gate must read is missing (fail closed)
 """
 
@@ -57,6 +66,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FUZZ_DIR = REPO_ROOT / "fuzz"
@@ -68,13 +78,39 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "fuzzing.yml"
 #: does not quietly lower it for another.
 DEFAULT_MAX_LEN = 4096
 
+
+class ManualBound(NamedTuple):
+    """A bound this gate cannot compute, worked out by hand."""
+
+    #: The input length that makes every declared guard's branches reachable.
+    bound: int
+    #: The EXACT unresolved guards this entry accounts for, as the gate
+    #: renders them (``"payload_len < needed"``).  Matched by equality.  The
+    #: previous revision dropped any unresolved guard whose expression occurred
+    #: as a SUBSTRING of the reason text, so a new guard ``payload_len < n``
+    #: was silenced by any reason containing the letter n.
+    guards: tuple[str, ...]
+    #: How the bound is obtained, guard by guard.
+    reason: str
+
+
 #: Guards whose bound is a runtime value this gate cannot evaluate, with the
 #: bound worked out by hand and the reasoning that gets it.  Anything not
-#: listed here and not statically resolvable fails the gate.
-MANUAL_BOUNDS: dict[str, tuple[int, str]] = {
-    "fuzz_nistp": (
+#: listed here and not statically resolvable fails the gate, and so does a
+#: listed guard that no longer occurs (a declaration must not outlive its
+#: subject and pre-authorise the next guard that happens to read the same).
+MANUAL_BOUNDS: dict[str, ManualBound] = {
+    "fuzz_nistp": ManualBound(
         200,
-        "every guard is against nb = ama_nistp_field_bytes(curve) or "
+        (
+            "payload_len < 2u * nb",
+            "payload_len < pub_len + 1u",
+            "payload_len < pub_len",
+            "payload_len < nb",
+            "payload_len >= nb + pub_len",
+            "payload_len != again_len (in a || condition)",
+        ),
+        "every length guard is against nb = ama_nistp_field_bytes(curve) or "
         "pub_len = ama_nistp_pubkey_bytes(curve): runtime lookups, but ranging "
         "over exactly three curves, so each is bounded by its P-521 value -- "
         "nb <= 66 (AMA_NISTP_MAX_FIELD_BYTES) and pub_len <= 132 "
@@ -84,70 +120,79 @@ MANUAL_BOUNDS: dict[str, tuple[int, str]] = {
         "signature octet); `nb` <= 66 (default case, a private scalar); and "
         "the widest, `nb + pub_len` <= 198 (default case, scalar plus peer "
         "key). 198 plus the 2-byte header -- data[0] curve selector, data[1] "
-        "case selector -- before the payload gives 200",
+        "case selector -- before the payload gives 200. The sixth, "
+        "`again_len != payload_len || memcmp(...)` (case 0), is the DER "
+        "round-trip assertion: its true branch is a codec defect and is "
+        "reachable at no length if the codec is correct; its false branch is "
+        "any DER signature the parser accepts, the longest of which (P-521: "
+        "a 3-byte SEQUENCE header and two 69-byte INTEGERs, 141 bytes) is "
+        "inside the same 200",
     ),
-    "fuzz_frost": (
+    "fuzz_frost": ManualBound(
         780,
+        ("payload_len < needed",),
         "case 2 gates on `needed = threshold*32 + threshold*64 + threshold + 1`, "
         "and `threshold = 2 + data[1] % (FROST_FUZZ_MAX_N - 1)` is bounded by "
         "FROST_FUZZ_MAX_N = 8, so needed <= 8*32 + 8*64 + 8 + 1 = 777, plus the "
         "3-byte header before the payload",
     ),
+    "fuzz_sha3": ManualBound(
+        2,
+        ("payload_len > offset",),
+        "case 2's `while (offset < payload_len)` chunked-absorb loop: `offset` "
+        "starts at 0 and only grows by the chunk it absorbs, so the body is "
+        "entered iff payload_len >= 1 and the loop exits for every length. "
+        "1 payload byte plus the 1-byte case selector is 2",
+    ),
+    "fuzz_hkdf": ManualBound(
+        0,
+        ("rest_len < salt_len + ikm_len",),
+        "`if (salt_len + ikm_len > rest_len)` is a defensive clamp on the "
+        "salt/ikm split, not a length floor: salt_len = rest_len*salt_frac/512 "
+        "and ikm_len = rest_len*ikm_frac/512 with both fractions a uint8_t "
+        "(<= 255), so salt_len + ikm_len <= rest_len*510/512 < rest_len for "
+        "every rest_len > 0 and the clamp's true branch is taken at NO input "
+        "length -- no -max_len reaches it, and none is needed for the false "
+        "branch, which every input takes. It contributes no bound",
+    ),
+    "fuzz_agent_binding": ManualBound(
+        0,
+        ("key_len > tail_len (unparseable comparison)",),
+        "`if (key_len > tail_len) key_len = tail_len;` is a defensive clamp, not "
+        "a length floor: key_len = ((control >> 1) * tail_len) / 128 with control "
+        "a uint8_t, so control >> 1 <= 127 and key_len <= tail_len*127/128 <= "
+        "tail_len for every tail_len -- the clamp's true branch is taken at NO "
+        "input length and its false branch by every input. It contributes no "
+        "bound",
+    ),
+    "fuzz_kyber": ManualBound(
+        1569,
+        ("payload_len != AMA_KYBER_1024_PUBLIC_KEY_BYTES (in a || condition)",),
+        "case 4's post-condition `if (payload_len != AMA_KYBER_1024_PUBLIC_KEY_BYTES "
+        "|| ct_len != AMA_KYBER_1024_CIPHERTEXT_BYTES) __builtin_trap();` after a "
+        "SUCCESSFUL encapsulation: its true branch is a defect report, reachable "
+        "at no length if encapsulation is correct, and its false branch needs "
+        "payload_len == 1568 (AMA_KYBER_1024_PUBLIC_KEY_BYTES), plus the 1-byte "
+        "selector: 1569",
+    ),
 }
 
 _DEFINE_RE = re.compile(r"^\s*#\s*define\s+(?P<name>[A-Za-z_]\w*)\s+(?P<value>\d+)\s*$", re.M)
-#: Every comparison of a length variable against something, not just `<` and
-#: `==`.
+#: Every comparison operator, two-character forms first (alternation is
+#: ordered: ``<|<=`` would take the ``<`` of ``<=``).  Shifts (``<<``, ``>>``,
+#: ``<<=``, ``>>=``), ``->`` and assignments are not comparisons and are
+#: excluded by the look-arounds.
 #:
-#: The alternation used to be `(?P<op><|==)`, which matches `<` and then
-#: requires the expression to start with `[A-Za-z_0-9]`.  For `size <= 65536)`
-#: the `=` blocks that, so the pattern failed to match ANYWHERE on the guard —
-#: contributing neither a bound nor an entry in `unresolved`.  The fail-closed
-#: path only fires for guards that MATCH but will not resolve, so a guard the
-#: regex never matched produced no signal at all, under an error message
-#: reading "a guard this gate skips is a branch that can go unreachable
-#: unnoticed" and a success line reading "every harness branch is reachable
-#: under the ceiling its lane uses".  `>=`, `>` and `<=` are all ordinary ways
-#: to write a size floor.
-#:
-#: The two-character operators come FIRST in the alternation: regex
-#: alternation is ordered, so `<|<=` would match the `<` of `<=` and leave the
-#: `=` to fail the expression class all over again.
-#:
-#: The variable is ANY C identifier, filtered afterwards against the
-#: input-derived offset table (see :func:`_input_offsets`).  It used to be the
-#: literal alternation `payload_len|size`, so a harness that derived another
-#: length variable and gated on it — `tail_len = size - FUZZ_HEADER_BYTES;`
-#: then `if (tail_len < N)` — produced no bound and no `unresolved` entry:
-#: the exact no-signal failure mode the comment above documents for `<=`
-#: guards, one level up.
-#:
-#: The expression class admits parentheses and `*` so those spellings are
-#: MATCHED and land in `unresolved` (fail closed, a MANUAL_BOUNDS decision)
-#: when :func:`_resolve` cannot evaluate them, instead of contributing no
-#: signal at all.
-#: The expression is a sequence of plain atoms and single-level balanced
-#: paren groups, so `size < (N + 1))` captures `(N + 1)` whole instead of
-#: the lazy `(N + 1` that the flat char class produced (which then failed to
-#: resolve as unbalanced).  Deeper nesting does not match at all — the
-#: completeness check in required_max_len turns that into an `unresolved`
-#: entry rather than a silent skip.
-#: A comparison that closes an ``if``/``while`` condition (``)``) or that is
-#: the LEADING CONJUNCT of one (``&&``).
-#:
-#: The ``&&`` arm is sound and not a relaxation: ``A && B`` is reachable only
-#: when ``A`` holds, so ``A``'s length floor is a floor for the whole guard.
-#: ``||`` is deliberately absent — ``A || B`` is reachable with ``A`` false, so
-#: ``A``'s floor is not the guard's, and a ``||`` comparison the gate cannot
-#: otherwise parse still fails closed through the completeness scan below.
-_GUARD_RE = re.compile(
-    r"\b(?P<var>[A-Za-z_]\w*)\s*(?P<op><=|>=|==|<|>)\s*"
-    r"(?P<expr>(?:[A-Za-z_0-9 +*]|\([A-Za-z_0-9 +*]*\))+?)\s*(?:\)|&&)"
-)
-#: Every comparison operator occurrence, shifts included so they can be
-#: recognised and skipped; used to prove _GUARD_RE missed nothing on a
-#: tracked variable.
-_CMP_ANY_RE = re.compile(r"\b(?P<var>[A-Za-z_]\w*)\s*(?P<op><=|>=|==|<<|>>|<|>)")
+#: History, because each of these was once a guard that produced no signal:
+#: the alternation was ``(?P<op><|==)``, so ``size <= 65536`` matched nowhere
+#: (the ``=`` blocked the expression class); the variable was the literal
+#: ``payload_len|size``, so ``tail_len < N`` on a derived length was
+#: invisible; the variable had to sit immediately LEFT of the operator, so
+#: ``N > payload_len`` and ``payload_len - 1 < N`` were invisible; and ``!=``
+#: was not an operator at all.  The fail-closed path only fires for a guard
+#: the scan SEES, so every one of those printed "every harness branch is
+#: reachable" over a branch nobody examined.
+_CMP_OP_RE = re.compile(r"(?<![<>=!\-])(?P<op><=|>=|==|!=|<|>)(?![<>=])")
 #: `name = size - K;` / `name = payload_len - K1 - K2;` / `name = size;` —
 #: the assignment shapes that make a variable a pure constant offset of the
 #: input length.  The subtractions must each resolve (digits or macros).
@@ -277,6 +322,218 @@ def _input_offsets(flat: str, macros: dict[str, int]) -> dict[str, int | None]:
     return offsets
 
 
+#: A C cast at the front of an operand: ``(size_t)payload_len``.
+_CAST_RE = re.compile(
+    r"^\(\s*(?:const\s+)?(?:(?:unsigned|signed)\s+)?"
+    r"(?:size_t|ssize_t|u?int(?:8|16|32|64)_t|int|long|short|char|unsigned|signed)"
+    r"(?:\s+(?:long|int))*\s*\)\s*"
+)
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+class Comparison(NamedTuple):
+    """One comparison in a harness, split into its operands."""
+
+    #: Offset of the operator in the flattened source.
+    at: int
+    left: str
+    op: str
+    right: str
+    #: What ends the right operand: ``)``, ``&&``, ``||``, ``?``, ``;``, ...
+    terminator: str
+    #: True when the comparison closes an ``if``/``while`` condition (see
+    #: :func:`_comparison_context`), False in expression context.
+    guard: bool
+
+
+def _balanced_outer(text: str) -> bool:
+    """True when ``text``'s first ``(`` is closed by its last ``)``."""
+    depth = 0
+    for index, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0 and index != len(text) - 1:
+                return False
+    return depth == 0
+
+
+def _normalise(operand: str) -> str:
+    """An operand without surrounding space, ``return``, casts, or outer parens."""
+    text = operand.strip()
+    if text.startswith("return "):
+        text = text[len("return ") :].strip()
+    while True:
+        cast = _CAST_RE.match(text)
+        if cast is not None and cast.end() < len(text):
+            text = text[cast.end() :].strip()
+            continue
+        if text.startswith("(") and text.endswith(")") and _balanced_outer(text):
+            text = text[1:-1].strip()
+            continue
+        return text
+
+
+def _skeleton(operand: str) -> str:
+    """``operand`` with call argument lists and subscripts removed.
+
+    A length passed to a function (``f(payload, payload_len) != AMA_SUCCESS``)
+    or used as an index (``payload[payload_len - 1]``) is not being compared.
+    """
+    out: list[str] = []
+    depth = 0
+    index = 0
+    while index < len(operand):
+        char = operand[index]
+        if depth:
+            if char in "([":
+                depth += 1
+            elif char in ")]":
+                depth -= 1
+            index += 1
+            continue
+        if char == "[" or (char == "(" and re.search(r"[A-Za-z_0-9]\s*$", "".join(out))):
+            depth = 1
+            out.append(" CALL ")
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _left_extent(flat: str, at: int) -> int:
+    """Start of the operand that ends at ``at`` (an operator's position)."""
+    depth = 0
+    index = at
+    while index > 0:
+        char = flat[index - 1]
+        if char in ")]":
+            depth += 1
+        elif char in "([":
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0:
+            if flat[index - 2 : index] == "->":
+                index -= 2
+                continue
+            if char in ";{},?:=<>!" or flat[index - 2 : index] in ("&&", "||"):
+                break
+        index -= 1
+    return index
+
+
+def _right_extent(flat: str, start: int) -> int:
+    """End of the operand that starts at ``start`` (just past an operator)."""
+    depth = 0
+    index = start
+    while index < len(flat):
+        char = flat[index]
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0:
+            if flat[index : index + 2] == "->":
+                index += 2
+                continue
+            if char in ";{},?:=<>!" or flat[index : index + 2] in ("&&", "||"):
+                break
+        index += 1
+    return index
+
+
+def _comparisons(flat: str) -> list[Comparison]:
+    """Every comparison in ``flat``, with both operands and its context."""
+    found: list[Comparison] = []
+    for match in _CMP_OP_RE.finditer(flat):
+        left_start = _left_extent(flat, match.start())
+        right_end = _right_extent(flat, match.end())
+        terminator = flat[right_end : right_end + 2]
+        if terminator not in ("&&", "||"):
+            terminator = terminator[:1]
+        found.append(
+            Comparison(
+                at=match.start(),
+                left=flat[left_start : match.start()],
+                op=match.group("op"),
+                right=flat[match.end() : right_end],
+                terminator=terminator,
+                guard=_comparison_context(flat, right_end) == ")",
+            )
+        )
+    return found
+
+
+#: ``N op var`` is ``var flip(op) N``.
+_FLIP = {"<": ">", ">": "<", "<=": ">=", ">=": "<=", "==": "==", "!=": "!="}
+
+
+class _Classified(NamedTuple):
+    """A comparison as this gate reads it."""
+
+    #: The length variables it mentions (outside call arguments/subscripts).
+    lengths: tuple[str, ...]
+    #: ``(var, op, expr)`` with the tracked variable moved to the left, when
+    #: one operand IS a tracked length and the other mentions none.
+    canonical: tuple[str, str, str] | None
+
+
+def _classify(cmp: Comparison, offsets: dict[str, int | None]) -> _Classified:
+    left, right = _normalise(cmp.left), _normalise(cmp.right)
+    left_names = set(_IDENT_RE.findall(_skeleton(left)))
+    right_names = set(_IDENT_RE.findall(_skeleton(right)))
+    lengths = tuple(sorted(name for name in left_names | right_names if name in offsets))
+    tracked = {name for name, offset in offsets.items() if offset is not None}
+    canonical: tuple[str, str, str] | None = None
+    if left in tracked and not right_names & set(offsets):
+        canonical = (left, cmp.op, right)
+    elif right in tracked and not left_names & set(offsets):
+        canonical = (right, _FLIP[cmp.op], left)
+    return _Classified(lengths, canonical)
+
+
+def _render(cmp: Comparison, classified: _Classified) -> str:
+    """The exact text an unresolved guard is reported (and declared) as."""
+    if classified.canonical is not None:
+        var, op, expr = classified.canonical
+        text = f"{var} {op} {expr}"
+        return f"{text} (in a || condition)" if cmp.terminator == "||" else text
+    raw = re.sub(r"\s+", " ", f"{_normalise(cmp.left)} {cmp.op} {_normalise(cmp.right)}")
+    return f"{raw} (unparseable comparison)"
+
+
+def _needed(op: str, value: int) -> int:
+    """How many units of the variable make BOTH branches of ``var op value`` reachable.
+
+    Measured, not reasoned about in the abstract: libFuzzer's ``-max_len`` is
+    INCLUSIVE (a harness trapping past ``if (payload_len < 100) return 0;``
+    with a 1-byte selector traps under ``-max_len=101`` and never under 100,
+    clang 18 libFuzzer, 2026-09-24), so:
+
+      var <  N   true below N, false AT N              -> N
+      var <= N   false needs N+1                        -> N+1
+      var == N   true AT N, false anywhere else         -> N
+      var != N   the same two points                    -> N
+      var >  N   true needs N+1                         -> N+1
+      var >= N   true AT N                              -> N
+
+    The ``<`` row used to add one, contradicting the comment that stated this
+    table, so every ``<`` ceiling was one byte past the smallest that works.
+    """
+    return value + (1 if op in ("<=", ">") else 0)
+
+
+def _analyse(harness: Path) -> tuple[str, dict[str, int], dict[str, int | None]]:
+    macros = _macros(PUBLIC_HEADER, harness)
+    flat = re.sub(r"\s+", " ", _strip_comments(harness.read_text(encoding="utf-8")))
+    return flat, macros, _input_offsets(flat, macros)
+
+
 def required_max_len(harness: Path) -> tuple[int, list[str]]:
     """The smallest -max_len that makes every branch reachable, and the
     unresolved guards found on the way.
@@ -284,62 +541,39 @@ def required_max_len(harness: Path) -> tuple[int, list[str]]:
     Guards are collected on ``size``, ``payload_len``, and every variable
     :func:`_input_offsets` proves is a constant offset of the input length —
     so a harness gating on a derived name (``tail_len``, ``msg_len``) is
-    modeled rather than invisible.  Guards on data-dependent lengths are not
-    length floors and are surfaced by :func:`unmodeled_guards` instead.
-    """
-    macros = _macros(PUBLIC_HEADER, harness)
-    body = _strip_comments(harness.read_text(encoding="utf-8"))
-    flat = re.sub(r"\s+", " ", body)
-    offsets = _input_offsets(flat, macros)
+    modeled rather than invisible — on either side of the operator.
 
+    A comparison in guard context (it closes an ``if``/``while`` condition)
+    that mentions a tracked length is either MODELED — one operand is exactly
+    the length, the other resolves to a constant, and the comparison ends the
+    condition or leads an ``&&`` — or it is UNRESOLVED and must be declared in
+    :data:`MANUAL_BOUNDS`.  There is no third outcome: that was the defect.
+    ``A || B`` stays unresolved, as it always has — ``A`` false does not stop
+    the branch — and so does any arithmetic on the length's own side.  Guards
+    on data-dependent lengths are not length floors and are surfaced by
+    :func:`unmodeled_guards` instead.
+    """
+    flat, macros, offsets = _analyse(harness)
     required = 0
     unresolved: list[str] = []
-    modeled_at: set[int] = set()
-    for match in _GUARD_RE.finditer(flat):
-        var = match.group("var")
-        offset = offsets.get(var)
-        if offset is None:
-            # Untracked identifier (a loop counter, a macro, a data-dependent
-            # length): not an input-length guard.
+    for cmp in _comparisons(flat):
+        if not cmp.guard:
             continue
-        modeled_at.add(match.start())
-        value = _resolve(match.group("expr"), macros)
-        if value is None:
-            unresolved.append(f"{var} {match.group('op')} {match.group('expr')}")
+        classified = _classify(cmp, offsets)
+        if not any(offsets[name] is not None for name in classified.lengths):
+            continue  # untracked, or data-dependent only: not a length floor
+        if classified.canonical is None or cmp.terminator not in (")", "&&"):
+            unresolved.append(_render(cmp, classified))
             continue
-        # How many bytes make the guard's TRUE branch reachable, per operator:
-        #
-        #   size <  N   the branch is taken below N, so N-1 suffices — but the
-        #               FALSE branch needs N, and both must be reachable, so N.
-        #   size <= N   likewise, one more: N+1.
-        #   size == N   exactly N.
-        #   size >  N   N+1.
-        #   size >= N   N.
-        #
+        var, op, expr = classified.canonical
+        value = _resolve(expr, macros)
+        offset = offsets[var]
+        if value is None or offset is None:
+            unresolved.append(_render(cmp, classified))
+            continue
         # Relative to the whole input via the variable's derived offset
         # (0 for `size` itself).
-        operator = match.group("op")
-        needed = value + (1 if operator in ("<", "<=", ">") else 0) + offset
-        required = max(required, needed)
-
-    # Completeness: every GUARD-shaped comparison on a variable this scan
-    # tracks must have been either modeled above or already reported.  A
-    # guard whose expression _GUARD_RE cannot parse at all (deep nesting, a
-    # spelling outside the atom classes) would otherwise contribute NO
-    # signal — the exact failure mode this gate exists to prevent.  A
-    # comparison in EXPRESSION context — a clamp ternary
-    # (`payload_len > 32 ? 32 : payload_len`) or a statement — is not a
-    # reachability guard; those are surfaced by unmodeled_guards() instead.
-    for match in _CMP_ANY_RE.finditer(flat):
-        if match.group("op") in ("<<", ">>"):
-            continue
-        var = match.group("var")
-        if offsets.get(var) is None or match.start() in modeled_at:
-            continue
-        if _comparison_context(flat, match.end()) != ")":
-            continue
-        context = flat[match.start() : match.start() + 60]
-        unresolved.append(f"{var} (unparseable comparison: `{context.strip()}...`)")
+        required = max(required, _needed(op, value) + offset)
     return required, unresolved
 
 
@@ -367,30 +601,21 @@ def unmodeled_guards(harness: Path) -> list[str]:
       aad_len`` with ``aad_len`` read out of the input bytes can be small at
       any input size, so its guards say nothing about the input length;
     * comparisons on a tracked length in EXPRESSION context — clamp
-      ternaries (``payload_len > 32 ? 32 : payload_len``) select a value,
-      they do not gate a branch on a minimum input.
+      ternaries (``payload_len > 32 ? 32 : payload_len``) and loop conditions
+      select a value or bound an iteration, they do not gate a branch on a
+      minimum input.
     """
-    macros = _macros(PUBLIC_HEADER, harness)
-    flat = re.sub(r"\s+", " ", _strip_comments(harness.read_text(encoding="utf-8")))
-    offsets = _input_offsets(flat, macros)
-    modeled_at = {
-        match.start()
-        for match in _GUARD_RE.finditer(flat)
-        if offsets.get(match.group("var")) is not None
-    }
+    flat, _macros_table, offsets = _analyse(harness)
     rendered: list[str] = []
-    for match in _CMP_ANY_RE.finditer(flat):
-        if match.group("op") in ("<<", ">>"):
+    for cmp in _comparisons(flat):
+        classified = _classify(cmp, offsets)
+        if not classified.lengths:
             continue
-        var = match.group("var")
-        if var not in offsets:
-            continue
-        if match.start() in modeled_at:
-            continue
-        if offsets[var] is not None and _comparison_context(flat, match.end()) == ")":
-            continue  # guard context on a tracked var: required_max_len fails it
-        context = flat[match.start() : match.start() + 48].strip()
-        kind = "data-dependent length" if offsets[var] is None else "value-select clamp"
+        data_dependent = all(offsets[name] is None for name in classified.lengths)
+        if cmp.guard and not data_dependent:
+            continue  # guard context on a tracked length: required_max_len owns it
+        context = flat[_left_extent(flat, cmp.at) : cmp.at + 40].strip()
+        kind = "data-dependent length" if data_dependent else "value-select clamp"
         rendered.append(f"`{context}...` ({kind})")
     return rendered
 
@@ -409,24 +634,30 @@ def _bound_for(harness: Path) -> tuple[int, list[str]]:
     needed one manual bound it stopped being checked at all, which is the
     opposite of what an entry documenting a single exception should buy.
 
-    The declared bound still raises the ceiling; what it no longer does is
-    silence the rest of the file.
+    The replacement dropped a guard when its expression occurred anywhere in
+    the reason's prose, as a substring — so ``payload_len < n`` was covered by
+    any reason containing an ``n``.  An entry now names its guards exactly
+    (:attr:`ManualBound.guards`) and clears those and only those.
     """
     required, unresolved = required_max_len(harness)
     manual = MANUAL_BOUNDS.get(harness.stem)
     if manual is not None:
-        required = max(required, manual[0])
-        # Drop only the guards the entry's own reason accounts for: those whose
-        # expression appears verbatim in it.  Anything else stays unresolved.
-        reason = manual[1]
-        unresolved = [guard for guard in unresolved if _guard_expression(guard) not in reason]
+        required = max(required, manual.bound)
+        unresolved = [guard for guard in unresolved if guard not in manual.guards]
     return required, unresolved
 
 
-def _guard_expression(guard: str) -> str:
-    """The right-hand side of a rendered ``"<var> <op> <expr>"`` guard."""
-    parts = guard.split(None, 2)
-    return parts[2] if len(parts) == 3 else guard
+def stale_declarations(harness: Path) -> list[str]:
+    """Guards a MANUAL_BOUNDS entry declares that the harness no longer has.
+
+    A declaration that outlives its guard is an exemption waiting for the next
+    guard that happens to render the same way.
+    """
+    manual = MANUAL_BOUNDS.get(harness.stem)
+    if manual is None:
+        return []
+    _required, unresolved = required_max_len(harness)
+    return [guard for guard in manual.guards if guard not in unresolved]
 
 
 #: Committed seed corpora, one directory per target.
@@ -440,7 +671,9 @@ def largest_seed(target: str) -> int:
     seed longer than the ceiling enters the in-memory corpus TRUNCATED.  The
     ceiling was derived from the deepest guard alone, and the PQC verify seeds
     are built as ``1 + bound + MESSAGE_BYTES`` — 5,278 and 49,937 bytes —
-    against derived ceilings of 5,263 and 49,922.  Every seed the corpus
+    against the ceilings then derived, 5,263 and 49,922 (each one byte above
+    the true minimum, 5,262 and 49,921: the ``<`` row of :func:`_needed` added
+    one until 2026-09-24).  Every seed the corpus
     builder writes for those two targets was therefore truncated on load, by
     15 bytes, landing just short of the branch it was constructed to reach.
     That is the same defect the ceiling derivation was introduced to fix,
@@ -510,9 +743,16 @@ def main(argv: list[str] | None = None) -> int:
             for guard in unresolved:
                 problems.append(
                     f"{harness.name}: guard `{guard}` does not resolve to a constant. "
-                    f"Add {harness.stem!r} to MANUAL_BOUNDS with the bound and how it "
-                    f"is obtained — a guard this gate skips is a branch that can go "
-                    f"unreachable unnoticed."
+                    f"Declare it, exactly as written here, in MANUAL_BOUNDS[{harness.stem!r}] "
+                    f"with the bound and how it is obtained — a guard this gate skips "
+                    f"is a branch that can go unreachable unnoticed."
+                )
+            for guard in stale_declarations(harness):
+                problems.append(
+                    f"{harness.name}: MANUAL_BOUNDS[{harness.stem!r}] declares `{guard}`, "
+                    f"which is not an unresolved guard in the harness. Remove it: a "
+                    f"declaration with no subject would clear the next guard that "
+                    f"renders the same."
                 )
             # The ceiling the LANE uses, which is what max_len_for returns —
             # the deepest guard AND the largest committed seed.  The table

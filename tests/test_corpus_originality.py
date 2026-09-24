@@ -315,6 +315,47 @@ class TestVectorGeneratorsComputeNothing:
             ("from hashlib import sha256\n", "a from-import"),
             ('import hmac\nD = hmac.new(b"k", b"m").hexdigest()\n', "hmac"),
             ('import hashlib\nD = hashlib.new("sha256", b"abc").hexdigest()\n', "hashlib.new"),
+            # The dynamic spellings.  Only `__import__("<literal>")` was
+            # recognised; every one below passed before the fix.
+            (
+                'import importlib\nD = importlib.import_module("hashlib").sha256(b"")\n',
+                "importlib.import_module",
+            ),
+            (
+                'from importlib import import_module\nD = import_module("hmac")\n',
+                "a from-imported import_module",
+            ),
+            ('import builtins\nD = builtins.__import__("hashlib")\n', "builtins.__import__"),
+            ('import sys\nD = sys.modules["hashlib"]\n', "a sys.modules subscript"),
+            ('import sys\nD = sys.modules.get("_hashlib")\n', "sys.modules.get"),
+            ('D = __import__("hash" + "lib")\n', "a folded concatenation"),
+            ('M = "hashlib"\nD = __import__(M)\n', "a name bound to the string"),
+            ("import importlib\nD = importlib.import_module(input())\n", "an unresolvable module"),
+            (
+                'from importlib import import_module as im\nD = im("hashlib")\n',
+                "an aliased import_module",
+            ),
+            (
+                'import importlib\nim = importlib.import_module\nD = im("hashlib")\n',
+                "a rebound importer",
+            ),
+            # The same two escapes with a module name no literal scan can see:
+            # only the escape rule stands between these and a pass, because
+            # the dynamic-import walker matches the callable BY NAME.
+            (
+                "from importlib import import_module as im\nD = im(input())\n",
+                "an aliased import_module, computed name",
+            ),
+            (
+                "import importlib\nim = importlib.import_module\nD = im(input())\n",
+                "a rebound importer, computed name",
+            ),
+            ("import builtins\nloader = builtins.__import__\n", "an escaped __import__"),
+            (
+                'import builtins\nD = getattr(builtins, "__import__")("hashlib")\n',
+                "getattr of __import__",
+            ),
+            ('import importlib.util\nS = importlib.util.find_spec("hashlib")\n', "find_spec"),
         ],
     )
     def test_a_stdlib_digest_in_a_generator_is_reported(
@@ -328,6 +369,22 @@ class TestVectorGeneratorsComputeNothing:
             "import json\n"
             "# FIPS 180-4 Appendix B.1, transcribed.\n"
             'D = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"\n'
+        )
+        assert tool.scan_vector_generators(self._generator(tmp_path, body)) == []
+
+    def test_a_resolvable_non_digest_dynamic_import_passes(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Non-detection: the dynamic-import rule is about WHERE it reaches.
+
+        A generator that imports ``json`` dynamically, and mentions hashlib
+        only in prose, is not reaching for a digest.
+        """
+        body = (
+            "import importlib\n"
+            "# These used to be hashlib.sha256(...) calls; now transcribed.\n"
+            'MSG = "no hashlib here: values are transcribed from FIPS 180-4"\n'
+            'codec = importlib.import_module("json")\n'
         )
         assert tool.scan_vector_generators(self._generator(tmp_path, body)) == []
 

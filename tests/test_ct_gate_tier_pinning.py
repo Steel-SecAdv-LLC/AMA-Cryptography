@@ -107,11 +107,56 @@ class TestAnUnhonouredPinIsRefused:
         gate._DISPATCH_ONLY = "sha3-scalar"
         assert gate._dispatch_pin_was_honoured([self.REFUSAL]) == self.REFUSAL
 
-    def test_clean_wiring_is_accepted(self) -> None:
+    HONOURED = (
+        "[AMA Dispatch] AMA_DISPATCH_ONLY='kyber-ntt-avx2' honored \u2014 "
+        "every other slot is scalar fallback."
+    )
+
+    def test_confirmed_wiring_is_accepted(self) -> None:
+        gate = _gate()
+        gate._DISPATCH_ONLY = "kyber-ntt-avx2"
+        wiring = [
+            "[AMA Dispatch] kyber_ntt -> avx2",
+            "[AMA Dispatch] keccak_f1600 -> scalar",
+            self.HONOURED,
+        ]
+        assert gate._dispatch_pin_was_honoured(wiring) is None
+
+    def test_wiring_that_never_confirms_the_pin_is_refused(self) -> None:
+        """Absence of a refusal is not a confirmation.
+
+        This wiring is what the previous revision of this test accepted as
+        "clean": two dispatch lines, no refusal, and no line saying the pin
+        took.  The ``--dispatch-only`` help promises the run FAILS unless the
+        dispatcher reports the pin as honoured, and this is that case.
+        """
         gate = _gate()
         gate._DISPATCH_ONLY = "kyber-ntt-avx2"
         wiring = ["[AMA Dispatch] kyber_ntt -> avx2", "[AMA Dispatch] keccak_f1600 -> scalar"]
-        assert gate._dispatch_pin_was_honoured(wiring) is None
+        reason = gate._dispatch_pin_was_honoured(wiring)
+        assert reason is not None and "never reported" in reason
+
+    def test_an_empty_wiring_probe_is_refused(self) -> None:
+        """The fail-open: a probe that printed nothing read as "honoured"."""
+        gate = _gate()
+        gate._DISPATCH_ONLY = "kyber-ntt-avx2"
+        reason = gate._dispatch_pin_was_honoured([])
+        assert reason is not None and "0 dispatch line(s)" in reason
+
+    def test_a_confirmation_of_another_slot_is_refused(self) -> None:
+        gate = _gate()
+        gate._DISPATCH_ONLY = "dilithium-ntt-avx2"
+        assert gate._dispatch_pin_was_honoured([self.HONOURED]) is not None
+
+    def test_the_honoured_marker_matches_the_dispatchers_wording(self) -> None:
+        """If the dispatcher's confirmation changes, every pinned run goes
+        INCONCLUSIVE rather than blind — but it should go neither way
+        unannounced, so the format string is pinned to the C source."""
+        dispatch = (REPO_ROOT / "src" / "c" / "dispatch" / "ama_dispatch.c").read_text(
+            encoding="utf-8"
+        )
+        gate = _gate()
+        assert gate._DISPATCH_ONLY_HONOURED.format(slot="%s") in dispatch
 
     def test_nothing_is_checked_when_no_pin_was_asked_for(self) -> None:
         gate = _gate()

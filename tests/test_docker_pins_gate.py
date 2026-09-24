@@ -418,6 +418,29 @@ class TestWorkflowImages:
         found = [p.relative_to(tmp_path).as_posix() for p in gate.workflow_files(tmp_path)]
         assert found == [".github/workflows/a.yaml", ".github/actions/x/action.yml"]
 
+    def test_an_action_outside_github_actions_is_in_scope_and_checked(self, tmp_path: Path) -> None:
+        """``uses: ./tools/runner`` runs ``tools/runner/action.yml``.
+
+        The walk stopped at ``.github/actions``, so a container action one
+        directory to the side — or at the repository root — pulled a tag-only
+        image with the job's token and was never opened.  Measured before the
+        fix: neither file below was in ``workflow_files``.
+        """
+        (tmp_path / ".github" / "workflows").mkdir(parents=True)
+        (tmp_path / ".github" / "workflows" / "a.yaml").write_text("jobs: {}\n")
+        side = tmp_path / "tools" / "runner" / "action.yml"
+        side.parent.mkdir(parents=True)
+        side.write_text("runs:\n  using: docker\n  image: docker://alpine:3.19\n")
+        (tmp_path / "action.yaml").write_text(
+            f"runs:\n  using: docker\n  image: docker://alpine:3.19{self._DIGEST}\n"
+        )
+        found = [p.relative_to(tmp_path).as_posix() for p in gate.workflow_files(tmp_path)]
+        assert found == [".github/workflows/a.yaml", "action.yaml", "tools/runner/action.yml"]
+        findings = gate.audit(gate.workflow_files(tmp_path))
+        assert [(f.path.name, f.path.parent.name, f.kind) for f in findings] == [
+            ("action.yml", "runner", gate.NOT_DIGEST_PINNED)
+        ]
+
     def test_the_real_workflows_are_in_scope(self) -> None:
         found = {p.name for p in gate.workflow_files()}
         assert {"ci.yml", "static-analysis.yml", "release.yml"} <= found

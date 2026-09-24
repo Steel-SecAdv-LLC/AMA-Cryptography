@@ -57,13 +57,16 @@ What is checked
 
 Where a built library is not available (a documentation-only CI lane) the
 symbol checks report as skipped rather than passing vacuously, and the exit
-status distinguishes the two.
+status distinguishes the two: a run that skipped them exits 3, never 0.
+``--require-library`` turns the skip into exit 2 instead.
 
 Exit status
 -----------
-0  every documented API claim matches the package
+0  every documented API claim matches the package, the C export checks included
 1  at least one does not
-2  the check could not run
+2  the check could not run (including ``--require-library`` with no library)
+3  every claim that was checked matches, but the C export checks were SKIPPED
+   because no built library was found — not a pass
 """
 
 from __future__ import annotations
@@ -900,6 +903,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"OK    {report.checked} public-API claim(s) verified against the package")
     for skipped in report.skipped:
         print(f"SKIP  {skipped}")
+    if report.skipped:
+        # The module docstring has always promised this and the code used to
+        # return 0 here: a run that never examined the exported ABI read, to
+        # any caller, exactly like one that did.
+        print(
+            f"INCOMPLETE — {len(report.skipped)} check(s) skipped; exit 3 is not "
+            "a pass. Pass --library/--library-dir, or --require-library to make "
+            "a missing library an error."
+        )
+        return 3
     return 0
 
 

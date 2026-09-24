@@ -2284,20 +2284,53 @@ _DISPATCH_ONLY: Optional[str] = None
 #: exist, and duplicating that list here would go stale.
 _DISPATCH_ONLY_REFUSED = "ERROR: AMA_DISPATCH_ONLY="
 
+#: The dispatcher's own confirmation that a pin took, printed under
+#: AMA_DISPATCH_VERBOSE=1 (which the wiring probe sets) by
+#: ``dispatch_init_internal`` in src/c/dispatch/ama_dispatch.c:
+#: ``[AMA Dispatch] AMA_DISPATCH_ONLY='<slot>' honored — every other slot is
+#: scalar fallback.``  ``{slot}`` is the resolved label, which for every entry
+#: in the dispatcher's inventory is the name that was asked for.
+_DISPATCH_ONLY_HONOURED = "AMA_DISPATCH_ONLY='{slot}' honored"
+
 
 def _dispatch_pin_was_honoured(wiring: list[str]) -> Optional[str]:
-    """None when the pin took, else the dispatcher's refusal line.
+    """None when the dispatcher CONFIRMED the pin, else why it cannot be trusted.
 
     Without this the flag was decorative in the worst way: an unrecognised
     slot name left EVERY kernel at its scalar fallback and the gate reported
     a clean PASS, so a lane could claim to measure a tier it never selected.
+
+    The confirmation is required, not merely the absence of a refusal.  The
+    first version returned None unless it saw the refusal line, so a wiring
+    probe that printed nothing at all — valgrind unable to start the driver,
+    the probe's OSError path, a library built without the verbose lines —
+    passed as "honoured", which is not what ``--dispatch-only``'s help says
+    ("The run FAILS if the dispatcher does not report the pin as honoured").
     """
     if _DISPATCH_ONLY is None:
         return None
     for line in wiring:
         if _DISPATCH_ONLY_REFUSED in line:
             return line
-    return None
+    honoured = _DISPATCH_ONLY_HONOURED.format(slot=_DISPATCH_ONLY)
+    if any(honoured in line for line in wiring):
+        return None
+    if not wiring:
+        # Measured on this tree: `--target consttime --dispatch-only
+        # kyber-ntt-avx2` probes 0 lines — the target never initialises the
+        # dispatcher — and the previous revision printed PASSED (exit 0)
+        # for a tier nothing selected.
+        return (
+            f"the dispatcher never reported {honoured!r}: the wiring probe "
+            f"returned 0 dispatch line(s) — the target never initialised the "
+            f"dispatcher (a scalar-only target has no tier to pin), or the "
+            f"probe could not run — so the pin was not exercised"
+        )
+    return (
+        f"the dispatcher never reported {honoured!r}: the wiring probe returned "
+        f"{len(wiring)} dispatch line(s) and none confirms the pin, so which "
+        f"tier this run measured is unknown"
+    )
 
 
 def _driver_env() -> dict[str, str]:
@@ -2483,7 +2516,10 @@ def _dispatch_wiring(driver: Path) -> list[str]:
 
     Best-effort: a driver that cannot report its wiring still produces a valid
     measurement, so a failure here returns nothing rather than failing the
-    check.  The counts themselves are what the verdict rests on.
+    check.  The counts themselves are what the verdict rests on.  The one
+    exception is a ``--dispatch-only`` run: there these lines are the only
+    evidence the pin took, so :func:`_dispatch_pin_was_honoured` treats an
+    empty probe as unconfirmed and the run is INCONCLUSIVE.
     """
     env = _driver_env()
     env["AMA_DISPATCH_VERBOSE"] = "1"
@@ -2844,10 +2880,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         refusal = _dispatch_pin_was_honoured(wiring)
         if refusal is not None:
             print(
-                f"CONSTANT-TIME CHECK INCONCLUSIVE — the dispatcher refused "
-                f"--dispatch-only={_DISPATCH_ONLY!r}, so this run would have "
-                f"measured the default wiring while claiming to measure that "
-                f"tier.\n  {refusal}",
+                f"CONSTANT-TIME CHECK INCONCLUSIVE — the dispatcher refused, or "
+                f"did not confirm, --dispatch-only={_DISPATCH_ONLY!r}, so this "
+                f"run could have measured the default wiring while claiming to "
+                f"measure that tier.\n  {refusal}",
                 file=sys.stderr,
             )
             return 2

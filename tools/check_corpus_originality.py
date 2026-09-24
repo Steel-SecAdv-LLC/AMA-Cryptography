@@ -79,10 +79,12 @@ Exit code:
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
+from types import ModuleType
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -376,6 +378,142 @@ def _dotted_call_name(node: ast.Call) -> str | None:
     return None
 
 
+#: The callables that turn a string into a module object.
+_IMPORTERS = frozenset({"import_module", "__import__"})
+
+
+def _hash_boundary() -> ModuleType:
+    """``tools/check_stdlib_hash_boundary.py``, loaded by path.
+
+    Its :func:`dynamic_imports` walker and :class:`StringResolver` are the one
+    definition in this tree of "which module does this ``import_module`` /
+    ``__import__`` / ``sys.modules`` lookup reach" — constant folding,
+    single-binding names, f-strings — and ``tools/check_vendor_isolation.py``
+    already imports them rather than copying them.  Loaded by path because
+    ``tools/`` is not on ``sys.path`` when this runs as a script.
+    """
+    path = REPO / "tools" / "check_stdlib_hash_boundary.py"
+    spec = importlib.util.spec_from_file_location("_hash_boundary_for_originality", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable on a real tree
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _is_digest_module(name: str) -> bool:
+    return name.split(".", 1)[0] in _STDLIB_DIGEST_MODULES
+
+
+def _digest_module_reach(tree: ast.Module) -> list[tuple[int, str]]:
+    """``(line, what)`` for every way ``tree`` reaches a digest module WITHOUT
+    an import statement.
+
+    Three spellings, because enumerating one is how the last one got through:
+
+    * a dynamic import or ``sys.modules`` lookup — ``importlib.import_module``,
+      ``builtins.__import__``, ``from importlib import import_module``,
+      ``sys.modules["hashlib"]`` and ``.get``/``.pop``/``.setdefault`` on it —
+      resolved by the shared walker, so ``"hash" + "lib"`` and a name bound to
+      the string resolve too.  One whose module cannot be resolved from the
+      source is reported as well: a module chosen at run time is a module this
+      gate cannot bound.
+    * an importer that escapes the call position — ``im =
+      importlib.import_module``, ``from importlib import import_module as
+      im``, ``f(__import__)`` — after which the walker, which matches the
+      callable by name, cannot see the call.
+    * a string that names a digest module, or an importer, anywhere else —
+      ``getattr(builtins, "__import__")("hashlib")``,
+      ``importlib.util.find_spec("hashlib")``.  A vector generator has no
+      reason to spell either.
+
+    The walker only recognised ``__import__("<literal>")`` before this, so
+    ``importlib.import_module("hashlib").sha256(...)`` — the spelling a
+    reviewer reaches for first — computed a "NIST" digest with OpenSSL and
+    passed.
+    """
+    boundary = _hash_boundary()
+    found: list[tuple[int, str]] = []
+    reported: set[int] = set()
+
+    for site in boundary.dynamic_imports(tree):
+        if site.names is None:
+            found.append(
+                (
+                    site.lineno,
+                    f"{site.kind}({site.argument}) chooses its module at run time, "
+                    "so it could be a stdlib digest module and this gate cannot "
+                    "tell. Name the module with an import statement.",
+                )
+            )
+        elif any(_is_digest_module(name) for name in site.names):
+            found.append(
+                (
+                    site.lineno,
+                    f"{site.kind}({site.argument}) reaches "
+                    f"{', '.join(sorted(site.names))} — the same rule as a plain "
+                    "import, spelled around it.",
+                )
+            )
+        else:
+            continue
+        reported.add(site.lineno)
+
+    call_targets = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    resolver = boundary.StringResolver(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            for alias in node.names:
+                if alias.name == "import_module" and alias.asname not in (None, "import_module"):
+                    found.append(
+                        (
+                            node.lineno,
+                            f"import_module is bound as {alias.asname!r}; a call "
+                            "through that name is invisible to the dynamic-import "
+                            "scan.",
+                        )
+                    )
+            continue
+        importer: str | None = None
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            importer = node.id if node.id in _IMPORTERS else None
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            importer = node.attr if node.attr in _IMPORTERS else None
+        if importer is not None:
+            if id(node) not in call_targets:
+                found.append(
+                    (
+                        getattr(node, "lineno", 0),
+                        f"{importer} is referenced other than as a call; once it "
+                        "is bound or passed on, the call it makes cannot be seen.",
+                    )
+                )
+            continue
+        if not isinstance(node, (ast.Constant, ast.BinOp, ast.JoinedStr)):
+            continue
+        lineno = getattr(node, "lineno", 0)
+        if lineno in reported:
+            continue
+        values = resolver.resolve(node)
+        if not values:
+            continue
+        hits = sorted(
+            value
+            for value in values
+            if isinstance(value, str) and (value in _STDLIB_DIGEST_MODULES or value in _IMPORTERS)
+        )
+        if hits:
+            found.append(
+                (
+                    lineno,
+                    f"the string {hits[0]!r} names a stdlib digest module or an "
+                    "importer; a vector generator has no reason to spell either.",
+                )
+            )
+            reported.add(lineno)
+    return sorted(set(found))
+
+
 def scan_vector_generators(repo: Path = REPO) -> list[str]:
     """No expected value in a vector corpus may be computed by the stdlib.
 
@@ -401,6 +539,13 @@ def scan_vector_generators(repo: Path = REPO) -> list[str]:
     own primitives are what the run validates, not what it validates against.
     Neither file imports one today.  That is the same shape
     ``tools/check_stdlib_hash_boundary.py`` applies to the package itself.
+
+    "The import" means every way of obtaining the module, not only the
+    statement: :func:`_digest_module_reach` covers the dynamic spellings.
+    The first version of this rule special-cased ``__import__("<literal>")``
+    and nothing else, so ``importlib.import_module("hashlib")``,
+    ``builtins.__import__("hashlib")``, ``sys.modules["hashlib"]`` and
+    ``__import__("hash" + "lib")`` all passed.
     """
     problems: list[str] = []
     scanned = 0
@@ -437,20 +582,6 @@ def scan_vector_generators(repo: Path = REPO) -> list[str]:
                     continue
                 if not isinstance(node, ast.Call):
                     continue
-                if (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id == "__import__"
-                    and node.args
-                    and isinstance(node.args[0], ast.Constant)
-                    and isinstance(node.args[0].value, str)
-                    and node.args[0].value.split(".")[0] in _STDLIB_DIGEST_MODULES
-                ):
-                    problems.append(
-                        f"{_rel(path)}:{node.lineno}: __import__"
-                        f"({node.args[0].value!r}) in a vector generator — the same "
-                        "rule as a plain import, spelled around it."
-                    )
-                    continue
                 name = _dotted_call_name(node)
                 if name in _STDLIB_DIGEST_CALLS:
                     problems.append(
@@ -460,6 +591,8 @@ def scan_vector_generators(repo: Path = REPO) -> list[str]:
                         "implementation's output as the specification's. "
                         "Transcribe the published value instead."
                     )
+            for lineno, what in _digest_module_reach(tree):
+                problems.append(f"{_rel(path)}:{lineno}: {what}")
     if scanned == 0:
         problems.append(
             "no vector generators found under " + "/, ".join(VECTOR_ROOTS) + "/ — "

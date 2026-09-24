@@ -237,7 +237,11 @@ then runs different code with no diff in this repository.
 1. **`find_unpinned()`** — every `uses:` reference whose ref is not a
    40-character commit SHA is a violation. Local references (`./…`) and
    `docker://` images are out of scope; anything else needs an entry in
-   `_PIN_EXEMPT` with a written reason.
+   `_PIN_EXEMPT` with a written reason. The references are read from every
+   workflow AND from every action definition — a file named action.yml or
+   action.yaml — anywhere in the repository (`uses: ./some/dir` runs the
+   definition in some/dir), not only from `.github/actions/`, where the scan
+   used to stop; `tools/check_docker_pins.py` reads the same set.
 2. **`find_pins()` + `list_remote_refs()`** — every SHA pin must still resolve
    upstream, and under `--strict` its trailing version comment must name a tag
    the SHA actually carries.
@@ -2071,6 +2075,16 @@ names none, because a reader takes it as current.
    prevent returning is not a gate.
 2. Every corpus file's `source.url` is on `rfc-editor.org` or `ietf.org`.
 3. `tests/ref_keyformat.py` imports nothing from `ama_cryptography`.
+4. No vector generator under `nist_vectors/` reaches a stdlib digest module
+   (`hashlib`, `_hashlib`, `hmac` — OpenSSL on a libcrypto-linked CPython):
+   not by an import statement, not by a dynamic import
+   (`importlib.import_module`, `__import__`, `builtins.__import__`,
+   `sys.modules[...]`, resolved through the shared resolver in
+   `tools/check_stdlib_hash_boundary.py`, with an unresolvable module name a
+   failure), not through an importer bound to another name, and not through
+   a string naming one. This check was missing from this list, and until
+   2026-09-24 it recognised `__import__("<literal>")` as its only dynamic
+   spelling.
 
 **Verification.** `tests/test_corpus_originality.py` pins both directions —
 the repository as it stands, plus a reproduction of each violation: a
@@ -3672,13 +3686,17 @@ the code was what moved.
   covers are **every Markdown file the repository tracks** except the
   historical record (`CHANGELOG.md` and `docs/changelog/`), derived from
   `git ls-files` rather than listed, so a new page is covered by the commit
-  that adds it. Every `python`/`c` block on a covered page must declare its
-  mode; an unmarked block fails, which is what stops coverage decaying as pages
-  grow. A block that is the next step of the page's running example is
+  that adds it. Every Python or C block on a covered page — any CommonMark
+  fence (backticks or tildes, any length) tagged `python`, `py`, `python3`,
+  `py3`, `pyi`, `pycon`, `c` or `h` — must declare its mode; an unmarked block
+  fails, which is what stops coverage decaying as pages grow. A `pycon`
+  transcript runs under doctest, so its output lines are checked too. A block
+  that is the next step of the page's running example is
   `python-run continues` and executes after the one before it. `c-run` blocks
   execute under `valgrind --track-origins=yes`, because compiling is not enough
   — the uninitialised-seed example compiles and succeeds, and only a memory
-  checker can see it.
+  checker can see it — and a C example with no built library to link is exit
+  2, never "skipped".
 
   <!-- claim-check: quoting-retired-wording -->
   Until 2026-09-24 this bullet was true of seven wiki pages only. The gate

@@ -38,7 +38,10 @@ Fail-closed conditions — anything meaning "the scan did not actually run over
 the tree" is a failure, not a pass:
 
 * the report is missing, unreadable, or not JSON;
-* it has no ``results`` list;
+* it has no ``results`` list, or that list holds something other than
+  result objects;
+* a result carries no severity, or one this gate does not rank — a finding it
+  cannot rank is a finding it cannot clear, so it blocks;
 * Semgrep recorded scan ``errors`` (a rule or file that failed to evaluate was
   not actually checked);
 * ``paths.scanned`` is empty (nothing was examined).
@@ -97,35 +100,52 @@ def main(argv: list[str] | None = None) -> int:
     if not scanned:
         return _fail("semgrep scanned zero files — the config or target path is wrong.")
 
+    results = data["results"]
+    if not isinstance(results, list) or not all(isinstance(r, dict) for r in results):
+        return _fail(
+            f"report {report_path} has a 'results' value that is not a list of "
+            "result objects — not a semgrep report."
+        )
+
     floor = _ORDER[FLOOR]
     blocking = []
-    for result in data["results"]:
-        severity = str((result.get("extra") or {}).get("severity", "INFO")).upper()
-        rank = _ORDER.get(severity)
+    for result in results:
+        extra = result.get("extra")
+        raw = extra.get("severity") if isinstance(extra, dict) else None
         # Fail closed on an unrecognised severity.  Mapping an unknown label to
         # INFO (the old `.get(severity, 0)`) means a future Semgrep level above
         # ERROR — or a custom label from a config — would sink to INFO and slip a
         # real finding through a merge-blocking gate.  Unknown severity blocks.
+        #
+        # So does an ABSENT one.  The read used to be
+        # `extra.get("severity", "INFO")`: a result carrying no severity (or no
+        # `extra` at all) was labelled INFO by this gate — a label Semgrep never
+        # gave it — and passed as an advisory.  A result the gate cannot rank
+        # is a result it cannot clear.
+        rank = _ORDER.get(raw.upper()) if isinstance(raw, str) else None
         if rank is None or rank >= floor:
             blocking.append(result)
 
     if blocking:
         print(
-            f"SEMGREP GATE FAILED — {len(blocking)} finding(s) at or above {FLOOR} severity:\n",
+            f"SEMGREP GATE FAILED — {len(blocking)} finding(s) at or above {FLOOR} "
+            "severity (a missing or unrecognised severity counts as at or above):\n",
             file=sys.stderr,
         )
         for r in blocking:
             path = r.get("path", "?")
             line = (r.get("start") or {}).get("line", "?")
             check = r.get("check_id", "?")
-            msg = str((r.get("extra") or {}).get("message", "")).strip().splitlines()
+            extra = r.get("extra") if isinstance(r.get("extra"), dict) else {}
+            severity = extra.get("severity") or "NO SEVERITY"
+            msg = str(extra.get("message", "")).strip().splitlines()
             first = msg[0] if msg else ""
-            print(f"  {path}:{line}: [{check}] {first}", file=sys.stderr)
+            print(f"  {path}:{line}: [{check}] ({severity}) {first}", file=sys.stderr)
         return 1
 
     print(
         f"OK: semgrep scanned {len(scanned)} file(s); no finding at or above "
-        f"{FLOOR} severity ({len(data['results'])} lower-severity advisory finding(s))."
+        f"{FLOOR} severity ({len(results)} lower-severity advisory finding(s))."
     )
     return 0
 

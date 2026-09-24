@@ -46,10 +46,16 @@ callers that want that treated as a failure too.
 
 What is read
 ------------
-Every ``uses:`` in ``.github/workflows/*.y{a,}ml`` AND in every composite
-action under ``.github/actions/**/action.y{a,}ml`` — a composite action's
-steps run with the caller's token exactly as a workflow's do, and the scan
-used to stop at the workflows directory.  References are collected by
+Every ``uses:`` in ``.github/workflows/*.y{a,}ml`` AND in every action
+definition — ``action.yml`` / ``action.yaml`` — ANYWHERE in the repository.
+A composite action's steps run with the caller's token exactly as a
+workflow's do, and ``uses: ./tools/setup`` runs ``tools/setup/action.yml``
+from wherever it sits.  The scan used to stop at the workflows directory, and
+then at ``.github/actions/**``, so a composite action one directory to the
+side escaped INVARIANT-4 entirely.  In a git work tree the definitions come
+from ``git ls-files --cached --others --exclude-standard`` (every file a
+checkout carries, plus any not yet added); outside one, from a walk of the
+tree.  References are collected by
 PARSING the YAML (``yaml.compose``, which keeps line numbers), not by a
 per-line regex: the regex matched only the block form ``- uses: x@y``, so the
 flow form ``- {uses: actions/checkout@v4}`` was invisible to both halves of
@@ -67,6 +73,7 @@ silently treated as valid.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess  # nosec B404 -- fixed-argv git invocation only, never a shell (PIN-001)
 from dataclasses import dataclass
@@ -107,21 +114,85 @@ class UsesRef:
     source: str
 
 
-def pin_files(workflows_dir: Path) -> list[tuple[str, Path]]:
-    """``(display name, path)`` for every workflow and composite action.
+#: The file names GitHub reads an action's definition from.  ``uses:
+#: ./some/dir`` runs ``some/dir/action.yml`` (or ``.yaml``) from any directory
+#: of the repository, not only from ``.github/actions``.
+ACTION_FILE_NAMES = ("action.yml", "action.yaml")
 
-    Workflows display by file name (as they always have); composite actions
-    by their path under ``.github/`` so two ``action.yml`` files are told
-    apart.  Composite actions live beside the workflows directory, in
-    ``.github/actions/**``.
+
+def action_definition_files(root: Path) -> list[Path]:
+    """Every ``action.yml`` / ``action.yaml`` under ``root``, sorted.
+
+    In a git work tree (``root/.git`` exists) the listing is git's: every
+    tracked file plus every untracked one that is not ignored — what a
+    checkout carries, and what a pre-commit run is about to add — so a build
+    tree or virtualenv full of third-party actions cannot produce findings.
+    A listing failure there is an error, never an empty set.  Outside a work
+    tree (a staged fixture, an unpacked sdist) the whole tree is walked,
+    ``.git`` excepted, which can only see more files, never fewer.
     """
-    out: list[tuple[str, Path]] = [(path.name, path) for path in _workflow_files(workflows_dir)]
-    actions_dir = workflows_dir.parent / "actions"
-    if actions_dir.is_dir():
-        for pattern in ("action.yml", "action.yaml"):
-            for path in sorted(actions_dir.rglob(pattern)):
-                if path.is_file():
-                    out.append((path.relative_to(workflows_dir.parent).as_posix(), path))
+    if (root / ".git").exists():
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "--",
+                *(f"*{name}" for name in ACTION_FILE_NAMES),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"git ls-files failed under {root}: "
+                f"{proc.stderr.decode('utf-8', 'replace').strip()[:200]}"
+            )
+        names = {name for name in proc.stdout.decode("utf-8").split("\0") if name}
+        found = [root / name for name in names if Path(name).name in ACTION_FILE_NAMES]
+        return sorted(path for path in found if path.is_file())
+    out: list[Path] = []
+    for directory, subdirs, files in os.walk(root):
+        subdirs[:] = sorted(d for d in subdirs if d != ".git")
+        out.extend(Path(directory) / name for name in files if name in ACTION_FILE_NAMES)
+    return sorted(out)
+
+
+def _default_root(workflows_dir: Path) -> Path:
+    """The repository a workflows directory belongs to.
+
+    ``<repo>/.github/workflows`` gives ``<repo>``.  A staged fixture that is
+    not laid out that way (``<tmp>/workflows``) gives the fixture directory.
+    """
+    parent = workflows_dir.parent
+    return parent.parent if parent.name == ".github" else parent
+
+
+def pin_files(workflows_dir: Path, repo_root: Optional[Path] = None) -> list[tuple[str, Path]]:
+    """``(display name, path)`` for every workflow and action definition.
+
+    Workflows display by file name (as they always have); action definitions
+    by their path relative to the repository root, so two ``action.yml``
+    files are told apart.  Action definitions are collected from the whole
+    repository (see :func:`action_definition_files`), not from one directory.
+    """
+    base = _default_root(workflows_dir) if repo_root is None else repo_root
+    workflows = _workflow_files(workflows_dir)
+    out: list[tuple[str, Path]] = [(path.name, path) for path in workflows]
+    seen = {path.resolve() for path in workflows}
+    for path in action_definition_files(base):
+        if path.resolve() in seen:
+            continue
+        try:
+            display = path.relative_to(base).as_posix()
+        except ValueError:
+            display = path.as_posix()
+        out.append((display, path))
     return out
 
 
@@ -138,11 +209,13 @@ def _collect_uses(node: yaml.Node, found: list[yaml.ScalarNode]) -> None:
             _collect_uses(item, found)
 
 
-def uses_references(workflows_dir: Path) -> tuple[list[UsesRef], list[str]]:
+def uses_references(
+    workflows_dir: Path, repo_root: Optional[Path] = None
+) -> tuple[list[UsesRef], list[str]]:
     """``(every uses: reference, one message per file that did not parse)``."""
     refs: list[UsesRef] = []
     errors: list[str] = []
-    for display, path in pin_files(workflows_dir):
+    for display, path in pin_files(workflows_dir, repo_root):
         try:
             text = path.read_text(encoding="utf-8")
             root = yaml.compose(text)
@@ -165,10 +238,10 @@ def uses_references(workflows_dir: Path) -> tuple[list[UsesRef], list[str]]:
     return refs, errors
 
 
-def find_pins(workflows_dir: Path) -> list[Pin]:
-    """Collect every SHA-pinned action across the workflows and composite actions."""
+def find_pins(workflows_dir: Path, repo_root: Optional[Path] = None) -> list[Pin]:
+    """Collect every SHA-pinned action across the workflows and action definitions."""
     pins: list[Pin] = []
-    refs, _errors = uses_references(workflows_dir)
+    refs, _errors = uses_references(workflows_dir, repo_root)
     for use in refs:
         m = _PIN_RE.fullmatch(use.ref)
         if not m:
@@ -224,7 +297,7 @@ def _workflow_files(workflows_dir: Path) -> list[Path]:
     return sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml"))
 
 
-def find_unpinned(workflows_dir: Path) -> list[Unpinned]:
+def find_unpinned(workflows_dir: Path, repo_root: Optional[Path] = None) -> list[Unpinned]:
     """Every third-party ``uses:`` reference that is not a 40-hex commit SHA.
 
     Local references (``./.github/workflows/x.yml``) are not third-party
@@ -234,7 +307,7 @@ def find_unpinned(workflows_dir: Path) -> list[Unpinned]:
     file that does not parse is reported here too: a reference this gate
     cannot read is not a reference it has verified.
     """
-    refs, errors = uses_references(workflows_dir)
+    refs, errors = uses_references(workflows_dir, repo_root)
     out: list[Unpinned] = [
         Unpinned(workflow=error.split(":", 1)[0], line_no=0, ref=f"<{error.split(': ', 1)[1]}>")
         for error in errors
@@ -319,7 +392,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # INVARIANT-4 itself, checked before anything else: a reference with no SHA
     # is the violation, and no amount of verifying the OTHER references finds
     # it.  Reported even under --offline, since it needs no network.
-    unpinned = find_unpinned(workflows_dir)
+    # ``<root>/.github/workflows`` resolves its action definitions against
+    # ``<root>`` itself (see _default_root), so the whole repository is read.
+    try:
+        unpinned = find_unpinned(workflows_dir)
+        pins = find_pins(workflows_dir)
+    except RuntimeError as exc:
+        # The action-definition listing failed: a scan that could not
+        # enumerate the files is not a scan that found nothing.
+        print(f"FATAL: {exc}")
+        return 2
     if unpinned:
         print(f"INVARIANT-4 violation: {len(unpinned)} unpinned action reference(s):")
         for item in unpinned:
@@ -334,7 +416,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 1
 
-    pins = find_pins(workflows_dir)
     if not pins:
         # Fail closed, like every other gate in tools/.  An empty pin set on
         # this repository means the collector broke or the workflows moved; it

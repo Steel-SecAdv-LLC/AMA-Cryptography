@@ -230,18 +230,17 @@ _INSN_RE = re.compile(r"^\s+[0-9a-f]+:\s+(?P<mnemonic>[a-z][a-z0-9.]*)")
 #: architectures and are covered for the same reason; like ``fdiv`` they have
 #: no legitimate use in this library at all.
 #:
-#: SVE's reversed integer divides too.  SVE ``sdiv``/``udiv`` on Z registers
-#: are destructive (``Zdn = Zdn / Zm``), so the compiler emits ``sdivr`` /
-#: ``udivr`` (``Zdn = Zm / Zdn``) when register allocation leaves the divisor
-#: in the destination register.  The anchored ``udiv|sdiv`` arm matched
-#: neither, so a vector divide in an SVE2 kernel -- the build the arm-qemu SVE2
-#: lane runs this gate on -- was invisible whenever it came out reversed.
-#: ``fdivr`` was already covered by the ``fdiv[a-z]*`` arm.  Measured
-#: 2026-09-24 with clang 18 -O3 ``--target=aarch64-linux-gnu
-#: -march=armv9-a+sve2`` (no aarch64 gcc on that host): no ``sdivr``/``udivr``
-#: in the three src/c/sve2 objects that carry code (ML-KEM, ML-DSA, SHA-3; the
-#: other five are empty stubs), so the widening changes no verdict today.
-_DIVIDE_RE = re.compile(r"^(v?i?div[a-z]*|udivr?|sdivr?|v?fdiv[a-z]*|v?sqrt[a-z]*|fsqrt[a-z]*)$")
+#: SVE's REVERSED integer divides too.  ``sdivr``/``udivr`` (``Zdn = Zm /
+#: Zdn``) are distinct mnemonics from ``sdiv``/``udiv``, and the integer arm
+#: was anchored on the exact spellings, so it missed both — while ``fdivr``
+#: already matched through ``v?fdiv[a-z]*``.  The SVE2 ML-KEM, ML-DSA and SHA-3
+#: kernels are exactly where a vectorised secret divide would be emitted, and
+#: the object this gate reads on the AArch64 lane carries them.  Measured
+#: 2026-09-24 on an SVE object assembled by clang 18 and disassembled by both
+#: ``llvm-objdump`` and GNU ``aarch64-linux-gnu-objdump``: five divides
+#: (``sdivr``, ``udivr``, ``sdiv`` twice, ``fdivr``), of which the old pattern
+#: counted three.
+_DIVIDE_RE = re.compile(r"^(v?i?div[a-z]*|[su]divr?|v?fdiv[a-z]*|v?sqrt[a-z]*|fsqrt[a-z]*)$")
 
 
 #: Disassemblers to try, in order.  Every one of them is tried until one
