@@ -1009,7 +1009,7 @@ raises `KDFPolicyError` rather than deriving a weak key:
 
 | Parameter | Floor | Source |
 |---|---|---|
-| Algorithm | Argon2id, where the build provides it | this section |
+| Algorithm | Argon2id | this section |
 | PBKDF2-HMAC-SHA256 iterations | 600,000 | OWASP 2024 |
 | Argon2id `t_cost` | 3 | RFC 9106 §4 |
 | Argon2id `m_cost` | 65536 KiB (64 MiB) | RFC 9106 §4 |
@@ -1021,9 +1021,21 @@ metadata's `version` field selects the Argon2id branch, so deleting that single
 field re-routes derivation to PBKDF2 — and PBKDF2 at exactly 600,000 iterations
 satisfies every cost floor above while discarding memory-hardness entirely,
 which is the property Argon2id is chosen for and the one that costs a GPU or
-ASIC attacker real money. On a build with native Argon2id, metadata naming
-PBKDF2 is therefore refused. Builds without native Argon2id are unaffected,
-because PBKDF2 is what such a build legitimately creates stores with.
+ASIC attacker real money. Metadata naming PBKDF2 is therefore refused,
+whatever the loaded library provides.
+
+That last clause used to read the other way: a library without the Argon2id
+symbols was exempt, because `SecureKeyStorage` then *created* stores with
+PBKDF2. That fallback was itself the defect. Such a library is partial or
+stale (the native build compiles `ama_argon2.c` whenever it compiles the rest
+of the backend), and on it a new store silently received a derivation with no
+memory-hardness, `migrate_kdf()` re-keyed an Argon2id store down to PBKDF2 and
+returned `True`, and an Argon2id store whose metadata had been rewritten to
+PBKDF2 at 600,000 iterations opened without a word. Creating or migrating a
+store now requires Argon2id and raises `NativeBackendUnavailableError` when
+the library lacks it (INVARIANT-7), before a salt, metadata or key file is
+written, so no PBKDF2 store is ever legitimately new and the exemption has
+nothing left to protect.
 
 Storage format v3 also binds the KDF parameters into the AEAD associated data
 and records them in each key file. The parameters already influence the derived

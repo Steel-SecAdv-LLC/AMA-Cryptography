@@ -95,6 +95,7 @@ import importlib.util
 import marshal
 import math
 import os
+import struct
 import sys
 from pathlib import Path
 from types import CodeType
@@ -823,15 +824,45 @@ def resolve_signed_message(
 # ============================================================================
 
 
+def _const_key(value: object) -> object:
+    """Type-tagged, recursive identity key for one code-object constant.
+
+    Mirrors ``_self_test._const_key`` exactly (see its docstring for the
+    measured cases).  ``==`` equates ``1``/``1.0``/``True`` and ``0.0``/``-0.0``,
+    and a ``tuple``/``frozenset``/``slice`` inherits that for its contents, so
+    a type guard on the outer value alone let ``(1,)`` stand in for
+    ``(True,)``.  This key tags every value with its exact type, descends into
+    those containers, and keys ``float``/``complex`` by their IEEE-754 bits
+    (signed zeros differ; a NaN equals itself), modelled on the key CPython
+    uses to de-duplicate constants.  A code object nested in a container,
+    which no compile produces, is keyed by identity and so can only mismatch.
+    """
+    kind = type(value)
+    if isinstance(value, float) and kind is float:
+        return (kind, struct.pack("<d", value))
+    if isinstance(value, complex) and kind is complex:
+        return (kind, struct.pack("<dd", value.real, value.imag))
+    if isinstance(value, tuple) and kind is tuple:
+        return (kind, tuple(_const_key(item) for item in value))
+    if isinstance(value, frozenset) and kind is frozenset:
+        return (kind, frozenset(_const_key(item) for item in value))
+    if isinstance(value, slice) and kind is slice:
+        return (kind, _const_key(value.start), _const_key(value.stop), _const_key(value.step))
+    if kind is CodeType:
+        return (kind, id(value))
+    return (kind, value)
+
+
 def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
     """Execution-equivalence of two code objects.
 
     Mirrors ``_self_test._code_matches`` exactly: compares the executed
     surface (``co_code``, names, locals, flags, argument shape, and every
-    constant — recursing into nested code objects, type-strict on constants
-    so ``1``/``1.0``/``True`` cannot be swapped) and ignores ``co_filename``
-    and the line tables, which legitimately differ for a tree compiled at a
-    different path.
+    constant — recursing into nested code objects, and comparing every other
+    constant by ``_const_key`` so ``1``/``1.0``/``True`` cannot be swapped,
+    not even inside a tuple or frozenset, and ``0.0`` cannot become ``-0.0``)
+    and ignores ``co_filename`` and the line tables, which legitimately
+    differ for a tree compiled at a different path.
 
     That includes ``co_exceptiontable``, which both copies were missing.
     From Python 3.11 exception handling is a side table mapping instruction
@@ -871,7 +902,7 @@ def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
         if a_is_code:
             if not _code_matches(a, b):
                 return False
-        elif type(a) is not type(b) or a != b:
+        elif _const_key(a) != _const_key(b):
             return False
     return True
 

@@ -194,8 +194,9 @@ from ama_cryptography.key_management import SecureKeyStorage
 
 # The constructor takes a storage DIRECTORY and an optional master password —
 # not a raw encryption key. The AES-256 key is derived from the password
-# (Argon2id, or PBKDF2-HMAC-SHA256 when the native Argon2 backend is absent)
-# and held internally as a bytearray so it can be zeroed in place.
+# with Argon2id (there is no PBKDF2 fallback: a library without Argon2id
+# refuses to create the store) and held internally as a bytearray so it can
+# be zeroed in place.
 with SecureKeyStorage(
     storage_path=Path(tempfile.mkdtemp()),
     master_password="example-passphrase",

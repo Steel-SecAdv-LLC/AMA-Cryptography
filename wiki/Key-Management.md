@@ -262,21 +262,20 @@ from ama_cryptography.key_management import (
 # SecureKeyStorage takes a storage directory and an optional master
 # password.
 #
-# IMPORTANT (key_management.py:563-673): if `master_password` is truthy,
-# it is stretched through a password-based KDF into a 32-byte AES-256
-# key. Algorithm selection is automatic on first use of a fresh keystore:
-#   * Argon2id (RFC 9106; t=3, m=64 MiB, p=4) is preferred whenever the
-#     native Argon2 backend is compiled in (`_ARGON2_NATIVE_AVAILABLE`
-#     is True) — this is KDF_VERSION 3 and becomes the default on any
-#     modern build of the library.
-#   * PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2024) is the
-#     fallback when the native Argon2 backend is unavailable — this is
-#     KDF_VERSION 2.
-#   * `migrate_kdf()` exists to opportunistically upgrade an existing
-#     v2 (PBKDF2) keystore to v3 (Argon2id); it is not required for
-#     fresh installations.
-# Selection is persisted in `.kdf_metadata.json` alongside the salt so
-# existing keystores remain decryptable across algorithm changes.
+# IMPORTANT (SecureKeyStorage._derive_key_from_password): if
+# `master_password` is truthy, it is stretched through a password-based
+# KDF into a 32-byte AES-256 key.
+#   * A fresh keystore is always created with Argon2id (RFC 9106; t=3,
+#     m=64 MiB, p=4) — KDF_VERSION 3. There is no PBKDF2 fallback: if the
+#     loaded native library lacks the Argon2id symbols (a partial or stale
+#     build), creating a store raises NativeBackendUnavailableError and
+#     writes nothing (INVARIANT-7).
+#   * PBKDF2-HMAC-SHA256 (KDF_VERSION 1/2) is only read, to open a legacy
+#     keystore under `allow_legacy_kdf=True` so it can be migrated.
+#   * `migrate_kdf()` re-keys an existing keystore to Argon2id v3; it too
+#     requires Argon2id and raises rather than re-keying to PBKDF2.
+# The parameters are persisted in `.kdf_metadata.json` alongside the salt so
+# existing keystores remain decryptable across parameter changes.
 #
 # If `master_password` is None or empty, a *random in-memory* 32-byte
 # encryption key is generated via `secrets.token_bytes(32)` — there is

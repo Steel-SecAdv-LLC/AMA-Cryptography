@@ -37,7 +37,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from types import CodeType, ModuleType
+from types import CodeType, FunctionType, ModuleType
 
 import pytest
 
@@ -52,6 +52,43 @@ pytestmark = pytest.mark.fips
 
 _PYC_HEADER_LEN = 16  # magic(4) + bit field(4) + (mtime,size | source hash)(8)
 _EXT_SUFFIX = importlib.machinery.EXTENSION_SUFFIXES[0]
+
+
+#: Constant pairs that compare equal under ``==`` but are distinct constants
+#: the interpreter executes differently.  Shared with
+#: ``tests/test_verify_install_oob.py``, whose out-of-band copy of the
+#: comparator must reject the same set.
+EQUAL_BUT_DISTINCT_CONSTANTS: list[tuple[object, object]] = [
+    ((1,), (True,)),
+    ((1,), (1.0,)),
+    (((1,),), ((True,),)),
+    (frozenset({1, 2}), frozenset({True, 2})),
+    (frozenset({1, 2}), frozenset({1.0, 2})),
+    (0.0, -0.0),
+    ((0.0,), (-0.0,)),
+    (0j, complex(-0.0, 0.0)),
+    (slice(1, 2, None), slice(True, 2, None)),
+]
+
+_PLACEHOLDER = "__placeholder__"
+
+
+def code_with_constant(value: object) -> CodeType:
+    """The code of ``def f(): return <value>``, ``value`` placed in ``co_consts``.
+
+    Built by replacing one constant of a compiled template, which is what a
+    poisoned ``.pyc`` does: identical instructions, one constant swapped.
+    """
+    module = compile(f"def f():\n    return {_PLACEHOLDER!r}\n", "m.py", "exec")
+    template = next(c for c in module.co_consts if isinstance(c, CodeType))
+    consts = tuple(value if c == _PLACEHOLDER else c for c in template.co_consts)
+    assert consts != template.co_consts, "fixture: the placeholder was not a constant"
+    return template.replace(co_consts=consts)
+
+
+def call_code(code: CodeType) -> object:
+    """Run a zero-argument function body built by :func:`code_with_constant`."""
+    return FunctionType(code, {})()
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +171,108 @@ class TestCodeMatches:
         closes that."""
         a = compile("v = 1\n", "m.py", "exec")
         b = compile("v = 1.0\n", "m.py", "exec")
+        assert not st._code_matches(a, b)
+
+    @pytest.mark.parametrize(
+        ("original", "swapped"),
+        EQUAL_BUT_DISTINCT_CONSTANTS,
+        ids=[f"{o!r}->{s!r}" for o, s in EQUAL_BUT_DISTINCT_CONSTANTS],
+    )
+    def test_an_equal_but_distinct_constant_is_caught(
+        self, original: object, swapped: object
+    ) -> None:
+        """A swap ``==`` cannot see, inside a container or on a signed zero.
+
+        The guard was ``type(a) is not type(b) or a != b``: exact type for the
+        outer value, then ``==``.  A tuple or frozenset passes the type check
+        and ``==`` then equates ``1``/``1.0``/``True`` inside it; a float or
+        complex passes the type check and ``==`` equates ``0.0`` and ``-0.0``.
+        Measured on 3.11.15 before the fix: every pair here was accepted.
+
+        The poisoned object is built the way a poisoned ``.pyc`` is -- same
+        instructions, one constant replaced -- rather than by compiling a
+        second source, because from 3.14 the compiler also emits the element
+        as a separate top-level constant, which the outer type guard already
+        caught and which would make this test pass for the wrong reason.
+        """
+        fresh = code_with_constant(original)
+        poisoned = code_with_constant(swapped)
+
+        # The fixture is a real hazard: invisible to ==, visible to the program.
+        assert fresh.co_code == poisoned.co_code
+        assert fresh.co_consts == poisoned.co_consts, "the swap must be invisible to =="
+        assert repr(call_code(fresh)) != repr(call_code(poisoned)), "the swap must change behaviour"
+
+        assert st._code_matches(fresh, code_with_constant(original)), "control: same constant"
+        assert not st._code_matches(fresh, poisoned)
+
+    def test_a_genuine_pyc_of_folded_constants_still_verifies(self, tmp_path: Path) -> None:
+        """Non-vacuity, through the per-file path POST runs.
+
+        A key that rejected every tuple, frozenset, slice or float would pass
+        the test above and fail every install, so this compiles a module full
+        of them with ``py_compile`` -- a genuine ``.pyc`` -- and verifies it.
+
+        It also carries a constant-folded NaN.  ``nan != nan``, so under ``==``
+        a faithful ``.pyc`` holding one was reported poisoned; ``1e999 -
+        1e999`` folds to NaN on every supported interpreter (measured on
+        3.10.20, 3.11.15, 3.12.3, 3.13.12 and 3.14.0rc2).  Keyed by its bit
+        pattern it equals itself, as it does in the compiler's own constant
+        de-duplication.
+        """
+        body = (
+            "A = (1, 2.5, -0.0, b'x', None, ...)\n"
+            "B = 1e999 - 1e999\n"
+            "def f(x):\n"
+            "    return x in {1, 2, 3} or x in ('a', 'b') or x == 1j or x[1:2]\n"
+        )
+        py = _make_module(tmp_path, "folded", body)
+        fresh = compile(body, str(py), "exec")
+        assert any(isinstance(c, float) and c != c for c in fresh.co_consts), "fixture: NaN"
+        py_compile.compile(str(py), doraise=True)
+        assert st._verify_source_file_bytecode(py) == ("verified", None)
+
+    def test_a_poisoned_pyc_with_a_nested_swap_is_caught(self, tmp_path: Path) -> None:
+        """End to end: ``(1,)`` swapped for ``(True,)`` in a loadable ``.pyc``.
+
+        ``dont_inherit=True`` matters: without it ``compile()`` inherits this
+        module's ``from __future__ import annotations`` flag, the poisoned
+        object then differs in ``co_flags`` as well, and the test passes on
+        the flag rather than on the constant.  The control write below proves
+        the swap is the only difference.
+        """
+        py = _make_module(tmp_path, "nested", "A = (1,)\n")
+        py_compile.compile(str(py), doraise=True)
+        pyc = Path(importlib.util.cache_from_source(str(py)))
+        fresh = compile("A = (1,)\n", str(py), "exec", dont_inherit=True)
+        assert any(
+            isinstance(c, tuple) and c == (1,) for c in fresh.co_consts
+        ), "fixture: the tuple constant is present"
+
+        _poison_pyc_body(pyc, fresh)
+        assert st._verify_source_file_bytecode(py) == ("verified", None), "control"
+
+        consts = tuple(
+            (True,) if isinstance(c, tuple) and c == (1,) else c for c in fresh.co_consts
+        )
+        poisoned = fresh.replace(co_consts=consts)
+        assert poisoned.co_consts == fresh.co_consts, "fixture: invisible to =="
+        _poison_pyc_body(pyc, poisoned)
+        status, error = st._verify_source_file_bytecode(py)
+        assert status == "verified"
+        assert error is not None and "poisoned or stale" in error
+
+    def test_a_code_object_inside_a_container_never_matches(self) -> None:
+        """Fail closed on a shape no faithful compile produces.
+
+        The compiler never nests a code object in a tuple or frozenset
+        constant, so ``_const_key`` keys one by identity rather than
+        descending into it: two such tuples can only mismatch, even when the
+        code objects are identical.
+        """
+        inner = compile("x = 1\n", "m.py", "exec")
+        a = code_with_constant((inner,))
+        b = code_with_constant((compile("x = 1\n", "m.py", "exec"),))
         assert not st._code_matches(a, b)
 
 

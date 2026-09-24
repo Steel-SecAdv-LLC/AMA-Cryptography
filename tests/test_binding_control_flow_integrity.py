@@ -19,6 +19,7 @@ Two halves, because either alone is defeatable: the flag must be selected
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import pathlib
 import platform
@@ -426,3 +427,130 @@ class TestTheSmokeTestChecksTheBuiltObject:
         source = (REPO_ROOT / "tools" / "wheel_smoke_test.py").read_text(encoding="utf-8")
         body = source[source.index("def main() -> int:") :]
         assert "check_control_flow_integrity," in body
+
+
+@pytest.fixture(scope="module")
+def smoke_tool() -> types.ModuleType:
+    """``tools/wheel_smoke_test.py`` loaded as a module, without running ``main``."""
+    tool_path = REPO_ROOT / "tools" / "wheel_smoke_test.py"
+    spec = importlib.util.spec_from_file_location("wheel_smoke_test_cfi", tool_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestAMissingReadelfIsNotAPass:
+    """The CFI check must fail, not skip, when it cannot read the object.
+
+    ``check_control_flow_integrity`` printed ``SKIP`` and returned when neither
+    ``readelf`` nor ``llvm-readelf`` was on PATH, so on a test environment
+    without binutils it passed every wheel -- including one whose toolchain
+    dropped ``-fcf-protection`` / ``-mbranch-protection``, the one fault it
+    exists to catch.  These tests drive the function itself with the platform,
+    the PATH lookup and ``readelf`` replaced, so they run the same on every
+    host.
+    """
+
+    @staticmethod
+    def _run(
+        tool: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+        *,
+        machine: str,
+        readelf: str | None,
+        note: str = "",
+    ) -> list[str]:
+        package_dir = tmp_path / "ama_cryptography"
+        package_dir.mkdir()
+        (package_dir / "__init__.py").write_text("", encoding="utf-8")
+        (package_dir / "libama_cryptography.so").write_bytes(b"\x7fELF")
+
+        def fake_run(argv: list[str], **_: object) -> types.SimpleNamespace:
+            assert argv[0] == readelf, "the check must run the readelf it found"
+            return types.SimpleNamespace(stdout=note, returncode=0)
+
+        monkeypatch.setattr(tool, "_FAILURES", [])
+        monkeypatch.setattr(tool, "sys", types.SimpleNamespace(platform="linux"))
+        monkeypatch.setattr(tool, "platform", types.SimpleNamespace(machine=lambda: machine))
+        monkeypatch.setattr(tool, "shutil", types.SimpleNamespace(which=lambda _name: readelf))
+        monkeypatch.setattr(
+            tool,
+            "ama_cryptography",
+            types.SimpleNamespace(__file__=str(package_dir / "__init__.py")),
+        )
+        monkeypatch.setattr(
+            tool, "subprocess", types.SimpleNamespace(run=fake_run, SubprocessError=OSError)
+        )
+        tool.check_control_flow_integrity()
+        return list(tool._FAILURES)
+
+    @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+    def test_a_missing_readelf_is_a_failure(
+        self,
+        smoke_tool: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+        machine: str,
+    ) -> None:
+        failures = self._run(smoke_tool, monkeypatch, tmp_path, machine=machine, readelf=None)
+        assert len(failures) == 1, failures
+        assert "readelf" in failures[0]
+
+    @pytest.mark.parametrize(
+        ("machine", "note"),
+        [
+            ("x86_64", "Properties: x86 feature: IBT, SHSTK"),
+            ("aarch64", "Properties: AArch64 feature: BTI, PAC"),
+        ],
+    )
+    def test_a_marked_object_passes_when_readelf_is_present(
+        self,
+        smoke_tool: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+        machine: str,
+        note: str,
+    ) -> None:
+        """The control: with the tool present and the marking present, no failure.
+
+        Without it, a check that failed unconditionally would satisfy the test
+        above.
+        """
+        failures = self._run(
+            smoke_tool, monkeypatch, tmp_path, machine=machine, readelf="/bin/readelf", note=note
+        )
+        assert failures == []
+
+    def test_an_unmarked_object_still_fails(
+        self,
+        smoke_tool: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """And the marking itself is still what is judged once readelf runs."""
+        failures = self._run(
+            smoke_tool,
+            monkeypatch,
+            tmp_path,
+            machine="x86_64",
+            readelf="/bin/readelf",
+            note="Properties: x86 feature: IBT",
+        )
+        assert len(failures) == 1 and "SHSTK" in failures[0], failures
+
+    def test_a_machine_with_no_defined_marking_is_not_judged(
+        self,
+        smoke_tool: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """The requirement is scoped to where the check applies.
+
+        No CFI marking is defined for, e.g., riscv64, so there is nothing to
+        read and a missing readelf there is not a fault.  (The release matrix
+        builds x86_64 and aarch64 only.)
+        """
+        failures = self._run(smoke_tool, monkeypatch, tmp_path, machine="riscv64", readelf=None)
+        assert failures == []

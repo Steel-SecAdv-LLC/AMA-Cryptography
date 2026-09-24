@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_execution_integrity import EQUAL_BUT_DISTINCT_CONSTANTS, code_with_constant
 from tools import verify_install_oob as oob
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -141,6 +142,40 @@ class TestSha3Parity:
         for length in [0, 1, 111, 112, 113, 127, 128, 129, 500]:
             data = rng.randbytes(length)
             assert oob.sha512(data) == hashlib.sha512(data).digest()
+
+
+class TestCodeMatchesMirrorsTheInProcessCheck:
+    """The out-of-band comparator must reject what the in-process one rejects.
+
+    Its docstring says it mirrors ``_self_test._code_matches`` exactly, and
+    both carried the same hole: a type guard on the outer constant only, so a
+    tuple or frozenset constant could have ``1`` swapped for ``True`` or
+    ``1.0`` inside it, and ``0.0`` could become ``-0.0``.  The corpus is shared
+    with ``tests/test_execution_integrity.py`` so the two cannot drift.
+    """
+
+    @pytest.mark.parametrize(
+        ("original", "swapped"),
+        EQUAL_BUT_DISTINCT_CONSTANTS,
+        ids=[f"{o!r}->{s!r}" for o, s in EQUAL_BUT_DISTINCT_CONSTANTS],
+    )
+    def test_an_equal_but_distinct_constant_is_caught(
+        self, original: object, swapped: object
+    ) -> None:
+        fresh = code_with_constant(original)
+        poisoned = code_with_constant(swapped)
+        assert fresh.co_consts == poisoned.co_consts, "fixture: invisible to =="
+        assert oob._code_matches(fresh, code_with_constant(original)), "control"
+        assert not oob._code_matches(fresh, poisoned)
+
+    def test_a_genuine_pyc_with_a_nan_still_verifies(self, tmp_path: Path) -> None:
+        """Non-vacuity, and the ``nan != nan`` false positive, end to end."""
+        import py_compile
+
+        py = tmp_path / "folded.py"
+        py.write_text("A = (1, -0.0, x in {1, 2})\nB = 1e999 - 1e999\n", encoding="utf-8")
+        py_compile.compile(str(py), doraise=True)
+        assert oob.verify_bytecode_cache(py) == ("verified", None)
 
 
 # ---------------------------------------------------------------------------

@@ -516,14 +516,17 @@ def check_control_flow_integrity() -> None:
     something reads the built object.  That is this check.
 
     Only what the platform can actually carry is required: the GNU property
-    note is an ELF construct, so this is a no-op on macOS and Windows.
+    note is an ELF construct, so this is a no-op on macOS and Windows, and on
+    a Linux machine with no CFI marking defined.
+
+    Where the check does apply, a missing ``readelf`` is a FAILURE, not a
+    skip.  It used to print ``SKIP`` and return, so a test environment without
+    binutils passed every wheel -- including one whose toolchain dropped the
+    flag, which is the only thing this check exists to catch.  Not being able
+    to look is not evidence that the marking is there.
     """
     if not sys.platform.startswith("linux"):
         print("  SKIP  control-flow integrity (GNU property notes are ELF-only)")
-        return
-    readelf = shutil.which("readelf") or shutil.which("llvm-readelf")
-    if readelf is None:
-        print("  SKIP  control-flow integrity (no readelf on PATH)")
         return
 
     machine = platform.machine().lower()
@@ -534,6 +537,17 @@ def check_control_flow_integrity() -> None:
         wanted, label = ("BTI",), "AArch64 BTI"
     else:
         print(f"  SKIP  control-flow integrity (no CFI marking defined for {machine})")
+        return
+
+    readelf = shutil.which("readelf") or shutil.which("llvm-readelf")
+    check(
+        f"control-flow integrity: a readelf is available to verify {label}",
+        readelf is not None,
+        "neither readelf nor llvm-readelf is on PATH, so the GNU property note "
+        "of the shipped objects cannot be read; install binutils (or llvm) in "
+        "the test environment rather than shipping an unverified wheel",
+    )
+    if readelf is None:
         return
 
     package_dir = Path(ama_cryptography.__file__).parent

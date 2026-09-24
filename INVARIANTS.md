@@ -2528,9 +2528,22 @@ names/locals, the argument and flag shape, and every constant, descending
 recursively into nested code objects — and deliberately ignores `co_filename`
 and the line tables. Ignoring those is what keeps a legitimate `.pyc` built at a
 different absolute path (a relocated wheel) from being a false positive, while a
-single altered instruction, even inside a nested function, is still caught. A
-constant swapped for an equal-valued one of another type (`1` for `1.0`, `1` for
-`True`) is caught by a type guard, because `==` alone would pass it.
+single altered instruction, even inside a nested function, is still caught.
+Constants are compared by a type-tagged identity key (`_const_key`), not by
+`==`: every value carries its exact type, `tuple`, `frozenset` and `slice`
+constants are compared element by element under the same key, and `float` and
+`complex` are compared by their IEEE-754 bit patterns. So `1` cannot become
+`1.0` or `True` even inside a tuple or frozenset, `0.0` cannot become `-0.0`,
+and a constant-folded NaN matches itself. The key is modelled on the one
+CPython uses to de-duplicate constants (`_PyCode_ConstantKey`).
+
+*Correction (2026-09-24).* This paragraph previously said a swap to an
+equal-valued constant of another type "is caught by a type guard". The guard
+checked the type of the outer constant only and then fell back to `==`, so
+`(1,)` for `(True,)`, `frozenset({1})` for `frozenset({1.0})` and `0.0` for
+`-0.0` were all accepted (measured on 3.11.15), by `_self_test._code_matches`
+and by its out-of-band mirror in `tools/verify_install_oob.py` alike, and a
+faithful `.pyc` holding a NaN was rejected because `nan != nan`.
 
 The stage covers the **same file set the digest signs** (every `*.py` below
 the package directory, recursively), not merely the modules imported so far,
@@ -2589,8 +2602,10 @@ covers the package's own `__init__`: an extension `__init__<suffix>` beside
 runs to see it.
 
 **Enforcement.** `tests/test_execution_integrity.py` pins the bytecode
-comparator (a changed instruction, a nested-function change and a
-constant-type swap are caught; a filename-only difference is not), the
+comparator (a changed instruction, a nested-function change, a
+constant-type swap and an equal-but-distinct constant inside a tuple,
+frozenset or slice or on a signed zero are caught; a filename-only difference
+and a genuine `.pyc` of folded constants, NaN included, are not), the
 per-file check (a poisoned `.pyc` whose header still matches its pristine
 source is a fault; a corrupt or foreign-magic `.pyc` is handled), the
 substitution guard, and the end-to-end path: on a copied tree, a poisoned

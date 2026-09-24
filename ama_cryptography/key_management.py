@@ -207,8 +207,10 @@ HSM_AVAILABLE: bool = importlib.util.find_spec("PyKCS11") is not None
 # see ``_kdf_binding``) is what makes an attempt *diagnosable* rather than an
 # opaque authentication failure.
 #
-# The floors match the values this class writes for new stores: OWASP 2024 for
-# PBKDF2-HMAC-SHA256 and the RFC 9106 second recommended option for Argon2id.
+# The floors match the values this class has written: the RFC 9106 second
+# recommended option for Argon2id, which every new or migrated store uses, and
+# OWASP 2024 for the PBKDF2-HMAC-SHA256 that legacy v2 stores were written with
+# (read only, under ``allow_legacy_kdf``, so they can be migrated).
 MIN_PBKDF2_ITERATIONS = 600000
 MIN_ARGON2_T_COST = 3
 MIN_ARGON2_M_COST = 65536  # KiB, i.e. 64 MiB
@@ -787,11 +789,18 @@ class SecureKeyStorage:
 
     Security Features:
         - AES-256-GCM authenticated encryption (integrity + confidentiality)
-        - PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2024)
+        - Argon2id (RFC 9106; t=3, m=64 MiB, p=4) for every password-protected
+          store this class creates or migrates.  There is no PBKDF2 fallback:
+          a loaded library without the Argon2id symbols is refused with
+          ``NativeBackendUnavailableError`` rather than silently given a
+          weaker derivation (INVARIANT-7).  PBKDF2-HMAC-SHA256 is only ever
+          *read*, to open a legacy v1/v2 store under ``allow_legacy_kdf`` so
+          it can be migrated.
         - Per-installation random salt (32 bytes)
         - Secure file permissions (0600)
         - KDF versioning for future algorithm upgrades
-        - Backward compatibility with legacy AES-CFB encrypted keys
+        - Legacy AES-CFB records are recognised and refused with a re-store
+          instruction; they are not decrypted
     """
 
     def __init__(
@@ -818,6 +827,9 @@ class SecureKeyStorage:
         Raises:
             KDFPolicyError: If the stored KDF parameters are below the policy
                 floor and ``allow_legacy_kdf`` is False.
+            NativeBackendUnavailableError: If ``master_password`` would create
+                a new store and the loaded library does not provide Argon2id.
+                Nothing is written to the store directory in that case.
         """
         self.allow_legacy_kdf = allow_legacy_kdf
         self.storage_path = Path(storage_path)
@@ -838,7 +850,7 @@ class SecureKeyStorage:
 
         # Key derivation parameters (versioned for future upgrades)
         self.KDF_VERSION = 3  # v3 = Argon2id, v2 = PBKDF2 600k, v1 = PBKDF2 100k
-        self.KDF_ITERATIONS = 600000  # OWASP 2024 recommendation (PBKDF2 fallback)
+        self.KDF_ITERATIONS = 600000  # OWASP 2024; legacy v2 stores (read, never written)
         self.KDF_LEGACY_ITERATIONS = 100000  # Pre-v2 default iterations
         self.KDF_SALT_BYTES = 32  # Salt size in bytes
         self.KDF_KEY_BYTES = 32  # Derived key size (AES-256)
@@ -928,22 +940,27 @@ class SecureKeyStorage:
         # cracking. The parameter floors above cannot see this: they only ever
         # compare a number against the floor for whichever algorithm was named.
         #
-        # So the algorithm is floored too. PBKDF2 is accepted only where it is
-        # the genuine best available — a build with no native Argon2id, which
-        # is what ``_derive_key_from_password`` itself falls back to when it
-        # creates a store. Where Argon2id *is* available, a store claiming
-        # PBKDF2 is either a real legacy store or a downgrade attempt, and
-        # nothing in the unauthenticated file distinguishes them. Both are
+        # So the algorithm is floored too, and unconditionally. A store
+        # claiming PBKDF2 is either a real legacy store or a downgrade attempt,
+        # and nothing in the unauthenticated file distinguishes them. Both are
         # handled the same way as sub-floor costs: refuse, and point at
         # ``allow_legacy_kdf`` + ``migrate_kdf()``.
+        #
+        # This floor used to stand down when the loaded library lacked the
+        # Argon2id symbols, on the reasoning that PBKDF2 was then "the genuine
+        # best available" because ``_derive_key_from_password`` fell back to it
+        # when creating a store. Both halves were the same defect: a partial or
+        # stale library silently created PBKDF2 stores, and on that library an
+        # Argon2id store whose metadata was rewritten to PBKDF2 at 600k opened
+        # without a word. Creation and migration now refuse without Argon2id
+        # (``_require_argon2id``), so no PBKDF2 store is ever legitimately new,
+        # and the completeness of the loaded library no longer decides what
+        # this check accepts.
         if algorithm != "Argon2id":
-            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
-
-            if _ARGON2_NATIVE_AVAILABLE:
-                shortfalls.append(
-                    f"algorithm {algorithm!r} is weaker than the Argon2id this "
-                    "build supports (no memory-hardness)"
-                )
+            shortfalls.append(
+                f"algorithm {algorithm!r} is weaker than the Argon2id every new "
+                "or migrated store is created with (no memory-hardness)"
+            )
 
         # Cost floors, read through _policy_cost() rather than bare int().
         #
@@ -1043,6 +1060,30 @@ class SecureKeyStorage:
             )
         )
 
+    def _require_argon2id(self, action: str) -> None:
+        """Refuse ``action`` unless the loaded library provides Argon2id.
+
+        Creating a store and migrating one are the two places this class
+        *chooses* a KDF, and Argon2id is the only one it chooses.  A library
+        without the Argon2id symbols is partial or stale -- the native build
+        compiles ``ama_argon2.c`` whenever it compiles the rest of the
+        backend -- and the answer to it is the same as for every other missing
+        family: refuse at call time, never substitute (INVARIANT-7).
+
+        Raises:
+            NativeBackendUnavailableError: If Argon2id is unavailable.
+        """
+        from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+
+        if not _ARGON2_NATIVE_AVAILABLE:
+            raise NativeBackendUnavailableError(
+                f"Argon2id native backend not available: refusing to {action} at "
+                f"{self.storage_path}. Every key store this library creates or "
+                "migrates is protected with Argon2id; there is no PBKDF2 fallback "
+                "(INVARIANT-7). The loaded library is partial or stale. Rebuild: "
+                "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+            )
+
     def _derive_key_from_password(self, master_password: str) -> None:
         """Derive encryption key from password with proper salt handling.
 
@@ -1053,6 +1094,8 @@ class SecureKeyStorage:
         Raises:
             KDFPolicyError: If the stored parameters are below the floor and
                 ``allow_legacy_kdf`` is False.
+            NativeBackendUnavailableError: If this would create a new store and
+                the loaded library does not provide Argon2id.
         """
         # Check for existing salt (migration support)
         if self.salt_file.exists():
@@ -1070,43 +1113,43 @@ class SecureKeyStorage:
                 iterations = self.KDF_LEGACY_ITERATIONS
                 version = 1
         else:
-            # New installation: generate random salt
+            # New installation.  Argon2id or nothing, and decided BEFORE the
+            # salt is written, so a refused creation leaves no half-initialised
+            # store behind.
+            #
+            # This branch used to "prefer Argon2id, fall back to PBKDF2": when
+            # the loaded library lacked the Argon2id symbols (a partial or
+            # stale build -- every build of this tree with the native backend
+            # compiles ama_argon2.c) it created a v2 PBKDF2 store and said
+            # nothing beyond the load-time missing-families warning.  Every
+            # other missing family refuses at call time; this one silently
+            # selected a KDF with no memory-hardness for the key that protects
+            # every stored key (INVARIANT-7, and INVARIANT-35's selection axis).
+            self._require_argon2id("create a new password-protected key store")
+
             self.salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
             # Save salt with secure permissions (0600), no world-readable window.
             _atomic_write_bytes(self.salt_file, self.salt)
 
-            # Determine algorithm: prefer Argon2id, fall back to PBKDF2
-            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
-
-            use_argon2 = _ARGON2_NATIVE_AVAILABLE
-
-            if use_argon2:
-                algorithm = "Argon2id"
-                version = 3
-            else:
-                algorithm = "PBKDF2-HMAC-SHA256"
-                version = 2
-
-            # Save KDF metadata
+            version = self.KDF_VERSION
             metadata = {
                 "version": version,
-                "algorithm": algorithm,
+                "algorithm": "Argon2id",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "t_cost": self.ARGON2_T_COST,
+                "m_cost": self.ARGON2_M_COST,
+                "parallelism": self.ARGON2_PARALLELISM,
             }
-            if algorithm == "PBKDF2-HMAC-SHA256":
-                metadata["iterations"] = self.KDF_ITERATIONS
-            else:
-                metadata["t_cost"] = self.ARGON2_T_COST
-                metadata["m_cost"] = self.ARGON2_M_COST
-                metadata["parallelism"] = self.ARGON2_PARALLELISM
             # Through the same atomic owner-only writer as the salt one screen
             # up: this used to be open() + chmod, the ordering the writer's
             # docstring names as the world-readable window, for the file the
             # store later reads back as untrusted input.
             _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
-            iterations = self.KDF_ITERATIONS
+            # Argon2id has no iteration count; version 3 takes the Argon2id
+            # branch below and never reads this.
+            iterations = None
 
         # Derive key using the appropriate algorithm
         if version >= 3:
@@ -1229,11 +1272,23 @@ class SecureKeyStorage:
         """
         Migrate to current KDF parameters.
 
-        Re-encrypts all stored keys with new salt and iteration count.
-        Returns True on success.
+        Re-encrypts all stored keys under a new salt and an Argon2id key at the
+        current parameters (KDF version 3).  Returns True on success, False
+        when there is no salt file and so nothing to migrate.
+
+        Raises:
+            NativeBackendUnavailableError: If the loaded library does not
+                provide Argon2id.  Raised before any key is read or any file
+                is written; the store is left exactly as it was.
         """
         if not self.salt_file.exists():
             return False  # Nothing to migrate
+
+        # Argon2id or nothing, checked before a key is read or a byte written.
+        # This used to fall back to PBKDF2 on a library without the Argon2id
+        # symbols, which re-keyed an Argon2id store DOWN to PBKDF2 under the
+        # name "migrate", and reported success.
+        self._require_argon2id("migrate the key store")
 
         # Read all existing keys with old parameters
         old_keys: Dict[str, Tuple[bytes, Dict[str, Any]]] = {}
@@ -1258,32 +1313,19 @@ class SecureKeyStorage:
         # Generate new salt
         new_salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
-        # Derive new key — prefer Argon2id, fall back to PBKDF2
-        from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
+        # Derive the new key with Argon2id (availability checked above).
+        from ama_cryptography.pqc_backends import native_argon2id
 
-        use_argon2 = _ARGON2_NATIVE_AVAILABLE
-
-        if use_argon2:
-            new_encryption_key = bytearray(
-                native_argon2id(
-                    master_password.encode("utf-8"),
-                    new_salt,
-                    t_cost=self.ARGON2_T_COST,
-                    m_cost=self.ARGON2_M_COST,
-                    parallelism=self.ARGON2_PARALLELISM,
-                    out_len=self.KDF_KEY_BYTES,
-                )
+        new_encryption_key = bytearray(
+            native_argon2id(
+                master_password.encode("utf-8"),
+                new_salt,
+                t_cost=self.ARGON2_T_COST,
+                m_cost=self.ARGON2_M_COST,
+                parallelism=self.ARGON2_PARALLELISM,
+                out_len=self.KDF_KEY_BYTES,
             )
-        else:
-            # Same KDF as the initial derivation above (INVARIANT-1).
-            new_encryption_key = bytearray(
-                native_pbkdf2_hmac_sha256(
-                    master_password.encode("utf-8"),
-                    new_salt,
-                    self.KDF_ITERATIONS,
-                    self.KDF_KEY_BYTES,
-                )
-            )
+        )
 
         # Re-encrypt all keys under the new key.  This is the dangerous part:
         # each ``{key_id}.json`` is rewritten in place under ``new_encryption_key``
@@ -1319,18 +1361,12 @@ class SecureKeyStorage:
         # Swap the recorded parameters over with the key, so the keys written
         # below are bound to the parameters they are actually protected by
         # rather than to the ones being migrated away from.
-        if use_argon2:
-            self.kdf_params = {
-                "algorithm": "Argon2id",
-                "t_cost": self.ARGON2_T_COST,
-                "m_cost": self.ARGON2_M_COST,
-                "parallelism": self.ARGON2_PARALLELISM,
-            }
-        else:
-            self.kdf_params = {
-                "algorithm": "PBKDF2-HMAC-SHA256",
-                "iterations": self.KDF_ITERATIONS,
-            }
+        self.kdf_params = {
+            "algorithm": "Argon2id",
+            "t_cost": self.ARGON2_T_COST,
+            "m_cost": self.ARGON2_M_COST,
+            "parallelism": self.ARGON2_PARALLELISM,
+        }
 
         try:
             for key_id, (key_data, key_metadata) in old_keys.items():
@@ -1341,17 +1377,14 @@ class SecureKeyStorage:
 
             # Update metadata (atomic, 0600).
             metadata = {
-                "version": self.KDF_VERSION if use_argon2 else 2,
-                "algorithm": "Argon2id" if use_argon2 else "PBKDF2-HMAC-SHA256",
+                "version": self.KDF_VERSION,
+                "algorithm": "Argon2id",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "migrated_at": datetime.now(timezone.utc).isoformat(),
+                "t_cost": self.ARGON2_T_COST,
+                "m_cost": self.ARGON2_M_COST,
+                "parallelism": self.ARGON2_PARALLELISM,
             }
-            if use_argon2:
-                metadata["t_cost"] = self.ARGON2_T_COST
-                metadata["m_cost"] = self.ARGON2_M_COST
-                metadata["parallelism"] = self.ARGON2_PARALLELISM
-            else:
-                metadata["iterations"] = self.KDF_ITERATIONS
             _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
 
             return True

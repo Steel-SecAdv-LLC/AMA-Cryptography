@@ -30,6 +30,7 @@ import marshal
 import math
 import os
 import secrets
+import struct
 import sys
 import threading
 import time
@@ -870,6 +871,50 @@ def _compute_module_digest() -> str:
 _EXEC_PKG_PREFIX = "ama_cryptography"
 
 
+def _const_key(value: object) -> object:
+    """A type-tagged, recursive identity key for one code-object constant.
+
+    ``==`` is the wrong relation for constants.  ``1 == 1.0 == True`` and
+    ``0.0 == -0.0``, and container equality inherits both, so ``(1,) ==
+    (True,)`` and ``frozenset({1}) == frozenset({1.0})``.  Each pair is two
+    different constants that the interpreter executes differently (``repr``,
+    ``str``, ``math.copysign``, ``1 / x``), so a ``.pyc`` carrying the other
+    member of the pair is not a faithful compile of the signed source.  The
+    previous guard -- ``type(a) is not type(b) or a != b`` -- closed this only
+    for a top-level scalar: it compared a tuple or frozenset by its outer type
+    and then fell back to ``==`` for the contents, and it could not see a sign
+    change on a float zero at all.  And ``nan != nan``, so a legitimate
+    constant-folded NaN (``1e999 - 1e999``) compared unequal to itself.
+
+    The key tags every value with its exact type, descends into the
+    containers the compiler folds constants into (``tuple``, ``frozenset``,
+    and ``slice`` from 3.14), and keys ``float`` and ``complex`` by their
+    IEEE-754 bit patterns, so signed zeros differ and a NaN equals itself.
+    It is modelled on the key CPython uses to de-duplicate constants
+    (``_PyCode_ConstantKey``: exact type, signed zeros kept apart, containers
+    keyed element by element), except that a NaN is keyed by its bits rather
+    than by object identity.
+
+    The compiler never places a code object inside a container constant, so a
+    nested one is keyed by identity and can only mismatch -- fail closed
+    rather than descend into something no faithful compile produces.
+    """
+    kind = type(value)
+    if isinstance(value, float) and kind is float:
+        return (kind, struct.pack("<d", value))
+    if isinstance(value, complex) and kind is complex:
+        return (kind, struct.pack("<dd", value.real, value.imag))
+    if isinstance(value, tuple) and kind is tuple:
+        return (kind, tuple(_const_key(item) for item in value))
+    if isinstance(value, frozenset) and kind is frozenset:
+        return (kind, frozenset(_const_key(item) for item in value))
+    if isinstance(value, slice) and kind is slice:
+        return (kind, _const_key(value.start), _const_key(value.stop), _const_key(value.step))
+    if kind is CodeType:
+        return (kind, id(value))
+    return (kind, value)
+
+
 def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
     """Whether two code objects are execution-equivalent.
 
@@ -931,10 +976,10 @@ def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
         if a_is_code:
             if not _code_matches(a, b):
                 return False
-        # Guard the type first: ``1 == 1.0`` and ``1 == True`` are ``True`` in
-        # Python, so a bare ``!=`` would let an int constant be swapped for an
-        # equal-valued float or bool.  Requiring identical types closes that.
-        elif type(a) is not type(b) or a != b:
+        # Compared by identity key, not ``==``: ``1 == 1.0 == True``, ``0.0 ==
+        # -0.0``, and a tuple or frozenset inherits both for its contents.
+        # See ``_const_key``.
+        elif _const_key(a) != _const_key(b):
             return False
     return True
 
