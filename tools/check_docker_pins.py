@@ -73,13 +73,8 @@ What is checked
     carry it, and the image's support window is the workflow's owner's to
     track.
 
-Scope: the Dockerfiles git tracks (``tools/_repo.py``), not whatever a
-filesystem walk finds under the root — an untracked checkout nested in the
-tree is not this repository's build input.  See :func:`dockerfiles`.
-
-Exit status: 0 when clean, 1 on any finding, 2 on a usage error or when git
-cannot enumerate the tree.  A scan that finds no Dockerfiles is an error, not a
-pass.
+Exit status: 0 when clean, 1 on any finding, 2 on a usage error.  A scan that
+finds no Dockerfiles is an error, not a pass.
 """
 
 from __future__ import annotations
@@ -180,34 +175,16 @@ class Finding(NamedTuple):
 
 
 def dockerfiles(root: Path | None = None) -> list[Path]:
-    """Every TRACKED Dockerfile in the tree, build trees excluded.
-
-    Enumerated through ``tools/_repo.py`` (``git ls-files -z``), not by walking
-    the filesystem.  The walk this replaced was ``base.rglob("Dockerfile*")``:
-    any untracked checkout under the root — a ``.claude/worktrees/<copy>``, a
-    developer's scratch clone — contributed its Dockerfiles, and the gate
-    failed on files that are not part of the repository.  An untracked
-    Dockerfile is not built, published or reviewed from this tree, so it is
-    out of scope; a tracked one with working-tree edits is read as it is on
-    disk.
-
-    Raises ``TrackedFilesError`` (a ``RuntimeError``) when git cannot
-    enumerate ``root``: a scope that cannot be established is not a clean one.
-    """
+    """Every Dockerfile in the tree, vendored and build trees excluded."""
     base = REPO_ROOT if root is None else root
-    repo = str(Path(__file__).resolve().parent.parent)
-    if repo not in sys.path:
-        sys.path.insert(0, repo)
-    from tools._repo import tracked_names
-
     skip = {".git", "build", "build-arm", "node_modules", ".venv", "dist"}
     out: list[Path] = []
-    # `:(glob)` magic so `*` does not cross a `/`; the leading `**/` matches at
-    # every depth including the root, which is what `rglob` did.
-    for name in sorted(tracked_names(base, ":(glob)**/Dockerfile*")):
-        if any(part in skip for part in name.split("/")):
+    for path in sorted(base.rglob("Dockerfile*")):
+        if not path.is_file():
             continue
-        out.append(base / name)
+        if any(part in skip for part in path.relative_to(base).parts):
+            continue
+        out.append(path)
     return out
 
 
@@ -490,11 +467,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"ERROR: not a file: {path}", file=sys.stderr)
             return 2
     else:
-        try:
-            docker = dockerfiles()
-        except RuntimeError as exc:  # TrackedFilesError: git could not enumerate
-            print(f"ERROR: cannot enumerate the tracked Dockerfiles: {exc}", file=sys.stderr)
-            return 2
+        docker = dockerfiles()
         workflows = workflow_files()
         # Fail closed PER KIND: an empty scan of either is a broken scan, and
         # the other kind's files must not carry it to a pass.

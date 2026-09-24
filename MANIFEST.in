@@ -46,14 +46,6 @@ exclude src/cython/*.c
 global-exclude *.so *.so.* *.o *.a *.dylib *.dll *.pyd
 global-exclude *.pyc *.pyo
 global-exclude .DS_Store
-# The signed integrity artefact is a per-build output (ephemeral key, this
-# build's native and binding digests), not a source input: the build that
-# installs the sdist signs its own.  setuptools adds every package .py by
-# default, so without this line an sdist made in a tree that had been built
-# shipped that tree's artefact (measured: `python setup.py sdist` after
-# `build_ext --inplace` listed ama_cryptography/_integrity_signature.py).
-exclude ama_cryptography/_integrity_signature.py
-exclude ama_cryptography/_integrity_signature.py.pre-sign
 prune build
 prune dist
 prune **/__pycache__

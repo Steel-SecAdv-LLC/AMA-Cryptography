@@ -4,11 +4,7 @@ name: CI - Testing and Code Quality
 
 on:
   push:
-    # Pushes run for the bases pull requests merge into, not for PR head
-    # branches: a feature/** or fix/** head is covered by its pull_request run,
-    # and running on its push as well ran this workflow twice per head
-    # (tests/test_gate_coverage.py::test_a_pull_request_head_runs_each_workflow_once).
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
@@ -71,15 +67,7 @@ jobs:
     # measured job and 49 % over the worst observed run.  A timeout is a
     # resource budget, not a correctness threshold: nothing here is made
     # easier to pass, and a leg that genuinely hangs still fails.
-    #
-    # ubuntu-latest / 3.11 gets 30 as well: it now runs the suite under
-    # coverage (moved here from ci-build-test.yml::python-package).  On
-    # d6270f28 that instrumented run took 15.1 min in the other workflow
-    # against 13.3 min for this cell uninstrumented, and this cell also runs
-    # the detector gates, examples, Wycheproof and the demonstration — 20
-    # would leave it under the 33 % headroom the Windows record above shows
-    # is not enough.
-    timeout-minutes: ${{ (matrix.os == 'windows-latest' || (matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11')) && 30 || 20 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -376,13 +364,13 @@ jobs:
 
     # The signed integrity artefact binds two digests: the .py sources
     # (platform-independent) and the built native library (specific to the exact
-    # OS/arch/toolchain/flags it was compiled with). Only the .py half is
-    # tracked, as _integrity_digest.txt; the artefact itself is a per-build
-    # output that is not in the repository (AGENTS.md section 8.4) and that the
-    # install above generated for this job's own library. The verification
-    # therefore splits: check the tracked .py half against the commit (which
-    # every runner can verify identically), then sign the native half for this
-    # build — exactly what setup.py's _run_integrity_signer does for each wheel.
+    # OS/arch/toolchain/flags it was compiled with). This job builds the native
+    # library itself, so its .so/.dll/.dylib hashes differently from the one the
+    # committed artefact was signed against — the native digest cannot match, on
+    # Windows/macOS/ARM by binary format and even across Linux build configs. The
+    # verification therefore splits: check the .py half (which every runner can
+    # verify identically), then re-sign the native half for this build — exactly
+    # what setup.py's _run_integrity_signer already does for each wheel.
     - name: Verify committed .py integrity digest is current (platform-independent)
       shell: bash
       # Catches the real thing the old committed-artefact check protected: a .py
@@ -493,23 +481,8 @@ jobs:
         # The checkout above is fetch-depth: 0, so a history-dependent guard
         # that skips here is a broken checkout, not a shallow one.
         AMA_CI_REQUIRE_HISTORY: "1"
-      # One cell measures coverage for the codecov upload below; every other
-      # cell runs uninstrumented.  That upload used to live on the same cell
-      # of ci-build-test.yml::python-package, whose ubuntu-latest and
-      # windows-latest legs duplicated this matrix and were removed — so the
-      # measurement moved here rather than being lost.  The expression reads
-      # only static matrix values.
       run: |
-        python -m pytest tests/ -v --tb=short ${{ (matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11') && '--cov=ama_cryptography --cov-report=xml' || '--no-cov' }}
-
-    - name: Upload coverage
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        files: ./coverage.xml
-        flags: python
-        name: python-${{ matrix.python-version }}
+        python -m pytest tests/ -v --tb=short --no-cov
 
     - name: "3R detector efficacy gates (real timings, measured contract)"
       # benchmarks/detector_baseline_eval.py is the measurement that found
@@ -982,11 +955,9 @@ jobs:
         cmake --build build -j"$(nproc)"
 
     - name: Bind the freshly-built library into the integrity artefact
-      # Same reason as every other build-then-import job: the signed artefact
-      # is a per-build output, not tracked in the repository (AGENTS.md
-      # section 8.4), so this generates the one that binds the library built
-      # above and POST verifies at full strength.  (It used to re-sign over a
-      # committed artefact whose native digest described another build.)
+      # Same reason as every other build-then-import job: a library built here
+      # is not the one the committed artefact was signed over, and the digest
+      # mismatch is refused before the object is mapped.
       env:
         AMA_BUILD_PIPELINE: "1"
       run: python -m ama_cryptography.integrity --update --sign
@@ -1416,20 +1387,19 @@ jobs:
       run: |
         python tools/check_benchmark_claims.py
 
-    - name: "The published CI benchmark figures must match their record"
+    - name: "The canonical-host figures must match their record"
       # check_benchmark_claims.py above pins what is re-derivable from
-      # benchmarks/benchmark-results.json. It does not see README's table of
-      # CI four-run medians, because nothing it reads carries those figures as
-      # data -- measured: with the ama_sha3_256_hash x86_64 median edited from
-      # 363,574 to 963,574, that gate still reported "OK 91 benchmark claim(s)
-      # consistent with their records".
+      # benchmarks/benchmark-results.json. It does not see the canonical-host
+      # tables, because nothing carried those figures as data -- measured: with
+      # the ML-DSA-65 KeyGen row edited from 3,626 to 9,626 ops/sec, that gate
+      # still reported "OK 86 benchmark claim(s) consistent with their records".
       #
-      # benchmarks/published-benchmarks.json records every number between the
-      # README's published-bench markers, and each measurement source must name
-      # its host, build flags, command and runs. The comparison runs both ways,
-      # so an edited, invented or quietly deleted figure fails.
+      # Re-measuring that host needs that host, and this lane does not have one.
+      # Noticing that a published number changed needs only a record, which is
+      # benchmarks/canonical-host.json. The comparison runs both ways, so an
+      # invented figure and a quietly deleted one both fail.
       run: |
-        python tools/check_published_benchmarks.py
+        python tools/check_canonical_benchmarks.py
 
     - name: "Verify the vendored key-format conformance corpus"
       # tests/kat/keyformats/ is the only evidence that AMA's key encodings

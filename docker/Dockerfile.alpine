@@ -130,10 +130,8 @@ RUN pip3 install --no-cache-dir --break-system-packages /tmp/*.whl && \
     rm -rf /tmp/*.whl
 
 # Re-sign the module-integrity artefact for the native library this image loads.
-# The wheel ships the artefact its own build signed (a per-build output, not
-# tracked in the repository — AGENTS.md section 8.4; this comment used to call
-# it "the committed artefact"), whose signed native digest is specific to the
-# library that build bundled; this Alpine image compiles its own musl
+# The wheel ships the committed artefact, whose signed native digest is specific
+# to the build it was signed against; this Alpine image compiles its own musl
 # native library, which hashes differently, so POST would fail-close and the
 # HEALTHCHECK / CMD `import ama_cryptography` below would fail. Bind the artefact
 # to what this runtime actually loads, as root before dropping to `ama` — the

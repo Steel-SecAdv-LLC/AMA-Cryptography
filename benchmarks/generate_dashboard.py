@@ -42,12 +42,7 @@ Usage
     ./build/bin/benchmark_c_raw > /tmp/rawc.txt
     python benchmarks/generate_dashboard.py \\
         --bench /tmp/bench.json --raw-c /tmp/rawc.txt \\
-        --out /tmp/dashboard.html
-
-The rendered page is a run product, like the JSON it is rendered from, and is
-not committed: a render in ``benchmarks/`` was, and sat in the tree as a
-3.4.0 snapshot, linked from nowhere, for two majors. The template carries no
-figure of its own — every number on the page comes from the two inputs.
+        --out benchmarks/dashboard.html
 """
 
 from __future__ import annotations

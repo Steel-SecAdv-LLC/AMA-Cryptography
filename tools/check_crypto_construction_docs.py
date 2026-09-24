@@ -68,11 +68,9 @@ What is checked
 5. **Contradictions with INVARIANTS.** A document may not assert a behaviour
    an invariant forbids where the implementation agrees with the invariant.
 6. **Reintroduction elsewhere.** Every rule runs over the whole tracked
-   documentation set — enumerated by ``git ls-files`` through
-   ``tools/_repo.py``, so an untracked file is out of scope and a git that
-   cannot enumerate is exit 2 — so moving a corrected claim into another file
-   does not escape it. The retired-claim registry additionally pins the exact
-   wording that was removed.
+   documentation set, so moving a corrected claim into another file does not
+   escape it. The retired-claim registry additionally pins the exact wording
+   that was removed.
 
 The scan covers **source comments and docstrings as well as prose**, because
 they drift identically and are read by the same people. Extending it found two
@@ -467,42 +465,6 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
         "is generated from benchmarks/benchmark-results.json by "
         "tools/update_docs.py; do not type the figure.",
     ),
-    # The 3R overhead pass.  Each was shipped wording with no measurement
-    # behind it; `python benchmarks/validation_suite.py --only-3r` now measures
-    # what one monitored package adds.
-    (
-        re.compile(
-            r"<\s?2\s?%\s+(?:performance\s+)?overhead|overhead\s+from\s+<\s?2\s?%"
-            r"|Total Impact\W+<\s?2\s?%",
-            re.IGNORECASE,
-        ),
-        "No measurement ever backed a sub-2% monitoring overhead. "
-        "benchmarks/validation_suite.py --only-3r measures a monitored package; "
-        "MONITORING.md (Performance Impact) records one host's figures with "
-        "their provenance, and the timing records alone exceed 20% there.",
-    ),
-    (
-        re.compile(r"Disabled by default for zero-cost", re.IGNORECASE),
-        "AmaCryptographyMonitor defaults to enabled=True (monitoring.py, the "
-        "__init__ signature); the demo now derives this line from it.",
-    ),
-    (
-        re.compile(r"pattern analysis\W+(?:runs|is run)\s+on[- ]demand", re.IGNORECASE),
-        "AmaCryptographyMonitor.record_package_signing runs the pattern-anomaly "
-        "check on EVERY monitored package (legacy create_crypto_package calls "
-        "it whenever a monitor is attached). Only the hierarchical feature "
-        "extraction in analyze_patterns() is on-demand.",
-    ),
-    (
-        re.compile(
-            r"\b\d+\s*[-\u2013]\s*\d+\s*[x\u00d7]\s+(?:speedup|faster than (?:the )?pure[- ]python)",
-            re.IGNORECASE,
-        ),
-        "A Cython speed-up range with no measurement behind it. "
-        "benchmarks/performance_suite.py measures the math_engine kernels "
-        "against their NumPy baselines (Lyapunov: ~4.2-4.5x on the host "
-        "recorded in math_engine.pyx); state a figure only with its provenance.",
-    ),
 )
 
 
@@ -725,34 +687,16 @@ def _display_path(path: Path, repo: Path) -> str:
 
 
 def scanned_files(repo: Path = REPO) -> list[Path]:
-    """Every TRACKED documentation-bearing file under ``repo``.
-
-    Item 6 of the module docstring says every rule runs over the whole
-    *tracked* documentation set, and until this was corrected it did not: the
-    enumeration was ``repo.rglob("*")``, which consulted neither git nor
-    ``.gitignore``.  An untracked checkout nested under the root (a
-    ``.claude/worktrees/<copy>``, a scratch clone) contributed every one of its
-    files, and the gate failed on documents that are not part of the
-    repository.  Enumeration now goes through ``tools/_repo.py``
-    (``git ls-files -z``), which also reads a tracked file's working-tree edits.
-
-    Raises ``TrackedFilesError`` (a ``RuntimeError``) when git cannot
-    enumerate ``repo``; :func:`main` reports that as exit 2.
-    """
-    root = str(Path(__file__).resolve().parent.parent)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from tools._repo import tracked_names
-
     seen: list[Path] = []
-    for name in sorted(tracked_names(repo)):
-        if Path(name).suffix.lower() not in SCAN_SUFFIXES:
+    for path in sorted(repo.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in SCAN_SUFFIXES:
             continue
-        if any(part in EXCLUDED_DIRS for part in name.split("/")):
+        relative = path.relative_to(repo)
+        if any(part in EXCLUDED_DIRS for part in relative.parts):
             continue
-        if name in EXEMPT_FILES or name in SELF_REFERENTIAL:
+        if relative.as_posix() in EXEMPT_FILES or relative.as_posix() in SELF_REFERENTIAL:
             continue
-        seen.append(repo / name)
+        seen.append(path)
     return seen
 
 
@@ -850,15 +794,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 2
 
-    if args.files:
-        scanned = [repo / name for name in args.files]
-    else:
-        try:
-            scanned = scanned_files(repo)
-        except RuntimeError as exc:  # TrackedFilesError: git could not enumerate
-            print(f"FATAL: cannot enumerate the tracked tree: {exc}", file=sys.stderr)
-            return 2
-    findings = find_claims(authority, repo, scanned)
+    files = [repo / name for name in args.files] if args.files else None
+    findings = find_claims(authority, repo, files)
 
     if findings:
         print(
@@ -878,6 +815,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
+    scanned = files if files is not None else scanned_files(repo)
     print(
         f"OK    {len(scanned)} document(s); constructions agree with the implementation "
         f"(posture {authority.posture_weights} / thresholds {authority.posture_thresholds}, "

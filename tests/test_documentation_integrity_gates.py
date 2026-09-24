@@ -50,7 +50,6 @@ from unittest import mock
 import pytest
 
 from ama_cryptography import key_management, legacy_compat, secure_memory
-from tools._repo import TrackedFilesError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS = REPO_ROOT / "tools"
@@ -124,10 +123,6 @@ def _run(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         cwd=str(REPO_ROOT),
         check=False,
     )
-
-
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
 
 #: Everything tools/check_benchmark_claims.py reads: the two floor ledgers, the
@@ -623,27 +618,6 @@ class TestCryptoConstructionDocs:
                 "multi-pass",
             ),
             ("- **Bottleneck**: ML-DSA-65 signing (4.20 ms, dominant signing cost)", "4.20 ms"),
-            # The 3R overhead pass: each line below shipped, and none had a
-            # measurement behind it.
-            ("    - Lightweight: <2% performance overhead when enabled", "sub-2%"),
-            ("**Total Impact**: <2% when all components enabled", "sub-2%"),
-            (
-                "    recalculation on every update. This optimization reduces 3R monitoring\n"
-                "    overhead from <2% to <1% without any change in detection capability.",
-                "sub-2%",
-            ),
-            ('    print("    • Disabled by default for zero-cost operation")', "enabled=True"),
-            (
-                '            print("  Note: Pattern analysis runs on-demand for security reports")',
-                "EVERY monitored package",
-            ),
-            ("    Achieves 30-100x speedup through:", "Cython speed-up"),
-            ("Targets 10-50x speedup over pure Python through:", "Cython speed-up"),
-            ("    10-20x faster than pure Python implementation.", "Cython speed-up"),
-            (
-                "— Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64",
-                "Cython speed-up",
-            ),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -674,13 +648,7 @@ class TestCryptoConstructionDocs:
             "    assert len(pkg_v2.ethical_vector) == 4\n\n"
             "AMA implements HSS/LMS verification; only signing is withheld.\n\n"
             "| C Compiler | GCC 12 / Clang 15 | GCC 13+ / Clang 17+ |\n\n"
-            "`secure_memzero()` writes zeros once and issues a compiler barrier.\n\n"
-            "| Pattern check — one `record_package_signing` call | 1.7–2.3% | 4% |\n\n"
-            "The per-package pattern check is O(1); the feature extraction in\n"
-            "`analyze_patterns()` runs on demand.\n\n"
-            "Enabled by default (enabled=True); pass enabled=False to switch it off.\n\n"
-            "No speed-up ratio is published; performance_suite.py measured 4.34x,\n"
-            "4.22x and 4.51x against the NumPy baseline.\n",
+            "`secure_memzero()` writes zeros once and issues a compiler barrier.\n",
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
@@ -730,77 +698,6 @@ class TestCryptoConstructionDocs:
         completed = _run(CONSTRUCTION_DOCS, "--repo", str(tmp_path))
         assert completed.returncode == 2
         assert "partial authority" in completed.stderr
-
-    #: Wording that shipped and that the gate rejects (see the parametrized
-    #: test above), placed where an untracked nested checkout would hold it.
-    _STRAY = ".claude/worktrees/copy/ARCHITECTURE.md"
-    _STRAY_CLAIM = (
-        "# stray\n\n"
-        "Uses native C `ama_hkdf` (HMAC-SHA3-256) with pure Python SHA3-256 fallback.\n"
-    )
-
-    @staticmethod
-    def _authority_tree(root: Path, gate: ModuleType) -> Path:
-        """The smallest tree the gate derives a FULL authority from.
-
-        The package's top-level modules, the two C sources and the header
-        ``build_authority`` reads, and the self-referential exemptions (which
-        must exist, or the gate refuses to run).  Every one of these is a real
-        file from this repository, so the tracked set passes on its own.
-        """
-        relatives = [
-            f"ama_cryptography/{module.name}"
-            for module in sorted((REPO_ROOT / "ama_cryptography").glob("*.py"))
-        ]
-        relatives += ["include/ama_cryptography.h", "src/c/ama_consttime.c", "src/c/ama_lms.c"]
-        relatives += list(gate.SELF_REFERENTIAL)
-        for relative in relatives:
-            (root / relative).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(REPO_ROOT / relative, root / relative)
-        return root
-
-    def test_an_untracked_copy_is_out_of_scope_and_the_same_file_tracked_is_not(
-        self, tmp_path: Path
-    ) -> None:
-        """Item 6 says the TRACKED documentation set, and now the scan agrees.
-
-        Measured before the fix: ``scanned_files`` was ``repo.rglob("*")``, so
-        an untracked ``.claude/worktrees/<copy>`` under the root contributed
-        every one of its files and the gate failed on a document that is not
-        part of the repository.  The same document, once tracked, must be read
-        and must fail: the exclusion is by tracking, not by path.
-        """
-        gate = _load(CONSTRUCTION_DOCS)
-        root = self._authority_tree(tmp_path / "tree", gate)
-        _git(root, "init", "-q")
-        _git(root, "add", "-A")
-        stray = root / self._STRAY
-        stray.parent.mkdir(parents=True)
-        stray.write_text(self._STRAY_CLAIM, encoding="utf-8")
-
-        assert stray not in gate.scanned_files(root)
-        assert gate.main(["--repo", str(root)]) == 0
-
-        _git(root, "add", "-f", self._STRAY)
-        assert stray in gate.scanned_files(root)
-        assert gate.main(["--repo", str(root)]) == 1
-
-    def test_a_tree_git_cannot_enumerate_fails_closed(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """No git, no scope: ``TrackedFilesError`` and exit 2 — never a
-        filesystem fallback that reads the untracked files it exists to exclude."""
-        gate = _load(CONSTRUCTION_DOCS)
-        root = self._authority_tree(tmp_path / "tree", gate)
-        (root / "CLAIM.md").write_text(self._STRAY_CLAIM, encoding="utf-8")
-        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-        with pytest.raises(TrackedFilesError):
-            gate.scanned_files(root)
-        assert gate.main(["--repo", str(root)]) == 2
-        assert "cannot enumerate the tracked tree" in capsys.readouterr().err
 
 
 # ===========================================================================

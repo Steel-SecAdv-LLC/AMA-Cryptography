@@ -1372,9 +1372,9 @@ def _integrity_strength_for(native_ok: bool, bindings_exact: bool) -> str:
     executed and was never checked:
 
     * ``signed-native-unverified`` — the shared object performing every
-      cryptographic operation went unchecked (an unreadable developer object,
-      or a legacy v1 artefact).  It is the broader gap, so it wins when both
-      apply.
+      cryptographic operation went unchecked (an AMA_CRYPTO_LIB_PATH override,
+      an unreadable developer object, or a legacy v1 artefact).  It is the
+      broader gap, so it wins when both apply.
     * ``signed-bindings-unverified`` — the library was verified, but at least
       one binding extension imported and executed without being covered by the
       artefact.  This is the downgrade ``_check_binding_extensions``' contract
@@ -1416,17 +1416,7 @@ def _artefact_or_error() -> Tuple[Optional[Any], Optional[Tuple[Optional[bool], 
     except ArtefactSourceError as exc:
         return None, (False, f"signature module malformed: {exc}")
     if fields is None:
-        # The artefact is a build output, not a tracked file (AGENTS.md
-        # section 8.4), so "absent" in a checkout means "not built by
-        # setup.py yet".  The detail names the command that produces it,
-        # because this string reaches the operator verbatim in the
-        # digest-only WARNING and the POST table.
-        return None, (
-            None,
-            "no signed-integrity artefact (digest-only fallback); every "
-            "package build generates it — pip install -e . or python setup.py "
-            "build_ext --inplace — and it is not tracked in git",
-        )
+        return None, (None, "no signed-integrity artefact (digest-only fallback)")
     return fields, None
 
 
@@ -1488,11 +1478,9 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     signer_anchor_mismatch: Optional[str] = None
     if trust_anchor_error is not None:
         # An artefact whose key does not match the compiled anchor is the
-        # DOCUMENTED starting state of a wheel build that finds one: an
-        # artefact left by an earlier build is dev-signed with a per-build
-        # ephemeral key by design (this used to say "the committed artefact";
-        # the artefact is no longer tracked in the repository, AGENTS.md
-        # section 8.4), and the build-time signer's whole job is to replace it with one
+        # DOCUMENTED starting state of every wheel build: the committed
+        # artefact is dev-signed with a per-build ephemeral key by design,
+        # and the build-time signer's whole job is to replace it with one
         # minted from the release seed whose anchor-match the pipeline
         # verifies separately.  The first exercised dry run at the previous
         # head only survived this comparison by an accident of blindness —
@@ -1580,8 +1568,8 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
             "integrity artefact is signed by a key that does not match the "
             "compiled trust anchor, in a process launched as the integrity "
             "signer with AMA_BUILD_PIPELINE=1. This is the documented "
-            "pre-signing state of a wheel build (an artefact left by an earlier "
-            "build is dev-signed by design); the stage fails, the import may complete "
+            "pre-signing state of a wheel build (the committed artefact is "
+            "dev-signed by design); the stage fails, the import may complete "
             "for the signer only, and the signing run replaces the artefact. "
             f"Cause: {signer_anchor_mismatch}"
         )
@@ -1632,14 +1620,10 @@ def _check_loaded_native_library(
     * ``native_ok`` is True only when the loaded object's digest matched the
       signed one — the sole full-strength outcome.
 
-    The two non-matching outcomes are deliberately distinct: an unreadable
-    object fails closed on an anchored build but only warns on a developer one;
-    a digest mismatch is tampering (or a stale binding) and always fails.  An
-    AMA_CRYPTO_LIB_PATH override is not a third outcome, and used to be: it was
-    mapped without the pre-load digest check and reported UNVERIFIED here.
-    Discovery now refuses an override whose bytes differ from the signed ones
-    before mapping it, so an override that reaches this stage is judged exactly
-    like any other loaded object.
+    The three non-matching outcomes are deliberately distinct: an
+    AMA_CRYPTO_LIB_PATH override is the operator's own substitution (proceed,
+    unverified); an unreadable object fails closed on an anchored build but only
+    warns on a developer one; a digest mismatch is tampering and always fails.
 
     The digest compared is the one recorded by the PRE-LOAD verification ONLY
     when the loader actually mapped the descriptor it hashed —
@@ -1657,20 +1641,30 @@ def _check_loaded_native_library(
     recorded digest unconditionally removed that, and reported "native library
     verified" for bytes nothing had verified.
 
-    Re-reading the path is also the fallback for a load whose bytes could not
-    be hashed before mapping.  A match is reported as verified wherever the
-    object was loaded from: bytes identical to the signed bytes are the signed
-    library, and an AMA_CRYPTO_LIB_PATH relocation of it verifies in full.
+    Re-reading the path is also the fallback for loads that skipped pre-load
+    hashing (an override, or a missing artefact).  A match is reported as
+    verified even under an override: bytes identical to the signed bytes are
+    the signed library, wherever the operator loaded it from.
     """
     from ama_cryptography.pqc_backends import native_backend_diagnostics
 
     diag = native_backend_diagnostics()
     loaded_path = diag.get("path")
+    override = diag.get("override")
     preload_hex = diag.get("preload_digest_hex")
     preload_is_mapped = bool(diag.get("preload_digest_is_of_mapped_bytes"))
     actual_native = bytes.fromhex(preload_hex) if (preload_hex and preload_is_mapped) else None
     if actual_native is None:
         actual_native = _compute_native_library_digest(loaded_path)
+    if override and actual_native != native_digest_raw:
+        return (
+            None,
+            (
+                "; native library UNVERIFIED — AMA_CRYPTO_LIB_PATH override in "
+                f"effect ({override}), loaded object is not the signed one"
+            ),
+            False,
+        )
     if actual_native is None:
         if anchored:
             return (
@@ -1735,8 +1729,8 @@ def verify_module_integrity() -> Tuple[bool, str]:
     if signed_ok is True:
         # _verify_signed_integrity has already set _INTEGRITY_STRENGTH to
         # "signed" (native library verified) or "signed-native-unverified"
-        # (unreadable / legacy v1).  Do not flatten that distinction back to
-        # "signed" here — the whole point is that a build whose native
+        # (override / unreadable / legacy v1).  Do not flatten that distinction
+        # back to "signed" here — the whole point is that a build whose native
         # library went unchecked is not full-strength.
         return True, signed_detail
 
@@ -2810,8 +2804,9 @@ def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
     #     not tampering.
     #   * "signed-native-unverified" — the signature verified, but the shared
     #     object that performs every cryptographic operation was not bound to
-    #     it (an unreadable dev object, or a legacy v1 artefact).  The
-    #     wrapper is verified; the implementation is not.
+    #     it (AMA_CRYPTO_LIB_PATH override, an unreadable dev object, or a
+    #     legacy v1 artefact).  The wrapper is verified; the implementation is
+    #     not.
     # Recording either as a skip lands it in the same machinery as an untested
     # algorithm: named in the POST warning, counted by
     # module_attestation()["tests_skipped"], excluded from "fully_verified",

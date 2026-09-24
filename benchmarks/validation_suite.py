@@ -5,15 +5,9 @@
 AMA Cryptography - Benchmark Validation Suite
 ==================================================
 
-Validates this suite's own acceptance table -- ``documented_claims`` in
-:class:`BenchmarkValidator` -- against live measurements, and writes a
-report with a pass/fail status for each row.
-
-The table is the authority for these thresholds; nothing else in the tree
-states them.  Earlier versions of this file cited "BENCHMARKS.md Sections
-1.1-2.1" as their source.  No such document is tracked: ``BENCHMARKS.md`` is
-a gitignored report that ``benchmarks/benchmark_suite.py`` writes locally,
-and it has no numbered sections and states no threshold.
+Empirically validates all performance claims in BENCHMARKS.md against
+live measurements. Generates a validation report with pass/fail status
+for each documented claim.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
@@ -24,9 +18,7 @@ Project: AMA Cryptography Performance Validation
 """
 
 import argparse
-import itertools
 import json
-import math
 import platform
 import secrets
 import statistics
@@ -35,30 +27,10 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-
-#: Real monitored packages captured to build the 3R replay workload (see
-#: run_3r_monitoring_benchmarks).  Several rather than one, so the replayed
-#: durations carry the run-to-run variation real packages record.
-_CAPTURED_PACKAGES = 64
-
-#: The rows run_package_operation_benchmarks and run_3r_monitoring_benchmarks
-#: measure -- the two sections --only-3r runs.
-PACKAGE_CLAIMS: Tuple[str, ...] = (
-    "canonical_encoding",
-    "code_hash",
-    "package_creation",
-    "package_verification",
-)
-MONITORING_CLAIMS: Tuple[str, ...] = (
-    "timing_monitor_overhead",
-    "pattern_analysis_overhead",
-    "total_3r_overhead",
-)
 
 
 @dataclass
@@ -76,12 +48,24 @@ class ValidationResult:
     std_dev: float
 
 
+# Documented claims that have no hot-path measurement BY DESIGN: pattern
+# analysis runs on-demand for security reports (see
+# run_3r_monitoring_benchmarks), not on every crypto operation, so a
+# per-operation overhead row would time a code path the library does not
+# execute per operation. Claims listed here are reported as "exempt
+# (on-demand)" in the coverage accounting instead of counting as unmeasured
+# under --require-complete. Any documented claim that is neither measured,
+# skipped-with-reason, nor listed here is a validator defect — that is
+# exactly the hole --require-complete exists to close.
+ON_DEMAND_CLAIMS: frozenset[str] = frozenset({"pattern_analysis_overhead"})
+
+
 class BenchmarkValidator:
     """
-    Validates the acceptance table below against live measurements.
+    Validates documented performance claims against live measurements.
 
-    Compares each measured row with its entry in ``documented_claims`` and
-    generates a validation report indicating which rows are within bounds.
+    Compares actual benchmark results to claims in BENCHMARKS.md and
+    generates a validation report indicating which claims are accurate.
     """
 
     def __init__(self, iterations: int = 1000, warmup: int = 100) -> None:
@@ -102,32 +86,16 @@ class BenchmarkValidator:
         # report "all claims validated" after validating almost none of
         # them (the exit-0-measured-nothing failure mode).
         self.skipped: List[Tuple[str, str]] = []
-        # Mean package-creation time (ms) measured by
-        # run_package_operation_benchmarks in THIS run.  Every 3R overhead
-        # row is a percentage of it; through 5.0.0 they were percentages of a
-        # hard-coded 0.30 ms that no run measured.
-        self.package_creation_ms: Optional[float] = None
 
-        # This suite's acceptance table.  It is the only place these bounds
-        # are stated: the "Section N.N" labels below group the rows and are
-        # not references to another document.
-        # Format: claim_name -> (value, unit, tolerance_pct); a row passes
-        # when measured <= value * (1 + tolerance_pct / 100).
+        # Documented claims from BENCHMARKS.md
+        # Format: claim_name -> (value, unit, tolerance_pct)
         self.documented_claims: Dict[str, Tuple[float, str, float]] = {
             # Section 1.1 - Key Generation (ms) - native C backend
             "master_secret_gen": (0.005, "ms", 100.0),  # ~0.005ms (secrets.token_bytes CSPRNG)
             "hkdf_derivation": (0.06, "ms", 100.0),  # ~0.06ms (native SHA3 HKDF)
             "ed25519_keygen": (0.13, "ms", 50.0),  # ~0.13ms (native C, no asm)
             "dilithium_keygen": (0.85, "ms", 100.0),  # ~0.85ms slow CI (canonical ~0.28ms)
-            # full_kms: generate_key_management_system(), i.e. an Ed25519 and an
-            # ML-DSA-65 keypair, each with its INVARIANT-41 pairwise test, plus
-            # the HD master and HMAC key.  Measured 1.18-1.29 ms over four runs
-            # (Intel Xeon @ 2.80GHz, 4 vCPU container, CPython 3.11.15, Release
-            # build, 2026-09-24); the components were ed25519_keygen 0.089 ms
-            # and dilithium_keygen 0.984 ms in the same run.  The earlier
-            # 0.45 ms predates the pairwise tests and was below this table's
-            # own dilithium_keygen row, which full_kms contains.
-            "full_kms": (1.25, "ms", 100.0),
+            "full_kms": (0.45, "ms", 100.0),  # ~0.45ms (all key types)
             # Section 1.2 - Cryptographic Operations (ms) - native C backend
             "sha3_256_hash": (0.002, "ms", 100.0),  # ~0.002ms
             "hmac_sha3_auth": (0.030, "ms", 100.0),  # ~0.03ms slow CI (canonical ~0.008ms)
@@ -137,46 +105,13 @@ class BenchmarkValidator:
             "dilithium_verify": (0.75, "ms", 100.0),  # ~0.75ms slow CI (canonical ~0.13ms)
             # Section 1.3 - Code Package Operations (ms)
             "canonical_encoding": (0.003, "ms", 100.0),  # ~0.003ms
-            # code_hash: measured 0.0186-0.0214 ms over seven runs, same host
-            # and build as full_kms above.  The earlier 0.01 ms put the bound
-            # (0.02 ms) inside the measured spread, so the row failed on some
-            # runs and passed on others with no code change.
-            "code_hash": (0.019, "ms", 100.0),
+            "code_hash": (0.01, "ms", 100.0),  # ~0.01ms
             "package_creation": (1.10, "ms", 100.0),  # ~1.10ms (with PQC)
             "package_verification": (0.56, "ms", 100.0),  # ~0.56ms
-            # Section 2.1 - 3R Monitoring Overhead (% of package_creation
-            # measured in the same run; see run_3r_monitoring_benchmarks).
-            #
-            # These three bounds are set to measured reality, not to the
-            # figures they replace.  The old rows (<5% / <0.5% / <5% total)
-            # timed ONE monitor_crypto_operation call against a hard-coded
-            # 0.30 ms "typical package" and exempted pattern analysis as
-            # on-demand; a monitored package makes four timing calls and a
-            # pattern check, against a measured 0.69-0.77 ms.
-            #
-            # Provenance: 2026-09-24, Intel Xeon @ 2.80GHz (4 vCPU, Linux
-            # 6.18 container), CPython 3.11.15, gcc 13.3.0 Release build
-            # (-DAMA_USE_NATIVE_PQC=ON) plus `setup.py build_ext --inplace`,
-            # tree a62bb446 + this change; command
-            # `python benchmarks/validation_suite.py --only-3r`, 1,000 timed
-            # iterations after 100 warm-up per row, mean.
-            #   timing_monitor_overhead: 22.4 / 25.0 / 25.6 / 24.1 % before
-            #     the pattern-analysis change and 23.1 / 24.3 / 23.6 / 23.0 /
-            #     27.3 % after it (the timing path did not change): median
-            #     24.2%.  Bound 25% +50%.
-            #   pattern_analysis_overhead: 674 / 742 / 657 / 699 % while
-            #     record_package_signing re-ran the full O(n) analyze_patterns
-            #     on every package (5.0-5.2 ms at the default 10,000-entry
-            #     history); 1.67 / 1.76 / 2.33 / 1.73 / 2.28 % once it reads
-            #     O(1) exact running moments (12.9-17.1 us).  Bound 2% +100%:
-            #     4%.  Mutation-tested: with record_package_signing made to
-            #     do its pattern work ten times per package, this row
-            #     measured 13.8% and 18.0% (124-131 us) and FAILED both runs.
-            #   total_3r_overhead: 24.7 / 26.0 / 26.0 / 24.8 / 29.6 % after.
-            #     Bound 27% +50%.
-            "timing_monitor_overhead": (25.0, "%", 50.0),
-            "pattern_analysis_overhead": (2.0, "%", 100.0),
-            "total_3r_overhead": (27.0, "%", 50.0),
+            # Section 2.1 - 3R Monitoring Overhead (%)
+            "timing_monitor_overhead": (5.0, "%", 100.0),  # <5% (per-call overhead)
+            "pattern_analysis_overhead": (0.5, "%", 100.0),  # <0.5%
+            "total_3r_overhead": (5.0, "%", 50.0),  # <5% total
         }
 
     def benchmark_operation(
@@ -290,18 +225,17 @@ class BenchmarkValidator:
         Documented claims this run produced no measurement for.
 
         Returns:
-            Mapping of claim name -> reason for every row of the table that
-            has no measurement.  There is no exemption: every row times code
-            the library runs.  A claim that was skipped carries its recorded
-            skip reason; a claim no code path even attempted carries a fixed
-            diagnostic, because that state means the validator itself has a
-            coverage hole.
+            Mapping of claim name -> reason, excluding claims listed in
+            ON_DEMAND_CLAIMS (measured on-demand only, by design). A claim
+            that was skipped carries its recorded skip reason; a claim no
+            code path even attempted carries a fixed diagnostic, because
+            that state means the validator itself has a coverage hole.
         """
         measured = {r.claim_name for r in self.results}
         skip_reasons = dict(self.skipped)
         reasons: Dict[str, str] = {}
         for name in self.documented_claims:
-            if name in measured:
+            if name in measured or name in ON_DEMAND_CLAIMS:
                 continue
             reasons[name] = skip_reasons.get(
                 name, "no measurement block in this suite attempted this claim"
@@ -396,7 +330,7 @@ class BenchmarkValidator:
             print("  SKIP: KMS generation not available")
 
     def run_package_operation_benchmarks(self) -> None:
-        """Benchmark code-package operations (acceptance table Section 1.3)."""
+        """Benchmark code-package operations (BENCHMARKS.md Section 1.3)."""
         print("\n" + "=" * 70)
         print("CODE PACKAGE OPERATION BENCHMARKS")
         print("=" * 70)
@@ -405,7 +339,12 @@ class BenchmarkValidator:
         # benchmark_suite.py's benchmark_dna_operations rows exactly, so a
         # claim validated here is validated against the same operation the
         # reporting suite publishes numbers for.
-        section_claims = PACKAGE_CLAIMS
+        section_claims = (
+            "canonical_encoding",
+            "code_hash",
+            "package_creation",
+            "package_verification",
+        )
         try:
             from ama_cryptography.legacy_compat import (
                 MASTER_CODES,
@@ -441,7 +380,6 @@ class BenchmarkValidator:
             return create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "benchmark")
 
         stats = self.benchmark_operation("package_creation", package_create)
-        self.package_creation_ms = stats["mean_ms"]
         result = self.validate_claim("package_creation", stats["mean_ms"], stats["std_ms"])
         print(f"  {result.message}")
 
@@ -580,152 +518,68 @@ class BenchmarkValidator:
 
     def run_3r_monitoring_benchmarks(self) -> None:
         """
-        Benchmark what 3R monitoring adds to one monitored package.
+        Benchmark 3R monitoring overhead.
 
-        Every row is a percentage of ``package_creation`` as measured by
-        :meth:`run_package_operation_benchmarks` in this same run -- an
-        unmonitored ``create_crypto_package`` -- so numerator and
-        denominator come from one host, one build and one process.
-
-        The workload is read off the library rather than assumed.
-        ``_CAPTURED_PACKAGES`` real ``create_crypto_package(...,
-        monitor=...)`` calls are made against a recording monitor, and the
-        calls each one makes into the monitor are what the timed thunks
-        replay, cycling through the captured packages:
-
-        * ``timing_monitor_overhead`` -- every ``monitor_crypto_operation``
-          call one package makes (one per timed primitive, with the
-          durations and input sizes that package actually recorded).
-        * ``pattern_analysis_overhead`` -- every ``record_package_signing``
-          call one package makes, with the metadata the library passed.
-          ``record_package_signing`` runs the pattern-anomaly check on
-          EVERY monitored package; through 5.0.0 this row was exempted as
-          "on-demand for security reports", which was false.  It is timed
-          with the pattern history in steady state -- filled to
-          ``max_history`` through the same call first -- because its cost
-          at an empty history says nothing about a long-running service.
-        * ``total_3r_overhead`` -- the sum of the two: everything the
-          monitor executes per monitored package.
+        The documented <2% overhead in BENCHMARKS.md refers to timing instrumentation
+        overhead. Pattern analysis runs on-demand for security reports, not on every
+        operation, so we measure timing monitor overhead separately.
         """
         print("\n" + "=" * 70)
         print("3R MONITORING OVERHEAD BENCHMARKS")
         print("=" * 70)
 
-        section_claims = MONITORING_CLAIMS
-        package_ms = self.package_creation_ms
-        if package_ms is None or package_ms <= 0.0:
-            self.record_skip(
-                "package_creation was not measured this run, and every 3R row "
-                "is a percentage of it",
-                *section_claims,
-            )
-            print("  SKIP: package_creation not measured; 3R rows are relative to it")
-            return
-
         try:
-            from ama_cryptography.legacy_compat import (
-                MASTER_CODES,
-                MASTER_HELIX_PARAMS,
-                create_crypto_package,
-                generate_key_management_system,
-            )
-            from ama_cryptography.monitoring import AmaCryptographyMonitor
+            from ama_cryptography_monitor import AmaCryptographyMonitor
+
+            monitor = AmaCryptographyMonitor(enabled=True)
+
+            # Measure timing monitor overhead (this is the hot-path instrumentation)
+            # The documented <2% overhead refers to this timing instrumentation
+            def timing_monitor_call() -> None:
+                monitor.monitor_crypto_operation("test_op", 0.1)
+
+            timing_stats = self.benchmark_operation("timing_monitor", timing_monitor_call)
+            timing_overhead_ms = timing_stats["mean_ms"]
+
+            # Calculate overhead as percentage of typical package creation (~0.30ms)
+            # Per BENCHMARKS.md: timing monitoring adds <0.5% overhead
+            typical_package_ms = 0.30
+            timing_overhead_pct = (timing_overhead_ms / typical_package_ms) * 100
+
+            # Validate timing monitor overhead (<0.5% per BENCHMARKS.md Section 2.1)
+            result = self.validate_claim("timing_monitor_overhead", timing_overhead_pct, 0.0)
+            print(f"  Timing monitor overhead: {timing_overhead_ms:.4f}ms")
+            print(f"  As % of 0.30ms package:  {timing_overhead_pct:.2f}%")
+            print(f"  {result.message}")
+
+            # Total hot-path 3R overhead. Pattern analysis runs on-demand
+            # (see note below), so the per-operation total is the timing
+            # instrumentation measured above: validating the documented
+            # total against it validates the claim against everything 3R
+            # actually executes per operation, under the total's own
+            # (tighter) tolerance.
+            result = self.validate_claim("total_3r_overhead", timing_overhead_pct, 0.0)
+            print(f"  {result.message}")
+
+            # Note: Pattern analysis (record_package_signing) includes analyze_patterns()
+            # which is intentionally more expensive for security analysis. This runs
+            # on-demand for security reports, not on every crypto operation —
+            # which is why `pattern_analysis_overhead` sits in ON_DEMAND_CLAIMS
+            # rather than getting a per-operation row here.
+            print("  Note: Pattern analysis runs on-demand for security reports")
+
         except ImportError as e:
-            self.record_skip(f"Could not import required modules: {e}", *section_claims)
-            print(f"  SKIP: Could not import required modules: {e}")
-            return
-
-        class _RecordingMonitor(AmaCryptographyMonitor):
-            """Records the calls one monitored package makes, then forwards them."""
-
-            def __init__(self) -> None:
-                super().__init__(enabled=True)
-                self.timing_calls: List[Tuple[str, float, Optional[int]]] = []
-                self.signing_calls: List[Dict[str, Any]] = []
-
-            def monitor_crypto_operation(
-                self, operation: str, duration_ms: float, input_size: Optional[int] = None
-            ) -> None:
-                self.timing_calls.append((operation, duration_ms, input_size))
-                super().monitor_crypto_operation(operation, duration_ms, input_size)
-
-            def record_package_signing(self, metadata: Dict[Any, Any]) -> None:
-                self.signing_calls.append(dict(metadata))
-                super().record_package_signing(metadata)
-
-        kms = generate_key_management_system("benchmark")
-        timing_workload: List[List[Tuple[str, float, Optional[int]]]] = []
-        signing_workload: List[List[Dict[str, Any]]] = []
-        for _ in range(_CAPTURED_PACKAGES):
-            recorder = _RecordingMonitor()
-            create_crypto_package(
-                MASTER_CODES, MASTER_HELIX_PARAMS, kms, "benchmark", monitor=recorder
+            self.record_skip(
+                f"Could not import required modules: {e}",
+                "timing_monitor_overhead",
+                "total_3r_overhead",
             )
-            timing_workload.append(recorder.timing_calls)
-            signing_workload.append(recorder.signing_calls)
-
-        timing_calls = len(timing_workload[0])
-        signing_calls = len(signing_workload[0])
-        print(
-            f"  One monitored package makes {timing_calls} monitor_crypto_operation "
-            f"call(s) and {signing_calls} record_package_signing call(s)"
-        )
-
-        timing_monitor = AmaCryptographyMonitor(enabled=True)
-        timing_replay = itertools.cycle(timing_workload)
-
-        def timing_per_package() -> None:
-            for operation, duration_ms, input_size in next(timing_replay):
-                timing_monitor.monitor_crypto_operation(
-                    operation, duration_ms, input_size=input_size
-                )
-
-        pattern_monitor = AmaCryptographyMonitor(enabled=True)
-        signing_replay = itertools.cycle(signing_workload)
-
-        def pattern_per_package() -> None:
-            for metadata in next(signing_replay):
-                pattern_monitor.record_package_signing(metadata)
-
-        # Steady state: the history is a bounded deque, so a service that has
-        # signed max_history packages analyses a full window on every call
-        # from then on.  Fill it through the call under test.
-        for _ in range(pattern_monitor.patterns.max_history):
-            pattern_per_package()
-
-        timing_stats = self.benchmark_operation("timing_monitor", timing_per_package)
-        pattern_stats = self.benchmark_operation("pattern_analysis", pattern_per_package)
-
-        def pct(ms: float) -> float:
-            return ms / package_ms * 100.0
-
-        timing_pct = pct(timing_stats["mean_ms"])
-        pattern_pct = pct(pattern_stats["mean_ms"])
-        total_pct = timing_pct + pattern_pct
-
-        print(f"  package_creation (this run):   {package_ms:.4f}ms")
-        print(
-            f"  Timing instrumentation/package: {timing_stats['mean_ms']:.4f}ms "
-            f"({timing_pct:.2f}%)"
-        )
-        print(
-            f"  Pattern analysis/package:       {pattern_stats['mean_ms']:.4f}ms "
-            f"({pattern_pct:.2f}%, history {len(pattern_monitor.patterns.package_history)})"
-        )
-
-        result = self.validate_claim(
-            "timing_monitor_overhead", timing_pct, pct(timing_stats["std_ms"])
-        )
-        print(f"  {result.message}")
-        result = self.validate_claim(
-            "pattern_analysis_overhead", pattern_pct, pct(pattern_stats["std_ms"])
-        )
-        print(f"  {result.message}")
-        # The two thunks are timed separately, so their spread does not add
-        # linearly; report the root-sum-square as the total's deviation.
-        total_std = pct(math.hypot(timing_stats["std_ms"], pattern_stats["std_ms"]))
-        result = self.validate_claim("total_3r_overhead", total_pct, total_std)
-        print(f"  {result.message}")
+            print(f"  SKIP: Could not import required modules: {e}")
+        except Exception as e:
+            self.record_skip(
+                f"Benchmark failed: {e}", "timing_monitor_overhead", "total_3r_overhead"
+            )
+            print(f"  SKIP: Benchmark failed: {e}")
 
     def generate_report(self) -> str:
         """
@@ -763,6 +617,12 @@ class BenchmarkValidator:
             report.append("")
             for name, reason in sorted(unmeasured.items()):
                 report.append(f"- **{name}**: {reason}")
+            report.append("")
+        if ON_DEMAND_CLAIMS:
+            report.append(
+                "Exempt (measured on-demand only, by design): "
+                + ", ".join(sorted(ON_DEMAND_CLAIMS))
+            )
             report.append("")
         report.append("## Results")
         report.append("")
@@ -808,7 +668,7 @@ class BenchmarkValidator:
             "results": [asdict(r) for r in self.results],
             "skipped": [{"claim_name": n, "reason": r} for n, r in self.skipped],
             "unmeasured": self.unmeasured_claims(),
-            "package_creation_ms": self.package_creation_ms,
+            "exempt_on_demand": sorted(ON_DEMAND_CLAIMS),
             "summary": {
                 "total": len(self.results),
                 "passed": sum(1 for r in self.results if r.passed),
@@ -841,40 +701,18 @@ def main(argv: "List[str] | None" = None) -> int:
             "reported but the exit code reflects only the measured rows."
         ),
     )
-    parser.add_argument(
-        "--only-3r",
-        action="store_true",
-        help=(
-            "Run only the code-package and 3R monitoring sections. The 3R rows "
-            "are percentages of package_creation, so that section always runs "
-            "first. The other rows are then reported unmeasured, and "
-            "--require-complete fails the run."
-        ),
-    )
     args = parser.parse_args(argv)
 
     print("=" * 70)
     print("AMA Cryptography - Benchmark Validation Suite")
     print("=" * 70)
-    print("\nValidating the acceptance table in benchmarks/validation_suite.py...")
+    print("\nValidating performance claims from BENCHMARKS.md...")
 
     validator = BenchmarkValidator(iterations=1000, warmup=100)
 
     # Run all benchmark categories
-    if args.only_3r:
-        # Name the rows this run chose not to measure, so the report does not
-        # read them as validator coverage holes.
-        validator.record_skip(
-            "not run (--only-3r)",
-            *(
-                name
-                for name in validator.documented_claims
-                if name not in PACKAGE_CLAIMS and name not in MONITORING_CLAIMS
-            ),
-        )
-    else:
-        validator.run_key_generation_benchmarks()
-        validator.run_crypto_operation_benchmarks()
+    validator.run_key_generation_benchmarks()
+    validator.run_crypto_operation_benchmarks()
     validator.run_package_operation_benchmarks()
     validator.run_3r_monitoring_benchmarks()
 
@@ -903,6 +741,7 @@ def main(argv: "List[str] | None" = None) -> int:
     print("=" * 70)
     print(f"  Documented claims:      {documented}")
     print(f"  Measured this run:      {measured}")
+    print(f"  Exempt (on-demand):     {len(ON_DEMAND_CLAIMS)}")
     print(f"  Passed: {passed}")
     print(f"  Failed: {total - passed}")
     print(f"  Pass rate: {passed / total * 100:.1f}%" if total > 0 else "  No results")

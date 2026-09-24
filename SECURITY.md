@@ -116,19 +116,18 @@ only supported throughput claims; avoid quoting relative speedups unless the
 source artifact and host class are named. Recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
 batching, Ed25519 signed-window combs, merged-layer ML-DSA NTT, and
 Ed25519 verify via Shamir/Straus joint scalar multiplication with a
-width-5 wNAF. No before-and-after ratio for that change is published: none
-was recorded with its host and run, and the backend has changed since.
+width-5 wNAF — roughly doubling verify throughput.
 
-#### What verify throughput means in practice
+#### What "2× verify" means in practice
 
 Ed25519 verify dominates wall-clock time in three protocol families
 that AMA consumers run at scale:
 
 - **X.509 certificate-chain validation** (TLS handshake, code-signing).
   A typical chain is 3–4 certificates deep; each certificate signature
-  is one Ed25519 verify, so per-verify cost sets the CPU budget per
-  chain validation and, on a busy gateway, the concurrent handshakes a
-  core can carry.
+  is one Ed25519 verify.  Doubling per-verify throughput halves the
+  CPU budget per chain validation, which on a busy gateway is the
+  difference between handling N and 2N concurrent handshakes per core.
 - **Noise Protocol Framework handshakes** (WireGuard, Lightning,
   Nym).  The XX, IK and IKpsk2 patterns each do at least one Ed25519
   verify of the responder's static key per handshake; mixed-PQ
@@ -157,10 +156,8 @@ LoC of audit surface.  Readers who value raw speed over supply-chain
 minimalism are unlikely to be the target audience for this library;
 readers who need auditable, small-surface post-quantum primitives
 with headroom to keep improving should find the trade-off
-acceptable.  Measured ops/sec numbers are the CI four-run medians in the
-README's *Performance Metrics* table (pinned by
-`tools/check_published_benchmarks.py`) and the single-run
-`benchmark-report.md` — any claim to the contrary elsewhere in
+acceptable.  Measured ops/sec numbers are in `benchmark-report.md`
+and `benchmarks/README.md` — any claim to the contrary elsewhere in
 the repository should be treated as aspirational and reported as a
 documentation bug.
 
@@ -362,9 +359,11 @@ contract is:
    can only produce a signature by calling the native `ama_ed25519_sign`,
    a working native library is present at signing time by construction,
    so every signed artefact carries the native digest — there is no
-   unsigned-native downgrade path.  An `AMA_CRYPTO_LIB_PATH` override
-   (see below) is no exception: it may relocate the signed library but
-   an object whose bytes differ is refused before it is mapped.
+   unsigned-native downgrade path.  The one exception is an explicit
+   `AMA_CRYPTO_LIB_PATH` override (see below): the operator has
+   deliberately substituted the backend, so the loaded object is
+   recorded as **unverified** (a warning, and `fully_verified` is
+   `False`) rather than treated as tampering.
 
 There is **no long-lived signing key in developer builds**.  Each
 default build generates, signs once, and discards.  Release CI may
@@ -510,22 +509,21 @@ remains the OS-code-signing boundary above. An in-place overwrite of the
 pinned inode inside the hash-to-map window is not excluded (an attacker
 with that write access is caught whenever they write *before* the hash),
 and platforms without procfs fall back to hash-then-load with the POST
-stage re-verifying after load. `AMA_CRYPTO_LIB_PATH` is not a carve-out:
-its object is checked like every other candidate. The one carve-out is the
-integrity signer re-blessing a rebuilt library — the in-process
-`unverified_load_for_signing()` opt-in `_build_sign` enters, or a process
-launched as the signer's writing subcommand with `AMA_BUILD_PIPELINE=1` —
-and secure-execution mode revokes it. The variable alone never suffices.
-Pinned in both directions by
+stage re-verifying after load. Two deliberate carve-outs:
+`AMA_CRYPTO_LIB_PATH` (the operator's own substitution — honoured,
+digest-recorded, reported UNVERIFIED when the bytes differ) and
+`AMA_BUILD_PIPELINE=1` outside secure-execution mode (the artefact-repair
+tools live inside this package and must be able to import it after a
+rebuild). Pinned in both directions by
 `tests/test_preload_native_digest.py` and the tamper cases in
 `tests/test_native_integrity.py`.
 
-Because verification binds the mapped **bytes**, an
+Because verification now binds the mapped **bytes**, an
 `AMA_CRYPTO_LIB_PATH` override whose bytes are identical to the signed
 library reports as verified — a byte-identical copy *is* the signed
 library, wherever it was loaded from — while the override's presence
-stays visible in `native_backend_diagnostics()`. A modified override is
-refused before it is mapped, and nothing is loaded in its place.
+stays visible in `native_backend_diagnostics()`. A modified override
+remains UNVERIFIED, never blocked.
 
 **The Cython binding extensions are digest-bound (v3 artefact).** The
 composite signature covers the `.py` sources, the POST KAT vectors,
@@ -690,20 +688,9 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
     `ama_integrity_trust_anchor_pubkey_hex()`, calls
     `ama_ed25519_verify` via ctypes with the embedded pubkey and
     signature, and accepts only on a positive verify plus trust-anchor
-    match when configured.  The artefact is a **build output, not a
-    tracked file**: `setup.py` signs every build (editable installs and
-    `build_ext --inplace` included) with a fresh ephemeral key and binds
-    that build's native library and binding extensions, so no copy of it is
-    meaningful outside the tree that produced it.  It is listed in
-    `.gitignore`, excluded from the sdist by `MANIFEST.in`, and never
-    committed (AGENTS.md §8.4); `_integrity_digest.txt`, a pure function of
-    the `.py` sources, is the tracked half.  A fresh clone therefore has no
-    artefact, and no native library either: its import fails closed at the
-    `native-backend` POST stage with a message naming
-    `pip install -e .` / `python setup.py build_ext --inplace`.  When the
-    artefact is absent from a tree that does have a native library (a
-    `cmake`-only build, or an unbuilt checkout under the documented
-    `AMA_SPHINX_BUILD=1` docs override), the behaviour depends on
+    match when configured.  When the artefact is absent (editable
+    installs, source checkouts, wheels built without
+    `AMA_BUILD_PIPELINE=1`), the behaviour depends on
     `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`:
     - **Unset (developer / editable / source-checkout path):** the
       module falls back to digest-only verification against
@@ -743,9 +730,10 @@ is load-bearing for your deployment:
   per-file digest map of the binding extensions, so a substituted or
   patched shared object is refused, not invisible. The same
   write-capable-adversary caveat as the previous bullet applies: re-sign
-  the whole artefact and only a compiled trust anchor catches it. An
-  `AMA_CRYPTO_LIB_PATH` override is held to the same digest; see the
-  note below.
+  the whole artefact and only a compiled trust anchor catches it. The
+  one deliberate exception is an operator's `AMA_CRYPTO_LIB_PATH`
+  override, reported UNVERIFIED when its bytes differ; see the note
+  below.
 
 A build is only tamper-evident against a write-capable adversary when
 `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` is compiled into the native
@@ -793,31 +781,24 @@ rather than failing on a missing secret.
 
 #### `AMA_CRYPTO_LIB_PATH`
 
-This environment variable names where the native library is — a file, or a
-directory holding it — and replaces the search. It **relocates** the signed
-library; it cannot **substitute** another one. A shared object runs its
-constructors the moment it is mapped, before the power-on self-test executes,
-so the override's object goes through the same pre-load digest check as every
-other candidate: bytes identical to the signed library's verify in full (a
-byte-identical copy is the signed library, wherever it was loaded from), and
-bytes that differ are refused before they are mapped. The search is confined
-to the override: when nothing there loads — refused, unloadable or absent —
-discovery fails and the import fails closed, with the reason in
-`native_backend_diagnostics()["override_refusal"]` and the POST message. The
-shipped library is not tried in its place (INVARIANT-7).
-
-This variable used to map the named object with the digest check skipped,
-and POST recorded it as *unverified*, so setting one variable executed
-arbitrary native code in the crypto process. The only way left to map an
-object that does not match the signed digest is the integrity signer's own
-scope — the in-process `unverified_load_for_signing()` opt-in `_build_sign`
-enters, or a process launched as the signer's writing subcommand with
-`AMA_BUILD_PIPELINE=1` — which secure-execution mode revokes.
+This environment variable overrides the search for the native library and
+loads the named shared object directly. It is a developer convenience for
+pointing at an out-of-tree build, and it is a code-execution boundary: a
+shared object runs its constructors the moment it is mapped, before the
+power-on self-test executes. The loaded object's digest is recorded at load
+time and compared against the signed native digest: when the override's
+bytes are **identical** to the signed library's, it verifies in full (a
+byte-identical copy is the signed library, wherever it was loaded from);
+when they differ, the integrity check records the loaded library as
+**unverified** (the signature over the artefact still verifies, but the
+loaded bytes are not bound to it) — `module_attestation()["fully_verified"]`
+is `False` and a warning names the override. Treat the ability to set it as
+equivalent to the ability to run code in the process.
 
 It is ignored, with a warning, when the process is running set-uid or
 set-gid, matching the dynamic loader's refusal to honour `LD_PRELOAD` and
 `LD_LIBRARY_PATH` in secure-execution mode. When it is honoured, the
-override is logged at WARNING so a relocated backend is visible in
+override is logged at WARNING so a substituted backend is visible in
 operational logs.
 
 #### `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`

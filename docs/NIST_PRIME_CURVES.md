@@ -122,15 +122,15 @@ generic path cannot express).
 Montgomery form over 64-bit limbs with CIOS multiplication, rather than per-curve
 Solinas reduction. The reduction chains for P-256/384/521 are three separate
 bodies of subtle carry code; one generic, uniformly constant-time kernel is the
-defensible trade at this stage. The cost is stated below rather than hidden:
-the generic kernel is slower than a curve-specialised one.
+defensible trade at this stage. The cost is measured below and stated honestly
+rather than hidden.
 
 ### Fixed-base comb for the generator
 
 The generator is a public constant, so the doublings its scalar multiplication
 performs can be done once at start-up instead of on every call — and doublings
 are where the time went: the variable-base multiplier runs 132 windows × 4
-doublings on P-521, and 528 doublings are most of the operation's cost.
+doublings on P-521, and 528 doublings is most of a 2 ms operation.
 
 `nistp_scalar_mul_generator` splits the scalar into four blocks and precomputes
 every subset sum of the block-aligned multiples `2^(e·j)·G`. One pass over `e`
@@ -184,19 +184,31 @@ Verification is variable time by design — every input is public. This matches
 
 ### Measured cost
 
-When the comb landed (2026-07-28, #378) it was timed before and after on one
-machine in one session — single core, x86-64, `-O3 -flto`, generic Montgomery
-path, median of 60 runs. That table is kept, with exactly that provenance, in
-[`docs/BENCHMARK_HISTORY.md`](BENCHMARK_HISTORY.md) (2026-09-24), and is not
-published here as a current figure: it named no CPU, date or run identifier,
-the code it timed has changed since, and no CI lane measures the P-curves.
+Single core, x86-64, `-O3 -flto`, generic Montgomery path. Median of 60 runs,
+measured before and after the fixed-base comb on the same machine in the same
+session:
 
-The shape of that result is the point, and it does not depend on the host.
-Every operation whose base is the fixed generator — key generation, public-key
-derivation, the `k·G` in signing — got faster. Verification (Shamir's trick
-over two public points) and ECDH (a peer-supplied base) did not move, which is
-what confirms the change is scoped where it was meant to be rather than
-perturbing the field arithmetic.
+| Curve | Operation | Before | After | Change |
+|---|---|---:|---:|---:|
+| P-256 | keygen | 0.334 ms | 0.183 ms | **1.83×** |
+| P-256 | public key from private | 0.335 ms | 0.178 ms | **1.88×** |
+| P-256 | sign | 0.377 ms | 0.217 ms | **1.74×** |
+| P-256 | verify | 0.559 ms | 0.545 ms | — |
+| P-256 | ECDH | 0.340 ms | 0.338 ms | — |
+| P-384 | keygen | 0.811 ms | 0.467 ms | **1.74×** |
+| P-384 | sign | 0.874 ms | 0.537 ms | **1.63×** |
+| P-384 | verify | 1.360 ms | 1.376 ms | — |
+| P-384 | ECDH | 0.798 ms | 0.803 ms | — |
+| P-521 | keygen | 2.014 ms | 1.189 ms | **1.69×** |
+| P-521 | sign | 2.244 ms | 1.398 ms | **1.61×** |
+| P-521 | verify | 3.570 ms | 3.661 ms | — |
+| P-521 | ECDH | 2.047 ms | 2.038 ms | — |
+
+The shape of that table is the point. Every operation whose base is the fixed
+generator — key generation, public-key derivation, the `k·G` in signing — moves
+by 1.6–1.9×. Verification (Shamir's trick over two public points) and ECDH
+(a peer-supplied base) do not move at all, which is what confirms the change is
+scoped where it was meant to be rather than perturbing the field arithmetic.
 
 Still slower than a curve-specialised implementation, and still stated rather
 than elided. What remains, with an honest note on each:

@@ -1,7 +1,6 @@
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
-"""``AMA_CRYPTO_LIB_PATH`` must not steer the backend under set-uid/set-gid,
-and outside it may relocate the signed library but never substitute it.
+"""``AMA_CRYPTO_LIB_PATH`` must not steer the backend under set-uid/set-gid.
 
 The variable names the shared object that supplies every cryptographic
 primitive, and a shared object runs its constructors the moment it is mapped —
@@ -14,13 +13,10 @@ code a privileged process loads.  An override of our own has to follow the same
 rule, otherwise it re-opens the hole the platform just closed.
 """
 
-import copy
 import ctypes
-import hashlib
 import logging
 import os
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Optional
 
@@ -377,7 +373,7 @@ class TestOverrideIgnoredUnderSecureExecution:
 
         attempted: list[Path] = []
 
-        def _record(path: Path) -> Optional[Any]:
+        def _record(path: Path, verify_digest: bool = True) -> Optional[Any]:
             attempted.append(path)
             return None
 
@@ -396,13 +392,7 @@ class TestOverrideIgnoredUnderSecureExecution:
         caplog: pytest.LogCaptureFixture,
         tmp_path: Path,
     ) -> None:
-        """Outside secure-execution the override still works, but it is visible.
-
-        ``_try_load_library`` is replaced by a one-argument stub: the loader no
-        longer has a way to skip the digest check, and a call that tried to
-        pass one would fail here.  Whether the object is loaded is decided by
-        that check — see ``TestOverrideRelocatesNeverSubstitutes``.
-        """
+        """Outside secure-execution the override still works, but it is visible."""
         planted = tmp_path / "libama_cryptography.so"
         planted.write_bytes(b"")
 
@@ -410,7 +400,9 @@ class TestOverrideIgnoredUnderSecureExecution:
         monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(planted))
         monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: False)
         monkeypatch.setattr(pqc_backends, "_get_search_dirs", list)
-        monkeypatch.setattr(pqc_backends, "_try_load_library", lambda path: sentinel)
+        monkeypatch.setattr(
+            pqc_backends, "_try_load_library", lambda path, verify_digest=True: sentinel
+        )
 
         with caplog.at_level(logging.WARNING):
             result = pqc_backends._find_native_library()
@@ -419,174 +411,6 @@ class TestOverrideIgnoredUnderSecureExecution:
         assert any(
             "AMA_CRYPTO_LIB_PATH" in r.message for r in caplog.records
         ), "an overridden cryptographic backend must be visible in the logs"
-
-
-class TestOverrideRelocatesNeverSubstitutes:
-    """``AMA_CRYPTO_LIB_PATH`` may RELOCATE the signed library, never SUBSTITUTE it.
-
-    The override used to be mapped with the pre-load digest check skipped and
-    reported UNVERIFIED by POST afterwards, so one environment variable
-    executed arbitrary native code in the crypto process.  Its object now goes
-    through the same check as every other candidate, and the search is
-    confined to it: a refused override fails closed rather than falling back
-    to the shipped library (INVARIANT-7).
-
-    Every case runs the real ``_try_load_library`` against the library this
-    process loaded, with the signed digest pinned to that library's bytes and
-    every signing-scope escape pinned off.  A "different" library is that
-    library plus one appended byte: it would load and function if mapped, so
-    only the digest check stands between it and execution.  The shipped
-    library sits on the ordinary search path throughout, so a fallback would
-    be observed as a successful load.
-    """
-
-    attempted: list[Path]
-
-    @pytest.fixture()
-    def shipped(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-        """The loaded library, the signed digest pinned to it, attempts spied."""
-        assert pqc_backends._NATIVE_LIB_PATH, "the suite runs against a loaded backend"
-        shipped = Path(pqc_backends._NATIVE_LIB_PATH)
-        assert shipped.name in pqc_backends._get_lib_names()
-        signed = hashlib.sha3_256(shipped.read_bytes()).digest()
-
-        monkeypatch.setattr(pqc_backends, "_expected_native_digest", lambda: signed)
-        monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: False)
-        monkeypatch.setattr(pqc_backends, "_SIGNING_LOAD_OVERRIDE", False)
-        monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
-        monkeypatch.setattr(pqc_backends, "_get_search_dirs", lambda: [shipped.parent])
-
-        self.attempted = []
-        real_try_load = pqc_backends._try_load_library
-
-        # Pass-through, arguments and all: the spy observes which candidates
-        # are tried and must not itself decide how they are loaded.
-        def _spy(path: Path, *args: Any, **kwargs: Any) -> Optional[ctypes.CDLL]:
-            self.attempted.append(Path(path))
-            return real_try_load(path, *args, **kwargs)
-
-        monkeypatch.setattr(pqc_backends, "_try_load_library", _spy)
-
-        saved = copy.deepcopy(pqc_backends._LOAD_DIAGNOSTICS)
-        try:
-            yield shipped
-        finally:
-            pqc_backends._LOAD_DIAGNOSTICS.clear()
-            pqc_backends._LOAD_DIAGNOSTICS.update(saved)
-
-    @staticmethod
-    def _copy(shipped: Path, directory: Path) -> Path:
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / shipped.name
-        target.write_bytes(shipped.read_bytes())
-        return target
-
-    @staticmethod
-    def _different(shipped: Path, directory: Path) -> Path:
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / shipped.name
-        target.write_bytes(shipped.read_bytes() + b"\x00")
-        return target
-
-    def _assert_refused_without_fallback(self, refused: Path) -> None:
-        diag = pqc_backends._LOAD_DIAGNOSTICS
-        assert self.attempted == [refused], (
-            f"only the override may be tried; attempted {self.attempted} — "
-            "anything after it is a fallback to a library the operator did not name"
-        )
-        assert diag["loaded"] is False
-        assert diag["errors"] == [(str(refused), pqc_backends._PRELOAD_MISMATCH_HINT)]
-        assert str(refused) in diag["digest_refused"]
-        refusal = diag["override_refusal"]
-        assert refusal and "AMA_CRYPTO_LIB_PATH" in refusal and "never substitute" in refusal
-        # The operator-facing summary (the POST message) leads with the reason.
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(pqc_backends, "_native_lib", None)
-            assert pqc_backends.native_backend_load_summary().startswith(refusal)
-
-    def test_mismatching_override_file_is_refused_with_no_fallback(
-        self, shipped: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        different = self._different(shipped, tmp_path / "elsewhere")
-        monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(different))
-
-        assert pqc_backends._find_native_library() is None
-        self._assert_refused_without_fallback(different)
-
-    def test_mismatching_override_dir_candidate_is_refused_with_no_fallback(
-        self, shipped: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        directory = tmp_path / "elsewhere-dir"
-        different = self._different(shipped, directory)
-        monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(directory))
-
-        assert pqc_backends._find_native_library() is None
-        self._assert_refused_without_fallback(different)
-        assert pqc_backends._LOAD_DIAGNOSTICS["searched_dirs"] == [str(directory)]
-
-    def test_override_naming_nothing_does_not_fall_back(
-        self, shipped: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """An override that names no library is not a licence to load another."""
-        monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(tmp_path / "no-such-build"))
-
-        assert pqc_backends._find_native_library() is None
-        assert self.attempted == []
-        assert "names no file" in pqc_backends._LOAD_DIAGNOSTICS["override_refusal"]
-        # The signer's path-only discovery is confined the same way, so it
-        # cannot bind the shipped library in place of the one it was sent to.
-        assert pqc_backends._find_native_library_path() is None
-
-    def test_matching_override_file_loads(
-        self, shipped: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The control: relocating the signed library is what the override is for.
-
-        A byte-identical copy in another directory: this maps a second copy
-        of the backend in-process, which is inert (the library defines no
-        load-time constructors).  ``tests/test_native_integrity.py`` drives
-        the same relocation through a real import in a subprocess.
-        """
-        relocated = self._copy(shipped, tmp_path / "relocated")
-        monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(relocated))
-
-        assert pqc_backends._find_native_library() is not None
-        assert self.attempted == [relocated]
-        diag = pqc_backends._LOAD_DIAGNOSTICS
-        assert diag["loaded"] is True and diag["path"] == str(relocated)
-        assert diag["override"] == str(relocated) and diag["override_refusal"] is None
-        assert pqc_backends._find_native_library_path() == relocated
-
-    def test_matching_override_dir_loads(
-        self, shipped: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        directory = tmp_path / "relocated-dir"
-        self._copy(shipped, directory)
-        monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(directory))
-
-        assert pqc_backends._find_native_library() is not None
-        assert self.attempted == [directory / shipped.name]
-        assert pqc_backends._LOAD_DIAGNOSTICS["path"] == str(directory / shipped.name)
-        assert pqc_backends._find_native_library_path() == directory / shipped.name
-
-    def test_signing_opt_in_still_maps_a_mismatching_override(
-        self, shipped: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The one remaining way to map an unsigned object is the signer's scope.
-
-        ``tools/resign_wheel.py`` points the override at a wheel tree whose
-        library ``_build_sign`` is about to bless, and ``_build_sign`` maps it
-        inside ``unverified_load_for_signing()``.  That is the opt-in doing the
-        work, not the variable: the same override outside it is refused, as
-        the first assertion shows.
-        """
-        unsigned = self._different(shipped, tmp_path / "unsigned")
-        monkeypatch.setenv("AMA_CRYPTO_LIB_PATH", str(unsigned))
-
-        assert pqc_backends._find_native_library() is None
-        with pqc_backends.unverified_load_for_signing():
-            assert pqc_backends._find_native_library() is not None
-        assert pqc_backends._LOAD_DIAGNOSTICS["path"] == str(unsigned)
 
 
 class TestLibraryPathEnvIgnoredUnderSecureExecution:

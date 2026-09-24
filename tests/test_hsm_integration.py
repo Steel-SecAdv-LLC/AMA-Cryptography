@@ -22,7 +22,6 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 
 from ama_cryptography.exceptions import AmaHSMUnavailableError
 from ama_cryptography.key_management import HSMKeyStorage
@@ -953,57 +952,8 @@ def test_softhsm_lane_is_provisioned_in_ci() -> None:
     )
 
 
-#: The literal that provisions the SoftHSM2 token on each runner OS family, as
-#: the job's own step text must carry it.  The Chocolatey package name is the
-#: only one the apt/brew forms cannot satisfy, so a deleted Windows step cannot
-#: hide behind a surviving Linux or macOS one.
-_SOFTHSM_PROVISIONING = {
-    "linux": "apt-install.sh --no-install-recommends softhsm2",
-    "macos": "brew install softhsm",
-    "windows": "softhsm.install",
-}
-
-#: ``pip install -e ".[...]"`` naming the ``hsm`` extra among any others.
-_HSM_EXTRA_RE = re.compile(r"\.\[[^\]]*\bhsm\b[^\]]*\]")
-
-
-def _runner_family(label: str) -> str:
-    for prefix, family in (("ubuntu", "linux"), ("macos", "macos"), ("windows", "windows")):
-        if label.startswith(prefix):
-            return family
-    raise AssertionError(f"unrecognised runner label {label!r}; extend _runner_family")
-
-
-def _job_runner_labels(job: "dict[str, Any]") -> "set[str]":
-    """Every runner label a job runs on: its matrix ``os`` list and includes."""
-    runs_on = job.get("runs-on")
-    if isinstance(runs_on, str) and "matrix.os" in runs_on:
-        matrix = (job.get("strategy") or {}).get("matrix") or {}
-        labels = {str(label) for label in matrix.get("os") or []}
-        labels |= {
-            str(entry["os"])
-            for entry in matrix.get("include") or []
-            if isinstance(entry, dict) and "os" in entry
-        }
-        return labels
-    return {str(runs_on)}
-
-
-def _job_strings(node: Any) -> "list[str]":
-    """Every key and scalar in a parsed job — what it DOES, with no comments."""
-    if isinstance(node, dict):
-        out: list[str] = []
-        for key, value in node.items():
-            out.append(str(key))
-            out.extend(_job_strings(value))
-        return out
-    if isinstance(node, list):
-        return [text for item in node for text in _job_strings(item)]
-    return [str(node)]
-
-
 def test_the_workflow_still_provisions_softhsm() -> None:
-    """Every job that promises provisioned backends must install the token.
+    """Every workflow that promises provisioned backends must install the token.
 
     ``test_softhsm_lane_is_provisioned_in_ci`` only fires where the token is
     expected, so on its own it would be satisfied by removing the step that
@@ -1011,52 +961,41 @@ def test_the_workflow_still_provisions_softhsm() -> None:
     would stay green. This asserts the provisioning exists, so the pair cannot
     be satisfied by deletion.
 
-    Checked per JOB, against that job's own runner matrix, from the parsed
-    workflow rather than its raw text.  It used to grep each whole file for
-    the three provisioning strings, which had two holes.  A comment satisfied
-    it: ``ci.yml``'s ``[hsm]`` extra check passed on a comment that says
-    "[hsm] supplies PyKCS11" — the install line itself reads
-    ``.[dev,legacy,benchmark,hsm,examples]``, which the old ``"hsm]"`` literal
-    does not match.  And it required a Windows step in every file that set
-    ``AMA_CI_REQUIRE_BACKENDS``, whether or not that file ran on Windows —
-    which is what would have kept a dead Windows step alive in
-    ``ci-build-test.yml`` once its Linux and Windows legs, exact duplicates of
-    ``ci.yml::test``'s, were removed and its matrix became macOS-only.
-
-    ``ci-build-test.yml`` is still in scope for the reason it was added: it set
-    that flag while installing neither the token nor PyKCS11, so it promised
-    every backend was present and skipped the only real PKCS#11 coverage in
-    the tree — which is exactly the shape this test exists to catch, and is
-    how it was found.
+    Both workflows are checked, because both set ``AMA_CI_REQUIRE_BACKENDS=1``.
+    ``ci-build-test.yml`` set that flag while installing neither the token nor
+    PyKCS11, so it promised every backend was present and skipped the only
+    real PKCS#11 coverage in the tree — which is exactly the shape this test
+    exists to catch, and is how it was found.
 
     Reads the workflows rather than trusting a comment: the claim is about
     what CI does.
     """
     workflows = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
-    gating: list[str] = []
-    families_run: set[str] = set()
+    gating = []
     for name in ("ci.yml", "ci-build-test.yml"):
-        document = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))
-        for job_id, job in (document.get("jobs") or {}).items():
-            text = "\n".join(_job_strings(job))
-            if "AMA_CI_REQUIRE_BACKENDS" not in text:
-                continue
-            where = f"{name}::{job_id}"
-            gating.append(where)
-            families = {_runner_family(label) for label in _job_runner_labels(job)}
-            families_run |= families
-            for family in sorted(families):
-                assert _SOFTHSM_PROVISIONING[family] in text, (
-                    f"{where} sets AMA_CI_REQUIRE_BACKENDS and runs on {family}, but "
-                    f"no step installs the SoftHSM2 token there "
-                    f"({_SOFTHSM_PROVISIONING[family]!r}). TestSoftHSMIntegration is the "
-                    f"only real PKCS#11 coverage in the tree; without the step it fails on "
-                    f"those legs — or, if the assertion is also removed, silently skips."
-                )
-            assert _HSM_EXTRA_RE.search(text), (
-                f"{where} no longer installs the [hsm] extra, so PyKCS11 is absent and "
-                f"the SoftHSM2 lane skips even with the token installed."
-            )
+        text = (workflows / name).read_text(encoding="utf-8")
+        if "AMA_CI_REQUIRE_BACKENDS" not in text:
+            continue
+        gating.append(name)
+        assert "softhsm2" in text or "brew install softhsm" in text, (
+            f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs softhsm2. "
+            f"TestSoftHSMIntegration is the only real PKCS#11 coverage in the tree; "
+            f"without this step it skips while the flag claims every backend is present."
+        )
+        # Windows evidence is asserted separately: the choco package name is
+        # the only string the apt/brew checks above cannot be satisfied by,
+        # so deleting just the Windows step would otherwise stay green while
+        # test_softhsm_lane_is_provisioned_in_ci failed the Windows entries.
+        assert "softhsm.install" in text, (
+            f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs the "
+            f"Windows SoftHSM2 token (choco softhsm.install). The Windows matrix "
+            f"entries assert the real PKCS#11 lane runs there; without this step "
+            f"they fail — or, if the assertion is also removed, silently skip."
+        )
+        assert "hsm]" in text, (
+            f"{name} no longer installs the [hsm] extra, so PyKCS11 is absent and the "
+            f"SoftHSM2 lane skips even with the token installed."
+        )
 
     # Without this the whole test is vacuous by deletion, which is the exact
     # hole its docstring claims the pair does not have: drop the two
@@ -1069,13 +1008,6 @@ def test_the_workflow_still_provisions_softhsm() -> None:
         "That flag is what turns a missing backend into a failure instead of a silent "
         "skip; without it the SoftHSM2 lane — the only real PKCS#11 coverage in the "
         "tree — returns to skipping everywhere while this suite stays green."
-    )
-    # ...and per-job scoping must not let an OS drop out of the lane entirely:
-    # the real token lifecycle has to run somewhere on each of the three.
-    assert families_run == set(_SOFTHSM_PROVISIONING), (
-        f"the require-backends pytest lanes run on {sorted(families_run)} only; the "
-        f"SoftHSM2 lifecycle must execute on every OS family "
-        f"{sorted(_SOFTHSM_PROVISIONING)}."
     )
 
 

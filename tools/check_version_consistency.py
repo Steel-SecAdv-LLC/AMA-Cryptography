@@ -25,15 +25,9 @@ test (``tests/test_version_consistency.py``) writes a
 synthetic C file with a fake version literal into a temp tree and
 asserts the scanner flags it.
 
-The repository-wide Markdown sweeps read the files git tracks
-(``tools/_repo.py``), not whatever a filesystem walk finds under the root, so
-an untracked checkout nested in the tree is out of scope; see
-:func:`tracked_documents`.
-
 Exit code:
     0  all versions and invariants agree, no embedded C-source version literals
     1  a mismatch or stray C-source version literal was detected
-    2  git could not enumerate the tracked tree
 """
 
 from __future__ import annotations
@@ -63,41 +57,6 @@ def repo_relative(path: PurePath, repo: PurePath) -> str:
     path you cannot grep for.  Normalise once, here.
     """
     return path.relative_to(repo).as_posix()
-
-
-def tracked_documents(repo: Path, *pathspecs: str) -> list[Path]:
-    """Every file git tracks under ``repo`` matching ``pathspecs``, sorted.
-
-    The three repository-wide Markdown sweeps below (tag pins, document
-    headers, invariant-range claims) used to enumerate with
-    ``repo.rglob("*.md")``, which consulted neither git nor ``.gitignore``.
-    Any untracked checkout nested under the root — a
-    ``.claude/worktrees/<copy>``, a developer's scratch clone — contributed
-    every one of its documents, and the gate failed on files that are not part
-    of the repository.  Enumeration now goes through ``tools/_repo.py``
-    (``git ls-files -z``); a tracked file's working-tree edits are still read,
-    because the file is read from disk.
-
-    Raises ``TrackedFilesError`` (a ``RuntimeError``) when git cannot
-    enumerate ``repo``.  There is deliberately no filesystem fallback: a scan
-    whose scope cannot be established is not a clean scan.
-    """
-    root = str(Path(__file__).resolve().parent.parent)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from tools._repo import tracked_files
-
-    return sorted(tracked_files(repo, *pathspecs))
-
-
-def _relative_parts(path: Path, repo: Path) -> tuple[str, ...]:
-    """``path``'s components below ``repo`` — what the directory exclusions test.
-
-    Tested against the repository-relative path, not the absolute one, so a
-    checkout that happens to live under a directory named ``build`` is not
-    excluded wholesale.
-    """
-    return path.relative_to(repo).parts
 
 
 _C_VERSION_LITERAL_RE = re.compile(r'"\d+\.\d+\.\d+"')
@@ -496,9 +455,8 @@ def scan_invariant_range_claims(repo: Path, highest: int) -> tuple[list[str], in
     """``(problems, claims checked)`` over every tracked Markdown file."""
     problems: list[str] = []
     checked = 0
-    for path in tracked_documents(repo, "*.md"):
-        parts = _relative_parts(path, repo)
-        if ".git" in parts or "node_modules" in parts:
+    for path in sorted(repo.rglob("*.md")):
+        if ".git" in path.parts or "node_modules" in path.parts:
             continue
         text = _read(path)
         if not text:
@@ -576,14 +534,11 @@ def scan_tag_pins(repo: Path, canonical: str) -> tuple[list[str], int]:
     install pins" — a ``.md`` was matched only by the document-HEADER pattern,
     which does not see an install command (INVARIANT-32; audit M11).
     """
-    # Both halves are enumerated from git (see tracked_documents): an untracked
-    # document is not something this repository publishes an install pin in.
-    docs = tracked_documents(repo, ":(glob)docs/**/*.rst")
-    for md in tracked_documents(repo, "*.md"):
-        parts = _relative_parts(md, repo)
-        if any(part in {".git", "build", "node_modules"} for part in parts):
+    docs = list((repo / "docs").rglob("*.rst"))
+    for md in repo.rglob("*.md"):
+        if any(part in {".git", "build", "node_modules"} for part in md.parts):
             continue
-        if md.name == "CHANGELOG.md" or "compliance" in parts:
+        if md.name == "CHANGELOG.md" or "compliance" in md.parts:
             continue
         docs.append(md)
     problems: list[str] = []
@@ -600,54 +555,6 @@ def scan_tag_pins(repo: Path, canonical: str) -> tuple[list[str], int]:
                     f"@v{m.group(1)} != canonical {canonical!r}"
                 )
     return problems, checked
-
-
-def scan_doc_headers(repo: Path, canonical: str) -> tuple[list[str], int]:
-    """``(stale headers, headers checked)`` over every tracked ``*.md``.
-
-    The document-header sweep :func:`main` describes, extracted (as
-    :func:`scan_tag_pins` was) so its file set can be tested on a temporary
-    tree: it read ``REPO.rglob("*.md")`` inline and therefore failed on the
-    documents of any untracked checkout nested under the root.
-    """
-    stale: list[str] = []
-    checked = 0
-    for md in tracked_documents(repo, "*.md"):
-        parts = _relative_parts(md, repo)
-        if any(part in {".git", "build", "node_modules"} for part in parts):
-            continue
-        if md.name == "CHANGELOG.md":
-            continue  # historical by definition
-        if "compliance" in parts:
-            # docs/compliance/** are DATED ATTESTATION RECORDS.  Their
-            # "Version" field names the library version the attestation was
-            # generated against — bound to an immutable upstream ACVP ref and
-            # a generation date — NOT a document revision that tracks the
-            # current release.  Auto-bumping them on a release would assert
-            # validation that was never performed, which INVARIANT-16
-            # (Honest Compliance and Audit Claims) prohibits.  Refreshing an
-            # attestation is a deliberate act with its own procedure (see
-            # acvp_attestation.json::acvp_ref_note).
-            continue
-        text = _read(md)
-        if not text:
-            continue
-        for pat in DOC_HEADER_PATTERNS:
-            for m in pat.finditer(text):
-                checked += 1
-                # repo_relative, not relative_to: the message is a path a
-                # reviewer reads, and str(Path.relative_to(...)) spells it with
-                # backslashes on Windows while every other message here uses
-                # forward slashes.
-                rel = repo_relative(md, repo)
-                if m.group(1) != canonical:
-                    stale.append(f"{rel}: header version {m.group(1)!r} != canonical {canonical!r}")
-                elif m.group(2).strip():
-                    stale.append(
-                        f"{rel}: header version carries the trailing qualifier "
-                        f"{m.group(2).strip()!r} — state one version, not a version and a mood"
-                    )
-    return stale, checked
 
 
 def extract(file: str, pattern: str) -> str | None:
@@ -670,15 +577,6 @@ def extract(file: str, pattern: str) -> str | None:
 
 
 def main() -> int:
-    # Establish the scope before checking anything in it: the Markdown sweeps
-    # below read the tracked tree (see tracked_documents), and a git that
-    # cannot enumerate it is a check that cannot run, never a clean one.
-    try:
-        tracked_documents(REPO, "*.md")
-    except RuntimeError as exc:  # TrackedFilesError
-        print(f"ERROR: cannot enumerate the tracked tree: {exc}", file=sys.stderr)
-        return 2
-
     canonical = extract("ama_cryptography/__init__.py", r'^__version__\s*=\s*"([^"]+)"')
     if canonical is None:
         print(
@@ -893,7 +791,45 @@ def main() -> int:
     # printed "All declarations agree".  A qualifier is now a finding in
     # its own right: a version header states one version, not a version
     # and a mood.
-    doc_stale, doc_checked = scan_doc_headers(REPO, canonical)
+    doc_header_pats = DOC_HEADER_PATTERNS
+    doc_checked = 0
+    doc_stale: list[str] = []
+    for md in sorted(REPO.rglob("*.md")):
+        if any(part in {".git", "build", "node_modules"} for part in md.parts):
+            continue
+        if md.name == "CHANGELOG.md":
+            continue  # historical by definition
+        if "compliance" in md.parts:
+            # docs/compliance/** are DATED ATTESTATION RECORDS.  Their
+            # "Version" field names the library version the attestation was
+            # generated against — bound to an immutable upstream ACVP ref and
+            # a generation date — NOT a document revision that tracks the
+            # current release.  Auto-bumping them on a release would assert
+            # validation that was never performed, which INVARIANT-16
+            # (Honest Compliance and Audit Claims) prohibits.  Refreshing an
+            # attestation is a deliberate act with its own procedure (see
+            # acvp_attestation.json::acvp_ref_note).
+            continue
+        text = _read(md)
+        if not text:
+            continue
+        for pat in doc_header_pats:
+            for m in pat.finditer(text):
+                doc_checked += 1
+                # repo_relative, not relative_to: the message is a path a
+                # reviewer reads, and str(Path.relative_to(...)) spells it with
+                # backslashes on Windows while every other message here uses
+                # forward slashes.
+                rel = repo_relative(md, REPO)
+                if m.group(1) != canonical:
+                    doc_stale.append(
+                        f"{rel}: header version {m.group(1)!r} != canonical {canonical!r}"
+                    )
+                elif m.group(2).strip():
+                    doc_stale.append(
+                        f"{rel}: header version carries the trailing qualifier "
+                        f"{m.group(2).strip()!r} — state one version, not a version and a mood"
+                    )
     if doc_stale:
         failures.append(f"  - documentation version headers ({len(doc_stale)} stale):")
         for row in doc_stale:

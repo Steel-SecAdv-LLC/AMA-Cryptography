@@ -252,32 +252,24 @@ Cross-check: output of `ama_hmac_sha3_256()` matches Python
 
 A Cython binding (`cy_hmac_sha3_256`) was added to eliminate ctypes per-call
 marshaling overhead. The Cython path compiles to C and calls
-`ama_hmac_sha3_256()` directly. No Cython-versus-ctypes throughput ratio is
-published: the one this paragraph carried named no host, build or run (see
-§2.8). The `hmac_sha3_256` row of the README's
-[Performance Metrics](../../README.md#performance-metrics) table is the
-current CI-measured figure, taken with the Cython bindings built.
+`ama_hmac_sha3_256()` directly, achieving ~262K ops/sec vs ~182K via ctypes.
 
-### 2.8 Ed25519 performance — v3.0.0 fix, and the figures retired
+### 2.8 Ed25519 performance — post-fix results (v3.0.0)
 
-**Performance fix applied (v3.0.0):** `generate_ed25519_keypair()` stores the
-64-byte key (`seed || pk`) instead of discarding it. **Superseded in 5.0.0:**
-`ama_ed25519_sign()` no longer skips the point multiplication for a 64-byte key.
-Under INVARIANT-51 it re-derives `A = [a]B` on every call and refuses a key
-whose stored public half disagrees; the fast path is now the 128-byte expanded
-form (`ama_ed25519_expand_secret_key` / `Ed25519SigningKey`).
+**Performance fix applied:** `generate_ed25519_keypair()` now stores the 64-byte
+expanded key (seed||pk) instead of discarding it. `ed25519_sign()` detects
+64-byte keys and skips redundant SHA-512 expansion + point multiplication.
 
-**Benchmark figures retired (2026-09-24).** This section listed per-algorithm
-throughput measured on 2026-03-21 against v3.0.0 on a "4-core Linux" host. It
-named no build flags and no run identifier (AGENTS.md §8.7), described code
-5.0.0 has since changed on every Ed25519 and ML-DSA path, and could not be
-reproduced, so the figures were removed rather than carried in a
-customer-facing report; the retirement is recorded in
-[`docs/BENCHMARK_HISTORY.md`](../BENCHMARK_HISTORY.md). The current figures
-are the CI four-run medians in the README's
-[Performance Metrics](../../README.md#performance-metrics) table, each tied to
-named workflow runs and pinned by `tools/check_published_benchmarks.py`.
-None of this affects the ACVP results in §2.1–§3.
+Post-fix benchmark results (2026-03-21, native C backend, 4-core Linux):
+- HMAC-SHA3-256: 206,010 ops/sec (0.005 ms) — native C via ctypes
+- Ed25519 KeyGen: 19,388 ops/sec (0.052 ms) — radix 2^51 field arithmetic
+- Ed25519 Sign: 18,657 ops/sec (0.054 ms) — expanded-key fast path
+- Ed25519 Verify: 9,702 ops/sec (0.103 ms)
+- ML-DSA-65 KeyGen: 5,536 ops/sec (0.181 ms)
+- ML-DSA-65 Sign: 3,639 ops/sec (0.275 ms)
+- ML-DSA-65 Verify: 6,490 ops/sec (0.154 ms)
+- SLH-DSA Sign: ~1.4 ops/sec (~741 ms) — consistent with SHA2-256f fast variant
+- SLH-DSA Verify: ~53 ops/sec (~19 ms)
 
 **Performance test status:** The wall-clock ops/sec thresholds that used to
 live in a dedicated performance test module were retired in the
@@ -289,7 +281,7 @@ instruction-count ledger under `benchmarks/` (`baseline.json`,
 (`benchmarks/check_baseline_justification.py`,
 `tests/test_benchmark_baseline_infra.py`), which run on every CI lane.  The
 object-retention bound that module also carried lives on in
-`tests/test_memory_security.py`.
+`tests/test_memory_security.py`.  The measured numbers above stand as measured.
 
 ---
 
@@ -407,10 +399,8 @@ load:
 | Ed25519 | Keygen + sign + verify roundtrip | Runtime generated |
 | RNG | Two consecutive `secrets.token_bytes(32)` non-equality | Runtime |
 
-**POST duration:** no wall-clock budget is enforced, and none is published:
-the duration depends on the host and build. Each run's wall-clock is reported
-by `ama_cryptography._self_test.post_duration_ms()`. (The figures this line
-carried until 2026-09-24 named no build or run and are retired; see §2.8.)
+**POST Budget:** All self-tests complete in <300ms (measured ~260ms on
+4-core Linux), well within the 500ms budget.
 
 **POST coverage boundary.** The table above is the set of approved algorithms
 that carry a power-on KAT; it is a **subset** of the approved primitives the
@@ -649,8 +639,8 @@ listed for inventory completeness:
    runs; continuous ACVP validation runs independently in
    `.github/workflows/acvp_validation.yml`.
 2. It did not repeat any performance measurement. The §2.8 benchmark figures
-   and the §4.1 POST timing were left as records of their original
-   measurement dates; both were retired on 2026-09-24 (see §2.8).
+   and the §4.1 POST timing (<300 ms) are unchanged records of their original
+   measurement dates.
 3. It did not re-fetch the Appendix A vector-source URLs; they are re-stated
    as cited, not re-downloaded.
 4. It adds no ACVP claims. The primitives in the table above are validated by

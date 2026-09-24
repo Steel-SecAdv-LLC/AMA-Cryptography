@@ -30,23 +30,11 @@ from pathlib import Path
 import pytest
 
 from tools import check_docker_pins as gate
-from tools._repo import TrackedFilesError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _PINNED = "alpine:3.23@sha256:" + "f" * 64
 _TODAY = _dt.date(2026, 8, 13)
-
-
-def _git(root: Path, *args: str) -> None:
-    _subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
-
-
-def _git_tree(root: Path) -> Path:
-    """An empty git work tree: files are in scope once ``git add``-ed."""
-    root.mkdir(parents=True, exist_ok=True)
-    _git(root, "init", "-q")
-    return root
 
 
 def _write(tmp_path: Path, body: str, name: str = "Dockerfile") -> Path:
@@ -269,74 +257,12 @@ class TestScopeAndFailClosed:
     def test_missing_file_argument_is_a_usage_error(self, tmp_path: Path) -> None:
         assert gate.main([str(tmp_path / "nope")]) == 2
 
-    def test_empty_scan_fails_closed(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """A scan that finds nothing is a broken scan, never a silent pass.
-
-        The tree is a git repository tracking nothing, so this reaches the
-        empty-scan guard rather than the enumeration failure tested below.
-        """
-        empty = _git_tree(tmp_path / "tree")
-        assert gate.dockerfiles(empty) == []
+    def test_empty_scan_fails_closed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A scan that finds nothing is a broken scan, never a silent pass."""
+        empty = tmp_path / "tree"
+        empty.mkdir()
         monkeypatch.setattr(gate, "REPO_ROOT", empty)
         assert gate.main([]) == 2
-        assert "no Dockerfiles found" in capsys.readouterr().err
-
-    def test_a_tree_git_cannot_enumerate_fails_closed(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """No git, no scope: ``TrackedFilesError`` and exit 2, never a filesystem walk.
-
-        A fallback that walked the directory when git was unavailable would
-        read exactly the untracked files the tracked enumeration exists to
-        exclude.  The Dockerfile here is a finding if anything reads it.
-        """
-        tree = tmp_path / "tree"
-        tree.mkdir()
-        (tree / "Dockerfile").write_text(_dockerfile(base="alpine:3.18"), encoding="utf-8")
-        # Stop git discovering a repository above the temporary directory.
-        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-        with pytest.raises(TrackedFilesError):
-            gate.dockerfiles(tree)
-        monkeypatch.setattr(gate, "REPO_ROOT", tree)
-        assert gate.main([]) == 2
-        assert "cannot enumerate the tracked Dockerfiles" in capsys.readouterr().err
-
-    def test_an_untracked_copy_is_out_of_scope_and_the_same_file_tracked_is_not(
-        self, tmp_path: Path
-    ) -> None:
-        """The scope is the tracked tree, not whatever sits under the root.
-
-        Measured before the fix: an untracked ``.claude/worktrees/<copy>``
-        under the root contributed its Dockerfiles to ``rglob("Dockerfile*")``
-        and the gate failed on a file that is not part of the repository.
-        The same bytes, once tracked, must be found and must fail — so the
-        exclusion is by tracking, not by path.
-        """
-        tree = _git_tree(tmp_path / "tree")
-        (tree / "docker").mkdir()
-        shipped = tree / "docker" / "Dockerfile"
-        shipped.write_text(_dockerfile(), encoding="utf-8")
-        stray_dir = tree / ".claude" / "worktrees" / "copy" / "docker"
-        stray_dir.mkdir(parents=True)
-        stray = stray_dir / "Dockerfile"
-        stray.write_text(_dockerfile(base="alpine:3.18"), encoding="utf-8")
-        _git(tree, "add", "docker/Dockerfile")
-
-        assert gate.dockerfiles(tree) == [shipped]
-        assert gate.audit(gate.dockerfiles(tree), today=_TODAY) == []
-
-        _git(tree, "add", "-f", ".claude/worktrees/copy/docker/Dockerfile")
-        assert stray in gate.dockerfiles(tree)
-        findings = gate.audit(gate.dockerfiles(tree), today=_TODAY)
-        assert [f.kind for f in findings if f.path == stray] == [gate.NOT_DIGEST_PINNED]
 
 
 class TestDocumentedBaseImagesMatchTheDockerfiles:
@@ -496,17 +422,10 @@ class TestWorkflowImages:
         assert {"ci.yml", "static-analysis.yml", "release.yml"} <= found
 
     def test_no_workflows_fails_closed(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A git tree tracking its Dockerfile, so the exit comes from the
-        # no-workflows guard and not from an enumeration failure.
-        tree = _git_tree(tmp_path / "tree")
+        tree = tmp_path / "tree"
+        tree.mkdir()
         _write(tree, _dockerfile())
-        _git(tree, "add", "Dockerfile")
-        assert gate.dockerfiles(tree) == [tree / "Dockerfile"]
         monkeypatch.setattr(gate, "REPO_ROOT", tree)
         assert gate.main([]) == 2
-        assert "no workflow files found" in capsys.readouterr().err

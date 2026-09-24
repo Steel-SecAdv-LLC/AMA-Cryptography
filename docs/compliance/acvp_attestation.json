@@ -192,7 +192,8 @@
         "triggers": [
             "push:main",
             "push:develop",
-            "push:tags:v*",
+            "push:feature/**",
+            "push:fix/**",
             "pull_request:main",
             "pull_request:develop",
             "weekly-schedule",

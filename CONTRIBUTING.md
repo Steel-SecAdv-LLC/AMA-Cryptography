@@ -97,18 +97,6 @@ cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --bui
 pip install -e ".[dev]"  # Installs pytest, ruff, mypy, bandit (and black on Python 3.10+)
 ```
 
-`pip install -e .` (or `python setup.py build_ext --inplace`) also writes
-`ama_cryptography/_integrity_signature.py`, the Ed25519-signed integrity
-artefact for **this** build: a per-build ephemeral key and this machine's
-native-library and binding digests. It is ignored by git and must never be
-committed (AGENTS.md §8.4); a fresh clone has none and refuses to import until
-it is built. After editing a `.py` file under `ama_cryptography/`, refresh the
-tracked source digest and commit `ama_cryptography/_integrity_digest.txt` only:
-
-```bash
-AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
-```
-
 ### 3. Verify Setup
 
 ```bash

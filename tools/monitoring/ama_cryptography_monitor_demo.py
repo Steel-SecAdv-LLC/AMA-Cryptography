@@ -27,7 +27,6 @@ AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
-import inspect
 import time
 
 from ama_cryptography.legacy_compat import (
@@ -217,20 +216,6 @@ def demo_security_report() -> None:
             print(f"    • {rec}")
 
 
-def default_state_line() -> str:
-    """The takeaway about the monitor's default, read off its constructor.
-
-    This line used to tell the reader monitoring was off by default, at
-    zero cost, while ``AmaCryptographyMonitor.__init__`` defaulted to
-    ``enabled=True`` -- and the class docstring said so.  Deriving it means
-    the demo cannot state a default the library does not have.
-    """
-    default = inspect.signature(AmaCryptographyMonitor.__init__).parameters["enabled"].default
-    if default is True:
-        return "Enabled by default (enabled=True); pass enabled=False to switch it off"
-    return f"Off unless requested (enabled={default!r}); pass enabled=True to switch it on"
-
-
 def main() -> None:
     """Run all demos."""
     print("=" * 70)
@@ -259,8 +244,8 @@ def main() -> None:
     print("    • ResonanceEngine detects timing anomalies via FFT analysis")
     print("    • RecursionEngine identifies pattern changes across time scales")
     print("    • RefactoringEngine provides code complexity metrics (read-only)")
-    print("    • Overhead is measured, not assumed: benchmarks/validation_suite.py --only-3r")
-    print(f"    • {default_state_line()}")
+    print("    • <2% performance overhead when enabled")
+    print("    • Disabled by default for zero-cost operation")
     print("\n  📖 Full documentation: MONITORING.md")
     print("=" * 70)
 

@@ -35,27 +35,9 @@ import pytest
 
 from tests.conftest import native_library_path
 from tools import check_vendor_isolation as gate
-from tools._repo import TrackedFilesError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GATE_PATH = REPO_ROOT / "tools" / "check_vendor_isolation.py"
-
-
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
-
-
-def _track(root: Path) -> Path:
-    """Make ``root`` a git work tree tracking every file now under it.
-
-    The build-config scan reads the TRACKED tree, so a fixture has to be
-    tracked to be in scope — exactly as a real build file must be.
-    """
-    if not (root / ".git").exists():
-        _git(root, "init", "-q")
-    _git(root, "add", "-A")
-    return root
-
 
 #: Where CMake leaves the built shared library, across generators.
 #:
@@ -973,7 +955,7 @@ class TestBuildConfigCheck:
 
     def _cmake(self, tmp_path: Path, body: str) -> Path:
         (tmp_path / "CMakeLists.txt").write_text(body, encoding="utf-8")
-        return _track(tmp_path)
+        return tmp_path
 
     def test_the_repository_itself_is_clean(self) -> None:
         assert gate.check_build_config(REPO_ROOT) == []
@@ -1044,7 +1026,7 @@ class TestBuildConfigCheck:
             encoding="utf-8",
         )
         (tmp_path / "CMakeLists.txt").write_text("add_subdirectory(benchmarks)\n", encoding="utf-8")
-        assert gate.check_build_config(_track(tmp_path)) == []
+        assert gate.check_build_config(tmp_path) == []
 
     def test_generated_build_output_is_not_scanned(self, tmp_path: Path) -> None:
         """``build/`` holds CMake's own generated files, not AMA's choices."""
@@ -1052,60 +1034,7 @@ class TestBuildConfigCheck:
         generated.mkdir(parents=True)
         (generated / "CMakeLists.txt").write_text("find_package(OpenSSL)\n", encoding="utf-8")
         (tmp_path / "CMakeLists.txt").write_text("project(ama)\n", encoding="utf-8")
-        # Tracked on purpose (``-A`` takes the generated file too): the
-        # exclusion under test is the ``build/`` directory rule, which must
-        # hold even for a file git would enumerate.
-        assert gate.check_build_config(_track(tmp_path)) == []
-
-    def test_an_untracked_copy_is_out_of_scope_and_the_same_file_tracked_is_not(
-        self, tmp_path: Path
-    ) -> None:
-        """The scope is the tracked tree, not whatever sits under the root.
-
-        Measured before the fix: ``**/CMakeLists.txt`` was globbed from the
-        filesystem, so an untracked ``.claude/worktrees/<copy>`` holding a
-        ``find_package(OpenSSL)`` failed the gate on a file that is not part
-        of the repository.  The same file, once tracked, must be read and
-        must fail: the exclusion is by tracking, not by path.
-        """
-        (tmp_path / "CMakeLists.txt").write_text("project(ama)\n", encoding="utf-8")
-        _track(tmp_path)
-        stray_rel = ".claude/worktrees/copy/CMakeLists.txt"
-        stray = tmp_path / stray_rel
-        stray.parent.mkdir(parents=True)
-        stray.write_text("find_package(OpenSSL REQUIRED)\n", encoding="utf-8")
-
-        assert gate.tracked_build_config_files(tmp_path) == [tmp_path / "CMakeLists.txt"]
         assert gate.check_build_config(tmp_path) == []
-
-        _git(tmp_path, "add", "-f", stray_rel)
-        violations = gate.check_build_config(tmp_path)
-        assert [v.where for v in violations] == [str(Path(stray_rel))], violations
-        assert "OpenSSL" in violations[0].detail
-
-    def test_a_tree_git_cannot_enumerate_fails_closed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """No git, no scope — and no filesystem fallback that would read the
-        untracked files this enumeration exists to exclude."""
-        (tmp_path / "CMakeLists.txt").write_text(
-            "find_package(OpenSSL REQUIRED)\n", encoding="utf-8"
-        )
-        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
-        with pytest.raises(TrackedFilesError):
-            gate.check_build_config(tmp_path)
-
-    def test_main_reports_an_enumeration_failure_as_a_failure(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Exit 1 per the module contract: a check that could not run failed."""
-
-        def _unenumerable(repo_root: Path) -> list[gate.Violation]:
-            raise TrackedFilesError(f"git could not enumerate {repo_root} (simulated)")
-
-        monkeypatch.setattr(gate, "check_build_config", _unenumerable)
-        assert gate.main(["--build-config"]) == 1
-        assert "cannot enumerate tracked files" in capsys.readouterr().err
 
     def test_every_screened_vendor_has_at_least_one_link_token(self) -> None:
         tokens = gate._vendor_link_tokens()

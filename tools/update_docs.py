@@ -9,14 +9,14 @@ Updates documentation targets from source-of-truth data:
   1. CHANGELOG.md   — new section from git log since last entry
   2. README.md       — refresh version number and date stamps
   3. Benchmark docs  — regenerate tables from ``benchmarks/benchmark-results.json``
-                       (one measured run on the host its provenance names),
+                       (canonical-host run; the actual measurement output),
                        cross-checked against ``benchmarks/baseline.json``
                        for the regression-floor secondary column. Pre-3.0.1
                        this generator pointed at ``baseline.json`` and so
                        published the *floors* as if they were headline
                        numbers — the wiki caption reflected that, calling the
                        table "Regression Baselines". The published numbers now
-                       match what the suite actually measures on the record's
+                       match what the suite actually measures on the canonical
                        host; the floor remains visible as a secondary column
                        so reviewers see both the headline and the CI safety
                        net. Since 5.0.0 the floor is a measured median on the
@@ -74,7 +74,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = ROOT / "CHANGELOG.md"
 README = ROOT / "README.md"
 # Source-of-truth split (3.0.0 audit follow-up):
-#   * Headline ops/sec come from the *measurement* file
+#   * Headline ops/sec come from the canonical-host *measurement* file
 #     produced by ``benchmarks/benchmark_runner.py --output
 #     benchmarks/benchmark-results.json`` (the same command CI runs — see
 #     ``.github/workflows/ci.yml``'s "Benchmark Regression Detection"
@@ -372,16 +372,16 @@ def update_readme(dry_run: bool = False) -> bool:
 # ============================================================================
 #
 # The auto-generated benchmark table publishes the latest *measured* ops/sec
-# from ``benchmarks/benchmark-results.json`` as the headline number — the run
-# that the suite actually produced, on the host that record names — and pairs each row with the matching
+# from ``benchmarks/benchmark-results.json`` as the headline number — the canonical-host
+# run that the suite actually produced — and pairs each row with the matching
 # regression floor from ``benchmarks/baseline.json``.  Reviewers see both:
 #   * "Throughput (ops/sec)" — what the host actually measured.
 #   * "Regression floor"     — what CI enforces (deliberately ~65% of
 #                              measured, with `tolerance_percent` headroom).
 #
-# Headline === the recorded run.  The pre-3.0.1 generator pointed at the
+# Headline === canonical-host run.  The pre-3.0.1 generator pointed at the
 # floor file and so unintentionally published the safety-net numbers as if
-# they were measured figures; that has been corrected here.
+# they were the canonical figures; that has been corrected here.
 
 
 def _format_iso_date(timestamp: str | None) -> str:
@@ -434,7 +434,7 @@ def _baseline_index() -> dict[str, dict[str, Any]]:
 
 
 def _generate_benchmark_table() -> str:
-    """Emit the throughput table of the committed benchmark record.
+    """Emit the canonical-host throughput table.
 
     ``benchmarks/benchmark-results.json`` is the source of truth for the headline
     numbers; if it is missing the function returns an empty string and
@@ -527,7 +527,7 @@ def _generate_benchmark_table() -> str:
             f"{captured} results-JSON run; their measured values are in "
             "[`benchmark-report.md`](https://github.com/Steel-SecAdv-LLC/"
             "AMA-Cryptography/blob/main/benchmark-report.md) until the next "
-            "dual-output run is committed._"
+            "dual-output canonical-host run is committed._"
         )
         lines.append("")
         lines.append(
@@ -711,7 +711,7 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
             "regenerate the auto-table from baseline floors. Re-run\n"
             "    LD_LIBRARY_PATH=build/lib python3 benchmarks/benchmark_runner.py \\\n"
             "        --output benchmarks/benchmark-results.json --markdown benchmark-report.md\n"
-            "first."
+            "on the canonical host first."
         )
         return False
 

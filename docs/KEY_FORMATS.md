@@ -153,21 +153,26 @@ are what reject the RFC 9881 §8.2 and lamps-kyber §C.4.1 negative vectors, and
 because an ML-KEM inconsistency is *designed* to fail silently.
 
 It is a policy rather than a constant because the checks are not free and the
-import path is reachable by whoever supplies a key file. For an `expandedKey`
-import the check does cryptographic work — for ML-DSA a full matrix expansion,
-for ML-KEM an encapsulation and a decapsulation — so it, not the DER parse, is
-the cost of the import, on a path whoever supplies the file can reach. That is
-the denial-of-service lever the policy exists to expose. The `seed` form is different: expanding a
-seed is how the key is decoded at all — not a check, and so not governed by the
-policy.
+import path is reachable by whoever supplies a key file. Measured on one core,
+x86-64, `-O3 -flto`, by `benchmarks/keyformat_import.py` — the same standard as
+the curve measurements in `docs/NIST_PRIME_CURVES.md`:
 
-`benchmarks/keyformat_import.py` measures parse-only against checked import
-for every algorithm and form on the host it runs on. The table this section
-carried — one core, x86-64, `-O3 -flto`, taken when the policy landed
-(2026-07-28, #378) — named no CPU, date or run identifier, and the import and
-key-generation paths it timed have changed since, so it is not published here
-as a current figure; it is kept, with that provenance, in
-[`docs/BENCHMARK_HISTORY.md`](BENCHMARK_HISTORY.md) (2026-09-24).
+| Algorithm | Form | Parse only | Checked (default) | Ratio | Keygen, for scale |
+|---|---|---:|---:|---:|---:|
+| ML-DSA-44 | `expandedKey` | 0.011 ms | 0.099 ms | 8.9× | 0.118 ms |
+| ML-DSA-65 | `expandedKey` | 0.011 ms | 0.155 ms | 13.7× | 0.192 ms |
+| ML-DSA-87 | `expandedKey` | 0.011 ms | 0.287 ms | 26.0× | 0.274 ms |
+| ML-KEM-512 | `expandedKey` | 0.018 ms | 0.127 ms | 7.0× | 0.044 ms |
+| ML-KEM-768 | `expandedKey` | 0.019 ms | 0.204 ms | 10.9× | 0.077 ms |
+| ML-KEM-1024 | `expandedKey` | 0.022 ms | 0.291 ms | 13.3× | 0.116 ms |
+| ML-DSA-87 | `seed` | 0.266 ms | 0.262 ms | 1.0× | 0.274 ms |
+| ML-KEM-1024 | `both` | 0.021 ms | 0.127 ms | 6.0× | 0.116 ms |
+
+Read the ratio column as the denial-of-service lever: an `expandedKey`-only
+ML-DSA-87 import costs about what *generating* a key costs, and 26× what parsing
+the DER around it costs. The `seed` form shows a ratio of 1.0 because expanding
+a seed is how the key is decoded at all — not a check, and so not governed by
+the policy.
 
 Two things stay true with the checks off, both free:
 
@@ -184,12 +189,12 @@ check), and the specifications' negative vectors are no longer rejected at
 import. RFC 9881 §8.2 requires an inconsistent key to be rejected as malformed,
 so disabling this is a conformance decision, not a tuning one.
 
-For scale: on this path the EC curves cost more than the PQ ones, because
-deriving a public key from a scalar is a scalar multiplication (the recorded
-2026-07-28 measurement put P-521 import above every PQ row). That cost is not
-governed by this policy because for EC the derivation *is* the key. It is the
-reason the fixed-base comb described in `docs/NIST_PRIME_CURVES.md` was worth
-doing.
+For scale, note what the table does *not* show: the EC curves cost far more on
+this path than the PQ ones, because deriving a public key from a scalar is a
+scalar multiplication. P-521 import is 1.23 ms against ML-DSA-87's 0.287 ms, and
+that cost is not governed by this policy because for EC the derivation *is* the
+key. It is the reason the fixed-base comb described in
+`docs/NIST_PRIME_CURVES.md` was worth doing.
 
 ### Every algorithm is real
 

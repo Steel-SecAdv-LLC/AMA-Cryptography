@@ -526,7 +526,7 @@ class TestTamperDetection:
 
 
 # ---------------------------------------------------------------------------
-# 5. AMA_CRYPTO_LIB_PATH override — relocates the signed library, never substitutes
+# 5. AMA_CRYPTO_LIB_PATH override — signed, but native not the shipped object
 # ---------------------------------------------------------------------------
 
 
@@ -534,10 +534,12 @@ class TestOverrideVerification:
     def test_byte_identical_override_is_verified(self, signed_tree: Path, tmp_path: Path) -> None:
         """An override whose bytes EQUAL the signed bytes is the signed library.
 
-        Verification is a property of the bytes, not the path: a
-        byte-identical copy loaded from elsewhere passes the pre-load check,
-        carries the full signed assurance, and the override's presence
-        remains visible in the diagnostics record.
+        The pre-4.0 rule marked every override UNVERIFIED unconditionally.
+        Since the POST stage now compares the digest of the bytes actually
+        mapped, verification is a property of the bytes, not the path: a
+        byte-identical copy loaded from elsewhere carries the full signed
+        assurance, and the override's presence remains visible in the
+        diagnostics record.
         """
         so = _real_so(signed_tree)
         external = tmp_path / "elsewhere"
@@ -564,45 +566,39 @@ class TestOverrideVerification:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "OK" in result.stdout
 
-    def test_modified_override_is_refused_and_nothing_loads_in_its_place(
+    def test_modified_override_loads_but_is_recorded_unverified(
         self, signed_tree: Path, tmp_path: Path
     ) -> None:
-        """The override relocates the signed library; it never substitutes it.
-
-        A *modified* override used to be honoured — mapped with the pre-load
-        digest check skipped, its constructors run — and POST then reported it
-        UNVERIFIED while the import succeeded.  It is now refused before it is
-        mapped, exactly like a tampered shipped library, and the import fails.
-
-        The tree under test still holds the genuine signed library in the
-        package directory, first on the ordinary search path, so a fallback
-        after the refusal would import cleanly: the failed import pins that
-        there is none.  "refused before mapping", and the absence of the
-        post-load MISMATCH message, pin that the modified object was never
-        mapped at all.
-        """
+        """A *modified* override is the operator's own substitution: honoured,
+        never digest-blocked, and reported UNVERIFIED rather than tampered."""
         so = _real_so(signed_tree)
         external = tmp_path / "elsewhere-modified"
         external.mkdir()
         ext_so = external / "libama_cryptography.so"
         blob = bytearray(so.read_bytes())
         # Append a byte: changes the digest without perturbing any mapped
-        # segment, so the object would still load and function if mapped —
-        # only the digest check stands in its way.
+        # segment, so the object still loads and functions.
         blob.append(0x00)
         ext_so.write_bytes(bytes(blob))
 
         result = _run_python(
-            "import sys; sys.path.insert(0, '.'); import ama_cryptography",
+            """
+            import sys; sys.path.insert(0, ".")
+            import ama_cryptography as a
+            att = a.module_attestation()
+            # The override backend is functional, so the module is OPERATIONAL...
+            assert att["state"] == "OPERATIONAL", att
+            # ...but the loaded bytes are not the signed ones, so NOT full.
+            assert att["fully_verified"] is False, att
+            detail = dict((n, d) for n, _p, d in a.module_self_test_results())["integrity"]
+            assert "UNVERIFIED" in detail and "override" in detail, detail
+            print("OK")
+            """,
             cwd=signed_tree,
             env_extra={"AMA_CRYPTO_LIB_PATH": str(ext_so)},
         )
-        assert result.returncode != 0, "a modified AMA_CRYPTO_LIB_PATH object imported"
-        combined = result.stdout + result.stderr
-        assert "refused before mapping" in combined, combined
-        assert "AMA_CRYPTO_LIB_PATH" in combined and "never substitute" in combined, combined
-        assert "native library digest MISMATCH" not in combined, combined
-        assert "UNVERIFIED" not in combined, combined
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "OK" in result.stdout
 
 
 # ---------------------------------------------------------------------------

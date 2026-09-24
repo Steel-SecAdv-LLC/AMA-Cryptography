@@ -40,11 +40,7 @@ on:
   # scripts were re-verified on a PR and skipped on a direct push to main,
   # develop or a feature branch — the same change, gated on how it arrived.
   push:
-    # Pushes run for the bases pull requests merge into, not for PR head
-    # branches: a feature/** or fix/** head is covered by its pull_request run,
-    # and running on its push as well ran this workflow twice per head
-    # (tests/test_gate_coverage.py::test_a_pull_request_head_runs_each_workflow_once).
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
     paths:
       - 'src/c/**'
       - 'include/**'

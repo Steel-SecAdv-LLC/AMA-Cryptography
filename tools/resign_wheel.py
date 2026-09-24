@@ -204,12 +204,10 @@ def _run_signer(root: Path, pkg_dir: Path) -> None:
       ``import ama_cryptography`` resolves to the wheel's own tree (both
       precede site-packages, and ``python -m`` puts the cwd first);
     * ``AMA_CRYPTO_LIB_PATH`` = the unpacked package directory, so
-      import-path native-library discovery is confined to the tree (an
-      honoured override is the whole search; it relocates, and mapping the
-      not-yet-signed library is the signer's own in-process opt-in, not
-      something this variable grants);
-    * ``LD_LIBRARY_PATH``/``DYLD_LIBRARY_PATH`` dropped — defence in depth:
-      under the override above they are no longer consulted at all;
+      import-path native-library discovery starts (and, with the vendored
+      library present, ends) inside the tree;
+    * ``LD_LIBRARY_PATH``/``DYLD_LIBRARY_PATH`` dropped — the one documented
+      way a candidate from outside the tree could outrank an in-tree one;
     * ``AMA_BUILD_PIPELINE=1`` — the signer's own gate (set by
       ``CIBW_ENVIRONMENT`` in the container already; pinned here so the
       tool does not depend on that);

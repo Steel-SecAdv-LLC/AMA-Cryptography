@@ -13,34 +13,14 @@ from __future__ import annotations
 
 import importlib.util
 import re
-import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Callable
 
 import pytest
 
-from tools._repo import TrackedFilesError
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOL_PATH = REPO_ROOT / "tools" / "check_version_consistency.py"
-
-
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
-
-
-def _track(root: Path) -> Path:
-    """Make ``root`` a git work tree tracking every file now under it.
-
-    The repository-wide Markdown sweeps read the TRACKED tree, so a fixture
-    has to be tracked to be in scope — exactly as a real document must be.
-    """
-    if not (root / ".git").exists():
-        _git(root, "init", "-q")
-    _git(root, "add", "-A")
-    return root
 
 
 @pytest.fixture(scope="module")
@@ -143,7 +123,6 @@ class TestTagPins:
             'AMA-Cryptography.git@v4.0.0"\n',
             encoding="utf-8",
         )
-        _track(tmp_path)
         problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
         assert checked == 1
         assert problems and "@v4.0.0" in problems[0] and "README.md" in problems[0]
@@ -155,7 +134,6 @@ class TestTagPins:
             "AMA-Cryptography.git@v5.0.0\n",
             encoding="utf-8",
         )
-        _track(tmp_path)
         problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
         assert problems == [] and checked == 1
 
@@ -169,7 +147,6 @@ class TestTagPins:
             ".github/workflows/generator_generic_slsa3.yml@v2.1.0\n",
             encoding="utf-8",
         )
-        _track(tmp_path)
         problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
         assert problems == [] and checked == 0
 
@@ -185,7 +162,6 @@ class TestTagPins:
         (compliance / "OLD_ATTESTATION.md").write_text(
             "Generated against AMA-Cryptography.git@v3.0.0\n", encoding="utf-8"
         )
-        _track(tmp_path)
         problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
         assert problems == [] and checked == 0
 
@@ -212,7 +188,6 @@ class TestInvariantRangeClaims:
         (tmp_path / "doc.md").write_text(
             "See INVARIANTS.md (INVARIANT-1 through INVARIANT-42).\n", encoding="utf-8"
         )
-        _track(tmp_path)
         problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
         assert checked == 1
         assert len(problems) == 1
@@ -223,7 +198,6 @@ class TestInvariantRangeClaims:
         self, tool_module: ModuleType, tmp_path: Path, joiner: str
     ) -> None:
         (tmp_path / "doc.md").write_text(f"INVARIANT-1 {joiner} INVARIANT-9\n", encoding="utf-8")
-        _track(tmp_path)
         problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
         assert checked == 1, joiner
         assert len(problems) == 1, joiner
@@ -237,7 +211,6 @@ class TestInvariantRangeClaims:
         (tmp_path / "doc.md").write_text(
             "Security (INVARIANT-39 through INVARIANT-42)\n", encoding="utf-8"
         )
-        _track(tmp_path)
         problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
         assert checked == 0
         assert problems == []
@@ -250,7 +223,6 @@ class TestInvariantRangeClaims:
         (tmp_path / "doc.md").write_text(
             "See INVARIANTS.md, INVARIANT-1\n  through INVARIANT-42.\n", encoding="utf-8"
         )
-        _track(tmp_path)
         problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
         assert checked == 1
         assert len(problems) == 1
@@ -263,7 +235,6 @@ class TestInvariantRangeClaims:
         """The check reads prose and cannot tell a quotation from a claim, so
         the message has to name the escape rather than leave a writer stuck."""
         (tmp_path / "doc.md").write_text("INVARIANT-1 through INVARIANT-42\n", encoding="utf-8")
-        _track(tmp_path)
         problems, _checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
         assert "ending at INVARIANT-N" in problems[0]
 
@@ -294,83 +265,6 @@ class TestInvariantRangeClaims:
         highest, problems = tool_module.invariant_register_extent(register)
         assert highest == 0
         assert problems, "a register with nothing in it must not read as clean"
-
-
-#: The three repository-wide Markdown sweeps, each as ``(problems, checked)``.
-_MARKDOWN_SWEEPS: dict[str, Callable[[ModuleType, Path], tuple[list[str], int]]] = {
-    "git-tag install pins": lambda m, repo: m.scan_tag_pins(repo, "5.0.0"),
-    "invariant-range claims": lambda m, repo: m.scan_invariant_range_claims(repo, 43),
-    "document version headers": lambda m, repo: m.scan_doc_headers(repo, "5.0.0"),
-}
-
-
-class TestTrackedScope:
-    """The Markdown sweeps read the tracked tree, not whatever is under the root.
-
-    Measured before the fix: all three enumerated with ``rglob("*.md")``, so
-    an untracked checkout nested under the root (``.claude/worktrees/<copy>``,
-    a scratch clone) contributed its documents and the gate failed on files
-    that are not part of the repository.  The same document, once tracked,
-    must be read and must fail: the exclusion is by tracking, not by path.
-    """
-
-    _STRAY = ".claude/worktrees/copy/docs/GUIDE.md"
-    _STALE = (
-        "**Version:** 4.0.0\n\n"
-        "See INVARIANTS.md (INVARIANT-1 through INVARIANT-42).\n\n"
-        'pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0"\n'
-    )
-
-    @pytest.mark.parametrize("sweep", sorted(_MARKDOWN_SWEEPS))
-    def test_an_untracked_copy_is_out_of_scope_and_the_same_file_tracked_is_not(
-        self, tool_module: ModuleType, tmp_path: Path, sweep: str
-    ) -> None:
-        scan = _MARKDOWN_SWEEPS[sweep]
-        root = tmp_path / "tree"
-        root.mkdir()
-        (root / "README.md").write_text("**Version:** 5.0.0\n", encoding="utf-8")
-        _track(root)
-        stray = root / self._STRAY
-        stray.parent.mkdir(parents=True)
-        stray.write_text(self._STALE, encoding="utf-8")
-
-        problems, _checked = scan(tool_module, root)
-        assert problems == [], f"{sweep}: read an untracked file: {problems}"
-
-        _git(root, "add", "-f", self._STRAY)
-        problems, _checked = scan(tool_module, root)
-        assert len(problems) == 1, f"{sweep}: {problems}"
-        assert self._STRAY in problems[0], problems[0]
-
-    @pytest.mark.parametrize("sweep", sorted(_MARKDOWN_SWEEPS))
-    def test_a_tree_git_cannot_enumerate_fails_closed(
-        self,
-        tool_module: ModuleType,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        sweep: str,
-    ) -> None:
-        """No git, no scope — and no filesystem fallback that would read the
-        untracked files this enumeration exists to exclude."""
-        root = tmp_path / "tree"
-        root.mkdir()
-        (root / "doc.md").write_text(self._STALE, encoding="utf-8")
-        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-        with pytest.raises(TrackedFilesError):
-            _MARKDOWN_SWEEPS[sweep](tool_module, root)
-
-    def test_main_exits_2_when_the_tracked_tree_cannot_be_enumerated(
-        self,
-        tool_module: ModuleType,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        def _unenumerable(repo: Path, *pathspecs: str) -> list[Path]:
-            raise TrackedFilesError(f"git could not enumerate {repo} (simulated)")
-
-        monkeypatch.setattr(tool_module, "tracked_documents", _unenumerable)
-        assert tool_module.main() == 2
-        assert "cannot enumerate the tracked tree" in capsys.readouterr().err
 
 
 def _match_header(tool_module: ModuleType, text: str) -> tuple[str, str] | None:

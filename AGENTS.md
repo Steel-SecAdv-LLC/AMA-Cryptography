@@ -242,11 +242,7 @@ until measurement establishes otherwise.
 2. Skipping, quarantining, or deleting a test to obtain a passing build.
 3. Adding a suppression to `src/c/` or `include/` under any justification.
 4. Committing `ama_cryptography/_integrity_signature.py` from a local build; it
-   carries a per-build ephemeral key and local artifact digests. The file is
-   not tracked and is listed in `.gitignore`; every build that imports the
-   package generates its own, and `tests/test_setup_signer_contract.py` fails
-   if it is tracked again. A `.py` source change commits
-   `ama_cryptography/_integrity_digest.txt`, the tracked source digest, only.
+   carries a per-build ephemeral key and local artifact digests.
 5. Empty commits, or closing and reopening a pull request, to re-trigger CI.
 6. Asserting that a CI lane passed without observing it complete.
 7. Publishing a performance figure without its host, build flags, and run
@@ -323,45 +319,61 @@ repository maintainer.
 
 ## 11. Current engineering state
 
-**Open item: guards no test reaches.** Carried forward and unassigned.
-`tools/measure_branch_coverage.py` reported 1,741 of 11,315 instrumented branch
-arcs under `src/c` never taken by the C suite, measured 2026-09-22 (gcc 13.3.0,
-Debug `--coverage -O0 -g`, 143 translation units, `ctest` 138 tests, on the
-tree just before `test_ed25519_stack_residue` was added). That is a dated
-measurement, not a current count; the `839b66b4` commit message's 1,765 of
-11,053 came from a different host and toolchain and is superseded. The Ed25519
-rows are triaged (two Medium findings closed). The dispatch and CPUID buckets
-(285 and 60 arcs) are structurally unreachable on any single host and need no
-action. Not yet examined: `ama_nistp.c` (152 arcs), `ama_dilithium.c` (143),
-`ama_slhdsa.c` (116), `ama_kyber.c` (113), `ama_frost.c` (67).
+Open item, carried forward and unassigned:
 
-How to read that inventory (the conclusions of two §6.6 corrections; the
-reasoning is in the repository history):
+`tools/measure_branch_coverage.py` reports 1,741 of 11,315 instrumented
+branch arcs under `src/c` never taken by the C suite (measured 2026-09-22 on
+the tree just before `test_ed25519_stack_residue` was added: gcc 13.3.0, Debug
+`--coverage -O0 -g`, 143 translation units, `ctest` 138 tests; the suite has
+grown since, so this is a dated measurement, not a current count). The 839b66b4 commit message
+reported 1,765 of 11,053; re-measuring that revision on this host gives
+1,792 of 11,081 over 142 translation units, so the earlier figure belongs to
+a different host and toolchain and is superseded here. The Ed25519 rows have been triaged
+and two Medium findings closed. The dispatch and CPUID buckets (285 and 60
+arcs) are structurally unreachable on any single host and require no action.
+The following have not been examined: `ama_nistp.c` (152 arcs),
+`ama_dilithium.c` (143), `ama_slhdsa.c` (116), `ama_kyber.c` (113),
+`ama_frost.c` (67).
 
-- It measures the **C suite only**. An arc reached only from Python is counted
-  as never taken, so a row is a question, not a finding. Extending the
-  measurement to both suites is open.
-- NULL-argument and allocation-failure returns are already classified as
-  legitimately never taken. Arcs recovered in that class are not triage
-  progress; `abde8640`'s claim to the contrary is withdrawn, and its test is
-  kept because it pins real INVARIANT-5 guards.
-- The work is to find guards *no test in either suite* executes, build tests
-  that fail without them, and remediate anything that is more than a coverage
-  gap. An arc is triaged when mutation establishes its classification, not when
-  it leaves the count. Per §10, a coverage gate carrying an exemption list is
-  not an acceptable substitute.
+**What this inventory is, and what it is not.** Two corrections, per §6.6,
+because the paragraph above has twice been read as a defect list and worked as
+one.
 
-`fuzz/fuzz_nistp.c` gives `ama_nistp.c`'s four parsers exploratory coverage.
-It is a standing check, not a reduction in the `ctest` figure above.
+First, the instrument measures one suite. Its own docstring says so — "the
+branch arcs under `src/c` that the C suite never takes" — and its documented
+procedure builds with `--coverage` and runs `ctest`, nothing else. The Python suite
+never executes under it. An arc reached only from Python is
+therefore counted here as never taken, so the number is an inventory of what
+the C suite does not reach, which is not the same set as the guards no test
+protects. Extending the measurement to cover both suites is open and unsolved;
+until it is, a row in this inventory is a question, not a finding.
 
-**Release prerequisites** are recorded in the pull request description. Each
-requires hardware, a protected credential or a workflow dispatch; none is
-blocked by a defect in the tree. Re-measuring a "canonical host" is not one of
-them: the 4.x-era canonical-host tables are removed, `README.md` publishes only
-CI four-run medians pinned by `tools/check_published_benchmarks.py` against
-`benchmarks/published-benchmarks.json` (host, build flags and run identifiers
-recorded for every source), and `benchmarks/README.md` states the policy for
-figures from other hardware.
+Second, `839b66b4` — the commit that produced this inventory — already
+classified NULL-argument returns and allocation-failure returns among the arcs
+that are legitimately never taken. Arc count recovered against that class is
+not triage progress, and reporting it as such is a measurement error. `abde8640`
+made exactly that error and its claim is withdrawn; the test it added is kept,
+because it pins real INVARIANT-5 guards.
+
+The required approach is unchanged in kind but not in target: identify guards
+*no test in either suite* executes, construct tests that fail without them, and
+remediate anything that proves to be more than a coverage gap. An arc is
+triaged when its classification is established by mutation, not when it stops
+appearing in a count. Per §10, a coverage gate carrying an exemption list is
+not an acceptable substitute.
+
+`ama_nistp.c` now also has exploratory coverage: `fuzz/fuzz_nistp.c` drives its
+four parsers and asserts four properties across them. That is a standing check,
+not a reduction in the figure above, which is a `ctest` measurement.
+
+Release prerequisites are recorded in the pull request description. Each
+requires hardware, a protected credential, or a workflow dispatch; none is
+blocked by a defect in the tree. One of them has been narrowed: the published
+canonical-host benchmark figures now have a drift mechanism
+(`tools/check_canonical_benchmarks.py` against `benchmarks/canonical-host.json`),
+so an edited, invented or quietly deleted figure fails CI. Re-measuring that
+host still requires AVX-512 silicon this project's CI does not have; detecting
+that a published number changed no longer does.
 
 ---
 

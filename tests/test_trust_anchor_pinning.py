@@ -535,12 +535,12 @@ class TestAttestationExposesAnchoring:
         from ama_cryptography import _self_test
 
         ok, _ = _self_test.verify_module_integrity()
-        assert ok is True, "the developer build's own artefact must verify"
+        assert ok is True, "the committed developer artefact must verify"
         att = _self_test.module_attestation()
         assert att["fully_verified"] is True
         assert att["integrity_strength"] == "signed"
         assert att["anchored"] is False, (
-            "the developer build's artefact is dev-signed with a per-build ephemeral key; "
+            "the committed artefact is dev-signed with a per-build ephemeral key; "
             "attestation must not report it as anchored"
         )
 
@@ -550,7 +550,7 @@ class TestAttestationExposesAnchoring:
         """When the signing key matches the compiled anchor, anchored is True.
 
         Driven through the real ``verify_module_integrity`` — only the anchor
-        source is mocked, to the built artefact's own public key, which is
+        source is mocked, to the committed artefact's own public key, which is
         exactly the identity a release build's compiled anchor asserts.
         """
         from ama_cryptography import _integrity_signature, _self_test
@@ -672,16 +672,14 @@ class TestSignerIdentityRunpyWindow:
 class TestSignerAnchorMismatchCarveOut:
     """The documented pre-signing state must not hard-fail the signer.
 
-    A wheel build that finds an artefact starts from (freshly built anchored
-    library + an earlier build's dev-signed artefact): the anchor comparison
-    on that artefact can only mismatch, and the signer exists to replace it.
-    (This said "committed dev-signed artefact" while the artefact was tracked;
-    it is a build output now, AGENTS.md section 8.4.)  The first head where the
+    Every wheel build starts from (freshly built anchored library + committed
+    dev-signed artefact): the anchor comparison on that artefact can only
+    mismatch, and the signer exists to replace it.  The first head where the
     signer identity legitimately mapped the library exposed this — all five
     cibuildwheel platforms failed the BUILD phase on "integrity trust anchor
     mismatch" (previously the unreadable anchor made the branch unreachable
     at build time, an accident of blindness, not a design).  These drive the
-    REAL _verify_signed_integrity against the tree's real (built) artefact.
+    REAL _verify_signed_integrity against the repository's real artefact.
     """
 
     @staticmethod

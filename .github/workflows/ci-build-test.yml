@@ -4,11 +4,7 @@ name: CI - Build and Test
 
 on:
   push:
-    # Pushes run for the bases pull requests merge into, not for PR head
-    # branches: a feature/** or fix/** head is covered by its pull_request run,
-    # and running on its push as well ran this workflow twice per head
-    # (tests/test_gate_coverage.py::test_a_pull_request_head_runs_each_workflow_once).
-    branches: [ main, develop ]
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
@@ -267,30 +263,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS only: this is the repository's macOS pytest lane.  Linux and
-        # Windows are ci.yml::test's, and running them here as well ran the
-        # same suite twice per head.
-        #
-        # This matrix used to carry ubuntu-latest and windows-latest as well,
-        # and so did ci.yml::test, cell for cell: same interpreters, same
-        # extras ([dev,hsm,examples] + cryptography/pynacl/pycryptodome here,
-        # [dev,legacy,benchmark,hsm,examples] + pycryptodome there, which
-        # resolve to the same packages), the same SoftHSM2 provisioning, the
-        # same AMA_CI_REQUIRE_BACKENDS / AMA_CI_REQUIRE_HISTORY promotion of
-        # skips to failures, and the same `tests/` run.  The ten duplicated
-        # legs cost 161.7 job-minutes of the 720.1 on PR #394's head d6270f28.
-        # What differed, and where each difference went:
-        #   * coverage: the codecov upload ran on ubuntu-latest / 3.11 here; it
-        #     now runs on the same cell of ci.yml::test.
-        #   * Windows PYTHONUTF8=1 / PYTHONIOENCODING=utf-8 on the test step:
-        #     dropped, not moved.  It is the WEAKER configuration: ci.yml runs
-        #     the suite on the runner's cp1252 console deliberately, and that
-        #     is where a real Windows encoding failure surfaced that this lane
-        #     "never saw" (tests/test_conftest_backend_skip_scoping.py).
-        #   * ci.yml::test additionally verifies the backends and the interop
-        #     references import, runs the detector gates, the examples, the
-        #     Wycheproof corpus and the demonstration: nothing was only here.
-        #
         # macos-15-intel (x86_64) sits beside macos-latest (arm64) because
         # release.yml builds wheels on BOTH macOS architectures and its
         # matrix comment states the invariant: a wheel for a platform and
@@ -299,10 +271,8 @@ jobs:
         # cibuildwheel's import smoke test — no pytest lane anywhere ran on
         # an Intel Mac.  The SoftHSM/PyKCS11 provisioning below is already
         # prefix-relative (brew --prefix), so the x86_64 lane runs the same
-        # real-token lifecycle as the arm64 one.  The per-(OS, interpreter)
-        # union of this matrix and ci.yml::test is pinned against the release
-        # wheel matrix by tests/test_release_matrix_coverage.py.
-        os: [macos-latest, macos-15-intel]
+        # real-token lifecycle as the arm64 one.
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
@@ -330,15 +300,40 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # The Ubuntu (apt) and Windows (Chocolatey) system-dependency, native
-      # build and SoftHSM2 steps left with those two OSes: every one was gated
-      # on an OS this matrix no longer runs, so each would only have been a
-      # step that never executes.  ci.yml::test carries them for its legs.
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential python3-dev cmake
+
       - name: Install system dependencies (macOS)
         # startsWith, not equality: this job's matrix carries both macOS
         # architectures (macos-latest arm64, macos-15-intel x86_64).
         if: startsWith(matrix.os, 'macos')
         run: brew install cmake
+
+      - name: Install system dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # CMake is pre-installed on GitHub-hosted Windows runners.
+          # Only install via Chocolatey (with retries) if it is missing,
+          # so a transient Chocolatey CDN outage cannot break the build.
+          if (Get-Command cmake -ErrorAction SilentlyContinue) {
+            Write-Host "CMake already available: $(cmake --version | Select-Object -First 1)"
+          } else {
+            Write-Host "CMake not found; installing via Chocolatey with retries..."
+            # Retries live in the script, and they key on the OUTCOME rather
+            # than on Chocolatey's exit code, which is 0 even when the feed is
+            # down and nothing was installed.  See
+            # .github/scripts/choco-install.ps1.
+            & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1" `
+              -Package cmake -InstallArgs 'ADD_CMAKE_TO_PATH=System'
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            # Refresh PATH so cmake is available to subsequent steps
+            Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+            refreshenv
+          }
 
       - name: Install Python build dependencies
         run: |
@@ -351,13 +346,20 @@ jobs:
       # latent setup.py CMakeBuild fragility on Windows / macOS that
       # surfaces as "Python X.Y on {os} -- exit 1/2" without the
       # pre-build.
-      - name: Build native C library (macOS)
+      - name: Build native C library (Linux / macOS)
+        if: matrix.os != 'windows-latest'
         run: |
           cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           # Use Python's os.cpu_count() for portability — `nproc` is GNU
           # coreutils and not guaranteed on macos-latest. Bare `-j` would
           # unbound make's parallelism and OOM the runner.
           cmake --build build -j"$(python -c 'import os; print(os.cpu_count() or 1)')"
+
+      - name: Build native C library (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build --config Release --parallel
 
       - name: Install SoftHSM2 (PKCS#11 test token)
         # This job runs with AMA_CI_REQUIRE_BACKENDS=1, which promises every
@@ -366,25 +368,114 @@ jobs:
         # otherwise.  ci.yml gained this step in 5.0.0; this workflow needs it
         # for the same reason, because it makes the same promise.
         #
-        # Homebrew, on both macOS architectures.  The first version of this
-        # step was Linux-only and the macOS gap was written up as a known
+        # Linux via apt, macOS via Homebrew.  The first version of this step
+        # was Linux-only and the macOS gap was written up as a known
         # limitation instead of being closed — but `brew install softhsm`
         # ships the same PKCS#11 module, so the limitation was a choice, not a
-        # constraint.  The Linux (apt) and Windows (Chocolatey softhsm.install)
-        # provisioning this workflow also carried went with its Linux and
-        # Windows legs to ci.yml::test, which runs the real token lifecycle on
-        # both; tests/test_hsm_integration.py pins the provisioning per job
-        # against each job's own matrix.
-        if: runner.os == 'macOS'
+        # constraint.  Both platforms now execute the real token lifecycle.
+        #
+        # Windows went through the same arc one revision later: it was excused
+        # as "no maintained package on any runner-available manager", but
+        # Chocolatey's softhsm.install package (wrapping the Disig
+        # SoftHSM2-for-Windows MSI) is live on the community feed, so that
+        # claim was also a choice wearing a constraint's clothes.  The next
+        # step provisions it, and all three OSes run the real token lifecycle.
+        if: runner.os == 'Linux' || runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          brew install softhsm
-          # Homebrew is prefix-relative (/opt/homebrew on arm64,
-          # /usr/local on x86-64), so the module path is discovered rather
-          # than hard-coded — the same mistake as the .so.2 SONAME pin.
-          test -f "$(brew --prefix)/lib/softhsm/libsofthsm2.so"
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+            .github/scripts/apt-install.sh --no-install-recommends softhsm2
+            test -f /usr/lib/softhsm/libsofthsm2.so
+          else
+            brew install softhsm
+            # Homebrew is prefix-relative (/opt/homebrew on arm64,
+            # /usr/local on x86-64), so the module path is discovered rather
+            # than hard-coded — the same mistake as the .so.2 SONAME pin.
+            test -f "$(brew --prefix)/lib/softhsm/libsofthsm2.so"
+          fi
           command -v softhsm2-util
+
+      - name: Install SoftHSM2 (PKCS#11 test token, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # Chocolatey's softhsm.install embeds the Disig SoftHSM2-for-Windows
+        # MSI, which statically links OpenSSL 1.1.1 (EOL) — acceptable ONLY as
+        # a test token that never executes in or for product code, the same
+        # posture as the OpenSSL-linked apt/brew builds above.  Retry shape
+        # matches the cmake choco step (transient CDN outages).
+        run: |
+          # INSTALLDIR is pinned, not assumed.  The Disig MSI parents its
+          # install directory to TARGETDIR, which Windows Installer resolves
+          # to ROOTDRIVE — the fixed drive with the MOST FREE SPACE, which on
+          # GitHub's Windows runners is D:, not C:.  The first revision of
+          # this step asserted C:\SoftHSM2\lib\softhsm2-x64.dll and every
+          # Windows lane in both workflows failed on a *successful* install.
+          # Pinning the property makes the location deterministic and keeps
+          # the constant in HSMKeyStorage.PKCS11_PATHS truthful.
+          $installDir = 'C:\SoftHSM2'
+          # Retries live in the script, and -RequirePath makes them key on the
+          # OUTCOME.  Chocolatey exits 0 when the community feed is down and it
+          # installed nothing, so the inline loop that used to sit here "succeeded"
+          # on attempt 1 of 5 and this step then failed at the DLL check below with
+          # no retry ever attempted — every Windows lane in both workflows went red
+          # on a 503.  See .github/scripts/choco-install.ps1.
+          & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1" `
+            -Package softhsm.install `
+            -InstallArgs "INSTALLDIR=$installDir" `
+            -RequirePath (Join-Path $installDir 'lib\softhsm2-x64.dll')
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # Discover rather than assume.  The pin above should make the first
+          # candidate exact; searching every fixed drive's two plausible roots
+          # means a future runner-image or MSI change degrades into a slower
+          # success instead of a red lane, while a genuine miss still fails.
+          $roots = @($installDir)
+          foreach ($fs in (Get-PSDrive -PSProvider FileSystem)) {
+            $roots += (Join-Path $fs.Root 'SoftHSM2')
+            $roots += (Join-Path $fs.Root 'Program Files\SoftHSM2')
+          }
+          $dll = $null
+          foreach ($root in ($roots | Select-Object -Unique)) {
+            $candidate = Join-Path $root 'lib\softhsm2-x64.dll'
+            if (Test-Path $candidate) { $dll = $candidate; break }
+          }
+          # Fail loudly WITH evidence: a missing DLL fails the step rather
+          # than quietly returning the HSM lane to a skip.
+          if (-not $dll) {
+            Write-Error "softhsm2-x64.dll not found after a successful install. Roots searched:`n$($roots -join "`n")"
+            Get-ChildItem -Path $installDir -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 50 -ExpandProperty FullName
+            exit 1
+          }
+          $root = Split-Path -Parent (Split-Path -Parent $dll)
+          Write-Host "SoftHSM2 resolved at $root (module: $dll)"
+          # TestSoftHSMIntegration constructs HSMKeyStorage("softhsm") with NO
+          # library_path override, so the module must land somewhere
+          # PKCS11_PATHS lists.  If the INSTALLDIR pin did not take effect the
+          # install is still "successful" but the lane would fail later with
+          # an opaque PKCS#11 error, so assert the contract here, where the
+          # message can name the real location.
+          if ($root -ne $installDir) {
+            Write-Error "SoftHSM2 installed to $root, not the pinned $installDir; HSMKeyStorage's PKCS11_PATHS would not find it. The INSTALLDIR property did not take effect."
+            exit 1
+          }
+          # Publish BOTH bin\ and lib\ to the remaining steps.  The MSI appends
+          # INSTALLDIR\lib to the *machine* PATH, which a running job never
+          # re-reads — and lib\ is the half that matters to the loader:
+          # softhsm2-util.exe lives in bin\ but the PKCS#11 module it loads is
+          # softhsm2-x64.dll in lib\, so publishing bin\ alone made the util
+          # resolvable and the module not, failing token init with
+          # "LoadLibraryA failed: 0x0000007E" (ERROR_MOD_NOT_FOUND).  The test
+          # also passes --module explicitly, so this is defence in depth rather
+          # than the only thing holding the lane up.
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'bin')
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'lib')
+          & (Join-Path $root 'bin\softhsm2-util.exe') --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "softhsm2-util --version failed (exit ${LASTEXITCODE})"
+            exit 1
+          }
 
       # MUST run before the install below: `pip install -e .` runs setup.py's
       # build_ext, which signs and thereby REWRITES
@@ -521,11 +612,19 @@ jobs:
           # The checkout is fetch-depth: 0, so a history-dependent guard that
           # skips here is a broken checkout, not a shallow one.
           AMA_CI_REQUIRE_HISTORY: "1"
-        # --no-cov: the only consumer of coverage.xml was the codecov upload,
-        # which ran on ubuntu-latest / 3.11 and moved with that leg to
-        # ci.yml::test.  The Windows-only PYTHONUTF8 / PYTHONIOENCODING this
-        # step set are gone with the Windows legs (see the matrix comment).
-        run: pytest tests/ -v --tb=short --no-cov
+          # UTF-8 encoding for Windows to support Unicode symbols in output
+          PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
+          PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+        run: pytest tests/ -v --tb=short --cov=ama_cryptography --cov-report=xml
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: python
+          name: python-${{ matrix.python-version }}
 
   # Linting and Code Quality
   lint:

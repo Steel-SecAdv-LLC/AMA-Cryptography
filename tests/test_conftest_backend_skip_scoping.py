@@ -159,9 +159,8 @@ def isolated_conftest(
     # subprocess emits those on a cp1252 stream, so the em dash is byte 0x97,
     # and pytester's UTF-8 decode raises "'utf-8' codec can't decode byte 0x97"
     # — failing all seven tests in this module on every windows-latest job in
-    # ci.yml.  ci-build-test.yml's Windows legs set PYTHONUTF8=1 at the step and
-    # so never saw it (those legs duplicated ci.yml's and have been removed; its
-    # matrix is macOS-only now).  ci.yml deliberately does NOT (its Run-pytest step verifies real
+    # ci.yml.  ci-build-test.yml sets PYTHONUTF8=1 at the step and so never saw
+    # it.  ci.yml deliberately does NOT (its Run-pytest step verifies real
     # cp1252 console behaviour for tests/test_python_examples.py, which strips
     # these vars from its own children), so the guarantee has to be made HERE,
     # scoped to this fixture's inner subprocess only.  An earlier fix read the

@@ -850,21 +850,14 @@ class CMakeBuild(build_ext):
         # conditional.  The pre-import gate is right to refuse; what was
         # wrong was asking it to adjudicate a tree mid-rebuild.
         #
-        # Moved ASIDE, not deleted.  An earlier form of this block unlinked the
-        # artefact outright: any signer failure then left the developer's
-        # checkout without the working artefact its previous build produced,
-        # which the RuntimeError below does not mention.  The rename is
-        # restored on every non-zero exit and on every exception, so a failed
-        # build leaves the tree exactly as it found it.  __pycache__ goes too,
-        # so a compiled copy cannot shadow the move.
-        #
-        # This comment used to say the artefact was a git-TRACKED file, so the
-        # only recovery was `git checkout`.  It is no longer tracked: it is a
-        # per-build output (ephemeral key, this build's native and binding
-        # digests) that AGENTS.md section 8.4 forbids committing, and
-        # .gitignore lists it.  The move-aside matters more for that, not
-        # less: with nothing in git to restore from, the previous build's
-        # artefact is the only copy there is.
+        # Moved ASIDE, not deleted.  `_integrity_signature.py` is a git-TRACKED
+        # file, and an earlier form of this block unlinked it outright: any
+        # signer failure then left the developer's checkout with the artefact
+        # gone, a state `git checkout` is the only recovery from and which the
+        # RuntimeError below does not mention.  The rename is restored on every
+        # non-zero exit and on every exception, so a failed build leaves the
+        # tree exactly as it found it.  __pycache__ goes too, so a compiled
+        # copy cannot shadow the move.
         #
         # Removing it for the duration is safe and is not a downgrade: with no
         # artefact, nothing is signed, so nothing reads as tampering; the .py

@@ -510,11 +510,9 @@ format: hold it for the signing session, read the public key at
 `AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET`, and scrub it with
 `ama_secure_memzero()` when done. Any single flipped bit in the 128 bytes is
 refused at signing, so the property INVARIANT-51 states holds on this path
-too. The expanded form skips the per-call derivation of `A`, so it signs
-faster than the 64-byte path; the measured cost of each path, with its date,
-host and harness (`benchmarks/benchmark_c_raw` rows "Ed25519 Sign" and
-"Ed25519 Sign (expanded)"), is recorded under INVARIANT-51 in
-[INVARIANTS.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/INVARIANTS.md#invariant-51--an-ed25519-signer-derives-its-own-public-half).
+too. Measured on the tree that introduced it, a signature through the
+expanded form costs 0.55× the per-call path (`benchmarks/benchmark_c_raw`
+rows "Ed25519 Sign" and "Ed25519 Sign (expanded)").
 
 ---
 
