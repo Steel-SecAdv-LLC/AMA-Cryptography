@@ -454,39 +454,21 @@ if not _post():
             _reason,
         )
     elif _all_failures_repairable and _process_is_the_signer():
-        # The override, verbatim, when one is in effect.  This message used to
-        # end "outside the signer identity, nothing unverified has been
-        # mapped", which the loader does not guarantee: _find_native_library
-        # calls _try_load_library(..., verify_digest=False) for an
-        # AMA_CRYPTO_LIB_PATH file and for every candidate under an override
-        # directory, and with verify_digest=False the digest comparison is
-        # skipped outright — the object is mapped and its constructors run with
-        # no digest binding at all.  Nothing in this branch tested that no
-        # override was in effect, so the sentence was a claim about a
-        # configuration the code had not looked at.  Now it looks.
-        try:
-            from ama_cryptography.pqc_backends import (
-                native_backend_diagnostics as _nbd,
-            )
-
-            _override_in_effect = _nbd().get("override")
-        except Exception:  # pragma: no cover - pqc_backends is imported above
-            _override_in_effect = "<unknown: diagnostics unavailable>"
+        # This message used to name the AMA_CRYPTO_LIB_PATH object, because
+        # discovery mapped an override WITHOUT the pre-load digest check.  It
+        # no longer does (an override is refused unless its bytes match the
+        # signed digest), so there is no unverified override load to report:
+        # the only digest-mismatching object that can be mapped is the one
+        # the signer itself maps under its own scope, which is this branch's
+        # precondition.
         _logging.getLogger(__name__).critical(
             "FIPS 140-3 POST FAILED only in stage(s) a re-signing run repairs "
             "(%s) and this process IS the integrity signer running its "
             "writing subcommand: completing the import so the signing tooling "
             "can run. The module is in the ERROR state and "
             "every cryptographic operation through the public surface will be "
-            "refused. Native object load override: %s. Root cause: %s",
+            "refused. Root cause: %s",
             ", ".join(sorted(_repairable)),
-            (
-                f"AMA_CRYPTO_LIB_PATH={_override_in_effect!r} — that object was "
-                "mapped WITHOUT digest verification"
-                if _override_in_effect
-                else "none; every mapped object passed pre-load digest "
-                "verification or was refused"
-            ),
             _reason,
         )
     else:

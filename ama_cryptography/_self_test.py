@@ -1372,9 +1372,9 @@ def _integrity_strength_for(native_ok: bool, bindings_exact: bool) -> str:
     executed and was never checked:
 
     * ``signed-native-unverified`` — the shared object performing every
-      cryptographic operation went unchecked (an AMA_CRYPTO_LIB_PATH override,
-      an unreadable developer object, or a legacy v1 artefact).  It is the
-      broader gap, so it wins when both apply.
+      cryptographic operation went unchecked (an unreadable developer object,
+      or a legacy v1 artefact).  It is the broader gap, so it wins when both
+      apply.
     * ``signed-bindings-unverified`` — the library was verified, but at least
       one binding extension imported and executed without being covered by the
       artefact.  This is the downgrade ``_check_binding_extensions``' contract
@@ -1620,10 +1620,14 @@ def _check_loaded_native_library(
     * ``native_ok`` is True only when the loaded object's digest matched the
       signed one — the sole full-strength outcome.
 
-    The three non-matching outcomes are deliberately distinct: an
-    AMA_CRYPTO_LIB_PATH override is the operator's own substitution (proceed,
-    unverified); an unreadable object fails closed on an anchored build but only
-    warns on a developer one; a digest mismatch is tampering and always fails.
+    The two non-matching outcomes are deliberately distinct: an unreadable
+    object fails closed on an anchored build but only warns on a developer one;
+    a digest mismatch is tampering (or a stale binding) and always fails.  An
+    AMA_CRYPTO_LIB_PATH override is not a third outcome, and used to be: it was
+    mapped without the pre-load digest check and reported UNVERIFIED here.
+    Discovery now refuses an override whose bytes differ from the signed ones
+    before mapping it, so an override that reaches this stage is judged exactly
+    like any other loaded object.
 
     The digest compared is the one recorded by the PRE-LOAD verification ONLY
     when the loader actually mapped the descriptor it hashed —
@@ -1641,30 +1645,20 @@ def _check_loaded_native_library(
     recorded digest unconditionally removed that, and reported "native library
     verified" for bytes nothing had verified.
 
-    Re-reading the path is also the fallback for loads that skipped pre-load
-    hashing (an override, or a missing artefact).  A match is reported as
-    verified even under an override: bytes identical to the signed bytes are
-    the signed library, wherever the operator loaded it from.
+    Re-reading the path is also the fallback for a load whose bytes could not
+    be hashed before mapping.  A match is reported as verified wherever the
+    object was loaded from: bytes identical to the signed bytes are the signed
+    library, and an AMA_CRYPTO_LIB_PATH relocation of it verifies in full.
     """
     from ama_cryptography.pqc_backends import native_backend_diagnostics
 
     diag = native_backend_diagnostics()
     loaded_path = diag.get("path")
-    override = diag.get("override")
     preload_hex = diag.get("preload_digest_hex")
     preload_is_mapped = bool(diag.get("preload_digest_is_of_mapped_bytes"))
     actual_native = bytes.fromhex(preload_hex) if (preload_hex and preload_is_mapped) else None
     if actual_native is None:
         actual_native = _compute_native_library_digest(loaded_path)
-    if override and actual_native != native_digest_raw:
-        return (
-            None,
-            (
-                "; native library UNVERIFIED — AMA_CRYPTO_LIB_PATH override in "
-                f"effect ({override}), loaded object is not the signed one"
-            ),
-            False,
-        )
     if actual_native is None:
         if anchored:
             return (
@@ -1729,8 +1723,8 @@ def verify_module_integrity() -> Tuple[bool, str]:
     if signed_ok is True:
         # _verify_signed_integrity has already set _INTEGRITY_STRENGTH to
         # "signed" (native library verified) or "signed-native-unverified"
-        # (override / unreadable / legacy v1).  Do not flatten that distinction
-        # back to "signed" here — the whole point is that a build whose native
+        # (unreadable / legacy v1).  Do not flatten that distinction back to
+        # "signed" here — the whole point is that a build whose native
         # library went unchecked is not full-strength.
         return True, signed_detail
 
@@ -2804,9 +2798,8 @@ def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
     #     not tampering.
     #   * "signed-native-unverified" — the signature verified, but the shared
     #     object that performs every cryptographic operation was not bound to
-    #     it (AMA_CRYPTO_LIB_PATH override, an unreadable dev object, or a
-    #     legacy v1 artefact).  The wrapper is verified; the implementation is
-    #     not.
+    #     it (an unreadable dev object, or a legacy v1 artefact).  The
+    #     wrapper is verified; the implementation is not.
     # Recording either as a skip lands it in the same machinery as an untested
     # algorithm: named in the POST warning, counted by
     # module_attestation()["tests_skipped"], excluded from "fully_verified",

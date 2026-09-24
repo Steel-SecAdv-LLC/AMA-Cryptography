@@ -364,9 +364,13 @@ def _get_search_dirs() -> list:
 _LOAD_DIAGNOSTICS: dict = {
     "loaded": False,
     "path": None,  # str: the library that loaded, when one did
-    "override": None,  # str: AMA_CRYPTO_LIB_PATH value, when honoured
-    "loaded_via_override": False,  # bool: the loaded library IS the override file
-    "override_ignored_reason": None,  # str: why an override was refused
+    # str: AMA_CRYPTO_LIB_PATH value, when honoured.  An honoured override
+    # CONFINES the search to itself, so a load with this set came from it.
+    "override": None,
+    "override_ignored_reason": None,  # str: why an override was not honoured
+    # str: why nothing loaded from an honoured override, or None.  The search
+    # does not continue past a failed override (INVARIANT-7: no fallbacks).
+    "override_refusal": None,
     "searched_dirs": [],  # list[str]: every directory consulted, in order
     "candidates": [],  # list[str]: files that existed and were tried
     "errors": [],  # list[(path, str)]: dlopen failure per candidate
@@ -738,7 +742,7 @@ def unverified_load_for_signing() -> Iterator[None]:
         _SIGNING_LOAD_OVERRIDE = previous
 
 
-def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ctypes.CDLL]:
+def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
     """Try to load a shared library from the given path. Returns None on failure.
 
     Records every attempt — and the exact loader error on failure — in
@@ -752,9 +756,9 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
     check that runs only after ``dlopen`` detects tampering but does not
     prevent the tampered code from running.  Every candidate's bytes are
     therefore hashed *first*, and when the integrity artefact carries a
-    native digest and ``verify_digest`` is true, a mismatch refuses to map
-    the object at all.  On Linux the mapping then goes through
-    ``/proc/self/fd`` on the very descriptor that was hashed: a path swap
+    native digest, a mismatch refuses to map the object at all.  On Linux the
+    mapping then goes through ``/proc/self/fd`` on the very descriptor that
+    was hashed: a path swap
     between the two steps cannot occur (the descriptor pins the inode), so
     what remains is an in-place overwrite of that inode inside the window —
     an attacker who could do that could have pre-written the file, which the
@@ -767,12 +771,14 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
     makes "the POST stage re-verifies after load as before" true on the
     platforms this paragraph accepts the window for.
 
-    One deliberate carve-out.  The ``AMA_CRYPTO_LIB_PATH`` override
-    (``verify_digest=False``) is the operator's own substitution: its digest
-    is still recorded, but a mismatch is reported by POST as UNVERIFIED
-    rather than blocked here.
+    Every candidate goes through this check, ``AMA_CRYPTO_LIB_PATH`` included.
+    The override used to be a carve-out: it was mapped with the comparison
+    skipped (a ``verify_digest=False`` parameter this function no longer has)
+    and POST then reported it UNVERIFIED — so one environment variable mapped
+    arbitrary native code into the crypto process.  It may now relocate the
+    signed library, never substitute it; see :func:`_find_native_library`.
 
-    ``AMA_BUILD_PIPELINE=1`` is NOT a second carve-out, and used to be.  It
+    ``AMA_BUILD_PIPELINE=1`` is not a carve-out either, and used to be.  It
     demoted the refusal to a warning and then mapped the object anyway, on the
     reasoning that the tools which refresh a stale artefact after a rebuild
     live inside this package and must be able to import it.  The premise is
@@ -820,13 +826,13 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
             # unverified.  (The first draft applied this only on POSIX; on
             # Windows a read failure silently skipped the check — a fail-open
             # on exactly the error path a fail-closed control must cover.)
-            if verify_digest and expected is not None:
+            if expected is not None:
                 _LOAD_DIAGNOSTICS["errors"].append(
                     (str(lib_path), f"pre-load digest read failed: {exc}")
                 )
                 return None
             digest = None
-        if verify_digest and expected is not None and digest is not None and digest != expected:
+        if expected is not None and digest is not None and digest != expected:
             # Refused on every ORDINARY path: mapping is execution, and no
             # environment variable alone may buy execution of bytes that
             # failed verification.  Precisely: `AMA_BUILD_PIPELINE=1` is a
@@ -1068,7 +1074,6 @@ def _in_secure_execution_mode() -> bool:
 def _find_native_library() -> Optional[ctypes.CDLL]:
     """Locate and load the native ama_cryptography shared library."""
     lib_names = _get_lib_names()
-    search_dirs = _get_search_dirs()
 
     # Reset the per-run discovery record.  _find_native_library() runs more than
     # once in-process (secure_memory during import, the build-time signer, tests),
@@ -1083,8 +1088,8 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         loaded=False,
         path=None,
         override=None,
-        loaded_via_override=False,
         override_ignored_reason=None,
+        override_refusal=None,
         searched_dirs=[],
         candidates=[],
         errors=[],
@@ -1101,13 +1106,8 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
     # loader-hijack the platform just prevented.  Under set-uid/set-gid the
     # variable is therefore ignored, loudly.
     #
-    # Outside secure-execution mode the override remains available (it is how
-    # developers point at an out-of-tree build), but it is logged at WARNING
-    # so that a substituted backend is visible in operational logs.  Note that
-    # the module-integrity digest covers the package's .py files only and
-    # never the native library, so this log line is the only signal that the
-    # backend was not the shipped one.
-    override_dir: Optional[Path] = None
+    # Outside secure-execution mode it is honoured as a RELOCATION: see
+    # _load_from_override.
     override = os.getenv("AMA_CRYPTO_LIB_PATH")
     if override and _in_secure_execution_mode():
         logging.getLogger(__name__).warning(
@@ -1123,50 +1123,89 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         )
         override = None
     if override:
-        _LOAD_DIAGNOSTICS["override"] = override
-        override_path = Path(override)
-        if override_path.is_file() or override_path.is_dir():
-            logging.getLogger(__name__).warning(
-                "Loading the native cryptographic backend from "
-                "AMA_CRYPTO_LIB_PATH=%r instead of the shipped library. The "
-                "signed integrity artefact binds the SHIPPED library's "
-                "digest, which this substituted object is by definition not "
-                "bound by — the POST integrity stage will record it as "
-                "UNVERIFIED.",
-                override,
-            )
-        if override_path.is_file():
-            # verify_digest=False: the override is by definition not the signed
-            # object; it is the operator's own substitution, honoured (outside
-            # secure-execution mode) and recorded UNVERIFIED by the POST stage
-            # rather than blocked here.
-            lib = _try_load_library(override_path, verify_digest=False)
-            if lib is not None:
-                _LOAD_DIAGNOSTICS["loaded"] = True
-                _LOAD_DIAGNOSTICS["path"] = str(override_path)
-                _LOAD_DIAGNOSTICS["loaded_via_override"] = True
-                return lib
-        elif override_path.is_dir():
-            override_dir = override_path
-            search_dirs.insert(0, override_path)
+        return _load_from_override(override, lib_names)
 
+    search_dirs = _get_search_dirs()
     _LOAD_DIAGNOSTICS["searched_dirs"] = [str(d) for d in search_dirs]
 
     for search_dir in search_dirs:
         for lib_name in lib_names:
             lib_path = search_dir / lib_name
             if lib_path.is_file():
-                # Candidates under an AMA_CRYPTO_LIB_PATH directory carry the
-                # same operator intent as an override file: substitution is
-                # honoured and reported, not digest-blocked.
-                lib = _try_load_library(lib_path, verify_digest=search_dir is not override_dir)
+                lib = _try_load_library(lib_path)
                 if lib is not None:
                     _LOAD_DIAGNOSTICS["loaded"] = True
                     _LOAD_DIAGNOSTICS["path"] = str(lib_path)
-                    if search_dir is override_dir:
-                        _LOAD_DIAGNOSTICS["loaded_via_override"] = True
                     return lib
 
+    return None
+
+
+def _override_candidates(override_path: Path, lib_names: Sequence[str]) -> List[Path]:
+    """The files an honoured ``AMA_CRYPTO_LIB_PATH`` names, in search order.
+
+    A file names itself; a directory names the platform library names inside
+    it.  Anything else names nothing.  Shared by the loading and the path-only
+    discovery so the signer hashes the file the runtime would map.
+    """
+    if override_path.is_file():
+        return [override_path]
+    if override_path.is_dir():
+        return [override_path / name for name in lib_names if (override_path / name).is_file()]
+    return []
+
+
+def _load_from_override(override: str, lib_names: Sequence[str]) -> Optional[ctypes.CDLL]:
+    """Load the backend from an honoured ``AMA_CRYPTO_LIB_PATH``, or from nowhere.
+
+    The override RELOCATES the signed library; it never SUBSTITUTES it.  Every
+    candidate goes through the same pre-load digest check as any other
+    (:func:`_try_load_library`), so an object whose bytes differ from the
+    signed native digest is refused before it is mapped.  It used to be mapped
+    with that check skipped and reported UNVERIFIED by POST afterwards, which
+    let one environment variable execute arbitrary native code in the crypto
+    process; the only way left to map a digest-mismatching object is the
+    signer's in-process opt-in, :func:`unverified_load_for_signing`.
+
+    The search is CONFINED to the override.  When nothing there loads —
+    refused, unloadable, or absent — this returns None and the import fails
+    closed.  Falling back to the shipped library would run a different object
+    than the one the operator named, silently: that is a fallback, and
+    INVARIANT-7 forbids it.
+    """
+    _LOAD_DIAGNOSTICS["override"] = override
+    override_path = Path(override)
+    if override_path.is_dir():
+        _LOAD_DIAGNOSTICS["searched_dirs"] = [str(override_path)]
+    logging.getLogger(__name__).warning(
+        "Loading the native cryptographic backend from AMA_CRYPTO_LIB_PATH=%r. "
+        "The override relocates the signed library and cannot substitute it: "
+        "an object that does not match the signed native digest is refused, "
+        "and no other location is searched.",
+        override,
+    )
+    candidates = _override_candidates(override_path, lib_names)
+    for lib_path in candidates:
+        lib = _try_load_library(lib_path)
+        if lib is not None:
+            _LOAD_DIAGNOSTICS["loaded"] = True
+            _LOAD_DIAGNOSTICS["path"] = str(lib_path)
+            return lib
+
+    found = (
+        "every candidate there was refused or failed to load"
+        if candidates
+        else f"it names no file, and no directory holding {' or '.join(lib_names)}"
+    )
+    refusal = (
+        f"AMA_CRYPTO_LIB_PATH={override!r} was honoured and nothing loaded from "
+        f"it: {found}. The override may relocate the signed library, never "
+        "substitute it — an object whose bytes do not match the signed native "
+        "digest is refused before it is mapped — and no other location, the "
+        "shipped library included, is tried in its place (INVARIANT-7)."
+    )
+    _LOAD_DIAGNOSTICS["override_refusal"] = refusal
+    logging.getLogger(__name__).error("%s", refusal)
     return None
 
 
@@ -1174,9 +1213,9 @@ def _find_native_library_path() -> Optional[Path]:
     """The path discovery would select — WITHOUT mapping the object.
 
     Same search order as :func:`_find_native_library`, same handling of
-    ``AMA_CRYPTO_LIB_PATH`` (including its suppression under secure-execution
-    mode), but it stops at "this file exists" instead of going on to
-    ``dlopen`` it.
+    ``AMA_CRYPTO_LIB_PATH`` (its suppression under secure-execution mode, and
+    the confinement of the search to it when honoured), but it stops at "this
+    file exists" instead of going on to ``dlopen`` it.
 
     This exists for the build-time signer.  Signing needs the *bytes* of the
     library that will ship, which is a read; it never calls into the library.
@@ -1198,15 +1237,13 @@ def _find_native_library_path() -> Optional[Path]:
         # select what gets signed either.
         override = None
 
-    search_dirs: list[Path] = list(_get_search_dirs())
     if override:
-        override_path = Path(override)
-        if override_path.is_file():
-            return override_path
-        if override_path.is_dir():
-            search_dirs.insert(0, override_path)
+        # Confined, exactly as the loading path is: an override that names
+        # nothing must not quietly hand the signer the shipped library.
+        candidates = _override_candidates(Path(override), _get_lib_names())
+        return candidates[0] if candidates else None
 
-    for search_dir in search_dirs:
+    for search_dir in _get_search_dirs():
         for lib_name in _get_lib_names():
             lib_path = Path(search_dir) / str(lib_name)
             if lib_path.is_file():
@@ -1223,18 +1260,22 @@ def native_backend_diagnostics() -> dict:
     ``_find_native_library`` call (the build signer, a test) cannot change what
     this reports about the loaded backend.  ``loaded`` reflects the real module
     state (``_native_lib``); ``path`` is that object's file; ``override`` is the
-    AMA_CRYPTO_LIB_PATH value only when the loaded object actually came from it.
+    AMA_CRYPTO_LIB_PATH value only when the loaded object actually came from it
+    (a relocation: the object passed the same pre-load digest check as any
+    other candidate).
 
-    The remaining fields — ``override_ignored_reason``, ``searched_dirs``,
-    ``candidates``, ``errors`` — come from the last discovery and exist to
-    explain a FAILED load (see ``native_backend_load_summary``).  Safe to call
-    at any time; performs no I/O and never raises.
+    The remaining fields — ``override_ignored_reason``, ``override_refusal``,
+    ``searched_dirs``, ``candidates``, ``errors`` — come from the last
+    discovery and exist to explain a FAILED load (see
+    ``native_backend_load_summary``).  Safe to call at any time; performs no
+    I/O and never raises.
     """
     return {
         "loaded": _native_lib is not None,
         "path": _NATIVE_LIB_PATH,
         "override": _NATIVE_LIB_VIA_OVERRIDE,
         "override_ignored_reason": _LOAD_DIAGNOSTICS["override_ignored_reason"],
+        "override_refusal": _LOAD_DIAGNOSTICS["override_refusal"],
         "searched_dirs": list(_LOAD_DIAGNOSTICS["searched_dirs"]),
         "candidates": list(_LOAD_DIAGNOSTICS["candidates"]),
         "errors": [(p, e) for p, e in _LOAD_DIAGNOSTICS["errors"]],
@@ -1315,6 +1356,13 @@ def native_backend_load_summary() -> str:
             f"(it reported {diag['native_version'] or 'no version'})"
         )
 
+    if diag["override_refusal"]:
+        # Before "errors": those name WHAT failed at the override, this says
+        # why nothing else was tried — without it the "FOUND but could not be
+        # loaded" line below sent the reader to ldd over a refusal by design.
+        detail = "; ".join(f"{path}: {err}" for path, err in diag["errors"][:3])
+        return f"{diag['override_refusal']}" + (f" Candidates: {detail}" if detail else "")
+
     if diag["errors"]:
         detail = "; ".join(f"{path}: {err}" for path, err in diag["errors"][:3])
         return (
@@ -1335,7 +1383,8 @@ def native_backend_load_summary() -> str:
         f"no native library found in any of {n_dirs} searched directories "
         f"(first: {shown}).{ignored} Build it with: "
         "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build — or "
-        "point AMA_CRYPTO_LIB_PATH at an existing build."
+        "point AMA_CRYPTO_LIB_PATH at the signed library's location (it "
+        "relocates the signed library; it cannot substitute another build)."
     )
 
 
@@ -2847,16 +2896,18 @@ _NATIVE_LIB_PATH: Optional[str] = (
     else None
 )
 _NATIVE_LIB_VIA_OVERRIDE: Optional[str] = (
+    # An honoured override confines the search, so a load with it set is
+    # a load from it.
     _LOAD_DIAGNOSTICS["override"]
-    if (_native_lib is not None and _LOAD_DIAGNOSTICS["loaded_via_override"])
+    if _native_lib is not None
     else None
 )
 #: Digest of the bytes that were actually hashed-then-mapped at load time
-#: (None when the load skipped pre-load verification — an override, a missing
-#: artefact, or a pre-artefact test harness).  Snapshotted here for the same
-#: reason as the two names above: the POST integrity stage must describe the
-#: library the process is running, not whatever a later discovery re-run
-#: scribbled into the scratch record.
+#: (None when the candidate's bytes could not be read before mapping, which
+#: is only permitted when there is no signed digest to compare against).
+#: Snapshotted here for the same reason as the two names above: the POST
+#: integrity stage must describe the library the process is running, not
+#: whatever a later discovery re-run scribbled into the scratch record.
 _NATIVE_LIB_PRELOAD_DIGEST_HEX: Optional[str] = (
     _LOAD_DIAGNOSTICS["preload_digest_hex"] if _native_lib is not None else None
 )

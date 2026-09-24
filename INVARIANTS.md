@@ -2338,13 +2338,17 @@ the `.so` fails POST and therefore the import; rewriting the embedded native
 digest to match a tampered `.so` breaks the signature, which cannot be forged.
 Because `_build_sign` can only sign by calling the native `ama_ed25519_sign`, a
 working library is present at signing time by construction, so every signed
-artefact binds it — there is no unsigned-native downgrade path. The one
-non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override whose
-bytes differ from the signed library's, which is recorded as *unverified* (a
-skip, `fully_verified` `False`) rather than tampering; a byte-identical
-override verifies in full, because verification binds the bytes, not the path.
+artefact binds it — there is no unsigned-native downgrade path. An
+`AMA_CRYPTO_LIB_PATH` override may relocate the signed library, never
+substitute it: its object passes the same pre-load digest check as every other
+candidate, a byte-identical copy verifies in full (verification binds the
+bytes, not the path), and a differing one is refused before it is mapped, with
+the search confined to the override so nothing else loads in its place. (It
+used to be mapped unchecked and recorded as *unverified*, which let one
+environment variable execute arbitrary native code in the crypto process.)
 Pinned by `tests/test_native_integrity.py`, including the tamper and
-forge-attempt cases and the signer/verifier domain-constant agreement.
+forge-attempt cases and the signer/verifier domain-constant agreement, and by
+`tests/test_native_lib_override_hardening.py` for the override.
 
 **The check runs before the object is mapped, not only after.** A shared
 object executes its constructors at `dlopen` time, so a digest comparison

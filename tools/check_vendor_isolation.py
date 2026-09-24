@@ -609,9 +609,9 @@ def _dynamic_source_violations(tree: ast.Module, path: Path, package_dir: Path) 
             # What such a load maps is checked where it can be decided: the
             # runtime check inspects every library the imported package has
             # actually loaded, and the pre-load digest check refuses a
-            # searched candidate whose bytes are not the signed library's.
-            # The AMA_CRYPTO_LIB_PATH override is the one unverified load and
-            # is recorded as UNVERIFIED by POST.
+            # searched candidate whose bytes are not the signed library's —
+            # an AMA_CRYPTO_LIB_PATH override included, which may relocate
+            # the signed library but not substitute it.
             violations.append(
                 Violation(
                     INVENTORY,
