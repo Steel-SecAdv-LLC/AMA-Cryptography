@@ -251,13 +251,23 @@ On its first run over the tree the gate reported, and the tree then removed:
 - the zero-scalar and point-at-infinity branches in
   `ama_secp256k1_point_mul` (now masks);
 - a conditional move gcc made of the AES-GCM verify mask at `-O2` (the mask
-  now passes through `ama_ct_value_barrier_u64`, as in ChaCha20-Poly1305).
+  now passes through `ama_ct_value_barrier_u64`, as in ChaCha20-Poly1305);
+- in `ama_nistp_ecdh`, once the `nistp-ecdsa` driver was extended to run ECDH
+  under the same tainted key (ECDH is the only P-curve entry point that feeds
+  a secret scalar to the variable-base windowed multiplier), six reports: the
+  scalar-range verdict and the at-infinity flag were undeclassified branches
+  on the key, and the compiler had reused the range check's zero result as
+  the multiplier's loop-counter start, so that loop's bound, its scalar-byte
+  address and its nibble select read as key-dependent too.  Both values are
+  now declassified exactly as on the key-derivation and signing paths, and
+  the driver reports none.
 
-The branches that remain on secret-derived values are in ECDSA, on values
-the function returns: an out-of-range private key (the verdict is the return
-code), `r == 0` / `s == 0` (the emitted signature), a fixed-base multiple at
-infinity (impossible for a key in range), and the RFC 6979 candidate
-rejection that every conforming signer shares.  Each is declassified at its
+The branches that remain on secret-derived values are in ECDSA and ECDH, on
+values the function returns: an out-of-range private key (the verdict is the
+return code), `r == 0` / `s == 0` (the emitted signature), a scalar multiple
+at infinity (impossible for a key in range, on the fixed generator or on a
+validated prime-order peer point), and the RFC 6979 candidate rejection that
+every conforming signer shares.  Each is declassified at its
 site with `AMA_CT_DECLASSIFY` (`src/c/internal/ama_ct_declassify.h`), a
 no-op in production and a Memcheck client request in `AMA_TESTING_MODE`
 builds — the construction libsecp256k1 and BoringSSL use.

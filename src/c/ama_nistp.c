@@ -598,7 +598,17 @@ static void nistp_exp_minus2(uint64_t *e, const uint64_t *m, unsigned nl) {
     (void)nistp_sub(e, m, two, nl);
 }
 
-/** Modular inverse via Fermat: r = a^(m-2) mod m.  a must be nonzero. */
+/**
+ * Modular inverse via Fermat: r = a^(m-2) mod m.
+ *
+ * a = 0 is a valid input and gives r = 0 (0^(m-2) = 0; the exponentiation is
+ * a fixed square-and-multiply over the public exponent and takes no branch on
+ * a).  That is load-bearing, not incidental: nistp_jac_to_affine inverts Z
+ * unconditionally and relies on Z = 0 (the point at infinity) mapping to 0,
+ * so a replacement inversion that assumes a nonzero input, or branches on
+ * it, would break the infinity path.  Measured for all three curves, on the
+ * portable and the MULX Montgomery kernels.
+ */
 static void nistp_mont_inv(uint64_t *r, const uint64_t *a,
                            const uint64_t *rr, const uint64_t *m,
                            unsigned mbits, uint64_t m0inv, unsigned nl) {
@@ -628,9 +638,10 @@ static int nistp_jac_is_infinity(const nistp_jac *p, unsigned nl) {
 /**
  * The point at infinity.
  *
- * Only Z == 0 carries meaning; X and Y are never read for their value on any
- * path (doubling an infinity point reproduces Z3 = 0 for any X, Y, and
- * `nistp_jac_to_affine` refuses to convert it at all).  They are set to a
+ * Only Z == 0 carries meaning; X and Y never reach a result on any path
+ * (doubling an infinity point reproduces Z3 = 0 for any X, Y, and
+ * `nistp_jac_to_affine` multiplies them by Z^-2 = Z^-3 = 0, so it returns
+ * (0, 0) and the at-infinity flag whatever they hold).  They are set to a
  * small nonzero constant rather than to the Montgomery encoding of 1 purely
  * so this costs a `memset` instead of two Montgomery multiplications —
  * `nistp_jac_add` constructs an infinity on every single call.
@@ -813,10 +824,13 @@ static int nistp_jac_to_affine(uint64_t *x, uint64_t *y, const nistp_jac *p,
     unsigned nl = c->nlimbs;
 
     /* The conversion always runs: Z = 0 inverts to 0 through the
-     * exponentiation, so infinity serialises as (0, 0) and the caller gets
-     * the flag.  A branch here would be a secret-dependent branch for every
-     * caller whose point derives from a private scalar; those callers
-     * declassify the flag (see ama_ct_declassify.h) instead. */
+     * exponentiation (nistp_mont_inv), so infinity serialises as (0, 0) and
+     * the caller gets the flag.  A branch here would be a secret-dependent
+     * branch for every caller whose point derives from a private scalar;
+     * those callers — public-key derivation, ECDSA signing and ECDH — each
+     * declassify the flag at the call site instead (ama_ct_declassify.h),
+     * and the `nistp-ecdsa` secret-taint driver in
+     * tools/check_ghash_constant_time.py runs all three under a tainted key. */
     int at_infinity = nistp_jac_is_infinity(p, nl);
 
     nistp_mont_inv(zi, p->Z, c->rr_p, c->p, c->pbits, c->p0inv, nl);
@@ -1899,8 +1913,24 @@ AMA_API ama_error_t ama_nistp_ecdh(ama_nist_curve_t curve,
     if (!c || !private_key || !peer_public_key || !shared_secret)
         return AMA_ERROR_INVALID_PARAM;
 
-    if (!nistp_scalar_load(d, private_key, c) || nistp_is_zero(d, c->nlimbs))
-        goto done;
+    {
+        /* Verdict public by contract (returned as AMA_ERROR_INVALID_PARAM);
+         * declassified for the secret-taint gate, exactly as in
+         * ama_nistp_pubkey_from_privkey.  Both predicates always run, and the
+         * load is a separate statement because `nistp_is_zero` reads what it
+         * writes (see the sequencing note in ama_secp256k1.c).  Undeclassified,
+         * this verdict was a branch on the key, and in the Release testing
+         * archive (gcc 13.3, -O3, LTO) the compiler also reused the
+         * nistp_is_zero result — known to be 0 past the check — as the
+         * windowed multiplier's loop-counter start, so the taint gate
+         * reported that loop's bound, its scalar-byte address and its nibble
+         * select as key-dependent as well. */
+        const int d_in_range = nistp_scalar_load(d, private_key, c);
+        int bad = (1 ^ d_in_range) | nistp_is_zero(d, c->nlimbs);
+        AMA_CT_DECLASSIFY(&bad, sizeof bad);
+        if (bad)
+            goto done;
+    }
 
     /* Full public-key validation before any secret-scalar arithmetic touches
      * it.  This is the invalid-curve defence: without it, a peer that sends a
@@ -1914,12 +1944,18 @@ AMA_API ama_error_t ama_nistp_ecdh(ama_nist_curve_t curve,
     nistp_mont_one(P.Z, c->rr_p, c->p, c->p0inv, c->nlimbs);
 
     nistp_scalar_mul(&S, private_key, &P, c);
-    if (!nistp_jac_to_affine(x, y, &S, c)) {
+    {
         /* d*P == infinity is impossible for a validated prime-order point and
          * d in [1, n-1]; treat it as a hard failure rather than emitting a
-         * predictable all-zero secret. */
-        rc = AMA_ERROR_CRYPTO;
-        goto done;
+         * predictable all-zero secret.  Declassified defensive guard, as on
+         * the key-derivation and signing paths: the flag is constant for
+         * every input that reaches it, and its outcome is the return code. */
+        int ok = nistp_jac_to_affine(x, y, &S, c);
+        AMA_CT_DECLASSIFY(&ok, sizeof ok);
+        if (!ok) {
+            rc = AMA_ERROR_CRYPTO;
+            goto done;
+        }
     }
 
     nistp_from_mont(xs, x, c->p, c->p0inv, c->nlimbs);

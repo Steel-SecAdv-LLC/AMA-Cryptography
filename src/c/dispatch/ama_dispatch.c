@@ -1205,6 +1205,77 @@ static void dispatch_bench_keccak_x4(ama_keccak_f1600_x4_fn simd_x4_fn,
     }
 }
 
+/* The single-state Keccak kernel the slot-1 revert installs under verdict
+ * `v`, given the kernel slot 1 benched (`top`, the SIMD pointer wired before
+ * the verdict) and the tier below it (`fallback`, `pre_sve2_keccak` in
+ * dispatch_init_internal): the fallback tier when it is a distinct kernel
+ * that was measured and did not itself regress, otherwise the scalar
+ * baseline — the BMI1/BMI2 build where the CPU has it, the portable kernel
+ * elsewhere.  It is the ONE place that decision is made: the revert applies
+ * it, and slot 2 benches against it, so the two cannot disagree again.  They
+ * did: slot 2 used to take `ama_keccak_f1600_generic` as its baseline
+ * whenever slot 1 regressed, while the revert installed
+ * keccak_scalar_baseline or the NEON tier, so the x4 kernel was compared
+ * against a fallback the process would never run. */
+static ama_keccak_f1600_fn keccak_single_revert_target(const dispatch_autotune_verdicts_t *v,
+                                                       ama_keccak_f1600_fn top,
+                                                       ama_keccak_f1600_fn fallback) {
+    if (fallback != top && fallback != keccak_scalar_baseline
+        && !v->keccak_fallback_regressed && v->keccak_fallback_ns >= 0) {
+        return fallback;
+    }
+    return keccak_scalar_baseline;
+}
+
+/* Slot 2: bench the 4-way kernel `x4` against what the process would run
+ * without it.  `ama_keccak_f1600_x4_generic` is NOT "4 x
+ * ama_keccak_f1600_generic by definition" (an earlier revision of the comment
+ * at the call site said so): per its own definition in ama_sha3.c and the
+ * extern note at the top of this file, it calls the WIRED single-state
+ * pointer four times.  So the baseline is four calls to the single-state
+ * kernel that will be wired once slot 1's verdict is applied: `top` if slot 1
+ * held, keccak_single_revert_target() if it regressed.  Benching against the
+ * live SIMD pointer when slot 1 regressed would inflate the baseline and could
+ * mask an x4 regression (Copilot review #326 r3276471155); benching against
+ * the portable kernel when the real fallback is faster (the BMI build, the
+ * NEON tier) would understate the fallback and could keep an x4 kernel that
+ * is slower than it.  Fewer iterations than slot 1 because each call permutes 4x the
+ * state.  Writes the slot-2 fields of `v`. */
+static void dispatch_autotune_keccak_x4(dispatch_autotune_verdicts_t *v,
+                                        ama_keccak_f1600_x4_fn x4,
+                                        ama_keccak_f1600_fn top,
+                                        ama_keccak_f1600_fn fallback) {
+    uint64_t states[4][25];
+    const ama_keccak_f1600_fn x4_fallback_single =
+        v->keccak_regressed ? keccak_single_revert_target(v, top, fallback) : top;
+    int64_t generic_best = -1, simd_best = -1;
+
+    memset(states, 0x42, sizeof(states));  // PUBLIC-DATA: states — bench scratch (PUBLIC)
+    dispatch_bench_keccak_x4(x4, x4_fallback_single, states,
+                             /*warmup=*/100, /*trials=*/5, /*iters=*/500,
+                             &generic_best, &simd_best);
+    v->keccak_x4_regressed = bench_slot_regressed(simd_best, generic_best);
+    if (v->keccak_x4_regressed) {
+        /* Confirmation round.  The x4 bench compares a 4-way kernel
+         * against four single-state calls, so the loop order cannot
+         * be swapped; an independent second round still has to
+         * agree before the slot is demoted. */
+        int64_t simd_second = -1, generic_second = -1;
+        memset(states, 0x42, sizeof(states));  // PUBLIC-DATA: states — bench scratch (PUBLIC)
+        dispatch_bench_keccak_x4(x4, x4_fallback_single, states,
+                                 /*warmup=*/100, /*trials=*/5, /*iters=*/500,
+                                 &generic_second, &simd_second);
+        v->keccak_x4_regressed = bench_confirms_regression(
+            simd_best, generic_best, simd_second, generic_second);
+        if (!v->keccak_x4_regressed) {
+            simd_best = simd_second;
+            generic_best = generic_second;
+        }
+    }
+    v->keccak_x4_simd_ns    = simd_best;
+    v->keccak_x4_generic_ns = generic_best;
+}
+
 /* Kyber / Dilithium NTT bench helpers.
  *
  * Compiled only under AMA_USE_NATIVE_PQC, because that is the only
@@ -2072,8 +2143,11 @@ static void dispatch_init_internal(void) {
      *     and this branch is skipped — AVX2 4-way remains.
      *   - When both the build flag and the runtime gate pass, the
      *     in-house AVX-512 kernel takes over the keccak_f1600_x4
-     *     pointer.  The single-state keccak_f1600 pointer is left
-     *     on the AVX2 path — this PR ships only the 4-way kernel.
+     *     pointer.  The single-state keccak_f1600 pointer is not
+     *     touched here: on x86-64 it stays on keccak_scalar_baseline
+     *     (the BMI1/BMI2 scalar build where the CPU has it, the
+     *     portable kernel otherwise), because there is no AVX2 or
+     *     AVX-512 single-state kernel to install.
      * The hand-written kernel preserves the same uint64_t[4][25]
      * ABI as the AVX2 4-way path, so the SHAKE128/SHAKE256 absorb +
      * squeeze wrappers in src/c/ama_sha3.c need no changes. */
@@ -2089,18 +2163,22 @@ static void dispatch_init_internal(void) {
 #endif
 
 #ifdef AMA_HAVE_X86_AESNI_IMPL
-    /* AES-GCM's hardware kernel, gated on AES-NI + PCLMULQDQ.  It needs no ISA
-     * WIDER than 128-bit: src/c/avx2/ama_aes_gcm_avx2.c emits AESENC /
-     * AESENCLAST / AESKEYGENASSIST, PCLMULQDQ and SSSE3 pshufb
-     * (_mm_shuffle_epi8, for the GCM<->PCLMULQDQ byte-swap), and no _mm256_*
-     * intrinsic — so requiring AVX2 was a coupling the ISA does not have.
-     * SSSE3, and the -msse4.1 the TU is built with, are not CPUID-gated
-     * separately here: every part that reports AES-NI (Westmere, 2010) also
-     * reports SSSE3 (2006) and SSE4.1 (2007), so the AES-NI bit already implies
-     * them.  The split-bit hazard the two checks below guard against is
-     * specific to AES-NI vs PCLMULQDQ, which a chicken-bit MSR can toggle
-     * independently.  Until 5.0.0 it was compiled only inside
-     * `if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)` and installed only when
+    /* AES-GCM's hardware kernel, gated on AES-NI + PCLMULQDQ + SSSE3 + SSE4.1.
+     * It needs no ISA WIDER than 128-bit: src/c/avx2/ama_aes_gcm_avx2.c emits
+     * AESENC / AESENCLAST / AESKEYGENASSIST, PCLMULQDQ, SSSE3 pshufb
+     * (_mm_shuffle_epi8, for the GCM<->PCLMULQDQ byte-swap) and the SSE4.1 the
+     * compiler chooses under the TU's -msse4.1 (pinsrb in the shipped object),
+     * and no _mm256_* intrinsic — so requiring AVX2 was a coupling the ISA does
+     * not have.  SSSE3 and SSE4.1 ARE CPUID-gated, inside the two calls below:
+     * ama_has_aes_ni() and ama_has_pclmulqdq() (src/c/ama_cpuid.c) each return
+     * their headline bit AND SSSE3 AND SSE4.1.  Every real part that reports
+     * AES-NI (Westmere, 2010) also reports SSSE3 (2006) and SSE4.1 (2007), but
+     * a hypervisor can mask any CPUID bit independently, so the implication is
+     * not relied on; tests/test_cpuid_gates_cover_kernel_flags.py derives the
+     * required bits from this TU's per-file flags in CMakeLists.txt and fails
+     * if the two gates stop testing any of them.  Until 5.0.0 it was compiled
+     * only inside `if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)` and installed only
+     * when
      * `dispatch_info.aes_gcm >= AMA_IMPL_AVX2`, which cost hardware AES-GCM on
      * every AES-NI CPU without AVX2 and in every build with SIMD or AVX2
      * turned off — the dispatcher quietly kept the constant-time bitsliced
@@ -2404,7 +2482,11 @@ static void dispatch_init_internal(void) {
      * and skip the bench.  Default does no file I/O.
      *
      * `AMA_DISPATCH_NO_AUTOTUNE=1` bypasses every bench AND the cache.
-     * MSVC skips the whole phase (no POSIX clock_gettime).
+     * Every Windows build skips the whole phase — the guard below is
+     * `!defined(_WIN32)`, so MinGW as well as MSVC: the cache layer is
+     * built on the POSIX *at family (openat / unlinkat / renameat), which
+     * the `_WIN32` branch above stubs out, and the benches on
+     * clock_gettime.
      * ==================================================================== */
 #if !defined(_WIN32)
     const char *no_autotune = dispatch_getenv("AMA_DISPATCH_NO_AUTOTUNE");
@@ -2581,73 +2663,15 @@ static void dispatch_init_internal(void) {
         }
 
         /* ----- Slot 2: keccak_f1600_x4 (batched 4-way permutation) ----
-         * Benched independently — the AVX-512 4-way kernel is a
-         * fundamentally different implementation from the AVX2 single-
-         * state kernel, so the slot-1 verdict cannot proxy for it.
-         * The 4× scalar baseline uses `ama_keccak_f1600_generic`
-         * directly (NOT the current `dispatch_table.keccak_f1600`
-         * pointer): the latter is still the SIMD kernel at this
-         * point in init — slot 1's verdict has been computed but
-         * the revert (`dispatch_table.keccak_f1600 = ama_keccak_f1600_generic`
-         * if `v.keccak_regressed`) hasn't been applied yet.  If slot 1
-         * IS regressed, using its current SIMD pointer as the x4
-         * baseline would inflate the baseline timing past what the
-         * runtime actually does (the runtime would resolve to
-         * `ama_keccak_f1600_x4_generic` ≈ 4× generic), making the
-         * x4 SIMD look faster than it really is and potentially
-         * masking an x4 regression — Copilot review #326 r3276471155.
-         * The baseline must be what the revert would actually run, and
-         * `ama_keccak_f1600_x4_generic` is NOT `4 x
-         * ama_keccak_f1600_generic by definition` (an earlier revision of
-         * this comment said so): per its own definition in ama_sha3.c and
-         * the extern note at the top of this file, it calls the WIRED
-         * single-state pointer four times.  So the honest baseline follows
-         * slot 1's verdict — if slot 1 regressed, the future
-         * dispatch_table.keccak_f1600 is the portable kernel and the old
-         * pinned-generic baseline is right; if slot 1 held, the revert
-         * path is 4 x the live SIMD single-state kernel, and benching
-         * against 4 x portable understated it (on a BMI host, enough to
-         * keep an x4 kernel slower than its real fallback — the exact
-         * scalar-baseline discipline this file states at the slot-1
-         * bench).  Fewer iters than slot 1 because each call permutes
-         * 4x the state. */
+         * Benched independently — the 4-way kernels (AVX2, AVX-512) have
+         * no single-state counterpart on x86-64, so no other verdict can
+         * proxy for them.  The baseline is four calls to the single-state
+         * kernel the process will actually wire once slot 1's verdict is
+         * applied, which dispatch_autotune_keccak_x4 takes from the same
+         * helper the slot-1 revert below uses (see its comment). */
         if (dispatch_table.keccak_f1600_x4 != ama_keccak_f1600_x4_generic) {
-            uint64_t states[4][25];
-            memset(states, 0x42, sizeof(states));  // PUBLIC-DATA: states — bench scratch (PUBLIC)
-
-            ama_keccak_f1600_fn x4_fallback_single =
-                v.keccak_regressed ? ama_keccak_f1600_generic
-                                   : dispatch_table.keccak_f1600;
-            int64_t generic_best = -1, simd_best = -1;
-            dispatch_bench_keccak_x4(
-                dispatch_table.keccak_f1600_x4,
-                x4_fallback_single,
-                states,
-                /*warmup=*/100, /*trials=*/5, /*iters=*/500,
-                &generic_best, &simd_best);
-            v.keccak_x4_regressed = bench_slot_regressed(simd_best, generic_best);
-            if (v.keccak_x4_regressed) {
-                /* Confirmation round.  The x4 bench compares a 4-way kernel
-                 * against four single-state calls, so the loop order cannot
-                 * be swapped; an independent second round still has to
-                 * agree before the slot is demoted. */
-                int64_t simd_second = -1, generic_second = -1;
-                memset(states, 0x42, sizeof(states));  // PUBLIC-DATA: states — bench scratch (PUBLIC)
-                dispatch_bench_keccak_x4(
-                    dispatch_table.keccak_f1600_x4,
-                    x4_fallback_single,
-                    states,
-                    /*warmup=*/100, /*trials=*/5, /*iters=*/500,
-                    &generic_second, &simd_second);
-                v.keccak_x4_regressed = bench_confirms_regression(
-                    simd_best, generic_best, simd_second, generic_second);
-                if (!v.keccak_x4_regressed) {
-                    simd_best = simd_second;
-                    generic_best = generic_second;
-                }
-            }
-            v.keccak_x4_simd_ns    = simd_best;
-            v.keccak_x4_generic_ns = generic_best;
+            dispatch_autotune_keccak_x4(&v, dispatch_table.keccak_f1600_x4,
+                                        dispatch_table.keccak_f1600, pre_sve2_keccak);
         }
 
 #ifdef AMA_USE_NATIVE_PQC
@@ -2798,17 +2822,12 @@ static void dispatch_init_internal(void) {
              * a regression could be a larger regression — and the ">10 %"
              * guarantee this phase advertises did not hold in the one
              * configuration where a fallback tier exists at all.  On a
-             * NEON-only host the first condition is false (there is no
-             * distinct intermediate tier) and this reduces to the previous
-             * behaviour: straight to the scalar baseline. */
-            if (pre_sve2_keccak != dispatch_table.keccak_f1600
-                && pre_sve2_keccak != keccak_scalar_baseline
-                && !v.keccak_fallback_regressed
-                && v.keccak_fallback_ns >= 0) {
-                dispatch_table.keccak_f1600 = pre_sve2_keccak;
-            } else {
-                dispatch_table.keccak_f1600 = keccak_scalar_baseline;
-            }
+             * NEON-only host there is no distinct intermediate tier and this
+             * reduces to the previous behaviour: straight to the scalar
+             * baseline.  The decision is keccak_single_revert_target(), the
+             * helper slot 2's bench baseline is taken from as well. */
+            dispatch_table.keccak_f1600 = keccak_single_revert_target(
+                &v, dispatch_table.keccak_f1600, pre_sve2_keccak);
             /* kyber_poly_{add,sub,reduce} — share the SVE2 codegen tier */
             if (pre_sve2_kyber_poly_add != dispatch_table.kyber_poly_add) {
                 dispatch_table.kyber_poly_add = pre_sve2_kyber_poly_add;
@@ -3217,6 +3236,78 @@ void ama_test_restore_dilithium_ntt(void) {
     dispatch_table.dilithium_ntt = dispatch_table_post_init.dilithium_ntt;
     dispatch_table.dilithium_invntt = dispatch_table_post_init.dilithium_invntt;
     dispatch_table.dilithium_pointwise = dispatch_table_post_init.dilithium_pointwise;
+}
+
+/* Test-only access to the Keccak auto-tune decisions for
+ * tests/c/test_dispatch_keccak_revert_target.c.  The configuration they
+ * serve — slot 1 benched and regressed while a 4-way SIMD kernel is wired —
+ * exists on no shipped host (x86-64 has no single-state SIMD Keccak, so slot
+ * 1 is never benched there; AArch64 has no 4-way kernel, so slot 2 is never
+ * benched there), so the decisions are driven here with a synthesised
+ * verdict and caller-supplied kernels instead of by a real init.  Neither
+ * hook touches the dispatch table.  Each returns 0 on Windows, where the
+ * auto-tune phase is compiled out. */
+int ama_test_keccak_scalar_baseline(ama_keccak_f1600_fn *out);
+int ama_test_keccak_single_revert_target(int keccak_regressed, int fallback_regressed,
+                                         long long fallback_ns, ama_keccak_f1600_fn top,
+                                         ama_keccak_f1600_fn fallback,
+                                         ama_keccak_f1600_fn *out);
+int ama_test_keccak_x4_autotune(int keccak_regressed, int fallback_regressed,
+                                long long fallback_ns, ama_keccak_f1600_x4_fn x4,
+                                ama_keccak_f1600_fn top, ama_keccak_f1600_fn fallback);
+
+int ama_test_keccak_scalar_baseline(ama_keccak_f1600_fn *out) {
+    ama_dispatch_init();
+    *out = keccak_scalar_baseline;
+    return 1;
+}
+
+#if !defined(_WIN32)
+static void dispatch_test_verdict(dispatch_autotune_verdicts_t *v, int keccak_regressed,
+                                  int fallback_regressed, long long fallback_ns) {
+    memset(v, 0, sizeof(*v));  // PUBLIC-DATA: v — synthesised test verdict (PUBLIC; no secret material)
+    v->keccak_regressed = keccak_regressed;
+    v->keccak_fallback_regressed = fallback_regressed;
+    v->keccak_fallback_ns = (int64_t)fallback_ns;
+    v->keccak_x4_simd_ns = -1;
+    v->keccak_x4_generic_ns = -1;
+}
+#endif
+
+int ama_test_keccak_single_revert_target(int keccak_regressed, int fallback_regressed,
+                                         long long fallback_ns, ama_keccak_f1600_fn top,
+                                         ama_keccak_f1600_fn fallback,
+                                         ama_keccak_f1600_fn *out) {
+#if !defined(_WIN32)
+    dispatch_autotune_verdicts_t v;
+    ama_dispatch_init();
+    dispatch_test_verdict(&v, keccak_regressed, fallback_regressed, fallback_ns);
+    *out = keccak_single_revert_target(&v, top, fallback);
+    return 1;
+#else
+    (void)keccak_regressed; (void)fallback_regressed; (void)fallback_ns;
+    (void)top; (void)fallback; (void)out;
+    return 0;
+#endif
+}
+
+/* Runs the real slot-2 bench (dispatch_autotune_keccak_x4) with the given
+ * kernels; the test observes which single-state kernel it used as the
+ * baseline by counting calls in its own stand-ins. */
+int ama_test_keccak_x4_autotune(int keccak_regressed, int fallback_regressed,
+                                long long fallback_ns, ama_keccak_f1600_x4_fn x4,
+                                ama_keccak_f1600_fn top, ama_keccak_f1600_fn fallback) {
+#if !defined(_WIN32)
+    dispatch_autotune_verdicts_t v;
+    ama_dispatch_init();
+    dispatch_test_verdict(&v, keccak_regressed, fallback_regressed, fallback_ns);
+    dispatch_autotune_keccak_x4(&v, x4, top, fallback);
+    return 1;
+#else
+    (void)keccak_regressed; (void)fallback_regressed; (void)fallback_ns;
+    (void)x4; (void)top; (void)fallback;
+    return 0;
+#endif
 }
 #endif /* AMA_TESTING_MODE */
 

@@ -140,19 +140,35 @@ static void op_double_scalarmult(result_t *r, const void *p) {
 }
 
 int main(void) {
-    const char *b0, *b1;
+    const char *b0, *b1, *bdefault, *brestored;
     int i;
 
     printf("Ed25519 fe51 vs fe64-mulx byte-equivalence\n");
+    /* The process default, read before any override call. */
+    bdefault = ama_ed25519_active_backend();
     ama_ed25519_set_mulx_override(0);
     b0 = ama_ed25519_active_backend();
     ama_ed25519_set_mulx_override(1);
     b1 = ama_ed25519_active_backend();
     ama_ed25519_set_mulx_override(-1);
-    printf("  override 0 -> %s, override 1 -> %s\n", b0, b1);
+    brestored = ama_ed25519_active_backend();
+    printf("  default -> %s, override 0 -> %s, override 1 -> %s, override -1 -> %s\n",
+           bdefault, b0, b1, brestored);
     if (strcmp(b0, "fe51") != 0 || strcmp(b1, "fe64-mulx") != 0) {
         printf("SKIP: this host or build cannot run both instantiations\n");
         return SKIP;
+    }
+    /* On a host that CAN run fe64-mulx, the default must still be fe51:
+     * src/c/ama_ed25519.c sets the default by measurement, not by ISA, and
+     * says so in its header and at BACKEND DISPATCH.  A dispatcher that
+     * started selecting MULX whenever CPUID reports BMI2 and ADX would move
+     * every production Ed25519 call onto the instantiation the measurement
+     * rejected, and nothing else here would notice: the two are byte-
+     * identical, which is the rest of this test. */
+    if (strcmp(bdefault, "fe51") != 0 || strcmp(brestored, "fe51") != 0) {
+        printf("FAIL: the default backend on a BMI2+ADX host is %s / %s, not fe51\n",
+               bdefault, brestored);
+        return 1;
     }
 
     /* Keypair + sign + verify, honest and tampered, over 256 seeds. */

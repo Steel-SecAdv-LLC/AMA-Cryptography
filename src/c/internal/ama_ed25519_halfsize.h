@@ -68,8 +68,9 @@
 #include "ama_wide_mul.h"
 
 /* Five 64-bit limbs hold every quantity below: remainders start at n < 2^256
- * and a candidate sum r_i + r_{i-1} stays below 2^256 (see hs_choose), while
- * cofactor magnitudes never exceed n / 2^128 < 2^128 by the bound above. */
+ * and a candidate sum r_k + r_{k-1} stays below 2^256 (see the even-t_k
+ * candidate selection at the end of ama_ed25519_half_reduce), while cofactor
+ * magnitudes never exceed n / 2^128 < 2^128 by the bound above. */
 #define HS_LIMBS 5
 #define HS_HALF_BITS 128
 #define HS_TOP_BITS 61   /* Lehmer digit size: sums and products fit int64_t */
@@ -257,6 +258,39 @@ static int hs_pair_bits(const uint64_t t[HS_LIMBS], const uint64_t r[HS_LIMBS]) 
     return bt > br ? bt : br;
 }
 
+/* The Lehmer stopping threshold for a round that simulates on the bits of
+ * (r0, r1) from position sh upward: the least integer thr with
+ * thr * 2^sh >= 2^128.  A simulated step whose lower bound `low` (see the
+ * loop below) satisfies low >= thr leaves a true remainder
+ * r > low * 2^sh >= 2^128, so it is never the step that crosses the stopping
+ * point; a step the threshold refuses is taken by a later round or by the
+ * exact step instead.
+ *
+ *   sh <  128:  2^(128 - sh), exact because 2^sh divides 2^128;
+ *   sh >= 128:  1, the ceiling of 2^(128 - sh) <= 1.  Not 0: a threshold of 0
+ *               accepts a step with low == 0, whose remainder is only known to
+ *               be positive.  Earlier revisions used 0 here and relied, without
+ *               saying so, on low == 0 making vh + C or vh + D zero so that
+ *               the loop broke on the next iteration; that kept the output
+ *               correct (identical v0, v1 and sign on all 200,886 inputs of the
+ *               measurement, 157 of which took such a step), but the bound
+ *               the loop states was not the bound it applied.
+ *
+ * Inside the loop r0 has 129 to 256 bits, so sh = bitlen(r0) - HS_TOP_BITS is
+ * in [68, 195] — every first round has sh = 195, because r0 = n — and
+ * 128 - sh is in [-67, 60].  The INT64_MAX arm (128 - sh >= 62, i.e.
+ * sh <= 66) lies outside that range; it keeps the value representable on
+ * every input, and were it reached low < thr would always hold, which is the
+ * correct "threshold effectively infinite" behaviour.
+ * tests/c/test_ed25519_half_reduce.c checks the least-integer property over
+ * the whole reachable range. */
+static int64_t hs_lehmer_threshold(int sh) {
+    const int shamt = HS_HALF_BITS - sh;
+    if (shamt <= 0) return 1;
+    if (shamt >= 62) return INT64_MAX;
+    return (int64_t)1 << shamt;
+}
+
 /**
  * Half-size decomposition of a public scalar h < l (32 bytes, little
  * endian): writes odd v0 > 0 and the magnitude of v1 with
@@ -279,16 +313,8 @@ static void ama_ed25519_half_reduce(uint8_t v0[32], uint8_t v1[32], int *v1_nega
 
     while (hs_bitlen(r1) > HS_HALF_BITS) {
         /* Lehmer round on the top HS_TOP_BITS bits of (r0, r1). */
-        const int sh = hs_bitlen(r0) - HS_TOP_BITS;   /* >= 129 - 61 > 0 */
-        /* The threshold 2^128 in units of 2^sh.  In the loop sh >= 68 so the
-         * shift amount is in (0, 60], but the amount is clamped explicitly so
-         * the value stays representable in int64_t on every path: 0 once sh is
-         * at or above HS_HALF_BITS (2^128 below a unit), and saturated to
-         * INT64_MAX once the shift would not fit (unreachable in the loop, but
-         * then low < thr always holds, the correct "threshold effectively
-         * infinite" behaviour). */
-        const int shamt = HS_HALF_BITS - sh;
-        const int64_t thr = (shamt <= 0) ? 0 : (shamt >= 62) ? INT64_MAX : ((int64_t)1 << shamt);
+        const int sh = hs_bitlen(r0) - HS_TOP_BITS;   /* in [68, 195] */
+        const int64_t thr = hs_lehmer_threshold(sh);  /* 2^128 in units of 2^sh, rounded up */
         int64_t uh = (int64_t)hs_extract(r0, sh);
         int64_t vh = (int64_t)hs_extract(r1, sh);
         int64_t A = 1, B = 0, C = 0, D = 1;
@@ -302,9 +328,10 @@ static void ama_ed25519_half_reduce(uint8_t v0[32], uint8_t v1[32], int *v1_nega
             D2 = B - q * D;
             T = uh - q * vh;
             /* The true remainder after this step exceeds (T + min(C2, D2)) 2^sh
-             * (the cofactors bracket the truncation error); refuse the step
-             * when that bound would fall below 2^128, so a round never runs
-             * past the stopping point and the cofactors stay half-size. */
+             * (the cofactors bracket the truncation error, and C2, D2 have
+             * opposite signs); refuse the step unless that bound is at least
+             * 2^128 (low >= thr), so a round never runs past the stopping
+             * point and the cofactors stay half-size. */
             low = T + (C2 < D2 ? C2 : D2);
             if (low < thr) break;
             A = C; C = C2;

@@ -16,12 +16,31 @@
  *      subtracting v1, and reducing modulo 8l by long division (schoolbook
  *      code that shares nothing with the Lehmer loop under test);
  *   3. the wNAF recoding of v0 and v1 reproduces the values, with every
- *      digit odd and inside the width's range.
+ *      digit odd and inside the width's range;
+ *   4. (v0, v1, sign) is exactly the pair the header documents: the plain
+ *      extended Euclidean algorithm on (8l, h), one full long division per
+ *      step and no Lehmer batching, stopped at the FIRST remainder below
+ *      2^128, followed by the documented even-t_k candidate choice.  1-3
+ *      hold for any valid pair, including one taken a step or two past the
+ *      stopping point, so without this a Lehmer round that overshot would
+ *      pass: measured, halving the round's stopping threshold changes the
+ *      pair on 17,130 of 200,000 random h, and 1-3 and the size band alone
+ *      passed it on this corpus (this check reports 350 mismatches).
  * It also reports the mean and maximum of max(bits(v0), bits(v1)) over the
  * random part of the corpus, and requires the mean to sit within the
  * half-size band the header promises (below 132 bits); a few inputs with a
  * short continued-fraction expansion legitimately give longer pairs, so the
  * maximum is printed, not asserted.
+ *
+ * Separately, hs_lehmer_threshold is checked to be the least integer thr with
+ * thr * 2^sh >= 2^128 at every shift the loop can reach, sh in [68, 195].
+ * That is the property the round's stopping test rests on, and it is not
+ * observable through the pair: a threshold of 0 for sh >= 128 (what earlier
+ * revisions used) returns the same pair on every input measured, because the
+ * step it wrongly accepts always ends its round.  So it is pinned directly.
+ * The structured inputs h = 2^k - 1 for k = 226..252 are the ones in this
+ * corpus on which a threshold of 0 accepts such a step (in the first round,
+ * sh = 195), so check 4 covers that case as well.
  */
 
 #include <stdint.h>
@@ -173,8 +192,168 @@ static int wnaf_ok(const int8_t *w, int top, int width, const uint8_t want[32]) 
     return wide_cmp(acc, ref) == 0;
 }
 
+/* q = a / m and a <- a mod m, by schoolbook shift-and-subtract long division
+ * (m != 0).  One full quotient per call: nothing here is batched. */
+static void wide_divmod(uint64_t q[WIDE], uint64_t a[WIDE], const uint64_t m[WIDE]) {
+    uint64_t t[WIDE];
+    int d;
+    memset(q, 0, WIDE * sizeof q[0]);
+    if (wide_cmp(a, m) < 0) return;
+    for (d = wide_bitlen(a) - wide_bitlen(m); d >= 0; d--) {
+        wide_shl(t, m, d);
+        if (wide_cmp(t, a) <= 0) {
+            wide_sub(a, a, t);
+            q[d >> 6] |= (uint64_t)1 << (d & 63);
+        }
+    }
+}
+
+/* out = a * b for operands below 2^256 (checked: returns 0 otherwise). */
+static int wide_mul_small(uint64_t out[WIDE], const uint64_t a[WIDE], const uint64_t b[WIDE]) {
+    int i;
+    for (i = 4; i < WIDE; i++) {
+        if (a[i] != 0 || b[i] != 0) return 0;
+    }
+    wide_mul(out, a, b);
+    return 1;
+}
+
+static int pair_bits_w(const uint64_t t[WIDE], const uint64_t r[WIDE]) {
+    const int bt = wide_bitlen(t), br = wide_bitlen(r);
+    return bt > br ? bt : br;
+}
+
+static int to_bytes32(uint8_t out[32], const uint64_t x[WIDE]) {
+    int i;
+    for (i = 4; i < WIDE; i++) {
+        if (x[i] != 0) return 0;
+    }
+    for (i = 0; i < 32; i++) out[i] = (uint8_t)(x[i >> 3] >> (8 * (i & 7)));
+    return 1;
+}
+
+/* The pair the header documents, by the textbook route: the extended
+ * Euclidean algorithm on (r_0, r_1) = (8l, h) with one long division per
+ * step, stopped at the first remainder r_k below 2^128, then — when t_k is
+ * even — the shortest of (t_{k+1}, r_{k+1}) (unless r_{k+1} = 0),
+ * (t_k + t_{k-1}, r_k + r_{k-1}) and (t_k - t_{k-1}, r_k - r_{k-1}), ties
+ * going to the earlier candidate, and finally the sign normalisation v0 > 0.
+ * Cofactor magnitudes follow |t_{i+1}| = |t_{i-1}| + q_i |t_i| with signs
+ * alternating from t_1 = +1.  Returns 0 if an intermediate leaves the
+ * 256-bit range the conversions assume (never, for h < l). */
+static int reference_pair(uint8_t v0[32], uint8_t v1[32], int *negative, const uint8_t h[32]) {
+    uint64_t rp[WIDE] = {0}, rc[WIDE] = {0}, tp[WIDE] = {0}, tc[WIDE] = {0};
+    uint64_t q[WIDE], rn[WIDE], tn[WIDE], lw[WIDE] = {0};
+    uint64_t tv[WIDE], rv[WIDE];
+    int idx = 1, sk, st, sr;
+
+    memcpy(lw, L_LIMBS, sizeof L_LIMBS);
+    wide_shl(rp, lw, 3);
+    from_bytes4(rc, h);
+    tc[0] = 1;
+    while (wide_bitlen(rc) > 128) {
+        memcpy(rn, rp, sizeof rn);
+        wide_divmod(q, rn, rc);                 /* rn = r_{i-1} mod r_i */
+        if (!wide_mul_small(tn, q, tc)) return 0;
+        wide_add(tn, tn, tp);                   /* |t_{i+1}| = |t_{i-1}| + q |t_i| */
+        memcpy(rp, rc, sizeof rp);
+        memcpy(rc, rn, sizeof rc);
+        memcpy(tp, tc, sizeof tp);
+        memcpy(tc, tn, sizeof tc);
+        idx++;
+    }
+    sk = (idx & 1) ? 1 : -1;                    /* sign of t_k; t_{k-1} has -sk */
+    memcpy(tv, tc, sizeof tv);
+    memcpy(rv, rc, sizeof rv);
+    st = sk;
+    sr = 1;
+    if ((tc[0] & 1) == 0) {
+        uint64_t ta[WIDE], ra[WIDE], tb[WIDE], rb[WIDE];
+        int best, sta;
+        /* (t_{k+1}, r_{k+1}): t_{k+1} = t_{k-1} - q t_k has the sign -sk. */
+        memcpy(rn, rp, sizeof rn);
+        wide_divmod(q, rn, rc);
+        if (!wide_mul_small(tn, q, tc)) return 0;
+        wide_add(tn, tn, tp);
+        if (wide_bitlen(rn) != 0) {
+            memcpy(tv, tn, sizeof tv);
+            memcpy(rv, rn, sizeof rv);
+            st = -sk;
+            sr = 1;
+            best = pair_bits_w(tn, rn);
+        } else {
+            best = 1 << 20;
+        }
+        /* t_k + t_{k-1} = sk (|t_k| - |t_{k-1}|), paired with r_k + r_{k-1} > 0. */
+        if (wide_cmp(tc, tp) >= 0) {
+            wide_sub(ta, tc, tp);
+            sta = sk;
+        } else {
+            wide_sub(ta, tp, tc);
+            sta = -sk;
+        }
+        wide_add(ra, rc, rp);
+        if (pair_bits_w(ta, ra) < best) {
+            memcpy(tv, ta, sizeof tv);
+            memcpy(rv, ra, sizeof rv);
+            st = sta;
+            sr = 1;
+            best = pair_bits_w(ta, ra);
+        }
+        /* t_k - t_{k-1} = sk (|t_k| + |t_{k-1}|), paired with r_k - r_{k-1} < 0. */
+        wide_add(tb, tc, tp);
+        wide_sub(rb, rp, rc);
+        if (pair_bits_w(tb, rb) < best) {
+            memcpy(tv, tb, sizeof tv);
+            memcpy(rv, rb, sizeof rv);
+            st = sk;
+            sr = -1;
+        }
+    }
+    if (!to_bytes32(v0, tv) || !to_bytes32(v1, rv)) return 0;
+    *negative = (st * sr < 0) && wide_bitlen(rv) != 0;
+    return 1;
+}
+
 static int failures = 0;
 static int checked = 0;
+
+/* hs_lehmer_threshold(sh) must be the least integer thr with
+ * thr * 2^sh >= 2^128 at every sh the Lehmer loop reaches: r0 has 129..256
+ * bits there, so sh = bitlen(r0) - HS_TOP_BITS runs over [68, 195].  "At
+ * least" is what keeps a round from stepping below the stopping point; "least"
+ * is what keeps it from refusing a step it could take. */
+static void check_threshold(void) {
+    int sh, bad = 0;
+    uint64_t two128[WIDE] = {0};
+    two128[2] = 1;
+    for (sh = 129 - HS_TOP_BITS; sh <= 256 - HS_TOP_BITS; sh++) {
+        const int64_t thr = hs_lehmer_threshold(sh);
+        uint64_t x[WIDE] = {0};
+        if (thr < 1) {
+            bad++;
+            if (bad <= 5) printf("  FAIL: threshold %lld at sh = %d accepts low = 0\n", (long long)thr, sh);
+            continue;
+        }
+        x[0] = (uint64_t)thr;
+        wide_shl(x, x, sh);
+        if (wide_cmp(x, two128) < 0) {
+            bad++;
+            if (bad <= 5) printf("  FAIL: threshold %lld * 2^%d < 2^128\n", (long long)thr, sh);
+            continue;
+        }
+        memset(x, 0, sizeof x);
+        x[0] = (uint64_t)(thr - 1);
+        wide_shl(x, x, sh);
+        if (wide_cmp(x, two128) >= 0) {
+            bad++;
+            if (bad <= 5) printf("  FAIL: threshold %lld at sh = %d is not the least\n", (long long)thr, sh);
+        }
+    }
+    printf("  Lehmer threshold: least integer with thr * 2^sh >= 2^128 for sh in [%d, %d]: %s\n",
+           129 - HS_TOP_BITS, 256 - HS_TOP_BITS, bad ? "NO" : "yes");
+    failures += bad;
+}
 
 static void check_one(const uint8_t h[32], int random_part, double *sum_bits, int *max_bits) {
     uint8_t v0[32], v1[32];
@@ -195,8 +374,9 @@ static void check_one(const uint8_t h[32], int random_part, double *sum_bits, in
     }
     /* v0 < l.  Oddness alone does NOT establish gcd(v0, 8l) = 1, which is
      * what makes v0 P = O equivalent to P = O: l is odd, so the degenerate
-     * pair (v0, v1) = (l, 0) — exactly what the r_{k+1} == 0 guard in
-     * hs_choose rejects — satisfies every other assertion in this function,
+     * pair (v0, v1) = (l, 0) — exactly what the r_{k+1} == 0 guard in the
+     * header's even-t_k candidate selection rejects — satisfies every other
+     * assertion in this function,
      * including the congruence, whenever 8 | h.  It would also make the
      * verify equation read [0]B - [l]R - [0]A = O, which holds for every R
      * and every A.  With v0 odd and 0 < v0 < l (l prime), gcd(v0, 8l) = 1
@@ -238,6 +418,20 @@ static void check_one(const uint8_t h[32], int random_part, double *sum_bits, in
         if (failures <= 10) printf("  FAIL: wNAF recoding does not reproduce the scalar\n");
         return;
     }
+    {
+        uint8_t r0[32], r1[32];
+        int rneg;
+        if (!reference_pair(r0, r1, &rneg, h) || memcmp(r0, v0, 32) != 0 ||
+            memcmp(r1, v1, 32) != 0 || rneg != negative) {
+            failures++;
+            if (failures <= 10) {
+                printf("  FAIL: not the pair at the first remainder below 2^128 (h[31..0] =");
+                for (bits = 31; bits >= 0; bits--) printf("%02x", h[bits]);
+                printf(")\n");
+            }
+            return;
+        }
+    }
     bits = bitlen32(v0) > bitlen32(v1) ? bitlen32(v0) : bitlen32(v1);
     if (random_part) {
         *sum_bits += bits;
@@ -251,6 +445,8 @@ int main(void) {
     int max_bits = 0, i, k;
 
     printf("Ed25519 half-size scalar decomposition\n");
+
+    check_threshold();
 
     /* Structured: 0, 1, 2, 3, l - 1, l - 2, powers of two and their
      * neighbours (on both sides of the 2^128 threshold), and a few scalars
@@ -290,8 +486,9 @@ int main(void) {
     check_one(h, 0, &sum_bits, &max_bits);
 
     /* Scalars that drive the Euclid sequence to r_{k+1} == 0 with t_k even,
-     * the one branch of hs_choose that neither the structured corpus above
-     * nor the random corpus below reaches.  The candidate the guard there
+     * the one branch of the header's even-t_k candidate selection that
+     * neither the structured corpus above nor the random corpus below
+     * reaches.  The candidate the guard there
      * rejects is (v0, v1) = (l, 0), which passes every other check in
      * check_one and would make the verify equation hold for every input.
      *
@@ -302,7 +499,7 @@ int main(void) {
      * latent-correctness guard, not an attack surface — which is exactly why
      * it needs fixed vectors.  The first entry is the extreme case: the
      * smallest cofactor that occurs, where the rejected pair loses the size
-     * comparison in hs_choose by a single bit (253 against 252). */
+     * comparison in that selection by a single bit (253 against 252). */
     {
         static const uint8_t r_next_zero[4][32] = {
             /* t_k = 10 (4 bits, even), r_k = 8, r_prev = 252 bits */
@@ -354,6 +551,7 @@ int main(void) {
         printf("FAIL: %d mismatch(es)\n", failures);
         return 1;
     }
-    printf("PASS: v1 ≡ v0 h (mod 8l), 0 < v0 < l odd, wNAF exact on every input\n");
+    printf("PASS: v1 ≡ v0 h (mod 8l), 0 < v0 < l odd, wNAF exact, and the pair at the first\n"
+           "      remainder below 2^128 on every input\n");
     return 0;
 }

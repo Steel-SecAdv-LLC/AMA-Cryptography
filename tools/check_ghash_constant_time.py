@@ -420,14 +420,18 @@ THRESHOLDS = {
 #: described as eleven, twelve, thirteen and fourteen targets in four
 #: sentences of the same file, plus "the other eleven" in
 #: src/c/ama_secp256k1.c and include/ama_cryptography.h.  Nothing checked any
-#: of them.  This does.  A target added or removed without updating the prose
-#: stops the tool at import with the number to write.
+#: of them.  This constant covers the prose in THIS file: a target added or
+#: removed without updating it stops the tool at import with the number to
+#: write.  It could not cover the two C-side sentences, which it cannot read,
+#: and they drifted anyway — to "the other thirteen" and "the other
+#: seventeen" while the table held twenty — so they no longer state a count
+#: at all, and tests/test_ghash_constant_time_gate.py fails if a comment
+#: under src/c or include that names this tool states one again.
 _DOCUMENTED_TARGET_COUNT = 20
 if len(THRESHOLDS) != _DOCUMENTED_TARGET_COUNT:
     raise SystemExit(
         f"check_ghash_constant_time.py: THRESHOLDS holds {len(THRESHOLDS)} "
-        f"targets but the module docstring, the THRESHOLDS comments, "
-        f"src/c/ama_secp256k1.c and include/ama_cryptography.h all say "
+        f"targets but the module docstring and the THRESHOLDS comments say "
         f"{_DOCUMENTED_TARGET_COUNT}. Update the prose and this constant "
         f"together, or the counts drift apart again."
     )
@@ -2133,11 +2137,20 @@ int main(void) {
     + r"""
 /* Secret: the P-256 private key.  Same shape as the secp256k1 driver: key
  * derivation and two raw signatures under taint, only the public outputs
- * untainted. */
+ * untainted.  ECDH then runs under the same tainted key: it is the one entry
+ * point in ama_nistp.c that feeds a SECRET scalar to the variable-base
+ * windowed multiplier (key derivation and signing use the fixed-base comb),
+ * and its scalar-range verdict and at-infinity flag are branches that
+ * nistp_jac_to_affine's comment says every secret-scalar caller
+ * declassifies.  The shared secret is secret, so it is never untainted. */
 int main(void) {
     uint8_t sk[32], pk[65], sig[64], digest[32];
+    uint8_t peer_sk[32], peer_pk[64], shared[32];
     for (unsigned i = 0; i < sizeof sk; i++) sk[i] = (uint8_t)(0x41u * 31u + i * 167u + i * i * 13u);
+    for (unsigned i = 0; i < sizeof peer_sk; i++) peer_sk[i] = (uint8_t)(0x5Au + i * 29u);
     memset(digest, 0x11, sizeof digest);
+    /* The peer key pair is public: derived before anything is tainted. */
+    if (ama_nistp_pubkey_from_privkey(AMA_NIST_CURVE_P256, peer_sk, peer_pk) != AMA_SUCCESS) return 1;
     TAINT(sk, sizeof sk);
     static volatile uint8_t sink;
     {
@@ -2151,6 +2164,11 @@ int main(void) {
         if (rc != AMA_SUCCESS) return 1;
         UNTAINT(sig, sizeof sig);
         sink = (uint8_t)(sink ^ sig[0]);
+    }
+    {
+        ama_error_t rc = ama_nistp_ecdh(AMA_NIST_CURVE_P256, sk, peer_pk, shared);
+        UNTAINT(&rc, sizeof rc);
+        if (rc != AMA_SUCCESS) return 1;
     }
     return 0;
 }

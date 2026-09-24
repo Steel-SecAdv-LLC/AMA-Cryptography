@@ -10,11 +10,18 @@
  *   - Vectorized GHASH using PCLMULQDQ with Karatsuba multiplication
  *   - Interleaved AES-CTR + GHASH for maximum throughput
  *
- * Requires: AES-NI + PCLMULQDQ + SSSE3 (pshufb, for the GCM<->PCLMULQDQ
- * byte-swap below).  Built with -maes -mpclmul -mssse3 -msse4.1.  It does
- * NOT require AVX2 — no 256- or 512-bit (_mm256_ / _mm512_) intrinsic appears
- * here, so the dispatcher installs it on any AES-NI + PCLMULQDQ host, with or
- * without AVX2 (see src/c/dispatch/ama_dispatch.c).
+ * Requires: AES-NI + PCLMULQDQ + SSSE3 + SSE4.1.  SSSE3 for pshufb (the
+ * GCM<->PCLMULQDQ byte-swap below); SSE4.1 because the file is built with
+ * -maes -mpclmul -mssse3 -msse4.1 and the compiler uses it without any
+ * SSE4.1 intrinsic appearing here (measured: in this tree's Release shared
+ * object, gcc 13.3 -O3 with LTO, ama_aes256_gcm_{en,de}crypt_avx2 carry 16
+ * pinsrb; a standalone clang 18 -O3 compile of this file emits pinsrb,
+ * pinsrd and pblendw).
+ * ama_has_aes_ni() and ama_has_pclmulqdq() in src/c/ama_cpuid.c each check
+ * SSSE3 and SSE4.1 as well as their headline bit, so all four are gated.  It
+ * does NOT require AVX2 — no 256- or 512-bit (_mm256_ / _mm512_) intrinsic
+ * appears here, so the dispatcher installs it on any host that passes those
+ * two checks, with or without AVX2 (see src/c/dispatch/ama_dispatch.c).
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */

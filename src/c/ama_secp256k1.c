@@ -642,6 +642,12 @@ static void secp256k1_fe_sqr(secp256k1_fe *r, const secp256k1_fe *a) {
  * p - 2 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2D
  *
  * We use an addition chain optimized for secp256k1's prime.
+ *
+ * a = 0 is a valid input and gives r = 0 (0^(p-2) = 0; the chain is a fixed
+ * sequence of squarings and multiplications with no branch on a).
+ * secp256k1_jac_to_affine depends on that for the point at infinity (Z = 0),
+ * which ama_secp256k1_point_mul converts without a branch; a replacement
+ * inversion that assumes a nonzero input would break that path.
  */
 static void secp256k1_fe_inv(secp256k1_fe *r, const secp256k1_fe *a) {
     secp256k1_fe x2, x3, x6, x9, x11, x22, x44, x88, x176, x220, x223, t;
@@ -878,8 +884,14 @@ static void secp256k1_jac_from_affine(secp256k1_jac *r, const secp256k1_aff *p) 
 
 /**
  * Convert a Jacobian point to affine coordinates.
- * The point must not be the point at infinity.
  * Computes x = X/Z^2, y = Y/Z^3.
+ *
+ * The point at infinity (Z = 0) is accepted and converts to (0, 0), because
+ * secp256k1_fe_inv(0) = 0; measured.  ama_secp256k1_point_mul relies on this
+ * to run the conversion unconditionally and select its outputs and return
+ * code with masks, instead of branching on a scalar-dependent infinity.
+ * Callers that need to tell infinity apart test Z before or after — the
+ * (0, 0) result is not itself on the curve and is never emitted as a point.
  */
 static void secp256k1_jac_to_affine(secp256k1_aff *r, const secp256k1_jac *p) {
     secp256k1_fe z_inv, z_inv2, z_inv3;
@@ -2407,11 +2419,15 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
  * inside a retired-instruction count taken over the whole call: measured, 24
  * instructions over 8 signatures under gcc 13 and 16 under clang 18.
  * `check_ghash_constant_time` therefore had to hold `ecdsa` at a threshold of
- * 64 while its other thirteen targets sat at 0 — a tolerance of 8
+ * 64 while every other target it measured sat at 0 — a tolerance of 8
  * instructions per signature inside which a real leak could hide.  Measured
  * through this entry point the encoder is not in the count at all, so the
- * target joins the other thirteen at 0.  This is the same remedy
- * `nistp-ecdsa` used to reach 0.
+ * target's threshold is 0, like every other target in that tool's THRESHOLDS
+ * table.  This is the same remedy `nistp-ecdsa` used to reach 0.  (No target
+ * count is stated here on purpose: this comment and the matching one in
+ * include/ama_cryptography.h once said "thirteen" and "seventeen" while the
+ * table held twenty.  The tool pins its own count at import, and
+ * tests/test_ghash_constant_time_gate.py keeps a count out of these two.)
  */
 AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(uint8_t signature[64],
                                                  const uint8_t message[32],

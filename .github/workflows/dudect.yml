@@ -962,8 +962,10 @@ jobs:
       # keygen and sign), the zero-scalar / infinity branches in
       # ama_secp256k1_point_mul, and a -O2 conditional move gcc made of the
       # AES-GCM verify mask.  The remaining branches on secret-derived
-      # values in ECDSA are values the API returns; each is declassified at
-      # its site with the argument stated (src/c/internal/ama_ct_declassify.h;
+      # values in ECDSA and P-curve ECDH (which the nistp-ecdsa driver also
+      # runs under the tainted key) are values the API returns; each is
+      # declassified at its site with the argument stated
+      # (src/c/internal/ama_ct_declassify.h;
       # `grep -rn AMA_CT_DECLASSIFY src/c` is the complete list).
       - name: Secret-taint - no control flow or memory address depends on a secret
         run: |

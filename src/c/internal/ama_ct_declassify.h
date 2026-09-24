@@ -13,8 +13,10 @@
  *   - an input-validity verdict the function returns to the caller anyway
  *     (a private key outside [1, n-1]);
  *   - a "cannot happen" guard on a value the API emits (r == 0 or s == 0 in
- *     ECDSA, a fixed-base multiple landing at infinity), where the standard
- *     mandates a retry or an error and the event has probability ~2^-256;
+ *     ECDSA, a fixed-base multiple landing at infinity, or in ECDH a multiple
+ *     of a validated prime-order peer point by a key in [1, n-1] landing at
+ *     infinity), where the standard mandates a retry or an error and the
+ *     event has probability ~2^-256 or cannot occur at all;
  *   - the RFC 6979 Sec 3.2 step h.3 candidate-rejection loop, which every
  *     conforming signer shares and which exposes only that a discarded
  *     DRBG block was out of range (~2^-32 on the NIST curves, ~2^-128 on

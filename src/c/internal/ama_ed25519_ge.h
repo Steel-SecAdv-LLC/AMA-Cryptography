@@ -15,8 +15,11 @@
  *     64-bit limbs, portable, the path every non-x86-64 target and every MSVC
  *     build takes), and
  *   * in src/c/x86/ama_ed25519_fe64_mulx.c over the radix-2^64 field with the
- *     MULX+ADX multiply/square kernel, selected at run time on x86-64 hosts
- *     whose CPUID reports BMI2 and ADX.
+ *     MULX+ADX multiply/square kernel, compiled on x86-64 GCC/Clang and
+ *     selectable at run time through ama_ed25519_set_mulx_override(1) on
+ *     hosts whose CPUID reports BMI2 and ADX.  It is never selected by
+ *     default: fe51 is the default on every host, by measurement (see
+ *     BACKEND DISPATCH in src/c/ama_ed25519.c).
  *
  * Two translation units, one set of formulas.  A defect in the group law is a
  * defect in both, which is the point: the two instantiations are compared
@@ -45,14 +48,21 @@
  *                      hot path.
  *   GE_FE_SUB_M / GE_FE_SUB_S
  *                      subtractions whose result feeds a multiplication and
- *                      whose subtrahend is bounded: _M when g is a multiply
- *                      output (or a sum of two), _S when g is at most the
- *                      result of a _M subtraction (or a sum of two).  On fe51
+ *                      whose subtrahend g is bounded.  _M only when g is a
+ *                      SINGLE multiply or square output (or a carried value):
+ *                      every limb at most 2^52 - 38.  A sum of two products
+ *                      is NOT a valid _M subtrahend — its limb 0 reaches
+ *                      2^52 - 2, past fe51_sub_2p's bias, and the subtraction
+ *                      wraps (src/c/fe51.h; pinned by
+ *                      tests/test_fe51_lazy_reduction_bounds.py).  _S when g
+ *                      is a sum of two products, a _M result, or a sum of two
+ *                      _M results: every limb at most 2^54 - 152.  On fe51
  *                      these are the carry-free fe51_sub_2p / fe51_sub_8p,
  *                      which take the ladder's critical path from a dependent
  *                      carry chain per subtraction to one cycle; on fe64 both
- *                      are the exact fe64_sub.  Every use below states which
- *                      bound holds.
+ *                      are the exact fe64_sub, so a wrong choice is invisible
+ *                      there and wrong only on fe51.  Every use below states
+ *                      which bound holds.
  *   GE_NIELS           the precomputed-point struct for this radix, as
  *                      emitted by tools/gen_ed25519_tables.py.
  *   GE_TABLE_COMB / GE_TABLE_ODD / GE_TABLE_ODD128 / GE_CONST_D / GE_CONST_D2

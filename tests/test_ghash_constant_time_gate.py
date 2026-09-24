@@ -910,3 +910,57 @@ class TestEveryTargetMeasuresItsEntryPoint:
         and must exist.
         """
         assert "ed25519-sign-expanded" in tool._TAINT_DRIVERS
+
+    def test_the_nistp_taint_driver_runs_ecdh_under_the_tainted_key(self, tool: ModuleType) -> None:
+        """ECDH is the one P-curve entry point with a SECRET variable-base scalar.
+
+        Key derivation and signing go through the fixed-base comb; only
+        ama_nistp_ecdh feeds the private key to the windowed multiplier, and
+        until the `nistp-ecdsa` taint driver ran it, its scalar-range verdict
+        and at-infinity flag were undeclassified branches on the key that no
+        lane saw (6 Memcheck reports on this tree before the fix, 0 after).
+        The driver must keep calling it, with the key tainted first.
+        """
+        driver = _strip_c_comments(tool._TAINT_DRIVERS["nistp-ecdsa"])
+        assert "ama_nistp_ecdh" in _calls(driver)
+        assert driver.index("TAINT(sk") < driver.index("ama_nistp_ecdh(")
+
+
+#: A spelled-out or numeric count, as prose states one ("the other thirteen").
+_COUNT_WORD = (
+    r"(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+    r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:-[a-z]+)?|\d+)"
+)
+
+
+class TestTheInventoryCountLivesInTheToolOnly:
+    """No C-side comment restates how many targets the gate has.
+
+    ``_DOCUMENTED_TARGET_COUNT`` pins the count the tool's own prose states,
+    at import.  It cannot read src/c/ama_secp256k1.c or
+    include/ama_cryptography.h, and the sentences there drifted regardless:
+    "joins the other thirteen at 0" and "like the other seventeen" while
+    THRESHOLDS held twenty.  They now state no number; this keeps it so for
+    every comment under src/c and include that names the tool.
+    """
+
+    def test_no_comment_naming_the_tool_counts_its_other_targets(self) -> None:
+        pattern = re.compile(r"\bother\s+" + _COUNT_WORD + r"\b", re.IGNORECASE)
+        offenders: list[str] = []
+        sources = sorted((REPO_ROOT / "src" / "c").rglob("*.[ch]")) + sorted(
+            (REPO_ROOT / "include").rglob("*.h")
+        )
+        assert sources, "no C sources found under src/c and include"
+        for path in sources:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for block in re.finditer(r"/\*.*?\*/", text, re.DOTALL):
+                if "check_ghash_constant_time" not in block.group(0):
+                    continue
+                for hit in pattern.finditer(block.group(0)):
+                    line = text.count("\n", 0, block.start() + hit.start()) + 1
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{line}: {hit.group(0)!r}")
+        assert not offenders, (
+            "a comment that names check_ghash_constant_time restates its target count; "
+            "the count lives in THRESHOLDS / _DOCUMENTED_TARGET_COUNT only:\n  "
+            + "\n  ".join(offenders)
+        )

@@ -17,24 +17,30 @@ It is the companion for file-level `Provenance:` comments added to
 source file conflict, **the source file is authoritative** — this document
 must be updated to match.
 
-Every claim of "clean-room from FIPS" is backed by ACVP Known Answer Test
-results published in [`../../docs/compliance/CSRC_ALIGN_REPORT.md`](../../docs/compliance/CSRC_ALIGN_REPORT.md)
+Every claim of "clean-room from FIPS" is backed by the Known Answer Tests
+the table's last column names. Where that column gives ACVP counts, the
+results are published in [`../../docs/compliance/CSRC_ALIGN_REPORT.md`](../../docs/compliance/CSRC_ALIGN_REPORT.md)
 and continuously enforced in
-[`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
+[`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml);
+where it says "No ACVP vectors", it names the specification vectors and
+the test module that carries them instead.
 
 ---
 
 ## Summary Table
 
-| Primitive | Source file | Provenance | Upstream ref | License | ACVP KAT |
-|-----------|-------------|------------|--------------|---------|----------|
+| Primitive | Source file | Provenance | Upstream ref | License | KAT basis (ACVP where stated) |
+|-----------|-------------|------------|--------------|---------|-------------------------------|
 | ML-KEM-1024 (FIPS 203) | `ama_kyber.c` | Written from FIPS 203 spec | None (no upstream code copied) | N/A (clean-room) | 25/25 KeyGen, 25/25 EncapDecap |
 | ML-DSA-65 (FIPS 204) | `ama_dilithium.c` | Written from FIPS 204 spec | None (no upstream code copied) | N/A (clean-room) | 25/25 KeyGen, 15/15 SigVer (TG3) |
 | SLH-DSA-SHA2-256f (FIPS 205) | `ama_slhdsa.c` | Written from FIPS 205 spec | None (no upstream code copied) | N/A (clean-room) | 14/14 SigVer (TG5) |
 | Ed25519 | `ama_ed25519.c` + `internal/ama_ed25519_ge.h` | In-house (written from RFC 8032; tables generated in-tree) | Group law, comb, verify: none. Constant-time inversion (`internal/ama_fe25519_safegcd.h`) follows libsecp256k1's safegcd `modinv64` reference (MIT; attributed in NOTICE) | Adapted (safegcd), else in-house | Sign/verify round-trip + frozen-oracle replay (2,022 records) |
 | SHA3-256 / SHA3-512 / SHAKE | `ama_sha3.c` | Written from FIPS 202 spec | None | N/A (clean-room) | 554 AFT + 400 MCT (151/86/174/143 AFT + 100 MCT per algo) |
+| SHA3-384 | `ama_sha3.c` (`ama_sha3_384`) | Written from FIPS 202 spec: the same Keccak-f[1600] sponge as the row above at rate 104 / capacity 768 | None | N/A (clean-room) | No ACVP vectors. NIST example digests of `"abc"` and the empty message, plus a differential against stdlib `hashlib` (a test-side comparator only) at 16 lengths across the 104-byte rate boundary — `tests/test_sha2_pbkdf2_native.py` |
 | SHA-256 | `ama_sha256.c` | Written from FIPS 180-4 spec | None | N/A (clean-room) | FIPS 180-4 §B.1 refs |
+| SHA-512 / SHA-384 | `ama_sha512.c` (`ama_sha512`, `ama_sha384`) over `internal/ama_sha2.h` | In-house FIPS 180-4 core, the one Ed25519, SLH-DSA-SHA2, HKDF-SHA-512 and HMAC-SHA-384 already run on (consolidated in v3.0.0; `CSRC_ALIGN_REPORT.md` §2.5); `ama_sha512.c` only exports it and adds no cryptographic code | None (no attribution in either source or in `NOTICE`) | N/A (in-house) | No ACVP vectors. FIPS 180-4 example digests (SHA-512 of `"abc"` and of the empty message, SHA-384 of `"abc"`), plus the same 16-length `hashlib` differential across the 128-byte block boundary — `tests/test_sha2_pbkdf2_native.py` |
 | HMAC-SHA-256 | `ama_hmac_sha256.c` | Written from RFC 2104 + FIPS 198-1 | None | N/A (clean-room) | 150/150 AFT |
+| PBKDF2-HMAC-SHA-256 / PBKDF2-HMAC-SHA-512 | `ama_pbkdf2.c` (`ama_pbkdf2_hmac_sha256`, `ama_pbkdf2_hmac_sha512`) | Written from NIST SP 800-132 / RFC 8018 §5.2, over the in-tree SHA-256 and SHA-512 cores | None | N/A (clean-room) | No ACVP vectors. RFC 7914 §11 PBKDF2-HMAC-SHA-256 vectors 1 and 2 (c = 1 and c = 80,000), the Trezor BIP39 reference vector (PBKDF2-HMAC-SHA-512, c = 2,048), and `hashlib` differentials over 6 edge shapes (empty password, empty salt, a password exactly one SHA-256 block long and ones past the SHA-256 and SHA-512 block sizes) and 20 fresh random shapes per run — `tests/test_sha2_pbkdf2_native.py` |
 
 "Clean-room" means the AMA source file was written against the published
 normative document (FIPS / RFC), not copied from another implementation.

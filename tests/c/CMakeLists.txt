@@ -157,6 +157,14 @@ set_tests_properties(test_dispatch_cache_file PROPERTIES
 add_ama_test(test_dispatch_cache_hostile test_dispatch_cache_hostile.c)
 set_tests_properties(test_dispatch_cache_hostile PROPERTIES
     SKIP_RETURN_CODE 77)
+# The Keccak auto-tune's slot-2 (4-way) bench baseline must be the
+# single-state kernel the slot-1 revert installs.  Driven through
+# AMA_TESTING_MODE hooks with a synthesised verdict, because no shipped host
+# reaches the combination; skips (77) on Windows, where auto-tune is compiled
+# out.
+add_ama_test(test_dispatch_keccak_revert_target test_dispatch_keccak_revert_target.c)
+set_tests_properties(test_dispatch_keccak_revert_target PROPERTIES
+    SKIP_RETURN_CODE 77)
 
 # DISP-07: the dispatch function-pointer table must be read-only after init.
 # Linked against the NON-testing library on purpose: ama_cryptography_test
