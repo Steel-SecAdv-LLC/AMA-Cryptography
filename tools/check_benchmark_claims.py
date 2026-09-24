@@ -50,8 +50,11 @@ than no gate. What it enforces instead is everything that is *not* hardware:
    figure published without a unit, or with the wrong one, is the 4.20 ms bug.
 5. **Ranges are sane.** Where documentation pairs a measured figure with a
    floor for the same benchmark on the same architecture, the two must be
-   within a declared factor of each other. A measured value thirty times its
-   floor is not a fast machine; it is a mistake.
+   within a declared factor of each other, in either direction. A measured
+   value thirty times its floor is not a fast machine, and one a thirtieth of
+   it is not a slow one; both are mistakes. A measured figure that is not a
+   positive, finite number is not a measurement at all and is rejected with
+   the provenance (rule 3), for every row, whether or not it has a floor.
 
 Exit status
 -----------
@@ -65,6 +68,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, field
@@ -96,13 +100,21 @@ REQUIRED_BASELINE_FIELDS: tuple[str, ...] = (
     "tier",
 )
 
-#: A measured figure more than this many times its own floor, on the same
-#: architecture, is a units or identity error rather than a fast host.  Chosen
-#: to be loose enough for genuine cross-class hardware spread (the x86 fleet is
-#: two-class at ~15%, and a canonical bench host can be several times a shared
-#: runner) and tight enough to have caught every defect this pass found: the
-#: 4.20 ms ML-DSA figure was ~30x out and the 70,496 ed25519_sign row ~1.85x
-#: over a re-based floor it should have moved with.
+#: A measured figure more than this many times its own floor, or less than
+#: its reciprocal, on the same architecture, is a units or identity error
+#: rather than a fast or slow host.  Chosen to be loose enough for genuine
+#: cross-class hardware spread (the x86 fleet is two-class at ~15%, and a
+#: canonical bench host can be several times a shared runner).
+#:
+#: The bound was one-sided until 2026-09-24: only ``ratio > 8`` failed, and this
+#: comment claimed it would have caught the 4.20 ms ML-DSA-65 figure, which it
+#: could not.  That figure was too SLOW, the direction the check did not read:
+#: as a throughput it is ~238 ops/sec, about an eleventh of the 2,636 ops/sec
+#: x86-64 ``dilithium_sign`` floor it is compared with here (ratio ~0.09), and
+#: a latency written into the ``ops_per_second`` field (0.379 for 0.379 ms/op)
+#: is ~0.0001.  Both are below ``1/8`` and fail now.  The 70,496 ed25519_sign
+#: row was ~1.85x over its re-based floor, which no range bound catches;
+#: ``check_documented_floors`` does.
 MAX_MEASURED_OVER_FLOOR = 8.0
 
 LATENCY_START = "<!-- AUTO-PIPELINE-LATENCY-START -->"
@@ -204,6 +216,21 @@ def _floors(baseline: dict[str, Any]) -> dict[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _measured_ops(value: object) -> Optional[float]:
+    """``value`` as a throughput, or None when it cannot be one.
+
+    A throughput is a positive, finite number.  ``bool`` is excluded although
+    it is an ``int`` subclass, and so are NaN and the infinities, which
+    ``json`` accepts and which compare False against every bound.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    ops = float(value)
+    if not math.isfinite(ops) or ops <= 0.0:
+        return None
+    return ops
+
+
 def check_provenance(report: Report, results: dict[str, Any]) -> None:
     provenance = results.get("provenance") or {}
     for key, what in REQUIRED_PROVENANCE:
@@ -222,8 +249,17 @@ def check_provenance(report: Report, results: dict[str, Any]) -> None:
     else:
         report.ok()
     for row in results.get("results", []):
-        if row.get("ops_per_second") is None:
+        value = row.get("ops_per_second")
+        if value is None:
             report.fail(f"{RESULTS_JSON}: benchmark {row.get('name')!r} has no ops_per_second")
+        elif _measured_ops(value) is None:
+            report.fail(
+                f"{RESULTS_JSON}: benchmark {row.get('name')!r} records ops_per_second "
+                f"{value!r}, which is not a positive, finite number. A zero, a "
+                "negative, a non-finite or a non-numeric throughput is a failed or "
+                "mis-written measurement, and the tables derived from it would "
+                "publish it."
+            )
         else:
             report.ok()
 
@@ -670,24 +706,31 @@ def check_documented_floors(
 def check_measured_against_floor(
     report: Report, results: dict[str, Any], x86: dict[str, Any]
 ) -> None:
-    """A measured figure many times its own floor is a units or identity error."""
+    """A measured figure many times its own floor, or a small fraction of it,
+    is a units or identity error.
+
+    A row whose ``ops_per_second`` is not a positive, finite number is not
+    compared here: :func:`check_provenance` rejects it for every row, with or
+    without a floor, and comparing it here as well would report it twice.
+    """
     floors = _floors(x86)
     for row in results.get("results", []):
         name = row.get("name")
-        ops = row.get("ops_per_second")
+        ops = _measured_ops(row.get("ops_per_second"))
         entry = floors.get(name)
-        if not (name and ops and entry):
+        if not (name and ops is not None and entry):
             continue
         floor = entry.get("baseline_value")
         if not isinstance(floor, (int, float)) or floor <= 0:
             continue
-        ratio = float(ops) / float(floor)
-        if ratio > MAX_MEASURED_OVER_FLOOR:
+        ratio = ops / float(floor)
+        if ratio > MAX_MEASURED_OVER_FLOOR or ratio < 1.0 / MAX_MEASURED_OVER_FLOOR:
             report.fail(
-                f"{name}: the committed measurement is {ops:,.1f} ops/sec against a "
-                f"floor of {floor:,} — {ratio:.1f}x. Genuine hardware spread does "
-                f"not reach {MAX_MEASURED_OVER_FLOOR:g}x; check the units and that "
-                "both figures name the same operation."
+                f"{name}: the committed measurement is {ops:,.6g} ops/sec against a "
+                f"floor of {floor:,} — {ratio:.3g}x. Genuine hardware spread does "
+                f"not reach {MAX_MEASURED_OVER_FLOOR:g}x in either direction; check "
+                "the units (a ms/op latency in the ops_per_second field lands far "
+                "below the floor) and that both figures name the same operation."
             )
             continue
         report.ok()

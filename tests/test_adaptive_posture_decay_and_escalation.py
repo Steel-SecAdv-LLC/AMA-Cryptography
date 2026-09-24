@@ -127,9 +127,10 @@ class TestSustainedStreamsEscalate:
         and resets, so this stream never escalated, while the unbounded
         accumulator it replaced climbed past the threshold and stayed.
 
-        3.6 sigma is not a contrived value: the weights are 0.45 / 0.25 / 0.15
-        / 0.15 and the raw score is bounded by 1.0, so a peak that only just
-        clears a threshold is the normal case for a low-and-slow signal.
+        3.6 sigma is not a contrived value: the weights are
+        0.45 / 0.25 / 0.15 / 0.15 and the raw score is bounded by 1.0, so a
+        peak that only just clears a threshold is the normal case for a
+        low-and-slow signal.
         """
         evaluator = PostureEvaluator()
         window: list[dict[str, Any]] = []

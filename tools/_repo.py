@@ -183,14 +183,25 @@ def tracked_files(root: Path, *pathspecs: str) -> list[Path]:
 
 
 def staged_files(root: Path) -> list[Path]:
-    """Files added, copied or modified in the index, as ``root / name``.
+    """Every path the index would commit content for, as ``root / name``.
+
+    That is every staged change except a deletion: ``--diff-filter=d`` excludes
+    ``D`` and nothing else.  The filter used to be ``ACM``, an allow-list, and
+    two statuses fell outside it.  ``git diff`` detects renames by default, so
+    ``git mv config.py settings.py`` followed by an edit and ``git add`` stages
+    ``settings.py`` as ``R``; a symlink replaced by a regular file is ``T``.
+    Both carry new content into the commit and both were dropped, so the
+    pre-commit secret scan passed a key added to either.  Excluding the one
+    status that carries no content, rather than listing the ones that do, keeps
+    a status this list did not anticipate in scope.  With ``--name-only`` a
+    rename or copy is reported by its new name, the file on disk.
 
     ``root`` must be the top of the work tree: ``git diff --name-only`` reports
     paths relative to it.  A staged path that is not a regular file on disk is
     an error — its staged content still goes into the commit, so skipping it
     would pass exactly the file a pre-commit scan exists to see.
     """
-    names = _git_names(root, ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACM"])
+    names = _git_names(root, ["diff", "--cached", "--name-only", "-z", "--diff-filter=d"])
     out: list[Path] = []
     for name in names:
         path = root / name

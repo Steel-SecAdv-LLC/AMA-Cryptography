@@ -72,6 +72,10 @@ What is checked
    escape it. The retired-claim registry additionally pins the exact wording
    that was removed.
 
+A claim is excused only by a denial in its own clause — "there is no Python
+fallback", "a Python fallback does not exist" — never by a negative word
+elsewhere on the line; see the comment above the rules.
+
 The scan covers **source comments and docstrings as well as prose**, because
 they drift identically and are read by the same people. Extending it found two
 more: ``crypto_api.py`` carried "Import HMAC and HKDF from pqc_backends
@@ -98,6 +102,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import itertools
 import re
 import sys
 from dataclasses import dataclass
@@ -388,20 +393,123 @@ def build_authority(repo: Path = REPO) -> Authority:
 # ---------------------------------------------------------------------------
 # Rules
 # ---------------------------------------------------------------------------
+#
+# Denial is scoped to the claim, not to the line.  A sentence that DENIES a
+# claim is the corrected wording and must keep passing even though it quotes
+# the claimed phrase in order to deny it ("There is no Python fallback."), so
+# each rule asks whether the words touching ITS match deny it.
+#
+# Until 2026-09-24 that was asked of the whole line.  Any "no", "not",
+# "without", "raises", "stale", "INVARIANT-7" (and nine more cues) anywhere on
+# a line switched off every assertion rule for it, so the natural phrasing of
+# the claims the rules exist for passed: "If the C library is not built, the
+# hybrid combiner uses a pure-Python SHA3-256 fallback" (the INVARIANT-7
+# defect this gate was written for), "`secure_memzero()` performs multiple
+# overwrite passes so no data remains", and "| ELEVATED | 0.3-0.6 | Increase
+# monitoring, no rotation |".  Measured on the tree at the time, the line-wide
+# waiver was what let six lines pass.  Three are genuine denials ("There is no
+# Python fallback", "INVARIANT-7: no Python fallback", "Verify no pure-Python
+# fallback exists") and pass under the scoped rule.  Two were the weights
+# rule misreading figures -- ARCHITECTURE.md's threshold triple
+# 0.15 / 0.45 / 0.80 (excused by the word "stale" later on its line) and a
+# weight run hard-wrapped across two docstring lines -- and are now read as
+# thresholds and rewrapped onto one line respectively.  One was false: a test
+# docstring said ``HybridCombiner(native_lib=None)`` uses "the Python
+# fallback"; it loads the native library, and ``combine()`` raises without
+# it.  That docstring is corrected.
+#
+# A correction note that NARRATES a retired claim ("an earlier revision
+# documented ...") is not a denial; it quotes the claim.  It opens with the
+# explicit, greppable WAIVER marker, which is what the marker is for.
 
-#: A line that *denies* a claim is the corrected wording and must keep passing
-#: even though it quotes the phrase in order to deny it.
-NEGATION_CUES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(no|never|not|without|refus\w*|rais\w*|forbid\w*|absent)\b", re.IGNORECASE),
-    re.compile(
-        r"\b(an earlier|previously|used to|no longer|was documented|stale)\b", re.IGNORECASE
-    ),
-    re.compile(r"\bINVARIANT-7\b"),
+#: A clause ends at any of these; a denial never reaches across one.  "If the C
+#: library is not built, the combiner uses a Python fallback" denies nothing
+#: about the fallback.
+_CLAUSE_BREAK = re.compile(r"[,;:.!?()\[\]|\u2014]")
+
+_WORD = re.compile(r"[a-z]+(?:['\u2019][a-z]+)?", re.IGNORECASE)
+
+#: A word that denies what follows it.
+_DENIERS: frozenset[str] = frozenset(
+    {"no", "not", "never", "without", "nor", "neither", "none", "nothing", "cannot"}
+)
+#: Two-word deniers: "raises rather than using a Python fallback".
+_DENYING_PAIRS: frozenset[tuple[str, str]] = frozenset({("rather", "than"), ("instead", "of")})
+#: Verbs that deny their object: "INVARIANT-7 forbids a Python fallback".
+_DENYING_STEMS: tuple[str, ...] = ("forbid", "prohibit", "refus", "reject")
+
+#: At most this many words between a denier and the phrase it denies: "does not
+#: use a Python fallback" (two), "no longer ships a Python fallback" (three).
+DENIAL_GAP_WORDS = 3
+
+#: How far after the phrase its denying auxiliary may sit: "a pure-Python
+#: SHA3-256 fallback for the hybrid combiner does not exist" (the fifth word).
+DENIAL_TRAILING_WORDS = 5
+
+#: Auxiliaries that, followed by "not", deny the phrase before them: "a pure
+#: Python fallback is not provided", "... fallback does not exist".
+_AUXILIARIES: frozenset[str] = frozenset(
+    "is are was were be been has have had does do did will would can could should must may".split()
 )
 
 
-def _is_negated(line: str) -> bool:
-    return any(cue.search(line) for cue in NEGATION_CUES)
+def _is_contracted_negative(word: str) -> bool:
+    return word.endswith(("n't", "n\u2019t"))
+
+
+def _denies(word: str) -> bool:
+    return word in _DENIERS or _is_contracted_negative(word) or word.startswith(_DENYING_STEMS)
+
+
+#: Words that open a new clause after the phrase; a denial after one of them
+#: is about that clause ("a Python fallback for callers who can't build C").
+_CLAUSE_OPENERS: frozenset[str] = frozenset(
+    "that which who whose whom when where while if unless because since and or but so".split()
+)
+
+
+def _denied(line: str, match: re.Match[str]) -> bool:
+    """Whether the words touching ``match`` deny it.
+
+    Before the phrase: a denier followed by at most :data:`DENIAL_GAP_WORDS`
+    words, in the same clause.  After it, in the same clause and before any
+    word that opens a new one: within its first five words, an auxiliary
+    immediately followed by "not", "never" or "no longer", or a contracted
+    negative ("isn't", "doesn't").
+    """
+    before = _CLAUSE_BREAK.split(line[: match.start()])[-1]
+    words = [w.lower() for w in _WORD.findall(before)][-(DENIAL_GAP_WORDS + 1) :]
+    if any(_denies(word) for word in words):
+        return True
+    if any(pair in _DENYING_PAIRS for pair in itertools.pairwise(words)):
+        return True
+    after = _CLAUSE_BREAK.split(line[match.end() :])[0]
+    following: list[str] = []
+    for word in _WORD.findall(after)[: DENIAL_TRAILING_WORDS + 2]:
+        if word.lower() in _CLAUSE_OPENERS:
+            break
+        following.append(word.lower())
+    for index, word in enumerate(following[:DENIAL_TRAILING_WORDS]):
+        if _is_contracted_negative(word):
+            return True
+        if word in _AUXILIARIES and (
+            following[index + 1 : index + 2] in (["not"], ["never"])
+            or following[index + 1 : index + 3] == ["no", "longer"]
+        ):
+            return True
+    return False
+
+
+def _asserted(pattern: re.Pattern[str], line: str) -> Optional[re.Match[str]]:
+    """The first match of ``pattern`` on ``line`` that is not denied, if any.
+
+    Every match is examined: one denied mention does not excuse a second,
+    asserted one on the same line.
+    """
+    for match in pattern.finditer(line):
+        if not _denied(line, match):
+            return match
+    return None
 
 
 _FALLBACK_NEAR_HKDF = re.compile(
@@ -434,6 +542,32 @@ _THRESHOLD_ROW = re.compile(
     "\\s*[-\u2013]\\s*([0-9.]+)\\s*\\|",
     re.IGNORECASE,
 )
+
+#: A row that states one boundary with a comparator: ``| NOMINAL | < 0.15 |``,
+#: ``| CRITICAL | >= 0.80 |`` or with U+2264 / U+2265.  The shipped tables write
+#: their first and last rows this way, and a rule that read only ``a-b`` rows
+#: left both unchecked: ``>= 0.80`` edited to ``>= 0.90`` passed.
+_THRESHOLD_BOUND_ROW = re.compile(
+    r"\|\s*(NOMINAL|ELEVATED|HIGH|CRITICAL)\s*\|\s*(<=|>=|<|>|\u2264|\u2265)\s*"
+    r"(\d+(?:\.\d+)?)\s*\|",
+    re.IGNORECASE,
+)
+_LOWER_BOUND_COMPARATORS: frozenset[str] = frozenset({">", ">=", "\u2265"})
+
+#: Prose naming a default threshold constant and its value:
+#: "`DEFAULT_ELEVATED_THRESHOLD` = 0.15", "DEFAULT_HIGH_THRESHOLD is 0.45".
+_THRESHOLD_CONSTANT = re.compile(
+    r"\bDEFAULT_(ELEVATED|HIGH|CRITICAL)_THRESHOLD\b[`*]*\s*(?::\s*float\s*)?"
+    r"(?:=|:|\bis\b)\s*[`*]*(\d+(?:\.\d+)?)"
+)
+
+#: Words that say a run of decimals is the threshold triple rather than the
+#: weights: "Threat-level boundaries are 0.15 / 0.45 / 0.80".  The weights
+#: rule used to read that sentence as four weights written as three, which is
+#: a false finding that only the old line-wide negation waiver was hiding.
+_THRESHOLD_WORDS = re.compile(r"threshold|boundar", re.IGNORECASE)
+_WEIGHT_WORDS = re.compile(r"weight|signal", re.IGNORECASE)
+_SENTENCE_END = re.compile(r"[.;!?](?=\s|$)")
 
 _ETHICAL_LEN = re.compile(r"len\(\s*[\w.]*ethical_vector\s*\)\s*==\s*(\d+)")
 
@@ -483,7 +617,7 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
 def _rule_fallback(line: str, authority: Authority) -> Optional[str]:
     if not authority.combine_raises_on_missing_native:
         return None  # a fallback exists; the claim would be true
-    if not (_FALLBACK_NEAR_HKDF.search(line) and _HKDF_CONTEXT.search(line)):
+    if not (_HKDF_CONTEXT.search(line) and _asserted(_FALLBACK_NEAR_HKDF, line)):
         return None
     return (
         "claims a Python HKDF fallback. HybridCombiner.combine() raises "
@@ -497,7 +631,7 @@ def _rule_fallback(line: str, authority: Authority) -> Optional[str]:
 def _rule_memzero_passes(line: str, authority: Authority) -> Optional[str]:
     if not authority.native_memzero_has_barrier:
         return None
-    if not (_MULTIPASS.search(line) and _MEMZERO_CONTEXT.search(line)):
+    if not (_MEMZERO_CONTEXT.search(line) and _asserted(_MULTIPASS, line)):
         return None
     if re.search(r"fallback|AMA_ALLOW_PYTHON_MEMZERO|opt-in", line, re.IGNORECASE):
         return None  # the opt-in Python fallback genuinely does loop
@@ -510,11 +644,52 @@ def _rule_memzero_passes(line: str, authority: Authority) -> Optional[str]:
     )
 
 
+def _sentence_around(line: str, match: re.Match[str]) -> tuple[int, int]:
+    """The ``(start, end)`` of the sentence on ``line`` that contains ``match``."""
+    start = 0
+    for end_mark in _SENTENCE_END.finditer(line, 0, match.start()):
+        start = end_mark.end()
+    following = _SENTENCE_END.search(line, match.end())
+    return start, following.end() if following else len(line)
+
+
+def _distance_to(pattern: re.Pattern[str], line: str, match: re.Match[str]) -> Optional[int]:
+    """Characters from ``match`` to the nearest ``pattern`` in its sentence, if any."""
+    start, end = _sentence_around(line, match)
+    nearest: Optional[int] = None
+    for word in pattern.finditer(line, start, end):
+        if word.end() <= match.start():
+            distance = match.start() - word.end()
+        elif word.start() >= match.end():
+            distance = word.start() - match.end()
+        else:
+            distance = 0
+        nearest = distance if nearest is None else min(nearest, distance)
+    return nearest
+
+
+def _names_thresholds(line: str, run: re.Match[str]) -> bool:
+    """Whether a run of decimals is the threshold triple rather than the weights.
+
+    It is when its sentence names thresholds or boundaries, and names them
+    nearer the run than it names weights or signals.
+    """
+    to_thresholds = _distance_to(_THRESHOLD_WORDS, line, run)
+    if to_thresholds is None:
+        return False
+    to_weights = _distance_to(_WEIGHT_WORDS, line, run)
+    return to_weights is None or to_thresholds < to_weights
+
+
+def _decimals(run: re.Match[str]) -> tuple[float, ...]:
+    return tuple(float(v) for v in re.findall(r"0\.\d\d", run.group(0)))
+
+
 def _rule_posture_weights(line: str, authority: Authority) -> Optional[str]:
     if not authority.posture_weights:
         return None
     actual_percent = tuple(round(w * 100) for w in authority.posture_weights)
-    match = _WEIGHT_TRIPLE.search(line)
+    match = _asserted(_WEIGHT_TRIPLE, line)
     if match:
         documented = tuple(int(g) for g in match.groups())
         if documented != actual_percent[: len(documented)] or len(authority.posture_weights) != len(
@@ -528,9 +703,12 @@ def _rule_posture_weights(line: str, authority: Authority) -> Optional[str]:
                 "(adaptive_posture.py, the `score = ...` expression in evaluate())."
             )
         return None
-    decimals = _WEIGHT_DECIMALS.search(line)
-    if decimals and re.search(r"weight|posture|signal|scor", line, re.IGNORECASE):
-        documented_decimals = tuple(float(v) for v in re.findall(r"0\.\d\d", decimals.group(0)))
+    if not re.search(r"weight|posture|signal|scor", line, re.IGNORECASE):
+        return None
+    for run in _WEIGHT_DECIMALS.finditer(line):
+        if _names_thresholds(line, run) or _denied(line, run):
+            continue  # the threshold rule reads it, or the sentence denies it
+        documented_decimals = _decimals(run)
         if documented_decimals != authority.posture_weights:
             return (
                 f"documents posture weights {documented_decimals}; the composite "
@@ -540,37 +718,77 @@ def _rule_posture_weights(line: str, authority: Authority) -> Optional[str]:
 
 
 def _rule_posture_thresholds(line: str, authority: Authority) -> Optional[str]:
+    """Every documented form of the three default thresholds.
+
+    ``a-b`` range rows, single-boundary rows (``< 0.15``, ``>= 0.80``), the
+    ``DEFAULT_*_THRESHOLD = x`` constants named in prose, and a run of decimals
+    in a sentence about thresholds or boundaries.  The rule used to read only
+    the first form, so the NOMINAL and CRITICAL rows of every shipped table and
+    all of the threshold prose were unchecked.
+    """
     if len(authority.posture_thresholds) != 3:
         return None
     elevated, high, critical = authority.posture_thresholds
-    match = _THRESHOLD_ROW.search(line)
-    if not match:
-        return None
-    level = match.group(1).upper()
-    low, upper = float(match.group(2)), float(match.group(3))
+    implemented = (
+        "(DEFAULT_ELEVATED/HIGH/CRITICAL_THRESHOLD = "
+        f"{elevated} / {high} / {critical}, adaptive_posture.py). Publishing a "
+        "higher boundary than the code uses means the module escalates before "
+        "the documented level, so an operator calibrating to the table "
+        "under-reads their own monitor."
+    )
     expected = {
         "NOMINAL": (0.0, elevated),
         "ELEVATED": (elevated, high),
         "HIGH": (high, critical),
         "CRITICAL": (critical, 1.0),
-    }[level]
-    if (low, upper) != expected:
-        return (
-            f"a {level} row spanning {low} to {upper}; the implemented boundaries "
-            f"are {expected[0]} to {expected[1]} "
-            "(DEFAULT_ELEVATED/HIGH/CRITICAL_THRESHOLD = "
-            f"{elevated} / {high} / {critical}, adaptive_posture.py). Publishing a "
-            "higher boundary than the code uses means the module escalates before "
-            "the documented level, so an operator calibrating to the table "
-            "under-reads their own monitor."
-        )
+    }
+    match = _THRESHOLD_ROW.search(line)
+    if match:
+        level = match.group(1).upper()
+        low, upper = float(match.group(2)), float(match.group(3))
+        if (low, upper) != expected[level]:
+            return (
+                f"a {level} row spanning {low} to {upper}; the implemented boundaries "
+                f"are {expected[level][0]} to {expected[level][1]} " + implemented
+            )
+    for bound in _THRESHOLD_BOUND_ROW.finditer(line):
+        level, comparator = bound.group(1).upper(), bound.group(2)
+        documented = float(bound.group(3))
+        is_lower = comparator in _LOWER_BOUND_COMPARATORS
+        wanted = expected[level][0] if is_lower else expected[level][1]
+        if documented != wanted:
+            side = "lower" if is_lower else "upper"
+            return (
+                f"a {level} row bounded {comparator} {documented}; the implemented "
+                f"{side} boundary of {level} is {wanted} " + implemented
+            )
+    by_name = dict(zip(("ELEVATED", "HIGH", "CRITICAL"), authority.posture_thresholds))
+    for constant in _THRESHOLD_CONSTANT.finditer(line):
+        if _denied(line, constant):
+            continue
+        level, documented = constant.group(1), float(constant.group(2))
+        if documented != by_name[level]:
+            return (
+                f"documents DEFAULT_{level}_THRESHOLD as {documented}; it is "
+                f"{by_name[level]} " + implemented
+            )
+    for run in _WEIGHT_DECIMALS.finditer(line):
+        if not _names_thresholds(line, run) or _denied(line, run):
+            continue
+        documented_run = _decimals(run)
+        if documented_run != authority.posture_thresholds:
+            return (
+                f"documents the posture thresholds as "
+                f"{' / '.join(format(v, '.2f') for v in documented_run)}; they are "
+                f"{elevated} / {high} / {critical} " + implemented
+            )
     return None
 
 
 def _rule_ethical_vector(line: str, authority: Authority) -> Optional[str]:
     if not authority.ethical_vector_length:
         return None
-    match = _ETHICAL_LEN.search(line)
+    match = _asserted(_ETHICAL_LEN, line)
     if not match:
         return None
     documented = int(match.group(1))
@@ -606,16 +824,14 @@ def _rule_retired(line: str, authority: Authority) -> Optional[str]:
     return None
 
 
-#: Most rules look for an ASSERTION, so a line that denies the claim is the
-#: corrected wording and must keep passing.  Two rules invert that: the LMS
-#: rule is looking for a denial ("AMA does not implement HSS/LMS"), and the
+#: Most rules look for an ASSERTION, and each asks :func:`_asserted` for a
+#: match its own words do not deny.  Two rules never consult a denial: the LMS
+#: rule is looking for one ("AMA does not implement HSS/LMS"), and the
 #: retired-claim registry pins wording that teaches a dead name whether or not
-#: the sentence around it is a denial.  Applying the negation waiver to those
-#: two would make them permanently vacuous — which is exactly what happened on
-#: the first run of this gate, where the HSS/LMS claim it was written for
-#: passed because "does not" tripped the waiver.
-NEGATION_SENSITIVE_RULES: frozenset[str] = frozenset({"_rule_lms", "_rule_retired"})
-
+#: the sentence around it is a denial.  Letting a denial excuse those two
+#: would make them permanently vacuous — which is exactly what happened on the
+#: first run of this gate, where the HSS/LMS claim it was written for passed
+#: because "does not" tripped the then line-wide negation waiver.
 RULES: tuple[Callable[[str, Authority], Optional[str]], ...] = (
     _rule_fallback,
     _rule_memzero_passes,
@@ -737,10 +953,7 @@ def find_claims(
                 continue
             if waived:
                 continue
-            negated = _is_negated(line)
             for rule in RULES:
-                if negated and rule.__name__ not in NEGATION_SENSITIVE_RULES:
-                    continue
                 why = rule(line, authority)
                 if why:
                     findings.append(Finding(relative, number, line[:160], why))

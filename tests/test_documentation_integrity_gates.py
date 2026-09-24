@@ -666,6 +666,166 @@ class TestCryptoConstructionDocs:
         fixture.write_text(f"# fixture\n\n{gate.WAIVER}\n{claim}\n", encoding="utf-8")
         assert _run(CONSTRUCTION_DOCS, "--file", str(fixture)).returncode == 0
 
+    @pytest.mark.parametrize(
+        ("claim", "expected_fragment"),
+        [
+            # The finding's own examples: each passed while ANY negative word on
+            # the line switched every assertion rule off.
+            (
+                "If the C library is not built, the hybrid combiner uses a pure-Python "
+                "SHA3-256 fallback.",
+                "Python HKDF fallback",
+            ),
+            (
+                "Without the native library, the hybrid combiner uses a pure Python "
+                "SHA3-256 fallback.",
+                "Python HKDF fallback",
+            ),
+            (
+                "`secure_memzero()` performs multiple overwrite passes so no data remains.",
+                "multi-pass",
+            ),
+            ("| ELEVATED | 0.3-0.6 | Increase monitoring, no rotation |", "ELEVATED row"),
+            (
+                "- **PostureEvaluator** — Weighted scoring (not configurable): timing (50%), "
+                "pattern (30%), resonance (20%)",
+                "posture signals",
+            ),
+            ("    assert len(pkg.ethical_vector) == 12  # not 4", "ETHICAL_VECTOR has 4 keys"),
+            # "INVARIANT-7" anywhere on the line was a cue of its own.
+            (
+                "Per INVARIANT-7 the hybrid combiner keeps a pure Python SHA3-256 fallback.",
+                "Python HKDF fallback",
+            ),
+            # The one real line the waiver hid: HybridCombiner(native_lib=None)
+            # loads the native library; there is no Python fallback to use.
+            (
+                '"""Return a HybridCombiner using the Python fallback (no native lib)."""',
+                "Python HKDF fallback",
+            ),
+            # One denied mention does not excuse a second, asserted one.
+            (
+                "There is no Python fallback for HMAC, but the hybrid combiner uses a "
+                "pure Python fallback.",
+                "Python HKDF fallback",
+            ),
+            # A denial does not reach across a clause boundary ...
+            (
+                "Where HKDF is not native, a pure Python fallback serves the hybrid combiner.",
+                "Python HKDF fallback",
+            ),
+            # ... nor further than three words back ...
+            (
+                "If the native library is not present the hybrid combiner uses a pure "
+                "Python fallback.",
+                "Python HKDF fallback",
+            ),
+            # ... nor past a word that opens a new clause after the phrase.
+            (
+                "The hybrid combiner has a pure Python fallback for callers who can't build C.",
+                "Python HKDF fallback",
+            ),
+        ],
+    )
+    def test_a_negative_word_elsewhere_on_the_line_does_not_excuse_the_claim(
+        self, tmp_path: Path, claim: str, expected_fragment: str
+    ) -> None:
+        fixture = tmp_path / "claim.md"
+        fixture.write_text(f"# fixture\n\n{claim}\n", encoding="utf-8")
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert expected_fragment.lower() in completed.stderr.lower()
+
+    def test_a_denial_in_the_claims_own_clause_still_passes(self, tmp_path: Path) -> None:
+        """Non-vacuity: the corrected wording, in each denial shape the scope admits.
+
+        The first three are the real lines the old line-wide waiver was
+        excusing that are genuine denials (ENHANCED_FEATURES.md,
+        requirements.txt, tests/test_invariant_upgrades.py).
+        """
+        denials = (
+            "- Uses native C HKDF-SHA3-256. **There is no Python fallback.**",
+            "#   - HKDF-SHA3-256 key derivation (RFC 5869) — INVARIANT-7: no Python fallback",
+            '"""Verify no pure-Python fallback exists in the HMAC/HKDF functions."""',
+            "The hybrid combiner does not use a pure Python fallback.",
+            "The hybrid combiner no longer ships a pure Python fallback.",
+            "A pure-Python SHA3-256 fallback for the hybrid combiner does not exist.",
+            "A pure Python fallback isn't provided for the hybrid combiner.",
+            "INVARIANT-7 forbids a pure Python fallback in the hybrid combiner.",
+            "`combine()` raises rather than using a pure Python fallback in the hybrid combiner.",
+            "`secure_memzero()` writes zeros once, not in three passes.",
+            "The native kernel is not multi-pass: `secure_memzero()` writes once and "
+            "issues a barrier.",
+        )
+        fixture = tmp_path / "denials.md"
+        fixture.write_text("# fixture\n\n" + "\n\n".join(denials) + "\n", encoding="utf-8")
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 0, completed.stderr
+
+    @pytest.mark.parametrize(
+        ("claim", "expected_fragment"),
+        [
+            # Single-boundary rows: the NOMINAL and CRITICAL rows of every shipped
+            # table are written this way, and none of them was read.
+            ("| CRITICAL | >= 0.90 | Rotate keys + switch algorithm + alert |", "CRITICAL row"),
+            ("| CRITICAL | ≥ 0.90 | Rotate keys + switch algorithm + alert |", "CRITICAL row"),
+            ("| NOMINAL | < 0.30 | No action |", "NOMINAL row"),
+            ("| HIGH | > 0.50 | Rotate keys |", "HIGH row"),
+            # The constants named in prose.
+            (
+                "The thresholds are `DEFAULT_ELEVATED_THRESHOLD` = 0.30,",
+                "DEFAULT_ELEVATED_THRESHOLD as 0.3",
+            ),
+            (
+                "`DEFAULT_HIGH_THRESHOLD` = 0.45 and `DEFAULT_CRITICAL_THRESHOLD` = 0.90",
+                "DEFAULT_CRITICAL_THRESHOLD as 0.9",
+            ),
+            # A threshold triple in prose.
+            (
+                "Threat-level boundaries are 0.30 / 0.60 / 0.80 "
+                "(3σ / 5σ / 7σ in composite-score space).",
+                "posture thresholds as 0.30 / 0.60 / 0.80",
+            ),
+        ],
+    )
+    def test_every_documented_form_of_a_threshold_is_checked(
+        self, tmp_path: Path, claim: str, expected_fragment: str
+    ) -> None:
+        """The rule read only ``| LEVEL | a-b |`` rows; every other form passed."""
+        fixture = tmp_path / "claim.md"
+        fixture.write_text(f"# fixture\n\n{claim}\n", encoding="utf-8")
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert expected_fragment.lower() in completed.stderr.lower()
+
+    def test_the_shipped_threshold_forms_pass(self, tmp_path: Path) -> None:
+        """Non-vacuity: the forms the real tables and prose use, with the real values.
+
+        The ARCHITECTURE.md sentence is the one the weights rule used to misread
+        as three weights: its threshold triple must be read as the thresholds.
+        """
+        fixture = tmp_path / "thresholds.md"
+        fixture.write_text(
+            "# fixture\n\n"
+            "| NOMINAL | < 0.15 | No action |\n"
+            "| ELEVATED | 0.15 – 0.45 | Increase monitoring frequency |\n"
+            "| HIGH | 0.45-0.80 | Rotate keys |\n"
+            "| CRITICAL | ≥ 0.80 | Rotate keys + switch algorithm + alert |\n"
+            "| CRITICAL | >= 0.80 | Rotate keys + switch algorithm + alert |\n\n"
+            "The thresholds are `DEFAULT_ELEVATED_THRESHOLD` = 0.15,\n"
+            "`DEFAULT_HIGH_THRESHOLD` = 0.45 and `DEFAULT_CRITICAL_THRESHOLD` = 0.80\n\n"
+            "- `PostureEvaluator`: Weighted scoring model consuming **four** signals — "
+            "timing 0.45, pattern 0.25, resonance 0.15 and Lyapunov stability 0.15. "
+            "Threat-level boundaries are 0.15 / 0.45 / 0.80 (3σ / 5σ / 7σ in "
+            "composite-score space). Exponential decay on accumulated score prevents "
+            "stale anomalies from driving permanent escalation.\n\n"
+            "The weights 0.45/0.25/0.15/0.15 sum to 1.0, so the CRITICAL threshold "
+            "is reachable.\n",
+            encoding="utf-8",
+        )
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 0, completed.stderr
+
     def test_source_comments_are_scanned_too(self, tmp_path: Path) -> None:
         """A stale comment in the package is a claim like any other.
 
@@ -1083,6 +1243,100 @@ class TestBenchmarkClaims:
         completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
         assert completed.returncode == 1, completed.stdout
         assert "76,215" in completed.stderr
+
+    @staticmethod
+    def _record_measuring(tmp_path: Path, name: str, value: object) -> Path:
+        """A scratch tree whose record gives ``name`` the throughput ``value``.
+
+        The generated tables are then re-derived from that record, which is
+        the state a units error reaches once ``tools/update_docs.py`` has run:
+        rule 1 agrees with the bad record, so only the range rule and the
+        provenance rule are left to object.
+        """
+        scratch = _scratch_repo(tmp_path)
+        record_path = scratch / "benchmarks" / "benchmark-results.json"
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        rows = [row for row in record["results"] if row.get("name") == name]
+        assert len(rows) == 1, name
+        rows[0]["ops_per_second"] = value
+        record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8", newline="")
+        # Loaded by path under a private name and never registered in
+        # sys.modules: the copy's ROOT is the scratch tree.
+        spec = importlib.util.spec_from_file_location(
+            "_scratch_update_docs", scratch / "tools" / "update_docs.py"
+        )
+        assert spec is not None and spec.loader is not None
+        update_docs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(update_docs)
+        with contextlib.redirect_stdout(io.StringIO()):
+            update_docs.update_pipeline_latency_docs()
+            update_docs.update_benchmark_docs()
+        return scratch
+
+    @staticmethod
+    def _x86_floor(name: str) -> float:
+        baseline = json.loads(
+            (REPO_ROOT / "benchmarks" / "baseline.json").read_text(encoding="utf-8")
+        )
+        entry = baseline.get("benchmarks", {}).get(name) or baseline["pqc_benchmarks"][name]
+        return float(entry["baseline_value"])
+
+    @pytest.mark.parametrize(
+        "ops",
+        [
+            pytest.param(1000.0 / 4.20, id="the-4.20-ms-figure-as-a-throughput"),
+            pytest.param(0.379, id="a-ms-per-op-latency-in-the-ops-field"),
+        ],
+    )
+    def test_a_measurement_far_below_its_floor_fails(self, tmp_path: Path, ops: float) -> None:
+        """The range rule read only ``ratio > 8``; the 4.20 ms defect is ``ratio < 1/8``.
+
+        Both values are under an eleventh of the 2,636 ops/sec x86-64
+        ``dilithium_sign`` floor, and both passed the one-sided check.
+        """
+        gate = _load(BENCHMARK_CLAIMS)
+        assert ops < self._x86_floor("dilithium_sign") / gate.MAX_MEASURED_OVER_FLOOR
+        scratch = self._record_measuring(tmp_path, "dilithium_sign", ops)
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 1, completed.stdout
+        assert "dilithium_sign: the committed measurement" in completed.stderr
+        assert "either direction" in completed.stderr
+
+    def test_a_measurement_far_above_its_floor_still_fails(self, tmp_path: Path) -> None:
+        gate = _load(BENCHMARK_CLAIMS)
+        ops = self._x86_floor("dilithium_sign") * (gate.MAX_MEASURED_OVER_FLOOR + 1)
+        scratch = self._record_measuring(tmp_path, "dilithium_sign", ops)
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 1, completed.stdout
+        assert "dilithium_sign: the committed measurement" in completed.stderr
+
+    @pytest.mark.parametrize("factor", [0.13, 7.9])
+    def test_a_measurement_inside_the_declared_factor_passes(
+        self, tmp_path: Path, factor: float
+    ) -> None:
+        """Non-vacuity: hardware spread short of the factor, either way, is not an error."""
+        ops = round(self._x86_floor("dilithium_sign") * factor, 2)
+        scratch = self._record_measuring(tmp_path, "dilithium_sign", ops)
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 0, completed.stderr
+
+    @pytest.mark.parametrize(
+        "value",
+        [0, -5.0, float("nan"), True],
+        ids=["zero", "negative", "nan", "bool"],
+    )
+    def test_a_throughput_that_is_not_a_positive_finite_number_fails(
+        self, tmp_path: Path, value: object
+    ) -> None:
+        """``if not (name and ops and entry): continue`` skipped a zero, and the
+        provenance rule rejected only ``None``: a zero, a negative, NaN (which
+        ``json`` accepts and which compares False against every bound) and a
+        boolean all reached the published tables with exit 0.
+        """
+        scratch = self._record_measuring(tmp_path, "dilithium_sign", value)
+        completed = _run(BENCHMARK_CLAIMS, "--repo", str(scratch))
+        assert completed.returncode == 1, completed.stdout
+        assert "not a positive, finite number" in completed.stderr
 
     def test_a_documented_floor_that_exists_passes(self, tmp_path: Path) -> None:
         """Non-vacuity: the corrected number must not fail."""

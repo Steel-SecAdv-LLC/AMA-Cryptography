@@ -3609,7 +3609,8 @@ the code was what moved.
   of the generated benchmark blocks, requires every floor cited in prose to
   exist in `baseline.json` or `arm-baseline.json`, requires the results record
   to carry reproduction provenance, and rejects a measured figure more than 8x
-  its own floor as a units or identity error.
+  above or below its own floor as a units or identity error, and a throughput
+  that is not a positive, finite number as no measurement at all.
 
 A **correction note** may quote the wording it retires — a reader cannot
 otherwise tell what changed — but only behind an explicit

@@ -173,6 +173,92 @@ class TestHelperFailsClosed:
 
 
 # ---------------------------------------------------------------------------
+# staged_files: every staged status that carries content into the commit
+# ---------------------------------------------------------------------------
+
+#: Long enough that appending one line keeps the edited file far above git's
+#: 50% rename-similarity threshold, so the edit is staged as a rename.
+_MODULE_BODY = "".join(f"SETTING_{i} = {i}\n" for i in range(40))
+
+
+def _staged_status(repo: Path, name: str) -> str:
+    """The status letter ``git diff --cached`` gives ``name`` (``R092`` -> ``R``)."""
+    for line in _git(repo, "diff", "--cached", "--name-status").splitlines():
+        fields = line.split("\t")
+        if fields[-1] == name:
+            return fields[0][0]
+    raise AssertionError(f"{name} is not staged")
+
+
+@pytest.fixture()
+def committed_repo(tmp_path: Path) -> Path:
+    """A repository with one commit: ``config.py`` and a symlink entry ``link.txt``.
+
+    The symlink is written into the index with ``update-index --cacheinfo``
+    rather than created on disk, so the test needs no symlink privilege on
+    Windows; ``core.symlinks=true`` makes git take a later regular file at that
+    path as the type change it is on every platform.  ``diff.renames`` is
+    pinned to git's default so a developer's global override cannot turn the
+    rename below into a delete-and-add and hide the regression.
+    """
+    repo = _init_repo(tmp_path / "repo")
+    _git(repo, "config", "user.name", "gate test")
+    _git(repo, "config", "user.email", "gate-test@example.invalid")
+    _git(repo, "config", "diff.renames", "true")
+    _git(repo, "config", "core.symlinks", "true")
+    (repo / "config.py").write_text(_MODULE_BODY, encoding="utf-8")
+    target = repo / "link-target.tmp"
+    target.write_text("config.py", encoding="utf-8")
+    blob = _git(repo, "hash-object", "-w", "--", target.name).strip()
+    target.unlink()
+    _git(repo, "update-index", "--add", "--cacheinfo", f"120000,{blob},link.txt")
+    _git(repo, "add", "--", "config.py")
+    _git(repo, "commit", "-q", "-m", "baseline")
+    return repo
+
+
+def _rename_and_plant_a_key(repo: Path) -> Path:
+    _git(repo, "mv", "config.py", "settings.py")
+    renamed = repo / "settings.py"
+    renamed.write_text(_MODULE_BODY + f'aws_key = "{FAKE_AWS_KEY_ID}"\n', encoding="utf-8")
+    _git(repo, "add", "--", "settings.py")
+    assert _staged_status(repo, "settings.py") == "R"
+    return renamed
+
+
+def _replace_the_symlink_with_a_key(repo: Path) -> Path:
+    replaced = repo / "link.txt"
+    replaced.write_text(f'aws_key = "{FAKE_AWS_KEY_ID}"\n', encoding="utf-8")
+    _git(repo, "add", "--", "link.txt")
+    assert _staged_status(repo, "link.txt") == "T"
+    return replaced
+
+
+class TestStagedFilesListsEveryStatusThatCarriesContent:
+    """``--diff-filter=ACM`` dropped renames (``R``) and type changes (``T``).
+
+    Both put new content into the commit, so the pre-commit secret scan
+    (``check_secrets.py --staged``) passed a key added to either.  Each test
+    asserts its status first, so it cannot pass because git staged the change
+    under a status the old filter already allowed.
+    """
+
+    def test_a_renamed_and_edited_file_is_listed(self, committed_repo: Path) -> None:
+        renamed = _rename_and_plant_a_key(committed_repo)
+        assert renamed in _repo.staged_files(committed_repo)
+
+    def test_a_type_changed_path_is_listed(self, committed_repo: Path) -> None:
+        replaced = _replace_the_symlink_with_a_key(committed_repo)
+        assert replaced in _repo.staged_files(committed_repo)
+
+    def test_a_staged_deletion_is_not_listed_and_not_an_error(self, committed_repo: Path) -> None:
+        """Deletion is the one status with no content: excluding it is the filter."""
+        _git(committed_repo, "rm", "-q", "--", "config.py")
+        assert _staged_status(committed_repo, "config.py") == "D"
+        assert committed_repo / "config.py" not in _repo.staged_files(committed_repo)
+
+
+# ---------------------------------------------------------------------------
 # The gates, end to end: copied into the repository and run as scripts
 # ---------------------------------------------------------------------------
 
@@ -204,6 +290,26 @@ class TestCheckSecretsSeesNonAsciiFiles:
         with pytest.raises(SystemExit) as exc:
             _tracked_files(plain, staged_only=False)
         assert exc.value.code == 2
+
+
+class TestCheckSecretsStagedSeesRenamesAndTypeChanges:
+    """The pre-commit hook itself, run the way ``.pre-commit-config.yaml`` runs it."""
+
+    def test_staged_mode_fails_on_a_key_in_a_renamed_file(self, committed_repo: Path) -> None:
+        _rename_and_plant_a_key(committed_repo)
+        _copy_gate(committed_repo, "check_secrets.py")
+        proc = _run_gate(committed_repo, "check_secrets.py", "--staged")
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "settings.py" in proc.stdout
+        assert "aws-access-key-id" in proc.stdout
+
+    def test_staged_mode_fails_on_a_key_in_a_type_changed_file(self, committed_repo: Path) -> None:
+        _replace_the_symlink_with_a_key(committed_repo)
+        _copy_gate(committed_repo, "check_secrets.py")
+        proc = _run_gate(committed_repo, "check_secrets.py", "--staged")
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "link.txt" in proc.stdout
+        assert "aws-access-key-id" in proc.stdout
 
 
 class TestCheckSuppressionHygieneSeesNonAsciiFiles:
