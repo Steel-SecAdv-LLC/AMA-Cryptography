@@ -40,6 +40,7 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._module_state import check_operational as _check_operational
 from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._package_transcript import canonical as _canonical
 from ama_cryptography._package_transcript import transcript as _transcript
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
@@ -2969,6 +2970,9 @@ def create_crypto_package(
         "multi_layer_defense": True,
         # Signed stand-in for the KEM shared secret; None without the add-on.
         "kem_shared_secret_commitment": kem_commitment,
+        # Signed stand-in for the Layer-4 derived keys (and, through them, the
+        # master secret): the keys are secrets the redacted form strips.
+        "derived_keys_commitment": _derived_keys_commitment(derived_keys),
     }
 
     # ========================================================================
@@ -3051,6 +3055,28 @@ def _kem_shared_secret_commitment(shared_secret: bytes) -> str:
     return native_sha3_256(_KEM_SS_COMMITMENT_DOMAIN + bytes(shared_secret)).hex()
 
 
+#: Domain separator for the public commitment to a package's derived keys.
+_DERIVED_KEYS_COMMITMENT_DOMAIN = b"AMA/crypto-package/derived-keys/v1"
+
+
+def _derived_keys_commitment(derived_keys: List[bytes]) -> str:
+    """The public commitment a package signs in place of its derived keys.
+
+    The keys are secrets — ``to_dict()`` and a pickle strip them — so, like
+    the KEM shared secret above, they stay out of the transcript and a
+    domain-separated SHA3-256 of them goes in instead.  The keys are encoded
+    with the transcript's own injective encoding, so neither their count nor
+    a boundary between two of them can move without moving the commitment.
+
+    Binding the keys, and not only the salt, info and count they come from,
+    is what catches an attacker who swaps ``hkdf_master_secret`` and
+    re-derives the keys to match: every one of salt, info and count is then
+    unchanged and Layer 4 is self-consistent, and the keys are the only thing
+    that moved.  Layer 4 compares them with this commitment.
+    """
+    return native_sha3_256(_DERIVED_KEYS_COMMITMENT_DOMAIN + _canonical(list(derived_keys))).hex()
+
+
 def package_transcript(package: "CryptoPackageResult", content_digest: bytes) -> bytes:
     """The exact bytes a package's Layer-3 signature is computed over.
 
@@ -3074,19 +3100,20 @@ def package_transcript(package: "CryptoPackageResult", content_digest: bytes) ->
     stored claim unsigned.  Both are bound, so every field of the package is
     under the signature without exception.
 
-    Deliberately NOT included: ``hmac_key``, ``hkdf_master_secret`` and
-    ``kem_shared_secret``.  Each is pinned through a public commitment that IS
-    signed — ``hmac_tag`` for the key, ``derived_keys`` for the master secret,
-    and ``metadata["kem_shared_secret_commitment"]`` for the KEM secret — and
-    binding a secret directly would make the transcript uncomputable from the
-    redacted form :meth:`to_dict` emits.
+    Deliberately NOT included: the secret fields — ``hmac_key``,
+    ``hkdf_master_secret``, ``derived_keys`` and ``kem_shared_secret``.  Each
+    is pinned through a public value that IS signed — ``hmac_tag`` for the
+    HMAC key, ``metadata["derived_keys_commitment"]`` for the derived keys and
+    through them the master secret, and
+    ``metadata["kem_shared_secret_commitment"]`` for the KEM secret — because
+    binding a secret directly makes the transcript uncomputable from the
+    redacted form that :meth:`~CryptoPackageResult.to_dict` and a pickle emit,
+    and Layer 3 is the one layer that must still verify there.
 
-    ``derived_keys`` IS included, and the reason is worth stating because
-    binding the salt, info and count alone looks sufficient and is not: an
-    attacker who swaps ``hkdf_master_secret`` and recomputes the derived keys
-    to match leaves Layer 4 self-consistent and every one of salt, info and
-    count unchanged.  The derived keys themselves are the only field that
-    moves, so they are the field that has to be signed.
+    ``derived_keys`` used to be bound directly, which is what made a redacted
+    package fail Layer 3 (2026-09 review).  The commitment keeps what binding
+    them bought — see :func:`_derived_keys_commitment` for why the keys, and
+    not only the salt, info and count, have to be pinned.
 
     Raises:
         TypeError: if any field holds a value the encoding cannot represent.
@@ -3115,7 +3142,6 @@ def package_transcript(package: "CryptoPackageResult", content_digest: bytes) ->
                     }
                 ),
             ),
-            ("derived_keys", list(package.derived_keys)),
             ("hkdf_salt", package.hkdf_salt),
             ("hkdf_info", package.hkdf_info),
             ("kem_ciphertext", package.kem_ciphertext),
@@ -3344,7 +3370,8 @@ def verify_crypto_package(
       detectable.  A package carrying a field the transcript cannot encode
       fails this layer rather than raising.
     - *Layer 4 — Key Independence:* re-derive keys from stored master
-      secret, salt, and info; compare to stored derived keys.
+      secret, salt, and info; compare to stored derived keys, and those to
+      the signed ``metadata["derived_keys_commitment"]``.
 
     Optional add-on verification:
 
@@ -3518,7 +3545,18 @@ def verify_crypto_package(
             for rk, sk in zip(recomputed_keys, package.derived_keys):
                 if not _ct(rk, sk):
                     keys_match = False
-            results["hkdf_keys"] = keys_match
+            # The master secret and the keys are both unsigned, so their
+            # agreeing proves nothing on its own: the keys must also be the
+            # ones the signed commitment names (see _derived_keys_commitment).
+            committed = package.metadata.get("derived_keys_commitment")
+            results["hkdf_keys"] = (
+                keys_match
+                and isinstance(committed, str)
+                and _ct(
+                    _derived_keys_commitment(package.derived_keys).encode(),
+                    committed.encode(),
+                )
+            )
     except Exception as exc:
         logger.error("Layer 4 HKDF key verification error: %s", exc)
         results["hkdf_keys"] = False

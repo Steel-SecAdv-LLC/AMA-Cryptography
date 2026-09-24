@@ -29,7 +29,7 @@ import importlib
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable, ClassVar, cast
 
 import pytest
 
@@ -350,6 +350,46 @@ class TestAbiVersionHandshake:
 # ---------------------------------------------------------------------------
 
 
+class _Parameter:
+    """An object ``ctypes`` marshals through its ``_as_parameter_``."""
+
+    def __init__(self, value: Any) -> None:
+        self._as_parameter_ = value
+
+
+class _Index:
+    """A non-``int`` integer (a NumPy scalar's shape): ``ctypes`` reads it
+    through ``__index__`` for a by-value ``c_size_t``."""
+
+    def __init__(self, value: int) -> None:
+        self._value = value
+
+    def __index__(self) -> int:
+        return self._value
+
+
+#: Every spelling ``ctypes`` accepts for a ``POINTER(c_size_t)`` in/out
+#: length, bar NULL and an offset ``byref``.
+_POINTER_SPELLINGS = ("pointer", "scalar", "byref", "array", "as_parameter")
+
+
+def _length_spelling(spelling: str, declared: int) -> tuple[Any, Callable[[], int]]:
+    """``declared`` in the named spelling, and a reader for the value C sees."""
+    cell = ctypes.c_size_t(declared)
+    if spelling == "pointer":
+        return ctypes.pointer(cell), lambda: cell.value
+    if spelling == "scalar":
+        return cell, lambda: cell.value
+    if spelling == "byref":
+        return ctypes.byref(cell), lambda: cell.value
+    if spelling == "array":
+        array = (ctypes.c_size_t * 1)(declared)
+        return array, lambda: int(array[0])
+    if spelling == "as_parameter":
+        return _Parameter(ctypes.pointer(cell)), lambda: cell.value
+    raise AssertionError(f"unknown spelling {spelling!r}")
+
+
 class TestContextOutputBufferCapacity:
     """The capacity contract, on every context method that writes a buffer.
 
@@ -374,12 +414,24 @@ class TestContextOutputBufferCapacity:
 
     # -- the measurement, in a process of its own ---------------------------
 
-    #: The audit's reproduction, verbatim, for a child interpreter.  It is run
-    #: out-of-process because a regression here is *memory corruption*: the
-    #: in-process tests below would take the whole pytest session down with
-    #: SIGSEGV, and a dead session reports a signal rather than a diagnosis.
-    #: Declared first in the class so its clean verdict is on the record
-    #: before any in-process test can crash the run.
+    #: The audit's reproduction, for a child interpreter, in every spelling
+    #: ``ctypes`` accepts for the declared length.  It is run out-of-process
+    #: because a regression here is *memory corruption*: the in-process tests
+    #: below would take the whole pytest session down with SIGSEGV, and a dead
+    #: session reports a signal rather than a diagnosis.  Declared first in the
+    #: class so its clean verdict is on the record before any in-process test
+    #: can crash the run.
+    #:
+    #: ``pointer`` is the audit's own case.  The others are the 2026-09 review's:
+    #: ``byref`` — the spelling the ``ctypes`` documentation recommends for an
+    #: out-parameter — reached the same overflow because the guard could not
+    #: read a ``CArgObject`` and skipped the check, and ``array``,
+    #: ``as_parameter`` and ``index`` (a NumPy-style integer, for the by-value
+    #: KEM lengths) did the same.  ``byref_offset`` wraps a ``c_size_t`` whose
+    #: value FITS but points, through the offset, at the word after it, which
+    #: does not: a guard that reads ``_obj`` without checking the address is
+    #: fooled by it.  Each case prints ``CASE`` before the call, so a crash
+    #: names the case that caused it.
     _REPRODUCTION = """
 import ctypes
 import sys
@@ -390,26 +442,123 @@ if not pb._CONTEXT_API_AVAILABLE:
     print("VERDICT SKIP")
     sys.exit(0)
 
+
+class Parameter:
+    def __init__(self, value):
+        self._as_parameter_ = value
+
+
+class Index:
+    def __init__(self, value):
+        self._value = value
+
+    def __index__(self):
+        return self._value
+
+
+SIG = pb.DILITHIUM_SIGNATURE_BYTES
+
+
+def sign_cases():
+    cell = ctypes.c_size_t(SIG)
+    yield "pointer", ctypes.pointer(cell), lambda: cell.value
+    cell_s = ctypes.c_size_t(SIG)
+    yield "scalar", cell_s, lambda: cell_s.value
+    cell_b = ctypes.c_size_t(SIG)
+    yield "byref", ctypes.byref(cell_b), lambda: cell_b.value
+    pair = (ctypes.c_size_t * 2)(64, SIG)
+    view = ctypes.c_size_t.from_buffer(pair)
+    yield "byref_offset", ctypes.byref(view, ctypes.sizeof(ctypes.c_size_t)), lambda: pair[1]
+    array = (ctypes.c_size_t * 1)(SIG)
+    yield "array", array, lambda: array[0]
+    cell_p = ctypes.c_size_t(SIG)
+    yield "as_parameter", Parameter(ctypes.pointer(cell_p)), lambda: cell_p.value
+
+
+def run(name, call, read_back):
+    print("CASE", name, flush=True)
+    rc = call()
+    print("VERDICT", name, rc, read_back(), flush=True)
+
+
 with pb.AmaContext(pb.AmaContext.ALG_ML_DSA_65) as ctx:
     pk = ctypes.create_string_buffer(pb.DILITHIUM_PUBLIC_KEY_BYTES)
     sk = ctypes.create_string_buffer(pb.DILITHIUM_SECRET_KEY_BYTES)
     assert ctx.keypair_generate(
         pk, pb.DILITHIUM_PUBLIC_KEY_BYTES, sk, pb.DILITHIUM_SECRET_KEY_BYTES
     ) == 0
-    signature = ctypes.create_string_buffer(64)
-    declared = ctypes.pointer(ctypes.c_size_t(pb.DILITHIUM_SIGNATURE_BYTES))
-    rc = ctx.sign(b"audit A-1", sk.raw, signature, declared)
+    for name, declared, read_back in sign_cases():
+        signature = ctypes.create_string_buffer(64)
+        run(name, lambda: ctx.sign(b"audit A-1", sk.raw, signature, declared), read_back)
 
-print("VERDICT", rc, declared.contents.value)
+with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+    pk = ctypes.create_string_buffer(pb.KYBER_PUBLIC_KEY_BYTES)
+    sk = ctypes.create_string_buffer(pb.KYBER_SECRET_KEY_BYTES)
+    assert ctx.keypair_generate(
+        pk, pb.KYBER_PUBLIC_KEY_BYTES, sk, pb.KYBER_SECRET_KEY_BYTES
+    ) == 0
+    public, secret = pk.raw[: pb.KYBER_PUBLIC_KEY_BYTES], sk.raw[: pb.KYBER_SECRET_KEY_BYTES]
+    ct = ctypes.create_string_buffer(pb.KYBER_CIPHERTEXT_BYTES)
+    ct_len = ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES)
+    ss = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
+    assert ctx.kem_encapsulate(
+        public, ct, ctypes.pointer(ct_len), ss, pb.KYBER_SHARED_SECRET_BYTES
+    ) == 0
+    ciphertext = ct.raw[: pb.KYBER_CIPHERTEXT_BYTES]
+
+    small_ct = ctypes.create_string_buffer(8)
+    declared_ct = ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES)
+    run(
+        "encapsulate_ciphertext_byref",
+        lambda: ctx.kem_encapsulate(
+            public, small_ct, ctypes.byref(declared_ct), ss, pb.KYBER_SHARED_SECRET_BYTES
+        ),
+        lambda: declared_ct.value,
+    )
+    small_ss = ctypes.create_string_buffer(1)
+    ct_len2 = ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES)
+    run(
+        "encapsulate_shared_secret_index",
+        lambda: ctx.kem_encapsulate(
+            public, ct, ctypes.pointer(ct_len2), small_ss, Index(pb.KYBER_SHARED_SECRET_BYTES)
+        ),
+        lambda: pb.KYBER_SHARED_SECRET_BYTES,
+    )
+    run(
+        "decapsulate_shared_secret_index",
+        lambda: ctx.kem_decapsulate(
+            ciphertext, secret, small_ss, Index(pb.KYBER_SHARED_SECRET_BYTES)
+        ),
+        lambda: pb.KYBER_SHARED_SECRET_BYTES,
+    )
 """
 
+    #: Every case the child runs, with the declared length it must leave
+    #: untouched.  The C side writes the real length back through an in/out
+    #: pointer, so an unchanged value is only half the evidence; ``-1`` is the
+    #: other half, and a clean exit the third.
+    _REPRODUCTION_CASES: ClassVar[dict[str, int]] = {
+        "pointer": pb.DILITHIUM_SIGNATURE_BYTES,
+        "scalar": pb.DILITHIUM_SIGNATURE_BYTES,
+        "byref": pb.DILITHIUM_SIGNATURE_BYTES,
+        "byref_offset": pb.DILITHIUM_SIGNATURE_BYTES,
+        "array": pb.DILITHIUM_SIGNATURE_BYTES,
+        "as_parameter": pb.DILITHIUM_SIGNATURE_BYTES,
+        "encapsulate_ciphertext_byref": pb.KYBER_CIPHERTEXT_BYTES,
+        "encapsulate_shared_secret_index": pb.KYBER_SHARED_SECRET_BYTES,
+        "decapsulate_shared_secret_index": pb.KYBER_SHARED_SECRET_BYTES,
+    }
+
     def test_the_measured_overflow_cannot_crash_a_child_interpreter(self) -> None:
-        """Before the fix this child returned ``AMA_SUCCESS``, reported 3309
-        bytes written into a 64-byte buffer, and died with SIGSEGV (exit
-        ``-11``).  Both halves are asserted: a clean exit alone would also be
-        produced by a build whose ``sign`` had been made to fail everywhere,
-        and ``rc == -1`` alone would be produced by a guard that refuses and
-        then lets the call through anyway.
+        """Before the fix the ``pointer`` case returned ``AMA_SUCCESS``,
+        reported 3309 bytes written into a 64-byte buffer, and died with
+        SIGSEGV (exit ``-11``); at ``e0dcc42`` every other case except
+        ``scalar`` did the same.  All three halves are asserted: a clean exit
+        alone would also be produced by a build whose methods had been made to
+        fail everywhere, and ``rc == -1`` alone would be produced by a guard
+        that refuses and then lets the call through anyway.  The positive
+        controls for every spelling are
+        ``test_every_declared_length_spelling_still_works_when_it_fits``.
         """
         self._skip_without_context_api()
         proc = subprocess.run(
@@ -420,15 +569,20 @@ print("VERDICT", rc, declared.contents.value)
             timeout=300,
             check=False,
         )
+        cases = [ln for ln in proc.stdout.splitlines() if ln.startswith("CASE")]
         assert proc.returncode == 0, (
-            f"child exited {proc.returncode} "
-            f"(negative = killed by that signal)\n{proc.stderr[-2000:]}"
+            f"child exited {proc.returncode} (negative = killed by that signal) "
+            f"during {cases[-1] if cases else 'setup'}; a heap overflow can surface "
+            f"a case or two late, so every verdict so far:\n{proc.stdout}\n"
+            f"{proc.stderr[-2000:]}"
         )
-        verdict = [ln for ln in proc.stdout.splitlines() if ln.startswith("VERDICT")]
-        assert verdict, proc.stdout + proc.stderr[-2000:]
-        if verdict[-1] == "VERDICT SKIP":
+        verdicts = [ln for ln in proc.stdout.splitlines() if ln.startswith("VERDICT")]
+        assert verdicts, proc.stdout + proc.stderr[-2000:]
+        if verdicts[-1] == "VERDICT SKIP":
             pytest.skip("native context API not available in the child build")
-        assert verdict[-1] == f"VERDICT -1 {pb.DILITHIUM_SIGNATURE_BYTES}", verdict[-1]
+        assert verdicts == [
+            f"VERDICT {name} -1 {declared}" for name, declared in self._REPRODUCTION_CASES.items()
+        ]
 
     # -- sign ---------------------------------------------------------------
 
@@ -495,6 +649,51 @@ print("VERDICT", rc, declared.contents.value)
                 sig.raw[: sig_len.contents.value],
                 pk.raw[: pb.DILITHIUM_PUBLIC_KEY_BYTES],
             )
+
+    @pytest.mark.parametrize("spelling", _POINTER_SPELLINGS)
+    def test_every_declared_length_spelling_still_works_when_it_fits(self, spelling: str) -> None:
+        """The positive control for the child test's spellings.
+
+        The guard now reads ``byref``, arrays and ``_as_parameter_``, and
+        refuses a declaration it cannot read.  Without this control, a guard
+        that refused every spelling it could not read *the old way* would pass
+        the child test above while breaking every caller who uses one.
+        """
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_ML_DSA_65) as ctx:
+            pk = ctypes.create_string_buffer(pb.DILITHIUM_PUBLIC_KEY_BYTES)
+            sk = ctypes.create_string_buffer(pb.DILITHIUM_SECRET_KEY_BYTES)
+            assert (
+                ctx.keypair_generate(
+                    pk, pb.DILITHIUM_PUBLIC_KEY_BYTES, sk, pb.DILITHIUM_SECRET_KEY_BYTES
+                )
+                == 0
+            )
+            sig = ctypes.create_string_buffer(pb.DILITHIUM_SIGNATURE_BYTES)
+            declared, read_back = _length_spelling(spelling, pb.DILITHIUM_SIGNATURE_BYTES)
+            assert ctx.sign(b"spelling", sk.raw, sig, declared) == 0
+            assert read_back() == pb.DILITHIUM_SIGNATURE_BYTES
+            assert ctx.verify(
+                b"spelling",
+                sig.raw[: pb.DILITHIUM_SIGNATURE_BYTES],
+                pk.raw[: pb.DILITHIUM_PUBLIC_KEY_BYTES],
+            )
+
+    def test_sign_refuses_a_null_declaration_instead_of_raising(self) -> None:
+        """An unreadable declaration over a buffer of known size is refused.
+
+        A NULL ``POINTER(c_size_t)`` is the one such declaration that is safe
+        to make in-process (``ama_core.c`` refuses it too).  Before the fix the
+        guard dereferenced it to find a length and raised ``ValueError: NULL
+        pointer access`` out of ``sign``; the offset ``byref`` — the unreadable
+        declaration that is also dangerous — is in the child test above.
+        """
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_ML_DSA_65) as ctx:
+            sk = ctypes.create_string_buffer(pb.DILITHIUM_SECRET_KEY_BYTES)
+            sig = ctypes.create_string_buffer(pb.DILITHIUM_SIGNATURE_BYTES)
+            null = ctypes.POINTER(ctypes.c_size_t)()
+            assert ctx.sign(b"null", sk.raw, sig, null) == -1
 
     # -- kem_encapsulate ----------------------------------------------------
 
@@ -563,6 +762,25 @@ print("VERDICT", rc, declared.contents.value)
             ss_dec = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
             assert ctx.kem_decapsulate(ct, sk, ss_dec, pb.KYBER_SHARED_SECRET_BYTES) == 0
             assert ss_dec.raw[: pb.KYBER_SHARED_SECRET_BYTES] == ss_enc
+
+    def test_an_index_length_still_works_for_both_kem_methods(self) -> None:
+        """Positive control for the child test's ``index`` cases, and for the
+        ``byref`` ciphertext length: both KEM methods read them and agree."""
+        self._skip_without_context_api()
+        with pb.AmaContext(pb.AmaContext.ALG_KYBER_1024) as ctx:
+            pk, sk = self._kyber_keypair(ctx)
+            ct = ctypes.create_string_buffer(pb.KYBER_CIPHERTEXT_BYTES)
+            ct_len = ctypes.c_size_t(pb.KYBER_CIPHERTEXT_BYTES)
+            ss_enc = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
+            # The annotations name one spelling each; ``ctypes`` accepts these
+            # too at run time, which is why the guard has to read them.
+            declared_ct: Any = ctypes.byref(ct_len)
+            declared_ss: Any = _Index(pb.KYBER_SHARED_SECRET_BYTES)
+            assert ctx.kem_encapsulate(pk, ct, declared_ct, ss_enc, declared_ss) == 0
+            assert ct_len.value == pb.KYBER_CIPHERTEXT_BYTES
+            ss_dec = ctypes.create_string_buffer(pb.KYBER_SHARED_SECRET_BYTES)
+            assert ctx.kem_decapsulate(ct.raw[: ct_len.value], sk, ss_dec, declared_ss) == 0
+            assert ss_dec.raw == ss_enc.raw
 
     # -- keypair_generate ---------------------------------------------------
 
@@ -640,27 +858,67 @@ print("VERDICT", rc, declared.contents.value)
 
 
 class TestOutputBufferHelpers:
-    """``_declared_out_len`` and ``_out_buffer_is_writable`` decide every
-    refusal above, including the two cases where they deliberately decline to
-    refuse.  Those two are the ones most likely to be "tidied" by a later
-    reader, so they are stated here rather than left implicit."""
+    """``_declared_out_len``, ``_declared_out_len_fits`` and
+    ``_out_buffer_is_writable`` decide every refusal above, including the case
+    where they deliberately decline to refuse (a raw pointer, whose size
+    nothing can see).  That case is the one most likely to be "tidied" by a
+    later reader, so it is stated here rather than left implicit."""
 
-    def test_declared_out_len_resolves_all_three_spellings(self) -> None:
+    @pytest.mark.parametrize("spelling", _POINTER_SPELLINGS)
+    def test_declared_out_len_resolves_every_pointer_spelling(self, spelling: str) -> None:
+        declared, _read_back = _length_spelling(spelling, 3309)
+        assert pb._declared_out_len(declared) == 3309
+
+    def test_declared_out_len_resolves_the_by_value_spellings(self) -> None:
         assert pb._declared_out_len(3309) == 3309
-        assert pb._declared_out_len(ctypes.c_size_t(3309)) == 3309
-        assert pb._declared_out_len(ctypes.pointer(ctypes.c_size_t(3309))) == 3309
+        assert pb._declared_out_len(_Index(3309)) == 3309
+        assert pb._declared_out_len(_Parameter(3309)) == 3309
+
+    def test_declared_out_len_reduces_an_int_as_ctypes_marshals_it(self) -> None:
+        """``ctypes`` passes ``-1`` to a ``size_t`` as ``SIZE_MAX``; the guard
+        compares the number C receives, not the one the caller typed."""
+        size_max = ctypes.c_size_t(-1).value
+        assert pb._declared_out_len(-1) == size_max
+        assert pb._declared_out_len(size_max + 1 + 5) == 5
 
     def test_declared_out_len_rejects_a_bool(self) -> None:
         """``bool`` is an ``int`` subclass; ``True`` must not read as 1."""
         assert pb._declared_out_len(True) is None
         assert pb._declared_out_len(False) is None
 
-    def test_declared_out_len_gives_up_on_byref(self) -> None:
-        """``byref`` returns a ``CArgObject``, which exposes nothing.  The
-        guard treats an unreadable declaration as "nothing to compare"
-        rather than as a refusal — refusing a spelling the C ABI accepts
-        would break working callers to close a hazard it cannot see."""
-        assert pb._declared_out_len(ctypes.byref(ctypes.c_size_t(3309))) is None
+    def test_declared_out_len_reads_through_byref(self) -> None:
+        """``byref`` returns a ``CArgObject``, and its read-only ``_obj`` is the
+        ``c_size_t`` it wraps.  This test used to assert ``None`` here, on the
+        premise that a ``CArgObject`` exposes nothing; the premise was false,
+        and the ``None`` let the A-1 overflow through (2026-09 review)."""
+        assert pb._declared_out_len(ctypes.byref(ctypes.c_size_t(3309))) == 3309
+
+    def test_declared_out_len_does_not_trust_an_offset_byref(self) -> None:
+        """``byref(x, offset)`` wraps ``x`` but points past it.  Reading
+        ``_obj`` would report ``x``'s harmless 64 while C read the 3309 after
+        it, so the address is checked and the declaration is unreadable."""
+        pair = (ctypes.c_size_t * 2)(64, 3309)
+        view = ctypes.c_size_t.from_buffer(pair)
+        assert pb._declared_out_len(ctypes.byref(view)) == 64
+        assert pb._declared_out_len(ctypes.byref(view, ctypes.sizeof(ctypes.c_size_t))) is None
+
+    def test_declared_out_len_cannot_read_null_or_nothing(self) -> None:
+        assert pb._declared_out_len(ctypes.POINTER(ctypes.c_size_t)()) is None
+        assert pb._declared_out_len((ctypes.c_size_t * 0)()) is None
+        assert pb._declared_out_len(None) is None
+        assert pb._declared_out_len(object()) is None
+
+    def test_an_unreadable_declaration_is_refused_only_over_a_known_size(self) -> None:
+        """The refusal is the other half of the byref fix: a declaration the
+        guard cannot read reaches C unchecked, so over a buffer whose size is
+        known it is refused.  Over a raw pointer there is nothing to compare,
+        and the pointer case below stays the caller's contract."""
+        buf = ctypes.create_string_buffer(64)
+        null = ctypes.POINTER(ctypes.c_size_t)()
+        assert pb._declared_out_len_fits(buf, null) is False
+        assert pb._declared_out_len_fits(ctypes.cast(buf, ctypes.c_char_p), null) is True
+        assert pb._declared_out_len_fits(buf, ctypes.byref(ctypes.c_size_t(64))) is True
+        assert pb._declared_out_len_fits(buf, ctypes.byref(ctypes.c_size_t(65))) is False
 
     def test_writability_distinguishes_the_buffer_kinds(self) -> None:
         assert pb._out_buffer_is_writable(ctypes.create_string_buffer(16)) is True

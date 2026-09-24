@@ -15,8 +15,8 @@ still verify as fully valid.
 
 The signature now covers a canonical transcript of the whole package.  The
 measurement below is the audit's own tamper matrix, run as a test.  Against
-the code as it stood, seven of these seventeen rows returned ``all_valid``
-True; the parametrisation is the pin that keeps them at False.
+the code as it stood, seven of the seventeen rows it then had returned
+``all_valid`` True; the parametrisation is the pin that keeps them at False.
 
 Two classes here, deliberately separate:
 
@@ -253,10 +253,34 @@ def _swap_kyber_key_and_secret_consistently(package: Any) -> None:
     package.kem_shared_secret = kyber_decapsulate(package.kem_ciphertext, secret_key)
 
 
+def _swap_hkdf_master_secret_consistently(package: Any) -> None:
+    """Replace the Layer-4 master secret AND re-derive every key from it.
+
+    Salt, info and count are unchanged, so Layer 4 checks out on its own.  The
+    derived keys are not in the transcript — they are secrets, and the redacted
+    form must still verify Layer 3 — so this row is caught only by Layer 4
+    comparing them with ``metadata["derived_keys_commitment"]``, which is.
+    """
+    from ama_cryptography.crypto_api import _hkdf_sha3_256
+
+    package.hkdf_master_secret = b"\x06" * 32
+    package.derived_keys = [
+        _hkdf_sha3_256(
+            ikm=package.hkdf_master_secret,
+            length=32,
+            salt=package.hkdf_salt,
+            info=package.hkdf_info + b":" + str(i).encode(),
+        )
+        for i in range(len(package.derived_keys))
+    ]
+
+
 #: (name, mutation).  The rows the audit measured, plus the three this
 #: remediation found while proving the fix: a rewritten add-on signature
 #: metadata dict, a consistently swapped HMAC key/tag pair, and a dropped
 #: derived key.  Seven of these returned ``all_valid`` True before the fix.
+#: The consistently swapped HKDF master secret was added on 2026-09-24, when
+#: the derived keys moved out of the transcript behind a signed commitment.
 TAMPERS: tuple[tuple[str, Callable[[Any], None]], ...] = (
     ("content_hash altered", lambda p: setattr(p, "content_hash", "00" * 32)),
     (
@@ -282,6 +306,10 @@ TAMPERS: tuple[tuple[str, Callable[[Any], None]], ...] = (
     ("hkdf_salt altered", lambda p: setattr(p, "hkdf_salt", b"\x04" * 32)),
     ("hkdf_info altered", lambda p: setattr(p, "hkdf_info", b"other-info")),
     ("a derived key dropped", lambda p: p.derived_keys.pop()),
+    (
+        "hkdf master secret and derived keys swapped consistently",
+        _swap_hkdf_master_secret_consistently,
+    ),
     (
         "embedded SPHINCS public key swapped",
         lambda p: setattr(p.keypairs["SPHINCS_256F"], "public_key", b"\x05" * 64),
@@ -374,6 +402,47 @@ class TestEveryFieldIsUnderTheSignature:
             CONTENT, package, expected_public_key=self._pin(full_package)
         )
         assert verdict["primary_signature"] is False
+        assert verdict["all_valid"] is False
+
+    @pytest.mark.parametrize("form", ["pickle_state", "to_dict"])
+    def test_the_redacted_form_still_verifies_the_signature(
+        self, full_package: Any, form: str
+    ) -> None:
+        """Every secret is kept out of the transcript so that the forms which
+        strip them — ``to_dict()`` and a pickle — can still check the one
+        layer that carries origin.
+
+        ``derived_keys`` was bound directly although both forms strip it, so
+        a redacted package failed Layer 3 as well as the layers whose secrets
+        it no longer carries (2026-09 review).  They are now bound through
+        ``metadata["derived_keys_commitment"]``.  The stripped layers still
+        fail, which is correct: nothing here claims the redacted form is
+        ``all_valid``, only that its signature is checkable.
+
+        ``pickle_state`` goes through ``__getstate__``/``__setstate__``, the
+        pair a pickle round-trip calls, by way of ``copy.deepcopy`` — the
+        route ``_clone`` above exists to avoid — so no blob is deserialised.
+        """
+        import copy
+
+        from ama_cryptography.crypto_api import CryptoPackageResult, verify_crypto_package
+
+        if form == "pickle_state":
+            redacted = copy.deepcopy(full_package)
+        else:
+            fields = full_package.to_dict()
+            fields.update(CryptoPackageResult._SECRET_FIELD_PLACEHOLDERS)
+            fields["derived_keys"] = []
+            redacted = CryptoPackageResult(**fields)
+        assert redacted.derived_keys == [] and redacted.hkdf_master_secret == b""
+
+        verdict = verify_crypto_package(
+            CONTENT, redacted, expected_public_key=self._pin(full_package)
+        )
+        assert verdict["primary_signature"] is True
+        assert verdict["key_pinned"] is True
+        assert verdict["content_hash"] is True
+        assert verdict["hkdf_keys"] is False
         assert verdict["all_valid"] is False
 
 

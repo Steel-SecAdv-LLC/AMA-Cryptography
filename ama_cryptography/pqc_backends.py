@@ -30,6 +30,7 @@ import errno as _errno
 import functools
 import hashlib
 import logging
+import operator
 import os
 import platform
 import sys
@@ -3386,35 +3387,89 @@ def _declared_length_fits(buf: Any, declared: int) -> bool:
     return bool(declared <= actual)
 
 
+#: The type ``ctypes.byref`` returns.  CPython does not export it by name.
+_CArgObject = type(ctypes.byref(ctypes.c_int()))
+
+
 def _declared_out_len(value: Any) -> Optional[int]:
-    """The integer a caller declared for an output buffer, or ``None``.
+    """The integer C will read as an output buffer's length, or ``None``.
 
     ``ama_sign`` and ``ama_kem_encapsulate`` take their output length as
-    ``POINTER(c_size_t)`` (in/out), while ``ama_kem_decapsulate`` takes a plain
-    ``c_size_t``.  A caller may legitimately spell either as a ``pointer()``, a
-    bare ``c_size_t``, or — for the by-value parameter — a Python ``int``.  All
-    three are resolved here so the capacity check below sees one number.
+    ``POINTER(c_size_t)`` (in/out), while both KEM methods take the shared
+    secret's length as a plain ``c_size_t``.  This resolves every spelling
+    ``ctypes`` accepts for either, to the value the C side will see:
 
-    ``None`` means "the declaration could not be read", which happens for
-    ``ctypes.byref()`` (a ``CArgObject``, which deliberately exposes nothing).
-    The caller treats that as "nothing to compare" rather than as a refusal,
-    exactly as :func:`_declared_length_fits` treats a raw pointer: refusing a
-    spelling the C ABI accepts would break working callers to close a hazard
-    this function cannot see in the first place.
+    * a Python ``int`` or any object with ``__index__`` (a NumPy integer),
+      reduced to ``size_t`` width exactly as ``ctypes`` marshals it;
+    * a ``c_size_t``, which ``ctypes`` passes by reference to a pointer
+      parameter;
+    * a ``pointer()`` or ``cast()`` pointer, read through;
+    * a ``byref()`` (a ``CArgObject``), read through its ``_obj``;
+    * a ``c_size_t`` array, which decays to a pointer to element 0;
+    * an object with ``_as_parameter_``, resolved as ``ctypes`` resolves it.
+
+    ``byref()`` was the gap (2026-09 review).  This function used to return
+    ``None`` for it on the premise that a ``CArgObject`` exposes nothing, and
+    its callers skipped the capacity check on ``None``, so the heap overflow
+    audit A-1 measured through ``pointer()`` came straight back through the
+    spelling the ``ctypes`` documentation recommends for out-parameters.  The
+    premise was false: ``_obj`` is a read-only member of every ``CArgObject``.
+    The array, ``_as_parameter_`` and ``__index__`` spellings were skipped the
+    same way; each reproduced the overflow in a child interpreter.
+
+    ``None`` means the declaration cannot be read: a NULL pointer, a
+    ``byref()`` with a non-zero offset (which points somewhere other than the
+    object it wraps), an empty array, a ``bool``, or a value ``ctypes`` would
+    not marshal as a length at all.  :func:`_declared_out_len_fits` refuses
+    every one of them when the output buffer's size is known; none is a
+    declaration a working caller makes.
     """
     if isinstance(value, bool):
-        # bool is an int subclass and 0/1 would silently read as a length.
+        # bool is an int subclass and True would silently read as a length.
         return None
-    if isinstance(value, int):
-        return value
-    contents = getattr(value, "contents", None)
-    if contents is not None:
-        inner = getattr(contents, "value", None)
-        if isinstance(inner, int):
-            return inner
-        return None
-    inner = getattr(value, "value", None)
-    return inner if isinstance(inner, int) else None
+    if isinstance(value, _CArgObject):
+        obj = getattr(value, "_obj", None)
+        if not isinstance(obj, ctypes._SimpleCData):
+            return None
+        try:
+            address = ctypes.cast(value, ctypes.c_void_p).value
+        except (TypeError, ctypes.ArgumentError):
+            return None  # not a pointer-tagged CArgObject: nothing byref made
+        if address != ctypes.addressof(obj):
+            # byref(x, offset): C reads the word at x + offset, not x.
+            return None
+        return _declared_out_len(obj.value)
+    if isinstance(value, ctypes.Array):
+        return _declared_out_len(value[0]) if len(value) > 0 else None
+    if isinstance(value, ctypes._Pointer):
+        return _declared_out_len(value.contents.value) if value else None
+    if isinstance(value, ctypes._SimpleCData):
+        return _declared_out_len(value.value)
+    try:
+        index = operator.index(value)
+    except TypeError:
+        parameter = getattr(value, "_as_parameter_", None)
+        return None if parameter is None else _declared_out_len(parameter)
+    return ctypes.c_size_t(index).value
+
+
+def _declared_out_len_fits(buf: Any, declared: Any) -> bool:
+    """Whether the length ``declared`` fits ``buf``, in whatever spelling.
+
+    When ``buf``'s capacity is knowable (see :func:`_output_buffer_capacity`)
+    a declaration that cannot be read is refused rather than passed through:
+    the C side would write through it with nothing having checked it, which is
+    the overflow this guard exists to stop.  Every spelling ``ctypes`` accepts
+    is resolved by :func:`_declared_out_len`, so what is refused here is a
+    NULL pointer (which ``ama_core.c`` refuses as well), an offset ``byref()``
+    or a value no working caller passes as a length.  When the capacity is not
+    knowable the buffer is a raw pointer and nothing can be compared, exactly
+    as before.
+    """
+    if _output_buffer_capacity(buf) is None:
+        return True
+    length = _declared_out_len(declared)
+    return length is not None and _declared_length_fits(buf, length)
 
 
 def _out_buffer_is_writable(buf: Any) -> bool:
@@ -3718,10 +3773,9 @@ class AmaContext:
         # make the check.  The reasoning was never applied to the three sibling
         # methods that take the same (buffer, declared-length) shape, which is
         # the whole of the defect: the guard existed one method away.
-        _declared = _declared_out_len(signature_len)
-        if _declared is not None and not _declared_length_fits(signature, _declared):
+        if not _declared_out_len_fits(signature, signature_len):
             logging.getLogger(__name__).error(
-                "sign: signature_len exceeds the supplied buffer's size"
+                "sign: signature_len exceeds the supplied buffer's size or cannot be read"
             )
             return -1  # AMA_ERROR_INVALID_PARAM
         if not _out_buffer_is_writable(signature):
@@ -3811,10 +3865,10 @@ class AmaContext:
         # there for the measurement.  Both are checked, because a caller that
         # gets one right and the other wrong is exactly the shape that produced
         # the defect in the first place.
-        _declared_ct = _declared_out_len(ciphertext_len)
-        if _declared_ct is not None and not _declared_length_fits(ciphertext, _declared_ct):
+        if not _declared_out_len_fits(ciphertext, ciphertext_len):
             logging.getLogger(__name__).error(
-                "kem_encapsulate: ciphertext_len exceeds the supplied buffer's size"
+                "kem_encapsulate: ciphertext_len exceeds the supplied buffer's size "
+                "or cannot be read"
             )
             return -1  # AMA_ERROR_INVALID_PARAM
         if not _out_buffer_is_writable(ciphertext):
@@ -3822,10 +3876,10 @@ class AmaContext:
                 "kem_encapsulate: the ciphertext buffer is read-only and cannot receive output"
             )
             return -1  # AMA_ERROR_INVALID_PARAM
-        _declared_ss = _declared_out_len(shared_secret_len)
-        if _declared_ss is not None and not _declared_length_fits(shared_secret, _declared_ss):
+        if not _declared_out_len_fits(shared_secret, shared_secret_len):
             logging.getLogger(__name__).error(
-                "kem_encapsulate: shared_secret_len exceeds the supplied buffer's size"
+                "kem_encapsulate: shared_secret_len exceeds the supplied buffer's size "
+                "or cannot be read"
             )
             return -1  # AMA_ERROR_INVALID_PARAM
         if not _out_buffer_is_writable(shared_secret):
@@ -3857,11 +3911,11 @@ class AmaContext:
         self._require_open()
         # Same guard as `sign` and `kem_encapsulate` above.  Here the declared
         # length is a by-value `c_size_t` rather than an in/out pointer, which
-        # is why `_declared_out_len` resolves all three spellings.
-        _declared_ss = _declared_out_len(shared_secret_len)
-        if _declared_ss is not None and not _declared_length_fits(shared_secret, _declared_ss):
+        # is why `_declared_out_len` resolves both shapes.
+        if not _declared_out_len_fits(shared_secret, shared_secret_len):
             logging.getLogger(__name__).error(
-                "kem_decapsulate: shared_secret_len exceeds the supplied buffer's size"
+                "kem_decapsulate: shared_secret_len exceeds the supplied buffer's size "
+                "or cannot be read"
             )
             return -1  # AMA_ERROR_INVALID_PARAM
         if not _out_buffer_is_writable(shared_secret):
@@ -5460,9 +5514,14 @@ class Ed25519SigningKey:
                 "one its seed generates (INVARIANT-51)"
             )
         self._expanded = expanded
-        self._public_key = expanded.raw[
-            ED25519_EXPANDED_PUBLIC_KEY_OFFSET : ED25519_EXPANDED_PUBLIC_KEY_OFFSET + 32
-        ]
+        # Only the public half is read out.  ``expanded.raw[...]`` would first
+        # build a ``bytes`` of all 128 bytes — the scalar and the nonce prefix
+        # with it — which nothing can wipe, so :meth:`close` would zero this
+        # object's buffer while an immutable copy of the scalar outlived it.
+        self._public_key = ctypes.string_at(
+            ctypes.addressof(expanded) + ED25519_EXPANDED_PUBLIC_KEY_OFFSET,
+            ED25519_PUBLIC_KEY_BYTES,
+        )
         self._closed = False
         if seed_derived:
             # INVARIANT-41: a seed-derived keypair is released only after it
@@ -9427,11 +9486,15 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
     if rc != 0:
         raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
 
-    # ``nonce_buf.raw`` is the 64 bytes without ctypes' NUL-termination
-    # convention; copied into a bytearray so the caller holds a buffer round 2
-    # can scrub, then the staging buffer is scrubbed here so the nonce is not
-    # left in a second place.
-    nonce_pair = bytearray(nonce_buf.raw[:FROST_NONCE_BYTES])
+    # Copied C-to-C into a bytearray so the caller holds a buffer round 2 can
+    # scrub, then the staging buffer is scrubbed here so the nonce is not left
+    # in a second place.  No ``bytes`` is made on the way: ``nonce_buf.raw``
+    # would be one — a full-length slice of it is the same object — and an
+    # immutable copy of (d, e) is beyond both scrubs.
+    nonce_pair = bytearray(FROST_NONCE_BYTES)
+    ctypes.memmove(
+        (ctypes.c_char * FROST_NONCE_BYTES).from_buffer(nonce_pair), nonce_buf, FROST_NONCE_BYTES
+    )
     ctypes.memset(nonce_buf, 0, FROST_NONCE_BYTES)
     return nonce_pair, bytes(commit_buf.raw[:FROST_COMMITMENT_BYTES])
 

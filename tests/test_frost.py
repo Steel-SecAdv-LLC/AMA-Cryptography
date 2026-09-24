@@ -33,6 +33,7 @@ from typing import Any
 import pytest
 
 from ama_cryptography.pqc_backends import FROST_AVAILABLE
+from tests._ctypes_copy_recorder import record_char_buffer_copies
 
 skip_no_frost = pytest.mark.skipif(
     not FROST_AVAILABLE,
@@ -458,6 +459,38 @@ class TestFROSTNonceSingleUse:
         assert len(nonce) == FROST_NONCE_BYTES
         assert len(commitment) == 64
         assert nonce != bytearray(FROST_NONCE_BYTES), "a fresh nonce pair is not all-zero"
+
+    def test_round1_leaves_no_immutable_copy_of_the_nonce_pair(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The caller's ``bytearray`` must be the only copy of ``(d, e)``.
+
+        Round 2 zeroizes that ``bytearray`` and round 1 zeroizes its staging
+        buffer, and neither reaches an immutable ``bytes``.  Round 1 used to
+        build the ``bytearray`` from ``nonce_buf.raw[:64]``: ``.raw`` makes a
+        64-byte ``bytes`` of the pair, a full-length slice returns that same
+        object, and nothing wiped it (2026-09 review).  A nonce pair recovered
+        from it, with the share ``z_i`` the signer publishes, gives the
+        long-term secret share — the disclosure INVARIANT-49's one-shot
+        consumption exists to prevent.
+        """
+        from ama_cryptography.pqc_backends import (
+            FROST_COMMITMENT_BYTES,
+            FROST_NONCE_BYTES,
+            frost_keygen_trusted_dealer,
+            frost_round1_commit,
+        )
+
+        _gpk, shares = frost_keygen_trusted_dealer(threshold=2, num_participants=3)
+        copies = record_char_buffer_copies(monkeypatch, {FROST_NONCE_BYTES, FROST_COMMITMENT_BYTES})
+        nonce, commitment = frost_round1_commit(shares[0])
+        hiding, binding = bytes(nonce[:32]), bytes(nonce[32:])
+        assert any(hiding) and any(binding)
+        leaked = [c for c in copies if hiding in c or binding in c]
+        assert leaked == [], "round 1 made an immutable copy of the secret nonce pair"
+        # Non-vacuity: round 1's buffers were instrumented — the public
+        # commitment, read out of the same-sized sibling buffer, was recorded.
+        assert any(commitment in c for c in copies)
 
     def test_nonce_is_zeroed_after_successful_round2(self) -> None:
         ctx = _ceremony()

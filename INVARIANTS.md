@@ -3444,25 +3444,29 @@ hole this closes, so it is refused at signing time rather than discovered by an
 auditor.
 
 Secrets are deliberately *not* in the transcript — `hmac_key`,
-`hkdf_master_secret` and `kem_shared_secret` are each pinned through a public
-commitment that is signed (`hmac_tag`, `derived_keys`, and
-`metadata["kem_shared_secret_commitment"]`, a domain-separated SHA3-256 of the
-KEM secret), and including them would make the transcript uncomputable from
-the redacted form `to_dict()` emits. The KEM commitment was missing until
-2026-09-23: the Kyber secret key and the shared secret were both unsigned, so
-a substituted key together with the secret it decapsulates to left the KEM
-layer passing. `derived_keys`
-*is* included, and the reason is worth stating because binding the salt, info
-and count alone looks sufficient and is not: an attacker who swaps
-`hkdf_master_secret` and recomputes the derived keys to match leaves Layer 4
-self-consistent and salt, info and count unchanged.
+`hkdf_master_secret`, `derived_keys` and `kem_shared_secret` are each pinned
+through a public value that is signed (`hmac_tag`;
+`metadata["derived_keys_commitment"]` for the derived keys and, through them,
+the master secret; and `metadata["kem_shared_secret_commitment"]`; each
+commitment a domain-separated SHA3-256), and including them would make the
+transcript uncomputable from the redacted form `to_dict()` and a pickle emit.
+The KEM commitment was missing until 2026-09-23: the Kyber secret key and the
+shared secret were both unsigned, so a substituted key together with the
+secret it decapsulates to left the KEM layer passing. The derived keys were
+bound directly until 2026-09-24, so a redacted package failed Layer 3 — the
+one layer that carries origin. They must still be pinned, and the reason is
+worth stating because binding the salt, info and count alone looks sufficient
+and is not: an attacker who swaps `hkdf_master_secret` and recomputes the
+derived keys to match leaves Layer 4 self-consistent and salt, info and count
+unchanged. Layer 4 therefore compares the keys with their signed commitment.
 
 **Verification.** `tests/test_crypto_package_transcript.py` runs the audit's
 tamper matrix as a parametrised test — eighteen cases on the modern package,
 seven on the legacy one — with an untampered-clone control, because a clone that
 quietly lost a field would make the whole matrix pass while proving nothing
 (`copy.deepcopy` does exactly that here: `__getstate__` strips secrets). The
-encoder's injectivity is tested separately and without a backend. Measured
+same file verifies Layer 3 on both redacted forms. The encoder's injectivity is
+tested separately and without a backend. Measured
 against the code as it stood, seven of the seventeen and four of the six
 returned success.
 

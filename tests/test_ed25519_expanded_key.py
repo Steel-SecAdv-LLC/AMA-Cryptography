@@ -46,6 +46,7 @@ import pytest
 import ama_cryptography.pqc_backends as pb
 from ama_cryptography import crypto_api
 from ama_cryptography._module_state import pairwise_test_signature as _real_pct
+from tests._ctypes_copy_recorder import record_char_buffer_copies
 
 pytestmark = pytest.mark.skipif(
     not pb._ED25519_NATIVE_AVAILABLE,
@@ -337,6 +338,42 @@ class TestLifetime:
             key.sign(b"inside")
         assert key.closed
         assert key._expanded.raw == bytes(pb.ED25519_EXPANDED_KEY_BYTES)
+
+    @pytest.mark.parametrize("length", [32, 64], ids=["seed", "seed_and_public_half"])
+    def test_loading_leaves_no_immutable_copy_of_the_private_half(
+        self, monkeypatch: pytest.MonkeyPatch, length: int
+    ) -> None:
+        """``close()`` wipes the buffer this object owns, and nothing else.
+
+        The load used to take the public half as ``expanded.raw[64:96]``, and
+        ``.raw`` builds a ``bytes`` of all 128 bytes first — the clamped scalar
+        ``a`` and the nonce prefix with it — which nothing ever wiped, so the
+        scalar of a key its caller had closed survived in freed heap (2026-09
+        review).  Every copy made of the load's ctypes buffers is recorded, and
+        none may contain the seed, the scalar or the prefix.
+        """
+        pk, sk = _fresh()
+        copies = record_char_buffer_copies(
+            monkeypatch, {pb.ED25519_SECRET_KEY_BYTES, pb.ED25519_EXPANDED_KEY_BYTES}
+        )
+        key = pb.Ed25519SigningKey(sk[:length])
+        try:
+            assert key.public_key == pk
+            view = memoryview(key._expanded)
+            private_parts = {
+                "seed": sk[:32],
+                "scalar": bytes(view[0:32]),
+                "prefix": bytes(view[32:64]),
+            }
+            leaked = [name for name, part in private_parts.items() for c in copies if part in c]
+            assert leaked == [], f"immutable copies of {sorted(set(leaked))} were made at load"
+            # Non-vacuity: the buffer really is instrumented, so the empty
+            # list above is an observation and not an absence of one.
+            probe = key._expanded.raw
+            assert private_parts["scalar"] in probe
+            assert any(c is probe for c in copies)
+        finally:
+            key.close()
 
     def test_the_public_key_survives_close(self) -> None:
         pk, sk = _fresh()
