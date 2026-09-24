@@ -21,6 +21,7 @@ from __future__ import annotations
 import ctypes
 import os
 import stat
+from pathlib import Path
 from typing import Any, ClassVar, cast
 from unittest.mock import patch
 
@@ -648,11 +649,22 @@ class TestRequireTrustAnchorCliFlag:
     unanchored signature and no error.
     """
 
-    def test_cli_flag_carries_the_demand_through_the_env_scrub(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    @staticmethod
+    def _run_signer_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *flags: str) -> bool:
+        """Run ``_build_sign.main()`` up to the signer and return the demand it saw.
+
+        ``main()`` refreshes ``<package-dir>/_integrity_digest.txt`` BEFORE it
+        reaches ``_generate_keypair_and_sign``, so the stop at the signer is not
+        "before any artefact write".  Pointed at the real package these tests
+        rewrote the TRACKED digest file with whatever the working tree held --
+        re-blessing uncommitted .py edits behind the explicit
+        ``integrity --update`` step, and truncating the file under any
+        concurrent digest-fallback import.  ``--package-dir`` is therefore a
+        throwaway directory, and every file write is recorded so a write that
+        lands in the real package fails the test on a clean tree too, where the
+        rewritten bytes would be identical.
+        """
         import sys
-        from pathlib import Path
 
         captured: dict[str, bool] = {}
 
@@ -664,57 +676,56 @@ class TestRequireTrustAnchorCliFlag:
             native_lib: ctypes.CDLL | None = None,
         ) -> tuple[bytes, bytes, str]:
             captured["require"] = require_trust_anchor
-            raise RuntimeError("test capture: stop before any artefact write")
+            raise RuntimeError("test capture: stop at the signer")
 
+        written: list[Path] = []
+        real_write_text = Path.write_text
+
+        def _recording_write_text(
+            self: Path,
+            data: str,
+            encoding: str | None = None,
+            errors: str | None = None,
+            newline: str | None = None,
+        ) -> int:
+            written.append(self.resolve())
+            return real_write_text(self, data, encoding=encoding, errors=errors, newline=newline)
+
+        monkeypatch.setattr(Path, "write_text", _recording_write_text)
         monkeypatch.setattr(bs, "_generate_keypair_and_sign", _capture_and_stop)
         monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
         monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
-        pkg = Path(bs.__file__).resolve().parent
+        real_pkg = Path(bs.__file__).resolve().parent
+        pkg = tmp_path / "ama_cryptography"
+        pkg.mkdir()
         monkeypatch.setattr(
             sys,
             "argv",
-            [
-                "_build_sign",
-                "--package-dir",
-                str(pkg),
-                "--bind-extensions",
-                "--require-trust-anchor",
-            ],
+            ["_build_sign", "--package-dir", str(pkg), "--bind-extensions", *flags],
         )
         assert bs.main() == 1  # the capture RuntimeError takes the exit-1 path
-        assert captured["require"] is True, (
+        assert (pkg / "_integrity_digest.txt").is_file(), (
+            "main() no longer refreshes the digest before signing; this "
+            "isolation's premise changed, so re-check what the call writes"
+        )
+        into_real = [p for p in written if real_pkg in p.parents]
+        assert not into_real, f"the signer CLI wrote into the real package: {into_real}"
+        return captured["require"]
+
+    def test_cli_flag_carries_the_demand_through_the_env_scrub(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        require = self._run_signer_cli(monkeypatch, tmp_path, "--require-trust-anchor")
+        assert require is True, (
             "--require-trust-anchor did not reach _generate_keypair_and_sign: "
             "the env scrub in setup.py would silently drop the operator's "
             "anchor enforcement"
         )
 
     def test_without_flag_or_env_the_demand_is_absent(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        import sys
-        from pathlib import Path
-
-        captured: dict[str, bool] = {}
-
-        def _capture_and_stop(
-            message: bytes,
-            seed_override: bytes | None = None,
-            trusted_pubkey: bytes | None = None,
-            require_trust_anchor: bool = False,
-            native_lib: ctypes.CDLL | None = None,
-        ) -> tuple[bytes, bytes, str]:
-            captured["require"] = require_trust_anchor
-            raise RuntimeError("test capture: stop before any artefact write")
-
-        monkeypatch.setattr(bs, "_generate_keypair_and_sign", _capture_and_stop)
-        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
-        monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
-        pkg = Path(bs.__file__).resolve().parent
-        monkeypatch.setattr(
-            sys, "argv", ["_build_sign", "--package-dir", str(pkg), "--bind-extensions"]
-        )
-        assert bs.main() == 1
-        assert captured["require"] is False
+        assert self._run_signer_cli(monkeypatch, tmp_path) is False
 
     def test_setup_py_forwards_the_flag_before_scrubbing(self) -> None:
         """Source contract: setup.py must decide the flag from the PARENT

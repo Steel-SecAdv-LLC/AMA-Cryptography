@@ -22,15 +22,19 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GATE = REPO_ROOT / "tools" / "check_compiler_warnings.py"
+STATIC_ANALYSIS_YML = REPO_ROOT / ".github" / "workflows" / "static-analysis.yml"
 
 # Verbatim from a Release build of this tree before the benchmark harness was
 # fixed (gcc 13, -O3 -D_FORTIFY_SOURCE=2).  This is the class the unoptimized
@@ -211,35 +215,111 @@ class TestDecodingCannotMaskContent:
         assert "ama_kyber_ntt_neon" in result.stderr
 
 
+_WARNING_LOG = re.compile(r"build-warnings[\w.-]*\.log")
+_GATE_SCRIPT = "tools/check_compiler_warnings.py"
+
+
+def _commands(run: str) -> list[list[str]]:
+    """The commands a ``run:`` body executes, as argv lists.
+
+    ``\\``-continuations are joined and ``#`` comments dropped (by shlex, which
+    reads them the way bash does), so text in a comment is not a command.
+    """
+    commands: list[list[str]] = []
+    pending = ""
+    for raw in run.splitlines():
+        line = raw.strip()
+        if line.endswith("\\"):
+            pending += line[:-1] + " "
+            continue
+        argv = shlex.split(pending + line, comments=True)
+        pending = ""
+        if argv:
+            commands.append(argv)
+    if pending.strip():
+        commands.append(shlex.split(pending, comments=True))
+    return commands
+
+
+def _warning_gate_flow() -> dict[str, list[tuple[int, str, list[str]]]]:
+    """Per job: every step command that names a warning log or runs the gate.
+
+    Each entry is ``(step index, "gate" | "produce", argv)``.  A gate command
+    is one that executes ``tools/check_compiler_warnings.py``; any other
+    command naming a ``build-warnings*.log`` writes it (``tee``, a redirect).
+    """
+    workflow: dict[str, Any] = yaml.safe_load(STATIC_ANALYSIS_YML.read_text(encoding="utf-8"))
+    flow: dict[str, list[tuple[int, str, list[str]]]] = {}
+    for job_id, job in workflow["jobs"].items():
+        for index, step in enumerate(job.get("steps", [])):
+            run = step.get("run")
+            # Only steps that mention a warning log or the gate at all are
+            # parsed; the rest cannot take part, and a heredoc elsewhere in
+            # the file is not shell that shlex should be asked to read.
+            if not isinstance(run, str) or not (_WARNING_LOG.search(run) or _GATE_SCRIPT in run):
+                continue
+            for argv in _commands(run):
+                if any(token.endswith(_GATE_SCRIPT) for token in argv):
+                    assert not step.get("continue-on-error"), (
+                        f"{job_id}: the warning gate step is continue-on-error, "
+                        "so its failure fails nothing"
+                    )
+                    flow.setdefault(job_id, []).append((index, "gate", argv))
+                elif any(_WARNING_LOG.search(token) for token in argv):
+                    flow.setdefault(job_id, []).append((index, "produce", argv))
+    return flow
+
+
 class TestWiredIntoTheWorkflow:
-    """The script only enforces anything if the workflow actually calls it."""
+    """The script only enforces anything if the workflow actually calls it.
+
+    Both checks read the COMMANDS the steps run, not the workflow's text: the
+    file mentions ``tools/check_compiler_warnings.py`` in comments above every
+    producer, and a substring search over the text was satisfied by those
+    comments with every gate invocation deleted.
+    """
 
     def test_static_analysis_workflow_invokes_the_gate(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "static-analysis.yml").read_text(
-            encoding="utf-8"
-        )
-        assert "tools/check_compiler_warnings.py" in workflow
+        gates = [
+            argv
+            for entries in _warning_gate_flow().values()
+            for _, kind, argv in entries
+            if kind == "gate"
+        ]
+        assert gates, f"no step of {STATIC_ANALYSIS_YML.name} executes {_GATE_SCRIPT}"
+        for argv in gates:
+            assert any(
+                _WARNING_LOG.fullmatch(token) for token in argv
+            ), f"a gate invocation checks no warning log: {argv}"
 
     def test_every_produced_log_is_checked(self) -> None:
-        """Every `tee`d warning log must be passed to the gate.
+        """Every warning log a build step writes must be passed to the gate.
 
         A build step that writes a log nobody reads is the same silent gap as
-        a missing gate, and it is one edit away at any time.
+        a missing gate, and it is one edit away at any time.  "Passed to the
+        gate" means: named in the argv of a gate command in the SAME job (logs
+        do not cross runners) at a LATER step (a gate that runs before the
+        build reads nothing).
         """
-        workflow = (REPO_ROOT / ".github" / "workflows" / "static-analysis.yml").read_text(
-            encoding="utf-8"
-        )
-        produced = {
-            token
-            for token in workflow.replace("|", " ").split()
-            if token.startswith("build-warnings") and token.endswith(".log")
-        }
-        assert produced, "no warning logs are produced by the workflow at all"
-        checked_section = workflow.split("tools/check_compiler_warnings.py")
-        assert len(checked_section) >= 2
-        checked_text = "".join(checked_section[1:])
-        for log in sorted(produced):
-            assert log in checked_text, f"{log} is written but never checked"
+        flow = _warning_gate_flow()
+        produced_any = False
+        for job_id, entries in flow.items():
+            for index, kind, argv in entries:
+                if kind != "produce":
+                    continue
+                for token in argv:
+                    for log in _WARNING_LOG.findall(token):
+                        produced_any = True
+                        checked_later = any(
+                            later > index and log in gate_argv
+                            for later, gate_kind, gate_argv in entries
+                            if gate_kind == "gate"
+                        )
+                        assert checked_later, (
+                            f"{job_id}: {log} is written at step {index} but no "
+                            "later warning-gate step in that job checks it"
+                        )
+        assert produced_any, "no warning logs are produced by the workflow at all"
 
 
 class TestClangFormatConfigLoads:

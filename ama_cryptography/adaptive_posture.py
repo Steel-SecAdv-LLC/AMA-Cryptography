@@ -184,11 +184,21 @@ class PostureEvaluator:
         # Lyapunov stability tracking — rolling window of timing deviations
         self._timing_deviation_history: Deque[float] = deque(maxlen=50)
         self._lyapunov_baseline: Optional[float] = None
-        # Track the timestamp of the last processed alert so we don't
-        # re-append deviations from the monitor's sliding window.
-        # Using timestamps instead of positional index because the
-        # window slides (old alerts drop off the front), which would
-        # invalidate a count-based offset.
+        #: Arrival index of the first alert not yet scored, for a report that
+        #: carries ``scorable_alerts_offset`` (every AmaCryptographyMonitor
+        #: report does).  The offset makes a positional cursor exact even
+        #: though the window slides, and unlike the timestamp cursor below it
+        #: cannot be fooled by a backward wall-clock step: the monitor stamps
+        #: alerts with ``time.time()``, and after a step every new alert
+        #: carries a timestamp BELOW the one that set the timestamp cursor.
+        #: The pre-step alert that set it is still in the retained window, so
+        #: the window's maximum never dropped below the cursor and the
+        #: timestamp path dropped every new alert for the step's duration.
+        self._next_alert_arrival: int = 0
+        # Timestamp cursor: the fallback for a report WITHOUT an arrival
+        # offset (a hand-built report, or one from a monitor that predates
+        # ``scorable_alerts_offset``).  Tracks the timestamp of the last
+        # processed alert so the monitor's sliding window is not re-scored.
         self._last_processed_alert_ts: float = -1.0
         #: How many alerts bearing exactly ``_last_processed_alert_ts`` have
         #: already been scored.  Without it the cursor's strict ``>`` dropped
@@ -248,10 +258,22 @@ class PostureEvaluator:
         # filter below still scores each alert exactly once, so widening the
         # input cannot double-count.
         scorable = monitor_report.get("scorable_alerts")
-        source_alerts = (
-            scorable if scorable is not None else monitor_report.get("recent_alerts", [])
-        )
-        new_alerts = self._alerts_not_yet_scored(source_alerts)
+        offset = monitor_report.get("scorable_alerts_offset")
+        arrival_end: Optional[int] = None
+        if (
+            scorable is not None
+            and isinstance(offset, int)
+            and not isinstance(offset, bool)
+            and offset >= 0
+        ):
+            # The monitor's own report: select by arrival position, which a
+            # wall-clock step cannot reorder.
+            new_alerts, arrival_end = self._alerts_not_yet_scored_by_arrival(scorable, offset)
+        else:
+            source_alerts = (
+                scorable if scorable is not None else monitor_report.get("recent_alerts", [])
+            )
+            new_alerts = self._alerts_not_yet_scored(source_alerts)
         timing_alerts = [a for a in new_alerts if a.get("type") == "timing"]
         pattern_alerts = [a for a in new_alerts if a.get("type") == "pattern"]
 
@@ -260,6 +282,8 @@ class PostureEvaluator:
         resonance_score = self._score_resonance(monitor_report.get("resonance_analysis", {}))
         lyapunov_score = self._score_lyapunov_stability(timing_alerts)
         self._advance_alert_cursor(new_alerts)
+        if arrival_end is not None:
+            self._next_alert_arrival = arrival_end
 
         score = (
             timing_score * 0.45
@@ -317,8 +341,38 @@ class PostureEvaluator:
             signals=signals,
         )
 
+    def _alerts_not_yet_scored_by_arrival(
+        self, alerts: List[Dict], offset: int
+    ) -> Tuple[List[Dict], int]:
+        """The unscored tail of the monitor's retained list, by arrival index.
+
+        ``alerts[i]`` is the ``(offset + i)``-th alert the monitor has raised
+        (``offset`` counts the alerts it has pruned from the front), and the
+        list only ever grows at the back and shrinks at the front.  Everything
+        from arrival index ``_next_alert_arrival`` onwards is therefore new,
+        whatever its ``timestamp`` says -- which is what keeps scoring live
+        across a backward wall-clock step.  Alerts pruned before they were
+        ever reported (``offset > _next_alert_arrival``) are gone and cannot be
+        recovered; that is the retention cap's bound, not this cursor's.
+
+        An arrival end BELOW the cursor means the stream restarted: a different
+        or re-created monitor is feeding this evaluator, and nothing it holds
+        has been scored, so the whole list is new.
+
+        Returns ``(new_alerts, arrival_end)``; ``evaluate`` stores
+        ``arrival_end`` as the cursor once every scorer has run.
+        """
+        arrival_end = offset + len(alerts)
+        cursor = self._next_alert_arrival if arrival_end >= self._next_alert_arrival else 0
+        start = max(0, cursor - offset)
+        return list(alerts[start:]), arrival_end
+
     def _alerts_not_yet_scored(self, alerts: List[Dict]) -> List[Dict]:
         """The alerts in the sliding window this evaluator has not scored yet.
+
+        The TIMESTAMP path, used only for a report without
+        ``scorable_alerts_offset`` (see ``_alerts_not_yet_scored_by_arrival``
+        for the monitor's own reports).
 
         An alert with no ``timestamp`` is placed at 0.0, which the cursor —
         initialised to -1.0 — is behind exactly once.  It is therefore scored
@@ -343,13 +397,17 @@ class PostureEvaluator:
         in order is exact while the window still holds them, and fails towards
         skipping (never towards double-counting) if it no longer does.
         """
-        # Backward-clock-step guard: the monitor
-        # stamps alerts with the wall clock (monitoring.time.time()).  If it
-        # steps back, every freshly-created alert carries a timestamp below this
-        # forward-only cursor and is silently dropped from scoring — the
-        # adaptive defense goes blind under a still-detected attack.  When every
-        # incoming alert predates the cursor, the clock regressed: re-baseline
-        # so the new alerts are scored (re-scoring at most the retained window).
+        # Backward-clock-step guard, timestamp path only: alerts are stamped
+        # with the wall clock.  If it steps back, every freshly-created alert
+        # carries a timestamp below this forward-only cursor and is silently
+        # dropped from scoring.  When every incoming alert predates the cursor,
+        # the clock regressed: re-baseline so the new alerts are scored
+        # (re-scoring at most the window given).  This fires only when no
+        # pre-step alert is left in the window -- a window still holding the
+        # alert that set the cursor has max(incoming) == cursor and the new
+        # alerts stay dropped.  The monitor's full retained list always holds
+        # that alert, which is why its reports carry an arrival offset and take
+        # the arrival path instead; this guard covers the hand-built shape.
         incoming = [
             float(a["timestamp"]) for a in alerts if isinstance(a.get("timestamp"), (int, float))
         ]
@@ -688,6 +746,7 @@ class PostureEvaluator:
         self._current_level = ThreatLevel.NOMINAL
         self._timing_deviation_history.clear()
         self._lyapunov_baseline = None
+        self._next_alert_arrival = 0
         self._last_processed_alert_ts = -1.0
         self._scored_at_cursor_ts = 0
 

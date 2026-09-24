@@ -19,9 +19,44 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 GATE = REPO_ROOT / "tools" / "check_ghash_constant_time.py"
+DISPATCH_C = REPO_ROOT / "src" / "c" / "dispatch" / "ama_dispatch.c"
+
+_C_STRING_LITERAL = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+
+
+def _dispatch_only_outcome_text() -> dict[str, str]:
+    """What each arm of the dispatcher's ``AMA_DISPATCH_ONLY`` outcome switch prints.
+
+    Keyed by outcome (``AMA_DISPATCH_ONLY_HONORED``, ...), valued by the arm's
+    string literals concatenated in order -- as the compiler concatenates
+    adjacent literals -- with comments removed, so a comment that happens to
+    mention the variable cannot stand in for a message the arm emits.  The
+    arm set is checked against the ``apply_dispatch_only_result_t`` enum, so an
+    outcome added without a message is a failure here rather than a gap.
+    """
+    src = DISPATCH_C.read_text(encoding="utf-8")
+    enum = re.search(r"typedef enum \{([^{}]*)\}\s*apply_dispatch_only_result_t;", src)
+    assert enum, "apply_dispatch_only_result_t is no longer a plain enum in ama_dispatch.c"
+    outcomes = re.findall(r"\b(AMA_DISPATCH_ONLY_[A-Z]+)\s*=", enum.group(1))
+    open_brace = src.index("{", src.index("switch (r)", src.index("apply_dispatch_only(only,")))
+    depth = 0
+    for close in range(open_brace, len(src)):
+        depth += {"{": 1, "}": -1}.get(src[close], 0)
+        if depth == 0:
+            break
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", src[open_brace + 1 : close], flags=re.DOTALL)
+    parts = re.split(r"\bcase\s+(AMA_DISPATCH_ONLY_[A-Z]+)\s*:", body)
+    arms = {
+        parts[i]: "".join(_C_STRING_LITERAL.findall(parts[i + 1])) for i in range(1, len(parts), 2)
+    }
+    assert sorted(arms) == sorted(
+        outcomes
+    ), f"the outcome switch handles {sorted(arms)} but the enum declares {sorted(outcomes)}"
+    return arms
 
 
 def _gate():  # type: ignore[no-untyped-def]  # module object, not a typed API (KCT-003)
@@ -84,14 +119,30 @@ class TestAnUnhonouredPinIsRefused:
         assert gate._dispatch_pin_was_honoured([self.REFUSAL]) is None
 
     def test_the_refusal_marker_matches_the_dispatchers_wording(self) -> None:
-        """If the dispatcher's message changes, this gate goes blind."""
-        dispatch = (REPO_ROOT / "src" / "c" / "dispatch" / "ama_dispatch.c").read_text(
-            encoding="utf-8"
-        )
+        """If the dispatcher's message changes, this gate goes blind.
+
+        Every refusal arm must print the gate's marker VERBATIM, and the
+        honoured arm must not print it at all.  The previous form stripped
+        ``"ERROR: "`` from the marker and or-ed the result with a bare
+        ``"AMA_DISPATCH_ONLY="`` search: both halves were the same check, and
+        a comment and the "honored" message both satisfied it, so rewording
+        a refusal (``ERROR:`` -> ``error:``) left this green while the gate
+        returned PASS for a tier it never measured.
+        """
         gate = _gate()
-        assert gate._DISPATCH_ONLY_REFUSED.replace("ERROR: ", "") in dispatch or (
-            "AMA_DISPATCH_ONLY=" in dispatch
-        )
+        marker = gate._DISPATCH_ONLY_REFUSED
+        arms = _dispatch_only_outcome_text()
+        honoured = "AMA_DISPATCH_ONLY_HONORED"
+        refusals = sorted(outcome for outcome in arms if outcome != honoured)
+        assert honoured in arms and refusals, f"unexpected outcome set: {sorted(arms)}"
+        for outcome in refusals:
+            assert marker in arms[outcome], (
+                f"the {outcome} arm no longer prints {marker!r}: the gate would "
+                "read that refused pin as honoured and report a clean PASS"
+            )
+        assert (
+            marker not in arms[honoured]
+        ), f"the honoured arm prints {marker!r}: every honoured pin would read as refused"
 
 
 class TestTheGateStillRefusesToGuess:

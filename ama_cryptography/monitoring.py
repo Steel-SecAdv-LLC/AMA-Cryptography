@@ -3921,6 +3921,15 @@ class AmaCryptographyMonitor:
             NoteArtifactDetector() if detect_note_artifacts else None
         )
         self.alerts: List[Dict] = []
+        # How many alerts ``_prune_alerts`` has removed from the front of
+        # ``self.alerts`` over this monitor's lifetime.  ``self.alerts[i]`` is
+        # therefore the ``(_alerts_pruned + i)``-th alert ever raised: an
+        # ARRIVAL index, which get_security_report publishes as
+        # ``scorable_alerts_offset``.  The posture evaluator keys its
+        # "already scored" cursor on it rather than on the wall-clock
+        # ``timestamp``, which a backward clock step (NTP step, snapshot
+        # restore) makes non-monotonic.  Guarded by ``_alert_lock``.
+        self._alerts_pruned: int = 0
         # ``record_operation_event`` is called from every worker thread of a
         # concurrent workload; the detector serialises its own state, but the
         # shared alert list needs its own guard.
@@ -4191,6 +4200,9 @@ class AmaCryptographyMonitor:
                 - resonance_analysis: Frequency-domain analysis results
                 - pattern_analysis: Hierarchical pattern analysis
                 - recent_alerts: Last 10 alerts
+                - scorable_alerts: Every retained alert, in arrival order
+                - scorable_alerts_offset: Arrival index of scorable_alerts[0]
+                  (alerts pruned before it); never decreases
                 - total_alerts: Total alert count
                 - recommendations: Security recommendations (if any)
         """
@@ -4211,6 +4223,9 @@ class AmaCryptographyMonitor:
             recent_alerts = [dict(alert) for alert in self.alerts[-10:]]
             total_alerts = len(self.alerts)
             alerts_snapshot = list(self.alerts)
+            # Read under the same lock as the snapshot: the offset describes
+            # exactly this list, not one a concurrent prune has since trimmed.
+            alerts_offset = self._alerts_pruned
         report: Dict[str, Any] = {
             "status": "active",
             "timing_baseline": self.timing.snapshot_baselines(),
@@ -4228,6 +4243,13 @@ class AmaCryptographyMonitor:
             # alerts before it is scored.  recent_alerts stays the human-facing
             # summary.
             "scorable_alerts": [dict(alert) for alert in alerts_snapshot],
+            # Arrival index of scorable_alerts[0]: the number of alerts pruned
+            # before it.  scorable_alerts[i] is the (offset + i)-th alert this
+            # monitor ever raised, so a consumer can tell which entries it has
+            # already seen without trusting the wall-clock "timestamp" to be
+            # monotonic -- a backward clock step made every new alert look
+            # older than the last one scored, and the evaluator dropped them.
+            "scorable_alerts_offset": alerts_offset,
             "total_alerts": total_alerts,
             "recommendations": [],
         }
@@ -4302,6 +4324,7 @@ class AmaCryptographyMonitor:
             excess = len(self.alerts) - self.alert_retention
             if excess > 0:
                 del self.alerts[:excess]
+                self._alerts_pruned += excess
 
 
 # Module-level convenience functions

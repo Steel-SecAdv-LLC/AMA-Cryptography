@@ -10,15 +10,25 @@ A backward step (NTP step, VM snapshot restore, container clock adjustment) made
 elapsed" forever and silently muted protective actions and blinded alert
 scoring for the step's duration. The fix re-anchors a stored timestamp left in
 the future by a regression, converting a permanent wedge into a bounded delay.
+
+The alert-scoring cursor is the exception: re-anchoring a timestamp cursor does
+not work there, because the monitor reports its FULL retained alert list and
+the pre-step alert that set the cursor is still in it.  The evaluator therefore
+selects the monitor's alerts by ARRIVAL index (``scorable_alerts_offset``), which
+a clock step cannot reorder, and the timestamp re-baseline survives only for a
+report without that offset.  The real-monitor tests below pin the first; the
+hand-built one pins the second.
 """
 
 from __future__ import annotations
 
+import time as _real_time
 from typing import Any
 
 import pytest
 
-from ama_cryptography import adaptive_posture
+from ama_cryptography import adaptive_posture, monitoring
+from ama_cryptography.monitoring import AmaCryptographyMonitor, TimingAnomaly
 
 
 class _SteppableClock:
@@ -36,6 +46,11 @@ class _SteppableClock:
 
     def step_back(self, seconds: float) -> None:
         self.now -= seconds
+
+    def __getattr__(self, name: str) -> Any:
+        # Everything but time() is the real module, so a patched module that
+        # also reads perf_counter/monotonic keeps working.
+        return getattr(_real_time, name)
 
 
 class _EmptyMonitor:
@@ -92,6 +107,12 @@ def test_grace_period_reanchors_after_backward_step(monkeypatch: pytest.MonkeyPa
 
 
 def test_alert_cursor_rebaselines_after_backward_step() -> None:
+    """The TIMESTAMP fallback, for a report with no ``scorable_alerts_offset``.
+
+    Its window holds only post-step alerts, the one shape in which the
+    re-baseline fires.  The monitor's own reports never have that shape (see
+    the real-monitor tests below), so this pins the fallback and nothing more.
+    """
     ev = adaptive_posture.PostureEvaluator()
     ev._last_processed_alert_ts = 2_000_000.0  # cursor from a high pre-step clock
     # All incoming alerts predate the cursor (the clock stepped back).
@@ -103,3 +124,99 @@ def test_alert_cursor_rebaselines_after_backward_step() -> None:
     assert (
         len(fresh) == 2
     ), "post-step alerts were dropped by the forward-only cursor — scoring blinded"
+
+
+def _raise_timing_critical(
+    monkeypatch: pytest.MonkeyPatch, mon: AmaCryptographyMonitor, clock: _SteppableClock
+) -> None:
+    """One critical timing alert through the monitor's real append path.
+
+    Only the detector's verdict is stubbed; the alert is stamped, appended,
+    pruned and reported by AmaCryptographyMonitor itself, under the patched
+    wall clock.
+    """
+
+    def _critical(
+        operation: str, duration_ms: float, input_size: int | None = None
+    ) -> TimingAnomaly:
+        return TimingAnomaly(operation, 1.0, duration_ms, 9.0, "critical", clock.time())
+
+    monkeypatch.setattr(mon.timing, "record_timing", _critical)
+    mon.monitor_crypto_operation("sign", 50.0)
+
+
+def test_real_monitor_alerts_are_scored_across_a_backward_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _SteppableClock()
+    monkeypatch.setattr(monitoring, "time", clock)
+    mon = AmaCryptographyMonitor(enabled=True)
+    ev = adaptive_posture.PostureEvaluator()
+
+    _raise_timing_critical(monkeypatch, mon, clock)
+    assert ev.evaluate(mon.get_security_report()).signals["timing_alert_count"] == 1
+
+    # NTP steps the clock back an hour; the attack is still being detected.
+    clock.step_back(3600.0)
+    _raise_timing_critical(monkeypatch, mon, clock)
+    report = mon.get_security_report()
+    stamps = [a["timestamp"] for a in report["scorable_alerts"]]
+    # The shape the monitor really emits: the pre-step alert that set the
+    # timestamp cursor is still retained, so the window's maximum equals the
+    # cursor and a "every alert predates the cursor" re-baseline never fires.
+    assert stamps == [1_000_000.0, 996_400.0]
+    assert (
+        ev.evaluate(report).signals["timing_alert_count"] == 1
+    ), "the post-step alert was dropped: scoring is blind for the step's duration"
+
+    # Still below the pre-step stamp ten seconds later: still scored.
+    clock.advance(10.0)
+    _raise_timing_critical(monkeypatch, mon, clock)
+    assert ev.evaluate(mon.get_security_report()).signals["timing_alert_count"] == 1
+
+    # And nothing is scored twice: a quiet cycle scores nothing.
+    assert ev.evaluate(mon.get_security_report()).signals["timing_alert_count"] == 0
+
+
+def test_arrival_cursor_counts_pruned_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The offset is what keeps a positional cursor exact while the window slides."""
+    clock = _SteppableClock()
+    monkeypatch.setattr(monitoring, "time", clock)
+    mon = AmaCryptographyMonitor(enabled=True, alert_retention=3)
+    ev = adaptive_posture.PostureEvaluator()
+
+    for _ in range(2):
+        clock.advance(1.0)
+        _raise_timing_critical(monkeypatch, mon, clock)
+    assert ev.evaluate(mon.get_security_report()).signals["timing_alert_count"] == 2
+
+    # Four more: arrivals #2..#5.  Retention 3 prunes #0..#2, so #2 is gone
+    # before it was ever reported and #3..#5 are the new, scorable ones.
+    for _ in range(4):
+        clock.advance(1.0)
+        _raise_timing_critical(monkeypatch, mon, clock)
+    report = mon.get_security_report()
+    assert report["scorable_alerts_offset"] == 3
+    assert len(report["scorable_alerts"]) == 3
+    assert ev.evaluate(report).signals["timing_alert_count"] == 3
+
+
+def test_arrival_cursor_restarts_for_a_new_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stream that ends below the cursor is a different monitor: all of it is new."""
+    clock = _SteppableClock()
+    monkeypatch.setattr(monitoring, "time", clock)
+    ev = adaptive_posture.PostureEvaluator()
+
+    first = AmaCryptographyMonitor(enabled=True)
+    for _ in range(5):
+        clock.advance(1.0)
+        _raise_timing_critical(monkeypatch, first, clock)
+    assert ev.evaluate(first.get_security_report()).signals["timing_alert_count"] == 5
+
+    replacement = AmaCryptographyMonitor(enabled=True)
+    for _ in range(2):
+        clock.advance(1.0)
+        _raise_timing_critical(monkeypatch, replacement, clock)
+    assert (
+        ev.evaluate(replacement.get_security_report()).signals["timing_alert_count"] == 2
+    ), "a replacement monitor's alerts were ignored until it outgrew the old one"

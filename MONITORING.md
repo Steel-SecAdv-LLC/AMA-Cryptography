@@ -510,11 +510,18 @@ controller.evaluate_and_respond()  # Key rotation / algorithm switching by level
 - Resonance analysis: 15%
 - Lyapunov stability: 15% (double-helix divergence)
 
-Each alert is scored **once**. `get_security_report()` returns a sliding
-window (`self.alerts[-10:]`) that the evaluator does not drain, so the same
-alert reappears on every cycle until ten newer ones displace it; the evaluator
-tracks a timestamp cursor and scores only what it has not seen. Without that,
-one stale alert kept the raw score pinned at its peak indefinitely.
+Each alert is scored **once**. `get_security_report()` returns every retained
+alert (`scorable_alerts`, up to `alert_retention`) with `scorable_alerts_offset`,
+the number pruned before the first of them. The evaluator does not drain that
+list, so the same alert reappears on every cycle until it is pruned; the
+evaluator keeps an arrival-index cursor and scores only alerts past it. Without
+that, one stale alert kept the raw score pinned at its peak indefinitely. The
+cursor is positional, not a timestamp, because alerts are stamped with the wall
+clock: after a backward step (an NTP step, a VM snapshot rolled back) every new
+alert carries a stamp below the last one scored, and a timestamp cursor dropped
+them all for the step's duration. A report without the offset (a hand-built
+one, or only the ten-entry `recent_alerts` window) falls back to a timestamp
+cursor.
 
 The accumulator is a **decaying peak-hold**, `acc = max(score, acc * decay)`,
 with `decay_rate = 0.95` by default. It is bounded in [0, 1], so the
