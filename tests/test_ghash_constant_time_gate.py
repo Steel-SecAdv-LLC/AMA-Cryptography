@@ -547,9 +547,66 @@ class TestAnUnoptimizedLibraryIsNotAMeasurement:
 
         A probe that reported its own translation unit's setting would answer
         "optimized" for every library it was handed.
+
+        The assertions this replaced could not see that.  ``-O2`` is passed on
+        the probe's compiler command line, never written in its source, so
+        ``"-O2" not in _OPT_PROBE`` held of every probe; and the symbol's name
+        in the source was satisfied by its declaration alone.  A ``main`` that
+        printed ``__OPTIMIZE__`` of its own translation unit kept both true.
+        This is the static half, which needs no compiler; the behavioural half
+        is the test below, which is the one that decides.
         """
-        assert "ama_build_optimization_probe" in tool._OPT_PROBE
-        assert "-O2" not in tool._OPT_PROBE
+        code = re.sub(r"/\*.*?\*/|//[^\n]*", "", tool._OPT_PROBE, flags=re.S)
+        assert "__OPTIMIZE__" not in code, "the probe reads its own TU's optimization"
+        assert not re.search(
+            r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", code, re.M
+        ), "the probe's output must not depend on how the probe itself is compiled"
+        assert re.search(
+            r'printf\(\s*"%d\\n"\s*,\s*ama_build_optimization_probe\(\s*\)\s*\)\s*;', code
+        ), "the probe must print what the LIBRARY's ama_build_optimization_probe() returns"
+
+    @pytest.mark.parametrize(("opt_flag", "expected"), [("-O0", 0), ("-O2", 1)])
+    def test_the_probe_reports_the_librarys_optimization_level(
+        self, tool: ModuleType, tmp_path: Path, opt_flag: str, expected: int
+    ) -> None:
+        """Measured, not read: the real probe against the real exporter.
+
+        ``src/c/ama_consttime.c`` — the translation unit that defines
+        ``ama_build_optimization_probe`` for the AMA_TESTING_MODE archive — is
+        compiled at ``-O0`` and at ``-O2`` and handed to
+        :func:`_library_is_optimized`, which builds its probe driver at
+        ``-O2`` as it does in CI.  The ``-O0`` object must read 0: that is the
+        historical failure, an unoptimized archive, and a probe that answered
+        for its own translation unit reads 1 there.  The ``-O2`` row is the
+        non-vacuity control.
+        """
+        import shutil
+        import subprocess
+
+        cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+        if cc is None:
+            pytest.skip("no C compiler on PATH")
+        obj = tmp_path / f"consttime{opt_flag}.o"
+        built = subprocess.run(
+            [
+                cc,
+                opt_flag,
+                "-DAMA_TESTING_MODE",
+                f"-I{REPO_ROOT / 'include'}",
+                f"-I{REPO_ROOT / 'src' / 'c'}",
+                "-c",
+                str(REPO_ROOT / "src" / "c" / "ama_consttime.c"),
+                "-o",
+                str(obj),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert built.returncode == 0, built.stderr
+        workdir = tmp_path / "probe"
+        workdir.mkdir()
+        assert tool._library_is_optimized(obj, cc, REPO_ROOT / "include", workdir) == expected
 
     def test_every_ci_step_that_runs_a_target_builds_an_optimized_library(
         self, tool: ModuleType

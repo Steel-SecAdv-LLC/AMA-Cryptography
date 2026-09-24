@@ -39,6 +39,7 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from tools.check_gate_coverage import (
@@ -702,8 +703,88 @@ class TestAMentionIsNotAnEvaluation:
             "needs['build'].result",
             'needs["build"].outcome',
         ):
-            job = {"needs": ["build"], "steps": [{"run": "x=${{ " + expr + " }}"}]}
+            run = "x=${{ " + expr + ' }}; [ "$x" = success ]'
+            job = {"needs": ["build"], "steps": [{"run": run}]}
             assert gate._unevaluated_needs(job) == [], expr
+
+    @pytest.mark.parametrize(
+        ("step", "shape"),
+        [
+            ({"run": 'echo "build=${{ needs.build.result }}"'}, "echoed"),
+            # The script can fail, but not on the dependency: it only prints it.
+            (
+                {"run": 'echo "build=${{ needs.build.result }}"; [ -f report.txt ]'},
+                "echoed beside an unrelated test",
+            ),
+            ({"run": "printf '%s\\n' \"${{ needs.build.result }}\"; exit 0"}, "printed"),
+            ({"run": 'x="${{ needs.build.result }}"'}, "read by a script that cannot fail"),
+            (
+                {
+                    "run": '[ "${{ needs.build.result }}" = success ]',
+                    "continue-on-error": True,
+                },
+                "continue-on-error",
+            ),
+            (
+                {"run": "cat <<EOF\n${{ needs.build.result }}\nEOF\n[ -n x ]"},
+                "a heredoc body",
+            ),
+            (
+                {"run": "# ${{ needs.build.result }}\n[ -n x ]"},
+                "a comment",
+            ),
+        ],
+    )
+    def test_a_named_read_that_cannot_turn_the_gate_red_is_not_an_evaluation(
+        self, step: dict[str, Any], shape: str
+    ) -> None:
+        """The wildcard's standard, applied to a named dependency: an echoed
+        ``join(needs.*.result)`` never exempted anything, and an echoed
+        ``needs.build.result`` must not either."""
+        gate = self._gate()
+        assert gate._unevaluated_needs({"needs": ["build"], "steps": [step]}) == ["build"], shape
+
+    @pytest.mark.parametrize(
+        ("job", "shape"),
+        [
+            (
+                {"steps": [{"run": 'echo "${{ needs.build.result }}" | grep -qx success'}]},
+                "a pipeline ending in a test",
+            ),
+            (
+                {
+                    "steps": [
+                        {"if": "needs.build.result != 'success'", "run": "exit 1"},
+                    ]
+                },
+                "a step condition over an unconditional exit 1",
+            ),
+            (
+                {
+                    "env": {"R_BUILD": "${{ needs.build.result }}"},
+                    "steps": [{"run": 'if [ "$R_BUILD" != success ]; then exit 1; fi'}],
+                },
+                "a job-level alias",
+            ),
+        ],
+    )
+    def test_a_named_read_that_decides_the_status_counts(
+        self, job: dict[str, Any], shape: str
+    ) -> None:
+        gate = self._gate()
+        assert gate._unevaluated_needs({"needs": ["build"], **job}) == [], shape
+
+    def test_an_alias_bound_in_another_step_is_not_visible(self) -> None:
+        """A step sees the job's ``env:`` and its own, never a sibling's."""
+        gate = self._gate()
+        job = {
+            "needs": ["build"],
+            "steps": [
+                {"env": {"R_BUILD": "${{ needs.build.result }}"}, "run": "true"},
+                {"run": 'if [ "$R_BUILD" != success ]; then exit 1; fi'},
+            ],
+        }
+        assert gate._unevaluated_needs(job) == ["build"]
 
     def test_a_substring_job_name_does_not_borrow_coverage(self) -> None:
         """`build` must not be satisfied by `needs.build-test.result`."""

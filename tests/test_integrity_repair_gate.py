@@ -423,7 +423,12 @@ class TestImportGateEndToEnd:
             timeout=300,
         )
 
-    def test_tampered_signature_is_refused_even_in_a_build_pipeline(self, tmp_path: Path) -> None:
+    @classmethod
+    def _tampered_tree(cls, tmp_path: Path) -> tuple[Path, Path, str]:
+        """A package copy whose signature verifies against nothing.
+
+        Returns ``(root, artefact path, tampered artefact text)``.
+        """
         from ama_cryptography import pqc_backends
 
         if not pqc_backends._ED25519_NATIVE_AVAILABLE:
@@ -434,7 +439,7 @@ class TestImportGateEndToEnd:
         if NATIVE_LIB is None:
             pytest.skip("no native library discoverable by the package loader")
 
-        root = self._tree(tmp_path)
+        root = cls._tree(tmp_path)
         copied = root / "ama_cryptography" / "_integrity_signature.py"
         text = copied.read_text(encoding="utf-8")
         # Flip one hex digit of the signature: the digest it covers is
@@ -444,7 +449,57 @@ class TestImportGateEndToEnd:
         head, _, tail = text.partition(marker)
         assert tail, "artefact does not carry INTEGRITY_SIGNATURE_HEX"
         flipped = ("0" if tail[0] != "0" else "1") + tail[1:]
-        copied.write_text(head + marker + flipped, encoding="utf-8")
+        tampered = head + marker + flipped
+        copied.write_text(tampered, encoding="utf-8")
+        return root, copied, tampered
+
+    def test_tampered_signature_is_refused_even_in_a_build_pipeline(self, tmp_path: Path) -> None:
+        """A bad signature must not buy the SIGNER an import either.
+
+        This drives the one process the carve-out admits —
+        ``python -m ama_cryptography._build_sign`` with
+        ``AMA_BUILD_PIPELINE=1`` — so the classification of the failure is the
+        only thing left to refuse it.  Against the tautology this module's
+        docstring describes (every integrity failure counted as repairable),
+        the signer imported through the bad signature, re-signed the tree and
+        exited 0: the tamper laundered into a valid artefact.
+
+        It used to be driven with ``python -c "import ama_cryptography"``.
+        That process is never the signer, so it is refused on identity
+        whatever the failure is classified as, and the test passed against the
+        tautology — the same reason the stale-digest case below moved to
+        ``_run_signer``.  The non-signer case is kept, as the test after this
+        one, because it is still a property; it is just not this one.
+
+        Its control is ``test_stale_source_digest_still_imports_for_the_signer``:
+        the same copy, the same signer and the same variable exit 0 when the
+        fault is a stale digest, so the refusal here is the classification.
+        """
+        root, artefact, tampered = self._tampered_tree(tmp_path)
+
+        result = self._run_signer(
+            root,
+            "--package-dir",
+            str(root / "ama_cryptography"),
+            AMA_BUILD_PIPELINE="1",
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode != 0, (
+            "the integrity signer imported through an Ed25519 signature that "
+            "does not verify — the fail-open the repair carve-out is supposed "
+            f"to exclude, and the signer would launder it: {output}"
+        )
+        assert "Signed integrity artefact written" not in result.stdout, output
+        assert "power-on self-tests FAILED" in output, output
+        assert (
+            artefact.read_text(encoding="utf-8") == tampered
+        ), "the tampered artefact was rewritten: a re-sign laundered the tamper"
+
+    def test_tampered_signature_refuses_a_process_that_is_not_the_signer(
+        self, tmp_path: Path
+    ) -> None:
+        """SMOKE: holds on process identity alone, whatever the classification."""
+        root, _artefact, _tampered = self._tampered_tree(tmp_path)
 
         diag = self._run("import ama_cryptography", root, AMA_BUILD_PIPELINE="1")
         assert diag.returncode != 0, (

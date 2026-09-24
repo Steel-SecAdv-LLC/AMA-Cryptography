@@ -313,24 +313,166 @@ def _wildcard_fail_step(job: dict[str, Any]) -> bool:
     return False
 
 
-def _run_text(job: dict[str, Any]) -> str:
-    """The shell bodies of a gate job's steps — where ``rc`` is computed.
+#: Commands whose arguments are output, never a decision.  A dependency's result
+#: that appears only as their argument is printed, not evaluated: the command
+#: succeeds whatever the value was, so the gate stays green over a failed job.
+_OUTPUT_ONLY_COMMANDS = frozenset({"echo", "printf", ":", "true"})
 
-    This is the EVALUATION surface for the hand-enumerated gates: they bind each
-    dependency into an ``env:`` alias and decide the exit code in a ``run:``
-    script.  The binding is not the evaluation (H7): a job can be bound into
-    ``env:`` and its alias never consulted, so ``rc`` never sees its failure.
-    Only what a ``run:`` script actually references counts.
+#: Reserved words and grouping tokens that can open a simple command without
+#: being its command word (``if [ ... ]``, ``then exit 1``, ``! test ...``).
+_COMMAND_PREFIXES = frozenset(
+    {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "(", "time"}
+)
+
+#: Commands through which a script turns a value into a failing status.
+_FAILING_COMMANDS = frozenset({"test", "[", "[[", "false"})
+
+#: The opener of a heredoc (``<<EOF``, ``<<-'EOF'``), not a here-string (``<<<``).
+_HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _shell_segments(run: str) -> list[tuple[str, bool]]:
+    """Split a ``run:`` script into simple commands, as ``(text, piped)``.
+
+    Separators are newline, ``;``, ``&&``, ``||`` and ``&`` outside quotes and
+    outside ``${{ }}`` expressions.  ``|`` does not separate: a pipeline's
+    status is its last stage's, so ``echo "$R" | grep -q success`` is one
+    command that CAN fail, and ``piped`` records that it is a pipeline.
+    Comments are dropped, and a heredoc's body is dropped as the data it is.
+
+    This is a tokenizer for deciding what a script DOES with a value, not a
+    shell parser; it errs toward reporting a real evaluation as missing (the
+    gate author then writes the check plainly) rather than toward accepting a
+    mention as one.
     """
-    parts: list[str] = []
-    steps = job.get("steps")
-    if isinstance(steps, list):
-        for step in steps:
-            if isinstance(step, dict):
-                run = step.get("run")
-                if isinstance(run, str):
-                    parts.append(run)
-    return "\n".join(parts)
+    segments: list[tuple[str, bool]] = []
+    current: list[str] = []
+    piped = False
+    quote: str | None = None
+    heredocs: list[str] = []
+    index = 0
+    length = len(run)
+
+    def flush() -> None:
+        nonlocal piped
+        text = "".join(current).strip()
+        if text:
+            segments.append((text, piped))
+            heredocs.extend(match.group(2) for match in _HEREDOC_RE.finditer(text))
+        current.clear()
+        piped = False
+
+    while index < length:
+        char = run[index]
+        if run.startswith("${{", index):
+            end = run.find("}}", index + 3)
+            end = length if end < 0 else end + 2
+            current.append(run[index:end])
+            index = end
+            continue
+        if quote is not None:
+            current.append(char)
+            if char == "\\" and quote == '"' and index + 1 < length:
+                current.append(run[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "'\"":
+            quote = char
+            current.append(char)
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length:
+            current.append(" " if run[index + 1] == "\n" else run[index : index + 2])
+            index += 2
+            continue
+        if char == "#" and (index == 0 or run[index - 1] in " \t\n;&|()"):
+            newline = run.find("\n", index)
+            index = length if newline < 0 else newline
+            continue
+        if char == "\n":
+            flush()
+            index += 1
+            # A heredoc's body starts on the line after its opener and ends at
+            # the line holding only its delimiter; none of it is a command.
+            while heredocs:
+                delimiter = heredocs.pop(0)
+                while index < length:
+                    newline = run.find("\n", index)
+                    line_end = length if newline < 0 else newline
+                    line = run[index:line_end]
+                    index = line_end + 1
+                    if line.strip() == delimiter:
+                        break
+            continue
+        if run.startswith("&&", index) or run.startswith("||", index):
+            flush()
+            index += 2
+            continue
+        if char == ";" or (
+            char == "&"
+            and run[index - 1 : index] not in (">", "<")
+            and run[index + 1 : index + 2] != ">"
+        ):
+            flush()
+            index += 1
+            continue
+        if char == "|":
+            piped = True
+        current.append(char)
+        index += 1
+    flush()
+    return segments
+
+
+def _command_word(segment: str) -> tuple[str, list[str]]:
+    """The command a simple-command segment runs, and its tokens from there."""
+    tokens = segment.split()
+    while tokens and tokens[0] in _COMMAND_PREFIXES:
+        tokens.pop(0)
+    if not tokens:
+        return "", []
+    tokens[0] = tokens[0].lstrip("(")
+    return tokens[0], tokens
+
+
+def _decisive_text(run: str) -> str:
+    """The parts of a script that can act on a value: every command that is not
+    output-only.  A read that survives only here can change the exit status."""
+    kept: list[str] = []
+    for segment, piped in _shell_segments(run):
+        word, _tokens = _command_word(segment)
+        if word in _OUTPUT_ONLY_COMMANDS and not piped:
+            continue
+        kept.append(segment)
+    return "\n".join(kept)
+
+
+def _run_can_fail(run: str) -> bool:
+    """Whether a script has any way to turn a value into a failing status.
+
+    A ``test``/``[``/``[[``/``false`` command (a false test fails the step under
+    the runner's ``bash -e``), an ``exit``/``return`` with a status other
+    than a literal ``0``, or a pipeline whose last stage is not output-only.
+    A script with none of these succeeds whatever the
+    dependency's result was, so a read inside it evaluates nothing.
+    """
+    for segment, piped in _shell_segments(run):
+        word, tokens = _command_word(segment)
+        if word in _FAILING_COMMANDS:
+            return True
+        if word in ("exit", "return") and len(tokens) > 1 and tokens[1] != "0":
+            return True
+        if piped:
+            # A pipeline's status is its last stage's: `echo "$R" | grep -qx
+            # success` fails the step under `bash -e` when grep finds nothing.
+            last_word, _ = _command_word(segment.rsplit("|", 1)[1])
+            if last_word and last_word not in _OUTPUT_ONLY_COMMANDS:
+                return True
+    return False
 
 
 #: ``needs.<dep>.result`` / ``.outcome`` inside a value, dotted or bracketed.
@@ -339,34 +481,25 @@ _NEEDS_IN_VALUE_RE = re.compile(
 )
 
 
-def _env_alias_map(job: dict[str, Any]) -> dict[str, set[str]]:
-    """Map each dependency to the ``env:`` alias key(s) bound to its result.
+def _env_aliases(env: Any) -> dict[str, set[str]]:
+    """Map each dependency to the ``env:`` key(s) one ``env:`` block binds to it.
 
-    Scans the job-level ``env:`` and every step's ``env:`` for values that
-    reference ``needs.<dep>.result`` and records the KEY they are bound to (the
+    Records the KEY a value referencing ``needs.<dep>.result`` is bound to (the
     shell variable name).  A dependency is only evaluated through such an alias
-    when a ``run:`` script dereferences that variable; the binding alone is not
-    evaluation, which is the vacuity H7 names.
+    when a ``run:`` script that can see it dereferences it; the binding alone
+    is not evaluation, which is the vacuity H7 names.  Scoped per block because
+    a step sees the job's ``env:`` and its own, never another step's.
     """
     alias_map: dict[str, set[str]] = {}
-
-    def _scan(env: Any) -> None:
-        if not isinstance(env, dict):
-            return
-        for key, value in env.items():
-            if not isinstance(key, str) or not isinstance(value, str):
-                continue
-            for match in _NEEDS_IN_VALUE_RE.finditer(value):
-                dep = match.group(1) or match.group(2)
-                if dep:
-                    alias_map.setdefault(dep, set()).add(key)
-
-    _scan(job.get("env"))
-    steps = job.get("steps")
-    if isinstance(steps, list):
-        for step in steps:
-            if isinstance(step, dict):
-                _scan(step.get("env"))
+    if not isinstance(env, dict):
+        return alias_map
+    for key, value in env.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        for match in _NEEDS_IN_VALUE_RE.finditer(value):
+            dep = match.group(1) or match.group(2)
+            if dep:
+                alias_map.setdefault(dep, set()).add(key)
     return alias_map
 
 
@@ -397,11 +530,11 @@ def _result_reference(need: str) -> str:
     else -- the job's name in a comment, in an echo, or as a substring of a
     different job's name -- is a mention, not an evaluation.
 
-    The optional backslash before the bracket quotes is not decoration: the
-    body this is searched against is JSON-serialised, so a double-quoted
-    ``needs["job"].outcome`` arrives as ``needs[\\"job\\"].outcome`` and a
-    pattern expecting a bare quote misses it.  Measured -- that one spelling of
-    four was reported unevaluated until the escape was allowed for.
+    The optional backslash before the bracket quotes dates from when the body
+    this was searched against was JSON-serialised, so a double-quoted
+    ``needs["job"].outcome`` arrived as ``needs[\\"job\\"].outcome``.  The
+    search now reads the raw ``if:`` and ``run:`` text, where the backslash
+    never appears; allowing it matches nothing a real read would not.
     """
     name = re.escape(need)
     return (
@@ -431,28 +564,51 @@ def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
     if _wildcard_fail_step(job):
         return []
 
-    # Read the EVALUATION, not the binding (H7).  A dependency's env: alias
-    # binding -- `R_X: ${{ needs.x.result }}` -- used to satisfy the old
-    # whole-body substring test even when the run: script that sets `rc` never
-    # consulted `$R_X`.  So look only at what actually decides the exit code:
-    #   (a) a direct read of `needs.<dep>.result` in an if: or a run:, OR
-    #   (b) an env: alias bound to the dep AND dereferenced ($X / ${X}) in run:.
-    evaluation_text = _gate_condition_text(job) + "\n" + _run_text(job)
-    run_text = _run_text(job)
-    alias_map = _env_alias_map(job)
-
-    unevaluated: list[str] = []
-    for need in _needs(job):
-        if re.search(_result_reference(need), evaluation_text):
+    # Read the EVALUATION, not the binding (H7), and not the mention either.
+    # A dependency's env: alias binding -- `R_X: ${{ needs.x.result }}` -- used
+    # to satisfy the old whole-body substring test even when the run: script
+    # that sets `rc` never consulted `$R_X`.  The fix for that still accepted
+    # ANY read in any if: or run:, so `run: echo "x=${{ needs.x.result }}"`
+    # counted, while `echo ${{ join(needs.*.result, ', ') }}` did not exempt the
+    # wildcard -- the same mention held to two standards.  A named read now
+    # counts only where it can turn the gate red, in a step without
+    # `continue-on-error` (which turns a failing step green):
+    #   (a) the step's `if:` reads it and the step's script exits nonzero
+    #       unconditionally -- the wildcard rule, for one dependency; or
+    #   (b) the step's script reads it, directly or through an env: alias the
+    #       step can see (the job's env: or its own), in a command that is not
+    #       output-only (echo/printf/:/true, a heredoc body, a comment), and the
+    #       script has a way to fail at all (test/[/[[/false, or exit/return
+    #       with a status other than 0).
+    job_aliases = _env_aliases(job.get("env"))
+    needs = _needs(job)
+    evaluated: set[str] = set()
+    steps = job.get("steps")
+    for step in steps if isinstance(steps, list) else []:
+        if not isinstance(step, dict):
             continue
-        aliases = alias_map.get(need, set())
-        if any(
-            re.search(r"\$\{?" + re.escape(alias) + r"(?![A-Za-z0-9_])", run_text)
-            for alias in aliases
-        ):
+        if step.get("continue-on-error") not in (None, False):
             continue
-        unevaluated.append(need)
-    return sorted(unevaluated)
+        run = step.get("run")
+        run = run if isinstance(run, str) else ""
+        condition = step.get("if")
+        if condition is not None and _run_exits_nonzero(run):
+            evaluated.update(
+                need for need in needs if re.search(_result_reference(need), str(condition))
+            )
+        if not run or not _run_can_fail(run):
+            continue
+        decisive = _decisive_text(run)
+        aliases = {dep: set(keys) for dep, keys in job_aliases.items()}
+        for dep, keys in _env_aliases(step.get("env")).items():
+            aliases.setdefault(dep, set()).update(keys)
+        for need in needs:
+            if re.search(_result_reference(need), decisive) or any(
+                re.search(r"\$\{?" + re.escape(alias) + r"(?![A-Za-z0-9_])", decisive)
+                for alias in aliases.get(need, set())
+            ):
+                evaluated.add(need)
+    return sorted(needs - evaluated)
 
 
 def _is_always(job: dict[str, Any]) -> bool:
