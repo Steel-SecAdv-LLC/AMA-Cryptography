@@ -153,3 +153,75 @@ def test_no_artifact_upload_is_gated_on_success() -> None:
         "artifact uploads gated on success() withhold their evidence exactly "
         f"when a gate fails and somebody needs it: {offenders}"
     )
+
+
+def test_no_pytest_lane_runs_twice_per_head() -> None:
+    """ci.yml::test and ci-build-test.yml::python-package partition the lanes.
+
+    Both matrices ran ubuntu-latest and windows-latest on all five interpreters
+    with the same extras, the same SoftHSM2 token, the same
+    AMA_CI_REQUIRE_BACKENDS / AMA_CI_REQUIRE_HISTORY escalation and the same
+    ``tests/`` run, so ten pytest jobs per head were exact repeats — 161.7 of
+    the 720.1 job-minutes PR #394's head d6270f28 consumed.  ci-build-test.yml
+    now runs the macOS lanes only; the coverage upload those ten legs carried
+    moved to ci.yml::test's ubuntu-latest / 3.11 cell.  This keeps the union
+    (pinned against the release matrix above) from growing a duplicate again.
+    """
+    in_ci = _matrix_lanes("ci.yml", "test")
+    in_build_test = _matrix_lanes("ci-build-test.yml", "python-package")
+    both = sorted(in_ci & in_build_test)
+    assert both == [], (
+        "these (platform, interpreter) lanes run the full pytest suite in BOTH "
+        f"ci.yml::test and ci-build-test.yml::python-package on every head: {both}. "
+        "Keep each lane in one matrix; fold any step the other carries into it."
+    )
+    # Non-vacuity: both sides must still be populated, or the intersection is
+    # empty because a matrix vanished rather than because it was partitioned.
+    assert in_ci and in_build_test
+
+
+def test_the_coverage_upload_runs_on_a_lane_that_exists() -> None:
+    """The codecov upload survived the matrix consolidation, on a real cell.
+
+    It lived on ci-build-test.yml::python-package's ubuntu-latest / 3.11 leg,
+    one of the ten legs removed as duplicates of ci.yml::test; it moved to the
+    same cell of ci.yml::test.  Pinned so a later matrix edit cannot drop it,
+    or strand it behind an ``if:`` naming a cell no matrix runs any more.
+    """
+    uploads: list[tuple[str, str]] = []
+    for workflow, job_id in (("ci.yml", "test"), ("ci-build-test.yml", "python-package")):
+        job = _load(workflow)["jobs"][job_id]
+        matrix = job["strategy"]["matrix"]
+        cells = {
+            (str(o), str(v)) for o in matrix.get("os", []) for v in matrix.get("python-version", [])
+        }
+        cells |= {
+            (str(e["os"]), str(e["python-version"]))
+            for e in matrix.get("include", [])
+            if "os" in e and "python-version" in e
+        }
+        steps = job["steps"]
+        for step in steps:
+            if not str(step.get("uses", "")).startswith("codecov/codecov-action@"):
+                continue
+            condition = str(step.get("if", ""))
+            match = re.fullmatch(
+                r"matrix\.os == '([^']+)' && matrix\.python-version == '([^']+)'",
+                condition.strip(),
+            )
+            assert match, f"{workflow}::{job_id} codecov step has an unexpected if: {condition!r}"
+            assert (match.group(1), match.group(2)) in cells, (
+                f"{workflow}::{job_id} uploads coverage only on {match.groups()}, a cell "
+                f"its matrix does not run — the upload can never execute"
+            )
+            # The pytest step must actually write coverage.xml.
+            pytest_runs = [
+                str(s.get("run", "")) for s in steps if "pytest tests/" in str(s.get("run", ""))
+            ]
+            assert any(
+                "--cov-report=xml" in run for run in pytest_runs
+            ), f"{workflow}::{job_id} uploads coverage.xml but no pytest step writes it"
+            uploads.append((workflow, job_id))
+    assert (
+        len(uploads) == 1
+    ), f"expected exactly one coverage upload across the pytest lanes: {uploads}"

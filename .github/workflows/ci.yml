@@ -4,7 +4,11 @@ name: CI - Testing and Code Quality
 
 on:
   push:
-    branches: [ main, develop, 'feature/**', 'fix/**' ]
+    # Pushes run for the bases pull requests merge into, not for PR head
+    # branches: a feature/** or fix/** head is covered by its pull_request run,
+    # and running on its push as well ran this workflow twice per head
+    # (tests/test_gate_coverage.py::test_a_pull_request_head_runs_each_workflow_once).
+    branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
@@ -67,7 +71,15 @@ jobs:
     # measured job and 49 % over the worst observed run.  A timeout is a
     # resource budget, not a correctness threshold: nothing here is made
     # easier to pass, and a leg that genuinely hangs still fails.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
+    #
+    # ubuntu-latest / 3.11 gets 30 as well: it now runs the suite under
+    # coverage (moved here from ci-build-test.yml::python-package).  On
+    # d6270f28 that instrumented run took 15.1 min in the other workflow
+    # against 13.3 min for this cell uninstrumented, and this cell also runs
+    # the detector gates, examples, Wycheproof and the demonstration — 20
+    # would leave it under the 33 % headroom the Windows record above shows
+    # is not enough.
+    timeout-minutes: ${{ (matrix.os == 'windows-latest' || (matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11')) && 30 || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -481,8 +493,23 @@ jobs:
         # The checkout above is fetch-depth: 0, so a history-dependent guard
         # that skips here is a broken checkout, not a shallow one.
         AMA_CI_REQUIRE_HISTORY: "1"
+      # One cell measures coverage for the codecov upload below; every other
+      # cell runs uninstrumented.  That upload used to live on the same cell
+      # of ci-build-test.yml::python-package, whose ubuntu-latest and
+      # windows-latest legs duplicated this matrix and were removed — so the
+      # measurement moved here rather than being lost.  The expression reads
+      # only static matrix values.
       run: |
-        python -m pytest tests/ -v --tb=short --no-cov
+        python -m pytest tests/ -v --tb=short ${{ (matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11') && '--cov=ama_cryptography --cov-report=xml' || '--no-cov' }}
+
+    - name: Upload coverage
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.xml
+        flags: python
+        name: python-${{ matrix.python-version }}
 
     - name: "3R detector efficacy gates (real timings, measured contract)"
       # benchmarks/detector_baseline_eval.py is the measurement that found

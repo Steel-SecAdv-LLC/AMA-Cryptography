@@ -775,3 +775,86 @@ def test_the_rejected_wildcard_gate_fails_the_workflow_with_the_right_remedy() -
     assert "no step of that shape acts on it" in failures[0]
     # The remedy must not recommend the failure-only form on its own.
     assert "switch the gate to the `contains(needs.*.result, 'failure')` form" not in failures[0]
+
+
+#: The only branches a ``push`` may run a pull-request workflow for: the
+#: long-lived bases pull requests merge INTO.  A push to one of them is a merge
+#: (or a direct commit) and has no pull_request run of its own.
+_PUSH_BRANCHES_OF_A_PR_WORKFLOW = frozenset({"main", "develop"})
+
+
+def _push_branches_beyond_the_bases(workflow: dict[Any, Any]) -> list[str]:
+    """Push branch patterns that would also fire for a pull request's head."""
+    on = workflow.get(True, workflow.get("on"))
+    if isinstance(on, str):
+        on = [on]
+    if isinstance(on, list):
+        # `on: [push, pull_request]` filters nothing: every branch, both events.
+        return ["<every branch>"] if {"push", "pull_request"} <= set(on) else []
+    if not isinstance(on, dict) or "pull_request" not in on or "push" not in on:
+        return []
+    push = on["push"]
+    if not isinstance(push, dict):
+        return ["<every branch>"]  # bare `push:` runs for every branch
+    if "branches" not in push:
+        # tags-only (or paths-only) push: a tag is never a pull-request head;
+        # a push with no branch filter at all runs for every branch.
+        return [] if "tags" in push else ["<every branch>"]
+    return sorted(set(push["branches"]) - _PUSH_BRANCHES_OF_A_PR_WORKFLOW)
+
+
+def test_a_pull_request_head_runs_each_workflow_once() -> None:
+    """No workflow may run for the same head on both ``push`` and ``pull_request``.
+
+    Seven workflows (acvp_validation, ci, ci-build-test, dudect, fuzzing,
+    security, static-analysis) triggered on pushes to ``feature/**`` and
+    ``fix/**`` as well as on pull requests to ``main``.  CONTRIBUTING.md tells
+    contributors to name their branches exactly that, so every such pull
+    request ran each of those workflows twice per head — once on the branch
+    commit (the ``push`` run, which branch protection never evaluates) and once
+    on the merge commit (the ``pull_request`` run, which it does).  On PR #394's
+    head d6270f28 those seven workflows cost 683.7 job-minutes; a feature
+    branch paid that twice.  The concurrency groups did not collapse the pair:
+    they key on ``github.ref``, which is ``refs/heads/<branch>`` for one and
+    ``refs/pull/<n>/merge`` for the other.
+
+    Pushes now run only for the bases pull requests merge into, the way
+    arm-qemu.yml and wiki-sync.yml already scoped theirs, so a direct push to
+    ``main`` is still covered and a pull request is covered by its own run.
+    """
+    workflow_dir = REPO_ROOT / ".github" / "workflows"
+    offenders: dict[str, list[str]] = {}
+    examined = 0
+    for path in sorted(workflow_dir.glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        on = workflow.get(True, workflow.get("on"))
+        if isinstance(on, dict) and "pull_request" in on and "push" in on:
+            examined += 1
+        extra = _push_branches_beyond_the_bases(workflow)
+        if extra:
+            offenders[path.name] = extra
+    assert offenders == {}, (
+        "these workflows also run on pushes to branches a pull request can come "
+        f"from, so such a pull request runs them twice per head: {offenders}. "
+        "Scope `push: branches:` to main/develop."
+    )
+    # Non-vacuity: the sweep must actually see the push+pull_request workflows.
+    assert examined >= 8, f"only {examined} push+pull_request workflow(s) examined"
+
+
+def test_the_double_trigger_rule_detects_a_head_branch_pattern() -> None:
+    """Detection direction for the sweep above, on synthetic trigger blocks."""
+    shapes: dict[str, list[str]] = {
+        "on: {push: {branches: [main, 'feature/**']}, pull_request: {branches: [main]}}": [
+            "feature/**"
+        ],
+        "on: {push: {}, pull_request: {}}": ["<every branch>"],
+        "on: {push: {paths: ['src/**']}, pull_request: {}}": ["<every branch>"],
+        "on: [push, pull_request]": ["<every branch>"],
+        "on: [push]": [],
+        "on: {push: {branches: [main], tags: ['v*']}, pull_request: {}}": [],
+        "on: {push: {tags: ['v*']}, pull_request: {}}": [],
+        "on: {push: {branches: ['feature/**']}}": [],  # no pull_request trigger
+    }
+    for source, expected in shapes.items():
+        assert _push_branches_beyond_the_bases(yaml.safe_load(source)) == expected, source
