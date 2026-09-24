@@ -981,7 +981,10 @@ def _merge_manifest_entry() -> None:
         "bench_timestamp": bench.get("benchmark_start") or bench.get("timestamp"),
         "outputs": ["performance_dashboard.png", "defense_layers.png"],
     }
-    manifest_path.write_text(json.dumps(recorded, indent=2, sort_keys=True) + "\n")
+    # UTF-8 and LF on every platform; see tools/generate_visuals.py::_write_manifest.
+    manifest_path.write_text(
+        json.dumps(recorded, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline=""
+    )
     print(f"  Updated {manifest_path}")
 
 

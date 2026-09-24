@@ -545,6 +545,15 @@ class TestFormalVerificationClaimsAreRefused:
             "A formal proof of correctness accompanies the release.",
             "The construction is mathematically proven.",
             "No timestamp is checked here, but the module is provably correct.",
+            # Spellings the first pattern set missed; each passed the gate.
+            "The ML-KEM core is formally proven.",
+            "The hybrid combiner is provably secure.",
+            "The NTT kernel is machine-checked.",
+            "Ships a formally-verified AES core.",
+            "The KEM is proven secure under IND-CCA2.",
+            "The reduction was mechanically verified.",
+            "Our mechanized proofs cover the whole handshake.",
+            "Constant-time behaviour is formally checked.",
         ],
     )
     def test_an_unqualified_claim_is_reported(
@@ -563,6 +572,18 @@ class TestFormalVerificationClaimsAreRefused:
             "This is statistical timing analysis, not formal verification.",
             "It is **not** a claim of independent formal proof.",
             "a mechanical transcription, not a formal proof of correctness",
+            # The two honest denials in the tree the wider pattern set reaches:
+            # ARCHITECTURE.md's PRF assumption and docs/DESIGN_NOTES.md's
+            # description of the adaptive-posture layer.
+            "HMAC-SHA3-256 is a secure PRF (widely believed, not formally proven "
+            "for sponge constructions)",
+            "a heuristic response layer, not a provably secure protocol.",
+            "The kernel has not been machine-checked.",
+            "The scheme has not been proven secure in the QROM.",
+            "There is no machine-checked proof of the combiner.",
+            # Ordinary uses of "provably" that make no verification claim.
+            "Length-prefixed encoding (provably unambiguous)",
+            "The advertised enforcement was a provable no-op.",
         ],
     )
     def test_a_qualified_statement_is_permitted(

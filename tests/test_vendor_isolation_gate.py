@@ -1213,6 +1213,10 @@ class TestRuntimeCheck:
             pytest.skip("native library not built in this tree")
         assert violations == []
 
+    # M18: the planted binding is PyCA, which the require-backends lanes
+    # install; a skip here means that install broke and this control went
+    # silent, so the marker escalates it there like any other oracle skip.
+    @pytest.mark.requires_interop_oracle
     def test_a_resident_vendor_binding_is_flagged(self, tmp_path: Path) -> None:
         """Inject an OpenSSL binding into every interpreter via sitecustomize.
 

@@ -21,10 +21,25 @@ here — inputs and outputs, byte for byte — and every build replays the
 recording against the shipped backend.  The independent oracle survives the
 code it was recorded from.
 
-The corpus is generated from fixed seeds, never from the CSPRNG, so the
-fixture can be regenerated from any library and diffed: ``--write`` against
-the shipped backend on one architecture and ``--check`` on another is a
-cross-platform determinism test as well.
+The committed fixture cannot be regenerated
+-------------------------------------------
+Its value is WHO answered: the vendored backend, which no longer exists in
+this tree.  Re-recording it from the shipped backend would replace the only
+independent Ed25519 differential with the shipped backend's own answers, and
+every later replay would then compare that backend with itself — a test that
+cannot fail on any defect the backend has.  The fixture's header says so ("this
+fixture is not regenerable").  This docstring used to say the opposite ("the
+fixture can be regenerated from any library and diffed"), and ``--write``
+defaulted to the committed path with nothing in the way.
+
+So ``--write`` refuses the committed fixture: it exits 2 before loading any
+library when ``--fixture`` resolves to ``tests/oracle/ed25519_frozen_oracle.txt``
+(the default), and there is no flag that lifts the refusal.  ``--write`` to any
+other path still works, and because the corpus is generated from fixed seeds,
+never from the CSPRNG, recording into a scratch file on one architecture and
+running ``--check --fixture <that file>`` on another is a cross-platform
+determinism test of the shipped backend.  ``--check`` against the committed
+fixture is the differential.
 
 Fixture format
 --------------
@@ -51,11 +66,15 @@ Python lane including windows-latest) and tests/c/test_ed25519_frozen_oracle.c
 
 Usage::
 
-    python tools/freeze_ed25519_oracle.py --library build/lib/libama_cryptography.so --write
+    # the differential: replay the committed fixture
     python tools/freeze_ed25519_oracle.py --library build/lib/libama_cryptography.so --check
+    # a determinism recording, never onto the committed fixture
+    python tools/freeze_ed25519_oracle.py --library build/lib/libama_cryptography.so \
+        --write --fixture /tmp/ed25519_oracle.txt
 
 Exit status: 0 on a clean write or a clean replay; 1 on any replay mismatch;
-2 when the library cannot be loaded or the fixture is unreadable.
+2 when the library cannot be loaded, the fixture is unreadable, or ``--write``
+names the committed fixture.
 """
 
 from __future__ import annotations
@@ -543,7 +562,12 @@ def render(lib: Library, git_commit: str) -> str:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Freeze or replay the Ed25519 oracle fixture.")
     parser.add_argument("--library", type=Path, required=True, help="libama_cryptography to drive")
-    parser.add_argument("--fixture", type=Path, default=FIXTURE_PATH)
+    parser.add_argument(
+        "--fixture",
+        type=Path,
+        default=FIXTURE_PATH,
+        help="fixture to replay (default: the committed one) or to write (never the committed one)",
+    )
     parser.add_argument("--commit", default="unknown", help="source commit recorded in the header")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true", help="record this library's answers")
@@ -551,6 +575,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--check", action="store_true", help="replay the fixture against this library"
     )
     args = parser.parse_args(argv)
+
+    # Checked before the library is loaded, so the refusal does not depend on
+    # having a library at all — and resolved, so a relative or `..` spelling of
+    # the committed path is the committed path.
+    if args.write and args.fixture.resolve() == FIXTURE_PATH.resolve():
+        print(
+            f"REFUSED — {args.fixture} is the committed oracle, recorded from the "
+            "vendored backend this tree no longer has. Re-recording it from the "
+            "shipped backend would turn the differential into a self-comparison. "
+            "Pass --fixture <another path> to record a determinism fixture.",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         lib = Library(args.library)

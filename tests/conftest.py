@@ -285,11 +285,13 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
             "The C library must be built before running tests."
         )
 
-    # Interop oracle: a test marked requires_interop_oracle cross-checks an AMA
-    # primitive against an external reference (PyCA cryptography / PyNaCl /
-    # pycryptodome).  The require-backends lane installs all three, so a skip
-    # here means that install broke and the ONLY independent-implementation
-    # check of these primitives went silent — exactly the "a skip must not stand
+    # Interop oracle: a test marked requires_interop_oracle needs an external
+    # reference (PyCA cryptography / PyNaCl / pycryptodome), almost always to
+    # cross-check an AMA primitive against it; one vendor-isolation control
+    # uses PyCA as the planted third-party binding it must detect.  The
+    # require-backends lane installs all three, so a skip here means that
+    # install broke and the ONLY independent-implementation check of these
+    # primitives went silent — exactly the "a skip must not stand
     # in for coverage" hole this hook exists to close, and the one the nine
     # backend keywords never matched because these skips name the reference
     # library, not an AMA backend (audit M18).  Marker-based, not text-matched,

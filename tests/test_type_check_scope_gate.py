@@ -53,6 +53,10 @@ platform:
   path arguments cover every tracked ``.py`` file, checked without running
   mypy at all, which is the drift the gate was written for;
 * :class:`TestTheRule` — the gate's own logic, both directions.
+* :class:`TestInTheReportIsNotTheSameAsChecked` — a file mypy analysed while
+  discarding every error in it (an inline ``# mypy: ignore-errors``, a
+  module-level ``# type: ignore``, an ``ignore_errors`` configuration section)
+  is in the report too; the gate rejects each, and the live tree carries none.
 """
 
 from __future__ import annotations
@@ -423,3 +427,211 @@ class TestTheRule:
         report = _report(tmp_path, root, files)
         assert gate.main([str(report), "--root", str(root)]) == 0
         assert "tracked .py file(s) are inside" in capsys.readouterr().out
+
+
+#: A module whose one statement is a type error, so a run that reports success
+#: over it has discarded the error rather than found none.
+_TYPE_ERROR = 'x: int = "s"\n'
+
+
+def _silenced_repo(tmp_path: Path, sources: dict[str, str]) -> tuple[Path, Path]:
+    """A tracked tree with ``sources`` as given, plus a report naming every file."""
+    root = _repo(tmp_path, list(sources))
+    for rel, text in sources.items():
+        (root / rel).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    return root, _report(tmp_path, root, list(sources))
+
+
+class TestInTheReportIsNotTheSameAsChecked:
+    """A file mypy analysed but whose every error it discarded is not checked.
+
+    ``mypy --linecoverage-report`` lists a file whether or not its errors are
+    reported, so the report alone passed all three of these.  Each spelling was
+    measured against mypy 2.3.1 with a deliberate type error in the file: mypy
+    reported no error for it, and ``coverage.json`` listed it.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "# mypy: ignore-errors\n" + _TYPE_ERROR,
+            "# mypy: ignore_errors = True\n" + _TYPE_ERROR,
+            "#!/usr/bin/env python3\n# mypy: disallow-untyped-defs, ignore-errors=yes\n"
+            + _TYPE_ERROR,
+            _TYPE_ERROR + "# mypy: ignore-errors=on\n",
+        ],
+    )
+    def test_an_inline_ignore_errors_comment_is_reported(
+        self, gate: ModuleType, tmp_path: Path, text: str
+    ) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": text, "pkg/b.py": "y = 1\n"})
+        problems = gate.audit(report, root)
+        assert len(problems) == 1 and "pkg/a.py" in problems[0], problems
+        assert "ignore" in problems[0], problems
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # mypy matches the prefix at column 0 only; an indented copy is inert.
+            "  # mypy: ignore-errors\n" + _TYPE_ERROR,
+            # An explicit false value turns the option off.
+            "# mypy: ignore-errors=false\n" + _TYPE_ERROR,
+            # A different option is a relaxation, not a discard.
+            "# mypy: disallow-any-generics=False\n" + _TYPE_ERROR,
+            # Prose that merely names the option.
+            '"""Never write # mypy: ignore-errors here."""\n' + _TYPE_ERROR,
+        ],
+    )
+    def test_text_that_does_not_discard_errors_is_not_reported(
+        self, gate: ModuleType, tmp_path: Path, text: str
+    ) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": text})
+        assert gate.audit(report, root) == []
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "# type: ignore\n" + _TYPE_ERROR,
+            "#!/usr/bin/env python3\n# Copyright\n# type: ignore\nimport os\n" + _TYPE_ERROR,
+            "# type: ignore\n@staticmethod\ndef f() -> None: ...\n",
+        ],
+    )
+    def test_a_module_level_type_ignore_is_reported(
+        self, gate: ModuleType, tmp_path: Path, text: str
+    ) -> None:
+        """Before the first statement mypy reads it as "ignore this module"."""
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": text})
+        problems = gate.audit(report, root)
+        assert len(problems) == 1 and "type: ignore" in problems[0], problems
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            '"""Docstring first."""\n# type: ignore\n' + _TYPE_ERROR,
+            "import os  # type: ignore\n" + _TYPE_ERROR,
+            "x = 1\ny: int = 's'  # type: ignore[assignment]\n",
+        ],
+    )
+    def test_a_line_scoped_type_ignore_is_not_a_module_ignore(
+        self, gate: ModuleType, tmp_path: Path, text: str
+    ) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": text})
+        assert gate.audit(report, root) == []
+
+    @pytest.mark.parametrize(
+        "config_name,config_text",
+        [
+            (
+                "pyproject.toml",
+                "[tool.mypy]\nstrict = true\n\n[[tool.mypy.overrides]]\n"
+                'module = ["numpy.*", "pkg.*"]\nignore_errors = true\n',
+            ),
+            (
+                "pyproject.toml",
+                '[tool.mypy]\n[[tool.mypy.overrides]]\nmodule = "a"\nignore_errors = "True"\n',
+            ),
+            ("mypy.ini", "[mypy]\nstrict = True\n\n[mypy-numpy.*,a]\nignore_errors = True\n"),
+            (".mypy.ini", "[mypy]\n[mypy-*.a]\nignore_errors = yes\n"),
+            ("setup.cfg", "[metadata]\nname = x\n\n[mypy-pkg.a]\nignore_errors = 1\n"),
+        ],
+    )
+    def test_a_config_override_that_discards_a_tracked_file_is_reported(
+        self, gate: ModuleType, tmp_path: Path, config_name: str, config_text: str
+    ) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": _TYPE_ERROR, "other/b.py": "y = 1\n"})
+        (root / config_name).write_text(config_text, encoding="utf-8")
+        problems = gate.audit(report, root)
+        assert len(problems) == 1, problems
+        assert "pkg/a.py" in problems[0] and config_name in problems[0], problems
+
+    @pytest.mark.parametrize(
+        "config_name,config_text",
+        [
+            ("pyproject.toml", "[tool.mypy]\nignore_errors = true\n"),
+            ("mypy.ini", "[mypy]\nignore_errors = True\n"),
+        ],
+    )
+    def test_a_global_ignore_errors_reports_every_file(
+        self, gate: ModuleType, tmp_path: Path, config_name: str, config_text: str
+    ) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": "x = 1\n", "b.py": "y = 1\n"})
+        (root / config_name).write_text(config_text, encoding="utf-8")
+        problems = gate.audit(report, root)
+        assert len(problems) == 2, problems
+
+    @pytest.mark.parametrize(
+        "config_name,config_text",
+        [
+            # Matches nothing tracked: a third-party module.
+            (
+                "pyproject.toml",
+                '[tool.mypy]\n[[tool.mypy.overrides]]\nmodule = ["numpy.*"]\n'
+                "ignore_errors = true\n",
+            ),
+            # The shape this repository's own overrides take: a relaxation of one
+            # strict flag, not a discard.
+            (
+                "pyproject.toml",
+                '[tool.mypy]\n[[tool.mypy.overrides]]\nmodule = ["pkg.*"]\n'
+                "disallow_any_generics = false\nignore_missing_imports = true\n",
+            ),
+            ("mypy.ini", "[mypy-pkg.*]\nignore_errors = False\n"),
+            # A non-mypy section in a shared file.
+            ("setup.cfg", "[flake8]\nignore_errors = True\n"),
+        ],
+    )
+    def test_a_config_that_discards_nothing_tracked_is_not_reported(
+        self, gate: ModuleType, tmp_path: Path, config_name: str, config_text: str
+    ) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": "x = 1\n"})
+        (root / config_name).write_text(config_text, encoding="utf-8")
+        assert gate.audit(report, root) == []
+
+    def test_an_unparseable_config_fails_closed(self, gate: ModuleType, tmp_path: Path) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": "x = 1\n"})
+        (root / "pyproject.toml").write_text("[tool.mypy\nstrict = true\n", encoding="utf-8")
+        problems = gate.audit(report, root)
+        assert problems and "cannot read the mypy configuration" in problems[0], problems
+
+    def test_an_unparseable_source_fails_closed(self, gate: ModuleType, tmp_path: Path) -> None:
+        root, report = _silenced_repo(tmp_path, {"pkg/a.py": "def (:\n"})
+        problems = gate.audit(report, root)
+        assert problems and "cannot be read" in problems[0], problems
+
+    def test_module_names_cover_every_invocation(self, gate: ModuleType) -> None:
+        """The spellings the examples' own overrides list both of."""
+        assert gate.module_name_candidates("examples/python/flask_integration.py") == [
+            "examples.python.flask_integration",
+            "python.flask_integration",
+            "flask_integration",
+        ]
+        assert gate.module_name_candidates("pkg/sub/__init__.py") == ["pkg.sub", "sub"]
+
+    @pytest.mark.parametrize(
+        "pattern,module,expected",
+        [
+            ("pkg.*", "pkg", True),
+            ("pkg.*", "pkg.a.b", True),
+            ("pkg.*", "pkgx", False),
+            ("pkg", "pkg.a", False),
+            ("pkg.*.a", "pkg.a", True),
+            ("pkg.*.a", "pkg.x.y.a", True),
+            ("*.a", "pkg.a", True),
+            ("*.a", "pkg.b", False),
+        ],
+    )
+    def test_patterns_follow_mypys_glob_rules(
+        self, gate: ModuleType, pattern: str, module: str, expected: bool
+    ) -> None:
+        assert gate._glob_matches(pattern, module) is expected
+
+    def test_this_repository_discards_no_errors(self, gate: ModuleType) -> None:
+        """The live tree, on every platform, without running mypy."""
+        assert gate.config_silencers(REPO_ROOT) == []
+        offenders = {
+            rel: causes
+            for rel in _tracked_python()
+            if (causes := gate.source_silencers((REPO_ROOT / rel).read_text(encoding="utf-8")))
+        }
+        assert offenders == {}, offenders

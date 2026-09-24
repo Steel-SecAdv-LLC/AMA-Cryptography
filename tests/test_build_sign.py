@@ -560,16 +560,23 @@ class TestPackageDigestCoversSubpackages:
 
         The expectation side must not share the implementation's traversal
         primitive, or the comparison collapses into a tautology that passes
-        no matter what the digest actually covers.
+        no matter what the digest actually covers.  Nor its FILTERS: this walk
+        used to drop ``_integrity_signature.py`` at any depth, exactly as both
+        mirrors did, so the two sides agreed on a blind spot — a subpackage
+        file of that name was unsigned and the pin could not see it.  Only the
+        package's own top-level artefact is excluded here, by relative path.
         """
         found: set[str] = set()
         for dirpath, dirnames, filenames in os.walk(pkg):
             dirnames[:] = [d for d in dirnames if d != "__pycache__"]
             for filename in filenames:
-                if not filename.endswith(".py") or filename == "_integrity_signature.py":
+                if not filename.endswith(".py"):
                     continue
                 rel = os.path.relpath(os.path.join(dirpath, filename), str(pkg))
-                found.add(rel.replace(os.sep, "/"))
+                rel = rel.replace(os.sep, "/")
+                if rel == "_integrity_signature.py":
+                    continue
+                found.add(rel)
         return found
 
     def test_no_tracked_package_py_escapes_the_enumeration(
@@ -593,6 +600,9 @@ class TestPackageDigestCoversSubpackages:
         (pkg / "__pycache__").mkdir()
         (pkg / "__pycache__" / "stray.py").write_text("ignored = 1\n", encoding="utf-8")
         (pkg / "_integrity_signature.py").write_text("generated = 0\n", encoding="utf-8")
+        # Named like the artefact, but in a subpackage: ordinary, importable
+        # code, which must be signed.
+        (pkg / "sub" / "_integrity_signature.py").write_text("payload = 1\n", encoding="utf-8")
 
         hashed: list[str] = []
         real_absorb = bs._absorb_entry
@@ -607,6 +617,10 @@ class TestPackageDigestCoversSubpackages:
 
         expected = self._independent_py_walk(pkg)
         assert "sub/mod.py" in expected, "the staged tree must exercise a subpackage"
+        assert (
+            "sub/_integrity_signature.py" in expected
+        ), "the staged tree must exercise a nested file named like the artefact"
+        assert "_integrity_signature.py" not in expected
         assert set(hashed) == expected, (
             f"the signer hashes {sorted(set(hashed))} but the tree holds "
             f"{sorted(expected)} — a tracked .py escaped signature coverage"
@@ -636,6 +650,70 @@ class TestPackageDigestCoversSubpackages:
             f"installed package holds {sorted(expected_runtime)} — the signed "
             f"set must be non-empty and cover every tracked .py"
         )
+
+
+class TestTheArtefactExclusionIsScopedToThePackage:
+    """Only ``<package>/_integrity_signature.py`` is outside the digest.
+
+    Both mirrors excluded every file NAMED ``_integrity_signature.py`` and every
+    path with ``__pycache__`` anywhere in its ABSOLUTE parts.  The first left a
+    subpackage file of that name unsigned; the second hashed nothing at all for
+    a checkout under a directory called ``__pycache__``.  Each test runs both
+    the signer and the runtime verifier, the verifier re-pointed at the staged
+    tree through its own ``__file__``.
+    """
+
+    @staticmethod
+    def _stage(root: Any) -> Any:
+        pkg = root / "pkg"
+        (pkg / "sub").mkdir(parents=True)
+        (pkg / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+        (pkg / "_integrity_signature.py").write_text("generated = 0\n", encoding="utf-8")
+        (pkg / "sub" / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "sub" / "_integrity_signature.py").write_text("payload = 1\n", encoding="utf-8")
+        return pkg
+
+    @staticmethod
+    def _both(pkg: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
+        import ama_cryptography._self_test as st
+
+        monkeypatch.setattr(st, "__file__", str(pkg / "_self_test.py"))
+        return bs._compute_package_digest(pkg).hex(), st._compute_module_digest()
+
+    def test_a_nested_file_named_like_the_artefact_is_signed(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pkg = self._stage(tmp_path)
+        signer, verifier = self._both(pkg, monkeypatch)
+        assert signer == verifier
+        (pkg / "sub" / "_integrity_signature.py").write_text("payload = 2\n", encoding="utf-8")
+        signer_after, verifier_after = self._both(pkg, monkeypatch)
+        assert signer_after != signer, "the signer does not cover sub/_integrity_signature.py"
+        assert verifier_after != verifier, "the verifier does not cover it either"
+
+    def test_the_top_level_artefact_stays_outside(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exclusion that must remain: the digest cannot cover its own signature."""
+        pkg = self._stage(tmp_path)
+        before = self._both(pkg, monkeypatch)
+        (pkg / "_integrity_signature.py").write_text("generated = 1\n", encoding="utf-8")
+        assert self._both(pkg, monkeypatch) == before
+
+    def test_a_checkout_under_a_pycache_directory_is_still_hashed(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pkg = self._stage(tmp_path / "__pycache__")
+        empty = self._stage(tmp_path / "elsewhere")
+        for path in empty.rglob("*.py"):
+            path.unlink()
+        signer, verifier = self._both(pkg, monkeypatch)
+        assert signer == verifier
+        assert (
+            signer != self._both(empty, monkeypatch)[0]
+        ), "a package under a `__pycache__` directory hashed as if it held no files"
+        (pkg / "__init__.py").write_text("x = 2\n", encoding="utf-8")
+        assert self._both(pkg, monkeypatch)[0] != signer
 
 
 class TestRequireTrustAnchorCliFlag:

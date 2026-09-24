@@ -26,12 +26,23 @@ Updates documentation targets from source-of-truth data:
                        the measured figure.  A single figure quoted in prose
                        between ``<!-- AUTO-RECORD-OPS:<name> -->`` markers is
                        rewritten from the same record.
+  3b. ARCHITECTURE.md — the pipeline-latency view of the same record
   4. wiki/*.md       — update version and date stamps
+  5. docs/METRICS_REPORT.md — re-measured Lines-of-Code figures
+  6. Static test-function / test-file counts
+  7. C-suite and source-inventory counts
+
+Steps 5-7 are every count the documented-counts gate checks, so the full run
+and ``--counts`` rewrite the same figures.  The full run used to stop at step
+6, which left a new C test suite or internal header stale in README.md,
+ARCHITECTURE.md, AGENTS.md and docs/METRICS_REPORT.md after a run documented
+as "full update".
 
 Usage:
     python tools/update_docs.py                # full update
     python tools/update_docs.py --dry-run      # preview only
     python tools/update_docs.py --changelog-only
+    python tools/update_docs.py --counts       # steps 5-7 only
 
 Text I/O
 --------
@@ -53,6 +64,18 @@ precisely to reject that, so the tool that maintains the documentation would
 have failed the repository's own gate on the documentation it maintains.
 ``newline=""`` disables the translation and pins LF on every platform, the
 same way ``ama_cryptography/_build_sign.py`` pins the signature artefact.
+
+Replacement text
+----------------
+Every ``re.sub`` / ``Pattern.sub`` below passes its replacement as a FUNCTION,
+never as a string.  A string replacement is a template: ``re`` expands ``\\1``
+and ``\\g<name>`` in it, turns ``\\n`` and ``\\b`` into control characters, and
+raises ``re.error: bad escape`` on ``\\l`` or ``\\d``.  The benchmark and
+pipeline-latency tables interpolate the measurement record's provenance — the
+host, the CPU string, the benchmark command — so a record captured on Windows
+(``LD_LIBRARY_PATH=build\\lib python benchmarks\\benchmark_runner.py``) either
+aborted the run or was written into the published page with its path
+corrupted.  A function's return value is inserted verbatim.
 """
 
 from __future__ import annotations
@@ -143,6 +166,15 @@ PIPELINE_LATENCY_ROWS: tuple[tuple[str, str, float], ...] = (
 # ============================================================================
 # Helpers
 # ============================================================================
+
+
+def _literal(text: str) -> Callable[[re.Match[str]], str]:
+    """A ``re.sub`` replacement that inserts ``text`` verbatim.
+
+    A string replacement is a template (see "Replacement text" in the module
+    docstring); a function's return value is not.
+    """
+    return lambda _match: text
 
 
 def _get_version() -> str:
@@ -329,7 +361,7 @@ def update_changelog(dry_run: bool = False) -> bool:
     # Update Document Version date
     text = re.sub(
         r"(\| Last Updated \|)\s*\d{4}-\d{2}-\d{2}\s*\|",
-        f"\\1 {today} |",
+        lambda m: f"{m.group(1)} {today} |",
         text,
     )
 
@@ -356,7 +388,7 @@ def update_readme(dry_run: bool = False) -> bool:
     # Update **Version:** X.Y
     new_text = re.sub(
         r"(\*\*Version:\*\*)\s*\d+\.\d+(\.\d+)?",
-        f"\\1 {version}",
+        lambda m: f"{m.group(1)} {version}",
         text,
     )
     if new_text != text:
@@ -366,7 +398,7 @@ def update_readme(dry_run: bool = False) -> bool:
     # Update "Last Updated" table rows
     new_text = re.sub(
         r"(\| Last Updated \|)\s*\d{4}-\d{2}-\d{2}\s*\|",
-        f"\\1 {today} |",
+        lambda m: f"{m.group(1)} {today} |",
         text,
     )
     if new_text != text:
@@ -769,7 +801,8 @@ def update_pipeline_latency_docs(dry_run: bool = False) -> bool:
             continue
         carrying += 1
         pattern = re.compile(re.escape(LATENCY_START) + r".*?" + re.escape(LATENCY_END), re.DOTALL)
-        new_text = pattern.sub(f"{LATENCY_START}\n{table}\n{LATENCY_END}", text)
+        block = f"{LATENCY_START}\n{table}\n{LATENCY_END}"
+        new_text = pattern.sub(_literal(block), text)
         if new_text != text:
             if dry_run:
                 print(f"  LATENCY: would update {md_file.name}")
@@ -823,7 +856,7 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
             re.DOTALL,
         )
         replacement = f"{BENCH_START}\n{table}\n{BENCH_END}"
-        new_text = pattern.sub(replacement, text)
+        new_text = pattern.sub(_literal(replacement), text)
 
         if new_text != text:
             if dry_run:
@@ -871,14 +904,14 @@ def update_wiki(dry_run: bool = False) -> bool:
         # Update "| Version | X.Y |" table rows
         new_text = re.sub(
             r"(\| Version \|)\s*\d+\.\d+(\.\d+)?\s*\|",
-            f"\\1 {version} |",
+            lambda m: f"{m.group(1)} {version} |",
             new_text,
         )
 
         # Update "| Last Updated | YYYY-MM-DD |" table rows
         new_text = re.sub(
             r"(\| Last Updated \|)\s*\d{4}-\d{2}-\d{2}\s*\|",
-            f"\\1 {today} |",
+            lambda m: f"{m.group(1)} {today} |",
             new_text,
         )
 
@@ -1010,7 +1043,8 @@ def update_loc_metrics(dry_run: bool = False) -> bool:
             lines_cell = f"**{lines_cell}**"
         if label.startswith("**Whole project**"):
             lines_cell = f"**{lines_cell}**"
-        text = counts._loc_row_re(label).sub(f"| {label} | {_fmt(files)} | {lines_cell} |", text)
+        row = f"| {label} | {_fmt(files)} | {lines_cell} |"
+        text = counts._loc_row_re(label).sub(_literal(row), text)
 
     # --- Scope Composition table rows.
     comp_paths = {
@@ -1029,9 +1063,10 @@ def update_loc_metrics(dry_run: bool = False) -> bool:
         bold = label.startswith("**")
         lines_cell = f"**{_fmt(lines)}**" if bold else _fmt(lines)
         pct_cell = f"**{pct}**" if bold else pct
+        row = f"| {label} | {lines_cell} | {pct_cell} | {comp_paths[label]} |"
         text = re.sub(
             rf"\|\s*{re.escape(label)}\s*\|[^|]*\|[^|]*\|[^|]*\|",
-            f"| {label} | {lines_cell} | {pct_cell} | {comp_paths[label]} |",
+            _literal(row),
             text,
         )
 
@@ -1043,42 +1078,33 @@ def update_loc_metrics(dry_run: bool = False) -> bool:
     remainder_pct = composition["Everything else (remainder)"][1]
     ratio = tests_lines / lib_lines if lib_lines else 0.0
 
-    text = re.sub(
-        r"\d[\d,]* lines\*\* across \d[\d,]* files under",
-        f"{_fmt(lib_lines)} lines** across {_fmt(lib_files)} files under",
-        text,
+    prose = (
+        (
+            r"\d[\d,]* lines\*\* across \d[\d,]* files under",
+            f"{_fmt(lib_lines)} lines** across {_fmt(lib_files)} files under",
+        ),
+        (
+            r"Whole-project total\*\* \(`\d[\d,]*` lines",
+            f"Whole-project total** (`{_fmt(whole_lines)}` lines",
+        ),
+        (
+            r"only\s*\*\*[\d.]+%\*\* of the repository is library code",
+            f"only **{library_pct}** of the repository is library code",
+        ),
+        (
+            r"Test code \([\d.]+%\) is roughly \S+ the size of the library\s*\([\d.]+%\)",
+            f"Test code ({tests_pct}) is roughly {ratio:.1f}x the size of the library "
+            f"({library_pct})",
+        ),
+        (
+            r"test-to-library ratio is roughly \*\*[\d.]+\*\*",
+            f"test-to-library ratio is roughly **{ratio:.2f}**",
+        ),
+        (r"The remainder \([\d.]+%\)", f"The remainder ({remainder_pct})"),
+        (r"\(\d[\d,]* lines of\s*`\*\.json`", f"({_fmt(json_lines)} lines of `*.json`"),
     )
-    text = re.sub(
-        r"Whole-project total\*\* \(`\d[\d,]*` lines",
-        f"Whole-project total** (`{_fmt(whole_lines)}` lines",
-        text,
-    )
-    text = re.sub(
-        r"only\s*\*\*[\d.]+%\*\* of the repository is library code",
-        f"only **{library_pct}** of the repository is library code",
-        text,
-    )
-    text = re.sub(
-        r"Test code \([\d.]+%\) is roughly \S+ the size of the library\s*\([\d.]+%\)",
-        f"Test code ({tests_pct}) is roughly {ratio:.1f}x the size of the library "
-        f"({library_pct})",
-        text,
-    )
-    text = re.sub(
-        r"test-to-library ratio is roughly \*\*[\d.]+\*\*",
-        f"test-to-library ratio is roughly **{ratio:.2f}**",
-        text,
-    )
-    text = re.sub(
-        r"The remainder \([\d.]+%\)",
-        f"The remainder ({remainder_pct})",
-        text,
-    )
-    text = re.sub(
-        r"\(\d[\d,]* lines of\s*`\*\.json`",
-        f"({_fmt(json_lines)} lines of `*.json`",
-        text,
-    )
+    for pattern, replacement in prose:
+        text = re.sub(pattern, _literal(replacement), text)
 
     if text == original:
         print("   METRICS_REPORT.md LoC figures: already current")
@@ -1177,12 +1203,16 @@ def update_static_test_counts(dry_run: bool = False, root: Optional[Path] = None
             chunk = _AGGREGATE_REWRITE_RE.sub(
                 lambda m: f"{functions:,}{m.group(2)}{files:,}{m.group(4)}", chunk
             )
+            # Callables, not template strings: a replacement string would have
+            # its backslashes interpreted as group references.
             chunk = counts._METRICS_FILES_RE.sub(
-                "| Python test files under `tests/` matching the static regex " f"| {files:,} |",
+                lambda _match: "| Python test files under `tests/` matching the static regex "
+                f"| {files:,} |",
                 chunk,
             )
             chunk = counts._METRICS_FUNCS_RE.sub(
-                "| Syntactic `def test_` matches under `tests/**/*.py` " f"| **{functions:,}** |",
+                lambda _match: "| Syntactic `def test_` matches under `tests/**/*.py` "
+                f"| **{functions:,}** |",
                 chunk,
             )
             return _rewrite_groups(counts._PY_TEST_MODULES_RE, (files,), chunk)
@@ -1428,6 +1458,9 @@ def main() -> None:
 
         print("\n6. Static test counts")
         any_changed |= update_static_test_counts(dry_run=args.dry_run)
+
+        print("\n7. Inventory counts")
+        any_changed |= update_inventory_counts(dry_run=args.dry_run)
 
     if any_changed:
         print("\n✓ Documentation updated" + (" (dry run)" if args.dry_run else ""))

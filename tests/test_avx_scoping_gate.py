@@ -71,7 +71,8 @@ def test_the_gate_file_names_the_defect_class() -> None:
         "ama_kyber_ntt_avx2",
         "ama_dilithium_invntt_avx2",
         "ama_keccak_f1600_x4_avx512",
-        "ama_sphincs_wots_chain_avx2.part.0",  # gcc partial-inline split
+        "ama_ed25519_select12_avx2.constprop.0",  # measured: gcc 13.3 Release emits it
+        "ama_keccak_f1600_x4_avx2.part.0",  # the partial-inline split shape
         "ama_kyber_ntt_avx2.constprop.0",  # gcc const-propagation clone
         "fe_mul_x4",  # allowlisted helper
         "fe25519_10_contract",  # allowlisted helper
@@ -273,6 +274,60 @@ def test_call_sites_of_a_kernel_are_not_read_as_occurrences() -> None:
     per_family, _symbols, _instructions = gate.scan_families(text)
     for family in gate.ISA_FAMILIES:
         assert per_family[family.name] == {}, family.name
+
+
+class TestTheAllowlistCannotGoStale:
+    """An allowlist entry is an exemption by name, so the name must be live.
+
+    Nothing checked it: delete a helper and its entry stays, ready to exempt
+    whatever unrelated function takes the name next.
+    """
+
+    def test_every_entry_in_the_tree_is_a_static_of_its_scoped_tu(self) -> None:
+        assert gate.stale_allowlist_entries() == []
+
+    def test_an_entry_for_a_deleted_function_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The function src/c/avx2/ama_sphincs_avx2.c used to export; the file
+        # still names it in prose, which must not count as a definition.
+        monkeypatch.setitem(
+            gate.ALLOWED_NON_SUFFIXED,
+            "ama_sphincs_wots_chain_avx2",
+            "WOTS+ chain, static in src/c/avx2/ama_sphincs_avx2.c",
+        )
+        problems = gate.stale_allowlist_entries()
+        assert len(problems) == 1 and "ama_sphincs_wots_chain_avx2" in problems[0], problems
+
+    def test_an_entry_that_names_no_scoped_tu_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(gate.ALLOWED_NON_SUFFIXED, "fe_mul_x4", "4-way field multiply")
+        problems = gate.stale_allowlist_entries()
+        assert len(problems) == 1 and "does not name" in problems[0], problems
+
+    def test_an_entry_naming_an_unscoped_tu_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A helper in a baseline TU is not exempt just because it is named."""
+        monkeypatch.setitem(
+            gate.ALLOWED_NON_SUFFIXED, "ge_add", "point add, static in src/c/ama_ed25519.c"
+        )
+        problems = gate.stale_allowlist_entries()
+        assert len(problems) == 1 and "ge_add" in problems[0], problems
+
+    def test_a_stale_entry_fails_main(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "libama_cryptography.so"
+        lib.write_bytes(b"\x7fELF")
+        monkeypatch.setattr(gate, "disassemble", lambda _lib: _clean_object())
+        monkeypatch.setitem(
+            gate.ALLOWED_NON_SUFFIXED,
+            "ama_sphincs_wots_chain_avx2",
+            "WOTS+ chain, static in src/c/avx2/ama_sphincs_avx2.c",
+        )
+        assert gate.main(["--lib", str(lib)]) == 1
 
 
 def test_main_passes_a_scoped_object(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

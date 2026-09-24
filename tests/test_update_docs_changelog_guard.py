@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -186,6 +187,11 @@ class TestTextIOIsPlatformIndependent:
         "tools/build_post_kats.py",
         "tools/refresh_wycheproof_corpus.py",
         "benchmarks/generate_competitive.py",
+        # Both write assets/visuals_manifest.json, a committed artefact the
+        # line-endings gate holds to LF; each wrote it in text mode with no
+        # newline argument, so a regeneration on Windows committed CRLF.
+        "tools/generate_visuals.py",
+        "tools/generate_dashboards.py",
     )
 
     @staticmethod
@@ -713,3 +719,169 @@ class TestTheBenchmarkStatusLineSaysWhatHappened:
         assert update_docs.update_benchmark_docs() is False
         out = capsys.readouterr().out
         assert "no files with AUTO-BENCHMARK-TABLE markers found" in out, out
+
+
+class TestTheFullRunIsAFullRun:
+    """``python tools/update_docs.py`` must rewrite every count ``--counts`` does.
+
+    The full run stopped at the static test counts and never called
+    ``update_inventory_counts``, so the run documented as "full update" left
+    the C-suite and source-inventory figures stale while ``--counts`` — the
+    narrower command — rewrote them.
+    """
+
+    _STEPS = (
+        "update_changelog",
+        "update_readme",
+        "update_benchmark_docs",
+        "update_pipeline_latency_docs",
+        "update_wiki",
+        "update_loc_metrics",
+        "update_static_test_counts",
+        "update_inventory_counts",
+    )
+
+    def _run(self, monkeypatch: pytest.MonkeyPatch, *argv: str) -> list[str]:
+        called: list[str] = []
+        for name in self._STEPS:
+
+            def _record(dry_run: bool = False, _name: str = name) -> bool:
+                called.append(_name)
+                return False
+
+            monkeypatch.setattr(update_docs, name, _record)
+        monkeypatch.setattr("sys.argv", ["update_docs.py", *argv])
+        update_docs.main()
+        return called
+
+    def test_the_full_run_includes_every_count_step(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        counts_only = set(self._run(monkeypatch, "--counts"))
+        full = set(self._run(monkeypatch))
+        capsys.readouterr()
+        assert "update_inventory_counts" in counts_only, counts_only
+        assert counts_only <= full, (
+            f"--counts runs {sorted(counts_only - full)} and the full run does not, so "
+            "`python tools/update_docs.py` leaves those figures stale"
+        )
+
+    def test_the_full_run_calls_every_step_once(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        called = self._run(monkeypatch)
+        capsys.readouterr()
+        assert sorted(called) == sorted(self._STEPS), called
+
+
+class TestReplacementTextIsInsertedVerbatim:
+    """Generated text is spliced in by a function, never as a ``re`` template.
+
+    ``pattern.sub(f"...{table}...", text)`` hands the table to ``re`` as a
+    template, and the table carries the measurement record's provenance.  A
+    record captured on Windows made ``\\l`` and ``\\d`` a ``re.error: bad
+    escape``, ``\\b`` a backspace, and ``\\1`` a group reference — measured
+    against the pre-fix module, the first raised before any page was written.
+    """
+
+    _PROVENANCE: ClassVar[dict[str, str]] = {
+        "host": r"C:\bench\host-01",
+        "cpu": r"Intel\d Xeon",
+        "command": r"LD_LIBRARY_PATH=build\lib python benchmarks\benchmark_runner.py \1",
+        "sampling": r"5 runs \g<0>",
+        "aggregation": "median",
+        "native_backend": r"ama_cryptography.dll from build\lib",
+    }
+
+    def _tree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        import json
+
+        (tmp_path / "benchmarks").mkdir()
+        results = tmp_path / "benchmarks" / "benchmark-results.json"
+        results.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-09-24T00:00:00Z",
+                    "provenance": self._PROVENANCE,
+                    "results": [
+                        {"name": "full_package_create", "ops_per_second": 500.0},
+                        {"name": "dilithium_sign", "ops_per_second": 2000.0},
+                        {"name": "ed25519_sign", "ops_per_second": 40000.0},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "benchmarks" / "baseline.json").write_text("{}", encoding="utf-8")
+        page = tmp_path / "page.md"
+        page.write_text(
+            f"{update_docs.BENCH_START}\nold\n{update_docs.BENCH_END}\n\n"
+            f"{update_docs.LATENCY_START}\nold\n{update_docs.LATENCY_END}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(update_docs, "ROOT", tmp_path)
+        monkeypatch.setattr(update_docs, "BENCHMARK_RESULTS_JSON", results)
+        monkeypatch.setattr(update_docs, "BASELINE_JSON", tmp_path / "benchmarks" / "baseline.json")
+        return page
+
+    def test_backslashes_in_the_provenance_survive_both_tables(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        page = self._tree(tmp_path, monkeypatch)
+        assert update_docs.update_benchmark_docs() is True
+        assert update_docs.update_pipeline_latency_docs() is True
+        capsys.readouterr()
+        text = page.read_text(encoding="utf-8")
+        bench = update_docs._generate_benchmark_table()
+        latency = update_docs._generate_pipeline_latency_table()
+        assert f"{update_docs.BENCH_START}\n{bench}\n{update_docs.BENCH_END}" in text
+        assert f"{update_docs.LATENCY_START}\n{latency}\n{update_docs.LATENCY_END}" in text
+        for value in self._PROVENANCE.values():
+            assert value in text, f"{value!r} was not written verbatim"
+        assert "\b" not in text
+
+    def test_every_substitution_passes_a_function(self) -> None:
+        """No ``sub`` call in the module takes a string template.
+
+        Checked over the source because the property is "no call does it",
+        which a behavioural test of the two provenance-bearing tables cannot
+        establish for the version, date and count rewrites.
+        """
+        import ast
+
+        source = (REPO_ROOT / "tools" / "update_docs.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        defined = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        offenders: list[str] = []
+        calls = 0
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "sub"
+            ):
+                continue
+            calls += 1
+            module_level = isinstance(node.func.value, ast.Name) and node.func.value.id == "re"
+            args = node.args[1:] if module_level else node.args
+            repl = args[0] if args else None
+            if isinstance(repl, ast.Lambda):
+                continue
+            if isinstance(repl, ast.Name) and repl.id in defined:
+                continue
+            if (
+                isinstance(repl, ast.Call)
+                and isinstance(repl.func, ast.Name)
+                and repl.func.id == "_literal"
+            ):
+                continue
+            offenders.append(f"line {node.lineno}: {ast.unparse(node)[:100]}")
+        assert calls >= 10, f"found only {calls} sub() calls; the scan has stopped matching"
+        assert not offenders, "sub() with a string template:\n" + "\n".join(offenders)

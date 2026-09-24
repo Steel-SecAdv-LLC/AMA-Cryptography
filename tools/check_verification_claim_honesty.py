@@ -681,9 +681,25 @@ FORMAL_SCAN_SUFFIXES: frozenset[str] = SCAN_SUFFIXES | frozenset(
 )
 
 #: Phrases that assert the library HAS been formally verified / proven.
+#:
+#: The first version listed six spellings and missed the commonest others:
+#: "formally proven", "provably secure", "machine-checked", and every
+#: hyphenated form ("formally-verified AES") — each passed this gate
+#: unqualified.  The separator is ``[\s-]+`` for every adverb form, so the
+#: hyphenated spellings are claims too.  ``formal verification`` / ``formal
+#: proof`` keep a whitespace separator: hyphenated, they are the compound
+#: modifier this repository uses to NAME the gate ("the formal-verification
+#: exemption"), which is not a claim.  Each claim is anchored to a qualifier
+#: word ("secure", "checked", "verified", ...) so the tree's ordinary uses of
+#: "provably" ("a provable no-op", "provably unambiguous", "provably inert")
+#: are not read as claims of formal verification.
 _FORMAL_CLAIM_RE = re.compile(
-    r"provably\s+correct|proven\s+correct|mathematically\s+proven|"
-    r"formally\s+verified|formal\s+verification|formal\s+proof",
+    r"(?:provably|proven|proved)[\s-]+(?:correct|secure)"
+    r"|mathematically[\s-]+(?:proven|proved|verified)"
+    r"|formally[\s-]+(?:verified|proven|proved|checked)"
+    r"|formal\s+(?:verification|proofs?)"
+    r"|machine[\s-]+(?:checked|verified)"
+    r"|mechani(?:cally|[sz]ed)[\s-]+(?:checked|verified|proven|proofs?)",
     re.IGNORECASE,
 )
 
@@ -699,11 +715,16 @@ _FORMAL_EXEMPT_RE = tuple(
     for pattern in (
         # Explicit denials.
         r"\b(?:has|have|had|is|are|was|were)\s+not\s+(?:been\s+|yet\s+)?"
-        r"(?:formally\s+verified|undergone[^.]{0,40}?formal\s+verification)",
-        r"\bnot\s+(?:been\s+)?formally\s+verified\b",
+        r"(?:formally[\s-]+verified|undergone[^.]{0,40}?formal\s+verification)",
+        r"\bnot\s+(?:been\s+|yet\s+)?formally[\s-]+(?:verified|proven|proved|checked)\b",
+        r"\bnot\s+(?:been\s+|yet\s+)?mathematically[\s-]+(?:proven|proved|verified)\b",
+        r"\bnot\s+(?:been\s+|yet\s+)?(?:machine|mechanically)[\s-]+(?:checked|verified)\b",
+        r"\bnot\s+(?:been\s+|yet\s+)?(?:a\s+|an\s+)?(?:provably|proven|proved)[\s-]+"
+        r"(?:correct|secure)\b",
         r"\bnot\s+undergone[^.]{0,60}?formal\s+verification\b",
         r"\bno\s+formal\s+(?:verification|proof)\b",
-        r"\bnever\s+(?:been\s+)?formally\s+verified\b",
+        r"\bno\s+(?:machine[\s-]+checked|mechani[sz]ed)\s+proofs?\b",
+        r"\bnever\s+(?:been\s+)?formally[\s-]+(?:verified|proven|proved)\b",
         r"\bwithout\s+formal\s+(?:verification|proof)\b",
         # Naming the thing in order to distinguish this project from it.
         r"\bnot\s+formal\s+(?:verification|proof)\b",

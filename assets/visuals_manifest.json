@@ -10,15 +10,15 @@
   },
   "test_coverage": {
     "counts": {
-      "Core Crypto\n& NIST KATs": 1069,
+      "Core Crypto\n& NIST KATs": 1081,
       "Key Management\n& Rotation": 281,
       "Memory Security\n& Fuzzing": 339,
-      "Other": 3425,
+      "Other": 3509,
       "PQC Backends\n& Integration": 776,
-      "Performance\n& Monitoring": 375
+      "Performance\n& Monitoring": 378
     },
-    "n_files": 264,
-    "total_tests": 6265,
+    "n_files": 265,
+    "total_tests": 6364,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -54,6 +54,7 @@
       "test_ci_gate_negative.py",
       "test_cmake_library_options_link.py",
       "test_codeql_severity_gate.py",
+      "test_comparative_provenance.py",
       "test_competitive_page.py",
       "test_compiler_warning_gate.py",
       "test_conftest_backend_skip_scoping.py",

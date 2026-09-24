@@ -81,7 +81,9 @@ Exit status
 -----------
 0  every CPUID-gated instruction lives in a kernel scoped for its ISA
 1  a non-kernel symbol carries one, OR a required kernel symbol is missing or
-   carries none (the build this gate exists to check did not actually happen)
+   carries none (the build this gate exists to check did not actually happen),
+   OR an allowlist entry names a function its translation unit no longer
+   defines (see :func:`stale_allowlist_entries`)
 2  the object could not be read (missing, no disassembler, or below the
    non-vacuity floor) -- a clean result over an object nothing disassembled
    would be a false pass
@@ -141,9 +143,57 @@ ALLOWED_NON_SUFFIXED = {
     "fe25519_10_expand": "field expansion, static in src/c/avx2/ama_x25519_avx2.c",
 }
 
+#: The translation unit an allowlist reason must name: one of the per-file
+#: ``-mavx2`` / ``-mavx512`` directories, which is what makes the entry true.
+_ALLOWLIST_TU_RE = re.compile(r"\bsrc/c/(?:avx2|avx512)/[\w.-]+\.c\b")
+
+
+def stale_allowlist_entries(root: Path = _REPO_ROOT) -> list[str]:
+    """Allowlist entries whose named function is not a static of a scoped TU.
+
+    An allowlist entry is an exemption BY NAME.  Nothing checked that the name
+    still refers to anything: delete the helper and the entry stays, ready to
+    exempt whatever unrelated function takes that name next — the pattern
+    AGENTS.md section 10 rejects.  So every entry must name, in its reason, the
+    ``src/c/avx2`` or ``src/c/avx512`` translation unit it lives in, and that
+    file must define it as a ``static`` function.  Checked against the source
+    rather than the object: a static helper the compiler inlines leaves no
+    symbol, so absence from the object is not staleness.
+    """
+    problems: list[str] = []
+    entries: dict[str, str] = {}
+    for family in ISA_FAMILIES:
+        entries.update(family.allowed)
+    for name, reason in sorted(entries.items()):
+        match = _ALLOWLIST_TU_RE.search(reason)
+        if match is None:
+            problems.append(
+                f"allowlist entry {name!r} does not name the src/c/avx2 or src/c/avx512 "
+                f"translation unit that defines it (reason: {reason!r})"
+            )
+            continue
+        try:
+            source = (root / match.group(0)).read_text(encoding="utf-8")
+        except OSError as exc:
+            problems.append(f"allowlist entry {name!r} names {match.group(0)}, unreadable: {exc}")
+            continue
+        definition = re.compile(rf"^[ \t]*static\b[^;{{}}()]*\b{re.escape(name)}[ \t]*\(", re.M)
+        if definition.search(source) is None:
+            problems.append(
+                f"allowlist entry {name!r}: {match.group(0)} defines no static function of "
+                f"that name, so the entry exempts a symbol that no longer exists. Remove it."
+            )
+    return problems
+
+
 #: Kernel-name marker.  Matches ``ama_kyber_ntt_avx2`` and the compiler's
-#: ``ama_sphincs_wots_chain_avx2.part.0`` / ``...avx512.constprop.0`` splits: the
-#: marker is followed by end-of-string or a ``.`` fragment suffix.
+#: ``.part`` / ``.constprop`` / ``.isra`` splits of a kernel, such as the
+#: ``ama_ed25519_select12_avx2.constprop.0`` a gcc 13.3 Release build emits: the
+#: marker is followed by end-of-string or a ``.`` fragment suffix.  (This
+#: example used to be ``ama_sphincs_wots_chain_avx2.part.0``, a split of a
+#: function since deleted from src/c/avx2/ama_sphincs_avx2.c.  It was never an
+#: allowlist entry — the marker rule covers every such split by name shape — but
+#: it described a symbol no build produces.)
 _KERNEL_MARKER_RE = re.compile(r"_avx(?:2|512)(?:\.|$)")
 
 _SYMBOL_RE = re.compile(r"^[0-9a-f]+ <(?P<name>[^>]+)>:$")
@@ -450,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    problems: list[str] = []
+    problems: list[str] = list(stale_allowlist_entries())
     total_leaks = 0
     total_ops = 0
 

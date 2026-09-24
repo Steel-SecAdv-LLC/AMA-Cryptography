@@ -40,9 +40,16 @@ support.  It was absent from ``ci-gate``'s ``needs:`` while commit ``f3dd0c2``
 of this branch had to repair that exact configuration after it broke
 undetected.  The guard job existed, ran, and gated nothing.
 
-Every gate comment in this repository asserts "every job in this workflow
-runs unconditionally … so each MUST be ``success``".  This checker is what
-makes that sentence true rather than aspirational.
+Each gate's comment states what it requires of its dependencies.  The
+wildcard gates require every one to be ``success`` — ``ci-gate`` in both
+``ci.yml`` and ``ci-build-test.yml`` says "every job in this workflow runs
+unconditionally … so each MUST be ``success``".  ``dudect-gate`` and
+``static-analysis-gate`` say the opposite on purpose: several of their jobs are
+schedule- or dispatch-only, so each gate re-derives every job's trigger and
+requires ``success`` where the job should run and ``skipped`` where it should
+not.  (This paragraph used to say every gate comment asserted the first form;
+those two never did.)  Either statement is true only of the jobs a gate
+actually lists and evaluates, and that is what this checker enforces.
 
 What is checked
 ---------------

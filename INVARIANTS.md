@@ -2208,7 +2208,7 @@ excuse the claim beside it.)
 The table is read with `ast` rather than by importing the module, so the gate
 runs in a lint job with nothing built.
 
-**Verification.** `tests/test_verification_claim_honesty_gate.py` — 85 tests —
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 100 tests —
 pins both directions: the repository as it stands, plus a reproduction of every
 violation class and, equally, the near-misses that must **not** fire. It also
 pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
@@ -2223,6 +2223,12 @@ negation window to the sentence had narrowed the RFC 3161 context test with it,
 so a claim whose subject sat in the previous sentence passed; and the
 formal-verification pass never read `src/`, `include/` or `.github/`, so an
 unqualified correctness claim in `src/c/sve2/ama_kyber_sve2.c` passed with it.
+The fifteen after those pin the formal-verification claim pattern's reach: it
+listed six spellings and passed "formally proven", "provably secure",
+"machine-checked", "mechanically verified" and every hyphenated adverb form
+("formally-verified AES") unqualified, and the wider pattern must still permit
+the tree's honest denials ("not formally proven", "not a provably secure
+protocol") and its ordinary uses of "provably".
 
 That suite has already earned its place. An early version of the pattern for
 the phrase this section will not repeat ended `(?:stamp|-stamp|stamping)?\b`,

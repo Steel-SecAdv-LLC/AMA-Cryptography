@@ -759,11 +759,12 @@ def _compute_module_digest() -> str:
 
     Two sections, in a fixed order:
 
-    1. Every ``*.py`` file below the package directory (recursively, keyed by
-       package-relative path, ``__pycache__`` excluded), excluding
-       ``_integrity_signature.py`` (the build-time-generated signature
-       artefact — hashing it would make the construction self-referential and
-       unverifiable).
+    1. Every ``*.py`` file under the package, at any depth (keyed by
+       package-relative path, ``__pycache__`` excluded), except the package's
+       own top-level ``_integrity_signature.py`` (the build-time-generated
+       signature artefact — hashing it would make the construction
+       self-referential and unverifiable).  A file of that name in a
+       subdirectory is ordinary code and is hashed.
     2. Every file under ``_post_kats/`` — the Known Answer vectors the
        self-tests check against.  Covering these closes a gap: without it, an
        attacker could swap a KAT vector for one a broken implementation happens
@@ -817,10 +818,14 @@ def _compute_module_digest() -> str:
     # the encoding injective once `a/x.py` and `b/x.py` can both exist.
     # The signer (_build_sign._compute_package_digest) mirrors this
     # byte-for-byte.
+    # Only the TOP-LEVEL artefact is excluded, and `__pycache__` is matched
+    # against the package-relative parts, byte-for-byte with the signer; see
+    # the note there for the two holes the broader tests left.
+    artefact = pkg_dir / "_integrity_signature.py"
     py_files = [
         p
         for p in sorted(pkg_dir.rglob("*.py"))
-        if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
+        if p != artefact and "__pycache__" not in p.relative_to(pkg_dir).parts
     ]
     hasher.update(len(py_files).to_bytes(4, "big"))
     for py_file in py_files:

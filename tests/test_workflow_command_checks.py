@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -1181,8 +1182,9 @@ class TestGatedJobsRunTheirPayload:
         assert report.gate_required_jobs_checked == 1
 
     def test_a_job_level_if_is_the_honest_form_and_passes(self) -> None:
-        """Job-level ``if:`` makes the skip a ``skipped`` result, which every
-        ``*-gate`` in this repo already fails on — so it is not the defect."""
+        """Job-level ``if:`` makes the skip a ``skipped`` result, which the gate
+        sees and judges (see :class:`TestEveryGateJudgesASkip` for how each
+        gate does) — so it is not the defect."""
         source = """
             jobs:
               probe-gate:
@@ -1539,6 +1541,73 @@ class TestJobTimeouts:
         found = sorted(f.message.split(";")[0] for f in report.findings)
         assert any("implicit `success()`" in f for f in found), messages(report)
         assert any("declares no `timeout-minutes`" in f for f in found), messages(report)
+
+
+class TestEveryGateJudgesASkip:
+    """The premise ``check_gate_jobs_run_their_payload`` exempts a job-level
+    ``if:`` on, measured against the repository's own gates.
+
+    Its docstring said every ``*-gate`` "already fails on a ``skipped`` need".
+    Two do not, by design: ``dudect-gate`` and ``static-analysis-gate`` have
+    schedule- and dispatch-only dependencies, so they re-derive each one's
+    trigger and fail only a skip the trigger does not expect.  The exemption
+    still holds for them — a skip is judged, not counted as work — but the
+    sentence was false.  This pins the corrected one: every gate with
+    dependencies either fails any skip (the wildcard step) or is one of the two
+    gates the docstring names, and those two carry both failure branches.
+    """
+
+    RE_DERIVING: ClassVar[frozenset[tuple[str, str]]] = frozenset(
+        {
+            ("dudect.yml", "dudect-gate"),
+            ("static-analysis.yml", "static-analysis-gate"),
+        }
+    )
+
+    @staticmethod
+    def _gates() -> list[tuple[str, str, dict[str, object]]]:
+        found: list[tuple[str, str, dict[str, object]]] = []
+        for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for job_id, job in ((document or {}).get("jobs") or {}).items():
+                if str(job_id).endswith("-gate") and wf._normalize_needs(job.get("needs")):
+                    found.append((path.name, str(job_id), job))
+        return found
+
+    def test_a_gate_that_accepts_any_skip_is_one_the_docstring_names(self) -> None:
+        import tools.check_gate_coverage as coverage
+
+        gates = self._gates()
+        non_wildcard = {
+            (name, job_id) for name, job_id, job in gates if not coverage._wildcard_fail_step(job)
+        }
+        assert len(gates) - len(non_wildcard) >= 5, "the wildcard gates stopped being found"
+        assert non_wildcard == self.RE_DERIVING, (
+            "the gates without a fail-on-any-skip wildcard step are "
+            f"{sorted(non_wildcard)}; check_gate_jobs_run_their_payload's docstring "
+            f"names {sorted(self.RE_DERIVING)}. Confirm the new gate judges every "
+            "skip, then name it in that docstring and in RE_DERIVING."
+        )
+        docstring = wf.check_gate_jobs_run_their_payload.__doc__ or ""
+        for _name, job_id in sorted(self.RE_DERIVING):
+            assert job_id in docstring, f"the docstring no longer names {job_id}"
+
+    def test_the_re_deriving_gates_fail_an_unexpected_skip_and_evaluate_every_need(
+        self,
+    ) -> None:
+        import tools.check_gate_coverage as coverage
+
+        by_key = {(name, job_id): job for name, job_id, job in self._gates()}
+        for key in sorted(self.RE_DERIVING):
+            job = by_key[key]
+            run = coverage._run_text(job)
+            assert (
+                "was SKIPPED but this trigger requires it to run" in run
+            ), f"{key}: no branch fails a dependency that skipped where it should run"
+            assert (
+                "but this trigger should skip it" in run
+            ), f"{key}: no branch fails a dependency that ran where it should skip"
+            assert coverage._unevaluated_needs(job) == [], key
 
 
 def _valid_workflow(index: int) -> str:

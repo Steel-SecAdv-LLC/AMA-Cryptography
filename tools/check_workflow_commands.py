@@ -1445,14 +1445,27 @@ def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report)
     itself ``skipped``), and the gate counted it green — a required check that
     had never executed.
 
-    A job-level ``if:`` is the honest form of "run only sometimes": every
-    ``*-gate`` in this repository already fails on a ``skipped`` need.  A
-    self-probe on ``steps.*.outputs.*`` gating a step *inside* an otherwise
-    unconditional job is the form that manufactures a vacuous ``success``, so it
-    is what this check forbids for any job a gate depends on.  The fix is to run
-    the work unconditionally — under emulation when the runner lacks the
-    hardware, as test-avx512 now runs the kernel under Intel SDE and
-    arm-qemu.yml runs the AArch64 kernels under QEMU.
+    A job-level ``if:`` is the honest form of "run only sometimes", because a
+    false one makes the job ``skipped`` and every ``*-gate`` here that has
+    dependencies evaluates a skip.  It does so in one of two ways, and the
+    difference matters: the wildcard gates (a step on
+    ``contains(needs.*.result, 'skipped')`` that exits 1) fail on ANY skipped
+    need, while ``dudect-gate`` and ``static-analysis-gate`` re-derive each
+    dependency's trigger condition and fail on a skip that condition does not
+    expect — accepting exactly the skips their schedule- and dispatch-only
+    lanes produce by design, and failing a lane that ran when it should have
+    skipped.  This docstring used to say every gate "already fails on a
+    ``skipped`` need"; those two do not, deliberately, and
+    ``tests/test_workflow_command_checks.py`` pins which gates are which.
+    Either way the skip is seen and judged; it is never counted as work done.
+
+    A self-probe on ``steps.*.outputs.*`` gating a step *inside* an otherwise
+    unconditional job is different: the job reports ``success``, which neither
+    kind of gate can tell from real work.  That is the form that manufactures a
+    vacuous pass, so it is what this check forbids for any job a gate depends
+    on.  The fix is to run the work unconditionally — under emulation when the
+    runner lacks the hardware, as test-avx512 now runs the kernel under Intel
+    SDE and arm-qemu.yml runs the AArch64 kernels under QEMU.
     """
     required = _gate_required_jobs(document)
     if not required:
@@ -1465,7 +1478,9 @@ def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report)
         report.gate_required_jobs_checked += 1
         if "if" in job:
             # Job-level condition: when it is false the whole job is `skipped`,
-            # which every `*-gate` in this repo already treats as a failure.
+            # and the gate sees that — the wildcard gates fail it outright,
+            # dudect-gate and static-analysis-gate fail it unless their
+            # re-derived trigger expects the skip (see the docstring).
             continue
         steps = job.get("steps")
         if not isinstance(steps, list):
@@ -1490,8 +1505,9 @@ def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report)
                         f"became a required check that had never executed (audit H2)."
                     ),
                     remedy=(
-                        "make the whole job conditional with a job-level `if:` (a "
-                        "`skipped` job fails every `*-gate` here), or run the work "
+                        "make the whole job conditional with a job-level `if:` (the "
+                        "gate then sees a `skipped` result and judges it, where it "
+                        "cannot judge a vacuous `success`), or run the work "
                         "unconditionally — under emulation when the runner lacks the "
                         "hardware (test-avx512 runs the kernel under Intel SDE; "
                         "arm-qemu.yml runs the AArch64 kernels under QEMU)."

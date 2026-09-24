@@ -140,9 +140,10 @@ def _absorb_entry(hasher: _Absorbing, section: bytes, name: str, content: bytes)
 def _compute_package_digest(pkg_dir: Path) -> bytes:
     """Compute SHA3-256 over ``pkg_dir``'s ``.py`` files and POST KAT vectors.
 
-    Mirrors ``_self_test._compute_module_digest`` byte-for-byte: the top-level
-    ``*.py`` files (excluding the generated ``_integrity_signature.py``), then
-    every file under ``_post_kats/`` ordered by name, each contributing its name
+    Mirrors ``_self_test._compute_module_digest`` byte-for-byte: every ``*.py``
+    file under ``pkg_dir`` at any depth (``__pycache__`` excluded), except the
+    generated ``pkg_dir/_integrity_signature.py`` itself, then every file
+    under ``_post_kats/`` ordered by name, each contributing its name
     plus content with CRLF normalised to LF, every field length-prefixed and
     every section tagged.  Covering ``_post_kats/`` binds the Known Answer
     vectors so a swapped vector fails the import-time integrity check.  Returns
@@ -165,10 +166,19 @@ def _compute_package_digest(pkg_dir: Path) -> bytes:
     # glob would leave a subpackage .py silently unsigned, and a name-only
     # key would collide `a/x.py` with `b/x.py`.  For the current flat layout
     # the relative path equals the name, so no existing signature changes.
+    #
+    # Both exclusions are scoped to the package, not to a name or an absolute
+    # path.  ONLY the top-level artefact is excluded: matching the bare name
+    # left any `<subpackage>/_integrity_signature.py` — executable, importable
+    # code — outside the digest, which is the unsigned-subpackage hole the
+    # recursion above exists to close.  And `__pycache__` is tested against the
+    # package-RELATIVE parts: against the absolute path, a checkout under any
+    # directory of that name hashed zero files.
+    artefact = pkg_dir / "_integrity_signature.py"
     py_files = [
         p
         for p in sorted(pkg_dir.rglob("*.py"))
-        if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
+        if p != artefact and "__pycache__" not in p.relative_to(pkg_dir).parts
     ]
     hasher.update(len(py_files).to_bytes(4, "big"))
     for py_file in py_files:

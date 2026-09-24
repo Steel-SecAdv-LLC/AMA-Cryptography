@@ -1032,7 +1032,13 @@ def _write_manifest() -> None:
     if MANIFEST_PATH.is_file():
         recorded = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     recorded.update(_live_manifest_entry())
-    MANIFEST_PATH.write_text(json.dumps(recorded, indent=2, sort_keys=True) + "\n")
+    # UTF-8 and LF on every platform: a text-mode write on Windows emits CRLF,
+    # and this manifest is a committed artefact tools/check_line_endings.py
+    # rejects CRLF in — the same reason every writer in tools/update_docs.py
+    # passes both arguments.
+    MANIFEST_PATH.write_text(
+        json.dumps(recorded, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline=""
+    )
     print(f"Wrote: {MANIFEST_PATH}")
 
 

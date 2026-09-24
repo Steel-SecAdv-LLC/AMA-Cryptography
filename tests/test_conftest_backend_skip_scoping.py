@@ -670,17 +670,47 @@ def _interop_helper_names(tree: ast.AST) -> set[str]:
     return names
 
 
-def _decorator_names(node: ast.AST) -> set[str]:
-    """The simple/attribute names of a def/class's decorators, for helper and
-    marker matching (``requires_interop_oracle``, ``skip_no_pyca``, …)."""
+def _mark_names(marks: list[ast.expr]) -> set[str]:
+    """The simple/attribute names of a list of marks — decorators or the
+    elements of a ``pytestmark`` — for helper and marker matching
+    (``requires_interop_oracle``, ``skip_no_pyca``, …)."""
     names: set[str] = set()
-    for dec in getattr(node, "decorator_list", []):
-        target = dec.func if isinstance(dec, ast.Call) else dec
+    for mark in marks:
+        target = mark.func if isinstance(mark, ast.Call) else mark
         if isinstance(target, ast.Name):
             names.add(target.id)
         elif isinstance(target, ast.Attribute):
             names.add(target.attr)
     return names
+
+
+def _decorator_names(node: ast.AST) -> set[str]:
+    """The simple/attribute names of a def/class's decorators."""
+    return _mark_names(list(getattr(node, "decorator_list", [])))
+
+
+def _pytestmark_elements(body: list[ast.stmt]) -> list[ast.expr]:
+    """The marks a ``pytestmark = ...`` in ``body`` applies (module or class scope).
+
+    pytest applies a module's ``pytestmark`` to every test in it, and a class
+    attribute of that name to every method, exactly as it applies a decorator.
+    A single mark and a list or tuple of marks are both accepted.
+    """
+    marks: list[ast.expr] = []
+    for stmt in body:
+        if isinstance(stmt, ast.Assign):
+            targets: list[ast.expr] = list(stmt.targets)
+            value: ast.expr | None = stmt.value
+        elif isinstance(stmt, ast.AnnAssign):
+            targets, value = [stmt.target], stmt.value
+        else:
+            continue
+        if value is None or not any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets
+        ):
+            continue
+        marks.extend(value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value])
+    return marks
 
 
 def _decorated_defs(
@@ -693,11 +723,138 @@ def _decorated_defs(
     return out
 
 
+#: Top-level import names of the external reference implementations the
+#: require-backends lane installs (PyCA cryptography, PyNaCl, pycryptodome in
+#: both of its namespaces).
+_INTEROP_ORACLE_MODULES = frozenset({"cryptography", "nacl", "Crypto", "Cryptodome"})
+
+
+def _is_oracle_skip_call(call: ast.Call) -> bool:
+    """An imperative skip that gates on an interop oracle.
+
+    ``pytest.skip(<reason naming an oracle>)`` or ``pytest.importorskip`` of an
+    oracle module — both attach no marker, so only the marker on the enclosing
+    test (or its class, or the module's ``pytestmark``) can escalate them.
+    """
+    if _is_pytest_call(call, "skip"):
+        reason = _string_parts(call.args[0]) if call.args else ""
+        for keyword in call.keywords:
+            if keyword.arg in ("reason", "msg"):
+                reason = _string_parts(keyword.value)
+        return _reason_names_oracle(reason)
+    if _is_pytest_call(call, "importorskip"):
+        target = _string_parts(call.args[0]) if call.args else ""
+        for keyword in call.keywords:
+            if keyword.arg == "modname":
+                target = _string_parts(keyword.value)
+        return target.split(".")[0] in _INTEROP_ORACLE_MODULES
+    return False
+
+
+#: One interop-gated site: its "line:name" label, and whether the marker is in
+#: force on it.  A collection-time skip is never marked: no marker reaches it.
+_Site = tuple[str, bool]
+
+
+def _is_oracle_mark(mark: ast.expr, helpers: set[str]) -> bool:
+    """A ``skipif`` mark whose reason names an oracle, or a helper bound to one."""
+    if isinstance(mark, ast.Call):
+        reason = _skipif_reason(mark)
+        if reason and _reason_names_oracle(reason):
+            return True
+    return bool(_mark_names([mark]) & helpers)
+
+
+def _decorator_sites(tree: ast.Module, helpers: set[str]) -> list[_Site]:
+    """Shape 1: an oracle ``skipif`` decorator on a def or class."""
+    return [
+        (f"{node.lineno}:{node.name}", "requires_interop_oracle" in _decorator_names(node))
+        for node in _decorated_defs(tree)
+        if any(_is_oracle_mark(dec, helpers) for dec in node.decorator_list)
+    ]
+
+
+def _pytestmark_sites(tree: ast.Module, helpers: set[str]) -> list[_Site]:
+    """Shape 2: the same mark in a module- or class-level ``pytestmark``."""
+    module_marks = _pytestmark_elements(tree.body)
+    scopes: list[tuple[str, list[ast.expr], set[str]]] = [
+        ("1:<module pytestmark>", module_marks, set())
+    ]
+    for cls in ast.walk(tree):
+        if isinstance(cls, ast.ClassDef):
+            inherited = _mark_names(module_marks) | _decorator_names(cls)
+            scopes.append(
+                (f"{cls.lineno}:{cls.name} pytestmark", _pytestmark_elements(cls.body), inherited)
+            )
+    return [
+        (label, "requires_interop_oracle" in _mark_names(marks) | inherited)
+        for label, marks, inherited in scopes
+        if any(_is_oracle_mark(mark, helpers) for mark in marks)
+    ]
+
+
+def _imperative_sites(tree: ast.Module) -> list[_Site]:
+    """Shape 3: an imperative oracle skip inside a test, under its markers."""
+    sites: dict[tuple[int, int], _Site] = {}
+    for func, markers in _defs_with_effective_markers(tree):
+        for node in ast.walk(func):
+            if isinstance(node, ast.Call) and _is_oracle_skip_call(node):
+                # A call in a nested def is reached from both defs; the
+                # outermost visit is kept.
+                sites.setdefault(
+                    (node.lineno, node.col_offset),
+                    (f"{node.lineno}:{func.name}", "requires_interop_oracle" in markers),
+                )
+    return list(sites.values())
+
+
+def _collection_time_sites(node: ast.AST) -> list[_Site]:
+    """Shape 4: an imperative oracle skip outside every function."""
+    sites: list[_Site] = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(child, ast.Call) and _is_oracle_skip_call(child):
+            sites.append((f"{child.lineno}:<collection-time skip>", False))
+        sites.extend(_collection_time_sites(child))
+    return sites
+
+
+def _interop_sites(tree: ast.Module) -> tuple[int, list[str]]:
+    """``(interop-gated sites, "line:name" of each not under the marker)``.
+
+    Four shapes gate a test on an oracle, and the first version of this guard
+    saw only the first — so the other three could skip silently in the
+    require-backends lane with nothing to say the marker was missing:
+
+    1. a ``skipif`` decorator whose reason names an oracle, or a module-level
+       helper bound to one (``skip_no_pyca``), on a def or class;
+    2. the same mark in a module- or class-level ``pytestmark``;
+    3. an imperative ``pytest.skip``/``pytest.importorskip`` on an oracle inside
+       a test, which needs the marker in force on that test;
+    4. the same call outside any function — a COLLECTION-time skip, which
+       ``pytest_runtest_makereport`` never sees, so no marker can escalate it
+       and it is always an offender.
+    """
+    helpers = _interop_helper_names(tree)
+    sites = (
+        _decorator_sites(tree, helpers)
+        + _pytestmark_sites(tree, helpers)
+        + _imperative_sites(tree)
+        + _collection_time_sites(tree)
+    )
+    return len(sites), [label for label, marked in sites if not marked]
+
+
 def test_every_interop_reason_skip_in_the_tree_carries_the_marker() -> None:
-    """Completeness guard (M18): any test whose skip gates on an interop oracle —
-    inline reason OR a module-level skipif helper whose reason names one — must
-    carry ``requires_interop_oracle``, so a new cross-implementation test cannot
-    silently escape the escalation the way all of them did before this fix.
+    """Completeness guard (M18): any test whose skip gates on an interop oracle
+    must carry ``requires_interop_oracle``, so a new cross-implementation test
+    cannot silently escape the escalation the way all of them did before this
+    fix.  "Gates on" covers every shape in :func:`_interop_sites` — this guard
+    used to see decorators only, so a module-level ``pytestmark`` or an
+    imperative ``pytest.skip``/``pytest.importorskip`` on PyCA passed it
+    unmarked, and one did: ``test_vendor_isolation_gate.py``'s resident-binding
+    control importorskips ``cryptography``.
 
     Non-vacuous: the assertion below also fails if the scan finds NO interop
     skips at all, which would mean the pattern stopped matching."""
@@ -706,24 +863,143 @@ def test_every_interop_reason_skip_in_the_tree_carries_the_marker() -> None:
     interop_sites = 0
     for path in sorted(tests_dir.glob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        helpers = _interop_helper_names(tree)
-        for node in _decorated_defs(tree):
-            dec_names = _decorator_names(node)
-            inline_oracle = any(
-                (_skipif_reason(dec) or "") and _reason_names_oracle(_skipif_reason(dec) or "")
-                for dec in getattr(node, "decorator_list", [])
-                if isinstance(dec, ast.Call)
-            )
-            via_helper = bool(dec_names & helpers)
-            if inline_oracle or via_helper:
-                interop_sites += 1
-                if "requires_interop_oracle" not in dec_names:
-                    offenders.append(f"{path.name}:{node.lineno}:{getattr(node, 'name', '?')}")
-    assert interop_sites >= 6, f"expected the known interop skip sites, found {interop_sites}"
+        sites, found = _interop_sites(tree)
+        interop_sites += sites
+        offenders.extend(f"{path.name}:{site}" for site in found)
+    assert interop_sites >= 7, f"expected the known interop skip sites, found {interop_sites}"
     assert not offenders, (
         "these tests gate on an interop oracle but lack @pytest.mark.requires_interop_oracle, "
         f"so a missing PyCA/PyNaCl/pycryptodome would mute them silently: {offenders}"
     )
+
+
+class TestTheInteropGuardSeesEveryShape:
+    """Negative controls for :func:`_interop_sites`, one per shape it reads.
+
+    Each source is parsed, never run.  An offender here is a test that would
+    skip silently in the require-backends lane.
+    """
+
+    @staticmethod
+    def _offenders(source: str) -> list[str]:
+        sites, offenders = _interop_sites(ast.parse(source))
+        assert sites >= 1, "the scan did not recognise the interop site at all"
+        return offenders
+
+    def test_a_module_pytestmark_without_the_marker_is_reported(self) -> None:
+        source = (
+            "import pytest\n"
+            "pytestmark = pytest.mark.skipif(True, reason='PyCA cryptography not available')\n"
+            "def test_x():\n    pass\n"
+        )
+        assert self._offenders(source) == ["1:<module pytestmark>"]
+
+    def test_a_module_pytestmark_list_carrying_the_marker_passes(self) -> None:
+        source = (
+            "import pytest\n"
+            "pytestmark = [\n"
+            "    pytest.mark.requires_interop_oracle,\n"
+            "    pytest.mark.skipif(True, reason='PyCA cryptography not available'),\n"
+            "]\n"
+            "def test_x():\n    pytest.importorskip('cryptography')\n"
+        )
+        assert self._offenders(source) == []
+
+    def test_a_class_pytestmark_via_a_helper_is_reported(self) -> None:
+        source = (
+            "import pytest\n"
+            "skip_no_nacl = pytest.mark.skipif(True, reason='PyNaCl not installed')\n"
+            "class TestX:\n"
+            "    pytestmark = skip_no_nacl\n"
+            "    def test_y(self):\n        pass\n"
+        )
+        assert self._offenders(source) == ["3:TestX pytestmark"]
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            "pytest.skip('PyCA cryptography not installed')",
+            "pytest.skip(reason='pycryptodome missing for cross-validation')",
+            "pytest.importorskip('cryptography')",
+            "pytest.importorskip('nacl.signing')",
+            "pytest.importorskip('Crypto.Cipher')",
+            "pytest.importorskip(modname='Cryptodome')",
+        ],
+    )
+    def test_an_imperative_oracle_skip_in_an_unmarked_test_is_reported(self, call: str) -> None:
+        source = f"import pytest\ndef test_x():\n    {call}\n"
+        assert self._offenders(source) == ["3:test_x"]
+
+    @pytest.mark.parametrize(
+        "prefix",
+        [
+            "@pytest.mark.requires_interop_oracle\ndef test_x():\n",
+            "@pytest.mark.requires_interop_oracle\nclass TestX:\n    def test_x(self):\n",
+            "pytestmark = pytest.mark.requires_interop_oracle\ndef test_x():\n",
+        ],
+    )
+    def test_an_imperative_oracle_skip_under_the_marker_passes(self, prefix: str) -> None:
+        indent = "        " if "class" in prefix else "    "
+        source = f"import pytest\n{prefix}{indent}pytest.importorskip('cryptography')\n"
+        assert self._offenders(source) == []
+
+    def test_a_collection_time_oracle_skip_is_always_reported(self) -> None:
+        """Outside any test, the skip happens at collection, where no marker
+        is consulted — so even a module-wide marker cannot make it honest."""
+        source = (
+            "import pytest\n"
+            "pytestmark = pytest.mark.requires_interop_oracle\n"
+            "cryptography = pytest.importorskip('cryptography')\n"
+            "def test_x():\n    pass\n"
+        )
+        assert self._offenders(source) == ["3:<collection-time skip>"]
+
+    def test_a_non_oracle_imperative_skip_is_not_a_site(self) -> None:
+        source = (
+            "import pytest\n"
+            "yaml = pytest.importorskip('yaml')\n"
+            "def test_x():\n    pytest.skip('native library not built')\n"
+        )
+        assert _interop_sites(ast.parse(source)) == (0, [])
+
+
+def test_a_marked_module_pytestmark_skip_becomes_a_failure_in_ci(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard accepts a marker carried in ``pytestmark``; this is why that
+    is enough — the hook reads it off the item like a decorator."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        pytestmark = [
+            pytest.mark.requires_interop_oracle,
+            pytest.mark.skipif(True, reason="PyCA cryptography not available"),
+        ]
+
+        def test_cross_check():
+            raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(errors=1, failed=0, skipped=0, passed=0)
+
+
+def test_a_marked_imperative_oracle_skip_becomes_a_failure_in_ci(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Likewise for an imperative ``importorskip`` inside a marked test."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_interop_oracle
+        def test_cross_check():
+            pytest.importorskip("no_such_interop_oracle_zzz")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
 
 
 def test_the_interop_marker_is_registered_so_strict_markers_accepts_it() -> None:
@@ -889,14 +1165,21 @@ def _defs_with_effective_markers(
     def visit(node: ast.AST, inherited: set[str]) -> None:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.ClassDef):
-                visit(child, inherited | _decorator_names(child))
+                visit(
+                    child,
+                    inherited
+                    | _decorator_names(child)
+                    | _mark_names(_pytestmark_elements(child.body)),
+                )
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 out.append((child, inherited | _decorator_names(child)))
                 visit(child, inherited | _decorator_names(child))
             else:
                 visit(child, inherited)
 
-    visit(tree, set())
+    # A module's `pytestmark` is in force on every test in it, like a decorator.
+    module_marks = _pytestmark_elements(tree.body) if isinstance(tree, ast.Module) else []
+    visit(tree, _mark_names(module_marks))
     return out
 
 
