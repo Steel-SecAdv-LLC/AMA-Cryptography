@@ -381,9 +381,12 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Fail unless every AArch64 job succeeded
-        # STRICT. skipped/cancelled also fail: on this workflow they can only
-        # mean the dependency failed or a future if: drifted so it silently
-        # stopped running.
+        # STRICT. skipped/cancelled also fail. `skipped` means the dependency
+        # failed or a future if: drifted so it silently stopped running;
+        # `cancelled` also covers a job that reached its timeout-minutes, which
+        # GitHub reports as `cancelled`, not `failure` (measured on
+        # ci-build-test.yml run 35955250803; see the comment on ci.yml's CI
+        # Gate), so tolerating it would pass a hung emulated lane.
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
         run: |
           echo "::error::ARM QEMU Gate failed — an AArch64 cross-test job did not succeed (baseline ctest, the SVE2 kernels at VL=128/256, or the UBSan sanitizer lane)."

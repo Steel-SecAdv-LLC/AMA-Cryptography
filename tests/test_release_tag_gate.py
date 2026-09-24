@@ -356,6 +356,46 @@ class TestTheGateIsWiredIntoTheReleasePipeline:
         assert "--force" in preceding[preceding.index("git fetch") :]
 
 
+class TestAQueuedTagReleaseIsNeverCancelled:
+    """A pushed tag's release waits its turn; a newer run does not drop it.
+
+    The concurrency block carried ``cancel-in-progress: false`` and a comment
+    saying "the second tag must wait".  That setting protects only the RUNNING
+    release.  Under GitHub's default ``queue: single`` a concurrency group holds
+    at most one PENDING run, and queuing another cancels the pending one.  With
+    release A building and tag B pending, a third tag push or a
+    workflow_dispatch dry run (same static group) cancelled B before it
+    started: a pushed tag with no release and no artefacts.  ``queue: max``
+    keeps the pending runs, first in first out.
+
+    release.yml never runs on pull_request, so no PR check would notice any of
+    these three settings being dropped; this pins them in the file.
+    """
+
+    @pytest.fixture(scope="class")
+    def concurrency(self) -> dict[str, Any]:
+        text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        block = cast("dict[str, Any]", yaml.safe_load(text)).get("concurrency")
+        assert isinstance(block, dict), "release.yml must declare a concurrency block"
+        return cast("dict[str, Any]", block)
+
+    def test_the_group_is_static(self, concurrency: dict[str, Any]) -> None:
+        """One group for every run, so two different tags never publish at once."""
+        assert concurrency.get("group") == "release"
+
+    def test_a_running_release_is_not_cancelled(self, concurrency: dict[str, Any]) -> None:
+        assert concurrency.get("cancel-in-progress") is False
+
+    def test_pending_runs_queue_instead_of_replacing_each_other(
+        self, concurrency: dict[str, Any]
+    ) -> None:
+        assert concurrency.get("queue") == "max", (
+            "without `queue: max` the group keeps one pending run and cancels it "
+            "when another is queued, so a tag pushed while a release is building "
+            "is dropped by the next tag push or dry run"
+        )
+
+
 class TestTheUnanchoredReleaseGuardIsWired:
     """A canonical-repo tag must not publish an unanchored release (audit H3).
 

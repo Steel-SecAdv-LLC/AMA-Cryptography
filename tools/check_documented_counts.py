@@ -1132,11 +1132,18 @@ def audit(repo: Path = REPO) -> tuple[list[str], dict[str, int]]:
 #: test-count claim, a moved backtick, or a line-wrap that splits "entry points"
 #: across two lines fails the gate instead of quietly leaving a claim unchecked.
 #:
-#: The values are pinned to the counts the current tree carries — they are
-#: MINIMUMS, so adding a claim never trips them; only removing or rewording one
-#: below the floor does, which is the deliberate, visible act pinning is for.
-#: Lower a floor only when a claim is genuinely retired, the same discipline
-#: ``tools/check_stdlib_hash_boundary.py`` uses for its per-file pinned counts.
+#: Each value IS the count the current tree carries, and
+#: ``tests/test_documented_counts_gate.py`` holds it there: it fails when any
+#: family's count differs from its floor in either direction.  The gate itself
+#: reads a floor as a MINIMUM, so it only fails a family that falls below one;
+#: the test is what stops a floor lagging the tree.  A lagging floor is the
+#: M15 gap again at a smaller scale: ``c_suite_bare`` sat at 2 while the tree
+#: carried 3 claims, so one of the three could be reworded out of its pattern
+#: and go unchecked with every floor still met.  Adding a claim therefore means
+#: raising its floor in the same commit; removing or rewording one means
+#: lowering it, which is the deliberate, visible act pinning is for — the same
+#: discipline ``tools/check_stdlib_hash_boundary.py`` uses for its per-file
+#: pinned counts.
 CLAIM_FAMILY_FLOORS: dict[str, int] = {
     "test_count": 6,
     "record_count": 7,
@@ -1146,7 +1153,7 @@ CLAIM_FAMILY_FLOORS: dict[str, int] = {
     "metrics_funcs": 1,
     "native_entry": 1,
     "cython_entry": 1,
-    "c_suite_bare": 2,
+    "c_suite_bare": 3,
     "fuzz": 11,
     "breaking": 4,
     "loc_rows": 14,

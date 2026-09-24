@@ -842,6 +842,43 @@ class TestCryptoConstructionDocs:
         assert completed.returncode == 1, completed.stdout
         assert "Python HKDF fallback" in completed.stderr
 
+    def test_a_document_that_is_not_utf8_fails_and_is_still_scanned(self, tmp_path: Path) -> None:
+        """One cp1252 byte used to drop the whole file from every rule.
+
+        ``read_text`` raised ``UnicodeDecodeError``, the loop ``continue``d, and
+        the run printed ``OK 1 document(s)`` over a file carrying a retired
+        claim.  The encoding error is now a finding of its own, and the rules
+        still run on the rest of the file, so the claim on line 5 is reported
+        as well.
+        """
+        fixture = tmp_path / "cp1252.md"
+        fixture.write_bytes(
+            b"# fixture\n\nAn em dash \x97 pasted from a Windows editor.\n\n"
+            b"pkg = sign_codes(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms)\n"
+        )
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert "cp1252.md:3" in completed.stderr
+        assert "not valid UTF-8 (byte 0x97" in completed.stderr
+        assert "cp1252.md:5" in completed.stderr, "the rest of the file was not scanned"
+        assert "MASTER_OMNI_CODES does not exist" in completed.stderr
+
+    def test_an_encoding_error_alone_fails(self, tmp_path: Path) -> None:
+        """No claim in the file at all: the undecodable byte is enough."""
+        fixture = tmp_path / "latin1.md"
+        fixture.write_bytes(b"# fixture\n\nCaf\xe9 au lait.\n")
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert "not valid UTF-8 (byte 0xe9" in completed.stderr
+        assert "Caf\\xe9" in completed.stderr, "the offending byte is named, not replaced"
+
+    def test_a_document_that_cannot_be_read_fails(self, tmp_path: Path) -> None:
+        """An ``OSError`` was swallowed by the same ``continue``."""
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(tmp_path / "absent.md"))
+        assert completed.returncode == 1, completed.stdout
+        assert "absent.md" in completed.stderr
+        assert "cannot be read" in completed.stderr
+
     def test_the_self_referential_exemptions_all_exist(self) -> None:
         """An exemption that outlives its file is a silently widened exemption."""
         gate = _load(CONSTRUCTION_DOCS)

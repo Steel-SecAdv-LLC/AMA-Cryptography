@@ -54,7 +54,16 @@ not "every number followed by a unit this gate recognises": the first version
 read only the latter, so "~10,834 Decaps ops/sec", "~4,845 KeyGen, ~3,929
 Sign" and any figure in ms, ns or MB/s could be edited freely inside the pinned
 region. The only digits not pinned are those inside a name — ``ML-DSA-65``,
-``Ed25519``, ``64-byte`` — which cannot change without the name changing. The comparison runs in both directions on purpose:
+``Ed25519``, ``64-byte`` — which cannot change without the name changing. A
+name anchors its digits to a letter that LEADS them (``Ed25519``, ``fe64``) or
+to a letter-led segment of the same hyphenated word (``ML-DSA-65``,
+``64-byte``); a letter that merely follows the digits is a unit, not a name.
+The first cut of this rule accepted a letter on either side, so ``5x``,
+``1.5M`` and ``10k`` were read as names and "the MULX kernel is 5x faster"
+could be written into the region with the gate green. They are pinned now,
+the suffix as their unit, and a git revision such as ``974cb019`` (which the
+same rule had read as a name) is pinned whole, since it states which tree the
+figures were measured on. The comparison runs in both directions on purpose:
 one direction catches an edited or invented figure, the other catches a figure
 quietly dropped to make an inconvenient claim go away.
 
@@ -129,23 +138,82 @@ _ANY_NUMBER = re.compile(
 )
 
 #: The characters that glue a digit run into a word: ``ML-DSA-65``, ``x86-64``,
-#: ``radix-2^51``, ``64-byte``. A digit run whose word carries a letter is part
-#: of a NAME, not a figure: it cannot drift without the name changing.
+#: ``radix-2^51``, ``64-byte``.
 _WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_^-")
+
+#: The characters that join the SEGMENTS of one compound word: the ``-`` of
+#: ``ML-DSA-65`` and ``64-byte``, the ``^`` of ``2^51``, the ``_`` of an
+#: identifier.
+_CONNECTORS = frozenset("-^_")
+
+#: A git revision: a whole word of 7 to 40 lowercase hex digits.  It names the
+#: tree a figure was measured on, so it is provenance and is pinned, as one
+#: value, whether it happens to begin with a digit (``974cb019``) or a letter.
+#: :func:`_revision_spans` also requires a digit and a letter, so an all-digit
+#: run stays a number and an all-letter word ("defaced") stays prose.
+_REVISION = re.compile(r"(?<![\w^-])[0-9a-f]{7,40}(?![\w^-])")
 
 #: A Markdown link target is an address, not a published figure.
 _LINK_TARGET = re.compile(r"\]\([^)]*\)")
 
 
-def _is_name_part(line: str, start: int, end: int) -> bool:
-    """True when the digits at ``line[start:end]`` sit inside a word with a letter."""
+def _segment(line: str, start: int, end: int) -> tuple[int, int, list[str]]:
+    """The bounds of the connector-delimited segment holding ``line[start:end]``,
+    and the word's OTHER segments."""
     left = start
     while left > 0 and line[left - 1] in _WORD_CHARS:
         left -= 1
     right = end
     while right < len(line) and line[right] in _WORD_CHARS:
         right += 1
-    return any(character.isalpha() for character in line[left:start] + line[end:right])
+    seg_start = start
+    while seg_start > left and line[seg_start - 1] not in _CONNECTORS:
+        seg_start -= 1
+    seg_end = end
+    while seg_end < right and line[seg_end] not in _CONNECTORS:
+        seg_end += 1
+    before = re.split(r"[-^_]", line[left : max(left, seg_start - 1)]) if seg_start > left else []
+    after = re.split(r"[-^_]", line[seg_end + 1 : right]) if seg_end < right else []
+    return seg_start, seg_end, before + after
+
+
+def _is_name_part(line: str, start: int, end: int) -> bool:
+    """True when the digits at ``line[start:end]`` are part of a NAME.
+
+    A name anchors its digits to a letter: a letter leads the digits' own
+    segment (``Ed25519``, ``fe64``, ``SHA3``, ``cp310``), or another segment of
+    the compound word begins with one (``ML-DSA-65``, ``x86-64``,
+    ``radix-2^51``, ``64-byte``).  Such digits cannot change without the name
+    changing.
+
+    A letter merely FOLLOWING the digits does not make a name.  This used to
+    ask only whether the word held a letter anywhere, so ``5x``, ``1.5M`` and
+    ``10k`` — a figure with a unit glued on — were read as names and never
+    pinned, and "the MULX kernel is 5x faster" could be edited or added inside
+    the pinned region with the gate still green.  Those are figures, and
+    :func:`_letter_suffix` gives them their suffix as the unit.
+    """
+    seg_start, _seg_end, others = _segment(line, start, end)
+    if any(character.isalpha() for character in line[seg_start:start]):
+        return True
+    return any(other[:1].isalpha() for other in others)
+
+
+def _revision_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of every git revision in ``line``."""
+    return [
+        match.span()
+        for match in _REVISION.finditer(line)
+        if any(c.isdigit() for c in match.group()) and any(c.isalpha() for c in match.group())
+    ]
+
+
+def _letter_suffix(line: str, start: int, end: int) -> str:
+    """The letters glued to the right of a figure's digits: ``x`` of ``5x``,
+    ``M`` of ``1.5M``.  Empty when a letter does not directly follow."""
+    _seg_start, seg_end, _others = _segment(line, start, end)
+    suffix = line[end:seg_end]
+    return suffix if suffix[:1].isalpha() else ""
 
 
 class Report:
@@ -188,10 +256,11 @@ def extract_measurements(region: str) -> list[dict[str, Any]]:
     ops/sec" and "~4,845 KeyGen, ~3,929 Sign" are throughput claims whose unit
     is not adjacent to the number, and a figure in a unit this gate did not list
     would have escaped the same way. So every number token is pinned — carrying
-    its unit when one follows it, and an empty unit when none does — unless its
-    digits are part of a name (``ML-DSA-65``, ``Ed25519``, ``64-byte``), which
-    cannot change without the name changing. A heading's numbers are pinned
-    under the label ``(heading)``.
+    its unit when one follows it, the letters glued to it when there are some
+    (``5x``, ``1.5M``, ``10k``), and an empty unit otherwise — unless its digits
+    are part of a name (``ML-DSA-65``, ``Ed25519``, ``64-byte``), which cannot
+    change without the name changing. A git revision (``974cb019``) is pinned
+    whole. A heading's numbers are pinned under the label ``(heading)``.
 
     The label is the first cell of a markdown table row, which is how this
     README names the thing being measured. Prose measurements outside a table
@@ -210,7 +279,20 @@ def extract_measurements(region: str) -> list[dict[str, Any]]:
         else:
             label = "(prose)"
         claimed: list[tuple[int, int]] = []
+        for start, end in _revision_spans(line):
+            claimed.append((start, end))
+            found.append(
+                {
+                    "heading": heading,
+                    "label": label,
+                    "approx": False,
+                    "value": line[start:end],
+                    "unit": "",
+                }
+            )
         for match in _MEASUREMENT.finditer(line):
+            if any(taken_start <= match.start(2) < taken_end for taken_start, taken_end in claimed):
+                continue
             claimed.append(match.span(2))
             found.append(
                 {
@@ -227,13 +309,15 @@ def extract_measurements(region: str) -> list[dict[str, Any]]:
                 continue
             if _is_name_part(line, start, end):
                 continue
+            suffix = _letter_suffix(line, start, end)
+            claimed.append((start, end + len(suffix)))
             found.append(
                 {
                     "heading": heading,
                     "label": label,
                     "approx": bool(match.group(1)),
                     "value": match.group(2),
-                    "unit": "",
+                    "unit": suffix,
                 }
             )
     return found

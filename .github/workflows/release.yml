@@ -148,9 +148,23 @@ permissions:
 # (the previous `release-${{ github.ref }}`) serialized only re-pushes
 # of the SAME tag, while two different tags — the accident this block's
 # own comment names — ran fully in parallel.
+#
+# `cancel-in-progress: false` alone made the second tag wait only until a
+# third run was queued.  It protects the RUNNING release: under the
+# default `queue: single` a concurrency group holds at most one PENDING
+# run, and queuing another cancels the one already pending.  So with
+# release A building and tag B pending, a third tag push — or a
+# workflow_dispatch dry run, which shares this group — cancelled B before
+# it started, and a pushed tag was left with no release and no
+# artefacts.  `queue: max` keeps up to 100 pending runs, first in first
+# out (GitHub's documented concurrency `queue` property; it may not be
+# combined with `cancel-in-progress: true`, which this block never sets).
+# tests/test_release_tag_gate.py::TestAQueuedTagReleaseIsNeverCancelled
+# pins all three settings.
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   preflight:

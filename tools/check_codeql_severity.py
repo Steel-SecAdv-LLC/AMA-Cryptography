@@ -55,6 +55,28 @@ from typing import Any, Iterable, Sequence
 #: Levels that block. SARIF 2.1.0 defines: none, note, warning, error.
 BLOCKING_LEVELS = frozenset({"error"})
 
+#: What the operator is told to do about a blocking result.
+#:
+#: It used to say "dismiss it in the code-scanning UI with a reason, which
+#: removes it from the SARIF".  It does not.  The report this gate reads is the
+#: file ``codeql-action/analyze`` writes to ``output:`` from this run's own
+#: database analysis; dismissal is state on the alert GitHub stores after
+#: upload, and the analysis does not consult it.  A dismissed result is in the
+#: next run's SARIF exactly as before, so the advice could not clear the gate
+#: and steered a reviewer toward weakening it instead.  A result's SARIF
+#: ``suppressions`` are not honoured either (tests/test_codeql_severity_gate.py
+#: pins both), and ``.github/codeql/codeql-config.yml`` states that a CodeQL
+#: finding is resolved at the source, never by a Security-UI dismissal or a
+#: ``paths-ignore``.
+REMEDY = (
+    "\nFix the code that produces the result.  Dismissing the alert in the "
+    "code-scanning UI does not clear this gate: the SARIF it reads is written by "
+    "this run's analysis, before upload, and does not consult alert dismissal "
+    "state.  Per .github/codeql/codeql-config.yml a CodeQL finding is resolved at "
+    "the source, not with a Security-UI dismissal or a paths-ignore; src/c/ and "
+    "include/ admit no suppression at all (INVARIANT-13)."
+)
+
 #: CodeQL's security queries mostly carry ``@problem.severity warning`` and put
 #: their CVSS-style rating in the rule's ``properties.security-severity``;
 #: GitHub's own code-scanning threshold is keyed on that rating for exactly
@@ -224,11 +246,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for row in failures:
             print(f"  {row}", file=sys.stderr)
-        print(
-            "\nFix the finding, or — if it is a false positive — dismiss it in the "
-            "code-scanning UI with a reason, which removes it from the SARIF.",
-            file=sys.stderr,
-        )
+        print(REMEDY, file=sys.stderr)
         return 1
     print(
         "PASS — no CodeQL result at error level or with security-severity "

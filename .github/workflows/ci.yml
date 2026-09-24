@@ -2031,10 +2031,16 @@ jobs:
       # `success`. `skipped` now fails the gate too: on this workflow it can only
       # mean a `needs:` dependency failed (already red) or a future job's `if:`
       # drifted so it silently stopped running — exactly the gap a lenient gate
-      # hides. `cancelled` also fails, but only ever appears on a run superseded
-      # by a newer push or a manual abort, neither of which gates the latest head
-      # commit that branch protection evaluates. Matrix jobs are fail-fast:false
-      # and timeouts report as `failure`.
+      # hides. `cancelled` fails too, and it is not only a superseded run or a
+      # manual abort: a job that reaches its `timeout-minutes` ends `cancelled`,
+      # not `failure`. This workflow's own `test` job recorded it (the timeout
+      # note at the top of this file), and ci-build-test.yml run 35955250803
+      # (head dfd35dcb) measured it again: "Python 3.10 on windows-latest" hit
+      # the 20-minute cap it then had, mid-`Run tests`, and the Actions jobs
+      # API reports the job and that step as `cancelled`. A gate that
+      # tolerated `cancelled` would therefore pass a hung or over-budget leg.
+      # tools/check_gate_coverage.py requires all three results in this
+      # condition. Matrix jobs are fail-fast:false.
       if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
       run: |
         echo "::error::CI Gate failed — a required job did not succeed."

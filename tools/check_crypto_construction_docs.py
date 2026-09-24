@@ -94,7 +94,8 @@ exempt throughout: they are the historical record (``tools/_repo.py``'s
 Exit status
 -----------
 0  documentation agrees with the implementation
-1  at least one claim contradicts it
+1  at least one claim contradicts it, or a scanned document could not be read
+   or is not valid UTF-8 (a document no rule can read is not one that passed)
 2  the check could not run
 """
 
@@ -928,16 +929,59 @@ def scanned_files(repo: Path = REPO) -> list[Path]:
     return seen
 
 
+def _read_document(path: Path, shown_as: str) -> tuple[Optional[str], Optional[Finding]]:
+    """The text of one scanned document, and a finding if it could not be read cleanly.
+
+    A document the gate cannot read is a document every rule skipped.  This
+    used to be ``except (UnicodeDecodeError, OSError): continue``: one cp1252
+    byte (an em dash pasted from a Windows editor is ``0x97``) dropped the
+    whole file from every rule, and the run still printed ``OK N document(s)``
+    with that file counted in N.  Now the failure is itself a finding, so the
+    gate cannot report green over it, and an undecodable file is still scanned
+    with the offending bytes replaced by U+FFFD, so a claim elsewhere in it is
+    reported too rather than hidden behind the encoding error.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return None, Finding(
+            shown_as,
+            0,
+            "",
+            f"cannot be read ({exc.strerror or exc}); no rule ran on it, so the "
+            "gate cannot pass it",
+        )
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError as exc:
+        line = raw.count(b"\n", 0, exc.start) + 1
+        # The offending line is shown with the bad bytes escaped (``\x97``)
+        # rather than replaced, so the report names the byte to fix instead of
+        # printing an anonymous U+FFFD.
+        begin = raw.rfind(b"\n", 0, exc.start) + 1
+        finish = raw.find(b"\n", exc.start)
+        shown = raw[begin : finish if finish >= 0 else len(raw)]
+        return raw.decode("utf-8", errors="replace"), Finding(
+            shown_as,
+            line,
+            shown.decode("utf-8", errors="backslashreplace").strip()[:160],
+            f"is not valid UTF-8 (byte 0x{raw[exc.start]:02x} at offset {exc.start}); "
+            "re-save it as UTF-8. The rules still ran on it with undecodable bytes "
+            "replaced, and any claim they found is listed separately",
+        )
+
+
 def find_claims(
     authority: Authority, repo: Path = REPO, files: Optional[Iterable[Path]] = None
 ) -> list[Finding]:
     findings: list[Finding] = []
     for path in files if files is not None else scanned_files(repo):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
         relative = _display_path(path, repo)
+        text, unreadable = _read_document(path, relative)
+        if unreadable is not None:
+            findings.append(unreadable)
+        if text is None:
+            continue
         source_lines = text.splitlines()
         waived = False
         for number, raw in enumerate(source_lines, start=1):
@@ -1024,8 +1068,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if findings:
         print(
-            f"CRYPTOGRAPHIC CONSTRUCTION DOC CHECK FAILED — {len(findings)} claim(s) "
-            "contradict the implementation:",
+            f"CRYPTOGRAPHIC CONSTRUCTION DOC CHECK FAILED — {len(findings)} finding(s): "
+            "claims that contradict the implementation, or documents the gate "
+            "could not read:",
             file=sys.stderr,
         )
         for finding in findings:

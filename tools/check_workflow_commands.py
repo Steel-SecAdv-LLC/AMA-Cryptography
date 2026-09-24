@@ -987,15 +987,27 @@ def check_cmake_build_type(path: Path, document: Any, report: Report) -> None:
 #: Found by dispatching the workflow (GitHub answers `422 Invalid Argument -
 #: failed to parse workflow`), not by any check in this repository.  It is
 #: checked here now.
-_ARITHMETIC_IN_EXPRESSION_RE = re.compile(
-    r"\$\{\{(?P<body>[^}]*)\}\}",
-)
+#:
+#: The body of each ``${{ ... }}`` is found by :func:`_expression_bodies`, a
+#: scanner, not by a ``[^}]*`` regex: that pattern could not match a body with a
+#: ``}`` in it, so ``${{ format('{0}', x) * 2 }}`` was never extracted and never
+#: checked.
 
 #: Arithmetic operators, matched only where they can be an operator: between
 #: two operand-ish characters.  Written narrowly so ordinary content inside an
 #: expression — a `-` inside a quoted string, a `/` in a path literal, a `!` —
 #: does not produce a false positive.
 _ARITHMETIC_OPERATOR_RE = re.compile(r"[\w)\]]\s*[*/%+]\s*[\w(]")
+
+#: Subtraction, which the class above cannot hold: ``-`` is also part of an
+#: identifier (``needs.build-wheels.result``, ``matrix.python-version``), so
+#: ``a-b`` with nothing around the hyphen is one name, not an operator.  A
+#: ``-`` is subtraction when whitespace separates it from an operand on either
+#: side (``matrix.budget - 5``, ``a -5``, ``a- 5``) or when it follows a closing
+#: ``)`` or ``]`` (``fromJSON(x)-1``), where no identifier can continue.  A
+#: leading minus with no operand before it (``== -1``, ``(-1``) is a negative
+#: number literal, which the grammar does admit, and is not matched.
+_SUBTRACTION_OPERATOR_RE = re.compile(r"(?:[)\]]\s*|\w\s+)-\s*[\w(]|[\w)\]]\s*-\s+[\w(]")
 
 #: A single-quoted GitHub-expression string literal, `''` being the escape.
 _EXPRESSION_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
@@ -1035,9 +1047,43 @@ def _iter_expression_bodies(node: Any, trail: str = "") -> list[tuple[str, str]]
         for index, value in enumerate(node):
             found.extend(_iter_expression_bodies(value, f"{trail}[{index}]"))
     elif isinstance(node, str) and "${{" in node:
-        for match in _ARITHMETIC_IN_EXPRESSION_RE.finditer(node):
-            found.append((trail or "<root>", match.group("body")))
+        for body in _expression_bodies(node):
+            found.append((trail or "<root>", body))
     return found
+
+
+def _expression_bodies(text: str) -> list[str]:
+    """The inside of every ``${{ ... }}`` in ``text``.
+
+    An expression ends at the first ``}}`` that is NOT inside a single-quoted
+    string literal.  That is the rule GitHub's own reader applies
+    (actions/runner, ``src/Sdk/WorkflowParser/ObjectTemplating/
+    TemplateReader.cs``): a ``'`` toggles the literal state (the ``''`` escape
+    toggles it twice, so it needs no special case), and ``}}`` closes the
+    expression only outside a literal.  ``format('{0}', x)`` therefore stays
+    one body.  An expression with no closing ``}}`` is returned up to the end
+    of the string, so the operator checks still run over it.
+    """
+    bodies: list[str] = []
+    position = text.find("${{")
+    while position >= 0:
+        cursor = position + 3
+        in_literal = False
+        end = -1
+        while cursor < len(text):
+            character = text[cursor]
+            if character == "'":
+                in_literal = not in_literal
+            elif not in_literal and text.startswith("}}", cursor):
+                end = cursor
+                break
+            cursor += 1
+        if end < 0:
+            bodies.append(text[position + 3 :])
+            break
+        bodies.append(text[position + 3 : end])
+        position = text.find("${{", end + 2)
+    return bodies
 
 
 def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
@@ -1055,10 +1101,14 @@ def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
         # Blank single-quoted string literals first.  GitHub expressions
         # quote with `'` only, and their CONTENTS are data: `'refs/heads/main'`
         # contains a `/` between two word characters and would otherwise read
-        # as a division.  Spaces rather than deletion so the operator's offset
-        # still indexes `body`; detection is the same either way (measured).
-        scannable = _EXPRESSION_LITERAL_RE.sub(lambda m: " " * len(m.group(0)), body)
-        operator = _ARITHMETIC_OPERATOR_RE.search(scannable)
+        # as a division.  Each literal becomes a same-length run of `_`, which
+        # keeps offsets indexing `body` and leaves the literal an OPERAND: a
+        # run of spaces made `'a' * 2` and `'a' - 1` invisible, because the
+        # operator then had no operand character before it.
+        scannable = _EXPRESSION_LITERAL_RE.sub(lambda m: "_" * len(m.group(0)), body)
+        operator = _ARITHMETIC_OPERATOR_RE.search(scannable) or _SUBTRACTION_OPERATOR_RE.search(
+            scannable
+        )
         if operator is not None:
             report.findings.append(
                 Finding(

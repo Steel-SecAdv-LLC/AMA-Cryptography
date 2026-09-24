@@ -567,6 +567,22 @@ class TestExpressionSyntax:
             "${{ matrix.n + 1 }}",
             "${{ (matrix.a) / 4 }}",
             "${{ matrix.a % 8 }}",
+            # Subtraction was outside the operator class entirely.  `-` is also
+            # an identifier character, so only a minus an operand cannot absorb
+            # is one: whitespace on either side, or after `)` / `]`.
+            "${{ matrix.budget - 5 }}",
+            "${{ matrix.budget -5 }}",
+            "${{ matrix.budget- 5 }}",
+            "${{ fromJSON(matrix.n)-1 }}",
+            "${{ matrix.list[0] - 1 }}",
+            # A `}` inside a string literal ended the old `[^}]*` extraction,
+            # so these bodies were never checked at all.
+            "${{ format('{0}', matrix.x) * 2 }}",
+            "${{ format('{0}', matrix.x) - 2 }}",
+            # A literal operand: blanking literals to spaces left the operator
+            # with nothing before it.
+            "${{ '5' * 2 }}",
+            "${{ 'a' - 1 }}",
         ],
     )
     def test_every_arithmetic_operator_is_rejected(self, expression: str) -> None:
@@ -589,6 +605,18 @@ class TestExpressionSyntax:
             "${{ github.event.inputs.measurements || '100000' }}",
             "${{ steps.confirm.outputs.supported == 'true' }}",
             "${{ hashFiles('**/requirements*.txt') }}",
+            # Hyphenated identifiers are names, not subtraction.
+            "${{ needs.build-wheels.result == 'success' }}",
+            "${{ needs['publish-pypi'].result != 'failure' }}",
+            "${{ matrix.python-version }}",
+            # A negative number literal is admitted by the grammar.
+            "${{ matrix.n == -1 }}",
+            "${{ contains(fromJSON('[-1, 2]'), matrix.n) }}",
+            # Braces and a spaced minus inside a literal are data.  The first
+            # is the shape fuzzing.yml carries four times.
+            "${{ hashFiles(format('fuzz/{0}.c', matrix.target)) }}",
+            "${{ format('{0} - {1}', matrix.a, matrix.b) }}",
+            "${{ format('it''s {0}', matrix.a) }}",
         ],
     )
     def test_legitimate_expressions_are_not_flagged(self, expression: str) -> None:
@@ -636,6 +664,50 @@ class TestExpressionSyntax:
         )
         assert report.ok, messages(report)
         assert report.expressions_checked == 1
+
+    def test_a_brace_inside_a_literal_does_not_end_the_expression(self) -> None:
+        """GitHub ends an expression at the first ``}}`` outside a literal."""
+        assert wf._expression_bodies("key-${{ hashFiles(format('fuzz/{0}.c', m)) }}-x") == [
+            " hashFiles(format('fuzz/{0}.c', m)) "
+        ]
+        assert wf._expression_bodies("${{ format('}}', a) }} and ${{ b }}") == [
+            " format('}}', a) ",
+            " b ",
+        ]
+        assert wf._expression_bodies("${{ format('it''s', a) }}") == [" format('it''s', a) "]
+
+    def test_an_unclosed_expression_is_still_checked(self) -> None:
+        assert wf._expression_bodies("echo ${{ matrix.n - 1") == [" matrix.n - 1"]
+
+    def test_every_expression_in_the_tree_is_extracted(self) -> None:
+        """Counted against an independent tally: the walk the gate runs yields
+        one body per ``${{`` in every string of every workflow, plus one per
+        bare ``if:``.  The ``[^}]*`` extraction dropped the four
+        ``hashFiles(format('fuzz/{0}.c', ...))`` expressions in fuzzing.yml, so
+        the gate had never checked them."""
+        expected = 0
+
+        def tally(node: object, key: object = None) -> None:
+            nonlocal expected
+            if isinstance(node, dict):
+                for child_key, value in node.items():
+                    tally(value, child_key)
+            elif isinstance(node, list):
+                for value in node:
+                    tally(value)
+            elif isinstance(node, str):
+                if key == "if" and "${{" not in node:
+                    expected += 1
+                else:
+                    expected += node.count("${{")
+
+        extracted = 0
+        for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+            document = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+            tally(document)
+            extracted += len(wf._iter_expression_bodies(document))
+        assert expected > 0
+        assert extracted == expected
 
     def test_the_check_inspects_something(self) -> None:
         """A silent no-op would pass every workflow in the tree."""

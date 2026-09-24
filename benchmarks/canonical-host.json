@@ -750,6 +750,14 @@
       "heading": "Core Cryptographic Primitives (Python API via ctypes)",
       "label": "(prose)",
       "approx": false,
+      "value": "974cb019",
+      "unit": "",
+      "source": "canonical-bench-host"
+    },
+    {
+      "heading": "Core Cryptographic Primitives (Python API via ctypes)",
+      "label": "(prose)",
+      "approx": false,
       "value": "0",
       "unit": "",
       "source": "canonical-bench-host"

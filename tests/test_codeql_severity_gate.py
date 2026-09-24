@@ -182,3 +182,42 @@ def test_the_upload_keeps_mains_code_scanning_category() -> None:
     ]
     assert len(analyze) == 1
     assert analyze[0]["with"]["category"] == "/language:c-cpp"
+
+
+def test_the_remedy_does_not_send_the_operator_to_a_ui_dismissal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The printed advice used to be "dismiss it in the code-scanning UI with a
+    reason, which removes it from the SARIF".  The SARIF this gate reads is the
+    file the analysis step writes before upload; alert dismissal is server-side
+    state it never consults, so that advice could not clear the gate."""
+    report = _write(tmp_path, _sarif(("cpp/use-after-free", "error", None)))
+    assert gate.main([str(report)]) == 1
+    err = capsys.readouterr().err
+    assert "removes it from the SARIF" not in err
+    assert "Fix the code that produces the result." in err
+    assert "does not clear this gate" in err
+    assert ".github/codeql/codeql-config.yml" in err
+
+
+@pytest.mark.parametrize(
+    "suppression",
+    [
+        {"kind": "external", "status": "accepted", "justification": "false positive"},
+        {"kind": "inSource", "status": "accepted"},
+    ],
+)
+def test_a_suppressed_result_still_blocks(tmp_path: Path, suppression: dict[str, str]) -> None:
+    """SARIF's own acknowledgement of a result does not clear it here either.
+
+    ``suppressions`` is where SARIF records a result as triaged (``external``)
+    or silenced by a source comment (``inSource``).  The gate reads the result,
+    not its triage state: INVARIANT-13 forbids suppressions in ``src/c/`` and
+    ``include/`` outright, and codeql-config.yml resolves CodeQL findings at the
+    source.
+    """
+    sarif = _sarif(("cpp/use-after-free", "error", None))
+    sarif["runs"][0]["results"][0]["suppressions"] = [suppression]
+    failures, blocking, total = gate.audit([_write(tmp_path, sarif)])
+    assert (blocking, total) == (1, 1)
+    assert "cpp/use-after-free" in failures[0]

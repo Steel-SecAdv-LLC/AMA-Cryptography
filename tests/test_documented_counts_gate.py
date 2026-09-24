@@ -676,6 +676,24 @@ class TestTheGateIsNotVacuousOnThisRepository:
         floored = set(tool.CLAIM_FAMILY_FLOORS)
         assert floored <= produced, f"floors for families never counted: {floored - produced}"
 
+    def test_every_floor_is_the_count_the_tree_carries(self, tool: ModuleType) -> None:
+        """A floor below the tree's count lets that many claims go silent unseen.
+
+        ``c_suite_bare`` was floored at 2 while three documents carried the
+        claim, so rewording any one of them out of its pattern left it
+        unchecked with every floor still met: the per-family silent drop the
+        floors were introduced to catch (audit M15).  The gate reads floors as
+        minimums; this is what keeps them equal to the tree, so adding a claim
+        raises its floor in the same commit.
+        """
+        counts = tool.count_claim_families(REPO_ROOT)
+        stale = {
+            family: (counts.get(family, 0), floor)
+            for family, floor in tool.CLAIM_FAMILY_FLOORS.items()
+            if counts.get(family, 0) != floor
+        }
+        assert stale == {}, f"(count on the tree, floor) per family that differs: {stale}"
+
 
 class TestPerFamilyFloor:
     """A family going silent must fail even while the total stays high (M15)."""
