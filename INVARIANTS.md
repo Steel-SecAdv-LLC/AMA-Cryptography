@@ -1724,7 +1724,7 @@ running it. The checker distinguishes a *deliberate, documented* exclusion
 from silent drift.
 
 **The Python lane, and why it exists.** `ama_cryptography/_asn1.py` and
-`key_formats.py` are hostile-input parsers in exactly the sense the sixteen C
+`key_formats.py` are hostile-input parsers in exactly the sense the seventeen C
 harnesses are — anyone who can hand you a key file reaches them — and they had
 no harness at all. What they had was a deterministic mutation sweep inside
 pytest: 120 fixed mutations per algorithm from one seed, which explores the same
@@ -2912,7 +2912,7 @@ it so there is one build integration.
 
 **Measured cost.** One cache restore and save per matrix cell (corpora are
 tens of KB to a few MB); a merge of a few seconds; the OSS-Fuzz job pulls
-`base-builder` and `base-runner` and builds sixteen fuzzers, roughly ten
+`base-builder` and `base-runner` and builds 17 fuzzers, roughly ten
 minutes in parallel with the other lanes.
 
 ---

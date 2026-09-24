@@ -888,7 +888,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | All C functions | 86 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
+| C Unit Tests | Native library validation | All C functions | 90 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -896,7 +896,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 17 C targets | `fuzz/fuzz_*.c` (18 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 5,845 Python test functions across 257 test files, plus the
+**Total:** 6,159 Python test functions across 262 test files, plus the
 ctest-registered C tests and the two `x25519_equiv_*.c` helper translation units under `tests/c/`,
 which have no `main` of their own and are linked into `test_x25519_field_equiv`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
