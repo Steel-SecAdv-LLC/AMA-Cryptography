@@ -68,9 +68,11 @@ What is checked
 5. **Contradictions with INVARIANTS.** A document may not assert a behaviour
    an invariant forbids where the implementation agrees with the invariant.
 6. **Reintroduction elsewhere.** Every rule runs over the whole tracked
-   documentation set, so moving a corrected claim into another file does not
-   escape it. The retired-claim registry additionally pins the exact wording
-   that was removed.
+   documentation set — enumerated by ``git ls-files`` through
+   ``tools/_repo.py``, so an untracked file is out of scope and a git that
+   cannot enumerate is exit 2 — so moving a corrected claim into another file
+   does not escape it. The retired-claim registry additionally pins the exact
+   wording that was removed.
 
 The scan covers **source comments and docstrings as well as prose**, because
 they drift identically and are read by the same people. Extending it found two
@@ -687,16 +689,34 @@ def _display_path(path: Path, repo: Path) -> str:
 
 
 def scanned_files(repo: Path = REPO) -> list[Path]:
+    """Every TRACKED documentation-bearing file under ``repo``.
+
+    Item 6 of the module docstring says every rule runs over the whole
+    *tracked* documentation set, and until this was corrected it did not: the
+    enumeration was ``repo.rglob("*")``, which consulted neither git nor
+    ``.gitignore``.  An untracked checkout nested under the root (a
+    ``.claude/worktrees/<copy>``, a scratch clone) contributed every one of its
+    files, and the gate failed on documents that are not part of the
+    repository.  Enumeration now goes through ``tools/_repo.py``
+    (``git ls-files -z``), which also reads a tracked file's working-tree edits.
+
+    Raises ``TrackedFilesError`` (a ``RuntimeError``) when git cannot
+    enumerate ``repo``; :func:`main` reports that as exit 2.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import tracked_names
+
     seen: list[Path] = []
-    for path in sorted(repo.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in SCAN_SUFFIXES:
+    for name in sorted(tracked_names(repo)):
+        if Path(name).suffix.lower() not in SCAN_SUFFIXES:
             continue
-        relative = path.relative_to(repo)
-        if any(part in EXCLUDED_DIRS for part in relative.parts):
+        if any(part in EXCLUDED_DIRS for part in name.split("/")):
             continue
-        if relative.as_posix() in EXEMPT_FILES or relative.as_posix() in SELF_REFERENTIAL:
+        if name in EXEMPT_FILES or name in SELF_REFERENTIAL:
             continue
-        seen.append(path)
+        seen.append(repo / name)
     return seen
 
 
@@ -794,8 +814,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 2
 
-    files = [repo / name for name in args.files] if args.files else None
-    findings = find_claims(authority, repo, files)
+    if args.files:
+        scanned = [repo / name for name in args.files]
+    else:
+        try:
+            scanned = scanned_files(repo)
+        except RuntimeError as exc:  # TrackedFilesError: git could not enumerate
+            print(f"FATAL: cannot enumerate the tracked tree: {exc}", file=sys.stderr)
+            return 2
+    findings = find_claims(authority, repo, scanned)
 
     if findings:
         print(
@@ -815,7 +842,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    scanned = files if files is not None else scanned_files(repo)
     print(
         f"OK    {len(scanned)} document(s); constructions agree with the implementation "
         f"(posture {authority.posture_weights} / thresholds {authority.posture_thresholds}, "

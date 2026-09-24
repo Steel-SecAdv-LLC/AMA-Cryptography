@@ -103,8 +103,10 @@ Checks
     it, and an exemption list would be the suppression INVARIANT-13 forbids.
 
 ``--build-config``
-    No ``CMakeLists.txt``, ``cmake/**.cmake`` or ``setup.py`` outside
-    ``benchmarks/`` may search for, find, or link a forbidden vendor.
+    No tracked ``CMakeLists.txt``, ``cmake/**.cmake`` or ``setup.py`` outside
+    ``benchmarks/`` may search for, find, or link a forbidden vendor.  The
+    files are enumerated by git, not by a filesystem walk, so an untracked
+    checkout nested in the tree is out of scope.
     Commands are matched, not words: ``CMakeLists.txt`` names OpenSSL in a
     status message and in the comment recording why it is deliberately not
     probed, and a scan that cannot tell a mention from a link would fire on
@@ -729,6 +731,34 @@ def _vendor_link_tokens() -> dict[str, str]:
     return tokens
 
 
+def tracked_build_config_files(repo_root: Path) -> list[Path]:
+    """The TRACKED files matching :data:`_BUILD_CONFIG_GLOBS`, sorted.
+
+    ``**/CMakeLists.txt`` was globbed from the filesystem, so any untracked
+    checkout nested under the root — a ``.claude/worktrees/<copy>``, a
+    developer's scratch clone — had its build files read as this
+    repository's, and a ``find_package(OpenSSL)`` in one of them failed the
+    gate.  The files that decide what THIS tree links are the ones git
+    tracks, so they are enumerated through ``tools/_repo.py``
+    (``git ls-files -z``; working-tree edits to a tracked file are read).
+    Each glob is passed with ``:(glob)`` magic, under which ``*`` does not
+    cross a ``/`` and a leading ``**/`` also matches at the root — the
+    semantics ``Path.glob`` gave these patterns.
+
+    Raises ``TrackedFilesError`` (a ``RuntimeError``) when git cannot
+    enumerate ``repo_root``; :func:`main` reports it as a build-config
+    violation (exit 1: a requested check that could not be performed).
+    There is deliberately no filesystem fallback.
+    """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import tracked_files
+
+    pathspecs = [f":(glob){pattern}" for pattern in _BUILD_CONFIG_GLOBS]
+    return sorted(tracked_files(repo_root, *pathspecs))
+
+
 def check_build_config(repo_root: Path) -> list[Violation]:
     """No build file may search for, find, or link a forbidden vendor.
 
@@ -795,18 +825,17 @@ def check_build_config(repo_root: Path) -> list[Violation]:
     violations: list[Violation] = []
     seen: set[Path] = set()
     paths: list[Path] = []
-    for pattern in _BUILD_CONFIG_GLOBS:
-        for path in sorted(repo_root.glob(pattern)):
-            resolved = path.resolve()
-            if not path.is_file() or resolved in seen:
-                continue
-            relative = path.relative_to(repo_root)
-            if set(relative.parts) & _BUILD_CONFIG_SKIP_DIRS:
-                continue
-            if relative.parts and relative.parts[0] == COMPARATOR_PACKAGE:
-                continue
-            seen.add(resolved)
-            paths.append(path)
+    for path in tracked_build_config_files(repo_root):
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        relative = path.relative_to(repo_root)
+        if set(relative.parts) & _BUILD_CONFIG_SKIP_DIRS:
+            continue
+        if relative.parts and relative.parts[0] == COMPARATOR_PACKAGE:
+            continue
+        seen.add(resolved)
+        paths.append(path)
 
     def _report(where: str, token: str, vendor: str, context: str) -> None:
         violations.append(
@@ -1512,7 +1541,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         violations += check_c_source(repo_root / args.c_root, repo_root)
         ran.append(f"C source ({args.c_root})")
     if selected_build_config:
-        violations += check_build_config(repo_root)
+        try:
+            violations += check_build_config(repo_root)
+        except RuntimeError as exc:  # TrackedFilesError: git could not enumerate
+            # Exit 1 per the module's contract: a requested check that could
+            # not be performed is a failure, never a pass.
+            violations.append(
+                Violation("build-config", str(repo_root), f"cannot enumerate tracked files: {exc}")
+            )
         ran.append("build config (CMake / setup.py link lines)")
         violations += check_container_recipes(repo_root)
         ran.append("container recipes (Dockerfile package installs)")
