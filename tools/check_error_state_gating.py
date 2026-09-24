@@ -614,6 +614,17 @@ def _is_guard_statement(stmt: ast.stmt, delegating: set[str]) -> bool:
     return False
 
 
+def _try_blocks(
+    stmt: ast.stmt,
+) -> Optional[tuple[list[ast.stmt], list[ast.ExceptHandler], list[ast.stmt], list[ast.stmt]]]:
+    """``(body, handlers, orelse, finalbody)`` of a ``try`` / ``try*``, else ``None``."""
+    if isinstance(stmt, ast.Try):
+        return stmt.body, stmt.handlers, stmt.orelse, stmt.finalbody
+    if sys.version_info >= (3, 11) and isinstance(stmt, ast.TryStar):
+        return stmt.body, stmt.handlers, stmt.orelse, stmt.finalbody
+    return None
+
+
 def unguarded_native_line(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     helpers: frozenset[str],
@@ -622,9 +633,10 @@ def unguarded_native_line(
     """The line to report if ``node`` can reach native without the guard, else ``None``.
 
     The rule is DOMINANCE, which is what "before the first native call" has to
-    mean for the guard to inhibit anything: a statement of the function's own
-    body that is a guard call (:func:`_is_guard_statement`) must come before
-    the body statement holding the first native call.
+    mean for the guard to inhibit anything: a guard statement
+    (:func:`_is_guard_statement`) must come before every native call in the
+    same block, at the depth the call sits (see ``unguarded`` below for how
+    ``try``/``if``/``with`` blocks are read).
 
     The previous test compared line numbers — ``min(native) < min(guard)`` over
     every call anywhere in the body — so each of these read as gated while
@@ -647,20 +659,82 @@ def unguarded_native_line(
     aliases = _native_handle_aliases(node)
     if not _native_call_lines(node, direct_helpers, aliases):
         return None
-    for stmt in node.body:
-        if _is_guard_statement(stmt, delegating):
-            return None
-        native = _native_call_lines(stmt, direct_helpers, aliases)
-        if native:
-            # Reached before any guard statement.  Name the def when the body
-            # has no guard call at all, and the native call when it has one
-            # that does not dominate — that is where output escaped.
-            if not _guard_call_lines(node, delegating):
-                return node.lineno
-            return min(native)
-    # The call sits outside the body — a decorator, a default or an annotation,
-    # evaluated when the ``def`` runs — where no guard in the body precedes it.
-    return node.lineno
+
+    def native_in(item: ast.AST) -> list[int]:
+        return _native_call_lines(item, direct_helpers, aliases)
+
+    def unguarded(block: list[ast.stmt]) -> Optional[list[int]]:
+        """Native lines reachable in ``block`` before a dominating guard.
+
+        ``None`` when the block's native calls are all dominated.  A guard
+        statement dominates every later statement of the SAME block, at any
+        depth: ``try: check_crypto_permitted(); ...; native()`` is gated, and
+        so is ``if x: check_crypto_permitted(); native()``.  Dominance is
+        never inherited across blocks that can run without the guard having
+        completed: an ``except`` handler and a ``finally`` run after the try
+        body raised (possibly from the guard itself), so each must dominate
+        its own calls; an ``else`` runs only after the body completed, so the
+        body's guard covers it.  A native call in a condition, a ``with``
+        item or any other expression of the compound statement runs before
+        its blocks and is unguarded.
+        """
+        for stmt in block:
+            if _is_guard_statement(stmt, delegating):
+                return None
+            native = native_in(stmt)
+            if not native:
+                continue
+            try_blocks = _try_blocks(stmt)
+            if try_blocks is not None:
+                body, handlers, orelse, finalbody = try_blocks
+                body_open = unguarded(body)
+                if body_open:
+                    return body_open
+                body_guarded = any(_is_guard_statement(s, delegating) for s in body)
+                for handler in handlers:
+                    if handler.type is not None and native_in(handler.type):
+                        return native_in(handler.type)
+                for sub in (
+                    [h.body for h in handlers] + [finalbody] + ([] if body_guarded else [orelse])
+                ):
+                    open_lines = unguarded(sub)
+                    if open_lines:
+                        return open_lines
+                continue
+            if isinstance(stmt, ast.If):
+                if native_in(stmt.test):
+                    return native_in(stmt.test)
+                for sub in (stmt.body, stmt.orelse):
+                    open_lines = unguarded(sub)
+                    if open_lines:
+                        return open_lines
+                continue
+            if isinstance(stmt, (ast.With, ast.AsyncWith)):
+                items = [n for item in stmt.items for n in native_in(item)]
+                if items:
+                    return items
+                open_lines = unguarded(stmt.body)
+                if open_lines:
+                    return open_lines
+                continue
+            return native
+        return None
+
+    open_lines = unguarded(node.body)
+    if open_lines is None:
+        # Every call inside the body is dominated.  One outside it — a
+        # decorator, a default or an annotation, evaluated when the ``def``
+        # runs — has no guard ahead of it at all.
+        inside = {n for stmt in node.body for n in native_in(stmt)}
+        if set(native_in(node)) - inside:
+            return node.lineno
+        return None
+    # Reached before any guard statement.  Name the def when the body has no
+    # guard call at all, and the native call when it has one that does not
+    # dominate — that is where output escaped.
+    if not _guard_call_lines(node, delegating):
+        return node.lineno
+    return min(open_lines)
 
 
 def _iter_public_functions(

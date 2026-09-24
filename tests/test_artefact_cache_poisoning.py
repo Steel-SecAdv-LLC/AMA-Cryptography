@@ -389,7 +389,13 @@ class TestTheParserFailsWithTheOneExceptionCallersHandle:
 
         path = artefact_path(REPO_ROOT / "ama_cryptography")
         if not path.is_file():
-            pytest.skip("no signed artefact in this checkout (it is a build output)")
+            # "native" makes this skip escalate under AMA_CI_REQUIRE_BACKENDS;
+            # every lane that sets it signs the artefact before pytest runs.
+            pytest.skip(
+                "no signed artefact: the native build's signing step "
+                "(AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
+                "--update --sign) has not run"
+            )
         assert len(path.read_text(encoding="utf-8")) * 4 < ARTEFACT_MAX_CHARS
 
     def test_an_unparseable_artefact_raises_artefact_source_error(self, tmp_path: Path) -> None:

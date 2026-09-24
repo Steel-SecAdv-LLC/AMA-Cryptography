@@ -165,16 +165,6 @@ MANUAL_BOUNDS: dict[str, ManualBound] = {
         "input length and its false branch by every input. It contributes no "
         "bound",
     ),
-    "fuzz_kyber": ManualBound(
-        1569,
-        ("payload_len != AMA_KYBER_1024_PUBLIC_KEY_BYTES (in a || condition)",),
-        "case 4's post-condition `if (payload_len != AMA_KYBER_1024_PUBLIC_KEY_BYTES "
-        "|| ct_len != AMA_KYBER_1024_CIPHERTEXT_BYTES) __builtin_trap();` after a "
-        "SUCCESSFUL encapsulation: its true branch is a defect report, reachable "
-        "at no length if encapsulation is correct, and its false branch needs "
-        "payload_len == 1568 (AMA_KYBER_1024_PUBLIC_KEY_BYTES), plus the 1-byte "
-        "selector: 1569",
-    ),
 }
 
 _DEFINE_RE = re.compile(r"^\s*#\s*define\s+(?P<name>[A-Za-z_]\w*)\s+(?P<value>\d+)\s*$", re.M)

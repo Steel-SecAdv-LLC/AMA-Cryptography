@@ -10,15 +10,15 @@
   },
   "test_coverage": {
     "counts": {
-      "Core Crypto\n& NIST KATs": 1050,
+      "Core Crypto\n& NIST KATs": 1069,
       "Key Management\n& Rotation": 281,
       "Memory Security\n& Fuzzing": 339,
-      "Other": 3347,
+      "Other": 3409,
       "PQC Backends\n& Integration": 776,
-      "Performance\n& Monitoring": 366
+      "Performance\n& Monitoring": 375
     },
-    "n_files": 262,
-    "total_tests": 6159,
+    "n_files": 264,
+    "total_tests": 6249,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -52,6 +52,7 @@
       "test_changelog_relocation.py",
       "test_choco_retry_gate.py",
       "test_ci_gate_negative.py",
+      "test_cmake_library_options_link.py",
       "test_codeql_severity_gate.py",
       "test_competitive_page.py",
       "test_compiler_warning_gate.py",
@@ -104,6 +105,7 @@
       "test_keypair_conventions.py",
       "test_kyber_compress_width_contract.py",
       "test_lazy_exports.py",
+      "test_legacy_package_compat.py",
       "test_line_endings_gate.py",
       "test_lint_job_environment.py",
       "test_log_message_encodability_gate.py",

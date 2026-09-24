@@ -1295,6 +1295,60 @@ class TestTheGuardMustDominateTheNativeCall:
     ) -> None:
         assert self._ungated(tool, tmp_path, source) == []
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # frost_round2_sign's shape: the guard opens the try whose finally
+            # scrubs, so a refusal is scrubbed too, and the call follows it
+            "def f(data, buf):\n    try:\n        check_crypto_permitted()\n"
+            "        rc = _native_lib.ama_x(data)\n    finally:\n        scrub(buf)\n"
+            "    return rc\n",
+            # a guard earlier in the same branch as the call
+            "def f(data, fast=False):\n    if fast:\n        check_crypto_permitted()\n"
+            "        return _native_lib.ama_x(data)\n    return b''\n",
+            # try's else runs only after the body completed, guard included
+            "def f(data):\n    try:\n        check_crypto_permitted()\n"
+            "    except ValueError:\n        raise\n    else:\n"
+            "        return _native_lib.ama_x(data)\n",
+            # a with body is a block of its own
+            "def f(data, lock):\n    with lock:\n        check_crypto_permitted()\n"
+            "        return _native_lib.ama_x(data)\n",
+        ],
+        ids=["try-finally-body", "same-branch", "try-else", "with-body"],
+    )
+    def test_a_guard_dominating_its_own_block_is_accepted(
+        self, tool: ModuleType, tmp_path: Path, source: str
+    ) -> None:
+        """Dominance within a nested block: the guard precedes the call in it."""
+        assert self._ungated(tool, tmp_path, source) == []
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # a handler runs after the body raised -- possibly from the guard
+            "def f(data):\n    try:\n        check_crypto_permitted()\n"
+            "    except Exception:\n        return _native_lib.ama_x(data)\n"
+            "    return b''\n",
+            # a finally runs whether or not the guard completed
+            "def f(data):\n    try:\n        check_crypto_permitted()\n"
+            "    finally:\n        _native_lib.ama_x(data)\n",
+            # the other branch is not dominated by this one's guard
+            "def f(data, fast=False):\n    if fast:\n        check_crypto_permitted()\n"
+            "    else:\n        return _native_lib.ama_x(data)\n    return b''\n",
+            # a call in the condition runs before either branch
+            "def f(data):\n    if _native_lib.ama_x(data):\n"
+            "        check_crypto_permitted()\n    return b''\n",
+            # a call in a with item runs before the body
+            "def f(data):\n    with _native_lib.ama_x(data):\n"
+            "        check_crypto_permitted()\n    return b''\n",
+        ],
+        ids=["except-handler", "finally", "other-branch", "if-test", "with-item"],
+    )
+    def test_a_guard_in_a_block_the_call_is_not_in_is_reported(
+        self, tool: ModuleType, tmp_path: Path, source: str
+    ) -> None:
+        assert self._ungated(tool, tmp_path, source) == ["f"]
+
     def test_a_native_call_outside_the_body_is_reported(
         self, tool: ModuleType, tmp_path: Path
     ) -> None:
