@@ -768,10 +768,11 @@ The system provides two Cython extension modules for performance-critical paths:
 - Auto-selected when extension is built; ctypes fallback for environments without Cython
 
 **`src/cython/math_engine.pyx`** — Optimized mathematical operations:
-- Lyapunov stability computation (27.3x speedup)
-- Matrix-vector multiplication (28.1x speedup)
-- NTT operations (37.7x speedup)
-- Helix evolution (18.9x speedup)
+- Lyapunov stability computation
+- Matrix-vector multiplication
+- NTT operations
+- Helix evolution
+- No speed-up ratio is published for these: the per-operation figures this list carried had no benchmark, results file or history entry behind them (see README, *Cython Optimization Results*)
 - NumPy integration for array operations
 
 **`src/cython/helix_engine_complete.pyx`** — a complete-engine reference implementation of all 18+ variants. The default build does **not** compile it: `setup.py` builds `math_engine.pyx` and the FFI bindings, and this file is kept as a reference source rather than a shipped extension.
