@@ -546,7 +546,11 @@ class TestFuzzTargetCountsAreRegenerated:
             "- 9 libFuzzer fuzz targets run in CI\n"
             "Fuzz harnesses: 9 targets, plus 9 sources.\n"
             "| 3.5.0 | 2026-07-30 | 9 fuzz targets |\n"
-            "9 targets on a line that never mentions the word\n",
+            "\n"
+            "The tree builds nine\n"
+            "fuzzers, and Nine C harnesses feed them.\n"
+            "\n"
+            "9 targets in a paragraph that never mentions the word\n",
             encoding="utf-8",
         )
         counts = update_docs._counts_module()
@@ -556,7 +560,11 @@ class TestFuzzTargetCountsAreRegenerated:
             "- 3 libFuzzer fuzz targets run in CI\n"
             "Fuzz harnesses: 3 targets, plus 9 sources.\n"
             "| 3.5.0 | 2026-07-30 | 9 fuzz targets |\n"
-            "9 targets on a line that never mentions the word\n"
+            "\n"
+            "The tree builds three\n"
+            "fuzzers, and Three C harnesses feed them.\n"
+            "\n"
+            "9 targets in a paragraph that never mentions the word\n"
         )
         assert counts.check_fuzz_target_counts(tmp_path, 3) == []
         assert update_docs.update_fuzz_target_counts(root=tmp_path) is False

@@ -206,6 +206,7 @@ def changelog_problems(text: str, version: str) -> list[str]:
                     f"ships in {version}, so move them under its dated heading."
                 )
                 break
+    return problems
 
 
 def premature_release_dates(repo: Path, version: str) -> list[str]:

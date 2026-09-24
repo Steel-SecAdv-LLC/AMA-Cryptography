@@ -19,6 +19,109 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Review coverage restored: the partitioned review's findings fixed at source (batch 1 of 2) — 2026-09-24
+
+Copilot cannot review this pull request (it exceeds the 300-file limit), so
+the effective diff (`main...dfd35dcb`) was split into 22 partitions and each was
+reviewed in full. That review raised 190 findings: 3 critical, 34 high, 78
+medium and 75 low. The 115 above low were each checked by an independent
+refute-and-reproduce pass. The reviewers also listed items they judged below
+their own bar; those 56 are treated as findings too. Nothing was deferred for
+being low severity. Every commit below reproduced its findings at its base
+before changing anything. Each new or tightened test was run against the
+broken behaviour and fails there (AGENTS.md 6.2); the commit messages carry
+the measurements.
+
+**Security and correctness (C and Python)**
+- `2ee19a8`:
+  - FROST round 2 now claims the nonce pair on entry, under a process-wide
+    lock, so concurrent calls on one buffer sign at most once (INVARIANT-49).
+    Before this, 7 or 8 of 8 threads each produced a share.
+  - `ama_ed25519_point_from_scalar`, which FROST calls with every secret,
+    runs the Ed25519 stack wipe (INVARIANT-6).
+  - The secp256k1 infinity paths and the BSD urandom path are closed.
+- `684ef26`:
+  - The header's agent-binding derivation formulas now describe the code,
+    pinned by byte KATs computed outside the library.
+  - `ama_hmac_sha256`/`_2` abort on a NULL buffer with a non-zero length
+    instead of emitting the all-zero tag.
+- `9243adb`:
+  - `AmaContext`'s output-capacity guard reads every length spelling ctypes
+    accepts. `byref(c_size_t(n))` had bypassed it: the A-1 heap overflow
+    through the spelling the ctypes docs recommend, measured as SIGSEGV.
+  - `Ed25519SigningKey` no longer keeps an unwiped copy of the expanded key.
+- `0ae24a6` (critical, INVARIANT-40): a package directory, a stray `.pyc`
+  outside `__pycache__`, or a nested extension could shadow a signed module
+  and import with POST `OPERATIONAL`. The import now refuses such a tree
+  before any submodule loads.
+- `6828e7a`: `SecureKeyStorage` no longer creates, or migrates down to, a
+  PBKDF2 store when the loaded library lacks Argon2id. It refuses.
+  PBKDF2 stores remain readable under `allow_legacy_kdf=True`.
+  `_code_matches` compares constants by type as well as value.
+  `wheel_smoke_test`'s CFI probe fails closed without `readelf`.
+- `f8d870c`: the P-curve ECDH taint findings, the Lehmer threshold (the
+  loop now applies the bound it states; outputs are unchanged over 200,886
+  inputs) and the x4 baseline record.
+  `6e3e88d`: `Compress_d`'s width is checked at compile time, so `d` outside
+  FIPS 203's [1, 11] no longer compiles.
+- `5025cfe`: the Flask and FastAPI examples signed their response header and
+  an unauthenticated `/api/sign` with one key, which made `/api/sign` a
+  signing oracle for forged responses. They now use two keys.
+- `4e09e2e` (release blocker): the aarch64 manylinux wheel's `math_engine`
+  lost the BTI property. Cython's memoryview atomics called GCC's outline
+  helpers from `libgcc.a`, whose manylinux build carries no property note.
+  AArch64 extensions now build with `-mno-outline-atomics`. This was measured
+  against the release image's own `libgcc.a`.
+
+**Gates that could not see what they claimed** (AGENTS.md 10)
+- `0a3a581`, `e84b370`, `ad36599`, `14bc1ec`, `c9b4827`, `7fc231d`,
+  `45eaa23`: 37 findings in the gate scripts and their records, all fixed.
+  Examples:
+  - renamed or type-changed staged files escaped the secret scan;
+  - one-sided benchmark ranges;
+  - negation cues waived every construction-docs rule;
+  - retry and zeroization waivers borrowed from neighbouring lines;
+  - both twin workflows could skip a PR;
+  - `# mypy:` configuration after line 1 went unseen;
+  - guard ordering was judged by line number;
+  - executable annotations passed the artefact readers;
+  - the vendor-isolation probe listed module names instead of loaded
+    libraries;
+  - an undecodable document was skipped.
+- `31daa33`, `fb757ef`: INVARIANT-53's example coverage is now every tracked
+  Markdown page rather than seven. Bringing the 83 unrun blocks under it
+  found real defects on several pages, now fixed. Documented C symbols must
+  exist. The release-state gate refuses undated version rows and a non-empty
+  `[Unreleased]` at tag time. The documented-counts gate reads `BREAKING ×N`,
+  spelled-out numbers and wrapped lines. `fuzz/fuzz_lms.c` adds the HSS/LMS
+  harness the fuzz claims assumed.
+- `6e3076d`: `instruction-count-regression` failed on every push to `main`
+  (`cp head.json` before it existed). Every instruction-count acknowledgement
+  would also have failed the first pull request after the merge; an entry
+  whose change has landed is now reported, not failed. A queued tag release
+  is no longer cancelled by a later run (`queue: max`).
+- `0aa039b`, `1a285d8`:
+  - `test_secure_free_scrub` could not see a missing scrub, because
+    `ama_secure_free` unmaps the buffer. It now counts inside the release's
+    own `munmap`.
+  - The FROST small-order checks could not fail; they now can.
+  - Nine Python tests asserted less than their names, or leaked global state.
+    They now constrain what their names claim.
+
+**Behaviour changes**
+- A FROST round-2 call consumes the nonce pair even when it is refused.
+- `ama_hmac_sha256` aborts on a NULL input with a non-zero length.
+- `import ama_cryptography` refuses a tree with shadowing package files.
+- `SecureKeyStorage` raises `NativeBackendUnavailableError` on a library
+  without Argon2id.
+
+**Not fixable in the tree** (stated in the PR):
+- The ruleset on `main` requires none of the aggregating gates.
+- The release signing seed, a repository secret, reaches every branch's
+  dispatch; closing that needs a protected environment and a tag ruleset.
+
+Both need an administrator. Batch 2, the remaining clusters, follows.
+
 ### Code scanning: the one open CodeQL alert fixed, and two comment-justified empty handlers made explicit — 2026-09-24
 
 The PR's `CodeQL` check on `e0dcc42` reported "1 new alert (1 note)":

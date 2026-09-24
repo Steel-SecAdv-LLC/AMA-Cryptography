@@ -1196,22 +1196,53 @@ def update_fuzz_target_counts(dry_run: bool = False, root: Optional[Path] = None
     counts across six documents to the number of libFuzzer entry points, and
     nothing rewrote them: adding a harness meant finding each by hand.  The
     count is imported from the registration gate (``count_libfuzzer_entry_points``)
-    and the lines are selected by the gate's own rule — a line that mentions
-    fuzzing, outside a revision-history row — so the regenerator and the gate
-    cannot disagree about which claims exist or what they should say.
+    and the claims are selected by the gate's own rule — a paragraph that
+    mentions fuzzing, outside revision-history rows, with the count as digits
+    or as a number word — so the regenerator and the gate cannot disagree
+    about which claims exist or what they should say.
     """
     counts = _counts_module()
     tree = ROOT if root is None else root
     authoritative = counts.count_libfuzzer_entry_points(tree)
+    number_word = {value: word for word, value in counts._WORD_NUMBERS.items()}
+
+    def _replace(match: re.Match[str]) -> str:
+        # A count written as a word stays a word (capitalised if it was), so
+        # "the fifteen C harnesses" becomes "the seventeen C harnesses".
+        old = match.group(1)
+        new = str(authoritative)
+        if not old.isdigit() and authoritative in number_word:
+            new = number_word[authoritative]
+            if old[:1].isupper():
+                new = new.capitalize()
+        head = match.string[match.start() : match.start(1)]
+        return head + new + match.string[match.end(1) : match.end()]
+
     changed: list[str] = []
     for path in counts._markdown_files(tree):
         original = path.read_text(encoding="utf-8")
-        lines = []
-        for line in original.splitlines(keepends=True):
-            if not counts._HISTORY_ROW_RE.match(line) and "fuzz" in line.lower():
-                line = _rewrite_groups(counts._FUZZ_COUNT_RE, (authoritative,), line)
-            lines.append(line)
-        text = "".join(lines)
+        # The gate's scope, not a line's: one paragraph at a time (blank-line
+        # separated), only paragraphs that mention fuzzing, revision-history
+        # rows left as written.  Consecutive live lines are rewritten as one
+        # string so a claim wrapped across a line break is reached, as the
+        # gate reads it.
+        out: list[str] = []
+        for part in re.split(r"(\n[ \t]*\n)", original):
+            lines = part.splitlines(keepends=True)
+            live = [ln.strip() for ln in lines if not counts._HISTORY_ROW_RE.match(ln)]
+            if "fuzz" not in " ".join(live).lower():
+                out.append(part)
+                continue
+            run: list[str] = []
+            for line in lines:
+                if counts._HISTORY_ROW_RE.match(line):
+                    out.append(counts._FUZZ_COUNT_RE.sub(_replace, "".join(run)))
+                    run = []
+                    out.append(line)
+                else:
+                    run.append(line)
+            out.append(counts._FUZZ_COUNT_RE.sub(_replace, "".join(run)))
+        text = "".join(out)
         if text != original:
             changed.append(str(path.relative_to(tree)))
             if not dry_run:
