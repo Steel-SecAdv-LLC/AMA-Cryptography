@@ -1343,6 +1343,28 @@ jobs:
       run: |
         python tools/check_doc_examples.py --library-dir build/lib
 
+    - name: "Documented-example gate: the memcheck oracle's own controls must run"
+      # The step above runs the gate over the real pages, all of which pass.
+      # What proves the uninitialised-read oracle still REJECTS anything is
+      # tests/test_documentation_integrity_gates.py's negative control — the
+      # literal Ed25519-seed-from-stack-garbage example — with its positive
+      # twin beside it.  Both need valgrind, and until this step they skipped
+      # on every pytest lane: none installs valgrind, and the skip reason
+      # matched nothing tests/conftest.py escalates.  So a regression in the
+      # gate's memcheck handling (a dropped --error-exitcode, a misread
+      # report) would have left the step above passing with no evidence the
+      # oracle could fail.
+      #
+      # This job has valgrind (installed above) and the library (built
+      # above), so it runs exactly the tests marked requires_memcheck, and
+      # AMA_CI_REQUIRE_MEMCHECK makes a skip of either one a failure
+      # (INVARIANT-47).  `-m` selects by marker, so an empty selection exits
+      # 5 and fails the step rather than passing on nothing.
+      env:
+        AMA_CI_REQUIRE_MEMCHECK: "1"
+      run: |
+        python -m pytest tests/test_documentation_integrity_gates.py -m requires_memcheck -q
+
     - name: "Security-relevant constructions must match the code that implements them"
       # For an integrator, a cryptographic document IS the specification. When
       # it disagrees with the implementation either they build against a

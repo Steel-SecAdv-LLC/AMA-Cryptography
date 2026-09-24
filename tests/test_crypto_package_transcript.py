@@ -570,13 +570,15 @@ def legacy_pair() -> Any:
 
 
 def _legacy_verify(lc: Any, kms: Any, package: Any) -> Any:
-    """Verify, mapping a fail-closed raise onto a verdict.
+    """Verify under the DEFAULT policy, mapping a fail-closed raise onto ``None``.
 
-    ``verify_crypto_package`` raises ``QuantumSignatureRequiredError`` when a
-    required ML-DSA-65 signature does not verify, so a tamper that breaks the
-    signature surfaces as an exception rather than as ``False``.  Both are
-    detections; conflating them would let a test pass on the exception while
-    the boolean silently said True.
+    ``verify_crypto_package`` requires ML-DSA-65 whenever it is built, and
+    raises ``QuantumSignatureRequiredError`` when that signature does not
+    verify, so under the default a tamper that breaks the signature surfaces
+    as an exception rather than as ``False``.  That raise is the default
+    policy's refusal and is checked as such — but it is raised before any
+    other layer's verdict is returned, so it says nothing about Ed25519 or the
+    HMAC.  :func:`_legacy_verdicts` is how those are read.
     """
     import warnings
 
@@ -588,6 +590,60 @@ def _legacy_verify(lc: Any, kms: Any, package: Any) -> Any:
             return lc.verify_crypto_package(LEGACY_CODES, LEGACY_HELIX, package, kms.hmac_key)
         except QuantumSignatureRequiredError:
             return None
+
+
+def _legacy_verdicts(lc: Any, kms: Any, package: Any) -> Any:
+    """Every layer's verdict, with ML-DSA-65 reported rather than required.
+
+    The tamper tests below used to read the default-policy result and, on a
+    raise, ``return`` — "detected".  On every lane that builds ML-DSA-65 that
+    was every row, so the ``ed25519`` and ``hmac`` verdicts were computed and
+    never asserted.  Measured 2026-09-24: with the legacy Ed25519 signature
+    and the HMAC both regressed to their V2 messages (content+ethical hash,
+    and content hash alone) in create and verify, all twelve tests in
+    :class:`TestTheLegacyPackageBindsItsOwnIdentity` passed, while
+    ``verify_crypto_package(..., require_quantum_signatures=False)`` reported
+    ``ed25519`` and ``hmac`` True for a rewritten author, timestamp, version,
+    ethical hash and timestamp token.  Those two layers are the whole
+    protection on the Dilithium-unavailable fallback path, so each is read
+    here on its own.
+    """
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return lc.verify_crypto_package(
+            LEGACY_CODES, LEGACY_HELIX, package, kms.hmac_key, require_quantum_signatures=False
+        )
+
+
+def _assert_every_authenticator_refuses(verdict: Any, package: Any, name: str) -> None:
+    """Ed25519 and the HMAC each refuse, and ML-DSA-65 too where it signed."""
+    assert verdict["ed25519"] is False, f"{name}: Ed25519 accepted it"
+    assert verdict["hmac"] is False, f"{name}: the HMAC accepted it"
+    if package.quantum_signatures_enabled:
+        assert verdict["dilithium"] is False, f"{name}: ML-DSA-65 accepted it"
+    else:
+        assert verdict["dilithium"] is None, name
+
+
+@pytest.fixture(scope="module")
+def legacy_fallback_pair(legacy_pair: Any) -> Any:
+    """A package created with ML-DSA-65 unavailable — Ed25519 is its only signature."""
+    import warnings
+
+    from ama_cryptography.exceptions import QuantumSignatureUnavailableError
+
+    lc, kms, _package = legacy_pair
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> bytes:
+        raise QuantumSignatureUnavailableError("ML-DSA-65 backend not available")
+
+    with pytest.MonkeyPatch.context() as patcher, warnings.catch_warnings():
+        patcher.setattr(lc, "dilithium_sign", unavailable)
+        warnings.simplefilter("ignore", DeprecationWarning)
+        package = lc.create_crypto_package(LEGACY_CODES, LEGACY_HELIX, kms, "real-author")
+    return lc, kms, package
 
 
 #: Fields the V2 construction left outside BOTH the signature (which covered
@@ -632,17 +688,24 @@ class TestTheLegacyPackageBindsItsOwnIdentity:
     def test_tampering_is_detected(
         self, legacy_pair: Any, name: str, mutate: Callable[[Any], None]
     ) -> None:
+        """Refused by the default policy, and by every authenticator on its own.
+
+        See :func:`_legacy_verdicts` for why the second half exists: the
+        default policy's ML-DSA-65 raise alone cannot see a regression in
+        Ed25519 or the HMAC.
+        """
         lc, kms, package = legacy_pair
         tampered = self._clone(package)
         mutate(tampered)
-        verdict = _legacy_verify(lc, kms, tampered)
-        if verdict is None:
-            return  # fail-closed raise: detected
-        checked = [v for k, v in verdict.items() if k in {"content_hash", "hmac", "ed25519"}]
-        assert not all(checked), name
+        default = _legacy_verify(lc, kms, tampered)
+        if package.quantum_signatures_enabled:
+            assert default is None, f"{name}: the required ML-DSA-65 signature did not refuse"
+        else:
+            assert default is not None and default["ed25519"] is False, name
+        _assert_every_authenticator_refuses(_legacy_verdicts(lc, kms, tampered), package, name)
 
     def test_the_ed25519_signature_covers_the_dilithium_fallback(
-        self, legacy_pair: Any, monkeypatch: pytest.MonkeyPatch
+        self, legacy_fallback_pair: Any
     ) -> None:
         """When ML-DSA-65 is unavailable the package drops its quantum fields.
 
@@ -651,26 +714,26 @@ class TestTheLegacyPackageBindsItsOwnIdentity:
         first, over a transcript that still claimed a quantum layer, and a
         freshly created package failed its own verification.
         """
-        import warnings
-
-        from ama_cryptography.exceptions import QuantumSignatureUnavailableError
-
-        lc, kms, _package = legacy_pair
-
-        def unavailable(*_args: Any, **_kwargs: Any) -> bytes:
-            raise QuantumSignatureUnavailableError("ML-DSA-65 backend not available")
-
-        monkeypatch.setattr(lc, "dilithium_sign", unavailable)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            package = lc.create_crypto_package(LEGACY_CODES, LEGACY_HELIX, kms, "real-author")
-            verdict = lc.verify_crypto_package(
-                LEGACY_CODES, LEGACY_HELIX, package, kms.hmac_key, require_quantum_signatures=False
-            )
+        lc, kms, package = legacy_fallback_pair
+        verdict = _legacy_verdicts(lc, kms, self._clone(package))
         assert package.quantum_signatures_enabled is False
         assert package.dilithium_signature is None
         assert verdict["ed25519"] is True
         assert verdict["hmac"] is True
+
+    @pytest.mark.parametrize("name,mutate", LEGACY_TAMPERS, ids=[t[0] for t in LEGACY_TAMPERS])
+    def test_the_fallback_package_refuses_every_tamper(
+        self, legacy_fallback_pair: Any, name: str, mutate: Callable[[Any], None]
+    ) -> None:
+        """The path where Ed25519 is the only signature, tampered row by row.
+
+        The untampered test above says the fallback package verifies; this is
+        the half that says it verifies nothing else.
+        """
+        lc, kms, package = legacy_fallback_pair
+        tampered = self._clone(package)
+        mutate(tampered)
+        _assert_every_authenticator_refuses(_legacy_verdicts(lc, kms, tampered), package, name)
 
     def test_the_ethical_vector_is_derived_not_trusted(self, legacy_pair: Any) -> None:
         """The specific claim: ethical metadata cannot be separated from the
@@ -680,11 +743,9 @@ class TestTheLegacyPackageBindsItsOwnIdentity:
         lc, kms, package = legacy_pair
         tampered = self._clone(package)
         tampered.ethical_vector[next(iter(tampered.ethical_vector))] = 0.0
-        verdict = _legacy_verify(lc, kms, tampered)
-        if verdict is None:
-            return  # the signature failed closed, which is the stronger half
+        verdict = _legacy_verdicts(lc, kms, tampered)
         assert verdict["ethical_vector"] is False
-        assert verdict["ed25519"] is False
+        _assert_every_authenticator_refuses(verdict, package, "ethical_vector rewritten")
 
     def test_the_signature_and_the_mac_never_share_a_transcript(self, legacy_pair: Any) -> None:
         """A signature must not be replayable as a MAC, or the reverse: the

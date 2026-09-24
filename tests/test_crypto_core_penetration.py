@@ -694,27 +694,35 @@ class TestCryptoPackageVerification:
 
 
 def _rejects(codes: str, helix: Any, package: Any, hmac_key: bytes, key: str) -> bool:
-    """Whether verification rejects ``package`` — by verdict or by raising.
+    """Whether the default policy refuses ``package`` AND the ``key`` layer does.
 
     Since the 2026-09 audit (A-2), the legacy package's signature covers a
     transcript of every identity field, so tampering with ANY of them breaks
     the ML-DSA-65 signature.  With ``require_quantum_signatures`` in force
     (the default when Dilithium is built), that surfaces as
-    ``QuantumSignatureRequiredError`` rather than as a ``False`` in the
-    results dict — a strictly harder refusal, raised before the per-layer
-    verdicts are returned at all.
+    ``QuantumSignatureRequiredError`` — a strictly harder refusal, raised
+    before the per-layer verdicts are returned at all.
 
-    These tests were written to assert "this tamper is detected", and they
-    still do.  Treating only ``results[key] is False`` as detection would now
-    make them fail on the very hardening that made the tamper detectable in
-    the first place.
+    An earlier revision returned True on that raise and stopped there, which
+    made every caller a test of ML-DSA-65 rather than of the layer it names:
+    on any lane that builds Dilithium the ``content_hash`` and ``ed25519``
+    verdicts were never read.  Measured 2026-09-24: with
+    ``results["content_hash"]`` or ``results["ed25519"]`` forced to True
+    inside ``verify_crypto_package``, both callers still passed.  So the raise
+    (or a ``False`` where ML-DSA-65 is not required) is checked, and then the
+    named layer is read with ML-DSA-65 reported rather than required, which
+    is the only way its own verdict is returned.
     """
     from ama_cryptography.exceptions import QuantumSignatureRequiredError
 
     try:
-        return verify_crypto_package(codes, helix, package, hmac_key)[key] is False
+        default_refused = verify_crypto_package(codes, helix, package, hmac_key)[key] is False
     except QuantumSignatureRequiredError:
-        return True
+        default_refused = True
+    layers = verify_crypto_package(
+        codes, helix, package, hmac_key, require_quantum_signatures=False
+    )
+    return default_refused and layers[key] is False
 
 
 def _resign(pkg: Any, kms: Any) -> Any:

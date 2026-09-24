@@ -44,7 +44,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Iterator, Optional, Sequence, cast
+from typing import Any, Callable, Iterator, Optional, Sequence, TypeVar, cast
 from unittest import mock
 
 import pytest
@@ -97,13 +97,33 @@ _BUILT_LIBRARY = next(
 #: allowed to skip.
 _C_LANE_AVAILABLE = _BUILT_LIBRARY is not None and sys.platform != "win32"
 
-requires_c_lane = pytest.mark.skipif(
+_skip_without_c_lane = pytest.mark.skipif(
     not _C_LANE_AVAILABLE,
     reason=(
         "the C example lane needs a linkable libama_cryptography; "
         "it is exercised on the Linux lanes, where it may not skip"
     ),
 )
+
+_Test = TypeVar("_Test", bound=Callable[..., Any])
+
+
+def requires_c_lane(test: _Test) -> _Test:
+    """Skip where no library links; FAIL on a Linux require-backends lane.
+
+    The skip reason above said "where it may not skip" and nothing held it to
+    that: the reason names none of the backend keywords ``tests/conftest.py``
+    escalates, so a Linux lane that lost its library reported the C lane as a
+    green skip.  The ``requires_c_library`` marker is the escalation —
+    ``tests/conftest.py`` turns the skip into a failure under
+    ``AMA_CI_REQUIRE_BACKENDS`` on Linux, the platform the promise covers.
+
+    The two memcheck tests do NOT use this: they also skip when valgrind is
+    absent, which every require-backends lane is, so they would fail there for
+    a tool that lane never promised.  They carry ``requires_memcheck`` instead,
+    which the lane that installs valgrind escalates.
+    """
+    return _skip_without_c_lane(pytest.mark.requires_c_library(test))
 
 
 def _load(path: Path) -> ModuleType:
@@ -167,6 +187,113 @@ def _scratch_repo(tmp_path: Path) -> Path:
 #: py/redos at security-severity 7.5, and measured here, 22 repetitions took
 #: 0.73s against 0.0003s for this form.
 _GATE_INVOCATION = re.compile(r"^(?:[^\s=]+=\S+ )*python3? tools/check_[a-z_]+\.py")
+
+
+def _logical_lines(text: str) -> list[str]:
+    """``text``'s lines, stripped, with backslash continuations joined.
+
+    Joined FIRST, before anything is matched. An earlier revision of the
+    workflow scan skipped continued lines, which left the one multi-line
+    invocation in the tree — the c-consumer step, the only place the C lane
+    runs against an installed prefix — unchecked by the very test written to
+    stop an invalid invocation shipping.
+    """
+    joined: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if buffer:
+            buffer += " " + stripped.rstrip("\\").strip()
+        elif stripped.endswith("\\"):
+            buffer = stripped.rstrip("\\").strip()
+        else:
+            joined.append(stripped)
+            continue
+        if not stripped.endswith("\\"):
+            joined.append(buffer)
+            buffer = ""
+    if buffer:
+        joined.append(buffer)
+    return joined
+
+
+def _gate_argv(line: str) -> Optional[list[str]]:
+    """``line`` as argv if it is a command running a ``tools/check_*.py`` gate.
+
+    ``None`` for anything else — a shell comment that names a gate included,
+    because ``_GATE_INVOCATION`` is anchored at the start of the line. Leading
+    ``VAR=value`` assignments are stripped, so ``argv[0]`` is the interpreter.
+    """
+    import shlex
+
+    line = line.lstrip("-").strip()
+    if not _GATE_INVOCATION.match(line):
+        return None
+    try:
+        argv = shlex.split(line)
+    except ValueError:
+        return None  # unbalanced quoting from a YAML fragment
+    while argv and "=" in argv[0] and not argv[0].startswith("-"):
+        argv = argv[1:]  # strip leading VAR=value assignments
+    return argv
+
+
+def _flag_value(argv: Sequence[str], flag: str) -> Optional[str]:
+    """The value ``argv`` passes for ``flag`` (``--flag v`` or ``--flag=v``)."""
+    for index, part in enumerate(argv):
+        if part == flag and index + 1 < len(argv):
+            return argv[index + 1]
+        if part.startswith(flag + "="):
+            return part[len(flag) + 1 :]
+    return None
+
+
+def _c_example_lane_invocations(workflows_dir: Path) -> list[str]:
+    """Every workflow COMMAND that runs the documented-C-example lane on Linux.
+
+    Read structurally, not by grepping the text. The first revision of the
+    wiring test below counted any line containing ``check_doc_examples.py``
+    with no ``--lang python`` on it — and ``ci.yml`` carries a comment,
+    ``# tools/check_doc_examples.py compiles and RUNS every `c-run` block``,
+    that satisfied it on its own. Measured 2026-09-24: with both real
+    invocations deleted that test still passed (the deletion was caught only
+    by its sibling, which parses commands and so misses the comment), and
+    with both switched to ``--lang python`` every test in this class passed,
+    with no C example compiled anywhere.
+
+    So a hit here has to be (a) inside a step's ``run:`` script, (b) a command
+    line :func:`_gate_argv` accepts — a comment is not — whose script is
+    ``tools/check_doc_examples.py`` and whose ``--lang`` is absent (all
+    languages) or ``c``, and (c) in a job whose ``runs-on`` is a literal
+    ``ubuntu-*`` label. A matrix expression is not counted: it cannot be
+    resolved here, and the claim being pinned is that SOME job provably runs
+    the lane on Linux.
+    """
+    import yaml
+
+    found: list[str] = []
+    for workflow in sorted(workflows_dir.glob("*.yml")):
+        document = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        jobs = document.get("jobs") if isinstance(document, dict) else None
+        if not isinstance(jobs, dict):
+            continue
+        for job_name, job in jobs.items():
+            if not isinstance(job, dict):
+                continue
+            runs_on = job.get("runs-on")
+            if not (isinstance(runs_on, str) and runs_on.startswith("ubuntu-")):
+                continue
+            for step in job.get("steps") or []:
+                script = step.get("run") if isinstance(step, dict) else None
+                if not isinstance(script, str):
+                    continue
+                for line in _logical_lines(script):
+                    argv = _gate_argv(line)
+                    if not argv or len(argv) < 2 or argv[1] != "tools/check_doc_examples.py":
+                        continue
+                    if _flag_value(argv, "--lang") in (None, "c"):
+                        found.append(f"{workflow.name}::{job_name} ({runs_on}): {line}")
+    return found
 
 
 class _ParserBuiltError(Exception):
@@ -561,7 +688,8 @@ class TestDocExamples:
         assert report.skipped == 0
         assert len(report.findings) == 1 and "was not run" in report.findings[0].detail
 
-    @requires_c_lane
+    @_skip_without_c_lane
+    @pytest.mark.requires_memcheck
     def test_the_uninitialised_ed25519_seed_example_fails(self, doc_fixture: Path) -> None:
         """The defect this gate was built for.
 
@@ -570,6 +698,12 @@ class TestDocExamples:
         which shipped in ``wiki/C-API-Reference.md``, hands it uninitialised
         stack memory. It compiles clean under ``-Wall -Wextra -Werror`` and
         prints ``valid=1``: nothing but a memory checker can see it.
+
+        Until 2026-09-24 this skipped on every pytest lane: valgrind is
+        installed only in ``security-checks`` and ``c-consumer``, which did
+        not run this file, and the skip reason matched nothing the conftest
+        escalates. ``security-checks`` now runs the ``requires_memcheck``
+        tests with ``AMA_CI_REQUIRE_MEMCHECK=1``, under which a skip fails.
         """
         if shutil.which("valgrind") is None:
             pytest.skip("valgrind not installed; the uninitialised-read oracle is unavailable")
@@ -595,7 +729,8 @@ class TestDocExamples:
         assert completed.returncode == 1, completed.stdout
         assert "uninitialised" in completed.stderr.lower()
 
-    @requires_c_lane
+    @_skip_without_c_lane
+    @pytest.mark.requires_memcheck
     def test_the_safe_ed25519_example_passes(self, doc_fixture: Path) -> None:
         """The positive control that keeps the test above non-vacuous."""
         if shutil.which("valgrind") is None:
@@ -2384,43 +2519,13 @@ class TestTheWorkflowInvokesTheseGatesCorrectly:
 
     @staticmethod
     def _gate_invocations() -> list[list[str]]:
-        """Every gate command line in the workflows, as argv."""
-        import shlex
-
+        """Every gate command line in the workflows, as argv (script first)."""
         found: list[list[str]] = []
         for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
-            # Join backslash continuations FIRST. An earlier revision skipped
-            # them, which left the one multi-line invocation in the tree — the
-            # c-consumer step, the only place the C lane runs against an
-            # installed prefix — unchecked by the very test written to stop an
-            # invalid invocation shipping.
-            joined: list[str] = []
-            buffer = ""
-            for raw in workflow.read_text(encoding="utf-8").splitlines():
-                stripped = raw.strip()
-                if buffer:
-                    buffer += " " + stripped.rstrip("\\").strip()
-                elif stripped.endswith("\\"):
-                    buffer = stripped.rstrip("\\").strip()
-                else:
-                    joined.append(stripped)
+            for line in _logical_lines(workflow.read_text(encoding="utf-8")):
+                argv = _gate_argv(line)
+                if argv is None:
                     continue
-                if not stripped.endswith("\\"):
-                    joined.append(buffer)
-                    buffer = ""
-            if buffer:
-                joined.append(buffer)
-
-            for line in joined:
-                line = line.lstrip("-").strip()
-                if not _GATE_INVOCATION.match(line):
-                    continue
-                try:
-                    argv = shlex.split(line)
-                except ValueError:
-                    continue  # unbalanced quoting from a YAML fragment
-                while argv and "=" in argv[0] and not argv[0].startswith("-"):
-                    argv = argv[1:]  # strip leading VAR=value assignments
                 # Shell variables ($PREFIX, "$cc") cannot be resolved here, but
                 # they must be SUBSTITUTED rather than dropped: removing
                 # `"$cc"` from `--compiler "$cc" --include-dir ...` leaves
@@ -2428,8 +2533,7 @@ class TestTheWorkflowInvokesTheseGatesCorrectly:
                 # "expected one argument" for a command line that is perfectly
                 # well formed in the job. The placeholder keeps argv's arity,
                 # which is what makes the flag check meaningful.
-                argv = ["placeholder" if "$" in part else part for part in argv[1:]]
-                found.append(argv)
+                found.append(["placeholder" if "$" in part else part for part in argv[1:]])
         return found
 
     def test_the_c_example_lane_is_wired_into_ci(self) -> None:
@@ -2442,22 +2546,77 @@ class TestTheWorkflowInvokesTheseGatesCorrectly:
         lives somewhere rather than nowhere: a workflow step must compile, link
         and run the documented C examples on a Linux runner. Delete that step
         and this fails, which is the hole the escalation rule exists to close.
+        What counts as "a step" is :func:`_c_example_lane_invocations`, whose
+        own negative controls are the next test.
         """
-        wired: list[str] = []
-        for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
-            text = workflow.read_text(encoding="utf-8")
-            for raw in text.splitlines():
-                line = raw.strip()
-                if "check_doc_examples.py" not in line:
-                    continue
-                # Either the all-languages default, or an explicit C lane.
-                if "--lang" not in line or "--lang c" in line or '--lang", "c' in line:
-                    wired.append(f"{workflow.name}: {line}")
+        wired = _c_example_lane_invocations(REPO_ROOT / ".github" / "workflows")
         assert wired, (
-            "no workflow compiles and runs the documented C examples. The C "
-            "lane skips on Windows, so if no Linux lane runs it the coverage "
-            "is gone entirely."
+            "no workflow compiles and runs the documented C examples on a Linux "
+            "runner. The C lane skips on Windows, so if no Linux lane runs it the "
+            "coverage is gone entirely."
         )
+
+    def test_only_a_linux_command_counts_as_wiring(self, tmp_path: Path) -> None:
+        """The scan's negative controls, each a shape that is not a C lane.
+
+        The comment is the literal ``ci.yml`` line that kept the first
+        revision of the test above green with no invocation left in the tree.
+        """
+        workflows = tmp_path / "workflows"
+        workflows.mkdir()
+        not_wiring = (
+            "on: push\n"
+            "jobs:\n"
+            "  commented:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: |\n"
+            "          # tools/check_doc_examples.py compiles and RUNS every `c-run` block on\n"
+            "          true\n"
+            "  python-lane-only:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: python tools/check_doc_examples.py --lang python\n"
+            "  windows:\n"
+            "    runs-on: windows-latest\n"
+            "    steps:\n"
+            "      - run: python tools/check_doc_examples.py --lang c\n"
+            "  unresolvable-runner:\n"
+            "    runs-on: ${{ matrix.os }}\n"
+            "    steps:\n"
+            "      - run: python tools/check_doc_examples.py\n"
+            "  outside-a-run-script:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - name: python tools/check_doc_examples.py --lang c\n"
+            "        run: true\n"
+        )
+        (workflows / "fixture.yml").write_text(not_wiring, encoding="utf-8")
+        assert _c_example_lane_invocations(workflows) == []
+
+        # Positive controls: the two shapes the real tree uses.
+        (workflows / "real.yml").write_text(
+            "on: push\n"
+            "jobs:\n"
+            "  security-checks:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: |\n"
+            "          python tools/check_doc_examples.py --library-dir build/lib\n"
+            "  c-consumer:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: |\n"
+            '          CC="$cc" python tools/check_doc_examples.py \\\n'
+            "            --lang=c \\\n"
+            '            --library-dir "$PREFIX/lib"\n',
+            encoding="utf-8",
+        )
+        wired = _c_example_lane_invocations(workflows)
+        assert [entry.split(" ")[0] for entry in wired] == [
+            "real.yml::security-checks",
+            "real.yml::c-consumer",
+        ], wired
 
     def test_the_workflows_invoke_at_least_the_four_new_gates(self) -> None:
         """Non-vacuity: an empty scan would make the assertion below pass."""

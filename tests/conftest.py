@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 import tempfile
 from collections.abc import Callable, Generator
 from datetime import timedelta
@@ -46,6 +47,15 @@ _CI = os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("true", "1", "ye
 # the two pytest lanes checked out at depth 1; nothing reported it, because a
 # skip is green.  This flag is what makes that visible.
 _CI_HISTORY = os.environ.get("AMA_CI_REQUIRE_HISTORY", "").lower() in ("true", "1", "yes")
+
+# When AMA_CI_REQUIRE_MEMCHECK=1 is set (by ci.yml's security-checks job, the
+# lane that installs valgrind next to a built library), a test marked
+# ``requires_memcheck`` must run.  Those tests are the doc-example gate's
+# uninitialised-read oracle and its positive control; before this flag they
+# skipped on every pytest lane — none installs valgrind — and the skip named
+# nothing the backend escalation matches, so the one test proving the gate
+# rejects an Ed25519 key minted from stack garbage never executed in CI.
+_CI_MEMCHECK = os.environ.get("AMA_CI_REQUIRE_MEMCHECK", "").lower() in ("true", "1", "yes")
 _BACKEND_SKIP_REASONS = (
     "dilithium",
     "kyber",
@@ -249,12 +259,34 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
       imports resolve; a skip means the install broke and the attack-surface
       pins on the Flask demo stopped running — as they had on every CI run
       before the extra existed.
+    * ``requires_memcheck`` under ``AMA_CI_REQUIRE_MEMCHECK``: the lane
+      installs valgrind and builds the library, so a skip means one of the two
+      went missing and the doc-example gate's uninitialised-read oracle went
+      unverified.
+    * ``requires_c_library`` under ``AMA_CI_REQUIRE_BACKENDS`` on a Linux
+      host: the lane built ``libama_cryptography``, so a test that compiles
+      and links a C program against it has what it needs.  Linux only,
+      because that is the promise the C example lane makes: on Windows the
+      MSVC-built import library is not where a MinGW ``-lama_cryptography``
+      looks, and no macOS lane has been measured running it.
     """
     outcome = yield
-    if not (_CI or _CI_HISTORY):
+    if not (_CI or _CI_HISTORY or _CI_MEMCHECK):
         return
     rep = outcome.get_result()
     if not rep.skipped:
+        return
+    if _CI_MEMCHECK and item.get_closest_marker("requires_memcheck") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'memcheck oracle unavailable'} — "
+            "this lane installs valgrind and builds libama_cryptography "
+            "(AMA_CI_REQUIRE_MEMCHECK), so a test whose oracle is memcheck must "
+            "run here. A skip means the valgrind install or the library build "
+            "broke and the documented-C-example gate's uninitialised-read check "
+            "went unverified."
+        )
         return
     if _CI_HISTORY and item.get_closest_marker("requires_git_history") is not None:
         reported = _reported_skip_reason(rep)
@@ -304,6 +336,22 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
             "the cross-implementation validation oracle (PyCA cryptography / PyNaCl / "
             "pycryptodome) must be installed in the require-backends lane so this check "
             "runs. Install .[dev,legacy,benchmark] plus pycryptodome (audit M18)."
+        )
+        return
+
+    # C example lane: a test marked requires_c_library compiles and links
+    # against the library this lane built.  On Linux that is a promise, so the
+    # skip is the defect (see the docstring for why the scope is Linux).
+    if (
+        sys.platform.startswith("linux")
+        and item.get_closest_marker("requires_c_library") is not None
+    ):
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'C library not linkable'} — "
+            "this Linux lane builds libama_cryptography (AMA_CI_REQUIRE_BACKENDS), "
+            "so the C example lane must run here, not skip."
         )
         return
 

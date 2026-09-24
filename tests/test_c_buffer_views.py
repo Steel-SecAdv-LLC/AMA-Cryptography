@@ -74,41 +74,121 @@ class TestWritableBorrow:
             assert got == b"public input"
 
 
+@pytest.fixture()
+def recorded_views(monkeypatch: pytest.MonkeyPatch) -> list[memoryview]:
+    """Every memoryview ``_byte_view`` hands to ``_CBufferViews``, kept alive.
+
+    The release oracle is each view itself, read while this list holds a
+    strong reference to it (see :func:`_released`).  A view this list keeps
+    alive can only become released through an explicit ``release()``, so the
+    oracle reports what ``__exit__`` did and not what the garbage collector
+    did.
+
+    The oracle this class used first — resize the backing ``bytearray`` after
+    the ``with`` — could not tell the two apart.  Nothing bound the context
+    manager, so CPython freed it the moment the block ended, and freeing its
+    views and ctypes arrays drops the export whatever ``__exit__`` did.
+    Measured 2026-09-24: with ``__exit__`` reduced to ``return None`` all
+    three tests passed.
+    """
+    from ama_cryptography import pqc_backends
+
+    recorded: list[memoryview] = []
+    real = pqc_backends._byte_view
+
+    def recording(data: bytes | bytearray | memoryview) -> memoryview:
+        view = real(data)
+        recorded.append(view)
+        return view
+
+    monkeypatch.setattr(pqc_backends, "_byte_view", recording)
+    return recorded
+
+
+def _released(view: memoryview) -> bool:
+    """Whether ``view`` has been released.
+
+    ``memoryview`` exposes no ``released`` attribute (the review that found
+    this defect proposed reading one; it raises ``AttributeError``).  Every
+    operation on a released view raises ``ValueError`` instead, so that is the
+    observation.
+    """
+    try:
+        len(view)
+    except ValueError:
+        return True
+    return False
+
+
+def _resizable(backing: bytearray) -> bool:
+    """Whether no export is outstanding on ``backing`` — a resize succeeds."""
+    try:
+        backing.extend(b"grow")
+    except BufferError:
+        return False
+    del backing[-4:]
+    return True
+
+
 class TestReleaseContract:
-    def test_views_released_on_normal_exit(self) -> None:
-        backing = bytearray(b"k" * 32)
-        with _CBufferViews(backing):
-            pass
-        # A released export no longer blocks resizing the bytearray.
-        backing.extend(b"grow")
-        assert len(backing) == 36
+    """Every view ``__enter__`` takes is released, and every ctypes borrow is
+    dropped, by the time the context manager is done — observed while the
+    test still holds the context manager, so refcounting cannot do the work.
 
-    def test_views_released_when_acquisition_fails_partway(self) -> None:
-        backing = bytearray(b"k" * 32)
-        two_dimensional = memoryview(bytearray(range(16))).cast("B", (4, 4))
-        # enter_context rather than a `with` body: `__enter__` is what raises,
-        # so a `with` body is a statement that can never run — CodeQL reported
-        # exactly that (alerts 617/618), and an explanatory comment would have
-        # left the unreachable statement in place. ExitStack also guarantees
-        # that whatever WAS entered before the failure is released, which is
-        # the property this test is about.
-        with pytest.raises(TypeError, match="one-dimensional"), ExitStack() as stack:
-            stack.enter_context(_CBufferViews(backing, two_dimensional))
-        # The first view must have been released by the failure path.
-        backing.extend(b"grow")
-        assert len(backing) == 36
+    The two properties are separate and both are checked: :func:`_released`
+    on each view says ``__exit__`` released what it acquired, and a resizable
+    backing ``bytearray`` says the ``from_buffer`` arrays are gone too (each
+    holds its own view on the same managed buffer, so releasing the
+    ``_byte_view`` view alone leaves the ``bytearray`` locked).
+    """
 
-    def test_views_released_when_body_raises(self) -> None:
+    def test_views_released_on_normal_exit(self, recorded_views: list[memoryview]) -> None:
         backing = bytearray(b"k" * 32)
+        other = memoryview(bytearray(b"m" * 8))
+        cm = _CBufferViews(backing, b"bytes take no view", other)
+        with cm:
+            assert len(recorded_views) == 2
+            assert not any(_released(view) for view in recorded_views)
+            assert not _resizable(backing)
+        assert all(_released(view) for view in recorded_views)
+        assert _resizable(backing)
+
+    def test_views_released_when_body_raises(self, recorded_views: list[memoryview]) -> None:
+        backing = bytearray(b"k" * 32)
+        cm = _CBufferViews(backing)
 
         def _explode() -> None:
             raise RuntimeError("boom")
 
         with pytest.raises(RuntimeError, match="boom"):
-            with _CBufferViews(backing):
+            with cm:
                 _explode()
-        backing.extend(b"grow")
-        assert len(backing) == 36
+        assert len(recorded_views) == 1
+        assert _released(recorded_views[0])
+        assert _resizable(backing)
+
+    def test_views_released_when_acquisition_fails_partway(
+        self, recorded_views: list[memoryview]
+    ) -> None:
+        """``__enter__`` itself raises, so it is called directly.
+
+        A ``with`` body would be a statement that can never run (CodeQL
+        alerts 617/618), and ``ExitStack.enter_context`` — the form this test
+        used before — never registers a context manager whose ``__enter__``
+        raised, so it released nothing: the comment that said it did was
+        wrong.  The release under test is ``__enter__``'s own
+        ``except BaseException`` arm.
+        """
+        backing = bytearray(b"k" * 32)
+        two_dimensional = memoryview(bytearray(range(16))).cast("B", (4, 4))
+        cm = _CBufferViews(backing, two_dimensional)
+        with pytest.raises(TypeError, match="one-dimensional"):
+            cm.__enter__()
+        # _byte_view refuses the second input itself and releases the view it
+        # took, so exactly one view was handed over: the first one.
+        assert len(recorded_views) == 1
+        assert _released(recorded_views[0])
+        assert _resizable(backing)
 
 
 class TestValidation:

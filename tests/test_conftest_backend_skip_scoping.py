@@ -1123,6 +1123,198 @@ def test_example_deps_marked_skip_without_ci_env_stays_a_skip(
     result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
 
 
+# ---------------------------------------------------------------------------
+# requires_memcheck / requires_c_library (2026-09-24)
+#
+# The documented-C-example gate's uninitialised-read oracle had one negative
+# control, and it skipped on every pytest lane: valgrind was installed only in
+# jobs that never ran it, and the skip reason named no backend keyword.  The
+# C example lane's own skip said "where it may not skip" and nothing held it
+# to that.  One flag and two markers make both skips visible where the lane
+# provides the thing skipped for.
+# ---------------------------------------------------------------------------
+
+
+def test_memcheck_marked_skip_becomes_a_failure_under_the_memcheck_flag(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lane that installs valgrind does not get to skip its only user."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_MEMCHECK", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_HISTORY", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_memcheck
+        def test_uninitialised_seed_is_rejected():
+            pytest.skip("valgrind not installed; the uninitialised-read oracle is unavailable")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: valgrind not installed*"])
+
+
+def test_memcheck_marked_skip_under_the_backends_flag_alone_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The require-backends lanes do not install valgrind and never promised
+    to, so they keep the skip — the flag escalates only its own promise."""
+    monkeypatch.delenv("AMA_CI_REQUIRE_MEMCHECK", raising=False)
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    monkeypatch.setenv("AMA_CI_REQUIRE_HISTORY", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_memcheck
+        def test_uninitialised_seed_is_rejected():
+            pytest.skip("valgrind not installed")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_the_memcheck_flag_alone_does_not_escalate_backend_skips(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scoping in the other direction: the memcheck lane says nothing about
+    the backends, or about the C example lane's other tests."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_MEMCHECK", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_HISTORY", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.skipif(True, reason="Kyber backend unavailable")
+        def test_kyber():
+            raise AssertionError("must not run")
+
+        @pytest.mark.requires_c_library
+        def test_links():
+            pytest.skip("no linkable library")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=2, failed=0, errors=0, passed=0)
+
+
+def test_c_library_marked_skip_fails_on_a_linux_require_backends_lane(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On Linux the require-backends lane built the library, so the C example
+    lane's skip is the defect; elsewhere the lane makes no such promise.
+
+    The inner run is on this host, so the expected outcome is this host's:
+    a Linux job checks the failure direction, the Windows and macOS jobs check
+    that their skip is left alone.
+    """
+    import sys
+
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_MEMCHECK", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_c_library
+        @pytest.mark.skipif(True, reason="the C example lane needs a linkable libama_cryptography")
+        def test_the_real_documentation_passes_c():
+            raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    if sys.platform.startswith("linux"):
+        # A skipif skip happens at setup, so the flipped report is an ERROR
+        # (see test_backend_skipif_with_truthy_condition_does_become_failure).
+        result.assert_outcomes(errors=1, failed=0, skipped=0, passed=0)
+        result.stdout.fnmatch_lines(["*CI FAILURE: the C example lane needs a linkable*"])
+    else:
+        result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_c_library_marked_skip_without_the_backends_flag_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A contributor with no built library gets a skip, on every platform."""
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_MEMCHECK", raising=False)
+    monkeypatch.setenv("AMA_CI_REQUIRE_HISTORY", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_c_library
+        @pytest.mark.skipif(True, reason="the C example lane needs a linkable libama_cryptography")
+        def test_the_real_documentation_passes_c():
+            raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_every_valgrind_skip_in_the_tree_carries_the_marker() -> None:
+    """Completeness guard: a test that skips when ``shutil.which("valgrind")``
+    finds nothing must carry ``requires_memcheck``, so the next memcheck
+    oracle cannot skip silently in the lane that installs valgrind.
+
+    Non-vacuous: fails if the scan finds fewer than the two known sites."""
+    tests_dir = Path(__file__).resolve().parent
+    offenders: list[str] = []
+    sites = 0
+    for path in sorted(tests_dir.glob("test_*.py")):
+        if path.name == Path(__file__).name:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for func, markers in _defs_with_effective_markers(tree):
+            probes_valgrind = any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "which"
+                and bool(node.args)
+                and _string_parts(node.args[0]) == "valgrind"
+                for node in ast.walk(func)
+            )
+            skips = any(
+                isinstance(node, ast.Call) and _is_pytest_call(node, "skip")
+                for node in ast.walk(func)
+            )
+            if not (probes_valgrind and skips):
+                continue
+            sites += 1
+            if "requires_memcheck" not in markers:
+                offenders.append(f"{path.name}:{func.lineno}:{func.name}")
+    assert sites >= 2, f"expected the two known memcheck skip sites, found {sites}"
+    assert not offenders, (
+        "these tests skip without valgrind but lack @pytest.mark.requires_memcheck, "
+        f"so the lane that installs valgrind would let them skip: {offenders}"
+    )
+
+
+def test_the_memcheck_lane_runs_the_memcheck_tests_under_its_flag() -> None:
+    """The flag is only a promise if a lane makes it: ``security-checks``
+    installs valgrind, builds the library, and runs the marked tests with
+    ``AMA_CI_REQUIRE_MEMCHECK`` set — in that order."""
+    import yaml
+
+    repo_root = Path(__file__).resolve().parent.parent
+    workflow = yaml.safe_load(
+        (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["security-checks"]["steps"]
+    runs = [str(step.get("run", "")) for step in steps]
+
+    def first(predicate: Any) -> int:
+        return next(i for i, step in enumerate(steps) if predicate(step, runs[i]))
+
+    installs = first(lambda _s, run: "apt-install.sh valgrind" in run)
+    builds = first(lambda _s, run: "cmake --build build" in run)
+    runs_marked = first(
+        lambda step, run: "-m requires_memcheck" in run
+        and str((step.get("env") or {}).get("AMA_CI_REQUIRE_MEMCHECK")) == "1"
+    )
+    assert installs < runs_marked and builds < runs_marked, (installs, builds, runs_marked)
+
+
 #: Reason fragments that identify an imperative skip as gating on git objects a
 #: shallow clone lacks.  Every history skip in the tree uses one of these.
 _HISTORY_SKIP_TOKENS = (
@@ -1271,6 +1463,8 @@ def test_the_history_and_example_markers_are_registered() -> None:
     )
     assert "requires_git_history" in pyproject
     assert "requires_example_deps" in pyproject
+    assert '"requires_memcheck:' in pyproject
+    assert '"requires_c_library:' in pyproject
 
 
 class TestNativeLibraryDetection:

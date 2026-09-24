@@ -400,8 +400,10 @@ int main(void) {
      * `ama_hkdf` itself — so the derived bytes were obtainable without ever
      * holding the key, and the audit obtained them.
      *
-     * Both checks below are inequalities rather than pinned expected values:
-     * a KAT would also pass if the derivation started returning a constant. */
+     * The first two checks below are inequalities rather than pinned expected
+     * values: a KAT would also pass if the derivation started returning a
+     * constant.  They are not sufficient on their own, which the
+     * reconstruction after them exists to close. */
     {
         uint8_t bypass_info[AMA_AGENT_BINDING_ENCODED_BYTES + 32 + 4];
         uint8_t bypass_okm[32];
@@ -426,6 +428,71 @@ int main(void) {
         TEST_ASSERT(rc == AMA_SUCCESS, "binder: the zero-binder derivation itself runs");
         TEST_ASSERT(memcmp(bypass_okm, okm_b, sizeof(okm_b)) != 0,
                     "binder: a guessed zero binder does not reproduce a restricted key");
+
+        /* Neither inequality above can tell WHICH key the binder was taken
+         * under.  A binder keyed by a public constant (the all-zero key that
+         * compute_binding_tag substitutes for a NULL key, say) fails both of
+         * them exactly as a real one does, and is recomputable by anyone who
+         * holds enc(b), which is the audit's bypass again.  Measured: with
+         * authority_binder() passing NULL/0 instead of the authority key,
+         * every check in this block up to here passed.  So the layout is
+         * rebuilt from its parts: HMAC-SHA3-256(K, subdomain || enc(b)) under
+         * the authority key must reproduce both outputs, and the same
+         * construction under the zero key or a foreign key must not.  A
+         * reconstruction from K is not a constant KAT: it moves with K. */
+        {
+            static const uint8_t ZERO_KEY[32] = {0};
+            static const char *const HKDF_LABELS[3] = {
+                "binder: HMAC(K_auth, 0x03 || enc(b)) reproduces the restricted key",
+                "binder: the same construction under the zero key does not",
+                "binder: the same construction under a foreign key does not",
+            };
+            static const char *const CTX_LABELS[3] = {
+                "binder: SHA3(0x02 || enc(b) || HMAC(K_auth, 0x04 || enc(b))) is the context",
+                "binder: the context construction under the zero key does not match",
+                "binder: the context construction under a foreign key does not match",
+            };
+            const uint8_t *const binder_keys[3] = {AUTHORITY_KEY, ZERO_KEY, OTHER_KEY};
+            uint8_t binder_msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES];
+            uint8_t ctx_msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES + 32];
+            uint8_t ctx_real[AMA_AGENT_BINDING_CONTEXT_BYTES];
+            uint8_t ctx_ref[AMA_AGENT_BINDING_CONTEXT_BYTES];
+            size_t k;
+
+            rc = ama_agent_binding_context(&pers, AUTHORITY_KEY, sizeof(AUTHORITY_KEY),
+                                           ctx_real);
+            TEST_ASSERT(rc == AMA_SUCCESS, "binder: the authorized context derives");
+
+            memcpy(binder_msg + 1, enc2, sizeof(enc2));
+            for (k = 0; k < 3; k++) {
+                const int must_match = (k == 0);
+
+                /* enc(b) || HMAC(K, 0x03 || enc(b)) || u32be(0) */
+                binder_msg[0] = 0x03u;
+                memcpy(bypass_info, enc2, sizeof(enc2));
+                rc = ama_hmac_sha3_256(binder_keys[k], 32u, binder_msg, sizeof(binder_msg),
+                                       bypass_info + sizeof(enc2));
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference HKDF binder computes");
+                memset(bypass_info + sizeof(enc2) + 32u, 0, 4);
+                rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                              bypass_info, sizeof(bypass_info), bypass_okm, sizeof(bypass_okm));
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference derivation runs");
+                TEST_ASSERT((memcmp(bypass_okm, okm_b, sizeof(okm_b)) == 0) == must_match,
+                            HKDF_LABELS[k]);
+
+                /* SHA3-256(0x02 || enc(b) || HMAC(K, 0x04 || enc(b))) */
+                binder_msg[0] = 0x04u;
+                ctx_msg[0] = 0x02u;
+                memcpy(ctx_msg + 1, enc2, sizeof(enc2));
+                rc = ama_hmac_sha3_256(binder_keys[k], 32u, binder_msg, sizeof(binder_msg),
+                                       ctx_msg + 1 + sizeof(enc2));
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference context binder computes");
+                rc = ama_sha3_256(ctx_msg, sizeof(ctx_msg), ctx_ref);
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference context hashes");
+                TEST_ASSERT((memcmp(ctx_ref, ctx_real, sizeof(ctx_real)) == 0) == must_match,
+                            CTX_LABELS[k]);
+            }
+        }
 
         /* An UNRESTRICTED binding has no operator secret, so it takes a zero
          * binder by design.  Pinned positively: it is what proves the two
