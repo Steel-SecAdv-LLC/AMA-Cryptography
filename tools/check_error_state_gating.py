@@ -38,9 +38,14 @@ Every module-level ``def`` in ``pqc_backends.py`` that
   * has a public name (no leading underscore), and
   * calls a native symbol
 
-must call ``check_crypto_permitted()`` **before** the first such call.
+must call ``check_crypto_permitted()`` **before** the first such call — as a
+statement of its own body, not under an ``if``, a ``try``, a loop or a nested
+``def``/``lambda``, so that the guard runs on every path that reaches the
+kernel (see :func:`unguarded_native_line`).
 
-Both halves of that sentence were once weaker than they read.
+Each half of that sentence was once weaker than it read.  The ordering test
+compared line numbers until the review of PR #394 showed a conditional,
+swallowed or never-called guard satisfied it.
 
 *Ordering.*  The Python audit asked only whether a guard appeared anywhere in
 the body, while ``audit_pyx`` — the same gate over the ``.pyx`` bindings — had
@@ -88,13 +93,18 @@ Which modules are scanned
 library was unaudited *by default* rather than by decision (audit M16).  A
 discovery step now AST-scans ``ama_cryptography/**/*.py`` for the forms that
 reach the library — ``_native_lib`` as a Name/Attribute, ``getattr(x,
-"_native_lib", …)``, or a ``_cy_*`` call — and requires every module it finds
-to appear in ``MODULES`` (audited) or in ``EXEMPT_MODULES`` (exempted with a
-reason for why the body-level AST audit is not its enforcement — indirect
-reach through a private helper, a presence check, or delegation to
-``pqc_backends``' gated wrappers).  A native-reaching module in neither list
-fails the check.  ``EXEMPT_MODULES`` is staleness-checked the same way
-``EXEMPT`` is: an entry that no longer reaches the library is an error.
+"_native_lib", …)``, a ``_cy_*`` call, and (since the review of PR #394) a
+handle the module obtains itself: any ``*.ama_*(...)`` call, a
+``getattr(x, "ama_…")``, ``_find_native_library``, or ``ctypes.CDLL`` — and
+requires every module it finds to appear in ``MODULES`` (audited) or in
+``EXEMPT_MODULES`` (exempted with a reason for why the body-level AST audit is
+not its enforcement — indirect reach through a private helper, a presence
+check, or delegation to ``pqc_backends``' gated wrappers).  A native-reaching
+module in neither list fails the check.  ``EXEMPT_MODULES`` is
+staleness-checked the same way ``EXEMPT`` is: an entry that no longer reaches
+the library is an error.  The Cython side is held the same way: every ``.pyx``
+under ``src/`` or ``ama_cryptography/`` that declares an ``ama_*`` header
+extern must be in ``BINDING_PYX``.
 
 Usage
 -----
@@ -119,7 +129,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: kernel directly — bypassing ``pqc_backends``' gated wrappers, and, when the
 #: package directory is on ``sys.path``, bypassing POST itself.  They are not
 #: valid Python (``cdef`` etc.), so they get a line-based check rather than the
-#: AST one used for ``pqc_backends.py``.
+#: AST one used for ``pqc_backends.py``.  Written by hand, and held to the tree
+#: by :func:`discover_native_reaching_pyx`: a ``.pyx`` that declares an
+#: ``ama_*`` header extern and is missing here fails :func:`main`.
 BINDING_PYX = (
     "src/cython/ed25519_binding.pyx",
     "src/cython/hmac_binding.pyx",
@@ -228,6 +240,19 @@ EXEMPT: dict[str, str] = {
 #: no longer reaches the native library is an error, so it cannot rot into a
 #: silent allowlist.
 EXEMPT_MODULES: dict[str, str] = {
+    "ama_cryptography/_build_sign.py": (
+        "Build-pipeline integrity signer (AMA_BUILD_PIPELINE=1 only; "
+        "_require_build_pipeline refuses otherwise). It obtains its own handle "
+        "with pqc_backends._find_native_library() and calls ama_ed25519_keypair "
+        "/ ama_ed25519_sign / ama_integrity_trust_anchor_pubkey_hex in private "
+        "helpers, to re-sign the package after a source edit — i.e. precisely "
+        "while the integrity POST reports failure. Gating it with "
+        "check_crypto_permitted would wall the repair off behind the fault it "
+        "exists to clear (see the build-pipeline note in "
+        "ama_cryptography/__init__.py), the same circularity as _self_test. "
+        "It signs the package digest with a per-build key it discards; it emits "
+        "no cryptographic output on a caller's behalf."
+    ),
     "ama_cryptography/_self_test.py": (
         "POST and integrity verification. Reaches native only through private "
         "helpers (_load_integrity_trust_anchor reads the compiled trust anchor; "
@@ -406,7 +431,11 @@ def native_reaching_private_helpers(tree: ast.Module) -> set[str]:
     return reaching
 
 
-def _native_call_lines(node: ast.AST, helpers: frozenset[str] = frozenset()) -> list[int]:
+def _native_call_lines(
+    node: ast.AST,
+    helpers: frozenset[str] = frozenset(),
+    aliases: Optional[set[str]] = None,
+) -> list[int]:
     """Line numbers of every native call in the body, by any route.
 
     Matches an ``ast.Call`` whose function is:
@@ -426,8 +455,13 @@ def _native_call_lines(node: ast.AST, helpers: frozenset[str] = frozenset()) -> 
     — is deliberately not matched: it configures or inspects a signature, it does
     not perform cryptography.  An alias binding is likewise not a call; only a
     later call *through* the alias counts.
+
+    ``aliases`` defaults to the names bound inside ``node`` itself; pass the
+    enclosing function's set when ``node`` is one statement of it, or a call
+    through a name bound in an EARLIER statement is not seen.
     """
-    aliases = _native_handle_aliases(node)
+    if aliases is None:
+        aliases = _native_handle_aliases(node)
     lines: list[int] = []
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Call):
@@ -554,6 +588,81 @@ def _guard_call_lines(node: ast.AST, delegating: Optional[set[str]] = None) -> l
     return lines
 
 
+def _is_guard_statement(stmt: ast.stmt, delegating: set[str]) -> bool:
+    """Whether ``stmt`` is, by itself, an error-state guard call.
+
+    ``check_crypto_permitted()`` as an expression statement, or a call to a
+    guard-delegating helper whose result is kept (``lib = _require_native()``).
+    Nothing that CONTAINS a guard qualifies: a guard under an ``if``, in a
+    ``try`` whose handler can swallow its raise, in a loop that may not run,
+    or inside a nested ``def``/``lambda`` that may never be called, is a guard
+    that does not always run.
+    """
+    if isinstance(stmt, (ast.Expr, ast.Assign)) or (
+        isinstance(stmt, ast.AnnAssign) and stmt.value is not None
+    ):
+        value = stmt.value
+    else:
+        return False
+    if not isinstance(value, ast.Call):
+        return False
+    fn = value.func
+    if isinstance(fn, ast.Name):
+        return fn.id in GUARDS or fn.id in delegating
+    if isinstance(fn, ast.Attribute):
+        return fn.attr in GUARDS
+    return False
+
+
+def unguarded_native_line(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    helpers: frozenset[str],
+    delegating: set[str],
+) -> Optional[int]:
+    """The line to report if ``node`` can reach native without the guard, else ``None``.
+
+    The rule is DOMINANCE, which is what "before the first native call" has to
+    mean for the guard to inhibit anything: a statement of the function's own
+    body that is a guard call (:func:`_is_guard_statement`) must come before
+    the body statement holding the first native call.
+
+    The previous test compared line numbers — ``min(native) < min(guard)`` over
+    every call anywhere in the body — so each of these read as gated while
+    emitting output in the ERROR state:
+
+    * ``if not fast: check_crypto_permitted()`` — a conditional guard;
+    * ``try: check_crypto_permitted()`` / ``except Exception: pass`` — a
+      swallowed one;
+    * ``_g = lambda: check_crypto_permitted()`` — a guard never called.
+
+    ``guard_delegating_helpers`` already held a helper to exactly this rule
+    ("a helper that guards inside an ``if`` … guards only sometimes"); the
+    public functions it serves were held to a weaker one.
+
+    A call to a guard-delegating helper is guarded wherever it appears — the
+    helper guards before it does anything — so it never needs a guard ahead
+    of it (``return _native_hkdf_sha2(...)`` is the shape).
+    """
+    direct_helpers = helpers - frozenset(delegating)
+    aliases = _native_handle_aliases(node)
+    if not _native_call_lines(node, direct_helpers, aliases):
+        return None
+    for stmt in node.body:
+        if _is_guard_statement(stmt, delegating):
+            return None
+        native = _native_call_lines(stmt, direct_helpers, aliases)
+        if native:
+            # Reached before any guard statement.  Name the def when the body
+            # has no guard call at all, and the native call when it has one
+            # that does not dominate — that is where output escaped.
+            if not _guard_call_lines(node, delegating):
+                return node.lineno
+            return min(native)
+    # The call sits outside the body — a decorator, a default or an annotation,
+    # evaluated when the ``def`` runs — where no guard in the body precedes it.
+    return node.lineno
+
+
 def _iter_public_functions(
     tree: ast.Module,
 ) -> Iterator[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
@@ -594,29 +703,66 @@ def _module_reaches_native(tree: ast.AST) -> bool:
       while appearing in neither MODULES nor EXEMPT_MODULES, exactly the
       unaudited-by-omission state the discovery claims to make impossible.
       (The un-aliased form was already caught: its uses are Name nodes.)
+
+    Every arm above names ``pqc_backends``' handle.  A module that obtains
+    ITS OWN handle reached the library while matching none of them:
+    ``_build_sign.py`` does ``lib = _find_native_library()`` and then
+    ``lib.ama_ed25519_sign(...)``, and was in neither list while the gate
+    printed "all classified".  So a module also reaches native when it
+
+    * calls any ``*.ama_*(...)`` symbol, on any receiver — the same
+      receiver-agnostic rule :func:`_native_call_lines` applies inside a
+      function, since every exported C symbol is ``ama_``-prefixed;
+    * resolves one by name, ``getattr(x, "ama_…")``;
+    * calls or imports ``_find_native_library``, the loader that returns the
+      handle (exactly that name: ``_find_native_library_path`` returns a
+      path, and loading it is the next arm's business); or
+    * loads a shared library itself — ``ctypes.CDLL(...)`` /
+      ``cdll.LoadLibrary(...)``.
     """
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == "_native_lib":
+        if isinstance(node, ast.Name) and node.id in ("_native_lib", _LOADER):
             return True
-        if isinstance(node, ast.Attribute) and node.attr == "_native_lib":
+        if isinstance(node, ast.Attribute) and node.attr in ("_native_lib", _LOADER):
             return True
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
-                if alias.name == "_native_lib" or alias.name.endswith("._native_lib"):
+                if alias.name.rsplit(".", 1)[-1] in ("_native_lib", _LOADER):
                     return True
         if isinstance(node, ast.Call):
             fn = node.func
             if isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):
+                return True
+            if isinstance(fn, ast.Attribute) and fn.attr.startswith("ama_"):
+                return True
+            if isinstance(fn, (ast.Name, ast.Attribute)) and _callee_name(fn) in _LIBRARY_LOADERS:
                 return True
             if (
                 isinstance(fn, ast.Name)
                 and fn.id == "getattr"
                 and len(node.args) >= 2
                 and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value == "_native_lib"
+                and isinstance(node.args[1].value, str)
+                and (node.args[1].value == "_native_lib" or node.args[1].value.startswith("ama_"))
             ):
                 return True
     return False
+
+
+#: ``pqc_backends``' loader: returns the ctypes handle on the AMA library.
+_LOADER = "_find_native_library"
+
+#: ctypes calls that load a shared library and return a handle to it.
+_LIBRARY_LOADERS = frozenset({"CDLL", "LoadLibrary"})
+
+
+def _callee_name(fn: ast.expr) -> Optional[str]:
+    """``f`` for ``f(...)`` and ``x.f(...)``; ``None`` otherwise."""
+    if isinstance(fn, ast.Name):
+        return fn.id
+    if isinstance(fn, ast.Attribute):
+        return fn.attr
+    return None
 
 
 def discover_native_reaching_modules(repo: Path) -> list[str]:
@@ -647,6 +793,44 @@ def discover_native_reaching_modules(repo: Path) -> list[str]:
     return found
 
 
+#: The source roots a Cython binding is compiled from.  ``setup.py`` builds
+#: every extension from ``src/``; ``ama_cryptography/`` is walked as well so a
+#: ``.pyx`` placed beside the package it extends is not outside the scan.
+PYX_ROOTS = ("src", "ama_cryptography")
+
+#: A ``.pyx`` reaches the C kernel when it declares a project header extern:
+#: ``cdef extern from "ama_cryptography.h":`` (or any ``include/ama_*.h``).
+_PYX_EXTERN_RE = re.compile(
+    r"""^[ \t]*cdef[ \t]+extern[ \t]+from[ \t]+["'](?:[^"'\n]*/)?ama_[^"'\n]*["']""",
+    re.MULTILINE,
+)
+
+
+def discover_native_reaching_pyx(repo: Path) -> list[str]:
+    """Every ``.pyx`` under :data:`PYX_ROOTS` that declares an ``ama_*`` header.
+
+    :data:`BINDING_PYX` is a written list, and nothing in the gate compared it
+    with the tree: a new ``foo_binding.pyx`` whose ``cy_foo`` called the C
+    kernel unguarded was simply never read, and the run still reported every
+    binding gated.  :func:`main` now requires each file found here to be listed.
+    """
+    found: set[str] = set()
+    for root in PYX_ROOTS:
+        base = repo / root
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*.pyx"):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                # Unreadable is not "reaches nothing": list it so main() fails.
+                found.add(path.relative_to(repo).as_posix())
+                continue
+            if _PYX_EXTERN_RE.search(text):
+                found.add(path.relative_to(repo).as_posix())
+    return sorted(found)
+
+
 def audit(
     path: Path, exempt: dict[str, str] | None = None
 ) -> tuple[list[tuple[str, int]], list[str], int]:
@@ -674,17 +858,13 @@ def audit(
         if display in exempt:
             continue
         checked += 1
-        guard_lines = _guard_call_lines(node, delegating)
-        if not guard_lines:
-            ungated.append((display, node.lineno))
-        elif min(native_lines) < min(guard_lines):
-            # Guard present but reached only after a native call has already
-            # run — the module is in the ERROR state, output has been produced,
-            # and the guard raises too late to inhibit it.  ``audit_pyx`` has
-            # rejected this ordering since it was written; the Python half
-            # asked only whether a guard appeared anywhere in the body, so the
-            # two halves of the same gate enforced different rules.
-            ungated.append((display, min(native_lines)))
+        # A guard reached only after a native call — or only on some paths —
+        # does not inhibit output: the module is in the ERROR state and the C
+        # kernel has run.  ``audit_pyx`` has rejected the late ordering since it
+        # was written; see unguarded_native_line for the dominance rule.
+        line = unguarded_native_line(node, helpers, delegating)
+        if line is not None:
+            ungated.append((display, line))
 
     stale = sorted(name for name in exempt if name not in seen)
     return ungated, stale, checked
@@ -843,6 +1023,18 @@ def main() -> int:
             file=sys.stderr,
         )
         for name in unclassified:
+            print(f"  - {name}", file=sys.stderr)
+        return 1
+
+    unlisted_pyx = sorted(set(discover_native_reaching_pyx(REPO_ROOT)) - set(BINDING_PYX))
+    if unlisted_pyx:
+        print(
+            "ERROR: Cython file(s) declare an ama_* header extern — they call the C "
+            "kernel — but are not in BINDING_PYX, so their entry points are never "
+            "checked for an error-state guard:",
+            file=sys.stderr,
+        )
+        for name in unlisted_pyx:
             print(f"  - {name}", file=sys.stderr)
         return 1
 

@@ -172,9 +172,15 @@ class TestVersionScopingAndMissing:
     def test_changelog_heading_is_version_scoped(self, tool: ModuleType, tmp_path: Path) -> None:
         # A CHANGELOG heading for 5.0.0 must not be flagged when 6.0.0 is being
         # released: only the heading of the version under release is enforced.
+        # 6.0.0 carries its own dated section, which a release must have.
         _unreleased_tree(tmp_path, "5.0.0")
+        changelog = (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+        (tmp_path / "CHANGELOG.md").write_text(
+            changelog.replace("# Changelog\n\n", "# Changelog\n\n## [6.0.0] - 2026-10-01\n\n"),
+            encoding="utf-8",
+        )
         problems, _ = tool.scan(tmp_path, "6.0.0", require_published=False)
-        assert not any("CHANGELOG.md" in p for p in problems)
+        assert not any("CHANGELOG.md" in p for p in problems), problems
 
     def test_missing_release_state_file_fails(self, tool: ModuleType, tmp_path: Path) -> None:
         _released_tree(tmp_path, "5.0.0")
@@ -215,6 +221,78 @@ class TestVersionScopingAndMissing:
         )
         problems, _ = tool.scan(tmp_path, "5.0.0", require_published=False)
         assert any("not yet tagged" in p for p in problems), problems
+
+
+# --------------------------------------------------------------------------
+# The CHANGELOG's real pre-release form: notes under a version-less
+# ``## [Unreleased]`` heading, no section for the version at all.
+# --------------------------------------------------------------------------
+def _changelog_tree(root: Path, changelog: str, version: str) -> None:
+    _released_tree(root, version)
+    (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+
+
+class TestChangelogMustRecordTheRelease:
+    """The marker set could only refuse a statement that is present.
+
+    Before a release this CHANGELOG files its notes under Keep a Changelog's
+    ``## [Unreleased]`` — no version in the brackets — and has no heading for
+    the version at all.  Tagging ``v5.0.1`` from that state matched nothing,
+    and the preflight passed a tag whose CHANGELOG called its own contents
+    unreleased.
+    """
+
+    def test_notes_still_under_unreleased_with_no_section_fail(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The audited scenario, exactly."""
+        _changelog_tree(
+            tmp_path,
+            "# Changelog\n\n## [Unreleased]\n\n- the 5.0.1 fixes\n\n"
+            "## [5.0.0] - 2026-09-01\n\n- old\n",
+            "5.0.1",
+        )
+        assert tool.main(["--version", "5.0.1", "--repo", str(tmp_path)]) == 1
+        problems, _ = tool.scan(tmp_path, "5.0.1", require_published=False)
+        assert any("no dated '## [5.0.1]" in p for p in problems), problems
+        assert any("CHANGELOG.md:5:" in p and "[Unreleased]" in p for p in problems), problems
+
+    def test_an_undated_version_heading_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        _changelog_tree(tmp_path, "# Changelog\n\n## [5.0.1]\n\n- fixes\n", "5.0.1")
+        problems, _ = tool.scan(tmp_path, "5.0.1", require_published=False)
+        assert any("no dated '## [5.0.1]" in p for p in problems), problems
+
+    def test_another_versions_dated_heading_does_not_count(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _changelog_tree(tmp_path, "# Changelog\n\n## [5.0.10] - 2026-10-01\n\n- x\n", "5.0.1")
+        problems, _ = tool.scan(tmp_path, "5.0.1", require_published=False)
+        assert any("no dated '## [5.0.1]" in p for p in problems), problems
+
+    def test_entries_left_under_unreleased_fail_even_with_a_dated_section(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Everything in the tree ships in the tag, so an entry left behind is misfiled."""
+        _changelog_tree(
+            tmp_path,
+            "# Changelog\n\n---\n\n## [Unreleased]\n\n### Fixed\n\n- late fix\n\n"
+            "## [5.0.1] - 2026-10-01\n\n- fixes\n",
+            "5.0.1",
+        )
+        problems, _ = tool.scan(tmp_path, "5.0.1", require_published=False)
+        assert len(problems) == 1 and "CHANGELOG.md:9:" in problems[0], problems
+
+    def test_the_empty_placeholder_is_accepted(self, tool: ModuleType, tmp_path: Path) -> None:
+        """The control: the convention itself — an empty ``[Unreleased]`` — stays legal."""
+        _changelog_tree(
+            tmp_path,
+            "# Changelog\n\n---\n\n## [Unreleased]\n\n### Added\n\n***\n\n---\n\n"
+            "## [5.0.1] - 2026-10-01\n\n### Fixed\n\n- fixes\n",
+            "5.0.1",
+        )
+        problems, _ = tool.scan(tmp_path, "5.0.1", require_published=False)
+        assert problems == [], problems
+        assert tool.main(["--version", "5.0.1", "--repo", str(tmp_path)]) == 0
 
 
 # --------------------------------------------------------------------------

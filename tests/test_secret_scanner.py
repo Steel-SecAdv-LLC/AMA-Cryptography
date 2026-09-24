@@ -165,9 +165,57 @@ class TestDoesNotFlagPublishedArtefacts:
         assert scan_text("README.md", text) == []
 
     def test_explicit_optout_marker_is_honoured(self) -> None:
+        """The full form — reason and tracking reference — is honoured.
+
+        Written in a YAML file: in ``*.py`` the same comment is a blanket
+        bandit ``nosec`` and ``check_suppression_hygiene.py`` refuses it.
+        """
         token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
-        line = f'sample = "{token}"  # nosecret: documentation example'
-        assert scan_text("doc.py", line) == []
+        line = f"sample: {token}  # nosecret: documentation example (SEC-001)"
+        assert scan_text("doc.yml", line) == []
+
+
+class TestOptOutMarkerIsAudited:
+    """The opt-out used to be any occurrence of the word, anywhere on the line.
+
+    No reason, no tracking reference, not even a comment: a string literal
+    containing the word switched the scanner off for the whole line, and the
+    comment claiming ``check_suppression_hygiene.py`` audited the marker was
+    false — that gate reads only ``*.py`` comments, and never this marker.
+    """
+
+    TOKEN = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+
+    @pytest.mark.parametrize(
+        "suffix",
+        [
+            "  # nosecret",
+            "  # nosecret: because",
+            "  # nosecret: (SEC-001)",
+            "  # NOSECRET",
+            "  // nosecret",
+        ],
+    )
+    def test_an_unjustified_marker_is_a_finding_and_silences_nothing(self, suffix: str) -> None:
+        rules = _rules(scan_text("ci.yml", f"GH_TOKEN: {self.TOKEN}{suffix}"))
+        assert "unjustified-optout" in rules, rules
+        assert "github-token" in rules, rules
+
+    def test_the_word_in_a_string_literal_is_not_an_opt_out(self) -> None:
+        line = f'label = "nosecret"; token = "{self.TOKEN}"'
+        rules = _rules(scan_text("x.sh", line))
+        assert "github-token" in rules and "unjustified-optout" not in rules, rules
+
+    def test_the_full_form_is_honoured_in_a_c_comment(self) -> None:
+        line = f'static const char *k = "{self.TOKEN}"; // nosecret: vector (SEC-002)'
+        assert scan_text("x.c", line) == []
+
+    def test_a_python_file_cannot_carry_it(self) -> None:
+        """bandit reads the marker as a bare ``nosec``; the hygiene gate says so."""
+        from tools.check_suppression_hygiene import check_source
+
+        found = check_source("pkg/mod.py", "x = 1  # nosecret: documentation example (SEC-001)\n")
+        assert len(found) == 1 and "read by bandit as a bare 'nosec'" in found[0], found
 
 
 class TestCatchesSplitLiteralEvasion:

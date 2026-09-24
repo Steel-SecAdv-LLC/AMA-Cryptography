@@ -20,6 +20,7 @@ import re
 import sys
 import tokenize
 from pathlib import Path
+from typing import Optional
 
 # Suppression tokens to scan for.
 #
@@ -56,9 +57,11 @@ _SUPPRESSION_RE = re.compile(
 #: `# mypy: ignore-errors` was unrecognised even as a marker.
 #:
 #: These are refused UNCONDITIONALLY, justification or not: the invariant
-#: forbids the scope, not the absence of a reason.  A file-level
-#: `# type: ignore` on line 1 is mypy's whole-file form and is caught here too;
-#: the line-1 carve-out below exists so it is examined rather than skipped.
+#: forbids the scope, not the absence of a reason.  Two more file-scoped forms
+#: are found by position rather than by spelling, and so are not in this
+#: pattern: mypy's whole-module `# type: ignore` (see
+#: :func:`module_level_type_ignore_lines`) and mypy's inline configuration
+#: (see :func:`mypy_inline_config_lines`).
 _FILE_SCOPED_RE = re.compile(
     r"^#\s*(?:"
     r"ruff\s*:\s*noqa"
@@ -68,11 +71,143 @@ _FILE_SCOPED_RE = re.compile(
     r")\b"
 )
 
-#: mypy's whole-file form: a STANDALONE `# type: ignore` on line 1.  Split out
-#: because the same spelling as a TRAILING comment is the ordinary line-scoped
-#: suppression this repository allows with a justification, so it cannot be
-#: matched by position-blind pattern alone.
-_FILE_LEVEL_TYPE_IGNORE_RE = re.compile(r"^#\s*type\s*:\s*ignore\b")
+#: mypy's inline-configuration prefix, spelled exactly as mypy matches it
+#: (``mypy.util.get_mypy_comments``: ``line.startswith("# mypy: ")`` over the
+#: RAW source lines, verified against mypy 2.3.1).
+_MYPY_INLINE_CONFIG_PREFIX = "# mypy: "
+
+
+def module_level_type_ignore_lines(source: str) -> list[int]:
+    """Lines of every ``# type: ignore`` that makes mypy skip the whole module.
+
+    mypy's rule (``ASTConverter.translate_stmt_list``, mypy 2.3.1): a
+    ``type: ignore`` comment whose line is BEFORE the module's first statement
+    — a decorated definition starts at its first decorator — ignores the
+    entire module.  Not "on line 1": anywhere before the first statement.
+
+    The gate used to test ``lineno == 1`` only, and every tracked ``.py`` file
+    opens with the shebang and/or the copyright and SPDX lines that
+    ``check_headers.py`` requires, so line 1 can never hold the marker in a
+    compliant file.  ``# type: ignore`` on line 4 — after the SPDX line,
+    before the docstring — made ``mypy --strict`` skip the module while this
+    gate reported every suppression justified.
+
+    Found the way mypy finds it: the parser's own ``type_ignores`` (Python's
+    tokenizer emits them only for genuine comments), compared against the
+    first statement's line.  A file that does not parse yields nothing here,
+    and mypy refuses it outright anyway.
+    """
+    try:
+        tree = ast.parse(source, type_comments=True)
+    except (SyntaxError, ValueError):
+        return []
+    if not tree.body:
+        return []
+    first = tree.body[0]
+    first_line = first.lineno
+    if (
+        isinstance(first, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and first.decorator_list
+    ):
+        first_line = first.decorator_list[0].lineno
+    return sorted(ti.lineno for ti in tree.type_ignores if ti.lineno < first_line)
+
+
+def mypy_inline_config_lines(source: str) -> list[tuple[int, str]]:
+    """``(lineno, line)`` for every line mypy reads as inline configuration.
+
+    mypy's inline configuration is file-scoped by construction: it sets
+    per-module options for the whole file.  ``# mypy: allow-untyped-defs``
+    or ``# mypy: no-warn-unused-ignores`` relaxes ``--strict`` for every line
+    of the module just as ``# mypy: ignore-errors`` does, and
+    ``_FILE_SCOPED_RE`` named only the last two options.
+
+    Matched on RAW lines, the way mypy matches it, not on comment tokens: mypy
+    does not tokenize, so a line beginning ``# mypy: ignore-errors`` inside a
+    triple-quoted string silences the module exactly as a real comment does,
+    and a token-based scan never sees it.
+
+    Every option is refused, not just the relaxations.  An allow-list of
+    "strictness-increasing" options would have to track mypy's option set and
+    its ``flag=False`` spellings; a per-module setting belongs in the
+    reviewed ``[tool.mypy]`` configuration instead.  The tree carries none.
+    """
+    return [
+        (lineno, line.rstrip("\r"))
+        for lineno, line in enumerate(source.split("\n"), start=1)
+        if line.startswith(_MYPY_INLINE_CONFIG_PREFIX)
+    ]
+
+
+#: A comment that could be a ``type: ignore`` — the loose pre-filter that
+#: decides whether :func:`module_level_type_ignore_lines` needs to parse.
+_MAYBE_TYPE_IGNORE_RE = re.compile(r"type\s*:\s*ignore")
+
+#: Tokens that are not a statement's first token.
+_NOT_A_STATEMENT = frozenset(
+    {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.ENCODING, tokenize.ENDMARKER}
+)
+
+
+def scan_comments(source: str) -> tuple[list[tuple[int, str, bool]], Optional[int]]:
+    """One tokenize pass: ``(lineno, text, trailing)`` per comment, and the
+    line of the first statement's first token (``None`` for no statement).
+
+    The first significant token is where mypy's rule places the first
+    statement — a decorator's ``@``, a docstring's opening quote — so this
+    pass also tells :func:`file_scoped_lines` whether a ``type: ignore``
+    comment is even a candidate before anything is parsed.  An unparseable
+    file yields what was seen before the error.
+    """
+    comments: list[tuple[int, str, bool]] = []
+    first: Optional[int] = None
+    lines = source.splitlines()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                lineno, col = tok.start
+                physical = lines[lineno - 1] if lineno - 1 < len(lines) else ""
+                comments.append((lineno, tok.string, bool(physical[:col].strip())))
+            elif first is None and tok.type not in _NOT_A_STATEMENT:
+                first = tok.start[0]
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        pass
+    return comments, first
+
+
+def file_scoped_lines(
+    source: str,
+    scanned: Optional[tuple[list[tuple[int, str, bool]], Optional[int]]] = None,
+) -> dict[int, str]:
+    """Every line of ``source`` that holds a file-scoped suppression.
+
+    The union of the three ways a suppression can reach the whole file: a
+    standalone linter directive ``_FILE_SCOPED_RE`` names, mypy's
+    whole-module ``# type: ignore``, and mypy's inline configuration.
+    ``scanned`` is :func:`scan_comments`' result, when the caller has it.
+    """
+    comments, first = scanned if scanned is not None else scan_comments(source)
+    found: dict[int, str] = {}
+    candidate = False
+    for lineno, text, trailing in comments:
+        if trailing:
+            continue  # line-scoped by position
+        if _FILE_SCOPED_RE.match(text.strip()):
+            found[lineno] = text.strip()
+        if (first is None or lineno < first) and _MAYBE_TYPE_IGNORE_RE.search(text):
+            candidate = True
+    if candidate:
+        # Exact, and rare: only a file with a type-ignore-shaped comment ahead
+        # of its first statement pays for a parse.
+        lines = source.splitlines()
+        for lineno in module_level_type_ignore_lines(source):
+            found[lineno] = lines[lineno - 1].strip() if lineno - 1 < len(lines) else ""
+    if _MYPY_INLINE_CONFIG_PREFIX in source:
+        for lineno, line in mypy_inline_config_lines(source):
+            found[lineno] = line.strip()
+    return found
+
+
 _NOSEMGREP_STRICT_RE = re.compile(r"^:\s*\S+")
 
 # The same requirement, for the two other markers that blanket-suppress a whole
@@ -97,10 +232,10 @@ _NOSEMGREP_STRICT_RE = re.compile(r"^:\s*\S+")
 #            malformed directives — three warnings in every CI lint log.)
 #
 # ``type: ignore`` and ``pylint: disable`` are deliberately NOT held to this,
-# and the reason is stated rather than left as an omission: mypy's file-level
-# ``# type: ignore`` on line 1 is a legitimate bare form that
-# ``effective_suppressions`` keeps in scope on purpose, and mypy --strict's
+# and the reason is stated rather than left as an omission: mypy --strict's
 # ``warn_unused_ignores`` already reports an ignore that suppresses nothing.
+# (mypy's bare whole-module ``# type: ignore`` is not an exception to that:
+# it is file-scoped, and :func:`file_scoped_lines` refuses it outright.)
 # Neither family has a bare occurrence in the tree today.
 _NOSEC_STRICT_RE = re.compile(r"^:?\s*B\d+", re.IGNORECASE)
 _NOQA_STRICT_RE = re.compile(r"^:\s*[A-Z]+\d+", re.IGNORECASE)
@@ -156,58 +291,44 @@ def effective_suppressions(source: str) -> list[tuple[int, str]]:
     that tree was included. A gate that fires on its own documentation is one
     people learn to route around.
 
-    The standalone forms that are REAL — the file-scoped directives
-    ``_FILE_SCOPED_RE`` matches — are kept in scope explicitly rather than lost
-    to the rule.  That set used to be just mypy's line-1 ``# type: ignore``,
-    which meant ``# ruff: noqa``, ``# flake8: noqa`` and
+    The standalone forms that are REAL — the file-scoped suppressions
+    :func:`file_scoped_lines` finds — are kept in scope explicitly rather than
+    lost to the rule.  That set used to be just mypy's ``# type: ignore`` on
+    line 1, which meant ``# ruff: noqa``, ``# flake8: noqa`` and
     ``# mypy: ignore-errors`` were structurally invisible: the gate could not
     have reported them however they were written, and INVARIANT-13's first
     condition — line-scoped, not file-scoped — had no enforcement at all.
+    Line 1 was itself the wrong test: see
+    :func:`module_level_type_ignore_lines`.
     """
-    results: list[tuple[int, str]] = []
-    try:
-        lines = source.splitlines()
-        readline = io.StringIO(source).readline
-        for tok in tokenize.generate_tokens(readline):
-            if tok.type != tokenize.COMMENT:
-                continue
-            lineno, col = tok.start
-            physical = lines[lineno - 1] if lineno - 1 < len(lines) else ""
-            trailing = bool(physical[:col].strip())
-            standalone = not trailing
-            file_scoped = standalone and (
-                bool(_FILE_SCOPED_RE.match(tok.string.strip()))
-                or (lineno == 1 and bool(_FILE_LEVEL_TYPE_IGNORE_RE.match(tok.string.strip())))
-            )
-            if trailing or file_scoped:
-                results.append((lineno, tok.string))
-    except (tokenize.TokenError, SyntaxError, IndentationError):
-        return results  # unparseable file: report what was seen before the error
-    return results
+    scanned = scan_comments(source)
+    scoped = file_scoped_lines(source, scanned)
+    return [(lineno, text) for lineno, text, trailing in scanned[0] if trailing or lineno in scoped]
 
 
 def check_source(filepath: str, source: str) -> list[str]:
     """Return violation messages for already-loaded Python ``source``."""
     violations: list[str] = []
-    for lineno, comment in effective_suppressions(source):
-        stripped = comment.strip()
-        # File-scoped first, and unconditionally: INVARIANT-13 forbids the
-        # SCOPE.  A justification and a tracking id do not make a file-scoped
-        # `ruff: noqa` comment line-scoped, so there is no form of it to
-        # accept.
-        #
-        # `effective_suppressions` only surfaces these when they are
-        # STANDALONE, so a trailing `# type: ignore[arg-type]` — the ordinary
-        # line-scoped form — never reaches this branch.
-        if _FILE_SCOPED_RE.match(stripped) or (
-            lineno == 1 and _FILE_LEVEL_TYPE_IGNORE_RE.match(stripped)
-        ):
-            violations.append(
-                f"{filepath}:{lineno}: FILE-SCOPED suppression '{stripped[:60]}' — "
-                f"INVARIANT-13 requires line-scoped suppressions; move it to the "
-                f"lines it applies to and justify each one"
-            )
-            continue
+    # File-scoped first, and unconditionally: INVARIANT-13 forbids the SCOPE.
+    # A justification and a tracking id do not make a file-scoped `ruff: noqa`
+    # comment line-scoped, so there is no form of it to accept.
+    #
+    # Reported from `file_scoped_lines` directly, not from the comment tokens:
+    # a mypy inline-config line inside a string literal is not a comment token
+    # at all, and mypy honours it anyway.  A trailing
+    # `# type: ignore[arg-type]` — the ordinary line-scoped form — is never in
+    # this set.
+    scanned = scan_comments(source)
+    scoped = file_scoped_lines(source, scanned)
+    for lineno, stripped in sorted(scoped.items()):
+        violations.append(
+            f"{filepath}:{lineno}: FILE-SCOPED suppression '{stripped[:60]}' — "
+            f"INVARIANT-13 requires line-scoped suppressions; move it to the "
+            f"lines it applies to and justify each one"
+        )
+    for lineno, comment, trailing in scanned[0]:
+        if not trailing or lineno in scoped:
+            continue  # prose, or already reported as file-scoped
         for m in _SUPPRESSION_RE.finditer(comment):
             tag = f"{filepath}:{lineno}"
             if _is_forbidden(filepath):
@@ -222,6 +343,19 @@ def check_source(filepath: str, source: str) -> list[str]:
             # held to this.
             marker = m.group(1)
             strict = _STRICT_FORMS.get(marker)
+            if marker == "nosec" and rest[:1].isalpha() and not _NOSEC_STRICT_RE.match(rest):
+                # A longer word that merely STARTS with the marker — the secret
+                # scanner's nosecret opt-out is the one this tree defines.
+                # bandit's NOSEC_COMMENT matches the prefix all the same, finds
+                # no test id in the remainder, and skips every test on the line
+                # (bandit 1.9.2), so this is a real blanket suppression.
+                violations.append(
+                    f"{tag}: '{comment.strip()[:40]}' is read by bandit as a bare "
+                    f"'nosec' (its pattern matches the prefix) and silences every "
+                    f"bandit test on the line; the secret-scan opt-out cannot be "
+                    f"used in a Python file"
+                )
+                continue
             if strict is not None and not strict[0].match(rest):
                 violations.append(
                     f"{tag}: suppression '{marker}' missing rule id "

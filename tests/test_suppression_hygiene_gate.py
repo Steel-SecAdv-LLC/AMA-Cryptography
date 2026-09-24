@@ -33,6 +33,7 @@ passes of three read as a covered tool.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re as _re
 import shutil as _shutil
 import subprocess as _subprocess
@@ -278,6 +279,143 @@ class TestFileScopedSuppressionsAreRefused:
         source = (
             "# A file-scoped `# ruff: noqa` would be refused here.\n\ndef f() -> None:\n    pass\n"
         )
+        assert gate.check_source("pkg/mod.py", source) == []
+
+
+#: The opening every tracked ``.py`` file must carry (``check_headers.py``).
+#: It occupies lines 1-3, which is why a whole-module ``# type: ignore`` in a
+#: compliant file can never be on line 1.
+_HEADER = (
+    "#!/usr/bin/env python3\n"
+    "# Copyright (C) 2025-2026 Steel Security Advisors LLC\n"
+    "# SPDX-License-Identifier: Apache-2.0\n"
+)
+
+#: A module ``mypy --strict`` rejects: an untyped def returning a bad sum.
+_BODY = '"""Doc."""\n\n\ndef f(x):\n    return x + "a" + 1\n'
+
+#: Every file-scoped mypy form that sits AFTER the mandatory header, each
+#: paired with the line it occupies.  The gate used to report none of them.
+_FILE_SCOPED_AFTER_HEADER = {
+    "type-ignore-before-docstring": (_HEADER + "# type: ignore\n" + _BODY, 4),
+    "type-ignore-after-blank": (_HEADER + "\n# type: ignore\n\n" + _BODY, 5),
+    "type-ignore-before-decorator": (
+        _HEADER + "# type: ignore\nimport functools\n\n\n@functools.cache\ndef f(x):\n"
+        '    return x + "a" + 1\n',
+        4,
+    ),
+    "mypy-allow-untyped-defs": (
+        _HEADER + "# mypy: allow-untyped-defs, no-warn-unused-ignores\n" + _BODY,
+        4,
+    ),
+    "mypy-flag-false": (_HEADER + "# mypy: disallow-untyped-defs=False\n" + _BODY, 4),
+    "mypy-inside-docstring": (
+        _HEADER + '"""Doc.\n\n# mypy: ignore-errors\n"""\n\n\ndef f(x):\n'
+        '    return x + "a" + 1\n',
+        6,
+    ),
+}
+
+
+class TestFileScopedMypyFormsAreFoundWhereMypyFindsThem:
+    """mypy's file-scoped forms are defined by POSITION, not by line 1.
+
+    A ``# type: ignore`` anywhere before the module's first statement makes
+    mypy skip the whole module, and mypy reads ``# mypy: <options>`` from any
+    raw line beginning with that prefix — including one inside a string.  The
+    gate used to recognise the first only on line 1, which the header
+    ``check_headers.py`` requires always occupies, and the second only for
+    ``ignore-errors``/``disable-error-code`` in a real comment token.  Each
+    case below was reported clean.
+    """
+
+    @pytest.mark.parametrize("label", sorted(_FILE_SCOPED_AFTER_HEADER))
+    def test_it_is_refused_as_file_scoped(self, gate: ModuleType, label: str) -> None:
+        source, lineno = _FILE_SCOPED_AFTER_HEADER[label]
+        found = gate.check_source("pkg/mod.py", source)
+        assert len(found) == 1, found
+        assert found[0].startswith(f"pkg/mod.py:{lineno}: FILE-SCOPED"), found[0]
+
+    @pytest.mark.parametrize("label", sorted(_FILE_SCOPED_AFTER_HEADER))
+    def test_mypy_really_skips_the_module(self, label: str, tmp_path: Path) -> None:
+        """The premise, measured: each form silences ``mypy --strict``.
+
+        Paired with the control below, which proves the same body fails
+        without the directive — so a mypy that stopped honouring a form would
+        turn this red rather than leave the gate refusing a harmless line.
+        """
+        api = pytest.importorskip("mypy.api")
+        source, _ = _FILE_SCOPED_AFTER_HEADER[label]
+        target = tmp_path / "mod.py"
+        target.write_text(source, encoding="utf-8")
+        out, err, status = api.run(
+            [
+                "--strict",
+                "--no-incremental",
+                "--config-file=",
+                f"--cache-dir={os.devnull}",
+                str(target),
+            ]
+        )
+        assert status == 0, f"{label}: mypy was NOT silenced:\n{out}{err}"
+
+    def test_the_control_body_fails_mypy(self, tmp_path: Path) -> None:
+        api = pytest.importorskip("mypy.api")
+        target = tmp_path / "mod.py"
+        target.write_text(_HEADER + _BODY, encoding="utf-8")
+        out, _err, status = api.run(
+            [
+                "--strict",
+                "--no-incremental",
+                "--config-file=",
+                f"--cache-dir={os.devnull}",
+                str(target),
+            ]
+        )
+        assert status == 1 and "error:" in out, out
+
+    def test_a_standalone_type_ignore_after_the_first_statement_is_not_file_scoped(
+        self, gate: ModuleType
+    ) -> None:
+        """The boundary: past the first statement mypy no longer reads it as whole-module."""
+        source = _HEADER + '"""Doc."""\n# type: ignore\nx = 1\n'
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_a_trailing_type_ignore_on_the_first_statement_is_line_scoped(
+        self, gate: ModuleType
+    ) -> None:
+        """The boundary is strict: ON the first statement's line mypy scopes it to that line."""
+        source = _HEADER + "import os  # type: ignore[import-untyped]  -- why (TAG-001)\n"
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_a_type_ignore_between_a_decorator_and_its_def_is_not_file_scoped(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """A decorated first statement starts at its decorator, as mypy counts it.
+
+        So a ``# type: ignore`` below the decorator is past the first statement
+        and mypy still checks the module — measured here, so the gate's
+        boundary is pinned to mypy's rather than to the ``def`` line.
+        """
+        source = _HEADER + '@staticmethod\n# type: ignore\ndef f(x):\n    return x + "a" + 1\n'
+        assert gate.check_source("pkg/mod.py", source) == []
+        api = pytest.importorskip("mypy.api")
+        target = tmp_path / "mod.py"
+        target.write_text(source, encoding="utf-8")
+        out, _err, status = api.run(
+            [
+                "--strict",
+                "--no-incremental",
+                "--config-file=",
+                f"--cache-dir={os.devnull}",
+                str(target),
+            ]
+        )
+        assert status == 1 and "error:" in out, out
+
+    def test_an_indented_mypy_line_in_a_string_is_not_configuration(self, gate: ModuleType) -> None:
+        """mypy matches the prefix at column 0 only; an indented quotation is prose."""
+        source = _HEADER + '"""Doc.\n\n    # mypy: ignore-errors\n"""\nx = 1\n'
         assert gate.check_source("pkg/mod.py", source) == []
 
 

@@ -32,10 +32,15 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from tools.check_reference_integrity import (  # noqa: E402 -- repo-root path insert above (REF-001)
     EXEMPT,
+    NOT_PROSE_TYPES,
     SCANNED_DIRS,
+    SCANNED_NAMES,
     SCANNED_ROOT_FILES,
+    SUFFIXES,
+    _is_historical_record,
     _tracked_files,
     check,
+    file_type,
     main,
     scan_text,
 )
@@ -219,6 +224,14 @@ class TestTheTreeIsClean:
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
         assert main(["--repo", str(tmp_path)]) == 1
 
+    def test_an_empty_scope_fails_closed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """ "OK 0 file(s) checked" was a pass over nothing."""
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        assert main(["--repo", str(tmp_path)]) == 1
+        assert "0 files in scope" in capsys.readouterr().out
+
     def test_the_epilog_states_what_is_not_checked(self) -> None:
         text = subprocess.run(
             [sys.executable, "tools/check_reference_integrity.py", "--help"],
@@ -229,3 +242,72 @@ class TestTheTreeIsClean:
         ).stdout
         assert "NOT checked" in text
         assert "CHANGELOG.md" in text
+
+
+class TestEveryProseFormatInScopeIsRead:
+    """The suffix list had to be complete for the declared scope to be true.
+
+    ``tests/`` and ``docs/`` were scanned directories, yet ``.rst`` (the Sphinx
+    pages) and ``.txt`` (``tests/c/CMakeLists.txt``) were not scanned types.
+    The CMake file carried two ``(2026-08 v5 audit)`` citations — this gate's
+    own motivating shape — while it reported every citation resolved.
+    """
+
+    def test_every_tracked_file_in_scope_is_scanned_or_declared_data(self) -> None:
+        """A partition, not a spot check: a new prose type cannot slip past."""
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", *SCANNED_DIRS, *SCANNED_ROOT_FILES],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        scanned = {p.relative_to(REPO_ROOT).as_posix() for p in _tracked_files(REPO_ROOT)}
+        unread = sorted(
+            name
+            for name in listed.split("\0")
+            if name
+            and name not in scanned
+            and name not in EXEMPT
+            and not _is_historical_record(name)
+            and file_type(Path(name)) not in NOT_PROSE_TYPES
+            and (REPO_ROOT / name).is_file()
+        )
+        assert unread == [], (
+            "tracked files in the declared scope that the gate never reads; add "
+            f"their type to SUFFIXES/SCANNED_NAMES or, if data, NOT_PROSE_TYPES: {unread}"
+        )
+
+    def test_no_type_is_both_prose_and_data(self) -> None:
+        assert not (SUFFIXES | SCANNED_NAMES) & set(NOT_PROSE_TYPES)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "tests/c/CMakeLists.txt",
+            "docs/index.rst",
+            "docs/Doxyfile",
+            "tools/constant_time/Makefile",
+        ],
+    )
+    def test_the_formerly_skipped_files_are_scanned(self, name: str) -> None:
+        scanned = {p.relative_to(REPO_ROOT).as_posix() for p in _tracked_files(REPO_ROOT)}
+        assert name in scanned
+
+    def test_a_citation_in_cmake_or_rst_fails_the_cli(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / "tests" / "c").mkdir(parents=True)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "tests" / "c" / "CMakeLists.txt").write_text(
+            "# Item-8 post-free scrub (2026-08 v5 audit)\n", encoding="utf-8"
+        )
+        (tmp_path / "docs" / "page.rst").write_text(
+            "Title\n=====\n\nThe nonce is derived at line 632.\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        assert main(["--repo", str(tmp_path)]) == 1
+        out = capsys.readouterr().out
+        assert "tests/c/CMakeLists.txt:1:" in out, out
+        assert "docs/page.rst:4:" in out, out

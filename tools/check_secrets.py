@@ -296,14 +296,50 @@ def _allow_reason(rel_path: str) -> Optional[str]:
     return None
 
 
+#: The per-line opt-out marker, as a COMMENT token (``#`` or ``//``), in any
+#: form.  Matching the bare substring anywhere on the line meant a string
+#: literal such as ``x = "nosecret"`` switched the scanner off for everything
+#: else on that line.
+_OPTOUT_MARKER: Pattern[str] = re.compile(r"(?:#|//)\s*(?i:nosecret)\b")
+
+#: The only form of the opt-out that is honoured: the marker, a colon, a
+#: written reason, and a tracking reference — INVARIANT-13's requirements for
+#: every suppression marker.  Nothing else in the repository audits this one:
+#: ``tools/check_suppression_hygiene.py`` reads only tracked ``*.py`` comments,
+#: and this scanner also reads workflow YAML, JSON, Markdown, shell and TOML,
+#: so the requirement is enforced here, where every file type is seen.
+#:
+#: In a Python file the marker is ALSO a blanket bandit suppression: bandit's
+#: ``NOSEC_COMMENT`` (``#\s*nosec:?...``) matches its prefix, and a comment
+#: that names no test id skips every test on the line (measured against
+#: bandit 1.9.2).  ``check_suppression_hygiene.py`` therefore refuses it in
+#: ``*.py``; the opt-out is usable only in files bandit does not read.
+_OPTOUT_FORM: Pattern[str] = re.compile(
+    r"(?:#|//)\s*(?i:nosecret):[ \t]*[^\s(][^\n]*?\([A-Z]+-\d+\)"
+)
+
+
 def scan_text(rel_path: str, text: str) -> list[Finding]:
     """Scan already-loaded ``text`` and return findings for ``rel_path``."""
     findings: list[Finding] = []
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        # A line that opts out explicitly must say why; the marker is audited
-        # by tools/check_suppression_hygiene.py like every other suppression.
-        if "nosecret" in raw_line.lower():
+        # A line opts out only through the full marker form: a reason and a
+        # tracking reference.  A marker without them is a finding of its own,
+        # AND the line is still scanned — an unjustified opt-out silences
+        # nothing.
+        if _OPTOUT_FORM.search(raw_line):
             continue
+        if _OPTOUT_MARKER.search(raw_line):
+            findings.append(
+                Finding(
+                    rel_path,
+                    line_no,
+                    "unjustified-optout",
+                    "secret-scan opt-out without a reason and tracking reference "
+                    "(expected: marker, colon, reason, then e.g. (SEC-001))",
+                    raw_line.strip()[:160],
+                )
+            )
 
         # Match against the concatenation-normalised form so a credential split
         # across adjacent literals cannot slip past.  The *excerpt* reported to

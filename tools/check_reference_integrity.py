@@ -117,7 +117,7 @@ wolf is worth more than a broad one that gets switched off.
 
 Exit code:
     0  every citation in the shipped tree resolves
-    1  at least one does not
+    1  at least one does not, or no file was in scope to check
 """
 
 from __future__ import annotations
@@ -148,7 +148,43 @@ EXEMPT = {
     "tests/test_reference_integrity_gate.py": "drives the rejected shapes through the gate",
 }
 
-SUFFIXES = {".py", ".pyx", ".pyi", ".c", ".h", ".md", ".sh", ".yml", ".yaml"}
+#: The file types that carry prose, and so can carry a citation.
+#:
+#: ``.txt``, ``.rst`` and ``.cmake`` were missing while ``tests/`` and
+#: ``docs/`` were in scope: the Sphinx pages under ``docs/`` are ``.rst``, and
+#: ``tests/c/CMakeLists.txt`` carried two ``(2026-08 v5 audit)`` citations —
+#: the exact shape this module's docstring opens with — while the gate printed
+#: "every citation resolves".
+SUFFIXES = {
+    ".py",
+    ".pyx",
+    ".pyi",
+    ".c",
+    ".h",
+    ".md",
+    ".rst",
+    ".txt",
+    ".sh",
+    ".yml",
+    ".yaml",
+    ".cmake",
+}
+
+#: Prose-bearing files that have no suffix to match (see :func:`file_type`).
+SCANNED_NAMES = {"Makefile", "Doxyfile", ".gitignore"}
+
+#: In-scope file types (:func:`file_type`) that are machine-read data, not
+#: prose, and the reason.  ``tests/test_reference_integrity_gate.py`` requires
+#: every tracked file in scope to be scanned, historical, exempt, or of one of
+#: these types — so a new prose format entering the tree fails the suite
+#: instead of being skipped the way ``.rst`` and ``.txt`` were.
+NOT_PROSE_TYPES = {
+    ".json": "test vectors, attestations and SBOMs, read by tools rather than people",
+    ".kat": "known-answer vectors",
+    ".rsp": "NIST CAVP response vectors",
+    ".typed": "the empty PEP 561 marker",
+    ".gitkeep": "an empty placeholder",
+}
 
 #: Citations that name a development artefact no reader of the repository has.
 PROCESS_CITATION = re.compile(r"""(?xi)
@@ -204,6 +240,17 @@ def _is_historical_record(name: str) -> bool:
     return is_historical_record(name)
 
 
+def file_type(path: Path) -> str:
+    """A file's suffix, or its whole name when it has none (``Makefile``, ``.gitkeep``)."""
+    return path.suffix or path.name
+
+
+def _is_prose(path: Path) -> bool:
+    """Whether ``path`` is a file type this gate reads."""
+    kind = file_type(path)
+    return kind in SUFFIXES or kind in SCANNED_NAMES
+
+
 def _tracked_files(repo_root: Path) -> list[Path]:
     """Every tracked file in scope, via ``git ls-files``.
 
@@ -222,7 +269,7 @@ def _tracked_files(repo_root: Path) -> list[Path]:
         if not name:
             continue
         path = repo_root / name
-        if name in EXEMPT or path.suffix not in SUFFIXES or not path.is_file():
+        if name in EXEMPT or not _is_prose(path) or not path.is_file():
             continue
         if _is_historical_record(name):
             continue
@@ -283,6 +330,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     checked, problems = check(Path(args.repo))
+    if checked == 0:
+        # Fail closed: an empty scope means the layout moved or --repo points
+        # somewhere else, and "every citation resolves" over nothing is the
+        # report this gate must never give.
+        print(
+            f"FAIL: 0 files in scope under {args.repo} — the scanned directories "
+            f"({', '.join(SCANNED_DIRS)}) hold no tracked prose file; that is a "
+            "checker fault, not a clean tree."
+        )
+        return 1
     if problems:
         print(f"FAIL: {len(problems)} unresolvable citation(s):")
         for problem in problems:

@@ -315,15 +315,24 @@ class TestModuleDiscovery:
     def test_comment_and_lookalike_are_not_false_positives(
         self, tool: ModuleType, tmp_path: Path
     ) -> None:
-        """A comment mentioning _native_lib, and the _find_native_library name
-        (which contains the substring), must not register as reaching native —
-        the reason discovery is AST-based rather than a grep."""
+        """A comment mentioning _native_lib, and a name that merely contains
+        the substring, must not register as reaching native — the reason
+        discovery is AST-based rather than a grep.
+
+        The lookalike used here was ``_find_native_library`` itself until the
+        review of PR #394, which asserted that CALLING the loader is not native
+        reach.  It is: the loader returns the ctypes handle on the library,
+        and ``_build_sign.py`` calls ``ama_ed25519_sign`` through exactly that
+        handle while discovery reported it reaching nothing.  The lookalike is
+        now ``_find_native_library_path``, which returns a path, not a handle;
+        the loader has its own test in :class:`TestModulesWithTheirOwnHandle`.
+        """
         repo = self._mk(
             tmp_path,
             "innocent.py",
             "# this module does not touch _native_lib at all\n"
-            "from ama_cryptography.pqc_backends import _find_native_library\n"
-            "def where():\n    return _find_native_library()\n",
+            "from ama_cryptography.pqc_backends import _find_native_library_path\n"
+            "def where():\n    return _find_native_library_path()\n",
         )
         assert "ama_cryptography/innocent.py" not in tool.discover_native_reaching_modules(repo)
 
@@ -1170,3 +1179,246 @@ class TestTheGateRunsAsCiRunsIt:
         assert result.returncode == 0, result.stderr
         assert result.stdout.startswith("OK: all "), result.stdout
         assert "Cython binding entry points" in result.stdout
+
+
+class TestTheGuardMustDominateTheNativeCall:
+    """The guard has to run on every path that reaches the kernel.
+
+    The ordering test was ``min(native_lines) < min(guard_lines)`` over every
+    call anywhere in the body, so a guard under an ``if``, in a ``try`` whose
+    handler swallows its raise, or inside a ``lambda`` nothing calls, satisfied
+    it — and the function emitted output in the ERROR state while the gate
+    reported it gated.  ``guard_delegating_helpers`` already refused exactly
+    those shapes for a helper; now the public functions are held to it too.
+    """
+
+    @staticmethod
+    def _ungated(tool: ModuleType, tmp_path: Path, source: str) -> list[str]:
+        path = _write(tmp_path, "mod.py", source)
+        ungated, _stale, checked = tool.audit(path, exempt={})
+        assert checked >= 1, "the native call must have been counted"
+        return [name for name, _line in ungated]
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # conditional
+            "    if not fast:\n        check_crypto_permitted()\n",
+            # swallowed
+            "    try:\n        check_crypto_permitted()\n    except Exception:\n        pass\n",
+            # a lambda nothing calls
+            "    _g = lambda: check_crypto_permitted()\n",
+            # a nested def nothing calls
+            "    def _g():\n        check_crypto_permitted()\n",
+            # a loop that may not run
+            "    for _ in ():\n        check_crypto_permitted()\n",
+            # the delegating-helper form, conditionally
+            "    if not fast:\n        _require_native()\n",
+        ],
+        ids=["if", "try-except", "lambda", "nested-def", "loop", "if-delegating"],
+    )
+    def test_a_guard_that_does_not_always_run_is_reported(
+        self, tool: ModuleType, tmp_path: Path, body: str
+    ) -> None:
+        source = (
+            "def _require_native():\n    check_crypto_permitted()\n    return _lib\n\n\n"
+            f"def native_x(data, fast=False):\n{body}    return _native_lib.ama_x(data)\n"
+        )
+        assert self._ungated(tool, tmp_path, source) == ["native_x"]
+
+    def test_a_symbol_bound_earlier_and_called_before_the_guard_is_reported(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The binding and the call are separate statements; the call escapes first."""
+        path = _write(
+            tmp_path,
+            "mod.py",
+            """
+            def native_x(data):
+                fn = _native_lib.ama_x
+                out = fn(data)
+                check_crypto_permitted()
+                return out
+            """,
+        )
+        ungated, _stale, _checked = tool.audit(path, exempt={})
+        assert ungated == [("native_x", 3)]
+
+    def test_the_reported_line_is_the_escaping_call(self, tool: ModuleType, tmp_path: Path) -> None:
+        path = _write(
+            tmp_path,
+            "mod.py",
+            """
+            def native_x(data, fast=False):
+                if not fast:
+                    check_crypto_permitted()
+                return _native_lib.ama_x(data)
+            """,
+        )
+        ungated, _stale, _checked = tool.audit(path, exempt={})
+        assert ungated == [("native_x", 4)]
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # an early return that emits nothing, then the guard
+            "def f(data):\n    if not data:\n        return b''\n"
+            "    check_crypto_permitted()\n    return _native_lib.ama_x(data)\n",
+            # the module-qualified guard form
+            "def f(data):\n    _module_state.check_crypto_permitted()\n"
+            "    return _native_lib.ama_x(data)\n",
+            # guard and call on one physical line: statements, not lines, decide
+            "def f(data):\n    check_crypto_permitted(); return _native_lib.ama_x(data)\n",
+            # a symbol bound BEFORE the guard and called after it
+            "def f(data):\n    fn = _native_lib.ama_x\n    check_crypto_permitted()\n"
+            "    return fn(data)\n",
+            # the kept result of a guard-delegating helper
+            "def _require_native():\n    check_crypto_permitted()\n    return _lib\n\n\n"
+            "def f(data):\n    lib = _require_native()\n    return lib.ama_x(data)\n",
+            # a helper that guards AND calls native is guarded wherever it is called
+            "def _native_x(data):\n    check_crypto_permitted()\n"
+            "    return _native_lib.ama_x(data)\n\n\n"
+            "def f(data, fast=False):\n    if fast:\n        return _native_x(data)\n"
+            "    return _native_x(data[:1])\n",
+        ],
+        ids=[
+            "early-return",
+            "qualified",
+            "same-line",
+            "alias-before-guard",
+            "delegating-assign",
+            "delegating-native-helper",
+        ],
+    )
+    def test_a_dominating_guard_is_accepted(
+        self, tool: ModuleType, tmp_path: Path, source: str
+    ) -> None:
+        assert self._ungated(tool, tmp_path, source) == []
+
+    def test_a_native_call_outside_the_body_is_reported(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """A default is evaluated when the ``def`` runs; nothing in the body precedes it."""
+        assert self._ungated(tool, tmp_path, "def f(x=_native_lib.ama_x()):\n    return x\n") == [
+            "f"
+        ]
+
+
+class TestModulesWithTheirOwnHandle:
+    """Discovery named only ``pqc_backends``' handle.
+
+    A module that obtained its own — ``lib = _find_native_library()``, a
+    ``ctypes.CDLL``, a name-resolved ``ama_*`` symbol — reached the library in
+    neither ``MODULES`` nor ``EXEMPT_MODULES``, and the gate printed "all
+    classified".  ``_build_sign.py`` was that module.
+    """
+
+    @staticmethod
+    def _found(tool: ModuleType, tmp_path: Path, body: str) -> bool:
+        _write(tmp_path, "ama_cryptography/own.py", body)
+        return "ama_cryptography/own.py" in tool.discover_native_reaching_modules(tmp_path)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "from ama_cryptography.pqc_backends import _find_native_library\n"
+            "def sign(m):\n    lib = _find_native_library()\n    return lib.ama_ed25519_sign(m)\n",
+            "from ama_cryptography.pqc_backends import _find_native_library as load\n"
+            "def handle():\n    return load()\n",
+            "from ama_cryptography import pqc_backends\n"
+            "def handle():\n    return pqc_backends._find_native_library()\n",
+            "import ctypes\ndef handle(p):\n    return ctypes.CDLL(p)\n",
+            "import ctypes\ndef handle(p):\n    return ctypes.cdll.LoadLibrary(p)\n",
+            "def sign(lib, m):\n    return lib.ama_ed25519_sign(m)\n",
+            "def sign(lib, m):\n    return getattr(lib, 'ama_ed25519_sign')(m)\n",
+        ],
+        ids=[
+            "loader-call",
+            "loader-aliased-import",
+            "loader-attribute",
+            "cdll",
+            "loadlibrary",
+            "ama-call-any-receiver",
+            "getattr-ama-name",
+        ],
+    )
+    def test_it_is_discovered(self, tool: ModuleType, tmp_path: Path, body: str) -> None:
+        assert self._found(tool, tmp_path, body)
+
+    def test_the_build_signer_is_discovered_and_classified(self, tool: ModuleType) -> None:
+        discovered = tool.discover_native_reaching_modules(REPO_ROOT)
+        assert "ama_cryptography/_build_sign.py" in discovered
+        assert "ama_cryptography/_build_sign.py" in tool.EXEMPT_MODULES
+
+    def test_main_refuses_an_unclassified_module_with_its_own_handle(
+        self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write(tmp_path, "ama_cryptography/backend.py", GATED_MODULE)
+        _write(tmp_path, "src/cython/binding.pyx", GATED_BINDING)
+        _write(
+            tmp_path,
+            "ama_cryptography/signer.py",
+            "from ama_cryptography.pqc_backends import _find_native_library\n"
+            "def sign(m):\n    lib = _find_native_library()\n    return lib.ama_ed25519_sign(m)\n",
+        )
+        monkeypatch.setattr(tool, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(tool, "MODULES", ("ama_cryptography/backend.py",))
+        monkeypatch.setattr(tool, "BINDING_PYX", ("src/cython/binding.pyx",))
+        monkeypatch.setattr(tool, "EXEMPT", {})
+        monkeypatch.setattr(tool, "EXEMPT_MODULES", {})
+        assert tool.main() == 1
+
+
+class TestCythonBindingDiscovery:
+    """``BINDING_PYX`` was a written list the gate never compared with the tree."""
+
+    EXTERN = 'cdef extern from "ama_cryptography.h":\n    int ama_foo(const char *p)\n\n'
+
+    @pytest.fixture
+    def repo(self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        _write(tmp_path, "ama_cryptography/backend.py", GATED_MODULE)
+        (tmp_path / "src" / "cython").mkdir(parents=True)
+        (tmp_path / "src" / "cython" / "binding.pyx").write_text(
+            self.EXTERN + textwrap.dedent(GATED_BINDING).lstrip("\n"), encoding="utf-8"
+        )
+        monkeypatch.setattr(tool, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(tool, "MODULES", ("ama_cryptography/backend.py",))
+        monkeypatch.setattr(tool, "BINDING_PYX", ("src/cython/binding.pyx",))
+        monkeypatch.setattr(tool, "EXEMPT", {})
+        monkeypatch.setattr(tool, "EXEMPT_MODULES", {})
+        return tmp_path
+
+    def test_a_listed_binding_passes(self, tool: ModuleType, repo: Path) -> None:
+        assert tool.discover_native_reaching_pyx(repo) == ["src/cython/binding.pyx"]
+        assert tool.main() == 0
+
+    @pytest.mark.parametrize(
+        "rel", ["src/cython/foo_binding.pyx", "src/other/deep/foo.pyx", "ama_cryptography/foo.pyx"]
+    )
+    def test_an_unlisted_binding_is_an_error(
+        self, tool: ModuleType, repo: Path, rel: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            self.EXTERN + "def cy_foo(bytes data):\n    return ama_foo(data)\n", encoding="utf-8"
+        )
+        assert rel in tool.discover_native_reaching_pyx(repo)
+        assert tool.main() == 1
+        assert rel in capsys.readouterr().err
+
+    def test_a_pyx_with_no_project_extern_is_not_a_binding(
+        self, tool: ModuleType, repo: Path
+    ) -> None:
+        """``math_engine.pyx`` is the shape: numpy and libc, no ``ama_*`` header."""
+        _write(
+            repo,
+            "src/cython/math_engine.pyx",
+            'from libc.math cimport sqrt\ncdef extern from "math.h":\n    double fabs(double)\n'
+            "def mean(x):\n    return x\n",
+        )
+        assert "src/cython/math_engine.pyx" not in tool.discover_native_reaching_pyx(repo)
+        assert tool.main() == 0
+
+    def test_the_real_tree_lists_exactly_the_discovered_bindings(self, tool: ModuleType) -> None:
+        assert set(tool.discover_native_reaching_pyx(REPO_ROOT)) == set(tool.BINDING_PYX)
