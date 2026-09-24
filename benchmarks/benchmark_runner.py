@@ -1855,6 +1855,19 @@ def _provenance() -> "list[tuple[str, str]]":
     ]
 
 
+def _md_cell(text: object) -> str:
+    """``text`` as ONE GitHub-flavoured-markdown table cell.
+
+    An unescaped ``|`` ends a cell, even inside a code span.  The ledger
+    describes ``ed25519_sign``'s key as ``seed || A``, and rendered raw that
+    row split into eight cells: the Ops/sec column showed the tail of the
+    description, the Baseline column its end, and the Tolerance and Status
+    cells fell off the row -- a PASS row that no longer said PASS or showed
+    its throughput.  ``\\|`` renders as a literal bar.
+    """
+    return str(text).replace("|", "\\|")
+
+
 def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, Any]) -> str:
     """Generate a markdown report with tables and bar chart."""
     # Render from the PUBLISHED (quantised) measurements, so this page is a
@@ -1908,10 +1921,11 @@ def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, A
         }
         for key, value in recorded.items():
             shown = f"`{value}`" if key in ticked and not str(value).startswith("`") else value
-            lines.append(f"| {by_key.get(key, key.replace('_', ' ').capitalize())} | {shown} |")
+            label = by_key.get(key, key.replace("_", " ").capitalize())
+            lines.append(f"| {label} | {_md_cell(shown)} |")
     else:
         for key, value in _provenance():
-            lines.append(f"| {key} | {value} |")
+            lines.append(f"| {key} | {_md_cell(value)} |")
     lines.append("")
 
     # Results table
@@ -1930,9 +1944,11 @@ def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, A
         "*Regression is measured against the floor: **positive means SLOWER** "
         "than `baseline_value`, negative means faster. It is the same number as "
         "`regression_percent` in `benchmark-results.json`. The floor is a "
-        "measured median on the runner class named in Provenance above, not a "
-        "discount of this run, so the two hosts differ and a positive value "
-        "within Tolerance is an ordinary result.*"
+        "measured median on the CI runner class the baseline file names, not a "
+        "discount of this run -- except on a row the baseline's change log "
+        "records as DERIVED, whose floor is a placeholder taken from a measured "
+        "sibling until that runner has measured the row -- so the two hosts "
+        "differ and a positive value within Tolerance is an ordinary result.*"
     )
     lines.append("")
     lines.append("| Primitive | Ops/sec | Baseline | Regression | Tolerance | Status |")
@@ -1940,7 +1956,7 @@ def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, A
     for r in results:
         status = "PASS" if r.passed else ("WARN" if r.optional else "**FAIL**")
         lines.append(
-            f"| {r.description} | {r.ops_per_second:,.0f} | {r.baseline_value:,.0f} "
+            f"| {_md_cell(r.description)} | {r.ops_per_second:,.0f} | {r.baseline_value:,.0f} "
             f"| {r.regression_percent:+.1f}% | {r.tolerance_percent:.0f}% | {status} |"
         )
     lines.append("")

@@ -1,9 +1,14 @@
 <!--
-  Template for benchmarks/generate_dashboard.py. The `/*__DATA__*/` marker is
-  replaced with the measured JSON at generation time; __VERSION__ and
-  __GENERATED__ are substituted as text, and __MEASURED__ as a pre-escaped
-  HTML clause naming the commit/version/time the numbers were MEASURED at
-  (distinct from when the page was generated). Everything is inline — no external
+  Template for benchmarks/generate_dashboard.py, which fills four placeholder
+  markers where they stand: the data marker in the script element below takes
+  the measured JSON; the version and generated-time markers take escaped text;
+  and the measured marker takes a pre-escaped HTML clause naming the
+  commit/version/time the numbers were MEASURED at (distinct from when the
+  page was generated). The markers are deliberately not spelled out in this
+  comment: a marker written here is a marker the generator fills here, which is
+  how every earlier render carried a second, commented-out copy of the whole
+  data payload. generate_dashboard.fill_template refuses a template that
+  names a marker inside a comment. Everything is inline — no external
   fonts, scripts, styles, or images — so the page renders identically offline
   and inside a strict CSP.
 -->

@@ -573,6 +573,19 @@ one is built, while the expanded path is ctypes). `ama_ed25519_sign`'s own
 instruction count is unchanged by the shared core: 331,814 → 331,864 Ir,
 +0.02%, `benchmarks/ic_driver.c` base against head.
 
+**Correction, 2026-09-24.** The committed record's `ed25519_sign` row went on
+carrying the ledger's older description, "native C, expanded key", after
+`c126037` rewrote the ledger to say what the row measures: the 64-byte
+`seed ‖ A` key with INVARIANT-51's derivation on every call. The once-at-load
+form is the separate `ed25519_sign_expanded` row, so the record labelled the
+two rows the wrong way round. That one copied field was corrected in place to
+the ledger's text, and `benchmark-report.md` re-rendered from the record. The
+measurement, floor, tolerance and provenance are unchanged. The record could
+not be re-run that day: the only host available was a 4-vCPU container with a
+load average above 50. `tests/test_published_benchmark_artefacts_are_current.py`
+now compares every description and tolerance a row copies with the ledger,
+as it already did the floor.
+
 **The new row's floors are derived, not measured on the canonical runners,
 and say so.** The canonical runner has never run this row, so there is no
 four-run median to take. Both change-log entries record the derivation:

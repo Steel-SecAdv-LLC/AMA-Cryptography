@@ -24,14 +24,14 @@
 
 ## Results
 
-*Regression is measured against the floor: **positive means SLOWER** than `baseline_value`, negative means faster. It is the same number as `regression_percent` in `benchmark-results.json`. The floor is a measured median on the runner class named in Provenance above, not a discount of this run, so the two hosts differ and a positive value within Tolerance is an ordinary result.*
+*Regression is measured against the floor: **positive means SLOWER** than `baseline_value`, negative means faster. It is the same number as `regression_percent` in `benchmark-results.json`. The floor is a measured median on the CI runner class the baseline file names, not a discount of this run -- except on a row the baseline's change log records as DERIVED, whose floor is a placeholder taken from a measured sibling until that runner has measured the row -- so the two hosts differ and a positive value within Tolerance is an ordinary result.*
 
 | Primitive | Ops/sec | Baseline | Regression | Tolerance | Status |
 |-----------|--------:|---------:|-----------:|----------:|--------|
 | AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 298,723 | 327,222 | +8.7% | 45% | PASS |
 | HMAC-SHA3-256 authentication (native C via ctypes) | 205,641 | 215,299 | +4.5% | 45% | PASS |
 | Ed25519 key pair generation through the Python API: one CSPRNG seed draw + native keygen + the FIPS 140-3 pairwise-consistency sign/verify that keypair() runs on every key (native keygen alone is about a sixth of the timed operation). Not comparable with the 4.x native-keygen-only row. | 11,316 | 12,368 | +8.5% | 45% | PASS |
-| Ed25519 signature generation (native C, expanded key) | 35,287 | 38,811 | +9.1% | 45% | PASS |
+| Ed25519 signature generation through the Python API with the 64-byte seed \|\| A key (native C); INVARIANT-51 re-derives A = [a]B on every call. The once-at-load form is the ed25519_sign_expanded row. | 35,287 | 38,811 | +9.1% | 45% | PASS |
 | Ed25519 signature generation through Ed25519SigningKey: the key is loaded once, outside the timed operation, with the INVARIANT-51 derivation of the public half done at load; each timed signature re-checks the expanded form's tag (ama_ed25519_sign_expanded) instead of re-deriving. Same 240-byte message and key source as ed25519_sign; the ratio between the two rows is the per-signature cost the derivation had. | 56,746 | 61,671 | +8.0% | 45% | PASS |
 | Ed25519 signature verification (native C) | 25,181 | 27,934 | +9.8% | 45% | PASS |
 | HKDF-SHA3-256 key derivation (3 keys) | 136,549 | 131,341 | -4.0% | 45% | PASS |

@@ -19,7 +19,9 @@ the former, and the latter is what actually occurs between ``exists()`` and
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -231,3 +233,52 @@ class TestNoHarnessOverheadInsideATimedThunk:
             "the import into the enclosing driver — measured at 26.8% of the "
             "reported number the last time this happened."
         )
+
+
+class TestTheLiveResultsPathIsTheDocumentedOne:
+    """The charts' live-data branch must read what the documented command writes.
+
+    ``benchmarks/README.md`` documents ``benchmark_suite.py --json
+    benchmarks/benchmark_results.json`` and says the chart anchors are
+    overridden by live data from it.  ``generate_charts.py`` read
+    ``benchmark_results.json`` at the repository ROOT instead, so following
+    the documented command never reached the charts, which went on drawing
+    their anchored tables.  ``tools/generate_dashboards.py`` had already been
+    moved to the documented path; the two consumers disagreed with each other.
+    """
+
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+
+    def _documented(self) -> Path:
+        readme = (self.REPO_ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
+        paths: set[str] = set(
+            re.findall(r"benchmark_suite\.py\b[^`\n]*?--json (\S+?)(?=[`\s])", readme)
+        )
+        assert len(paths) == 1, f"benchmarks/README.md documents {paths or 'no'} --json path(s)"
+        return self.REPO_ROOT / paths.pop()
+
+    @classmethod
+    def _path_parts(cls, expr: ast.expr) -> list[str]:
+        """The string segments of ``ROOT / "a" / "b"``, left to right."""
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+            return cls._path_parts(expr.left) + cls._path_parts(expr.right)
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            return [expr.value]
+        return []
+
+    def _dashboards_bench_file(self) -> Path:
+        """``BENCH_FILE`` of tools/generate_dashboards.py, read without importing
+        it (the module imports matplotlib at load)."""
+        source = (self.REPO_ROOT / "tools" / "generate_dashboards.py").read_text(encoding="utf-8")
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == [
+                "BENCH_FILE"
+            ]:
+                return self.REPO_ROOT.joinpath(*self._path_parts(node.value))
+        raise AssertionError("tools/generate_dashboards.py no longer assigns BENCH_FILE")
+
+    def test_generate_charts_reads_the_documented_path(self) -> None:
+        assert gc.BENCH_FILE.resolve() == self._documented().resolve()
+
+    def test_both_consumers_read_the_same_file(self) -> None:
+        assert self._dashboards_bench_file().resolve() == gc.BENCH_FILE.resolve()

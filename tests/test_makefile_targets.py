@@ -30,7 +30,9 @@ artefact is ``libama_cryptography_static.a``.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -218,3 +220,94 @@ class TestTheDudectHarnessMakefileBuildsWhatItSaysItBuilds:
                 f"{stale} in CFLAGS overrides the Release optimization level "
                 f"(last -O wins with gcc).  CFLAGS = {cflags!r}"
             )
+
+
+class TestTheBenchmarksMakefileBuildsWithoutAPrebuiltLibrary:
+    """``make -C benchmarks benchmark_c_raw`` on a tree with no ``build/``.
+
+    The recipe advertised a no-library fallback -- "No pre-built library
+    found. Compiling from sources..." -- that compiled
+    ``$(wildcard src/c/ama_*.c)`` with the harness and could never produce a
+    binary.  Measured on a fresh worktree: the compile stops in
+    ``ama_sha256_ni.c`` (``_mm_sha256rnds2_epu32``: target specific option
+    mismatch), because the glob carries none of the per-file ISA flags CMake
+    applies; with ``-march=native`` added to get past that, the link fails on
+    ``ama_get_dispatch_table``, which lives in ``src/c/dispatch/`` where the
+    glob does not look.  It also defined neither ``AMA_USE_NATIVE_PQC`` nor
+    ``AMA_AES_CONSTTIME``.  The fallback now builds the static archive through
+    CMake, the one complete description of the library, and links that.
+
+    Driven through make itself with recording stand-ins for ``cmake`` and the
+    compiler, in a scratch tree whose ``src/`` and ``include/`` are the real
+    ones -- so the old recipe, which globs them, is exercised as it was.
+    """
+
+    def test_the_fallback_builds_the_archive_with_cmake_and_links_it(self, tmp_path: Path) -> None:
+        if sys.platform == "win32" or shutil.which("make") is None:
+            pytest.skip("benchmarks/Makefile is a POSIX make recipe")
+        root = tmp_path / "tree"
+        (root / "benchmarks").mkdir(parents=True)
+        for name in ("Makefile", "benchmark_c_raw.c"):
+            shutil.copy(REPO_ROOT / "benchmarks" / name, root / "benchmarks" / name)
+        for name in ("src", "include"):
+            (root / name).symlink_to(REPO_ROOT / name, target_is_directory=True)
+
+        log = tmp_path / "calls.log"
+        stubs = tmp_path / "bin"
+        stubs.mkdir()
+        cmake = stubs / "cmake"
+        cmake.write_text(
+            "#!/bin/sh\n"
+            f'echo "cmake $*" >> "{log}"\n'
+            'prev=""\n'
+            "for arg; do\n"
+            '  if [ "$prev" = "--build" ]; then\n'
+            '    mkdir -p "$arg/lib" && : > "$arg/lib/libama_cryptography_static.a"\n'
+            "  fi\n"
+            '  prev="$arg"\n'
+            "done\n",
+            encoding="utf-8",
+        )
+        cc = stubs / "cc"
+        cc.write_text(
+            "#!/bin/sh\n"
+            f'echo "cc $*" >> "{log}"\n'
+            'prev=""\n'
+            'for arg; do [ "$prev" = "-o" ] && : > "$arg"; prev="$arg"; done\n',
+            encoding="utf-8",
+        )
+        cmake.chmod(0o755)
+        cc.chmod(0o755)
+
+        result = subprocess.run(
+            [
+                "make",
+                "-C",
+                str(root / "benchmarks"),
+                "benchmark_c_raw",
+                f"CC={cc}",
+                f"CMAKE={cmake}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = log.read_text(encoding="utf-8").splitlines()
+        configure = [c for c in calls if c.startswith("cmake ") and " -S " in c]
+        build = [c for c in calls if c.startswith("cmake ") and " --build " in c]
+        compiles = [c for c in calls if c.startswith("cc ")]
+
+        assert len(configure) == 1, calls
+        for flag in (f"-S {root}", f"-B {root}/build", "-DCMAKE_BUILD_TYPE=Release"):
+            assert flag in configure[0], configure[0]
+        assert "-DAMA_USE_NATIVE_PQC=ON" in configure[0], configure[0]
+        assert "AMA_AES_CONSTTIME=OFF" not in configure[0], configure[0]
+        assert len(build) == 1 and "--target ama_cryptography_static" in build[0], calls
+        assert len(compiles) == 1, calls
+        assert f"{root}/build/lib/libama_cryptography_static.a" in compiles[0], compiles[0]
+        assert not re.search(r"/src/c/\S+\.c\b", compiles[0]), (
+            "the fallback compiles library sources itself instead of linking the "
+            f"archive CMake built: {compiles[0]}"
+        )
+        assert (root / "benchmarks" / "benchmark_c_raw").is_file()

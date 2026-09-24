@@ -30,9 +30,19 @@
  *
  * Determinism requirements, each load-bearing
  * -------------------------------------------
- * 1. Every input is fixed.  No system RNG reaches a measured loop; key
- *    material is either a compile-time pattern or derived from a fixed seed
- *    through the `_from_seed` entry points.
+ * 1. Every input is fixed, with ONE exception.  Key material is either a
+ *    compile-time pattern or derived from a fixed seed through the
+ *    `_from_seed` entry points, and no other operation draws randomness --
+ *    but `kyber_encapsulate` calls ama_kyber_encapsulate(), which draws the
+ *    FIPS 203 message m from the CSPRNG on every iteration, so the system
+ *    RNG does reach that measured loop.  The public API has no derandomised
+ *    encapsulation to call instead (FIPS 203 keeps ML-KEM.Encaps_internal a
+ *    testing interface; this tree's derandomised entry point exists only
+ *    under AMA_TESTING_MODE), and a real encapsulation pays for its draw.
+ *    The effect is measured, not assumed away: measure_instruction_counts.py
+ *    records every operation's spread over three runs and refuses one that
+ *    exceeds its jitter budget, and kyber_encapsulate's is the one non-zero
+ *    spread instruction-baseline.json records.
  * 2. All setup happens BEFORE the loop, so it lands in both Ir(N) and Ir(2N)
  *    and cancels.
  * 3. The caller must set `AMA_DISPATCH_NO_AUTOTUNE=1`.  This is not optional
@@ -48,10 +58,10 @@
  *
  * Operations whose cost depends on secret or sampled data — ML-DSA signing
  * rejection-samples until a candidate passes — are not silently excluded
- * here.  The measurement tool runs every operation twice and refuses to
- * record a baseline for any that does not reproduce, so a non-deterministic
- * operation fails loudly rather than being baselined at whatever it happened
- * to cost.
+ * here.  The measurement tool runs every operation three times and refuses
+ * to record a baseline for any whose spread exceeds its jitter budget, so a
+ * non-deterministic operation fails loudly rather than being baselined at
+ * whatever it happened to cost.
  *
  * Dispatch fingerprint
  * --------------------
@@ -62,10 +72,38 @@
  * refusing to compare across configurations rather than reporting a
  * regression that is really a different machine.
  *
- * With auto-tune disabled the wired kernels are a deterministic function of
- * the detected tiers and the build, which is what makes the detected tiers a
- * sound key.  With auto-tune live they are not, which is the other reason
- * the measurement tool pins it off.
+ * The key is the per-slot TIER only, and that collapses differences inside a
+ * tier.  With auto-tune disabled the wired kernels are a deterministic
+ * function of the build and of the CPUID features the process sees -- not of
+ * the tiers alone: within aes_gcm=AVX2 the dispatcher installs the VAES +
+ * VPCLMULQDQ kernel, the AES-NI + PCLMULQDQ kernel or the constant-time
+ * software path by ama_cpuid_has_vaes_aesgcm(), ama_has_aes_ni() and
+ * ama_has_pclmulqdq(); X25519 takes its MULX field arithmetic on
+ * ama_cpuid_has_x25519_mulx() (BMI2 + ADX); the scalar Keccak baseline
+ * follows ama_cpuid_has_keccak_bmi().  None of those bits is in the line
+ * --fingerprint prints.
+ *
+ * Under callgrind the CPUID the process sees is valgrind's.  Measured
+ * 2026-09-24 on an AVX-512 + VAES + ADX host with valgrind 3.22: natively the
+ * dispatcher wires the VAES kernel and the MULX path, under valgrind neither
+ * (it reports no AVX-512, no VAES bundle and no ADX, and passes AES-NI,
+ * PCLMULQDQ and BMI through).  So the counts this driver produces are the
+ * AES-NI kernel's for aes_256_gcm_encrypt -- 4,555 Ir with
+ * AMA_DISPATCH_ONLY=aes-gcm-aesni, the same as unpinned; the aes-gcm-vaes pin
+ * is refused under valgrind and leaves the bitsliced software path at
+ * 3,821,526 Ir -- and the pure-C field arithmetic's for x25519_scalarmult,
+ * on a VAES host and a non-VAES host alike.  What the tier key still
+ * collapses is what valgrind passes through: a host whose CPUID lacks
+ * AES-NI, PCLMULQDQ or BMI1/BMI2 shares the key, runs different code, and
+ * is compared by the recorded-baseline mode against a count from other code.
+ *
+ * tools/check_instruction_counts.py records why the key is the tiers anyway:
+ * a key that followed the wired kernels would excuse a slot that fell off its
+ * kernel -- a runtime override, a failed bundle check -- as "a different
+ * machine" instead of reporting it.  The A/B mode CI runs does not depend on
+ * the key at all: both builds are measured on one runner.  With auto-tune
+ * live even the build-and-CPUID function does not hold, which is the other
+ * reason the measurement tool pins it off.
  *
  * Usage: ic_driver <operation> <iterations>
  *        ic_driver --list

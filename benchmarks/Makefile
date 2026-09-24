@@ -11,30 +11,44 @@
 #   ./benchmark_c_raw --csv      # CSV output
 #   ./benchmark_c_raw --json     # JSON output
 #
-# Prerequisites:
-#   The AMA C library must be built first:
+# Library:
+#   Links build/lib/libama_cryptography.so, else build/lib/
+#   libama_cryptography_static.a.  When neither exists, the recipe builds the
+#   static archive with CMake first -- the same configuration as
 #     cmake -B ../build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release
-#     cmake --build ../build
+#     cmake --build ../build --target ama_cryptography_static
 
 ROOT_DIR     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 INCLUDE_DIR  := $(ROOT_DIR)/include
-SRC_DIR      := $(ROOT_DIR)/src/c
 BUILD_DIR    := $(ROOT_DIR)/build
 
 UNAME_S      := $(shell uname -s)
 CC           ?= gcc
 CFLAGS       := -O3 -Wall -Wextra -std=c11 -I$(INCLUDE_DIR)
-LDFLAGS      := -lm
+# -pthread: the static archive's dispatcher initialises through
+# pthread_once (INVARIANT-15), and CMake records Threads::Threads as a link
+# dependency of that archive rather than folding it in.
+LDFLAGS      := -lm -pthread
 ifeq ($(UNAME_S),Linux)
 LDFLAGS      += -lrt
 endif
 
-# If the shared library exists, link against it; otherwise compile sources directly
+# Link the shared library if it exists, else the static archive; when neither
+# exists, build the static archive with CMake and link that.
 LIB_SO       := $(BUILD_DIR)/lib/libama_cryptography.so
 LIB_A        := $(BUILD_DIR)/lib/libama_cryptography_static.a
 
-# C source files needed when linking statically
-C_SOURCES    := $(wildcard $(SRC_DIR)/ama_*.c)
+# The no-library fallback goes through CMake because CMakeLists.txt is the
+# only complete description of the library.  This recipe used to compile
+# $(wildcard src/c/ama_*.c) itself, and that could never produce a binary:
+# the glob misses src/c/dispatch/ (ama_get_dispatch_table, which the harness
+# calls), src/c/internal/ and src/c/x86/, and carries none of the per-file ISA
+# flags (ama_sha256_ni.c stops the compile at the first SHA-NI intrinsic).
+# It also defined neither AMA_USE_NATIVE_PQC nor AMA_AES_CONSTTIME, so had it
+# linked it would have benchmarked PQC stubs and the table S-box that CMake
+# refuses to build without an explicit INVARIANT-20 acknowledgement.
+CMAKE        ?= cmake
+CMAKE_FLAGS  := -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_STATIC=ON
 
 .PHONY: all clean help
 
@@ -50,10 +64,10 @@ benchmark_c_raw: benchmark_c_raw.c
 		echo "Linking against static library: $(LIB_A)"; \
 		$(CC) $(CFLAGS) -o $@ $< $(LIB_A) $(LDFLAGS); \
 	else \
-		echo "No pre-built library found. Compiling from sources..."; \
-		$(CC) $(CFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/internal \
-			-DAMA_BUILDING_STATIC \
-			-o $@ $< $(C_SOURCES) $(LDFLAGS); \
+		echo "No pre-built library found. Building $(LIB_A) with CMake..."; \
+		$(CMAKE) -S $(ROOT_DIR) -B $(BUILD_DIR) $(CMAKE_FLAGS) && \
+		$(CMAKE) --build $(BUILD_DIR) --target ama_cryptography_static && \
+		$(CC) $(CFLAGS) -o $@ $< $(LIB_A) $(LDFLAGS); \
 	fi
 	@echo "=== Build complete: ./benchmark_c_raw ==="
 

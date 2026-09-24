@@ -58,7 +58,7 @@
     },
     {
       "name": "ed25519_sign",
-      "description": "Ed25519 signature generation (native C, expanded key)",
+      "description": "Ed25519 signature generation through the Python API with the 64-byte seed || A key (native C); INVARIANT-51 re-derives A = [a]B on every call. The once-at-load form is the ed25519_sign_expanded row.",
       "ops_per_second": 35287.0,
       "baseline_value": 38811,
       "regression_percent": 9.08,

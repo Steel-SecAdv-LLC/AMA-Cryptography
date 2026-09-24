@@ -20,7 +20,11 @@ the page when it does.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 import benchmarks.generate_dashboard as gd
 
@@ -100,3 +104,71 @@ class TestLegacyInputsFallBackLoudly:
         assert "read from the working tree at generation time" in page
         # And in that mode the tree's real version is the only honest label.
         assert "v9.9.9-test" not in page
+
+
+_TEMPLATE = Path(gd.__file__).resolve().parent / "_dashboard_template.html"
+_SENTINEL = "payload-sentinel-6b1f0c"
+
+
+def _script_body(page: str) -> str:
+    """The text of the page's one ``<script>`` element."""
+    start = page.index("<script>") + len("<script>")
+    return page[start : page.index("</script>", start)]
+
+
+def _embedded_data(page: str) -> Any:
+    """The object the page's script binds to ``DATA``, parsed back."""
+    body = _script_body(page)
+    start = body.index("const DATA = ") + len("const DATA = ")
+    return json.loads(body[start : body.index(";\n", start)])
+
+
+class TestThePayloadIsEmbeddedOnceAndStaysInItsScript:
+    """The template's header comment named the markers it documents.
+
+    ``str.replace`` substitutes every occurrence, so each render carried a
+    second copy of the whole data payload inside that ``<!-- -->`` comment
+    (the committed ``benchmarks/dashboard.html`` shows it on line 2), where a
+    ``-->`` in any change-log string would have closed the comment and
+    printed the rest of the JSON as page text.  The remaining copy had the
+    same exposure to ``</script>``, and the chained substitutions would have
+    rewritten a marker spelled inside the already-inserted JSON.
+    """
+
+    def test_the_shipped_template_names_no_marker_inside_a_comment(self) -> None:
+        tmpl = _TEMPLATE.read_text(encoding="utf-8")
+        comments = gd._HTML_COMMENT_RE.findall(tmpl)
+        assert comments, "non-vacuity: the template's header comment is gone"
+        for comment in comments:
+            assert gd._MARKER_RE.findall(comment) == [], comment
+
+    def test_the_payload_appears_once_and_inside_the_script(self) -> None:
+        bench = _bench()
+        bench["results"][0]["description"] = _SENTINEL
+        page = _render(bench)
+        assert page.count(_SENTINEL) == 1, "the data payload is embedded more than once"
+        assert _SENTINEL in _script_body(page)
+
+    def test_free_text_cannot_close_the_script_or_open_a_comment(self) -> None:
+        hostile = f"{_SENTINEL} --> </script><!-- <b>x</b> __VERSION__ __MEASURED__"
+        bench = _bench()
+        bench["results"][0]["description"] = hostile
+        page = _render(bench)
+        tmpl = _TEMPLATE.read_text(encoding="utf-8")
+        # Every structural sequence in the page is the template's own.
+        for seq in ("</script>", "<!--", "-->"):
+            assert page.count(seq) == tmpl.count(seq), seq
+        # And the reader parses back exactly what was written: no escaping
+        # artefact and no marker substituted inside the data.
+        assert _embedded_data(page)["results"][0]["description"] == hostile
+
+    def test_a_template_naming_a_marker_in_a_comment_is_refused(self) -> None:
+        tmpl = "<!-- fills __VERSION__ -->\n__VERSION__ __MEASURED__ __GENERATED__ /*__DATA__*/"
+        with pytest.raises(RuntimeError, match="inside an HTML comment"):
+            gd.fill_template(tmpl, {})
+
+    @pytest.mark.parametrize("marker", [gd.DATA_MARKER, gd.MEASURED_MARKER, gd.GENERATED_MARKER])
+    def test_a_single_place_marker_must_occur_exactly_once(self, marker: str) -> None:
+        tmpl = f"__VERSION__ __MEASURED__ __GENERATED__ /*__DATA__*/ {marker}"
+        with pytest.raises(RuntimeError, match="exactly once"):
+            gd.fill_template(tmpl, {})

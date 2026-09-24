@@ -105,6 +105,12 @@ _PATH_RE = re.compile(r"`((?:" + "|".join(SOURCE_DIRS) + r")/[A-Za-z0-9_./+-]+\.
 #: Each value is the command that produces it — the justification, not a label.
 RUN_PRODUCED = {
     "benchmarks/performance_results.json": "written by benchmarks/performance_suite.py",
+    "benchmarks/benchmark_results.json": (
+        "written by `benchmarks/benchmark_suite.py --json "
+        "benchmarks/benchmark_results.json`, the command benchmarks/README.md "
+        "documents; tools/generate_dashboards.py and benchmarks/generate_charts.py "
+        "read it when present"
+    ),
     "benchmarks/benchmark_c_raw_results.json": (
         "written by the raw-C harness; benchmarks/generate_charts.py reads it "
         "'when present' and falls back to checked-in anchors"

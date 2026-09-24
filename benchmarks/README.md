@@ -11,19 +11,25 @@ one of the artifacts below (or to live output regenerated from them):
 
 | Artifact | Scope | Produced by |
 |----------|-------|-------------|
-| [`baseline.json`](baseline.json) | CI regression FLOORS. `baseline_value` IS a measured median on the runner class named in `metadata.runner_cpu_class` — not a discount of one — and `tolerance_percent` (45 on x86-64, 15/25 on aarch64) is the separate allowance. The pre-5.0.0 "65% of measured, then a 35-70% tolerance on top" convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM regression without firing; both baseline files now say so in their own `metadata.description`. | Re-measured on the canonical runner when primitives land/change |
+| [`baseline.json`](baseline.json), [`arm-baseline.json`](arm-baseline.json) | CI regression FLOORS. `baseline_value` is a measured median on the runner class named in `metadata.runner_cpu_class` — not a discount of one — EXCEPT on a row whose latest `metadata.baseline_change_log` entry records its floor as DERIVED: a row the canonical runner has not yet measured is floored from a measured sibling's floor times a ratio taken from development-host measurements, and carries that placeholder until the runner's own median replaces it. A derived floor is not a calibration; its change-log entry gives the derivation and the host. `tolerance_percent` (45 on x86-64, 15/25 on aarch64) is the separate allowance. The pre-5.0.0 "65% of measured, then a 35-70% tolerance on top" convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM regression without firing; both baseline files now say so in their own `metadata.description`. | Re-measured on the canonical runner when primitives land/change |
+| [`benchmark-results.json`](benchmark-results.json) | The committed record of one `benchmark_runner.py` run: ops/sec per row, the floor, tolerance and description each row copies from `baseline.json`, and a `provenance` block naming the commit, tree state, host, dispatch wiring and command that produced it. It is the input of [`dashboard.html`](dashboard.html), of [`benchmark-report.md`](../benchmark-report.md) (a pure render of it), and of the latency and throughput tables `tools/update_docs.py` writes into `ARCHITECTURE.md` and `wiki/Performance-Benchmarks.md`. `tests/test_published_benchmark_artefacts_are_current.py` fails when a copied floor, tolerance or description no longer matches `baseline.json` | `python benchmarks/benchmark_runner.py --baseline benchmarks/baseline.json --output benchmarks/benchmark-results.json --markdown benchmark-report.md` (the exact command that produced the committed record is in its `provenance.command`) |
+| [`canonical-host.json`](canonical-host.json) | Every figure `README.md` publishes between its `canonical-bench` markers, held as data with the host, date and command that measured it; `tools/check_canonical_benchmarks.py` fails when a README figure and this record disagree, or when a figure cites no source | Measured on the canonical bench host its `sources` block describes; re-measuring needs that host |
 | [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
-| `benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
+| `benchmark_results.json` (runtime-only) | `benchmark_suite.py` output: read by `tools/generate_dashboards.py` (the PNG dashboards under `assets/`) and by [`generate_charts.py`](generate_charts.py), whose live-data branch overrides its anchored tables with it. Both read `benchmarks/benchmark_results.json`, the path the command beside this writes. It is not the input of [`dashboard.html`](dashboard.html), which renders `benchmark-results.json` | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
 | `../build/bin/benchmark_c_raw` (runtime-only) | Raw C per-op medians (no ctypes overhead) | `cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build --target benchmark_c_raw && build/bin/benchmark_c_raw --json` |
 | [`../docs/compliance/CSRC_ALIGN_REPORT.md`](../docs/compliance/CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (1,215/1,215/0 — 815 AFT + 400 SHA-3 MCT) | Updated with each alignment run |
 | [`multi_library_results.json`](multi_library_results.json) | Competitive comparator measurements (AMA + 7 peer libraries, 12 primitives). `provenance` names the commit, AMA version and date of the measurement run | `python benchmarks/comparative_benchmark.py` on the measurement host |
 | [`pqc_results.json`](pqc_results.json) | Competitive PQC measurements (separate host; the page labels them as a prior record) | Same harness, PQC surface |
 | [`competitive.html`](competitive.html) | The rendered competitive page — a pure function of the two JSONs above plus the generator's pinned versions/coverage/notes. `tests/test_competitive_page.py` fails if the committed page is not a fresh render (modulo the render timestamp) | `python benchmarks/generate_competitive.py` |
+| [`dashboard.html`](dashboard.html) | The rendered performance dashboard — a function of `benchmark-results.json`, a `benchmark_c_raw` stdout capture and `baseline.json`. The generator labels the numbers with the commit, version and time recorded in the record's `provenance` block, not with the tree that renders them. The raw-C capture is a run product and is not committed, so no test re-renders the committed page, and the committed page is still the 2026-07-29 render of a v3.4.0 run (its header and embedded data say so): it predates the current record, template and generator, and re-rendering it needs a raw-C capture taken on the host the record names | `python benchmarks/generate_dashboard.py --bench benchmarks/benchmark-results.json --raw-c <capture> --out benchmarks/dashboard.html` |
 
 If a chart cannot cite one of these, it should not be in the repository.
 The fallback tables in [`generate_charts.py`](generate_charts.py) are
-anchored to `phase0_baseline_results.json` and `benchmark_c_raw`; they
-are overridden by live data from `benchmark_results.json` when available.
+anchored to `phase0_baseline_results.json`, `benchmark_c_raw`, a
+`benchmark_suite.py` scalability sweep and one row of
+`benchmark-results.json` (its header comment names the run behind each);
+they are overridden by live data from `benchmarks/benchmark_results.json`
+when that file exists.
 
 
 ## Raw C Benchmark (`benchmark_c_raw.c`)
@@ -33,7 +39,8 @@ Directly calls C library functions without Python or ctypes involvement. Provide
 ### Build
 
 ```bash
-# Option 1: Build via the benchmarks Makefile (auto-detects library)
+# Option 1: Build via the benchmarks Makefile (links build/lib; with no
+# library there, it builds the static one with CMake first)
 make -C benchmarks benchmark_c_raw
 
 # Option 2: Build via cmake (adds benchmark_c_raw target)

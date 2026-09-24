@@ -25,7 +25,12 @@ from typing import Any
 
 # -- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).parent.parent
-BENCH_FILE = ROOT / "benchmark_results.json"
+# Where the documented producer writes: benchmarks/README.md gives
+# `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json`,
+# the path tools/generate_dashboards.py reads too.  This read the repository
+# ROOT, so the live-data branch below never saw the output of the documented
+# command and the charts kept drawing the anchored tables.
+BENCH_FILE = ROOT / "benchmarks" / "benchmark_results.json"
 
 # -- Anchored baselines ------------------------------------------------------
 # Used when no live benchmark JSON is available, which is the normal case:

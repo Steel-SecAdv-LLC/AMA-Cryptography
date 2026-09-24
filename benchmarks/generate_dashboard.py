@@ -112,6 +112,83 @@ PRETTY = {
 }
 
 
+#: The template's placeholder markers.  ``DATA_MARKER`` sits where a JavaScript
+#: expression belongs, so it is written as a comment and the unrendered
+#: template still parses as a script.
+DATA_MARKER = "/*__DATA__*/"
+MEASURED_MARKER = "__MEASURED__"
+GENERATED_MARKER = "__GENERATED__"
+VERSION_MARKER = "__VERSION__"
+_MARKER_RE = re.compile(
+    "|".join(re.escape(t) for t in (DATA_MARKER, MEASURED_MARKER, GENERATED_MARKER, VERSION_MARKER))
+)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+#: How often each marker must occur.  The data, the measured clause and the
+#: generated time each have exactly one place; the version is shown in the
+#: title, the header and one sentence of prose, so it is only required to be
+#: present.
+_EXACTLY_ONCE = (DATA_MARKER, MEASURED_MARKER, GENERATED_MARKER)
+
+
+def script_json(payload: Any) -> str:
+    """``payload`` as JSON that cannot end the ``<script>`` element it sits in.
+
+    The payload carries free text -- change-log prose from
+    ``benchmarks/baseline.json``, provenance strings, descriptions -- and
+    ``json.dumps`` leaves ``<``, ``>`` and ``&`` alone, so a string containing
+    ``</script>`` would close the element and render the rest of the data as
+    page text, and one containing ``<!--`` would change how the parser reads
+    the rest of the script.  Each of the three is written as its JSON escape
+    (``\\u003c``, ``\\u003e``, ``\\u0026``) instead, so no markup sequence
+    can come from the data.  JSON has none of the three outside a string, so
+    the value a reader parses back is unchanged.
+    """
+    return (
+        json.dumps(payload).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    )
+
+
+def fill_template(tmpl: str, values: dict[str, str]) -> str:
+    """Substitute every marker in ``tmpl`` once, where it stands.
+
+    Two defects this replaces.  The template's own header comment named the
+    markers it documents, and ``str.replace`` substitutes every occurrence, so
+    each render carried a second copy of the whole data payload inside that
+    ``<!-- -->`` comment -- where any ``-->`` in the free text would have
+    closed the comment early and printed the remainder as visible page text.
+    And the substitutions were chained, so a marker spelled inside the
+    already-substituted JSON would itself have been replaced by the next
+    ``.replace``.  One regular-expression pass fills the template's markers and
+    never rescans what it inserted.
+
+    The template is checked first, and a malformed one is refused rather than
+    rendered: no marker may sit inside an HTML comment, the data, measured and
+    generated markers must each occur exactly once, and the version at least
+    once.
+    """
+    for comment in _HTML_COMMENT_RE.findall(tmpl):
+        named = sorted(set(_MARKER_RE.findall(comment)))
+        if named:
+            raise RuntimeError(
+                f"the dashboard template names {named} inside an HTML comment; the "
+                "generator would fill it there and publish a second copy of what "
+                "it substitutes. Describe the marker without spelling it."
+            )
+    for marker in _EXACTLY_ONCE:
+        count = tmpl.count(marker)
+        if count != 1:
+            raise RuntimeError(
+                f"the dashboard template must carry {marker} exactly once; it has {count}"
+            )
+    if VERSION_MARKER not in tmpl:
+        raise RuntimeError(f"the dashboard template does not carry {VERSION_MARKER}")
+    missing = sorted(set(_MARKER_RE.findall(tmpl)) - set(values))
+    if missing:
+        raise RuntimeError(f"no value supplied for template marker(s) {missing}")
+    return _MARKER_RE.sub(lambda match: values[match.group(0)], tmpl)
+
+
 def parse_raw_c(path: Path) -> list[dict[str, Any]]:
     """Parse the fixed-width table emitted by build/bin/benchmark_c_raw."""
     rows: list[dict[str, Any]] = []
@@ -222,11 +299,14 @@ def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str,
     tmpl = (Path(__file__).resolve().parent / "_dashboard_template.html").read_text(
         encoding="utf-8"
     )
-    return (
-        tmpl.replace("/*__DATA__*/", json.dumps(payload))
-        .replace("__MEASURED__", measured_html)
-        .replace("__GENERATED__", html.escape(generated))
-        .replace("__VERSION__", html.escape(version))
+    return fill_template(
+        tmpl,
+        {
+            DATA_MARKER: script_json(payload),
+            MEASURED_MARKER: measured_html,
+            GENERATED_MARKER: html.escape(generated),
+            VERSION_MARKER: html.escape(version),
+        },
     )
 
 
