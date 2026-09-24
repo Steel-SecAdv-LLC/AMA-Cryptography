@@ -800,8 +800,11 @@ def main() -> int:
         # Signing the wrong file is worse than failing to sign.
         #
         # _find_native_library_path applies the same search order and the same
-        # AMA_CRYPTO_LIB_PATH rules (secure-execution suppression included), so
-        # the file hashed here is the file the runtime will select.
+        # AMA_CRYPTO_LIB_PATH rules (secure-execution suppression and
+        # confinement to the override included), so the file hashed here is the
+        # file the runtime will select.  The variable relocates what is signed;
+        # it is not what permits mapping an unsigned object — the opt-in below
+        # is.
         native_path_obj = _find_native_library_path()
         if native_path_obj is None:
             raise RuntimeError(
@@ -829,9 +832,10 @@ def main() -> int:
                 "(INVARIANT-1: no PyCA dependency). Check the architecture, "
                 "the SONAME and the library's own dependencies (ldd/otool)."
             )
-        # The two discoveries must have agreed on the file: with the override
-        # active nothing is digest-refused, so both select the first existing
-        # candidate.  A disagreement would mean signing a digest for a
+        # The two discoveries must have agreed on the file: with the signing
+        # opt-in active nothing is digest-refused, so both select the first
+        # existing candidate (under AMA_CRYPTO_LIB_PATH, the first one the
+        # override names — both confine the search to it).  A disagreement would mean signing a digest for a
         # different object than the one just loaded, so it is an error rather
         # than a warning.
         from ama_cryptography.pqc_backends import _LOAD_DIAGNOSTICS as _LD
