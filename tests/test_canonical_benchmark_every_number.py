@@ -52,10 +52,13 @@ class TestNumbersWithoutAnAdjacentUnit:
     @pytest.mark.parametrize(
         ("old", "new"),
         [
-            ("~10,834 Decaps", "~19,834 Decaps"),
-            ("~4,845 KeyGen", "~9,845 KeyGen"),
-            ("~3,929 Sign", "~8,929 Sign"),
-            ("measured 2026-04-25. Decapsulate", "measured 2026-05-25. Decapsulate"),
+            ("~16,117 Decaps", "~19,117 Decaps"),
+            ("~9,358 KeyGen", "~8,358 KeyGen"),
+            ("~6,023 Sign", "~8,023 Sign"),
+            (
+                "measured 2026-09-24; median of five runs, min–max KeyGen 3,402",
+                "measured 2026-09-25; median of five runs, min–max KeyGen 3,402",
+            ),
             ("Python 3.11.15", "Python 3.12.1"),
             ("over 60,000 samples", "over 90,000 samples"),
             ("**|t| = 0.29**", "**|t| = 0.09**"),
@@ -67,7 +70,11 @@ class TestNumbersWithoutAnAdjacentUnit:
         assert _run(tree) == 1
 
     def test_a_figure_added_in_an_unlisted_unit_fails(self, tree: Path) -> None:
-        _edit(tree, "(~10,834 Decaps ops/sec", "(~10,834 Decaps ops/sec, ~0.09 ms each")
+        _edit(
+            tree,
+            "~16,117 Decaps ops/sec (medians)",
+            "~16,117 Decaps ops/sec, ~0.06 ms each (medians)",
+        )
         assert _run(tree) == 1
 
     def test_deleting_one_of_two_identical_figures_fails(self, tree: Path) -> None:

@@ -390,6 +390,64 @@ the full NTT chain, where AMA vectorises a subset. Closing it is a
 vectorisation project measured in weeks, not a configuration change, and
 nothing here should be read as implying a quick fix exists.
 
+## 2026-09-24: canonical-host tables re-measured on the 5.0.0 tree
+
+The `README.md` canonical-bench region and `benchmarks/canonical-host.json` carried figures measured 2026-04-25 to 2026-04-27 against the 4.x code. 5.0.0 changed most of the paths they timed (the INVARIANT-41 pairwise-consistency test on every Python keypair, the INVARIANT-51 per-signature derivation, the INVARIANT-52 package transcript, the in-house Ed25519 backend, FIPS 204 §5.2 external ML-DSA), so they described neither the code nor any host this repository could reproduce them on. They are replaced here; the figures they replace are kept in the table below.
+
+**Host.** Intel Xeon, family 6 model 207 (Emerald Rapids) @ 2.10 GHz, 4 vCPU KVM guest (Firecracker), flags `avx512f avx512vl avx512bw avx512dq avx512vbmi avx512ifma vaes vpclmulqdq sha_ni bmi2 adx hypervisor`; Linux 6.18.44; gcc 13.3.0, CMake Release, `-DAMA_USE_NATIVE_PQC=ON`; Python 3.11.15; native library and all six Cython bindings built by `python setup.py build_ext --inplace` at `974cb019` (runner provenance: `python_bindings: 6 of 6 compiled bindings imported`). The previous record's own note called its canonical host a VM, with the same ISA list and the same Python; this one is a VM too, and says so. It is not bare metal. Whether bare metal would move these figures is not measured here.
+
+**Method.** Five rounds; each round ran `taskset -c 0 python benchmarks/benchmark_runner.py --output runner_N.json`, then `taskset -c 0 build/bin/benchmark_c_raw --json`, then the X25519 kernel pair (`ama_x25519_set_mulx_override(0)` and `(1)` around `benchmark_runner.run_x25519_benchmark`), so the three harnesses interleave across host phases. Published figure: the median of the five rounds; the ranges in `README.md` are min–max. No other benchmark ran concurrently; unrelated work was confined to cores 2–3 with `nice -n 19`.
+
+**Auto-tune.** The dispatcher demoted the AVX-512 four-way Keccak to the scalar BMI1/BMI2 path in 5 of 5 benchmark-runner process starts, four-way against scalar 676,105 / 466,984 ns, 766,260 / 528,823 ns, 742,740 / 518,622 ns, 1,193,889 / 957,746 ns, 678,014 / 465,534 ns (1.45×, 1.45×, 1.43×, 1.25×, 1.46×). The SHA3 and ML-KEM rows therefore measure the scalar Keccak on this host, as the 2026-07-29 section above found on the earlier AVX-512 host.
+
+### Python API rows (`benchmark_runner.py`), ops/sec
+
+| Row | 2026-04 (4.x) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|---|
+| `dilithium_keygen` | 3,626 | 1,578 | 1,699 | 1,617 | 1,616 | 1,627 | **1,617** |
+| `dilithium_sign` | 2,976 | 3,028 | 3,125 | 3,171 | 3,244 | 3,242 | **3,171** |
+| `dilithium_verify` | 7,576 | 11,443 | 11,368 | 10,815 | 10,630 | 10,817 | **10,817** |
+| `kyber_keygen` | 4,965 | 3,891 | 3,865 | 3,515 | 3,402 | 3,602 | **3,602** |
+| `kyber_encapsulate` | 10,253 | 17,417 | 17,984 | 18,171 | 16,715 | 18,398 | **17,984** |
+| `full_package_create` | 2,853 | 1,939 | 2,050 | 1,900 | 1,955 | 2,044 | **1,955** |
+| `full_package_verify` | 4,973 | 3,455 | 3,402 | 3,270 | 3,128 | 3,336 | **3,336** |
+| `ama_sha3_256_hash` | 184,112 | 411,552 | 412,231 | 420,412 | 427,840 | 408,425 | **412,231** |
+| `hmac_sha3_256` | 115,408 | 270,827 | 275,758 | 297,557 | 289,167 | 276,791 | **276,791** |
+| `hkdf_derive` | 81,703 | 187,480 | 182,789 | 184,618 | 174,595 | 197,367 | **184,618** |
+| `ed25519_keygen` | 55,716 | 13,361 | 13,939 | 13,354 | 14,028 | 13,191 | **13,361** |
+| `ed25519_sign` | 51,488 | 40,547 | 41,626 | 41,825 | 41,300 | 39,986 | **41,300** |
+| `ed25519_sign_expanded` | — | 63,692 | 63,939 | 66,512 | 66,228 | 65,411 | **65,411** |
+| `ed25519_verify` | 21,338 | 30,299 | 29,664 | 32,200 | 30,659 | 30,199 | **30,299** |
+| `aes_256_gcm_encrypt` | 293,143 | 297,439 | 314,871 | 299,214 | 292,062 | 304,615 | **299,214** |
+| `chacha20poly1305_encrypt` | 256,249 | 279,284 | 288,960 | 311,899 | 289,768 | 281,060 | **288,960** |
+| `x25519_scalarmult` | 15,401 | 20,284 | 20,329 | 20,026 | 20,828 | 21,738 | **20,329** |
+
+### Raw C rows (`benchmark_c_raw --json`, median-of-iterations basis), ops/sec
+
+| Row | 2026-04 (4.x) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|---|
+| ML-DSA-65 KeyGen | ~4,845 | 9,321 | 9,397 | 9,358 | 9,299 | 9,498 | **9,358** |
+| ML-DSA-65 Sign | ~3,929 | 6,023 | 3,716 | 2,826 | 7,713 | 7,196 | **6,023** |
+| ML-DSA-65 Verify | ~7,773 | 11,559 | 11,101 | 11,532 | 11,666 | 7,568 | **11,532** |
+| ML-KEM-1024 KeyGen | — | 16,734 | 17,254 | 10,684 | 18,931 | 10,229 | **16,734** |
+| ML-KEM-1024 Encaps | — | 19,016 | 19,977 | 11,626 | 19,604 | 15,783 | **19,016** |
+| ML-KEM-1024 Decaps | ~10,834 | 15,839 | 17,094 | 9,383 | 16,466 | 16,117 | **16,117** |
+| X25519 DH (MULX off) | — | 12,383 | 12,486 | 12,115 | 12,819 | 12,465 | **12,465** |
+| X25519 DH (MULX on) | ~16,983 | 20,592 | 21,188 | 19,848 | 21,369 | 20,709 | **20,709** |
+
+Four raw-C PQC rows were not stable across rounds: ML-KEM-1024 KeyGen and Encaps were slow in rounds 3 and 5 and Decaps in round 3, ML-DSA-65 Verify in round 5, and ML-DSA-65 Sign ranged 2,826–7,713 (its signing time varies by design with rejection sampling, and 200 iterations per round do not average that out). The Python-API rows of the same rounds stayed within 4.3–13.6% (max–min over median). The median is what is published; the spread is stated here rather than trimmed.
+
+### X25519 through the Python harness, kernel pinned, ops/sec
+
+| Configuration | 2026-04 (4.x) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|---|
+| MULX+ADX pinned off (pure-C fe64) | ~11,500 | 11,561 | 11,283 | 10,580 | 12,027 | 11,412 | **11,412** |
+| MULX+ADX pinned on | ~15,401 | 19,931 | 20,213 | 20,830 | 19,348 | 20,632 | **20,213** |
+| default dispatch | — | 21,360 | 19,303 | 20,373 | 20,955 | 21,937 | **20,955** |
+
+**Why rows moved.** Throughput rows that now include work 4.x did not do fell: ML-DSA-65 and ML-KEM-1024 KeyGen and Ed25519 KeyGen run a pairwise-consistency test on every Python keypair (INVARIANT-41), Ed25519 Sign on the 64-byte key derives `A = [a]B` per call (INVARIANT-51; the expanded-key row is the once-at-load form), and the package rows carry the INVARIANT-52 transcript and the KEM commitment. Rows whose work did not grow rose on this host (SHA3, HMAC, HKDF, Ed25519 Verify, the AEADs, X25519, ML-KEM Encapsulate, ML-DSA Sign and Verify). The two sets were measured on different VMs five months apart, so a row-by-row ratio between them is not a code-only comparison and is not published as one.
+
+
 ## 2026-09-07: Ed25519 floors on the in-house backend — a single-run floor replaced by four-run medians
 
 PR #394's twenty-first maintenance pass replaced the vendored ed25519-donna

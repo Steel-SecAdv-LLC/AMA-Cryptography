@@ -81,23 +81,23 @@ class TestADriftedFigureIsRejected:
     def test_an_edited_throughput_figure_fails(self, tree: Path) -> None:
         readme = tree / gate.README
         text = readme.read_text(encoding="utf-8")
-        assert "3,626 ops/sec" in text
-        readme.write_text(text.replace("3,626 ops/sec", "9,626 ops/sec"), encoding="utf-8")
+        assert "1,617 ops/sec" in text
+        readme.write_text(text.replace("1,617 ops/sec", "9,617 ops/sec"), encoding="utf-8")
         assert _run(tree) == 1
 
     def test_an_edited_latency_figure_fails(self, tree: Path) -> None:
         readme = tree / gate.README
         text = readme.read_text(encoding="utf-8")
-        assert "~336µs" in text
-        readme.write_text(text.replace("~336µs", "~136µs"), encoding="utf-8")
+        assert "~315µs" in text
+        readme.write_text(text.replace("~315µs", "~135µs"), encoding="utf-8")
         assert _run(tree) == 1
 
     def test_dropping_the_approximation_mark_fails(self, tree: Path) -> None:
-        """``276µs`` and ``~276µs`` are different claims about the same number."""
+        """``618µs`` and ``~618µs`` are different claims about the same number."""
         readme = tree / gate.README
         text = readme.read_text(encoding="utf-8")
-        assert "~276µs" in text
-        readme.write_text(text.replace("~276µs", "276µs"), encoding="utf-8")
+        assert "~618µs" in text
+        readme.write_text(text.replace("~618µs", "618µs"), encoding="utf-8")
         assert _run(tree) == 1
 
 
@@ -107,9 +107,9 @@ class TestAnUnbackedFigureIsRejected:
     def test_an_added_row_fails(self, tree: Path) -> None:
         readme = tree / gate.README
         text = readme.read_text(encoding="utf-8")
-        anchor = "| Ed25519 Verify | 21,338 ops/sec | canonical bench, 2026-04-26 |"
+        anchor = "| Ed25519 Verify | 30,299 ops/sec | canonical bench, 2026-09-24 |"
         assert anchor in text
-        added = f"{anchor}\n| Ed25519 Batch | 99,999 ops/sec | canonical bench, 2026-04-26 |"
+        added = f"{anchor}\n| Ed25519 Batch | 99,999 ops/sec | canonical bench, 2026-09-24 |"
         readme.write_text(text.replace(anchor, added), encoding="utf-8")
         assert _run(tree) == 1
 
@@ -126,7 +126,7 @@ class TestADeletedFigureIsRejected:
     def test_removing_a_published_row_fails(self, tree: Path) -> None:
         readme = tree / gate.README
         lines = readme.read_text(encoding="utf-8").splitlines()
-        kept = [ln for ln in lines if "| **Encapsulate** | 10,253 ops/sec" not in ln]
+        kept = [ln for ln in lines if "| **Encapsulate** | 17,985 ops/sec" not in ln]
         assert len(kept) == len(lines) - 1
         readme.write_text("\n".join(kept) + "\n", encoding="utf-8")
         assert _run(tree) == 1

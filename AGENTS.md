@@ -368,12 +368,13 @@ not a reduction in the figure above, which is a `ctest` measurement.
 
 Release prerequisites are recorded in the pull request description. Each
 requires hardware, a protected credential, or a workflow dispatch; none is
-blocked by a defect in the tree. One of them has been narrowed: the published
-canonical-host benchmark figures now have a drift mechanism
-(`tools/check_canonical_benchmarks.py` against `benchmarks/canonical-host.json`),
-so an edited, invented or quietly deleted figure fails CI. Re-measuring that
-host still requires AVX-512 silicon this project's CI does not have; detecting
-that a published number changed no longer does.
+blocked by a defect in the tree. The canonical-host benchmark figures have a
+drift mechanism (`tools/check_canonical_benchmarks.py` against
+`benchmarks/canonical-host.json`), so an edited, invented or quietly deleted
+figure fails CI, and they were re-measured on the 5.0.0 tree on 2026-09-24 on
+an AVX-512 VBMI + VAES + VPCLMULQDQ VM matching the recorded host definition
+(method and per-run data in `docs/BENCHMARK_HISTORY.md`). CI still cannot
+re-measure them: no runner it has carries that ISA.
 
 ---
 
