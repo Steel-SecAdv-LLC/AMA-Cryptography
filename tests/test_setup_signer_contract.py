@@ -229,8 +229,9 @@ def _require_git_work_tree() -> None:
         probe = _git("rev-parse", "--is-inside-work-tree")
     except OSError as exc:
         pytest.skip(f"git is not available: {exc}")
-    if probe.returncode != 0 or probe.stdout.strip() != "true":
-        pytest.skip("not a git work tree (an sdist or an exported tree)")
+    else:
+        if probe.returncode != 0 or probe.stdout.strip() != "true":
+            pytest.skip("not a git work tree (an sdist or an exported tree)")
 
 
 class TestTheArtefactIsABuildOutput:
@@ -292,15 +293,24 @@ class TestTheArtefactIsABuildOutput:
 
     @staticmethod
     def _manifest_survivors(files: list[str]) -> list[str]:
-        """Apply MANIFEST.in's template lines to ``files`` as sdist does."""
+        """Apply MANIFEST.in's template lines to ``files`` as sdist does.
+
+        Candidates go in through ``FileList.append``, as sdist's do, so they
+        pass through the same ``convert_path`` as the template patterns.
+        Assigning ``/``-joined names to ``.files`` directly bypassed that, and
+        on Windows no converted (``\\``-joined) pattern could ever match them:
+        the test failed there whatever MANIFEST.in said.  The survivors come
+        back ``/``-joined for comparison.
+        """
         file_list = FileList()
-        file_list.files = list(files)
+        for name in files:
+            file_list.append(name)
         manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
         for raw in manifest.splitlines():
             line = raw.strip()
             if line and not line.startswith("#"):
                 file_list.process_template_line(line)
-        return sorted(file_list.files)
+        return sorted(Path(name).as_posix() for name in file_list.files)
 
     def test_the_sdist_does_not_carry_a_local_artefact(self) -> None:
         """setuptools adds every package .py to an sdist unless MANIFEST.in says not.
