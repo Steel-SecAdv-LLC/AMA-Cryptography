@@ -56,9 +56,15 @@ What is checked
 ---------------
 1. **No claim of an unperformed check.** For every capability that is ``False``,
    the claim patterns bound to it must not appear in shipped code or
-   documentation *unless negated on the same line*. Same line, deliberately: a
-   disclaimer three paragraphs from the claim is how this repository came to
-   assert attestation in fifty places while the module docstring disclaimed it.
+   documentation *unless negated in the same sentence*. The same sentence,
+   deliberately: a disclaimer three paragraphs from the claim is how this
+   repository came to assert attestation in fifty places while the module
+   docstring disclaimed it. (The unit was once the physical line; prose here is
+   hard-wrapped, so a sentence is what the reader actually reads as one claim.)
+   Whether generic assurance vocabulary is *about* RFC 3161 at all is judged
+   over the whole paragraph (blank-line-delimited block), not the sentence: in
+   "AMA attaches RFC 3161 timestamps. They provide independent verification."
+   the subject of the claim is carried into the second sentence by a pronoun.
 2. **The misnamed result key is not taught.** No document or docstring may show
    ``results["rfc3161"]``. That key is retained in code for compatibility and
    now warns when read, but a copy-pasteable example teaching it defeats the
@@ -151,13 +157,16 @@ CLAIM_SCAN_EXEMPT: frozenset[str] = frozenset(
     }
 )
 
-#: Cues that a line is talking about RFC 3161 at all.
+#: Cues that a paragraph is talking about RFC 3161 at all.
 #:
 #: Without this, generic assurance vocabulary is caught wherever it appears:
 #: "requires independent verification" about side-channel review of the C code,
 #: or "# Round trip and independent verification" in an ECDSA test, are true
 #: statements about other things. A pattern marked ``requires_context`` is only
-#: a violation on a line that is about timestamping.
+#: a violation in a paragraph (blank-line-delimited block) that is about
+#: timestamping — the paragraph, not the sentence, because a claim routinely
+#: names its subject one sentence earlier ("RFC 3161 timestamps ... They
+#: provide ...").
 CONTEXT_CUES: tuple[re.Pattern[str], ...] = (
     # ``\s*-?\s*`` is two nullable quantifiers around an optional atom — the
     # same adjacent-nullable shape fixed elsewhere in this branch, quadratic on
@@ -175,7 +184,7 @@ CONTEXT_CUES: tuple[re.Pattern[str], ...] = (
 # Each entry is (compiled pattern, human description, requires_context). A
 # pattern is enforced only while its capability is False in
 # RFC3161_CAPABILITIES. ``requires_context`` marks generic assurance vocabulary
-# that is only a violation on a line already talking about timestamping; a
+# that is only a violation in a paragraph already talking about timestamping; a
 # pattern that names the TSA or the timestamp itself is self-scoping and needs
 # no such gate.
 _P = re.compile
@@ -406,16 +415,20 @@ def load_capabilities(source: Path | None = None) -> dict[str, bool]:
     raise ValueError(f"{CAPABILITY_SYMBOL} not found in {path}")
 
 
-def _scanned_files(repo: Path) -> list[Path]:
+def _scanned_files(
+    repo: Path,
+    roots: Sequence[str] = SCAN_ROOTS,
+    suffixes: frozenset[str] = SCAN_SUFFIXES,
+) -> list[Path]:
     seen: list[Path] = []
     for glob in SCAN_ROOT_GLOBS:
         seen.extend(sorted(repo.glob(glob)))
-    for root in SCAN_ROOTS:
+    for root in roots:
         base = repo / root
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*")):
-            if not path.is_file() or path.suffix not in SCAN_SUFFIXES:
+            if not path.is_file() or path.suffix not in suffixes:
                 continue
             if any(part in EXCLUDED_DIRS for part in path.relative_to(repo).parts):
                 continue
@@ -468,11 +481,19 @@ def scan_for_unperformed_claims(
     # too: a genuinely negated claim whose negation wrapped onto the previous
     # line was reported as a violation.  Blocks fix the wrapping; sentences fix
     # the over-suppression.
+    #
+    # CONTEXT is the one thing judged per block, not per sentence.  Moving it
+    # to the sentence along with the negation window dropped every claim whose
+    # subject sat in the preceding sentence: "AMA attaches RFC 3161 timestamps.
+    # They provide independent verification of when a package was signed." —
+    # which the line rule caught (cue and claim on one line) and the sentence
+    # rule passed, because sentence two carries no cue.  Widening the context
+    # can only report more; the negation window stays the claim's sentence.
     for path, number, block in _iter_prose_blocks(_scanned_files(repo)):
+        in_context = _has_rfc3161_context(block)
         for sentence in _SENTENCE_SPLIT_RE.split(block):
             if _is_negated(sentence):
                 continue
-            in_context = _has_rfc3161_context(sentence)
             for capability, pattern, description, needs_context in active:
                 if needs_context and not in_context:
                     continue
@@ -641,6 +662,23 @@ def check_pattern_coverage(capabilities: Mapping[str, bool] | None = None) -> li
 # The checks above cannot see it: they are scoped to the RFC 3161 capability
 # table by construction, as their own docstrings say.  This pass is separate
 # and phrase-based.
+#
+# It also reads further than they do.  It first reused their file set, which
+# never opens src/, include/ or .github/ and reads no .c or .h at all — so
+# the C library, the code any "formally verified" claim would be ABOUT, was
+# the one tree it could not see, and src/c/sve2/ama_kyber_sve2.c carried an
+# unqualified "provably correct" past it.
+
+#: Roots for the formal-verification pass: everything checks 1-4 read, plus
+#: the C sources and public headers and the repository's GitHub metadata.
+FORMAL_SCAN_ROOTS: tuple[str, ...] = (*SCAN_ROOTS, "src", "include", ".github")
+
+#: Suffixes for the formal-verification pass: the documentation suffixes, plus
+#: C and Cython sources (whose comments are where such a claim would sit) and
+#: the workflow and template YAML under ``.github/``.
+FORMAL_SCAN_SUFFIXES: frozenset[str] = SCAN_SUFFIXES | frozenset(
+    {".c", ".h", ".pyx", ".pxd", ".yml", ".yaml"}
+)
 
 #: Phrases that assert the library HAS been formally verified / proven.
 _FORMAL_CLAIM_RE = re.compile(
@@ -676,6 +714,11 @@ _FORMAL_EXEMPT_RE = tuple(
         r"\bnot\s+a\s+(?:claim\s+of\s+)?(?:independent\s+)?formal\s+(?:proof|verification)\b",
         r"\bnot\s+a\s+claim\s+of[^.]{0,60}?formal\s+(?:proof|verification)\b",
         r"\bnot\s+(?:a\s+)?formal\s+proof\s+of\s+correctness\b",
+        # The "does not claim:" list form — src/c/PROVENANCE.md's attestation
+        # ends with a list of what it does NOT claim, whose first item is the
+        # claim itself.  Anchored to the list's opening, so it covers that
+        # first item only.
+        r"\bdoes\s+not\s+claim[\s:-]{0,8}formal\s+(?:proof|verification)\b",
         # This gate itself, and the record of removing such claims.
         r"\bclaimed\s+FIPS\s+validation,\s+formal\s+verification\b",
     )
@@ -770,7 +813,8 @@ def _iter_prose_blocks(paths: Iterable[Path]) -> Iterable[tuple[Path, int, str]]
 def scan_for_formal_verification_claims(repo: Path = REPO) -> list[str]:
     """Every unqualified claim of formal verification, with its location."""
     problems: list[str] = []
-    for path, number, block in _iter_prose_blocks(_scanned_files(repo)):
+    files = _scanned_files(repo, FORMAL_SCAN_ROOTS, FORMAL_SCAN_SUFFIXES)
+    for path, number, block in _iter_prose_blocks(files):
         if not _FORMAL_CLAIM_RE.search(block):
             continue
         for sentence in _SENTENCE_SPLIT_RE.split(block):

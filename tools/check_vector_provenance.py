@@ -47,7 +47,10 @@ otherwise would be the "gate that cannot fail" pattern this repository exists
 to remove.  Two things narrow it:
 
 * ``--update`` is explicit and never runs in CI, so a regeneration is a
-  deliberate act that appears in the diff;
+  deliberate act that appears in the diff.  It rewrites only the digests
+  (``roots``, ``files``, ``note``): the upstream-provenance buckets below are
+  hand-written, are carried across unchanged, and must account for every
+  pinned vector before it will write;
 * ``tests/test_vector_provenance_gate.py`` pins the digests of a handful of
   ANCHOR files inline, in the test source, away from the manifest.  Rewriting
   the manifest alone leaves those assertions failing.
@@ -125,9 +128,9 @@ NON_VECTOR_ALLOWLIST: frozenset[str] = frozenset(
 #: enough above zero that an empty or partially-checked-out tree cannot pass.
 #:
 #: 30 when the sweep pinned every file under the protected roots; the tracked
-#: published-vector count is now exactly 30, so the floor moves to 20 to keep
-#: headroom.  20 is still an order of magnitude above what a partial checkout
-#: produces.
+#: published-vector count was exactly 30 when the floor moved to 20 to keep
+#: headroom (32 on 2026-09-24).  20 is still an order of magnitude above what a
+#: partial checkout produces.
 MIN_FILES = 20
 
 
@@ -270,6 +273,40 @@ def build() -> dict[str, Any]:
 _UPSTREAM_BUCKETS = ("verbatim", "derived", "verified_elsewhere", "unverifiable")
 
 
+def _bucket_coverage_problems(manifest: dict[str, Any]) -> list[str]:
+    """Every way the bucket maps fail to cover ``manifest["files"]`` exactly once.
+
+    Shared by ``--verify-upstream``, which reports these before fetching, and
+    ``--update``, which refuses to write a manifest that would fail them.
+    """
+    pinned = set(manifest.get("files", {}))
+    buckets = {name: manifest.get(name, {}) for name in _UPSTREAM_BUCKETS}
+    problems: list[str] = []
+    for relative in sorted(pinned):
+        holding = [name for name in _UPSTREAM_BUCKETS if relative in buckets[name]]
+        if not holding:
+            problems.append(
+                f"{relative} is pinned but appears in none of {', '.join(_UPSTREAM_BUCKETS)}. "
+                f"Every vector must state how its provenance is established, even if "
+                f"the answer is that it cannot be fetched."
+            )
+        elif len(holding) > 1:
+            problems.append(f"{relative} appears in more than one bucket: {holding}.")
+    for name in _UPSTREAM_BUCKETS:
+        for relative in sorted(buckets[name]):
+            if relative not in pinned:
+                problems.append(f"{name} names {relative}, which the manifest does not pin.")
+    return problems
+
+
+def _display(path: Path) -> str:
+    """``path`` relative to the repository when it is inside it, else as given."""
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _fetch(url: str) -> bytes:
     # This module is run as a script (`python tools/check_vector_provenance.py`),
     # so the repository root is not on sys.path and `from tools import ...` fails
@@ -296,23 +333,8 @@ def verify_upstream() -> int:
         return 2
 
     buckets = {name: manifest.get(name, {}) for name in _UPSTREAM_BUCKETS}
-    problems: list[str] = []
-
     # Coverage first: a file in no bucket, or in two, is a defect in the map.
-    for relative in sorted(pinned):
-        holding = [name for name in _UPSTREAM_BUCKETS if relative in buckets[name]]
-        if not holding:
-            problems.append(
-                f"{relative} is pinned but appears in none of {', '.join(_UPSTREAM_BUCKETS)}. "
-                f"Every vector must state how its provenance is established, even if "
-                f"the answer is that it cannot be fetched."
-            )
-        elif len(holding) > 1:
-            problems.append(f"{relative} appears in more than one bucket: {holding}.")
-    for name in _UPSTREAM_BUCKETS:
-        for relative in sorted(buckets[name]):
-            if relative not in pinned:
-                problems.append(f"{name} names {relative}, which the manifest does not pin.")
+    problems: list[str] = _bucket_coverage_problems(manifest)
 
     verified = 0
 
@@ -403,6 +425,81 @@ def verify_upstream() -> int:
     return 0
 
 
+#: The top-level manifest keys `--update` regenerates from the tree.  Every
+#: other key is hand-written — the four upstream buckets with their per-file
+#: reasons, and `upstream_note` — and `--update` carries it across unchanged.
+_REGENERATED_KEYS = frozenset({"roots", "files", "note"})
+
+
+def _update(current: dict[str, Any]) -> int:
+    """Re-pin the digests, keeping every hand-written key of the manifest.
+
+    `--update` used to write `build()` over the manifest wholesale.  `build()`
+    returns only `roots`, `files` and `note`, so following this gate's own
+    remedy ("re-pin with --update") after adding one KAT file erased the four
+    upstream-provenance buckets and the reason recorded for every vector in
+    them — silently, because the offline check reads only `files`.  The loss
+    surfaced later, in the network-only `--verify-upstream` run, as one "in
+    none of" error per vector, with the reasons left to be rebuilt from git.
+
+    Now the regenerated keys replace their old values and nothing else is
+    touched.  And once the manifest carries buckets, `--update` refuses to
+    write one that `--verify-upstream` would reject for coverage — a newly
+    pinned vector in no bucket, or a bucket naming a vector no longer pinned —
+    so deciding how a new vector's provenance is established happens when it
+    is pinned, not when the upstream run next fails.
+    """
+    existing: dict[str, Any] = {}
+    if MANIFEST_PATH.is_file():
+        try:
+            loaded = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            print(
+                f"FATAL: cannot read the existing {_display(MANIFEST_PATH)} ({exc}); "
+                f"refusing to overwrite hand-written provenance it may hold.",
+                file=sys.stderr,
+            )
+            return 2
+        if not isinstance(loaded, dict):
+            print(
+                f"FATAL: {_display(MANIFEST_PATH)} is not a JSON object; refusing to "
+                f"overwrite it.",
+                file=sys.stderr,
+            )
+            return 2
+        existing = loaded
+
+    merged = {key: value for key, value in existing.items() if key not in _REGENERATED_KEYS}
+    merged.update(current)
+
+    if any(name in existing for name in _UPSTREAM_BUCKETS):
+        problems = _bucket_coverage_problems(merged)
+        if problems:
+            print(
+                f"\nREFUSING TO RE-PIN: the result would fail --verify-upstream's "
+                f"coverage rule, and {_display(MANIFEST_PATH)} was left unchanged:",
+                file=sys.stderr,
+            )
+            for problem in problems:
+                print(f"  - {problem}", file=sys.stderr)
+            print(
+                f"\nRecord each new vector in exactly one of "
+                f"{', '.join(_UPSTREAM_BUCKETS)} (and drop the entries of any vector "
+                f"removed), then run --update again.",
+                file=sys.stderr,
+            )
+            return 1
+
+    MANIFEST_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    total = sum(entry["bytes"] for entry in current["files"].values())
+    kept = sorted(key for key in merged if key not in _REGENERATED_KEYS)
+    print(
+        f"wrote {_display(MANIFEST_PATH)}: {len(current['files'])} file(s), {total:,} bytes"
+        + (f"; kept {', '.join(kept)} unchanged" if kept else "")
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -440,14 +537,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.update:
-        MANIFEST_PATH.write_text(
-            json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        total = sum(entry["bytes"] for entry in current["files"].values())
-        print(
-            f"wrote {MANIFEST_PATH.relative_to(REPO_ROOT)}: {len(current['files'])} file(s), {total:,} bytes"
-        )
-        return 0
+        return _update(current)
 
     if not MANIFEST_PATH.is_file():
         print(

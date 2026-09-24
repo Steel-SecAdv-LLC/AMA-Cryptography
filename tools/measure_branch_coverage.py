@@ -60,8 +60,20 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# `<count>: <line>: <text>`; count is a number, `-` (no code) or `#####`.
-_SRC_RE = re.compile(r"^\s*([\d#\-]+):\s*(\d+):(.*)$")
+# `<count>: <line>: <text>`.  The count is a number, `-` (no code), `#####`
+# (never executed) or `=====` (reached only on an exceptional path), and since
+# GCC 8 a number carries a trailing `*` when the line holds a basic block that
+# never ran (`        5*:   42:  if (x)`).
+#
+# The `*` was outside this pattern.  A starred line failed to match, so its
+# `branch N` rows were keyed to the PREVIOUS source line with the index still
+# counting from it, and its text was never recorded.  Those are exactly the
+# lines with partially executed branches — what this inventory exists to
+# surface — and the damage compounded in the merge: a line fully executed in
+# one translation unit (`10:`, arcs keyed correctly and taken) and starred in
+# another (arcs keyed one line up, never taken) reported phantom never-taken
+# arcs on the line above, which need not hold a branch at all.
+_SRC_RE = re.compile(r"^\s*([\d#=\-]+\*?):\s*(\d+):(.*)$")
 _BRANCH_RE = re.compile(r"^branch\s+(\d+)\s+(.*)$")
 _TAKEN_RE = re.compile(r"taken (\d+)")
 

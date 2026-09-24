@@ -294,7 +294,7 @@
       },
       {
         "path": "src/c/sve2/ama_kyber_sve2.c",
-        "reason": "Same barrett_reduce form (94e4bd6). SVE2 is off in the benchmarked configuration, so no floored primitive dispatches here."
+        "reason": "2026-09-24: comment-only - the forward-NTT header's unqualified correctness claim, which the widened INVARIANT-16 formal-verification scan reports, now names the reference reduction and the equivalence test instead; .text, .rodata and .data are byte-identical before and after (disassembly of all 5 exported symbols identical) under aarch64-linux-gnu-gcc 13.3.0 and clang 18.1.3 at -O3 -march=armv9-a+sve2, and SVE2 stays off in the benchmarked configuration. Same barrett_reduce form (94e4bd6). SVE2 is off in the benchmarked configuration, so no floored primitive dispatches here."
       },
       {
         "path": "src/c/ama_sha3.c",

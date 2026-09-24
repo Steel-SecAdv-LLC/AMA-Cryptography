@@ -682,3 +682,137 @@ class TestThePastTenseAttributionCues:
         assert not tool._is_negated(
             "Each vector is listed in the corpus and its status was recorded."
         )
+
+
+# ---------------------------------------------------------------------------
+# Context is the paragraph; negation is the sentence
+# ---------------------------------------------------------------------------
+class TestContextSpansTheParagraph:
+    """A claim whose subject sits one sentence earlier is still about RFC 3161.
+
+    When the negation window narrowed from the line to the sentence, the
+    RFC 3161 context test narrowed with it, so a ``requires_context`` claim
+    was checked only when the cue shared its sentence.  "AMA attaches RFC 3161
+    timestamps. They provide independent verification ..." — caught by the
+    line rule, which saw the cue and the claim on one line — then passed,
+    because the second sentence names its subject with a pronoun.  Context is
+    now judged over the blank-line-delimited block; negation still has to sit
+    in the claim's own sentence.
+    """
+
+    CAPS: ClassVar[dict[str, bool]] = {
+        "tsa_signature": False,
+        "gen_time": False,
+        "tsa_certificate_chain": False,
+    }
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "AMA attaches RFC 3161 timestamps. They provide independent verification "
+            "of when a package was signed.\n",
+            "AMA attaches RFC 3161 timestamps.\nThey provide independent verification\n"
+            "of when a package was signed.\n",
+            "Each package carries a TSA token. It is proof of existence at signing time.\n",
+            "RFC 3161 support is built in. Verification is simple. The chain gives "
+            "third-party attestation of the signing time.\n",
+        ],
+    )
+    def test_a_claim_whose_subject_is_in_an_earlier_sentence_is_caught(
+        self, tool: ModuleType, tmp_path: Path, text: str
+    ) -> None:
+        _write(tmp_path, "README.md", text)
+        problems = tool.scan_for_unperformed_claims(tmp_path, self.CAPS)
+        assert problems, f"a claim passed because its RFC 3161 cue was a sentence up: {text!r}"
+        assert "README.md:1" in problems[0]
+
+    def test_a_negated_claim_in_a_timestamp_paragraph_is_still_allowed(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "README.md",
+            "AMA attaches RFC 3161 timestamps. They do not provide independent "
+            "verification of when a package was signed.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS) == []
+
+    def test_a_negation_in_the_cue_sentence_does_not_excuse_the_next_one(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Widening the context must not widen the negation window with it."""
+        _write(
+            tmp_path,
+            "README.md",
+            "AMA does not fetch RFC 3161 timestamps itself. They provide independent "
+            "verification of when a package was signed.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS)
+
+    def test_generic_vocabulary_in_a_different_paragraph_is_not_caught(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The paragraph is the boundary: a blank line ends the RFC 3161 context."""
+        _write(
+            tmp_path,
+            "README.md",
+            "AMA binds RFC 3161 tokens to the package digest.\n\n"
+            "The constant-time C core requires independent verification.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS) == []
+
+
+# ---------------------------------------------------------------------------
+# The formal-verification pass reads the C tree too
+# ---------------------------------------------------------------------------
+class TestFormalVerificationScanCoversTheCTree:
+    """Check 6 used to reuse checks 1-4's file set.
+
+    That set never opens ``src/``, ``include/`` or ``.github/`` and reads no
+    ``.c`` or ``.h`` file, so the C library — the code a "formally verified"
+    claim would be about — was invisible to it, and
+    ``src/c/sve2/ama_kyber_sve2.c`` carried an unqualified "provably correct"
+    while the gate reported clean.
+    """
+
+    @pytest.mark.parametrize(
+        ("relative", "text"),
+        [
+            ("src/c/sve2/kernel.c", "/* Montgomery reduction (provably correct). */\n"),
+            ("include/ama_cryptography.h", "/** @brief Formally verified constant-time AES. */\n"),
+            ("src/cython/binding.pyx", "# The wrapper is mathematically proven.\n"),
+            (".github/PULL_REQUEST_TEMPLATE.md", "The core has been formally verified.\n"),
+            (".github/workflows/ci.yml", "# formal proof of the NTT\njobs: {}\n"),
+        ],
+    )
+    def test_a_claim_outside_the_documentation_roots_is_reported(
+        self, tool: ModuleType, tmp_path: Path, relative: str, text: str
+    ) -> None:
+        _write(tmp_path, relative, text)
+        problems = tool.scan_for_formal_verification_claims(tmp_path)
+        assert problems, f"{relative} was not scanned"
+        assert relative in problems[0]
+
+    def test_the_does_not_claim_list_form_is_permitted(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """src/c/PROVENANCE.md's disclaimer, which the wider scan now reads."""
+        _write(
+            tmp_path,
+            "src/c/PROVENANCE.md",
+            "This attestation does **not** claim:\n"
+            "- Formal proof of correctness. See `docs/DESIGN_NOTES.md`.\n"
+            "- Immunity from implementation bugs.\n",
+        )
+        assert tool.scan_for_formal_verification_claims(tmp_path) == []
+
+    def test_does_not_claim_covers_only_the_item_it_introduces(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "src/c/PROVENANCE.md",
+            "This attestation does not claim FIPS validation; the AES core is "
+            "formally verified.\n",
+        )
+        assert tool.scan_for_formal_verification_claims(tmp_path)

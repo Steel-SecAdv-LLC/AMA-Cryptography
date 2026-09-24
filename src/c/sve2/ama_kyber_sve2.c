@@ -220,8 +220,11 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
  * For each NTT layer (len = 128, 64, 32, ...):
  *   - When the butterfly stride (len) >= VL we vectorize the inner loop
  *     using SVE2 for loads, butterfly add/sub, and stores.  Montgomery
- *     reduction uses scalar via extract-to-buffer (provably correct,
- *     avoids the svmul/svmulh signed-borrow issue entirely).
+ *     reduction uses scalar via extract-to-buffer: each lane goes through
+ *     montgomery_reduce_scalar(), the reference reduction, which avoids the
+ *     svmul/svmulh signed-borrow issue entirely.  Agreement with the scalar
+ *     NTT is tested, not proven: the "direct SVE2" lane of
+ *     tests/c/test_kyber_ntt_equiv.c compares both directions against it.
  *   - When len < VL we use the purely scalar path.
  * ============================================================================ */
 void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],

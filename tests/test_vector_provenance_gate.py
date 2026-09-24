@@ -261,7 +261,7 @@ def test_a_deleted_vector_fails(
     shrunk below the floor is reported as unreadable (exit 2) before any
     per-file comparison, because a comparison over a tree that was not really
     read is the failure this gate's floor exists to prevent. The real tree
-    holds 30 files against a floor of 20 (tests/kat/PROVENANCE.json vs
+    holds 32 files against a floor of 20 (tests/kat/PROVENANCE.json vs
     MIN_FILES), so an ordinary deletion lands here, at exit 1, with the path
     named.
     """
@@ -311,3 +311,112 @@ def test_a_missing_manifest_fails_closed(
     monkeypatch.setattr(gate, "MANIFEST_PATH", tmp_path / "absent.json")
     monkeypatch.setattr(gate, "PROTECTED", {"vectors": "synthetic"})
     assert gate.main([]) == 2
+
+
+# --------------------------------------------------------------------------
+# --update re-pins the digests and nothing else
+# --------------------------------------------------------------------------
+#
+# `--update` used to write `build()` over the manifest wholesale.  `build()`
+# returns `roots`, `files` and `note` only, so the gate's own remedy for a
+# deliberate edit ("re-pin with --update") erased the four upstream buckets
+# and every per-vector reason in them, and nothing offline noticed.
+
+
+def _bucketed_tree(gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A synthetic tree whose manifest carries hand-written upstream buckets.
+
+    MIN_FILES + 5 vectors, so deleting one still clears the vacuity floor.
+    """
+    root = tmp_path / "vectors"
+    root.mkdir()
+    for i in range(gate.MIN_FILES + 5):
+        (root / f"v{i}.kat").write_text(f"x{i}\n", encoding="utf-8")
+    manifest = tmp_path / "PROVENANCE.json"
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "MANIFEST_PATH", manifest)
+    monkeypatch.setattr(gate, "PROTECTED", {"vectors": "synthetic"})
+    assert gate.main(["--update"]) == 0
+    recorded = json.loads(manifest.read_text(encoding="utf-8"))
+    recorded["unverifiable"] = {
+        name: {"reason": f"hand-written reason for {name}"} for name in recorded["files"]
+    }
+    recorded["upstream_note"] = "hand-written, not derivable from the tree"
+    manifest.write_text(json.dumps(recorded, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest
+
+
+def test_update_round_trips_the_real_manifest_byte_for_byte(
+    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On an unchanged tree, re-pinning is a no-op — buckets and reasons included."""
+    copy = tmp_path / "PROVENANCE.json"
+    copy.write_bytes(gate.MANIFEST_PATH.read_bytes())
+    monkeypatch.setattr(gate, "MANIFEST_PATH", copy)
+    assert gate.main(["--update"]) == 0
+    assert copy.read_bytes() == (REPO_ROOT / "tests" / "kat" / "PROVENANCE.json").read_bytes(), (
+        "--update on an unchanged tree rewrote tests/kat/PROVENANCE.json; the "
+        "hand-written upstream buckets must survive a re-pin"
+    )
+
+
+def test_update_keeps_the_upstream_buckets_when_a_vector_is_added(
+    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The documented flow: bucket the new vector, then re-pin."""
+    manifest = _bucketed_tree(gate, tmp_path, monkeypatch)
+    before = json.loads(manifest.read_text(encoding="utf-8"))
+    (tmp_path / "vectors" / "added.kat").write_text("new\n", encoding="utf-8")
+    before["unverifiable"]["vectors/added.kat"] = {"reason": "added deliberately"}
+    manifest.write_text(json.dumps(before, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    assert gate.main(["--update"]) == 0
+    after = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "vectors/added.kat" in after["files"]
+    assert after["unverifiable"] == before["unverifiable"]
+    assert after["upstream_note"] == before["upstream_note"]
+    assert gate._bucket_coverage_problems(after) == []
+    assert gate.main([]) == 0
+
+
+def test_update_refuses_to_pin_a_vector_no_bucket_accounts_for(
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Refused, and the manifest is left exactly as it was."""
+    manifest = _bucketed_tree(gate, tmp_path, monkeypatch)
+    before = manifest.read_bytes()
+    (tmp_path / "vectors" / "unbucketed.kat").write_text("new\n", encoding="utf-8")
+
+    assert gate.main(["--update"]) == 1
+    assert manifest.read_bytes() == before
+    err = capsys.readouterr().err
+    assert "vectors/unbucketed.kat is pinned but appears in none of" in err
+    assert "left unchanged" in err
+
+
+def test_update_refuses_a_bucket_that_names_a_removed_vector(
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = _bucketed_tree(gate, tmp_path, monkeypatch)
+    before = manifest.read_bytes()
+    (tmp_path / "vectors" / "v0.kat").unlink()
+
+    assert gate.main(["--update"]) == 1
+    assert manifest.read_bytes() == before
+    assert "unverifiable names vectors/v0.kat" in capsys.readouterr().err
+
+
+def test_update_refuses_to_overwrite_a_manifest_it_cannot_read(
+    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unreadable is not empty: what it holds cannot be carried across."""
+    manifest = _bucketed_tree(gate, tmp_path, monkeypatch)
+    manifest.write_text("{ not json", encoding="utf-8")
+    assert gate.main(["--update"]) == 2
+    assert manifest.read_text(encoding="utf-8") == "{ not json"

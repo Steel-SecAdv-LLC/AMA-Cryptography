@@ -752,6 +752,75 @@ class TestCmakeBuildType:
         assert report.ok, messages(report)
         assert report.cmake_configures_checked == 0
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cmake -G Ninja -B build -DAMA_USE_NATIVE_PQC=ON",
+            "cmake -A x64 -B build",
+            "cmake -T ClangCL -B build",
+            "cmake --fresh -B build",
+            "cmake --preset ci",
+            'cmake "${{ github.workspace }}" -B build',
+            "cmake $SRC_DIR -B build",
+            'cd build && cmake "$GITHUB_WORKSPACE"',
+            "cd build && cmake src",
+            "CC=clang cmake -G Ninja -B build",
+            "if cmake -G Ninja -B build; then echo configured; fi",
+            "scan-build --status-bugs cmake -G Ninja -B build",
+            "cmake -L -B build",
+        ],
+    )
+    def test_the_first_argument_does_not_decide_whether_a_configure_is_seen(
+        self, command: str
+    ) -> None:
+        """Every one of these configures with no -O flag at all.
+
+        The matcher used to key on the FIRST argument being `-B`, `-S`, `-D`,
+        `.`, `..` or `/`, so a configure that led with `-G`, `-A`, `-T`,
+        `--fresh`, `--preset`, a quoted or variable source directory, or that
+        sat behind `VAR=value` or `if`, was neither counted nor checked.
+        `--preset` is held to the command-line rule because the gate does not
+        read CMakePresets.json; `-L` configures before it lists the cache.
+        """
+        report = run_checks(self._fragment(command))
+        assert report.cmake_configures_checked == 1, command
+        assert not report.ok, f"{command}: a configure with no build type passed"
+        assert "no optimization flag at all" in messages(report)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release",
+            "cmake -A x64 -B build -DCMAKE_BUILD_TYPE=Release",
+            "cmake --preset ci -DCMAKE_BUILD_TYPE=Release",
+        ],
+    )
+    def test_those_forms_pass_once_they_state_the_build_type(self, command: str) -> None:
+        report = run_checks(self._fragment(command))
+        assert report.cmake_configures_checked == 1, command
+        assert report.ok, messages(report)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cmake --version",
+            "cmake -LA -N build",
+            "cmake -P tools/script.cmake",
+            "cmake --workflow --preset ci",
+            "cmake --help",
+            "cmake",
+            "brew install cmake gcc@12",
+            "choco install -y cmake",
+            'Write-Host "CMake: $(cmake --version | Select-Object -First 1)"',
+            "if (Get-Command cmake -ErrorAction SilentlyContinue) { exit 0 }",
+            "resolved=$(cmake -LA -N build-probe | grep AMA_ || true)",
+        ],
+    )
+    def test_other_modes_and_mentions_are_not_configures(self, command: str) -> None:
+        report = run_checks(self._fragment(command))
+        assert report.ok, f"{command}: {messages(report)}"
+        assert report.cmake_configures_checked == 0, command
+
 
 class TestPytestPrerequisites:
     """A pytest step that cannot start is not a lane.

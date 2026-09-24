@@ -16,6 +16,7 @@ with a synthesised wheel pair rather than asserted in prose.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 import zipfile
@@ -26,6 +27,55 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GATE_PATH = REPO_ROOT / "tools" / "verify_wheel_reproducible.py"
+BUILD_SIGN_PATH = REPO_ROOT / "ama_cryptography" / "_build_sign.py"
+
+
+def _signature_template() -> str:
+    """``_build_sign._SIGNATURE_TEMPLATE``, read from source, not imported.
+
+    The synthesised artefacts below are rendered from the template the signer
+    actually writes, so the gate is exercised on the real file shape.
+    """
+    tree = ast.parse(BUILD_SIGN_PATH.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "_SIGNATURE_TEMPLATE"
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            return node.value.value
+    raise AssertionError("_SIGNATURE_TEMPLATE not found in _build_sign.py")
+
+
+BINDINGS = (
+    "{\n"
+    '    "hkdf_binding.cpython-312-x86_64-linux-gnu.so": "' + "c" * 64 + '",\n'
+    '    "sha3_binding.cpython-312-x86_64-linux-gnu.so": "' + "d" * 64 + '",\n'
+    "}"
+)
+
+
+def _artefact(
+    pubkey: str = "a" * 64,
+    signature: str = "b" * 128,
+    native: str = "e" * 64,
+    bindings: str = BINDINGS,
+) -> bytes:
+    """An integrity artefact exactly as the signer renders it."""
+    return (
+        _signature_template()
+        .format(
+            digest_hex="f" * 64,
+            native_digest_hex=native,
+            binding_digests_literal=bindings,
+            pubkey_hex=pubkey,
+            signature_hex=signature,
+        )
+        .encode("utf-8")
+    )
 
 
 def _load() -> ModuleType:
@@ -45,12 +95,13 @@ def gate() -> ModuleType:
 WHEEL = "ama_cryptography-5.0.0-cp312-cp312-manylinux_2_28_x86_64.whl"
 
 #: The members every synthesised wheel carries.  `_integrity_signature.py` is
-#: present deliberately: it is the one member excluded from the byte
-#: comparison, so its presence is what the gate checks instead.
+#: present deliberately: two of its literals are masked from the byte
+#: comparison, so its presence is checked as well as the rest of its bytes.
+ARTEFACT = "ama_cryptography/_integrity_signature.py"
 BASE_MEMBERS = {
     "ama_cryptography/__init__.py": b"# package\n",
     "ama_cryptography/crypto_api.py": b"# api\n",
-    "ama_cryptography/_integrity_signature.py": b"PUBKEY = 'aaaa'\n",
+    ARTEFACT: _artefact(),
     "ama_cryptography/libama_cryptography.so": b"\x7fELF fake native object",
     "ama_cryptography-5.0.0.dist-info/METADATA": b"Name: ama-cryptography\n",
     "ama_cryptography-5.0.0.dist-info/RECORD": b"ama_cryptography/__init__.py,sha256=x,9\n",
@@ -90,7 +141,7 @@ def test_identical_wheels_pass(gate: ModuleType, tmp_path: Path) -> None:
 def test_the_per_build_signature_may_differ(gate: ModuleType, tmp_path: Path) -> None:
     """INVARIANT-17 gives each build its own keypair; that is not a failure."""
     rebuilt = dict(BASE_MEMBERS)
-    rebuilt["ama_cryptography/_integrity_signature.py"] = b"PUBKEY = 'bbbb'\n"
+    rebuilt[ARTEFACT] = _artefact(pubkey="0123456789abcdef" * 4, signature="9" * 128)
     a, b = _pair(tmp_path, dict(BASE_MEMBERS), rebuilt)
     assert _run(gate, a, b) == 0
 
@@ -149,6 +200,85 @@ def test_a_missing_integrity_signature_fails(
     a, b = _pair(tmp_path, dict(BASE_MEMBERS), rebuilt)
     assert _run(gate, a, b) == 1
     assert "_integrity_signature.py is missing" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("label", "shipped_artefact"),
+    [
+        ("binding map emptied", _artefact(bindings="{}")),
+        ("native digest changed", _artefact(native="0" * 64)),
+        (
+            "binding map rebound after the signed one",
+            _artefact() + b"INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {}\n",
+        ),
+        ("a comment edited", _artefact().replace(b"DO NOT EDIT.", b"Edited.", 1)),
+    ],
+)
+def test_the_artefact_is_compared_outside_its_per_build_literals(
+    gate: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    label: str,
+    shipped_artefact: bytes,
+) -> None:
+    """Only the ephemeral key and signature are build-specific.
+
+    The whole artefact used to be exempt from the byte comparison, so a shipped
+    `_integrity_signature.py` with its binding map emptied, a digest swapped or
+    a second binding appended passed as "byte-identical to an independent
+    rebuild" — over the one file that anchors every runtime integrity check.
+    """
+    shipped = dict(BASE_MEMBERS)
+    shipped[ARTEFACT] = shipped_artefact
+    a, b = _pair(tmp_path, shipped, dict(BASE_MEMBERS))
+    assert _run(gate, a, b) == 1, label
+    assert "_integrity_signature.py differs outside" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("label", "shipped_artefact", "why"),
+    [
+        ("pubkey too short", _artefact(pubkey="a" * 63), "is not 64 lowercase hex"),
+        ("signature not hex", _artefact(signature="z" * 128), "is not 128 lowercase hex"),
+        (
+            "second pubkey assignment",
+            _artefact() + b'INTEGRITY_PUBKEY_HEX = "' + b"1" * 64 + b'"\n',
+            "binds INTEGRITY_PUBKEY_HEX 2 times",
+        ),
+        (
+            "pubkey computed rather than written",
+            _artefact().replace(
+                b'INTEGRITY_PUBKEY_HEX = "' + b"a" * 64 + b'"',
+                b'INTEGRITY_PUBKEY_HEX = "a" * 64',
+            ),
+            "is not a top-level assignment of a string literal",
+        ),
+        ("not Python", b"INTEGRITY_PUBKEY_HEX = (\n", "does not parse as Python"),
+    ],
+)
+def test_the_mask_cannot_be_stretched(
+    gate: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    label: str,
+    shipped_artefact: bytes,
+    why: str,
+) -> None:
+    """The masked span is exactly one fixed-width hex literal per field."""
+    shipped = dict(BASE_MEMBERS)
+    shipped[ARTEFACT] = shipped_artefact
+    a, b = _pair(tmp_path, shipped, dict(BASE_MEMBERS))
+    assert _run(gate, a, b) == 1, label
+    assert why in capsys.readouterr().err, label
+
+
+def test_the_mask_covers_only_the_literal_bytes(gate: ModuleType) -> None:
+    masked, why = gate._masked_artefact(_artefact())
+    assert why is None
+    assert masked is not None
+    assert b"a" * 64 not in masked and b"b" * 128 not in masked
+    assert masked.count(gate._MASK) == 2
+    assert b"e" * 64 in masked, "the native digest must stay in the compared bytes"
 
 
 def test_a_wheel_the_rebuild_did_not_produce_fails(

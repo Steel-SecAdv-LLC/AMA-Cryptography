@@ -2103,10 +2103,13 @@ claim more than the library does, and what the behavioural tests drive — the
 code, the runtime record, the tests and the documentation are four consumers of
 one declaration rather than four restatements of one belief.
 
-**The same-line rule.** A claim must be negated on the line that makes it. This
-is deliberate and it is the lesson of the fifty: a disclaimer three paragraphs
-away, or in another file, or in a docstring the reader is not looking at, did
-not prevent a single one of them.
+**The same-sentence rule.** A claim must be negated in the sentence that makes
+it. This is deliberate and it is the lesson of the fifty: a disclaimer three
+paragraphs away, or in another file, or in a docstring the reader is not looking
+at, did not prevent a single one of them. (The gate first applied it per
+physical line. This repository hard-wraps its prose, so the sentence is the unit
+a reader takes as one claim, and one negative word elsewhere on a line must not
+excuse the claim beside it.)
 
 **Enforcement.** `tools/check_verification_claim_honesty.py`, run in the
 `security-checks` job of `ci.yml`. Five checks:
@@ -2115,10 +2118,12 @@ not prevent a single one of them.
    patterns bound to it must not appear un-negated in `ama_cryptography/`,
    `tools/`, `tests/`, `examples/`, `docs/`, `wiki/`, `benchmarks/`, `fuzz/` or
    root Markdown. Generic assurance vocabulary ("independent verification") is
-   scoped to lines that are about timestamping, so a true statement about
+   scoped to paragraphs that are about timestamping, so a true statement about
    side-channel review of the C code is not a finding — a gate that fires on
    those is one people learn to route around, which is the failure mode
-   INVARIANT-2 already records.
+   INVARIANT-2 already records. The paragraph and not the sentence, because a
+   claim routinely names its subject one sentence earlier and continues with a
+   pronoun; the negation window stays the claim's own sentence.
 2. **The misnamed result key is not taught.** No `results["rfc3161"]` in any
    document or docstring. The key is retained in code and now warns when read;
    a copy-pasteable example teaching it would undo that.
@@ -2134,7 +2139,7 @@ not prevent a single one of them.
 The table is read with `ast` rather than by importing the module, so the gate
 runs in a lint job with nothing built.
 
-**Verification.** `tests/test_verification_claim_honesty_gate.py` — 71 tests —
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 85 tests —
 pins both directions: the repository as it stands, plus a reproduction of every
 violation class and, equally, the near-misses that must **not** fire. It also
 pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
@@ -2144,7 +2149,11 @@ added last pin the two scoping defects found in the gate itself: the
 formal-verification exemption was tested against the whole SENTENCE, so a
 denial in one clause exempted a live claim in another, and a past-tense
 attribution cue matched any of eight ordinary reporting verbs within eighty
-characters of a `was`.
+characters of a `was`. The fourteen after those pin two more: narrowing the
+negation window to the sentence had narrowed the RFC 3161 context test with it,
+so a claim whose subject sat in the previous sentence passed; and the
+formal-verification pass never read `src/`, `include/` or `.github/`, so an
+unqualified correctness claim in `src/c/sve2/ama_kyber_sve2.c` passed with it.
 
 That suite has already earned its place. An early version of the pattern for
 the phrase this section will not repeat ended `(?:stamp|-stamp|stamping)?\b`,

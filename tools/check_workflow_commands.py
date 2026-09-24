@@ -792,16 +792,86 @@ def check_cmake_gated_binaries(path: Path, document: Any, report: Report) -> Non
                 )
 
 
-#: A `cmake` *configure* invocation: `cmake -B <dir>`, `cmake -S . -B <dir>`,
-#: `cmake -D... <src>`, or `cmake <path-to-source>`.
-#:
-#: The shape of the FIRST argument is what identifies it, and that is
-#: deliberate.  Matching the bare word `cmake` matches it as a package name in
-#: `apt-install.sh cmake clang`, as a pip requirement in `'cmake>=4.4.0'`, and
-#: in `cmake --build` / `--install` / `-E`, none of which take a build type.
-#: The lookbehind additionally keeps `>=`, `/` and `-` off the front so a
-#: version specifier or a path ending in `cmake` is not read as an invocation.
-_CMAKE_CONFIGURE_RE = re.compile(r"(?<![\w./>=-])cmake\s+(?:-[BSD]|\.\.?(?=$|[\s/])|/)")
+#: `cmake` as a word — the executable, not a path component (`cmake/toolchains`),
+#: a version specifier (`'cmake>=4.4.0'`), or part of another identifier.
+#: The lookbehind keeps `>=`, `/`, `.`, `-` and word characters off the front;
+#: the lookahead requires whitespace or the end of the line after it.
+_CMAKE_WORD_RE = re.compile(r"(?<![\w./>=-])cmake(?:\.exe)?(?=\s|$)")
+
+#: Where the arguments of one command end.  Used only to decide which MODE a
+#: `cmake` invocation runs in; the build-type test itself reads the whole line.
+_CMAKE_ARGS_END_RE = re.compile(r"&&|\|\||[;|)]")
+
+#: Where the command a `cmake` word belongs to begins: the last shell operator
+#: or subshell opener before it.  `&` covers PowerShell's call operator too.
+_COMMAND_START_RE = re.compile(r"&&|\|\||[;|&(`]")
+
+#: Words that may stand before a command without being the command.
+_SHELL_PREFIX_WORDS = frozenset(
+    {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "time", "exec"}
+    | {"command", "sudo", "env"}
+)
+
+#: `cmake` arguments that select a mode which does not configure a build tree.
+#: `-L` is deliberately absent: `cmake -L -B build` configures and then lists
+#: the cache; only `-N` makes it view-only.
+_CMAKE_NON_CONFIGURE_MODES = frozenset(
+    {"--build", "--install", "--workflow", "--open", "-E", "-P", "-N"}
+    | {"--version", "-version", "--help", "-help", "-h", "-H", "/?"}
+    | {"--system-information", "--find-package", "--list-presets"}
+)
+
+#: An argument only a configure takes.  Decides the one case where the `cmake`
+#: word is not in command position — a wrapper such as `scan-build ... cmake
+#: -B build` — while `apt-install.sh cmake clang` and `choco install cmake -y`
+#: carry none and stay package names.
+_CMAKE_CONFIGURE_ARG_RE = re.compile(
+    r"^(?:-[BSDGATCU]|--preset\b|--fresh$|--toolchain\b|--install-prefix\b|\.\.?(?:/|$)|/)"
+)
+
+
+def _is_cmake_configure(line: str) -> bool:
+    """Whether ``line`` runs a `cmake` that configures a build tree.
+
+    The previous test keyed on the shape of the FIRST argument (`-B`, `-S`,
+    `-D`, `.`, `..` or `/`), so `cmake -G Ninja -B build`, `cmake -A x64 -B
+    build`, `cmake --preset ci`, `cmake "${{ github.workspace }}" -B build`
+    and `cmake $SRC -B build` were never seen: neither counted nor checked for
+    a build type, though each builds exactly the unoptimized library this
+    check exists to stop.  The flag order must not decide whether a configure
+    is seen, so the test is now what a configure IS — cmake run in a mode that
+    configures:
+
+    * the `cmake` word is the command (nothing but environment assignments or
+      shell keywords before it in its command), or its arguments include one
+      only a configure takes (`-B`, `-S`, `-D`, `-G`, `-A`, `-T`, `-C`, `-U`,
+      `--preset`, `--fresh`, a source path) — the wrapped form;
+    * it has arguments, and none of them selects another mode
+      (:data:`_CMAKE_NON_CONFIGURE_MODES`).
+
+    `--preset` is held to the same rule as any configure: this check does not
+    read `CMakePresets.json`, so the build type must be stated on the command
+    line.
+    """
+    for match in _CMAKE_WORD_RE.finditer(line):
+        rest = line[match.end() :]
+        end = _CMAKE_ARGS_END_RE.search(rest)
+        args = [a.strip("\"'") for a in (rest[: end.start()] if end else rest).split()]
+        if not args or any(
+            arg in _CMAKE_NON_CONFIGURE_MODES or arg.startswith("--help-") for arg in args
+        ):
+            continue
+        before = line[: match.start()]
+        starts = [m.end() for m in _COMMAND_START_RE.finditer(before)]
+        leading = before[starts[-1] if starts else 0 :].split()
+        in_command_position = all(
+            word in _SHELL_PREFIX_WORDS or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", word)
+            for word in leading
+        )
+        if in_command_position or any(_CMAKE_CONFIGURE_ARG_RE.match(arg) for arg in args):
+            return True
+    return False
+
 
 #: An explicit optimization level inside a `-DCMAKE_C_FLAGS=...` (or CXX) value.
 _EXPLICIT_OPT_RE = re.compile(r"-O(?:[0-3]|s|z|fast|g)\b")
@@ -817,7 +887,7 @@ def _cmake_configure_commands(run_text: str) -> list[str]:
 
     Continuations are joined BEFORE matching, the way :func:`_commands`
     already does: the previous matcher only started buffering when the FIRST
-    physical line matched ``_CMAKE_CONFIGURE_RE``, so a configure written as
+    physical line matched the configure pattern, so a configure written as
     a bare ``cmake \\`` with every flag on continuation lines was never seen
     at all — neither counted (deflating the non-vacuity floor's input) nor
     checked for a build type, which is this gate's whole subject.  The flag
@@ -829,7 +899,7 @@ def _cmake_configure_commands(run_text: str) -> list[str]:
         stripped = raw.strip()
         if stripped.startswith("#"):
             continue
-        if _CMAKE_CONFIGURE_RE.search(stripped):
+        if _is_cmake_configure(stripped):
             commands.append(stripped)
     return commands
 
