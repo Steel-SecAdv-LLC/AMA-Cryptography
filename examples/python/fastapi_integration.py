@@ -154,22 +154,40 @@ app.add_middleware(
 # In production, load keys from secure storage (HSM, Vault, etc.)
 KMS = generate_key_management_system("FastAPI Server")
 CRYPTO = AmaCryptography(algorithm=AlgorithmType.ED25519)
-KEYPAIR = CRYPTO.generate_keypair()
+
+# Two keys for two jobs, and they must never be one key.
+#
+# RESPONSE_KEYPAIR signs only this server's own response bodies (the
+# X-Signature header), so a client can check a response came from here.
+# SIGNING_KEYPAIR is the Ed25519 key behind POST /api/sign, an unauthenticated
+# service that signs whatever bytes a caller sends.  When both jobs shared one
+# key, /api/sign was a signing oracle for the authenticity header: a caller
+# posted json.dumps(forged_body, sort_keys=True) as "data" and got back a valid
+# X-Signature for a response this server never sent.  An endpoint that signs
+# caller-chosen bytes must never share a key with an authenticity header.  A
+# domain prefix on the header's signature alone would not have closed this:
+# /api/sign signs whatever it is sent, so a caller can send the prefix too.
+RESPONSE_KEYPAIR = CRYPTO.generate_keypair()
+SIGNING_KEYPAIR = CRYPTO.generate_keypair()
 
 
 class SignedResponse(JSONResponse):
-    """Custom response class that adds cryptographic signature headers."""
+    """Custom response class that adds cryptographic signature headers.
+
+    Signs with ``RESPONSE_KEYPAIR`` over ``json.dumps(content, sort_keys=True)``,
+    and ``RESPONSE_KEYPAIR`` signs nothing else.
+    """
 
     def __init__(self, content: Any, **kwargs: Any) -> None:
         super().__init__(content, **kwargs)
 
-        # Sign the response content
+        # Sign the response content with the response-only key
         message = json.dumps(content, sort_keys=True).encode()
-        signature = CRYPTO.sign(message, KEYPAIR.secret_key)
+        signature = CRYPTO.sign(message, RESPONSE_KEYPAIR.secret_key)
 
         # Add signature headers
         self.headers["X-Signature"] = signature.signature.hex()
-        self.headers["X-Public-Key"] = KEYPAIR.public_key.hex()
+        self.headers["X-Public-Key"] = RESPONSE_KEYPAIR.public_key.hex()
         self.headers["X-Algorithm"] = "Ed25519"
 
 
@@ -227,7 +245,10 @@ async def sign_data(request: SignRequest) -> Any:
     """
     Sign data with AMA Cryptography cryptographic system.
 
-    Supports Ed25519 (classical) and ML-DSA-65 (quantum-resistant).
+    Supports Ed25519 (classical) and ML-DSA-65 (quantum-resistant).  Ed25519
+    signs with ``SIGNING_KEYPAIR``, never with the key behind the X-Signature
+    response header: this endpoint signs caller-chosen bytes, so sharing that
+    key would let any caller mint response signatures.
     """
     message = request.data.encode()
 
@@ -243,7 +264,7 @@ async def sign_data(request: SignRequest) -> Any:
         keypair = crypto.generate_keypair()
     else:
         crypto = CRYPTO
-        keypair = KEYPAIR
+        keypair = SIGNING_KEYPAIR
 
     # Sign the message
     signature = crypto.sign(message, keypair.secret_key)
@@ -364,11 +385,22 @@ async def create_protected_data(request: ProtectedDataRequest) -> Any:
 
 @app.get("/api/keys/public", tags=["Keys"])
 async def get_public_keys() -> Any:
-    """Get server's public keys for client-side verification."""
+    """Get server's public keys for client-side verification.
+
+    Two keys, labelled by role: ``response`` verifies the X-Signature header
+    (over the sorted-key JSON body), ``signing_service`` verifies Ed25519
+    signatures issued by POST /api/sign.
+    """
     return {
-        "ed25519_public_key": KEYPAIR.public_key.hex(),
         "algorithm": "Ed25519",
-        "key_id": "fastapi-server-v1",
+        "response": {
+            "ed25519_public_key": RESPONSE_KEYPAIR.public_key.hex(),
+            "key_id": "fastapi-response-v1",
+        },
+        "signing_service": {
+            "ed25519_public_key": SIGNING_KEYPAIR.public_key.hex(),
+            "key_id": "fastapi-signing-service-v1",
+        },
     }
 
 
@@ -426,7 +458,8 @@ def main() -> None:
     print()
     print("Interactive docs: http://localhost:8000/docs")
     print()
-    print("Server public key:", KEYPAIR.public_key.hex()[:32] + "...")
+    print("Response public key:", RESPONSE_KEYPAIR.public_key.hex()[:32] + "...")
+    print("Signing-service public key:", SIGNING_KEYPAIR.public_key.hex()[:32] + "...")
     print()
 
     try:

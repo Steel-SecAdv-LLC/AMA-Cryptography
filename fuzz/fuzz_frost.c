@@ -18,8 +18,10 @@
  *     for any combination of parameters — failures must be returned via
  *     the ama_error_t channel.
  *   - A full happy-path flow (dealer keygen -> round1 -> round2 ->
- *     aggregate) with fuzzed message bytes must yield a signature that
- *     verifies under ama_ed25519_verify.
+ *     verify_share -> aggregate) with fuzzed message bytes must complete
+ *     and yield a signature that verifies under ama_ed25519_verify.  Every
+ *     step after keygen runs on honest inputs, so a refusal at any of them
+ *     traps; only keygen may legitimately refuse the fuzzed secret.
  *
  * Build (inside CMake):
  *   cmake -B build-fuzz -DAMA_BUILD_FUZZ=ON -DCMAKE_C_COMPILER=clang \
@@ -149,6 +151,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         uint8_t signer_indices[FROST_FUZZ_MAX_N];
         for (uint8_t i = 0; i < threshold; i++) signer_indices[i] = (uint8_t)(i + 1);
 
+        /* Every input from here on is honest: dealt, committed and signed by
+         * the library itself.  The fuzzer chooses only the message (and the
+         * RNG seed), and a FROST ceremony must complete for every message.
+         * So a refusal at ANY step below is a completeness failure, and it
+         * traps.  These steps used to `return 0` on failure, which made a
+         * message-dependent completeness break (round 2 and aggregation
+         * disagreeing on a challenge or a Lagrange coefficient, say)
+         * indistinguishable from a clean run: libFuzzer saw the same return
+         * either way, and the ama_ed25519_verify assertion at the end was
+         * never reached.  Keygen above is the one step allowed to refuse,
+         * because the input can legitimately cause it (a secret that
+         * reduces to zero mod l). */
         uint8_t nonces[FROST_FUZZ_MAX_N * 64];
         uint8_t commitments[FROST_FUZZ_MAX_N * 64];
         for (uint8_t i = 0; i < threshold; i++) {
@@ -156,7 +170,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 nonces + (size_t)i * 64,
                 commitments + (size_t)i * 64,
                 shares + (size_t)i * 64);
-            if (rc != AMA_SUCCESS) return 0;
+            if (rc != AMA_SUCCESS) __builtin_trap();
         }
 
         const uint8_t *msg = payload + copy;
@@ -172,7 +186,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 nonces + (size_t)i * 64,
                 commitments, signer_indices,
                 threshold, group_pk);
-            if (rc != AMA_SUCCESS) return 0;
+            if (rc != AMA_SUCCESS) __builtin_trap();
         }
 
         /* INVARIANT-49: aggregation verifies every share, which needs each
@@ -184,6 +198,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                    shares + (size_t)i * 64 + 32, 32);
         }
 
+        /* The standalone share check must accept every honest share, over
+         * the same inputs aggregation checks it against.  Case 2 feeds this
+         * entry point fuzzed bytes and asserts only that it does not crash;
+         * its completeness is asserted here. */
+        for (uint8_t i = 0; i < threshold; i++) {
+            rc = ama_frost_verify_share(
+                sig_shares + (size_t)i * 32, signer_indices[i],
+                signer_public_shares + (size_t)i * 32,
+                commitments, signer_indices, threshold,
+                msg, msg_len, group_pk);
+            if (rc != AMA_SUCCESS) __builtin_trap();
+        }
+
         uint8_t signature[64];
         uint8_t bad_index = 0xFF;
         rc = ama_frost_aggregate(
@@ -191,7 +218,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             signer_public_shares,
             signer_indices, threshold,
             msg, msg_len, group_pk, &bad_index);
-        if (rc != AMA_SUCCESS) return 0;
+        /* Honest shares only: aggregation refusing them is a completeness
+         * failure, not a verdict on the input. */
+        if (rc != AMA_SUCCESS) __builtin_trap();
         /* On success the blame channel must read "not attributable" (0).  A
          * non-zero value alongside AMA_SUCCESS would mean the out-parameter
          * is not being reset on entry, which is the stale-attribution bug

@@ -22,14 +22,15 @@
  * fuzz_x25519 has "key exchange with fuzzed peer public key".  The KEM, which
  * is the primitive with an IND-CCA2 argument to protect, had neither.
  *
- * The contract assertions below are the point of cases 3 and 5, not decoration.
- * FIPS 203 Sec 6.3 implicit rejection means a decapsulation whose
- * re-encryption fails returns a pseudorandom shared secret and SUCCESS — if
- * the RETURN CODE distinguished a valid ciphertext from an invalid one, that
- * code would be exactly the plaintext-checking oracle the Fujisaki-Okamoto
- * transform exists to deny, and no amount of constant-time care below it
- * would matter.  So over arbitrary attacker bytes at the correct length, the
- * only acceptable answer is AMA_SUCCESS, and anything else traps.
+ * The contract assertions below are the point of cases 3, 4 and 5, not
+ * decoration.  FIPS 203 Sec 6.3 implicit rejection means a decapsulation
+ * whose re-encryption fails returns a pseudorandom shared secret and
+ * SUCCESS — if the RETURN CODE distinguished a valid ciphertext from an
+ * invalid one, that code would be exactly the plaintext-checking oracle the
+ * Fujisaki-Okamoto transform exists to deny, and no amount of constant-time
+ * care below it would matter.  So over arbitrary attacker bytes at the
+ * correct length, the only acceptable answer is AMA_SUCCESS, and anything
+ * else traps.
  *
  * Build (standalone):
  *   clang -fsanitize=fuzzer,address -O1 -g -I../include \
@@ -118,13 +119,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
          * of u were unreachable through this case, while the seed corpus
          * carried files NAMED for those positions ("corrupt-u-v-boundary",
          * "corrupt-last-byte") that actually hit bytes 128 and 31.
-         * tools/build_kyber_seed_corpus.py writes the matching layout. */
+         * tools/build_kyber_seed_corpus.py writes the matching layout.
+         *
+         * `mask` records the XOR actually applied, because the FO assertion
+         * below is gated on it.  It used to be gated on
+         * `payload_len > 2 && payload[2] != 0`, which is false for every
+         * one- or two-byte payload -- whose default mask 0x01 always
+         * corrupts -- so those inputs, the committed `corrupt-default-mask`
+         * seed among them, ran with the FO assertion switched off. */
+        uint8_t mask = 0;
         if (payload_len >= 2) {
             size_t pos = (((size_t)payload[0] << 8) | payload[1]) % ct_len;
-            ct[pos] ^= (payload_len > 2) ? payload[2] : 0x01;
+            mask = (payload_len > 2) ? payload[2] : 0x01;
+            ct[pos] ^= mask;
         } else if (payload_len == 1) {
             /* One payload byte: position only (mod 256), default mask. */
-            ct[payload[0] % ct_len] ^= 0x01;
+            mask = 0x01;
+            ct[payload[0] % ct_len] ^= mask;
         }
 
         /* Decapsulate the corrupted ciphertext.  "Must not crash" was the
@@ -141,9 +152,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             __builtin_trap();  /* implicit rejection is silent, not an error */
         }
         if (memcmp(ss_dec, ss_enc, sizeof(ss_enc)) == 0) {
-            /* Only reachable if the corruption was a no-op (mask 0), which
-             * the position/mask layout above allows. */
-            if (payload_len > 2 && payload[2] != 0) {
+            /* Legitimate only when no byte changed (mask 0, which the
+             * three-byte layout above allows).  Any applied corruption that
+             * still yields the real K means the FO re-encryption check did
+             * not reject. */
+            if (mask != 0) {
                 __builtin_trap();  /* FO check did not reject */
             }
         }
@@ -216,9 +229,17 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
          * encapsulated to.  Arbitrary bytes at the exact key length are the
          * only way to reach the interesting half of that check.
          *
-         * Success or refusal are both legitimate answers; what is not
-         * legitimate is a crash, or a success that produced a ciphertext of
-         * the wrong length.
+         * The harness decides the modulus check itself and asserts the
+         * matching verdict, as case 5 does for the Sec 7.3 hash check.  This
+         * case used to accept "success or refusal" at the exact length, and
+         * that assertion could not fail: with the check removed, the
+         * committed all-0xFF seed (every coefficient 4095 >= q) encapsulated
+         * cleanly and the case passed -- certifying the regression it names.
+         *
+         *   exact length, a coefficient >= q -> AMA_ERROR_VERIFY_FAILED
+         *   exact length, all in range       -> AMA_SUCCESS, full-length ct
+         *   other length                     -> refused (the Sec 7.2 type
+         *                                       check; never a success)
          */
         uint8_t ct[AMA_KYBER_1024_CIPHERTEXT_BYTES];
         size_t ct_len = sizeof(ct);
@@ -227,11 +248,33 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         ama_error_t rc = ama_kyber_encapsulate(
             payload, payload_len, ct, &ct_len, ss_enc, sizeof(ss_enc));
 
-        if (rc == AMA_SUCCESS) {
-            if (payload_len != AMA_KYBER_1024_PUBLIC_KEY_BYTES ||
-                ct_len != AMA_KYBER_1024_CIPHERTEXT_BYTES) {
-                __builtin_trap();
+        if (payload_len == AMA_KYBER_1024_PUBLIC_KEY_BYTES) {
+            /* ek = ByteEncode_12(t_hat) || rho: k = 4 polynomials of 384
+             * bytes, each packing 256 12-bit coefficients two per three
+             * bytes; the trailing 32-byte rho is unconstrained.  Decoded
+             * here independently of the library's own parser. */
+            int in_range = 1;
+            for (size_t off = 0; off + 3 <= AMA_KYBER_1024_PUBLIC_KEY_BYTES - 32u;
+                 off += 3) {
+                const unsigned c0 =
+                    (unsigned)payload[off] | (((unsigned)payload[off + 1] & 0x0Fu) << 8);
+                const unsigned c1 =
+                    ((unsigned)payload[off + 1] >> 4) | ((unsigned)payload[off + 2] << 4);
+                if (c0 >= 3329u || c1 >= 3329u) {
+                    in_range = 0;
+                    break;
+                }
             }
+            if (in_range) {
+                if (rc != AMA_SUCCESS ||
+                    ct_len != AMA_KYBER_1024_CIPHERTEXT_BYTES) {
+                    __builtin_trap();  /* a valid key was refused */
+                }
+            } else if (rc != AMA_ERROR_VERIFY_FAILED) {
+                __builtin_trap();  /* Sec 7.2 modulus check did not reject */
+            }
+        } else if (rc == AMA_SUCCESS) {
+            __builtin_trap();
         }
         break;
     }
