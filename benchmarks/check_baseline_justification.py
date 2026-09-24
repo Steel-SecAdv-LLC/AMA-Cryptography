@@ -18,6 +18,10 @@ in the PR's commit messages and/or PR body, by:
      the measurement was produced (e.g. ``ubuntu-latest``, ``macos-14``,
      ``self-hosted``, ``benchmark_c_raw``, an explicit hardware string).
 
+A lowered floor must also cite a bracketing ops/sec figure and a CI run id
+(see :func:`_text_justifies_change`), and a floor may not be deleted at all
+while ``benchmarks/benchmark_runner.py`` still defines its benchmark.
+
 The goal is to prevent silent baseline adjustments that mask real
 regressions (the pattern documented in
 docs/BENCHMARK_HISTORY.md as commits `c9f4722` and `6b2cf82`).
@@ -42,6 +46,7 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -122,7 +127,16 @@ def _require_commit(ref: str) -> str:
 
 def _load_baseline_at(ref: str, path: str = BASELINE_PATH) -> Dict[str, Dict[str, object]]:
     """Return {primitive_name: entry_dict} merged from benchmarks + pqc_benchmarks
-    sections, as they appeared at ``ref``. Missing file yields {}."""
+    sections, as they appeared at ``ref``. Missing file yields {}.
+
+    ``tolerance_percent`` is reported as the tolerance the runner APPLIES,
+    not the key as written: ``benchmark_runner`` reads
+    ``config.get("tolerance_percent", threshold)``, so deleting the key hands
+    the entry the file's ``thresholds.regression_threshold_percent``.  Read
+    literally, that deletion arrived here as ``45 -> None`` — not two numbers,
+    so none of the rules for a lowered floor applied, whatever the fallback
+    was.  Resolved, it is the numeric move it really is and is judged as one.
+    """
     try:
         raw = _run_git("show", f"{ref}:{path}")
     except subprocess.CalledProcessError:
@@ -132,10 +146,66 @@ def _load_baseline_at(ref: str, path: str = BASELINE_PATH) -> Dict[str, Dict[str
     except json.JSONDecodeError as exc:
         print(f"ERROR: could not parse {path}@{ref}: {exc}", file=sys.stderr)
         sys.exit(2)
+    thresholds = data.get("thresholds")
+    fallback = (
+        thresholds.get("regression_threshold_percent") if isinstance(thresholds, dict) else None
+    )
     merged: Dict[str, Dict[str, object]] = {}
     for section in ("benchmarks", "pqc_benchmarks"):
-        merged.update(data.get(section, {}))
+        for name, entry in data.get(section, {}).items():
+            if (
+                isinstance(entry, dict)
+                and "tolerance_percent" not in entry
+                and fallback is not None
+            ):
+                entry = {**entry, "tolerance_percent": fallback}
+            merged[name] = entry
     return merged
+
+
+#: The runner whose function tables decide which floors are live.
+RUNNER_PATH = "benchmarks/benchmark_runner.py"
+_FUNCTION_TABLES = ("BENCHMARK_FUNCTIONS", "PQC_BENCHMARK_FUNCTIONS")
+
+
+def _benchmark_functions_at(ref: str) -> Set[str] | None:
+    """Every benchmark name the runner at ``ref`` can measure, or ``None``.
+
+    Read from the two module-level dict literals in ``RUNNER_PATH`` by parsing
+    the source, never by importing it: the runner imports the package, and a
+    guard that runs on a pull request must not execute the code under review.
+    ``None`` means the answer could not be established (no runner at that
+    ref, a syntax error, or a table no longer written as a dict literal), and
+    the caller treats it as "the function may still exist" -- the direction
+    that refuses rather than waves through.
+    """
+    try:
+        source = _run_git("show", f"{ref}:{RUNNER_PATH}")
+    except subprocess.CalledProcessError:
+        return None
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    names: Set[str] = set()
+    found: Set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            value: ast.expr | None = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target.id]
+            value = node.value
+        else:
+            continue
+        tables = [t for t in targets if t in _FUNCTION_TABLES]
+        if not tables or not isinstance(value, ast.Dict):
+            continue
+        found.update(tables)
+        for key in value.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                names.add(key.value)
+    return names if found == set(_FUNCTION_TABLES) else None
 
 
 def _changed_baseline_values(
@@ -288,8 +358,17 @@ def _text_justifies_change(text: str, primitive: str, before: object, after: obj
     3. for a cut deeper than ``_RECALIBRATION_CUT_FRACTION``, say
        ``RECALIBRATION`` outright: a quarter of the floor is not a trim.
 
-    Raised floors, added and removed entries keep the three-token rule: a
-    higher floor can only make the gate stricter.
+    Raised floors and added entries keep the three-token rule: a higher
+    floor, or a floor where there was none, can only make the gate stricter.
+
+    A REMOVED entry is not decided here.  It used to be: ``38811 -> None`` is
+    not a pair of numbers, so it fell through to the three-token rule, and
+    the deepest cut there is -- the runner stops measuring the primitive at
+    all -- needed less evidence than a 1% trim.
+    :func:`_check_justification_attributed` refuses a removal outright while
+    the benchmark function still exists at the head ref, and passes a removal
+    here only once the function is gone with it, where no gate is left for
+    the floor to protect.
     """
     if not _text_justifies(text, primitive):
         return False
@@ -386,8 +465,41 @@ def _check_justification_attributed(
         for key in keys:
             attributed[key] = (sha, message)
 
+    # A floor deleted from the JSON while its benchmark function survives is
+    # the maximal floor cut: benchmark_runner used to `continue` past a
+    # function with no floor, so the primitive was never measured again and
+    # every run stayed green.  No text justifies that, because no measurement
+    # can support "never measure this"; the remedy is to keep the floor, or
+    # to retire the benchmark function in the same change.  Resolved lazily,
+    # once, and only if something was removed.
+    head_functions: Set[str] | None = None
+    head_functions_read = False
+
     for path, name, before, after in net_changes:
         key = f"{path}::{name}"
+        primitive = name.split()[0]
+        if before is not None and after is None:
+            if not head_functions_read:
+                head_functions = _benchmark_functions_at(head_ref)
+                head_functions_read = True
+            if head_functions is None or primitive in head_functions:
+                where = (
+                    f"{RUNNER_PATH} at {head_ref} still defines a `{primitive}` benchmark"
+                    if head_functions is not None
+                    else f"the benchmark tables in {RUNNER_PATH} could not be read at "
+                    f"{head_ref}, so it cannot be shown that `{primitive}` is gone"
+                )
+                failures.append(
+                    f"{path}: `{name}` was removed ({before!r} -> None), but {where}. "
+                    f"Deleting a floor whose benchmark still exists stops that "
+                    f"primitive from being gated at all -- the deepest floor cut "
+                    f"there is -- and no justification text can carry it. Keep the "
+                    f"floor (lower it with a justified RECALIBRATION if it must "
+                    f"move), or delete the benchmark function from "
+                    f"{' / '.join(_FUNCTION_TABLES)} in the same change if the "
+                    f"benchmark is retired."
+                )
+                continue
         if _text_justifies_change(pr_body, name, before, after):
             continue
         source = attributed.get(key)

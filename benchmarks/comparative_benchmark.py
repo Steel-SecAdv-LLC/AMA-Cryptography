@@ -758,8 +758,18 @@ class ComparativeBenchmark:
 
         return comparisons
 
-    def save_results(self, filename: str = "comparative_benchmark_results.json") -> Dict[str, Any]:
-        """Save results to JSON"""
+    def save_results(
+        self,
+        filename: str = "comparative_benchmark_results.json",
+        provenance: "Optional[Dict[str, Any]]" = None,
+    ) -> Dict[str, Any]:
+        """Save results to JSON.
+
+        ``provenance`` should be the block :func:`_measurement_provenance`
+        returned BEFORE the benchmarks ran (``main`` does this).  It is
+        computed here only for a caller that did not, and then describes the
+        tree at save time rather than at measurement time.
+        """
         data = {
             "timestamp": datetime.now().isoformat(),
             "iterations": self.iterations,
@@ -784,7 +794,7 @@ class ComparativeBenchmark:
         # committed block existed only because someone once added it by
         # hand, so the very next regeneration would have detached the page
         # from any honest version stamp.
-        data["provenance"] = _measurement_provenance()
+        data["provenance"] = provenance if provenance is not None else _measurement_provenance()
 
         output_path = Path(__file__).parent / filename
         with open(output_path, "w") as f:
@@ -794,30 +804,114 @@ class ComparativeBenchmark:
         return data
 
 
-def _measurement_provenance() -> "dict[str, str]":
-    """The block generate_competitive.py refuses to render without.
+#: Paths whose state decides which build a run measures: the native sources,
+#: the package, the build configuration and the two harnesses.  A tracked
+#: modification under any of them means the checkout's HEAD does not name the
+#: code that ran.  Other dirt (an earlier run's output, a doc edit) is recorded
+#: but does not make the measurement unattributable.
+_MEASURED_BUILD_PATHS = (
+    "src/c",
+    "include",
+    "ama_cryptography",
+    "CMakeLists.txt",
+    "cmake",
+    "setup.py",
+    "pyproject.toml",
+    "benchmarks/comparative_benchmark.py",
+    "benchmarks/pqc_comparative_bench.py",
+)
 
-    Version from the imported package (the build actually measured, not the
-    working tree's source text), commit from git at measurement time.
+
+def _git_stdout(*args: str, cwd: Path) -> "Optional[str]":
+    """A read-only git query, or ``None`` when git cannot answer it.
+
+    Never raises: a run that has spent minutes measuring must not lose its
+    results because the host has no git or the tree is not a checkout (an
+    sdist, a ``git archive`` export).  An unanswerable question is reported
+    as unattributable provenance instead.
     """
     import subprocess
-    from datetime import datetime, timezone
+
+    try:
+        done = subprocess.run(
+            ["git", *args], capture_output=True, text=True, check=False, timeout=30, cwd=cwd
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _measurement_provenance() -> "Dict[str, Any]":
+    """The block generate_competitive.py refuses to render without.
+
+    Call it BEFORE measuring, so that it describes the tree the numbers come
+    from and so that anything it cannot establish is known before minutes of
+    benchmarking, not after.
+
+    ``ama_version`` is the imported package's.  ``ama_commit`` is the
+    checkout's HEAD only when that commit demonstrably names the build that
+    ran: git answered, the imported ``ama_cryptography`` lives inside that
+    checkout (the package records no commit of its own, so its location is
+    the evidence), and nothing under ``_MEASURED_BUILD_PATHS`` carries an
+    uncommitted change.  Otherwise ``ama_commit`` is ``"unknown"``,
+    ``attributable`` is ``False`` and ``unattributable_because`` says why.
+
+    This used to run ``git rev-parse HEAD`` with ``check=True`` after the
+    benchmarks, so a host without git lost the whole run to a
+    ``CalledProcessError``; and it stamped the checkout's HEAD onto any
+    imported build, so an installed wheel from another commit was published
+    as "measured at" this one -- the relabelling this block exists to stop.
+    """
+    from datetime import timezone
 
     import ama_cryptography
 
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=Path(__file__).parent,
-    ).stdout.strip()
-    return {
+    here = Path(__file__).resolve().parent
+    reasons: List[str] = []
+
+    toplevel = _git_stdout("rev-parse", "--show-toplevel", cwd=here)
+    head = _git_stdout("rev-parse", "HEAD", cwd=here)
+    status = _git_stdout("status", "--porcelain", "--untracked-files=no", cwd=here)
+    dirty_paths: List[str] = []
+    if toplevel is None or head is None or status is None:
+        reasons.append(
+            "git could not describe the checkout (git is missing, or this is "
+            "not a git checkout), so no commit can be named"
+        )
+    else:
+        root = Path(toplevel.strip()).resolve()
+        package_dir = Path(ama_cryptography.__file__).resolve().parent
+        if not package_dir.is_relative_to(root):
+            reasons.append(
+                f"the imported ama_cryptography is {package_dir}, outside the "
+                f"checkout {root}, so the checkout's HEAD does not name the "
+                f"build that was measured"
+            )
+        # Porcelain v1: two status columns and a space, then the path.
+        dirty_paths = [line[3:].strip() for line in status.splitlines() if len(line) > 3]
+        drifted = [
+            path
+            for path in dirty_paths
+            if any(path == p or path.startswith(p + "/") for p in _MEASURED_BUILD_PATHS)
+        ]
+        if drifted:
+            reasons.append(
+                "uncommitted changes to the measured build: " + ", ".join(sorted(drifted))
+            )
+
+    attributable = not reasons
+    block: Dict[str, Any] = {
         "ama_version": ama_cryptography.__version__,
-        "ama_commit": commit,
+        "ama_commit": head.strip() if attributable and head is not None else "unknown",
+        "attributable": attributable,
+        "tree_dirty": bool(dirty_paths),
+        "dirty_paths": sorted(dirty_paths),
         "measured_at": datetime.now(timezone.utc).isoformat(),
-        "note": "written by the harness at measurement time",
+        "note": "written by the harness before measuring",
     }
+    if not attributable:
+        block["unattributable_because"] = reasons
+    return block
 
 
 def main() -> None:
@@ -830,6 +924,15 @@ def main() -> None:
     print("  1. libsodium via PyNaCl (Ed25519)")
     print("  2. cryptography library (OpenSSL backend, Ed25519)")
     print()
+
+    # Provenance first: it must describe the tree the numbers come from, and a
+    # question it cannot answer is better known before the run than after.
+    provenance = _measurement_provenance()
+    if not provenance["attributable"]:
+        print("WARNING: these results will be recorded as UNATTRIBUTABLE:")
+        for reason in provenance["unattributable_because"]:
+            print(f"  - {reason}")
+        print()
 
     bench = ComparativeBenchmark(iterations=1000)
 
@@ -846,7 +949,7 @@ def main() -> None:
     comparisons = bench.calculate_comparative_metrics()
 
     # Save results
-    bench.save_results()
+    bench.save_results(provenance=provenance)
 
     # Summary
     print("\n" + "=" * 70)

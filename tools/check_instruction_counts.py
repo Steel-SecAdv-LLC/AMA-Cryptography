@@ -23,7 +23,12 @@ Retired instruction count is a property of the binary and its input.  The same
 four operations measured under that same load came back bit-identical to their
 idle values — ``sha3_256`` 38,072, ``ed25519_sign`` 206,910, ``kyber_keygen``
 744,872, ``dilithium_sign`` 8,290,768, zero variance.  That is what makes a 2%
-threshold meaningful here where 45% was decoration there.
+threshold meaningful here where 45% was decoration there.  (Those are the
+counts of the tree that experiment ran on.  ``ed25519_sign`` has since doubled
+its fixed-base work under INVARIANT-51 and retires 332,907 on 5fdd02c; the
+recorded baseline carries the current figure, and
+``tests/test_instruction_count_gate.py`` holds it to the acknowledged head
+values so it cannot fall behind again.)
 
 This gate does not delete the wall-clock lane.  Instruction counts are blind
 to cache behaviour, memory-level parallelism and real frequency effects, so

@@ -188,6 +188,36 @@ FOUR_LAYER_BREAKDOWN = [
     ("HKDF Derivation", 0.0069),
 ]
 
+# The whole the layers are a breakdown OF: phase0_baseline_results.json's
+# "Package create" median (446.033 µs), from the same run as the rows above.
+# The chart once labelled the SUM of the four layer medians "Total package
+# creation" -- 0.229 ms, half the measured call, beside a scalability chart
+# showing 0.565 ms at N=1.  The four layers leave out the canonical encoding,
+# the KMS/HKDF context and the packaging the real call performs; that
+# remainder is now its own slice, so the pie adds up to what was measured.
+PACKAGE_CREATE_MS = 0.4460
+
+
+def layer_breakdown_slices() -> "tuple[list[tuple[str, float]], float, float]":
+    """``(slices, measured_total_ms, layer_sum_ms)`` for the breakdown chart.
+
+    ``slices`` are the four primitive layers plus the rest of package
+    creation, so they sum to the measured total.  A layer sum above the
+    measured total would mean the tables describe different runs, and is
+    refused rather than drawn as a negative slice.
+    """
+    layers = [(name, ms) for name, ms in FOUR_LAYER_BREAKDOWN if ms > 0]
+    layer_sum = sum(ms for _, ms in layers)
+    remainder = PACKAGE_CREATE_MS - layer_sum
+    if remainder < 0:
+        raise ValueError(
+            f"the four layers sum to {layer_sum:.4f} ms, more than the "
+            f"{PACKAGE_CREATE_MS:.4f} ms package creation they break down; "
+            f"FOUR_LAYER_BREAKDOWN and PACKAGE_CREATE_MS describe different runs"
+        )
+    slices = [*layers, ("Rest of package creation", remainder)]
+    return slices, PACKAGE_CREATE_MS, layer_sum
+
 
 def load_live_data() -> Any:
     """Live benchmark measurements, or ``None`` when none have been produced.
@@ -403,10 +433,11 @@ def generate_charts(output_dir: str) -> None:
 
     # -- Chart 3: 4-Layer Package Breakdown ----------------------------------
     fig, ax = plt.subplots(figsize=(9, 6))
-    labels = [name for name, ms in FOUR_LAYER_BREAKDOWN if ms > 0]
-    sizes = [ms for _, ms in FOUR_LAYER_BREAKDOWN if ms > 0]
-    colors_pie = ["#00d2ff", "#7b2ff7", "#ff6b6b", "#6bcb77"]
-    explode = [0, 0, 0.05, 0]
+    slices, package_total_ms, layer_sum_ms = layer_breakdown_slices()
+    labels = [name for name, _ in slices]
+    sizes = [ms for _, ms in slices]
+    colors_pie = ["#00d2ff", "#7b2ff7", "#ff6b6b", "#6bcb77", "#888888"]
+    explode = [0, 0, 0.05, 0, 0]
     wedges, texts, autotexts = ax.pie(
         sizes,
         explode=explode,
@@ -427,12 +458,11 @@ def generate_charts(output_dir: str) -> None:
         fontweight="bold",
         pad=12,
     )
-    total_ms = sum(sizes)
     ax.text(
         0,
         -1.35,
-        f"Total package creation: {total_ms:.3f} ms  |  "
-        f"Layers: SHA3 + HMAC + Signatures + HKDF",
+        f"Measured package creation: {package_total_ms:.3f} ms  |  "
+        f"Sum of the four primitive layers: {layer_sum_ms:.3f} ms",
         ha="center",
         fontsize=9,
         color="#888888",

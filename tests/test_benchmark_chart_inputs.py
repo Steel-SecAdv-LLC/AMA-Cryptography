@@ -282,3 +282,56 @@ class TestTheLiveResultsPathIsTheDocumentedOne:
 
     def test_both_consumers_read_the_same_file(self) -> None:
         assert self._dashboards_bench_file().resolve() == gc.BENCH_FILE.resolve()
+
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_PHASE0 = _REPO_ROOT / "benchmarks" / "phase0_baseline_results.json"
+_LAYER_SVG = _REPO_ROOT / "benchmarks" / "charts" / "layer_breakdown.svg"
+
+
+class TestTheLayerBreakdownAddsUpToWhatWasMeasured:
+    """The layer chart's total is the measured package creation, not a sum.
+
+    It labelled the sum of four primitive medians "Total package creation":
+    0.229 ms, half the 0.446 ms ``Package create`` median recorded by the very
+    run the four rows were re-derived from, and beside a scalability chart
+    showing 0.565 ms at N=1.
+    """
+
+    @staticmethod
+    def _median_ms(row: str) -> float:
+        phase0 = json.loads(_PHASE0.read_text(encoding="utf-8"))
+        return float(phase0[row]["median_us"]) / 1000.0
+
+    def test_the_total_is_the_measured_package_creation(self) -> None:
+        assert gc.PACKAGE_CREATE_MS == pytest.approx(self._median_ms("Package create"), abs=5e-5)
+
+    def test_the_layers_are_the_same_runs_medians(self) -> None:
+        rows = dict(gc.FOUR_LAYER_BREAKDOWN)
+        expected = {
+            "SHA3-256 Hash": self._median_ms("SHA3-256 (1KB)"),
+            "HMAC-SHA3-256": self._median_ms("HMAC-SHA3-256 (1KB)"),
+            "Ed25519 + ML-DSA-65 Sign": self._median_ms("Ed25519 sign (240B)")
+            + self._median_ms("ML-DSA-65 sign"),
+            "HKDF Derivation": self._median_ms("HKDF-SHA3-256 (96B output)"),
+        }
+        assert set(rows) == set(expected)
+        for name, value in expected.items():
+            assert rows[name] == pytest.approx(value, abs=5e-5), name
+
+    def test_the_slices_add_up_to_the_measured_total(self) -> None:
+        slices, total, layer_sum = gc.layer_breakdown_slices()
+        assert total == gc.PACKAGE_CREATE_MS
+        assert sum(ms for _, ms in slices) == pytest.approx(total)
+        assert layer_sum == pytest.approx(sum(ms for _, ms in gc.FOUR_LAYER_BREAKDOWN))
+        assert 0 < layer_sum < total, "the four layers are part of the call, not all of it"
+
+    def test_a_layer_sum_above_the_total_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(gc, "PACKAGE_CREATE_MS", 0.1)
+        with pytest.raises(ValueError):
+            gc.layer_breakdown_slices()
+
+    def test_the_committed_chart_states_the_measured_total(self) -> None:
+        text = _LAYER_SVG.read_text(encoding="utf-8")
+        assert f"Measured package creation: {gc.PACKAGE_CREATE_MS:.3f} ms" in text
+        assert "Total package creation" not in text

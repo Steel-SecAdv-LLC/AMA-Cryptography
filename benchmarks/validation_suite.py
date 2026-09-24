@@ -86,6 +86,12 @@ class BenchmarkValidator:
         # report "all claims validated" after validating almost none of
         # them (the exit-0-measured-nothing failure mode).
         self.skipped: List[Tuple[str, str]] = []
+        # Mean package-creation latency measured by
+        # run_package_operation_benchmarks(), or None when that block did not
+        # run.  It is the denominator of the 3R overhead percentages: the
+        # overhead claimed is overhead ON package creation, so it is divided
+        # by the package creation this run measured, not by a constant.
+        self.measured_package_creation_ms: float | None = None
 
         # Documented claims from BENCHMARKS.md
         # Format: claim_name -> (value, unit, tolerance_pct)
@@ -381,6 +387,7 @@ class BenchmarkValidator:
 
         stats = self.benchmark_operation("package_creation", package_create)
         result = self.validate_claim("package_creation", stats["mean_ms"], stats["std_ms"])
+        self.measured_package_creation_ms = stats["mean_ms"]
         print(f"  {result.message}")
 
         pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "benchmark")
@@ -516,12 +523,35 @@ class BenchmarkValidator:
             )
             print(f"  SKIP: Dilithium benchmark unavailable: {e}")
 
+    def overhead_denominator_ms(self) -> Tuple[float, str]:
+        """The package-creation latency the 3R overhead is a percentage of.
+
+        Returns ``(milliseconds, basis)``.  The package creation measured
+        earlier in this run when there is one; otherwise the documented
+        ``package_creation`` claim, and ``basis`` says so, because a
+        percentage of a figure this run did not measure is a weaker statement
+        and the output must not present it as the other kind.
+
+        This was a hard-coded 0.30 ms "typical package".  The same run already
+        measured package creation (the committed phase0 median is 0.446 ms),
+        so a 0.02 ms monitor call would read as 6.7% where it is 4.5% of the
+        operation measured, enough to fail ``total_3r_overhead`` (bound 7.5%)
+        spuriously; and on a host where package creation measures under
+        0.30 ms the constant understated the overhead, so a real breach of
+        the claim could pass.
+        """
+        if self.measured_package_creation_ms is not None and self.measured_package_creation_ms > 0:
+            return self.measured_package_creation_ms, "package_creation measured this run"
+        claimed = self.documented_claims["package_creation"][0]
+        return claimed, "documented package_creation claim; not measured this run"
+
     def run_3r_monitoring_benchmarks(self) -> None:
         """
         Benchmark 3R monitoring overhead.
 
-        The documented <2% overhead in BENCHMARKS.md refers to timing instrumentation
-        overhead. Pattern analysis runs on-demand for security reports, not on every
+        The overhead claims refer to timing instrumentation, expressed as a
+        percentage of package creation (see :meth:`overhead_denominator_ms`).
+        Pattern analysis runs on-demand for security reports, not on every
         operation, so we measure timing monitor overhead separately.
         """
         print("\n" + "=" * 70)
@@ -534,22 +564,19 @@ class BenchmarkValidator:
             monitor = AmaCryptographyMonitor(enabled=True)
 
             # Measure timing monitor overhead (this is the hot-path instrumentation)
-            # The documented <2% overhead refers to this timing instrumentation
             def timing_monitor_call() -> None:
                 monitor.monitor_crypto_operation("test_op", 0.1)
 
             timing_stats = self.benchmark_operation("timing_monitor", timing_monitor_call)
             timing_overhead_ms = timing_stats["mean_ms"]
 
-            # Calculate overhead as percentage of typical package creation (~0.30ms)
-            # Per BENCHMARKS.md: timing monitoring adds <0.5% overhead
-            typical_package_ms = 0.30
-            timing_overhead_pct = (timing_overhead_ms / typical_package_ms) * 100
+            # Overhead as a percentage of the package creation it is paid on.
+            package_ms, basis = self.overhead_denominator_ms()
+            timing_overhead_pct = (timing_overhead_ms / package_ms) * 100
 
-            # Validate timing monitor overhead (<0.5% per BENCHMARKS.md Section 2.1)
             result = self.validate_claim("timing_monitor_overhead", timing_overhead_pct, 0.0)
             print(f"  Timing monitor overhead: {timing_overhead_ms:.4f}ms")
-            print(f"  As % of 0.30ms package:  {timing_overhead_pct:.2f}%")
+            print(f"  As % of {package_ms:.4f}ms package ({basis}): {timing_overhead_pct:.2f}%")
             print(f"  {result.message}")
 
             # Total hot-path 3R overhead. Pattern analysis runs on-demand

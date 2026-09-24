@@ -2165,6 +2165,36 @@ def main() -> int:
         print("the benchmark is gone.")
         return 2
 
+    # The reverse direction: a benchmark function with no floor in its
+    # section.  The measuring loops `continue` past it without a word, so
+    # deleting a primitive's entry from the baseline JSON retired its gate
+    # while every run stayed green.  Reproduced against the shipped
+    # baseline.json with `ed25519_sign` deleted, under
+    # --require-populated-baseline: 19 measured, 19 passed, exit 0, and
+    # signing never measured again.  A floorless function is a defect of the
+    # baseline file, not of the host, so like a rename it fails whatever the
+    # flags; a benchmark that is genuinely retired is deleted from its table
+    # in the same change that deletes its floor.
+    unfloored = [
+        (section, name)
+        for section, table in (
+            ("benchmarks", BENCHMARK_FUNCTIONS),
+            ("pqc_benchmarks", PQC_BENCHMARK_FUNCTIONS),
+        )
+        for name in table
+        if name not in baseline.get(section, {})
+    ]
+    if unfloored:
+        print("BENCHMARKS WITH NO FLOOR!")
+        print("-" * 60)
+        for section, name in unfloored:
+            print(f"  {name}: has a benchmark function, but no entry in [{section}]")
+        print()
+        print("Each of these is never measured: the run skips a function the baseline")
+        print("does not name and still exits 0. Restore the floor, or delete the")
+        print("benchmark function in the same change if the benchmark is retired.")
+        return 2
+
     if not results:
         print("NO BENCHMARK WAS MEASURED!")
         print("-" * 60)

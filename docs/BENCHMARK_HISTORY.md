@@ -24,7 +24,15 @@ Enforcement mechanisms:
 - `.github/workflows/baseline-guard.yml` runs
   `benchmarks/check_baseline_justification.py` on every PR touching
   either baseline JSON and fails CI if any of the three requirements
-  is missing.
+  is missing. A lowered floor must also cite an ops/sec figure between
+  the old and new floors and the CI run id it came from, and a floor may
+  not be deleted while `benchmarks/benchmark_runner.py` still defines its
+  benchmark: no text justifies that, because the deletion stops the
+  primitive being measured at all.
+- `benchmarks/benchmark_runner.py` refuses, whatever its flags, a baseline
+  entry with no benchmark function behind it and a benchmark function with
+  no floor in its section, so neither a rename nor a deletion can retire a
+  gate while the run stays green.
 - The benchmark-regression CI job passes `--require-runner-class` and
   `--require-populated-baseline`, so x86 and AArch64 matrix entries
   must consume their matching baseline file and no `baseline_value: 0`

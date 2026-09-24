@@ -116,6 +116,19 @@ def _source_provenance() -> dict[str, Any]:
             f"{p2.get('ama_commit')!r}); one page cannot carry one honest "
             "version stamp over two builds. Re-measure both."
         )
+    # The harness marks a run it cannot tie to a commit (no git, an imported
+    # build from outside the checkout, uncommitted changes to the measured
+    # code).  Two such files agree on ama_commit -- both "unknown" -- so the
+    # check above passes them; this one does not.
+    for name, block in (("multi_library_results.json", p1), ("pqc_results.json", p2)):
+        if block.get("attributable") is False:
+            reasons = "; ".join(str(r) for r in block.get("unattributable_because", []))
+            raise RuntimeError(
+                f"{name} is marked unattributable by the harness that wrote it "
+                f"({reasons or 'no reason recorded'}). Its numbers cannot be "
+                "published under a commit. Re-measure from a clean checkout "
+                "whose build is the one imported."
+            )
     return p1
 
 

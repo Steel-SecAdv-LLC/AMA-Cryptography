@@ -1599,7 +1599,8 @@ class TestARunThatMeasuredNothingIsNotAPass:
     everywhere. A name whose function exists but produced no measurement is the
     documented "primitive absent from this build" skip: legitimate locally,
     never true of the CI job, so it is fatal exactly under
-    ``--require-populated-baseline``.
+    ``--require-populated-baseline``.  The reverse of a rename -- a benchmark
+    function with no floor -- is a deleted gate, and is fatal everywhere too.
     """
 
     @staticmethod
@@ -1615,6 +1616,29 @@ class TestARunThatMeasuredNothingIsNotAPass:
     def _entry(value: float = 1000.0) -> dict[str, Any]:
         return {"description": "synthetic", "baseline_value": value, "tolerance_percent": 15}
 
+    @classmethod
+    def _complete(
+        cls,
+        *,
+        drop: tuple[str, ...] = (),
+        core_extra: dict[str, Any] | None = None,
+        pqc_extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """A floor for every benchmark function, as both shipped baselines have.
+
+        The runner refuses a function with no floor, so a fixture naming one
+        primitive now fails on that check before reaching the one a test is
+        about.  Each test therefore starts from a complete baseline and makes
+        exactly the one change it exercises, which is also what keeps each
+        assertion pinned to a single check rather than to whichever of several
+        happens to fire first.
+        """
+        core = {name: cls._entry() for name in br.BENCHMARK_FUNCTIONS if name not in drop}
+        pqc = {name: cls._entry() for name in br.PQC_BENCHMARK_FUNCTIONS if name not in drop}
+        core.update(core_extra or {})
+        pqc.update(pqc_extra or {})
+        return cls._baseline(core, pqc)
+
     def _run(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -1623,6 +1647,7 @@ class TestARunThatMeasuredNothingIsNotAPass:
         *,
         strict: bool,
         rate: float | None = 1000.0,
+        skip: tuple[str, ...] = (),
     ) -> int:
         path = tmp_path / "baseline.json"
         path.write_text(json.dumps(baseline), encoding="utf-8")
@@ -1630,7 +1655,9 @@ class TestARunThatMeasuredNothingIsNotAPass:
         if strict:
             argv.append("--require-populated-baseline")
         monkeypatch.setattr(sys, "argv", argv)
-        monkeypatch.setattr(br, "_measure_benchmark", lambda name, func: rate)
+        monkeypatch.setattr(
+            br, "_measure_benchmark", lambda name, func: None if name in skip else rate
+        )
         return br.main()
 
     def test_a_healthy_run_still_passes(
@@ -1638,10 +1665,7 @@ class TestARunThatMeasuredNothingIsNotAPass:
     ) -> None:
         """Non-vacuity: without this, every assertion below could pass on a
         ``main()`` that had simply become unable to return 0."""
-        name = next(iter(br.BENCHMARK_FUNCTIONS))
-        rc = self._run(
-            monkeypatch, tmp_path, self._baseline({name: self._entry()}, {}), strict=True
-        )
+        rc = self._run(monkeypatch, tmp_path, self._complete(), strict=True)
         assert rc == 0, "a measured, in-tolerance row must still exit 0"
 
     def test_a_baseline_naming_no_known_benchmark_is_fatal(
@@ -1651,7 +1675,7 @@ class TestARunThatMeasuredNothingIsNotAPass:
         rc = self._run(
             monkeypatch,
             tmp_path,
-            self._baseline({"renamed_ed25519_sign": self._entry()}, {}),
+            self._complete(core_extra={"renamed_ed25519_sign": self._entry()}),
             strict=False,
         )
         assert rc != 0, (
@@ -1666,7 +1690,7 @@ class TestARunThatMeasuredNothingIsNotAPass:
         rc = self._run(
             monkeypatch,
             tmp_path,
-            self._baseline({}, {"renamed_kyber_keygen": self._entry()}),
+            self._complete(pqc_extra={"renamed_kyber_keygen": self._entry()}),
             strict=False,
         )
         assert rc != 0
@@ -1681,14 +1705,21 @@ class TestARunThatMeasuredNothingIsNotAPass:
     def test_an_unmeasured_primitive_is_fatal_under_the_strict_flag(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """``rate=None`` is the "primitive absent from this build" skip."""
+        """A ``None`` rate is the "primitive absent from this build" skip.
+
+        One name skipped and every other one measured, so the only check that
+        can fire is the strict-flag one.  This used to skip the only name in
+        a one-entry baseline, which left nothing measured, so the run failed
+        on the "no benchmark was measured" check instead and would have kept
+        failing with the strict-flag check deleted.
+        """
         name = next(iter(br.BENCHMARK_FUNCTIONS))
         rc = self._run(
             monkeypatch,
             tmp_path,
-            self._baseline({name: self._entry()}, {}),
+            self._complete(),
             strict=True,
-            rate=None,
+            skip=(name,),
         )
         assert rc != 0, (
             "--require-populated-baseline is the CI invocation; a floor that was "
@@ -1704,11 +1735,10 @@ class TestARunThatMeasuredNothingIsNotAPass:
         assertion would pass equally against a runner that rejected every
         unmeasured entry, which would make a developer build unusable.
         """
-        name = next(iter(br.BENCHMARK_FUNCTIONS))
         rc = self._run(
             monkeypatch,
             tmp_path,
-            self._baseline({name: self._entry()}, {}),
+            self._complete(),
             strict=False,
             rate=None,
         )
@@ -1719,22 +1749,55 @@ class TestARunThatMeasuredNothingIsNotAPass:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """One measured and one skipped: usable locally, and reported."""
-        measured, skipped = list(br.BENCHMARK_FUNCTIONS)[:2]
-        path = tmp_path / "baseline.json"
-        path.write_text(
-            json.dumps(self._baseline({measured: self._entry(), skipped: self._entry()}, {})),
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--baseline", str(path)])
-        monkeypatch.setattr(
-            br, "_measure_benchmark", lambda name, func: 1000.0 if name == measured else None
-        )
-        rc = br.main()
+        skipped = list(br.BENCHMARK_FUNCTIONS)[1]
+        rc = self._run(monkeypatch, tmp_path, self._complete(), strict=False, skip=(skipped,))
         out = capsys.readouterr().out
         assert rc == 0, "one good row on a partial build is a usable local run"
         assert (
             skipped in out and "not measured" in out
         ), "a skipped floor must be named, or the run silently covers less than it claims"
+
+    @pytest.mark.parametrize(
+        "dropped", [next(iter(br.BENCHMARK_FUNCTIONS)), next(iter(br.PQC_BENCHMARK_FUNCTIONS))]
+    )
+    @pytest.mark.parametrize("strict", [False, True])
+    def test_a_benchmark_with_no_floor_is_fatal(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        dropped: str,
+        strict: bool,
+    ) -> None:
+        """Deleting a floor must not retire the gate while the benchmark lives.
+
+        The loops ``continue`` past a function the baseline does not name, and
+        the coverage checks only looked from the baseline towards the
+        functions.  Reproduced before the fix with the shipped baseline.json
+        minus ``ed25519_sign``, under ``--require-populated-baseline``: 19
+        measured, 19 passed, exit 0, signing never measured.
+        """
+        rc = self._run(monkeypatch, tmp_path, self._complete(drop=(dropped,)), strict=strict)
+        out = capsys.readouterr().out
+        assert rc != 0, (
+            f"{dropped} has a benchmark function and no floor, so the run never "
+            f"measured it and still exited 0"
+        )
+        assert "NO FLOOR" in out and dropped in out, "the run must name what it did not gate"
+
+    def test_every_benchmark_function_has_a_floor_in_both_shipped_baselines(self) -> None:
+        """The check above is what CI runs; this is the standing state of the tree."""
+        for filename in ("baseline.json", "arm-baseline.json"):
+            doc = json.loads((REPO_ROOT / "benchmarks" / filename).read_text(encoding="utf-8"))
+            for section, table in (
+                ("benchmarks", br.BENCHMARK_FUNCTIONS),
+                ("pqc_benchmarks", br.PQC_BENCHMARK_FUNCTIONS),
+            ):
+                missing = sorted(set(table) - set(doc.get(section, {})))
+                assert not missing, (
+                    f"{filename} [{section}] has no floor for {missing}; the runner "
+                    f"would never measure them"
+                )
 
     def test_the_dispatch_tables_are_module_level_and_populated(self) -> None:
         """The coverage check reads them; empty tables would make it vacuous."""
@@ -1982,6 +2045,145 @@ class TestJustificationMustAccountForTheChange:
         )
         self._git(repo, "add", "-A")
         self._git(repo, "commit", "-q", "-m", "whitespace")
+        assert self._run(repo) == 0
+
+    # ---- a DELETED floor is the deepest cut there is ------------------------
+    #
+    # Reproduced before these rules: deleting `ed25519_sign` from the JSON
+    # reached the guard as `38811 -> None` and `45 -> None`, not two numbers,
+    # so only the three-token rule applied, and this message passed with no
+    # run id and no RECALIBRATION.  The runner then skipped the function for
+    # good and every run stayed green.
+
+    REMOVAL = "drop ed25519_sign and its tolerance_percent: 38,811 ops/sec on ubuntu-latest"
+    #: Every rule a lowered floor must meet, met.  It must still not carry a
+    #: removal whose benchmark lives on: no measurement supports "never
+    #: measure this".
+    REMOVAL_WITH_EVERYTHING = (
+        "RECALIBRATION: drop ed25519_sign and its tolerance_percent, measured at "
+        "30,000 ops/sec on ubuntu-latest, benchmark-regression run 34084425292"
+    )
+
+    TOLERANCE_KEY_DELETED = (
+        "tidy: ed25519_sign tolerance_percent inherits the default, 38,811 ops/sec on x86_64"
+    )
+
+    @staticmethod
+    def _entry(value: float, tolerance: float | None = 45) -> dict[str, Any]:
+        entry: dict[str, Any] = {"description": "d", "baseline_value": value}
+        if tolerance is not None:
+            entry["tolerance_percent"] = tolerance
+        return entry
+
+    @staticmethod
+    def _write_doc(repo: Path, entries: dict[str, Any], threshold: float = 10) -> None:
+        (repo / "benchmarks" / "baseline.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {},
+                    "thresholds": {"regression_threshold_percent": threshold},
+                    "benchmarks": entries,
+                    "pqc_benchmarks": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _write_runner(repo: Path, names: list[str]) -> None:
+        """A runner whose tables name ``names``.  Parsed by the guard, never run."""
+        rows = "".join(f'    "{name}": run_{name},\n' for name in names)
+        (repo / "benchmarks" / "benchmark_runner.py").write_text(
+            "BENCHMARK_FUNCTIONS: dict[str, object] = {\n"
+            + rows
+            + "}\n\nPQC_BENCHMARK_FUNCTIONS: dict[str, object] = {}\n",
+            encoding="utf-8",
+        )
+
+    def _commit_all(self, repo: Path, message: str) -> None:
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", message)
+
+    def _removal_repo(self, tmp_path: Path) -> Path:
+        repo = self._repo(tmp_path)
+        self._write_doc(
+            repo, {"ed25519_sign": self._entry(38811), "ed25519_verify": self._entry(20000)}
+        )
+        self._write_runner(repo, ["ed25519_sign", "ed25519_verify"])
+        self._commit_all(repo, "seed")
+        return repo
+
+    def test_deleting_a_live_benchmarks_floor_is_refused(self, tmp_path: Path) -> None:
+        repo = self._removal_repo(tmp_path)
+        self._write_doc(repo, {"ed25519_verify": self._entry(20000)})
+        self._commit_all(repo, self.REMOVAL)
+        assert self._run(repo) == 1, (
+            "the benchmark still exists, so deleting its floor retires its gate; "
+            "the three-token message used to be enough"
+        )
+        assert self._run(repo, pr_body=self.REMOVAL_WITH_EVERYTHING) == 1, (
+            "no text carries a removal while the benchmark lives, however "
+            "complete: the remedy is to keep the floor or retire the function"
+        )
+
+    def test_a_floor_retired_with_its_benchmark_keeps_the_three_token_rule(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-vacuity: a genuine retirement is still possible, and still named."""
+        repo = self._removal_repo(tmp_path)
+        self._write_doc(repo, {"ed25519_verify": self._entry(20000)})
+        self._write_runner(repo, ["ed25519_verify"])
+        self._commit_all(repo, self.REMOVAL)
+        assert self._run(repo) == 0
+
+        silent = self._removal_repo(tmp_path / "silent")
+        self._write_doc(silent, {"ed25519_verify": self._entry(20000)})
+        self._write_runner(silent, ["ed25519_verify"])
+        self._commit_all(silent, "wip")
+        assert self._run(silent) == 1, "a retirement still has to be a line item"
+
+    def test_a_removal_is_refused_when_the_runner_cannot_be_read(self, tmp_path: Path) -> None:
+        """An unanswerable "is the benchmark gone?" refuses rather than waves through."""
+        repo = self._removal_repo(tmp_path)
+        self._write_doc(repo, {"ed25519_verify": self._entry(20000)})
+        (repo / "benchmarks" / "benchmark_runner.py").unlink()
+        self._commit_all(repo, self.REMOVAL)
+        assert self._run(repo) == 1
+
+    def test_deleting_the_tolerance_key_is_judged_by_the_fallback_it_gets(
+        self, tmp_path: Path
+    ) -> None:
+        """``tolerance_percent: 5`` deleted under a 45% default is a 5 -> 45 raise.
+
+        The runner applies ``thresholds.regression_threshold_percent`` to an
+        entry with no ``tolerance_percent``, so the deletion lowers the
+        effective floor exactly as editing the number to 45 would.  Read
+        literally it was ``5 -> None`` and needed only the three-token rule.
+
+        The property is enforced twice, so this pins the property rather than
+        either rule (measured by mutation): without the fallback resolution the
+        literal ``5 -> None`` is refused as a removal; without both, it passes.
+        The test below is the one the fallback alone carries -- unresolved, a
+        deletion that TIGHTENS the gate is refused as a removal too.
+        """
+        repo = self._repo(tmp_path)
+        self._write_doc(repo, {"ed25519_sign": self._entry(38811, tolerance=5)}, threshold=45)
+        self._write_runner(repo, ["ed25519_sign"])
+        self._commit_all(repo, "seed")
+        self._write_doc(repo, {"ed25519_sign": self._entry(38811, tolerance=None)}, threshold=45)
+        self._commit_all(repo, self.TOLERANCE_KEY_DELETED)
+        assert self._run(repo) == 1
+
+    def test_deleting_the_tolerance_key_toward_a_stricter_default_stays_cheap(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-vacuity: 45 -> the 10% default tightens the gate, so three tokens do."""
+        repo = self._repo(tmp_path)
+        self._write_doc(repo, {"ed25519_sign": self._entry(38811, tolerance=45)}, threshold=10)
+        self._write_runner(repo, ["ed25519_sign"])
+        self._commit_all(repo, "seed")
+        self._write_doc(repo, {"ed25519_sign": self._entry(38811, tolerance=None)}, threshold=10)
+        self._commit_all(repo, self.TOLERANCE_KEY_DELETED)
         assert self._run(repo) == 0
 
     def test_the_replaced_algorithm_would_have_passed_the_same_history(

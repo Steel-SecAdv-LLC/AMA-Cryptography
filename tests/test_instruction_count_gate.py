@@ -582,6 +582,53 @@ def test_the_shipped_baseline_is_well_formed() -> None:
             assert isinstance(count, int) and count > 0, f"{name} has a bad count"
 
 
+def test_the_recorded_baseline_agrees_with_every_acknowledged_head_value() -> None:
+    """The recorded reference cannot fall behind a change CI has acknowledged.
+
+    CI does not compare against ``benchmarks/instruction-baseline.json``: its
+    lane is A/B, the merge-base build against the head build on one runner.
+    So nothing re-measured the recorded file when INVARIANT-51 doubled the
+    Ed25519 signer's fixed-base work.  It kept ``ed25519_sign`` at 206,910 Ir
+    while the acknowledgement for that very change recorded the shipped tree
+    at 331,814, and the documented local mode reported a regression on an
+    unchanged tree: measured on 5fdd02c, 206,910 -> 332,907 Ir, +60.89%, exit 1.
+
+    An acknowledgement's ``to`` is a head measurement the CI lane checks
+    against the running build at the gate's tolerance, so it cannot go stale
+    unnoticed.  Holding each recorded count to it at that same tolerance
+    carries the check across to the reference.  Operations with no
+    acknowledgement did not move between the merge-base and head, and the
+    gate's own stale-entry rule keeps the acknowledgement set honest.
+    """
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    acknowledgements = json.loads(ACK_PATH.read_text(encoding="utf-8"))
+    tolerance = float(acknowledgements["tolerance_percent"])
+    compared = 0
+    disagreements = []
+    for fingerprint, profile in baseline["profiles"].items():
+        for operation, entry in acknowledgements["acknowledgements"].items():
+            recorded = profile["operations"].get(operation)
+            if recorded is None:
+                continue
+            compared += 1
+            head = int(entry["to"])
+            drift = (recorded - head) / head * 100.0
+            if abs(drift) > tolerance:
+                disagreements.append(
+                    f"{operation}: recorded {recorded:,} Ir in [{fingerprint}], "
+                    f"acknowledged head value {head:,} Ir ({drift:+.2f}%)"
+                )
+    assert compared, (
+        "no acknowledged operation appears in the recorded baseline, so this "
+        "comparison checked nothing"
+    )
+    assert not disagreements, (
+        "benchmarks/instruction-baseline.json no longer describes the tree the "
+        "acknowledgements describe; re-measure it with "
+        "benchmarks/measure_instruction_counts.py:\n  " + "\n  ".join(disagreements)
+    )
+
+
 def test_the_baseline_covers_every_primitive_family() -> None:
     """A gate that covers only hashing would not have caught the AEAD case."""
     document = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))

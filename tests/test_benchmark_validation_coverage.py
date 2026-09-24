@@ -242,3 +242,82 @@ class TestNoPrintOnlySkips:
             "block, or its claims silently leave the verdict's denominator "
             "again (the exit-0-measured-nothing defect)."
         )
+
+
+class TestOverheadIsAPercentageOfWhatWasMeasured:
+    """The 3R overhead percentages divide by the package creation measured.
+
+    They divided by a hard-coded 0.30 ms "typical package" while the same run
+    measured package creation a block earlier (the committed phase0 median is
+    0.446 ms), so the percentage validated against ``total_3r_overhead`` was
+    inflated on the reference host and understated on any host faster than
+    the constant.
+    """
+
+    MONITOR_MS = 0.02
+
+    def _run_3r(
+        self, monkeypatch: pytest.MonkeyPatch, package_ms: float | None
+    ) -> vs.BenchmarkValidator:
+        v = vs.BenchmarkValidator(iterations=1, warmup=0)
+        v.measured_package_creation_ms = package_ms
+        stats = {
+            "mean_ms": self.MONITOR_MS,
+            "std_ms": 0.0,
+            "min_ms": self.MONITOR_MS,
+            "max_ms": self.MONITOR_MS,
+            "median_ms": self.MONITOR_MS,
+            "ops_per_sec": 1000 / self.MONITOR_MS,
+        }
+        monkeypatch.setattr(v, "benchmark_operation", lambda name, func, *a, **k: stats)
+        v.run_3r_monitoring_benchmarks()
+        return v
+
+    @staticmethod
+    def _measured(v: vs.BenchmarkValidator, claim: str) -> float:
+        (row,) = [r for r in v.results if r.claim_name == claim]
+        return float(row.measured_value)
+
+    def test_the_denominator_is_the_package_creation_this_run_measured(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        v = self._run_3r(monkeypatch, package_ms=0.446)
+        expected = self.MONITOR_MS / 0.446 * 100
+        for claim in ("timing_monitor_overhead", "total_3r_overhead"):
+            assert self._measured(v, claim) == pytest.approx(expected), (
+                f"{claim} must be a percentage of the package creation measured "
+                f"(0.446 ms), not of a constant"
+            )
+        assert "measured this run" in capsys.readouterr().out
+
+    def test_without_a_measurement_it_uses_the_documented_claim_and_says_so(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        v = self._run_3r(monkeypatch, package_ms=None)
+        claimed = v.documented_claims["package_creation"][0]
+        assert self._measured(v, "timing_monitor_overhead") == pytest.approx(
+            self.MONITOR_MS / claimed * 100
+        )
+        assert "not measured this run" in capsys.readouterr().out
+
+    def test_the_package_block_records_what_it_measured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The value the 3R block divides by is the one the package row reports."""
+        v = vs.BenchmarkValidator(iterations=1, warmup=0)
+
+        def fake(name: str, func: Any, *a: Any, **k: Any) -> dict[str, float]:
+            mean = 0.777 if name == "package_creation" else 0.001
+            return {
+                "mean_ms": mean,
+                "std_ms": 0.0,
+                "min_ms": mean,
+                "max_ms": mean,
+                "median_ms": mean,
+                "ops_per_sec": 1000 / mean,
+            }
+
+        monkeypatch.setattr(v, "benchmark_operation", fake)
+        v.run_package_operation_benchmarks()
+        assert v.measured_package_creation_ms == pytest.approx(0.777)
+        assert v.overhead_denominator_ms()[0] == pytest.approx(0.777)
