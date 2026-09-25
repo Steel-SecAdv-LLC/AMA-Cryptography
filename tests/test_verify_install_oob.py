@@ -620,7 +620,9 @@ class TestArtefactIsLiteralDataOnly:
         fields, so a fixed field whitelist would reject a legitimate tree.
         The rule is "literal data only", not "exactly these names".
         """
-        tree = ast.parse((REPO_ROOT / "ama_cryptography" / "_integrity_signature.py").read_text())
+        tree = ast.parse(
+            (REPO_ROOT / "ama_cryptography" / "_integrity_signature.py").read_text(encoding="utf-8")
+        )
         assert oob.artefact_shape_violation(tree) is None
 
     def test_a_new_literal_field_is_still_accepted(self) -> None:

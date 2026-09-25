@@ -80,7 +80,7 @@ def test_no_workflows_fails_closed(tmp_path: Path) -> None:
     scripts = tmp_path / ".github" / "scripts"
     scripts.mkdir(parents=True)
     helper = scripts / "apt-install.sh"
-    helper.write_text("#!/bin/sh\n")
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
     helper.chmod(helper.stat().st_mode | stat.S_IXUSR)
     (tmp_path / ".github" / "workflows").mkdir()
     assert gate.main(["--root", str(tmp_path)]) == 2
@@ -97,12 +97,12 @@ def test_a_yaml_workflow_is_scanned_too(tmp_path: Path) -> None:
     scripts = tmp_path / ".github" / "scripts"
     scripts.mkdir(parents=True)
     helper = scripts / "apt-install.sh"
-    helper.write_text("#!/bin/sh\n")
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
     helper.chmod(helper.stat().st_mode | stat.S_IXUSR)
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir()
     (workflows / "sneaky.yaml").write_text(
-        "jobs:\n  a:\n    steps:\n" "      - run: sudo apt-get install -y cmake\n"
+        "jobs:\n  a:\n    steps:\n" "      - run: sudo apt-get install -y cmake\n", encoding="utf-8"
     )
     assert (
         gate.main(["--root", str(tmp_path)]) == 1
@@ -114,12 +114,13 @@ def test_a_yaml_only_tree_is_not_vacuous(tmp_path: Path) -> None:
     scripts = tmp_path / ".github" / "scripts"
     scripts.mkdir(parents=True)
     helper = scripts / "apt-install.sh"
-    helper.write_text("#!/bin/sh\n")
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
     helper.chmod(helper.stat().st_mode | stat.S_IXUSR)
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir()
     (workflows / "ok.yaml").write_text(
-        "jobs:\n  a:\n    steps:\n" "      - run: .github/scripts/apt-install.sh cmake\n"
+        "jobs:\n  a:\n    steps:\n" "      - run: .github/scripts/apt-install.sh cmake\n",
+        encoding="utf-8",
     )
     assert gate.main(["--root", str(tmp_path)]) == 0
 
@@ -227,7 +228,8 @@ def _fake_sudo(tmp_path: Path) -> Path:
     binroot = tmp_path / "bin"
     binroot.mkdir(exist_ok=True)
     fake = binroot / "sudo"
-    fake.write_text(textwrap.dedent("""\
+    fake.write_text(
+        textwrap.dedent("""\
             #!/usr/bin/env bash
             # Skip a leading `timeout [--kill-after=N] <secs>`, then drop any
             # `-o Key=Value` apt options, so the case below sees the verb.
@@ -261,7 +263,9 @@ def _fake_sudo(tmp_path: Path) -> Path:
                   echo "installed: ${*:3}"; exit 0 ;;
             esac
             exit 0
-            """))
+            """),
+        encoding="utf-8",
+    )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     return binroot
 
@@ -387,7 +391,7 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
 
     # `sudo` that simply runs what it is given, so the REAL timeout executes.
     sudo = binroot / "sudo"
-    sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n')
+    sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n', encoding="utf-8")
     sudo.chmod(sudo.stat().st_mode | stat.S_IXUSR)
 
     # `apt-get` that refuses to die on SIGTERM on its FIRST call, like apt
@@ -404,7 +408,8 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
         '  trap "" TERM\n'
         "  sleep 120\n"
         "fi\n"
-        "exit 100\n"
+        "exit 100\n",
+        encoding="utf-8",
     )
     apt.chmod(apt.stat().st_mode | stat.S_IXUSR)
 
@@ -479,12 +484,12 @@ def test_the_total_budget_bounds_the_whole_script(tmp_path: Path) -> None:
     binroot.mkdir(exist_ok=True)
 
     sudo = binroot / "sudo"
-    sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n')
+    sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n', encoding="utf-8")
     sudo.chmod(sudo.stat().st_mode | stat.S_IXUSR)
 
     # Hangs every time, and ignores SIGTERM, which is what a wedged apt does.
     apt = binroot / "apt-get"
-    apt.write_text('#!/usr/bin/env bash\ntrap "" TERM\nsleep 600\n')
+    apt.write_text('#!/usr/bin/env bash\ntrap "" TERM\nsleep 600\n', encoding="utf-8")
     apt.chmod(apt.stat().st_mode | stat.S_IXUSR)
 
     env = dict(os.environ)
@@ -680,7 +685,8 @@ def test_a_timed_out_final_attempt_is_diagnosed_not_a_bare_124(tmp_path: Path) -
     binroot = tmp_path / "bin"
     binroot.mkdir(exist_ok=True)
     fake = binroot / "sudo"
-    fake.write_text(textwrap.dedent("""\
+    fake.write_text(
+        textwrap.dedent("""\
             #!/usr/bin/env bash
             if [ "$1" = "timeout" ]; then
               shift
@@ -691,7 +697,9 @@ def test_a_timed_out_final_attempt_is_diagnosed_not_a_bare_124(tmp_path: Path) -
               exec timeout --kill-after=1 "$bound" sleep 300
             fi
             exit 0
-            """))
+            """),
+        encoding="utf-8",
+    )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     e = dict(os.environ)
     e["PATH"] = f"{binroot}{os.pathsep}{e['PATH']}"

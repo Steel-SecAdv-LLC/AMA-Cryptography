@@ -728,7 +728,7 @@ class SimpleClass:
     pass
 """
         file_path = tmp_path / "simple.py"
-        file_path.write_text(code)
+        file_path.write_text(code, encoding="utf-8")
         return file_path
 
     @pytest.fixture
@@ -765,7 +765,7 @@ def complex_function(a, b, c, d):
     return result
 """
         file_path = tmp_path / "complex.py"
-        file_path.write_text(code)
+        file_path.write_text(code, encoding="utf-8")
         return file_path
 
     def test_initialization(self) -> None:
@@ -834,7 +834,7 @@ def complex_function(a, b, c, d):
     def test_analyze_invalid_file(self, tmp_path: Any) -> None:
         """Test analysis of invalid Python file."""
         invalid_file = tmp_path / "invalid.py"
-        invalid_file.write_text("def invalid syntax!")
+        invalid_file.write_text("def invalid syntax!", encoding="utf-8")
 
         analyzer = RefactoringAnalyzer()
         results = analyzer.analyze_file(invalid_file)

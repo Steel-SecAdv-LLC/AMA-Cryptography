@@ -706,7 +706,7 @@ class BenchmarkValidator:
         }
 
         output_path = Path(__file__).parent / filename
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
         print(f"\nResults saved to {output_path}")
@@ -746,7 +746,7 @@ def main(argv: "List[str] | None" = None) -> int:
     # Generate and save report
     report = validator.generate_report()
     report_path = Path(__file__).parent / "validation_report.md"
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
     print(f"\nReport saved to {report_path}")
 

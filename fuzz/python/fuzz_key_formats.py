@@ -491,7 +491,7 @@ def _corpus_records() -> list[tuple[str, bytes]]:
     seeds: list[tuple[str, bytes]] = []
     corpus = REPO_ROOT / "tests" / "kat" / "keyformats"
     for path in sorted(corpus.glob("*.json")):
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         for record in data["records"]:
             if "pem_b64" not in record:
                 continue

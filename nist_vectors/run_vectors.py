@@ -252,7 +252,7 @@ def _load_vector_file(path: Path) -> dict[str, Any] | None:
     entry = _manifest().entries.get(path.name)
     if entry is not None:
         acvp_manifest.verify_file(entry, path)
-    return cast(dict[str, Any], json.loads(path.read_text()))
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def _sha3_mct_iterate(
@@ -1435,7 +1435,7 @@ def main() -> int:
     }
 
     out_path = VECTORS_DIR / "results.json"
-    out_path.write_text(json.dumps(results_json, indent=2))
+    out_path.write_text(json.dumps(results_json, indent=2), encoding="utf-8")
     print(f"\nResults written to {out_path}")
 
     problems = _verdict_problems(

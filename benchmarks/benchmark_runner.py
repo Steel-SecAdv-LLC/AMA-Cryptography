@@ -113,7 +113,7 @@ def published(value: float) -> float:
 
 def load_baseline(baseline_path: Path) -> Dict[str, Any]:
     """Load baseline configuration from JSON file."""
-    with open(baseline_path) as f:
+    with open(baseline_path, encoding="utf-8") as f:
         return cast(Dict[str, Any], json.load(f))
 
 
@@ -2090,13 +2090,13 @@ def main() -> int:
         # that checks whether the artefact exists would call that a run.
         # `json.dumps` raises before the file is created.
         payload = json.dumps(report, indent=2, allow_nan=False)
-        with open(args.output, "w") as f:
+        with open(args.output, "w", encoding="utf-8") as f:
             f.write(payload)
         print(f"Report written to: {args.output}")
 
     if args.markdown:
         md = generate_markdown_report(results, report)
-        with open(args.markdown, "w") as f:
+        with open(args.markdown, "w", encoding="utf-8") as f:
             f.write(md)
         print(f"Markdown report written to: {args.markdown}")
 

@@ -50,7 +50,7 @@ def gate() -> ModuleType:
 
 def _fake_repo(tmp_path: Path, files: dict[str, str]) -> Path:
     (tmp_path / "ama_cryptography").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "ama_cryptography" / "key_management.py").write_text("# stub\n")
+    (tmp_path / "ama_cryptography" / "key_management.py").write_text("# stub\n", encoding="utf-8")
     for relative, body in files.items():
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,7 +274,7 @@ def test_the_changelog_is_exempt(gate: ModuleType, tmp_path: Path) -> None:
 
 def test_a_tree_with_no_documentation_fails_closed(gate: ModuleType, tmp_path: Path) -> None:
     (tmp_path / "ama_cryptography").mkdir(parents=True)
-    (tmp_path / "ama_cryptography" / "key_management.py").write_text("# stub\n")
+    (tmp_path / "ama_cryptography" / "key_management.py").write_text("# stub\n", encoding="utf-8")
     assert gate.main(["--repo", str(tmp_path)]) == 2
 
 

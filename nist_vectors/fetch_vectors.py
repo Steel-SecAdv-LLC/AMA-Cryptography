@@ -302,7 +302,7 @@ def create_sha256_vectors() -> None:
             }
         ],
     }
-    out_path.write_text(json.dumps(vectors, indent=2))
+    out_path.write_text(json.dumps(vectors, indent=2), encoding="utf-8")
     print("  -> Saved SHA-256-FIPS180-4.json")
 
 
@@ -383,7 +383,7 @@ def create_aes256gcm_vectors() -> None:
             }
         ],
     }
-    out_path.write_text(json.dumps(vectors, indent=2))
+    out_path.write_text(json.dumps(vectors, indent=2), encoding="utf-8")
     print("  -> Saved AES-256-GCM-SP800-38D.json")
 
 

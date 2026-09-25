@@ -60,7 +60,7 @@ import ama_cryptography.pqc_backends as backends
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CORPUS = REPO_ROOT / "tests" / "kat" / "keyformats" / "rfc8554_hss_lms.json"
 
-DATA: dict[str, Any] = json.loads(CORPUS.read_text())
+DATA: dict[str, Any] = json.loads(CORPUS.read_text(encoding="utf-8"))
 RECORDS: list[dict[str, Any]] = DATA["records"]
 
 #: The verifier lives in the unconditional C source list, so it is present in

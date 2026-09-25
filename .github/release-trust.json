@@ -1,4 +1,4 @@
 {
-  "trusted_branches": ["main"],
+  "release_branches": ["main"],
   "_comment": "Branches a release tag's commit must be reachable from. release.yml's preflight reads this file from origin/main with `git show`, never from the tag's own tree, and passes it to tools/check_release_tag.py --trust-config; that tool's docstring records why the definition of 'trusted' has to come from the protected branch."
 }

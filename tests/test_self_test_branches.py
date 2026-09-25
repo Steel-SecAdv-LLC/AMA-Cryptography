@@ -49,7 +49,7 @@ def isolated_integrity_file(
     """
     fake = tmp_path / "_integrity_digest.txt"
     if st._INTEGRITY_DIGEST_FILE.exists():
-        fake.write_text(st._INTEGRITY_DIGEST_FILE.read_text(encoding="utf-8"))
+        fake.write_text(st._INTEGRITY_DIGEST_FILE.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setattr(st, "_INTEGRITY_DIGEST_FILE", fake)
     yield fake
 

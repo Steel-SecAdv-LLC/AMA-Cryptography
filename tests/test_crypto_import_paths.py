@@ -363,7 +363,7 @@ class TestDilithiumUnavailablePaths:
         out_dir = tmp_path / "keys"
         with caplog.at_level(logging.DEBUG, logger="ama_cryptography.legacy_compat"):
             dgs.export_public_keys(kms, out_dir)
-        readme = (out_dir / "README.txt").read_text()
+        readme = (out_dir / "README.txt").read_text(encoding="utf-8")
         assert "Dilithium Public Key: NOT AVAILABLE" in readme
         assert "Dilithium: NOT AVAILABLE" in caplog.text
 

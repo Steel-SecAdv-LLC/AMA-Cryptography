@@ -1090,7 +1090,7 @@ class TestShippedTreeAnnotationRule:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, kind: str
     ) -> None:
         path = self._shipped(tmp_path, monkeypatch, f"void f(void) {{ memset({name}, 0, 32); }}\n")
-        findings = gate.scan_text(path.read_text(), path)
+        findings = gate.scan_text(path.read_text(encoding="utf-8"), path)
         assert [(f.dst, f.kind) for f in findings] == [(name, kind)]
 
     @pytest.mark.parametrize(
@@ -1105,7 +1105,7 @@ class TestShippedTreeAnnotationRule:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str
     ) -> None:
         path = self._shipped(tmp_path, monkeypatch, body)
-        assert gate.scan_text(path.read_text(), path) == []
+        assert gate.scan_text(path.read_text(encoding="utf-8"), path) == []
 
     def test_an_annotation_two_lines_above_does_not_count(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1113,7 +1113,9 @@ class TestShippedTreeAnnotationRule:
         path = self._shipped(
             tmp_path, monkeypatch, "/* PUBLIC-DATA: sel */\nint x;\nmemset(sel, 0, 32);\n"
         )
-        assert [f.kind for f in gate.scan_text(path.read_text(), path)] == ["unannotated"]
+        assert [f.kind for f in gate.scan_text(path.read_text(encoding="utf-8"), path)] == [
+            "unannotated"
+        ]
 
     def test_a_neighbours_annotation_does_not_cover_the_call_below(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1131,9 +1133,10 @@ class TestShippedTreeAnnotationRule:
             "memset(&input_block, 0, 16);  // PUBLIC-DATA: input_block — pad\n"
             "memset(kr, 0, sizeof kr);\n",
         )
-        assert [(f.line_no, f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
-            (2, "kr", "unannotated")
-        ]
+        assert [
+            (f.line_no, f.dst, f.kind)
+            for f in gate.scan_text(path.read_text(encoding="utf-8"), path)
+        ] == [(2, "kr", "unannotated")]
 
     def test_a_block_comment_line_above_still_annotates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1144,7 +1147,7 @@ class TestShippedTreeAnnotationRule:
             monkeypatch,
             "/* why this is safe:\n * PUBLIC-DATA: sel — pre-use init */\nmemset(sel, 0, 32);\n",
         )
-        assert gate.scan_text(path.read_text(), path) == []
+        assert gate.scan_text(path.read_text(encoding="utf-8"), path) == []
 
     @pytest.mark.parametrize(
         "body",
@@ -1160,7 +1163,9 @@ class TestShippedTreeAnnotationRule:
     ) -> None:
         """An annotation is a comment; the same letters in a string are data."""
         path = self._shipped(tmp_path, monkeypatch, body)
-        assert [f.kind for f in gate.scan_text(path.read_text(), path)] == ["unannotated"]
+        assert [f.kind for f in gate.scan_text(path.read_text(encoding="utf-8"), path)] == [
+            "unannotated"
+        ]
 
     def test_a_secret_named_destination_is_flagged_despite_an_annotation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1168,7 +1173,9 @@ class TestShippedTreeAnnotationRule:
         path = self._shipped(
             tmp_path, monkeypatch, "memset(secret_key, 0, 32);  // PUBLIC-DATA: secret_key\n"
         )
-        assert [f.kind for f in gate.scan_text(path.read_text(), path)] == ["secret-named"]
+        assert [f.kind for f in gate.scan_text(path.read_text(encoding="utf-8"), path)] == [
+            "secret-named"
+        ]
 
     def test_the_test_tree_keeps_the_naming_rule_only(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1177,9 +1184,9 @@ class TestShippedTreeAnnotationRule:
         tests_root = tmp_path / "tests" / "c"
         tests_root.mkdir(parents=True)
         path = _write(tests_root, "memset(kr, 0, 32);\nmemset(secret_key, 0, 32);\n")
-        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
-            ("secret_key", "secret-named")
-        ]
+        assert [
+            (f.dst, f.kind) for f in gate.scan_text(path.read_text(encoding="utf-8"), path)
+        ] == [("secret_key", "secret-named")]
 
     def test_non_zero_fills_need_no_annotation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1187,7 +1194,7 @@ class TestShippedTreeAnnotationRule:
         path = self._shipped(
             tmp_path, monkeypatch, "memset(k_ipad, 0x36, 136);\nmemset(V, 0x01, 32);\n"
         )
-        assert gate.scan_text(path.read_text(), path) == []
+        assert gate.scan_text(path.read_text(encoding="utf-8"), path) == []
 
     def test_the_unannotated_hint_names_both_remedies(self) -> None:
         finding = gate.Finding(_INLINE, 1, "sk", "memset(sk, 0, 32);", "sk", "unannotated")
@@ -1480,9 +1487,9 @@ class TestBareSecretNamesAndOtherZeroingCalls:
     ) -> None:
         monkeypatch.setattr(gate, "C_ROOT", tmp_path / "src" / "c")
         path = _write(tmp_path, f"void f(void) {{ {line} }}\n")
-        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
-            (name, "secret-named")
-        ]
+        assert [
+            (f.dst, f.kind) for f in gate.scan_text(path.read_text(encoding="utf-8"), path)
+        ] == [(name, "secret-named")]
 
     def test_a_public_data_annotation_does_not_launder_a_secret_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1491,9 +1498,9 @@ class TestBareSecretNamesAndOtherZeroingCalls:
         root.mkdir(parents=True)
         monkeypatch.setattr(gate, "C_ROOT", root)
         path = _write(root, "memset(sk, 0, 64);  // PUBLIC-DATA: sk — not really\n")
-        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
-            ("sk", "secret-named")
-        ]
+        assert [
+            (f.dst, f.kind) for f in gate.scan_text(path.read_text(encoding="utf-8"), path)
+        ] == [("sk", "secret-named")]
 
     @pytest.mark.parametrize(
         ("line", "call"),
@@ -1522,9 +1529,9 @@ class TestBareSecretNamesAndOtherZeroingCalls:
         root.mkdir(parents=True)
         monkeypatch.setattr(gate, "C_ROOT", root)
         path = _write(root, "bzero(scratch, 32);\nbzero(tmp, 8);  // PUBLIC-DATA: tmp — counter\n")
-        assert [(f.dst, f.kind) for f in gate.scan_text(path.read_text(), path)] == [
-            ("scratch", "unannotated")
-        ]
+        assert [
+            (f.dst, f.kind) for f in gate.scan_text(path.read_text(encoding="utf-8"), path)
+        ] == [("scratch", "unannotated")]
 
     def test_a_bzero_wrapper_macro_and_alias_are_seen_at_the_call_site(
         self, tmp_path: Path

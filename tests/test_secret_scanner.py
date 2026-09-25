@@ -123,7 +123,7 @@ class TestDetectsRealCredentials:
 
     def test_env_file_is_flagged(self, tmp_path: Path) -> None:
         env = tmp_path / ".env"
-        env.write_text("API_TOKEN=abc123\n")
+        env.write_text("API_TOKEN=abc123\n", encoding="utf-8")
         findings = scan_file(env, tmp_path)
         assert "env-file" in _rules(findings)
 

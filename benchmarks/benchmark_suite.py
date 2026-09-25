@@ -420,7 +420,7 @@ class BenchmarkSuite:
 
     def save_results(self, filename: str = "benchmark_results.json") -> None:
         """Save benchmark results to JSON file."""
-        with open(filename, "w") as f:
+        with open(filename, "w", encoding="utf-8") as f:
             json.dump(self.results, f, indent=2)
         print(f"Results saved to: {filename}")
 
@@ -525,7 +525,7 @@ class BenchmarkSuite:
 
         # --- Write file ---
         md_content = "\n".join(lines)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(md_content)
         print(f"Markdown report saved to: {output_path}")
         return md_content

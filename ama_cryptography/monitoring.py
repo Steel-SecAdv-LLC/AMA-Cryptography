@@ -1008,7 +1008,7 @@ class NonceTracker:
         are tolerated (trailing newline, etc.).
         """
         try:
-            with open(self._persist_path, "r") as f:
+            with open(self._persist_path, "r", encoding="utf-8") as f:
                 for lineno, raw_line in enumerate(f, 1):
                     line = raw_line.strip()
                     if not line:
@@ -1058,7 +1058,7 @@ class NonceTracker:
             # umask, which is 0644 on a default account.
             flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
             fd = os.open(self._persist_path, flags, self._LEDGER_MODE)
-            with os.fdopen(fd, "a") as f:
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(f"{key_id_hash},{nonce_hex}\n")
                 f.flush()
                 os.fsync(f.fileno())
@@ -1203,7 +1203,7 @@ class NonceTracker:
         fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=".nonce_tracker.")
         try:
             _owner_only.restrict_fd_to_owner(fd, tmp_name)
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 for key_hash, nonce_hex in sorted(self._seen):
                     f.write(f"{key_hash},{nonce_hex}\n")
                 f.flush()

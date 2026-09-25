@@ -380,7 +380,8 @@ def test_synthetic_c_file_is_flagged(tool_module: ModuleType, tmp_path: Path) ->
     fake.write_text(
         "/* synthetic test fixture */\n"
         '#define MY_VERSION "9.9.9"\n'
-        'static const char *version = "0.1.2";\n'
+        'static const char *version = "0.1.2";\n',
+        encoding="utf-8",
     )
 
     hits = tool_module.scan_c_sources_for_version_literals(src_dir)
@@ -418,7 +419,10 @@ def test_literal_without_version_identifier_is_ignored(
     src_dir = tmp_path / "c"
     src_dir.mkdir()
     f = src_dir / "no_version_ident.c"
-    f.write_text('static const char *rfc_section = "5.2.1";\n' "int main(void) { return 0; }\n")
+    f.write_text(
+        'static const char *rfc_section = "5.2.1";\n' "int main(void) { return 0; }\n",
+        encoding="utf-8",
+    )
     assert tool_module.scan_c_sources_for_version_literals(src_dir) == []
 
 
@@ -428,7 +432,7 @@ def test_header_files_are_scanned(tool_module: ModuleType, tmp_path: Path) -> No
     src_dir = tmp_path / "c"
     src_dir.mkdir()
     h = src_dir / "fake_module.h"
-    h.write_text('#define FAKE_VERSION "2.5.0"\n')
+    h.write_text('#define FAKE_VERSION "2.5.0"\n', encoding="utf-8")
     hits = tool_module.scan_c_sources_for_version_literals(src_dir)
     assert any("fake_module.h" in hit and "2.5.0" in hit for hit in hits)
 
@@ -446,7 +450,7 @@ def test_standalone_uppercase_version_identifier_is_flagged(
     src_dir = tmp_path / "c"
     src_dir.mkdir()
     f = src_dir / "standalone_upper.c"
-    f.write_text('#define VERSION "1.2.3"\n')
+    f.write_text('#define VERSION "1.2.3"\n', encoding="utf-8")
     hits = tool_module.scan_c_sources_for_version_literals(src_dir)
     assert any("1.2.3" in hit for hit in hits), f"VERSION was not flagged: {hits}"
 
@@ -461,7 +465,7 @@ def test_standalone_titlecase_version_identifier_is_flagged(
     src_dir = tmp_path / "c"
     src_dir.mkdir()
     f = src_dir / "standalone_title.c"
-    f.write_text('#define Version "2.0.0"\n')
+    f.write_text('#define Version "2.0.0"\n', encoding="utf-8")
     hits = tool_module.scan_c_sources_for_version_literals(src_dir)
     assert any("2.0.0" in hit for hit in hits), f"Version was not flagged: {hits}"
 
@@ -487,7 +491,9 @@ def test_declared_version_scan_flags_a_stale_stamp(tool_module: ModuleType, tmp_
     detect drift, not walk quietly. Both stamp kinds are exercised."""
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "stale.py").write_text('"""m\n\nVersion: 3.0.0\n"""\n__version__ = "3.0.0"\n')
+    (pkg / "stale.py").write_text(
+        '"""m\n\nVersion: 3.0.0\n"""\n__version__ = "3.0.0"\n', encoding="utf-8"
+    )
     stamps = tool_module.scan_declared_versions(tmp_path)
     seen = {(label, val) for _rel, _ln, label, val in stamps}
     assert ("__version__", "3.0.0") in seen
@@ -532,10 +538,12 @@ def test_the_scan_catches_a_drifted_constant(tool_module: ModuleType, tmp_path: 
     """Failure direction, on the exact constant that had no gate."""
     header = tmp_path / "include" / "ama_cryptography.h"
     header.parent.mkdir(parents=True)
-    header.write_text("typedef enum {\n    AMA_ERROR_INVALID_PARAM = -1,\n} ama_error_t;\n")
+    header.write_text(
+        "typedef enum {\n    AMA_ERROR_INVALID_PARAM = -1,\n} ama_error_t;\n", encoding="utf-8"
+    )
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "mirror.py").write_text("AMA_ERROR_INVALID_PARAM = -2\n")
+    (pkg / "mirror.py").write_text("AMA_ERROR_INVALID_PARAM = -2\n", encoding="utf-8")
     problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
     assert checked == 1
     assert any("AMA_ERROR_INVALID_PARAM" in p and "-2" in p for p in problems), problems
@@ -555,11 +563,14 @@ def test_the_scan_matches_through_a_leading_underscore_and_a_dropped_prefix(
     header.parent.mkdir(parents=True)
     header.write_text(
         "typedef enum {\n    AMA_ERROR_VERIFY_FAILED = -4,\n} ama_error_t;\n"
-        "#define AMA_ED25519_PUBLIC_KEY_BYTES 32\n"
+        "#define AMA_ED25519_PUBLIC_KEY_BYTES 32\n",
+        encoding="utf-8",
     )
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "mirror.py").write_text("_AMA_ERROR_VERIFY_FAILED = -5\nED25519_PUBLIC_KEY_BYTES = 31\n")
+    (pkg / "mirror.py").write_text(
+        "_AMA_ERROR_VERIFY_FAILED = -5\nED25519_PUBLIC_KEY_BYTES = 31\n", encoding="utf-8"
+    )
     problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
     assert checked == 2
     assert len(problems) == 2, problems
@@ -570,10 +581,12 @@ def test_the_scan_reaches_class_level_constants(tool_module: ModuleType, tmp_pat
     only walked module level would miss them entirely."""
     header = tmp_path / "include" / "ama_cryptography.h"
     header.parent.mkdir(parents=True)
-    header.write_text("#define AMA_ED25519_SIGNATURE_BYTES 64\n")
+    header.write_text("#define AMA_ED25519_SIGNATURE_BYTES 64\n", encoding="utf-8")
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "sizes.py").write_text("class Sizes:\n    ED25519_SIGNATURE_BYTES = 63\n")
+    (pkg / "sizes.py").write_text(
+        "class Sizes:\n    ED25519_SIGNATURE_BYTES = 63\n", encoding="utf-8"
+    )
     problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
     assert checked == 1 and len(problems) == 1, (problems, checked)
 
@@ -585,10 +598,12 @@ def test_unrelated_python_constants_are_not_flagged(
     the gate un-satisfiable and push a maintainer to rename working code."""
     header = tmp_path / "include" / "ama_cryptography.h"
     header.parent.mkdir(parents=True)
-    header.write_text("#define AMA_ED25519_SIGNATURE_BYTES 64\n")
+    header.write_text("#define AMA_ED25519_SIGNATURE_BYTES 64\n", encoding="utf-8")
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "local.py").write_text("_TIMING_ITERATIONS = 10000\nMAX_RETRIES = 3\nDEBUG = True\n")
+    (pkg / "local.py").write_text(
+        "_TIMING_ITERATIONS = 10000\nMAX_RETRIES = 3\nDEBUG = True\n", encoding="utf-8"
+    )
     problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
     assert (problems, checked) == ([], 0)
 
@@ -610,10 +625,10 @@ def test_an_alias_pointing_at_nothing_is_reported(
 ) -> None:
     header = tmp_path / "include" / "ama_cryptography.h"
     header.parent.mkdir(parents=True)
-    header.write_text("#define AMA_SOMETHING_ELSE 1\n")
+    header.write_text("#define AMA_SOMETHING_ELSE 1\n", encoding="utf-8")
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "aliased.py").write_text("LOCAL_NAME = 16\n")
+    (pkg / "aliased.py").write_text("LOCAL_NAME = 16\n", encoding="utf-8")
     monkeypatch.setattr(
         tool_module,
         "C_CONSTANT_ALIASES",

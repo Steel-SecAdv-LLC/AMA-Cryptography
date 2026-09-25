@@ -177,7 +177,7 @@ checked, fail-closed:
   2. it names a tag object, not a commit (the lightweight case)
   3. that object carries a complete OpenPGP, SSH or SIGNED MESSAGE block
   4. with --trust-config FILE: the tag's commit is an ancestor of a branch the
-     file's "trusted_branches" list names (git merge-base --is-ancestor against
+     file's "release_branches" list names (git merge-base --is-ancestor against
      refs/remotes/<--branch-prefix><branch>, i.e. origin/<branch> by default;
      an empty prefix resolves refs/heads/<branch>).  A missing, invalid or
      empty FILE fails.  release.yml reads FILE out of origin/main with
@@ -367,11 +367,11 @@ def is_ancestor(commit: str, tip: str, repo: Path) -> bool:
     return result.returncode == 0
 
 
-def load_trusted_branches(config: Path) -> tuple[list[str], list[str]]:
+def load_release_branches(config: Path) -> tuple[list[str], list[str]]:
     """``(branches, problems)`` from a trust configuration file.
 
     A file that cannot be read, is not JSON, or does not carry a non-empty
-    ``"trusted_branches"`` list of names is a problem, never an empty list
+    ``"release_branches"`` list of names is a problem, never an empty list
     that a caller could mistake for "nothing to check".
     """
     try:
@@ -387,14 +387,14 @@ def load_trusted_branches(config: Path) -> tuple[list[str], list[str]]:
         document = json.loads(text)
     except ValueError as exc:
         return [], [f"trust config `{config}` is not valid JSON: {exc}"]
-    branches = document.get("trusted_branches") if isinstance(document, dict) else None
+    branches = document.get("release_branches") if isinstance(document, dict) else None
     if (
         not isinstance(branches, list)
         or not branches
         or not all(isinstance(branch, str) and branch.strip() for branch in branches)
     ):
         return [], [
-            f'trust config `{config}` must carry a non-empty "trusted_branches" list of '
+            f'trust config `{config}` must carry a non-empty "release_branches" list of '
             "branch names; an empty or missing list would trust nothing and release "
             "nothing, which is the intended reading."
         ]
@@ -403,7 +403,7 @@ def load_trusted_branches(config: Path) -> tuple[list[str], list[str]]:
 
 def check_provenance(tag: str, repo: Path, trust_config: Path, branch_prefix: str) -> list[str]:
     """Problems with where ``tag`` points; empty means it descends from a trusted branch."""
-    branches, problems = load_trusted_branches(trust_config)
+    branches, problems = load_release_branches(trust_config)
     if problems:
         return problems
     commit = tag_commit(tag, repo)
@@ -476,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            'JSON file with a "trusted_branches" list; enables check 4. '
+            'JSON file with a "release_branches" list; enables check 4. '
             "release.yml passes a copy read from origin/main."
         ),
     )

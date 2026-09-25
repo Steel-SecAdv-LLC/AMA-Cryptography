@@ -1098,7 +1098,7 @@ class TestClassAndCrossModuleInhibition:
             """)
         import tempfile
 
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as fh:
             fh.write(src)
             path = Path(fh.name)
         try:

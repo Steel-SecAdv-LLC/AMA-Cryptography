@@ -774,7 +774,7 @@ class KeyRotationManager:
             }
 
         if filepath:
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2)
 
         return export_data
@@ -1107,7 +1107,7 @@ class SecureKeyStorage:
 
             # Load metadata to get iteration count
             if self.metadata_file.exists():
-                with open(self.metadata_file, "r") as f:
+                with open(self.metadata_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
                 iterations = metadata.get("iterations", self.KDF_LEGACY_ITERATIONS)
                 version = metadata.get("version", 1)
@@ -1180,7 +1180,7 @@ class SecureKeyStorage:
                 #
                 # Read the values raw and let the policy check adjudicate.
                 try:
-                    with open(self.metadata_file, "r") as _f:
+                    with open(self.metadata_file, "r", encoding="utf-8") as _f:
                         _meta = json.load(_f)
                 except (OSError, json.JSONDecodeError) as _exc:
                     logger.warning(
@@ -1310,7 +1310,7 @@ class SecureKeyStorage:
             # permanently unreadable, while list_keys() went on reporting it.
             # Silent, and not recoverable once the old salt is gone.
             if key_data is not None:
-                with open(key_file, "r") as f:
+                with open(key_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f).get("metadata", {})
                 old_keys[key_id] = (key_data, metadata)
 
@@ -1546,7 +1546,7 @@ class SecureKeyStorage:
         if not key_file.exists():
             return None
 
-        with open(key_file, "r") as f:
+        with open(key_file, "r", encoding="utf-8") as f:
             storage_data = json.load(f)
 
         algorithm = storage_data.get("algorithm", "AES-256-GCM")

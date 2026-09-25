@@ -78,7 +78,7 @@ def test_every_corpus_file_cites_an_rfc(tool: ModuleType) -> None:
     corpus = REPO_ROOT / "tests" / "kat" / "keyformats"
     seen = 0
     for path in sorted(corpus.glob("*.json")):
-        source = json.loads(path.read_text())["source"]
+        source = json.loads(path.read_text(encoding="utf-8"))["source"]
         assert any(host in source["url"] for host in tool.STANDARDS_HOSTS), path.name
         assert source["title"] and source["revision"], path.name
         seen += 1
@@ -93,7 +93,8 @@ def test_a_subprocess_invocation_of_openssl_is_caught(tool: ModuleType, tmp_path
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "gen.py").write_text(
         "import subprocess\n"
-        'subprocess.run(["openssl", "genpkey", "-algorithm", "EC"], check=True)\n'
+        'subprocess.run(["openssl", "genpkey", "-algorithm", "EC"], check=True)\n',
+        encoding="utf-8",
     )
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any("openssl" in p and "gen.py" in p for p in problems), problems
@@ -106,7 +107,8 @@ def test_other_cryptographic_binaries_are_caught(
     """Not an OpenSSL-shaped rule: any other implementation counts."""
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "t.py").write_text(
-        f'import subprocess\nsubprocess.check_output("{binary} --version", shell=True)\n'
+        f'import subprocess\nsubprocess.check_output("{binary} --version", shell=True)\n',
+        encoding="utf-8",
     )
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any(binary in p for p in problems), problems
@@ -128,7 +130,8 @@ def test_the_shipped_package_is_in_scope(tool: ModuleType, tmp_path: Path) -> No
     (tmp_path / "ama_cryptography").mkdir()
     (tmp_path / "ama_cryptography" / "legacy_compat.py").write_text(
         "import subprocess\n"
-        'subprocess.run(["openssl", "ts", "-query", "-data", "-"], capture_output=True)\n'
+        'subprocess.run(["openssl", "ts", "-query", "-data", "-"], capture_output=True)\n',
+        encoding="utf-8",
     )
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any("openssl" in p and "legacy_compat.py" in p for p in problems), problems
@@ -151,7 +154,8 @@ def test_a_mention_in_prose_is_not_a_finding(tool: ModuleType, tmp_path: Path) -
         "# openssl is not used here\n"
         'OPENSSL_NOTE = "openssl"\n'
         "import subprocess\n"
-        'subprocess.run(["python3", "-c", "pass"], check=True)\n'
+        'subprocess.run(["python3", "-c", "pass"], check=True)\n',
+        encoding="utf-8",
     )
     assert tool.scan_for_binary_invocations(tmp_path) == []
 
@@ -167,7 +171,8 @@ def test_a_corpus_file_citing_a_non_standards_source_is_caught(
                 "source": {"url": "https://example.com/keys", "title": "t", "revision": "r"},
                 "records": [],
             }
-        )
+        ),
+        encoding="utf-8",
     )
     problems = tool.scan_corpus_sources(corpus)
     assert any("not a standards-body archive" in p for p in problems), problems
@@ -188,12 +193,13 @@ def test_a_directory_of_key_files_in_the_corpus_is_caught(tool: ModuleType, tmp_
                 },
                 "records": [],
             }
-        )
+        ),
+        encoding="utf-8",
     )
     # Deliberately *not* a literal PEM header: the check under test keys off
     # the directory, not the contents, and a real header here would be a finding
     # for tools/check_secrets.py (INVARIANT-23) in this very file.
-    (corpus / "somevendor" / "P-256.key.pem").write_text("placeholder\n")
+    (corpus / "somevendor" / "P-256.key.pem").write_text("placeholder\n", encoding="utf-8")
     problems = tool.scan_corpus_sources(corpus)
     assert any("unexpected directory" in p for p in problems), problems
 
@@ -203,11 +209,11 @@ def test_a_reference_encoder_that_imports_the_production_one_is_caught(
 ) -> None:
     """The one-line change that would silently void every differential test."""
     path = tmp_path / "ref.py"
-    path.write_text("from ama_cryptography._asn1 import der_sequence\n")
+    path.write_text("from ama_cryptography._asn1 import der_sequence\n", encoding="utf-8")
     problems = tool.check_reference_encoder(path)
     assert any("imports ama_cryptography" in p for p in problems), problems
 
-    path.write_text("import ama_cryptography.key_formats as kf\n")
+    path.write_text("import ama_cryptography.key_formats as kf\n", encoding="utf-8")
     assert tool.check_reference_encoder(path) != []
 
 
@@ -256,7 +262,7 @@ def test_indirect_invocations_are_caught(
     tool: ModuleType, tmp_path: Path, label: str, source: str
 ) -> None:
     (tmp_path / "ama_cryptography").mkdir()
-    (tmp_path / "ama_cryptography" / "sneaky.py").write_text(source)
+    (tmp_path / "ama_cryptography" / "sneaky.py").write_text(source, encoding="utf-8")
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any("openssl" in p for p in problems), f"{label}: {problems}"
 
@@ -275,7 +281,8 @@ def test_a_binary_name_that_only_appears_in_a_docstring_is_still_not_a_finding(
         "import subprocess\n"
         'NOTE = "this replaces the openssl ts -query call"\n'
         '"""Module docstring mentioning openssl and gpg."""\n'
-        'subprocess.run(["python3", "-c", "pass"], check=True)\n'
+        'subprocess.run(["python3", "-c", "pass"], check=True)\n',
+        encoding="utf-8",
     )
     assert tool.scan_for_binary_invocations(tmp_path) == []
 

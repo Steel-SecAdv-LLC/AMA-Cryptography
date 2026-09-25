@@ -651,7 +651,7 @@ class TestSLHDSA_SHA2_256f_KAT:
                 "validated-by-skip."
             )
 
-        with open(vectors_path) as f:
+        with open(vectors_path, encoding="utf-8") as f:
             data = json.load(f)
 
         tested = 0
@@ -690,7 +690,7 @@ class TestSLHDSA_SHA2_256f_KAT:
                 "validated-by-skip."
             )
 
-        with open(vectors_path) as f:
+        with open(vectors_path, encoding="utf-8") as f:
             data = json.load(f)
 
         tested = 0
@@ -747,7 +747,7 @@ class TestSLHDSA_SHAKE_128s_ACVP:
                 "corpus, not a reason to report this parameter set as "
                 "validated-by-skip."
             )
-        with open(self.VECTORS_PATH) as f:
+        with open(self.VECTORS_PATH, encoding="utf-8") as f:
             data = json.load(f)
         vectors: list[dict[str, Any]] = data["vectors"]
         if not vectors:
@@ -899,7 +899,7 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
                 "corpus, not a reason to report this parameter set as "
                 "validated-by-skip."
             )
-        with open(self.VECTORS_PATH) as f:
+        with open(self.VECTORS_PATH, encoding="utf-8") as f:
             data = json.load(f)
         vectors: list[dict[str, Any]] = data["vectors"]
         if not vectors:

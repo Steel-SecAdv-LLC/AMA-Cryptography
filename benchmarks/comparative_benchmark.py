@@ -797,7 +797,7 @@ class ComparativeBenchmark:
         data["provenance"] = provenance if provenance is not None else _measurement_provenance()
 
         output_path = Path(__file__).parent / filename
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
         print(f"\n✓ Results saved to {output_path}")

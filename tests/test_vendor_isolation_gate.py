@@ -287,15 +287,15 @@ class TestCSourceCheck:
     def test_a_vendored_tree_is_flagged(self, tmp_path: Path) -> None:
         root = tmp_path / "src" / "c"
         (root / "vendor" / "something").mkdir(parents=True)
-        (root / "ama_thing.c").write_text("int x;\n")
-        (root / "vendor" / "something" / "x.h").write_text("/* vendored */\n")
+        (root / "ama_thing.c").write_text("int x;\n", encoding="utf-8")
+        (root / "vendor" / "something" / "x.h").write_text("/* vendored */\n", encoding="utf-8")
         violations = gate.check_c_source(root, tmp_path)
         assert any(gate.VENDOR_TREE in v.where for v in violations)
 
     def test_a_vendor_include_is_flagged(self, tmp_path: Path) -> None:
         root = tmp_path / "src" / "c"
         root.mkdir(parents=True)
-        (root / "ama_thing.c").write_text("#include <openssl/evp.h>\n")
+        (root / "ama_thing.c").write_text("#include <openssl/evp.h>\n", encoding="utf-8")
         violations = gate.check_c_source(root, tmp_path)
         assert any("OpenSSL" in v.detail for v in violations)
 
@@ -304,7 +304,8 @@ class TestCSourceCheck:
         root = tmp_path / "src" / "c"
         root.mkdir(parents=True)
         (root / "ama_hash.h").write_text(
-            '#if defined(OWN_HASH)\n#include "own.h"\n#else\n#include <openssl/sha.h>\n#endif\n'
+            '#if defined(OWN_HASH)\n#include "own.h"\n#else\n#include <openssl/sha.h>\n#endif\n',
+            encoding="utf-8",
         )
         violations = gate.check_c_source(root, tmp_path)
         assert any("OpenSSL" in v.detail for v in violations)
@@ -327,7 +328,7 @@ class TestCSourceCheck:
         """A vendor with no C include root would be invisible to this check."""
         root = tmp_path / "src" / "c"
         root.mkdir(parents=True)
-        (root / "ama_thing.c").write_text(f"#include {include}\n")
+        (root / "ama_thing.c").write_text(f"#include {include}\n", encoding="utf-8")
         violations = gate.check_c_source(root, tmp_path)
         assert any(vendor in v.detail for v in violations)
 

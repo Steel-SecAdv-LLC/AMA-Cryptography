@@ -953,7 +953,7 @@ def _atomic_write_json(
 
     fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp", prefix=tmp_prefix)
     try:
-        f = os.fdopen(fd, "w")
+        f = os.fdopen(fd, "w", encoding="utf-8")
     except BaseException:
         os.close(fd)
         try:
@@ -1119,7 +1119,7 @@ class AESGCMProvider:
 
         path = cls._get_persist_path()
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = _json.load(f)
             for key_hex, count in data.items():
                 key_id = bytes.fromhex(key_hex)
@@ -1214,7 +1214,7 @@ class AESGCMProvider:
 
         path = cls._get_persist_path()
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 on_disk = _json.load(f)
             for key_hex, count in on_disk.items():
                 key_id = bytes.fromhex(key_hex)

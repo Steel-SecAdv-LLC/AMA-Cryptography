@@ -97,7 +97,7 @@ _PLATFORM = f"{platform.system()} {platform.machine()}, {os.cpu_count()} cores"
 
 # ── Load benchmark data ────────────────────────────────────────────────
 def load_json(path: Path) -> Any:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -105,7 +105,7 @@ def load_json_safe(path: Path, default: Any = None) -> Any:
     """Load JSON file, returning default if the file does not exist."""
     if not path.exists():
         return default
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

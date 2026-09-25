@@ -821,7 +821,7 @@ def export_public_keys(kms: KeyManagementSystem, output_dir: Path) -> None:
             f.write(kms.dilithium_keypair.public_key)
 
     readme_path = output_dir / "README.txt"
-    with open(readme_path, "w") as f:
+    with open(readme_path, "w", encoding="utf-8") as f:
         f.write("AMA Cryptography - Public Keys\n")
         f.write("=" * 50 + "\n\n")
         f.write(f"Generated: {kms.creation_date}\n")
@@ -1702,7 +1702,7 @@ def main() -> int:
 
     # Save cryptographic package
     package_file = Path("CRYPTO_PACKAGE.json")
-    with open(package_file, "w") as f:
+    with open(package_file, "w", encoding="utf-8") as f:
         json.dump(asdict(crypto_pkg), f, indent=2)
     print(f"  \u2713 Package saved: {package_file}")
 

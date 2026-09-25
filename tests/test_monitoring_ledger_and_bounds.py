@@ -99,10 +99,10 @@ class TestForgetKeyIsTheReclaimPath:
         tracker = NonceTracker(persist_path=str(ledger))
         tracker.check_and_record(b"retired", b"\x00" * 12)
         tracker.check_and_record(b"live", b"\x02" * 12)
-        assert len(ledger.read_text().splitlines()) == 2
+        assert len(ledger.read_text(encoding="utf-8").splitlines()) == 2
 
         tracker.forget_key(b"retired")
-        assert len(ledger.read_text().splitlines()) == 1
+        assert len(ledger.read_text(encoding="utf-8").splitlines()) == 1
         assert _owner_only.access_description(ledger) == (
             _owner_only.expected_owner_only_description()
         )
@@ -154,7 +154,7 @@ class TestTheLedgerIsOwnerOnly:
         whichever platform is running, including Windows.
         """
         ledger = tmp_path / "ledger.dat"
-        ledger.write_text("")
+        ledger.write_text("", encoding="utf-8")
         _widen(ledger)
         assert _owner_only.access_description(ledger) != (
             _owner_only.expected_owner_only_description()
@@ -199,7 +199,7 @@ class TestTheLedgerIsOwnerOnly:
         octal literal.
         """
         ledger = tmp_path / "ledger.dat"
-        ledger.write_text("")
+        ledger.write_text("", encoding="utf-8")
         ledger.chmod(stat.S_IRUSR | stat.S_IWUSR | stale_bits)
         assert stat.S_IMODE(ledger.stat().st_mode) != 0o600, "fixture is vacuous"
         NonceTracker(persist_path=str(ledger)).check_and_record(b"k", b"\x00" * 12)
@@ -208,14 +208,14 @@ class TestTheLedgerIsOwnerOnly:
     @pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="no O_NOFOLLOW on this platform")
     def test_appending_through_a_planted_symlink_is_refused(self, tmp_path: pathlib.Path) -> None:
         target = tmp_path / "victim.txt"
-        target.write_text("untouched")
+        target.write_text("untouched", encoding="utf-8")
         ledger = tmp_path / "ledger.dat"
         ledger.symlink_to(target)
         tracker = NonceTracker(persist_path=str(ledger), ephemeral=True)
         tracker._ephemeral = False  # keep the constructor from reading the link
         with pytest.raises(RuntimeError):
             tracker.check_and_record(b"k", b"\x00" * 12)
-        assert target.read_text() == "untouched"
+        assert target.read_text(encoding="utf-8") == "untouched"
 
 
 class TestSizeNormalisationIsLiveOnEveryShippedCallSite:

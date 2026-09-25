@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 91 C test suites, 269 Python test modules |
+| `tests/c/`, `tests/` | 91 C test suites, 270 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:

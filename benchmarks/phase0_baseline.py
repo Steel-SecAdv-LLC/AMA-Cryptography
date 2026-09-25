@@ -369,7 +369,7 @@ def main() -> dict[str, dict[str, float | str]]:
 
     # Save results
     out_path = Path(__file__).parent / "phase0_baseline_results.json"
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"Results saved to: {out_path}")
 

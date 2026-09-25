@@ -106,7 +106,7 @@ def _run(tmp_path: Path, tool: ModuleType, report: Any) -> tuple[int, str]:
     redirected into one buffer and returned together.
     """
     path = tmp_path / "semgrep.json"
-    path.write_text(report if isinstance(report, str) else json.dumps(report))
+    path.write_text(report if isinstance(report, str) else json.dumps(report), encoding="utf-8")
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
         rc = tool.main([str(path)])
@@ -388,7 +388,7 @@ def test_the_real_tree_passes_the_gate(tmp_path: Path) -> None:
     # Non-vacuity: a gate that passed on an empty report would also print zero
     # blocking findings.
     assert "scanned" in done.stdout
-    assert json.loads(report.read_text())["paths"]["scanned"]
+    assert json.loads(report.read_text(encoding="utf-8"))["paths"]["scanned"]
 
 
 def test_an_installed_semgrep_is_never_reported_as_absent() -> None:

@@ -154,7 +154,7 @@ class TestMemoryGrowth:
         """Get current memory usage in bytes (platform-dependent)."""
         try:
             # Linux: read from /proc
-            with open("/proc/self/statm") as f:
+            with open("/proc/self/statm", encoding="utf-8") as f:
                 # statm: size resident shared text lib data dt
                 # resident is in pages
                 parts = f.read().split()

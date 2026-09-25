@@ -191,7 +191,7 @@ class TestExportPublicKeys:
             export_public_keys(kms, output_dir)
             readme_path = output_dir / "README.txt"
             assert readme_path.exists()
-            with open(readme_path) as f:
+            with open(readme_path, encoding="utf-8") as f:
                 content = f.read()
             assert "AMA Cryptography" in content
             assert kms.creation_date in content
@@ -664,7 +664,7 @@ class TestMainFunction:
             )
 
             package_path = Path(tmpdir) / "CRYPTO_PACKAGE.json"
-            with open(package_path) as f:
+            with open(package_path, encoding="utf-8") as f:
                 pkg_data = json.load(f)
 
             # Verify expected fields

@@ -150,7 +150,7 @@ def parse_kat_file(filepath: Path) -> Iterator[dict[str, str]]:
 
     current_vector: dict[str, str] = {}
 
-    with open(filepath) as f:
+    with open(filepath, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
 

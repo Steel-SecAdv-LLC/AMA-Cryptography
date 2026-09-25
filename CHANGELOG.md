@@ -116,10 +116,8 @@ messages and the file comments.
   no encoding, so the em dash in that file's header went out as cp1252
   and the gate's UTF-8 read of it raised. The write names UTF-8, as its
   reads already did; the same omission on a non-ASCII literal in
-  `test_version_consistency.py` is closed with it. Measured on the tree:
-  84 further `read_text`/`write_text` calls without an encoding carry
-  dynamic content and 63 carry ASCII literals; none has failed a lane,
-  and they are recorded here as the remaining members of the class.
+  `test_version_consistency.py` is closed with it; the rest of the class is
+  closed below.
 - Build and Test, Windows 3.10: the leg reached the job's 30-minute
   budget with pytest at 93% and no failing test, on the first head where
   every test passed on every leg (run 36169465118). The four completed
@@ -132,6 +130,32 @@ messages and the file comments.
   the other four Intel legs took 33 to 46 minutes (run 36182818333); the
   previous run's five had taken 31 to 42. The macos-15-intel budget is 75,
   1.6x the slowest completed leg, recorded with the same per-leg evidence.
+- CodeQL (high, security-severity 7.5): `py/clear-text-logging-sensitive-data`
+  at the release-tag gate's refusal printout. CodeQL's `maybeSecret` name
+  heuristic (`codeql/concepts` 0.0.32) classifies any identifier containing
+  `trusted` as secret material, and `load_trusted_branches` and the
+  `"trusted_branches"` key matched, so printing the branch names read through
+  them was reported as logging a secret. Nothing secret is involved, and the
+  repository's CodeQL gate honours no suppression, so the names changed and
+  the behaviour did not: `load_release_branches` and `"release_branches"` in
+  the tool, its tests and `.github/release-trust.json`, a config this branch
+  introduced and no release has read. `tests/test_release_tag_gate.py`
+  replays the heuristic against every name and short literal in the gate;
+  renaming either back fails it.
+- Every text-mode file access names its encoding. The single site that
+  failed Windows was one of 217 of the same shape across the package, tools,
+  tests, benchmarks and examples: bare `read_text`/`write_text`, text-mode
+  `open`, `os.fdopen` and `NamedTemporaryFile`. All name UTF-8; the three
+  package writers (the counter store and both nonce-ledger writers) now match
+  the UTF-8 readers they already had, and every byte they write is ASCII, so
+  no stored file changes. `tools/check_text_encoding.py` (Code Quality job)
+  holds the class at zero with no exemption list, and
+  `tests/test_text_encoding_gate.py` pins every refused and every allowed
+  shape and replays the Windows defect through it. Ruff's PLW1514 was
+  measured and not used: it is preview-only in the pinned ruff, and it does
+  not flag the `tmp_path / ...` receiver the Windows failure came from. This
+  replaces the earlier entry that recorded the remaining sites instead of
+  fixing them.
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to

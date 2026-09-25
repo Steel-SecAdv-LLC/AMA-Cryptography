@@ -389,7 +389,9 @@ class TestWorkflowImages:
         )
         container = tmp_path / "c" / "action.yml"
         container.parent.mkdir()
-        container.write_text("runs:\n  using: docker\n  image: docker://alpine:3.19\n")
+        container.write_text(
+            "runs:\n  using: docker\n  image: docker://alpine:3.19\n", encoding="utf-8"
+        )
         findings = gate.audit([composite, container])
         assert [(f.path.name, f.line_no) for f in findings] == [
             ("action.yml", 4),
@@ -412,9 +414,11 @@ class TestWorkflowImages:
 
     def test_the_tree_walk_includes_workflows_and_actions(self, tmp_path: Path) -> None:
         (tmp_path / ".github" / "workflows").mkdir(parents=True)
-        (tmp_path / ".github" / "workflows" / "a.yaml").write_text("jobs: {}\n")
+        (tmp_path / ".github" / "workflows" / "a.yaml").write_text("jobs: {}\n", encoding="utf-8")
         (tmp_path / ".github" / "actions" / "x").mkdir(parents=True)
-        (tmp_path / ".github" / "actions" / "x" / "action.yml").write_text("runs: {}\n")
+        (tmp_path / ".github" / "actions" / "x" / "action.yml").write_text(
+            "runs: {}\n", encoding="utf-8"
+        )
         found = [p.relative_to(tmp_path).as_posix() for p in gate.workflow_files(tmp_path)]
         assert found == [".github/workflows/a.yaml", ".github/actions/x/action.yml"]
 
@@ -427,12 +431,13 @@ class TestWorkflowImages:
         fix: neither file below was in ``workflow_files``.
         """
         (tmp_path / ".github" / "workflows").mkdir(parents=True)
-        (tmp_path / ".github" / "workflows" / "a.yaml").write_text("jobs: {}\n")
+        (tmp_path / ".github" / "workflows" / "a.yaml").write_text("jobs: {}\n", encoding="utf-8")
         side = tmp_path / "tools" / "runner" / "action.yml"
         side.parent.mkdir(parents=True)
-        side.write_text("runs:\n  using: docker\n  image: docker://alpine:3.19\n")
+        side.write_text("runs:\n  using: docker\n  image: docker://alpine:3.19\n", encoding="utf-8")
         (tmp_path / "action.yaml").write_text(
-            f"runs:\n  using: docker\n  image: docker://alpine:3.19{self._DIGEST}\n"
+            f"runs:\n  using: docker\n  image: docker://alpine:3.19{self._DIGEST}\n",
+            encoding="utf-8",
         )
         found = [p.relative_to(tmp_path).as_posix() for p in gate.workflow_files(tmp_path)]
         assert found == [".github/workflows/a.yaml", "action.yaml", "tools/runner/action.yml"]

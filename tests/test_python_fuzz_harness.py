@@ -226,7 +226,9 @@ def test_replaying_an_artifact_reproduces_the_finding(
 ) -> None:
     """``--input`` is the documented reproduction path and must work."""
     path = tmp_path / "input.bin"
-    path.write_text("-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----\n")
+    path.write_text(
+        "-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----\n", encoding="utf-8"
+    )
     assert harness.run_input(path) == 0
     assert "violates nothing" in capsys.readouterr().out
 

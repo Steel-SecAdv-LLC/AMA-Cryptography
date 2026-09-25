@@ -105,7 +105,7 @@ def _load(name: str) -> dict[str, Any]:
         "missing file must fail rather than silently skip. Regenerate with "
         "tools/build_keyformat_corpus.py --specs"
     )
-    loaded: dict[str, Any] = json.loads(path.read_text())
+    loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     return loaded
 
 

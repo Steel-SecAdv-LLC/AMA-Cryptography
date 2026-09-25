@@ -119,7 +119,9 @@ def test_every_linked_ama_library_is_a_target(tmp_path: Path, static: bool, shar
     assert files, f"the generator wrote no link commands under {build_dir}"
     offenders = []
     for path in files:
-        for match in sorted(set(_BARE_AMA_LIBRARY.findall(path.read_text(errors="replace")))):
+        for match in sorted(
+            set(_BARE_AMA_LIBRARY.findall(path.read_text(errors="replace", encoding="utf-8")))
+        ):
             offenders.append(f"{path.relative_to(build_dir)}: {match}")
     assert not offenders, (
         "a target links an AMA library that this configuration does not build; "
@@ -129,7 +131,7 @@ def test_every_linked_ama_library_is_a_target(tmp_path: Path, static: bool, shar
     example_link = build_dir / "examples" / "c" / "CMakeFiles" / "simple_example.dir" / "link.txt"
     ninja = build_dir / "build.ninja"
     example_built = example_link.is_file() or (
-        ninja.is_file() and "simple_example" in ninja.read_text(errors="replace")
+        ninja.is_file() and "simple_example" in ninja.read_text(errors="replace", encoding="utf-8")
     )
     assert example_built == (static or shared), (
         f"examples registered={example_built} with AMA_BUILD_STATIC={static} "
@@ -138,7 +140,9 @@ def test_every_linked_ama_library_is_a_target(tmp_path: Path, static: bool, shar
     )
 
     ctest_file = build_dir / "tests" / "c" / "CTestTestfile.cmake"
-    registered = bool(_SEAL_TEST_REGISTERED.search(ctest_file.read_text(errors="replace")))
+    registered = bool(
+        _SEAL_TEST_REGISTERED.search(ctest_file.read_text(errors="replace", encoding="utf-8"))
+    )
     assert registered == (static or shared), (
         f"test_dispatch_seal registered={registered} with AMA_BUILD_STATIC={static} "
         f"AMA_BUILD_SHARED={shared}: it must run against whichever production "

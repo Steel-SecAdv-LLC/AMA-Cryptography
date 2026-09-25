@@ -389,7 +389,7 @@ class TestKeyRotationManagerComprehensive:
 
         assert filepath.exists()
 
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             loaded = json.load(f)
 
         assert loaded == export
@@ -580,7 +580,7 @@ class TestSecureKeyStorageComprehensive:
         metadata_file = temp_storage_path / ".kdf_metadata.json"
         assert metadata_file.exists()
 
-        with open(metadata_file) as f:
+        with open(metadata_file, encoding="utf-8") as f:
             metadata = json.load(f)
 
         # A new store is always v3 Argon2id.  There is no v2 PBKDF2 branch to
@@ -675,7 +675,7 @@ class TestSecureKeyStorageMigration:
         assert result is True
 
         # Verify metadata updated
-        with open(temp_storage_path / ".kdf_metadata.json") as f:
+        with open(temp_storage_path / ".kdf_metadata.json", encoding="utf-8") as f:
             metadata = json.load(f)
         assert "migrated_at" in metadata
 
@@ -700,7 +700,7 @@ class TestSecureKeyStorageLegacy:
         }
 
         key_file = temp_storage_path / "unknown-key.json"
-        with open(key_file, "w") as f:
+        with open(key_file, "w", encoding="utf-8") as f:
             json.dump(unknown_data, f)
 
         with pytest.raises(ValueError, match="Unknown encryption algorithm"):
@@ -725,7 +725,7 @@ class TestSecureKeyStorageLegacyKDF:
             "iterations": 100000,
         }
         metadata_file = temp_storage_path / ".kdf_metadata.json"
-        with open(metadata_file, "w") as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(v1_metadata, f)
 
         # Opening is refused by default: the metadata naming those parameters
@@ -764,7 +764,7 @@ class TestSecureKeyStorageLegacyKDF:
         with open(salt_file, "wb") as f:
             f.write(secrets.token_bytes(32))
         metadata_file = temp_storage_path / ".kdf_metadata.json"
-        with open(metadata_file, "w") as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(
                 {"version": 1, "algorithm": "PBKDF2-HMAC-SHA256", "iterations": 100000},
                 f,
@@ -804,10 +804,10 @@ class TestKDFMetadataIsUntrusted:
 
     def _weaken(self, path: Any, **overrides: Any) -> dict[str, Any]:
         metadata_file = path / ".kdf_metadata.json"
-        with open(metadata_file) as f:
+        with open(metadata_file, encoding="utf-8") as f:
             metadata: dict[str, Any] = json.load(f)
         metadata.update(overrides)
-        with open(metadata_file, "w") as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f)
         return metadata
 
@@ -1035,7 +1035,7 @@ class TestKDFMetadataIsUntrusted:
         storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         storage.store_key("provenance", b"\x42" * 32)
 
-        with open(temp_storage_path / "provenance.json") as f:
+        with open(temp_storage_path / "provenance.json", encoding="utf-8") as f:
             record = json.load(f)
 
         assert record["version"] == STORAGE_FORMAT_VERSION
@@ -1054,7 +1054,7 @@ class TestKDFMetadataIsUntrusted:
         storage.store_key("bound", b"\x37" * 32)
 
         key_file = temp_storage_path / "bound.json"
-        with open(key_file) as f:
+        with open(key_file, encoding="utf-8") as f:
             record = json.load(f)
         record["kdf_params"] = {
             "algorithm": "Argon2id",
@@ -1062,7 +1062,7 @@ class TestKDFMetadataIsUntrusted:
             "m_cost": 99,
             "parallelism": 9,
         }
-        with open(key_file, "w") as f:
+        with open(key_file, "w", encoding="utf-8") as f:
             json.dump(record, f)
 
         from ama_cryptography.key_management import KDFPolicyError
@@ -1088,7 +1088,7 @@ class TestKDFMetadataIsUntrusted:
         ct, tag = native_aes256_gcm_encrypt(
             storage.encryption_key, nonce, b"\x5a" * 32, b"legacy-record"
         )
-        with open(temp_storage_path / "legacy-record.json", "w") as f:
+        with open(temp_storage_path / "legacy-record.json", "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "key_id": "legacy-record",
@@ -1140,7 +1140,7 @@ class TestArgon2idIsRequiredNotSubstituted:
         would pass the refusal test below.
         """
         storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
-        with open(temp_storage_path / ".kdf_metadata.json") as f:
+        with open(temp_storage_path / ".kdf_metadata.json", encoding="utf-8") as f:
             metadata = json.load(f)
         assert metadata["version"] == 3
         assert metadata["algorithm"] == "Argon2id"
@@ -1225,10 +1225,10 @@ class TestArgon2idIsRequiredNotSubstituted:
 
         SecureKeyStorage(temp_storage_path, master_password=sample_password)
         metadata_file = temp_storage_path / ".kdf_metadata.json"
-        with open(metadata_file) as f:
+        with open(metadata_file, encoding="utf-8") as f:
             metadata = json.load(f)
         metadata.update(version=2, algorithm="PBKDF2-HMAC-SHA256", iterations=MIN_PBKDF2_ITERATIONS)
-        with open(metadata_file, "w") as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f)
 
         self._without_argon2id(monkeypatch)
@@ -1250,7 +1250,7 @@ class TestArgon2idIsRequiredNotSubstituted:
 
         with open(temp_storage_path / ".salt", "wb") as f:
             f.write(secrets.token_bytes(32))
-        with open(temp_storage_path / ".kdf_metadata.json", "w") as f:
+        with open(temp_storage_path / ".kdf_metadata.json", "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "version": 2,

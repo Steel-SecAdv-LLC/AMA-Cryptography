@@ -282,7 +282,7 @@ class TestCheckNeedsNoPlottingStack:
             pkg = tmp_path / name
             pkg.mkdir()
             (pkg / "__init__.py").write_text(
-                f'raise ImportError("{name} deliberately absent for this test")\n'
+                f'raise ImportError("{name} deliberately absent for this test")\n', encoding="utf-8"
             )
         env = dict(os.environ)
         env["PYTHONPATH"] = str(tmp_path)

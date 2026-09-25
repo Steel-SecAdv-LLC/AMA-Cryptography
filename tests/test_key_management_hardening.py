@@ -55,11 +55,11 @@ class TestKeyIdTraversalGuard:
     def test_delete_rejects_traversal_and_does_not_touch_outside_file(self, tmp_path: Path) -> None:
         store = SecureKeyStorage(tmp_path / "store", PASSWORD)
         victim = tmp_path / "victim.json"
-        victim.write_text('{"do": "not touch"}')
+        victim.write_text('{"do": "not touch"}', encoding="utf-8")
         with pytest.raises(ValueError):
             store.delete_key("../victim")
         assert victim.exists()
-        assert victim.read_text() == '{"do": "not touch"}'
+        assert victim.read_text(encoding="utf-8") == '{"do": "not touch"}'
 
     def test_valid_ids_still_work(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

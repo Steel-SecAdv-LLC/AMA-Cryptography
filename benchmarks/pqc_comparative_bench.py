@@ -126,7 +126,7 @@ def main() -> None:
 
     out = "pqc_results.json"
     payload = json.dumps({"provenance": provenance, "rounds": ROUNDS, "results": rows}, indent=2)
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write(payload)
     print(f"\nwrote {out} ({len(rows)} rows)")
 

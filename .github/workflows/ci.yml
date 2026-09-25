@@ -758,6 +758,19 @@ jobs:
       run: |
         python tools/check_release_pins.py
 
+    - name: "Every text-mode file access names its encoding (tools/check_text_encoding.py)"
+      # Python's text I/O defaults to the locale codec: UTF-8 on Linux and
+      # macOS, cp1252 on the Windows runners.  A bare write_text in
+      # test_keygen_pct_gate wrote an em dash as 0x97 and failed every Windows
+      # leg of 187934e6; 216 more sites of that shape were given UTF-8 in the
+      # commit that added this step, so it starts at zero and holds the class
+      # shut.  It matches by call shape because ruff's PLW1514 is preview-only
+      # in the pinned ruff and does not flag a `tmp_path / ...` receiver.
+      # tests/test_text_encoding_gate.py pins every refused and every allowed
+      # shape, and replays the 187934e6 defect through the gate.
+      run: |
+        python tools/check_text_encoding.py
+
     - name: "Required status contexts: each still produced by a pull-request job"
       # main's ruleset requires 55 individual job contexts
       # (.github/required-status-checks.json).  Renaming a job or dropping a

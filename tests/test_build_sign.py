@@ -219,7 +219,7 @@ def test_main_catches_unexpected_exception_returns_exit_1(
     # Stage a fake package dir with the bare minimum the signer expects.
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "dummy.py").write_text("x = 1\n")
+    (pkg / "dummy.py").write_text("x = 1\n", encoding="utf-8")
 
     def _boom(*args: Any, **kwargs: Any) -> Any:
         # Raise a non-RuntimeError exception type to prove the handler
@@ -464,8 +464,8 @@ def test_compute_package_digest_matches_self_test(tmp_path: Any) -> None:
     # produce the same SHA3-256 digest over the same content.
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    (pkg / "a.py").write_text("alpha = 1\r\n")
-    (pkg / "b.py").write_text("beta = 2\n")
+    (pkg / "a.py").write_text("alpha = 1\r\n", encoding="utf-8")
+    (pkg / "b.py").write_text("beta = 2\n", encoding="utf-8")
 
     digest_signer = bs._compute_package_digest(pkg).hex()
 

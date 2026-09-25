@@ -38,7 +38,9 @@ class TestTheRealTreeHoldsTheBoundary:
 
 class TestTheGateFailsWhenItMust:
     def test_a_use_outside_the_allowlist_fails(self, tmp_path: Path) -> None:
-        (tmp_path / "rogue.py").write_text("import hashlib\nX = hashlib.sha256(b'x')\n")
+        (tmp_path / "rogue.py").write_text(
+            "import hashlib\nX = hashlib.sha256(b'x')\n", encoding="utf-8"
+        )
         failures = gate.scan_package(tmp_path)
         assert any(
             "rogue.py" in f and "not in the trust-bootstrap allowlist" in f for f in failures
@@ -47,7 +49,7 @@ class TestTheGateFailsWhenItMust:
     def test_growth_inside_an_allowlisted_file_fails(self, tmp_path: Path) -> None:
         # One more reference than __init__.py's pinned count of 2.
         (tmp_path / "__init__.py").write_text(
-            "import hashlib\nA = hashlib.sha3_256(b'a')\nB = hashlib.md5(b'b')\n"
+            "import hashlib\nA = hashlib.sha3_256(b'a')\nB = hashlib.md5(b'b')\n", encoding="utf-8"
         )
         failures = gate.scan_package(tmp_path)
         assert any("__init__.py" in f and "allowlist records 2" in f for f in failures)
@@ -55,7 +57,7 @@ class TestTheGateFailsWhenItMust:
     def test_a_stale_allowlist_entry_fails(self, tmp_path: Path) -> None:
         """Every allowlisted file must exist, or the entry could cover a
         future file it was never written for."""
-        (tmp_path / "unrelated.py").write_text("x = 1\n")
+        (tmp_path / "unrelated.py").write_text("x = 1\n", encoding="utf-8")
         failures = gate.scan_package(tmp_path)
         stale = {f.split(":")[0] for f in failures if "allowlisted but absent" in f}
         assert stale == set(gate.ALLOWLIST)
@@ -180,16 +182,18 @@ class TestTheScanReachesEveryFile:
         """The scan was non-recursive, so any subpackage was unscanned."""
         sub = tmp_path / "sub"
         sub.mkdir()
-        (sub / "mod.py").write_text("import hashlib\nX = hashlib.sha256(b'x')\n")
+        (sub / "mod.py").write_text("import hashlib\nX = hashlib.sha256(b'x')\n", encoding="utf-8")
         failures = gate.scan_package(tmp_path)
         assert any("sub/mod.py" in f for f in failures)
 
     def test_pycache_is_not_scanned(self, tmp_path: Path) -> None:
         """Compiled leftovers are not source; scanning them fails honest trees."""
-        (tmp_path / "real.py").write_text("x = 1\n")
+        (tmp_path / "real.py").write_text("x = 1\n", encoding="utf-8")
         cache = tmp_path / "__pycache__"
         cache.mkdir()
-        (cache / "stale.py").write_text("import hashlib\nX = hashlib.sha256(b'x')\n")
+        (cache / "stale.py").write_text(
+            "import hashlib\nX = hashlib.sha256(b'x')\n", encoding="utf-8"
+        )
         # The absent-allowlist-entry failures are expected for a scratch tree;
         # what must NOT appear is a finding against the __pycache__ copy.
         assert not any("__pycache__" in f for f in gate.scan_package(tmp_path))
@@ -206,7 +210,7 @@ class TestRunTimeModuleNamesAreResolvedOrRefused:
 
     @staticmethod
     def _scan(tmp_path: Path, source: str, name: str = "rogue.py") -> list[str]:
-        (tmp_path / name).write_text(source)
+        (tmp_path / name).write_text(source, encoding="utf-8")
         return gate.scan_package(tmp_path)
 
     @staticmethod
@@ -354,7 +358,7 @@ class TestAReExportIsNotAFreshStart:
         package = tmp_path / "pkg"
         package.mkdir()
         for name, body in files.items():
-            (package / name).write_text(body)
+            (package / name).write_text(body, encoding="utf-8")
         return package
 
     @staticmethod

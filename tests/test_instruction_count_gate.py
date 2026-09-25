@@ -720,7 +720,7 @@ def test_exceeding_the_startup_ceiling_fails(
     )
     monkeypatch.setattr(measure.shutil, "which", lambda name: "/usr/bin/valgrind")
     driver = tmp_path / "ic_driver"
-    driver.write_text("#!/bin/sh\n")
+    driver.write_text("#!/bin/sh\n", encoding="utf-8")
     driver.chmod(0o755)
     assert measure.main(["--driver", str(driver), "--measure-startup"]) == 1
 

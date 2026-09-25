@@ -1643,7 +1643,9 @@ class TestThePublicApiGateReadsTheImageInFrontOfIt:
         ``-fpartial-inlining`` moved the symbol to ``.constprop.0``.
         """
         module = _load(PUBLIC_API)
-        declared = set(module._AMA_API.findall(Path("include/ama_cryptography.h").read_text()))
+        declared = set(
+            module._AMA_API.findall(Path("include/ama_cryptography.h").read_text(encoding="utf-8"))
+        )
         clean = sorted(declared | set(module.MUST_BE_EXPORTED))
         path = tmp_path / "ama_cryptography.dll"
 
@@ -2117,7 +2119,9 @@ class TestEveryLocalisedSymbolIsCheckedOnEveryPlatform:
         """Every localised name is checked, not a chosen few."""
         module = _load(PUBLIC_API)
         localised = sorted(module.localised_symbols(REPO_ROOT))
-        declared = set(module._AMA_API.findall(Path("include/ama_cryptography.h").read_text()))
+        declared = set(
+            module._AMA_API.findall(Path("include/ama_cryptography.h").read_text(encoding="utf-8"))
+        )
         clean = sorted(declared | set(module.MUST_BE_EXPORTED))
         path = tmp_path / "ama_cryptography.dll"
 

@@ -383,5 +383,5 @@ class TestNoPredicateWritesAndReadsOneObjectUnsequenced:
         field arithmetic.  These four cases pin both edges.
         """
         path = tmp_path / "probe.c"
-        path.write_text(source)
+        path.write_text(source, encoding="utf-8")
         assert bool(find_unsequenced({path: _strip_comments(source)})) is expected

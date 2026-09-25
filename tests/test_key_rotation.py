@@ -199,7 +199,7 @@ class TestSecureKeyStorageGCM:
             metadata_file = path / ".kdf_metadata.json"
             assert metadata_file.exists()
 
-            with open(metadata_file) as f:
+            with open(metadata_file, encoding="utf-8") as f:
                 metadata = json.load(f)
 
             # A new store is always v3 Argon2id.  There is no v2 PBKDF2 branch to

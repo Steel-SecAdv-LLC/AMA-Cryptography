@@ -101,7 +101,7 @@ def _report(*findings: dict[str, Any], loc: int = 20000) -> dict[str, Any]:
 def _run(tmp_path: Path, report: Any) -> tuple[int, str]:
     """Drive the tool's ``main`` on a written-out report."""
     path = tmp_path / "bandit.json"
-    path.write_text(json.dumps(report) if not isinstance(report, str) else report)
+    path.write_text(json.dumps(report) if not isinstance(report, str) else report, encoding="utf-8")
     import contextlib
     import io
 
@@ -336,4 +336,4 @@ def test_the_real_tree_passes_the_gate(tmp_path: Path) -> None:
     # Non-vacuity: a gate that passed because it read an empty report would
     # also print zero blocking findings.
     assert "lines of code" in done.stdout
-    assert json.loads(report.read_text())["metrics"]["_totals"]["loc"] > 1000
+    assert json.loads(report.read_text(encoding="utf-8"))["metrics"]["_totals"]["loc"] > 1000

@@ -598,7 +598,7 @@ def generate_charts(output_dir: str) -> None:
         # back is the anchored constants in `X25519_MULX` already
         # deep-copied into `mulx_rows`.
         try:
-            with open(bench_raw) as f:
+            with open(bench_raw, encoding="utf-8") as f:
                 raw = json.load(f)
             live_off = None
             live_on = None

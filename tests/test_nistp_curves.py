@@ -520,7 +520,7 @@ RFC6979_KAT = REPO_ROOT / "tests" / "kat" / "rfc6979" / "ecdsa_prime_curves.kat"
 def _load_rfc6979_vectors() -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     current: dict[str, str] = {}
-    for line in RFC6979_KAT.read_text().splitlines():
+    for line in RFC6979_KAT.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             if current:
