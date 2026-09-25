@@ -53,27 +53,36 @@
  * each probe found 1 hit, limb 8 (bits 168..188, which the scalar and its
  * reduction share), and removing that one call restores exactly that.
  *
- * ONE SCAN PER POISON.  The scanning function is not exempt from the
- * defect it measures: a compiler may spill the needle it is comparing
- * against into the scanner's own frame, below the anchor, inside the window
- * the next scan at the same depth will read.  Measured: aarch64 gcc 13.3.0
- * at -O2 with -fsanitize=undefined (the arm-qemu UBSan lane) leaves
- * scalar[16..32] at anchor-95 and prefix[0..16] at anchor-143 after one
- * scan, so a second evaluation of `secret_residue_count()` before the next
- * `poison_stack()` reported the first evaluation's spill as library residue
- * and failed the expand verdict; x86-64 gcc and clang keep the needle in
- * registers and never showed it.  Each verdict below therefore evaluates the
- * count exactly once per poison and prints that value; `poison_stack()`'s
- * 32 KiB frame at this same depth is what clears the previous scan's spill
- * before the next probed call.
+ * THE PROBE is `residue_probe.h`, shared with the AEAD harness: poison, run
+ * the entry point below a GAP at the same depth, scan the poisoned bytes.
+ * Its control, baseline and coverage checks are what make a verdict below
+ * evidence, and the reasoning behind every construction — the barrier in
+ * `poison_stack`, the mark taken in a leaf below the scanner, the window
+ * clipped to the poison, the sentinel that is not the secret, the GAP, and
+ * the sanitizer skip — is recorded there once.
  *
- * CONTROL and BASELINE follow the AEAD harness exactly: a sentinel the probe
- * MUST see, then a window that MUST hold no copy of either needle before any
- * signing call, so a verdict is trusted only after both directions are
- * established.  The reasoning behind every construction here — the barrier
- * in `poison_stack`, the integer address arithmetic in `residue_count`, the
- * sentinel that is not the secret, and the sanitizer skip — is recorded in
- * that file and is not repeated.
+ * ONE SCAN PER POISON.  Each verdict evaluates `secret_residue_count()`
+ * exactly once per poison and prints that value.  The discipline dates from
+ * a measurement on aarch64 gcc 13.3.0 -O2 -fsanitize=undefined (the
+ * arm-qemu UBSan lane), where the scanner spilled scalar[16..32] at
+ * anchor-95 and prefix[0..16] at anchor-143 into its own frame, and a
+ * second evaluation before the next poison reported the first one's spill
+ * as library residue.  That frame is no longer inside the window (the mark
+ * is taken below the scanner; see residue_probe.h, defect (a)), so the
+ * discipline is now defensive rather than load-bearing; it is kept because
+ * it costs nothing.  The record it replaces claimed the scanner's spill was
+ * the only way the harness could see its own needle.  It was not: on the
+ * uninstrumented AArch64 lanes the caller kept each limb needle live in a
+ * callee-saved register across the scan, the scanner's prologue saved that
+ * register inside the window, and every verdict — baseline included —
+ * reported all twelve scalar limbs, once each (2026-09-25, RelWithDebInfo,
+ * the arm-qemu-ctest, no-crypto-ext and both SVE2 lanes).  The window is
+ * fixed at the construction, not the symptom.
+ *
+ * CONTROL and BASELINE: a sentinel the probe MUST see, then a window that
+ * MUST hold no copy of any needle before any signing call, then the
+ * coverage check that the window read is the poison written; a verdict is
+ * trusted only after all three are established.
  */
 #include <stdio.h>
 #include <string.h>
@@ -82,27 +91,11 @@
 
 #include "ama_cryptography.h"
 
-#if defined(__has_feature)
-#  if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) \
-      || __has_feature(thread_sanitizer)
-#    define AMA_PROBE_IS_INSTRUMENTED 1
-#  endif
-#endif
-#if !defined(AMA_PROBE_IS_INSTRUMENTED) && (defined(__SANITIZE_ADDRESS__) \
-    || defined(__SANITIZE_MEMORY__) || defined(__SANITIZE_THREAD__))
-#  define AMA_PROBE_IS_INSTRUMENTED 1
-#endif
-#if !defined(AMA_PROBE_IS_INSTRUMENTED)
-#  define AMA_PROBE_IS_INSTRUMENTED 0
-#endif
+#include "residue_probe.h"
 
-/* Everything up to main() is the probe itself, compiled only where it runs:
- * an instrumented build returns 77 before calling any of it, and would
- * otherwise carry every helper as an unused function. */
 #if !AMA_PROBE_IS_INSTRUMENTED
 
-#define SCAN_BYTES 32768u
-#define MSG_BYTES  256u
+#define MSG_BYTES 256u
 
 static int checks = 0;
 static int failures = 0;
@@ -167,36 +160,6 @@ static void scalar_limbs(const uint8_t s[32], int64_t out[12]) {
     }
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-static void poison_stack(void) {
-    volatile uint8_t pad[SCAN_BYTES];
-    memset((void *)pad, 0x5A, sizeof pad);
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__ __volatile__("" : : "r"(pad) : "memory");
-#else
-    (void)pad[0];
-#endif
-}
-
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-static int residue_count(const uint8_t *needle, size_t len) {
-    volatile uint8_t anchor = 0;
-    const uintptr_t anchor_addr = (uintptr_t)(const void *)&anchor;
-    const uint8_t *base = (const uint8_t *)(anchor_addr - (uintptr_t)SCAN_BYTES);
-    size_t i;
-    int hits = 0;
-    for (i = 0; i + len <= SCAN_BYTES; i++) {
-        if (memcmp(base + i, needle, len) == 0) {
-            hits++;
-        }
-    }
-    return hits;
-}
-
 /* The last count, by needle: the scalar (bytes and limbs), the prefix, and
  * the two nonces (bytes and limbs).  Printed with each verdict so a failure
  * names what survived; written by the one evaluation per poison. */
@@ -206,9 +169,7 @@ static int g_hits_scalar, g_hits_prefix, g_hits_nonce;
  * one object, and the AVX2 AES kernel demonstrably does not (see the AEAD
  * harness).  Half a scalar, half a prefix or half a nonce is 128 bits of
  * secret. */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+RESIDUE_NOINLINE
 static int secret_residue_count(void) {
     int i, m;
     g_hits_scalar = residue_count(g_scalar, 16) + residue_count(g_scalar + 16, 16)
@@ -259,71 +220,59 @@ static int derive_nonce(uint8_t out[64], const uint8_t *msg, size_t msg_len) {
     return 0;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-static void probe_control(void) {
-    volatile uint8_t copy[512];
-    memset((void *)copy, 0, sizeof copy);
-    memcpy((void *)(copy + 128), g_sentinel, sizeof g_sentinel);
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__ __volatile__("" : : "r"(copy) : "memory");
-#endif
-}
-
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+/* Every probed entry point runs below the GAP (residue_probe.h), so its
+ * frame lies wholly under the bytes the scanner's frames occupy when they are
+ * called at this same depth.  Until 2026-09-25 these wrappers had no gap and
+ * the top ~176 bytes of each entry point's frame were clobbered by the
+ * scanner before they were read. */
+RESIDUE_NOINLINE
 static void run_expand(void) {
-    CHECK(ama_ed25519_expand_secret_key(g_expanded, g_sk) == AMA_SUCCESS,
-          "expand_secret_key succeeds");
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ed25519_expand_secret_key(g_expanded, g_sk));
+    CHECK(rc == AMA_SUCCESS, "expand_secret_key succeeds");
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+RESIDUE_NOINLINE
 static void run_sign_expanded(void) {
-    CHECK(ama_ed25519_sign_expanded(g_sig, g_msg, MSG_BYTES, g_expanded) == AMA_SUCCESS,
-          "sign_expanded succeeds");
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ed25519_sign_expanded(g_sig, g_msg, MSG_BYTES, g_expanded));
+    CHECK(rc == AMA_SUCCESS, "sign_expanded succeeds");
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+RESIDUE_NOINLINE
 static void run_keypair(void) {
     static uint8_t pk[32];
-    CHECK(ama_ed25519_keypair(pk, g_sk) == AMA_SUCCESS && memcmp(pk, g_pk, 32) == 0,
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ed25519_keypair(pk, g_sk));
+    CHECK(rc == AMA_SUCCESS && memcmp(pk, g_pk, 32) == 0,
           "keypair succeeds and is deterministic");
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+RESIDUE_NOINLINE
 static void run_sign(void) {
-    CHECK(ama_ed25519_sign(g_sig, g_msg, MSG_BYTES, g_sk) == AMA_SUCCESS,
-          "sign succeeds");
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ed25519_sign(g_sig, g_msg, MSG_BYTES, g_sk));
+    CHECK(rc == AMA_SUCCESS, "sign succeeds");
 }
 
 /* The raw FROST primitive, on a scalar whose [s]B is known: the clamped
  * scalar gives the public key, and so does its reduction mod l. */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+RESIDUE_NOINLINE
 static void run_point_from_scalar(const uint8_t *scalar) {
     static uint8_t point[32];
-    CHECK(ama_ed25519_point_from_scalar(point, scalar) == AMA_SUCCESS &&
-          memcmp(point, g_pk, 32) == 0,
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ed25519_point_from_scalar(point, scalar));
+    CHECK(rc == AMA_SUCCESS && memcmp(point, g_pk, 32) == 0,
           "point_from_scalar succeeds and [s]B is the public key");
 }
 
 /* A message above the 4 KiB stack threshold takes the heap path of the sign
  * core, whose scrub covers a different buffer than the small-message path. */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+RESIDUE_NOINLINE
 static void run_sign_expanded_large(const uint8_t *big, size_t big_len) {
-    CHECK(ama_ed25519_sign_expanded(g_sig, big, big_len, g_expanded) == AMA_SUCCESS,
-          "sign_expanded (heap path) succeeds");
+    ama_error_t rc;
+    RUN_BELOW_GAP(ama_ed25519_sign_expanded(g_sig, big, big_len, g_expanded));
+    CHECK(rc == AMA_SUCCESS, "sign_expanded (heap path) succeeds");
 }
 
 #endif /* !AMA_PROBE_IS_INSTRUMENTED */
@@ -397,13 +346,17 @@ int main(void) {
 
     /* --- control: the probe must be able to see a value left behind. */
     poison_stack();
-    probe_control();
+    residue_probe_control(g_sentinel, sizeof g_sentinel);
     control_hits = residue_count(g_sentinel, sizeof g_sentinel);
     printf("  control (sentinel deliberately left): %d hit(s)\n", control_hits);
     CHECK(control_hits > 0,
           "probe control: a value left on the stack IS detected "
           "(a zero here means the scan window missed the frame and every "
           "verdict below would be vacuous)");
+    CHECK(residue_window_covers_poison(),
+          "probe coverage: the bytes the scan reads are the bytes the poison "
+          "wrote (a failure here is a frame layout the probe was not written "
+          "for, and every verdict below would be reading unpoisoned memory)");
 
     /* --- baseline: the window holds neither needle before any probed call.
      * The derivation above ran at this depth too, so this is also the first

@@ -946,8 +946,17 @@ if(NOT WIN32)
         ${CMAKE_SOURCE_DIR}/src/c/ama_platform_rand.c)
     target_compile_options(test_platform_rand_device_symlink PRIVATE
         -U__linux__ -U__APPLE__)
+    # _POSIX_C_SOURCE alone is what glibc needs to expose the POSIX.1-2008
+    # open(2) flags the harness pins.  Darwin's <sys/cdefs.h> reads that same
+    # definition as a request for STRICT POSIX visibility, and its
+    # <sys/fcntl.h> keeps O_NOFOLLOW behind __DARWIN_C_FULL, so on macOS the
+    # definition hid the very flag it exists to reveal and the harness's own
+    # #error refused to build (both macOS C-library lanes, 2026-09-24).
+    # _DARWIN_C_SOURCE restores full visibility there while leaving the
+    # POSIX request in place; it is a no-op on every other platform.
     target_compile_definitions(test_platform_rand_device_symlink PRIVATE
         _POSIX_C_SOURCE=200809L
+        $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
         AMA_PLATFORM_RAND_DEVICE="${CMAKE_CURRENT_BINARY_DIR}/ama_rand_device_probe")
     add_test(NAME test_platform_rand_device_symlink
              COMMAND test_platform_rand_device_symlink)

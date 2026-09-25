@@ -256,7 +256,11 @@ def _aarch64_compiler() -> str | None:
 
     The native compiler on an AArch64 Linux host -- which is every
     ``ubuntu-24.04-arm`` lane of ci.yml -- resolved the way setup.py's own
-    probe resolves it; otherwise a cross compiler on PATH.
+    probe resolves it; otherwise a cross compiler on PATH, which the
+    ``ubuntu-latest`` legs of ci.yml::test and ci-build-test.yml::python-package
+    install as gcc-aarch64-linux-gnu.  ``tests/conftest.py`` asks the same two
+    questions of the host (``_host_has_aarch64_elf_compiler``) when it decides
+    whether a skip of the probe below may stand.
     """
     if _ON_AARCH64_LINUX:
         compiler = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
@@ -293,8 +297,13 @@ class TestLibgccCannotClearTheBtiProperty:
     note survives depends on whose libgcc.a is linked: Ubuntu's members are
     marked, so a native ``ubuntu-24.04-arm`` build kept the property and only
     the manylinux wheel lost it.  Three layers, since any one alone is
-    defeatable: the selection (host-independent), the flag's effect on a real
-    AArch64 compiler, and the built extensions on an AArch64 host.
+    defeatable: the selection (host-independent); the flag's effect on a real
+    AArch64 compiler -- run by the ``ubuntu-latest`` legs of ci.yml::test and
+    ci-build-test.yml::python-package with the gcc-aarch64-linux-gnu they
+    install, and by the ``ubuntu-24.04-arm`` legs natively, all of them under
+    AMA_CI_REQUIRE_AARCH64_TOOLCHAIN so that a skip there is a failure (marker
+    ``requires_aarch64_toolchain``, tests/conftest.py); and the built
+    extensions on an AArch64 host.
     """
 
     def test_an_aarch64_linux_build_selects_inline_atomics(
@@ -333,14 +342,15 @@ class TestLibgccCannotClearTheBtiProperty:
         flags, link_flags = _flags_fn(namespace)()
         assert "-mno-outline-atomics" not in flags + link_flags
 
+    @pytest.mark.requires_aarch64_toolchain
     def test_the_selected_flags_compile_atomics_without_a_libgcc_call(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         compiler = _aarch64_compiler()
         if compiler is None:
             pytest.skip(
-                "no AArch64 C compiler on this host (runs natively on ci.yml's "
-                "ubuntu-24.04-arm lanes, or anywhere aarch64-linux-gnu-gcc is on PATH)"
+                "no AArch64 ELF C compiler on this host (the ubuntu-latest lanes install "
+                "gcc-aarch64-linux-gnu; the ubuntu-24.04-arm lanes compile natively)"
             )
         readelf = shutil.which("readelf") or shutil.which("llvm-readelf")
         if readelf is None:

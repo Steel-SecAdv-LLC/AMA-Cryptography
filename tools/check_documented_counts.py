@@ -151,7 +151,7 @@ def check_test_counts(repo: Path) -> list[str]:
     for path in _markdown_files(repo):
         for match in _TEST_COUNT_RE.finditer(path.read_text(encoding="utf-8")):
             claims.setdefault(match.group(1), []).append(
-                (str(path.relative_to(repo)), int(match.group(2)))
+                (path.relative_to(repo).as_posix(), int(match.group(2)))
             )
     for target, entries in sorted(claims.items()):
         if not (repo / target).is_file():
@@ -177,7 +177,7 @@ def check_record_counts(repo: Path) -> list[str]:
         for match in _RECORD_COUNT_RE.finditer(path.read_text(encoding="utf-8")):
             name, claimed = match.group(1), int(match.group(2))
             target = corpora.get(Path(name).name)
-            doc = str(path.relative_to(repo))
+            doc = path.relative_to(repo).as_posix()
             if target is None:
                 problems.append(f"{doc}: claims {claimed} records for {name}, which does not exist")
                 continue
@@ -204,7 +204,7 @@ def check_wycheproof_counts(repo: Path) -> list[str]:
     for path in _markdown_files(repo):
         for match in _WYCHEPROOF_RE.finditer(path.read_text(encoding="utf-8")):
             claimed = int(match.group(1))
-            doc = str(path.relative_to(repo))
+            doc = path.relative_to(repo).as_posix()
             named = _BACKTICKED.findall(match.group(2))
             if not named:
                 problems.append(f"{doc}: a Wycheproof count names no corpus files")
@@ -600,7 +600,7 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
         return int(raw.replace(",", ""))
 
     for path in _markdown_files(repo):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         text = path.read_text(encoding="utf-8")
         live = _without_history_rows(text)
         for claimed_funcs, claimed_files in _AGGREGATE_RE.findall(live):
@@ -857,7 +857,7 @@ def _live_documents(repo: Path) -> list[tuple[str, str]]:
     for path in _markdown_files(repo):
         text = path.read_text(encoding="utf-8")
         live = _without_history_rows(text)
-        docs.append((str(path.relative_to(repo)), live))
+        docs.append((path.relative_to(repo).as_posix(), live))
     unreleased = changelog_unreleased_section(repo)
     if unreleased:
         docs.append(("CHANGELOG.md [Unreleased]", unreleased))
@@ -1063,7 +1063,7 @@ def check_fuzz_target_counts(repo: Path, authoritative: int) -> list[str]:
     """
     problems: list[str] = []
     for path in _markdown_files(repo):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         for token in _fuzz_count_claims(path.read_text(encoding="utf-8")):
             claimed = _resolve_number(token)
             if claimed is not None and claimed != authoritative:
@@ -1154,7 +1154,7 @@ def breaking_times_claims(repo: Path) -> list[tuple[str, str, str]]:
     """
     claims: list[tuple[str, str, str]] = []
     for path in _markdown_files(repo):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         for token, version in _BREAKING_TIMES_RE.findall(path.read_text(encoding="utf-8")):
             claims.append((rel, token, version))
     changelog = repo / "CHANGELOG.md"
@@ -1183,7 +1183,7 @@ def check_breaking_change_counts(repo: Path) -> list[str]:
                 f"[{version}] enumerates {actual} Breaking rows"
             )
     for path in _markdown_files(repo):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         text = path.read_text(encoding="utf-8")
         live = _without_history_rows(text)
         for token, version in _BREAKING_CLAIM_RE.findall(live):

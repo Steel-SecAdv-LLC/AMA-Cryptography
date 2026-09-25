@@ -131,6 +131,29 @@ jobs:
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
         .github/scripts/apt-install.sh build-essential cmake
 
+    # gcc-aarch64-linux-gnu gives the BTI libgcc probe
+    # (tests/test_binding_control_flow_integrity.py::
+    # TestLibgccCannotClearTheBtiProperty) a real AArch64 compiler on the
+    # x86-64 legs: it compiles an atomic read-modify-write with the flags
+    # setup.py selects and reads the cross object with binutils' readelf, which
+    # reads any ELF machine.  Scoped to X64 because the arm64 runners compile
+    # natively, and Ubuntu's arm64 archive carries no same-arch CROSS
+    # compiler: its gcc-aarch64-linux-gnu (noble/arm64, 4:13.2.0-7ubuntu1 from
+    # gcc-defaults, "GNU C compiler for the arm64 architecture") is the native
+    # gcc under its triplet name, shipping /usr/bin/aarch64-linux-gnu-gcc and
+    # no compiler the runner's own cc is not (packages.ubuntu.com, read
+    # 2026-09-25).  Until this step existed the probe skipped on
+    # ubuntu-latest with a reason that said it "runs natively" on the arm64
+    # lanes, the backend keyword escalation matched "native", and every
+    # ubuntu-latest leg of run 36074261249 (2026-09-24) failed on it.  "Run
+    # pytest test suite" below sets AMA_CI_REQUIRE_AARCH64_TOOLCHAIN on both
+    # Linux architectures, so a recurrence of the skip fails instead of hiding.
+    - name: Install the AArch64 cross toolchain (x86-64 Linux)
+      if: runner.os == 'Linux' && runner.arch == 'X64'
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+        .github/scripts/apt-install.sh gcc-aarch64-linux-gnu
+
     - name: Install system dependencies (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
@@ -494,6 +517,10 @@ jobs:
         # The checkout above is fetch-depth: 0, so a history-dependent guard
         # that skips here is a broken checkout, not a shallow one.
         AMA_CI_REQUIRE_HISTORY: "1"
+        # Both Linux architectures provision an AArch64 ELF compiler — the
+        # cross package on X64 (step above), the native gcc on ARM64 — so the
+        # BTI libgcc probe (marker requires_aarch64_toolchain) must run, not skip.
+        AMA_CI_REQUIRE_AARCH64_TOOLCHAIN: ${{ runner.os == 'Linux' && '1' || '' }}
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 
@@ -710,6 +737,26 @@ jobs:
     - name: "INVARIANT-13: Suppression hygiene check"
       run: |
         python tools/check_suppression_hygiene.py
+
+    - name: "Release build dependencies are hash-pinned (tools/check_release_pins.py)"
+      # release.yml runs only on a tag push, so no other check would notice a
+      # `pip install build` creeping back into build-sdist, a cibuildwheel step
+      # losing `--no-build-isolation`, or a pin dropping below the floors
+      # pyproject.toml [build-system].requires and setup.py's preflight
+      # declare.  Before the two manifests existed every release resolved its
+      # toolchain from PyPI against floors alone, twice: once in
+      # CIBW_BEFORE_BUILD_* and again inside pip's isolated build environment.
+      # This is the offline half of the gate: every line of
+      # requirements-release-build.txt and requirements-release-tools.txt is an
+      # exact `==` pin carrying sha256 hashes in the generator's canonical
+      # form; every pip install in release.yml is `--require-hashes -r
+      # <manifest>` (or the built sdist with --no-build-isolation); every build
+      # runs without isolation.  The hash sets themselves are regenerated from
+      # PyPI by `--refresh --as-of`, under review, never here.
+      # tests/test_release_pins_gate.py pins the rejection of each offender
+      # shape, so the gate cannot decay into a no-op.
+      run: |
+        python tools/check_release_pins.py
 
     - name: "Required status contexts: each still produced by a pull-request job"
       # main's ruleset requires 55 individual job contexts

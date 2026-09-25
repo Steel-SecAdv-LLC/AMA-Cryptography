@@ -123,7 +123,7 @@ def requires_c_lane(test: _Test) -> _Test:
     a tool that lane never promised.  They carry ``requires_memcheck`` instead,
     which the lane that installs valgrind escalates.
     """
-    return _skip_without_c_lane(pytest.mark.requires_c_library(test))
+    return cast(_Test, _skip_without_c_lane(pytest.mark.requires_c_library(test)))
 
 
 def _load(path: Path) -> ModuleType:

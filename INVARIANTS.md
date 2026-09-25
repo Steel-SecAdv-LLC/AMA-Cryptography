@@ -431,6 +431,34 @@ is in the workflow's `.py`-equality check (which compares every OTHER
 `.py` file byte-for-byte) and not in the native-artefact diff (where
 the file does not appear).
 
+### INVARIANT-8 Addendum — Release Builds Install Only Hash-Pinned Dependencies
+
+A byte-equal rebuild proves determinism against the toolchain that was
+present; it cannot say which toolchain that was when the release build
+resolved `cmake>=4.4.3`, `cython>=3.3.0` and `numpy>=1.24.0` from the index
+at build time and `python -m build` resolved `[build-system].requires` in an
+isolated environment the same way. Every Python dependency a release build
+installs **must** be pinned to an exact version and verified against a
+recorded SHA-256 before it is installed.
+
+**Enforcement:** `requirements-release-build.txt` (the build tools and
+extension dependencies, one pin per interpreter range where a package's
+wheel support requires it) and `requirements-release-tools.txt` (`pip`,
+`build` and their closure) carry a `--hash=sha256:` for every file the index
+publishes for each pinned version — every platform and interpreter wheel and
+the sdist — so `pip install --require-hashes` resolves on every row of the
+release matrix. `release.yml` installs from those manifests and nothing
+else: cibuildwheel's before-build step installs the build manifest and its
+build frontend runs without build isolation, and the sdist job builds and
+smoke-installs with `--no-isolation` / `--no-build-isolation` after
+installing both manifests. `tools/check_release_pins.py` fails CI on a
+manifest line without a hash, a specifier that is not `==`, a pin below the
+floors `pyproject.toml` and `setup.py` declare, or a `pip install` in
+`release.yml` that does not go through `--require-hashes` against a
+manifest; its `--refresh` mode regenerates the manifests from the index so
+a pin moves by regeneration, not by hand. `tests/test_release_pins_gate.py`
+supplies the negative controls.
+
 ## INVARIANT-9 — Maximum Exception Scope in Crypto Paths
 
 Code under `ama_cryptography/` **should** use narrow exception types
@@ -526,6 +554,33 @@ git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v5.0.0
 
 documented in `README.md` beside the Sigstore and SLSA commands. That check is
 offline: no GitHub account, no network, no trust in this repository's hosting.
+
+### INVARIANT-10 Addendum — A Release Tag Descends From the Trusted Branch
+
+A signed tag proves who tagged; it says nothing about *what* was tagged. Until
+2026-09-25 a `v*` tag pointing at any commit — a branch never reviewed, a
+commit reachable from nothing on `main` — passed preflight's shape and
+signature checks and built a release with the release signing seed in its
+environment. The tag's commit **must** be an ancestor of a trusted branch.
+
+**Enforcement:** `tools/check_release_tag.py --trust-config` adds a fourth
+fail-closed check, `git merge-base --is-ancestor <tag commit> origin/<branch>`
+for a branch named in `.github/release-trust.json`. `release.yml`'s preflight
+checks out the full history, fetches `main`, and reads that configuration
+from `origin/main` with `git show` — **never from the tag's own tree**, because
+the tag's tree is exactly what a tagger controls, and a definition of
+"trusted" that ships inside it would let the tagger write the definition.
+`tests/test_release_tag_gate.py` carries the negative controls: a tag on a
+side branch, a missing configuration, an unresolvable branch, and the
+workflow wiring.
+
+**Stated limitation (INVARIANT-37).** The workflow file that runs this gate
+is itself read from the tag, so a tag pushed by someone able to rewrite
+`release.yml` is outside what the gate can hold. The controls that make the
+gate binding are administrative and recorded as such: a tag ruleset on `v*`
+restricting who may create tags, and the signing seed living in an
+environment whose deployment policy admits only `v*` tags. The gate is the
+in-repository half; those are the other half.
 
 ## INVARIANT-11 — SBOM as Release Gate
 
@@ -2976,16 +3031,39 @@ host-OS reasons verbatim. A guard that cannot skip silently is only half the
 rule; the other half is that it cannot pass silently either, which is why
 the baseline guard resolves its refs before comparing anything.
 
-**Enforcement.** `tests/conftest.py` escalates the three markers and the
-backend keywords under their flags; `tests/test_conftest_backend_skip_scoping.py`
-drives the production hook through pytester for every marker in both
-directions, holds every history skip and every `[examples]` importorskip
-under its marker, and holds the eight backend-only modules' reasons to the
-keyword set; `ci.yml` and `ci-build-test.yml` check out with
-`fetch-depth: 0`, install `[examples]` and `clang-format`, and set both
-flags on their pytest steps; `benchmarks/check_baseline_justification.py`
-refuses a ref it cannot resolve and an empty base ref, with tests against
-real git.
+**A capability the host cannot supply is not a missing provision.** The
+BTI libgcc probe (`tests/test_binding_control_flow_integrity.py`) compiles
+an atomic read-modify-write with a real AArch64 ELF compiler. Its skip reason
+said the probe "runs natively" on the ARM lanes, the backend keyword `native`
+matched that word, and on 2026-09-24 every x86-64, macOS and Windows pytest
+lane failed the probe as a missing backend — a resource no build of the
+library produces and no such lane had been asked to install. The probe now
+carries `requires_aarch64_toolchain`, which `tests/conftest.py` re-asks of
+the real host (a Linux AArch64 host, or `aarch64-linux-gnu-gcc` on `PATH`)
+exactly as `requires_host_isa` does: where the lane declares
+`AMA_CI_REQUIRE_AARCH64_TOOLCHAIN` — the `ubuntu-latest` lanes, which now
+install `gcc-aarch64-linux-gnu`, and the native `ubuntu-24.04-arm` lanes —
+the skip is a failure; where the host cannot supply the compiler and no lane
+promised it, the skip stands; where the host can supply it and the probe
+still skipped, the ordinary escalation applies. The exemption is a declared
+capability, never a rewording of the reason.
+
+**Enforcement.** `tests/conftest.py` escalates the markers
+(`requires_interop_oracle`, `requires_example_deps` and `requires_c_library`
+under `AMA_CI_REQUIRE_BACKENDS`; `requires_git_history` under
+`AMA_CI_REQUIRE_HISTORY`; `requires_memcheck` under `AMA_CI_REQUIRE_MEMCHECK`;
+`requires_aarch64_toolchain` under `AMA_CI_REQUIRE_AARCH64_TOOLCHAIN`) and
+the backend keywords under their flags;
+`tests/test_conftest_backend_skip_scoping.py` drives the production hook
+through pytester for every marker in both directions, holds every history
+skip and every `[examples]` importorskip under its marker, holds the BTI
+probe to its toolchain marker and every lane that sets the toolchain flag to
+an install of the toolchain, and holds the eight backend-only modules'
+reasons to the keyword set; `ci.yml` and `ci-build-test.yml` check out with
+`fetch-depth: 0`, install `[examples]`, `clang-format` and (on x86-64 Linux)
+`gcc-aarch64-linux-gnu`, and set the flags on their pytest steps;
+`benchmarks/check_baseline_justification.py` refuses a ref it cannot
+resolve and an empty base ref, with tests against real git.
 
 ---
 

@@ -798,13 +798,23 @@ Then delete `seed.txt` and keep a copy of the seed somewhere durable: the
 public half is compiled into published binaries, so the key cannot be
 rotated without invalidating the anchor those releases expect.
 
+`release.yml` places the seed in a job's environment only on a `v*` tag
+push. A `workflow_dispatch` dry run builds and signs with a per-build
+ephemeral key, unanchored, and never receives the seed — so the code a
+branch carries cannot reach the release signing key by dispatching the
+workflow. The repository-side complement is administrative: keep the secret
+in an environment whose deployment policy admits only `v*` tags, and
+restrict tag creation on `v*` with a ruleset.
+
 Run the **Integrity anchor check** workflow (manual trigger) to confirm
 the two are a matching pair before tagging a release; a mismatch is
 otherwise only surfaced by a failing release build. `release.yml` picks
-both up automatically and sets `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`
-only when the anchor variable is non-empty, so forks and
-not-yet-configured repositories continue to build unanchored wheels
-rather than failing on a missing secret.
+both up automatically — on a `v*` tag push only — and sets
+`AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1` only when the anchor variable is
+non-empty, so forks and not-yet-configured repositories continue to
+build unanchored wheels rather than failing on a missing secret. A
+`workflow_dispatch` dry run never sees the seed and always builds
+unanchored; the anchored signer path is exercised only by a tag push.
 
 #### `AMA_CRYPTO_LIB_PATH`
 

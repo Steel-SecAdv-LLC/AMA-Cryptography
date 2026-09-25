@@ -19,6 +19,89 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### CI restored on every lane the integrated head failed, and the release pipeline holds its seed, its tag and its dependencies — 2026-09-25
+
+Run 36074261249/255/276 on `a4c3bf0d` failed four roll-up gates (Build and
+Test, CI, ARM QEMU, Sphinx Documentation). Every failure was reproduced,
+root-caused and fixed at source; nothing was skipped, quarantined or
+reworded to pass. Each new or changed test was run against the defect it
+pins and fails there (AGENTS.md 6.2); the measurements are in the commit
+messages and the file comments.
+
+**The lanes**
+- `mypy --strict`: `requires_c_lane` returned `Any` through the `skipif`
+  decorator, and a POST test patched `secrets` through `_self_test`'s
+  namespace instead of importing it. Two errors, both in tests; fixed.
+- Sphinx (`-W`): four `Raises:` rows in `key_management.py` referenced
+  `NativeBackendUnavailableError` by its short name, which resolves to both
+  `ama_cryptography.exceptions` and `pqc_backends`' re-export. The rows name
+  the defining module. The build is warning-free.
+- macOS C library (gcc and clang): `test_platform_rand_device_symlink`
+  compiles with `_POSIX_C_SOURCE=200809L`, which Darwin's headers read as a
+  request for strict POSIX visibility that hides `O_NOFOLLOW`, and the
+  harness's own `#error` refused to build. Apple targets add
+  `_DARWIN_C_SOURCE`; nothing else changes.
+- AArch64 (`arm-qemu-ctest`, both SVE2 lanes, no-crypto-ext):
+  `test_ed25519_stack_residue` reported all twelve scalar limbs, once each,
+  at the BASELINE. The library was clean. The probe's scan window included
+  the scanner's own frame, and AArch64 GCC lays a frame out with the
+  callee-saved registers at its bottom — the caller kept each limb needle
+  live in `x22` across the scan, the scanner's prologue saved it at `sp+40`,
+  and the scan read it. The window also reached 97 bytes below the poison.
+  The probe machinery is now one header, `tests/c/residue_probe.h`, shared
+  by the AEAD and Ed25519 harnesses: the mark is taken in a leaf below the
+  scanner, the window is clipped to the recorded poison span, and a third
+  check requires the bytes read to be the bytes poisoned. The Ed25519
+  wrappers gain the GAP the AEAD harness already had. Measured after the
+  change: both probes pass on x86-64 (gcc 13, clang 18), on AArch64 under
+  QEMU in the RelWithDebInfo, SVE2, no-crypto-ext and UBSan configurations;
+  removing the Ed25519 stack wipe fails keypair and sign on both
+  architectures, removing the AES-GCM stack wipe fails encrypt and decrypt,
+  halving the poison fails the coverage check, and dropping the sentinel
+  fails the control. Full AArch64 ctest: 144/144.
+- Windows (all five interpreters, both workflows): the documented-counts
+  gate reported `docs\NOTES.md`; it now reports POSIX paths on every
+  platform. `check_vector_provenance.py --update` wrote the LF manifest
+  back as CRLF through text-mode translation; it writes LF explicitly. The
+  Compress_d width probe compiled the real translation unit without the
+  static-library export definition, so every `AMA_API` definition was a
+  `dllimport` error before the width check was reached; the probe compiles
+  the unit the way the library is compiled.
+- Every non-AArch64 pytest lane: the BTI libgcc probe skipped with a reason
+  containing "natively", the backend keyword `native` matched it, and the
+  skip was escalated to a failure on hosts that no build could have given
+  an AArch64 compiler. The probe now carries `requires_aarch64_toolchain`,
+  which `conftest.py` re-asks of the real host; the `ubuntu-latest` lanes
+  install `gcc-aarch64-linux-gnu` and, with the native `ubuntu-24.04-arm`
+  lanes, declare `AMA_CI_REQUIRE_AARCH64_TOOLCHAIN`, under which a skip is
+  a failure. macOS and Windows keep the skip; the probe runs on four Linux
+  lanes instead of one.
+- macOS Intel: `test_rewriting_embedded_digest_breaks_the_signature`
+  flipped the middle byte of the dylib, which on that layout is inside the
+  SHA3-256 kernel; the pre-integrity KAT failed before the signature check
+  the test asserts ran. The tamper byte is now located through a marker —
+  a diagnostic string literal the library carries on every platform and
+  reads on no self-test path — so the tampered object loads, passes the
+  KATs and reaches the signature failure.
+
+**Release pipeline** (INVARIANT-8, INVARIANT-10)
+- The signing seed reaches a job's environment only on a `v*` tag push. A
+  `workflow_dispatch` dry run builds unanchored and never receives it.
+- A release tag must descend from `main`: `check_release_tag.py
+  --trust-config` requires the tag's commit to be an ancestor of a branch
+  named in `.github/release-trust.json`, which preflight reads from
+  `origin/main` and never from the tag's tree.
+- Release builds install only hash-pinned dependencies:
+  `requirements-release-build.txt` and `requirements-release-tools.txt`
+  carry every published SHA-256 for each exact pin, cibuildwheel and the
+  sdist job install them with `--require-hashes` and build without
+  isolation, and `tools/check_release_pins.py` fails CI on a floating
+  install, an unhashed line or a pin below the declared floors.
+
+**Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
+the seed's protected environment, and adding the aggregating gates to
+`main`'s required checks need an administrator.
+
 ### Review coverage restored: the partitioned review's findings fixed at source (batch 1 of 2) — 2026-09-24
 
 Copilot cannot review this pull request (it exceeds the 300-file limit), so

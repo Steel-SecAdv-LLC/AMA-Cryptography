@@ -71,7 +71,22 @@ CHECK_MACRO = "AMA_KYBER_COMPRESS_WIDTH_CHECK"
 #: The defines that compile every call site in: the native PQC paths and the
 #: diagnostics block, but NOT AMA_TESTING_MODE, whose one export calls the
 #: function directly on purpose (its width is a run-time sweep).
-PRODUCTION_DEFINES = ("-DAMA_USE_NATIVE_PQC", "-DAMA_KYBER_BUILD_DIAGNOSTICS")
+#:
+#: AMA_BUILDING_STATIC is the static-library build's own definition
+#: (CMakeLists.txt sets it on ``ama_cryptography_static``).  It is what makes
+#: ``AMA_API`` empty on Windows; without it the header falls through to
+#: ``__declspec(dllimport)``, and a translation unit that DEFINES the
+#: exported functions then fails to compile before the width probe is ever
+#: reached ("dllimport cannot be applied to non-inline function definition",
+#: fifteen times, on every windows-latest lane, 2026-09-24).  A non-vacuity
+#: probe that cannot compile the real TU proves nothing, so the harness
+#: compiles it the way the library itself is compiled.  On every other
+#: platform ``AMA_API`` is empty regardless and the define is inert.
+PRODUCTION_DEFINES = (
+    "-DAMA_USE_NATIVE_PQC",
+    "-DAMA_KYBER_BUILD_DIAGNOSTICS",
+    "-DAMA_BUILDING_STATIC",
+)
 
 
 def _compilers() -> list[str]:

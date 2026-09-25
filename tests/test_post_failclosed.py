@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -1763,7 +1764,7 @@ class TestContinuousRNGTest:
         from ama_cryptography import _self_test as st
 
         samples = iter([b"\x11" * 32, b"\x22" * 32])
-        monkeypatch.setattr(st.secrets, "token_bytes", lambda n: next(samples)[:n])
+        monkeypatch.setattr(secrets, "token_bytes", lambda n: next(samples)[:n])
         saved_previous = ms._rng_state["previous"]
         saved_results = list(st._SELF_TEST_RESULTS)
         try:

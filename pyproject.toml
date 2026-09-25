@@ -17,6 +17,9 @@
 # - numpy, Cython: required to build the math_engine extension; failures
 #   here are now FATAL unless AMA_NO_CYTHON=1 (D-4).  Users on pure-Python
 #   environments are still supported via the opt-out env var.
+# Release builds install the exact pins in requirements-release-build.txt
+# (hash-checked; tools/check_release_pins.py keeps them at or above these
+# floors) rather than resolving these floors from the index.
 requires = [
     "setuptools>=84.0.0",
     "wheel>=0.48.0",
@@ -610,6 +613,7 @@ markers = [
     "requires_example_deps: the test drives a shipped example that imports a third-party package from the [examples] extra (Flask); under AMA_CI_REQUIRE_BACKENDS the require-backends lane installs that extra, so a skip means the install broke and tests/conftest.py escalates it to a failure",
     "requires_memcheck: the test's oracle is valgrind memcheck running a C program linked against libama_cryptography; under AMA_CI_REQUIRE_MEMCHECK (ci.yml security-checks) the lane installs valgrind and builds the library, so a skip means one of them went missing and tests/conftest.py escalates it to a failure",
     "requires_c_library: the test compiles and links a C program against libama_cryptography; under AMA_CI_REQUIRE_BACKENDS on a Linux host the lane built that library, so a skip means it cannot be found and tests/conftest.py escalates it to a failure",
+    "requires_aarch64_toolchain: the test compiles an AArch64 ELF object with a real AArch64 C compiler (the BTI libgcc probe in tests/test_binding_control_flow_integrity.py); under AMA_CI_REQUIRE_AARCH64_TOOLCHAIN the lane installed gcc-aarch64-linux-gnu (ubuntu-latest) or compiles natively (ubuntu-24.04-arm), so a skip means the toolchain went missing and tests/conftest.py escalates it to a failure; without the flag, on a host with no AArch64 compiler at all, the skip is left alone — the exemption re-asks the host, like requires_host_isa, and a host that has the compiler still escalates",
 ]
 filterwarnings = [
     "error",

@@ -490,7 +490,15 @@ def _update(current: dict[str, Any]) -> int:
             )
             return 1
 
-    MANIFEST_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Written through ``open(newline="\n")`` rather than ``write_text``: text
+    # mode translates every ``\n`` to the platform terminator, so on Windows
+    # a re-pin of an unchanged tree rewrote the LF manifest as CRLF and the
+    # byte-for-byte round-trip test failed on every Windows lane
+    # (2026-09-24).  The manifest is a tracked file whose bytes are what
+    # ``.gitattributes`` (``* -text``) and tools/check_line_endings.py
+    # pin, so the tool must emit the committed shape on every platform.
+    with MANIFEST_PATH.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(merged, indent=2, sort_keys=True) + "\n")
     total = sum(entry["bytes"] for entry in current["files"].values())
     kept = sorted(key for key in merged if key not in _REGENERATED_KEYS)
     print(

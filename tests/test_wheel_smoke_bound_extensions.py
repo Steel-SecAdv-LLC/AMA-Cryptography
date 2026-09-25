@@ -133,8 +133,9 @@ class TestIntegrityAnchoring:
     """The release wheel must not silently ship unanchored (audit H3).
 
     Anchoring is enforced only when ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`` is set
-    — release.yml sets it iff the trust-anchor variable is configured, so forks
-    (which build unanchored) are unaffected while the canonical repository is.
+    — release.yml sets it iff the run is a ``v*`` tag push AND the trust-anchor
+    variable is configured, so forks (which build unanchored) and dispatch dry
+    runs (which never see the seed) are unaffected while a canonical tag is.
     """
 
     def test_required_and_unanchored_fails(

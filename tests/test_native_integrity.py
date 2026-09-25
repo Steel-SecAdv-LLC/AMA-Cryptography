@@ -49,6 +49,13 @@ from tests.conftest import native_library_path, native_library_present
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
 
+#: The bytes ``TestTamperDetection.test_rewriting_embedded_digest_breaks_the_signature``
+#: flips inside: the ``AMA_DISPATCH_VERBOSE`` line ``dispatch_init_internal`` prints
+#: for the Keccak slot, spelled as it compiles (a real newline).  Compiled on every
+#: platform, read by nothing but that ``fprintf``, and read-only string data rather
+#: than code or a KAT constant — see that test's docstring for the measurements.
+_TAMPER_MARKER = b"[AMA Dispatch] keccak_f1600 -> %s\n"
+
 pytestmark = pytest.mark.fips
 
 
@@ -119,6 +126,25 @@ def _drop_unbound_extensions(pkg_root: Path) -> None:
                 continue  # the native library, bound separately
             if path.name not in covered:
                 path.unlink()
+
+
+def _resign_ad_hoc(library: Path) -> None:
+    """Replace a Mach-O image's code signature with a fresh ad-hoc one.
+
+    ``codesign`` is part of macOS (``/usr/bin/codesign``); a missing binary
+    is a broken runner, not a reason to skip, so the call is ``check=True``
+    and a failure names the command.  See
+    ``test_rewriting_embedded_digest_breaks_the_signature`` for why a
+    tampered image must be re-signed on Apple Silicon before it can be
+    loaded at all.
+    """
+    subprocess.run(
+        ["codesign", "--force", "--sign", "-", str(library)],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
 
 
 def _real_so(tree_root: Path) -> Path:
@@ -497,16 +523,87 @@ class TestTamperDetection:
     ) -> None:
         """The composite bind: an attacker who edits the .so must also edit the
         embedded native digest to pass the digest check — which changes the
-        signed message and so breaks a signature they cannot forge."""
+        signed message and so breaks a signature they cannot forge.
+
+        The byte is chosen through a marker, not a position.  Until 2026-09-24
+        this flipped ``blob[len(blob) // 2]`` on the assumption that the middle
+        byte is harmless, and every macos-15-intel lane (Python 3.10–3.14, run
+        36074261255) failed with::
+
+            FIPS 140-3 POST FAILURE: SHA3-256 KAT failed (NATIVE backend,
+            0-byte message): got b95f99ac..., expected a7ffc6f8...
+
+        That dylib was not inspected (no macOS host); the wrong digest says
+        the middle byte is evidently among the bytes the SHA3-256 KAT depends
+        on — an instruction or a constant of the absorb/pad path — and the
+        SHA3-256 CAST runs BEFORE the integrity stage (NIST IG 10.3.A;
+        ``TestStageOrdering``), so POST failed one stage too early and the
+        signature check this test is about never ran.  A positional flip
+        must land in bytes no pre-integrity stage executes or reads, and no
+        file layout promises that: on the Linux x86-64 build measured here
+        the same offset (0x79ab4 of 996712 bytes) is an instruction byte of
+        ``kyber_decapsulate_internal``, on the released macOS x86-64 wheel it
+        is inside ``_kyber_keygen_internal``, and on the released arm64 wheel
+        inside ``_dil_sign_internal`` — inert on those builds only because
+        the ML-KEM and ML-DSA CASTs are scheduled after integrity.
+
+        ``_TAMPER_MARKER`` meets the requirement on every format.  It is
+        compiled unconditionally (the verbose block of
+        ``dispatch_init_internal`` in ``src/c/dispatch/ama_dispatch.c`` sits
+        under no platform ``#if``), it is read by nothing but the ``fprintf``
+        behind ``AMA_DISPATCH_VERBOSE=1``, and a string literal is read-only
+        data everywhere the library ships — ELF ``.rodata``, Mach-O
+        ``__TEXT,__cstring``, PE ``.rdata`` — never an instruction and never
+        a KAT constant.  Measured on ``libama_cryptography.so.5.0.0`` (Linux
+        x86-64, 2026-09-25): the literal occurs once, at file offset 0xc69b8,
+        inside section [16] ``.rodata`` (file range 0xc5000–0xe3980); on the
+        released arm64 dylib (run 35296160649, ``wheels-macos-15``): once, at
+        0xadabe in ``__TEXT,__cstring``.  The flip turns ``[AMA`` into
+        ``ZAMA`` and leaves the text a printable diagnostic; ``count == 1``
+        is asserted so a duplicated or merged literal cannot make ``find``
+        pick some other byte.
+
+        Darwin re-signs the tampered image ad hoc before the digest is taken
+        (:func:`_resign_ad_hoc`).  Apple Silicon validates each page of a
+        linker-signed Mach-O against its ad-hoc CodeDirectory as the page is
+        faulted in and kills the process on a mismatch; the released arm64
+        dylib carries that signature (``LC_CODE_SIGNATURE`` at 0xc2770), and
+        the marker shares its 4 KiB page with the ``AMA_DISPATCH_VERBOSE``
+        string ``dispatch_init_internal`` reads on the first native call.
+        The middle-byte flip survived the arm64 lanes only because its page
+        was never faulted.  A tamperer on Darwin must re-sign to load at all,
+        so the test does what the tamperer must do; what it measures is
+        AMA's Ed25519 signature over the composite digest, which the fresh
+        ad-hoc signature does nothing to repair.  Intel is unaffected either
+        way (its dylib carries no code signature and the loader accepts an
+        ad-hoc one).
+
+        Non-vacuity: the tampered object still loads and passes the SHA3-256
+        and Ed25519 CASTs, so ``signature did NOT verify`` below can only come
+        from the integrity stage.  Mutation (AGENTS.md §6.2): flipping the
+        SHA3-256 padding byte in ``.text`` instead — file offset 0x1053b, the
+        ``0x06`` immediate of ``movb $0x6,0xf0(%rsp,%r9,1)`` in
+        ``ama_sha3_256`` — reproduces the macOS Intel failure on Linux
+        (``SHA3-256 KAT failed (NATIVE backend, 0-byte message)``) and this
+        test fails at the ``signature did NOT verify`` assertion.
+        """
         import re
 
         root = tmp_path / "resigned"
         shutil.copytree(signed_tree / "ama_cryptography", root / "ama_cryptography")
         so = _real_so(root)
         blob = bytearray(so.read_bytes())
-        blob[len(blob) // 2] ^= 0x01
+        assert blob.count(_TAMPER_MARKER) == 1, (
+            f"expected the dispatch diagnostic literal {_TAMPER_MARKER!r} exactly "
+            f"once in {so.name}, found {blob.count(_TAMPER_MARKER)}; if the literal "
+            "in src/c/dispatch/ama_dispatch.c was reworded, update _TAMPER_MARKER "
+            "and test_the_tamper_marker_is_the_dispatch_literal to the new text"
+        )
+        blob[blob.find(_TAMPER_MARKER)] ^= 0x01  # '[' -> 'Z': still a printable diagnostic
         so.write_bytes(bytes(blob))
-        new_digest = hashlib.sha3_256(bytes(blob)).hexdigest()
+        if sys.platform == "darwin":
+            _resign_ad_hoc(so)
+        new_digest = hashlib.sha3_256(so.read_bytes()).hexdigest()
 
         sig = root / "ama_cryptography" / "_integrity_signature.py"
         text = sig.read_text(encoding="utf-8")
@@ -523,6 +620,28 @@ class TestTamperDetection:
         assert "signature did NOT verify" in combined, combined
         # And crucially NOT a mere digest mismatch — the signature is the gate.
         assert "native library digest MISMATCH" not in combined
+
+    def test_the_tamper_marker_is_the_dispatch_literal(self) -> None:
+        """The tamper test's marker is this literal, and drifts with it.
+
+        ``test_rewriting_embedded_digest_breaks_the_signature`` finds the byte
+        it flips by searching the shipped library for ``_TAMPER_MARKER``, the
+        ``AMA_DISPATCH_VERBOSE`` line ``dispatch_init_internal`` prints for
+        the Keccak slot.  If that literal is reworded in ``ama_dispatch.c`` the
+        tamper test fails on its ``count == 1`` assertion with nothing pointing
+        at the cause; this pins the literal to its source so the failure names
+        the file to edit.  The literal is asserted as C spells it — one string
+        literal, ``\\n`` escape included — because the marker must compile to a
+        single run of bytes for ``blob.find`` to locate.
+        """
+        source = (REPO_ROOT / "src" / "c" / "dispatch" / "ama_dispatch.c").read_text(
+            encoding="utf-8"
+        )
+        c_literal = '"' + _TAMPER_MARKER.decode("ascii").replace("\n", "\\n") + '"'
+        assert c_literal in source, (
+            f"{c_literal} is no longer a literal in src/c/dispatch/ama_dispatch.c; "
+            "the tamper test's marker must be updated to the text that replaced it"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -1252,6 +1252,194 @@ def test_c_library_marked_skip_without_the_backends_flag_stays_a_skip(
     result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
 
 
+# ---------------------------------------------------------------------------
+# requires_aarch64_toolchain (2026-09-25)
+#
+# The BTI libgcc probe in tests/test_binding_control_flow_integrity.py compiles
+# an atomic read-modify-write with a real AArch64 compiler.  Its skip reason
+# said the probe "runs natively" on the ubuntu-24.04-arm lanes; "natively"
+# matched the backend keyword "native", and under AMA_CI_REQUIRE_BACKENDS every
+# non-AArch64 lane — ubuntu-latest x86-64, macos-latest, macos-15-intel and
+# windows-latest, in ci.yml::test and ci-build-test.yml::python-package alike —
+# failed on it (runs 36074261249 / 36074261255, 2026-09-24), while no lane had
+# promised the compiler.  The ubuntu-latest legs now install
+# gcc-aarch64-linux-gnu and set AMA_CI_REQUIRE_AARCH64_TOOLCHAIN together with
+# the arm64 legs, so the skip fails where the compiler is promised; the marker
+# keeps the skip on a host with no AArch64 compiler and no such promise, and
+# re-asks the host, so a probe that skips beside a compiler it should have
+# found is still the ordinary backend failure.
+# ---------------------------------------------------------------------------
+
+
+def test_aarch64_toolchain_marked_skip_becomes_a_failure_under_its_flag(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lane that installs gcc-aarch64-linux-gnu does not get to skip the
+    one test that uses it — whatever the reason says, and whether or not this
+    host has the compiler.  The reason here names no backend keyword, so only
+    the marker branch can produce the failure."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_AARCH64_TOOLCHAIN", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_HISTORY", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_MEMCHECK", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_aarch64_toolchain
+        def test_the_selected_flags_compile_atomics_without_a_libgcc_call():
+            pytest.skip("no AArch64 ELF C compiler on this host")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE:*AArch64*"])
+
+
+def test_aarch64_toolchain_marked_skip_is_left_alone_where_no_lane_promised_it(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact skip that failed CI, under the backends flag alone.
+
+    The reason says the probe "runs natively" on the arm64 lanes, and
+    "natively" is a backend keyword, so before the marker this became ``CI
+    FAILURE: ... all cryptographic backends must be available in CI`` on every
+    non-AArch64 lane.  What the marker does with it depends on the host, and
+    the inner run is on THIS host, so the expectation is decided live from
+    the production predicate rather than assumed:
+
+    * a host with no AArch64 compiler — the windows-latest, macos-latest and
+      macos-15-intel jobs — keeps the skip: no lane promised the compiler, no
+      build of this library could have produced one, and "build the C
+      library" is not the remedy;
+    * a host that HAS one — the ubuntu jobs, whose install step puts
+      gcc-aarch64-linux-gnu on PATH, and any aarch64 Linux host — still
+      escalates, because a probe that skips beside a compiler it should have
+      found is the ordinary missing-backend case the keyword net exists for,
+      and the marker must not be a way to hide it.
+
+    Both directions are therefore checked in CI, by different jobs: the
+    Windows and macOS jobs check the skip direction, the ubuntu jobs the
+    escalation direction.
+    """
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_AARCH64_TOOLCHAIN", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_aarch64_toolchain
+        def test_the_selected_flags_compile_atomics_without_a_libgcc_call():
+            pytest.skip(
+                "no AArch64 C compiler on this host (runs natively on ci.yml's "
+                "ubuntu-24.04-arm lanes, or anywhere aarch64-linux-gnu-gcc is on PATH)"
+            )
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    if conftest._host_has_aarch64_elf_compiler():
+        result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+        result.stdout.fnmatch_lines(["*CI FAILURE: no AArch64 C compiler on this host*"])
+    else:
+        result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_the_aarch64_toolchain_flag_alone_does_not_escalate_backend_skips(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scoping in the other direction: the toolchain flag promises a compiler,
+    not the backends and not the C example lane's library."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_AARCH64_TOOLCHAIN", "1")
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_HISTORY", raising=False)
+    monkeypatch.delenv("AMA_CI_REQUIRE_MEMCHECK", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.skipif(True, reason="Kyber backend unavailable")
+        def test_kyber():
+            raise AssertionError("must not run")
+
+        @pytest.mark.requires_c_library
+        def test_links():
+            pytest.skip("no linkable library")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=2, failed=0, errors=0, passed=0)
+
+
+def test_the_bti_probe_carries_the_toolchain_marker() -> None:
+    """The one link the sandbox tests above cannot cover: the test that
+    actually skips without an AArch64 compiler is the one carrying the marker,
+    so the exemption reaches it on the macOS and Windows jobs and the flag
+    reaches it on the Linux ones.  Read from the source, the way the other
+    completeness guards are, so a class-level or module-level marker would
+    count too."""
+    path = Path(__file__).resolve().parent / "test_binding_control_flow_integrity.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    probe = "test_the_selected_flags_compile_atomics_without_a_libgcc_call"
+    marked = [markers for func, markers in _defs_with_effective_markers(tree) if func.name == probe]
+    assert len(marked) == 1, f"expected exactly one {probe} in {path.name}, found {len(marked)}"
+    assert "requires_aarch64_toolchain" in marked[0], (
+        f"{probe} no longer carries @pytest.mark.requires_aarch64_toolchain, so its skip "
+        "is a hard CI failure again on every non-AArch64 lane and a silent skip on the "
+        "lanes that install the compiler"
+    )
+
+
+def _matrix_os_values(job: dict[str, Any]) -> list[str]:
+    """Every ``os`` a job's matrix can take: the ``os`` axis plus ``include`` rows."""
+    matrix = (job.get("strategy") or {}).get("matrix") or {}
+    values = [str(os_name) for os_name in matrix.get("os") or []]
+    values += [str(row["os"]) for row in matrix.get("include") or [] if "os" in row]
+    return values
+
+
+def test_every_lane_that_promises_the_aarch64_toolchain_installs_it() -> None:
+    """The flag is only a promise if the lane keeps it.
+
+    For every job whose step env sets ``AMA_CI_REQUIRE_AARCH64_TOOLCHAIN`` —
+    to ``1``, or to an expression that can yield ``1`` — each x86-64 Linux
+    entry of its matrix needs an EARLIER step that installs
+    gcc-aarch64-linux-gnu through apt-install.sh; an arm64 entry
+    (``ubuntu-24.04-arm``) compiles natively and needs nothing.  A job that
+    set the flag without the install would fail on its own promise exactly
+    the way the probe failed before the flag existed.
+
+    Non-vacuous: the two jobs that make the promise today must be found.
+    """
+    import yaml
+
+    repo_root = Path(__file__).resolve().parent.parent
+    promising: set[str] = set()
+    for workflow_name in ("ci.yml", "ci-build-test.yml"):
+        document = yaml.safe_load(
+            (repo_root / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+        )
+        for job_name, job in document["jobs"].items():
+            steps = job.get("steps") or []
+            for index, step in enumerate(steps):
+                flag = str((step.get("env") or {}).get("AMA_CI_REQUIRE_AARCH64_TOOLCHAIN", ""))
+                if "1" not in flag:
+                    continue
+                lane = f"{workflow_name}:{job_name}"
+                promising.add(lane)
+                os_values = _matrix_os_values(job)
+                linux = [name for name in os_values if name.startswith("ubuntu")]
+                x86_linux = [name for name in linux if not name.endswith("-arm")]
+                assert linux, f"{lane} sets the flag but runs on no Linux entry: {os_values}"
+                installs = any(
+                    "apt-install.sh" in str(earlier.get("run", ""))
+                    and "gcc-aarch64-linux-gnu" in str(earlier.get("run", ""))
+                    for earlier in steps[:index]
+                )
+                assert installs or not x86_linux, (
+                    f"{lane} sets AMA_CI_REQUIRE_AARCH64_TOOLCHAIN for {x86_linux} but no "
+                    "earlier step installs gcc-aarch64-linux-gnu through apt-install.sh, so "
+                    "the BTI libgcc probe would fail on the lane's own promise there"
+                )
+    assert {"ci.yml:test", "ci-build-test.yml:python-package"} <= promising, promising
+
+
 def test_every_valgrind_skip_in_the_tree_carries_the_marker() -> None:
     """Completeness guard: a test that skips when ``shutil.which("valgrind")``
     finds nothing must carry ``requires_memcheck``, so the next memcheck
@@ -1465,6 +1653,7 @@ def test_the_history_and_example_markers_are_registered() -> None:
     assert "requires_example_deps" in pyproject
     assert '"requires_memcheck:' in pyproject
     assert '"requires_c_library:' in pyproject
+    assert '"requires_aarch64_toolchain:' in pyproject
 
 
 class TestNativeLibraryDetection:

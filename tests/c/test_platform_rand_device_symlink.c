@@ -46,9 +46,15 @@
  * Under the project's strict -std=c11, glibc hides O_NOFOLLOW and O_CLOEXEC
  * unless _POSIX_C_SOURCE >= 200809L is defined, the arm's fallbacks then
  * compile them as 0, and a flag compiled as 0 is a flag this test cannot
- * observe.  CMake defines it for this target; this pins that it still does. */
+ * observe.  CMake defines it for this target; this pins that it still does.
+ *
+ * Darwin reads a bare _POSIX_C_SOURCE as a request for strict POSIX
+ * visibility and keeps O_NOFOLLOW behind __DARWIN_C_FULL, so on macOS the
+ * definition alone HID the flag and this #error fired on both macOS lanes
+ * (2026-09-24).  CMake adds _DARWIN_C_SOURCE there, which restores full
+ * visibility without dropping the POSIX request glibc needs. */
 #if !defined(O_NOFOLLOW) || !defined(O_CLOEXEC)
-#error "test_platform_rand_device_symlink must see POSIX.1-2008 open flags: compile with -D_POSIX_C_SOURCE=200809L"
+#error "test_platform_rand_device_symlink must see POSIX.1-2008 open flags: compile with -D_POSIX_C_SOURCE=200809L (and -D_DARWIN_C_SOURCE on macOS)"
 #endif
 
 #include "../../src/c/ama_platform_rand.h"

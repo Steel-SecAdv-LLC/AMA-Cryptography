@@ -827,7 +827,8 @@ class SecureKeyStorage:
         Raises:
             KDFPolicyError: If the stored KDF parameters are below the policy
                 floor and ``allow_legacy_kdf`` is False.
-            NativeBackendUnavailableError: If ``master_password`` would create
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If
+                ``master_password`` would create
                 a new store and the loaded library does not provide Argon2id.
                 Nothing is written to the store directory in that case.
         """
@@ -1071,7 +1072,8 @@ class SecureKeyStorage:
         family: refuse at call time, never substitute (INVARIANT-7).
 
         Raises:
-            NativeBackendUnavailableError: If Argon2id is unavailable.
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If
+                Argon2id is unavailable.
         """
         from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
 
@@ -1094,7 +1096,8 @@ class SecureKeyStorage:
         Raises:
             KDFPolicyError: If the stored parameters are below the floor and
                 ``allow_legacy_kdf`` is False.
-            NativeBackendUnavailableError: If this would create a new store and
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If this
+                would create a new store and
                 the loaded library does not provide Argon2id.
         """
         # Check for existing salt (migration support)
@@ -1277,7 +1280,8 @@ class SecureKeyStorage:
         when there is no salt file and so nothing to migrate.
 
         Raises:
-            NativeBackendUnavailableError: If the loaded library does not
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If the
+                loaded library does not
                 provide Argon2id.  Raised before any key is read or any file
                 is written; the store is left exactly as it was.
         """

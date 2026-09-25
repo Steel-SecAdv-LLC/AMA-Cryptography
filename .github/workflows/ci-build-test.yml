@@ -366,9 +366,21 @@ jobs:
 
       - name: Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
+        # gcc-aarch64-linux-gnu: the BTI libgcc probe
+        # (tests/test_binding_control_flow_integrity.py::
+        # TestLibgccCannotClearTheBtiProperty) compiles an atomic
+        # read-modify-write with a real AArch64 compiler and reads the cross
+        # object with binutils' readelf, which reads any ELF machine.  It is
+        # installed HERE because this lane sets AMA_CI_REQUIRE_BACKENDS and ran
+        # that probe as a failure on every ubuntu-latest leg of run 36074261255
+        # (2026-09-24): the probe's skip reason said it "runs natively" on the
+        # arm64 lanes, the backend keyword escalation matched "native", and
+        # nothing in this job had provisioned the compiler the skip was about.
+        # "Run tests" below sets AMA_CI_REQUIRE_AARCH64_TOOLCHAIN on this OS so
+        # a recurrence of that skip fails instead of hiding behind the install.
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          .github/scripts/apt-install.sh build-essential python3-dev cmake
+          .github/scripts/apt-install.sh build-essential python3-dev cmake gcc-aarch64-linux-gnu
 
       - name: Install system dependencies (macOS)
         # startsWith, not equality: this job's matrix carries both macOS
@@ -676,6 +688,9 @@ jobs:
           # The checkout is fetch-depth: 0, so a history-dependent guard that
           # skips here is a broken checkout, not a shallow one.
           AMA_CI_REQUIRE_HISTORY: "1"
+          # ubuntu-latest installed gcc-aarch64-linux-gnu above, so the BTI
+          # libgcc probe (marker requires_aarch64_toolchain) must run there, not skip.
+          AMA_CI_REQUIRE_AARCH64_TOOLCHAIN: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
           # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}

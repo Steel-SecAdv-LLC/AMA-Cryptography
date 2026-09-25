@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import sys
 import tempfile
 from collections.abc import Callable, Generator
@@ -56,6 +57,29 @@ _CI_HISTORY = os.environ.get("AMA_CI_REQUIRE_HISTORY", "").lower() in ("true", "
 # nothing the backend escalation matches, so the one test proving the gate
 # rejects an Ed25519 key minted from stack garbage never executed in CI.
 _CI_MEMCHECK = os.environ.get("AMA_CI_REQUIRE_MEMCHECK", "").lower() in ("true", "1", "yes")
+
+# When AMA_CI_REQUIRE_AARCH64_TOOLCHAIN=1 is set (by the pytest lanes that
+# provision an AArch64 ELF C compiler: ci.yml's test job on both Linux
+# architectures and ci-build-test.yml's python-package job on ubuntu-latest —
+# gcc-aarch64-linux-gnu on x86-64, the native gcc on ubuntu-24.04-arm), a test
+# marked ``requires_aarch64_toolchain`` must run.  That is the BTI libgcc probe
+# in tests/test_binding_control_flow_integrity.py, which compiles an atomic
+# read-modify-write with a real AArch64 compiler.  Before this flag no pytest
+# lane installed the cross compiler, and the probe's skip reason said it "runs
+# natively on ci.yml's ubuntu-24.04-arm lanes"; "natively" matched the backend
+# keyword "native" below, so AMA_CI_REQUIRE_BACKENDS turned the skip into a
+# failure on every non-AArch64 lane — ubuntu-latest x86-64, macos-latest,
+# macos-15-intel and windows-latest, in ci.yml::test and
+# ci-build-test.yml::python-package alike (runs 36074261249 / 36074261255,
+# 2026-09-24) — while the ubuntu-24.04-arm lanes, whose native compiler is
+# AArch64, ran it.  The marker keeps the skip where no lane promised the
+# compiler and the host has none (see the hook); this flag makes the lanes
+# that do promise it fail on the skip.
+_CI_AARCH64_TOOLCHAIN = os.environ.get("AMA_CI_REQUIRE_AARCH64_TOOLCHAIN", "").lower() in (
+    "true",
+    "1",
+    "yes",
+)
 _BACKEND_SKIP_REASONS = (
     "dilithium",
     "kyber",
@@ -83,6 +107,20 @@ def _host_is_x86() -> bool:
 
 def _host_is_aarch64() -> bool:
     return _host_machine() in {"aarch64", "arm64"}
+
+
+def _host_has_aarch64_elf_compiler() -> bool:
+    """Whether this host can compile an AArch64 ELF object.
+
+    The native compiler on a Linux AArch64 host, or ``aarch64-linux-gnu-gcc``
+    on PATH anywhere else — the same two answers
+    ``tests/test_binding_control_flow_integrity.py::_aarch64_compiler`` gives.
+    The hook below re-asks them of the real host, so the toolchain exemption
+    is a capability this host lacks, not a phrase a skip reason contains.
+    """
+    if sys.platform.startswith("linux") and _host_is_aarch64():
+        return True
+    return shutil.which("aarch64-linux-gnu-gcc") is not None
 
 
 #: Instruction-set capabilities a test may declare with
@@ -215,6 +253,69 @@ def _reported_skip_reason(rep: Any) -> str:
     return ""
 
 
+def _lane_promise_decides(item: Any, rep: Any) -> bool:
+    """Settle a skipped ``item``'s report by the markers whose lane flags act
+    independently of ``AMA_CI_REQUIRE_BACKENDS``; True when it is settled.
+
+    ``requires_memcheck`` and ``requires_git_history`` fail under their own
+    flag and are otherwise handed on to the backend escalation, which ignores
+    them.  ``requires_aarch64_toolchain`` fails under its flag too; without
+    the flag it is a capability exemption re-asked of the real host, exactly
+    like :func:`host_isa_exempts`: the skip is settled — left standing — only
+    on a host with no AArch64 compiler at all, and on a host that HAS one the
+    report is handed on unchanged, because a probe that skips beside a
+    compiler it should have found is the ordinary missing-backend case.
+
+    Its own function so that ``pytest_runtest_makereport`` stays inside the
+    complexity ceiling ruff enforces (C901, 15): the hook sat exactly at the
+    ceiling before the toolchain marker, and the three lane-flag markers are
+    one decision, not three.
+    """
+    if _CI_MEMCHECK and item.get_closest_marker("requires_memcheck") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'memcheck oracle unavailable'} — "
+            "this lane installs valgrind and builds libama_cryptography "
+            "(AMA_CI_REQUIRE_MEMCHECK), so a test whose oracle is memcheck must "
+            "run here. A skip means the valgrind install or the library build "
+            "broke and the documented-C-example gate's uninitialised-read check "
+            "went unverified."
+        )
+        return True
+    if _CI_HISTORY and item.get_closest_marker("requires_git_history") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'git history unavailable'} — "
+            "this lane checks out the full history (fetch-depth: 0), so the git "
+            "object this test reads must be present. A skip here means the "
+            "checkout is shallow again and the history-dependent guards "
+            "(baseline validity window, calibration-commit drift, snapshot "
+            "provenance, the embedded release tag) went silent."
+        )
+        return True
+    if item.get_closest_marker("requires_aarch64_toolchain") is None:
+        return False
+    if _CI_AARCH64_TOOLCHAIN:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'AArch64 ELF toolchain unavailable'} — "
+            "this lane provisions an AArch64 ELF C compiler "
+            "(AMA_CI_REQUIRE_AARCH64_TOOLCHAIN: gcc-aarch64-linux-gnu on "
+            "ubuntu-latest, the native compiler on ubuntu-24.04-arm), so the "
+            "BTI libgcc probe must run here, not skip. A skip means the "
+            "toolchain install broke or the probe stopped finding it."
+        )
+        return True
+    # No lane promised the compiler.  The skip stands only where this host
+    # cannot supply one — a capability exemption re-asked of the real host,
+    # exactly like host_isa_exempts.  On a host that HAS the compiler this is
+    # False and the backend escalation in the hook runs unchanged.
+    return not _host_has_aarch64_elf_compiler()
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: Any, call: Any) -> Any:
     """In CI, convert any backend-related skip into a hard failure.
@@ -269,36 +370,34 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
       because that is the promise the C example lane makes: on Windows the
       MSVC-built import library is not where a MinGW ``-lama_cryptography``
       looks, and no macOS lane has been measured running it.
+    * ``requires_aarch64_toolchain`` under ``AMA_CI_REQUIRE_AARCH64_TOOLCHAIN``:
+      the lane provisions an AArch64 ELF C compiler — gcc-aarch64-linux-gnu on
+      ubuntu-latest, the native gcc on ubuntu-24.04-arm — so the BTI libgcc
+      probe in tests/test_binding_control_flow_integrity.py must run; a skip
+      means the install broke or the probe stopped finding the compiler.
+      Without that flag the marker is the second capability exemption, and it
+      works exactly like ``requires_host_isa``: the hook re-asks the REAL host
+      (:func:`_host_has_aarch64_elf_compiler`) and leaves the skip alone only
+      on a host with no AArch64 compiler at all, where no build of this
+      library could have supplied one and "build the C library" is not the
+      remedy.  On a host that HAS the compiler the skip falls through to the
+      backend escalation unchanged, because a probe that skips beside a
+      compiler it should have found is the ordinary missing-backend case.
+      Deliberately NOT text-matched: the probe's reason names the
+      ubuntu-24.04-arm lanes that "compile natively", and "natively" is what
+      :func:`_mentions_backend` matched when every non-AArch64 lane failed on
+      it (runs 36074261249 / 36074261255, 2026-09-24).  Rewording the reason
+      would have silenced that skip on every host, including the lanes that
+      now install the compiler; the marker silences it only where the
+      compiler cannot exist.
     """
     outcome = yield
-    if not (_CI or _CI_HISTORY or _CI_MEMCHECK):
+    if not (_CI or _CI_HISTORY or _CI_MEMCHECK or _CI_AARCH64_TOOLCHAIN):
         return
     rep = outcome.get_result()
     if not rep.skipped:
         return
-    if _CI_MEMCHECK and item.get_closest_marker("requires_memcheck") is not None:
-        reported = _reported_skip_reason(rep)
-        rep.outcome = "failed"
-        rep.longrepr = (
-            f"CI FAILURE: {reported or 'memcheck oracle unavailable'} — "
-            "this lane installs valgrind and builds libama_cryptography "
-            "(AMA_CI_REQUIRE_MEMCHECK), so a test whose oracle is memcheck must "
-            "run here. A skip means the valgrind install or the library build "
-            "broke and the documented-C-example gate's uninitialised-read check "
-            "went unverified."
-        )
-        return
-    if _CI_HISTORY and item.get_closest_marker("requires_git_history") is not None:
-        reported = _reported_skip_reason(rep)
-        rep.outcome = "failed"
-        rep.longrepr = (
-            f"CI FAILURE: {reported or 'git history unavailable'} — "
-            "this lane checks out the full history (fetch-depth: 0), so the git "
-            "object this test reads must be present. A skip here means the "
-            "checkout is shallow again and the history-dependent guards "
-            "(baseline validity window, calibration-commit drift, snapshot "
-            "provenance, the embedded release tag) went silent."
-        )
+    if _lane_promise_decides(item, rep):
         return
     if not _CI:
         return
