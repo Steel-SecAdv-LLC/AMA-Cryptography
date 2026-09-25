@@ -101,6 +101,16 @@ messages and the file comments.
   transport every fetch in this tree shares (FETCH-003), after the Python
   Security Audit lane flagged the private `urlopen` it first carried
   (bandit B310); the delegation is pinned at the source and at runtime.
+- The instruction-count A/B lane, skipped on a4c3bf0d because the jobs it
+  depends on had failed, ran on this branch for the first time since the
+  `x25519_scalarmult` acknowledgement was written and refused it as stale.
+  The LTO-only move it recorded (1,104,518 to 1,069,618 Ir, bisected to
+  `ama_consttime.c` and `ama_dispatch.c` on 8ddf606) was overtaken by the
+  later dispatch edits on this branch (f8d870cc, 6e3e88d9): against the same
+  reference the head now measures 1,089,253 Ir, -1.38%, inside the 2% band.
+  An entry inside tolerance is stale by the gate's own rule, so it is
+  removed; nothing is excused, and the gate passes on CI's own base and head
+  measurements without it (run 36165460123).
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to

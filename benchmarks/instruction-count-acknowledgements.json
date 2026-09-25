@@ -132,15 +132,6 @@
       "commits": [
         "b40e60f"
       ]
-    },
-    "x25519_scalarmult": {
-      "from": 1104518,
-      "to": 1069618,
-      "delta_percent": -3.16,
-      "reason": "No change to the X25519 code path: the ladder, its inputs and its source are unchanged. The Release archive is built with -flto, and the driver link re-optimises every translation unit together, so edits to units X25519 never calls move its count. Bisected on dcc8ab9 (1,115,771 Ir) by adding this pass's files one at a time: src/c/ama_consttime.c (the internal stack-wipe helper) takes it to 1,099,706, and src/c/dispatch/ama_dispatch.c (the AMA_DISPATCH_ONLY pin and cache-diagnostic edits) to 1,073,681. Recorded because the gate is right that the executed instruction stream changed; nothing here is a regression.",
-      "commits": [
-        "8ddf606"
-      ]
     }
   }
 }
