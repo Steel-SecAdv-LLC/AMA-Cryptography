@@ -111,6 +111,15 @@ messages and the file comments.
   An entry inside tolerance is stale by the gate's own rule, so it is
   removed; nothing is excused, and the gate passes on CI's own base and head
   measurements without it (run 36165460123).
+- Windows, every interpreter: `test_the_cli_fails_on_an_unwired_binding`
+  rewrote its scratch copy of `ed25519_binding.pyx` with `write_text` and
+  no encoding, so the em dash in that file's header went out as cp1252
+  and the gate's UTF-8 read of it raised. The write names UTF-8, as its
+  reads already did; the same omission on a non-ASCII literal in
+  `test_version_consistency.py` is closed with it. Measured on the tree:
+  84 further `read_text`/`write_text` calls without an encoding carry
+  dynamic content and 63 carry ASCII literals; none has failed a lane,
+  and they are recorded here as the remaining members of the class.
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to

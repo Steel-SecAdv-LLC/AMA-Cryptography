@@ -402,7 +402,8 @@ def test_c_comments_are_ignored(tool_module: ModuleType, tmp_path: Path) -> None
     f.write_text(
         '/* Released in version "1.2.3" — historical note */\n'
         '// const char *legacy_version = "0.0.1";\n'
-        "int main(void) { return 0; }\n"
+        "int main(void) { return 0; }\n",
+        encoding="utf-8",
     )
     assert tool_module.scan_c_sources_for_version_literals(src_dir) == []
 

@@ -611,7 +611,9 @@ class TestCythonBindingKeygens:
         assert gate.main(["--root", str(tmp_path)]) == 0
         target = tmp_path / "src" / "cython" / "ed25519_binding.pyx"
         text = target.read_text(encoding="utf-8")
-        target.write_text(text.replace("    pairwise_test_signature(", "    _no_test(", 1))
+        target.write_text(
+            text.replace("    pairwise_test_signature(", "    _no_test(", 1), encoding="utf-8"
+        )
         assert gate.main(["--root", str(tmp_path)]) == 1
 
 
