@@ -21,12 +21,14 @@ release day.
 from __future__ import annotations
 
 import re
+import urllib.error
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tools import check_release_pins as pins
+from tools import http_fetch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_YML = REPO_ROOT / ".github" / "workflows" / "release.yml"
@@ -670,6 +672,79 @@ class TestRefresh:
         with pytest.raises(SystemExit) as excinfo:
             pins.main(["--repo", str(_scratch_tree(tmp_path)), "--refresh"])
         assert excinfo.value.code == 2
+
+
+class TestFetchTransportPolicy:
+    """``fetch_json`` must ride ``tools/http_fetch.py``, not a transport of its own.
+
+    The first cut of this gate opened PyPI with ``urllib.request.urlopen``,
+    which bandit flagged (B310, Medium) on the Python Security Audit lane —
+    correctly: that opener's default redirect handler follows a ``Location:``
+    whose scheme is ``http``, ``ftp`` or empty, so only the first hop was
+    HTTPS.  The repository already holds the hardened transport once
+    (HTTPS re-checked on every hop, bounded retry of transport failures only)
+    and pins each caller's delegation to it, exactly as
+    ``tests/test_keyformat_corpus_provenance.py`` and
+    ``tests/test_acvp_fetch_fails_closed.py`` do: this defect class returns as
+    a private fetch, and a source-level pin is how it is kept out.
+    """
+
+    TOOL_PATH = REPO_ROOT / "tools" / "check_release_pins.py"
+
+    def test_the_fetch_goes_through_the_shared_policy(self) -> None:
+        body = self.TOOL_PATH.read_text(encoding="utf-8")
+        assert "http_fetch.fetch_bytes" in body, "the PyPI fetch bypasses the shared policy"
+        assert "urlopen" not in body, "the PyPI fetch has grown its own unhardened transport"
+
+    def test_fetch_json_delegates_at_runtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-vacuity for the source pin: the delegation must actually run,
+        against the ``https://pypi.org/`` literal and with a User-Agent."""
+        seen: list[tuple[str, str, int]] = []
+
+        def fake(url: str, *, user_agent: str, timeout: int = 0, **_: Any) -> bytes:
+            seen.append((url, user_agent, timeout))
+            return b'{"info": {"version": "2.4.6"}, "urls": [{"digests": {"sha256": "' + (
+                DIGEST.encode("ascii") + b'"}}]}'
+            )
+
+        monkeypatch.setattr(http_fetch, "fetch_bytes", fake)
+        document = pins.fetch_json("numpy", "2.4.6")
+        assert document["info"]["version"] == "2.4.6"
+        assert seen == [("https://pypi.org/pypi/numpy/2.4.6/json", pins.PYPI_USER_AGENT, 60)]
+        assert seen[0][1], "the shared policy requires an identifying User-Agent"
+        assert pins.release_hashes("numpy", "2.4.6") == [DIGEST]
+
+    def test_a_body_that_is_not_json_is_a_value_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(http_fetch, "fetch_bytes", lambda *_a, **_k: b"<html>gateway</html>")
+        with pytest.raises(ValueError):
+            pins.fetch_json("numpy", "2.4.6")
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer")),
+            TimeoutError("timed out"),
+            ValueError("refusing a non-HTTPS redirect target: 'http://pypi.org/'"),
+        ],
+        ids=["reset", "timeout", "plaintext-redirect"],
+    )
+    def test_a_failed_fetch_under_refresh_is_exit_two_and_writes_nothing(
+        self, tmp_path: Path, failure: Exception
+    ) -> None:
+        """Every failure the transport can raise is reported, not propagated:
+        the except tuple in ``refresh`` names OSError (URLError's base) and
+        ValueError, and narrowing either would turn a refused redirect or a
+        reset into a traceback with exit 1 instead of the documented 2."""
+        root = _scratch_tree(tmp_path)
+        before = {name: (root / name).read_bytes() for name in (BUILD, TOOLS)}
+
+        def failing(name: str, version: str) -> Any:
+            raise failure
+
+        assert pins.refresh(root, AS_OF, False, failing) == 2
+        assert {name: (root / name).read_bytes() for name in (BUILD, TOOLS)} == before
 
 
 class TestExitCodes:

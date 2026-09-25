@@ -96,7 +96,11 @@ messages and the file comments.
   carry every published SHA-256 for each exact pin, cibuildwheel and the
   sdist job install them with `--require-hashes` and build without
   isolation, and `tools/check_release_pins.py` fails CI on a floating
-  install, an unhashed line or a pin below the declared floors.
+  install, an unhashed line or a pin below the declared floors.  Its
+  `--refresh` reads PyPI through `tools/http_fetch.py`, the one HTTPS
+  transport every fetch in this tree shares (FETCH-003), after the Python
+  Security Audit lane flagged the private `urlopen` it first carried
+  (bandit B310); the delegation is pinned at the source and at runtime.
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to

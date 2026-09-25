@@ -105,7 +105,8 @@ pin, edit the version on its requirement line and run ``--refresh``; a note
 comment above a requirement is kept.  ``--refresh --check`` compares without
 writing.
 
-Dependencies: the standard library, ``urllib`` for the network path, and PyYAML
+Dependencies: the standard library, ``tools/http_fetch.py`` for the network path
+(the one HTTPS transport every fetch in this tree shares, FETCH-003), and PyYAML
 to read release.yml structurally — the dependency every workflow gate under
 ``tools/`` shares and the Code Quality job pins.
 
@@ -123,13 +124,20 @@ import json
 import re
 import shlex
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional, Sequence
 
 import yaml
+
+# Executed directly as a script (`python tools/check_release_pins.py` in the Code
+# Quality job), so `tools/` lands on sys.path but the repo root does not; the
+# shared fetch policy lives in the root's `tools` package.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1143,17 +1151,28 @@ def run_checks(repo: Path) -> tuple[Report, Optional[str]]:
 Fetcher = Callable[[str, str], Any]
 
 
+#: Identifies this gate to PyPI; the shared transport requires a User-Agent.
+PYPI_USER_AGENT = "ama-cryptography-release-pins"
+
+
 def fetch_json(name: str, version: str) -> Any:
     """PyPI's JSON document for ``name==version``.
 
-    The URL is spelled inside the call, as an ``https://pypi.org/`` literal, so
-    the scheme and host are fixed in the source rather than chosen by an
-    argument; ``urllib`` takes the proxy from the environment.
+    The URL is spelled here, as an ``https://pypi.org/`` literal, so the scheme
+    and host are fixed in the source rather than chosen by an argument.  The
+    transport is ``tools/http_fetch.py`` — HTTPS re-checked on every redirect
+    hop, transport failures retried a bounded number of times, a 4xx answered
+    on the first attempt — rather than a private transport, whose default
+    redirect handler follows a ``Location:`` off HTTPS and which bandit (B310)
+    rightly refuses without a justification this file would then have to
+    carry; the hardened policy lives once and every fetch in this tree rides
+    it (FETCH-003).  A body that is not JSON raises ``ValueError``, which
+    ``refresh`` reports as a failed fetch.
     """
-    with urllib.request.urlopen(
-        f"https://pypi.org/pypi/{name}/{version}/json", timeout=60
-    ) as response:
-        return json.load(response)
+    payload = http_fetch.fetch_bytes(
+        f"https://pypi.org/pypi/{name}/{version}/json", user_agent=PYPI_USER_AGENT, timeout=60
+    )
+    return json.loads(payload.decode("utf-8"))
 
 
 def release_hashes(name: str, version: str, fetch: Fetcher = fetch_json) -> list[str]:
@@ -1202,7 +1221,10 @@ def refresh(repo: Path, as_of: str, check_only: bool, fetch: Fetcher = fetch_jso
         for pin in parsed.pins:
             try:
                 pin.hashes = release_hashes(pin.name, pin.version, fetch)
-            except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+            # OSError covers the transport's URLError/HTTPError, timeouts and TLS
+            # failures; ValueError covers a non-JSON body, a refused non-HTTPS
+            # redirect and the answer checks in release_hashes.
+            except (OSError, ValueError, KeyError) as exc:
                 print(f"ERROR: {pin.name}=={pin.version}: {exc}", file=sys.stderr)
                 return 2
             print(f"  {pin.requirement}: {len(pin.hashes)} published file(s)")
