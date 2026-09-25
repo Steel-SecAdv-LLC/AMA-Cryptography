@@ -323,7 +323,27 @@ jobs:
     # budget ci.yml::test already gives the same suite on windows-latest
     # (evidence recorded there): 1.6x this run's Windows median and 52% over
     # its slowest completed leg.  macOS arm64 (9m37s-12m38s) is well inside it.
-    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 30 }}
+    #
+    # 30 was then outgrown on windows-latest the same way.  Per-leg job wall
+    # clock of ONE run (36169465118, head e8c83df5, check-runs API), the first
+    # head of the maintenance branch on which every test passed on every leg:
+    #
+    #     windows-latest  3.11 24m12s  3.12 26m16s  3.13 29m45s  3.14 21m06s
+    #                     3.10 cancelled at 30m10s, pytest at 93% (8,927
+    #                          passed, 0 failed) when the deadline hit
+    #     ubuntu-latest   3.10 20m49s  3.11 19m09s  3.12 13m56s  3.13 18m32s
+    #                     3.14 14m09s
+    #     macos-latest    14m10s-15m50s     macos-15-intel  32m00s-41m43s
+    #
+    # The slowest completed Windows leg used 99.2% of the budget; ci.yml::test
+    # runs the same suite on the same runner class without `--cov` in
+    # 20m28s-23m06s on that head, so the coverage run here is the slower one
+    # by design and needs the larger budget.  45 is 1.5x the slowest completed
+    # Windows leg and 1.8x the Windows median (~25m); a hang is still caught
+    # eight times before the platform ceiling.  macOS Intel's 50 stands at 83%
+    # of its slowest leg and is the next to watch.  Raise either again only
+    # with the per-leg durations of one run.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || matrix.os == 'windows-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:

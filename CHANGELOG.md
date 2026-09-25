@@ -120,6 +120,13 @@ messages and the file comments.
   84 further `read_text`/`write_text` calls without an encoding carry
   dynamic content and 63 carry ASCII literals; none has failed a lane,
   and they are recorded here as the remaining members of the class.
+- Build and Test, Windows 3.10: the leg reached the job's 30-minute
+  budget with pytest at 93% and no failing test, on the first head where
+  every test passed on every leg (run 36169465118). The four completed
+  Windows legs took 21 to 30 minutes under `--cov`; the same suite without
+  coverage in `ci.yml` took 20 to 23. The windows-latest budget is 45,
+  1.5x the slowest completed leg, with the per-leg evidence recorded above
+  the value as the previous recalibration was; a hung leg still fails.
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to
