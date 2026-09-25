@@ -343,7 +343,20 @@ jobs:
     # eight times before the platform ceiling.  macOS Intel's 50 stands at 83%
     # of its slowest leg and is the next to watch.  Raise either again only
     # with the per-leg durations of one run.
-    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || matrix.os == 'windows-latest' && 45 || 30 }}
+    #
+    # macOS Intel outgrew 50 on the very next run (36182818333, head
+    # 4237a8d8, check-runs API), again with no test failing:
+    #
+    #     macos-15-intel  3.11 45m49s  3.12 35m30s  3.13 39m11s  3.14 32m52s
+    #                     3.10 cancelled at 50m21s, pytest at 93% (0 failed)
+    #                          when the deadline hit
+    #     (the previous run's legs: 31m09s-41m43s, same commit content)
+    #
+    # 75 is 1.6x the slowest completed Intel leg and 1.9x this run's Intel
+    # median (~39m); the pool's spread on this class is now 31m-50m+ across
+    # two runs of identical content, and 50 sat inside it.  A hang is still
+    # caught almost five times before the platform ceiling.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 75 || matrix.os == 'windows-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:

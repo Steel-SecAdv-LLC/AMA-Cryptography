@@ -127,6 +127,11 @@ messages and the file comments.
   coverage in `ci.yml` took 20 to 23. The windows-latest budget is 45,
   1.5x the slowest completed leg, with the per-leg evidence recorded above
   the value as the previous recalibration was; a hung leg still fails.
+- Build and Test, macOS Intel 3.10: on the following run the leg reached
+  the job's 50-minute budget with pytest at 93% and no failing test, while
+  the other four Intel legs took 33 to 46 minutes (run 36182818333); the
+  previous run's five had taken 31 to 42. The macos-15-intel budget is 75,
+  1.6x the slowest completed leg, recorded with the same per-leg evidence.
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to
