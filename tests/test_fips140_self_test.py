@@ -182,17 +182,24 @@ class TestPowerOnSelfTests:
 
     def test_stage_durations_stop_at_the_failing_stage(self) -> None:
         """A failed stage is timed; the stages POST never reached are absent."""
-        import ama_cryptography._self_test as st
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            module_attestation,
+            module_status,
+        )
 
         try:
-            with patch.object(st, "_run_timing_oracle_stage", return_value=(False, "forced")):
-                assert st._run_self_tests() is False
-            stages = st.module_attestation()["stage_durations_ms"]
+            with patch(
+                "ama_cryptography._self_test._run_timing_oracle_stage",
+                return_value=(False, "forced"),
+            ):
+                assert _run_self_tests() is False
+            stages = module_attestation()["stage_durations_ms"]
             assert list(stages)[-1] == "oracle"
             assert "rng" not in stages
         finally:
-            assert st._run_self_tests() is True
-            assert st.module_status() == "OPERATIONAL"
+            assert _run_self_tests() is True
+            assert module_status() == "OPERATIONAL"
 
     def test_all_kats_passed(self) -> None:
         """Every recorded KAT either passed or was an explicit skip.
