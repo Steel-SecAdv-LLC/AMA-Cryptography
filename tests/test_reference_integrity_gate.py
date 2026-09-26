@@ -227,7 +227,21 @@ class TestTestCitationsInTheShippedCode:
     """
 
     TRACKED: ClassVar[frozenset[str]] = frozenset({"tests/c/test_real.c", "tests/test_real.py"})
-    SOURCES: ClassVar[dict[str, str]] = {"tests/test_real.py": "def test_present() -> None: ...\n"}
+    SOURCES: ClassVar[dict[str, str]] = {
+        "tests/test_real.py": (
+            '"""test_in_prose is named here and nowhere else."""\n'
+            "def test_present() -> None: ...\n"
+            "class TestGroup:\n"
+            "    async def test_method(self) -> None: ...\n"
+            "HELPER = 'test_in_a_string'\n"
+        ),
+        "tests/c/test_real.c": (
+            "/* test_in_a_comment(void) is described here only. */\n"
+            "static int test_defined(void) {\n"
+            "    return test_called_only(1);\n"
+            "}\n"
+        ),
+    }
 
     def _scan(self, text: str) -> list[tuple[int, str, str]]:
         return scan_test_citations(text, set(self.TRACKED), self.SOURCES.__getitem__)
@@ -256,6 +270,31 @@ class TestTestCitationsInTheShippedCode:
         found = self._scan("/* pinned by `test_absent` in tests/test_\n * real.py */\n")
         assert [cited for _, cited, _ in found] == ["test_absent in tests/test_real.py"]
         assert self._scan("/* pinned by `test_present` in tests/test_\n * real.py */\n") == []
+
+    @pytest.mark.parametrize(
+        ("name", "path"),
+        [
+            ("test_present", "tests/test_real.py"),
+            ("test_method", "tests/test_real.py"),
+            ("test_defined", "tests/c/test_real.c"),
+        ],
+    )
+    def test_a_defined_test_resolves(self, name: str, path: str) -> None:
+        assert self._scan(f"/* pinned by `{name}` in {path} */\n") == []
+
+    @pytest.mark.parametrize(
+        ("name", "path"),
+        [
+            ("test_in_prose", "tests/test_real.py"),
+            ("test_in_a_string", "tests/test_real.py"),
+            ("test_in_a_comment", "tests/c/test_real.c"),
+            ("test_called_only", "tests/c/test_real.c"),
+        ],
+    )
+    def test_a_name_that_is_only_mentioned_does_not_resolve(self, name: str, path: str) -> None:
+        """A docstring, comment, string or call names a test; only a definition is one."""
+        found = self._scan(f"/* pinned by `{name}` in {path} */\n")
+        assert [cited for _, cited, _ in found] == [f"{name} in {path}"]
 
     def test_a_named_test_in_a_missing_file_is_reported_once(self) -> None:
         found = self._scan("# `test_x` in tests/test_gone.py\n")

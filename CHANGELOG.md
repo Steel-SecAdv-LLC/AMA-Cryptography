@@ -65,7 +65,8 @@ test file's header.
   ML-DSA-44; the test pins the first qualifying message of each.
 - Four comments in `src/c` cited test files or tests that do not exist.
   `tools/check_reference_integrity.py` gains the shape (a `tests/...` path
-  that is not tracked, or `test_x` in a file that has no `test_x`), scoped to
+  that is not tracked, or `test_x` in a file that defines no `test_x`; a
+  mention in prose does not count), scoped to
   `ama_cryptography/`, `src/` and `include/` so that no exemption list is
   needed; `tests/` and `tools/` cite imaginary paths as fixtures.
 - Low — `sha2_mgf1_sha512` in `ama_slhdsa.c` returned silently with its
@@ -84,8 +85,9 @@ test file's header.
   with or without coverage, or with a 6,000,000-object heap. One stall of the
   host, charged to POST.
 - The test now runs POST five times itself and asserts the 2,000 ms budget
-  on the fastest run: a stall adds time to one sample, while a slower POST
-  raises every sample, the fastest included. The budget is unchanged.
+  on the median run: a stall adds time to one sample, and the median absorbs
+  up to two, while a POST slow in three or more of five runs fails. The
+  budget is unchanged.
 - POST now records each stage's wall-clock, and `module_attestation()`
   reports it as `stage_durations_ms`, so a slow POST names its stage -- in
   the budget test's failure message and for an operator. Nothing recorded

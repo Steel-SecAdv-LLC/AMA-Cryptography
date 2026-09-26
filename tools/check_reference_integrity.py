@@ -45,7 +45,8 @@ Over the shipped tree (``ama_cryptography/``, ``src/``, ``include/``,
    the identifier, the marker, or the function instead; those move with the
    code.
 3. **Test citations in the shipped code** — a ``tests/...`` path that is not a
-   tracked file, or ``test_x in tests/y.py`` where ``y.py`` has no ``test_x``.
+   tracked file, or ``test_x in tests/y.py`` where ``y.py`` defines no
+   ``test_x`` (a mention in a docstring, comment or string is not a test).
    A comment beside a guard that names its test is the reader's evidence that
    the guard is protected.  On 2026-09-26 ``src/c/ama_dilithium.c`` named
    ``test_a_permuted_hint_is_refused`` in ``tests/test_pqc_param_sets.py`` as
@@ -286,6 +287,21 @@ NAMED_TEST = re.compile(
 )
 
 
+def defines_test(source: str, name: str, path: str) -> bool:
+    """Whether ``source`` (the text of ``path``) defines the test ``name``.
+
+    A definition, not a mention: a Python ``def``, or a C function whose
+    return type precedes the name at the start of a line.  A name that
+    appears only in a docstring, comment or string does not resolve the
+    citation."""
+    escaped = re.escape(name)
+    if path.endswith(".py"):
+        shape = r"^[ \t]*(?:async[ \t]+)?def[ \t]+" + escaped + r"[ \t]*\("
+    else:
+        shape = r"^(?:[A-Za-z_]\w*[ \t\*]+)+" + escaped + r"[ \t]*\("
+    return re.search(shape, source, re.MULTILINE) is not None
+
+
 def _unwrap(matched: str) -> str:
     """A citation with its comment continuations removed."""
     return re.sub(_CONTINUATION, "", matched)
@@ -305,7 +321,7 @@ def scan_test_citations(
             findings.append((line, path, "cites a test file that is not in the repository"))
     for match in NAMED_TEST.finditer(text):
         name, path = match.group(1), _unwrap(match.group(2))
-        if path in tracked and not re.search(r"\b" + re.escape(name) + r"\b", read(path)):
+        if path in tracked and not defines_test(read(path), name, path):
             line = text.count("\n", 0, match.start()) + 1
             findings.append((line, f"{name} in {path}", f"{path} has no test named {name}"))
     return sorted(findings)

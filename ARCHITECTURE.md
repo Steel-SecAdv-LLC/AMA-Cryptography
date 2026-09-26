@@ -907,7 +907,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 17 C targets | `fuzz/fuzz_*.c` (18 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 6,552 Python test functions across 270 test files, plus the
+**Total:** 6,554 Python test functions across 270 test files, plus the
 ctest-registered C tests and the two `x25519_equiv_*.c` helper translation units under `tests/c/`,
 which have no `main` of their own and are linked into `test_x25519_field_equiv`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
