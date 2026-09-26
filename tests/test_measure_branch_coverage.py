@@ -262,6 +262,42 @@ def test_a_restored_run_leaves_no_backup_behind(
     assert len(made) == 1 and not Path(made[0]).exists(), "the backup directory was left behind"
 
 
+def test_a_macos_install_name_chain_is_found(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """clang --coverage writes gcov data on macOS too; the library there is
+    libama_cryptography.<version>.dylib behind symlinks, not .so.<version>."""
+    repo = tmp_path / "repo"
+    pkg = repo / "ama_cryptography"
+    lib = repo / "build-cov" / "lib"
+    for directory, body in ((pkg, b"release"), (lib, b"instrumented")):
+        directory.mkdir(parents=True)
+        (directory / "libama_cryptography.5.0.0.dylib").write_bytes(body)
+        (directory / "libama_cryptography.5.dylib").symlink_to("libama_cryptography.5.0.0.dylib")
+        (directory / "libama_cryptography.dylib").symlink_to("libama_cryptography.5.dylib")
+    monkeypatch.setattr(tool, "REPO_ROOT", repo)
+    installed = pkg / "libama_cryptography.5.0.0.dylib"
+    signed_over: list[bytes] = []
+    monkeypatch.setattr(tool, "_resign", lambda: signed_over.append(installed.read_bytes()))
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    assert tool._run_python_suite(lib.parent, []) == 0
+    assert signed_over == [b"instrumented", b"release"]
+    assert installed.read_bytes() == b"release"
+
+
+def test_two_real_libraries_are_refused_not_guessed(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    (installed.parent / "libama_cryptography.5.0.0.dylib").write_bytes(b"stray")
+    monkeypatch.setattr(tool, "_resign", lambda: pytest.fail("signed an ambiguous tree"))
+    assert tool._run_python_suite(build_dir, []) is None
+
+
 def test_the_python_suite_refuses_without_both_libraries(
     tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

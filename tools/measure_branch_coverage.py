@@ -49,8 +49,9 @@ Python side reaches is reported as never taken: an inventory of what the C
 suite misses, not of the guards no test protects.  `--python-suite` closes
 that gap.  It needs an editable install (`pip install -e .`) whose package
 directory holds the native library the bindings load.  It copies the
-instrumented `libama_cryptography.so` from the build tree over the installed
-one, re-signs the integrity artefact so the import-time self-test accepts it,
+instrumented native library (`libama_cryptography.so.*`, or the
+`libama_cryptography*.dylib` chain on macOS) from the build tree over the
+installed one, re-signs the integrity artefact so the import-time self-test accepts it,
 runs the two offline Python suites CI runs against the library -- `pytest
 tests/` and `wycheproof_vectors/run_wycheproof.py` -- and restores and
 re-signs the original library whatever the outcome.  The Wycheproof runner is
@@ -159,10 +160,17 @@ def _parse(report: Path, taken: set[Arc], seen: set[Arc], text: dict[tuple[str, 
                 taken.add(arc)
 
 
+#: The native library's file names: the Linux soname chain and the macOS
+#: install-name chain, the same two shapes setup.py bundles into the package.
+#: Each chain ends in exactly one real file; the rest are symlinks.
+_LIBRARY_GLOBS = ("libama_cryptography.so.*", "libama_cryptography*.dylib")
+
+
 def _real_library(directory: Path) -> Path | None:
-    """The one non-symlink ``libama_cryptography.so.*`` in ``directory``."""
-    found = [p for p in directory.glob("libama_cryptography.so.*") if not p.is_symlink()]
-    return found[0] if len(found) == 1 else None
+    """The one non-symlink native library in ``directory``, or None when there
+    is none or more than one (an ambiguous tree is refused, not guessed at)."""
+    found = {p for pattern in _LIBRARY_GLOBS for p in directory.glob(pattern) if not p.is_symlink()}
+    return found.pop() if len(found) == 1 else None
 
 
 def _resign() -> None:
@@ -258,7 +266,8 @@ def main() -> int:
         status = _run_python_suite(build_dir, args.pytest_arg)
         if status is None:
             print(
-                "--python-suite needs exactly one libama_cryptography.so.* in both "
+                "--python-suite needs exactly one native library (libama_cryptography.so.* "
+                "or libama_cryptography*.dylib) in both "
                 f"{REPO_ROOT / 'ama_cryptography'} (an editable install) and {build_dir / 'lib'}",
                 file=sys.stderr,
             )

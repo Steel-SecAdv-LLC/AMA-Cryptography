@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1099,
       "Key Management\n& Rotation": 281,
       "Memory Security\n& Fuzzing": 342,
-      "Other": 3681,
+      "Other": 3683,
       "PQC Backends\n& Integration": 776,
       "Performance\n& Monitoring": 378
     },
     "n_files": 270,
-    "total_tests": 6557,
+    "total_tests": 6559,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",

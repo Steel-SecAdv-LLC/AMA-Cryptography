@@ -30,7 +30,8 @@ each test file's header; the NULL, unknown-set and short-buffer rows of
 `tests/c/test_input_guards.c` are RANGE and were not.
 
 **The instrument** (`tools/measure_branch_coverage.py --python-suite`)
-- Swaps the instrumented `libama_cryptography.so` into an editable install,
+- Swaps the instrumented native library (the `.so` soname chain, or the
+  `.dylib` chain on macOS) into an editable install,
   re-signs the integrity artefact, runs `pytest tests/` and the Wycheproof
   runner against it, and restores and re-signs the release library on every
   path out; if the restore itself fails, the backup is kept and named rather
