@@ -1161,7 +1161,13 @@ AMA_API ama_error_t ama_slhdsa_keygen(ama_slhdsa_param_set_t ps,
     ama_error_t rc;
     if (!p || !pk || !sk) return AMA_ERROR_INVALID_PARAM;
     rc = slh_randombytes(seeds, 3 * p->n);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) {
+        /* A failed draw may already have written CSPRNG output: the
+         * getrandom(2) and getentropy(3) paths of ama_randombytes loop and
+         * can fail after earlier iterations succeeded. */
+        ama_secure_memzero(seeds, sizeof(seeds));
+        return rc;
+    }
     rc = slh_keygen_internal(p, seeds, seeds + p->n, seeds + 2 * p->n, pk, sk);
     ama_secure_memzero(seeds, sizeof(seeds));
     return rc;
@@ -1332,7 +1338,10 @@ AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
      * latter, so we must support both. We expose the hedged form here; the
      * deterministic form is ama_slhdsa_sign_deterministic. */
     rc = slh_randombytes(opt_rand, p->n);
-    if (rc != AMA_SUCCESS) return rc;
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(opt_rand, sizeof(opt_rand));   /* see ama_slhdsa_keygen */
+        return rc;
+    }
 
     rc = slh_sign_internal(p, signature, opt_rand, prefix, prefix_len,
                            message, message_len, sk);
@@ -1641,6 +1650,7 @@ AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key
     /* Draw SK.seed || SK.prf || PK.seed (3n bytes) and derive the keypair. */
     rc = spx_compat_randombytes(seeds, 3 * p->n);
     if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(seeds, sizeof(seeds));   /* see ama_slhdsa_keygen */
         return rc;
     }
     rc = slh_keygen_internal(p, seeds, seeds + p->n, seeds + 2 * p->n,
@@ -1671,6 +1681,7 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
     /* Hedged randomizer: fresh addrnd per signature. */
     rc = spx_compat_randombytes(opt_rand, p->n);
     if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(opt_rand, sizeof(opt_rand));   /* see ama_slhdsa_keygen */
         return rc;
     }
     rc = slh_sign_internal(p, signature, opt_rand,

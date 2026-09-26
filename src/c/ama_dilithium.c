@@ -1806,6 +1806,10 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     } else {
         rc = dil_randombytes(seedbuf, DIL_SEEDBYTES);
         if (rc != AMA_SUCCESS) {
+            /* A failed draw may already have written CSPRNG output (xi):
+             * ama_randombytes' getrandom(2) and getentropy(3) paths loop and
+             * can fail after earlier iterations succeeded. */
+            ama_secure_memzero(seedbuf, sizeof(seedbuf));
             return rc;
         }
     }

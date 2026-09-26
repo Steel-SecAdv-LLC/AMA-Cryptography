@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 93 C test suites, 270 Python test modules |
+| `tests/c/`, `tests/` | 94 C test suites, 270 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -341,7 +341,10 @@ structurally unreachable on any single host and require no action.
 
 The five files this section listed as never examined -- `ama_nistp.c`,
 `ama_dilithium.c`, `ama_slhdsa.c`, `ama_kyber.c` and `ama_frost.c` -- were
-triaged on 2026-09-26 (CHANGELOG, same date). A High finding (FROST
+triaged on 2026-09-26 (CHANGELOG, same date). A Critical finding (eight
+CSPRNG-failure exits in the ML-KEM, ML-DSA, SLH-DSA and X25519 files left
+the failed draw's output unscrubbed, an INVARIANT-6 gap; the rest of `src/c`
+was swept and already scrubbed), a High one (FROST
 `ama_frost_verify_share` returned a verdict its header contradicts) and a
 Medium one (three ML-DSA hint-encoding rejections, an SUF-CMA property,
 executed by no suite, under a comment citing a test that never existed) were

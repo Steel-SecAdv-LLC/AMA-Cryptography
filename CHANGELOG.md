@@ -44,6 +44,27 @@ test file's header.
   the Wycheproof run whenever pytest failed.
 
 **Defects**
+- Critical (INVARIANT-6) — eight CSPRNG-failure exits returned without
+  scrubbing the buffer the failed draw had written: the seed buffers of
+  `ama_slhdsa_keygen` and `ama_sphincs_keypair`, the hedged randomizer of
+  `ama_slhdsa_sign` and `ama_sphincs_sign`, ML-KEM key generation's `d`,
+  ML-KEM encapsulation's `m`, ML-DSA key generation's `xi`, and the
+  caller's `secret_key` in `ama_x25519_keypair`, which received the error
+  together with the partial draw.
+  `ama_randombytes` is not all-or-nothing -- its getrandom(2) and
+  getentropy(3) loops can fail after writing output -- so each exit could
+  leave live seed or message octets in a dead frame. Reaching it takes a
+  CSPRNG failure and, separately, a read of freed stack (for X25519, a
+  caller that keeps the buffer after an error); the classification is the
+  invariant's. Each exit now scrubs, as `ama_nistp.c`'s hedged signer and
+  `ama_core.c`'s Ed25519 and hybrid key generation already did; every other
+  CSPRNG call in `src/c` was read and already scrubs. `ama_x25519.c` gains
+  the `AMA_TESTING_MODE` hook the other files have.
+  `tests/c/test_csprng_failure_residue.c` drives every exit with a hook that
+  fills the buffer and then fails, scans the dead stack (`residue_probe.h`)
+  and reads X25519's output buffer; deleting any one scrub fails exactly its
+  own verdict. Found in review of this pass, which had made the SLH-DSA
+  exits reachable.
 - High — `ama_frost_verify_share` returned `AMA_ERROR_INVALID_PARAM` for a
   participant whose own commitment is non-canonical; the header promises
   `AMA_ERROR_VERIFY_FAILED`, and `ama_frost_aggregate` gives that verdict for

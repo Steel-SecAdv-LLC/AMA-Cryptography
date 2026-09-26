@@ -574,6 +574,18 @@ if(AMA_USE_NATIVE_PQC)
     # ciphertexts and keys, 256-octet contexts, out-of-range ECDSA scalars,
     # undefined flags and digest lengths, and every NULL argument.
     add_ama_test(test_input_guards test_input_guards.c)
+    # The dead-stack probe (residue_probe.h) applied to every CSPRNG-failure
+    # exit in those files: a failed draw may already have written output, and
+    # the exit must scrub it.  Linked against the test archive, not the shared
+    # library add_ama_residue_probe uses, because the failure is driven through
+    # the AMA_TESTING_MODE CSPRNG hooks; the test file records why LTO cannot
+    # hide this needle.  Same -O2, stack-protector and sanitizer-skip terms.
+    add_executable(test_csprng_failure_residue test_csprng_failure_residue.c)
+    target_link_libraries(test_csprng_failure_residue ama_cryptography_test)
+    add_test(NAME test_csprng_failure_residue COMMAND test_csprng_failure_residue)
+    set_tests_properties(test_csprng_failure_residue PROPERTIES SKIP_RETURN_CODE 77)
+    target_compile_options(test_csprng_failure_residue PRIVATE
+        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
 endif()
 
 # Constant-time bitsliced AES-256 (NIST SP 800-38A §F.1.5 KAT).

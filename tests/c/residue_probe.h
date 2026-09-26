@@ -2,8 +2,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file residue_probe.h
- * @brief The dead-stack residue probe shared by test_aead_stack_residue.c and
- *        test_ed25519_stack_residue.c (INVARIANT-6).
+ * @brief The dead-stack residue probe shared by test_aead_stack_residue.c,
+ *        test_ed25519_stack_residue.c and test_csprng_failure_residue.c
+ *        (INVARIANT-6).
  *
  * `ama_secure_memzero` scrubs the buffers a function names.  It cannot reach
  * the copies an optimizing compiler spills of them, and the probe here is how
@@ -12,12 +13,12 @@
  * entry point at the same depth, then read that region back and count
  * occurrences of the secret.
  *
- * The two harnesses that include this header differ only in their needles
+ * The harnesses that include this header differ only in their needles
  * (an AEAD key and its halves; an Ed25519 scalar, prefix and nonce in byte
- * and limb form).  The probe machinery below was duplicated between them
+ * and limb form; the output of a CSPRNG draw that then failed).  The probe machinery below was duplicated between them
  * until 2026-09-25, and the duplication is how the Ed25519 copy drifted from
  * the AEAD copy on the GAP construction and how a defect in the shared
- * construction was fixed in neither.  One copy, included by both.
+ * construction was fixed in neither.  One copy, included by each.
  *
  * WHAT A VERDICT MEANS.  Three facts are established before any verdict is
  * trusted, each by a check that can fail:
