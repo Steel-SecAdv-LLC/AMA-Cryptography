@@ -92,7 +92,7 @@ jobs:
         # under a run-unique key.  A pull request restores the default
         # branch's corpus; the nightly schedule on `main` is what deepens it.
         id: corpus
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ hashFiles(format('fuzz/{0}.c', matrix.target)) }}-${{ github.run_id }}
@@ -211,7 +211,7 @@ jobs:
         # for the next restore's prefix match.  Skipped only if the merge did
         # not produce a corpus to save.
         if: always() && steps.merge.outcome == 'success'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: corpus/${{ matrix.target }}
           key: ${{ steps.corpus.outputs.cache-primary-key }}
@@ -390,7 +390,7 @@ jobs:
         # under a run-unique key.  A pull request restores the default
         # branch's corpus; the nightly schedule on `main` is what deepens it.
         id: corpus
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ hashFiles(format('fuzz/{0}.c', matrix.target)) }}-${{ github.run_id }}
@@ -500,7 +500,7 @@ jobs:
         # for the next restore's prefix match.  Skipped only if the merge did
         # not produce a corpus to save.
         if: always() && steps.merge.outcome == 'success'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: corpus/${{ matrix.target }}
           key: ${{ steps.corpus.outputs.cache-primary-key }}
