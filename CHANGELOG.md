@@ -176,8 +176,10 @@ each test file's header; the NULL, unknown-set and short-buffer rows of
   own estimates: about 1e-5 per polynomial for the eta sampler, below
   1e-30 for the uniform one) and ML-KEM's x4 per-lane stop. No test holds a
   seed that reaches them.
-- The rest of what remains in the five files (all-suite figures: slhdsa
-  62, dilithium 50, kyber 48, frost 38, nistp 36) is structural:
+- The rest of what remains in the five files (all-suite figures on the
+  final tree: slhdsa 62, dilithium 51, kyber 48, frost 38, nistp 36; two of
+  the ML-DSA arcs are this pass's testing-only MakeHint helpers, the
+  unknown-set return and the counter's a1 != 0 side) is structural:
   propagation from calls that cannot fail once their inputs are validated,
   allocation and mutex failure, parameter-table self-checks, dispatch arms
   another ISA takes, diagnostics compiled under
