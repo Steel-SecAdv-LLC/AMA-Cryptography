@@ -186,6 +186,27 @@ def test_both_python_suites_run_on_the_instrumented_library_and_the_release_one_
     assert installed.read_bytes() == b"release", "the release library was not restored"
 
 
+@pytest.mark.parametrize("installed_plugin", [True, False])
+def test_no_cov_is_passed_only_where_pytest_cov_is_installed(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed_plugin: bool
+) -> None:
+    """``--no-cov`` belongs to pytest-cov, a dev extra: passed on a plain
+    install, pytest refuses the whole invocation before any test runs."""
+    _python_suite_tree(tool, tmp_path, monkeypatch)
+    real_find_spec = importlib.util.find_spec
+
+    def find_spec(name: str, *args: object) -> object:
+        if name == "pytest_cov":
+            return object() if installed_plugin else None
+        return real_find_spec(name, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tool.importlib.util, "find_spec", find_spec)
+    command = tool._pytest_command(["-x"])
+    assert command[:5] == [sys.executable, "-m", "pytest", "tests/", "-q"]
+    assert ("--no-cov" in command) is installed_plugin
+    assert command[-1] == "-x", "the caller's pytest arguments were dropped"
+
+
 def test_the_release_library_is_restored_when_pytest_cannot_start(
     tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

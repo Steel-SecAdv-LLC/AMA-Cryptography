@@ -809,7 +809,12 @@ class TestReplacementTextIsInsertedVerbatim:
         "native_backend": r"ama_cryptography.dll from build\lib",
     }
 
-    def _tree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    def _tree(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        provenance: dict[str, str] | None = None,
+    ) -> Path:
         import json
 
         (tmp_path / "benchmarks").mkdir()
@@ -818,7 +823,7 @@ class TestReplacementTextIsInsertedVerbatim:
             json.dumps(
                 {
                     "timestamp": "2026-09-24T00:00:00Z",
-                    "provenance": self._PROVENANCE,
+                    "provenance": self._PROVENANCE if provenance is None else provenance,
                     "results": [
                         {"name": "full_package_create", "ops_per_second": 500.0},
                         {"name": "dilithium_sign", "ops_per_second": 2000.0},
@@ -858,6 +863,64 @@ class TestReplacementTextIsInsertedVerbatim:
         for value in self._PROVENANCE.values():
             assert value in text, f"{value!r} was not written verbatim"
         assert "\b" not in text
+
+    @pytest.mark.parametrize(
+        ("recorded", "published"),
+        [
+            (
+                "v5.0.0 · digest d95f5cc7… · /home/user/AMA-Cryptography/ama_cryptography/"
+                "libama_cryptography.so",
+                "v5.0.0 · digest d95f5cc7… · libama_cryptography.so",
+            ),
+            (
+                r"v5.0.0 · C:\Users\bench\AMA-Cryptography\ama_cryptography\ama_cryptography.dll",
+                "v5.0.0 · ama_cryptography.dll",
+            ),
+            (
+                r"ama_cryptography.dll from build\lib",
+                r"ama_cryptography.dll from build\lib",
+            ),
+        ],
+    )
+    def test_only_an_absolute_library_path_is_reduced_to_its_basename(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        recorded: str,
+        published: str,
+    ) -> None:
+        """The record's absolute library path is the measuring checkout's home
+        directory, not a property of the build, so only that is dropped —
+        for either path flavour, on any host.  ``Path(part).name`` did this
+        with the host's rules, and on Windows it cut the descriptive value
+        ``ama_cryptography.dll from build\\lib`` down to ``lib``."""
+        self._tree(tmp_path, monkeypatch, dict(self._PROVENANCE, native_backend=recorded))
+        latency = update_docs._generate_pipeline_latency_table()
+        assert f"- **Build:** {published}\n" in latency
+
+    def test_the_latency_block_names_its_commit_and_tree_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A latency figure with no commit or tree state cannot be tied to
+        the code it measured; the record carries both, so the block does."""
+        self._tree(tmp_path, monkeypatch)
+        latency = update_docs._generate_pipeline_latency_table()
+        assert "- **Commit:** (unrecorded)\n" in latency
+        assert "- **Python bindings:** (unrecorded)\n" in latency
+        provenance = dict(
+            self._PROVENANCE,
+            commit="4e4fa7fa7f25f9cf14adec240d4789fcf4123325",
+            tree="DIRTY (uncommitted changes: ama_cryptography/_integrity_digest.txt)",
+            python_bindings="6 of 6 compiled bindings imported",
+        )
+        (tmp_path / "recorded").mkdir()
+        self._tree(tmp_path / "recorded", monkeypatch, provenance)
+        latency = update_docs._generate_pipeline_latency_table()
+        assert (
+            "- **Commit:** `4e4fa7fa7f25` — DIRTY (uncommitted changes: "
+            "ama_cryptography/_integrity_digest.txt)\n"
+        ) in latency
+        assert "- **Python bindings:** 6 of 6 compiled bindings imported\n" in latency
 
     def test_every_substitution_passes_a_function(self) -> None:
         """No ``sub`` call in the module takes a string template.

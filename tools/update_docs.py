@@ -92,7 +92,7 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -671,6 +671,22 @@ def _generate_benchmark_table() -> str:
     return "\n".join(lines)
 
 
+def _without_absolute_path(part: str) -> str:
+    """Reduce an absolute path to its basename; leave any other text as it is.
+
+    The record names the loaded library by absolute path, which is the
+    measuring checkout's home directory and not a property of the build.
+    Only an absolute path is reduced, and the test is made for both path
+    flavours whatever the host: ``Path(part).name`` on Windows turned the
+    descriptive value ``ama_cryptography.dll from build\\lib`` into ``lib``.
+    """
+    for flavour in (PureWindowsPath, PurePosixPath):
+        candidate = flavour(part)
+        if candidate.is_absolute():
+            return candidate.name
+    return part
+
+
 def _generate_pipeline_latency_table() -> str:
     """Emit ARCHITECTURE.md's per-operation latency table from the same record.
 
@@ -693,12 +709,9 @@ def _generate_pipeline_latency_table() -> str:
     command = str(provenance.get("command", "python benchmarks/benchmark_runner.py")).strip("` ")
     sampling = str(provenance.get("sampling", "")).strip()
     aggregation = str(provenance.get("aggregation", "")).strip()
-    native = str(provenance.get("native_backend", "")).strip()
-    # The record names the loaded library by absolute path, which is the
-    # measuring checkout's home directory, not a property of the build.
     native = " · ".join(
-        Path(part.strip()).name if "/" in part or "\\" in part else part.strip()
-        for part in native.split("·")
+        _without_absolute_path(part.strip())
+        for part in str(provenance.get("native_backend", "")).strip().split("·")
     )
     commit = str(provenance.get("commit", "")).strip()
     tree_state = str(provenance.get("tree", "")).strip()

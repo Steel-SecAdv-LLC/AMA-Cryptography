@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import importlib.util
 import os
 import re
 import shutil
@@ -189,6 +190,22 @@ def _resign() -> None:
     )
 
 
+def _pytest_command(pytest_args: list[str]) -> list[str]:
+    """The pytest invocation, with ``--no-cov`` only where pytest-cov exists.
+
+    ``--no-cov`` is pytest-cov's option, and pytest-cov is a dev extra, not a
+    requirement of the package: on a plain install pytest rejects the flag
+    (``unrecognized arguments: --no-cov``) and the whole Python-suite pass
+    dies before a test runs.  It is still passed when the plugin is present:
+    a caller with coverage options in ``PYTEST_ADDOPTS`` would otherwise have
+    this run trace the Python side too, which is not what it measures.
+    """
+    command = [sys.executable, "-m", "pytest", "tests/", "-q"]
+    if importlib.util.find_spec("pytest_cov") is not None:
+        command.append("--no-cov")
+    return command + list(pytest_args)
+
+
 def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
     """Run the Python suites against the instrumented library.
 
@@ -215,7 +232,7 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
         _resign()
         status = 0
         for command in (
-            [sys.executable, "-m", "pytest", "tests/", "-q", "--no-cov", *pytest_args],
+            _pytest_command(pytest_args),
             [sys.executable, "wycheproof_vectors/run_wycheproof.py"],
         ):
             # Both run whatever the first returns: each one's counters are data.
