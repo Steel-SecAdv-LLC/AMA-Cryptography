@@ -73,6 +73,24 @@ test file's header.
   reported success. Unreachable with every FIPS 205 parameter set; it now
   fails closed through the call sites' existing checks.
 
+**CI on main: `Python 3.14 on windows-latest` (and the Build and Test Gate)**
+- `test_post_duration_is_under_budget` failed at 2db626de with "POST took
+  6234.3ms". It read `post_duration_ms()`, the duration of whichever POST
+  another test ran last -- here `test_reset_module_recovers_from_error`'s.
+  Measured from the job logs: that POST took 6.24 s, every other POST in the
+  same process about 1 s, the same test 0.23-0.50 s on Windows CPython
+  3.10-3.13 and 0.18 s on macOS 3.14 in the same run, and 0.32 s on
+  Windows 3.14.6 at 2dcef5c6; it did not reproduce on Linux CPython 3.14
+  with or without coverage, or with a 6,000,000-object heap. One stall of the
+  host, charged to POST.
+- The test now runs POST five times itself and asserts the 2,000 ms budget
+  on the fastest run: a stall adds time to one sample, while a slower POST
+  raises every sample, the fastest included. The budget is unchanged.
+- POST now records each stage's wall-clock, and `module_attestation()`
+  reports it as `stage_durations_ms`, so a slow POST names its stage -- in
+  the budget test's failure message and for an operator. Nothing recorded
+  where the 6.2 s went.
+
 **Tests for guards nothing executed**
 - `tests/c/test_frost.c` Test 11: a CSPRNG that reports success with bytes
   reducing to the scalar 0 (keygen must refuse: kept, the group secret is

@@ -103,6 +103,11 @@ logger = logging.getLogger(__name__)
 #             specific skip conditions of each algorithm.
 _SELF_TEST_RESULTS: List[Tuple[str, Optional[bool], str]] = []  # (name, passed, detail)
 _POST_DURATION_MS: float = 0.0
+#: Wall-clock per POST stage of the last run, in execution order, so a slow
+#: POST names the stage that was slow.  Added after a Windows / CPython
+#: 3.14.7 CI run where one POST took 6,234 ms while every other POST in the
+#: same process took ~1 s, and nothing recorded where the time went.
+_POST_STAGE_DURATIONS_MS: Dict[str, float] = {}
 
 # Serialises POST runs and the state transitions they drive.  ``reset_module()``
 # is callable from any thread at any time, and without this two concurrent
@@ -196,6 +201,9 @@ def module_attestation() -> Dict[str, Any]:
         ``failed``           — ``[(name, detail), ...]``; at most one entry,
                                since POST short-circuits on the first failure.
         ``duration_ms``      — POST wall-clock.
+        ``stage_durations_ms`` — wall-clock of each POST stage that ran, in
+                               order, keyed by stage name; a stage after the
+                               first failure is absent.
         ``native_backend``   — provenance of the native library that backed the
                                run (see ``pqc_backends.native_backend_diagnostics``),
                                or an explanation of why there was none.
@@ -225,6 +233,7 @@ def module_attestation() -> Dict[str, Any]:
         "skipped": skipped,
         "failed": failed,
         "duration_ms": _POST_DURATION_MS,
+        "stage_durations_ms": dict(_POST_STAGE_DURATIONS_MS),
         "native_backend": native,
     }
 
@@ -3195,7 +3204,7 @@ def _run_self_tests() -> bool:
     cyclomatic-complexity ceiling and each stage is independently
     testable.
     """
-    global _SELF_TEST_RESULTS, _POST_DURATION_MS
+    global _SELF_TEST_RESULTS, _POST_DURATION_MS, _POST_STAGE_DURATIONS_MS
 
     with _POST_LOCK:
         # Enter SELF_TEST and pin the guard's allowance to this thread — the
@@ -3234,9 +3243,14 @@ def _run_self_tests() -> bool:
         )
 
         all_passed = True
+        stage_durations: Dict[str, float] = {}
         try:
-            for _stage_name, stage_fn in stages:
-                stage_ok, err = stage_fn()
+            for stage_name, stage_fn in stages:
+                stage_start = time.monotonic()
+                try:
+                    stage_ok, err = stage_fn()
+                finally:
+                    stage_durations[stage_name] = (time.monotonic() - stage_start) * 1000
                 if not stage_ok:
                     if err is None:
                         # SECURITY: asserts can be stripped with ``python -O``;
@@ -3254,6 +3268,7 @@ def _run_self_tests() -> bool:
             _clear_self_test_thread()
 
         _POST_DURATION_MS = (time.monotonic() - start) * 1000
+        _POST_STAGE_DURATIONS_MS = stage_durations
 
         if not all_passed:
             # Snapshot the failed run for :func:`last_failure` NOW.  Until this
