@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "kat_slot_guard.h"
 
 /* ============================================================================
  * TEST INFRASTRUCTURE
@@ -120,7 +121,7 @@ static void nist_drbg_update(nist_drbg_ctx *ctx, const uint8_t *provided_data) {
  * This is the exact seeding procedure from the NIST KAT framework
  */
 static void nist_drbg_init(nist_drbg_ctx *ctx, const uint8_t seed[48]) {
-    memset(ctx->key, 0, 32);
+    ama_secure_memzero(ctx->key, 32);
     memset(ctx->v, 0, 16);
     nist_drbg_update(ctx, seed);
     ctx->reseed_ctr = 1;
@@ -814,7 +815,7 @@ static int test_dilithium_kat_vector(void) {
 static int test_drbg_selftest(void) {
     /* Known test: seed with all zeros, check first output */
     uint8_t seed[48];
-    memset(seed, 0, 48);
+    ama_secure_memzero(seed, 48);
 
     nist_drbg_init(&g_drbg, seed);
 
@@ -900,6 +901,7 @@ static int test_kyber_compress_roundtrip(void) {
  * ============================================================================ */
 
 int main(int argc, char *argv[]) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     (void)argc;
     (void)argv;
 

@@ -93,6 +93,28 @@ class TestMemoryGrowth:
         growth_mb = (final - baseline) / (1024 * 1024)
         assert growth_mb < 1.0, f"Memory grew by {growth_mb:.2f} MB during hashing"
 
+    def test_hash_retains_no_python_objects_per_call(self) -> None:
+        """Repeated hashing leaves no Python objects behind.
+
+        The RSS bound above is coarse: a thousand small retained objects fit
+        inside its 1 MB allowance.  Counting live objects across the same
+        loop bounds retention at under one object per call, which any
+        per-call append to a module-level cache or list would exceed.
+        """
+        from ama_cryptography.legacy_compat import canonical_hash_code
+
+        gc.collect()
+        baseline_objects = len(gc.get_objects())
+
+        for _ in range(1000):
+            dna = "ACGT" * 100
+            params = [(1.0, 1.0)]
+            canonical_hash_code(dna, params)
+
+        gc.collect()
+        growth = len(gc.get_objects()) - baseline_objects
+        assert growth < 1000, f"live object count grew by {growth} over 1000 calls"
+
     def test_hmac_no_memory_growth(self) -> None:
         """Repeated HMAC operations don't leak memory."""
         from ama_cryptography.legacy_compat import hmac_authenticate
@@ -132,7 +154,7 @@ class TestMemoryGrowth:
         """Get current memory usage in bytes (platform-dependent)."""
         try:
             # Linux: read from /proc
-            with open("/proc/self/statm") as f:
+            with open("/proc/self/statm", encoding="utf-8") as f:
                 # statm: size resident shared text lib data dt
                 # resident is in pages
                 parts = f.read().split()

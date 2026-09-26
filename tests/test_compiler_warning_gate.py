@@ -1,0 +1,557 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""
+Tests for ``tools/check_compiler_warnings.py``.
+
+The gate this covers replaced a chain of ``grep -v`` inside one workflow step.
+That chain had already broken once in this branch's history — its allowlist
+matched ASCII apostrophes while ``LANG=C.UTF-8`` makes GCC quote identifiers
+with U+2018/U+2019, so the step failed on the exact class it exists to permit —
+and it passed vacuously when its log was missing, because ``grep``'s exit 2
+flattened into "no warnings found".
+
+So both directions are pinned here, not just the happy path: every exemption is
+shown to admit its own class in *both* quote spellings, a real out-of-allowlist
+diagnostic is shown to fail, and a missing or empty log is shown to be fatal
+rather than clean.  The out-of-allowlist samples are verbatim lines from real
+builds of this tree, not invented text.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GATE = REPO_ROOT / "tools" / "check_compiler_warnings.py"
+STATIC_ANALYSIS_YML = REPO_ROOT / ".github" / "workflows" / "static-analysis.yml"
+
+# Verbatim from a Release build of this tree before the benchmark harness was
+# fixed (gcc 13, -O3 -D_FORTIFY_SOURCE=2).  This is the class the unoptimized
+# gate configuration could not emit at all.
+STRINGOP_TRUNCATION = (
+    "/home/user/AMA-Cryptography/benchmarks/benchmark_c_raw.c:245:5: warning: "
+    "'__builtin_strncpy' output may be truncated copying 63 bytes from a "
+    "string of length 63 [-Wstringop-truncation]"
+)
+
+# Verbatim from an AArch64 cross build of this tree before the NEON kernels
+# were given a header.  This is the class the x86-64-only gate could not see.
+MISSING_PROTOTYPE = (
+    "/home/user/AMA-Cryptography/src/c/neon/ama_kyber_neon.c:133:6: warning: "
+    "no previous prototype for 'ama_kyber_ntt_neon' [-Wmissing-prototypes]"
+)
+
+# The class every `__int128` site used to emit, in both quote spellings GCC
+# uses.  Its allowlist entry was deleted once `__extension__` drove it to zero,
+# so it is now an ordinary out-of-allowlist warning.
+INT128_ASCII = (
+    "/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not "
+    "support '__int128' types [-Wpedantic]"
+)
+INT128_UTF8 = (
+    "/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not "
+    "support ‘__int128’ types [-Wpedantic]"
+)
+# The class the allowlist admitted until the MULX kernel's asm literals lost
+# their alignment padding (4,266 characters became 3,142, under the 4,095 C11
+# guarantees).  Like ``__int128`` above, it is now an ordinary finding.
+OVERLENGTH_LITERAL = (
+    "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c:120:9: "
+    "warning: string literal of length 9001 exceeds maximum length 4095 that "
+    "ISO C99 compilers are required to support [-Woverlength-strings]"
+)
+
+
+def run_gate(*logs: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(GATE), *[str(p) for p in logs]],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+
+
+def write_log(tmp_path: Path, name: str, *lines: str) -> Path:
+    path = tmp_path / name
+    body = "\n".join(("[ 42%] Building C object foo.c.o", *lines, "[100%] Built target ama")) + "\n"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def load_gate_module() -> ModuleType:
+    """Import the gate in-process, for the tests that substitute its allowlist."""
+    spec = importlib.util.spec_from_file_location("check_compiler_warnings", GATE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestAllowlistAdmitsItsOwnClasses:
+    """The allowlist is empty; its machinery must still admit exactly an entry.
+
+    The last entry (``overlength-asm-literal``) was deleted when the MULX
+    kernel's asm literals were unpadded, so no real diagnostic is admitted any
+    more.  The admission and counting code stays — a future entry is a
+    reviewed edit to ``EXEMPTIONS``, not a new mechanism — so it is exercised
+    with an entry substituted in-process rather than left untested.
+    """
+
+    def test_the_overlength_literal_is_no_longer_exempt(self, tmp_path: Path) -> None:
+        """PIN: restoring the deleted entry turns this green-to-red."""
+        log = write_log(tmp_path, "build.log", OVERLENGTH_LITERAL)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert OVERLENGTH_LITERAL in result.stderr
+
+    def test_clean_log_passes(self, tmp_path: Path) -> None:
+        log = write_log(tmp_path, "build.log")
+        result = run_gate(log)
+        assert result.returncode == 0, result.stderr
+        assert "no compiler warnings outside the frozen allowlist" in result.stdout
+
+    def test_counts_are_reported_so_a_dead_exemption_is_visible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        gate = load_gate_module()
+        entry = gate.Exemption(
+            name="substituted",
+            pattern=re.compile(r"ama_nistp_mont_mulx\.c.*warning:.*string literal of length"),
+            reason="test-only entry exercising the admission and counting code",
+        )
+        monkeypatch.setattr(gate, "EXEMPTIONS", (entry,))
+        log = write_log(tmp_path, "build.log", OVERLENGTH_LITERAL, OVERLENGTH_LITERAL)
+        assert gate.check([log]) == 0
+        assert "allowlisted [substituted]: 2" in capsys.readouterr().out
+
+
+class TestAllowlistRejectsEverythingElse:
+    @pytest.mark.parametrize(
+        "line",
+        [STRINGOP_TRUNCATION, MISSING_PROTOTYPE],
+        ids=["optimizer-dependent", "architecture-dependent"],
+    )
+    def test_real_warning_fails(self, tmp_path: Path, line: str) -> None:
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "outside the frozen allowlist" in result.stderr
+        assert line in result.stderr
+
+    @pytest.mark.parametrize("unit", ["fe51.h", "fe64.h", "ama_nistp.c", "ama_secp256k1.c"])
+    @pytest.mark.parametrize("line", [INT128_ASCII, INT128_UTF8], ids=["ascii", "utf8"])
+    def test_int128_is_no_longer_exempt_anywhere(
+        self, tmp_path: Path, unit: str, line: str
+    ) -> None:
+        """Every site declares the type with `__extension__`, so a return of
+        the warning is a regression at source, not an allowlisted class."""
+        bad = line.replace("fe51.h", unit)
+        log = write_log(tmp_path, "build.log", bad)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert unit in result.stderr
+
+    def test_one_bad_log_among_several_fails(self, tmp_path: Path) -> None:
+        clean = write_log(tmp_path, "clean.log")
+        dirty = write_log(tmp_path, "dirty.log", MISSING_PROTOTYPE)
+        result = run_gate(clean, dirty)
+        assert result.returncode == 1
+        assert "dirty.log" in result.stderr
+
+
+class TestFailsClosedOnAbsentEvidence:
+    """A gate that passes having examined nothing is the defect being removed."""
+
+    def test_missing_log_is_fatal(self, tmp_path: Path) -> None:
+        result = run_gate(tmp_path / "never-written.log")
+        assert result.returncode == 1
+        assert "does not exist" in result.stderr
+
+    def test_empty_log_is_fatal(self, tmp_path: Path) -> None:
+        empty = tmp_path / "empty.log"
+        empty.write_text("", encoding="utf-8")
+        result = run_gate(empty)
+        assert result.returncode == 1
+        assert "is empty" in result.stderr
+
+    def test_missing_log_beside_a_clean_one_is_still_fatal(self, tmp_path: Path) -> None:
+        clean = write_log(tmp_path, "clean.log")
+        result = run_gate(clean, tmp_path / "never-written.log")
+        assert result.returncode == 1
+
+    def test_no_arguments_is_a_usage_error(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(GATE)],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        assert result.returncode == 2
+
+
+class TestDecodingCannotMaskContent:
+    def test_undecodable_bytes_do_not_hide_a_warning(self, tmp_path: Path) -> None:
+        """A build log can carry any bytes a diagnostic quotes back.
+
+        The gate must fail on the warning it contains, not on the decode.
+        """
+        log = tmp_path / "build.log"
+        log.write_bytes(
+            b"quoted source: \xff\xfe not utf-8\n" + MISSING_PROTOTYPE.encode("utf-8") + b"\n"
+        )
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "ama_kyber_ntt_neon" in result.stderr
+
+
+_WARNING_LOG = re.compile(r"build-warnings[\w.-]*\.log")
+_GATE_SCRIPT = "tools/check_compiler_warnings.py"
+
+
+def _commands(run: str) -> list[list[str]]:
+    """The commands a ``run:`` body executes, as argv lists.
+
+    ``\\``-continuations are joined and ``#`` comments dropped (by shlex, which
+    reads them the way bash does), so text in a comment is not a command.
+    """
+    commands: list[list[str]] = []
+    pending = ""
+    for raw in run.splitlines():
+        line = raw.strip()
+        if line.endswith("\\"):
+            pending += line[:-1] + " "
+            continue
+        argv = shlex.split(pending + line, comments=True)
+        pending = ""
+        if argv:
+            commands.append(argv)
+    if pending.strip():
+        commands.append(shlex.split(pending, comments=True))
+    return commands
+
+
+def _warning_gate_flow() -> dict[str, list[tuple[int, str, list[str]]]]:
+    """Per job: every step command that names a warning log or runs the gate.
+
+    Each entry is ``(step index, "gate" | "produce", argv)``.  A gate command
+    is one that executes ``tools/check_compiler_warnings.py``; any other
+    command naming a ``build-warnings*.log`` writes it (``tee``, a redirect).
+    """
+    workflow: dict[str, Any] = yaml.safe_load(STATIC_ANALYSIS_YML.read_text(encoding="utf-8"))
+    flow: dict[str, list[tuple[int, str, list[str]]]] = {}
+    for job_id, job in workflow["jobs"].items():
+        for index, step in enumerate(job.get("steps", [])):
+            run = step.get("run")
+            # Only steps that mention a warning log or the gate at all are
+            # parsed; the rest cannot take part, and a heredoc elsewhere in
+            # the file is not shell that shlex should be asked to read.
+            if not isinstance(run, str) or not (_WARNING_LOG.search(run) or _GATE_SCRIPT in run):
+                continue
+            for argv in _commands(run):
+                if any(token.endswith(_GATE_SCRIPT) for token in argv):
+                    assert not step.get("continue-on-error"), (
+                        f"{job_id}: the warning gate step is continue-on-error, "
+                        "so its failure fails nothing"
+                    )
+                    flow.setdefault(job_id, []).append((index, "gate", argv))
+                elif any(_WARNING_LOG.search(token) for token in argv):
+                    flow.setdefault(job_id, []).append((index, "produce", argv))
+    return flow
+
+
+class TestWiredIntoTheWorkflow:
+    """The script only enforces anything if the workflow actually calls it.
+
+    Both checks read the COMMANDS the steps run, not the workflow's text: the
+    file mentions ``tools/check_compiler_warnings.py`` in comments above every
+    producer, and a substring search over the text was satisfied by those
+    comments with every gate invocation deleted.
+    """
+
+    def test_static_analysis_workflow_invokes_the_gate(self) -> None:
+        gates = [
+            argv
+            for entries in _warning_gate_flow().values()
+            for _, kind, argv in entries
+            if kind == "gate"
+        ]
+        assert gates, f"no step of {STATIC_ANALYSIS_YML.name} executes {_GATE_SCRIPT}"
+        for argv in gates:
+            assert any(
+                _WARNING_LOG.fullmatch(token) for token in argv
+            ), f"a gate invocation checks no warning log: {argv}"
+
+    def test_every_produced_log_is_checked(self) -> None:
+        """Every warning log a build step writes must be passed to the gate.
+
+        A build step that writes a log nobody reads is the same silent gap as
+        a missing gate, and it is one edit away at any time.  "Passed to the
+        gate" means: named in the argv of a gate command in the SAME job (logs
+        do not cross runners) at a LATER step (a gate that runs before the
+        build reads nothing).
+        """
+        flow = _warning_gate_flow()
+        produced_any = False
+        for job_id, entries in flow.items():
+            for index, kind, argv in entries:
+                if kind != "produce":
+                    continue
+                for token in argv:
+                    for log in _WARNING_LOG.findall(token):
+                        produced_any = True
+                        checked_later = any(
+                            later > index and log in gate_argv
+                            for later, gate_kind, gate_argv in entries
+                            if gate_kind == "gate"
+                        )
+                        assert checked_later, (
+                            f"{job_id}: {log} is written at step {index} but no "
+                            "later warning-gate step in that job checks it"
+                        )
+        assert produced_any, "no warning logs are produced by the workflow at all"
+
+
+class TestClangFormatConfigLoads:
+    """``.clang-format`` must be loadable by the toolchain this project pins.
+
+    Placed beside the warning-gate tests because it is the same class of
+    defect: a toolchain configuration file that silently does not apply.
+
+    ``Language: C`` was rejected by every clang-format before LLVM 20 —
+    including the clang-18 in CI and in the container images — with
+    ``unknown enumerated scalar`` followed by
+    ``Error reading .clang-format: Invalid argument``.  The whole file was
+    then ignored, so an editor with format-on-save fell back to LLVM defaults
+    (2-space indent, 80 columns): the exact opposite of what the file
+    specifies.
+    """
+
+    CONFIG = REPO_ROOT / ".clang-format"
+
+    def test_language_is_the_universally_valid_spelling(self) -> None:
+        text = self.CONFIG.read_text(encoding="utf-8")
+        language_lines = [
+            line.strip() for line in text.splitlines() if line.strip().startswith("Language:")
+        ]
+        assert language_lines == ["Language: Cpp"], (
+            "Language must be 'Cpp' — the kind clang-format uses for C in every "
+            "version.  'C' is a parse error before LLVM 20, which silently "
+            f"disables the entire file.  Found: {language_lines}"
+        )
+
+    def test_clang_format_actually_parses_it(self) -> None:
+        import shutil
+        import subprocess
+
+        clang_format = shutil.which("clang-format")
+        if clang_format is None:
+            # Both pytest lanes install the clang-format wheel; a skip there
+            # is a broken install, not a host without the tool.  This test
+            # skipped on every CI run before the lanes installed it.
+            if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("1", "true", "yes"):
+                pytest.fail(
+                    "clang-format is not installed in a lane that installs it; the "
+                    ".clang-format validity check cannot run"
+                )
+            pytest.skip("clang-format not installed")
+        result = subprocess.run(
+            [clang_format, "--dump-config"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        assert (
+            result.returncode == 0
+        ), f"clang-format could not read .clang-format: {result.stderr.strip()}"
+        # The dumped config must carry this file's settings, not LLVM defaults
+        # — a file that failed to load still dumps a config, just the wrong one.
+        assert "IndentWidth:     4" in result.stdout
+        assert "ColumnLimit:     100" in result.stdout
+
+
+class TestClangSummaryLineIsNotADiagnostic:
+    """``1 warning generated.`` is clang's bookkeeping, not a finding.
+
+    An earlier form of the line matcher (``\\bwarning[ :]``) matched it, so
+    every clang build reported one bogus finding per translation unit that
+    emitted any warning — including warnings the allowlist had already
+    excused.  GCC prints no such line, so it survived until the gate was first
+    run over a clang log.  A gate that fires on its own bookkeeping is as
+    useless as one that cannot fire.
+    """
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "1 warning generated.",
+            "2 warnings generated.",
+            "17 warnings generated.",
+        ],
+    )
+    def test_summary_lines_are_ignored(self, tmp_path: Path, line: str) -> None:
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 0, result.stderr
+
+    def test_a_summary_line_does_not_mask_a_real_warning(self, tmp_path: Path) -> None:
+        log = write_log(tmp_path, "build.log", MISSING_PROTOTYPE, "1 warning generated.")
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "ama_kyber_ntt_neon" in result.stderr
+        assert "1 warning generated." not in result.stderr
+
+    def test_msvc_spelling_is_still_a_diagnostic(self, tmp_path: Path) -> None:
+        """MSVC writes ``warning Cxxxx:`` — the colon is what both forms share."""
+        line = r"C:\src\ama_kyber.c(42): warning C4244: conversion, possible loss of data"
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "C4244" in result.stderr
+
+
+class TestInterleavedParallelOutput:
+    """`make -j N` can merge two compilers' stderr inside one line.
+
+    Two processes share one pipe, so a single line can carry both
+    diagnostics character-interleaved.  Observed verbatim in a clean parallel
+    build of this tree: two identical -Woverlength-strings warnings from the
+    shared and static targets merged into one line.  While that warning was
+    allowlisted, a position-exact pattern stopped matching such a line and the
+    gate went red for a reason unrelated to the code.
+
+    The warning is no longer emitted or admitted, so what these cases pin now
+    is the other direction: an interleaved line is still a diagnostic, and
+    interleaving cannot hide one.  The build steps still pass `-Otarget` so
+    Make serialises per-target output.
+    """
+
+    #: Verbatim from a clean `make -j` build of this tree.
+    INTERLEAVED_OVERLENGTH = (
+        "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c"
+        "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c::161161::99::"
+        "  warning: warning: string literal of length 4266 exceeds maximum length "
+        "4095 that ISO C99 compilers are required to support [-Woverlength-strings]"
+        "string literal of length 4266 exceeds maximum length 4095 that ISO C99 "
+        "compilers are required to support [-Woverlength-strings]"
+    )
+
+    def test_an_interleaved_diagnostic_is_still_a_finding(self, tmp_path: Path) -> None:
+        log = write_log(tmp_path, "build.log", self.INTERLEAVED_OVERLENGTH)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "Woverlength-strings" in result.stderr
+
+    def test_tolerance_does_not_admit_a_different_warning(self, tmp_path: Path) -> None:
+        """Naming the kernel file admits nothing by itself.
+
+        A line naming the once-allowlisted file but carrying a DIFFERENT
+        diagnostic fails, as it did while the entry existed — no exemption
+        is a per-file blanket.
+        """
+        line = (
+            "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c:12:3: "
+            "warning: variable 'tmp' set but not used [-Wunused-but-set-variable]"
+        )
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "unused-but-set-variable" in result.stderr
+
+    def test_every_parallel_strict_build_serialises_its_output(self) -> None:
+        """Make needs ``-Otarget``; Ninja already buffers per edge.
+
+        The assertion is per build directory, not per line: the two generators
+        need different things, and demanding one flag for both would either
+        miss the Make lanes or require a flag Ninja rejects.
+        """
+        workflow = (REPO_ROOT / ".github" / "workflows" / "static-analysis.yml").read_text(
+            encoding="utf-8"
+        )
+        ninja_dirs = set(re.findall(r"-B (\S+) -G Ninja", workflow))
+        builds = [
+            line
+            for line in workflow.splitlines()
+            if "cmake --build build-strict" in line and "tee" in line
+        ]
+        assert builds, "no strict build step pipes through tee"
+        for line in builds:
+            build_dir = line.split("cmake --build ", 1)[1].split()[0]
+            if build_dir in ninja_dirs:
+                assert (
+                    "-Otarget" not in line
+                ), f"{build_dir} is a Ninja build; -Otarget is a Make flag: {line.strip()}"
+                continue
+            assert "-Otarget" in line, f"unsynchronised parallel Make build: {line.strip()}"
+
+
+class TestClangTidyUndefinedBinaryOpExclusionIsPinned:
+    """clang-analyzer-core.UndefinedBinaryOperatorResult is enforced tree-wide
+    EXCEPT on three named files.
+
+    The check raises an irreducible interprocedural false positive on exactly
+    ama_dilithium.c, ama_kyber.c and ama_nistp.c (the path engine assumes a
+    zero-length fill loop, i.e. a runtime limb count of 0, impossible by
+    construction).  Rather than drop the whole category — which left it dead on
+    the ~40 other C sources — .clang-tidy enables it and the static-analysis
+    workflow appends a per-FILE `--checks=-...` for exactly those three.
+
+    This pins both halves: (1) the category is NOT globally disabled in
+    .clang-tidy, and (2) the workflow excludes exactly the three files.  If a
+    fourth file ever needs the exclusion, or one of these three is fixed so it
+    no longer needs it, this test fails until the set is corrected — the same
+    drift protection the deleted per-site cppcheck pins used to provide.
+    """
+
+    _CHECK = "clang-analyzer-core.UndefinedBinaryOperatorResult"
+    _EXPECTED_FILES = frozenset({"src/c/ama_dilithium.c", "src/c/ama_kyber.c", "src/c/ama_nistp.c"})
+
+    def test_check_is_not_globally_disabled(self) -> None:
+        clang_tidy = (REPO_ROOT / ".clang-tidy").read_text(encoding="utf-8")
+        # A global drop is a `-<check>` token in the YAML `Checks:` block; a
+        # `#`-comment mention of the name is prose, not a disable.
+        checks_disabled = [
+            line.strip().rstrip(",")
+            for line in clang_tidy.splitlines()
+            if not line.lstrip().startswith("#") and line.strip().rstrip(",") == f"-{self._CHECK}"
+        ]
+        assert not checks_disabled, (
+            f"{self._CHECK} is globally disabled in .clang-tidy again; it is "
+            "meant to run fail-closed on every C source except the three named "
+            "files, which are excluded per-file in the workflow instead."
+        )
+
+    def test_workflow_excludes_exactly_the_three_known_false_positive_files(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "static-analysis.yml").read_text(
+            encoding="utf-8"
+        )
+        assert f"--checks=-{self._CHECK}" in workflow, (
+            "the workflow no longer excludes the check for any file; if the false "
+            "positives were resolved at source, remove this test too."
+        )
+        # The exclusion targets a shell `case` whose pattern names the files
+        # with `|` separators; pull the pattern that guards the exclusion.
+        excluded: set[str] = set()
+        for line in workflow.splitlines():
+            stripped = line.strip()
+            if stripped.endswith(")") and "src/c/ama_" in stripped and "|" in stripped:
+                pattern = stripped[:-1]  # drop trailing ')'
+                excluded = {tok.strip() for tok in pattern.split("|") if tok.strip()}
+                break
+        assert excluded == set(self._EXPECTED_FILES), (
+            "the per-file clang-tidy exclusion set drifted from the three files "
+            f"that genuinely raise {self._CHECK}. Found {sorted(excluded)}, "
+            f"expected {sorted(self._EXPECTED_FILES)}. A fourth file means a new "
+            "false positive to document here; a shrunken set means one was fixed "
+            "and its exclusion (and this pin) should be removed."
+        )

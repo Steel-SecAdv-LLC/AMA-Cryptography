@@ -26,6 +26,9 @@
 
 static const char *const KNOWN_SLOTS[] = {
     "sha3-avx512x4",
+    "sha3-avx2x4",
+    "aes-gcm-aesni",
+    "aes-gcm-vaes",
     "kyber-ntt-avx2",
     "dilithium-ntt-avx2",
     "chacha20-avx2x8",
@@ -33,8 +36,12 @@ static const char *const KNOWN_SLOTS[] = {
     "aes-gcm-neon",
     "chacha20-neon",
     "sha3-neon",
+    "kyber-ntt-neon",
+    "dilithium-ntt-neon",
+    "argon2-g-neon",
     "kyber-sve2",
     "sha3-sve2",
+    "dilithium-ntt-sve2",
     "x25519-avx2",
     NULL,
 };
@@ -80,6 +87,17 @@ int main(void) {
     }
 
     if (strcmp(active, "all-default-dispatch") == 0) {
+        /* A case registered where the slot is known to be satisfiable sets
+         * AMA_TEST_EXPECT_HONORED=1, and there an unsupported answer is the
+         * defect under test (a pin refused because an opt-out or the
+         * auto-tune had cleared the default slot), not a host limitation. */
+        const char *expect = getenv("AMA_TEST_EXPECT_HONORED");
+        if (expect && strcmp(expect, "1") == 0) {
+            fprintf(stderr,
+                "FAIL: AMA_DISPATCH_ONLY='%s' must be honored here but "
+                "resolved to '%s'\n", requested, active);
+            return 1;
+        }
         /* apply_dispatch_only() left the table at scalar fallback
          * because the requested slot is not satisfiable on this
          * host (missing CPU feature, missing AMA_HAVE_*_IMPL build

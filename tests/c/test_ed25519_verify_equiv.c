@@ -3,16 +3,16 @@
 /**
  * @file test_ed25519_verify_equiv.c
  * @brief Behavioral + byte-identity equivalence tests for the Ed25519
- *        verify path (both the Shamir/Straus joint layout and the
- *        legacy split layout).
+ *        verify path and the public joint scalar multiplication.
  *
- * AMA_ED25519_VERIFY_SHAMIR=1 (default) implements verify as
- *   ge25519_double_scalarmult_vartime(R_check, s, B, h, -A)
- * at width AMA_ED25519_VERIFY_WINDOW (default 5).  Setting it to 0
- * selects the legacy split layout: [s]B via comb + [h](-A) via wNAF +
- * one final ge25519_add.  The two paths are mathematically required to
- * compute the same group element; this test pins that contract on five
- * independent layers:
+ * ama_ed25519_double_scalarmult_public runs a Shamir/Straus joint pass
+ * (width-5 wNAF on both points); the split composition
+ * ama_ed25519_scalarmult_public + ama_ed25519_point_add computes the same
+ * group element through different code, and verify itself runs a third
+ * formulation (the half-size-scalar check of
+ * src/c/internal/ama_ed25519_halfsize.h).  All three are mathematically
+ * required to agree; this test pins that contract on five independent
+ * layers:
  *
  *   (A) Behavioral accept/reject parity:
  *       1. 256 randomized (msg, sk) pairs signed with ama_ed25519_sign.
@@ -27,10 +27,10 @@
  *       (s1, P1, s2, P2) tuples, assert
  *           ama_ed25519_double_scalarmult_public(out, s1, P1, s2, P2)
  *       produces byte-for-byte the same compressed Edwards point as the
- *       legacy split layout reconstructed from the public primitives
- *       ama_ed25519_scalarmult_public + ama_ed25519_point_add.  This
- *       locks cross-path equivalence in every CI run rather than
- *       requiring the SHAMIR=1 / SHAMIR=0 build matrix.
+ *       split composition of the public primitives
+ *       ama_ed25519_scalarmult_public + ama_ed25519_point_add.  Both are
+ *       compiled into every build, so the comparison runs in every CI run;
+ *       there is no build switch selecting between them.
  *
  *   (C) Zero-scalar / l-1 edge cases for the joint scalar mult:
  *       (s1=0, s2!=0), (s1!=0, s2=0), (s1=0, s2=0), and scalar = l-1
@@ -39,10 +39,18 @@
  *       sc25519_to_wnaf.
  *
  *   (D) Strict-encoding rejection vectors.  Four negative (sig, msg, pk)
- *       tuples that any correct cofactored Ed25519 verifier MUST reject
- *       on the underlying group-element check, not on a strict-mode-only
+ *       tuples that any correct Ed25519 verifier MUST reject on the
+ *       underlying group-element check, not on a strict-mode-only
  *       canonicalization rule — robust against the cofactored vs
  *       cofactorless distinction (Chalkias & Konstantinou 2020).
+ *
+ *       This file used to call AMA's verifier "cofactored".  It is
+ *       COFACTORLESS: ama_ed25519_verify decides [S]B - R - [h]A = O, not
+ *       8([S]B - R - [h]A) = O.  The choice is documented at
+ *       ama_ed25519_verify in include/ama_cryptography.h, with the
+ *       interoperability consequence.  The word was wrong, not the vectors:
+ *       "robust against the distinction" was always the property this layer
+ *       wanted, and these four have it.
  *
  *   (E) RFC 8032 §7.1 KAT pin for absolute correctness.
  */
@@ -130,26 +138,33 @@ static const uint8_t rfc8032_sig[64] = {
 };
 
 /* ============================================================================
- * Layer (B): byte-identity of the joint Shamir scalar mult vs the legacy
- * split layout, reconstructed from the existing public primitives.
+ * Layer (B): byte-identity of the joint Shamir scalar mult vs the split
+ * composition of the existing public primitives.
  *
- * Legacy layout: out_compressed = compress(decompress(P1)·s1
- *                                          + decompress(P2)·s2)
+ * Split composition: out_compressed = compress(decompress(P1)·s1
+ *                                              + decompress(P2)·s2)
  * via two independent ama_ed25519_scalarmult_public calls plus one
  * ama_ed25519_point_add.  Note that ama_ed25519_scalarmult_public uses
- * the variable-base wNAF code path (ge25519_scalarmult); the Shamir
- * joint pass uses the same wNAF digit recoding interleaved across both
- * scalars.  Mathematically both must produce identical compressed
+ * the variable-base wNAF code path (ama_ed25519_ge_scalarmult_vartime);
+ * the Shamir joint pass (ama_ed25519_ge_double_scalarmult_vartime) uses
+ * the same wNAF digit recoding interleaved across both scalars.  Mathematically both must produce identical compressed
  * output for any (s1, P1, s2, P2) tuple.
  *
  * For arbitrary 32-byte test inputs we feed both paths the
  * sc25519_reduce'd form of each scalar so the comparison is made using
- * canonical representatives modulo the Ed25519 group order l.  Neither
- * scalarmult has a hard <2^253 precondition — both consume all 256 bits
- * — but reducing first keeps the byte-identity check strictly "mod l"
- * and guarantees the joint and split constructions are exercised on the
- * same scalar values (any `s` and `s + k*l` are group-equivalent but
- * hit different wNAF expansions, which we do not want to compare here).
+ * canonical representatives modulo the Ed25519 group order l.
+ *
+ * The reduction here is redundant, not load-bearing: sc25519_to_wnaf
+ * reduces mod l itself, so `s` and `s + k*l` now hit the SAME wNAF
+ * expansion.  Both statements this comment used to make were false.  It
+ * claimed "neither scalarmult has a hard <2^253 precondition — both
+ * consume all 256 bits": sc25519_to_wnaf emitted 256 digits from eight
+ * 32-bit limbs, so a negative digit near the top carried out of limb 7,
+ * the carry was discarded, and the recoding silently represented
+ * s - 2^256 for ~17% of uniform 32-byte scalars.  Reducing every input
+ * before comparing is precisely why this file never saw that.  See
+ * tests/c/test_ed25519_scalarmult_contract.c, which drives the same two
+ * entry points on unreduced scalars through the public API.
  * ============================================================================ */
 static int test_byte_identity_one(const uint8_t s1[32], const uint8_t P1[32],
                                   const uint8_t s2[32], const uint8_t P2[32],
@@ -341,7 +356,7 @@ int main(void) {
 
     /* ====================================================================
      * Layer (B): cross-path BYTE-IDENTITY of the joint Shamir scalar mult
-     * vs the legacy split layout, on 256 random (s1, P1, s2, P2) tuples.
+     * vs the split composition, on 256 random (s1, P1, s2, P2) tuples.
      * Closes the gap that (A) only pins accept/reject parity — this layer
      * pins R_check at the compressed-group-element level.
      * ==================================================================== */
@@ -353,9 +368,9 @@ int main(void) {
             uint8_t pk1[32], pk2[32], sk_unused[64];
             char label[80];
 
-            /* Random scalars (reduced mod l so the legacy split path,
-             * which dispatches to ge25519_scalarmult with its <2^253
-             * precondition, agrees with the Shamir helper). */
+            /* Random scalars, reduced mod l.  Redundant, not load-bearing:
+             * both entry points reduce through sc25519_to_wnaf themselves
+             * (see the Layer (B) block comment above). */
             fill_random_bytes(s1_raw, 32);
             fill_random_bytes(s2_raw, 32);
             reduce_scalar_32(s1, s1_raw);
@@ -386,7 +401,8 @@ int main(void) {
     }
 
     /* ====================================================================
-     * Layer (C): zero-scalar / l-1 edge cases for ge25519_double_scalarmult.
+     * Layer (C): zero-scalar / l-1 edge cases for the joint scalar mult
+     * (ama_ed25519_ge_double_scalarmult_vartime).
      * Pins the explicit `top < 0` identity-handling branch and the
      * most-significant-bit boundary of sc25519_to_wnaf.  All cases use
      * the Shamir public API and must agree byte-for-byte with the split
@@ -436,12 +452,14 @@ int main(void) {
     /* ====================================================================
      * Layer (D): strict-encoding rejection vectors.
      *
-     * Each vector is a (sig, msg, pk) tuple that any correct cofactored
-     * Ed25519 verifier MUST reject.  These are explicitly chosen to be
+     * Each vector is a (sig, msg, pk) tuple that any correct Ed25519
+     * verifier MUST reject.  These are explicitly chosen to be
      * robust against the cofactored vs cofactorless distinction that
      * Chalkias & Konstantinou (2020) showed splits real-world Ed25519
      * impls — i.e., they fail on the underlying group-element check,
-     * not on a strict-mode-only canonicalization rule.
+     * not on a strict-mode-only canonicalization rule.  (AMA's verifier
+     * is the COFACTORLESS one; this file said "cofactored" until the
+     * INVARIANT-48 pass corrected it.  See the note in the file header.)
      *
      * Rejection criterion exercised, per vector:
      *   D.1 — A is the identity element.  [h](-A) = identity, so
@@ -451,6 +469,15 @@ int main(void) {
      *         bit).  Then we'd need [s]B + [h](-A) = identity, which
      *         constrains s to a specific function of h, A — which our
      *         random msg/pk does not satisfy.  Reject.
+     *
+     *         D.1 and D.2 now reject EARLIER than that, at the
+     *         INVARIANT-48 small-order gate, and both rejected before it
+     *         existed for the reasons stated above — so neither is
+     *         coverage for that invariant, the way D.3 is not coverage
+     *         for INVARIANT-26.  The discriminating vectors, which
+     *         satisfy the group equation and so turn only on the
+     *         small-order rule, are in
+     *         tests/c/test_ed25519_small_order.c.
      *   D.3 — s-half of signature replaced with the group order l.
      *         NOT a malleability test — see the note at the case
      *         itself.  [l]B = identity, so R_check = [h](-A), which
@@ -504,8 +531,8 @@ int main(void) {
          * the genuine scalar plus the group order, which *satisfies*
          * the group equation and is caught only by the range check.
          * That case, and the L-1 / L / L+1 boundaries, live in
-         * tests/c/test_ed25519_canonical_s.c — which is built against
-         * both backends and the batch path, unlike this file. */
+         * tests/c/test_ed25519_canonical_s.c — which also drives the
+         * batch path, unlike this file. */
         {
             uint8_t bad_sig[64];
             memcpy(bad_sig, sig, 64);

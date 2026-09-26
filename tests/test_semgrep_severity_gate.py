@@ -33,6 +33,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -105,7 +106,7 @@ def _run(tmp_path: Path, tool: ModuleType, report: Any) -> tuple[int, str]:
     redirected into one buffer and returned together.
     """
     path = tmp_path / "semgrep.json"
-    path.write_text(report if isinstance(report, str) else json.dumps(report))
+    path.write_text(report if isinstance(report, str) else json.dumps(report), encoding="utf-8")
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
         rc = tool.main([str(path)])
@@ -148,6 +149,50 @@ def test_below_the_floor_passes(tool: ModuleType, tmp_path: Path, severity: str)
     # Non-vacuity: the pass names how many advisory findings it looked past, so a
     # pass over an empty report reads differently from a pass over real findings.
     assert "2 lower-severity advisory finding(s)" in out
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("no severity key", lambda r: r["extra"].pop("severity")),
+        ("no extra object at all", lambda r: r.pop("extra")),
+        ("a null severity", lambda r: r["extra"].__setitem__("severity", None)),
+        ("an unrecognised severity", lambda r: r["extra"].__setitem__("severity", "CRITICAL")),
+    ],
+)
+def test_a_result_the_gate_cannot_rank_blocks(
+    tool: ModuleType, tmp_path: Path, label: str, mutate: Any
+) -> None:
+    """A result with no rankable severity is not an advisory.
+
+    The read was ``extra.get("severity", "INFO")``: a result carrying no
+    severity was labelled INFO by the gate itself — a level Semgrep never
+    assigned — and passed a merge-blocking check as a tracked advisory.  The
+    rule that fires is the config's own ERROR rule, so a pass here would clear
+    exactly the finding the gate exists to block.
+    """
+    finding = _finding("ERROR", "insecure-random-usage")
+    mutate(finding)
+    rc, out = _run(tmp_path, tool, _report(finding))
+    assert rc == 1, (label, out)
+    assert "insecure-random-usage" in out, (label, out)
+
+
+@pytest.mark.parametrize(
+    ("label", "results"),
+    [
+        ("results is an object", {"a": 1}),
+        ("a result is a string", ["not a result"]),
+    ],
+)
+def test_a_results_value_that_is_not_a_list_of_results_fails(
+    tool: ModuleType, tmp_path: Path, label: str, results: Any
+) -> None:
+    report = _report()
+    report["results"] = results
+    rc, out = _run(tmp_path, tool, report)
+    assert rc == 1, (label, out)
+    assert "SEMGREP GATE FAILED" in out, (label, out)
 
 
 def test_a_clean_scan_passes(tool: ModuleType, tmp_path: Path) -> None:
@@ -275,22 +320,52 @@ def test_the_gate_exit_code_is_not_swallowed() -> None:
 # ---------------------------------------------------------------------------
 # End to end, on the real tree
 # ---------------------------------------------------------------------------
+def _semgrep_command() -> list[str] | None:
+    """How to invoke semgrep here, or None when it genuinely is not installed.
+
+    The console script, NOT ``python -m semgrep``.  The probe used to be
+    ``[sys.executable, "-m", "semgrep", "--version"]`` and read its return
+    code — but semgrep deprecated that entry point in 1.38.0 and it exits **2**
+    while printing a deprecation notice, on an installation that works
+    perfectly.  So the probe reported "semgrep is not installed" on every host
+    that had it, and the only end-to-end assertion that the shipped package
+    passes the semgrep gate has never executed anywhere: not locally, not in
+    CI.  Same shape as the ``nice`` probe this branch already fixed — a check
+    whose result was decided by something other than the property it named.
+
+    Verified empirically before changing it: with semgrep 1.74.0 installed,
+    ``python -m semgrep --version`` exits 2 with an empty stdout, while
+    ``semgrep --version`` exits 0 and prints the version.
+    """
+    exe = shutil.which("semgrep")
+    if exe is None:
+        # A virtualenv that is not on PATH still has the console script beside
+        # its interpreter; look there before concluding it is absent.
+        candidate = Path(sys.executable).parent / "semgrep"
+        exe = str(candidate) if candidate.exists() else None
+    if exe is None:
+        return None
+    probe = subprocess.run([exe, "--version"], capture_output=True, check=False)
+    if probe.returncode != 0:
+        return None
+    return [exe]
+
+
+_SEMGREP_CMD = _semgrep_command()
+
+
 @pytest.mark.skipif(
-    subprocess.run(
-        [sys.executable, "-m", "semgrep", "--version"], capture_output=True, check=False
-    ).returncode
-    != 0,
-    reason="semgrep is not installed",
+    _SEMGREP_CMD is None,
+    reason="semgrep is not installed (no `semgrep` on PATH)",
 )
 def test_the_real_tree_passes_the_gate(tmp_path: Path) -> None:
     """The shipped package must have no ERROR-severity finding — and the gate
     must be the thing that says so, on a report it generated itself."""
+    assert _SEMGREP_CMD is not None  # narrowed by the skipif
     report = tmp_path / "semgrep.json"
     subprocess.run(
         [
-            sys.executable,
-            "-m",
-            "semgrep",
+            *_SEMGREP_CMD,
             "--config",
             str(SEMGREP_CONFIG),
             "ama_cryptography/",
@@ -313,4 +388,49 @@ def test_the_real_tree_passes_the_gate(tmp_path: Path) -> None:
     # Non-vacuity: a gate that passed on an empty report would also print zero
     # blocking findings.
     assert "scanned" in done.stdout
-    assert json.loads(report.read_text())["paths"]["scanned"]
+    assert json.loads(report.read_text(encoding="utf-8"))["paths"]["scanned"]
+
+
+def test_an_installed_semgrep_is_never_reported_as_absent() -> None:
+    """The probe must not be able to mute this file's only end-to-end test.
+
+    Behavioural, not a source inspection: whenever the ``semgrep`` package is
+    importable in this environment, the probe must produce a command.  The
+    predecessor probe ran ``python -m semgrep --version`` and read its return
+    code — deprecated since semgrep 1.38.0, and it exits **2** on a working
+    installation — so it answered "not installed" everywhere semgrep was
+    installed, and the end-to-end assertion had never executed.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("semgrep") is None:
+        pytest.skip("semgrep is genuinely not installed in this environment")
+    assert _SEMGREP_CMD is not None, (
+        "semgrep is importable here, yet the availability probe reports it "
+        "absent — the end-to-end gate test would be silently muted"
+    )
+
+
+@pytest.mark.skipif(
+    _SEMGREP_CMD is None,
+    reason="semgrep is not installed (no `semgrep` on PATH)",
+)
+def test_the_deprecated_entry_point_would_have_muted_this_file() -> None:
+    """The bug, demonstrated on a host that HAS semgrep.
+
+    Skipped where semgrep is absent, because there the old probe's verdict
+    would have been right for the wrong reason and there is nothing to show.
+    """
+    legacy = subprocess.run(
+        [sys.executable, "-m", "semgrep", "--version"], capture_output=True, check=False
+    )
+    if legacy.returncode == 0:
+        pytest.skip(
+            "this semgrep build still supports `python -m semgrep`; the "
+            "regression this pins is not reproducible here"
+        )
+    assert _SEMGREP_CMD is not None
+    assert (
+        subprocess.run([*_SEMGREP_CMD, "--version"], capture_output=True, check=False).returncode
+        == 0
+    ), "semgrep is installed and working, yet the deprecated probe reports failure"

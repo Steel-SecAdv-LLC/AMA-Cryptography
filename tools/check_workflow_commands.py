@@ -66,11 +66,46 @@ What is checked
     ``*_WINDOWS`` cibuildwheel variables, and ``run:`` steps declaring
     ``shell: cmd`` — must not use POSIX single-quoting around arguments.
 
+``cmake build type``
+    Every ``cmake`` *configure* in a ``run:`` block must state its optimization
+    level, either with ``-DCMAKE_BUILD_TYPE`` or with an explicit ``-O`` inside
+    ``CMAKE_C_FLAGS``.  This project sets no default build type, so a configure
+    that names neither compiles with no ``-O`` flag at all — which is how ten
+    instruction-count constant-time gates came to be measuring an unoptimized
+    library.  See :func:`check_cmake_build_type`.
+
 ``release publishing``
     Steps using ``softprops/action-gh-release`` must not silently overwrite
     release text a maintainer edited by hand, and must not publish a
     prerelease before its assets have uploaded.  The rules are derived from
     the action's own resolution logic; see :func:`check_release_publishing`.
+
+``pytest prerequisites``
+    Since 5.0.0 a failed FIPS 140-3 power-on self-test makes ``import
+    ama_cryptography`` *raise*, and ``tests/conftest.py`` performs that import
+    from ``pytest_configure``.  So a workflow step that invokes pytest in a job
+    that never built the native library does not run one test and report a
+    skip — it dies with ``INTERNALERROR`` and exit 3 before collection.  Every
+    pytest-invoking step must therefore be preceded, in its own job, either by
+    a step that builds the library or by ``AMA_POST_DIAGNOSTIC_IMPORT``, which
+    completes the import with cryptography still refused.  See
+    :func:`check_pytest_prerequisites`.
+
+``skip propagation``
+    A job whose ``if:`` names no status function carries an implicit
+    ``success()``, and GitHub evaluates it over the job's TRANSITIVE
+    ``needs:``: a skipped ancestor anywhere above makes it false.  Below a
+    job that is skipped by design, such a job — and everything after it — is
+    skipped too, and the run still reports success.  That is how
+    ``release.yml``'s unanchored path signed, attested and released nothing
+    while ``build-wheels`` had been told the skipped anchor check was
+    permission to proceed.  See :func:`check_skip_propagation`.
+
+``job timeouts``
+    Every job that runs on a runner declares ``timeout-minutes``.  GitHub's
+    default is 360 minutes, so a hung step otherwise holds its runner — and
+    whatever token the job was granted, ``contents: write`` included — for six
+    hours.  See :func:`check_job_timeouts`.
 
 Known limitation, stated plainly
 --------------------------------
@@ -212,7 +247,16 @@ def _unescape_double_quoted(payload: str) -> str:
 
 
 #: ``${{ ... }}`` expression, e.g. ``${{ matrix.os }}``.
-_EXPRESSION = re.compile(r"\$\{\{\s*(?P<inner>[^}]+?)\s*\}\}")
+#:
+#: The inner text is captured raw and stripped by the caller.  Spelling it
+#: ``\s*(?P<inner>[^}]+?)\s*`` instead put three overlapping whitespace
+#: matchers in a row — the two ``\s*`` and the whitespace inside ``[^}]`` —
+#: around a lazy quantifier, so a run of N spaces could be split among them
+#: in O(N^2) ways and ``search`` retried every start offset: cubic.  Measured
+#: on ``"${{" + " " * N``: 7.9x per doubling, 634 ms at N=1,000.  With the
+#: ``\s*`` gone there is exactly one way to divide the text, and the bound
+#: keeps a malformed workflow linear.
+_EXPRESSION = re.compile(r"\$\{\{(?P<inner>[^}]{0,500})\}\}")
 
 #: A single-quoted argument, as POSIX shells understand it.
 _POSIX_SINGLE_QUOTED_ARG = re.compile(r"(?:^|\s)'[^']+'")
@@ -236,9 +280,15 @@ class Report:
     labels_checked: int = 0
     labels_unresolved: list[str] = field(default_factory=list)
     payloads_checked: int = 0
+    expressions_checked: int = 0
     windows_commands_checked: int = 0
     release_steps_checked: int = 0
     gated_binaries_checked: int = 0
+    cmake_configures_checked: int = 0
+    pytest_steps_checked: int = 0
+    gate_required_jobs_checked: int = 0
+    skip_chains_checked: int = 0
+    job_timeouts_checked: int = 0
 
     @property
     def ok(self) -> bool:
@@ -353,7 +403,7 @@ def _resolve_runs_on(raw: Any, job: dict[str, Any]) -> tuple[list[str], list[str
             else:
                 resolved.append(candidate)
             continue
-        inner = match.group("inner")
+        inner = match.group("inner").strip()
         if inner.startswith("matrix."):
             values = _matrix_values(job, inner[len("matrix.") :])
             if values is None:
@@ -760,6 +810,880 @@ def check_cmake_gated_binaries(path: Path, document: Any, report: Report) -> Non
                 )
 
 
+#: `cmake` as a word — the executable, not a path component (`cmake/toolchains`),
+#: a version specifier (`'cmake>=4.4.0'`), or part of another identifier.
+#: The lookbehind keeps `>=`, `/`, `.`, `-` and word characters off the front;
+#: the lookahead requires whitespace or the end of the line after it.
+_CMAKE_WORD_RE = re.compile(r"(?<![\w./>=-])cmake(?:\.exe)?(?=\s|$)")
+
+#: Where the arguments of one command end.  Used only to decide which MODE a
+#: `cmake` invocation runs in; the build-type test itself reads the whole line.
+_CMAKE_ARGS_END_RE = re.compile(r"&&|\|\||[;|)]")
+
+#: Where the command a `cmake` word belongs to begins: the last shell operator
+#: or subshell opener before it.  `&` covers PowerShell's call operator too.
+_COMMAND_START_RE = re.compile(r"&&|\|\||[;|&(`]")
+
+#: Words that may stand before a command without being the command.
+_SHELL_PREFIX_WORDS = frozenset(
+    {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "time", "exec"}
+    | {"command", "sudo", "env"}
+)
+
+#: `cmake` arguments that select a mode which does not configure a build tree.
+#: `-L` is deliberately absent: `cmake -L -B build` configures and then lists
+#: the cache; only `-N` makes it view-only.
+_CMAKE_NON_CONFIGURE_MODES = frozenset(
+    {"--build", "--install", "--workflow", "--open", "-E", "-P", "-N"}
+    | {"--version", "-version", "--help", "-help", "-h", "-H", "/?"}
+    | {"--system-information", "--find-package", "--list-presets"}
+)
+
+#: An argument only a configure takes.  Decides the one case where the `cmake`
+#: word is not in command position — a wrapper such as `scan-build ... cmake
+#: -B build` — while `apt-install.sh cmake clang` and `choco install cmake -y`
+#: carry none and stay package names.
+_CMAKE_CONFIGURE_ARG_RE = re.compile(
+    r"^(?:-[BSDGATCU]|--preset\b|--fresh$|--toolchain\b|--install-prefix\b|\.\.?(?:/|$)|/)"
+)
+
+
+def _is_cmake_configure(line: str) -> bool:
+    """Whether ``line`` runs a `cmake` that configures a build tree.
+
+    The previous test keyed on the shape of the FIRST argument (`-B`, `-S`,
+    `-D`, `.`, `..` or `/`), so `cmake -G Ninja -B build`, `cmake -A x64 -B
+    build`, `cmake --preset ci`, `cmake "${{ github.workspace }}" -B build`
+    and `cmake $SRC -B build` were never seen: neither counted nor checked for
+    a build type, though each builds exactly the unoptimized library this
+    check exists to stop.  The flag order must not decide whether a configure
+    is seen, so the test is now what a configure IS — cmake run in a mode that
+    configures:
+
+    * the `cmake` word is the command (nothing but environment assignments or
+      shell keywords before it in its command), or its arguments include one
+      only a configure takes (`-B`, `-S`, `-D`, `-G`, `-A`, `-T`, `-C`, `-U`,
+      `--preset`, `--fresh`, a source path) — the wrapped form;
+    * it has arguments, and none of them selects another mode
+      (:data:`_CMAKE_NON_CONFIGURE_MODES`).
+
+    `--preset` is held to the same rule as any configure: this check does not
+    read `CMakePresets.json`, so the build type must be stated on the command
+    line.
+    """
+    for match in _CMAKE_WORD_RE.finditer(line):
+        rest = line[match.end() :]
+        end = _CMAKE_ARGS_END_RE.search(rest)
+        args = [a.strip("\"'") for a in (rest[: end.start()] if end else rest).split()]
+        if not args or any(
+            arg in _CMAKE_NON_CONFIGURE_MODES or arg.startswith("--help-") for arg in args
+        ):
+            continue
+        before = line[: match.start()]
+        starts = [m.end() for m in _COMMAND_START_RE.finditer(before)]
+        leading = before[starts[-1] if starts else 0 :].split()
+        in_command_position = all(
+            word in _SHELL_PREFIX_WORDS or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", word)
+            for word in leading
+        )
+        if in_command_position or any(_CMAKE_CONFIGURE_ARG_RE.match(arg) for arg in args):
+            return True
+    return False
+
+
+#: An explicit optimization level inside a `-DCMAKE_C_FLAGS=...` (or CXX) value.
+_EXPLICIT_OPT_RE = re.compile(r"-O(?:[0-3]|s|z|fast|g)\b")
+
+
+def _cmake_configure_commands(run_text: str) -> list[str]:
+    """Every cmake configure command in a run block, line continuations joined.
+
+    A configure spread over ten backslash-continued lines is one command, and
+    every flag on those lines belongs to it.  Reading line by line would report
+    a missing build type on the first line of every multi-line configure in the
+    tree.
+
+    Continuations are joined BEFORE matching, the way :func:`_commands`
+    already does: the previous matcher only started buffering when the FIRST
+    physical line matched the configure pattern, so a configure written as
+    a bare ``cmake \\`` with every flag on continuation lines was never seen
+    at all — neither counted (deflating the non-vacuity floor's input) nor
+    checked for a build type, which is this gate's whole subject.  The flag
+    position in the source text must not decide whether the command is seen.
+    """
+    joined_text = run_text.replace("\\\n", " ")
+    commands: list[str] = []
+    for raw in joined_text.split("\n"):
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            continue
+        if _is_cmake_configure(stripped):
+            commands.append(stripped)
+    return commands
+
+
+def check_cmake_build_type(path: Path, document: Any, report: Report) -> None:
+    """Every cmake configure in a workflow must state its optimization level.
+
+    Why this exists
+    ---------------
+    ``CMakeLists.txt`` sets no default ``CMAKE_BUILD_TYPE``, and every
+    optimization flag this project adds lives in ``CMAKE_C_FLAGS_RELEASE`` /
+    ``_DEBUG``.  A configure that names no build type therefore compiles the
+    library with **no** ``-O`` flag at all — not "the default", not "-O2", but
+    unoptimized — and nothing in the log says so.
+
+    That is not a style matter.  ``dudect.yml`` built the AMA_TESTING_MODE
+    archive that way and ran all ten instruction-count constant-time targets
+    against it.  Those targets exist to catch a transformation the *optimizer*
+    performs (see ``src/c/internal/ama_ct_barrier.h``), so at ``-O0`` there was
+    nothing for them to find and every one reported PASS.  Rebuilt at ``-O3``,
+    ``--target ecdsa`` immediately measured a 9,424-instruction key-dependent
+    spread in the secp256k1 scalar arithmetic under clang 18: a live Montgomery
+    extra-reduction leak on the ECDSA signing path, which the gate had been
+    passing over for as long as it had built the library the way it did.
+
+    A job may legitimately want the unoptimized configuration — the strict
+    warning sweep builds it deliberately, because some diagnostics only appear
+    without the optimizer and some only with it.  What it may not do is leave
+    that unstated: ``-DCMAKE_BUILD_TYPE=None`` says "no configuration flags, on
+    purpose" in CMake's own vocabulary, and is accepted here.  An explicit
+    ``-O`` inside ``CMAKE_C_FLAGS`` (what the sanitizer jobs pass) is likewise
+    a statement of intent and is accepted.
+
+    So the rule is not "must be Release" — it is "must say".
+    """
+    for job_id, job in _iter_jobs(document):
+        for _, index, step in _iter_steps({"jobs": {job_id: job}}):
+            if not isinstance(step, dict):
+                continue
+            run_text = step.get("run") or ""
+            if not isinstance(run_text, str) or not run_text:
+                continue
+            for command in _cmake_configure_commands(run_text):
+                report.cmake_configures_checked += 1
+                if "CMAKE_BUILD_TYPE" in command:
+                    continue
+                if _EXPLICIT_OPT_RE.search(command):
+                    continue
+                report.findings.append(
+                    Finding(
+                        workflow=path.name,
+                        location=f"jobs.{job_id}.steps[{index}]",
+                        message=(
+                            "cmake configure names neither -DCMAKE_BUILD_TYPE nor an "
+                            "explicit -O in CMAKE_C_FLAGS, so it builds the library "
+                            "with no optimization flag at all: "
+                            + (command[:110] + "..." if len(command) > 110 else command)
+                        ),
+                        remedy=(
+                            "add -DCMAKE_BUILD_TYPE=Release (or Debug / "
+                            "RelWithDebInfo), or -DCMAKE_BUILD_TYPE=None if the "
+                            "unoptimized build is the point. CMakeLists.txt sets no "
+                            "default, so omitting it is not 'the usual build' — it is "
+                            "-O0, and it silently invalidated every instruction-count "
+                            "constant-time gate in dudect.yml."
+                        ),
+                    )
+                )
+
+
+#: Every operator GitHub Actions' expression grammar admits.
+#:
+#: The list is short and closed: logical `!`, `&&`, `||`; the comparisons
+#: `<`, `<=`, `>`, `>=`, `==`, `!=`; grouping; indexing; and the documented
+#: functions.  There is NO arithmetic.  `${{ matrix.sve_vq * 128 }}` is not a
+#: wrong value — it is a parse error, and a workflow file that does not parse
+#: never runs and never reports.
+#:
+#: That is exactly what happened to `.github/workflows/arm-qemu.yml`: the
+#: expression above made the whole file invalid, so the AArch64 cross-tests,
+#: the SVE2 lanes at VL=128 and VL=256, and the aggregating `ARM QEMU Gate`
+#: produced no check on any pull request. The gate did not fail — it never
+#: started, which looks identical to "not applicable to this change".
+#:
+#: Found by dispatching the workflow (GitHub answers `422 Invalid Argument -
+#: failed to parse workflow`), not by any check in this repository.  It is
+#: checked here now.
+#:
+#: The body of each ``${{ ... }}`` is found by :func:`_expression_bodies`, a
+#: scanner, not by a ``[^}]*`` regex: that pattern could not match a body with a
+#: ``}`` in it, so ``${{ format('{0}', x) * 2 }}`` was never extracted and never
+#: checked.
+
+#: Arithmetic operators, matched only where they can be an operator: between
+#: two operand-ish characters.  Written narrowly so ordinary content inside an
+#: expression — a `-` inside a quoted string, a `/` in a path literal, a `!` —
+#: does not produce a false positive.
+_ARITHMETIC_OPERATOR_RE = re.compile(r"[\w)\]]\s*[*/%+]\s*[\w(]")
+
+#: Subtraction, which the class above cannot hold: ``-`` is also part of an
+#: identifier (``needs.build-wheels.result``, ``matrix.python-version``), so
+#: ``a-b`` with nothing around the hyphen is one name, not an operator.  A
+#: ``-`` is subtraction when whitespace separates it from an operand on either
+#: side (``matrix.budget - 5``, ``a -5``, ``a- 5``) or when it follows a closing
+#: ``)`` or ``]`` (``fromJSON(x)-1``), where no identifier can continue.  A
+#: leading minus with no operand before it (``== -1``, ``(-1``) is a negative
+#: number literal, which the grammar does admit, and is not matched.
+_SUBTRACTION_OPERATOR_RE = re.compile(r"(?:[)\]]\s*|\w\s+)-\s*[\w(]|[\w)\]]\s*-\s+[\w(]")
+
+#: A single-quoted GitHub-expression string literal, `''` being the escape.
+_EXPRESSION_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+
+#: A lone `=`: not the second half of `==`, `!=`, `<=` or `>=`, and not the
+#: first half of `==`.  The grammar has no assignment and no single-`=`
+#: comparison, so this is a parse failure of the same kind as arithmetic.
+_ASSIGNMENT_OPERATOR_RE = re.compile(r"(?<![=!<>])=(?!=)")
+
+#: Keys whose value GitHub evaluates as an expression with no `${{ }}` around
+#: it.  `if: steps.x.outcome == 'failure'` is an expression as much as
+#: `${{ steps.x.outcome == 'failure' }}` is, and fails the file's parse the
+#: same way when malformed.
+_BARE_EXPRESSION_KEYS = frozenset({"if"})
+
+
+def _iter_expression_bodies(node: Any, trail: str = "") -> list[tuple[str, str]]:
+    """Every expression body in the document, with where it was found.
+
+    Two shapes.  The inside of each ``${{ ... }}`` wherever a string carries
+    one, and the whole value of an ``if:`` key, which GitHub evaluates as an
+    expression with no delimiters at all.  The bare form was invisible to the
+    first version of this check — it looked only for ``${{`` — so an
+    ``if: steps.x.outcome = 'failure'`` in a job passed the gate while it
+    would have made every job in the file silently produce no check.  Found
+    by planting that exact ``if:`` in a workflow and re-running the gate.
+    """
+    found: list[tuple[str, str]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{trail}.{key}" if trail else str(key)
+            if key in _BARE_EXPRESSION_KEYS and isinstance(value, str) and "${{" not in value:
+                found.append((here, value))
+                continue
+            found.extend(_iter_expression_bodies(value, here))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_iter_expression_bodies(value, f"{trail}[{index}]"))
+    elif isinstance(node, str) and "${{" in node:
+        for body in _expression_bodies(node):
+            found.append((trail or "<root>", body))
+    return found
+
+
+def _expression_bodies(text: str) -> list[str]:
+    """The inside of every ``${{ ... }}`` in ``text``.
+
+    An expression ends at the first ``}}`` that is NOT inside a single-quoted
+    string literal.  That is the rule GitHub's own reader applies
+    (actions/runner, ``src/Sdk/WorkflowParser/ObjectTemplating/
+    TemplateReader.cs``): a ``'`` toggles the literal state (the ``''`` escape
+    toggles it twice, so it needs no special case), and ``}}`` closes the
+    expression only outside a literal.  ``format('{0}', x)`` therefore stays
+    one body.  An expression with no closing ``}}`` is returned up to the end
+    of the string, so the operator checks still run over it.
+    """
+    bodies: list[str] = []
+    position = text.find("${{")
+    while position >= 0:
+        cursor = position + 3
+        in_literal = False
+        end = -1
+        while cursor < len(text):
+            character = text[cursor]
+            if character == "'":
+                in_literal = not in_literal
+            elif not in_literal and text.startswith("}}", cursor):
+                end = cursor
+                break
+            cursor += 1
+        if end < 0:
+            bodies.append(text[position + 3 :])
+            break
+        bodies.append(text[position + 3 : end])
+        position = text.find("${{", end + 2)
+    return bodies
+
+
+def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
+    """Reject expression forms GitHub's parser rejects.
+
+    Arithmetic, because that is the class that has actually shipped here, and
+    a lone ``=``, because a negative control showed the gate accepting one
+    (NC-29b).  Both are decidable without reimplementing the grammar.  YAML
+    parses the file fine — the operator is inside a string as far as YAML is
+    concerned — so this cannot be caught by loading the document, which is why
+    the existing YAML guard in :func:`sweep` did not see it.
+    """
+    for location, body in _iter_expression_bodies(document):
+        report.expressions_checked += 1
+        # Blank single-quoted string literals first.  GitHub expressions
+        # quote with `'` only, and their CONTENTS are data: `'refs/heads/main'`
+        # contains a `/` between two word characters and would otherwise read
+        # as a division.  Each literal becomes a same-length run of `_`, which
+        # keeps offsets indexing `body` and leaves the literal an OPERAND: a
+        # run of spaces made `'a' * 2` and `'a' - 1` invisible, because the
+        # operator then had no operand character before it.
+        scannable = _EXPRESSION_LITERAL_RE.sub(lambda m: "_" * len(m.group(0)), body)
+        operator = _ARITHMETIC_OPERATOR_RE.search(scannable) or _SUBTRACTION_OPERATOR_RE.search(
+            scannable
+        )
+        if operator is not None:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=location,
+                    message=(
+                        f"expression `${{{{{body}}}}}` uses the arithmetic operator "
+                        f"`{operator.group(0).strip()}`. GitHub Actions expressions have no "
+                        f"arithmetic; this makes the WHOLE FILE fail to parse, so every job "
+                        f"in it silently produces no check at all."
+                    ),
+                    remedy=(
+                        "carry the computed value in the matrix (matrix.include) or an env "
+                        "var instead of computing it in the expression."
+                    ),
+                )
+            )
+        if _ASSIGNMENT_OPERATOR_RE.search(scannable) is not None:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=location,
+                    message=(
+                        f"expression `${{{{{body}}}}}` uses a lone `=`. GitHub Actions "
+                        f"expressions compare with `==` and `!=` only; this makes the "
+                        f"WHOLE FILE fail to parse, so every job in it silently produces "
+                        f"no check at all."
+                    ),
+                    remedy="write `==` (or `!=`) for the comparison.",
+                )
+            )
+
+
+# --------------------------------------------------------------------------
+# pytest prerequisites.
+#
+# INVARIANT-39 made a failed POST raise instead of log, and tests/conftest.py
+# imports the package from ``pytest_configure`` to name the ``SecurityWarning``
+# category for pytest's ini ``filterwarnings``.  The consequence is that
+# `python -m pytest` in a job with no native library does not run and skip —
+# it exits 3 with INTERNALERROR before collecting anything.
+#
+# That is fail-closed behaviour working as designed; what is a defect is a job
+# that invokes pytest without providing what the package requires.  It has
+# happened twice on this branch: ci.yml's Security Checks job (fixed by adding
+# a build-and-bind pair) and corpus-provenance.yml's vector-provenance job,
+# whose preceding revision fixed `No module named pytest` and did not check
+# that the job could then run the test at all.  Both were only visible once CI
+# ran.  This check decides them on the pull request.
+# --------------------------------------------------------------------------
+
+#: Shell operators that end one command and begin another.  Splitting on these
+#: is what lets the check ask "is `pytest` the COMMAND here?" rather than "does
+#: the word appear?", so `pip install pytest` is not read as an invocation.
+_COMMAND_SEPARATOR_RE = re.compile(r"&&|\|\||[;|]")
+
+#: Interpreters that run a module with ``-m``.  ``py`` is the Windows launcher.
+_PYTHON_COMMANDS = frozenset({"python", "python3", "py", "python.exe", "python3.exe"})
+
+#: Environment variable that completes ``import ama_cryptography`` when POST
+#: fails, leaving the module in the ERROR state with every cryptographic
+#: operation refused.  This is the only escape that helps: ``AMA_BUILD_PIPELINE``
+#: deliberately does NOT, because it excuses only the stale-artefact stages
+#: (``integrity`` / a digest-refused ``native-backend``) and a job with no
+#: library at all fails ``native-backend`` for a reason no re-signing run
+#: repairs.  Encoding that difference here is the point: a gate that accepted
+#: either flag would pass a job the runner still cannot start.
+_POST_IMPORT_ESCAPE = "AMA_POST_DIAGNOSTIC_IMPORT"
+
+#: Truthy spellings ``ama_cryptography.__init__`` accepts for the escape.
+_ESCAPE_TRUE = frozenset({"1", "true", "yes", "on"})
+
+
+def _heredoc_stripped(run_text: str) -> str:
+    """``run_text`` with the BODY of every here-document removed.
+
+    A here-document is data handed to another interpreter, not commands for
+    this shell, so a Python payload containing the line ``pytest ...`` must not
+    be read as a pytest invocation — and a payload containing ``cmake --build``
+    in a string must not be read as a library build.  Only ``<<`` forms are
+    handled (``<<<`` is a here-string, which is one line and needs nothing).
+    """
+    lines = run_text.splitlines()
+    out: list[str] = []
+    terminator: Optional[str] = None
+    for line in lines:
+        if terminator is not None:
+            if line.strip() == terminator:
+                terminator = None
+            continue
+        out.append(line)
+        match = re.search(r"""<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?\s*$""", line)
+        if match and "<<<" not in line:
+            terminator = match.group(1)
+    return "\n".join(out)
+
+
+def _commands(run_text: str) -> Iterator[list[str]]:
+    """Yield the argv of every command in a ``run:`` block, leading
+    ``VAR=value`` assignments removed.
+
+    Line continuations are joined first so ``cmake --build`` split across two
+    lines is still one command.  Tokenizing with :mod:`shlex` (POSIX mode,
+    comments on) does the two things a regex sweep of the raw text cannot: it
+    removes ``#`` comments — so a step that merely *mentions* pytest in its
+    rationale is not read as running it — and it resolves quoting, so
+    ``pip install -e ".[dev,hsm]"`` tokenizes to the target ``.[dev,hsm]``.
+    A block shlex cannot tokenize (an unbalanced quote, PowerShell) falls back
+    to whitespace splitting rather than being skipped: a command this function
+    cannot read must not silently become a command that does not exist.
+    """
+    joined = _heredoc_stripped(run_text).replace("\\\n", " ")
+    for line in joined.splitlines():
+        for fragment in _COMMAND_SEPARATOR_RE.split(line):
+            fragment = fragment.strip()
+            if not fragment:
+                continue
+            try:
+                tokens = shlex.split(fragment, comments=True)
+            except ValueError:
+                tokens = [t for t in fragment.split() if not t.startswith("#")]
+            while tokens and "=" in tokens[0] and not tokens[0].startswith("-"):
+                # A leading NAME=value is an environment assignment, not the
+                # command; `AMA_CI_REQUIRE_BACKENDS=1 pytest tests/` runs pytest.
+                name = tokens[0].split("=", 1)[0]
+                if not name or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                    break
+                tokens = tokens[1:]
+            if tokens:
+                yield tokens
+
+
+def _basename(token: str) -> str:
+    """The final path component of ``token``, for either separator."""
+    return token.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _invokes_pytest(tokens: Sequence[str]) -> bool:
+    """Whether ``tokens`` is a pytest invocation.
+
+    Two forms: ``pytest ...`` as the command itself, and ``<python> -m pytest``.
+    Deliberately NOT a substring search — ``pip install pytest`` and
+    ``pip install "pytest==9.1.1"`` are how pytest gets *installed*, and reading
+    those as invocations would make the check fire on every job that has a test
+    dependency.
+    """
+    command = _basename(tokens[0])
+    if command == "pytest" or command == "pytest.exe":
+        return True
+    if command in _PYTHON_COMMANDS:
+        for index, argument in enumerate(tokens[1:-1], start=1):
+            if argument == "-m" and tokens[index + 1] == "pytest":
+                return True
+    return False
+
+
+def _builds_native_library(tokens: Sequence[str]) -> bool:
+    """Whether ``tokens`` produces a loadable ``libama_cryptography``.
+
+    The four routes this repository uses.  ``pip install .`` (with or without
+    ``-e``, with or without extras) runs ``setup.py``'s ``CMakeBuild``, which
+    both builds the library and copies it into the package directory — that is
+    why the test matrices need no separate cmake step.
+    """
+    command = _basename(tokens[0])
+    rest = tokens[1:]
+    if command in ("cmake", "cmake.exe") and "--build" in rest:
+        return True
+    if command in ("make", "gmake") and any(
+        target in rest for target in ("c", "build", "all", "install", "dev")
+    ):
+        return True
+    if command in _PYTHON_COMMANDS and "setup.py" in rest:
+        return any(token.startswith("build") for token in rest)
+    if command in ("pip", "pip3", "pip.exe") or (command in _PYTHON_COMMANDS and "pip" in rest[:2]):
+        if "install" not in rest:
+            return False
+        for token in rest:
+            if token.startswith("-"):
+                continue
+            stripped = token.rstrip("/")
+            if stripped == "." or stripped.startswith(".["):
+                return True
+            if stripped.endswith(".whl"):
+                return True
+    return False
+
+
+def _escape_is_set(*scopes: Any) -> bool:
+    """Whether ``AMA_POST_DIAGNOSTIC_IMPORT`` is truthy in any ``env:`` mapping.
+
+    Scopes are passed workflow-, job- then step-wide; any of them setting it is
+    enough, exactly as the runner composes them.  A value that is a ``${{ }}``
+    expression is NOT accepted: its value is decided on the runner, and a check
+    that guessed would report a job as covered that may not be.
+    """
+    for scope in scopes:
+        env = scope.get("env") if isinstance(scope, dict) else None
+        if not isinstance(env, dict):
+            continue
+        value = env.get(_POST_IMPORT_ESCAPE)
+        if value is None:
+            continue
+        if value is True:
+            return True
+        rendered = str(value).strip().lower()
+        if "${{" in rendered:
+            continue
+        if rendered in _ESCAPE_TRUE:
+            return True
+    return False
+
+
+def check_pytest_prerequisites(path: Path, document: Any, report: Report) -> None:
+    """Every pytest invocation must be able to start.
+
+    Walks each job's steps in order, remembering whether anything so far builds
+    the native library, and requires each pytest-invoking step to have either
+    that or the diagnostic-import escape.
+
+    Stated limitation, because a checker that hides one is worth less than the
+    check: a build step carrying an ``if:`` counts as satisfying the
+    requirement even though the runner may skip it.  Both test matrices split
+    their build across ``if: runner.os == 'Linux'`` / ``'Windows'`` pairs that
+    together cover every entry, and resolving that would mean evaluating
+    expressions against a matrix this checker only partially expands.  The
+    conservative direction was chosen deliberately: the defect this catches is
+    a job with NO build step at all, which is what both real occurrences were.
+    """
+    for job_id, job in _iter_jobs(document):
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            continue
+        library_built_by: Optional[str] = None
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            run_text = step.get("run")
+            if not isinstance(run_text, str):
+                continue
+            name = str(step.get("name") or f"steps[{index}]")
+            for tokens in _commands(run_text):
+                if library_built_by is None and _builds_native_library(tokens):
+                    library_built_by = name
+                if not _invokes_pytest(tokens):
+                    continue
+                report.pytest_steps_checked += 1
+                if library_built_by is not None:
+                    continue
+                if _escape_is_set(document, job, step):
+                    continue
+                report.findings.append(
+                    Finding(
+                        workflow=path.name,
+                        location=f"jobs.{job_id}.steps[{index}] ({name})",
+                        message=(
+                            f"`{' '.join(tokens[:4])} ...` runs pytest in a job that never "
+                            f"builds the native library. tests/conftest.py imports "
+                            f"ama_cryptography from pytest_configure, and since 5.0.0 a failed "
+                            f"POST raises, so this step exits 3 with INTERNALERROR before "
+                            f"collecting a single test — it does not skip, it does not run."
+                        ),
+                        remedy=(
+                            "either build the library earlier in the job "
+                            "(`cmake --build`, or `pip install -e .`) and bind it with "
+                            "`AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
+                            "--update --sign`, or, when the step runs no cryptography, "
+                            f'give the step an env entry `{_POST_IMPORT_ESCAPE}: "1"` '
+                            "— the import then completes with the module in the ERROR "
+                            "state and every cryptographic operation still refused."
+                        ),
+                    )
+                )
+
+
+#: A step ``if:`` that consults ``steps.<id>.outputs.<name>`` — a value the job
+#: computes on the runner during its own run.  ``steps.<id>.outcome`` /
+#: ``.conclusion`` are deliberately NOT matched: a step gated on a PRIOR step's
+#: result is a diagnostic or cleanup handler, which cannot manufacture a vacuous
+#: success.  A step gated on a self-computed OUTPUT is the shape that can.
+_SELF_PROBE_IF_RE = re.compile(r"steps\.[A-Za-z0-9_\-]+\.outputs\.")
+
+
+def _normalize_needs(raw: Any) -> list[str]:
+    """A job's ``needs:`` as a list, whether written as a scalar or a sequence."""
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return [str(item) for item in raw if isinstance(item, (str, int))]
+    return []
+
+
+def _gate_required_jobs(document: Any) -> set[str]:
+    """Job ids depended on by an aggregating ``*-gate`` job in this workflow.
+
+    ``needs:`` is workflow-local in GitHub Actions, so resolution stays within
+    one parsed document.  A gate is identified by the ``-gate`` id suffix, the
+    convention every aggregating status check in this repository already uses
+    (ci-gate, arm-qemu-gate, security-gate, static-analysis-gate, ...).
+    """
+    required: set[str] = set()
+    for job_id, job in _iter_jobs(document):
+        if job_id.endswith("-gate"):
+            required.update(_normalize_needs(job.get("needs")))
+    return required
+
+
+def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report) -> None:
+    """A gated job must not be able to report success without doing its work (H2).
+
+    The ``AVX-512 SHA3 4-way KAT`` job sat in ``ci-gate``'s ``needs:`` with no
+    job-level ``if:`` and every build/test step behind
+    ``if: steps.cpu.outputs.have_avx512 == '1'``.  ubuntu-latest rarely exposes
+    AVX-512, so on almost every run those steps skipped, the job reported
+    ``success`` (a job with no job-level ``if:`` whose steps all skip is not
+    itself ``skipped``), and the gate counted it green — a required check that
+    had never executed.
+
+    A job-level ``if:`` is the honest form of "run only sometimes", because a
+    false one makes the job ``skipped`` and every ``*-gate`` here that has
+    dependencies evaluates a skip.  It does so in one of two ways, and the
+    difference matters: the wildcard gates (a step on
+    ``contains(needs.*.result, 'skipped')`` that exits 1) fail on ANY skipped
+    need, while ``dudect-gate``, ``static-analysis-gate``, ``arm-qemu-gate``
+    and ``corpus-provenance-gate`` re-derive each dependency's trigger
+    condition and fail on a skip that condition does not expect — accepting
+    exactly the skips their schedule- and dispatch-only lanes, or a pull
+    request their ``changes`` job found irrelevant, produce by design, and
+    failing a lane that ran when it should have skipped.  This docstring used to say every gate "already fails on a
+    ``skipped`` need"; those two do not, deliberately, and
+    ``tests/test_workflow_command_checks.py`` pins which gates are which.
+    Either way the skip is seen and judged; it is never counted as work done.
+
+    A self-probe on ``steps.*.outputs.*`` gating a step *inside* an otherwise
+    unconditional job is different: the job reports ``success``, which neither
+    kind of gate can tell from real work.  That is the form that manufactures a
+    vacuous pass, so it is what this check forbids for any job a gate depends
+    on.  The fix is to run the work unconditionally — under emulation when the
+    runner lacks the hardware, as test-avx512 now runs the kernel under Intel
+    SDE and arm-qemu.yml runs the AArch64 kernels under QEMU.
+    """
+    required = _gate_required_jobs(document)
+    if not required:
+        return
+    jobs = dict(_iter_jobs(document))
+    for job_id in sorted(required):
+        job = jobs.get(job_id)
+        if job is None:
+            continue
+        report.gate_required_jobs_checked += 1
+        if "if" in job:
+            # Job-level condition: when it is false the whole job is `skipped`,
+            # and the gate sees that — the wildcard gates fail it outright,
+            # the re-deriving gates fail it unless their re-derived trigger
+            # expects the skip (see the docstring).
+            continue
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            condition = step.get("if")
+            if not isinstance(condition, str) or not _SELF_PROBE_IF_RE.search(condition):
+                continue
+            name = str(step.get("name") or f"steps[{index}]")
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=f"jobs.{job_id}.steps[{index}] ({name})",
+                    message=(
+                        f"job `{job_id}` is required by a `*-gate` but carries no "
+                        f"job-level `if:`, and this step is gated on a self-probe "
+                        f"(`{condition.strip()}`).  When the probe is false the step "
+                        f"skips while the job still reports `success`, so the gate counts "
+                        f"work that never ran as a pass — the way the AVX-512 KAT lane "
+                        f"became a required check that had never executed (audit H2)."
+                    ),
+                    remedy=(
+                        "make the whole job conditional with a job-level `if:` (the "
+                        "gate then sees a `skipped` result and judges it, where it "
+                        "cannot judge a vacuous `success`), or run the work "
+                        "unconditionally — under emulation when the runner lacks the "
+                        "hardware (test-avx512 runs the kernel under Intel SDE; "
+                        "arm-qemu.yml runs the AArch64 kernels under QEMU)."
+                    ),
+                )
+            )
+
+
+#: A status-check function call in a job-level ``if:``.
+_STATUS_FUNCTION_RE = re.compile(r"\b(success|failure|always|cancelled)\s*\(")
+
+
+def _needs_result_referenced(condition: str, job_id: str) -> bool:
+    """Whether ``condition`` tests ``needs.<job_id>.result`` in either syntax."""
+    ident = re.escape(job_id)
+    return bool(
+        re.search(
+            rf"needs\s*(?:\.\s*{ident}|\[\s*['\"]{ident}['\"]\s*\])\s*\.\s*result\b",
+            condition,
+        )
+    )
+
+
+def check_skip_propagation(path: Path, document: Any, report: Report) -> None:
+    """A job below a conditional job must not inherit its skip implicitly.
+
+    A job-level ``if:`` that calls no status function is evaluated as
+    ``success() && <condition>``, and ``success()`` there is false when ANY
+    job in the transitive ``needs:`` chain was skipped — not only the direct
+    ones (actions/runner#2205, community discussion 45058).  So below a job
+    that is skipped by design, every job relying on the implicit check is
+    skipped too, the jobs after it follow, and the run reports success with
+    the work never done.  An explicit ``success()`` has the same semantics and
+    the same effect.
+
+    ``release.yml`` shipped exactly that: ``verify-anchor`` is skipped on the
+    supported unanchored path and ``build-wheels`` proceeds past it with
+    ``!cancelled()``, but ``hash-artefacts``, ``sign``, ``provenance`` and
+    ``publish-pypi`` carried the implicit check, so on that path the release
+    signed, attested and published nothing — in a green run.
+
+    Two findings:
+
+    * a job with a conditional ancestor whose ``if:`` calls no status function
+      other than ``success()`` — the skip propagates into it;
+    * a job with a conditional ancestor that uses ``!cancelled()`` (the fix
+      for the first) but does not test every job in its own ``needs:`` by
+      ``needs.<id>.result`` — ``!cancelled()`` drops the implicit failure
+      check too, so an untested dependency can fail and the job still runs.
+
+    Jobs using ``always()`` or ``failure()`` state their intent to run past a
+    failure; aggregating gates are held to their own contract by
+    ``tools/check_gate_coverage.py``.
+    """
+    jobs = dict(_iter_jobs(document))
+    conditional = {job_id for job_id, job in jobs.items() if "if" in job}
+    if not conditional:
+        return
+
+    def ancestors(job_id: str) -> set[str]:
+        seen: set[str] = set()
+        stack = list(_normalize_needs(jobs[job_id].get("needs")))
+        while stack:
+            current = stack.pop()
+            if current in seen or current not in jobs:
+                continue
+            seen.add(current)
+            stack.extend(_normalize_needs(jobs[current].get("needs")))
+        return seen
+
+    for job_id, job in jobs.items():
+        skippable = sorted(ancestors(job_id) & conditional)
+        if not skippable:
+            continue
+        report.skip_chains_checked += 1
+        condition = str(job.get("if", ""))
+        functions = set(_STATUS_FUNCTION_RE.findall(condition))
+        named = ", ".join(f"`{a}`" for a in skippable)
+        if functions <= {"success"}:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=f"jobs.{job_id}",
+                    message=(
+                        f"job `{job_id}` relies on the implicit `success()`, which is "
+                        f"false when any job in its transitive `needs:` was skipped; "
+                        f"{named} can be skipped by its own `if:`, and then "
+                        f"`{job_id}` and everything after it are skipped while the "
+                        f"run reports success."
+                    ),
+                    remedy=(
+                        "start the job's `if:` with `!cancelled()` and test each job "
+                        "in its `needs:` by name — `needs['<id>'].result == "
+                        "'success'`, or `!= 'failure'` where a skip is acceptable."
+                    ),
+                )
+            )
+            continue
+        if "cancelled" not in functions or functions & {"always", "failure"}:
+            continue
+        untested = [
+            need
+            for need in _normalize_needs(job.get("needs"))
+            if not _needs_result_referenced(condition, need)
+        ]
+        if untested:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=f"jobs.{job_id}",
+                    message=(
+                        f"job `{job_id}` replaces the implicit `success()` with "
+                        f"`!cancelled()` but never tests "
+                        f"{', '.join(f'`{n}`' for n in untested)}; `!cancelled()` "
+                        f"also drops the failure check, so the job runs after that "
+                        f"dependency fails."
+                    ),
+                    remedy=(
+                        "test every job in `needs:` by name in the `if:` — "
+                        "`needs['<id>'].result == 'success'` (or `!= 'failure'`)."
+                    ),
+                )
+            )
+
+
+def check_job_timeouts(path: Path, document: Any, report: Report) -> None:
+    """Every job that runs on a runner declares ``timeout-minutes``.
+
+    GitHub's default is 360 minutes.  A job without its own bound that hangs —
+    a network fetch that never completes, a push waiting on a lock — holds its
+    runner, and the token it was granted, for six hours.  ``auto-docs.yml`` and
+    ``wiki-sync.yml`` were the two jobs in the tree without one, and both hold
+    ``contents: write``.
+
+    A job that calls a reusable workflow (``uses:``) cannot carry
+    ``timeout-minutes``; the called workflow's own jobs are checked where they
+    are defined when that workflow is in this directory.
+    """
+    for job_id, job in _iter_jobs(document):
+        if "uses" in job:
+            continue
+        report.job_timeouts_checked += 1
+        value = job.get("timeout-minutes")
+        if value is None:
+            problem = "declares no `timeout-minutes`"
+        elif isinstance(value, bool) or not (
+            (isinstance(value, (int, float)) and value > 0)
+            or (isinstance(value, str) and value.strip().startswith("${{"))
+        ):
+            problem = f"declares `timeout-minutes: {value!r}`, which is not a positive bound"
+        else:
+            continue
+        report.findings.append(
+            Finding(
+                workflow=path.name,
+                location=f"jobs.{job_id}",
+                message=(
+                    f"job `{job_id}` {problem}; GitHub's default is 360 minutes, "
+                    f"so a hung step holds the runner and the job's token for six "
+                    f"hours."
+                ),
+                remedy=(
+                    "set `timeout-minutes` from the job's measured run time with "
+                    "headroom, and say where the figure came from."
+                ),
+            )
+        )
+
+
+#: Non-vacuity floor (H7): the repository ships 14 workflow files.  Pinned so a
+#: deleted or wrong-path workflow set cannot leave the sweep reporting PASS over
+#: nothing -- the same zero-input vacuity the aggregating-gate audit carried.
+MIN_WORKFLOWS = 14
+
+
 def sweep(workflows_dir: Path) -> Report:
     """Run every check across every workflow file."""
     report = Report()
@@ -783,6 +1707,32 @@ def sweep(workflows_dir: Path) -> Report:
         check_shell_parseable(path, document, report)
         check_release_publishing(path, document, report)
         check_cmake_gated_binaries(path, document, report)
+        check_cmake_build_type(path, document, report)
+        check_expression_syntax(path, document, report)
+        check_pytest_prerequisites(path, document, report)
+        check_gate_jobs_run_their_payload(path, document, report)
+        check_skip_propagation(path, document, report)
+        check_job_timeouts(path, document, report)
+
+    # Non-vacuity floor (H7): an empty (or near-empty) workflow directory left
+    # this sweep with no findings and reporting PASS -- the same zero-input
+    # vacuity check_gate_coverage.py carried.  Pin the file count so a deleted or
+    # wrong-path workflow set fails here rather than passing silently.
+    if len(paths) < MIN_WORKFLOWS:
+        report.findings.append(
+            Finding(
+                workflow="<sweep>",
+                location=str(workflows_dir),
+                message=(
+                    f"only {len(paths)} workflow file(s) found (floor {MIN_WORKFLOWS}); "
+                    "the command sweep has nothing, or almost nothing, to check"
+                ),
+                remedy=(
+                    "a workflow set this small is almost certainly a wrong path or a "
+                    "deletion; if intentional, lower MIN_WORKFLOWS under review."
+                ),
+            )
+        )
     return report
 
 
@@ -805,7 +1755,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"{report.payloads_checked} inline python payload(s), "
         f"{report.windows_commands_checked} Windows command string(s), "
         f"{report.release_steps_checked} release-publishing step(s), "
-        f"{report.gated_binaries_checked} CMake-gated binary invocation(s)."
+        f"{report.gated_binaries_checked} CMake-gated binary invocation(s), "
+        f"{report.cmake_configures_checked} cmake configure(s), "
+        f"{report.expressions_checked} expression(s) (`${{{{ }}}}` and bare `if:`), "
+        f"{report.pytest_steps_checked} pytest invocation(s), "
+        f"{report.gate_required_jobs_checked} gate-required job(s), "
+        f"{report.skip_chains_checked} job(s) below a conditional job, "
+        f"{report.job_timeouts_checked} job timeout(s)."
     )
     if report.labels_unresolved:
         # Reported, never counted as verified.  Silence here would read as

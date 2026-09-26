@@ -109,47 +109,56 @@ void ama_nistp_mont_mul4_mulx(uint64_t r[4], const uint64_t a[4],
  * ADCX/ADOX *source*, so the three closing instructions fold the two
  * chains' carry-outs into the top limbs without needing another zero
  * register.
+ *
+ * No literal carries padding before its `\n\t`.  The four expansions
+ * below concatenate into ONE string literal, and C11 5.2.4.1 guarantees
+ * only 4095 characters of it: column-aligned with trailing spaces it
+ * was 4266, which clang -Wpedantic reports as -Woverlength-strings and
+ * -Werror makes fatal.  Unpadded it is 3142, and the assembler ignores
+ * the whitespace that was removed (the object code is byte-identical).
+ * Splitting the block into several asm statements instead would forfeit
+ * the register-state guarantees the rotation below depends on.
  */
 #define AMA_NISTP_MM4_ITER(B_OFF, L0, L1, L2, L3, L4, L5)                   \
     /* t += a * b[B_OFF] */                                                 \
-    "xorl  %%eax, %%eax              \n\t"                                  \
-    "movq  " #B_OFF "(%[b]), %%rdx   \n\t"                                  \
-    "mulx  (%[a]),   %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L0 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L1 "]         \n\t"                                  \
-    "mulx  8(%[a]),  %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L1 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L2 "]         \n\t"                                  \
-    "mulx  16(%[a]), %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L2 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L3 "]         \n\t"                                  \
-    "mulx  24(%[a]), %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L3 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L4 "]         \n\t"                                  \
-    "adcx  %%rax, %[" #L4 "]         \n\t"                                  \
-    "adox  %%rax, %[" #L5 "]         \n\t"                                  \
-    "adcx  %%rax, %[" #L5 "]         \n\t"                                  \
+    "xorl  %%eax, %%eax\n\t"                                                \
+    "movq  " #B_OFF "(%[b]), %%rdx\n\t"                                     \
+    "mulx  (%[a]),   %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L0 "]\n\t"                                           \
+    "adox  %[hi], %[" #L1 "]\n\t"                                           \
+    "mulx  8(%[a]),  %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L1 "]\n\t"                                           \
+    "adox  %[hi], %[" #L2 "]\n\t"                                           \
+    "mulx  16(%[a]), %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L2 "]\n\t"                                           \
+    "adox  %[hi], %[" #L3 "]\n\t"                                           \
+    "mulx  24(%[a]), %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L3 "]\n\t"                                           \
+    "adox  %[hi], %[" #L4 "]\n\t"                                           \
+    "adcx  %%rax, %[" #L4 "]\n\t"                                           \
+    "adox  %%rax, %[" #L5 "]\n\t"                                           \
+    "adcx  %%rax, %[" #L5 "]\n\t"                                           \
     /* mu = t[0] * m0inv (low half only); t += mu * m.  The low limb of  */ \
     /* the sum is zero by the choice of mu, which is what lets the next  */ \
     /* iteration reuse that register as its fresh top limb.              */ \
-    "movq  %[" #L0 "], %%rdx         \n\t"                                  \
-    "imulq %[m0inv], %%rdx           \n\t"                                  \
-    "xorl  %%eax, %%eax              \n\t"                                  \
-    "mulx  (%[m]),   %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L0 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L1 "]         \n\t"                                  \
-    "mulx  8(%[m]),  %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L1 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L2 "]         \n\t"                                  \
-    "mulx  16(%[m]), %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L2 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L3 "]         \n\t"                                  \
-    "mulx  24(%[m]), %[lo], %[hi]    \n\t"                                  \
-    "adcx  %[lo], %[" #L3 "]         \n\t"                                  \
-    "adox  %[hi], %[" #L4 "]         \n\t"                                  \
-    "adcx  %%rax, %[" #L4 "]         \n\t"                                  \
-    "adox  %%rax, %[" #L5 "]         \n\t"                                  \
-    "adcx  %%rax, %[" #L5 "]         \n\t"
+    "movq  %[" #L0 "], %%rdx\n\t"                                           \
+    "imulq %[m0inv], %%rdx\n\t"                                             \
+    "xorl  %%eax, %%eax\n\t"                                                \
+    "mulx  (%[m]),   %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L0 "]\n\t"                                           \
+    "adox  %[hi], %[" #L1 "]\n\t"                                           \
+    "mulx  8(%[m]),  %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L1 "]\n\t"                                           \
+    "adox  %[hi], %[" #L2 "]\n\t"                                           \
+    "mulx  16(%[m]), %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L2 "]\n\t"                                           \
+    "adox  %[hi], %[" #L3 "]\n\t"                                           \
+    "mulx  24(%[m]), %[lo], %[hi]\n\t"                                      \
+    "adcx  %[lo], %[" #L3 "]\n\t"                                           \
+    "adox  %[hi], %[" #L4 "]\n\t"                                           \
+    "adcx  %%rax, %[" #L4 "]\n\t"                                           \
+    "adox  %%rax, %[" #L5 "]\n\t"                                           \
+    "adcx  %%rax, %[" #L5 "]\n\t"
 
 void ama_nistp_mont_mul4_mulx(uint64_t r[4], const uint64_t a[4],
                               const uint64_t b[4], const uint64_t m[4],

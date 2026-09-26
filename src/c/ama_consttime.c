@@ -11,6 +11,9 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "internal/ama_testing_exports.h"
+#include "internal/ama_stack_wipe.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 #ifdef _MSC_VER
@@ -53,17 +56,124 @@ int ama_consttime_memcmp(const void* a, const void* b, size_t len) {
 /**
  * Secure memory zeroing
  *
- * Scrubs memory to zero in a way that cannot be optimized away by the compiler.
- * Uses volatile pointer to prevent optimization.
+ * Scrubs memory to zero in a way that cannot be optimized away by the compiler:
+ * every store goes through a volatile pointer, and a compiler barrier follows.
+ *
+ * Whole 64-bit words are stored when the buffer is 8-byte aligned, which every
+ * caller's field element, hash state and key buffer is, then the byte tail.
+ * The previous byte-at-a-time loop was correct but cost three instructions per
+ * byte, and the callers scrub a lot: one SHA-512 compression scrubs its
+ * 640-byte message schedule, so the loop was 40% of every hashed block and a
+ * tenth of an Ed25519 signature.  A memset-plus-barrier rendering was measured
+ * too and rejected: the X25519 ladder's dozen small scrubs became library
+ * calls and its exchange slowed by 2-3%, while the word loop stays inline.
  *
  * @param ptr Memory to zero
  * @param len Number of bytes to zero
  */
+/**
+ * @brief Zero the stack the last call left behind (INVARIANT-6, dead frames).
+ *
+ * `ama_secure_memzero` scrubs the buffers a function NAMES.  It cannot reach
+ * the copies an optimizing compiler makes of them.  Measured on the shipped
+ * build (gcc 13 -O3, LTO): the AES-GCM AES-NI and VAES kernels expand the key
+ * into a local `rk[15]`, scrub that array at exit as the source says — and
+ * gcc has already hoisted the loop-invariant round keys into separate stack
+ * slots that the AES rounds use as memory operands (`aesenc 0x10(%rsp)` …)
+ * and that nothing scrubs.  A residue probe found all fifteen round keys
+ * after every encrypt and decrypt, `rk[0]` and `rk[1]` among them — and for
+ * AES-256 those two ARE the raw 32-byte key.  ChaCha20-Poly1305 left its key
+ * likewise (that one was also a missing scrub, fixed at source).
+ *
+ * The compiler's copies have no names, so the only way to reach them is by
+ * address: this function extends the stack over the region a just-returned
+ * callee used and zeroes it.  Called from a public entry point right after
+ * the primitive returns, its frame lands exactly where the primitive's frame
+ * was.
+ *
+ * `AMA_STACK_WIPE_BYTES` (4096) comfortably covers the deepest AEAD kernel
+ * frame measured here (0x680 = 1664 bytes); the residue probe found nothing
+ * below 2,167 bytes of the caller's own anchor.  `memset` plus a compiler
+ * barrier is deliberate and measured: the barrier makes the write observable
+ * so it cannot be elided, while `memset` keeps the fast wide-store path — the
+ * volatile-word loop `ama_secure_memzero` uses cost 90-127 ns per call here
+ * against 29 ns for this form, which on a 16-byte AEAD call is the difference
+ * between +50% and +17%; at 1 KiB and above it is not measurable.
+ *
+ * WHAT MAKES THE WRITE NON-ELIDABLE, per toolchain.  `frame` is a local whose
+ * address would otherwise never leave this function, and a store to an object
+ * nobody can read again is exactly what dead-store elimination removes.
+ *   - GCC / Clang: the empty asm takes `frame`'s address as an input operand
+ *     and clobbers memory, so the compiler must assume the asm reads the
+ *     array: the address escapes and the memset is live.
+ *   - MSVC (x64 and ARM64 have no inline asm): until 2026-09-24 this branch
+ *     was `memset` followed by `_ReadWriteBarrier()`.  That intrinsic orders
+ *     memory accesses across the point of the call; it does not make the
+ *     array's address escape, so nothing in it obliges the optimiser to keep
+ *     a store to an array no one can read.  (clang in MSVC mode happens to
+ *     keep it; cl.exe's behaviour is not documented and could not be measured
+ *     here.)  The write now goes through a `volatile` pointer to `memset`:
+ *     reading a volatile object is an observable side effect whose value the
+ *     compiler cannot know, so it cannot know which function it is calling,
+ *     and an unknown callee handed `frame`'s address may read it.  This is
+ *     the construction OpenSSL's OPENSSL_cleanse uses for the same reason,
+ *     and it keeps `memset`'s wide-store path.
+ *
+ * This is a backstop, not a substitute for scrubbing named buffers.
+ */
+#ifdef _MSC_VER
+static void *(*const volatile ama_stack_wipe_memset)(void *, int, size_t) = memset;
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#elif defined(_MSC_VER)
+__declspec(noinline)
+#endif
+void ama_stack_wipe_below(size_t bytes) {
+    /* The frame is always the maximum depth; only the `bytes` nearest the
+     * caller are written, so the public 4 KiB wipe costs what it always did.
+     * The array's high end is adjacent to the caller's frame on every stack
+     * that grows downward, which is every target this library builds for. */
+    unsigned char frame[AMA_STACK_WIPE_MAX_BYTES];
+    if (bytes > sizeof frame) {
+        bytes = sizeof frame;
+    }
+#ifdef _MSC_VER
+    /* Opaque callee (see above): the call and the frame it is handed are
+     * both live by construction. */
+    ama_stack_wipe_memset(frame + (sizeof frame - bytes), 0, bytes);
+#else
+    memset(frame + (sizeof frame - bytes), 0, bytes);  // SCRUB-BARRIER: frame — dead stack, possibly secret; the barrier below makes the write non-elidable, and memset keeps the wide-store path (29 ns here against 90-127 ns for the volatile word loop)
+    /* Make the write observable so it survives dead-store elimination, and
+     * keep the array's address escaping so the frame is really allocated. */
+    __asm__ __volatile__("" : : "r"(frame) : "memory");
+#endif
+}
+
+AMA_API void ama_secure_stack_wipe(void) {
+    ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
+}
+
 void ama_secure_memzero(void* ptr, size_t len) {
     volatile uint8_t* vptr = (volatile uint8_t*)ptr;
-    size_t i;
+    size_t i = 0;
 
-    for (i = 0; i < len; i++) {
+    if (((uintptr_t)ptr & 7u) == 0) {
+        /* Type-puns the aligned buffer as volatile 64-bit words to scrub eight
+         * bytes per store.  Formally a strict-aliasing deviation, but benign:
+         * the stores are volatile (never elided or reordered away) and the
+         * object is dead after this call.  The branch is on the public pointer
+         * alignment and length only. */
+        volatile uint64_t* vwords = (volatile uint64_t*)ptr;
+        size_t words = len / 8;
+        size_t w;
+        for (w = 0; w < words; w++) {
+            vwords[w] = 0;
+        }
+        i = words * 8;
+    }
+    for (; i < len; i++) {
         vptr[i] = 0;
     }
 
@@ -81,6 +191,17 @@ void ama_secure_memzero(void* ptr, size_t len) {
  * Swaps two buffers if condition is non-zero, in constant time.
  * Uses XOR swap to avoid branching.
  *
+ * The mask goes through ama_ct_value_barrier_u64 (internal/ama_ct_barrier.h
+ * lists "conditional swap" among the shapes it exists for).  Without it,
+ * measured on 2026-09-24, clang 18.1.3 at -O3 proved the mask is 0x00 or 0xFF
+ * and unswitched the loop: `test %edi,%edi; je` on `condition` at entry, then
+ * two copies of the loop.  The only shipped caller is the Montgomery ladder of
+ * ama_secp256k1_point_mul, where `condition` is a bit of the secret scalar,
+ * and the Memcheck secret-taint gate (tools/check_ghash_constant_time.py
+ * --target secp256k1-scalarmult --taint) failed on a clang build with 16
+ * reports in this function.  gcc 13.3.0 does not unswitch it, which is why
+ * the gcc-built CI lane never saw it.
+ *
  * @param condition Swap if non-zero (constant time in condition value)
  * @param a First buffer
  * @param b Second buffer
@@ -93,8 +214,8 @@ void ama_consttime_swap(int condition, void* a, void* b, size_t len) {
     uint8_t mask;
     uint8_t tmp;
 
-    /* Convert condition to mask: 0x00 or 0xFF */
-    mask = (uint8_t)(-(int8_t)(condition != 0));
+    /* Convert condition to mask: 0x00 or 0xFF, opaquely (see above). */
+    mask = (uint8_t)ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)(condition != 0));
 
     /* XOR-based conditional swap */
     for (i = 0; i < len; i++) {
@@ -195,3 +316,27 @@ void ama_consttime_copy(int condition, void* dst, const void* src, size_t len) {
         vdst[i] = (vdst[i] & ~mask) | (vsrc[i] & mask);
     }
 }
+
+#ifdef AMA_TESTING_MODE
+/**
+ * Whether THIS translation unit — and therefore the library it is part of —
+ * was compiled with optimization enabled.
+ *
+ * See internal/ama_testing_exports.h for why this exists and what the return
+ * values mean.  It is deliberately in ama_consttime.c: the caller is the
+ * constant-time instruction-count gate, and this file is the one every such
+ * build must contain.
+ */
+int ama_build_optimization_probe(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    /* Defined by gcc and clang at -O1 and above; absent at -O0. */
+#  if defined(__OPTIMIZE__)
+    return 1;
+#  else
+    return 0;
+#  endif
+#else
+    return -1;
+#endif
+}
+#endif /* AMA_TESTING_MODE */

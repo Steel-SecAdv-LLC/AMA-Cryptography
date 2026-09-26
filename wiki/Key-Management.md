@@ -8,7 +8,7 @@ Comprehensive documentation for the AMA Cryptography key management system, incl
 
 The key management system provides enterprise-grade capabilities:
 
-- **HD Key Derivation** — BIP32-compatible hierarchical deterministic keys
+- **HD Key Derivation** — BIP32-style hierarchical deterministic keys (AMA-specific root; not interoperable with BIP32 wallets)
 - **Key Lifecycle** — Active → Rotating → Deprecated → Revoked → Compromised
 - **Zero-Downtime Rotation** — Seamless key rotation with versioned metadata
 - **Secure Storage** — Encrypted key storage at rest
@@ -20,6 +20,7 @@ The key management system provides enterprise-grade capabilities:
 
 ### `KeyStatus` Enum
 
+<!-- example: python-names module=ama_cryptography.key_management -->
 ```python
 from ama_cryptography.key_management import KeyStatus
 
@@ -33,21 +34,33 @@ class KeyStatus(Enum):
 
 ### `KeyMetadata`
 
+<!-- example: python-run -->
 ```python
-from ama_cryptography.key_management import KeyMetadata
+from datetime import datetime, timedelta, timezone
 
-# Metadata attached to every managed key
+from ama_cryptography.key_management import KeyMetadata, KeyStatus
+
+# Metadata attached to every managed key. Every field is REQUIRED — the
+# dataclass declares no defaults (key_management.py::KeyMetadata), so
+# `KeyMetadata(...)` without all eleven raises TypeError.
 meta = KeyMetadata(
     key_id="kid-abc123",
     created_at=datetime.now(timezone.utc),
     expires_at=datetime.now(timezone.utc) + timedelta(days=365),
     status=KeyStatus.ACTIVE,
     version=1,
+    parent_id=None,
+    derivation_path="m/44'/0'/0'/0'",
     usage_count=0,
     max_usage=10000,
-    derivation_path="m/44'/0'/0'/0'",
+    purpose="document-signatures",
+    metadata={},
 )
+print(meta.key_id, meta.status)
 ```
+
+In practice you rarely construct one by hand: `KeyRotationManager.register_key()`
+builds and returns it with every field populated.
 
 ### `KeyRotationManager`
 
@@ -56,6 +69,7 @@ hold key material itself — that stays with the application (or an HSM,
 or `SecureKeyStorage` below); the manager tracks metadata (status,
 version, expiry, usage counts) and exposes rotation hooks.
 
+<!-- example: python-run -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager
@@ -75,7 +89,7 @@ should_rotate = mgr.should_rotate("signing-key-v1")     # bool
 active_id     = mgr.get_active_key()                    # Optional[str]
 
 # Rotation lifecycle: old key -> ROTATING -> DEPRECATED.
-# IMPORTANT (key_management.py:435): initiate_rotation() raises
+# IMPORTANT (KeyRotationManager.initiate_rotation): initiate_rotation() raises
 # ValueError("Key not found") if either key_id is missing from the
 # manager. Register the replacement key first — the manager tracks
 # metadata only, so you still provision the actual key material in
@@ -108,8 +122,15 @@ and call `derive_key(...)` — see the next section.
 
 ### Overview
 
-AMA Cryptography implements BIP32-compatible hierarchical deterministic
-key derivation. The PRF is **HMAC-SHA-512** (BIP32-standard, delegated to
+AMA Cryptography implements BIP32-**style** hierarchical deterministic key
+derivation. The child KDF follows BIP32's formulae exactly, but the MASTER
+key is derived with the HMAC key `"AMA Cryptography Master Key"` where BIP32
+specifies `"Bitcoin seed"`. Every key therefore descends from a different
+root: **no BIP32 test vector passes here and no BIP32 wallet or library
+derives the same keys from the same seed.** A caller that needs keys a BIP32
+wallet can reproduce needs a BIP32 implementation, not this class.
+
+The PRF is **HMAC-SHA-512** (BIP32-standard, delegated to
 the native C backend via `ama_cryptography.pqc_backends.native_hmac_sha512`
 to satisfy INVARIANT-1 — no stdlib `hmac`). Non-hardened child derivation
 uses the native secp256k1 public-key computation.
@@ -131,6 +152,7 @@ any explicit BIP32 path.
 
 ### `HDKeyDerivation`
 
+<!-- example: python-run -->
 ```python
 import os
 from ama_cryptography.key_management import HDKeyDerivation
@@ -191,6 +213,7 @@ ACTIVE
 
 ### Full Lifecycle Example
 
+<!-- example: python-run -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager, KeyStatus
@@ -227,6 +250,7 @@ mgr.revoke_key("signing-key-v1", reason="superseded")
 
 For encrypted storage of key material at rest:
 
+<!-- example: python-run -->
 ```python
 import os
 from pathlib import Path
@@ -238,21 +262,20 @@ from ama_cryptography.key_management import (
 # SecureKeyStorage takes a storage directory and an optional master
 # password.
 #
-# IMPORTANT (key_management.py:563-673): if `master_password` is truthy,
-# it is stretched through a password-based KDF into a 32-byte AES-256
-# key. Algorithm selection is automatic on first use of a fresh keystore:
-#   * Argon2id (RFC 9106; t=3, m=64 MiB, p=4) is preferred whenever the
-#     native Argon2 backend is compiled in (`_ARGON2_NATIVE_AVAILABLE`
-#     is True) — this is KDF_VERSION 3 and becomes the default on any
-#     modern build of the library.
-#   * PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2024) is the
-#     fallback when the native Argon2 backend is unavailable — this is
-#     KDF_VERSION 2.
-#   * `migrate_kdf()` exists to opportunistically upgrade an existing
-#     v2 (PBKDF2) keystore to v3 (Argon2id); it is not required for
-#     fresh installations.
-# Selection is persisted in `.kdf_metadata.json` alongside the salt so
-# existing keystores remain decryptable across algorithm changes.
+# IMPORTANT (SecureKeyStorage._derive_key_from_password): if
+# `master_password` is truthy, it is stretched through a password-based
+# KDF into a 32-byte AES-256 key.
+#   * A fresh keystore is always created with Argon2id (RFC 9106; t=3,
+#     m=64 MiB, p=4) — KDF_VERSION 3. There is no PBKDF2 fallback: if the
+#     loaded native library lacks the Argon2id symbols (a partial or stale
+#     build), creating a store raises NativeBackendUnavailableError and
+#     writes nothing (INVARIANT-7).
+#   * PBKDF2-HMAC-SHA256 (KDF_VERSION 1/2) is only read, to open a legacy
+#     keystore under `allow_legacy_kdf=True` so it can be migrated.
+#   * `migrate_kdf()` re-keys an existing keystore to Argon2id v3; it too
+#     requires Argon2id and raises rather than re-keying to PBKDF2.
+# The parameters are persisted in `.kdf_metadata.json` alongside the salt so
+# existing keystores remain decryptable across parameter changes.
 #
 # If `master_password` is None or empty, a *random in-memory* 32-byte
 # encryption key is generated via `secrets.token_bytes(32)` — there is
@@ -260,9 +283,11 @@ from ama_cryptography.key_management import (
 # process's random in-memory key **cannot be decrypted after process
 # restart**. Use a stable master_password whenever the store must
 # survive across processes.
+import tempfile
+
 storage = SecureKeyStorage(
-    storage_path=Path("/var/lib/myapp/keys"),
-    master_password=os.environ["AMA_KEY_PASSWORD"],   # stable → persistable
+    storage_path=Path(tempfile.mkdtemp()),   # in production: Path("/var/lib/myapp/keys")
+    master_password=os.environ.get("AMA_KEY_PASSWORD", "example-passphrase"),
 )
 mgr = KeyRotationManager()
 
@@ -283,10 +308,25 @@ active_meta = mgr.export_metadata()
 
 ### Key Storage Security
 
-- **In-Memory:** Key material is stored as `bytearray` to allow in-place zeroing
-- **At-Rest:** Keys are encrypted with AES-256-GCM before serialization
-- **Memory Lock:** Uses `secure_mlock()` to prevent key swapping to disk
-- **Zeroing:** Automatic multi-pass zeroing via `SecureBuffer` context manager
+- **In-Memory:** the derived encryption key is held as a `bytearray`
+  (every assignment to `SecureKeyStorage.encryption_key`) so it can be zeroed in place.
+- **At-Rest:** key material is sealed with AES-256-GCM
+  (`SecureKeyStorage.store_key` → `native_aes256_gcm_encrypt`), with a fresh
+  96-bit nonce per record, drawn through the health-tested CSPRNG (INVARIANT-41's
+  rule for every draw that mints key material: a repeated GCM nonce under one key
+  is catastrophic), and the record's own metadata bound as AAD.
+- **Zeroing:** `SecureKeyStorage.__exit__` calls
+  `ama_cryptography.secure_memory.secure_memzero` on the encryption key.
+  That is the native barrier-backed wipe —
+  one pass through `volatile` stores followed by a compiler barrier
+  (`src/c/ama_consttime.c`), not a multi-pass Python loop.
+- **Memory lock: not performed.** `key_management.py` contains no reference to
+  `secure_mlock` and does not use `SecureBuffer`; nothing in this module pins
+  key pages against swap. An earlier revision of this page claimed both. If
+  your threat model includes swap, lock the pages yourself around the
+  material you hold — `ama_cryptography.secure_memory.secure_mlock()` is the
+  call, and it returns `None` and raises on failure rather than returning a
+  boolean.
 
 ---
 
@@ -296,6 +336,7 @@ active_meta = mgr.export_metadata()
 
 For production deployments, store master secrets in FIPS 140-2 Level 3+ HSMs:
 
+<!-- example: pseudocode: needs a provisioned AWS CloudHSM cluster and boto3 credentials -->
 ```python
 # AWS CloudHSM Example
 import boto3
@@ -319,6 +360,7 @@ def store_master_secret_hsm(master_secret: bytes, key_label: str) -> str:
 
 For personal/small-team use (FIPS 140-2 Level 2):
 
+<!-- example: pseudocode: needs a physically attached YubiKey and the ykman package -->
 ```python
 from ykman.device import connect_to_device
 from ykman.piv import PivController
@@ -334,6 +376,7 @@ def store_key_yubikey(master_secret: bytes, slot: int = 0x82):
 
 Minimum security for development. Use PBKDF2 with 600,000+ iterations (OWASP 2024):
 
+<!-- example: pseudocode: third-party PyCA example shown for contrast, not an AMA API -->
 ```python
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
@@ -370,6 +413,7 @@ def encrypt_master_secret(master_secret: bytes, password: str, path: str):
 
 ### Automated Rotation
 
+<!-- example: python-run -->
 ```python
 from datetime import timedelta
 from ama_cryptography.key_management import KeyRotationManager
@@ -386,7 +430,7 @@ def check_and_rotate(
     """Rotate `key_id` → `new_key_id` if policy says so; return the active id.
 
     Note: `mgr.initiate_rotation()` raises `ValueError("Key not found")`
-    (key_management.py:435) unless both key ids are already registered
+    (`KeyRotationManager.initiate_rotation`) unless both key ids are already registered
     with the manager. We register the replacement id first so the call
     site can't accidentally rotate into a key the manager has never
     seen. Key *material* still lives in the caller's keystore.
@@ -424,6 +468,7 @@ If you share a `KeyRotationManager` instance across threads, you are
 responsible for serializing **every** mutating call (not just rotation)
 behind your own lock:
 
+<!-- example: pseudocode: an ellipsis sketch of the locking pattern, not a program -->
 ```python
 import threading
 
@@ -443,14 +488,20 @@ rotation requests through a queue.
 
 ## Exception Handling
 
+<!-- example: python-run -->
 ```python
+from datetime import timedelta
+
 from ama_cryptography.exceptions import (
     KeyManagementError,
     PQCUnavailableError,
     QuantumSignatureUnavailableError,
     SecurityWarning,
 )
+from ama_cryptography.key_management import KeyRotationManager
 from ama_cryptography.pqc_backends import generate_dilithium_keypair
+
+mgr = KeyRotationManager(rotation_period=timedelta(days=90))
 
 try:
     meta = mgr.register_key("my-key", purpose="doc-signing")

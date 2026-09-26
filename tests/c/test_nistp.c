@@ -268,7 +268,7 @@ static void test_public_api(void) {
         unsigned i;
 
         for (i = 0; i < sizeof(digest); i++) {
-            digest[i] = (uint8_t)(i * 7u + idx);
+            digest[i] = (uint8_t)(i * 7u + (unsigned)idx);
         }
 
         CHECK(ama_nistp_keypair(curve, priv, pub) == AMA_SUCCESS, "keypair failed");
@@ -370,12 +370,262 @@ static void test_pqc_parameter_tables(void) {
     printf("      row-wise matrix expansion is byte-identical to whole-matrix\n");
 }
 
+/* ---------------------------------------------------------------------------
+ * [5] NULL-parameter rejection on the public P-curve API
+ *
+ * Why this is here rather than in Python: the ctypes wrappers in
+ * ama_cryptography/pqc_backends.py allocate every output buffer themselves and
+ * validate their inputs before the call, so a NULL pointer never reaches these
+ * entry points from that side.  No Python test passes ``None`` to one, and
+ * before this function no C test passed NULL either.
+ *
+ * That made every `if (!c || !x || ...) return AMA_ERROR_INVALID_PARAM;` on the
+ * twenty-one-entry-point P-curve surface a guard nothing executed: measured
+ * with tools/measure_branch_coverage.py, the NULL-guard arcs in ama_nistp.c's
+ * ama_nistp_{pubkey_from_privkey, keypair, pubkey_validate, point_encode,
+ * point_decode, ecdh, ecdsa_sign_raw_ex, ecdsa_sign_ex, ecdsa_verify_ex,
+ * ecdsa_verify_raw_ex, sig_der_to_raw, sig_raw_to_der} were never taken by
+ * the C suite, and deleting any of them would have broken no
+ * test in either suite -- the shape of thing AGENTS.md section 11 asks this
+ * triage to find.  (The first version of this function listed
+ * ecdsa_verify_raw_ex here and then never called it, nor ecdsa_verify_raw
+ * or ecdsa_sign_hedged: deleting that guard still broke nothing.  Both
+ * fixed-width verifiers and the hedged signer are now driven below.)
+ *
+ * The guards were already present and already correct; only the weight was
+ * missing.  Removing one does not merely flip a return value, it dereferences
+ * the NULL, so this function fails loudly (a crash is a failed test) rather
+ * than quietly -- which is what makes it a pin and not a smoke test.
+ * ------------------------------------------------------------------------- */
+static void test_null_parameter_rejection(void) {
+    const ama_nist_curve_t curve = AMA_NIST_CURVE_P256;
+    uint8_t priv[AMA_NISTP_MAX_FIELD_BYTES], pub[AMA_NISTP_MAX_PUBKEY_BYTES];
+    uint8_t out[AMA_NISTP_MAX_PUBKEY_BYTES + 1];
+    uint8_t sig[AMA_NISTP_MAX_SIG_LEN];
+    uint8_t raw[AMA_NISTP_MAX_SIG_LEN];
+    uint8_t digest[32];
+    size_t out_len = sizeof(out), sig_len = sizeof(sig), raw_len = sizeof(raw);
+    unsigned i;
+
+    printf("  [5] NULL-parameter rejection across the public P-curve API\n");
+
+    for (i = 0; i < sizeof(digest); i++)
+        digest[i] = (uint8_t)(i + 1u);
+    CHECK(ama_nistp_keypair(curve, priv, pub) == AMA_SUCCESS,
+          "could not generate the keypair the NULL cases are checked against");
+
+    /* An invalid curve selector reaches the same guard through `!c`, so each
+     * entry point is checked for it as well as for its NULL pointers. */
+#define BAD_CURVE ((ama_nist_curve_t)99)
+
+    CHECK(ama_nistp_keypair(curve, NULL, pub) == AMA_ERROR_INVALID_PARAM,
+          "keypair accepted a NULL private_key");
+    CHECK(ama_nistp_keypair(curve, priv, NULL) == AMA_ERROR_INVALID_PARAM,
+          "keypair accepted a NULL public_key");
+    CHECK(ama_nistp_keypair(BAD_CURVE, priv, pub) == AMA_ERROR_INVALID_PARAM,
+          "keypair accepted an unknown curve");
+
+    CHECK(ama_nistp_pubkey_from_privkey(curve, NULL, pub) == AMA_ERROR_INVALID_PARAM,
+          "pubkey_from_privkey accepted a NULL private_key");
+    CHECK(ama_nistp_pubkey_from_privkey(curve, priv, NULL) == AMA_ERROR_INVALID_PARAM,
+          "pubkey_from_privkey accepted a NULL public_key");
+    CHECK(ama_nistp_pubkey_from_privkey(BAD_CURVE, priv, pub) == AMA_ERROR_INVALID_PARAM,
+          "pubkey_from_privkey accepted an unknown curve");
+
+    /* Returns ama_error_t, not a boolean: AMA_SUCCESS / AMA_ERROR_VERIFY_FAILED
+     * for a well-formed call, AMA_ERROR_INVALID_PARAM for these.  The first
+     * draft of this function asserted `== 0` and failed here -- against correct
+     * code, because AMA_SUCCESS is 0 and the rejection is not. */
+    CHECK(ama_nistp_pubkey_validate(curve, NULL) == AMA_ERROR_INVALID_PARAM,
+          "pubkey_validate accepted a NULL public_key");
+    CHECK(ama_nistp_pubkey_validate(BAD_CURVE, pub) == AMA_ERROR_INVALID_PARAM,
+          "pubkey_validate accepted an unknown curve");
+
+    CHECK(ama_nistp_point_encode(curve, NULL, 0, out, &out_len) == AMA_ERROR_INVALID_PARAM,
+          "point_encode accepted a NULL public_key");
+    CHECK(ama_nistp_point_encode(curve, pub, 0, NULL, &out_len) == AMA_ERROR_INVALID_PARAM,
+          "point_encode accepted a NULL out");
+    CHECK(ama_nistp_point_encode(curve, pub, 0, out, NULL) == AMA_ERROR_INVALID_PARAM,
+          "point_encode accepted a NULL out_len");
+    CHECK(ama_nistp_point_encode(BAD_CURVE, pub, 0, out, &out_len) == AMA_ERROR_INVALID_PARAM,
+          "point_encode accepted an unknown curve");
+
+    CHECK(ama_nistp_point_decode(curve, NULL, 33, pub) == AMA_ERROR_INVALID_PARAM,
+          "point_decode accepted a NULL in");
+    CHECK(ama_nistp_point_decode(curve, out, 33, NULL) == AMA_ERROR_INVALID_PARAM,
+          "point_decode accepted a NULL public_key");
+    CHECK(ama_nistp_point_decode(BAD_CURVE, out, 33, pub) == AMA_ERROR_INVALID_PARAM,
+          "point_decode accepted an unknown curve");
+
+    CHECK(ama_nistp_ecdh(curve, NULL, pub, raw) == AMA_ERROR_INVALID_PARAM,
+          "ecdh accepted a NULL private_key");
+    CHECK(ama_nistp_ecdh(curve, priv, NULL, raw) == AMA_ERROR_INVALID_PARAM,
+          "ecdh accepted a NULL peer_public_key");
+    CHECK(ama_nistp_ecdh(curve, priv, pub, NULL) == AMA_ERROR_INVALID_PARAM,
+          "ecdh accepted a NULL shared_secret");
+    CHECK(ama_nistp_ecdh(BAD_CURVE, priv, pub, raw) == AMA_ERROR_INVALID_PARAM,
+          "ecdh accepted an unknown curve");
+
+    CHECK(ama_nistp_ecdsa_sign_raw(curve, NULL, sizeof(digest), priv, sig)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_raw accepted a NULL digest");
+    CHECK(ama_nistp_ecdsa_sign_raw(curve, digest, sizeof(digest), NULL, sig)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_raw accepted a NULL private_key");
+    CHECK(ama_nistp_ecdsa_sign_raw(curve, digest, sizeof(digest), priv, NULL)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_raw accepted a NULL signature");
+    CHECK(ama_nistp_ecdsa_sign_raw(BAD_CURVE, digest, sizeof(digest), priv, sig)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_raw accepted an unknown curve");
+
+    sig_len = sizeof(sig);
+    CHECK(ama_nistp_ecdsa_sign(curve, NULL, sizeof(digest), priv, sig, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign accepted a NULL digest");
+    CHECK(ama_nistp_ecdsa_sign(curve, digest, sizeof(digest), NULL, sig, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign accepted a NULL private_key");
+    CHECK(ama_nistp_ecdsa_sign(curve, digest, sizeof(digest), priv, NULL, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign accepted a NULL signature");
+    CHECK(ama_nistp_ecdsa_sign(curve, digest, sizeof(digest), priv, sig, NULL)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign accepted a NULL signature_len");
+    CHECK(ama_nistp_ecdsa_sign(BAD_CURVE, digest, sizeof(digest), priv, sig, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign accepted an unknown curve");
+
+    /* The hedged signer reaches ecdsa_sign_ex's guard with the HEDGED flag
+     * set; a successful call first, so each rejection below has to come
+     * from the argument under test. */
+    sig_len = sizeof(sig);
+    CHECK(ama_nistp_ecdsa_sign_hedged(curve, digest, sizeof(digest), priv, sig, &sig_len)
+              == AMA_SUCCESS,
+          "ecdsa_sign_hedged refused a well-formed call");
+    CHECK(ama_nistp_ecdsa_sign_hedged(curve, NULL, sizeof(digest), priv, sig, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_hedged accepted a NULL digest");
+    CHECK(ama_nistp_ecdsa_sign_hedged(curve, digest, sizeof(digest), NULL, sig, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_hedged accepted a NULL private_key");
+    CHECK(ama_nistp_ecdsa_sign_hedged(curve, digest, sizeof(digest), priv, NULL, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_hedged accepted a NULL signature");
+    CHECK(ama_nistp_ecdsa_sign_hedged(curve, digest, sizeof(digest), priv, sig, NULL)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_hedged accepted a NULL signature_len");
+    CHECK(ama_nistp_ecdsa_sign_hedged(BAD_CURVE, digest, sizeof(digest), priv, sig, &sig_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_sign_hedged accepted an unknown curve");
+
+    /* A real signature, so the verify NULL cases are checked against input
+     * that would otherwise be accepted -- a rejection here has to come from
+     * the NULL, not from a malformed signature. */
+    sig_len = sizeof(sig);
+    CHECK(ama_nistp_ecdsa_sign(curve, digest, sizeof(digest), priv, sig, &sig_len)
+              == AMA_SUCCESS,
+          "could not sign the digest the verify NULL cases are checked against");
+
+    CHECK(ama_nistp_ecdsa_verify(curve, NULL, sizeof(digest), pub, sig, sig_len)
+              != AMA_SUCCESS,
+          "ecdsa_verify accepted a NULL digest");
+    CHECK(ama_nistp_ecdsa_verify(curve, digest, sizeof(digest), NULL, sig, sig_len)
+              != AMA_SUCCESS,
+          "ecdsa_verify accepted a NULL public_key");
+    CHECK(ama_nistp_ecdsa_verify(curve, digest, sizeof(digest), pub, NULL, sig_len)
+              != AMA_SUCCESS,
+          "ecdsa_verify accepted a NULL signature");
+    CHECK(ama_nistp_ecdsa_verify(BAD_CURVE, digest, sizeof(digest), pub, sig, sig_len)
+              != AMA_SUCCESS,
+          "ecdsa_verify accepted an unknown curve");
+
+    raw_len = sizeof(raw);
+    CHECK(ama_nistp_sig_der_to_raw(curve, NULL, sig_len, raw, &raw_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "sig_der_to_raw accepted a NULL der");
+    CHECK(ama_nistp_sig_der_to_raw(curve, sig, sig_len, NULL, &raw_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "sig_der_to_raw accepted a NULL raw");
+    CHECK(ama_nistp_sig_der_to_raw(curve, sig, sig_len, raw, NULL)
+              == AMA_ERROR_INVALID_PARAM,
+          "sig_der_to_raw accepted a NULL raw_len");
+    CHECK(ama_nistp_sig_der_to_raw(BAD_CURVE, sig, sig_len, raw, &raw_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "sig_der_to_raw accepted an unknown curve");
+
+    raw_len = sizeof(raw);
+    CHECK(ama_nistp_sig_der_to_raw(curve, sig, sig_len, raw, &raw_len) == AMA_SUCCESS,
+          "could not convert the DER signature the raw_to_der cases need");
+    out_len = sizeof(out);
+    {
+        uint8_t der[AMA_NISTP_MAX_SIG_LEN];
+        size_t der_len = sizeof(der);
+        CHECK(ama_nistp_sig_raw_to_der(curve, NULL, raw_len, der, &der_len)
+                  == AMA_ERROR_INVALID_PARAM,
+              "sig_raw_to_der accepted a NULL raw");
+        CHECK(ama_nistp_sig_raw_to_der(curve, raw, raw_len, NULL, &der_len)
+                  == AMA_ERROR_INVALID_PARAM,
+              "sig_raw_to_der accepted a NULL der");
+        CHECK(ama_nistp_sig_raw_to_der(curve, raw, raw_len, der, NULL)
+                  == AMA_ERROR_INVALID_PARAM,
+              "sig_raw_to_der accepted a NULL der_len");
+        CHECK(ama_nistp_sig_raw_to_der(BAD_CURVE, raw, raw_len, der, &der_len)
+                  == AMA_ERROR_INVALID_PARAM,
+              "sig_raw_to_der accepted an unknown curve");
+    }
+
+    /* The fixed-width verifier, against the raw form of the same valid
+     * signature: it is shown to verify first, so each rejection below has to
+     * come from the argument under test.  ecdsa_verify_raw reaches
+     * ecdsa_verify_raw_ex's guard with the default policy; the _ex entry
+     * point is driven directly as well. */
+    CHECK(ama_nistp_ecdsa_verify_raw(curve, digest, sizeof(digest), pub, raw, raw_len)
+              == AMA_SUCCESS,
+          "the raw signature the verify_raw cases are checked against does not verify");
+    CHECK(ama_nistp_ecdsa_verify_raw(curve, NULL, sizeof(digest), pub, raw, raw_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw accepted a NULL digest");
+    CHECK(ama_nistp_ecdsa_verify_raw(curve, digest, sizeof(digest), NULL, raw, raw_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw accepted a NULL public_key");
+    CHECK(ama_nistp_ecdsa_verify_raw(curve, digest, sizeof(digest), pub, NULL, raw_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw accepted a NULL signature");
+    CHECK(ama_nistp_ecdsa_verify_raw(BAD_CURVE, digest, sizeof(digest), pub, raw, raw_len)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw accepted an unknown curve");
+    CHECK(ama_nistp_ecdsa_verify_raw_ex(curve, NULL, sizeof(digest), pub, raw, raw_len,
+                                        AMA_NISTP_ECDSA_VERIFY_DEFAULT)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw_ex accepted a NULL digest");
+    CHECK(ama_nistp_ecdsa_verify_raw_ex(curve, digest, sizeof(digest), NULL, raw, raw_len,
+                                        AMA_NISTP_ECDSA_VERIFY_DEFAULT)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw_ex accepted a NULL public_key");
+    CHECK(ama_nistp_ecdsa_verify_raw_ex(curve, digest, sizeof(digest), pub, NULL, raw_len,
+                                        AMA_NISTP_ECDSA_VERIFY_DEFAULT)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw_ex accepted a NULL signature");
+    CHECK(ama_nistp_ecdsa_verify_raw_ex(BAD_CURVE, digest, sizeof(digest), pub, raw, raw_len,
+                                        AMA_NISTP_ECDSA_VERIFY_DEFAULT)
+              == AMA_ERROR_INVALID_PARAM,
+          "ecdsa_verify_raw_ex accepted an unknown curve");
+
+#undef BAD_CURVE
+    /* ecdsa_sign_raw_ex, ecdsa_sign_ex and ecdsa_verify_ex are reached above
+     * through ecdsa_sign_raw, ecdsa_sign / ecdsa_sign_hedged and ecdsa_verify,
+     * which pass every pointer through to them unchanged. */
+    printf("      every pointer argument on the P-curve surface is rejected\n");
+}
+
 int main(void) {
     printf("=== NIST prime curves + PQC parameter blocks ===\n");
     test_montgomery_constants();
     test_scalar_mul_differential();
     test_public_api();
     test_pqc_parameter_tables();
+    test_null_parameter_rejection();
 
     if (g_failures) {
         printf("\n%d check(s) FAILED\n", g_failures);

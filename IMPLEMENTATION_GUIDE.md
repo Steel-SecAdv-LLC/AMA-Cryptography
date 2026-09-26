@@ -8,7 +8,7 @@
 **AI Co-Architects:**  
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-**Version:** 4.0.0
+**Version:** 5.0.0
 **Date:** 2026-07-25
 
 ---
@@ -27,14 +27,36 @@ Choose the appropriate verification profile for your use case:
 > The two "Required" columns are not comparable in strength. Dilithium's is signature verification. RFC 3161's is the §2.4.2 *message-imprint binding* — AMA verifies no TSA signature and no certificate chain, so an adversary who can supply a token satisfies it unaided ([INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform)). A `strict` profile therefore still requires the token's provenance to be established out of band.
 
 **Example: Strict profile verification**
+<!-- example: python-run -->
 ```python
-results = verify_crypto_package(codes, helix_params, pkg, hmac_key)
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    create_crypto_package,
+    generate_key_management_system,
+    verify_crypto_package,
+)
 
-# Strict profile: require all checks
-if not (results["content_hash"] and results["hmac"] and results["ed25519"]
-        and results["dilithium"] is True and results["timestamp"]
-        and results["rfc3161_binding"] is True):
-    raise ValueError("Package failed strict verification profile")
+kms = generate_key_management_system("YourOrganization")
+pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, author="YourOrganization")
+
+
+def verify_strict(codes, helix_params, pkg, hmac_key):
+    """Strict profile: require all checks, the RFC 3161 binding included."""
+    results = verify_crypto_package(codes, helix_params, pkg, hmac_key)
+    if not (results["content_hash"] and results["hmac"] and results["ed25519"]
+            and results["dilithium"] is True and results["timestamp"]
+            and results["rfc3161_binding"] is True):
+        raise ValueError("Package failed strict verification profile")
+    return results
+
+
+# This package carries no RFC 3161 token, so `rfc3161_binding` is None --
+# "not checked" -- which the strict profile refuses rather than passes.
+try:
+    verify_strict(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
+except ValueError as exc:
+    print(f"strict profile correctly refused: {exc}")
 ```
 
 `rfc3161_binding` establishes that the stored token refers to this package. It
@@ -132,19 +154,31 @@ All production cryptographic algorithms (SHA3-256, HKDF, Ed25519, AES-256-GCM, M
 
 #### Verify Installation
 
+<!-- example: python-run -->
 ```python
-from ama_cryptography.pqc_backends import get_pqc_status
-print("PQC status:")
-print(get_pqc_status())
-# Output should report ML-DSA-65, ML-KEM-1024, and SLH-DSA as available
+from ama_cryptography.pqc_backends import PQCStatus, get_pqc_status, get_pqc_backend_info
+
+# get_pqc_status() returns a PQCStatus ENUM (AVAILABLE / UNAVAILABLE), a
+# single rollup verdict — not a per-algorithm report.
+print("PQC status:", get_pqc_status())          # PQCStatus.AVAILABLE
+assert get_pqc_status() is PQCStatus.AVAILABLE
+
+# The per-algorithm report is get_pqc_backend_info()["algorithms"], keyed by
+# the implementation's own spellings.
+for name, meta in sorted(get_pqc_backend_info()["algorithms"].items()):
+    print(f"  {name}: {meta['available']} ({meta['backend']})")
+# ML-DSA-65, Kyber-1024 and SPHINCS+-256f should all report True / native.
 ```
 
 ### Step 2: Set Up Key Management
 
 #### Generate Keys
 
+<!-- example: python-run -->
 ```python
-from ama_cryptography.legacy_compat import *
+from pathlib import Path
+
+from ama_cryptography.legacy_compat import export_public_keys, generate_key_management_system
 
 # Generate key management system
 kms = generate_key_management_system("YourOrganization")
@@ -159,6 +193,7 @@ export_public_keys(kms, Path("public_keys"))
 
 Recommended for production. Supports FIPS 140-2 Level 3+.
 
+<!-- example: pseudocode: needs a provisioned AWS CloudHSM cluster and boto3 credentials -->
 ```python
 # Example: AWS CloudHSM
 import boto3
@@ -167,14 +202,14 @@ from botocore.exceptions import ClientError
 def store_master_secret_hsm(master_secret: bytes, key_label: str):
     """Store master secret in AWS CloudHSM."""
     client = boto3.client('cloudhsmv2')
-    
+
     # Import key to HSM
     response = client.import_key(
         KeyLabel=key_label,
         KeyMaterial=master_secret,
         KeySpec='AES_256'
     )
-    
+
     return response['KeyId']
 
 # Store master secret
@@ -184,8 +219,10 @@ hsm_key_id = store_master_secret_hsm(
 )
 print(f"Master secret stored in HSM: {hsm_key_id}")
 
-# NEVER store master_secret on disk after this point
-# Zero out memory
+# NEVER store master_secret on disk after this point.  Rebinding the attribute
+# drops this reference to the secret; it does NOT erase the bytes, which a
+# Python `bytes` object cannot do.  Hold a secret you must wipe in a bytearray
+# and pass it to ama_cryptography.secure_memory.secure_memzero().
 kms.master_secret = b'\x00' * 32
 ```
 
@@ -193,6 +230,7 @@ kms.master_secret = b'\x00' * 32
 
 For personal/small team use. FIPS 140-2 Level 2.
 
+<!-- example: pseudocode: needs a physically attached YubiKey and the ykman package -->
 ```python
 # Example: YubiKey PIV
 from ykman.device import connect_to_device
@@ -202,13 +240,13 @@ def store_key_yubikey(master_secret: bytes, slot: int = 0x82):
     """Store key in YubiKey PIV slot."""
     device, _ = connect_to_device()[0]
     piv = PivController(device.driver)
-    
+
     # Authenticate with management key
     piv.authenticate(bytes.fromhex('010203040506070801020304050607080102030405060708'))
-    
+
     # Store key in slot
     piv.import_key(slot, master_secret)
-    
+
     print(f"Key stored in YubiKey slot {hex(slot)}")
 
 store_key_yubikey(kms.master_secret)
@@ -218,87 +256,77 @@ store_key_yubikey(kms.master_secret)
 
 Minimum security for testing. Use strong password.
 
+The keystore below runs entirely on AMA's own primitives (INVARIANT-1):
+PBKDF2-HMAC-SHA256 from `ama_cryptography.pqc_backends` derives the key and
+AES-256-GCM from `ama_cryptography.crypto_api` seals the secret, so a wrong
+password or a modified file fails the tag check instead of returning garbage.
+An earlier revision used PyCA's Fernet with a `PBKDF2` class PyCA does not
+have (the class is `PBKDF2HMAC`), never imported `base64`, and wrote a 32-byte
+salt that the loader read back as 16 bytes, so it could not decrypt what it
+had stored.
+
+<!-- example: python-run -->
 ```python
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
-import getpass
 import os
+
+from ama_cryptography.crypto_api import AESGCMProvider
+from ama_cryptography.legacy_compat import generate_key_management_system
+from ama_cryptography.pqc_backends import native_pbkdf2_hmac_sha256
+
+PBKDF2_ITERATIONS = 600_000  # OWASP recommendation (2024) for PBKDF2-HMAC-SHA256
+SALT_LEN, NONCE_LEN, TAG_LEN = 32, 12, 16
+AAD = b"ama-master-secret-v1"
+
 
 def store_master_secret_encrypted(
     master_secret: bytes,
-    keyfile: str = "master_secret.enc"
-):
-    """Store master secret encrypted with password."""
-    
-    # Get password from user
-    password = getpass.getpass("Enter encryption password: ")
-    password_confirm = getpass.getpass("Confirm password: ")
-    
-    if password != password_confirm:
-        raise ValueError("Passwords don't match")
-    
-    # Derive encryption key from password using PBKDF2
-    salt = os.urandom(32)  # 256-bit salt
-    kdf = PBKDF2(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=600000  # OWASP recommendation (2024)
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-    
-    # Encrypt master secret
-    fernet = Fernet(key)
-    encrypted = fernet.encrypt(master_secret)
-    
-    # Save salt + encrypted data
-    with open(keyfile, 'wb') as f:
-        f.write(salt + encrypted)
-    
+    password: str,
+    keyfile: str = "master_secret.enc",
+) -> None:
+    """Store master secret encrypted under a password-derived AES-256-GCM key."""
+    salt = os.urandom(SALT_LEN)  # 256-bit salt
+    key = native_pbkdf2_hmac_sha256(password.encode(), salt, PBKDF2_ITERATIONS, 32)
+    sealed = AESGCMProvider().encrypt(master_secret, key, aad=AAD)
+
+    # Save salt || nonce || tag || ciphertext
+    with open(keyfile, "wb") as f:
+        f.write(salt + sealed["nonce"] + sealed["tag"] + sealed["ciphertext"])
+
     print(f"Master secret encrypted and saved to {keyfile}")
     print("WARNING: Password-protected encryption is weaker than HSM")
     print("         Use HSM for production deployments")
 
-def load_master_secret_encrypted(keyfile: str = "master_secret.enc") -> bytes:
-    """Load and decrypt master secret."""
-    
-    # Read salt + encrypted data
-    with open(keyfile, 'rb') as f:
-        data = f.read()
-    
-    salt = data[:16]
-    encrypted = data[16:]
-    
-    # Get password from user
-    password = getpass.getpass("Enter encryption password: ")
-    
-    # Derive decryption key
-    kdf = PBKDF2(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=600000  # Must match store iterations
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-    
-    # Decrypt master secret
-    fernet = Fernet(key)
-    master_secret = fernet.decrypt(encrypted)
-    
-    return master_secret
 
-# Usage
-store_master_secret_encrypted(kms.master_secret)
+def load_master_secret_encrypted(password: str, keyfile: str = "master_secret.enc") -> bytes:
+    """Load and decrypt master secret; raises if the password or the file is wrong."""
+    with open(keyfile, "rb") as f:
+        data = f.read()
+
+    salt = data[:SALT_LEN]
+    nonce = data[SALT_LEN:SALT_LEN + NONCE_LEN]
+    tag = data[SALT_LEN + NONCE_LEN:SALT_LEN + NONCE_LEN + TAG_LEN]
+    ciphertext = data[SALT_LEN + NONCE_LEN + TAG_LEN:]
+
+    key = native_pbkdf2_hmac_sha256(password.encode(), salt, PBKDF2_ITERATIONS, 32)
+    return AESGCMProvider().decrypt(ciphertext, key, nonce, tag, aad=AAD)
+
+
+# Usage.  An interactive tool reads the password with getpass.getpass() and
+# asks for it twice; it is a literal here so the example runs unattended.
+kms = generate_key_management_system("YourOrganization")
+password = "correct horse battery staple"
+store_master_secret_encrypted(kms.master_secret, password)
 
 # Later: Load master secret
-# master_secret = load_master_secret_encrypted()
+master_secret = load_master_secret_encrypted(password)
+assert master_secret == kms.master_secret
 ```
 
 ### Step 3: Configure RFC 3161 Timestamps
 
 #### Option A: FreeTSA (Free, Rate-Limited)
 
+<!-- example: pseudocode: contacts the FreeTSA server over the network, which a documentation check must not depend on -->
 ```python
 def create_package_with_timestamp(
     codes: str,
@@ -306,7 +334,7 @@ def create_package_with_timestamp(
     kms: KeyManagementSystem
 ) -> CryptoPackage:
     """Create package with RFC 3161 timestamp."""
-    
+
     return create_crypto_package(
         codes,
         helix_params,
@@ -318,23 +346,24 @@ def create_package_with_timestamp(
 
 # Usage
 pkg = create_package_with_timestamp(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms
 )
 
 if pkg.timestamp_token:
-    print("✓ RFC 3161 timestamp obtained")
+    print("OK: RFC 3161 timestamp obtained")
 else:
-    print("⚠ RFC 3161 failed, using self-asserted timestamp")
+    print("WARNING: RFC 3161 failed, using self-asserted timestamp")
 ```
 
 #### Option B: Commercial TSA (Production)
 
+<!-- example: pseudocode: contacts commercial TSA servers over the network, which a documentation check must not depend on -->
 ```python
 # DigiCert Timestamp Server
 pkg = create_crypto_package(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms,
     author="Steel-SecAdv-LLC",
@@ -344,7 +373,7 @@ pkg = create_crypto_package(
 
 # GlobalSign Timestamp Server
 pkg = create_crypto_package(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms,
     author="Steel-SecAdv-LLC",
@@ -370,54 +399,84 @@ ots verify CRYPTO_PACKAGE.json.ots
 
 ### Step 4: Implement Key Rotation
 
+<!-- example: python-run -->
 ```python
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from pathlib import Path
+
+from ama_cryptography.legacy_compat import (
+    KeyManagementSystem,
+    export_public_keys,
+    generate_key_management_system,
+)
 
 def should_rotate_keys(kms: KeyManagementSystem) -> bool:
     """Check if keys need rotation (quarterly schedule)."""
     creation = datetime.fromisoformat(kms.creation_date)
     now = datetime.now(timezone.utc)
     age = (now - creation).days
-    
+
     if kms.rotation_schedule == "quarterly":
         return age >= 90
     elif kms.rotation_schedule == "monthly":
         return age >= 30
     elif kms.rotation_schedule == "annually":
         return age >= 365
-    
+
     return False
 
 def rotate_keys(old_kms: KeyManagementSystem, author: str) -> KeyManagementSystem:
     """Rotate keys while maintaining master secret."""
-    
+
     print("Rotating keys...")
-    
+
     # Generate new KMS with NEW master secret
     new_kms = generate_key_management_system(author)
-    
-    # Archive old public keys for verification
-    archive_dir = Path(f"public_keys_archive_{datetime.now().isoformat()}")
+
+    # Archive old public keys for verification.  (A compact UTC stamp: the
+    # ":" in isoformat() is not a legal path character on Windows.)
+    archive_dir = Path(f"public_keys_archive_{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}")
     export_public_keys(old_kms, archive_dir)
     print(f"Old public keys archived to: {archive_dir}")
-    
+
     # Export new public keys
     export_public_keys(new_kms, Path("public_keys"))
-    
-    # Securely delete old master secret
+
+    # Drop the old master secret.  Rebinding the attribute releases this
+    # reference; it does not erase the bytes (a Python `bytes` object cannot
+    # be erased in place).  See Step 2 for keeping secrets out of Python.
     old_kms.master_secret = b'\x00' * 32
-    
-    print("✓ Key rotation complete")
+
+    print("Key rotation complete")
     return new_kms
 
 # Usage
+kms = generate_key_management_system("Steel-SecAdv-LLC")
+print("Rotation due:", should_rotate_keys(kms))  # False for a key created just now
 if should_rotate_keys(kms):
     kms = rotate_keys(kms, "Steel-SecAdv-LLC")
+
+# What the scheduled job runs once rotation is due:
+kms = rotate_keys(kms, "Steel-SecAdv-LLC")
 ```
 
 ### Step 5: Sign Omni-Code Packages
 
+<!-- example: python-run -->
 ```python
+import json
+from dataclasses import asdict
+from typing import List, Tuple
+
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    CryptoPackage,
+    KeyManagementSystem,
+    create_crypto_package,
+    generate_key_management_system,
+)
+
 def sign_codes(
     codes: str,
     helix_params: List[Tuple[float, float]],
@@ -425,30 +484,35 @@ def sign_codes(
     output_file: str = "CRYPTO_PACKAGE.json"
 ) -> CryptoPackage:
     """Sign Omni-Codes and save package."""
-    
-    # Create cryptographic package
+
+    # Create cryptographic package.  Production should set use_rfc3161=True
+    # with a TSA from Step 3; that contacts the TSA over the network.
     pkg = create_crypto_package(
         codes,
         helix_params,
         kms,
         author="Steel-SecAdv-LLC",
-        use_rfc3161=True  # Production should use RFC 3161
+        use_rfc3161=False,
     )
-    
+
     # Save to file
     with open(output_file, 'w') as f:
         json.dump(asdict(pkg), f, indent=2)
-    
-    print(f"✓ Package signed and saved: {output_file}")
+
+    print(f"Package signed and saved: {output_file}")
     return pkg
 
 # Sign master Omni-Codes
-pkg = sign_codes(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms)
+kms = generate_key_management_system("Steel-SecAdv-LLC")
+pkg = sign_codes(MASTER_CODES, MASTER_HELIX_PARAMS, kms)
 ```
 
 ### Step 6: Verify Omni-Code Packages
 
+<!-- example: python-run continues -->
 ```python
+from ama_cryptography.legacy_compat import verify_crypto_package
+
 def verify_dna_package(
     package_file: str,
     codes: str,
@@ -456,13 +520,13 @@ def verify_dna_package(
     hmac_key: bytes
 ) -> bool:
     """Verify Omni-Code package from file."""
-    
+
     # Load package
     with open(package_file, 'r') as f:
         pkg_dict = json.load(f)
-    
+
     pkg = CryptoPackage(**pkg_dict)
-    
+
     # Verify all layers
     results = verify_crypto_package(
         codes,
@@ -470,30 +534,32 @@ def verify_dna_package(
         pkg,
         hmac_key
     )
-    
-    # Print results
+
+    # Print results.  A check that does not apply to this package (the
+    # RFC 3161 ones, for a package with no token) reports None, not False.
     print(f"\nVerification Results for {package_file}:")
     print("-" * 50)
     for check, valid in results.items():
-        status = "✓" if valid else "✗"
-        print(f"  {status} {check}: {'VALID' if valid else 'INVALID'}")
-    
-    all_valid = all(results.values())
+        verdict = "N/A" if valid is None else ("VALID" if valid else "INVALID")
+        print(f"  {check}: {verdict}")
+
+    all_valid = all(valid is not False for valid in results.values())
     print("-" * 50)
     if all_valid:
-        print("✓ ALL VERIFICATIONS PASSED")
+        print("ALL VERIFICATIONS PASSED")
     else:
-        print("✗ VERIFICATION FAILED")
-    
+        print("VERIFICATION FAILED")
+
     return all_valid
 
 # Verify package
 is_valid = verify_dna_package(
     "CRYPTO_PACKAGE.json",
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     kms.hmac_key
 )
+assert is_valid
 ```
 
 ---
@@ -502,6 +568,7 @@ is_valid = verify_dna_package(
 
 ### Custom Omni-Codes
 
+<!-- example: python-run continues -->
 ```python
 # Define your own Omni-Codes
 custom_codes = (
@@ -533,38 +600,52 @@ results = verify_crypto_package(
 
 ### Multiple Signatures (Co-Signing)
 
+<!-- example: python-run -->
 ```python
+from typing import Any, Dict, List, Tuple
+
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    KeyManagementSystem,
+    create_crypto_package,
+    dilithium_sign,
+    ed25519_sign,
+    generate_key_management_system,
+    hmac_authenticate,
+)
+
 def create_multi_signed_package(
     codes: str,
     helix_params: List[Tuple[float, float]],
     signers: List[Tuple[str, KeyManagementSystem]]
 ) -> Dict[str, Any]:
     """Create package signed by multiple parties."""
-    
+
     # Create base package with first signer
     author1, kms1 = signers[0]
     pkg = create_crypto_package(codes, helix_params, kms1, author1)
-    
+
     # Add additional signatures
     multi_pkg = {
         "content_hash": pkg.content_hash,
         "timestamp": pkg.timestamp,
         "signatures": []
     }
-    
+
     for author, kms in signers:
         content_hash = bytes.fromhex(pkg.content_hash)
-        
+
         sig = {
             "author": author,
             "hmac": hmac_authenticate(content_hash, kms.hmac_key).hex(),
             "ed25519_sig": ed25519_sign(content_hash, kms.ed25519_keypair.private_key).hex(),
-            "dilithium_sig": dilithium_sign(content_hash, kms.dilithium_keypair.private_key).hex(),
+            "dilithium_sig": dilithium_sign(content_hash, kms.dilithium_keypair.secret_key).hex(),
             "ed25519_pubkey": kms.ed25519_keypair.public_key.hex(),
             "dilithium_pubkey": kms.dilithium_keypair.public_key.hex()
         }
         multi_pkg["signatures"].append(sig)
-    
+
     return multi_pkg
 
 # Usage: Multiple organizations co-sign
@@ -573,7 +654,7 @@ kms_org2 = generate_key_management_system("Organization2")
 kms_org3 = generate_key_management_system("Organization3")
 
 multi_pkg = create_multi_signed_package(
-    MASTER_OMNI_CODES,
+    MASTER_CODES,
     MASTER_HELIX_PARAMS,
     [
         ("Organization1", kms_org1),
@@ -587,27 +668,45 @@ print(f"Package signed by {len(multi_pkg['signatures'])} parties")
 
 ### Git Integration (Signed Commits)
 
+Git signs commits with an SSH key through `ssh-agent` or a key file, so the
+private half has to be in OpenSSH form, which this library does not export.
+What an AMA Ed25519 public key *can* do is **verify** those commits: it goes
+into Git's allowed-signers file, in the SSH wire encoding
+`base64(string "ssh-ed25519" || string key)` of RFC 4253 §6.6 / RFC 8709.
+An earlier revision of this section wrote `base64(public_key)` — the raw 32
+bytes, which no SSH tool parses — into `user.signingkey`, where Git expects a
+signing key, not a verification key.
+
+<!-- example: python-run -->
 ```python
-import subprocess
+import base64
+import struct
 
-def setup_git_signing(kms: KeyManagementSystem):
-    """Configure Git to sign commits with Ed25519."""
-    
-    # Export Ed25519 key in SSH format
-    public_key_ssh = base64.b64encode(kms.ed25519_keypair.public_key).decode()
-    
-    with open("ed25519_git.key", "w") as f:
-        f.write(f"ssh-ed25519 {public_key_ssh} Steel-SecAdv-LLC\n")
-    
-    # Configure Git
-    subprocess.run(["git", "config", "user.signingkey", "ed25519_git.key"])
-    subprocess.run(["git", "config", "commit.gpgsign", "true"])
-    subprocess.run(["git", "config", "gpg.format", "ssh"])
-    
-    print("✓ Git configured for Ed25519 signing")
-    print("Commit with: git commit -S -m 'Your message'")
+from ama_cryptography.legacy_compat import generate_key_management_system
 
-setup_git_signing(kms)
+def ssh_ed25519_public_key(public_key: bytes, comment: str) -> str:
+    """OpenSSH public-key line for a raw 32-byte Ed25519 key (RFC 8709)."""
+    def ssh_string(value: bytes) -> bytes:
+        return struct.pack(">I", len(value)) + value
+
+    blob = ssh_string(b"ssh-ed25519") + ssh_string(public_key)
+    return f"ssh-ed25519 {base64.b64encode(blob).decode()} {comment}"
+
+kms = generate_key_management_system("Steel-SecAdv-LLC")
+line = ssh_ed25519_public_key(kms.ed25519_keypair.public_key, "Steel-SecAdv-LLC")
+
+# Git's allowed-signers format: "<principal> <key type> <base64 key> [comment]"
+with open("allowed_signers", "w") as f:
+    f.write(f"security@example.org {line}\n")
+print(line)
+```
+
+Then point Git at the file for verification:
+
+```bash
+git config gpg.format ssh
+git config gpg.ssh.allowedSignersFile "$PWD/allowed_signers"
+git log --show-signature
 ```
 
 ---
@@ -656,6 +755,7 @@ curl -I https://freetsa.org/tsr
 ```
 
 2. Try different TSA:
+<!-- example: pseudocode: an ellipsis sketch that shows only the tsa_url argument; contacts a TSA over the network -->
 ```python
 pkg = create_crypto_package(
     ...,
@@ -691,6 +791,7 @@ ValueError: Ed25519 private key must be 32 bytes
 
 **Solution:**
 Check key length before import:
+<!-- example: pseudocode: a two-line guard on a private_key variable the reader already holds -->
 ```python
 if len(private_key) != 32:
     raise ValueError(f"Expected 32 bytes, got {len(private_key)}")
@@ -710,12 +811,26 @@ if len(private_key) != 32:
 
 **Solution:**
 Regenerate package with correct key:
+<!-- example: python-run -->
 ```python
-# Verify you're using the same KMS
-print(f"HMAC key: {kms.hmac_key.hex()[:16]}...")
+import hashlib
+
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    create_crypto_package,
+    generate_key_management_system,
+)
+
+kms = generate_key_management_system("Steel-SecAdv-LLC")
+
+# Verify you're using the same KMS: compare a FINGERPRINT of the HMAC key,
+# never the key bytes themselves -- a log line with 16 hex digits of the key
+# discloses 64 bits of it.
+print(f"HMAC key fingerprint: {hashlib.sha3_256(kms.hmac_key).hexdigest()[:16]}")
 
 # Re-sign with correct key
-pkg = create_crypto_package(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms, ...)
+pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, author="Steel-SecAdv-LLC")
 ```
 
 ---
@@ -724,15 +839,28 @@ pkg = create_crypto_package(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms, ...)
 
 ### Batch Processing
 
+<!-- example: python-run -->
 ```python
+import time
+from typing import List, Tuple
+
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    CryptoPackage,
+    KeyManagementSystem,
+    create_crypto_package,
+    generate_key_management_system,
+)
+
 def sign_multiple_codes(
     dna_list: List[Tuple[str, List[Tuple[float, float]]]],
     kms: KeyManagementSystem
 ) -> List[CryptoPackage]:
     """Sign multiple Omni-Codes efficiently."""
-    
+
     packages = []
-    
+
     for i, (codes, helix_params) in enumerate(dna_list):
         pkg = create_crypto_package(
             codes,
@@ -741,24 +869,39 @@ def sign_multiple_codes(
             author="Steel-SecAdv-LLC"
         )
         packages.append(pkg)
-        
+
         if (i + 1) % 100 == 0:
             print(f"Signed {i + 1} packages...")
-    
-    print(f"✓ Signed {len(packages)} packages total")
+
+    print(f"Signed {len(packages)} packages total")
     return packages
 
 # Usage: Sign 1000 Omni-Code sets
-dna_list = [(MASTER_OMNI_CODES, MASTER_HELIX_PARAMS) for _ in range(1000)]
+kms = generate_key_management_system("Steel-SecAdv-LLC")
+dna_list = [(MASTER_CODES, MASTER_HELIX_PARAMS) for _ in range(1000)]
+start = time.perf_counter()
 packages = sign_multiple_codes(dna_list, kms)
 
-# Performance: ~1000 packages/second (with Dilithium)
+# Throughput on this host (Ed25519 + ML-DSA-65 per package):
+print(f"{len(packages) / (time.perf_counter() - start):,.0f} packages/second")
 ```
 
 ### Parallel Verification
 
+<!-- example: python-run -->
 ```python
+import time
 from concurrent.futures import ProcessPoolExecutor
+from typing import Dict, List, Optional, Tuple
+
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    CryptoPackage,
+    create_crypto_package,
+    generate_key_management_system,
+    verify_crypto_package,
+)
 
 def verify_package_worker(args):
     """Worker function for parallel verification."""
@@ -771,24 +914,43 @@ def verify_multiple_packages(
     helix_params: List[Tuple[float, float]],
     hmac_key: bytes,
     workers: int = 4
-) -> List[Dict[str, bool]]:
+) -> List[Dict[str, Optional[bool]]]:
     """Verify multiple packages in parallel."""
-    
+
     args_list = [
         (pkg, codes, helix_params, hmac_key)
         for pkg in packages
     ]
-    
+
     with ProcessPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(verify_package_worker, args_list))
-    
+
     return results
 
-# Usage: Verify 1000 packages with 4 workers
-results = verify_multiple_packages(packages, MASTER_OMNI_CODES, MASTER_HELIX_PARAMS, kms.hmac_key)
+# The guard is required, not decoration: on Windows and macOS worker
+# processes are spawned by re-importing this module, and without it each
+# worker would start a pool of its own.
+if __name__ == "__main__":
+    kms = generate_key_management_system("Steel-SecAdv-LLC")
+    packages = [
+        create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, author="Steel-SecAdv-LLC")
+        for _ in range(200)
+    ]
 
-# Performance: ~4000 packages/second (4 cores)
+    # Usage: Verify the packages with 4 workers
+    start = time.perf_counter()
+    results = verify_multiple_packages(packages, MASTER_CODES, MASTER_HELIX_PARAMS, kms.hmac_key)
+    elapsed = time.perf_counter() - start
+
+    assert all(v is not False for r in results for v in r.values())
+    print(f"{len(results) / elapsed:,.0f} packages/second on 4 workers")
 ```
+
+An earlier revision of these two sections printed fixed figures ("~1000
+packages/second (with Dilithium)", "~4000 packages/second (4 cores)") with no
+host or run behind them, and its parallel example had no `__main__` guard, so
+it could not run where multiprocessing spawns rather than forks. Both examples
+now measure and print the rate on the machine that runs them.
 
 ---
 
@@ -839,6 +1001,7 @@ Version 2.0.0 introduces ethical integration into the cryptographic framework, a
 #### CryptoPackage Schema Changes
 
 **v1.0.0 Schema:**
+<!-- example: python-names module=ama_cryptography.legacy_compat -->
 ```python
 @dataclass
 class CryptoPackage:
@@ -855,6 +1018,7 @@ class CryptoPackage:
 ```
 
 **v2.0.0 Schema (NEW):**
+<!-- example: python-names module=ama_cryptography.legacy_compat -->
 ```python
 @dataclass
 class CryptoPackage:
@@ -889,66 +1053,73 @@ class CryptoPackage:
 
 **Best for:** New deployments, systems with few existing packages
 
+<!-- example: python-run -->
 ```python
+import json
+from dataclasses import asdict
+
 from ama_cryptography.legacy_compat import *
 
-# Load your Omni-Codes and helix parameters
-codes = "..."  # Your Omni-Codes
-helix_params = [...]  # Your helix parameters
+# Load your Omni-Codes and helix parameters (the shipped set stands in here)
+codes = MASTER_CODES                # Your Omni-Codes
+helix_params = MASTER_HELIX_PARAMS  # Your helix parameters
 
 # Generate new KMS with ethical integration
 kms = generate_key_management_system("YourOrganization")
 
-# Create new package with ethical integration
+# Create new package with ethical integration.  Production should set
+# use_rfc3161=True with a TSA from Step 3, which contacts it over the network.
 pkg = create_crypto_package(
     codes,
     helix_params,
     kms,
     author="YourOrganization",
-    use_rfc3161=True
+    use_rfc3161=False,
 )
 
 # Save new package
 with open("CRYPTO_PACKAGE.json", 'w') as f:
     json.dump(asdict(pkg), f, indent=2)
 
-print("✓ Package regenerated with ethical integration")
+print("Package regenerated with ethical integration")
 ```
 
 #### Strategy 2: Backward-Compatible Verification
 
 **Best for:** Systems that must verify both v1.0.0 and v2.0.0 packages
 
+<!-- example: python-run continues -->
 ```python
+import hashlib
 import json
 from typing import Optional
 
 def load_package_any_version(package_file: str) -> CryptoPackage:
     """Load package from any version, adding defaults for missing fields."""
-    
+
     with open(package_file, 'r') as f:
         pkg_dict = json.load(f)
-    
+
     # Check if ethical fields are present
     if 'ethical_vector' not in pkg_dict:
         # v1.0.0 package - add default ethical vector
-        print("⚠ Loading v1.0.0 package without ethical integration")
+        print("WARNING: loading v1.0.0 package without ethical integration")
         pkg_dict['ethical_vector'] = ETHICAL_VECTOR.copy()
-        
+
         # Compute ethical hash for consistency
         ethical_json = json.dumps(pkg_dict['ethical_vector'], sort_keys=True)
         pkg_dict['ethical_hash'] = hashlib.sha3_256(ethical_json.encode()).hexdigest()
-    
+
     return CryptoPackage(**pkg_dict)
 
 # Usage
 pkg = load_package_any_version("CRYPTO_PACKAGE.json")
 
 # Verify with warning if no ethical binding
-results = verify_crypto_package(codes, helix_params, pkg, hmac_key)
+results = verify_crypto_package(codes, helix_params, pkg, kms.hmac_key)
 
 if pkg.version == "1.0.0":
-    print("⚠ Package verified but lacks ethical binding")
+    print("WARNING: package verified but lacks ethical binding")
     print("  Consider regenerating with v2.0.0 for full security")
 ```
 
@@ -956,9 +1127,20 @@ if pkg.version == "1.0.0":
 
 **Best for:** Systems with many existing packages
 
+<!-- example: python-run -->
 ```python
-import os
+import json
+from dataclasses import asdict
 from pathlib import Path
+from typing import List, Tuple
+
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    KeyManagementSystem,
+    create_crypto_package,
+    generate_key_management_system,
+)
 
 def migrate_package_directory(
     input_dir: str,
@@ -968,43 +1150,45 @@ def migrate_package_directory(
     helix_params: List[Tuple[float, float]]
 ):
     """Migrate all packages in directory to v2.0.0."""
-    
+
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
-    
+
     # Find all JSON packages
     packages = list(input_path.glob("*.json"))
-    
+
     print(f"Found {len(packages)} packages to migrate")
-    
+
     for pkg_file in packages:
         print(f"Migrating {pkg_file.name}...")
-        
-        # Create new package with ethical integration
+
+        # Create new package with ethical integration (use_rfc3161=True in
+        # production, as in Strategy 1)
         new_pkg = create_crypto_package(
             codes,
             helix_params,
             kms,
             author=kms.author if hasattr(kms, 'author') else "Unknown",
-            use_rfc3161=True
+            use_rfc3161=False,
         )
-        
+
         # Save to output directory
         output_file = output_path / pkg_file.name
         with open(output_file, 'w') as f:
             json.dump(asdict(new_pkg), f, indent=2)
-        
-        print(f"  ✓ Migrated to {output_file}")
-    
-    print(f"\n✓ Migration complete: {len(packages)} packages")
+
+        print(f"  Migrated to {output_file}")
+
+    print(f"\nMigration complete: {len(packages)} packages")
 
 # Usage
+kms = generate_key_management_system("YourOrganization")
 migrate_package_directory(
     input_dir="packages_v1",
     output_dir="packages_v2",
     kms=kms,
-    codes=MASTER_OMNI_CODES,
+    codes=MASTER_CODES,
     helix_params=MASTER_HELIX_PARAMS
 )
 ```
@@ -1013,22 +1197,27 @@ migrate_package_directory(
 
 #### Ethical Vector in KMS
 
-**v2.0.0 adds ethical vector to KeyManagementSystem:**
+**v2.0.0 adds ethical vector to KeyManagementSystem** (shown as it stands
+today, with the fields added since):
 
+<!-- example: python-names module=ama_cryptography.legacy_compat -->
 ```python
 @dataclass
 class KeyManagementSystem:
     master_secret: bytes
     hmac_key: bytes
+    hkdf_salt: bytes
     ed25519_keypair: Ed25519KeyPair
-    dilithium_keypair: DilithiumKeyPair
+    dilithium_keypair: Optional[DilithiumKeyPair]
     creation_date: str
     rotation_schedule: str
     version: str
     ethical_vector: Dict[str, float]  # NEW in v2.0.0
+    quantum_signatures_enabled: bool = True
 ```
 
 **Default Ethical Vector:**
+<!-- example: python-run -->
 ```python
 ETHICAL_VECTOR = {
     "omniscient": 3.0,        # Triad of Wisdom
@@ -1037,10 +1226,17 @@ ETHICAL_VECTOR = {
     "omnibenevolent": 3.0,    # Triad of Integrity
 }
 # Constraint: Σw = 12.0
+assert sum(ETHICAL_VECTOR.values()) == 12.0
+
+from ama_cryptography.legacy_compat import ETHICAL_VECTOR as DEFAULT_ETHICAL_VECTOR
+assert ETHICAL_VECTOR == DEFAULT_ETHICAL_VECTOR
 ```
 
 **Custom Ethical Vector (Advanced):**
+<!-- example: python-run -->
 ```python
+from ama_cryptography.legacy_compat import generate_key_management_system
+
 # Define custom ethical vector for domain-specific use
 custom_ethical_vector = {
     "omniscient": 4.0,        # Increased verification emphasis
@@ -1065,69 +1261,90 @@ kms = generate_key_management_system(
 
 **v2.0.0 packages include ethical hash for verification:**
 
+<!-- example: python-run -->
 ```python
+import hashlib
+import json
+
+from ama_cryptography.legacy_compat import (
+    MASTER_CODES,
+    MASTER_HELIX_PARAMS,
+    CryptoPackage,
+    create_crypto_package,
+    generate_key_management_system,
+    verify_crypto_package,
+)
+
 def verify_ethical_binding(pkg: CryptoPackage) -> bool:
     """Verify ethical vector matches its hash."""
-    
+
     # Recompute ethical hash
     ethical_json = json.dumps(pkg.ethical_vector, sort_keys=True)
     computed_hash = hashlib.sha3_256(ethical_json.encode()).hexdigest()
-    
+
     # Compare with package hash
     if computed_hash != pkg.ethical_hash:
-        print("✗ Ethical hash mismatch - package may be tampered")
+        print("FAILED: ethical hash mismatch - package may be tampered")
         return False
-    
+
     # Verify constraint
     total_weight = sum(pkg.ethical_vector.values())
     if abs(total_weight - 12.0) > 1e-10:
-        print(f"✗ Ethical vector constraint violated: Σw = {total_weight} ≠ 12.0")
+        print(f"FAILED: ethical vector constraint violated: sum = {total_weight}, not 12.0")
         return False
-    
-    print("✓ Ethical binding verified")
+
+    print("OK: ethical binding verified")
     return True
 
 # Usage
+kms = generate_key_management_system("YourOrganization")
+pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, author="YourOrganization")
 if verify_ethical_binding(pkg):
     print("Package has valid ethical integration")
 ```
 
 ### Testing Migration
 
+<!-- example: python-run continues -->
 ```python
 def test_migration():
     """Test migration from v1.0.0 to v2.0.0."""
-    
+
     print("Testing migration...")
-    
+
     # 1. Create v2.0.0 package
     kms = generate_key_management_system("TestOrg")
     pkg_v2 = create_crypto_package(
-        MASTER_OMNI_CODES,
+        MASTER_CODES,
         MASTER_HELIX_PARAMS,
         kms,
         author="TestOrg"
     )
-    
+
     # 2. Verify all fields present
     assert hasattr(pkg_v2, 'ethical_vector')
     assert hasattr(pkg_v2, 'ethical_hash')
-    assert len(pkg_v2.ethical_vector) == 12
+    # ETHICAL_VECTOR is FOUR pillars weighted 3.0 each: the sum is 12.0, the
+    # length is 4 (ama_cryptography/equations.py:142-153, which raises at
+    # import if either stops holding).
+    assert len(pkg_v2.ethical_vector) == 4
     assert sum(pkg_v2.ethical_vector.values()) == 12.0
-    
+
     # 3. Verify ethical hash
     assert verify_ethical_binding(pkg_v2)
-    
+
     # 4. Verify cryptographic integrity
     results = verify_crypto_package(
-        MASTER_OMNI_CODES,
+        MASTER_CODES,
         MASTER_HELIX_PARAMS,
         pkg_v2,
         kms.hmac_key
     )
-    assert all(results.values())
-    
-    print("✓ Migration test passed")
+    # None means "not applicable" (the RFC 3161 checks, for a package with no
+    # token); only False is a failed check.
+    assert all(verdict is not False for verdict in results.values())
+
+    print("Migration test passed")
 
 test_migration()
 ```
@@ -1228,8 +1445,6 @@ cmake .. \
 | `AMA_ENABLE_SIMD` | ON | Enable SIMD optimizations |
 | `AMA_ENABLE_AVX2` | ON | Enable AVX2 instructions |
 | `AMA_ENABLE_LTO` | ON | Enable link-time optimization |
-| `AMA_ED25519_VERIFY_SHAMIR` | ON | Ed25519 verify path (in-tree backend only; ignored by the donna shim). `ON` = Shamir/Straus joint scalar mult `[s]B + [h](-A)` in one interleaved pass (~30% fewer point doublings than the split layout). `OFF` = sequential layout (`[s]B` via comb + `[h](-A)` via wNAF + final point add). Both paths are byte-identical at the `R_check` level (verified by `tests/c/test_ed25519_verify_equiv.c` layer B). |
-| `AMA_ED25519_VERIFY_WINDOW` | 5 | wNAF window width used by the variable-base scalar mults inside the Ed25519 verify path (both Shamir joint mult and the split mult; in-tree backend only). Accepted range: `[2, 6]`. Stack table size per point is `2^(W-2) * sizeof(ge25519_p3)` ≈ 160 B × `2^(W-2)` (Shamir instantiates two such tables). Practical sweet spot is `W=5` (≈18% fewer adds vs `W=4`); `W=6` is roughly par on Curve25519 with a doubled stack footprint. |
 | `AMA_ENABLE_DUDECT` | OFF | Build the `test_dudect` empirical constant-time test binary (Welch's t-test on timing samples). Required to run the dudect CI workflow (`.github/workflows/dudect.yml`). |
 
 ### Environment Variables (Python Build)
@@ -1303,11 +1518,18 @@ Check state: `ama_cryptography.module_status()`
 self-tests. If they pass, the module returns to OPERATIONAL.
 
 **Integrity Digest:** The module's source files are hashed at startup and
-compared to a stored digest. After legitimate code changes, regenerate:
+compared to a stored digest. After legitimate code changes, regenerate
+(build pipeline only):
 
 ```bash
-python -m ama_cryptography.integrity --update
+AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
 ```
+
+A bare `--update` exits 2: the refresh is gated behind
+`AMA_BUILD_PIPELINE=1` so a post-install user cannot silently re-bless
+tampered sources, and `--sign` also regenerates the signed
+`_integrity_signature.py` artefact, which takes precedence over the plain
+digest at import. See `SECURITY.md` ("`--update` is build-pipeline-only").
 
 Verify the module integrity digest (runs POST as part of normal import):
 
@@ -1315,16 +1537,22 @@ Verify the module integrity digest (runs POST as part of normal import):
 python -m ama_cryptography.integrity --verify
 ```
 
-**Continuous RNG Test:** Use `ama_cryptography.secure_token_bytes(n)` instead
-of `secrets.token_bytes(n)` for random byte generation with continuous health
-testing. This wrapper detects consecutive identical outputs and enters ERROR
-state if the RNG fails.
+**Repeated-output CSPRNG check:** Use `ama_cryptography.secure_token_bytes(n)`
+instead of `secrets.token_bytes(n)` for random byte generation with a
+defence-in-depth sanity check. This wrapper detects consecutive identical
+outputs from the OS CSPRNG and enters ERROR state. It is not the SP 800-90B
+health-test suite (Repetition Count, Adaptive Proportion) FIPS 140-3 specifies,
+nor an approved SP 800-90A DRBG — see `CSRC_STANDARDS.md` §3.1(e).
 
 > **Note:** This implementation has NOT been submitted for CMVP validation and is NOT FIPS 140-3 certified. These controls represent design alignment with FIPS 140-3 Level 1 technical requirements.
 
-**Pairwise Consistency Tests:** Functions `pairwise_test_signature()` and
-`pairwise_test_kem()` in `ama_cryptography._self_test` can be called after
-any key generation to verify the keypair is consistent.
+**Pairwise Consistency Tests:** Every asymmetric key generation in the package
+runs its pairwise consistency test itself, before the keypair is returned
+(`pairwise_test_signature()`, `pairwise_test_kem()` or
+`pairwise_test_agreement()`, INVARIANT-41). There is nothing for application
+code to call and no way to switch it off; a failure enters the ERROR state and
+raises `CryptoModuleError` instead of returning the keypair. See
+`docs/compliance/CSRC_ALIGN_REPORT.md` §4.4.
 
 ### Contact
 
@@ -1338,6 +1566,6 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
-**Document Version:** 4.0.0
-**Last Updated:** 2026-07-25
+**Document Version:** 5.0.0
+**Last Updated:** 2026-08-24
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**

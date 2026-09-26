@@ -86,7 +86,7 @@ REPO_ROOT = VECTORS_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ama_cryptography.pqc_backends import (  # noqa: E402
+from ama_cryptography.pqc_backends import (  # noqa: E402 -- import follows the repo-root sys.path insert above (WP-001)
     native_aes256_gcm_decrypt,
     native_chacha20poly1305_decrypt,
     native_ed25519_verify,
@@ -386,7 +386,16 @@ def drive_ecdsa_verify(c: Case) -> tuple[bool, str]:
     pub = bytes.fromhex(c.group["publicKey"]["uncompressed"])
     if pub[:1] != b"\x04" or len(pub) != 1 + 2 * field:
         return False, "public key is not an uncompressed SEC 1 point"
-    digest = hashlib.new(sha, c.hexf("msg")).digest()
+    # nosec-justification: `sha` cannot name a weak algorithm.  It is the
+    # value side of _ECDSA_HASHES, which lists only sha256/sha384/sha512, and
+    # the `sha is None` guard six lines up returns before this point for any
+    # label not in that table.  bandit reports B324 because the argument is a
+    # variable, not because a weak hash is reachable.  `usedforsecurity=False`
+    # is deliberately NOT used: these digests are the message hashes an ECDSA
+    # verification consumes, so declaring them non-security would be false.
+    digest = hashlib.new(
+        sha, c.hexf("msg")
+    ).digest()  # nosec B324 -- SHA-2 allowlist above (WP-001)
 
     try:
         if curve == "secp256k1":

@@ -27,45 +27,98 @@
 #                      here instead of surfacing 40 minutes deep in the
 #                      cibuildwheel matrix, after every platform has built.
 #
-#   pull_request       When a PR touches the anchor plumbing itself (the paths
-#                      below).  The installed pair is repository *configuration*
-#                      that this code depends on, so a change to the code that
-#                      consumes it is exactly when the configuration should be
-#                      re-verified.  It also closes a bootstrap gap: a
+#   pull_request       Every PR; the `changes` job decides whether it touches
+#                      the anchor plumbing (its WATCHED_PATHS), and the check is
+#                      skipped -- a passing context -- when it does not.  On
+#                      this trigger the job exercises the PLUMBING
+#                      with a throwaway keypair generated in the job — the
+#                      release signing seed is never placed in the environment
+#                      of a pull_request run.  A same-repository PR runs the
+#                      PR head's own Python (`pip install`, the integrity
+#                      re-sign, the derivation below), so exposing the seed
+#                      there would hand the release signing key to whatever a
+#                      branch push carries; the installed pair itself is
+#                      verified on the release preflight (workflow_call from a
+#                      `v*` tag) and on a workflow_dispatch of `main`.  A
+#                      dispatch of any OTHER ref also gets the throwaway pair:
+#                      it runs that branch's code, and a branch is not a
+#                      trusted ref.  (The workflow file itself comes from the
+#                      ref being run, so a branch could edit these conditions;
+#                      what binds is the secret living in an environment whose
+#                      deployment policy admits only `main` and `v*` tags,
+#                      which is repository configuration.)  This also closes a bootstrap gap: a
 #                      workflow_dispatch entry is only registered once the file
 #                      reaches the default branch, so the very first PR to add
 #                      anchor plumbing could not verify the key it was adding
 #                      support for until after the merge it was meant to gate.
 #
-# A pull request from a fork is skipped: GitHub does not expose repository
-# secrets to it, so the seed cannot be derived and a failure there would report
-# a missing secret rather than a bad key.  Run it from the Actions tab instead.
+# Because a pull_request run needs no secret, it runs for fork PRs too.
 name: Integrity anchor check
 
 on:
   workflow_dispatch:
   workflow_call:
+    # This reusable workflow reads exactly one secret.  Declaring it lets the
+    # caller forward only that secret instead of `secrets: inherit` (which would
+    # hand this job the entire secret set — audit Low).  Optional: the job below
+    # validates presence and fails closed with a clear message when it is unset,
+    # and fork PRs have no secrets to forward.
+    secrets:
+      AMA_INTEGRITY_SIGNING_SEED_HEX:
+        required: false
   pull_request:
-    paths:
-      - '.github/workflows/integrity-anchor-check.yml'
-      - '.github/workflows/release.yml'
-      - 'ama_cryptography/_build_sign.py'
 
 permissions:
   contents: read
 
 jobs:
+  # Every pull request runs this workflow, and this job decides whether the
+  # change touches anything the jobs below verify.  It replaced a path-filtered
+  # workflow plus a no-op twin that reported the same context: the two were not
+  # exclusive (paths: fires when ANY changed file matches, paths-ignore: when ANY
+  # is not ignored), so a mixed pull request ran both and the twin's green
+  # arrived first.  tools/pr_touches_watched_paths.py has the full account.  A
+  # failed detection is a failure, never "not relevant".
+  changes:
+    name: Relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.match.outputs.relevant }}
+    steps:
+      - name: Checkout (the merge commit and its base parent)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Does this change touch a watched path?
+        id: match
+        env:
+          EVENT: ${{ github.event_name }}
+          WATCHED_PATHS: |
+            .github/workflows/integrity-anchor-check.yml
+            .github/workflows/release.yml
+            ama_cryptography/_build_sign.py
+            CMakeLists.txt
+            tools/pr_touches_watched_paths.py
+        run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
+
   verify-anchor:
     name: Verify signing seed matches the trust anchor
-    # Fork PRs cannot see `secrets`, so there is nothing to verify — see the
-    # header note.  Every other trigger (dispatch, workflow_call from
-    # release.yml, and a same-repository PR) does have access and runs.
+    needs: [changes]
+    # See baseline-guard.yml: run when relevant or when relevance is unknown.
     if: >-
-      github.event_name != 'pull_request'
-      || github.event.pull_request.head.repo.full_name == github.repository
+      always()
+      && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Relevance was decided
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::The changes job did not succeed (${{ needs.changes.result }}); the check cannot know whether it applies."
+          exit 1
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -75,29 +128,54 @@ jobs:
           python-version: '3.12'
 
       - name: Install build dependencies
-        run: python -m pip install --upgrade pip 'cmake>=4.4.0' 'cython>=3.2.8' 'numpy>=1.24.0'
+        run: python -m pip install --upgrade pip 'cmake>=4.4.3' 'cython>=3.3.0' 'numpy>=1.24.0'
 
       - name: Build the native library
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          # Release: this job signs and verifies an integrity artefact against a
+          # native library, so the library it builds should be the shape the
+          # wheel ships (setup.py compiles at -O3), not an unoptimized one.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_shared
 
       - name: Re-sign the integrity artefact for this build's native library
         # The derive step below calls into the native Ed25519 kernel, which
-        # requires POST to have passed. The committed artefact's native digest
-        # is specific to the build it was signed against and does not match the
-        # library this job just compiled, so POST would fail-close on a native
-        # digest mismatch before the seed/anchor check ever ran. Re-sign for
-        # this build (the wheel signer does the same per platform); the seed and
-        # anchor being compared are independent of the integrity signing key.
+        # requires POST to have passed. The signed artefact is a per-build
+        # output that is not tracked in the repository (AGENTS.md section
+        # 8.4), so a checkout carries none: this step generates the one that
+        # binds the library this job just compiled, and POST verifies it at
+        # full strength rather than at digest-only strength. (This comment
+        # used to describe re-signing over a committed artefact whose native
+        # digest did not match; that artefact is no longer committed.) The
+        # wheel signer does the same per platform; the seed and anchor being
+        # compared are independent of the integrity signing key.
         env:
           AMA_BUILD_PIPELINE: "1"
         run: python -m ama_cryptography.integrity --update --sign
 
+      - name: Off a trusted ref, use a throwaway pair (the release seed is never given to untrusted code)
+        if: github.event_name == 'pull_request' || !(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          from ama_cryptography.pqc_backends import native_ed25519_keypair
+
+          public_key, secret_key = native_ed25519_keypair()
+          print(f"AMA_CHECK_SEED={secret_key[:32].hex()}")
+          print(f"AMA_CHECK_ANCHOR={public_key.hex()}")
+          PY
+          echo "${{ github.event_name }} on ${{ github.ref }}: verifying the plumbing with a throwaway keypair."
+
       - name: Check that both values are configured
+        # `cond && a || b` yields b whenever a is empty, so the old spelling
+        # (`pr && throwaway || secret`) handed a pull request the REAL signing
+        # seed if the throwaway step left its value empty.  Inverted, the
+        # fallback on a pull request is the throwaway, and an unset secret on
+        # a push falls back to an unset variable, which the check below
+        # reports as missing.
         env:
-          SEED: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
-          ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          SEED: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.AMA_INTEGRITY_SIGNING_SEED_HEX || env.AMA_CHECK_SEED }}
+          ANCHOR: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX || env.AMA_CHECK_ANCHOR }}
         run: |
           missing=0
           if [ -z "$SEED" ]; then
@@ -117,8 +195,8 @@ jobs:
           # line (argv is world-readable via /proc on the runner) and never
           # echoed.  GitHub masks the secret in logs regardless; this job also
           # never asks for it to be printed.
-          SEED: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
-          ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          SEED: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.AMA_INTEGRITY_SIGNING_SEED_HEX || env.AMA_CHECK_SEED }}
+          ANCHOR: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX || env.AMA_CHECK_ANCHOR }}
         run: |
           python - <<'PY'
           import os

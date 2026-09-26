@@ -15,7 +15,6 @@ Production-grade adversarial tests covering:
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
-import contextlib
 import ctypes
 import secrets
 import time
@@ -476,15 +475,24 @@ class TestCrossAlgorithm:
     @skip_no_kyber
     @skip_no_dilithium
     def test_dilithium_pk_as_kyber(self) -> None:
-        """Using Dilithium pk for Kyber encap should not crash."""
+        """A Dilithium pk handed to Kyber encapsulation is REJECTED as a key.
+
+        FIPS 203 Sec 7.2's modulus check finds a 12-bit coefficient >= q in
+        the truncated Dilithium bytes (767 of every 4096 encodable values are
+        out of range, over 1024 coefficients), and the binding reports that as
+        ValueError — an input rejection — never as "backend unavailable", and
+        never by encapsulating to bytes that are not an encapsulation key.
+        (This assertion used to sit inside contextlib.suppress(Exception), so
+        it could not fail.)
+        """
+        from ama_cryptography.pqc_backends import KyberUnavailableError, kyber_encapsulate
+
         dil_pk, _ = _dilithium_keygen()
         fake_pk = (dil_pk + b"\x00" * KYBER_PK)[:KYBER_PK]
-        # Should not crash — may succeed with unusable keys
-        with contextlib.suppress(Exception):
-            from ama_cryptography.pqc_backends import kyber_encapsulate
-
-            result = kyber_encapsulate(fake_pk)
-            assert isinstance(result.ciphertext, bytes)
+        assert len(fake_pk) == KYBER_PK, "the length check must not be what rejects it"
+        with pytest.raises(ValueError, match=r"FIPS 203 Sec 7\.2") as excinfo:
+            kyber_encapsulate(fake_pk)
+        assert not isinstance(excinfo.value, KyberUnavailableError)
 
 
 # ===========================================================================
@@ -566,10 +574,16 @@ class TestSecurityEdgeCases:
 
     @skip_no_kyber
     def test_kyber_all_zero_sk(self) -> None:
-        """Kyber decapsulation with all-zero SK should not crash."""
+        """An all-zero decapsulation key is REJECTED, not decapsulated with.
+
+        Its embedded H(ek) (all zeros) is not SHA3-256 of its embedded ek, so
+        FIPS 203 Sec 7.3 input check 3 fails and the binding raises ValueError
+        rather than returning an implicit-rejection secret derived from a key
+        that is not a key.  (This assertion, too, used to be wrapped in
+        contextlib.suppress(Exception).)
+        """
         pk, _ = _kyber_keygen()
         ct, _ = _kyber_encap(pk)
         zero_sk = b"\x00" * KYBER_SK
-        with contextlib.suppress(Exception):
-            ss = _kyber_decap(ct, zero_sk)
-            assert isinstance(ss, bytes)
+        with pytest.raises(ValueError, match=r"FIPS 203 Sec 7\.3"):
+            _kyber_decap(ct, zero_sk)

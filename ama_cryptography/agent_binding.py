@@ -457,6 +457,18 @@ class AgentBinding:
         Pass the result verbatim as the ``ctx`` argument so the signature is
         bound to this agent instance and capability set.  Refuses (and returns
         nothing) when the policy refuses.
+
+        For a RESTRICTED binding the value is a function of ``authority_key``
+        as well as of the binding, so it cannot be reproduced without the key.
+        It could be until the 2026-09 audit (A-6): the context was
+        ``SHA3-256(0x02 || encode())``, and ``encode()`` works on an
+        unauthorized binding, so the adversary this feature names — an agent
+        with in-process access — recomputed it holding no key at all.
+        Unrestricted bindings have no operator secret and take a fixed zero
+        binder, ``SHA3-256(0x02 || encode() || 0^32)``.  That is still a
+        change: before 5.0.0 every binding's context was
+        ``SHA3-256(0x02 || encode())``, so a signature made under a 4.x
+        context does not verify under this one, whatever the binding.
         """
         lib = _require_native()
         key = None if authority_key is None else _as_bytes("authority_key", authority_key)
@@ -479,6 +491,16 @@ class AgentBinding:
         authority_key: Optional[_BufferInput] = None,
     ) -> bytes:
         """HKDF-SHA3-256 with this binding folded into ``info``.
+
+        For a RESTRICTED binding the output is a function of ``authority_key``
+        as well — the C side mixes in a binder derived from it — so an agent
+        that can call ``native_hkdf`` directly still cannot produce these
+        bytes.  Before the 2026-09 audit (A-6) it could: the key gated this
+        entry point and nothing more, and the derivation was reproducible from
+        the public canonical encoding.  Unrestricted bindings have no operator
+        secret and take a fixed zero binder — which still inserts 32 bytes
+        into ``info``, so for the same inputs every binding, unrestricted
+        ones included, derives a different key than it did before 5.0.0.
 
         Args:
             ikm: Input key material.

@@ -120,20 +120,42 @@ static void ama_sha512_transform(uint64_t state[8], const uint8_t block[AMA_SHA5
     a = state[0]; b = state[1]; c = state[2]; d = state[3];
     e = state[4]; f = state[5]; g = state[6]; h = state[7];
 
-    for (i = 0; i < 80; i++) {
-        uint64_t S1 = ama_sha512_rotr64(e, 14) ^ ama_sha512_rotr64(e, 18) ^ ama_sha512_rotr64(e, 41);
-        uint64_t ch = (e & f) ^ ((~e) & g);
-        t1 = h + S1 + ch + ama_sha512_k[i] + W[i];
-        uint64_t S0 = ama_sha512_rotr64(a, 28) ^ ama_sha512_rotr64(a, 34) ^ ama_sha512_rotr64(a, 39);
-        uint64_t maj = (a & b) ^ (a & c) ^ (b & c);
-        t2 = S0 + maj;
+    /* Eight rounds per iteration with the working variables renamed rather
+     * than rotated: the same FIPS 180-4 round, minus the eight register
+     * moves a rotating loop spends per round.  Ch and Maj are the
+     * equivalent forms g ^ (e & (f ^ g)) and (a & b) | (c & (a | b)). */
+#define AMA_SHA512_ROUND(A, B, C, D, E, F, G, H, K, WV)                                   \
+    do {                                                                                  \
+        t1 = (H) + (ama_sha512_rotr64((E), 14) ^ ama_sha512_rotr64((E), 18) ^            \
+                    ama_sha512_rotr64((E), 41)) +                                         \
+             ((G) ^ ((E) & ((F) ^ (G)))) + (K) + (WV);                                    \
+        t2 = (ama_sha512_rotr64((A), 28) ^ ama_sha512_rotr64((A), 34) ^                  \
+              ama_sha512_rotr64((A), 39)) +                                               \
+             (((A) & (B)) | ((C) & ((A) | (B))));                                         \
+        (D) += t1;                                                                        \
+        (H) = t1 + t2;                                                                    \
+    } while (0)
 
-        h = g; g = f; f = e; e = d + t1;
-        d = c; c = b; b = a; a = t1 + t2;
+    for (i = 0; i < 80; i += 8) {
+        AMA_SHA512_ROUND(a, b, c, d, e, f, g, h, ama_sha512_k[i + 0], W[i + 0]);
+        AMA_SHA512_ROUND(h, a, b, c, d, e, f, g, ama_sha512_k[i + 1], W[i + 1]);
+        AMA_SHA512_ROUND(g, h, a, b, c, d, e, f, ama_sha512_k[i + 2], W[i + 2]);
+        AMA_SHA512_ROUND(f, g, h, a, b, c, d, e, ama_sha512_k[i + 3], W[i + 3]);
+        AMA_SHA512_ROUND(e, f, g, h, a, b, c, d, ama_sha512_k[i + 4], W[i + 4]);
+        AMA_SHA512_ROUND(d, e, f, g, h, a, b, c, ama_sha512_k[i + 5], W[i + 5]);
+        AMA_SHA512_ROUND(c, d, e, f, g, h, a, b, ama_sha512_k[i + 6], W[i + 6]);
+        AMA_SHA512_ROUND(b, c, d, e, f, g, h, a, ama_sha512_k[i + 7], W[i + 7]);
     }
+#undef AMA_SHA512_ROUND
 
     state[0] += a; state[1] += b; state[2] += c; state[3] += d;
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+
+    /* Same rationale as sha256_compress_scalar: W[0..15] is the verbatim
+     * input block (an HMAC's K^ipad/K^opad, HKDF's keyed inputs), left on
+     * the dead frame otherwise while the callers scrub their own k_pad
+     * (INVARIANT-6). */
+    ama_secure_memzero(W, sizeof(W));
 }
 
 /* ============================================================================
@@ -220,7 +242,7 @@ static AMA_SHA2_MAYBE_UNUSED void ama_sha512_ctx_final(ama_sha512_ctx *ctx,
     /* Bytes of {0x80, 0x00...} so that (rem + padlen) % 128 == 112, leaving
      * exactly the trailing 16 bytes for the length field. */
     padlen = (rem < 112) ? (112 - rem) : (240 - rem);
-    memset(pad, 0, padlen + 16);
+    memset(pad, 0, padlen + 16);  // PUBLIC-DATA: pad — the FIPS 180-4 padding block (0x80, zeros, message length)
     pad[0] = 0x80;
     ama_sha512_store64_be(pad + padlen, bits_hi);
     ama_sha512_store64_be(pad + padlen + 8, bits_lo);
@@ -239,14 +261,14 @@ static AMA_SHA2_MAYBE_UNUSED void ama_sha512_ctx_final(ama_sha512_ctx *ctx,
  * ONE-SHOT HASHES
  * ============================================================================ */
 
-static AMA_SHA2_MAYBE_UNUSED void ama_sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
+static AMA_SHA2_MAYBE_UNUSED void ama_sha512_oneshot(const uint8_t *data, size_t len, uint8_t out[64]) {
     ama_sha512_ctx ctx;
     ama_sha512_ctx_init(&ctx);
     ama_sha512_ctx_update(&ctx, data, len);
     ama_sha512_ctx_final(&ctx, out, AMA_SHA512_DIGEST_SIZE);
 }
 
-static AMA_SHA2_MAYBE_UNUSED void ama_sha384(const uint8_t *data, size_t len, uint8_t out[48]) {
+static AMA_SHA2_MAYBE_UNUSED void ama_sha384_oneshot(const uint8_t *data, size_t len, uint8_t out[48]) {
     ama_sha512_ctx ctx;
     ama_sha384_ctx_init(&ctx);
     ama_sha512_ctx_update(&ctx, data, len);
@@ -278,7 +300,7 @@ static AMA_SHA2_MAYBE_UNUSED int ama_hmac_sha512_3(
 
     /* If key > block size, hash it first (RFC 2104 §2) */
     if (key_len > AMA_SHA512_BLOCK_SIZE) {
-        ama_sha512(key, key_len, key_hash);
+        ama_sha512_oneshot(key, key_len, key_hash);
         key = key_hash;
         key_len = AMA_SHA512_DIGEST_SIZE;
     }

@@ -49,11 +49,15 @@ from __future__ import annotations
 import argparse
 import math
 import re
-import subprocess  # nosec B404 -- fixed-argv git invocation only, see _tracked_files (SEC-001)
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Pattern, Sequence
+
+#: The repository root, put on ``sys.path`` before the ``tools._repo`` import so
+#: the sibling resolves when this file runs as a script (``tools/`` is on the
+#: path then, not the root).  Same pattern as ``check_avx_scoping.py``.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Allowlist — every entry states WHY the path cannot contain a live secret.
@@ -67,10 +71,6 @@ _ALLOWED_PREFIXES: tuple[tuple[str, str], ...] = (
     (
         "ama_cryptography/_post_kats/",
         "FIPS 140-3 power-on self-test vectors — published test data",
-    ),
-    (
-        "src/c/vendor/",
-        "vendored public-domain ed25519-donna reference tables (public constants)",
     ),
 )
 
@@ -296,14 +296,50 @@ def _allow_reason(rel_path: str) -> Optional[str]:
     return None
 
 
+#: The per-line opt-out marker, as a COMMENT token (``#`` or ``//``), in any
+#: form.  Matching the bare substring anywhere on the line meant a string
+#: literal such as ``x = "nosecret"`` switched the scanner off for everything
+#: else on that line.
+_OPTOUT_MARKER: Pattern[str] = re.compile(r"(?:#|//)\s*(?i:nosecret)\b")
+
+#: The only form of the opt-out that is honoured: the marker, a colon, a
+#: written reason, and a tracking reference — INVARIANT-13's requirements for
+#: every suppression marker.  Nothing else in the repository audits this one:
+#: ``tools/check_suppression_hygiene.py`` reads only tracked ``*.py`` comments,
+#: and this scanner also reads workflow YAML, JSON, Markdown, shell and TOML,
+#: so the requirement is enforced here, where every file type is seen.
+#:
+#: In a Python file the marker is ALSO a blanket bandit suppression: bandit's
+#: ``NOSEC_COMMENT`` (``#\s*nosec:?...``) matches its prefix, and a comment
+#: that names no test id skips every test on the line (measured against
+#: bandit 1.9.2).  ``check_suppression_hygiene.py`` therefore refuses it in
+#: ``*.py``; the opt-out is usable only in files bandit does not read.
+_OPTOUT_FORM: Pattern[str] = re.compile(
+    r"(?:#|//)\s*(?i:nosecret):[ \t]*[^\s(][^\n]*?\([A-Z]+-\d+\)"
+)
+
+
 def scan_text(rel_path: str, text: str) -> list[Finding]:
     """Scan already-loaded ``text`` and return findings for ``rel_path``."""
     findings: list[Finding] = []
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        # A line that opts out explicitly must say why; the marker is audited
-        # by tools/check_suppression_hygiene.py like every other suppression.
-        if "nosecret" in raw_line.lower():
+        # A line opts out only through the full marker form: a reason and a
+        # tracking reference.  A marker without them is a finding of its own,
+        # AND the line is still scanned — an unjustified opt-out silences
+        # nothing.
+        if _OPTOUT_FORM.search(raw_line):
             continue
+        if _OPTOUT_MARKER.search(raw_line):
+            findings.append(
+                Finding(
+                    rel_path,
+                    line_no,
+                    "unjustified-optout",
+                    "secret-scan opt-out without a reason and tracking reference "
+                    "(expected: marker, colon, reason, then e.g. (SEC-001))",
+                    raw_line.strip()[:160],
+                )
+            )
 
         # Match against the concatenation-normalised form so a credential split
         # across adjacent literals cannot slip past.  The *excerpt* reported to
@@ -368,33 +404,23 @@ def scan_file(path: Path, repo_root: Path) -> list[Finding]:
 
 
 def _tracked_files(repo_root: Path, staged_only: bool) -> list[Path]:
-    """Enumerate files from git (fixed argv, ``shell=False``)."""
-    args = (
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"]
-        if staged_only
-        else ["git", "ls-files"]
-    )
+    """Enumerate files from git via the shared ``tools/_repo.py`` helper.
+
+    The listing used to be a bare ``git ls-files`` split on newlines.  git
+    C-quotes a non-ASCII path there (``"cl\\303\\251_key.txt"``), the quoted
+    string named no file, and the ``is_file()`` filter dropped it: a key in
+    ``clé_key.txt`` scanned clean.  The helper lists with ``-z`` and fails
+    closed on a tracked or staged path it cannot hand back as a regular file.
+    """
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from tools._repo import TrackedFilesError, staged_files, tracked_files
+
     try:
-        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, trusted git binary (SEC-002)
-            args,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError) as exc:
+        return staged_files(repo_root) if staged_only else tracked_files(repo_root)
+    except TrackedFilesError as exc:
         print(f"ERROR: unable to enumerate files via git: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-
-    paths = []
-    for name in out.splitlines():
-        if not name.strip():
-            continue
-        candidate = repo_root / name
-        if candidate.is_file():
-            paths.append(candidate)
-    return paths
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -410,6 +436,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     targets: Iterable[Path]
     if args.paths:
         targets = [Path(p).resolve() for p in args.paths]
+        # An explicit path the scanner cannot scan is an error, not a clean
+        # result: a typo, a moved file or a path outside the checkout used to
+        # be silently dropped and the run printed "clean: 0 file(s)".
+        for path in targets:
+            if not path.is_file():
+                print(f"ERROR: {path} is not a file the secret scanner can read.")
+                return 2
+            try:
+                path.relative_to(repo_root)
+            except ValueError:
+                print(f"ERROR: {path} is outside the repository; nothing was scanned.")
+                return 2
     else:
         targets = _tracked_files(repo_root, staged_only=args.staged)
 
@@ -422,6 +460,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue  # outside the repository
         scanned += 1
         findings.extend(scan_file(path, repo_root))
+
+    if scanned == 0 and not args.staged:
+        # Staged mode legitimately sees nothing when the index is empty; every
+        # other mode scanning nothing means the enumeration broke.
+        print("ERROR: the secret scanner scanned 0 files — refusing to report clean.")
+        return 2
 
     if findings:
         print("SECRET SCAN FAILED — potential credential material detected:\n")

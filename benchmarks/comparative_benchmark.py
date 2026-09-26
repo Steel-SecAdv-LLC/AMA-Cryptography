@@ -43,7 +43,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -70,7 +71,9 @@ class ComparativeBenchmark:
         self.iterations = iterations
         self.results: List[BenchmarkResult] = []
 
-    def benchmark_operation(self, name: str, operation: str, func, *args) -> BenchmarkResult:
+    def benchmark_operation(
+        self, name: str, operation: str, func: Callable[..., object], *args: Any
+    ) -> BenchmarkResult:
         """Benchmark a single operation"""
         print(f"  Benchmarking {name} - {operation}...")
 
@@ -134,7 +137,7 @@ class ComparativeBenchmark:
             available=True,
         )
 
-    def benchmark_ama_raw_c(self):
+    def benchmark_ama_raw_c(self) -> None:
         """Run the raw-C harness (`benchmarks/benchmark_c_raw`) and record
         its ops/sec numbers as a separate implementation column.
 
@@ -152,15 +155,10 @@ class ComparativeBenchmark:
           - the peer library (PyNaCl / cryptography) on the same
             Python surface.
 
-        The "Ed25519 Verify" row exercises the build-selected verify
-        scalar-mult path for the active backend.  For the in-tree C
-        backend (AMA_ED25519_ASSEMBLY=OFF), AMA_ED25519_VERIFY_SHAMIR
-        selects Shamir/Straus joint mult (default,
-        -DAMA_ED25519_VERIFY_SHAMIR=1) or the legacy split layout
-        (-DAMA_ED25519_VERIFY_SHAMIR=0).  When the donna shim is in use
-        (AMA_ED25519_ASSEMBLY=ON, auto-enabled on MSVC x64), those
-        CMake gates are ignored, so toggling AMA_ED25519_VERIFY_SHAMIR
-        does not change the benchmarked verify path.
+        The "Ed25519 Verify" row exercises the library's one verify path:
+        the half-size-scalar check of src/c/internal/ama_ed25519_halfsize.h
+        on the in-house backend.  There are no compile-time knobs left for
+        it; the only variable is the field instantiation, fe51 by default.
 
         Build prerequisite: the harness binary must exist.  Build with
         `cmake --build build --target benchmark_c_raw` before running, or
@@ -221,12 +219,19 @@ class ComparativeBenchmark:
 
         print(f"  Using: {binary}")
         try:
-            # Harness is fast (~8s total); 60s is a generous ceiling.
+            # The ceiling follows the harness's own cost model, not the "~8s
+            # total" an earlier comment asserted: SLH-DSA keygen alone is
+            # ITERS_SLOW (200) x ~164 ms ≈ 33 s, and the full run measures
+            # 109 s on a 4-core x86-64 sandbox (2026-08-30, Release build).
+            # The old timeout=60 therefore expired on every run since the
+            # SLH-DSA rows landed, silently degrading the entire raw-C
+            # column to "harness error: TimeoutExpired".  600 s is ~5.5x the
+            # measured total, headroom for slower shared runners.
             completed = subprocess.run(
                 [str(binary), "--json"],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=600,
                 check=True,
             )
             data = json.loads(completed.stdout)
@@ -286,7 +291,7 @@ class ComparativeBenchmark:
                 f"({float(row.get('ops_per_sec', 0)):,.0f} ops/sec)"
             )
 
-    def benchmark_ama_cryptography(self):
+    def benchmark_ama_cryptography(self) -> None:
         """Benchmark AMA Cryptography hybrid implementation"""
         print("\n" + "=" * 70)
         print("AMA CRYPTOGRAPHY HYBRID IMPLEMENTATION")
@@ -357,11 +362,11 @@ class ComparativeBenchmark:
                     )
 
                     # Hybrid operation (both signatures)
-                    def hybrid_sign():
+                    def hybrid_sign() -> None:
                         ed25519_sign(test_data, ed_keypair.private_key)
                         dilithium_sign(test_data, dil_keypair.secret_key)
 
-                    def hybrid_verify():
+                    def hybrid_verify() -> None:
                         ed25519_verify(test_data, ed_sig, ed_keypair.public_key)
                         dilithium_verify(test_data, dil_sig, dil_keypair.public_key)
 
@@ -406,7 +411,7 @@ class ComparativeBenchmark:
         except Exception as e:
             print(f"  ❌ Error benchmarking AMA Cryptography: {e}")
 
-    def benchmark_libsodium_ed25519(self):
+    def benchmark_libsodium_ed25519(self) -> None:
         """Benchmark libsodium Ed25519 via PyNaCl.
 
         PyNaCl wraps libsodium 1.0.x and its hand-tuned AVX2 ref10
@@ -429,7 +434,7 @@ class ComparativeBenchmark:
             if check.returncode != 0:
                 raise ImportError("PyNaCl not importable")
 
-            from nacl.signing import SigningKey, VerifyKey  # noqa: F401
+            from nacl.signing import SigningKey, VerifyKey  # fmt: skip  # noqa: F401 -- imported only to probe PyNaCl availability for the comparison benchmark (CB-001)
 
             test_data = b"Test message for benchmarking performance" * 10
 
@@ -479,7 +484,7 @@ class ComparativeBenchmark:
                     )
                 )
 
-    def benchmark_cryptography_ed25519(self):
+    def benchmark_cryptography_ed25519(self) -> None:
         """Benchmark cryptography library (OpenSSL backend) Ed25519"""
         print("\n" + "=" * 70)
         print("CRYPTOGRAPHY LIBRARY (OpenSSL Backend)")
@@ -543,7 +548,7 @@ class ComparativeBenchmark:
                 )
             )
 
-    def benchmark_aes_gcm_comparison(self):
+    def benchmark_aes_gcm_comparison(self) -> None:
         """Benchmark AES-256-GCM at 1 / 4 / 16 / 64 KB.
 
         PR A (2026-04) — adds the 4 KB / 16 KB / 64 KB rows requested in
@@ -671,7 +676,7 @@ class ComparativeBenchmark:
                 )
             )
 
-    def calculate_comparative_metrics(self) -> Dict:
+    def calculate_comparative_metrics(self) -> Dict[str, Any]:
         """Calculate comparative metrics between implementations"""
         print("\n" + "=" * 70)
         print("COMPARATIVE ANALYSIS")
@@ -680,7 +685,7 @@ class ComparativeBenchmark:
         comparisons = {}
 
         # Group by operation
-        by_operation = {}
+        by_operation: Dict[str, List[BenchmarkResult]] = {}
         for result in self.results:
             if result.available:
                 if result.operation not in by_operation:
@@ -753,8 +758,18 @@ class ComparativeBenchmark:
 
         return comparisons
 
-    def save_results(self, filename: str = "comparative_benchmark_results.json"):
-        """Save results to JSON"""
+    def save_results(
+        self,
+        filename: str = "comparative_benchmark_results.json",
+        provenance: "Optional[Dict[str, Any]]" = None,
+    ) -> Dict[str, Any]:
+        """Save results to JSON.
+
+        ``provenance`` should be the block :func:`_measurement_provenance`
+        returned BEFORE the benchmarks ran (``main`` does this).  It is
+        computed here only for a caller that did not, and then describes the
+        tree at save time rather than at measurement time.
+        """
         data = {
             "timestamp": datetime.now().isoformat(),
             "iterations": self.iterations,
@@ -773,16 +788,133 @@ class ComparativeBenchmark:
             ],
             "comparisons": self.calculate_comparative_metrics(),
         }
+        # The provenance block generate_competitive.py hard-requires.  Its
+        # error message has always said "re-run the harness (which records
+        # it)" — until this line, the harness recorded no such thing and the
+        # committed block existed only because someone once added it by
+        # hand, so the very next regeneration would have detached the page
+        # from any honest version stamp.
+        data["provenance"] = provenance if provenance is not None else _measurement_provenance()
 
         output_path = Path(__file__).parent / filename
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
         print(f"\n✓ Results saved to {output_path}")
         return data
 
 
-def main():
+#: Paths whose state decides which build a run measures: the native sources,
+#: the package, the build configuration and the two harnesses.  A tracked
+#: modification under any of them means the checkout's HEAD does not name the
+#: code that ran.  Other dirt (an earlier run's output, a doc edit) is recorded
+#: but does not make the measurement unattributable.
+_MEASURED_BUILD_PATHS = (
+    "src/c",
+    "include",
+    "ama_cryptography",
+    "CMakeLists.txt",
+    "cmake",
+    "setup.py",
+    "pyproject.toml",
+    "benchmarks/comparative_benchmark.py",
+    "benchmarks/pqc_comparative_bench.py",
+)
+
+
+def _git_stdout(*args: str, cwd: Path) -> "Optional[str]":
+    """A read-only git query, or ``None`` when git cannot answer it.
+
+    Never raises: a run that has spent minutes measuring must not lose its
+    results because the host has no git or the tree is not a checkout (an
+    sdist, a ``git archive`` export).  An unanswerable question is reported
+    as unattributable provenance instead.
+    """
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["git", *args], capture_output=True, text=True, check=False, timeout=30, cwd=cwd
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _measurement_provenance() -> "Dict[str, Any]":
+    """The block generate_competitive.py refuses to render without.
+
+    Call it BEFORE measuring, so that it describes the tree the numbers come
+    from and so that anything it cannot establish is known before minutes of
+    benchmarking, not after.
+
+    ``ama_version`` is the imported package's.  ``ama_commit`` is the
+    checkout's HEAD only when that commit demonstrably names the build that
+    ran: git answered, the imported ``ama_cryptography`` lives inside that
+    checkout (the package records no commit of its own, so its location is
+    the evidence), and nothing under ``_MEASURED_BUILD_PATHS`` carries an
+    uncommitted change.  Otherwise ``ama_commit`` is ``"unknown"``,
+    ``attributable`` is ``False`` and ``unattributable_because`` says why.
+
+    This used to run ``git rev-parse HEAD`` with ``check=True`` after the
+    benchmarks, so a host without git lost the whole run to a
+    ``CalledProcessError``; and it stamped the checkout's HEAD onto any
+    imported build, so an installed wheel from another commit was published
+    as "measured at" this one -- the relabelling this block exists to stop.
+    """
+    from datetime import timezone
+
+    import ama_cryptography
+
+    here = Path(__file__).resolve().parent
+    reasons: List[str] = []
+
+    toplevel = _git_stdout("rev-parse", "--show-toplevel", cwd=here)
+    head = _git_stdout("rev-parse", "HEAD", cwd=here)
+    status = _git_stdout("status", "--porcelain", "--untracked-files=no", cwd=here)
+    dirty_paths: List[str] = []
+    if toplevel is None or head is None or status is None:
+        reasons.append(
+            "git could not describe the checkout (git is missing, or this is "
+            "not a git checkout), so no commit can be named"
+        )
+    else:
+        root = Path(toplevel.strip()).resolve()
+        package_dir = Path(ama_cryptography.__file__).resolve().parent
+        if not package_dir.is_relative_to(root):
+            reasons.append(
+                f"the imported ama_cryptography is {package_dir}, outside the "
+                f"checkout {root}, so the checkout's HEAD does not name the "
+                f"build that was measured"
+            )
+        # Porcelain v1: two status columns and a space, then the path.
+        dirty_paths = [line[3:].strip() for line in status.splitlines() if len(line) > 3]
+        drifted = [
+            path
+            for path in dirty_paths
+            if any(path == p or path.startswith(p + "/") for p in _MEASURED_BUILD_PATHS)
+        ]
+        if drifted:
+            reasons.append(
+                "uncommitted changes to the measured build: " + ", ".join(sorted(drifted))
+            )
+
+    attributable = not reasons
+    block: Dict[str, Any] = {
+        "ama_version": ama_cryptography.__version__,
+        "ama_commit": head.strip() if attributable and head is not None else "unknown",
+        "attributable": attributable,
+        "tree_dirty": bool(dirty_paths),
+        "dirty_paths": sorted(dirty_paths),
+        "measured_at": datetime.now(timezone.utc).isoformat(),
+        "note": "written by the harness before measuring",
+    }
+    if not attributable:
+        block["unattributable_because"] = reasons
+    return block
+
+
+def main() -> None:
     """Run comparative benchmarks"""
     print("=" * 70)
     print("AMA CRYPTOGRAPHY - COMPARATIVE PERFORMANCE BENCHMARK")
@@ -792,6 +924,15 @@ def main():
     print("  1. libsodium via PyNaCl (Ed25519)")
     print("  2. cryptography library (OpenSSL backend, Ed25519)")
     print()
+
+    # Provenance first: it must describe the tree the numbers come from, and a
+    # question it cannot answer is better known before the run than after.
+    provenance = _measurement_provenance()
+    if not provenance["attributable"]:
+        print("WARNING: these results will be recorded as UNATTRIBUTABLE:")
+        for reason in provenance["unattributable_because"]:
+            print(f"  - {reason}")
+        print()
 
     bench = ComparativeBenchmark(iterations=1000)
 
@@ -808,7 +949,7 @@ def main():
     comparisons = bench.calculate_comparative_metrics()
 
     # Save results
-    bench.save_results()
+    bench.save_results(provenance=provenance)
 
     # Summary
     print("\n" + "=" * 70)

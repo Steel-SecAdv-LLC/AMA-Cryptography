@@ -20,6 +20,15 @@
  *      restored via ama_test_restore_aes_gcm() so subsequent tests
  *      in the same process observe the production dispatch choice.
  *
+ * The AMA_HAVE_NEON_CRYPTO_EXT_IMPL half of each guard below is what makes
+ * the third skip condition real.  This file takes
+ * ama_aes256_gcm_encrypt_neon / _decrypt_neon by address, and those exist
+ * only where the ARM Crypto Extensions were available to the compiler, so on
+ * an AArch64 build without them the binary did not LINK — and a binary that
+ * does not link never reaches a return code, however many SKIP_RETURN_CODEs
+ * are configured.  Reproduced with an aarch64 build at -march=armv8-a: four
+ * "undefined reference to `ama_aes256_gcm_encrypt_neon'" from this file.
+ *
  * SKIP conditions (return 77 — CTest "Skipped"):
  *   - Non-AArch64 build OR AArch64 host without ARM Crypto Extensions:
  *     the dispatcher leaves aes_gcm_encrypt / aes_gcm_decrypt NULL, so
@@ -42,7 +51,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+#if defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL) \
+    && defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 /* Forward decls of the NEON kernels — the dispatch table installs
  * these by name when the runtime gate passes. */
 extern void ama_aes256_gcm_encrypt_neon(const uint8_t *plaintext, size_t plaintext_len,
@@ -62,7 +72,8 @@ extern void ama_test_restore_aes_gcm(void);
 
 #define MAX_LEN (65536u + 64u)
 
-#if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+#if defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL) \
+    && defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
 static uint64_t prng_state;
 static uint64_t prng_next(void) {
     uint64_t z = (prng_state += 0x9E3779B97F4A7C15ULL);
@@ -80,7 +91,8 @@ int main(void) {
     printf("NEON AES-256-GCM vs generic-C reference equivalence\n");
     printf("==================================================\n\n");
 
-#if !defined(AMA_HAVE_NEON_IMPL) || (!defined(__aarch64__) && !defined(_M_ARM64))
+#if !defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL) \
+    || !defined(AMA_HAVE_NEON_IMPL) || (!defined(__aarch64__) && !defined(_M_ARM64))
     printf("  SKIP: NEON sources not compiled in (non-AArch64 build,\n"
            "        or AMA_ENABLE_NEON=OFF).  Generic C AES-GCM is\n"
            "        already covered by test_kat and ACVP.\n");
@@ -132,7 +144,8 @@ int main(void) {
      *   (c) Compare ct_neon vs ct_ref and tag_neon vs tag_ref.
      *   (d) Round-trip: NEON decrypt of NEON ciphertext.
      *   (e) Tag-tamper rejection: NEON decrypt of mutated tag → expect
-     *       AMA_ERROR_VERIFY_FAILED. */
+     *       AMA_ERROR_VERIFY_FAILED and the re-poisoned pt_back
+     *       untouched (no unauthenticated plaintext released). */
     #define RUN_TRIAL(LABEL, pt_len_v, aad_len_v, trial_id)                    \
     do {                                                                       \
         size_t _pt_len  = (pt_len_v);                                          \
@@ -177,16 +190,30 @@ int main(void) {
             break;                                                             \
         }                                                                      \
                                                                                \
-        /* (e) Tag-tamper rejection — exact error code, INVARIANT-12. */       \
+        /* (e) Tag-tamper rejection — exact error code, INVARIANT-12 — and */  \
+        /*     no plaintext released: pt_back still holds the round trip's */  \
+        /*     correct output, so it is re-poisoned before the call. */        \
         uint8_t bad_tag[16];                                                   \
         memcpy(bad_tag, tag_neon, 16);                                         \
         bad_tag[(trial_id) & 15] ^=                                            \
             (uint8_t)(1u << (((trial_id) >> 4) & 7));                          \
+        memset(pt_back, 0x5C, _pt_len);                                        \
         _r = ama_aes256_gcm_decrypt_neon(                                      \
             ct_neon, _pt_len, aad, _aad_len, key, nonce, bad_tag, pt_back);    \
         if (_r != AMA_ERROR_VERIFY_FAILED) {                                   \
             printf("  FAIL: %s tag-tamper trial=%d pt_len=%zu r=%d\n",         \
                    LABEL, (int)(trial_id), _pt_len, (int)_r);                  \
+            failed++;                                                          \
+            break;                                                             \
+        }                                                                      \
+        size_t _released = _pt_len;                                            \
+        for (size_t _i = 0; _i < _pt_len; _i++) {                              \
+            if (pt_back[_i] != 0x5C) { _released = _i; break; }                \
+        }                                                                      \
+        if (_released != _pt_len) {                                            \
+            printf("  FAIL: %s tag-tamper trial=%d pt_len=%zu released "       \
+                   "plaintext (byte %zu written)\n",                           \
+                   LABEL, (int)(trial_id), _pt_len, _released);                \
             failed++;                                                          \
             break;                                                             \
         }                                                                      \

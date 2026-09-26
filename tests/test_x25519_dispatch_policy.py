@@ -6,10 +6,11 @@ X25519 dispatch policy tests (D-7 follow-up).
 
 The AVX2 4-way Montgomery-ladder kernel (PR #273) is INTENTIONALLY opt-in
 on x86_64: on hosts where the scalar fe64 path uses native MULX/ADX, four
-sequential scalar ladders outrun four lanes of the AVX2 32-bit-limb donna
+sequential scalar ladders outrun four lanes of the AVX2 32-bit-limb
 ladder (the audit on 2026-04-27 measured zero speedup at batch sizes 4/8/16
 on a Skylake-class Xeon and confirmed this is the documented dispatch
-policy in src/c/dispatch/ama_dispatch.c lines 478-502).
+policy: the AMA_DISPATCH_USE_X25519_AVX2 opt-in in dispatch_init_internal()
+in src/c/dispatch/ama_dispatch.c).
 
 This module pins that contract from the Python side so a future change
 that flips the default — or accidentally regresses correctness across the
@@ -211,7 +212,7 @@ def test_avx2_optin_dispatch_print_differs() -> None:
         # own dependencies, which then surfaces as an ImportError that
         # the rc!=0 guard below would re-raise as an opaque AssertionError
         # rather than the actual missing-import.  Mirrors the prepend
-        # pattern in _run_in_subprocess (lines 60-78) and
+        # pattern in _run_in_subprocess() and
         # tests/test_cli_entry.py (D-2).
         pkg_parent = str(Path(_ama.__file__).resolve().parent.parent)
         existing_pp = env_full.get("PYTHONPATH")

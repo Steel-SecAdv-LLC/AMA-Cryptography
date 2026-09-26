@@ -33,7 +33,9 @@ import json
 import re
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = REPO / "docs" / "compliance" / "sbom-c-library.json"
@@ -68,13 +70,15 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_chacha20poly1305", "ChaCha20-Poly1305 AEAD (RFC 8439)"),
     ("ama_dilithium", "ML-DSA-44/-65/-87 post-quantum signatures (NIST FIPS 204)"),
     ("ama_ed25519", "Ed25519 digital signatures (RFC 8032)"),
-    ("ama_frost", "FROST threshold Ed25519 signatures (RFC 9591)"),
+    ("ama_frost", "FROST threshold Ed25519 signatures (RFC 9591-style)"),
     ("ama_hkdf", "HKDF-SHA3-256 key derivation (RFC 5869)"),
     ("ama_kyber", "ML-KEM-512/-768/-1024 key encapsulation (NIST FIPS 203)"),
     ("ama_lms", "HSS/LMS hash-based signature verification (RFC 8554)"),
     ("ama_nistp", "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)"),
+    ("ama_pbkdf2", "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)"),
     ("ama_secp256k1", "secp256k1 elliptic curve operations"),
-    ("ama_sha3", "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)"),
+    ("ama_sha3", "SHA3-256/384/512, SHAKE128/256 (NIST FIPS 202)"),
+    ("ama_sha512", "SHA-512/SHA-384 one-shot hashing (NIST FIPS 180-4)"),
     ("ama_slhdsa", "SLH-DSA-SHA2-256f + SHAKE-128s (NIST FIPS 205); legacy ama_sphincs_* API"),
     ("ama_x25519", "X25519 ECDH key exchange (RFC 7748)"),
 ]
@@ -95,22 +99,168 @@ INTERNAL_SUPPORT: frozenset[str] = frozenset(
         "ama_secure_memory",  # zeroization / locked-memory helpers
         "ama_sha256",  # internal SHA-256 backing LMS / NIST-P / HMAC
         "ama_sha256_ni",  # SHA-NI accelerated SHA-256 backend
-        "ed25519_donna_shim",  # vendored ed25519-donna glue
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Adapted third-party source (CycloneDX pedigree)
+#
+# NOTICE lists source that is compiled into the library and ADAPTED from a
+# third-party implementation under that implementation's licence.  Until
+# this registry existed the SBOM recorded none of it: ama_ed25519 was
+# rendered as an in-house Apache-2.0 component while NOTICE carried an MIT
+# attribution for the safegcd inversion it compiles in, and the README and
+# the INVARIANT-1 addendum told a licence reviewer there was no third-party
+# code at all.  A downstream redistributor reading the SBOM or those pages
+# would have shipped binaries without the MIT notice NOTICE says applies.
+#
+# The registry is checked three ways, so it cannot drift from the tree:
+#   * every src/c or include/ file whose comments say "see NOTICE" must be
+#     registered here (a new adaptation cannot land unrecorded);
+#   * every registered file must exist and still say "see NOTICE";
+#   * NOTICE must name every registered file and its licence, and the
+#     component it is attributed to must be a C_COMPONENTS entry.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AdaptedSource:
+    """One compiled-in file adapted from a third-party implementation."""
+
+    component: str  # the C_COMPONENTS entry that compiles it in
+    licence: str  # SPDX identifier of the upstream licence
+    upstream_name: str
+    upstream_supplier: str
+    upstream_purl: str
+    upstream_file: str  # the upstream file its structure follows
+    what: str  # one line: what was adapted
+
+
+ADAPTED_SOURCES: dict[str, AdaptedSource] = {
+    "src/c/internal/ama_fe25519_safegcd.h": AdaptedSource(
+        component="ama_ed25519",
+        licence="MIT",
+        upstream_name="secp256k1",
+        upstream_supplier="The Bitcoin Core developers",
+        upstream_purl="pkg:github/bitcoin-core/secp256k1",
+        upstream_file="src/modinv64_impl.h",
+        what=(
+            "Constant-time inversion modulo 2^255 - 19 (Bernstein-Yang safegcd, "
+            "batched 62-bit divsteps); its structure follows libsecp256k1's "
+            "modinv64 reference implementation."
+        ),
+    ),
+}
+
+#: A comment that points the reader at NOTICE for this file's licence.  Comment
+#: leaders (``*``, ``//``) and line breaks between the words are tolerated, as
+#: in the safegcd header's "MIT licence — see\n * NOTICE".
+_SEE_NOTICE = re.compile(r"\bsee(?:[\s*/]|\\)+NOTICE\b")
+
+
+def _cites_notice(text: str) -> bool:
+    return bool(_SEE_NOTICE.search(text))
+
+
+def check_adapted_sources(repo: Path = REPO) -> list[str]:
+    """Problems with the adapted-source registry; empty when it holds."""
+    problems: list[str] = []
+    citing: set[str] = set()
+    for root in ("src/c", "include"):
+        base = repo / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.suffix not in (".c", ".h", ".S", ".s", ".asm") or not path.is_file():
+                continue
+            if _cites_notice(path.read_text(encoding="utf-8", errors="replace")):
+                citing.add(path.relative_to(repo).as_posix())
+    for name in sorted(citing - set(ADAPTED_SOURCES)):
+        problems.append(
+            f"{name} cites NOTICE for its licence but is not in ADAPTED_SOURCES, so "
+            "the SBOM carries no pedigree or licence for it"
+        )
+    notice_path = repo / "NOTICE"
+    notice = notice_path.read_text(encoding="utf-8") if notice_path.is_file() else ""
+    components = {name for name, _ in C_COMPONENTS}
+    for name, adapted in sorted(ADAPTED_SOURCES.items()):
+        if name not in citing:
+            problems.append(
+                f"ADAPTED_SOURCES lists {name}, which does not exist or no longer cites "
+                "NOTICE; remove the entry or restore the attribution"
+            )
+        if name not in notice:
+            problems.append(f"NOTICE does not name {name}")
+        if not re.search(rf"\b{re.escape(adapted.licence)}\b", notice):
+            problems.append(f"NOTICE does not state the {adapted.licence} licence for {name}")
+        if adapted.component not in components:
+            problems.append(
+                f"ADAPTED_SOURCES attributes {name} to {adapted.component!r}, which is "
+                "not a C_COMPONENTS entry"
+            )
+    return problems
+
+
+def _component_record(name: str, description: str, version: str) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "type": "library",
+        "name": name,
+        "version": version,
+        "description": description,
+        "scope": "required",
+        "purl": f"pkg:generic/{name}@{version}",
+    }
+    adapted = {path: a for path, a in sorted(ADAPTED_SOURCES.items()) if a.component == name}
+    if adapted:
+        licences = sorted({"Apache-2.0", *(a.licence for a in adapted.values())})
+        record["licenses"] = [{"expression": " AND ".join(licences)}]
+        record["pedigree"] = {
+            "ancestors": [
+                {
+                    "type": "library",
+                    "name": a.upstream_name,
+                    "supplier": {"name": a.upstream_supplier},
+                    "purl": a.upstream_purl,
+                    "licenses": [{"license": {"id": a.licence}}],
+                    "description": f"{a.upstream_file}: the reference {path} adapts",
+                }
+                for path, a in adapted.items()
+            ],
+            "notes": " ".join(
+                f"{path} is adapted source ({a.licence}, attributed in NOTICE): {a.what}"
+                for path, a in adapted.items()
+            ),
+        }
+    return record
 
 
 def check_component_completeness() -> None:
     """Fail closed if src/c grows a TU the SBOM has not classified.
 
     Scans top-level ``src/c/*.c`` (subdirectories — dispatch/, SIMD
-    kernels, vendor/ — are implementation detail of the top-level TUs)
+    kernels, x86/ — are implementation detail of the top-level TUs)
     and requires every stem to be either a named component or an entry
     in INTERNAL_SUPPORT.  Runs in both generate and --check mode, so CI
     rejects a new primitive whose SBOM classification was forgotten —
     the failure mode that let Ascon, FROST, agent binding, HSS/LMS and
     the NIST prime curves ship unlisted between 3.4.0 and 3.5.0.
     """
+    # The manifest comment says "Order is alphabetical so a diff between two
+    # SBOM revisions is easy to read", and `render_sbom()` emits the list in
+    # list order without sorting.  Nothing checked it, and the list was not
+    # sorted: `ama_pbkdf2` sat after `ama_secp256k1`, and the committed
+    # docs/compliance/sbom-c-library.json carried the same misordering.  A
+    # documented convention nothing enforces is a convention that drifts.
+    ordered = [name for name, _ in C_COMPONENTS]
+    if ordered != sorted(ordered):
+        first = next((a, b) for a, b in zip(ordered, sorted(ordered), strict=True) if a != b)
+        raise SystemExit(
+            "ERROR: tools/generate_sbom.py: C_COMPONENTS is not in alphabetical "
+            f"order, which the manifest comment promises. First difference: "
+            f"{first[0]!r} where {first[1]!r} was expected."
+        )
+
     component_names = {name for name, _ in C_COMPONENTS}
     overlap = component_names & INTERNAL_SUPPORT
     if overlap:
@@ -156,7 +306,7 @@ def read_package_version() -> str:
     return match.group(1)
 
 
-def render_sbom(version: str) -> dict:
+def render_sbom(version: str) -> dict[str, Any]:
     """Render the C-library SBOM as a CycloneDX 1.5 JSON document.
 
     The ``serialNumber`` is a deterministic UUID5 derived from the
@@ -166,22 +316,16 @@ def render_sbom(version: str) -> dict:
     rolling cache of random UUIDs.
     """
     check_component_completeness()
+    adapted_problems = check_adapted_sources()
+    if adapted_problems:
+        raise SystemExit("ERROR: tools/generate_sbom.py: " + "; ".join(adapted_problems))
 
     deterministic_namespace = uuid.UUID("c1c7d2bc-1c1f-4e29-9b5a-c3a7e1f4b8d2")
     serial_uuid = uuid.uuid5(deterministic_namespace, f"ama-cryptography-c-library@{version}")
 
-    components = []
-    for name, description in C_COMPONENTS:
-        components.append(
-            {
-                "type": "library",
-                "name": name,
-                "version": version,
-                "description": description,
-                "scope": "required",
-                "purl": f"pkg:generic/{name}@{version}",
-            }
-        )
+    components = [
+        _component_record(name, description, version) for name, description in C_COMPONENTS
+    ]
 
     return {
         "bomFormat": "CycloneDX",
@@ -203,7 +347,7 @@ def render_sbom(version: str) -> dict:
     }
 
 
-def serialize(doc: dict) -> str:
+def serialize(doc: dict[str, Any]) -> str:
     """Render the SBOM with stable formatting so the CI --check is byte-exact."""
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 

@@ -11,22 +11,18 @@
 # See benchmarks/check_baseline_justification.py for the full contract
 # and docs/BENCHMARK_HISTORY.md for the motivating history.
 #
-# RULESET / REQUIRED-CHECKS NOTE: this workflow is path-filtered to PRs
-# touching a benchmark baseline JSON, so its 'Enforce baseline JSON
-# justification' job does NOT emit on unrelated PRs. Do NOT list this
-# job in the `main` branch's required-status-check ruleset — it would
-# block every PR that doesn't touch baseline.json with 'Expected —
-# Waiting for status to be reported'. Same reasoning as `dudect.yml`
-# and the wiki-sync job; see PR #289 'Deliberately not included' for
-# the canonical exclusion list.
+# RULESET / REQUIRED-CHECKS NOTE: this workflow runs on EVERY pull request so
+# its 'Enforce baseline JSON justification' context is always reported and can
+# be a required status check.  The `changes` job decides relevance; on a pull
+# request that touches none of the watched paths the guard job is skipped by
+# its own condition, which GitHub reports as a passing check.  It replaced a
+# path-filtered workflow plus a no-op twin (baseline-guard-skip.yml) that were
+# not exclusive -- see tools/pr_touches_watched_paths.py.
 
 name: Baseline Change Guard
 
 on:
   pull_request:
-    paths:
-      - "benchmarks/baseline.json"
-      - "benchmarks/arm-baseline.json"
 
 permissions:
   contents: read
@@ -39,11 +35,55 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}
 
 jobs:
+  # Every pull request runs this workflow, and this job decides whether the
+  # change touches anything the jobs below verify.  It replaced a path-filtered
+  # workflow plus a no-op twin that reported the same context: the two were not
+  # exclusive (paths: fires when ANY changed file matches, paths-ignore: when ANY
+  # is not ignored), so a mixed pull request ran both and the twin's green
+  # arrived first.  tools/pr_touches_watched_paths.py has the full account.  A
+  # failed detection is a failure, never "not relevant".
+  changes:
+    name: Relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.match.outputs.relevant }}
+    steps:
+      - name: Checkout (the merge commit and its base parent)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Does this change touch a watched path?
+        id: match
+        env:
+          EVENT: ${{ github.event_name }}
+          WATCHED_PATHS: |
+            benchmarks/baseline.json
+            benchmarks/arm-baseline.json
+            benchmarks/check_baseline_justification.py
+            .github/workflows/baseline-guard.yml
+            tools/pr_touches_watched_paths.py
+        run: python3 tools/pr_touches_watched_paths.py --event "$EVENT"
+
   baseline-justification:
     name: Enforce baseline JSON justification
+    needs: [changes]
+    # Runs when the change is relevant, and whenever relevance could not be
+    # decided (the first step then fails): a failed `changes` job must not
+    # read as the passing skip an irrelevant change produces.
+    if: >-
+      always()
+      && (needs.changes.result != 'success' || needs.changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Relevance was decided
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::The changes job did not succeed (${{ needs.changes.result }}); the guard cannot know whether it applies."
+          exit 1
+
       - name: Checkout PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

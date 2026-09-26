@@ -25,6 +25,9 @@ jobs:
   security-audit:
     name: Python Security Audit
     runs-on: ubuntu-latest
+    # Bounded like every other gate job: without this a hang on a network
+    # fetch runs to the 360-minute default while the Security Gate waits.
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -38,7 +41,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install bandit pip-audit
+        # Pinned (bandit to the requirements-lock.txt version): both feed
+        # fail-closed gates, and an unpinned release changes what they can
+        # catch with nothing to review here.
+        pip install "bandit==1.9.4" "pip-audit==2.10.1"
         # `requirements-lock.txt` is the audit-time dependency closure for
         # pip-audit's strict mode below.  Without it, pip-audit only sees
         # whatever happens to be in the GitHub Actions runner image —
@@ -93,8 +99,10 @@ jobs:
     # error it printed named a condition that did not exist.  See the
     # module docstring of tools/check_bandit_severity.py.
     - name: Run Bandit security linter (unfiltered JSON report)
+      # Includes setup.py and tools/ (the build/release code CI trusts), not
+      # just the runtime package — same scope as the ci.yml gate (audit Low).
       run: |
-        bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+        bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
 
     - name: Bandit severity gate (fail-closed)
       run: python3 tools/check_bandit_severity.py bandit-report.json
@@ -113,6 +121,7 @@ jobs:
   sbom:
     name: SBOM Generation (CycloneDX)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -232,6 +241,8 @@ jobs:
   secret-scanning:
     name: Secret Scanning
     runs-on: ubuntu-latest
+    # 20, not 15: the full-history TruffleHog scan grows with the repo.
+    timeout-minutes: 20
 
     steps:
     - name: Checkout code
@@ -240,7 +251,7 @@ jobs:
         fetch-depth: 0
 
     - name: TruffleHog Secret Scanning
-      uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11  # v3.96.0
+      uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6  # v3.97.5
       with:
         path: ./
         # --exclude-detectors=Lob removes a detector that produces only false

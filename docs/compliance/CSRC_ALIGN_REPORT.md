@@ -1,6 +1,6 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
-**Version:** 4.0.0
+**Version:** 3.5.0
 **Original audit:** 2026-05-16
 **Re-validated:** 2026-07-30 (see the Re-validation Addendum at the end of this document)
 **Organization:** Steel Security Advisors LLC
@@ -83,11 +83,18 @@ Source files:
 - `src/c/internal/ama_sha2.h` — Shared SHA-512/HMAC-SHA-512 (used by Ed25519 + SLH-DSA)
 - `src/c/PROVENANCE.md` — Per-primitive derivation status, known divergences, and the clean-room attestation
 
-Ed25519 (`src/c/ama_ed25519.c`) is **vendored** rather than clean-room: the
-field arithmetic and base-point tables in `src/c/vendor/ed25519-donna/`
-come from the public-domain floodyberry/ed25519-donna project with its
-LICENSE preserved verbatim. The AMA wrapper above it (API contract, FROST
-integration, expanded-key fast path) is in-house.
+Ed25519 (`src/c/ama_ed25519.c` + `src/c/internal/ama_ed25519_ge.h`) is
+**in-house**: the field arithmetic, the group arithmetic and the static
+base-point tables (generated in-tree by `tools/gen_ed25519_tables.py` into
+`src/c/internal/ama_ed25519_tables.h`) are written against RFC 8032 with no
+upstream code copied, except the constant-time field inversion
+(`src/c/internal/ama_fe25519_safegcd.h`), which is adapted from libsecp256k1's
+safegcd `modinv64` reference implementation under its MIT licence (attributed
+in `NOTICE`; `src/c/PROVENANCE.md` classifies it "Adapted (safegcd)"; the
+C-library SBOM records the pedigree). Earlier revisions of this report described a vendored
+public-domain x86-64 backend; it was removed in the twenty-first maintenance
+pass (see CHANGELOG). The AMA wrapper above it (API contract, FROST
+integration, expanded-key fast path) is likewise in-house.
 
 ### 1.3 Test Execution Environment
 
@@ -143,7 +150,7 @@ integration, expanded-key fast path) is in-house.
 | ML-DSA-65 KeyGen | FIPS 204 | ACVP-Server | 25 | 25 | 0 | 50 | ML-DSA-44/87 skipped |
 | ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 15 | 0 | 165 | External/pure TG 3; resolved via `ama_dilithium_verify_ctx` |
 | SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 14 | 0 | 490 | External/pure TG 5 only; resolved via FIPS 205 hash function alignment |
-| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,757 AFT-filtered + 1,032 non-AFT (LDT+VOT) |
+| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,667 AFT-filtered + 1,122 non-AFT (LDT+VOT+ML-KEM EncapDecap) |
 
 ### 2.2 Resolved: ML-DSA-65 SigVer (previously 3 failures, now 15/15 pass)
 
@@ -190,8 +197,9 @@ Section 11.2 Table 5, security category 5 (n=32) requires:
     PRF_msg(SK.prf, opt_rand, M) = Trunc_n(HMAC-SHA-512(SK.prf, opt_rand || M))
 
 **Fix:** Implemented `ama_hmac_sha512_3()` in `src/c/internal/ama_sha2.h` (FIPS
-198-1 compliant HMAC with SHA-512). Updated `spx_prf_msg()` to use HMAC-SHA-512
-with Trunc_n output truncation.
+198-1 compliant HMAC with SHA-512). Updated PRF_msg — today `sha2_PRF_msg()` in
+`src/c/ama_slhdsa.c`, the file the SHA2-256f signer now lives in — to use
+HMAC-SHA-512 with Trunc_n output truncation.
 
 **Fail-closed error paths:** `ama_hmac_sha512_3()` returns `int` (`0` on
 success, `-1` on `calloc` allocation failure, `-2` on `size_t` overflow
@@ -268,9 +276,17 @@ Post-fix benchmark results (2026-03-21, native C backend, 4-core Linux):
 - SLH-DSA Sign: ~1.4 ops/sec (~741 ms) — consistent with SHA2-256f fast variant
 - SLH-DSA Verify: ~53 ops/sec (~19 ms)
 
-**Performance test status:** All `tests/test_performance.py` thresholds now pass
-with the Cython HMAC binding (262K > 100K threshold) and Ed25519 expanded-key
-optimization.
+**Performance test status:** The wall-clock ops/sec thresholds that used to
+live in a dedicated performance test module were retired in the
+twenty-seventh maintenance pass: every one of them was skipped in CI by design
+(shared runners do not keep a timing promise) and the fixed per-host numbers
+said nothing a run could act on.  Regression detection is the
+instruction-count ledger under `benchmarks/` (`baseline.json`,
+`arm-baseline.json`) and the guards that hold it to a calibration commit
+(`benchmarks/check_baseline_justification.py`,
+`tests/test_benchmark_baseline_infra.py`), which run on every CI lane.  The
+object-retention bound that module also carried lives on in
+`tests/test_memory_security.py`.  The measured numbers above stand as measured.
 
 ---
 
@@ -391,6 +407,19 @@ load:
 **POST Budget:** All self-tests complete in <300ms (measured ~260ms on
 4-core Linux), well within the 500ms budget.
 
+**POST coverage boundary.** The table above is the set of approved algorithms
+that carry a power-on KAT; it is a **subset** of the approved primitives the
+module exposes, not full per-algorithm coverage, and a "0 skipped" attestation
+means every one of *these* stages ran, not that every approved algorithm was
+exercised. `module_attestation()`'s `tests_run` / `tests_skipped` count these
+stages. FIPS 140-3 §4.9.1 expects a self-test per approved algorithm in the
+boundary; the following approved primitives the module exposes do **not** yet
+carry a POST KAT, and a validated module would add one for each: HKDF-SHA2,
+HMAC-SHA2 (256/384/512), ChaCha20-Poly1305, X25519, ECDSA over secp256k1 and the
+NIST P-curves, PBKDF2, Argon2id, and LMS. These are exercised by the functional
+test suite and, where a NIST suite exists, by ACVP self-attestation — but not by
+POST.
+
 ### 4.2 Module Integrity Verification
 
 At startup, SHA3-256 is computed over all `.py` files in the
@@ -425,27 +454,61 @@ Recovery: `ama_cryptography.reset_module()` re-runs all self-tests.
 
 ### 4.4 Pairwise Consistency Tests
 
-The library provides helper functions (`pairwise_test_signature()`,
-`pairwise_test_kem()`) that perform a sign-verify or encaps-decaps
-roundtrip on a fixed test message. Callers (e.g. key-generation wrappers)
-are responsible for invoking these helpers after generating a keypair.
-On failure, the module enters ERROR state and the caller should discard
-the keypair. Covered algorithms:
+Every asymmetric key generation in the Python package runs the §4.9.2
+pairwise consistency test **itself**, unconditionally, before the keypair
+leaves the function (INVARIANT-41). The caller does not invoke it and cannot
+switch it off; there is no environment flag or opt-out. The helpers live in
+`ama_cryptography/_module_state.py`:
 
-- Ed25519: sign + verify
-- ML-DSA-65: sign + verify
-- ML-KEM-1024: encaps + decaps
+- `pairwise_test_signature()` — sign a fixed test message and verify it:
+  Ed25519, ML-DSA-65, SLH-DSA / SPHINCS+, ECDSA over the NIST P-curves and
+  over secp256k1 (including the BIP32 keys), and the FROST trusted dealer
+  (a full t-of-n round aggregated and verified against the group key).
+- `pairwise_test_kem()` — encapsulate and decapsulate: ML-KEM-1024.
+- `pairwise_test_agreement()` — X25519, as a Diffie-Hellman roundtrip against
+  a fresh ephemeral peer (SP 800-56A rev. 3 §5.6.2.1.4).
 
-These helpers do **not** automatically intercept every key generation;
-they must be called explicitly by application code or wrapper functions.
+The rule is the same for random and seed-derived generation and on every
+surface: the `native_*` entry points, the `generate_*` wrappers,
+`AmaContext.keypair_generate`, the keygens of the Cython binding extensions,
+and the BIP32 master and child derivations in `key_management`. A failed test
+enters the module ERROR state, raises `CryptoModuleError`, and the keypair is
+never returned; while in ERROR every further operation is refused
+(INVARIANT-39). Where a test's counterpart operation is not built, the keygen
+refuses with an availability error rather than releasing an untested keypair.
 
-### 4.5 Continuous RNG Test
+**Enforcement.** `tools/check_keygen_pct.py` discovers the keygen entry points
+from `ama_cryptography/pqc_backends.py`'s AST and from `src/cython/*.pyx` —
+19 and 2 on this tree — and fails, in `ci.yml`, on any that does not reach a
+pairwise test on every path. `tests/test_keygen_pct.py` pins the behaviour
+(both failure directions and the positive path per family).
+
+**Scope.** This is a property of the `ama_cryptography` Python package, not of
+`libama_cryptography` linked directly: a C consumer calling
+`ama_ed25519_keypair()` gets no pairwise test (the C library runs one for
+ML-KEM only). See INVARIANT-41's scope statement.
+
+Until 5.0.0 this section said the helpers covered Ed25519, ML-DSA-65 and
+ML-KEM-1024 only and had to be called explicitly by application code. That was
+accurate when written — the helpers were wired into no key-generation path —
+and it stopped being accurate when INVARIANT-41 wired them into every one.
+
+### 4.5 Repeated-output check on the OS CSPRNG
 
 `secure_token_bytes(n)` wraps `secrets.token_bytes(n)` with a comparison
 to the previous output. If two consecutive calls return identical bytes,
-the module enters ERROR state immediately. This is aligned with the
-continuous random number generator testing described in FIPS 140-3
-Section 4.9.2.
+the module enters ERROR state immediately.
+
+This is a defence-in-depth sanity check on the operating system's CSPRNG,
+**not** a FIPS 140-3 RNG health test, and the earlier text here mis-cited it
+as one. The two-consecutive-identical-blocks continuous RNG test (CRNGT) was
+a **FIPS 140-2** requirement; the FIPS 140-3 transition removed it in favour
+of the SP 800-90B startup and continuous health tests (Repetition Count and
+Adaptive Proportion) applied to a noise source. `secrets.token_bytes` is the
+operating-system CSPRNG, not an approved SP 800-90A DRBG instantiated inside a
+defined cryptographic boundary, and POST carries no DRBG KAT. Approved
+SP 800-90A DRBG / SP 800-90B entropy-source instantiation is listed among the
+outstanding prerequisites in `CSRC_STANDARDS.md` Section 3.1(e).
 
 > **Note:** This is a design-aligned implementation, not a CMVP-validated module. See Section 3 of `CSRC_STANDARDS.md` for full compliance status.
 
@@ -478,7 +541,8 @@ unchanged:
 - **Source-file inventory (§1.2).** `src/c/ama_kyber.c`,
   `src/c/ama_dilithium.c`, `src/c/ama_slhdsa.c`, `src/c/internal/ama_sha2.h`,
   `src/c/PROVENANCE.md`, and `src/c/ama_ed25519.c` +
-  `src/c/vendor/ed25519-donna/` (LICENSE preserved) are all present. The
+  `src/c/internal/ama_ed25519_ge.h` (the formerly vendored x86-64 backend
+  having been removed in the twenty-first maintenance pass) are all present. The
   no-external-PQC claim still holds: no liboqs, PQClean, or pq-crystals code
   or dependency exists anywhere in the tree (the last vestigial liboqs
   packaging reference was removed in #352, 2026-06-15).
@@ -524,10 +588,10 @@ The following claims **no longer hold as written** and are corrected here
    SHA-512 context, so the heap concatenation buffer — and with it the `-1`
    (allocation) and `-2` (overflow) failure paths §2.4 describes — no longer
    exists; the only outcome is `0`. The caller-side mappings are retained as
-   unreachable back-compat (`ama_hkdf.c`, now lines 40–43). The cited line
-   ranges have drifted: the function sits at `src/c/internal/ama_sha2.h:266`,
-   not `:199–212`. The fail-closed property §2.4 claims is preserved
-   vacuously — there is no longer a failure mode to close.
+   unreachable back-compat (the `rc` mapping in `ama_hmac_sha512()` in
+   `ama_hkdf.c`). §2.4's line ranges have drifted: the function now lives in
+   `src/c/internal/ama_sha2.h`, not where §2.4 places it. The fail-closed
+   property §2.4 claims is preserved vacuously — there is no longer a failure mode to close.
 5. **§4.2's regeneration command is now gated.**
    `python -m ama_cryptography.integrity --update` is build-pipeline-only,
    gated behind `AMA_BUILD_PIPELINE=1` (and has grown an `--sign` mode);
@@ -555,6 +619,8 @@ are as stated, zero failures.
 | ML-DSA-44 / ML-DSA-87 | FIPS 204 | `src/c/ama_dilithium.c`, parameter-driven (`ama_ml_dsa_*` over `ama_ml_dsa_param_set_t`); ML-DSA-65 unchanged | 3.5.0 | NIST ACVP-Server ML-DSA-{keyGen,sigGen}-FIPS204 `internalProjection.json` (master @ 2026-07-27) vendored as `tests/kat/fips204/ml_dsa_{44,87}.kat`; `tests/test_pqc_param_sets.py` — **79 passed, 0 failed** |
 | secp256k1 ECDSA | RFC 6979 (deterministic nonces); SEC 1 / SEC 2 (curve) | `ama_secp256k1_ecdsa_sign` / `_verify` in `src/c/ama_secp256k1.c` (the file predates the audit; its ECDSA surface is post-audit) | 3.4.0 | 476-vector Wycheproof `ecdsa_secp256k1_sha256_test.json` — **0 failures** |
 | HMAC-SHA-384 | FIPS 198-1 / RFC 2104, over FIPS 180-4 SHA-384 | `src/c/ama_hmac_sha384.c` (SHA-384 core shared from `src/c/internal/ama_sha2.h`) | 3.3.0 | 174-vector Wycheproof `hmac_sha384_test.json` — **0 failures** |
+| PBKDF2-HMAC-SHA-256 / PBKDF2-HMAC-SHA-512 | NIST SP 800-132; RFC 8018 §5.2 | `src/c/ama_pbkdf2.c` (`ama_pbkdf2_hmac_sha256`, `ama_pbkdf2_hmac_sha512`), over the HMAC cores in `src/c/internal/ama_sha2.h` | 5.0.0 | RFC 7914 §11 PBKDF2-HMAC-SHA256 vectors 1 and 2 and the official BIP39 vector; `tests/test_sha2_pbkdf2_native.py` — **35 passed, 0 failed** (re-run at this commit) |
+| SHA-512 / SHA-384 one-shot | FIPS 180-4 | `src/c/ama_sha512.c` (`ama_sha512_oneshot`, `ama_sha384_oneshot`), over the same shared core | 5.0.0 | FIPS 180-4 canonical vectors in `tests/test_sha2_pbkdf2_native.py` — **35 passed, 0 failed** (same suite as the row above) |
 
 The Wycheproof results above come from a full run of the vendored corpus on
 2026-07-30 (`wycheproof_vectors/run_wycheproof.py`, upstream C2SP/wycheproof

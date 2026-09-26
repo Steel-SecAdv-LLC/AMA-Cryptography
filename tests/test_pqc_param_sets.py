@@ -61,7 +61,7 @@ def _parse_records(path: Path) -> list[dict[str, str]]:
     """
     records: list[dict[str, str]] = []
     current: dict[str, str] = {}
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             if current:
@@ -223,27 +223,21 @@ def test_ml_dsa_tampered_signature_rejected(ps: int) -> None:
 def test_ml_dsa_context_is_domain_separating(ps: int) -> None:
     """The §5.2 context wrapper must actually separate domains.
 
-    ``ctx=None`` (internal interface) and ``ctx=b""`` (external/pure with an
-    empty context) are different domains and must produce different
-    signatures — a wrapper applied inconsistently would make them equal.
+    Two contexts under one key are different domains and must produce
+    signatures neither of which verifies under the other.  (The internal
+    interface is the third domain; it no longer ships, and its separation is
+    pinned in tests/c/test_ml_dsa_context_separation.c.)
     """
     pk, sk = pb.native_ml_dsa_keypair(ps)
     msg = b"context separation"
 
-    sig_internal = pb.native_ml_dsa_sign(ps, msg, sk)
     sig_empty_ctx = pb.native_ml_dsa_sign(ps, msg, sk, ctx=b"")
     sig_ctx = pb.native_ml_dsa_sign(ps, msg, sk, ctx=b"ama")
 
-    assert sig_internal != sig_empty_ctx
     assert sig_empty_ctx != sig_ctx
-
-    assert pb.native_ml_dsa_verify(ps, msg, sig_internal, pk)
     assert pb.native_ml_dsa_verify(ps, msg, sig_empty_ctx, pk, ctx=b"")
     assert pb.native_ml_dsa_verify(ps, msg, sig_ctx, pk, ctx=b"ama")
-
-    # Cross-domain verification must fail in every direction.
-    assert not pb.native_ml_dsa_verify(ps, msg, sig_internal, pk, ctx=b"")
-    assert not pb.native_ml_dsa_verify(ps, msg, sig_empty_ctx, pk)
+    assert not pb.native_ml_dsa_verify(ps, msg, sig_empty_ctx, pk, ctx=b"ama")
     assert not pb.native_ml_dsa_verify(ps, msg, sig_ctx, pk, ctx=b"")
 
 
@@ -338,6 +332,7 @@ def test_ml_dsa_known_answer_vectors(ps: int, filename: str) -> None:
 
     keygen_checked = 0
     siggen_checked = 0
+    internal_records = 0
     for rec in records:
         if "seed" in rec:
             pk, sk = pb.native_ml_dsa_keypair_from_seed(ps, bytes.fromhex(rec["seed"]))
@@ -348,12 +343,19 @@ def test_ml_dsa_known_answer_vectors(ps: int, filename: str) -> None:
             sk = bytes.fromhex(rec["skey"])
             msg = bytes.fromhex(rec["msg"]) if rec["msg"] else b""
             ctx = bytes.fromhex(rec["ctx"]) if rec.get("ctx") else b""
-            mode = rec["sigmode"]
-            sig = pb.native_ml_dsa_sign(ps, msg, sk, ctx=None if mode == "internal" else ctx)
-            assert sig == bytes.fromhex(rec["sig"]), f"ML-DSA {mode} signature diverged from KAT"
+            if rec["sigmode"] == "internal":
+                # Algorithm 7 is not in the shipped library (INVARIANT-50);
+                # tests/c/test_ml_dsa_context_separation.c replays these
+                # through the testing archive.  Counted so the corpus cannot
+                # quietly stop carrying them.
+                internal_records += 1
+                continue
+            sig = pb.native_ml_dsa_sign(ps, msg, sk, ctx=ctx)
+            assert sig == bytes.fromhex(rec["sig"]), "ML-DSA external signature diverged from KAT"
             siggen_checked += 1
 
     assert keygen_checked > 0 and siggen_checked > 0, "KAT file exercised nothing"
+    assert internal_records == 0 or internal_records >= 15, internal_records
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +378,14 @@ def test_legacy_kyber_wrapper_is_ml_kem_1024() -> None:
 
 
 def test_legacy_dilithium_wrapper_is_ml_dsa_65() -> None:
-    """``dilithium_sign`` must still mean exactly ML-DSA-65."""
+    """``dilithium_sign`` must still mean exactly ML-DSA-65 — and, since
+    5.0.0, the FIPS 204 Sec 5.2 EXTERNAL interface with the empty context.
+
+    It used to be the internal interface (Algorithm 7, no domain separator),
+    whose signatures no conforming ML-DSA-65 verifier accepts.  The pairing
+    below is therefore with ``ctx=b""``; the internal interface no longer ships
+    (``tests/test_ml_dsa_interfaces.py``).
+    """
     kp = pb.generate_dilithium_keypair()
     sizes = pb.ML_DSA_SIZES[pb.ML_DSA_65]
     assert len(kp.public_key) == sizes["public_key"]
@@ -385,8 +394,14 @@ def test_legacy_dilithium_wrapper_is_ml_dsa_65() -> None:
     sig = pb.dilithium_sign(msg, bytes(kp.secret_key))
     assert len(sig) == sizes["signature"]
     # The parameter-driven verifier must accept the legacy signer's output.
-    assert pb.native_ml_dsa_verify(pb.ML_DSA_65, msg, sig, kp.public_key)
+    assert pb.native_ml_dsa_verify(pb.ML_DSA_65, msg, sig, kp.public_key, ctx=b"")
     # ...and vice versa.
+    assert pb.dilithium_verify(
+        msg,
+        pb.native_ml_dsa_sign(pb.ML_DSA_65, msg, bytes(kp.secret_key), ctx=b""),
+        kp.public_key,
+    )
+    # The default context IS the empty one, so the default signer agrees too.
     assert pb.dilithium_verify(
         msg, pb.native_ml_dsa_sign(pb.ML_DSA_65, msg, bytes(kp.secret_key)), kp.public_key
     )
@@ -503,6 +518,42 @@ def test_ml_kem_implicit_rejection_hides_a_mismatched_key(ps: int) -> None:
     other = pb.native_ml_kem_decapsulate(ps, ciphertext, bytes(mutated))
     assert other != shared, "the mutation had no effect at all"
     assert len(other) == len(shared), "decapsulation errored instead of failing silently"
+
+
+@pytest.mark.parametrize("ps", pb.ML_KEM_PARAM_SETS)
+@pytest.mark.parametrize("field", ["ek", "h_ek"])
+def test_ml_kem_decapsulate_refuses_an_inconsistent_hash_field(ps: int, field: str) -> None:
+    """FIPS 203 Sec 7.3, input check 3, performed by decapsulation itself.
+
+    ``dk = dk_PKE || ek || H(ek) || z``.  The standard requires every
+    decapsulation key to have passed ``H(dk[384k:768k+32]) == dk[768k+32:768k+64]``
+    before ML-KEM.Decaps runs; this API takes raw key bytes from any caller,
+    so the native decapsulation performs the check on every call.  A
+    mutation of ``ek`` or of the stored digest must therefore raise, not
+    decapsulate into an implicit-rejection secret the peer never derived.
+    The dk_PKE mutation in the test above keeps the digest consistent and
+    stays on the silent path, which is the boundary this check must not
+    cross.
+    """
+    public, secret = pb.native_ml_kem_keypair(ps)
+    ciphertext, _ = pb.native_ml_kem_encapsulate(ps, public)
+    sizes = pb.ML_KEM_SIZES[ps]
+    t_bytes = sizes["secret_key"] - sizes["public_key"] - 64
+    offsets = {"ek": t_bytes, "h_ek": t_bytes + sizes["public_key"]}
+    mutated = bytearray(secret)
+    mutated[offsets[field]] ^= 0x01
+    with pytest.raises(ValueError, match="hash check"):
+        pb.native_ml_kem_decapsulate(ps, ciphertext, bytes(mutated))
+
+
+def test_legacy_kyber_decapsulate_refuses_an_inconsistent_hash_field() -> None:
+    """The Kyber-1024 wrapper is the same decapsulation and must refuse too."""
+    public, secret = pb.native_ml_kem_keypair(pb.ML_KEM_1024)
+    ciphertext, _ = pb.native_ml_kem_encapsulate(pb.ML_KEM_1024, public)
+    mutated = bytearray(secret)
+    mutated[768 * 4 + 32] ^= 0x01
+    with pytest.raises(ValueError, match="hash check"):
+        pb.kyber_decapsulate(ciphertext, bytes(mutated))
 
 
 @pytest.mark.parametrize("ps", pb.ML_DSA_PARAM_SETS)

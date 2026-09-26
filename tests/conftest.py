@@ -17,9 +17,11 @@ This file consolidates fixtures from across the test suite to:
 from __future__ import annotations
 
 import os
-import secrets
+import platform
+import shutil
+import sys
 import tempfile
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,48 @@ import pytest
 # legitimate skips are preserved.
 
 _CI = os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("true", "1", "yes")
+
+# When AMA_CI_REQUIRE_HISTORY=1 is set (by a lane whose checkout is
+# ``fetch-depth: 0``), every branch and every tag is in the checkout.  A test
+# marked ``requires_git_history`` skips when the object it reads is absent —
+# ``origin/main``, a baseline's calibration commit, the v4.0.0 release tag —
+# which is the honest answer in a shallow clone and a broken checkout here.
+# Four such guards skipped on every CI run for as long as they existed, because
+# the two pytest lanes checked out at depth 1; nothing reported it, because a
+# skip is green.  This flag is what makes that visible.
+_CI_HISTORY = os.environ.get("AMA_CI_REQUIRE_HISTORY", "").lower() in ("true", "1", "yes")
+
+# When AMA_CI_REQUIRE_MEMCHECK=1 is set (by ci.yml's security-checks job, the
+# lane that installs valgrind next to a built library), a test marked
+# ``requires_memcheck`` must run.  Those tests are the doc-example gate's
+# uninitialised-read oracle and its positive control; before this flag they
+# skipped on every pytest lane — none installs valgrind — and the skip named
+# nothing the backend escalation matches, so the one test proving the gate
+# rejects an Ed25519 key minted from stack garbage never executed in CI.
+_CI_MEMCHECK = os.environ.get("AMA_CI_REQUIRE_MEMCHECK", "").lower() in ("true", "1", "yes")
+
+# When AMA_CI_REQUIRE_AARCH64_TOOLCHAIN=1 is set (by the pytest lanes that
+# provision an AArch64 ELF C compiler: ci.yml's test job on both Linux
+# architectures and ci-build-test.yml's python-package job on ubuntu-latest —
+# gcc-aarch64-linux-gnu on x86-64, the native gcc on ubuntu-24.04-arm), a test
+# marked ``requires_aarch64_toolchain`` must run.  That is the BTI libgcc probe
+# in tests/test_binding_control_flow_integrity.py, which compiles an atomic
+# read-modify-write with a real AArch64 compiler.  Before this flag no pytest
+# lane installed the cross compiler, and the probe's skip reason said it "runs
+# natively on ci.yml's ubuntu-24.04-arm lanes"; "natively" matched the backend
+# keyword "native" below, so AMA_CI_REQUIRE_BACKENDS turned the skip into a
+# failure on every non-AArch64 lane — ubuntu-latest x86-64, macos-latest,
+# macos-15-intel and windows-latest, in ci.yml::test and
+# ci-build-test.yml::python-package alike (runs 36074261249 / 36074261255,
+# 2026-09-24) — while the ubuntu-24.04-arm lanes, whose native compiler is
+# AArch64, ran it.  The marker keeps the skip where no lane promised the
+# compiler and the host has none (see the hook); this flag makes the lanes
+# that do promise it fail on the skip.
+_CI_AARCH64_TOOLCHAIN = os.environ.get("AMA_CI_REQUIRE_AARCH64_TOOLCHAIN", "").lower() in (
+    "true",
+    "1",
+    "yes",
+)
 _BACKEND_SKIP_REASONS = (
     "dilithium",
     "kyber",
@@ -49,6 +93,140 @@ _BACKEND_SKIP_REASONS = (
 )
 
 
+def _host_machine() -> str:
+    return platform.machine().lower()
+
+
+def _host_is_x86_64() -> bool:
+    return _host_machine() in {"x86_64", "amd64"}
+
+
+def _host_is_x86() -> bool:
+    return _host_machine() in {"x86_64", "amd64", "i386", "i686", "x86"}
+
+
+def _host_is_aarch64() -> bool:
+    return _host_machine() in {"aarch64", "arm64"}
+
+
+def _host_has_aarch64_elf_compiler() -> bool:
+    """Whether this host can compile an AArch64 ELF object.
+
+    The native compiler on a Linux AArch64 host, or ``aarch64-linux-gnu-gcc``
+    on PATH anywhere else — the same two answers
+    ``tests/test_binding_control_flow_integrity.py::_aarch64_compiler`` gives.
+    The hook below re-asks them of the real host, so the toolchain exemption
+    is a capability this host lacks, not a phrase a skip reason contains.
+    """
+    if sys.platform.startswith("linux") and _host_is_aarch64():
+        return True
+    return shutil.which("aarch64-linux-gnu-gcc") is not None
+
+
+#: Instruction-set capabilities a test may declare with
+#: ``@pytest.mark.requires_host_isa("<token>")``, each mapped to a predicate
+#: that answers whether THIS host can provide it.
+#:
+#: The CI escalation below turns a backend-shaped skip into a hard failure
+#: because a backend missing after a build is a defect.  A test whose subject
+#: is an instruction-set extension is a different case: on an aarch64 runner
+#: there is no x86 AES-NI to be missing, and "build the C library" — what the
+#: escalation tells the operator to do — is not a remedy.  Three x86-only
+#: parametrisations of
+#: ``tests/test_aesni_is_not_gated_on_avx2.py::TestTheBackendAcrossBuildConfigurations``
+#: failed every ubuntu-24.04-arm, windows-latest and macos-latest job that way:
+#: the skip reason has to name AES-NI to be informative, and naming it is what
+#: tripped ``_mentions_backend``.
+#:
+#: The exemption is deliberately NOT text-matched — "mentions x86" would let
+#: any backend skip through by rewording.  A test must NAME a capability from
+#: this table, and the hook then re-asks the host: on a host that HAS the
+#: capability the skip is escalated exactly as before, so the marker cannot
+#: hide a backend a build should have produced.  A token that is not in the
+#: table is not an exemption either, so a typo fails closed.
+HOST_ISA_PREDICATES: dict[str, Callable[[], bool]] = {
+    "x86": _host_is_x86,
+    "x86-64": _host_is_x86_64,
+    "aarch64": _host_is_aarch64,
+}
+
+
+def host_isa_exempts(item: Any) -> bool:
+    """Whether a capability this host does not have explains ``item``'s skip.
+
+    Non-vacuous by construction: the predicate is evaluated against the real
+    host every time, so this returns ``False`` — and the skip is escalated —
+    on precisely the hosts where the capability exists and the skip would
+    therefore be reporting a missing build artefact.
+    """
+    for marker in item.iter_markers("requires_host_isa"):
+        for token in marker.args:
+            predicate = HOST_ISA_PREDICATES.get(str(token))
+            if predicate is not None and not predicate():
+                return True
+    return False
+
+
+#: Every name ``pqc_backends._get_lib_names()`` can return, in the order that
+#: function tries them — Windows first, because there CMake produces the
+#: UNPREFIXED ``ama_cryptography.dll`` and ``_get_lib_names`` puts it ahead of
+#: the ``lib``-prefixed spelling.
+#:
+#: Order is the whole point.  A caller that only asks "is a library here?" can
+#: use any of these; a caller that MODIFIES the library — every
+#: tamper-detection test in the suite — has to land on the file the loader will
+#: actually open, or it tampers with a copy nothing reads and the gate it is
+#: testing passes for the wrong reason.
+#:
+#: Two measured failures sit behind this list.  Three fixtures used to test for
+#: the library with ``glob("libama_cryptography*")`` alone; on Windows that
+#: matched nothing even when the DLL was present and loaded, so
+#: `tests/test_native_integrity.py`, `tests/test_execution_integrity.py` and
+#: the POST fixtures in `tests/test_post_failclosed.py` skipped their whole
+#: integrity surface — 15 tests — on every Windows job, silently, while the
+#: platform's own `import ama_cryptography` worked fine.  And
+#: `tests/test_artefact_cache_poisoning.py` took ``sorted(glob(...))[0]``,
+#: which on macOS is ``libama_cryptography.5.0.0.dylib`` (``.5`` sorts before
+#: ``.d``) rather than the ``libama_cryptography.dylib`` the loader opens.
+_NATIVE_LIB_NAMES = (
+    "ama_cryptography.dll",
+    "libama_cryptography.dll",
+    "libama_cryptography.dylib",
+    "libama_cryptography.so",
+)
+
+#: Versioned sonames — ``libama_cryptography.so.5.0.0``,
+#: ``libama_cryptography.5.0.0.dylib``.  Consulted only after every name above
+#: has missed, so a tree that holds both resolves to the loaded one.
+_NATIVE_LIB_GLOB = "libama_cryptography*"
+
+
+def native_library_path(directory: Path) -> Path | None:
+    """The resolved native library in ``directory``, or ``None`` if absent.
+
+    An unversioned name wins over a versioned soname: the versioned file is
+    normally the real object and the bare name a symlink to it, and
+    ``Path.resolve()`` collapses that anyway — but the bare name is what the
+    loader opens, so it is what a modifying caller must be handed.
+    """
+    for name in _NATIVE_LIB_NAMES:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate.resolve()
+    matches = sorted(p for p in directory.glob(_NATIVE_LIB_GLOB) if p.is_file())
+    return matches[-1].resolve() if matches else None
+
+
+def native_library_present(directory: Path) -> bool:
+    """Whether ``directory`` holds a built native library for this platform."""
+    return native_library_path(directory) is not None
+
+
+def _mentions_backend(reason: str) -> bool:
+    """Whether a skip reason names a cryptographic backend."""
+    return any(kw in reason.lower() for kw in _BACKEND_SKIP_REASONS)
+
+
 def _is_backend_skip(marker: Any) -> bool:
     """Check if a skipif marker is about a missing crypto backend."""
     reason = ""
@@ -56,7 +234,86 @@ def _is_backend_skip(marker: Any) -> bool:
         reason = marker.kwargs.get("reason", "")
     if hasattr(marker, "args") and len(marker.args) > 1 and not reason:
         reason = str(marker.args[1])
-    return any(kw in reason.lower() for kw in _BACKEND_SKIP_REASONS)
+    return _mentions_backend(reason)
+
+
+def _reported_skip_reason(rep: Any) -> str:
+    """The reason text pytest recorded for a skip, however it was raised.
+
+    For a skip, ``rep.longrepr`` is the ``(path, lineno, message)`` triple, and
+    the message is ``"Skipped: <reason>"``.  Reading it is the only way to see
+    an *imperative* ``pytest.skip("...")`` — those raise at call time and leave
+    no marker on the item, so marker inspection alone cannot find them.
+    """
+    longrepr = getattr(rep, "longrepr", None)
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        message = str(longrepr[2])
+        _, _, tail = message.partition("Skipped: ")
+        return tail or message
+    return ""
+
+
+def _lane_promise_decides(item: Any, rep: Any) -> bool:
+    """Settle a skipped ``item``'s report by the markers whose lane flags act
+    independently of ``AMA_CI_REQUIRE_BACKENDS``; True when it is settled.
+
+    ``requires_memcheck`` and ``requires_git_history`` fail under their own
+    flag and are otherwise handed on to the backend escalation, which ignores
+    them.  ``requires_aarch64_toolchain`` fails under its flag too; without
+    the flag it is a capability exemption re-asked of the real host, exactly
+    like :func:`host_isa_exempts`: the skip is settled — left standing — only
+    on a host with no AArch64 compiler at all, and on a host that HAS one the
+    report is handed on unchanged, because a probe that skips beside a
+    compiler it should have found is the ordinary missing-backend case.
+
+    Its own function so that ``pytest_runtest_makereport`` stays inside the
+    complexity ceiling ruff enforces (C901, 15): the hook sat exactly at the
+    ceiling before the toolchain marker, and the three lane-flag markers are
+    one decision, not three.
+    """
+    if _CI_MEMCHECK and item.get_closest_marker("requires_memcheck") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'memcheck oracle unavailable'} — "
+            "this lane installs valgrind and builds libama_cryptography "
+            "(AMA_CI_REQUIRE_MEMCHECK), so a test whose oracle is memcheck must "
+            "run here. A skip means the valgrind install or the library build "
+            "broke and the documented-C-example gate's uninitialised-read check "
+            "went unverified."
+        )
+        return True
+    if _CI_HISTORY and item.get_closest_marker("requires_git_history") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'git history unavailable'} — "
+            "this lane checks out the full history (fetch-depth: 0), so the git "
+            "object this test reads must be present. A skip here means the "
+            "checkout is shallow again and the history-dependent guards "
+            "(baseline validity window, calibration-commit drift, snapshot "
+            "provenance, the embedded release tag) went silent."
+        )
+        return True
+    if item.get_closest_marker("requires_aarch64_toolchain") is None:
+        return False
+    if _CI_AARCH64_TOOLCHAIN:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'AArch64 ELF toolchain unavailable'} — "
+            "this lane provisions an AArch64 ELF C compiler "
+            "(AMA_CI_REQUIRE_AARCH64_TOOLCHAIN: gcc-aarch64-linux-gnu on "
+            "ubuntu-latest, the native compiler on ubuntu-24.04-arm), so the "
+            "BTI libgcc probe must run here, not skip. A skip means the "
+            "toolchain install broke or the probe stopped finding it."
+        )
+        return True
+    # No lane promised the compiler.  The skip stands only where this host
+    # cannot supply one — a capability exemption re-asked of the real host,
+    # exactly like host_isa_exempts.  On a host that HAS the compiler this is
+    # False and the backend escalation in the hook runs unchanged.
+    return not _host_has_aarch64_elf_compiler()
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -73,13 +330,145 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
     reason (e.g. a broken PyCA install) would be incorrectly reported as
     a backend-missing failure because a sibling backend-related skipif
     happens to be attached to the same item.
+
+    Marker inspection is not sufficient on its own.  An imperative
+    ``pytest.skip("Kyber backend unavailable")`` — raised from a fixture or a
+    test body, which is how several of the PQC KAT suites report a missing
+    backend — attaches no marker to the item, so it passed straight through
+    this hook and CI reported it as a skip.  That is the same
+    escalation-shaped hole the ``skipif`` path exists to close, so the
+    reason pytest actually recorded is checked too.
+
+    One class of skip is exempt, and only one: a test that declares an
+    instruction set the host does not have (``@pytest.mark.requires_host_isa``).
+    "All cryptographic backends must be available in CI" is a claim about what
+    a build should have produced; an x86 AES-NI kernel on an aarch64 runner is
+    not one of those, and telling the operator to build the C library is not a
+    remedy for it.  See :data:`HOST_ISA_PREDICATES` for why that exemption
+    cannot be used to hide a real missing backend.
+
+    Two more markers name things a lane promises to provide, and are escalated
+    on the same principle — a skip must not stand in for coverage the lane was
+    configured to have:
+
+    * ``requires_git_history`` under ``AMA_CI_REQUIRE_HISTORY``: the lane
+      checked out with ``fetch-depth: 0``, so ``origin/main``, the baselines'
+      calibration commits and the release tag are present; a skip means the
+      checkout is shallow again and the history-dependent guards went silent.
+    * ``requires_example_deps`` under ``AMA_CI_REQUIRE_BACKENDS``: the lane
+      installs the ``[examples]`` extra, so the shipped examples' third-party
+      imports resolve; a skip means the install broke and the attack-surface
+      pins on the Flask demo stopped running — as they had on every CI run
+      before the extra existed.
+    * ``requires_memcheck`` under ``AMA_CI_REQUIRE_MEMCHECK``: the lane
+      installs valgrind and builds the library, so a skip means one of the two
+      went missing and the doc-example gate's uninitialised-read oracle went
+      unverified.
+    * ``requires_c_library`` under ``AMA_CI_REQUIRE_BACKENDS`` on a Linux
+      host: the lane built ``libama_cryptography``, so a test that compiles
+      and links a C program against it has what it needs.  Linux only,
+      because that is the promise the C example lane makes: on Windows the
+      MSVC-built import library is not where a MinGW ``-lama_cryptography``
+      looks, and no macOS lane has been measured running it.
+    * ``requires_aarch64_toolchain`` under ``AMA_CI_REQUIRE_AARCH64_TOOLCHAIN``:
+      the lane provisions an AArch64 ELF C compiler — gcc-aarch64-linux-gnu on
+      ubuntu-latest, the native gcc on ubuntu-24.04-arm — so the BTI libgcc
+      probe in tests/test_binding_control_flow_integrity.py must run; a skip
+      means the install broke or the probe stopped finding the compiler.
+      Without that flag the marker is the second capability exemption, and it
+      works exactly like ``requires_host_isa``: the hook re-asks the REAL host
+      (:func:`_host_has_aarch64_elf_compiler`) and leaves the skip alone only
+      on a host with no AArch64 compiler at all, where no build of this
+      library could have supplied one and "build the C library" is not the
+      remedy.  On a host that HAS the compiler the skip falls through to the
+      backend escalation unchanged, because a probe that skips beside a
+      compiler it should have found is the ordinary missing-backend case.
+      Deliberately NOT text-matched: the probe's reason names the
+      ubuntu-24.04-arm lanes that "compile natively", and "natively" is what
+      :func:`_mentions_backend` matched when every non-AArch64 lane failed on
+      it (runs 36074261249 / 36074261255, 2026-09-24).  Rewording the reason
+      would have silenced that skip on every host, including the lanes that
+      now install the compiler; the marker silences it only where the
+      compiler cannot exist.
     """
     outcome = yield
-    if not _CI:
+    if not (_CI or _CI_HISTORY or _CI_MEMCHECK or _CI_AARCH64_TOOLCHAIN):
         return
     rep = outcome.get_result()
     if not rep.skipped:
         return
+    if _lane_promise_decides(item, rep):
+        return
+    if not _CI:
+        return
+    if host_isa_exempts(item):
+        # The test declares an instruction set this host does not have, so no
+        # build of this library could have produced the backend it names.  See
+        # HOST_ISA_PREDICATES: on a host that DOES have it, this is False and
+        # the escalation below runs unchanged.
+        return
+
+    def _fail(reason: str) -> None:
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reason} — "
+            "all cryptographic backends must be available in CI. "
+            "The C library must be built before running tests."
+        )
+
+    # Interop oracle: a test marked requires_interop_oracle needs an external
+    # reference (PyCA cryptography / PyNaCl / pycryptodome), almost always to
+    # cross-check an AMA primitive against it; one vendor-isolation control
+    # uses PyCA as the planted third-party binding it must detect.  The
+    # require-backends lane installs all three, so a skip here means that
+    # install broke and the ONLY independent-implementation check of these
+    # primitives went silent — exactly the "a skip must not stand
+    # in for coverage" hole this hook exists to close, and the one the nine
+    # backend keywords never matched because these skips name the reference
+    # library, not an AMA backend (audit M18).  Marker-based, not text-matched,
+    # so it cannot be evaded by rewording the skip reason.
+    if any(True for _ in item.iter_markers("requires_interop_oracle")):
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'interop reference implementation unavailable'} — "
+            "the cross-implementation validation oracle (PyCA cryptography / PyNaCl / "
+            "pycryptodome) must be installed in the require-backends lane so this check "
+            "runs. Install .[dev,legacy,benchmark] plus pycryptodome (audit M18)."
+        )
+        return
+
+    # C example lane: a test marked requires_c_library compiles and links
+    # against the library this lane built.  On Linux that is a promise, so the
+    # skip is the defect (see the docstring for why the scope is Linux).
+    if (
+        sys.platform.startswith("linux")
+        and item.get_closest_marker("requires_c_library") is not None
+    ):
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'C library not linkable'} — "
+            "this Linux lane builds libama_cryptography (AMA_CI_REQUIRE_BACKENDS), "
+            "so the C example lane must run here, not skip."
+        )
+        return
+
+    # Shipped examples: a test marked requires_example_deps drives an example
+    # under examples/python/ that imports a third-party package (Flask).  The
+    # require-backends lanes install the [examples] extra, so a skip here means
+    # that install broke and the example's attack-surface pins went silent.
+    # Marker-based for the same reason as the oracle escalation above.
+    if item.get_closest_marker("requires_example_deps") is not None:
+        reported = _reported_skip_reason(rep)
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reported or 'example dependency unavailable'} — "
+            "the require-backends lane installs the [examples] extra so the shipped "
+            "examples' tests run. Install .[examples]."
+        )
+        return
+
     for marker in item.iter_markers("skipif"):
         if not _is_backend_skip(marker):
             continue
@@ -88,14 +477,12 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
             # The backend-related condition was false at evaluation time —
             # the backend is present, so this marker did not cause the skip.
             continue
-        reason = marker.kwargs.get("reason", "backend unavailable")
-        rep.outcome = "failed"
-        rep.longrepr = (
-            f"CI FAILURE: {reason} — "
-            "all cryptographic backends must be available in CI. "
-            "The C library must be built before running tests."
-        )
-        break
+        _fail(marker.kwargs.get("reason", "backend unavailable"))
+        return
+
+    reported = _reported_skip_reason(rep)
+    if reported and _mentions_backend(reported):
+        _fail(reported)
 
 
 # =============================================================================
@@ -136,19 +523,13 @@ def master_seed() -> bytes:
 
 
 @pytest.fixture
-def random_seed() -> bytes:
-    """Provide a random 64-byte seed for tests requiring entropy."""
-    return secrets.token_bytes(64)
-
-
-@pytest.fixture
-def test_key_material() -> bytes:
+def sample_key_material() -> bytes:
     """Provide standard 32-byte key material for storage tests."""
     return b"test-key-material-32-bytes-long!"
 
 
 @pytest.fixture
-def test_password() -> str:
+def sample_password() -> str:
     """Provide a standard test password."""
     return "test-password-secure-123"  # nosec B105 -- test fixture password, not a production secret (CONF-001)
 
@@ -201,79 +582,11 @@ def rotation_manager_long_period() -> Any:
 
 
 @pytest.fixture
-def secure_storage(temp_storage_path: Path, test_password: str) -> Any:
+def secure_storage(temp_storage_path: Path, sample_password: str) -> Any:
     """Provide a SecureKeyStorage instance with password-derived key."""
     from ama_cryptography.key_management import SecureKeyStorage
 
-    return SecureKeyStorage(temp_storage_path, master_password=test_password)
-
-
-# =============================================================================
-# CRYPTOGRAPHIC API FIXTURES
-# =============================================================================
-
-
-# =============================================================================
-# PQC BACKEND FIXTURES
-# =============================================================================
-
-
-@pytest.fixture
-def pqc_backend_info() -> Any:
-    """Provide current PQC backend availability info."""
-    from ama_cryptography.pqc_backends import get_pqc_backend_info
-
-    return get_pqc_backend_info()
-
-
-@pytest.fixture
-def dilithium_available() -> Any:
-    """Check if Dilithium is available."""
-    from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
-
-    return DILITHIUM_AVAILABLE
-
-
-@pytest.fixture
-def kyber_available() -> Any:
-    """Check if Kyber is available."""
-    from ama_cryptography.pqc_backends import KYBER_AVAILABLE
-
-    return KYBER_AVAILABLE
-
-
-@pytest.fixture
-def sphincs_available() -> Any:
-    """Check if SPHINCS+ is available."""
-    from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE
-
-    return SPHINCS_AVAILABLE
-
-
-# =============================================================================
-# EQUATION ENGINE FIXTURES
-# =============================================================================
-
-
-@pytest.fixture
-def equation_engine() -> Any:
-    """Provide an AmaEquationEngine instance."""
-    from ama_cryptography.double_helix_engine import AmaEquationEngine
-
-    return AmaEquationEngine()
-
-
-@pytest.fixture
-def initial_state() -> Any:
-    """Provide an initial state vector for equation tests."""
-    from ama_cryptography._numeric import array
-
-    return array([1.0, 0.5, 0.25, 0.125, 0.0625])
-
-
-# =============================================================================
-# MONITOR FIXTURES
-# =============================================================================
+    return SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
 
 # =============================================================================
@@ -283,15 +596,7 @@ def initial_state() -> Any:
 
 def pytest_configure(config: Any) -> None:
     """Configure custom pytest markers and deferred warning filters."""
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
-    config.addinivalue_line(
-        "markers", "quantum: marks tests that require quantum-resistant libraries"
-    )
-    config.addinivalue_line("markers", "integration: marks integration tests")
     config.addinivalue_line("markers", "security: marks security-related tests")
-    config.addinivalue_line("markers", "performance: marks performance-related tests")
 
     # Register the SecurityWarning filter via the ini mechanism rather than
     # a direct ``warnings.filterwarnings()`` call.  Pytest wraps every test

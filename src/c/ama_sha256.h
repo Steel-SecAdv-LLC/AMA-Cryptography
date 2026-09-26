@@ -55,10 +55,4 @@ void ama_sha256_final(ama_sha256_ctx *ctx, uint8_t digest[32]);
  */
 AMA_API void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen);
 
-/**
- * @brief SHA-256 with two concatenated inputs: SHA-256(in1 || in2)
- */
-AMA_API void ama_sha256_2(uint8_t *out, const uint8_t *in1, size_t in1len,
-                          const uint8_t *in2, size_t in2len);
-
 #endif /* AMA_SHA256_H */

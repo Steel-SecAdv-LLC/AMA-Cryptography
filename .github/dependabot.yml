@@ -23,10 +23,12 @@ updates:
     # Allow only security updates and compatible version updates
     allow:
       - dependency-type: "all"
-    # Ignore major version updates for critical cryptographic libraries
-    ignore:
-      - dependency-name: "cryptography"
-        update-types: ["version-update:semver-major"]
+    # No ignore rules.  A semver-major ignore on `cryptography` stood here;
+    # it kept that package's floor at 46.0.7 while four advisories fixed
+    # only in majors 48-50 accumulated against it (see pyproject.toml
+    # [legacy]).  `cryptography` is a test/benchmark-only extra
+    # (INVARIANT-1), and CI resolves its newest release on every run, so a
+    # major bump is exercised before it merges.
     # Batch routine version bumps into ONE PR per scheduled run so CI is
     # invoked once for the whole set instead of once per dependency. This
     # replaces the recurring manual-consolidation chore (see PRs #320, #334,

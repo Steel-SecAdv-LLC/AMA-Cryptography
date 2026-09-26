@@ -186,12 +186,12 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
     int round;
 
     /* AddRoundKey (round 0) */
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         state[j] = in[j] ^ round_keys[j];
 
     for (round = 1; round <= 14; round++) {
         /* SubBytes */
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             t[j] = aes_sbox[state[j]];
 
         /* ShiftRows */
@@ -216,7 +216,7 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
 
         /* AddRoundKey */
         const uint8_t *rk = round_keys + round * 16;
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             state[j] ^= rk[j];
     }
 
@@ -293,15 +293,23 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
  * conditional.  The accumulator Z is read but not modified during the
  * loop, so the bit extraction sees a stable operand.
  *
- * The mask goes through ama_ct_value_barrier_u64() and that is load-bearing,
- * not decoration.  A bare source-level mask is constant-time only in the C
- * abstract machine: clang 18 at -O2/-O3 proves the mask is all-zero-or-all-
- * ones, recognises the masked accumulate as the identity in the all-zero
- * case, and emits `bt`/`jae` to branch straight over it — reintroducing a
- * branch on a bit of the accumulator, which is a function of the secret
- * subkey H from the second block onward.  gcc 13 does not.  The barrier
- * hides the mask's range from both, so the accumulation stays unconditional
- * regardless of toolchain.  See internal/ama_ct_barrier.h, and
+ * The mask goes through ama_ct_value_barrier_u64().  A bare source-level mask
+ * is constant-time only in the C abstract machine: a sufficiently clever
+ * optimizer can prove the mask is all-zero-or-all-ones, recognise the masked
+ * accumulate as the identity in the all-zero case, and branch straight over it
+ * — reintroducing a branch on a bit of the accumulator, which is a function of
+ * the secret subkey H from the second block onward.  The barrier hides the
+ * mask's range so the accumulation stays unconditional regardless of toolchain.
+ *
+ * Status on the currently-available compilers, re-measured for audit M24: the
+ * barrier is FORWARD INSURANCE, not a reproduced fix.  Removing the __asm__ and
+ * rebuilding this TU is byte-identical under clang 18.1.3 -O3 and leaves the
+ * conditional-branch count unchanged (100 vs 100, a register-allocation-only
+ * diff) under gcc 13 -O3 — neither reintroduces the branch here.  An earlier
+ * version of this comment asserted clang 18 emitted `bt`/`jae` without the
+ * barrier; that does not reproduce on clang 18.1.3 and is withdrawn.  The
+ * barrier is kept because it costs nothing and guards against a compiler that
+ * does perform the conversion.  See internal/ama_ct_barrier.h, and
  * tools/check_ghash_constant_time.py, which measures this path's retired
  * instruction count under two key classes and fails if it is key-dependent. */
 
@@ -400,7 +408,7 @@ static void ghash(const uint8_t H[16],
     /* Process AAD */
     full_blocks = aad_len / 16;
     for (i = 0; i < full_blocks; i++) {
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= aad[i * 16 + j];
         ghash_mul(S, H);
     }
@@ -411,7 +419,7 @@ static void ghash(const uint8_t H[16],
          * writes on the secure path. */
         ama_secure_memzero(block, 16);
         memcpy(block, aad + full_blocks * 16, remaining);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= block[j];
         ghash_mul(S, H);
     }
@@ -419,7 +427,7 @@ static void ghash(const uint8_t H[16],
     /* Process ciphertext */
     full_blocks = ct_len / 16;
     for (i = 0; i < full_blocks; i++) {
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= ciphertext[i * 16 + j];
         ghash_mul(S, H);
     }
@@ -427,7 +435,7 @@ static void ghash(const uint8_t H[16],
     if (remaining > 0) {
         ama_secure_memzero(block, 16);
         memcpy(block, ciphertext + full_blocks * 16, remaining);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             S[j] ^= block[j];
         ghash_mul(S, H);
     }
@@ -456,7 +464,7 @@ static void ghash(const uint8_t H[16],
         block[14] = (uint8_t)(ct_bits >> 8);
         block[15] = (uint8_t)(ct_bits);
     }
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         S[j] ^= block[j];
     ghash_mul(S, H);
 
@@ -557,6 +565,12 @@ ama_error_t ama_aes256_gcm_encrypt(
     if (dt->aes_gcm_encrypt) {
         dt->aes_gcm_encrypt(plaintext, pt_len, aad, aad_len, key, nonce,
                             ciphertext, tag);
+    /* The hardware kernels expand the key into their own frame and scrub it,
+     * but the compiler's hoisted copies of the round keys are unnamed and
+     * unreachable from source — a residue probe found all fifteen, `rk[0]`
+     * and `rk[1]` (the raw AES-256 key) among them.  Wipe the frame they
+     * used.  See ama_secure_stack_wipe(). */
+        ama_secure_stack_wipe();
         return AMA_SUCCESS;
     }
 
@@ -587,7 +601,7 @@ ama_error_t ama_aes256_gcm_encrypt(
     for (i = 0; i < full_blocks; i++) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             ciphertext[i * 16 + j] = plaintext[i * 16 + j] ^ keystream[j];
     }
     remaining = pt_len % 16;
@@ -602,7 +616,7 @@ ama_error_t ama_aes256_gcm_encrypt(
     ghash(H, aad, aad_len, ciphertext, pt_len, tag);
 
     /* Final tag = GHASH XOR E_K(J0) */
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         tag[j] ^= tag_mask[j];
 
     /* Scrub sensitive material */
@@ -611,6 +625,9 @@ ama_error_t ama_aes256_gcm_encrypt(
     ama_secure_memzero(keystream, sizeof(keystream));
     ama_secure_memzero(tag_mask, sizeof(tag_mask));
 
+    /* Same backstop on the scalar path: aes256_key_expansion and the block
+     * function are separate frames below this one. */
+    ama_secure_stack_wipe();
     return AMA_SUCCESS;
 }
 
@@ -674,8 +691,15 @@ ama_error_t ama_aes256_gcm_decrypt(
     /* Dispatch to AVX2/AES-NI implementation when available */
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->aes_gcm_decrypt) {
-        return dt->aes_gcm_decrypt(ciphertext, ct_len, aad, aad_len, key, nonce,
-                                   tag, plaintext);
+        ama_error_t rc = dt->aes_gcm_decrypt(ciphertext, ct_len, aad, aad_len,
+                                             key, nonce, tag, plaintext);
+    /* The hardware kernels expand the key into their own frame and scrub it,
+     * but the compiler's hoisted copies of the round keys are unnamed and
+     * unreachable from source — a residue probe found all fifteen, `rk[0]`
+     * and `rk[1]` (the raw AES-256 key) among them.  Wipe the frame they
+     * used.  See ama_secure_stack_wipe(). */
+        ama_secure_stack_wipe();
+        return rc;
     }
 
     /* Key expansion */
@@ -694,7 +718,7 @@ ama_error_t ama_aes256_gcm_decrypt(
 
     /* Compute GHASH over AAD and ciphertext BEFORE decrypting */
     ghash(H, aad, aad_len, ciphertext, ct_len, computed_tag);
-    for (int j = 0; j < 16; j++)
+    for (size_t j = 0; j < 16; j++)
         computed_tag[j] ^= tag_mask[j];
 
     /* Constant-time tag comparison + unified post-verify control flow.
@@ -703,7 +727,11 @@ ama_error_t ama_aes256_gcm_decrypt(
      * divergence between verify-pass and verify-fail return paths
      * (closes the dudect leak at test_aes_gcm_tag_verify). */
     int tag_match = (ama_consttime_memcmp(computed_tag, tag, 16) == 0);
-    size_t bound_mask = (size_t)0 - (size_t)tag_match;
+    /* The mask goes through the value barrier: at -O2 gcc rewrote
+     * `x & (0 - tag_match)` as a conditional move on tag_match, which the
+     * Memcheck secret-taint gate reports (tag_match derives from the key).
+     * Laundered, the mask is opaque and the ANDs below stay ANDs. */
+    size_t bound_mask = (size_t)ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)tag_match);
     size_t bounded_full = (ct_len / 16) & bound_mask;
     size_t bounded_remaining = (ct_len % 16) & bound_mask;
 
@@ -718,7 +746,7 @@ ama_error_t ama_aes256_gcm_decrypt(
     for (i = 0; i < bounded_full; i++) {
         gcm_inc32(counter);
         aes256_encrypt_block(round_keys, counter, keystream);
-        for (int j = 0; j < 16; j++)
+        for (size_t j = 0; j < 16; j++)
             plaintext[i * 16 + j] = ciphertext[i * 16 + j] ^ keystream[j];
     }
     if (bounded_remaining > 0) {
@@ -740,5 +768,27 @@ ama_error_t ama_aes256_gcm_decrypt(
     ama_secure_memzero(tag_mask, sizeof(tag_mask));
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
-    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    /* Masked return-code selection — same defect class and same remedy
+     * as ama_chacha20poly1305.c's decrypt return (see the comment
+     * there).  Measured caveat: HERE gcc 13 -O2 on aarch64 happened to
+     * compile the ternary branch-free already (QEMU traces of the
+     * accept/reject pair were identical pre-change, 441,262
+     * instructions each), while the byte-for-byte identical ternary in
+     * the ChaCha decrypt got a `cbnz` with asymmetric arms — which is
+     * precisely why compiler luck is not a contract.  The mask form
+     * makes the symmetry a property of the source, and the aead-verify
+     * instruction-invariance gate pins both decrypts together. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    /* Return code from the laundered mask: 0 (AMA_SUCCESS) when the tag
+     * matched, AMA_ERROR_VERIFY_FAILED otherwise.  Correct on 32- and
+     * 64-bit size_t: ~(uint64_t)bound_mask narrows to 0 or 0xFFFFFFFF. */
+    {
+        ama_error_t rc = (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED &
+                                       (int)(int32_t)(uint32_t)~(uint64_t)bound_mask);
+        /* Unconditional and identical on both classes, so the aead-verify
+         * instruction-invariance gate stays satisfied. */
+        ama_secure_stack_wipe();
+        return rc;
+    }
 }

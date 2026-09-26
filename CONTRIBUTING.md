@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 4.0.0 |
-| Last Updated | 2026-07-25 |
+| Document Version | 5.0.0 |
+| Last Updated | 2026-08-31 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -95,6 +95,18 @@ cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --bui
 
 # Install development tools
 pip install -e ".[dev]"  # Installs pytest, ruff, mypy, bandit (and black on Python 3.10+)
+```
+
+`pip install -e .` (or `python setup.py build_ext --inplace`) also writes
+`ama_cryptography/_integrity_signature.py`, the Ed25519-signed integrity
+artefact for **this** build: a per-build ephemeral key and this machine's
+native-library and binding digests. It is ignored by git and must never be
+committed (AGENTS.md §8.4); a fresh clone has none and refuses to import until
+it is built. After editing a `.py` file under `ama_cryptography/`, refresh the
+tracked source digest and commit `ama_cryptography/_integrity_digest.txt` only:
+
+```bash
+AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
 ```
 
 ### 3. Verify Setup
@@ -196,29 +208,34 @@ ruff check .
 
 All functions must include comprehensive type hints:
 
+<!-- example: python-run -->
 ```python
-from typing import List, Tuple, Optional
+from typing import Union
+
+from ama_cryptography.crypto_api import AmaCryptography, Signature
 
 def create_signature(
+    crypto: AmaCryptography,
     data: bytes,
-    private_key: ed25519.Ed25519PrivateKey
-) -> bytes:
+    secret_key: Union[bytes, bytearray]
+) -> Signature:
     """
-    Create Ed25519 signature for data.
+    Create signature for data using the configured algorithm.
 
     Args:
+        crypto: Configured AmaCryptography instance
         data: Raw bytes to sign
-        private_key: Ed25519 private key
+        secret_key: Secret key bytes (e.g. KeyPair.secret_key)
 
     Returns:
-        64-byte signature
+        Signature container holding the signature bytes and metadata
 
     Raises:
         ValueError: If data is empty
     """
     if not data:
         raise ValueError("Cannot sign empty data")
-    return private_key.sign(data)
+    return crypto.sign(data, secret_key)
 ```
 
 ### Documentation Requirements
@@ -289,6 +306,7 @@ All tests must:
 
 ### Example Test Structure
 
+<!-- example: python-run -->
 ```python
 import pytest
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
@@ -335,7 +353,7 @@ class TestEd25519Signatures:
    ```bash
    black .
    ruff check .
-   mypy ama_cryptography/
+   make lint    # ruff + mypy --strict, exactly the scope and flags CI uses
    pytest
    ```
 
@@ -343,7 +361,10 @@ class TestEd25519Signatures:
    - Update README.md if adding features
    - Update SECURITY.md if affecting security
    - Update IMPLEMENTATION_GUIDE.md if changing deployment
-   - Add entries to CHANGELOG.md
+   - Add entries to CHANGELOG.md, and keep them release-notes grade: a
+     detailed per-pass narrative (measurements, rationale, dated figures) goes
+     in the release's development journal under `docs/changelog/`, as
+     `docs/changelog/5.0.0-development-journal.md` does for 5.0.0
 
 4. **Commit with clear messages:**
    ```bash

@@ -520,3 +520,171 @@ class TestRandomizedOperatorFlow:
         assert binding.is_permitted(rotated) is False
         with pytest.raises(EthicalBindingError):
             binding.derive_key(IKM, 32, authority_key=rotated)
+
+
+class TestTheAuthorityKeyIsAnInputNotOnlyAGate:
+    """2026-09 audit, A-6.
+
+    The policy gate was sound and both derivations called it.  Neither passed
+    the authority key to the primitive underneath: the HKDF ``info`` was
+    ``enc(b) || u32be(info_len) || info`` and the signature context was
+    ``SHA3-256(0x02 || enc(b))``.  ``enc(b)`` is public, ``encode()`` works on
+    an unauthorized binding, and the adversary INVARIANT-30 names is an agent
+    with in-process access — one that can call ``native_hkdf`` itself.  So the
+    control was a gate to step around rather than a secret to be without, and
+    the audit reproduced both outputs holding no authority key.
+
+    These tests are those reproductions, kept as the thing that must keep
+    failing.  Each is stated as "the bypass does not reproduce the value", not
+    as "the value equals X": an expected-value KAT would also pass if the
+    implementation started returning a constant.
+
+    Those inequalities are necessary and not sufficient, and until 2026-09-24
+    they were all this class had.  None of them can see WHICH key the binder
+    was taken under: with ``authority_binder()`` in C passing NULL/0 to
+    ``compute_binding_tag`` — so every restricted binder became
+    ``HMAC-SHA3-256(zero_key, subdomain || enc(b))``, which anyone holding the
+    public ``enc(b)`` can compute — all six tests here and the C twin passed.
+    The two ``..._is_keyed_by_the_authority_key`` tests close that: the layout
+    rebuilt from its parts under the authority key must reproduce the output,
+    and the same construction under the zero key or a foreign key must not.
+    A reconstruction from the key is not a constant KAT; it moves with the key.
+    """
+
+    @staticmethod
+    def _binder(key: bytes, subdomain: int, binding: AgentBinding) -> bytes:
+        """``HMAC-SHA3-256(key, subdomain || enc(b))`` — the documented binder."""
+        from ama_cryptography.pqc_backends import native_hmac_sha3_256
+
+        return native_hmac_sha3_256(key, bytes([subdomain]) + binding.encode())
+
+    @staticmethod
+    def _skip_without_native() -> None:
+        if not AGENT_BINDING_AVAILABLE:
+            pytest.skip("native agent binding not available in this build")
+
+    def test_the_audit_hkdf_bypass_no_longer_reproduces_the_key(self) -> None:
+        self._skip_without_native()
+        from ama_cryptography.pqc_backends import native_hkdf
+
+        binding = persistent(authorized=True)
+        ikm, salt, info = b"\x11" * 32, b"\x22" * 16, b"caller-info"
+        key = binding.derive_key(ikm, 32, salt=salt, info=info, authority_key=AUTHORITY_KEY)
+
+        forged_info = binding.encode() + len(info).to_bytes(4, "big") + info
+        assert native_hkdf(ikm, 32, salt, forged_info) != key
+
+    def test_a_zero_binder_does_not_reproduce_a_restricted_key(self) -> None:
+        """The other half of the same statement.
+
+        A reader who learns the layout is ``enc(b) || binder || u32be(len) ||
+        info`` and guesses the binder is a constant must also fail — otherwise
+        the binder would be ceremony rather than a key.
+        """
+        self._skip_without_native()
+        from ama_cryptography.pqc_backends import native_hkdf
+
+        binding = persistent(authorized=True)
+        ikm, salt, info = b"\x11" * 32, b"\x22" * 16, b"caller-info"
+        key = binding.derive_key(ikm, 32, salt=salt, info=info, authority_key=AUTHORITY_KEY)
+
+        layout = binding.encode() + b"\x00" * 32 + len(info).to_bytes(4, "big") + info
+        assert native_hkdf(ikm, 32, salt, layout) != key
+
+    def test_the_hkdf_binder_is_keyed_by_the_authority_key(self) -> None:
+        """``enc(b) || HMAC(K_auth, 0x03 || enc(b)) || u32be(len) || info``.
+
+        The positive half proves the binder is the documented one under the
+        operator's key; the negative half proves a public or guessed key does
+        not stand in for it.  Either half alone is satisfiable by a binder
+        that does not need the key.
+        """
+        self._skip_without_native()
+        from ama_cryptography.pqc_backends import native_hkdf
+
+        binding = persistent(authorized=True)
+        ikm, salt, info = b"\x11" * 32, b"\x22" * 16, b"caller-info"
+        key = binding.derive_key(ikm, 32, salt=salt, info=info, authority_key=AUTHORITY_KEY)
+
+        def rebuilt(binder_key: bytes) -> bytes:
+            return native_hkdf(
+                ikm,
+                32,
+                salt,
+                binding.encode()
+                + self._binder(binder_key, 0x03, binding)
+                + len(info).to_bytes(4, "big")
+                + info,
+            )
+
+        assert rebuilt(AUTHORITY_KEY) == key
+        assert rebuilt(bytes(32)) != key, "a zero-keyed binder reproduces the key"
+        assert rebuilt(FOREIGN_KEY) != key, "a foreign-keyed binder reproduces the key"
+
+    def test_the_context_binder_is_keyed_by_the_authority_key(self) -> None:
+        """``SHA3-256(0x02 || enc(b) || HMAC(K_auth, 0x04 || enc(b)))``, both halves."""
+        self._skip_without_native()
+        binding = persistent(authorized=True)
+        context = binding.signing_context(authority_key=AUTHORITY_KEY)
+
+        def rebuilt(binder_key: bytes) -> bytes:
+            message = bytes([0x02]) + binding.encode() + self._binder(binder_key, 0x04, binding)
+            return hashlib.sha3_256(message).digest()
+
+        assert rebuilt(AUTHORITY_KEY) == context
+        assert rebuilt(bytes(32)) != context, "a zero-keyed binder reproduces the context"
+        assert rebuilt(FOREIGN_KEY) != context, "a foreign-keyed binder reproduces the context"
+
+    def test_the_audit_context_bypass_no_longer_reproduces_the_context(self) -> None:
+        self._skip_without_native()
+        binding = persistent(authorized=True)
+        context = binding.signing_context(authority_key=AUTHORITY_KEY)
+        assert context != hashlib.sha3_256(bytes([0x02]) + binding.encode()).digest()
+        assert len(context) == SIGNATURE_CONTEXT_BYTES
+
+    def test_an_unrestricted_binding_does_not_fork_on_an_ignored_key(self) -> None:
+        """An unrestricted binding has no operator secret to be bound to.
+
+        Mixing a key the policy does not consult would make one binding derive
+        two different values depending on an argument that changes nothing
+        else — a silent fork for callers, buying nothing.  The scope of the
+        guarantee is exactly the population INVARIANT-30 names.
+        """
+        self._skip_without_native()
+        binding = ephemeral()
+        ikm, salt, info = b"\x11" * 32, b"\x22" * 16, b"caller-info"
+        assert binding.derive_key(ikm, 32, salt=salt, info=info) == binding.derive_key(
+            ikm, 32, salt=salt, info=info, authority_key=AUTHORITY_KEY
+        )
+        assert binding.signing_context() == binding.signing_context(authority_key=AUTHORITY_KEY)
+
+    def test_an_unrestricted_binding_uses_the_documented_zero_binder_layout(self) -> None:
+        """The documented layout, checked rather than described.
+
+        This is the one place a positive equality is right: it pins what an
+        unrestricted derivation IS, so the zero binder cannot quietly become
+        something else, and it proves the two tests above fail for the reason
+        claimed (a real binder) rather than because the layout moved.
+        """
+        self._skip_without_native()
+        from ama_cryptography.pqc_backends import native_hkdf
+
+        binding = ephemeral()
+        ikm, salt, info = b"\x11" * 32, b"\x22" * 16, b"caller-info"
+        expected = native_hkdf(
+            ikm, 32, salt, binding.encode() + b"\x00" * 32 + len(info).to_bytes(4, "big") + info
+        )
+        assert binding.derive_key(ikm, 32, salt=salt, info=info) == expected
+
+    def test_a_different_authority_key_is_refused_before_it_can_derive(self) -> None:
+        """The binder is reached only through the gate, so a wrong key is
+        refused rather than silently deriving a different value.  Both are
+        safe; which one happens is worth pinning, because a caller that gets
+        bytes back from a wrong key has no signal that anything is wrong."""
+        self._skip_without_native()
+        binding = persistent(authorized=True)
+        other = bytes(b ^ 0xFF for b in AUTHORITY_KEY)
+        with pytest.raises(EthicalBindingError):
+            binding.derive_key(b"\x11" * 32, 32, authority_key=other)
+        with pytest.raises(EthicalBindingError):
+            binding.signing_context(authority_key=other)

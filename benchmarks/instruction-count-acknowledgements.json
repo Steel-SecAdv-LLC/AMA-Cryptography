@@ -1,0 +1,137 @@
+{
+  "_comment": "Intended instruction-count changes between the merge-base and this branch head, each with its measured values and its cause. tools/check_instruction_counts.py accepts an out-of-tolerance operation ONLY if it appears here with matching numbers, and fails on an entry that no longer applies -- so this file cannot become a blanket exemption. An entry whose change the merge-base already contains (the reference measures its 'to': the state of every entry here once this branch merges) is reported as landed and excuses nothing; it stays true until its operation moves again. Same shape as benchmarks/check_baseline_justification.py requires of the wall-clock floors.",
+  "merge_base": "2dcef5c6ccf7aa95a00a460e525dfb500f59ea87",
+  "measured_on": "containerised x86-64; avx512f/bw/cd/dq/ifma/vbmi/vl, vaes, vpclmulqdq, sha_ni; gcc -O2; AMA_DISPATCH_NO_AUTOTUNE=1; difference method at N=10",
+  "tolerance_percent": 2.0,
+  "acknowledgements": {
+    "aes_256_gcm_encrypt": {
+      "from": 3946,
+      "to": 4540,
+      "delta_percent": 15.05,
+      "reason": "Security hardening, paid for in instructions. The AES-256 key schedule and the GHASH accumulator are scrubbed at exit where gcc -O3 had hoisted them somewhere the source never named (INVARIANT-6), and the AEAD accept/reject return is masked rather than branched, pinned by an instruction-invariance gate.",
+      "commits": [
+        "e8b9c8c",
+        "b8fffe3"
+      ]
+    },
+    "dilithium_keygen": {
+      "from": 1990766,
+      "to": 1503470,
+      "delta_percent": -24.48,
+      "reason": "ML-DSA gains the AVX2 NTT and shake256_x4 four-way absorb/squeeze for matrix expansion.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "dilithium_sign": {
+      "from": 3368591,
+      "to": 8290768,
+      "delta_percent": 146.12,
+      "reason": "DECLARED BREAKING CHANGE, not a performance regression. ama_dilithium_sign moved from ML-DSA.Sign_internal (FIPS 204 Algorithm 7, mu = H(tr || M), no domain separator) to the Sec 5.2 EXTERNAL interface (Algorithm 2), which prepends 0x00 || len(ctx) || ctx. That changes mu, which changes every rejection-sampling decision, so the loop runs a different number of times for any given key and message. Verified by measurement: the same seed yields an IDENTICAL public key on both sides but different signatures, and each side rejects the other's -- head sig VALID under head and INVALID under main, main sig VALID under main and INVALID under head. 4.x signatures do not verify under 5.0.0; this is the correction that makes the library interoperable with liboqs, BoringSSL, Go and Bouncy Castle. See CHANGELOG.md's BREAKING entry. The internal interface (Algorithms 7 and 8) is no longer exported: it is ama_ml_dsa_sign_internal() / ama_ml_dsa_verify_internal(), compiled only into the AMA_TESTING_MODE archive (src/c/internal/ama_testing_exports.h). Corrected 2026-09-24 (AGENTS.md 6.6): this entry named ama_ml_dsa_sign(), which no longer exists.",
+      "commits": [
+        "e8b9c8c"
+      ]
+    },
+    "dilithium_verify": {
+      "from": 2075809,
+      "to": 1540668,
+      "delta_percent": -25.78,
+      "reason": "Same AVX2 NTT and four-way SHAKE as dilithium_keygen.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "ed25519_keygen": {
+      "from": 152770,
+      "to": 129253,
+      "delta_percent": -15.39,
+      "reason": "The in-house Ed25519 backend replaces ed25519-donna: 5-bit signed comb with a constant-time masked select, an AVX2 fold for the 16-entry select, SHA-512 rounds unrolled x8, and Bernstein-Yang safegcd inversion.",
+      "commits": [
+        "e848740"
+      ]
+    },
+    "ed25519_sign": {
+      "from": 228185,
+      "to": 331814,
+      "delta_percent": 45.42,
+      "reason": "INVARIANT-51: the signer derives A = [a]B and refuses a key whose stored public half disagrees (2026-09 audit, B-2). Signing therefore does TWO fixed-base scalar multiplications where it did one -- the check is the same operation that computes R -- and that is the whole of the +103,629 Ir. Deliberate: without it, two signatures over ONE message under two different stored halves share R and give s1 - s2 = (h1 - h2) * a mod L, which recovers the private scalar, and a caller that stores the halves separately or rebuilds a key from a corrupted record reaches that input with no fault injector. The comparison itself is a laundered mask rather than a branch, so the output is masked and the verdict selected without a conditional -- worth about 130 Ir against the branching form CI measured at 331,941 on 84ad90d2, and it is what keeps ed25519-sign in the secret-taint lane that runs against the shipped shared object, where a declassification point expands to nothing. Supersedes the -9.32% entry, which described the Ed25519 rewrite before the check existed; that rewrite's saving is still in this number, under the doubled work.",
+      "commits": [
+        "e848740",
+        "9b860868",
+        "84ad90d2"
+      ]
+    },
+    "ed25519_verify": {
+      "from": 552979,
+      "to": 433411,
+      "delta_percent": -21.62,
+      "reason": "Half-size verification: Lehmer EEA reduces the scalar to ~128 bits and a four-way width-5/7 wNAF replaces the full double-scalar multiply.",
+      "commits": [
+        "e848740"
+      ]
+    },
+    "hkdf_derive": {
+      "from": 117640,
+      "to": 39867,
+      "delta_percent": -66.11,
+      "reason": "HKDF is extract-then-expand over HMAC-SHA3-256, so it inherits the Keccak gain.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "hmac_sha3_256": {
+      "from": 156124,
+      "to": 53028,
+      "delta_percent": -66.03,
+      "reason": "HMAC over the faster Keccak permutation. Two permutations per call, same -66%.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "kyber_decapsulate": {
+      "from": 1090251,
+      "to": 963121,
+      "delta_percent": -11.66,
+      "reason": "Same AVX2 NTT and reciprocal-multiply change; decapsulation also runs the FO re-encryption, which is why its gain is the smallest of the three.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "kyber_encapsulate": {
+      "from": 982315,
+      "to": 804598,
+      "delta_percent": -18.09,
+      "reason": "Same AVX2 NTT and reciprocal-multiply change as kyber_keygen.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "kyber_keygen": {
+      "from": 874573,
+      "to": 744872,
+      "delta_percent": -14.83,
+      "reason": "ML-KEM gains the AVX2 NTT and the KyberSlash divisions are replaced by an exact Granlund-Montgomery reciprocal multiply, proven byte-identical over all 16,645 (coefficient, width) pairs.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "sha3_256": {
+      "from": 112106,
+      "to": 38072,
+      "delta_percent": -66.04,
+      "reason": "Keccak-f[1600] gains the AVX2/AVX-512 kernels and the BMI1/BMI2 scalar path; this branch is where the SIMD SHA3 work lands. All four Keccak-driven rows move by the same -66%, which is the signature of one shared kernel rather than four separate changes.",
+      "commits": [
+        "b40e60f"
+      ]
+    },
+    "sha3_512": {
+      "from": 209151,
+      "to": 70941,
+      "delta_percent": -66.08,
+      "reason": "Same Keccak kernel as sha3_256; the -66% matches to two decimal places, which is what a shared permutation should look like.",
+      "commits": [
+        "b40e60f"
+      ]
+    }
+  }
+}

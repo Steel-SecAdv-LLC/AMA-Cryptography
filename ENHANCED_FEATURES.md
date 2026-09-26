@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 4.0.0 |
-| Last Updated | 2026-08-01 |
+| Document Version | 5.0.0 |
+| Last Updated | 2026-08-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -35,7 +35,7 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 +----v----------------------------+   +-----------v-----------+
 |   CYTHON OPTIMIZATION LAYER     |   |  PURE PYTHON FALLBACK |
 |   src/cython/math_engine.pyx    |   |  (for portability)    |
-|   - 18-37x math speedup         |   |                       |
+|   - 3R monitoring math kernels  |   |                       |
 |   - NTT O(n log n)              |   |                       |
 |   - Matrix operations           |   |                       |
 +----+----------------------------+   +-----------------------+
@@ -46,7 +46,7 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 |  - Constant-time cryptographic primitives                   |
 |  - ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f (FIPS 203/204/205)  |
 |  - AES-256-GCM, Ed25519, SHA3-256, HKDF-SHA3-256            |
-|  - C11 atomics for thread-safe initialization                |
+|  - pthread_once / InitOnceExecuteOnce dispatch init         |
 |  - Memory-safe context management                           |
 |  - SIMD optimizations (AVX2)                                |
 +-------------------------------------------------------------+
@@ -56,7 +56,15 @@ AMA Cryptography features a zero-dependency, multi-language architecture that co
 
 ### Cython Mathematical Engine
 
-**Measured: 18–37x speedup over pure Python mathematical baseline**
+No speed-up ratio is published for this engine. The range and the
+per-kernel table this section carried until 5.0.0 had no benchmark, results
+file or history entry behind them anywhere in the tree, and were removed
+rather than restated (INVARIANT-36). `python benchmarks/performance_suite.py`
+measures two of the kernels against their NumPy baselines on your own host —
+the Lyapunov function (`lyapunov_function_fast`) and the 500 x 500
+matrix-vector product (`matrix_vector_multiply`) — and prints the ratio; it
+times helix evolution in Python only, and nothing in the tree compares the
+NTT against a Python implementation.
 
 Optimized operations:
 - Polynomial arithmetic (add, sub, multiply)
@@ -65,19 +73,9 @@ Optimized operations:
 - Lyapunov function evaluation
 - Helix evolution steps
 
-Example speedup measurements:
-```
-Operation                  Python      Cython     Speedup
-─────────────────────────────────────────────────────────
-Lyapunov function         12.3 ms     0.45 ms    27.3x
-Matrix-vector (500x500)   8.7 ms      0.31 ms    28.1x
-NTT (degree 256)          45.2 ms     1.2 ms     37.7x
-Helix evolution step      3.4 ms      0.18 ms    18.9x
-```
-
 ### C Constant-Time Primitives
 
-All cryptographic operations execute in constant time:
+Secret-dependent comparisons, scrubbing, and swaps route through dedicated constant-time primitives:
 
 1. **ama_consttime_memcmp()**: Timing-attack resistant comparison
    - Volatile pointer usage prevents optimization
@@ -101,13 +99,15 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 | Algorithm | File | Key Optimizations |
 |-----------|------|-------------------|
 | ML-KEM-1024 | `ama_kyber_avx2.c` | Vectorized NTT butterfly (16 coefficients/cycle), Barrett reduction, CBD sampling |
-| ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT (q=8380417, 8 coefficients/YMM), rejection sampling, power2round |
-| SLH-DSA-SHA2-256f | `ama_sphincs_avx2.c` | 4-way parallel SHA-256 compression, vectorized WOTS+ chains, Merkle tree hashing |
+| ML-DSA-65 | `ama_dilithium_avx2.c` | Vectorized NTT and inverse NTT (q=8380417, 8 coefficients/YMM), pointwise multiplication, rejection sampling |
+| SLH-DSA-SHA2-256f | — | No vector kernel is shipped. The SHA2 parameter sets' SHA-256 compressions go through `src/c/ama_sha256.c`'s runtime-selected compress (SHA-NI where the CPU has it); their SHA-512 calls are scalar. The SHAKE sets accelerate indirectly through the dispatched `keccak_f1600` slot. `src/c/avx2/ama_sphincs_avx2.c` is a placeholder TU; its header records what it used to hold and why that was removed. |
 | SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
-| AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
-| Ed25519 | `ama_ed25519_avx2.c` | Vectorized radix-2^51 field arithmetic, 4-way parallel scalar multiplication |
+| AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH. Needs no AVX2 — no 256-bit intrinsic appears in it; it is built with `-maes -mpclmul -mssse3 -msse4.1` from `AMA_X86_AESNI_SOURCES` and lives in `src/c/avx2/` for historical layout only |
+| AES-256-GCM (VAES) | `ama_aes_gcm_vaes_avx2.c` | VAES + VPCLMULQDQ on YMM registers, no AVX-512: four counter blocks per iteration packed two per YMM, 4-lane Karatsuba GHASH. Dispatched only when `ama_cpuid_has_vaes_aesgcm()` reports VAES, VPCLMULQDQ, PCLMULQDQ, AVX2 and AES-NI with OS-enabled AVX state |
+| X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomery ladder (RFC 7748), radix-2^25.5 field arithmetic packed as 10 x `__m256i`. Opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and additive: only full 4-lane chunks of `ama_x25519_scalarmult_batch` reach it — `ama_x25519_key_exchange` and short batches stay on the scalar fe64/fe51 path. Ed25519's AVX2 unit is the next row. |
+| Ed25519 (signing comb) | `ama_ed25519_select_avx2.c` | Constant-time row fold for the fixed-base comb: selects one of the sixteen precomputed Niels points of a table row by the **secret** 5-bit digit, reading and masking every entry on YMM registers. Called from `src/c/ama_ed25519.c` when `ama_has_avx2()` reports AVX2 with OS-enabled AVX state; otherwise the 128-bit SSE2 fold in `src/c/internal/ama_ed25519_ge.h` does the same operation. `ama_ed25519_active_fold()` reports which one runs |
 | ChaCha20-Poly1305 | `ama_chacha20poly1305_avx2.c` | 8-way parallel quarter-rounds, vectorized Poly1305 with lazy reduction |
-| Argon2 | `ama_argon2_avx2.c` | Vectorized Blake2b compression, vectorized G function, parallel lane processing |
+| Argon2 | `ama_argon2_avx2.c` | Vectorized block compression G: each BlaMka round's four column-like G operations, then its four diagonal-like ones, run as one 4-lane 256-bit G sequence apiece (RFC 9106 §3.5). Blake2b (H, H') stays scalar |
 
 #### ARM NEON (AArch64) — `src/c/neon/`
 
@@ -120,13 +120,13 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 #### ARM SVE2 (AArch64) — `src/c/sve2/`
 
 Scalable Vector Extension 2 implementations (stretch goal).  Wired
-surface as of release 3.1.0:
+surface in this release:
 
 | Slot | Source | Status |
 |------|--------|--------|
 | `keccak_f1600` | `ama_sha3_sve2.c` | wired (single-state Keccak permutation) |
-| `sha3_256` | `ama_sha3_sve2.c` | wired (FIPS 202 sponge over the permutation above; PR #312) |
-| `kyber_ntt` / `kyber_invntt` / `kyber_pointwise` | `ama_kyber_sve2.c` | wired (ML-KEM-1024 hot loop) |
+| `sha3_256` | — | removed in 5.0.0 with the dispatch table's `sha3_256` member: `ama_sha3_256` absorbs inline and dispatches only `keccak_f1600` |
+| `kyber_ntt` / `kyber_invntt` | `ama_kyber_sve2.c` | wired (ML-KEM hot loop). `kyber_pointwise` is NULL on every tier: no basemul kernel ships |
 | `kyber_poly_add` / `kyber_poly_sub` / `kyber_poly_reduce` | `ama_kyber_sve2.c` | wired (VL-agnostic `svadd_s16_x` / `svsub_s16_x` plus the Barrett reduction reused from the wired NTT path; auto-tune lockstep-reverts these slots if the SVE2 codegen tier regresses on a particular host) |
 | `dilithium_ntt` / `dilithium_invntt` / `dilithium_pointwise` | `ama_dilithium_sve2.c` | wired (ML-DSA-65 hot loop) |
 | AES-GCM / ChaCha20 / Argon2 / SPHINCS+ / Ed25519 | placeholder TUs | **not wired** — see below |
@@ -154,7 +154,13 @@ Implementation notes for the wired SVE2 surface:
 Automatic best-implementation selection at initialization:
 - **x86-64**: CPUID leaf 7 detection → AVX-512 > AVX2 > generic
 - **AArch64**: `getauxval(AT_HWCAP2)` detection → SVE2 > NEON > generic
-- `ama_get_dispatch_info()` API for querying active implementations
+- `ama_get_dispatch_info()` API for querying the **detected** capability tier
+  per subsystem. It is not a report of the kernel that was wired — ISA-bundle
+  gates, the `AMA_DISPATCH_NO_*` opt-outs, `AMA_DISPATCH_ONLY` and the
+  auto-tune reverts can all leave a slot on the portable path while detection
+  still reads SIMD. To ask what is actually running, NULL-check the slot in
+  `ama_get_dispatch_table()`, or call `ama_aes_gcm_active_backend()` /
+  `ama_dispatch_active_slot()`. See `include/ama_dispatch.h`.
 - CPU feature detection via extended `ama_cpuid.c`
 - Set `AMA_DISPATCH_VERBOSE=1` to enable diagnostic output during init
 - Set `AMA_DISPATCH_NO_AUTOTUNE=1` to skip the Keccak-f[1600]
@@ -220,7 +226,7 @@ Automatic best-implementation selection at initialization:
 - IV/Nonce: 96 bits
 - Tag: 128 bits
 - Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
-- **Note:** Lookup-table S-box, not constant-time for cache-timing in shared-tenant environments
+- **Note:** Constant-time by default — `AMA_AES_CONSTTIME=ON` builds the bitsliced (masked full-scan) S-box, and AES-NI / VAES / ARMv8-Crypto hardware kernels dispatch where available; the cache-timing-unsafe table S-box is built only by explicit opt-out (`-DAMA_AES_CONSTTIME=OFF` plus the `-DAMA_AES_TABLE_INSECURE=ON` acknowledgement, INVARIANT-20)
 
 ### X25519 (Key Exchange)
 
@@ -241,7 +247,7 @@ Automatic best-implementation selection at initialization:
 - Tag: 128 bits
 - Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
 - **Constant-time by design** — no table lookups, no cache-timing concerns
-- Recommended alternative to AES-256-GCM in shared-tenant environments
+- Alternative AEAD to AES-256-GCM (whose default build is likewise constant-time via `AMA_AES_CONSTTIME=ON`)
 
 ### Argon2id (Password Hashing)
 
@@ -260,7 +266,7 @@ Automatic best-implementation selection at initialization:
 - Private key: 32 bytes
 - Public key: 33 bytes (compressed) / 65 bytes (uncompressed)
 - Security: 128-bit classical (NOT quantum-resistant)
-- BIP32-compliant hierarchical deterministic key derivation
+- BIP32-style hierarchical deterministic key derivation over an AMA-specific root (the child KDF follows BIP32; the master HMAC key does not, so the tree is not interoperable with a BIP32 wallet)
 
 ---
 
@@ -271,17 +277,35 @@ Automatic best-implementation selection at initialization:
 The adaptive posture system bridges the 3R runtime anomaly monitor with the cryptographic API for dynamic security responses.
 
 **Components:**
-- **PostureEvaluator** — Weighted scoring: timing (50%), pattern (30%), resonance (20%) with exponential decay
+- **PostureEvaluator** — Weighted scoring over **four** signals: timing 0.45,
+  pattern 0.25, resonance 0.15, Lyapunov stability 0.15
+  (`adaptive_posture.py:265-268`), with exponential decay on the accumulated
+  score. The Lyapunov term is the double-helix engine's divergence signal.
 - **CryptoPostureController** — Key rotation, algorithm switching, cooldown enforcement (300s default)
+
+<!-- claim-check: quoting-retired-wording -->
+An earlier revision of this section described a three-signal 0.50/0.30/0.20
+model. That has not been the construction since the fourth signal was added,
+and `tools/check_crypto_construction_docs.py` now parses the weights out of
+`adaptive_posture.py` so the pair cannot drift again.
 
 **Threat Levels:**
 
-| Level | Score | Automated Response |
-|-------|-------|--------------------|
-| NOMINAL | 0.0-0.3 | No action |
-| ELEVATED | 0.3-0.6 | Increase monitoring frequency |
-| HIGH | 0.6-0.8 | Rotate keys |
-| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+| Level | Composite score | Automated Response |
+|-------|-----------------|--------------------|
+| NOMINAL | < 0.15 | No action |
+| ELEVATED | 0.15 – 0.45 | Increase monitoring frequency |
+| HIGH | 0.45 – 0.80 | Rotate keys |
+| CRITICAL | ≥ 0.80 | Rotate keys + switch algorithm + alert |
+
+The thresholds are `DEFAULT_ELEVATED_THRESHOLD` = 0.15,
+`DEFAULT_HIGH_THRESHOLD` = 0.45 and `DEFAULT_CRITICAL_THRESHOLD` = 0.80
+(`adaptive_posture.py:148-150`) — 3σ, 5σ and 7σ mapped into the composite score
+space, which is why they are not the 0.3 / 0.6 / 0.8 this table used to show.
+Lowering the documented ELEVATED boundary from 0.3 to the implemented 0.15
+matters in the direction that counts: the implementation escalates *earlier*
+than the old table promised, so a reader calibrating alerts against 0.3 was
+under-reading their own monitor.
 
 **Algorithm Strength Ordering:**
 ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) → HYBRID_SIG (3)
@@ -305,7 +329,15 @@ combined_ss = HKDF-SHA3-256(
 **Security Properties:**
 - IND-CCA2 secure if **either** component KEM remains unbroken
 - Ciphertext binding prevents mix-and-match attacks
-- Uses native C HKDF-SHA3-256 with Python fallback
+- Uses native C HKDF-SHA3-256. **There is no Python fallback.**
+  `HybridCombiner.combine()` raises `RuntimeError` when `ama_hkdf` is
+  unavailable (`hybrid_combiner.py:241-250`), per INVARIANT-7. The
+  `_hkdf_python` static method still exists, but it is test-only: it raises
+  unless the caller passes an explicit keyword-only opt-in, and `combine()`
+  never reaches for it. An earlier revision of this line advertised the
+  fallback as a feature; a fallback here would be a non-constant-time HKDF
+  silently substituted into secret-dependent key combination, which is the
+  substitution INVARIANT-7 exists to forbid.
 
 ---
 
@@ -421,8 +453,8 @@ Tests:
 - `test_consttime.c`: Constant-time operation validation (structural correctness)
 - `test_dudect.c`: Empirical constant-time verification via dudect (Welch's t-test)
 - `test_core.c`: Context and lifecycle management
-- `test_kyber.c`: ML-KEM-1024 algorithm tests
-- `test_ml_dsa.c`: ML-DSA-65 signature tests
+- `test_kat.c`: ML-KEM / ML-DSA / SLH-DSA byte-exact KATs (FIPS 203/204/205 vectors)
+- `test_kyber_cpa.c`, `test_dilithium_*.c`: ML-KEM CPA-PKE and ML-DSA sampling-equivalence tests
 - `test_agent_binding.c`: Agent-instance binding (INVARIANT-30) — pins the canonical
   encoding as a byte KAT and covers structural refusals, foreign-key tags, single-bit
   tag flips and capability escalation
@@ -441,12 +473,17 @@ cmake -B build -DAMA_ENABLE_DUDECT=ON && cmake --build build
 
 Location: `fuzz/`
 
-15 libFuzzer fuzz targets with seed corpora and dictionaries:
-- Core: SHA3, Ed25519, AES-GCM, HKDF, consttime, agent-binding, Ascon
-- PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1, FROST
+17 libFuzzer fuzz targets with seed corpora and dictionaries:
+- Core: SHA3, Ed25519, AES-GCM, HKDF, consttime, agent-binding, Ascon, HSS/LMS
+- PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1, NIST P-curves, FROST
 
-OSS-Fuzz onboarding prepared in `oss-fuzz/` for continuous 24/7 fuzzing.
-See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for details.
+The OSS-Fuzz submission files in `oss-fuzz/` are built and checked by
+OSS-Fuzz's own driver on every push (`tools/test_oss_fuzz_build.sh`), and
+ClusterFuzzLite runs them nightly on GitHub-hosted runners (`ubuntu-latest`,
+`.github/workflows/clusterfuzzlite.yml`), building the fuzzers in OSS-Fuzz's
+`base-builder` image, with the corpus persisted between runs as workflow
+artifacts. The project is not onboarded to OSS-Fuzz itself, so nothing runs on
+OSS-Fuzz's infrastructure. See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md).
 
 ### Python Test Suite
 
@@ -485,9 +522,12 @@ docker run --rm ama-cryptography
 Minimal production image:
 
 ```dockerfile
-FROM alpine:3.18
+FROM alpine:3.23
 # ~50MB final size
 ```
+
+`docker/Dockerfile.alpine` pins that base by `@sha256:` digest as well as by
+tag; see the file for the current digest.
 
 Build and run:
 ```bash
@@ -499,10 +539,14 @@ docker run --rm ama-cryptography:alpine
 
 Multi-service deployment:
 
+The compose file lives in `docker/`, and its `context: ..` and `../data`
+paths resolve relative to it, so pass it with `-f` from the repository root
+(or `cd docker` first):
+
 ```bash
-docker-compose up -d        # Start all services
-docker-compose down         # Stop all services
-docker-compose ps           # Check status
+docker compose -f docker/docker-compose.yml up -d     # Start all services
+docker compose -f docker/docker-compose.yml down      # Stop all services
+docker compose -f docker/docker-compose.yml ps        # Check status
 ```
 
 Services:
@@ -564,19 +608,34 @@ Tests:
 
 ### Security (`security.yml`)
 
+Jobs: Python Security Audit, SBOM Generation (CycloneDX), Secret Scanning, and
+the Security Gate that requires all three.
+
 Checks:
 - Dependency vulnerabilities (pip-audit)
 - Code security (bandit)
-- Static analysis
-- License compliance
+- Secret scanning
+- CycloneDX SBOM
 
-### Docker (`docker.yml`)
+Static analysis is a separate workflow, not part of this one:
+`static-analysis.yml` runs cppcheck, clang-tidy, the Clang Static Analyzer,
+CodeQL, the sanitizer lanes and the strict-warnings lanes. There is no
+license-compliance check in this repository — the only `License` string in
+`security.yml` is its own SPDX header.
 
-Builds:
-- Ubuntu-based images
-- Alpine-based images
-- Multi-architecture (amd64, arm64)
-- Security scanning
+### Docker (the `docker` job in `ci-build-test.yml`)
+
+There is no standalone Docker workflow file. The Docker build is a job inside
+`ci-build-test.yml`, and the Build and Test Gate requires it.
+
+Builds and smoke-tests two images on the runner's own architecture:
+- Ubuntu-based (`docker/Dockerfile`)
+- Alpine-based (`docker/Dockerfile.alpine`)
+
+It is **not** multi-architecture and runs **no** image scanner: the job sets
+no `platforms:`, installs no QEMU, and invokes no scanning action.
+`docker/Dockerfile.c-api` is not built in CI either — it is covered by the
+digest-pin, version-consistency, header and vendor-isolation gates instead.
 
 ## Performance Benchmarking
 
@@ -635,13 +694,16 @@ Note: C extensions may require additional setup on Windows.
 
 ### Constant-Time Operations
 
-All cryptographic comparisons and operations execute in constant time:
+Constant-time execution is guaranteed for — and scoped to — the surfaces verified in
+[CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md); operations whose
+inputs are public, such as Ed25519 signature verification, are variable-time by design:
 
 ✓ Memory comparisons (ama_consttime_memcmp)
 ✓ Conditional swaps (ama_consttime_swap)
 ✓ Array lookups (ama_consttime_lookup)
-✓ Signature verification
-✓ Key generation
+✓ Ed25519 signing (key-independent timing)
+✓ AES-GCM tag verification / HMAC-SHA256 verification comparison
+✓ ML-KEM-1024 decapsulation (constant-time implicit rejection)
 
 ### Memory Safety
 
@@ -662,7 +724,8 @@ All cryptographic comparisons and operations execute in constant time:
 ### Empirical Constant-Time Verification (dudect)
 
 All security-critical functions are empirically verified using the dudect methodology
-(Welch's t-test on execution times, |t| < 4.5 threshold):
+(Welch's t-test on execution times with percentile cropping, |t| < 5.0 threshold —
+calibrated for the max-over-21-rungs statistic; a single Welch t would use 4.5):
 
 ✓ `ama_consttime_memcmp` — memory comparison
 ✓ `ama_consttime_swap` — conditional swap
@@ -677,10 +740,14 @@ All security-critical functions are empirically verified using the dudect method
 
 See [docs/constant-time-testing.md](docs/constant-time-testing.md) for methodology and usage.
 
-### Continuous Fuzzing (OSS-Fuzz)
+### Continuous Fuzzing (ClusterFuzzLite and OSS-Fuzz)
 
-15 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries, prepared
-for [OSS-Fuzz](https://github.com/google/oss-fuzz) onboarding:
+17 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries. They run
+nightly under [ClusterFuzzLite](https://google.github.io/clusterfuzzlite/)
+(batch mode, ASan/UBSan/MSan, corpus kept between runs, weekly prune and
+coverage report), the per-PR lane keeps and merges its corpus across runs,
+and the [OSS-Fuzz](https://github.com/google/oss-fuzz) submission files are
+built and checked by OSS-Fuzz's driver on every push:
 
 ✓ All fuzz targets have `LLVMFuzzerTestOneInput` entry points
 ✓ No hardcoded paths or environment dependencies
@@ -697,6 +764,7 @@ See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for onboarding de
 
 The new multi-language architecture is fully backward compatible:
 
+<!-- example: python-run -->
 ```python
 # Old code still works
 from ama_cryptography import AmaEquationEngine
@@ -748,7 +816,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation, Phase 2 primitives, fuzzing harnesses, threat model, Mercury Agent integration |
 | 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, professional dashboard/chart overhaul |
 | 2.1.5 | 2026-04-17 | HSM support via PyKCS11, security audit fixes (length-prefixed HKDF encoding, constant-time ops), secure channel protocol v2, comprehensive test coverage expansion |
-| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end, constant-time scalar GHASH with an instruction-invariance gate, Ed25519 canonical-`y` (INVARIANT-38), KDF cost + algorithm floor, per-epoch AEAD nonce budget, no key material in serialization or reprs, RFC 8439 length limit. BREAKING ×4 — see CHANGELOG `[4.0.0]`. (This table skips 3.x; CHANGELOG.md is the complete record.) |
+| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end, constant-time scalar GHASH with an instruction-invariance gate, Ed25519 canonical-`y` (INVARIANT-38), KDF cost + algorithm floor, per-epoch AEAD nonce budget, no key material in serialization or reprs, RFC 8439 length limit. BREAKING ×6 — see CHANGELOG `[4.0.0]`. (This table skips 3.x; CHANGELOG.md is the complete record.) |
 
 ---
 

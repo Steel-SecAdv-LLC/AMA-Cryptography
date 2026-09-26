@@ -20,7 +20,12 @@ from ama_cryptography.hybrid_combiner import HybridCombiner, HybridEncapsulation
 
 @pytest.fixture
 def combiner() -> HybridCombiner:
-    """Return a HybridCombiner using the Python fallback (no native lib)."""
+    """Return a HybridCombiner that loads the native library itself.
+
+    ``native_lib=None`` means "find the library", not "go without it":
+    ``combine()`` raises RuntimeError when ``ama_hkdf`` is unavailable
+    (INVARIANT-7), so every test here runs the native HKDF.
+    """
     return HybridCombiner(native_lib=None)
 
 

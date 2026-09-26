@@ -27,7 +27,6 @@ import contextlib
 import logging
 import os
 import pathlib
-import secrets
 import sys
 import threading
 import time
@@ -40,12 +39,53 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._module_state import check_operational as _check_operational
+from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography._package_transcript import canonical as _canonical
+from ama_cryptography._package_transcript import transcript as _transcript
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
-# Module-level 3R monitor instance — feeds timing data to anomaly detection
-_monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
+# Module-level 3R monitor instance — feeds timing data to anomaly detection.
+#
+# The persistent nonce ledger (~/.ama_cryptography/nonce_tracker.dat) backs
+# the OPT-IN AmaCryptographyMonitor.check_nonce() API: a caller that wants
+# (key, nonce) reuse detection across restarts invokes it around its own AEAD
+# calls.  No encrypt path in this package calls it — AESGCMProvider and
+# SecureSession bound how many nonces a key may see through the durable
+# per-key counter of INVARIANT-22 and never inspect nonce values — and
+# tests/test_nonce_tracker_is_opt_in.py pins that reading, so this text
+# cannot drift from the code.  (This comment and the warning below used to
+# say cross-restart reuse detection "is disabled" when the ledger could not
+# be loaded, which read as though the library had been performing it.)
+#
+# A corrupt / torn / oversized / unwritable ledger must NOT brick the entire
+# library at import.  The ledger is a cross-restart defense-in-depth feature
+# whose history is already unrecoverable once the file is corrupt (a torn
+# append after a crash or power-loss needs no attacker), and an unresolvable or
+# read-only HOME is an environment fault, not a cryptographic one — so a
+# failure to load it degrades the monitor to in-memory-only nonce tracking with
+# a logged warning rather than aborting `import ama_cryptography`.  The strict
+# fail-closed RuntimeError still fires for a caller who explicitly constructs a
+# persistent NonceTracker / monitor with a good path.
+try:
+    _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
+except Exception as _monitor_persist_exc:  # degrade, never brick import (AUDIT-15)
+    logging.getLogger(__name__).warning(
+        "monitor persistence unavailable (%s: %s); the opt-in check_nonce() ledger "
+        "continues in memory only for this process, without its cross-restart "
+        "history, until the backing file is repaired or removed. (No encrypt path in "
+        "this package calls check_nonce; nonce use is bounded by the per-key counter.)",
+        type(_monitor_persist_exc).__name__,
+        _monitor_persist_exc,
+    )
+    try:
+        _monitor = AmaCryptographyMonitor(enabled=True, nonce_persist_path=os.devnull)
+    except Exception:  # last resort: monitoring off, library still imports (AUDIT-15)
+        _monitor = create_monitor(enabled=False)
 
-# Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
+# Import HMAC and HKDF from pqc_backends.  Native C only — INVARIANT-7
+# forbids a pure-Python substitute for either, and the module-level guard
+# below raises rather than providing one.  The two `_*_NATIVE_AVAILABLE`
+# flags imported here are what that guard reads.
 from ama_cryptography.pqc_backends import (
     _HKDF_NATIVE_AVAILABLE,
     _HMAC_SHA3_256_NATIVE_AVAILABLE,
@@ -62,27 +102,22 @@ from ama_cryptography.pqc_backends import (
     SPHINCS_PUBLIC_KEY_BYTES,
     SPHINCS_SECRET_KEY_BYTES,
     SPHINCS_SIGNATURE_BYTES,
+    Ed25519SigningKey,
     KyberUnavailableError,
     PQCStatus,
     PQCUnavailableError,
     SphincsUnavailableError,
+    _native_lib,
     dilithium_sign,
+    dilithium_sign_ctx,
     dilithium_verify,
+    dilithium_verify_ctx,
     generate_dilithium_keypair,
     generate_kyber_keypair,
     generate_sphincs_keypair,
     get_pqc_backend_info,
     kyber_decapsulate,
     kyber_encapsulate,
-    sphincs_sign,
-    sphincs_verify,
-)
-
-_HMAC_NATIVE = False
-_HKDF_NATIVE = False
-
-from ama_cryptography.pqc_backends import (
-    _native_lib,
     native_ed25519_batch_verify,
     native_ed25519_keypair,
     native_ed25519_keypair_from_seed,
@@ -92,6 +127,8 @@ from ama_cryptography.pqc_backends import (
     native_hmac_sha3_256,
     native_sha3_256,
     native_sha256,
+    sphincs_sign,
+    sphincs_verify,
 )
 
 _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE
@@ -191,24 +228,21 @@ def _enforce_invariant7() -> None:
         )
 
 
-# Import RFC 3161 timestamping
-try:
-    from ama_cryptography.rfc3161_timestamp import (
-        RFC3161_AVAILABLE,
-        TimestampError,
-        TimestampUnavailableError,
-        get_timestamp,
-    )
-except ImportError:
-    # Not "the optional dependency is missing" any more: RFC 3161 is a
-    # first-party module in this same package, implemented on AMA's own DER
-    # codec, and the third-party `rfc3161ng` client was removed under
-    # INVARIANT-1. Reaching this branch means the in-tree module failed to
-    # import, i.e. a broken installation — not a supported configuration.
-    RFC3161_AVAILABLE = False
-    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]  # in-tree RFC 3161 module failed to import, Exception fallback (CA-001)
-    TimestampError = Exception  # type: ignore[misc,assignment]  # in-tree RFC 3161 module failed to import, Exception fallback (CA-002)
-    get_timestamp = None  # type: ignore[assignment]  # in-tree RFC 3161 module failed to import, None stub (CA-003)
+# RFC 3161 timestamping is a first-party module of this package, implemented
+# on AMA's own DER codec (the third-party `rfc3161ng` client was removed under
+# INVARIANT-1).  This import used to sit in a try/except ImportError whose
+# fallback bound TimestampError and TimestampUnavailableError to `Exception`
+# and get_timestamp to None: a broken installation then kept importing, and
+# `except TimestampError` below became a bare `except Exception` that swallowed
+# CryptoModuleError and everything else on the timestamp path.  A first-party
+# module that fails to import is a broken installation, and the honest
+# behaviour is the ImportError.
+from ama_cryptography.rfc3161_timestamp import (
+    RFC3161_AVAILABLE,
+    TimestampError,
+    TimestampUnavailableError,
+    get_timestamp,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -528,6 +562,26 @@ class Ed25519Provider(CryptoProvider):
             message_hash=message_hash,
             metadata={"signature_size": len(sig_bytes), "backend": "native_c"},
         )
+
+    def signing_key(self, secret_key: Union[bytes, bytearray]) -> Ed25519SigningKey:
+        """
+        Load ``secret_key`` once for many signatures (INVARIANT-51 at key load).
+
+        :meth:`sign` re-derives the public half on every call, and for a
+        32-byte seed re-runs keypair generation and its pairwise test as well.
+        The returned :class:`~ama_cryptography.pqc_backends.Ed25519SigningKey`
+        pays both once; ``key.sign(message)`` then returns the same bytes
+        :meth:`sign` would. Close it (or use it as a context manager) when the
+        signing session ends; it holds the private scalar until then.
+
+        Args:
+            secret_key: 32-byte Ed25519 seed or 64-byte native key
+
+        Returns:
+            An open Ed25519SigningKey
+        """
+        _enforce_invariant7()
+        return Ed25519SigningKey(secret_key)
 
     def verify(self, message: bytes, signature: bytes, public_key: bytes) -> bool:
         """
@@ -899,7 +953,7 @@ def _atomic_write_json(
 
     fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp", prefix=tmp_prefix)
     try:
-        f = os.fdopen(fd, "w")
+        f = os.fdopen(fd, "w", encoding="utf-8")
     except BaseException:
         os.close(fd)
         try:
@@ -1065,7 +1119,7 @@ class AESGCMProvider:
 
         path = cls._get_persist_path()
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = _json.load(f)
             for key_hex, count in data.items():
                 key_id = bytes.fromhex(key_hex)
@@ -1160,7 +1214,7 @@ class AESGCMProvider:
 
         path = cls._get_persist_path()
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 on_disk = _json.load(f)
             for key_hex, count in on_disk.items():
                 key_id = bytes.fromhex(key_hex)
@@ -1350,7 +1404,6 @@ class AESGCMProvider:
                 was inherited across ``os.fork()``.
         """
         _enforce_invariant7()
-        import secrets as _secrets
 
         # Fork detection: refuse to reuse nonce state after os.fork()
         if os.getpid() != self._pid_at_init:
@@ -1385,8 +1438,15 @@ class AESGCMProvider:
         # Generate the random nonce only after the durable counter
         # reservation succeeds, so failed persistence cannot consume
         # entropy or leave an untracked nonce candidate in caller state.
+        #
+        # INVARIANT-41: drawn through the health-tested, error-state-gated
+        # CSPRNG.  The counter machinery above bounds how MANY nonces a key
+        # may see; it never inspects their values, so a stuck DRBG repeating a
+        # nonce under one key — keystream reuse plus GHASH-subkey recovery —
+        # would pass every check here.  The continuous repeated-output test is
+        # the only control that can see it.
         if nonce is None:
-            nonce = _secrets.token_bytes(12)
+            nonce = secure_token_bytes(12)
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -1560,9 +1620,39 @@ class HybridKEMProvider(KEMProvider):
         return combined_ss
 
 
+#: Domain-separation label of the hybrid (Ed25519 + ML-DSA-65) signature
+#: scheme, format version 2.  Both components sign a message bound to this
+#: composite algorithm, so a component signature cannot be lifted out of a
+#: hybrid signature and presented as a standalone Ed25519 or ML-DSA-65
+#: signature over the same message — or spliced in from one — when a key is
+#: reused across the two contexts.  ML-DSA-65 carries the label as its FIPS
+#: 204 Sec 5.2 context string; Ed25519 (RFC 8032 pure, no context parameter)
+#: signs the same ``0x00 || len(label) || label || M`` wrapper explicitly, so
+#: the two components bind the identical prefix.  Changing this string (or
+#: the wrapper) changes every hybrid signature: it is part of the format.
+HYBRID_SIG_DOMAIN: bytes = b"AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65"
+
+
+def hybrid_classical_input(message: bytes) -> bytes:
+    """The bytes the Ed25519 component of a hybrid signature signs.
+
+    ``0x00 || len(HYBRID_SIG_DOMAIN) || HYBRID_SIG_DOMAIN || message`` — the
+    FIPS 204 Sec 5.2 pure-mode wrapper shape, applied to Ed25519 by hand so
+    both halves of the hybrid sign the same domain-bound input.
+    """
+    return b"\x00" + bytes([len(HYBRID_SIG_DOMAIN)]) + HYBRID_SIG_DOMAIN + bytes(message)
+
+
 class HybridSignatureProvider(CryptoProvider):
     """
     Hybrid signature provider (Ed25519 + ML-DSA-65).
+
+    Format v2: each component signs the message bound to
+    :data:`HYBRID_SIG_DOMAIN` (Ed25519 over :func:`hybrid_classical_input`,
+    ML-DSA-65 with the label as its FIPS 204 context), so neither half is a
+    valid standalone signature over the raw message and no standalone
+    signature can be spliced in.  Signatures made by the v1 format (both
+    components over the raw message) do not verify under v2.
 
     Provides dual-signature scheme combining classical Ed25519 with
     post-quantum ML-DSA-65 (Dilithium). Both signatures must verify
@@ -1577,6 +1667,7 @@ class HybridSignatureProvider(CryptoProvider):
 
     # Key sizes for splitting combined keys
     ED25519_SK_SIZE = 32
+    ED25519_FULL_SK_SIZE = 64  # expanded native form: seed || public key
     ED25519_PK_SIZE = 32
     ED25519_SIG_SIZE = 64
     DILITHIUM_SK_SIZE = 4032  # ML-DSA-65 per FIPS 204
@@ -1642,14 +1733,16 @@ class HybridSignatureProvider(CryptoProvider):
         """
         Create hybrid signature (Ed25519 + ML-DSA-65).
 
-        Performance Optimization:
-        -------------------------
-        This method now caches Ed25519 key objects to eliminate reconstruction
-        overhead during hybrid operations (~2x faster Ed25519 signing).
-
         Args:
             message: Data to sign
-            secret_key: Combined secret key (Ed25519 + Dilithium)
+            secret_key: Combined secret key (Ed25519 + Dilithium).  The
+                Ed25519 component may be either the 32-byte seed (the format
+                :meth:`generate_keypair` emits) or the 64-byte expanded
+                native key (the format
+                ``create_crypto_package``'s per-config normalization caches
+                so steady-state signing skips the per-call seed expansion);
+                the two are distinguished unambiguously by total length,
+                because the ML-DSA-65 component is a fixed 4,032 bytes.
             precomputed_hash: Optional pre-computed SHA3-256 hash of message.
                 When provided, skips redundant hash computation (~2x savings).
 
@@ -1663,21 +1756,30 @@ class HybridSignatureProvider(CryptoProvider):
         if not self._pqc_available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65.")
 
-        # Split keys
-        classical_sk_bytes = secret_key[: self.ED25519_SK_SIZE]
-        pqc_sk = secret_key[self.ED25519_SK_SIZE :]
+        # Split keys — see the ``secret_key`` docstring for the two accepted
+        # classical-component widths.
+        classical_size = (
+            self.ED25519_FULL_SK_SIZE
+            if len(secret_key) == self.ED25519_FULL_SK_SIZE + self.DILITHIUM_SK_SIZE
+            else self.ED25519_SK_SIZE
+        )
+        classical_sk_bytes = secret_key[:classical_size]
+        pqc_sk = secret_key[classical_size:]
 
         # Compute hash once and pass to both providers
         msg_hash = precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
 
-        # Create both signatures using native backends, passing precomputed hash
+        # Both components sign the domain-bound message (see HYBRID_SIG_DOMAIN):
+        # Ed25519 over the explicit wrapper, ML-DSA-65 with the label as its
+        # FIPS 204 context.  ``message_hash`` stays the hash of the caller's
+        # message; it is metadata, not signed input.
         classical_sig = self.classical_provider.sign(
-            message, classical_sk_bytes, precomputed_hash=msg_hash
+            hybrid_classical_input(message), classical_sk_bytes, precomputed_hash=msg_hash
         )
-        pqc_sig = self.pqc_provider.sign(message, pqc_sk, precomputed_hash=msg_hash)
+        pqc_sig_bytes = dilithium_sign_ctx(message, pqc_sk, HYBRID_SIG_DOMAIN)
 
         # Combine signatures (Ed25519 first, then Dilithium)
-        combined_sig = classical_sig.signature + pqc_sig.signature
+        combined_sig = classical_sig.signature + pqc_sig_bytes
 
         return Signature(
             signature=combined_sig,
@@ -1685,7 +1787,8 @@ class HybridSignatureProvider(CryptoProvider):
             message_hash=msg_hash,
             metadata={
                 "classical_sig_size": len(classical_sig.signature),
-                "pqc_sig_size": len(pqc_sig.signature),
+                "pqc_sig_size": len(pqc_sig_bytes),
+                "domain": HYBRID_SIG_DOMAIN.decode("ascii"),
             },
         )
 
@@ -1732,10 +1835,13 @@ class HybridSignatureProvider(CryptoProvider):
             # The GIL is released during native C calls, so true parallelism
             # is achieved for the C-level verification work.
             classical_future = self._verify_pool.submit(
-                self.classical_provider.verify, message, classical_sig, classical_pk_bytes
+                self.classical_provider.verify,
+                hybrid_classical_input(message),
+                classical_sig,
+                classical_pk_bytes,
             )
             pqc_future = self._verify_pool.submit(
-                self.pqc_provider.verify, message, pqc_sig, pqc_pk
+                dilithium_verify_ctx, message, pqc_sig, pqc_pk, HYBRID_SIG_DOMAIN
             )
 
             # Both futures must complete; collect results
@@ -1744,9 +1850,9 @@ class HybridSignatureProvider(CryptoProvider):
         else:
             # Sequential fallback for debugging/testing
             classical_valid = self.classical_provider.verify(
-                message, classical_sig, classical_pk_bytes
+                hybrid_classical_input(message), classical_sig, classical_pk_bytes
             )
-            pqc_valid = self.pqc_provider.verify(message, pqc_sig, pqc_pk)
+            pqc_valid = dilithium_verify_ctx(message, pqc_sig, pqc_pk, HYBRID_SIG_DOMAIN)
 
         return classical_valid and pqc_valid
 
@@ -2210,10 +2316,31 @@ class CryptoPackageConfig:
     agents (e.g. Mercury Agent) that sign many results with the same identity.
 
     The supplied keys are checked to ensure they are non-empty and not
-    composed entirely of zero bytes.  No algorithm-specific key length
-    validation is performed at this layer; invalid keys will surface as
+    composed entirely of zero bytes, and — for HYBRID_SIG and ED25519 —
+    that the Ed25519 public-key component matches the supplied seed (see
+    ``_normalized_signing_secret``).  Other algorithm-specific key length
+    validation is not performed at this layer; invalid keys will surface as
     errors from the underlying signing call.
     When ``None`` (default), a fresh keypair is generated per call.
+    """
+
+    _normalized_signing_memo: Optional[Tuple[bytes, bytes, bytes]] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    """``(public_key identity, secret_key identity, normalized secret)`` memo.
+
+    Keyed on the identity of the two ELEMENTS, not of the container: the
+    runtime validator admits a list, whose identity survives element
+    replacement, and a container-identity memo kept returning the previous
+    key's normalization after ``signing_keypair[1] = new_sk``.  bytes are
+    immutable, so element identity implies element value.
+
+    Written by ``_normalized_signing_secret`` on first use of a
+    ``signing_keypair`` so the per-call Ed25519 seed expansion (and the
+    keygen pairwise consistency test it drags in) is paid once per identity
+    instead of once per package.  Lives on this object deliberately: the
+    caller already owns the secret key stored two fields up, so the memo
+    introduces no new key-material retention class.
     """
 
 
@@ -2244,6 +2371,9 @@ class CryptoPackageResult:
         Non-repudiation via hybrid classical + post-quantum dual signature.
         Both signatures must verify.  Ed25519 provides 128-bit classical
         security; ML-DSA-65 provides 192-bit quantum security (NIST Level 3).
+        The signed message is a canonical transcript of every other field on
+        this object (:func:`package_transcript`), so no field here is outside
+        the signature and no optional layer can be removed unnoticed.
 
     Layer 4 — Key Independence (HKDF-SHA3-256, RFC 5869):
         Derives cryptographically independent sub-keys from a 256-bit master
@@ -2421,6 +2551,17 @@ def _acquire_timestamp(
         return None
 
     tsa_mode = getattr(config, "tsa_mode", "online")
+    if tsa_mode not in ("online", "mock", "disabled"):
+        # No default branch (INVARIANT-35's rule applied to a mode selector):
+        # an unrecognised value used to fall through to the ONLINE path, so a
+        # typo like "disable" or "off" in an air-gapped or privacy-sensitive
+        # deployment silently sent the content digest to an external TSA
+        # instead of failing.
+        raise ValueError(
+            f"unknown tsa_mode {tsa_mode!r}: expected 'online', 'mock' or "
+            f"'disabled'.  Refusing to guess — the previous fallthrough "
+            f"contacted an external timestamp authority."
+        )
     if tsa_mode == "disabled":
         return None
 
@@ -2492,6 +2633,82 @@ def _public_key_fingerprint(public_key: bytes) -> bytes:
     return bytes(public_key[:8])
 
 
+def _normalized_signing_secret(
+    config: CryptoPackageConfig, public_key: bytes, secret_key: bytes
+) -> bytes:
+    """Normalize a pre-generated signing secret once per config object.
+
+    HYBRID_SIG and ED25519 secret keys embed the Ed25519 secret as its
+    32-byte seed.  :meth:`Ed25519Provider.sign` expands a seed to the
+    64-byte native form on every call, and that expansion is a key
+    *generation* (``native_ed25519_keypair_from_seed``), so it also re-ran
+    the INVARIANT-41 pairwise consistency test per signature — measured at
+    ~0.2 ms per package on the agent flow the ``signing_keypair`` option
+    exists for, a cost with no security payoff after the first call.
+
+    The expansion is done once here and memoized on the *config object*,
+    which the caller already owns and which already holds the secret key —
+    the cached expansion is derivable from what the object stores, so this
+    creates no new key-material retention class (contrast module-level
+    caches, which INVARIANT-41's continuous-RNG fix removed).  The memo is
+    keyed on the identity of the two bytes ELEMENTS (immutable, so
+    identity implies value), so replacing the tuple or swapping an element
+    inside an admitted list container (e.g. after ``KeypairCache.rotate()``)
+    re-normalizes.
+
+    Normalization also *strengthens* validation: the Ed25519 public key
+    derived from the seed must equal the supplied public-key component,
+    which previously went unchecked — a mismatched pair produced packages
+    whose signatures could never verify, discovered only downstream.
+
+    Signing behaviour is unchanged: the native signer derives its scalar
+    from the seed and reads the public-key half from the expanded form,
+    which this function guarantees is the seed's own derived key.
+    """
+    # Memo hit requires ELEMENT identity, not container identity.  The
+    # runtime validator in create_crypto_package deliberately admits a list
+    # container, and a list's identity survives element replacement — so a
+    # container-identity memo returned the OLD normalized secret after a
+    # caller swapped config.signing_keypair[1] in place, silently signing
+    # every subsequent package under the replaced key while attaching the
+    # new public key: unverifiable by construction, detected only
+    # downstream.  The elements themselves are enforced to be bytes
+    # (immutable), so element identity implies element value — two `is`
+    # checks close the hole completely, at no cost, with no behavioural
+    # change for any caller who replaces the tuple (both keyings miss) or
+    # reuses it (both hit).
+    cached = config._normalized_signing_memo
+    if cached is not None and cached[0] is public_key and cached[1] is secret_key:
+        return cached[2]
+
+    algorithm = config.signature_algorithm
+    normalized = secret_key
+    if (
+        algorithm is AlgorithmType.HYBRID_SIG
+        and len(secret_key)
+        == HybridSignatureProvider.ED25519_SK_SIZE + HybridSignatureProvider.DILITHIUM_SK_SIZE
+    ):
+        seed = secret_key[: HybridSignatureProvider.ED25519_SK_SIZE]
+        derived_pk, full_sk = native_ed25519_keypair_from_seed(seed)
+        if derived_pk != public_key[: HybridSignatureProvider.ED25519_PK_SIZE]:
+            raise ValueError(
+                "signing_keypair mismatch: the Ed25519 public-key component does "
+                "not correspond to the supplied Ed25519 seed"
+            )
+        normalized = full_sk + secret_key[HybridSignatureProvider.ED25519_SK_SIZE :]
+    elif algorithm is AlgorithmType.ED25519 and len(secret_key) == 32:
+        derived_pk, full_sk = native_ed25519_keypair_from_seed(secret_key)
+        if derived_pk != public_key:
+            raise ValueError(
+                "signing_keypair mismatch: the Ed25519 public key does not "
+                "correspond to the supplied seed"
+            )
+        normalized = full_sk
+
+    config._normalized_signing_memo = (public_key, secret_key, normalized)
+    return normalized
+
+
 def create_crypto_package(
     content: bytes,
     config: Optional[CryptoPackageConfig] = None,
@@ -2511,6 +2728,15 @@ def create_crypto_package(
     Layer 3 — Digital Signature (Ed25519 + ML-DSA-65):
         Hybrid classical + post-quantum non-repudiation.  128-bit classical
         security (RFC 8032) + 192-bit quantum security (NIST FIPS 204).
+
+        The signature covers a canonical transcript of the **entire package**
+        — the content digest, every embedded public key, the add-on
+        signatures and ciphertexts and their *presence*, the HKDF salt, info
+        and derived keys, the timestamp token, and the metadata — not the
+        ``content`` bytes alone.  Signing the content alone left every other
+        field unauthenticated, so an attacker able to modify a package could
+        strip its SLH-DSA and ML-KEM layers and it still verified as fully
+        valid (2026-09 audit, A-2).  See :func:`package_transcript`.
 
     Layer 4 — Key Independence (HKDF-SHA3-256, RFC 5869):
         Derives N independent sub-keys from a 256-bit master secret,
@@ -2595,7 +2821,9 @@ def create_crypto_package(
     # ========================================================================
     # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
     # ========================================================================
-    hmac_key = secrets.token_bytes(32)  # 256-bit HMAC key
+    # INVARIANT-41: key material comes from the health-tested, error-state-gated
+    # draw, not bare secrets.token_bytes — a stuck DRBG must be detected here.
+    hmac_key = secure_token_bytes(32)  # 256-bit HMAC key
     hmac_tag = _hmac_sha3_256(hmac_key, content)
 
     # ========================================================================
@@ -2605,6 +2833,7 @@ def create_crypto_package(
     sphincs_signature: Optional[Signature] = None
     kem_ciphertext: Optional[bytes] = None
     kem_shared_secret: Optional[bytes] = None
+    kem_commitment: Optional[str] = None
 
     # Generate primary signature (with 3R timing instrumentation)
     primary_crypto = AmaCryptography(algorithm=config.signature_algorithm)
@@ -2613,7 +2842,10 @@ def create_crypto_package(
             not isinstance(config.signing_keypair, (tuple, list))
             or len(config.signing_keypair) != 2
         ):
-            raise TypeError("signing_keypair must be a (bytes, bytes) tuple of length 2")
+            raise TypeError(
+                "signing_keypair must be a (public_key, secret_key) pair of two "
+                "bytes values (tuple, or the equivalent list)"
+            )
         _pk, _sk = config.signing_keypair
         if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
             raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")
@@ -2631,22 +2863,17 @@ def create_crypto_package(
             algorithm=config.signature_algorithm,
             metadata={"source": "pre-generated"},
         )
+        _signing_secret = _normalized_signing_secret(config, _pk, _sk)
     else:
         primary_keypair = primary_crypto.generate_keypair()
-    _t0 = time.perf_counter_ns()
-    primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
-    _sign_ns = time.perf_counter_ns() - _t0
-    _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000)
-    # INVARIANT-30 companion signal.  Wired at the sites that are already
-    # instrumented rather than pushed down into the providers, so no new call
-    # path acquires a lock and the hot primitives stay untouched.  The
-    # fingerprint is a slice of the PUBLIC key — it lets the detector tell
-    # ephemeral-identity-per-artifact churn from a hot loop over one key.
-    _monitor.record_operation_event(
-        f"{config.signature_algorithm.name.lower()}_sign",
-        key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
-    )
+        _signing_secret = primary_keypair.secret_key
     keypairs[config.signature_algorithm.name] = primary_keypair
+    # The signature itself is produced at the END of this function, over the
+    # finished package's transcript rather than over `content`.  Signing here
+    # — before the add-ons, the timestamp and the metadata exist — is what
+    # left every one of them outside the signature (2026-09 audit, A-2): an
+    # attacker could strip the SLH-DSA and ML-KEM layers from a package and it
+    # still verified as fully valid.  See `package_transcript`.
 
     # Optional add-on: SPHINCS+ secondary signature
     if config.use_sphincs:
@@ -2663,7 +2890,9 @@ def create_crypto_package(
             content, sphincs_keypair.secret_key, precomputed_hash=_precomputed_hash
         )
         _sphincs_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation("sphincs_sign", _sphincs_ns / 1_000_000)
+        _monitor.monitor_crypto_operation(
+            "sphincs_sign", _sphincs_ns / 1_000_000, input_size=len(content)
+        )
         _monitor.record_operation_event(
             "sphincs_sign",
             key_fingerprint=_public_key_fingerprint(sphincs_keypair.public_key),
@@ -2673,10 +2902,21 @@ def create_crypto_package(
     # ========================================================================
     # LAYER 4: Key Independence — HKDF-SHA3-256 (RFC 5869)
     # ========================================================================
-    master_secret = secrets.token_bytes(32)  # 256-bit master secret
-    hkdf_salt = secrets.token_bytes(32)
+    # INVARIANT-41: health-tested, error-state-gated draw (see above).
+    master_secret = secure_token_bytes(32)  # 256-bit master secret
+    hkdf_salt = secure_token_bytes(32)
     hkdf_info = b"ama_cryptography_crypto_package_v1"
     derived_keys: List[bytes] = []
+    if config.num_derived_keys < 1:
+        # Layer 4 requires at least one derived key: verify_crypto_package
+        # fails closed on an empty derived_keys list, so a package built with
+        # 0 (or a negative count) is rejected by its own verifier — including
+        # by the party that created it — while creation reported success and
+        # recorded metadata["defense_layers"] = 4.
+        raise ValueError(
+            f"num_derived_keys must be at least 1, got {config.num_derived_keys}: "
+            f"Layer 4 (HKDF key derivation) cannot be verified without one."
+        )
     for i in range(config.num_derived_keys):
         dk = _hkdf_sha3_256(
             ikm=master_secret,
@@ -2701,13 +2941,16 @@ def create_crypto_package(
         _t0 = time.perf_counter_ns()
         encapsulated = kyber_provider.encapsulate(kyber_keypair.public_key)
         _encaps_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation("encrypt", _encaps_ns / 1_000_000)
+        _monitor.monitor_crypto_operation(
+            "encrypt", _encaps_ns / 1_000_000, input_size=len(kyber_keypair.public_key)
+        )
         _monitor.record_operation_event(
             "kyber_encaps",
             key_fingerprint=_public_key_fingerprint(kyber_keypair.public_key),
         )
         kem_ciphertext = encapsulated.ciphertext
         kem_shared_secret = encapsulated.shared_secret
+        kem_commitment = _kem_shared_secret_commitment(kem_shared_secret)
         keypairs["KYBER_1024"] = kyber_keypair
 
     # ========================================================================
@@ -2725,13 +2968,31 @@ def create_crypto_package(
         "pqc_status": get_pqc_capabilities()["status"],
         "defense_layers": 4,
         "multi_layer_defense": True,
+        # Signed stand-in for the KEM shared secret; None without the add-on.
+        "kem_shared_secret_commitment": kem_commitment,
+        # Signed stand-in for the Layer-4 derived keys (and, through them, the
+        # master secret): the keys are secrets the redacted form strips.
+        "derived_keys_commitment": _derived_keys_commitment(derived_keys),
     }
 
-    return CryptoPackageResult(
+    # ========================================================================
+    # LAYER 3, completed: sign the finished package's transcript
+    # ========================================================================
+    # The package is assembled first with a placeholder signature, the
+    # transcript is taken from THE SAME function the verifier will call, and
+    # the real signature replaces the placeholder.  `package_transcript` never
+    # reads `primary_signature`, so the placeholder cannot influence what is
+    # signed; `test_crypto_package_transcript.py` pins that independently.
+    #
+    # Assembling the object rather than passing a dozen locals to a parallel
+    # builder is deliberate: a second construction site is a second thing that
+    # can drift out of step with the verifier, and the two agreeing is the
+    # entire property being bought here.
+    package = CryptoPackageResult(
         content_hash=content_hash,
         hmac_key=hmac_key,
         hmac_tag=hmac_tag,
-        primary_signature=primary_signature,
+        primary_signature=_unsigned_placeholder(config.signature_algorithm),
         sphincs_signature=sphincs_signature,
         derived_keys=derived_keys,
         hkdf_salt=hkdf_salt,
@@ -2742,6 +3003,151 @@ def create_crypto_package(
         kem_shared_secret=kem_shared_secret,
         keypairs=keypairs,
         metadata=metadata,
+    )
+    signed_transcript = package_transcript(package, _precomputed_hash)
+    _t0 = time.perf_counter_ns()
+    package.primary_signature = primary_crypto.sign(signed_transcript, _signing_secret)
+    _sign_ns = time.perf_counter_ns() - _t0
+    _monitor.monitor_crypto_operation(
+        "sign", _sign_ns / 1_000_000, input_size=len(signed_transcript)
+    )
+    # INVARIANT-30 companion signal.  Wired at the sites that are already
+    # instrumented rather than pushed down into the providers, so no new call
+    # path acquires a lock and the hot primitives stay untouched.  The
+    # fingerprint is a slice of the PUBLIC key — it lets the detector tell
+    # ephemeral-identity-per-artifact churn from a hot loop over one key.
+    _monitor.record_operation_event(
+        f"{config.signature_algorithm.name.lower()}_sign",
+        key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
+    )
+    return package
+
+
+def _unsigned_placeholder(algorithm: AlgorithmType) -> Signature:
+    """The signature slot of a package that has not been signed yet.
+
+    ``create_crypto_package`` assembles the package, takes its transcript, and
+    only then signs — so for the length of one expression the object holds a
+    signature that does not exist.  An empty ``bytes`` is the honest value for
+    that: it verifies against nothing, so a package that somehow escaped with
+    the placeholder still in place fails Layer 3 rather than passing it.
+    """
+    return Signature(
+        signature=b"",
+        algorithm=algorithm,
+        message_hash=b"",
+        metadata={"unsigned_placeholder": True},
+    )
+
+
+#: Domain separator for the public commitment to a package's KEM shared secret.
+_KEM_SS_COMMITMENT_DOMAIN = b"AMA/crypto-package/kem-shared-secret/v1"
+
+
+def _kem_shared_secret_commitment(shared_secret: bytes) -> str:
+    """The public commitment a package signs in place of its KEM shared secret.
+
+    The secret itself stays out of the transcript (the redacted form must still
+    verify), and the Kyber secret key is out of it too.  Without this value the
+    KEM layer only checked that two unsigned fields agreed with each other: a
+    substituted Kyber secret key plus the secret it decapsulates to passed.
+    """
+    return native_sha3_256(_KEM_SS_COMMITMENT_DOMAIN + bytes(shared_secret)).hex()
+
+
+#: Domain separator for the public commitment to a package's derived keys.
+_DERIVED_KEYS_COMMITMENT_DOMAIN = b"AMA/crypto-package/derived-keys/v1"
+
+
+def _derived_keys_commitment(derived_keys: List[bytes]) -> str:
+    """The public commitment a package signs in place of its derived keys.
+
+    The keys are secrets — ``to_dict()`` and a pickle strip them — so, like
+    the KEM shared secret above, they stay out of the transcript and a
+    domain-separated SHA3-256 of them goes in instead.  The keys are encoded
+    with the transcript's own injective encoding, so neither their count nor
+    a boundary between two of them can move without moving the commitment.
+
+    Binding the keys, and not only the salt, info and count they come from,
+    is what catches an attacker who swaps ``hkdf_master_secret`` and
+    re-derives the keys to match: every one of salt, info and count is then
+    unchanged and Layer 4 is self-consistent, and the keys are the only thing
+    that moved.  Layer 4 compares them with this commitment.
+    """
+    return native_sha3_256(_DERIVED_KEYS_COMMITMENT_DOMAIN + _canonical(list(derived_keys))).hex()
+
+
+def package_transcript(package: "CryptoPackageResult", content_digest: bytes) -> bytes:
+    """The exact bytes a package's Layer-3 signature is computed over.
+
+    Every field of the package except ``primary_signature`` itself, plus the
+    *presence* of each optional one.  ``create_crypto_package`` and
+    ``verify_crypto_package`` both call THIS function rather than each
+    assembling their own byte string: the two views agreeing is the whole
+    property, and two hand-written assemblies that must stay in step is how
+    they stop agreeing.  ``primary_signature`` is read nowhere below, which is
+    what lets the creator build the package with a placeholder, compute the
+    transcript, and fill the real signature in afterwards.
+
+    ``content_digest`` is the SHA3-256 of the content actually in hand — the
+    bytes the creator signed, or the bytes the verifier was handed — and is
+    bound ALONGSIDE ``package.content_hash``, the package's own stored claim
+    about them.  Binding only the stored claim would leave
+    ``results["primary_signature"]`` True for a verifier called with entirely
+    different content (the transcript would not have moved), so a caller
+    reading that one key rather than ``all_valid`` would be told a signature
+    covered bytes it never saw.  Binding only the digest would leave the
+    stored claim unsigned.  Both are bound, so every field of the package is
+    under the signature without exception.
+
+    Deliberately NOT included: the secret fields — ``hmac_key``,
+    ``hkdf_master_secret``, ``derived_keys`` and ``kem_shared_secret``.  Each
+    is pinned through a public value that IS signed — ``hmac_tag`` for the
+    HMAC key, ``metadata["derived_keys_commitment"]`` for the derived keys and
+    through them the master secret, and
+    ``metadata["kem_shared_secret_commitment"]`` for the KEM secret — because
+    binding a secret directly makes the transcript uncomputable from the
+    redacted form that :meth:`~CryptoPackageResult.to_dict` and a pickle emit,
+    and Layer 3 is the one layer that must still verify there.
+
+    ``derived_keys`` used to be bound directly, which is what made a redacted
+    package fail Layer 3 (2026-09 review).  The commitment keeps what binding
+    them bought — see :func:`_derived_keys_commitment` for why the keys, and
+    not only the salt, info and count, have to be pinned.
+
+    Raises:
+        TypeError: if any field holds a value the encoding cannot represent.
+            Failing here is deliberate — see ``_package_transcript``.
+    """
+    sphincs = package.sphincs_signature
+    return _transcript(
+        [
+            ("content_digest", content_digest),
+            ("content_hash", package.content_hash),
+            ("hmac_tag", package.hmac_tag),
+            (
+                "public_keys",
+                {name: kp.public_key for name, kp in package.keypairs.items()},
+            ),
+            (
+                "sphincs_signature",
+                (
+                    None
+                    if sphincs is None
+                    else {
+                        "signature": sphincs.signature,
+                        "algorithm": sphincs.algorithm.name,
+                        "message_hash": sphincs.message_hash,
+                        "metadata": sphincs.metadata,
+                    }
+                ),
+            ),
+            ("hkdf_salt", package.hkdf_salt),
+            ("hkdf_info", package.hkdf_info),
+            ("kem_ciphertext", package.kem_ciphertext),
+            ("timestamp", package.timestamp),
+            ("metadata", package.metadata),
+        ]
     )
 
 
@@ -2809,20 +3215,138 @@ def _verify_package_signature(
         key_pinned = False
 
     try:
+        # Over the TRANSCRIPT, not over `content`.  `content` reaches this
+        # signature through `content_hash`, which the transcript binds and
+        # which Layer 1 independently recomputes; everything else in the
+        # package — the add-ons, their presence, the timestamp, the metadata —
+        # reaches it only here.  Signing `content` alone is what let a package
+        # be stripped of its post-quantum layers and still verify (A-2).
+        signed_transcript = package_transcript(package, native_sha3_256(content))
         primary_crypto = AmaCryptography(algorithm=sig_alg)
         _t0 = time.perf_counter_ns()
         signature_valid = primary_crypto.verify(
-            content,
+            signed_transcript,
             package.primary_signature.signature,
             embedded_pk,
         )
         _verify_ns = time.perf_counter_ns() - _t0
-        _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
+        _monitor.monitor_crypto_operation(
+            "verify", _verify_ns / 1_000_000, input_size=len(signed_transcript)
+        )
+    except TypeError as exc:
+        # A field the transcript cannot encode.  The package is malformed, and
+        # the signature cannot be checked against it at all — fail closed and
+        # say which condition it was, rather than folding it into the generic
+        # handler below where it would read as a verification failure.
+        logger.error("Layer 3 transcript could not be built from the package: %s", exc)
+        return False, key_pinned
     except Exception as exc:
         logger.error("Layer 3 signature verification error: %s", exc)
         return False, key_pinned
 
     return signature_valid, key_pinned
+
+
+def _verify_addon_layers(
+    content: bytes,
+    package: CryptoPackageResult,
+    results: Dict[str, bool],
+) -> None:
+    """Verify the optional SPHINCS+ and KEM add-on layers into ``results``.
+
+    Split out of :func:`verify_crypto_package`, whose branch count the
+    present-but-unverifiable handling below pushed over the project's
+    complexity ceiling.  INVARIANT-13 prefers a refactor to a suppression,
+    and these two blocks are a natural unit: they read only ``content`` and
+    ``package`` and write only their own keys in ``results``.
+
+    An add-on that is PRESENT but cannot be checked records ``False`` — see
+    the comments in each branch.
+    """
+    # ========================================================================
+    # OPTIONAL: Verify SPHINCS+ signature (add-on)
+    # ========================================================================
+    if package.sphincs_signature is not None and "SPHINCS_256F" not in package.keypairs:
+        # Present but unverifiable: the package still CARRIES a SPHINCS+
+        # signature, so a caller reading `all_valid: True` would believe it was
+        # evaluated.  Omitting the key entirely — which is what this branch used
+        # to do — kept it out of the aggregate and let the package pass with a
+        # visible signature nobody checked.  The primary-signature path fails
+        # closed for exactly this condition (`sig_alg_name not in
+        # package.keypairs` returns False, False); an add-on must not be more
+        # permissive than the layer it supplements (INVARIANT-37).
+        logger.error(
+            "SPHINCS+ signature present but its public key is missing from the "
+            "package — recording the layer as FAILED rather than skipping it"
+        )
+        results["sphincs"] = False
+    elif package.sphincs_signature is not None and "SPHINCS_256F" in package.keypairs:
+        if SPHINCS_AVAILABLE:
+            try:
+                sphincs_provider = SphincsProvider()
+                results["sphincs"] = sphincs_provider.verify(
+                    content,
+                    package.sphincs_signature.signature,
+                    package.keypairs["SPHINCS_256F"].public_key,
+                )
+            except Exception as exc:
+                logger.error("SPHINCS+ signature verification error: %s", exc)
+                results["sphincs"] = False
+        else:
+            results["sphincs"] = False
+
+    # ========================================================================
+    # OPTIONAL: Verify KEM shared secret (add-on)
+    # ========================================================================
+    if package.kem_ciphertext is not None and (
+        package.kem_shared_secret is None or "KYBER_1024" not in package.keypairs
+    ):
+        # Same rule as the SPHINCS+ add-on above: a ciphertext the package still
+        # carries, whose counterpart secret or keypair has been stripped, is an
+        # unverifiable layer and must be reported False rather than dropped from
+        # the aggregate (INVARIANT-37).
+        logger.error(
+            "KEM ciphertext present but its shared secret or keypair is missing "
+            "from the package — recording the layer as FAILED rather than skipping it"
+        )
+        results["kem"] = False
+    elif (
+        package.kem_ciphertext is not None
+        and package.kem_shared_secret is not None
+        and "KYBER_1024" in package.keypairs
+    ):
+        try:
+            from ama_cryptography.secure_memory import constant_time_compare as _ct2
+
+            # Both the shared secret and the Kyber secret key are unsigned, so
+            # decapsulation agreeing with the stored secret proves nothing on
+            # its own: the stored secret must also match the signed commitment.
+            # The commitment is checked FIRST.  Until the stored secret matches
+            # it, the key and ciphertext beside that secret are unauthenticated
+            # input, and a package that fails here is refused without running
+            # them through ML-KEM decapsulation.
+            committed = package.metadata.get("kem_shared_secret_commitment")
+            commitment_ok = isinstance(committed, str) and _ct2(
+                _kem_shared_secret_commitment(package.kem_shared_secret).encode(),
+                committed.encode(),
+            )
+            if not commitment_ok:
+                results["kem"] = False
+            else:
+                kyber_provider = KyberProvider()
+                _t0 = time.perf_counter_ns()
+                decapsulated_ss = kyber_provider.decapsulate(
+                    package.kem_ciphertext,
+                    package.keypairs["KYBER_1024"].secret_key,
+                )
+                _decaps_ns = time.perf_counter_ns() - _t0
+                _monitor.monitor_crypto_operation(
+                    "decrypt", _decaps_ns / 1_000_000, input_size=len(package.kem_ciphertext)
+                )
+                results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
+        except Exception as exc:
+            logger.error("KEM decapsulation verification error: %s", exc)
+            results["kem"] = False
 
 
 def verify_crypto_package(
@@ -2839,12 +3363,19 @@ def verify_crypto_package(
       stored hash.
     - *Layer 2 — Keyed Authentication:* recompute HMAC-SHA3-256 with
       stored key and compare to stored tag.
-    - *Layer 3 — Digital Signature:* verify primary signature
-      (Ed25519 + ML-DSA-65) against the signing public key, which is taken
-      from ``expected_public_key`` when supplied and otherwise from the
-      package itself (see the authenticity note below).
+    - *Layer 3 — Digital Signature:* rebuild the package's canonical
+      transcript (:func:`package_transcript`) over the ``content`` actually
+      supplied, and verify the primary signature (Ed25519 + ML-DSA-65) over
+      it against the signing public key, which is taken from
+      ``expected_public_key`` when supplied and otherwise from the package
+      itself (see the authenticity note below).  Because the transcript
+      covers every other field and the presence of every optional one, this
+      layer — not the add-on checks below — is what makes stripping an add-on
+      detectable.  A package carrying a field the transcript cannot encode
+      fails this layer rather than raising.
     - *Layer 4 — Key Independence:* re-derive keys from stored master
-      secret, salt, and info; compare to stored derived keys.
+      secret, salt, and info; compare to stored derived keys, and those to
+      the signed ``metadata["derived_keys_commitment"]``.
 
     Optional add-on verification:
 
@@ -3018,52 +3549,26 @@ def verify_crypto_package(
             for rk, sk in zip(recomputed_keys, package.derived_keys):
                 if not _ct(rk, sk):
                     keys_match = False
-            results["hkdf_keys"] = keys_match
+            # The master secret and the keys are both unsigned, so their
+            # agreeing proves nothing on its own: the keys must also be the
+            # ones the signed commitment names (see _derived_keys_commitment).
+            committed = package.metadata.get("derived_keys_commitment")
+            results["hkdf_keys"] = (
+                keys_match
+                and isinstance(committed, str)
+                and _ct(
+                    _derived_keys_commitment(package.derived_keys).encode(),
+                    committed.encode(),
+                )
+            )
     except Exception as exc:
         logger.error("Layer 4 HKDF key verification error: %s", exc)
         results["hkdf_keys"] = False
 
-    # ========================================================================
-    # OPTIONAL: Verify SPHINCS+ signature (add-on)
-    # ========================================================================
-    if package.sphincs_signature is not None and "SPHINCS_256F" in package.keypairs:
-        if SPHINCS_AVAILABLE:
-            try:
-                sphincs_provider = SphincsProvider()
-                results["sphincs"] = sphincs_provider.verify(
-                    content,
-                    package.sphincs_signature.signature,
-                    package.keypairs["SPHINCS_256F"].public_key,
-                )
-            except Exception as exc:
-                logger.error("SPHINCS+ signature verification error: %s", exc)
-                results["sphincs"] = False
-        else:
-            results["sphincs"] = False
-
-    # ========================================================================
-    # OPTIONAL: Verify KEM shared secret (add-on)
-    # ========================================================================
-    if (
-        package.kem_ciphertext is not None
-        and package.kem_shared_secret is not None
-        and "KYBER_1024" in package.keypairs
-    ):
-        try:
-            kyber_provider = KyberProvider()
-            _t0 = time.perf_counter_ns()
-            decapsulated_ss = kyber_provider.decapsulate(
-                package.kem_ciphertext,
-                package.keypairs["KYBER_1024"].secret_key,
-            )
-            _decaps_ns = time.perf_counter_ns() - _t0
-            _monitor.monitor_crypto_operation("decrypt", _decaps_ns / 1_000_000)
-            from ama_cryptography.secure_memory import constant_time_compare as _ct2
-
-            results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
-        except Exception as exc:
-            logger.error("KEM decapsulation verification error: %s", exc)
-            results["kem"] = False
+    # Optional add-on layers (SPHINCS+, KEM).  Extracted to keep this function
+    # under the complexity ceiling — the add-ons are a self-contained pass over
+    # the package and share no state with the core four layers beyond `results`.
+    _verify_addon_layers(content, package, results)
 
     # Aggregate: separate core 4-layer validity from optional add-ons.
     # Core 4 layers: content_hash (L1), hmac (L2), primary_signature (L3),

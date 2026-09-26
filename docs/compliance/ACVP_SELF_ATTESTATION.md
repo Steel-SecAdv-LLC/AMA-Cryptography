@@ -5,12 +5,24 @@
 | Organization | Steel Security Advisors LLC |
 | Library | AMA Cryptography |
 | Document ID | ACVP-SELF-ATTEST-2026-001 |
-| Version | 3.0.0 |
-| Date | 2026-04-25 |
+| Library version attested | 3.0.0 |
+| Date attestation was generated | 2026-04-25 |
 | Classification | Public |
 | Attestation Type | **Self-Attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3)** |
 | Source Report | [`CSRC_ALIGN_REPORT.md`](CSRC_ALIGN_REPORT.md) |
 | Machine-readable | [`acvp_attestation.json`](acvp_attestation.json) |
+
+> **The version above is deliberately not the current release.** It is a dated
+> record of the library version these ACVP vectors were actually run against,
+> bound to the immutable upstream ref `ACVP-Server v1.1.0.42`. Advancing it to
+> match a newer release would assert validation that was never performed, which
+> INVARIANT-16 (Honest Compliance and Audit Claims) prohibits — so
+> `tools/check_version_consistency.py` deliberately exempts `docs/compliance/**`
+> from the release-version sweep that keeps every other document current.
+> Refreshing an attestation means re-running the vectors, not editing this row;
+> the procedure is in `acvp_attestation.json::acvp_ref_note`. The ref names the
+> snapshot; [`acvp_vector_digests.json`](acvp_vector_digests.json) pins its
+> bytes, and every fetch and every harness run is verified against it.
 
 ---
 
@@ -110,28 +122,34 @@ under the per-resultsArray-entry accounting convention.
 **5,789 vectors were skipped total**, split into two buckets by the kind
 of thing that was skipped:
 
-- **4,757 AFT-filtered skips** — individual vectors filtered out *within*
+- **4,667 AFT-filtered skips** — individual vectors filtered out *within*
   AFT (Algorithm Functional Test) groups: non-byte-aligned inputs,
   non-target parameter sets (ML-KEM-512/768, ML-DSA-44/87, SLH-DSA
-  non-SHA2-256f), ML-KEM encapsulation (randomness parameter `m` not
-  exposed by the AMA API), and ML-DSA / SLH-DSA internal and pre-hash
-  test groups. This is the number reported by
+  non-SHA2-256f), and ML-DSA / SLH-DSA internal and pre-hash test groups.
+  This is the number reported by
   `nist_vectors/results.json::summary.total_skipped`, aggregated from
   each algorithm's `vectors_skipped`, and surfaced as
   `total_skipped_aft_filtered` in the CI `validation_summary.json`.
-- **1,032 non-AFT skips** — entire test groups with `testType != "AFT"`
+- **1,122 non-AFT skips** — entire test groups with `testType != "AFT"`
   that the AMA harness does not exercise: **Large Data Test (LDT)**
   groups (8 SHA-3 tcIds total — multi-gigabyte inputs outside the CI
-  harness scope) and **Variable Output Test (VOT)** groups (1,024
+  harness scope), **Variable Output Test (VOT)** groups (1,024
   SHAKE-128/256 tcIds — output-length coverage is already exercised by
-  AFT vectors in the same upstream vector files). MCT groups for the
-  four SHA-3 algorithms are no longer counted here; they moved from
-  "skipped" to "tested" when MCT coverage was added on the 2.1.5 line
-  (reducing this count from 1,036 to 1,032). Tracked per-algorithm in
+  AFT vectors in the same upstream vector files), and the
+  **ML-KEM-1024 EncapDecap** groups (90 tcIds — the encapsulation
+  randomness parameter `m` is not exposed by the AMA API, so these
+  groups are skipped wholesale rather than filtered within an AFT
+  group). MCT groups for the four SHA-3 algorithms are no longer counted
+  here; they moved from "skipped" to "tested" when MCT coverage was added
+  on the 2.1.5 line. Tracked per-algorithm in
   `nist_vectors/run_vectors.py` under the legacy field name
   `mct_skipped` (now a semantic misnomer — the field counts non-AFT
   groups generally); surfaced as `total_non_aft_skipped` in
-  `validation_summary.json`.
+  `validation_summary.json`. (An earlier revision placed the 90 ML-KEM
+  EncapDecap groups in the AFT-filtered bucket, giving a 4,757 / 1,032
+  split; the harness counts them as non-AFT, so the corrected split is
+  4,667 / 1,122 — the 5,789 total is unchanged. Re-derived by running the
+  harness at the release head.)
 
 The total (5,789) and the split match
 [`docs/compliance/acvp_attestation.json`](acvp_attestation.json) fields
@@ -186,8 +204,12 @@ python3 nist_vectors/fetch_vectors.py
 ```
 
 This pulls `internalProjection.json` files from the upstream
-`usnistgov/ACVP-Server` repository. SHA-256 and AES-256-GCM vectors are
-hardcoded from their respective FIPS/SP publications.
+`usnistgov/ACVP-Server` repository at the pinned ref and accepts each only if
+its SHA-256 and length match [`acvp_vector_digests.json`](acvp_vector_digests.json);
+a file already on disk is verified the same way rather than trusted, and the
+bytes are written exactly as published. `python3 tools/acvp_vector_pin.py --check`
+re-verifies the ten files at any time without fetching. SHA-256 and
+AES-256-GCM vectors are hardcoded from their respective FIPS/SP publications.
 
 ### 5.3 Run Validation
 
@@ -202,7 +224,9 @@ if any vector fails.
 
 Continuous validation runs on every push to `main` and on a weekly schedule
 via [`.github/workflows/acvp_validation.yml`](../../.github/workflows/acvp_validation.yml).
-The workflow parses `results.json` and enforces three conditions:
+The workflow verifies every fetched projection against
+`acvp_vector_digests.json` between the fetch and the run (the harness verifies
+again on load), then parses `results.json` and enforces four conditions:
 
 1. **Floor:** `total_tested >= EXPECTED_VECTORS` (currently 1,215 after
    the SHA-3 MCT addition on the 2.1.5 line: 815 AFT + 400 MCT).
@@ -215,10 +239,14 @@ The workflow parses `results.json` and enforces three conditions:
    requires updating the attestation JSON and the `EXPECTED_VECTORS`
    floor in the same commit — the published attestation and the CI
    measurement move together.
+4. **Digest pin cross-check:** `acvp_vector_digests.json::acvp_ref` must be
+   the ref the run resolved. A tag names a snapshot; the digests fix its
+   bytes, and they are only meaningful at the ref they were taken from.
 
 A `nist_vectors/validation_summary.json` artifact is published on every
-run with timestamp, git SHA, `acvp_ref`, per-algorithm counts, and split
-skip accounting (`total_skipped_aft_filtered` vs `total_non_aft_skipped`).
+run with timestamp, git SHA, `acvp_ref`, `digest_manifest_ref`,
+per-algorithm counts, and split skip accounting
+(`total_skipped_aft_filtered` vs `total_non_aft_skipped`).
 
 ---
 
@@ -297,7 +325,7 @@ paths including OOM.
 >
 > ### **⚠ This document is NOT a substitute for an independent cryptographic audit.**
 
-Per [`CSRC_ALIGN_REPORT.md` lines 22–24](CSRC_ALIGN_REPORT.md)
+Per the [`CSRC_ALIGN_REPORT.md` Abstract](CSRC_ALIGN_REPORT.md#abstract)
 and [§3.3](CSRC_ALIGN_REPORT.md):
 
 > This report constitutes self-attested algorithm compliance using official

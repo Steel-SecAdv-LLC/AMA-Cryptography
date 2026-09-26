@@ -78,7 +78,7 @@ def test_every_corpus_file_cites_an_rfc(tool: ModuleType) -> None:
     corpus = REPO_ROOT / "tests" / "kat" / "keyformats"
     seen = 0
     for path in sorted(corpus.glob("*.json")):
-        source = json.loads(path.read_text())["source"]
+        source = json.loads(path.read_text(encoding="utf-8"))["source"]
         assert any(host in source["url"] for host in tool.STANDARDS_HOSTS), path.name
         assert source["title"] and source["revision"], path.name
         seen += 1
@@ -93,7 +93,8 @@ def test_a_subprocess_invocation_of_openssl_is_caught(tool: ModuleType, tmp_path
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "gen.py").write_text(
         "import subprocess\n"
-        'subprocess.run(["openssl", "genpkey", "-algorithm", "EC"], check=True)\n'
+        'subprocess.run(["openssl", "genpkey", "-algorithm", "EC"], check=True)\n',
+        encoding="utf-8",
     )
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any("openssl" in p and "gen.py" in p for p in problems), problems
@@ -106,7 +107,8 @@ def test_other_cryptographic_binaries_are_caught(
     """Not an OpenSSL-shaped rule: any other implementation counts."""
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "t.py").write_text(
-        f'import subprocess\nsubprocess.check_output("{binary} --version", shell=True)\n'
+        f'import subprocess\nsubprocess.check_output("{binary} --version", shell=True)\n',
+        encoding="utf-8",
     )
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any(binary in p for p in problems), problems
@@ -128,7 +130,8 @@ def test_the_shipped_package_is_in_scope(tool: ModuleType, tmp_path: Path) -> No
     (tmp_path / "ama_cryptography").mkdir()
     (tmp_path / "ama_cryptography" / "legacy_compat.py").write_text(
         "import subprocess\n"
-        'subprocess.run(["openssl", "ts", "-query", "-data", "-"], capture_output=True)\n'
+        'subprocess.run(["openssl", "ts", "-query", "-data", "-"], capture_output=True)\n',
+        encoding="utf-8",
     )
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any("openssl" in p and "legacy_compat.py" in p for p in problems), problems
@@ -151,7 +154,8 @@ def test_a_mention_in_prose_is_not_a_finding(tool: ModuleType, tmp_path: Path) -
         "# openssl is not used here\n"
         'OPENSSL_NOTE = "openssl"\n'
         "import subprocess\n"
-        'subprocess.run(["python3", "-c", "pass"], check=True)\n'
+        'subprocess.run(["python3", "-c", "pass"], check=True)\n',
+        encoding="utf-8",
     )
     assert tool.scan_for_binary_invocations(tmp_path) == []
 
@@ -167,7 +171,8 @@ def test_a_corpus_file_citing_a_non_standards_source_is_caught(
                 "source": {"url": "https://example.com/keys", "title": "t", "revision": "r"},
                 "records": [],
             }
-        )
+        ),
+        encoding="utf-8",
     )
     problems = tool.scan_corpus_sources(corpus)
     assert any("not a standards-body archive" in p for p in problems), problems
@@ -188,12 +193,13 @@ def test_a_directory_of_key_files_in_the_corpus_is_caught(tool: ModuleType, tmp_
                 },
                 "records": [],
             }
-        )
+        ),
+        encoding="utf-8",
     )
     # Deliberately *not* a literal PEM header: the check under test keys off
     # the directory, not the contents, and a real header here would be a finding
     # for tools/check_secrets.py (INVARIANT-23) in this very file.
-    (corpus / "somevendor" / "P-256.key.pem").write_text("placeholder\n")
+    (corpus / "somevendor" / "P-256.key.pem").write_text("placeholder\n", encoding="utf-8")
     problems = tool.scan_corpus_sources(corpus)
     assert any("unexpected directory" in p for p in problems), problems
 
@@ -203,11 +209,11 @@ def test_a_reference_encoder_that_imports_the_production_one_is_caught(
 ) -> None:
     """The one-line change that would silently void every differential test."""
     path = tmp_path / "ref.py"
-    path.write_text("from ama_cryptography._asn1 import der_sequence\n")
+    path.write_text("from ama_cryptography._asn1 import der_sequence\n", encoding="utf-8")
     problems = tool.check_reference_encoder(path)
     assert any("imports ama_cryptography" in p for p in problems), problems
 
-    path.write_text("import ama_cryptography.key_formats as kf\n")
+    path.write_text("import ama_cryptography.key_formats as kf\n", encoding="utf-8")
     assert tool.check_reference_encoder(path) != []
 
 
@@ -256,7 +262,7 @@ def test_indirect_invocations_are_caught(
     tool: ModuleType, tmp_path: Path, label: str, source: str
 ) -> None:
     (tmp_path / "ama_cryptography").mkdir()
-    (tmp_path / "ama_cryptography" / "sneaky.py").write_text(source)
+    (tmp_path / "ama_cryptography" / "sneaky.py").write_text(source, encoding="utf-8")
     problems = tool.scan_for_binary_invocations(tmp_path)
     assert any("openssl" in p for p in problems), f"{label}: {problems}"
 
@@ -275,6 +281,143 @@ def test_a_binary_name_that_only_appears_in_a_docstring_is_still_not_a_finding(
         "import subprocess\n"
         'NOTE = "this replaces the openssl ts -query call"\n'
         '"""Module docstring mentioning openssl and gpg."""\n'
-        'subprocess.run(["python3", "-c", "pass"], check=True)\n'
+        'subprocess.run(["python3", "-c", "pass"], check=True)\n',
+        encoding="utf-8",
     )
     assert tool.scan_for_binary_invocations(tmp_path) == []
+
+
+class TestVectorGeneratorsComputeNothing:
+    """A "NIST vector" must come from NIST, not from whatever hashed it.
+
+    ``nist_vectors/fetch_vectors.py`` wrote ``SHA-256-FIPS180-4.json`` with
+    ``"source": "FIPS 180-4 Section B.1"`` and every digest in it produced by
+    ``hashlib.sha256(...).hexdigest()`` at generation time, while
+    ``nist_vectors/run_vectors.py`` validated AMA's SHA-256 against that file.
+    On any libcrypto-linked CPython — every manylinux wheel and every
+    mainstream distribution Python, as ``tools/check_stdlib_hash_boundary.py``
+    states — ``hashlib.sha256`` IS OpenSSL, so every regeneration would have
+    replaced the specification's vectors with OpenSSL's output under the
+    specification's name.  The committed values were correct; the source the
+    next regeneration would draw from was not.
+
+    The scan reads the GENERATORS, not the JSON: a digest sitting in a
+    committed file carries no evidence of where it came from, which is exactly
+    how this survived a gate whose stated subject is that question.
+    """
+
+    @staticmethod
+    def _generator(tmp_path: Path, body: str) -> Path:
+        directory = tmp_path / "nist_vectors"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "fetch_vectors.py").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        "body,label",
+        [
+            ('import hashlib\nD = hashlib.sha256(b"abc").hexdigest()\n', "plain call"),
+            ('D = __import__("hashlib").sha256(b"abc").hexdigest()\n', "__import__ call"),
+            ("import hashlib\n", "a bare import, with no call at all"),
+            ("from hashlib import sha256\n", "a from-import"),
+            ('import hmac\nD = hmac.new(b"k", b"m").hexdigest()\n', "hmac"),
+            ('import hashlib\nD = hashlib.new("sha256", b"abc").hexdigest()\n', "hashlib.new"),
+            # The dynamic spellings.  Only `__import__("<literal>")` was
+            # recognised; every one below passed before the fix.
+            (
+                'import importlib\nD = importlib.import_module("hashlib").sha256(b"")\n',
+                "importlib.import_module",
+            ),
+            (
+                'from importlib import import_module\nD = import_module("hmac")\n',
+                "a from-imported import_module",
+            ),
+            ('import builtins\nD = builtins.__import__("hashlib")\n', "builtins.__import__"),
+            ('import sys\nD = sys.modules["hashlib"]\n', "a sys.modules subscript"),
+            ('import sys\nD = sys.modules.get("_hashlib")\n', "sys.modules.get"),
+            ('D = __import__("hash" + "lib")\n', "a folded concatenation"),
+            ('M = "hashlib"\nD = __import__(M)\n', "a name bound to the string"),
+            ("import importlib\nD = importlib.import_module(input())\n", "an unresolvable module"),
+            (
+                'from importlib import import_module as im\nD = im("hashlib")\n',
+                "an aliased import_module",
+            ),
+            (
+                'import importlib\nim = importlib.import_module\nD = im("hashlib")\n',
+                "a rebound importer",
+            ),
+            # The same two escapes with a module name no literal scan can see:
+            # only the escape rule stands between these and a pass, because
+            # the dynamic-import walker matches the callable BY NAME.
+            (
+                "from importlib import import_module as im\nD = im(input())\n",
+                "an aliased import_module, computed name",
+            ),
+            (
+                "import importlib\nim = importlib.import_module\nD = im(input())\n",
+                "a rebound importer, computed name",
+            ),
+            ("import builtins\nloader = builtins.__import__\n", "an escaped __import__"),
+            (
+                'import builtins\nD = getattr(builtins, "__import__")("hashlib")\n',
+                "getattr of __import__",
+            ),
+            ('import importlib.util\nS = importlib.util.find_spec("hashlib")\n', "find_spec"),
+        ],
+    )
+    def test_a_stdlib_digest_in_a_generator_is_reported(
+        self, tool: ModuleType, tmp_path: Path, body: str, label: str
+    ) -> None:
+        problems = tool.scan_vector_generators(self._generator(tmp_path, body))
+        assert problems, f"accepted {label}"
+
+    def test_a_transcribing_generator_passes(self, tool: ModuleType, tmp_path: Path) -> None:
+        body = (
+            "import json\n"
+            "# FIPS 180-4 Appendix B.1, transcribed.\n"
+            'D = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"\n'
+        )
+        assert tool.scan_vector_generators(self._generator(tmp_path, body)) == []
+
+    def test_a_resolvable_non_digest_dynamic_import_passes(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Non-detection: the dynamic-import rule is about WHERE it reaches.
+
+        A generator that imports ``json`` dynamically, and mentions hashlib
+        only in prose, is not reaching for a digest.
+        """
+        body = (
+            "import importlib\n"
+            "# These used to be hashlib.sha256(...) calls; now transcribed.\n"
+            'MSG = "no hashlib here: values are transcribed from FIPS 180-4"\n'
+            'codec = importlib.import_module("json")\n'
+        )
+        assert tool.scan_vector_generators(self._generator(tmp_path, body)) == []
+
+    def test_an_empty_scope_fails_closed(self, tool: ModuleType, tmp_path: Path) -> None:
+        problems = tool.scan_vector_generators(tmp_path)
+        assert problems and "examined nothing" in problems[0]
+
+    def test_the_repository_generators_are_clean(self, tool: ModuleType) -> None:
+        assert tool.scan_vector_generators() == []
+
+    def test_the_committed_sha256_vectors_are_the_published_ones(self) -> None:
+        """The values themselves, checked against FIPS 180-4 by transcription.
+
+        Independent of the gate: the gate says where the numbers may come
+        from, this says they are the right numbers.  Both digests below appear
+        in FIPS 180-4 Appendix B.1 and B.2; the empty-string digest is the
+        NIST CAVP SHAVS ShortMsg Len=0 value.
+        """
+        path = REPO_ROOT / "nist_vectors" / "SHA-256-FIPS180-4.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        digests = {t["msg"]: t["md"] for g in data["testGroups"] for t in g["tests"]}
+        assert digests["616263"] == (
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        )
+        assert digests[""] == ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        long_msg = next(k for k in digests if len(k) > 100)
+        assert digests[long_msg] == (
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        )

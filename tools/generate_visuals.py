@@ -27,51 +27,65 @@ wrong is not an asset. Regenerating any of them means restoring the
 function AND adding the document reference that justifies it.
 """
 
+import argparse
 import json
 import re
+import struct
+import sys
+import zlib
 from pathlib import Path
+from typing import Optional
 
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
-import numpy as np
+# matplotlib and numpy are needed only to RENDER.  `--check` recomputes the
+# numbers the committed charts assert and diffs them against
+# assets/visuals_manifest.json, which must be possible in a CI job that has no
+# plotting stack installed — the check is precisely for environments that
+# cannot regenerate.  numpy sits inside the same guard because a bare
+# module-level import made `--check` crash in exactly the environment the
+# flag exists for (matplotlib requires numpy, so the render path loses
+# nothing by pairing them).
+try:
+    import matplotlib.patches as mpatches
+    import matplotlib.pyplot as plt
+    import numpy as np
 
-# Set style
-plt.style.use("seaborn-v0_8-whitegrid")
-plt.rcParams["font.family"] = "DejaVu Sans"
-plt.rcParams["font.size"] = 11
+    plt.style.use("seaborn-v0_8-whitegrid")
+    plt.rcParams["font.family"] = "DejaVu Sans"
+    plt.rcParams["font.size"] = 11
+    _HAVE_MATPLOTLIB = True
+except ImportError:  # pragma: no cover - exercised only where the stack is absent
+    _HAVE_MATPLOTLIB = False
 
 REPO_ROOT = Path(__file__).parent.parent
+
 
 # Version read from the package, not written here. This footer used to carry a
 # hardcoded "v3.0.0" against a 3.4.0 library — the same defect that froze the
 # dashboard PNGs at v2.1.5 — so a regenerated chart asserted a version it had
 # no way to know had moved.
-_PKG_VERSION = re.search(
-    r'^__version__\s*=\s*"([^"]+)"',
-    (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-    re.M,
-).group(1)
+def _read_package_version() -> str:
+    """The version declared by the package, or a hard failure naming why.
+
+    Not `.group(1)` on an unchecked `re.search`: if the declaration ever moves,
+    that raises `AttributeError: 'NoneType' object has no attribute 'group'` at
+    import time, which reads as a broken tool rather than the one thing that
+    actually went wrong.
+    """
+    source = (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', source, re.M)
+    if match is None:
+        raise RuntimeError(
+            "ama_cryptography/__init__.py declares no __version__; refusing to "
+            "stamp a chart with a version that was not read from the package"
+        )
+    return match.group(1)
+
+
+_PKG_VERSION = _read_package_version()
 ASSETS_DIR = REPO_ROOT / "assets"
 ASSETS_DIR.mkdir(exist_ok=True)
 
-PHASE0_JSON = REPO_ROOT / "benchmarks" / "phase0_baseline_results.json"
 TESTS_DIR = REPO_ROOT / "tests"
-
-
-def _load_phase0_medians():
-    """Load median latencies (microseconds) from the checked-in
-    Python/ctypes-path benchmark snapshot.
-
-    Returns a dict keyed by the operation labels used inside
-    `phase0_baseline_results.json`. Charts that depend on these
-    numbers should call this loader rather than re-typing literals,
-    so the chart cannot drift out of sync with the JSON snapshot.
-    """
-    with open(PHASE0_JSON) as fh:
-        raw = json.load(fh)
-    return {name: entry["median_us"] for name, entry in raw.items()}
-
-
 # Raw C medians (microseconds) from `build/bin/benchmark_c_raw --json`.
 # This source is build-time-only — the harness binary and its JSON output
 # are not checked into the repository, so these literals are a snapshot
@@ -89,13 +103,13 @@ RAW_C_MEDIANS_US = {
 # Category buckets for the test-coverage chart. Each entry is
 # (display_label, list_of_filename_substring_predicates). A test file
 # (basename) is assigned to the FIRST category whose predicate matches.
-# Files that match no predicate are tracked separately as uncategorized
-# (returned from `_count_test_functions_by_category()` as the third
-# tuple element) and are NOT included in the bucketed counts or the
-# chart's `total_tests`. `create_test_coverage()` surfaces any such
-# files to the build log so a new `test_*.py` added without a matching
-# rule is visible at chart-generation time instead of silently dropping
-# off the chart.
+# Files that match no predicate are charted under the trailing `Other`
+# bucket (see _OTHER_LABEL) so the chart's total always covers every
+# walked file; they are also returned from
+# `_count_test_functions_by_category()` as the third tuple element and
+# `create_test_coverage()` lists them in the build log, so a new
+# `test_*.py` added without a matching rule is visible at
+# chart-generation time rather than silently lumped away.
 _TEST_CATEGORY_RULES = [
     (
         "Core Crypto\n& NIST KATs",
@@ -180,7 +194,7 @@ _TEST_CATEGORY_RULES = [
 _DEF_TEST_RE = re.compile(r"^\s*def test_", re.MULTILINE)
 
 
-def _classify_test_file(basename):
+def _classify_test_file(basename: str) -> Optional[str]:
     """Return the display_label of the first category whose predicate
     list matches `basename` (a `test_*.py` filename), or None if no
     rule matches."""
@@ -190,30 +204,42 @@ def _classify_test_file(basename):
     return None
 
 
-def _count_test_functions_by_category():
+#: The catch-all bucket for files no `_TEST_CATEGORY_RULES` predicate claims.
+#: Load-bearing for the chart's honesty: without it, `total_tests` summed only
+#: the bucketed files while the title and footer claimed to describe every
+#: `tests/test_*.py` file — and 46% of the suite (114 of 200 files, 2,159 of
+#: 4,702 test functions when measured) was silently dropped from a chart whose
+#: only signal was a stdout WARN that nothing in CI ever ran.
+_OTHER_LABEL = "Other"
+
+
+def _count_test_functions_by_category() -> tuple[list[int], int, list[tuple[str, int]]]:
     """Walk `tests/test_*.py`, count `def test_` matches per file, and
-    bucket each file into one of `_TEST_CATEGORY_RULES`. Returns
-    (counts_in_rule_order, total, unbucketed_files).
+    bucket each file into one of `_TEST_CATEGORY_RULES`, with files that
+    match no rule collected under the trailing `Other` bucket.  Returns
+    (counts_in_rule_order_plus_other, total, other_files).
 
     `def test_` matches in `conftest.py` are intentionally excluded —
-    they are pytest fixtures, not tests. This count therefore equals
-    the 2,026-across-69 subset of docs/METRICS_REPORT.md's headline
-    2,028-across-70 figure.
+    they are pytest fixtures, not tests.  The total is therefore the
+    same top-level count docs/METRICS_REPORT.md's static-test figure
+    records (every `tests/test_*.py`, conftest excluded); the split into
+    named buckets vs. `Other` is presentation, never exclusion.
     """
-    counts = [0] * len(_TEST_CATEGORY_RULES)
+    counts = [0] * (len(_TEST_CATEGORY_RULES) + 1)
     label_to_idx = {label: i for i, (label, _) in enumerate(_TEST_CATEGORY_RULES)}
-    unbucketed = []
+    unbucketed: list[tuple[str, int]] = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
         n = len(_DEF_TEST_RE.findall(path.read_text(encoding="utf-8")))
         label = _classify_test_file(path.name)
         if label is None:
             unbucketed.append((path.name, n))
+            counts[-1] += n
             continue
         counts[label_to_idx[label]] += n
     return counts, sum(counts), unbucketed
 
 
-def create_test_coverage():
+def create_test_coverage() -> None:
     """Create enhanced test coverage visualization with percentages and cumulative data."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), gridspec_kw={"width_ratios": [2, 1]})
 
@@ -223,22 +249,23 @@ def create_test_coverage():
     # module scope) by filename predicate; `def test_` matches per file
     # are counted via regex. conftest.py is excluded (its `def test_`
     # entries are pytest fixtures, not tests).
-    categories = [label for label, _ in _TEST_CATEGORY_RULES]
+    categories = [label for label, _ in _TEST_CATEGORY_RULES] + [_OTHER_LABEL]
     test_counts, total_tests, unbucketed = _count_test_functions_by_category()
     # File count is derived once here and reused in both the suptitle
     # and the footer so they cannot disagree if tests are added or
-    # removed. It matches the set walked by `_count_test_functions_by_category()`.
+    # removed. It matches the set walked by `_count_test_functions_by_category()`,
+    # and with the Other bucket the total genuinely covers every one of them.
     n_files = len(list(TESTS_DIR.glob("test_*.py")))
     if unbucketed:
-        # Surface in the build log so a new test file added without a
-        # matching rule is noticed instead of silently dropped.
-        print("WARN: test files without a category rule (will be excluded " "from chart):")
+        # Surface in the build log so a new test file without a matching
+        # rule is noticed; it is charted under Other either way.
+        print("WARN: test files without a category rule (charted under 'Other'):")
         for name, n in unbucketed:
             print(f"  - {name} ({n} tests)")
     percentages = (
         [100 * c / total_tests for c in test_counts] if total_tests else [0] * len(categories)
     )
-    colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]
+    colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444", "#6B7280"]
 
     # === Left Panel: Horizontal bar chart with percentages ===
     bars = ax1.barh(categories, test_counts, color=colors, edgecolor="white", linewidth=2)
@@ -327,12 +354,21 @@ def create_test_coverage():
         bbox_inches="tight",
         facecolor="white",
         edgecolor="none",
+        # The numbers drawn above, written into the PNG itself so `--check`
+        # can compare the chart's own bytes with the tree (see
+        # `_check_rendered_inputs`).  Built from the same locals the chart
+        # drew, not recomputed, so the record is what was rendered.
+        metadata={
+            _CHART_INPUTS_KEY: _encode_chart_inputs(
+                _test_coverage_inputs(categories, test_counts, total_tests, n_files)
+            )
+        },
     )
     plt.close()
     print(f"Created: {ASSETS_DIR / 'test_coverage.png'}")
 
 
-def create_ethical_binding_flow():
+def create_ethical_binding_flow() -> None:
     """Create comprehensive ethical binding diagram showing 4 pillars with weights."""
     fig, ax = plt.subplots(figsize=(18, 12))
     ax.set_xlim(0, 18)
@@ -699,7 +735,7 @@ def create_ethical_binding_flow():
     print(f"Created: {ASSETS_DIR / 'ethical_binding.png'}")
 
 
-def create_quantum_comparison():
+def create_quantum_comparison() -> None:
     """Create quantum vs classical security comparison."""
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -794,7 +830,252 @@ def create_quantum_comparison():
     print(f"Created: {ASSETS_DIR / 'quantum_comparison.png'}")
 
 
-if __name__ == "__main__":
+#: The numbers the committed charts assert, recorded beside the PNGs so drift
+#: is checkable without re-rendering.  The five committed assets sat frozen
+#: and version-stamped at v3.4.0 for two major releases because neither
+#: generator had a --check mode and nothing in CI ran either one — a chart
+#: nobody regenerates decays into a false claim with a version label on it.
+MANIFEST_PATH = ASSETS_DIR / "visuals_manifest.json"
+
+#: The PNGs this tool owns; defense_layers.png and performance_dashboard.png
+#: belong to tools/generate_dashboards.py, which merges its own entry into the
+#: manifest when it renders.
+_OWNED_OUTPUTS = ("test_coverage.png", "ethical_binding.png", "quantum_comparison.png")
+
+
+#: PNG text-chunk keyword under which a chart records the numbers it drew.
+_CHART_INPUTS_KEY = "AMA-Chart-Inputs"
+
+
+def _test_coverage_inputs(
+    categories: list[str], counts: list[int], total_tests: int, n_files: int
+) -> dict[str, object]:
+    """Every number ``test_coverage.png`` draws, and the version it stamps."""
+    return {
+        "version": _PKG_VERSION,
+        "counts": dict(zip(categories, counts)),
+        "total_tests": total_tests,
+        "n_files": n_files,
+    }
+
+
+def _live_test_coverage_inputs() -> dict[str, object]:
+    """What ``test_coverage.png`` would draw if rendered from the tree now."""
+    counts, total_tests, _unbucketed = _count_test_functions_by_category()
+    labels = [label for label, _ in _TEST_CATEGORY_RULES] + [_OTHER_LABEL]
+    return _test_coverage_inputs(
+        labels, counts, total_tests, len(list(TESTS_DIR.glob("test_*.py")))
+    )
+
+
+def _encode_chart_inputs(inputs: dict[str, object]) -> str:
+    """Canonical ASCII JSON, which a PNG ``tEXt`` chunk (Latin-1) can carry."""
+    return json.dumps(inputs, sort_keys=True, ensure_ascii=True)
+
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _png_text_chunks(path: Path) -> dict[str, str]:
+    """The ``tEXt`` / ``zTXt`` / ``iTXt`` entries of a PNG, read with the stdlib.
+
+    Every chunk's CRC is verified, so a chart whose recorded inputs were edited
+    by hand, or a file truncated mid-chunk, raises instead of being read.
+    """
+    data = path.read_bytes()
+    if not data.startswith(_PNG_SIGNATURE):
+        raise ValueError(f"{path.name} is not a PNG file")
+    entries: dict[str, str] = {}
+    offset = len(_PNG_SIGNATURE)
+    while offset < len(data):
+        if offset + 8 > len(data):
+            raise ValueError(f"{path.name}: truncated chunk header at byte {offset}")
+        length, kind = struct.unpack(">I4s", data[offset : offset + 8])
+        body = data[offset + 8 : offset + 8 + length]
+        crc = data[offset + 8 + length : offset + 12 + length]
+        if len(body) != length or len(crc) != 4:
+            raise ValueError(f"{path.name}: truncated {kind!r} chunk at byte {offset}")
+        if zlib.crc32(kind + body) != int.from_bytes(crc, "big"):
+            raise ValueError(f"{path.name}: {kind!r} chunk at byte {offset} fails its CRC")
+        if kind == b"tEXt":
+            keyword, _, text = body.partition(b"\0")
+            entries[keyword.decode("latin-1")] = text.decode("latin-1")
+        elif kind == b"zTXt":
+            keyword, _, rest = body.partition(b"\0")
+            entries[keyword.decode("latin-1")] = zlib.decompress(rest[1:]).decode("latin-1")
+        elif kind == b"iTXt":
+            keyword, _, rest = body.partition(b"\0")
+            compressed, rest = rest[0], rest[2:]
+            _language, _, rest = rest.partition(b"\0")
+            _translated, _, text = rest.partition(b"\0")
+            raw = zlib.decompress(text) if compressed else text
+            entries[keyword.decode("latin-1")] = raw.decode("utf-8")
+        elif kind == b"IEND":
+            break
+        offset += 12 + length
+    return entries
+
+
+def _check_rendered_inputs() -> list[str]:
+    """Whether the committed ``test_coverage.png`` draws the tree's numbers.
+
+    The manifest check above compares ``visuals_manifest.json`` with the tree,
+    and the PNGs were checked only for existence — the chart's bytes were
+    bound to nothing.  Its failure message prints the exact expected JSON, so
+    the cheapest way to turn it green in an environment that cannot render
+    (the one ``--check`` exists for) was to paste that JSON into the manifest,
+    leaving a chart that still draws the old totals certified as current.
+
+    The chart now records the numbers it drew in its own ``AMA-Chart-Inputs``
+    text chunk, written at render time, and this compares them with the tree.
+    Editing the manifest cannot change a PNG.  ``ethical_binding.png`` and
+    ``quantum_comparison.png`` draw no tree-derived number, so existence is
+    all there is to check for them.
+    """
+    path = ASSETS_DIR / "test_coverage.png"
+    if not path.is_file():
+        return []  # reported as missing by check_manifest
+    regenerate = (
+        "Re-render with `python tools/generate_visuals.py` (or "
+        "`python tools/refresh_derived_docs.py`) and commit the PNG with the manifest."
+    )
+    try:
+        recorded_text = _png_text_chunks(path).get(_CHART_INPUTS_KEY)
+    except (OSError, ValueError, zlib.error, IndexError) as exc:
+        return [f"assets/test_coverage.png cannot be read as a PNG: {exc}. {regenerate}"]
+    if recorded_text is None:
+        return [
+            f"assets/test_coverage.png records no {_CHART_INPUTS_KEY} — it was not "
+            f"rendered by this version of the tool, so nothing binds what it "
+            f"draws to the tree. {regenerate}"
+        ]
+    try:
+        recorded = json.loads(recorded_text)
+    except ValueError as exc:
+        return [f"assets/test_coverage.png {_CHART_INPUTS_KEY} is not JSON: {exc}. {regenerate}"]
+    live = _live_test_coverage_inputs()
+    if recorded != live:
+        changed = sorted(
+            key
+            for key in set(live) | set(recorded)
+            if not isinstance(recorded, dict) or recorded.get(key) != live.get(key)
+        )
+        return [
+            f"assets/test_coverage.png draws numbers the tree no longer has "
+            f"(differs in: {', '.join(changed)}); the manifest cannot vouch for a "
+            f"chart that was not re-rendered. {regenerate}"
+        ]
+    return []
+
+
+def _live_manifest_entry() -> dict[str, object]:
+    """What this tool's charts assert, computed from the working tree now."""
+    counts, total_tests, unbucketed = _count_test_functions_by_category()
+    labels = [label for label, _ in _TEST_CATEGORY_RULES] + [_OTHER_LABEL]
+    return {
+        "version": _PKG_VERSION,
+        "test_coverage": {
+            "counts": dict(zip(labels, counts)),
+            "total_tests": total_tests,
+            "n_files": len(list(TESTS_DIR.glob("test_*.py"))),
+            "uncategorised_files": sorted(name for name, _ in unbucketed),
+        },
+    }
+
+
+def check_manifest() -> list[str]:
+    """Drift between the committed assets and the tree, as failure messages."""
+    problems: list[str] = []
+    if not MANIFEST_PATH.is_file():
+        return [
+            f"{MANIFEST_PATH} is missing; regenerate with "
+            f"`python tools/generate_visuals.py` (and commit the PNGs it writes)."
+        ]
+    recorded = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    live = _live_manifest_entry()
+    for key, value in live.items():
+        if recorded.get(key) != value:
+            problems.append(
+                f"visuals_manifest.json {key!r} does not match the tree:\n"
+                f"    recorded: {json.dumps(recorded.get(key), sort_keys=True)}\n"
+                f"    tree:     {json.dumps(value, sort_keys=True)}\n"
+                f"  The committed charts assert numbers the tree no longer has. "
+                f"Regenerate with `python tools/generate_visuals.py` and commit "
+                f"the PNGs and manifest together."
+            )
+    for name in _OWNED_OUTPUTS:
+        if not (ASSETS_DIR / name).is_file():
+            problems.append(f"assets/{name} is missing while the manifest describes it.")
+    problems.extend(_check_rendered_inputs())
+    # The dashboards' entry is measurement-derived and cannot be recomputed on
+    # a clean checkout, but its VERSION can be held to the package's: the
+    # committed performance dashboard carried a v3.4.0 title into a 5.0.0
+    # tree for two majors precisely because nothing compared these.
+    dashboards = recorded.get("dashboards")
+    if not isinstance(dashboards, dict):
+        problems.append(
+            "visuals_manifest.json carries no 'dashboards' entry; run "
+            "tools/generate_dashboards.py (it merges its entry when it renders)."
+        )
+    elif dashboards.get("version") != _PKG_VERSION:
+        problems.append(
+            f"assets/performance_dashboard.png and defense_layers.png were "
+            f"generated at v{dashboards.get('version')}, package is "
+            f"v{_PKG_VERSION}. Regenerate with tools/generate_dashboards.py "
+            f"(produce its measurement inputs first — see its module docstring)."
+        )
+    return problems
+
+
+def _write_manifest() -> None:
+    recorded: dict[str, object] = {}
+    if MANIFEST_PATH.is_file():
+        recorded = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    recorded.update(_live_manifest_entry())
+    # UTF-8 and LF on every platform: a text-mode write on Windows emits CRLF,
+    # and this manifest is a committed artefact tools/check_line_endings.py
+    # rejects CRLF in — the same reason every writer in tools/update_docs.py
+    # passes both arguments.
+    MANIFEST_PATH.write_text(
+        json.dumps(recorded, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline=""
+    )
+    print(f"Wrote: {MANIFEST_PATH}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "verify the committed charts' manifest, and the numbers "
+            "test_coverage.png records it drew, against the tree instead of "
+            "rendering; works without matplotlib, for CI"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    if args.check:
+        problems = check_manifest()
+        if problems:
+            print("VISUAL ASSETS CHECK FAILED:", file=sys.stderr)
+            for problem in problems:
+                print(f"  - {problem}", file=sys.stderr)
+            return 1
+        print(
+            "OK: committed visual assets match the numbers the tree produces "
+            "(manifest, and the numbers test_coverage.png records it drew)."
+        )
+        return 0
+
+    if not _HAVE_MATPLOTLIB:
+        print(
+            "matplotlib is required to render (pip install matplotlib); "
+            "--check works without it.",
+            file=sys.stderr,
+        )
+        return 2
+
     print("Generating AMA Cryptography visual diagrams...")
     print("=" * 50)
 
@@ -802,6 +1083,12 @@ if __name__ == "__main__":
     create_test_coverage()
     create_ethical_binding_flow()
     create_quantum_comparison()
+    _write_manifest()
 
     print("=" * 50)
     print(f"All visuals saved to: {ASSETS_DIR}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

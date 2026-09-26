@@ -35,10 +35,30 @@ Naming another implementation is not calling it. Curve aliases such as
 crediting where an approach came from is scholarship; the check works on the AST
 so neither trips it.
 
-Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
-non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
-substitute for AMA's own implementations of HMAC, memory zeroing, or core
-cipher operations.
+Python stdlib modules (`os`, `secrets`) are permitted for OS services —
+entropy is the operating system's to provide, not a competing implementation.
+
+**`hashlib` policy (tightened 2026-08):** CPython's `hashlib` is not a neutral
+helper. In every build that links libcrypto its constructors resolve to
+OpenSSL — `hashlib.sha3_256` *is* `_hashlib.openssl_sha3_256` — so a
+production `hashlib` call inside the package is OpenSSL performing an AMA
+cryptographic primitive in-process. An earlier revision of this invariant
+permitted stdlib "hashing" as a non-primitive operation; that parenthetical
+granted what the rule forbids, and roughly fifty call sites accumulated under
+it. All production hashing and key derivation now runs on AMA's own kernels
+(`native_sha256/384/512`, `native_sha3_256/384/512`,
+`native_pbkdf2_hmac_sha256/512`). `hashlib` is confined to the pre-execution
+**trust bootstrap** — the pre-load shared-object digest (which cannot be
+computed by the library not yet loaded), the pre-import binding-extension
+digest gate in `__init__.py` (which hashes each signed compiled extension
+before its module-init code may execute), the signed-integrity source
+digests, the build-time signer, the SHA3-256 KAT cross-check against fixed
+FIPS 202 vectors, and the RuntimeError-guarded test-only HKDF reference —
+pinned file-by-file with exact reference counts by
+`tools/check_stdlib_hash_boundary.py`, so a new use anywhere fails CI.
+
+They **must NOT** be used as a substitute for AMA's own implementations of
+HMAC, memory zeroing, or core cipher operations.
 
 **`hmac` module policy:** `hmac.compare_digest()` is permitted for constant-time
 comparison. `hmac.new()` / `hmac.HMAC()` are not permitted — use AMA's own HMAC
@@ -54,16 +74,81 @@ permitted. Algorithms whose governing standard has been deprecated or
 withdrawn must be removed from the library or explicitly documented with a
 migration timeline.
 
+**Enforcement.** `tools/check_algorithm_registry.py`, run in `ci.yml`, at two
+levels.
+
+1. **Families.** DISCOVERED from `include/ama_cryptography.h` — every `AMA_API`
+   prototype contributes its `ama_<family>_` prefix. Each family must carry a
+   mapping to one or more `CSRC_STANDARDS.md` tokens (a tuple where the family
+   spans two publications, as `ama_nistp_*` does: FIPS 186-5 for ECDSA and
+   SP 800-56A rev. 3 for ECDH), and each token must appear in that file's
+   tables.
+2. **Parameter sets.** Also discovered: the enumerators of the header's
+   parameter-set enums (`AMA_ML_DSA_*`, `AMA_ML_KEM_*`, `AMA_SLHDSA_*`,
+   `AMA_NIST_CURVE_*`) and the `ama_hmac_<hash>` prototypes. Each must map to a
+   token that appears in the **Algorithm column** of a row — its own row, not a
+   mention inside another algorithm's prose.
+
+At both levels an identifier the mapping does not know fails, which is the
+"before implementation is permitted" clause expressed as a check. The gate
+fails closed on a collapsed header scan, a header with no parameter sets, or a
+truncated registry, and every direction is pinned by
+`tests/test_algorithm_registry_gate.py`.
+
+The second level exists because the first is too coarse to see what the audit
+found. `ama_hmac_*` maps to FIPS 198-1, which the HMAC-SHA-256 row satisfies,
+so the family read as covered while three further HMAC constructions shipped
+with no row at all; `ama_dilithium_*` maps to ML-DSA-65, which said nothing
+about ML-DSA-44 or ML-DSA-87.
+
+Until 5.0.0 nothing checked this, and the registry did not hold. Run against
+`CSRC_STANDARDS.md` as it stood, the gate reports **18** violations by name:
+FIPS 186-5 and SP 800-56A rev. 3 both uncited and P-256/P-384/P-521 each
+without a row; SP 800-208 uncited for both LMS and HSS; ML-KEM-512, ML-KEM-768,
+ML-DSA-44, ML-DSA-87 and SLH-DSA-SHAKE-128s each without a row; and
+HMAC-SHA-384, HMAC-SHA-512 and HMAC-SHA3-256 the same — in a document whose
+first paragraph says it maps *every* primitive implemented in the library and
+lists no aspirational entries. The same pass that found this had itself added
+five other rows, so the rule was known and still not met, which is what a rule
+with no gate looks like.
+
 ### INVARIANT-1 Addendum — Vendoring Policy
 
-Vendoring public-domain source into `src/c/vendor/` and compiling it as part
-of AMA's own build system is permitted. Vendored source is included in-tree
-and compiled from source as part of AMA's build system; its original license
-(documented per component) is unaffected by vendoring. Vendored source
-**must not** be linked as a pre-built binary.
+No cryptographic source is vendored. Every primitive the library ships is
+written in this repository — one file of it adapted from a third-party
+reference under that reference's licence, named below — and `src/c/vendor/`
+**must not exist**:
+`tools/check_vendor_isolation.py` fails the build if the directory reappears
+or if any file under `src/c/` includes a forbidden vendor header, in a fallback
+arm or anywhere else, and `tests/test_vendor_isolation_gate.py` pins both
+directions.
 
-See the **Vendored Dependencies** appendix at the end of this document for
-the current inventory.
+This addendum used to permit vendoring public-domain source into
+`src/c/vendor/`, compiled from source and never linked pre-built, and one
+component lived under it: a public-domain x86-64 Ed25519 implementation
+selected by a CMake option on x86-64 and MSVC builds. The twenty-first
+maintenance pass replaced it with the in-house Ed25519 backend
+(`src/c/ama_ed25519.c`, `src/c/internal/ama_ed25519_ge.h`), which is measured
+faster than it was on every row, and removed the option, the shim, the
+differential CI job and the tree itself. The only third-party code copied
+into the repository is the dudect timing harness under `tests/c/dudect/`,
+which is test tooling, not a cryptographic primitive, and is outside `src/c/`.
+
+One compiled-in file is **adapted**, not written from the standard alone:
+the constant-time field inversion in `src/c/internal/ama_fe25519_safegcd.h`,
+which every Ed25519 keygen and sign runs, follows the batched 62-bit structure
+of libsecp256k1's safegcd `modinv64` reference implementation (MIT
+licence). It is attributed under that licence in
+`NOTICE`, and the C-library SBOM records it as the `ama_ed25519` component's
+pedigree with the licence expression `Apache-2.0 AND MIT`. An earlier revision
+of this addendum called the dudect harness "the only third-party code left in
+the repository", which a licence review would have read as "the Ed25519 path
+carries no third-party licence obligation"; it does. `tools/generate_sbom.py`
+now fails closed if a file under `src/c/` or `include/` cites `NOTICE` without
+an SBOM pedigree entry, if a registered file stops citing it, or if `NOTICE`
+stops naming the file or its licence (`tests/test_sbom_adapted_sources.py`).
+The **Vendored Dependencies** appendix at the end of this document records the
+history.
 
 ## INVARIANT-2 — Fail-Closed CI
 
@@ -142,7 +227,41 @@ query API.  All `__del__` methods in cryptographic classes must call
 ## INVARIANT-4 — Pinned Action References
 
 All third-party GitHub Actions used in security workflows **must** be pinned
-to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.).
+to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.). A tag is
+mutable: whoever controls the upstream repository can move it, and the workflow
+then runs different code with no diff in this repository.
+
+**Enforcement:** `tools/check_action_pins.py`, run with `--strict` in
+`ci.yml`. It performs two checks:
+
+1. **`find_unpinned()`** — every `uses:` reference whose ref is not a
+   40-character commit SHA is a violation. Local references (`./…`) and
+   `docker://` images are out of scope; anything else needs an entry in
+   `_PIN_EXEMPT` with a written reason. The references are read from every
+   workflow AND from every action definition — a file named action.yml or
+   action.yaml — anywhere in the repository (`uses: ./some/dir` runs the
+   definition in some/dir), not only from `.github/actions/`, where the scan
+   used to stop; `tools/check_docker_pins.py` reads the same set.
+2. **`find_pins()` + `list_remote_refs()`** — every SHA pin must still resolve
+   upstream, and under `--strict` its trailing version comment must name a tag
+   the SHA actually carries.
+
+Check 1 did not exist until 5.0.0, and this invariant had **no enforcement
+anywhere** until then. The pin checker matched `uses: <action>@[0-9a-f]{40}`
+and nothing else, so a reference carrying no SHA was structurally invisible to
+it — the rule's only checker could not see its violations, and
+`tests/test_action_pin_checks.py` recorded that in a comment ("Non-detection:
+`@v1` is a different violation") rather than closing it. The gate also exited
+**0** when it found no pins at all; it now fails closed, like every other gate
+in `tools/`.
+
+**The one exemption**, named individually rather than by prefix:
+`slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0`.
+Upstream *refuses* a SHA reference — the generator verifies that its caller
+referenced it by a semantic-version tag and fails the build otherwise, because
+the tag is what its own provenance attests. Pinning it by SHA would not harden
+the supply chain; it would break the attestation that workflow exists to
+produce.
 
 ## INVARIANT-5 — Input Validation at Python/C Boundary
 
@@ -312,6 +431,34 @@ is in the workflow's `.py`-equality check (which compares every OTHER
 `.py` file byte-for-byte) and not in the native-artefact diff (where
 the file does not appear).
 
+### INVARIANT-8 Addendum — Release Builds Install Only Hash-Pinned Dependencies
+
+A byte-equal rebuild proves determinism against the toolchain that was
+present; it cannot say which toolchain that was when the release build
+resolved `cmake>=4.4.3`, `cython>=3.3.0` and `numpy>=1.24.0` from the index
+at build time and `python -m build` resolved `[build-system].requires` in an
+isolated environment the same way. Every Python dependency a release build
+installs **must** be pinned to an exact version and verified against a
+recorded SHA-256 before it is installed.
+
+**Enforcement:** `requirements-release-build.txt` (the build tools and
+extension dependencies, one pin per interpreter range where a package's
+wheel support requires it) and `requirements-release-tools.txt` (`pip`,
+`build` and their closure) carry a `--hash=sha256:` for every file the index
+publishes for each pinned version — every platform and interpreter wheel and
+the sdist — so `pip install --require-hashes` resolves on every row of the
+release matrix. `release.yml` installs from those manifests and nothing
+else: cibuildwheel's before-build step installs the build manifest and its
+build frontend runs without build isolation, and the sdist job builds and
+smoke-installs with `--no-isolation` / `--no-build-isolation` after
+installing both manifests. `tools/check_release_pins.py` fails CI on a
+manifest line without a hash, a specifier that is not `==`, a pin below the
+floors `pyproject.toml` and `setup.py` declare, or a `pip install` in
+`release.yml` that does not go through `--require-hashes` against a
+manifest; its `--refresh` mode regenerates the manifests from the index so
+a pin moves by regeneration, not by hand. `tests/test_release_pins_gate.py`
+supplies the negative controls.
+
 ## INVARIANT-9 — Maximum Exception Scope in Crypto Paths
 
 Code under `ama_cryptography/` **should** use narrow exception types
@@ -350,15 +497,90 @@ not happened.
 preflight stage before any wheel is built. It checks *shape* — the ref
 resolves, names a tag object rather than a commit, and the object contains an
 OpenPGP, SSH, or X.509 signature block — and states in its own output that it
-does **not** verify the signature, since verification needs a trust store this
-repository deliberately does not ship (publishing an `allowed_signers` file
-would assert a key binding only the account owner can establish). GitHub's
-verified/unverified verdict is the complementary half; it is account-level
+does **not** verify the signature. That is a division of labour rather than a
+gap: preflight's job is the properties that were wrong on all eleven historical
+tags, and it needs no key material, no `ssh-keygen` and no network to do it,
+which is what lets it run first, before anything is built. Verification is a
+separate check with a separate input, and it exists — see the addendum below.
+GitHub's verified/unverified verdict is the third half; it is account-level
 state, so preflight reports it rather than gating on it.
 `tests/test_release_tag_gate.py` supplies the negative controls for each
 rejected shape, including one asserting that a fabricated signature block
 passes — so a future reader cannot mistake this gate's PASS for a
 cryptographic result.
+
+### INVARIANT-10 Addendum — The Trust Store, and a Correction
+
+Until 5.0.0 the paragraph above ended differently. It said verification needs a
+trust store "this repository deliberately does not ship", because "publishing an
+`allowed_signers` file would assert a key binding only the account owner can
+establish".
+
+The reasoning was sound; the conclusion was false when it was written. The
+account owner had already established the binding: the release signing key was
+registered on the account the same day v4.0.0 was tagged, and v4.0.0 — tagged
+twenty-eight minutes after that sentence was committed — is signed with it. What
+got recorded as a property of the project was really the author's inability to
+read account-level state. **An unverifiable claim and a claim that must not be
+published are not the same thing**, and a repository that enforces INVARIANT-37
+against its own APIs is the last place that confusion belongs. The sentence then
+propagated into `tools/check_release_tag.py` and
+`tests/test_release_tag_gate.py`, which is how a reasoned aside becomes a
+project policy nobody re-examines.
+
+**What ships instead.** `.github/allowed_signers` carries the binding, scoped
+`namespaces="git"`. It is a mirror of an owner-established fact, not the
+repository vouching for itself — and on its own it would still be worth exactly
+as much as the repository carrying it, which is why it does not stand on its
+own:
+
+**Enforcement:** `tests/test_release_tag_trust_store.py` verifies the v4.0.0 tag
+object against the published key on every run, with negative controls for a
+substituted key, a substituted principal, a tampered payload and a wrong
+signature namespace. The tag object is embedded in the test rather than read
+through `git`, because `actions/checkout` does not fetch tags at its default
+depth and a check that silently skips on the runners that matter is not a check.
+Ed25519 verification is implemented there in the standard library alone, pinned
+by the RFC 8032 §7.1 known-answer vector; INVARIANT-1's refusal of external
+cryptographic dependencies is a poor thing to honour everywhere except in the
+test that checks the release key. A fingerprint copied from a settings page
+proves nothing. A signature checked against the bytes it covers does.
+
+Consumers verify a release tag with
+
+```bash
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v5.0.0
+```
+
+documented in `README.md` beside the Sigstore and SLSA commands. That check is
+offline: no GitHub account, no network, no trust in this repository's hosting.
+
+### INVARIANT-10 Addendum — A Release Tag Descends From the Trusted Branch
+
+A signed tag proves who tagged; it says nothing about *what* was tagged. Until
+2026-09-25 a `v*` tag pointing at any commit — a branch never reviewed, a
+commit reachable from nothing on `main` — passed preflight's shape and
+signature checks and built a release with the release signing seed in its
+environment. The tag's commit **must** be an ancestor of a trusted branch.
+
+**Enforcement:** `tools/check_release_tag.py --trust-config` adds a fourth
+fail-closed check, `git merge-base --is-ancestor <tag commit> origin/<branch>`
+for a branch named in `.github/release-trust.json`. `release.yml`'s preflight
+checks out the full history, fetches `main`, and reads that configuration
+from `origin/main` with `git show` — **never from the tag's own tree**, because
+the tag's tree is exactly what a tagger controls, and a definition of
+"trusted" that ships inside it would let the tagger write the definition.
+`tests/test_release_tag_gate.py` carries the negative controls: a tag on a
+side branch, a missing configuration, an unresolvable branch, and the
+workflow wiring.
+
+**Stated limitation (INVARIANT-37).** The workflow file that runs this gate
+is itself read from the tag, so a tag pushed by someone able to rewrite
+`release.yml` is outside what the gate can hold. The controls that make the
+gate binding are administrative and recorded as such: a tag ruleset on `v*`
+restricting who may create tags, and the signing seed living in an
+environment whose deployment policy admits only `v*` tags. The gate is the
+in-repository half; those are the other half.
 
 ## INVARIANT-11 — SBOM as Release Gate
 
@@ -418,7 +640,34 @@ attacker-observable.
 
 4. **No secret-dependent branching:** Branching, table indexing, loop counts,
    and memory access patterns dependent on secret data are **prohibited** in
-   both C and Python cryptographic paths.
+   both C and Python cryptographic paths, with one carve-out mandated by the
+   standard itself: **the FIPS 204 (ML-DSA) signing loop rejects and resamples
+   by construction, so its iteration count is secret-dependent.** This is not
+   a defect and not fixable without diverging from the standard;
+   `CONSTANT_TIME_VERIFICATION.md` §"Rejection sampling and what these gates
+   cannot cover" documents it, the dudect lane measures it (info-only — no
+   deterministic counterpart can exist, because a correct signer does
+   different work per key), and it leaks no private-key material — only a
+   timing signal on the number of rejections for a given message. Every
+   *other* secret-dependent construct remains prohibited.
+
+   **SLH-DSA is not in the carve-out.** An earlier revision of this rule said
+   the FIPS 205 (SLH-DSA) signing loop also "rejects and resamples by
+   construction" and exempted it. FIPS 205 has no rejection loop. SLH-DSA
+   signing does a variable amount of work — WOTS+ chain lengths, FORS and XMSS
+   leaf positions — but every value that decides it is published in the
+   signature: the randomizer R (its first n bytes) and the digest computed
+   from it, the FORS public key, and each layer's XMSS root, which verification
+   recomputes. That is variation on public data, which this rule does not
+   prohibit, and the exemption pre-excused the thing it does prohibit: a
+   branch or index on an SK.seed-derived WOTS+ or FORS secret would have shipped
+   under it with no blocking instrument watching. SLH-DSA signing is now held
+   to this rule by `tools/check_ghash_constant_time.py --target slhdsa-sign
+   --taint` in `dudect.yml`: SK.seed and SK.prf are marked secret under
+   Memcheck for both shipped parameter sets, `src/c/ama_slhdsa.c` declassifies
+   exactly those published values (`AMA_CT_DECLASSIFY`, a no-op outside
+   `AMA_TESTING_MODE`), and any conditional jump, conditional move or address
+   that depends on anything else derived from the secret fails the lane.
 
 **Enforcement:** CI runs constant-time verification checks (dudect, ctgrind,
 custom timing harnesses, static structural scans) and **must** fail on
@@ -431,10 +680,17 @@ verification methodology.
 The nightly SIMD dudect sweep in `.github/workflows/dudect.yml`
 (`dudect-simd-sweep`) **must** measure each dispatch-table-routable
 SIMD slot in isolation via `AMA_DISPATCH_ONLY=<slot>`.  A t-value
-regression on any slot is a hard fail, not a "noise" excuse — the
-per-slot isolation is exactly what makes the t-value attributable
-to a single SIMD kernel rather than to the union of every SIMD
-path that happens to be on the host.
+excursion on any slot is a hard fail — never excused as noise — when it
+meets the adjudication rule in `tests/c/dudect/dudect_rounds.h`: |t| at
+or above `DUDECT_T_THRESHOLD` (5.0) in a strict majority of rounds, with
+a consistently signed per-class difference of at least
+`DUDECT_MIN_EFFECT_NS` (2 ns).  Below that measured floor the lane
+reports `SUB-FLOOR` without failing, because on shared hardware the
+apparatus cannot attribute a sub-2 ns difference to the code (the floor's
+derivation and its limits are documented at the definition).  The
+per-slot isolation is exactly what makes an adjudicable t-value
+attributable to a single SIMD kernel rather than to the union of every
+SIMD path that happens to be on the host.
 
 The slot inventory (also enumerated in `include/ama_dispatch.h` and
 in CHANGELOG `[Unreleased]`) is the authoritative list.  Adding a
@@ -459,13 +715,15 @@ ambiguity the close-out exists to remove.
 ## INVARIANT-13 — No Unjustified Static-Analysis Suppressions
 
 Use of `# noqa`, `# nosec`, `# pylint: disable`, `# type: ignore`, or any
-equivalent suppression marker is **prohibited** unless **all three** of the
+equivalent suppression marker is **prohibited** unless **all four** of the
 following conditions are met:
 
 1. The suppression is **line-scoped**, not file-scoped.
-2. It includes a **human-readable justification** and a **tracking reference**,
+2. It **names the rule it silences** — `# nosec B110`, `# noqa: S310`,
+   `# nosemgrep: <rule_id>` — never the bare marker.
+3. It includes a **human-readable justification** and a **tracking reference**,
    for example: `# nosec B110: __del__ must not raise (FIN-001)`.
-3. The suppressed line is **covered by tests** or a deterministic runtime check.
+4. The suppressed line is **covered by tests** or a deterministic runtime check.
 
 The **only** permitted exception is finalizers and destructors that must not
 raise, provided the reason is explicitly documented inline.
@@ -474,22 +732,86 @@ Suppressions are **absolutely forbidden** in the following locations regardless
 of justification:
 
 - `src/c/` (core cryptographic C primitives)
-- `ama_cryptography/_primitive` (if present)
-- `ama_cryptography/backend` (if present)
 - `include/ama_*.h` (C header files)
 
 **Enforcement:** CI scans the repository for suppression tokens and **must**
 fail if a suppression is missing a justification, missing a tracking ID, or
 appears in a forbidden directory.
 
-**Scope.** `tools/check_suppression_hygiene.py` covers `ama_cryptography/`,
-`tests/` **and `tools/`**. `tools/` was outside it until someone noticed what
-lives there: the gate scripts themselves. A suppression in that tree silences a
-static analyser *inside the layer that enforces this invariant*, which is the
-last place an unexplained one belongs. Widening the scan found two bare
-`# noqa: S310` markers — no reason, no tracking ID — over `urllib` calls in the
-corpus fetchers that accepted `file:` and `ftp:` URLs; both now check the
-scheme, so the suppression states a fact rather than a hope.
+**Scope.** `tools/check_suppression_hygiene.py` runs three passes, because this
+invariant states more than one rule.
+
+*The justified-and-tracked pass* covers `ama_cryptography/`, `tests/` **and
+`tools/`**. `tools/` was outside it until someone noticed what lives there: the
+gate scripts themselves. A suppression in that tree silences a static analyser
+*inside the layer that enforces this invariant*, which is the last place an
+unexplained one belongs. Widening the scan found two bare `# noqa: S310`
+markers — no reason, no tracking ID — over `urllib` calls in the corpus fetchers
+that accepted `file:` and `ftp:` URLs; both now check the scheme, so the
+suppression states a fact rather than a hope.
+
+*The absolutely-forbidden pass* covers every non-vendored `.c` and `.h` under
+`src/c/` and `include/` — the same enumeration the fail-closed clang-tidy job
+performs — and fails on the presence of `NOLINT*`, `cppcheck-suppress`,
+`nosemgrep`, `coverity[` or `LINTED`, and, since the twenty-seventh pass, of
+the compiler- and sanitizer-level forms too: `#pragma GCC/clang diagnostic
+ignored` and its `_Pragma(...)` operator form, MSVC
+`#pragma warning(disable|suppress)`, `#pragma GCC optimize`/`clang optimize
+off`, `no_sanitize*` and `disable_sanitizer_instrumentation` attributes, and
+`optnone` in any attribute position or as `[[clang::optnone]]`. It used to
+recognise the analyser comment markers only, so the tree carried two `-Wpedantic` pragmas and a `no_sanitize_address` while the
+gate reported that it carried none. The pragmas are gone, and so is the
+warning they hid: every `__int128` declaration carries `__extension__`, and the
+compiler-warning gate's `int128-extension` allowlist entry was deleted with
+it. There is no justification escape
+hatch, because that is what "regardless of justification" means. It fails
+closed on an empty scope: a glob that matches nothing is a checker fault, not
+a clean tree.
+
+**No exception is recorded.** The twenty-seventh pass kept one —
+`no_sanitize_address` on `ama_secure_stack_wipe` — on the stated ground that
+AddressSanitizer would report the scrub as the fault it resembles. That
+ground was never measured, and it is false: the function writes only its own
+local array, which is always a valid access. With the attribute removed the
+clang ASan+UBSan build passes all of `ctest` (140/140, including
+`detect_stack_use_after_return=1`), so the attribute and the gate's exemption
+register were both deleted.
+
+*The portability pass* covers every tracked Python file and fails on a
+`# type: ignore` sitting inside an `except ImportError` whose `try` imports a
+THIRD-PARTY module. Such a marker cannot be correct in both environments this
+project type-checks in: where the optional package is installed, the name bound
+by the `try` carries the module's type and `name = None` in the fallback needs
+the ignore; where it is not — the CI type-check image carries the pinned tools
+and nothing else — the import resolves to `Any` through
+`ignore_missing_imports`, the assignment is fine, and the same marker is an
+error under `warn_unused_ignores`. One file, two verdicts, and the one CI sees
+is the red one. The remedy is never another suppression: declare the name
+before the `try` (`np: Any`) and import under an alias.
+
+The third-party restriction is what makes the pass precise rather than noisy.
+`crypto_api.py` guards `from ama_cryptography.rfc3161_timestamp import …` — an
+in-tree module mypy resolves in every environment — so the three ignores in
+that handler are needed unconditionally and are correctly left alone. Both
+directions are pinned by `tests/test_invariant_upgrades.py`
+::`TestOptionalImportSuppressions`.
+
+Neither the C-tree pass nor the portability pass existed until 5.0.0, and the
+enforcement sentence above was false without the first of them. The checker listed the forbidden directories and had a branch
+that reported on them, but it only ever collected
+`ama_cryptography/**/*.py`, `tests/**/*.py` and `tools/**/*.py`, so no path
+under `src/c/` or `include/` could reach that branch — dead code for all four
+entries, two of which (`ama_cryptography/_primitive`, `ama_cryptography/backend`)
+name directories that do not exist. Meanwhile a live suppression sat in the
+shim of the since-removed vendored Ed25519 backend: a next-line marker
+silencing three clang-analyzer uninitialised-read checks on that backend's
+macro-driven initialisation, while the gate printed "all suppressions are
+properly justified" and exited 0. It went — not moved or re-justified, but
+removed by making the analyzer's premise false, zero-initialising the two
+locals at declaration, after which clang-tidy 18 reported the file clean (and
+the file itself has since left the tree with the backend). The tree now
+carries **zero** suppressions under either root, and the gate is the thing
+that keeps it that way.
 
 Widening it also required the scanner to become precise about what a
 suppression *is*. It had been collecting the line numbers carrying a comment
@@ -504,6 +826,26 @@ real, and it is kept in scope explicitly. The set of suppressions policed in
 `ama_cryptography/` and `tests/` is unchanged by this — 96 before and after —
 so the precision gain removed false positives only. Both directions are pinned
 by `tests/test_invariant_upgrades.py::TestSuppressionScanPrecision`.
+
+**Naming the rule (condition 2) is not style.** A bare marker blanket-suppresses
+its whole scanner on that line, and for `# nosec` the failure is worse than
+that: bandit parses everything after the marker as test ids, warns for each word
+it cannot resolve, and treats the resulting *empty* set as "no specific tests" —
+i.e. blanket. So this repository's own justification style, `# nosec -- reason
+(TAG-NNN)`, reads to a reviewer as targeted while silencing every bandit test on
+the line. Measured against bandit 1.9.4 on two files differing only in the
+marker: a `subprocess.call(..., shell=True)` line carrying `# nosec -- prose
+(DEMO-002)` produces no finding, while the same line carrying `# nosec B105` — a
+code that matches nothing there — still reports `B607`. `ruff` treats a bare
+`# noqa` the same way. Both are now required to name a rule, alongside the
+`nosemgrep` rule that already was; `# type: ignore` is deliberately exempt,
+because mypy's file-level form on line 1 is a legitimate bare spelling and
+`--strict`'s `warn_unused_ignores` already reports an ignore that suppresses
+nothing. The tree satisfied the rule before it existed — zero bare markers in
+`ama_cryptography/`, `tests/` and `tools/` — so this keeps the property rather
+than repairing a violation, and
+`TestSuppressionScanPrecision::test_no_marker_in_the_tree_is_written_bare`
+asserts it directly against the tree as well as through the checker.
 
 ## INVARIANT-14 — CVE Ignore-List Hygiene
 
@@ -536,7 +878,14 @@ exactly-once execution with full memory visibility across threads. The
 approved primitives are:
 
 - **POSIX** (Linux, macOS, BSDs): `pthread_once` (IEEE Std 1003.1)
-- **Windows** (MSVC): `InitOnceExecuteOnce` (`synchapi.h`, Vista+)
+- **Windows** (MSVC and MinGW-w64): `InitOnceExecuteOnce` (`synchapi.h`, Vista+)
+
+The selection is made on `_WIN32`, not on `_MSC_VER`: which primitive is
+available is a property of the operating system, not of the compiler.
+`src/c/internal/ama_once.h` and `src/c/dispatch/ama_dispatch.c` both asked
+the compiler until this was corrected, which sent MinGW-w64 — Windows, but
+not MSVC — down the POSIX branch to link `winpthreads` for a facility
+Windows itself supplies.
 
 Lockless flag + plain-variable patterns (e.g., `volatile int done` guarding a
 non-atomic shared variable) are **prohibited** — they constitute data races
@@ -598,6 +947,14 @@ Required properties:
   verifies the resulting public key against the compiled trust anchor.
 - The only shipped integrity artifact should contain public verification data
   such as digest, public key, and signature.
+- The signed artefact (`ama_cryptography/_integrity_signature.py`) is a build
+  output and is not tracked in the repository: every build signs its own with
+  a fresh ephemeral key over its own native and binding digests, so a
+  committed copy describes one machine's build and nothing else (AGENTS.md
+  §8.4). `.gitignore` and `MANIFEST.in` exclude it; the tracked source-drift
+  check is `_integrity_digest.txt`, a pure function of the `.py` sources.
+  `tests/test_setup_signer_contract.py` fails if the artefact becomes tracked
+  or ships in an sdist.
 - Missing, mismatched, malformed, or untrusted integrity artifacts must produce
   an observable failure state and must not silently bless modified Python
   modules as trusted runtime code.
@@ -760,36 +1117,32 @@ not as recoverable telemetry loss.
 
 ## Vendored Dependencies
 
-### ed25519-donna
+**None.** `src/c/vendor/` does not exist and the vendor-isolation gate fails
+the build if it reappears (INVARIANT-1 Addendum — Vendoring Policy). One
+compiled-in file is *adapted* from a third-party reference rather than vendored
+— the MIT-licensed safegcd inversion the addendum names — and carries its
+attribution in `NOTICE` and its pedigree in the C-library SBOM.
 
-- **Source:** https://github.com/floodyberry/ed25519-donna
-- **License:** Public domain (Andrew Moon)
-- **Location:** `src/c/vendor/ed25519-donna/`
-- **CMake flag:** `AMA_ED25519_ASSEMBLY` (default **ON** on x86-64 and
-  MSVC x64; default **OFF** on ARM and other non-x86 targets, where donna
-  has no assembly path. Opt out of donna on x86-64 with
-  `-DAMA_ED25519_ASSEMBLY=OFF`, which forces the in-tree fe51 + signed
-  4-bit window comb backend in `src/c/ama_ed25519.c` — useful for
-  clean-room auditing of the AMA-authored Ed25519 path.)
-- **Purpose:** Optimized x86-64 Ed25519 scalar multiplication with inline
-  assembly for constant-time Niels basepoint table selection. Provides ~3x
-  keygen/sign speedup and ~2.5x verify speedup over AMA's fe51 C
-  implementation on x86-64. The in-tree backend also uses a signed 4-bit
-  window comb (BDLSY 2012) that closes most of that gap on platforms where
-  donna is not available.
-- **INVARIANT-1 compliance:** The vendored source is public domain, compiled
-  from source as part of AMA's build system, and never linked as a pre-built
-  binary. It satisfies INVARIANT-1 under the vendoring policy: vendored
-  public-domain source is included in-tree and compiled as part of AMA's
-  build system; its original public-domain license is unaffected by
-  vendoring.
-- **MSVC ARM64 limitation:** The donna backend provides x86-64 assembly
-  only. The fe51 backend requires `__uint128_t`, which MSVC does not provide
-  on any architecture. Therefore MSVC on ARM64 (Windows on ARM) has no
-  working Ed25519 path. `CMakeLists.txt` emits `FATAL_ERROR` at configure
-  time for this combination. To build on ARM64 Windows, use GCC or Clang
-  (e.g., via MSYS2 or clang-cl) which provide `__uint128_t` and enable the
-  fe51 backend.
+### History: the removed x86-64 Ed25519 backend
+
+Until the twenty-first maintenance pass the tree vendored a public-domain
+x86-64 Ed25519 implementation (Andrew Moon's), compiled from source through a
+project shim and selected by a CMake option that defaulted on for x86-64 and
+was auto-enabled on MSVC x64, because the in-tree radix-2^51 arithmetic
+needed a 128-bit integer type MSVC does not have. It was the faster path on
+x86-64 at the time.
+
+It is gone. The in-house backend now carries static precomputed base-point
+tables (`tools/gen_ed25519_tables.py`), a signed 5-bit comb with constant-time
+masked selection, Bernstein–Yang constant-time inversion, and half-size-scalar
+verification, and measures faster than the removed backend on every Ed25519
+row of the benchmark on the reference x86-64 host (keygen 0.85x, sign 0.87x,
+verify 0.74x, double-scalar-mult 0.67x of its time). MSVC builds the same
+arithmetic through `_umul128` / `__shiftright128` (x64) and `__umulh` (ARM64),
+so Windows on ARM, which had no Ed25519 path at all, now has the same one as
+every other platform. The removed backend's answers over a 2,022-record corpus
+are frozen in `tests/oracle/ed25519_frozen_oracle.txt` and replayed on every
+build, so the code that replaced it is still held to the answers it gave.
 
 ---
 
@@ -802,7 +1155,8 @@ directions.
 
 **Why.** AMA Cryptography is a public repository whose tracked content is
 largely *published high-entropy material*: NIST KAT vectors, ACVP responses,
-fuzz seed corpora, and the Ed25519 public key plus detached signature in
+fuzz seed corpora, and, in every built tree though no longer in the repository,
+the Ed25519 public key plus detached signature in
 `ama_cryptography/_integrity_signature.py`. That combination is the worst case
 for an off-the-shelf secret scanner — it produces so many false positives that
 teams reach for a blanket ignore file, and the blanket is what lets a real key
@@ -937,6 +1291,23 @@ false-positive.
 (an `inputs.*` expression, a matrix it cannot expand) is reported separately
 and excluded from the verified count. It is never quietly counted as passing.
 
+**A fifth class: a skip inherited through the job graph.** A job-level `if:`
+that calls no status function is evaluated as `success() && ...`, and GitHub
+evaluates that `success()` over the job's *transitive* `needs:` — a skipped
+ancestor anywhere above makes it false. `release.yml` shipped the consequence:
+`verify-anchor` is skipped on the supported unanchored path and `build-wheels`
+proceeds past it with `!cancelled()`, but `hash-artefacts`, `sign`,
+`provenance` and `publish-pypi` carried the implicit check, so on that path
+the release signed, attested and published nothing, in a green run. The
+checker fails a job below a conditional job that relies on the implicit (or an
+explicit) `success()`, and a `!cancelled()` job that does not test each job in
+its `needs:` by `needs.<id>.result`. It also requires `timeout-minutes` on
+every job that runs on a runner: GitHub's default is 360 minutes, which is how
+long a hung `auto-docs.yml` or `wiki-sync.yml` job would have held its
+`contents: write` token. Both are pinned in both directions by
+`tests/test_workflow_command_checks.py`, the first against the pre-fix
+`release.yml` job graph replanted verbatim.
+
 **Stated limitation.** GitHub publishes no API enumerating available hosted
 labels, so `SUPPORTED_LABELS` is a curated table carrying the date and source
 it was verified against. It catches an already-retired label, a typo, and a
@@ -961,7 +1332,7 @@ Neither backend enforced it, and Wycheproof `eddsa_verify_schema_v1` found it:
 `tc63` (*checking malleability*) and `tc85` (*Signature with S just above the
 bound*) both verified as **valid**.
 
-* The vendored **ed25519-donna** path (x86-64 default) tested only
+* The vendored x86-64 path the tree then carried (since removed) tested only
   `RS[63] & 224`, rejecting `S >= 2^253`. `L` is just above `2^252`, so the
   band `L <= S < 2^253` passed — exactly where `S + L` lands.
 * The portable **fe51** path (`ama_ed25519.c`) performed no range check, and
@@ -975,18 +1346,22 @@ caches, replay windows, content addressing, transaction ids) can be shown two
 "different" signatures for one authenticated message.
 
 **Enforcement.** `src/c/internal/ama_ed25519_canonical.h` provides the range
-check as a `static inline`, included by **both** backends. It is header-only
-because CMakeLists.txt swaps one backend source for the other, so a shared `.c`
-would compile into only one configuration and the check could regress silently
-in the other. Applied at three sites: `ama_ed25519_verify` in each backend, and
-the donna batch wrapper — donna's batch routine calls its own
-`ed25519_sign_open` rather than `ama_ed25519_verify`, so without the third site
-batch verification would accept what single verification rejects.
+check as a `static inline`. It was made header-only when CMakeLists.txt still
+swapped one backend source for the other, so that a shared `.c` could not
+compile into only one configuration; with one backend left it is applied at
+`ama_ed25519_verify`, which batch verification calls per entry, so the two
+cannot disagree. (The removed vendored backend's batch routine called its own
+verifier, which is why a third site once existed.)
 
 **Not claimed as constant time.** `S` arrives in the signature and is public, so
 a data-dependent branch here leaks nothing secret. The check is written
 branch-free because it costs nothing at this size, not because INVARIANT-12
 requires it here.
+
+**Family.** This is the first of three input rules applied at
+`ama_ed25519_verify` and kept together in one header: `0 <= S < L` here,
+canonical point encodings in INVARIANT-38, and small-order rejection in
+INVARIANT-48.
 
 **Verification.** `tests/test_ed25519_canonical_s.py` pins the behaviour from
 Python, `tests/c/test_ed25519_canonical_s.c` pins it from C across the
@@ -1025,8 +1400,8 @@ RFC 7748 does not *require* the reduction and Wycheproof scores the case
 is decided in favour of reducing because the failure mode is silent and
 undiagnosable: two peers that agree on a public key derive different shared
 secrets, and the handshake simply fails. Every reference implementation
-(ref10, curve25519-donna, libsodium) normalizes and therefore agrees with the
-reduced interpretation.
+(ref10, Andrew Moon's curve25519, libsodium) normalizes and therefore agrees
+with the reduced interpretation.
 
 **Enforcement.** `x25519_canonicalize_u()` in `src/c/ama_x25519.c` masks bit
 255 and performs one conditional subtraction of `p` — one suffices, because
@@ -1053,10 +1428,20 @@ returning an all-zero shared secret.
 
 ## INVARIANT-28 — ECDSA Signatures Must Be Low-s and Strictly Encoded
 
-**Statement.** `ama_secp256k1_ecdsa_sign` must emit only the canonical low
+**Statement.** `ama_secp256k1_ecdsa_sign` **and
+`ama_secp256k1_ecdsa_sign_raw`** must emit only the canonical low
 representative (`s <= (n-1)/2`), and `ama_secp256k1_ecdsa_verify` must reject
 a high `s`, an `r` or `s` outside `[1, n-1]`, and any signature that is not
 minimal DER.
+
+Both signing entry points are named because they are one implementation:
+`secp256k1_ecdsa_sign_scalars()` performs the arithmetic, including the
+`sc_cond_negate` low-`s` selection, and the two public functions differ only
+in whether they DER-encode the result or return it as fixed-width `r || s`.
+`tests/c/test_secp256k1.c` decodes the DER form back to (r, s) and compares
+it against `r || s` over 512 keys, so a divergence between them — which is
+the only way one could satisfy this invariant while the other did not —
+fails there.
 
 The high-`s` rejection — and only that — is caller-selectable through
 `ama_secp256k1_ecdsa_verify_ex(..., flags)`: the strict default
@@ -1197,10 +1582,30 @@ other — including a binding that differs only in its lifetime byte or a single
 capability bit. An agent cannot relabel ephemeral material as persistent after
 the fact; it would have to derive it again, which is the call that is refused.
 
+The authority key is an **input to those derivations**, not only to the gate
+beside them. Until the 2026-09 audit it was not: `K_auth` authenticated the
+binding record and the policy gate checked that tag, but the HKDF `info` was
+`enc(b) || u32be(info_len) || info` and the signature context was
+`SHA3-256(0x02 || enc(b))` — both computable from `enc(b)`, which is public
+and which `ama_agent_binding_encode()` will produce for an *unauthorized*
+binding. The adversary this invariant names is an agent with in-process
+access (`THREAT_MODEL.md` T3.6), and that adversary can call `ama_hkdf`
+itself, so the control was a gate to step around rather than a secret to be
+without; the audit reproduced both outputs byte-for-byte holding no authority
+key. A restricted binding's derivations now take a 32-byte binder
+`HMAC-SHA3-256(K_auth, 0x03 || enc(b))` (HKDF) or `0x04 || enc(b)` (signature
+context) as an input, so the *output* is unobtainable without `K_auth`, not
+merely unreachable through the guarded entry point. Unrestricted bindings
+have no operator secret and take a fixed zero binder: the scope of the
+guarantee is exactly the population the statement above names.
+
 **Enforcement.** `src/c/ama_agent_binding.c`. `ama_agent_binding_check()` is
 the single policy point; `ama_hkdf_agent_bound()` and
 `ama_agent_binding_context()` both call it before producing anything and write
-no output on refusal. The authorization tag is
+no output on refusal. `authority_binder()` is the second point: it mixes
+`K_auth` into each of those two derivations under its own sub-domain, which is
+what makes the refusal above the *only* way to those bytes rather than the
+only guarded way. The authorization tag is
 `HMAC-SHA3-256(K_auth, 0x01 || enc(b))` over the whole record, so post-hoc
 capability escalation or lifetime relabelling invalidates it. The refusal path
 is constant-time by construction: every policy predicate is evaluated into a
@@ -1221,9 +1626,17 @@ property-based injectivity over the encoding.
 `tests/test_agentic_load_adversarial.py` runs the four adversarial scenarios
 (high-concurrency ephemeral load, future-version note simulation,
 lateral-probe simulation, fail-closed under parallel load). The constant-time
-claim is measured by the `Agent binding check` lane in
-`tests/c/test_dudect.c`, which is registered strict (`is_info_only = 0`) and
-therefore fails CI on |t| >= 4.5.
+claim is measured by two instruments. The `Agent binding check` lane in
+`tests/c/test_dudect.c` is registered strict (`is_info_only = 0`), and a
+strict lane fails CI only when |t| >= 5.0 (`DUDECT_T_THRESHOLD`) in a strict
+majority of rounds with a consistently signed per-class difference of at
+least `DUDECT_MIN_EFFECT_NS` (2 ns); below that floor the lane reports
+`SUB-FLOOR` and exits 0 — as this lane did on a shared runner at
+|t| = 41.72 in 3 of 3 rounds with a −1.141 ns difference
+(`tests/c/dudect/dudect_rounds.h`). The blocking instrument for the
+sub-floor range is therefore the deterministic `--target agent-binding`
+gate in `.github/workflows/dudect.yml`, which measures 612,810,230 retired
+instructions byte-identical whether the check accepts or rejects.
 
 `fuzz/fuzz_agent_binding.c` attacks the same invariant from the other
 direction. Where the tests above assert the policy on *chosen* records, the
@@ -1319,9 +1732,11 @@ An install instruction is API surface. A reader cannot verify it without
 running it, and running it reports success either way.
 
 **Enforcement.** `tools/check_documented_extras.py`, run in the `security-checks`
-job of `ci.yml`. `CHANGELOG.md` is excluded by design: it is a historical
-record, and an extra that genuinely existed in an earlier release must remain
-readable in the entry that introduced or removed it.
+job of `ci.yml`. `CHANGELOG.md` and the development journals under
+`docs/changelog/` are excluded by design (`is_historical_record()` in
+`tools/_repo.py`): they are the historical record, and an extra that genuinely
+existed in an earlier release must remain readable in the entry that introduced
+or removed it.
 
 **Verification.** `tests/test_documented_extras.py` pins both directions:
 detection of the historical defect in its single-extra and comma-separated
@@ -1368,7 +1783,7 @@ running it. The checker distinguishes a *deliberate, documented* exclusion
 from silent drift.
 
 **The Python lane, and why it exists.** `ama_cryptography/_asn1.py` and
-`key_formats.py` are hostile-input parsers in exactly the sense the fifteen C
+`key_formats.py` are hostile-input parsers in exactly the sense the seventeen C
 harnesses are — anyone who can hand you a key file reaches them — and they had
 no harness at all. What they had was a deterministic mutation sweep inside
 pytest: 120 fixed mutations per algorithm from one seed, which explores the same
@@ -1431,9 +1846,9 @@ confirm each is still caught.
 one control**. A curve's default must set both or neither, and any API that
 exposes them must expose both.
 
-- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` emits only the
-  low representative and `ama_secp256k1_ecdsa_verify` rejects the high twin
-  (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
+- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` and
+  `ama_secp256k1_ecdsa_sign_raw` emit only the low representative and
+  `ama_secp256k1_ecdsa_verify` rejects the high twin (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
   third-party X9.62 interop.
 - **P-256 / P-384 / P-521** set neither by default: `ama_nistp_ecdsa_sign`
   emits RFC 6979's `s` verbatim and `ama_nistp_ecdsa_verify` accepts either
@@ -1593,10 +2008,15 @@ derives its list from the modules rather than from a hand-written literal.
 ## INVARIANT-36 — AMA Is Not Measured Against Another Implementation
 
 **Statement.** No other cryptographic implementation's output may serve as an
-answer key for AMA's correctness, and no test or development tool may invoke
-another cryptographic binary. Where a specification publishes no worked example,
-the substitute is a reference derived **from the specification text**, written
-in this repository.
+answer key for AMA's correctness, and no code under `ama_cryptography/`,
+`tests/` or `tools/` — the runtime, correctness and gate surfaces the gate below
+scans — may invoke another cryptographic binary. Where a specification publishes
+no worked example, the substitute is a reference derived **from the specification
+text**, written in this repository. The one recorded exception is `benchmarks/`,
+which deliberately links and drives reference implementations (OpenSSL,
+libsodium, wolfSSL, Botan, Nettle, libgcrypt, mbedTLS) **solely to measure AMA
+against them**; it is on no correctness, runtime or release path, feeds no answer
+key, and is outside the gate's scope by design (see the exception note below).
 
 **Why.** AMA's stated position is that it depends on no other cryptographic
 implementation: the README says "zero external crypto deps", `CMakeLists.txt`
@@ -1656,13 +2076,45 @@ implementers to run — the same category as a specification's worked example, a
 they keep their own provenance gates (INVARIANT-24's sibling machinery in
 `.github/workflows/corpus-provenance.yml`).
 
-**No exceptions are recorded.** One used to be — `ama_cryptography/legacy_compat.py`
-shelling out to `openssl ts` for RFC 3161 timestamping, described here as "a
-shipped interop feature, not a validation path". It is gone: AMA encodes and
-decodes RFC 3161 on its own DER codec, `rfc3161_timestamp.py` no longer imports
-`rfc3161ng` either, and the gate below scans `ama_cryptography/` precisely so
-neither can return. An invariant register that still names a removed exception
-is worse than one that names none, because a reader takes it as current.
+**Two exceptions are recorded.** The first is `benchmarks/` (audit M22): the
+benchmark harness links and drives the reference implementations named in the
+Statement to measure AMA's throughput against them. It is intentional — the
+project benchmarks *against* these vendors, it does not use them in any
+operation — it feeds no answer key, and it is deliberately outside the gate's
+scope (the gate scans `ama_cryptography/`, `tests/` and `tools/`, not
+`benchmarks/`).
+
+The second is the interoperability oracles: the tests carrying
+`@pytest.mark.requires_interop_oracle` in `tests/test_aes_gcm_native.py`,
+`tests/test_hkdf_sha3_256.py`, `tests/test_ed25519_native.py`,
+`tests/test_ed25519_expanded_key.py`, `tests/test_differential.py` and
+`tests/test_vendor_isolation_gate.py` (which plants PyCA as a resident binding
+to prove the vendor-isolation gate flags one — the control, not an oracle) import
+PyCA cryptography, PyNaCl or pycryptodome
+and check that AMA and a second implementation agree — PyCA encrypts and AMA
+decrypts, libsodium signs and AMA verifies, and the reverse. That is
+interoperability evidence, and it is what the require-backends lane installs
+those packages for (audit M18); it is not the answer key. AMA's correctness is
+established by the published vectors under `nist_vectors/` and `tests/kat/`
+and by the specification-derived references in this repository, and a
+disagreement with an oracle is investigated against the specification, never
+resolved in the other implementation's favour. Until the twenty-seventh pass
+this register said `benchmarks/` was the sole place external cryptographic
+code is invoked anywhere in the tree, while a CI lane existed to require these
+four modules to run; the gate (`tools/check_corpus_originality.py`) looks for
+spawned binaries and vendored corpora and structurally cannot see a Python
+import, and its verdict now says what it checked. Recording both is the
+point: an absolute "no exceptions" that omits a live one is the converse of
+the failure this register warns against below — as misleading as a named-but-
+removed exception, because a reader takes the register as complete.
+
+A former exception is gone: `ama_cryptography/legacy_compat.py` shelled out to
+`openssl ts` for RFC 3161 timestamping, described here as "a shipped interop
+feature, not a validation path". It is gone: AMA encodes and decodes RFC 3161 on
+its own DER codec, `rfc3161_timestamp.py` no longer imports `rfc3161ng` either,
+and the gate below scans `ama_cryptography/` precisely so neither can return. An
+invariant register that still names a removed exception is worse than one that
+names none, because a reader takes it as current.
 
 **Enforcement.** `tools/check_corpus_originality.py`, run in the
 `security-checks` job of `ci.yml`. Three checks:
@@ -1680,6 +2132,16 @@ is worse than one that names none, because a reader takes it as current.
    prevent returning is not a gate.
 2. Every corpus file's `source.url` is on `rfc-editor.org` or `ietf.org`.
 3. `tests/ref_keyformat.py` imports nothing from `ama_cryptography`.
+4. No vector generator under `nist_vectors/` reaches a stdlib digest module
+   (`hashlib`, `_hashlib`, `hmac` — OpenSSL on a libcrypto-linked CPython):
+   not by an import statement, not by a dynamic import
+   (`importlib.import_module`, `__import__`, `builtins.__import__`,
+   `sys.modules[...]`, resolved through the shared resolver in
+   `tools/check_stdlib_hash_boundary.py`, with an unresolvable module name a
+   failure), not through an importer bound to another name, and not through
+   a string naming one. This check was missing from this list, and until
+   2026-09-24 it recognised `__import__("<literal>")` as its only dynamic
+   spelling.
 
 **Verification.** `tests/test_corpus_originality.py` pins both directions —
 the repository as it stands, plus a reproduction of each violation: a
@@ -1767,10 +2229,13 @@ claim more than the library does, and what the behavioural tests drive — the
 code, the runtime record, the tests and the documentation are four consumers of
 one declaration rather than four restatements of one belief.
 
-**The same-line rule.** A claim must be negated on the line that makes it. This
-is deliberate and it is the lesson of the fifty: a disclaimer three paragraphs
-away, or in another file, or in a docstring the reader is not looking at, did
-not prevent a single one of them.
+**The same-sentence rule.** A claim must be negated in the sentence that makes
+it. This is deliberate and it is the lesson of the fifty: a disclaimer three
+paragraphs away, or in another file, or in a docstring the reader is not looking
+at, did not prevent a single one of them. (The gate first applied it per
+physical line. This repository hard-wraps its prose, so the sentence is the unit
+a reader takes as one claim, and one negative word elsewhere on a line must not
+excuse the claim beside it.)
 
 **Enforcement.** `tools/check_verification_claim_honesty.py`, run in the
 `security-checks` job of `ci.yml`. Five checks:
@@ -1779,10 +2244,12 @@ not prevent a single one of them.
    patterns bound to it must not appear un-negated in `ama_cryptography/`,
    `tools/`, `tests/`, `examples/`, `docs/`, `wiki/`, `benchmarks/`, `fuzz/` or
    root Markdown. Generic assurance vocabulary ("independent verification") is
-   scoped to lines that are about timestamping, so a true statement about
+   scoped to paragraphs that are about timestamping, so a true statement about
    side-channel review of the C code is not a finding — a gate that fires on
    those is one people learn to route around, which is the failure mode
-   INVARIANT-2 already records.
+   INVARIANT-2 already records. The paragraph and not the sentence, because a
+   claim routinely names its subject one sentence earlier and continues with a
+   pronoun; the negation window stays the claim's own sentence.
 2. **The misnamed result key is not taught.** No `results["rfc3161"]` in any
    document or docstring. The key is retained in code and now warns when read;
    a copy-pasteable example teaching it would undo that.
@@ -1798,12 +2265,27 @@ not prevent a single one of them.
 The table is read with `ast` rather than by importing the module, so the gate
 runs in a lint job with nothing built.
 
-**Verification.** `tests/test_verification_claim_honesty_gate.py` — 46 tests —
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 100 tests —
 pins both directions: the repository as it stands, plus a reproduction of every
 violation class and, equally, the near-misses that must **not** fire. It also
 pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
 property the design rests on, and `test_ast_parsed_table_equals_the_imported_one`,
-so the gate's reading of the table and everyone else's cannot drift.
+so the gate's reading of the table and everyone else's cannot drift.  The ten
+added last pin the two scoping defects found in the gate itself: the
+formal-verification exemption was tested against the whole SENTENCE, so a
+denial in one clause exempted a live claim in another, and a past-tense
+attribution cue matched any of eight ordinary reporting verbs within eighty
+characters of a `was`. The fourteen after those pin two more: narrowing the
+negation window to the sentence had narrowed the RFC 3161 context test with it,
+so a claim whose subject sat in the previous sentence passed; and the
+formal-verification pass never read `src/`, `include/` or `.github/`, so an
+unqualified correctness claim in `src/c/sve2/ama_kyber_sve2.c` passed with it.
+The fifteen after those pin the formal-verification claim pattern's reach: it
+listed six spellings and passed "formally proven", "provably secure",
+"machine-checked", "mechanically verified" and every hyphenated adverb form
+("formally-verified AES") unqualified, and the wider pattern must still permit
+the tree's honest denials ("not formally proven", "not a provably secure
+protocol") and its ordinary uses of "provably".
 
 That suite has already earned its place. An early version of the pattern for
 the phrase this section will not repeat ended `(?:stamp|-stamp|stamping)?\b`,
@@ -1867,30 +2349,39 @@ malleated `R` fails the re-encode comparison in verify, so both
 signature-malleability paths were already closed. This closes the remaining
 public-key encoding malleability.
 
+A forgery route did exist alongside it, and this rule was not it:
+INVARIANT-48 records that a small-order public key — the identity above all —
+yields a universal forgery under AMA's cofactorless verifier, and that six of
+the fourteen encodings it blocks are ones this rule already refused. The two
+overlap without either being redundant; INVARIANT-48 states how they differ
+in kind.
+
 **Enforcement.** `ama_ed25519_point_y_is_canonical()` in
 `src/c/internal/ama_ed25519_canonical.h` masks bit 255 and compares the 32-byte
 little-endian value against `p` using the same branch-free comparator as the
 `S < L` check (`ama_ed25519_lt_32`, factored out so the scalar and
-field-element predicates cannot drift apart). Both backends enforce it: the
-in-tree fe51 path inside `ge25519_frombytes()` in `src/c/ama_ed25519.c`, which
-every decode in that file funnels through, and the donna path at each call site
-in `src/c/ed25519_donna_shim.c` — verify plus the four point helpers — because
-`ge25519_unpack_negative_vartime()` belongs to the vendored tree and stays
-byte-for-byte unmodified. Both therefore accept exactly the same set of
-encodings, which the Ed25519 backend-differential job depends on.
+field-element predicates cannot drift apart). It is enforced inside the
+decoder every point in the in-house backend funnels through
+(`ge_decode_prepare` in `src/c/internal/ama_ed25519_ge.h`), so both field
+instantiations accept exactly the same set of encodings — which the fe51/MULX
+differential and the frozen oracle both depend on. (The removed vendored
+backend applied the same predicate at each of its call sites, because its
+decoder stayed byte-for-byte unmodified.)
 
 **Not a constant-time requirement.** The `y` coordinate arrives in a public
 key and is public. The comparison is branch-free regardless.
 
-**Verification.** `tests/c/test_ed25519_canonical_y.c`-style coverage lives in
-`tests/c/test_ed25519_canonical_s.c` alongside the `S < L` cases: the full
+**Verification.** The canonical-`y` coverage lives in
+`tests/c/test_ed25519_canonical_s.c`, alongside the `S < L` cases: the full
 19-value band, the `p-1` / `p` boundary, sign-bit independence in both
 directions, and integration assertions through single and batch verify.
 `tests/test_ed25519_canonical_y.py` drives the policy through the Python
 binding — the whole `[p, p+18]` band rejected, canonical keys accepted, and the
 sign bit shown not to affect the verdict — mirroring
 `tests/test_secp256k1_ecdsa_noncanonical_pubkey.py` for INVARIANT-29. The
-backend-differential job proves the two backends agree on every case.
+frozen oracle (`tests/oracle/ed25519_frozen_oracle.txt`) replays the removed
+backend's verdicts on every case, and the fe51/MULX differential pins the two
+field instantiations against each other.
 
 ---
 
@@ -1932,12 +2423,35 @@ cryptography:
   lifetime — cannot smoke-test a genuinely broken wheel and call it built.
 
 **The error state must inhibit output.** The requirement was met only by
-`crypto_api`, which calls `check_operational()` on its public methods.  All
-eighty public entry points in `pqc_backends` — key generation, signing, KEM
+`crypto_api`, which calls `check_operational()` on its public methods.  Every
+public entry point in `pqc_backends` — key generation, signing, KEM
 encapsulation, AEAD, HMAC, KDF — called straight through to the C library with
 no state check, so a module in `ERROR` kept producing keys and signatures for
 any caller that reached past `crypto_api`, which is what this package's own
 internal modules do.  Each now calls `check_crypto_permitted()` first.
+
+The count is not written down here, because a number in prose is a number that
+goes stale: `tools/check_error_state_gating.py` enumerates the surface from the
+modules' own ASTs and fails when any entry point is ungated, and its output is
+the authoritative figure (107 native entry points across `pqc_backends`, `ascon`,
+`agent_binding` and `secure_memory`, plus 10 Cython binding entry points at the
+time of writing, with 4 documented exemptions, and a discovery step that fails
+if any other module reaches the native library while listed in neither the
+audited nor the exempted set).
+
+The parenthesis above is now checked rather than trusted: it said 85 while the
+tool reported 86, having missed a commit that started tracking a native symbol
+selected by a conditional expression.  `tools/check_documented_counts.py` reads
+the figure from the tool and compares every published occurrence against it, so
+the sentence that calls the tool authoritative is now enforced by the tool.
+
+`ascon` joined the scanned modules once the gate learned to follow one level of
+guard delegation.  Its public entry points call `lib.ama_ascon_*(...)` in their
+own bodies, so the native reach was always visible; the guard was not, because
+it lives in the private `_require_native()` choke point every one of them
+passes through.  The module had been excluded on the stated grounds that "a
+body-level scan cannot see the reach", which was true of `hybrid_combiner` and
+not of this one.
 
 `check_crypto_permitted()` is deliberately weaker than `check_operational()`:
 it permits `SELF_TEST` **on the POST thread only**, because POST's Known Answer
@@ -1976,11 +2490,50 @@ the `.so` fails POST and therefore the import; rewriting the embedded native
 digest to match a tampered `.so` breaks the signature, which cannot be forged.
 Because `_build_sign` can only sign by calling the native `ama_ed25519_sign`, a
 working library is present at signing time by construction, so every signed
-artefact binds it — there is no unsigned-native downgrade path. The one
-non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override, which
-is recorded as *unverified* (a skip, `fully_verified` `False`) rather than
-tampering. Pinned by `tests/test_native_integrity.py`, including the tamper and
-forge-attempt cases and the signer/verifier domain-constant agreement.
+artefact binds it — there is no unsigned-native downgrade path. An
+`AMA_CRYPTO_LIB_PATH` override may relocate the signed library, never
+substitute it: its object passes the same pre-load digest check as every other
+candidate, a byte-identical copy verifies in full (verification binds the
+bytes, not the path), and a differing one is refused before it is mapped, with
+the search confined to the override so nothing else loads in its place. (It
+used to be mapped unchecked and recorded as *unverified*, which let one
+environment variable execute arbitrary native code in the crypto process.)
+Pinned by `tests/test_native_integrity.py`, including the tamper and
+forge-attempt cases and the signer/verifier domain-constant agreement, and by
+`tests/test_native_lib_override_hardening.py` for the override.
+
+**The check runs before the object is mapped, not only after.** A shared
+object executes its constructors at `dlopen` time, so a digest comparison
+performed after load detects tampering the tampered code has already had a
+chance to act on — the "raw discovery" boundary the 2026-08 audit recorded.
+Discovery now hashes every candidate first and refuses to map an object whose
+SHA3-256 does not match the artefact's signed native digest; on Linux the
+mapping goes through `/proc/self/fd` on the descriptor that was hashed, so
+the verified and mapped bytes cannot be split by a path swap, and the POST
+stage compares the recorded digest of those mapped bytes rather than
+re-reading the file. The pre-load comparison uses the artefact before its
+signature can be verified (the verifier is inside the library being loaded),
+so it defeats the `.so`-only attacker outright; the rewrites-both attacker is
+caught post-load by the unforgeable signature or the trust anchor, with the
+constructor residue that entails — that attacker remains the OS-code-signing
+boundary `SECURITY.md` documents. The refusal is demoted to a
+warning only for a process that IS the signer: `_SIGNING_LOAD_OVERRIDE`, a
+module attribute `ama_cryptography._build_sign` sets around its own discovery
+call, or `_process_is_the_integrity_signer()`, which keys on `__main__`'s
+module name and `sys.orig_argv` — `ama_cryptography._build_sign`, or
+`ama_cryptography.integrity` running a WRITING subcommand — and in both cases
+only outside secure-execution mode.
+
+`AMA_BUILD_PIPELINE=1` does NOT demote it, which this paragraph used to say it
+did. The variable is read on every import, so any attacker who could set one
+environment variable in the victim's process would have turned a pre-execution
+refusal into a post-hoc report, with no code execution required. Setting a
+module attribute inside the victim's interpreter is not a capability an
+environment variable confers. Pinned by
+`tests/test_preload_native_digest.py` (including
+`TestSigningScopeRequiresIntentNotJustIdentity`, which drives the flag and a
+signer-module argv together) and the refused-before-mapping tamper case in
+`tests/test_native_integrity.py`.
 
 **CASTs precede the integrity test that relies on them.** FIPS 140-3
 (NIST IG 10.3.A) requires the algorithm self-test for any approved algorithm the
@@ -1993,7 +2546,7 @@ test with a negative case, not a self-consistency roundtrip an always-accept
 verifier would pass — and that same verifier backs the integrity check.
 
 **The gate covers the Cython bindings and secret-key export too.** Output
-inhibition is not only about `pqc_backends`. The five Cython binding modules
+inhibition is not only about `pqc_backends`. The Cython binding modules
 (`ama_cryptography.ed25519_binding` …) are public submodules whose `cy_*`
 functions call the C kernel directly — a caller importing one reaches signing
 and key generation without passing through `pqc_backends`' gated wrappers, and
@@ -2003,11 +2556,13 @@ its module-level import of `check_crypto_permitted` forces POST to run even on
 a top-level binding import. Separately, `key_formats` serialises secret keys
 (`to_pkcs8` / `to_pem` / `to_jwk` / `to_cose`); those private-key output paths
 now refuse in the error state rather than emitting a secret-key block from a
-faulted module. (Compiled binding `.so` files and the vectors under
-`_post_kats/` remain outside the *tamper* coverage of the module digest, which
-hashes the `.py` files, `_post_kats/`, and the native library — extending it to
-the binding `.so` files is future work; the runtime guard closes the
-error-state bypass regardless.)
+faulted module. (The v3 integrity artefact's module digest covers the
+`.py` files, the vectors under `_post_kats/`, the native library **and** the
+six compiled binding extensions — see the [5.0.0] glance row on
+binding-extension digest signing. This paragraph previously said the binding
+`.so` files were outside that coverage and called extending it "future work";
+that stopped being true when the row landed, and the runtime guard closes the
+error-state bypass independently either way.)
 
 **Enforcement.** `tools/check_error_state_gating.py` parses the AST of
 `pqc_backends.py` and requires `check_crypto_permitted()` on every public
@@ -2050,21 +2605,65 @@ names/locals, the argument and flag shape, and every constant, descending
 recursively into nested code objects — and deliberately ignores `co_filename`
 and the line tables. Ignoring those is what keeps a legitimate `.pyc` built at a
 different absolute path (a relocated wheel) from being a false positive, while a
-single altered instruction, even inside a nested function, is still caught. A
-constant swapped for an equal-valued one of another type (`1` for `1.0`, `1` for
-`True`) is caught by a type guard, because `==` alone would pass it.
+single altered instruction, even inside a nested function, is still caught.
+Constants are compared by a type-tagged identity key (`_const_key`), not by
+`==`: every value carries its exact type, `tuple`, `frozenset` and `slice`
+constants are compared element by element under the same key, and `float` and
+`complex` are compared by their IEEE-754 bit patterns. So `1` cannot become
+`1.0` or `True` even inside a tuple or frozenset, `0.0` cannot become `-0.0`,
+and a constant-folded NaN matches itself. The key is modelled on the one
+CPython uses to de-duplicate constants (`_PyCode_ConstantKey`).
 
-The stage covers the **same file set the digest signs** (every top-level
-`*.py`), not merely the modules imported so far, so a poisoned `.pyc` for a
-lazily-imported module is caught at POST rather than when that module is first
-used. Where no `.pyc` exists (a source-only run, or `PYTHONDONTWRITEBYTECODE`),
+*Correction (2026-09-24).* This paragraph previously said a swap to an
+equal-valued constant of another type "is caught by a type guard". The guard
+checked the type of the outer constant only and then fell back to `==`, so
+`(1,)` for `(True,)`, `frozenset({1})` for `frozenset({1.0})` and `0.0` for
+`-0.0` were all accepted (measured on 3.11.15), by `_self_test._code_matches`
+and by its out-of-band mirror in `tools/verify_install_oob.py` alike, and a
+faithful `.pyc` holding a NaN was rejected because `nan != nan`.
+
+The stage covers the **same file set the digest signs** (every `*.py` below
+the package directory, recursively), not merely the modules imported so far,
+so a poisoned `.pyc` for a lazily-imported module is caught at POST rather
+than when that module is first used. Where no `.pyc` exists (a source-only run, or `PYTHONDONTWRITEBYTECODE`),
 there is nothing to poison — the interpreter compiled the signed source
 directly — and the stage records that honestly rather than reporting a check it
 did not perform. A `.pyc` from a different interpreter version (magic-number
 mismatch) is skipped because the running interpreter will not load it either. A
-complementary pass flags any loaded `ama_cryptography` module whose source
-resolves outside the verified package directory — module substitution, whatever
-its bytecode says.
+complementary pass flags any loaded `ama_cryptography` module served from
+anything but a source file inside the verified package directory or a
+top-level binding extension — module substitution, whatever its bytecode says.
+
+**A file set is not an import resolution.** Every layer above keys on a file
+set — the digest on `*.py`, this stage on those files' caches, the binding map
+on the top-level extensions — and the import system does not. CPython's
+`FileFinder` resolves `ama_cryptography.<name>` to a *directory* `<name>/`
+holding an `__init__` with any importable suffix before it considers
+`<name>.py`; among module files an extension wins over source; and a `.pyc`
+outside `__pycache__` is loaded sourceless. So one planted file —
+`crypto_api/__init__.pyc` compiled with `py_compile`, or an extension
+`crypto_api/__init__<suffix>` — replaced a signed module while the digest,
+its signature and this stage all stayed green, and the substitution pass
+returned early on any `__file__` not ending in `.py`. Reproduced with a
+sourceless `__init__.pyc` for `crypto_api`, `pqc_backends` and
+`_artefact_source` and an extension `__init__` for `crypto_api`: POST
+`OPERATIONAL`, `fully_verified` true, the planted code imported. That attack needed no
+checker poisoning, so the "raises the bar to poisoning the checker's own
+`.pyc`" statement below was overstated until this was closed.
+
+The rule is enforced on the **file system**, which planted code cannot rewrite
+before it runs, by `ama_cryptography._find_import_shadowing`: a tree is refused
+when it holds a `.pyc` outside `__pycache__`, an extension module below the top
+level, an extension beside a `.py` of the same name, a package directory beside
+a module file of the same name, or a symlinked package directory (the digest
+does not walk directory symlinks). `__init__.py` runs the scan before any
+submodule is imported, so the refusal precedes the planted code; the
+execution-integrity stage runs it again, so `reset_module()` refuses a tree
+changed after import. No build produces any of these states, so every build
+refuses and `AMA_POST_DIAGNOSTIC_IMPORT` does not demote it. The
+loaded-module pass now also rejects sourceless and nested or `__init__`
+extension origins, but it is defence in depth only: the reproduction's planted
+module rewrote its own `__file__` and passed it.
 
 **Bounded, and stated rather than implied.** A self-check written in Python
 cannot vouch for the bytecode of *its own* module if that was already poisoned
@@ -2074,16 +2673,26 @@ so without tripping the source signature that the checker's source is bound by",
 but it does not eliminate the class. The out-of-band control that does is OS /
 package-manager code signing, which verifies files before the interpreter loads
 them; this is documented in [`SECURITY.md`](SECURITY.md) under *Execution
-integrity* alongside the trust-anchor boundary it shares.
+integrity* alongside the trust-anchor boundary it shares. The same boundary
+covers the package's own `__init__`: an extension `__init__<suffix>` beside
+`__init__.py` is resolved first and replaces the checker, so no in-package scan
+runs to see it.
 
 **Enforcement.** `tests/test_execution_integrity.py` pins the bytecode
-comparator (a changed instruction, a nested-function change and a
-constant-type swap are caught; a filename-only difference is not), the
+comparator (a changed instruction, a nested-function change, a
+constant-type swap and an equal-but-distinct constant inside a tuple,
+frozenset or slice or on a signed zero are caught; a filename-only difference
+and a genuine `.pyc` of folded constants, NaN included, are not), the
 per-file check (a poisoned `.pyc` whose header still matches its pristine
 source is a fault; a corrupt or foreign-magic `.pyc` is handled), the
 substitution guard, and the end-to-end path: on a copied tree, a poisoned
 but still-loadable `.pyc` fails POST and the import while the source digest
-stays valid.
+stays valid. The shadowing scan is pinned rule by rule on scratch trees (each
+rule has a test that fails when that rule alone is removed, and the shipped
+layout scans clean), and end to end: a planted `_artefact_source/__init__.pyc`
+is refused before it executes, a planted `crypto_api/__init__<suffix>` fails
+the import, and a directory planted after a clean import fails
+`reset_module()`.
 
 **Measured cost.** One `compile()` per signed source file, once per import —
 tens of milliseconds over the package, on the same one-time POST path as the
@@ -2095,7 +2704,7 @@ FIPS 140-3 requires a conditional self-test on every asymmetric key
 generation: the fresh keypair must demonstrate that its halves correspond
 before the caller receives it. The helpers existed
 (`pairwise_test_signature` / `pairwise_test_kem`) and were wired into **no**
-key-generation path — the 2026-08 audit's finding #5. A keypair whose halves
+key-generation path, so no keygen performed the required test. A keypair whose halves
 do not correspond (a fault mid-generation, a corrupted caller-supplied seed,
 a miscomputed BIP32 modular sum) was handed out and failed later, far from
 the generation event that caused it.
@@ -2127,6 +2736,25 @@ the Ed25519 seed, the BIP32 master seed, the Ascon key and nonce — now
 routes through the §4.9.2 health-tested, error-state-gated CSPRNG draw
 rather than a bare `secrets.token_bytes` / `os.urandom`.
 
+**Scope — the Python API surface, not the bare `.so` (audit M1).** This
+pairwise test, POST (INVARIANT-39) and the error-state output inhibition are
+properties of the `ama_cryptography` **Python package**, which wraps every
+approved operation behind `check_crypto_permitted()` and runs POST at import.
+They are **not** properties of `libama_cryptography.so` linked directly:
+`check_crypto_permitted` appears throughout `pqc_backends.py` and nowhere in
+`src/c/`, and the C library's `ama_ed25519_keypair()` performs no pairwise test
+(C-side PCT exists for ML-KEM only). `tools/check_keygen_pct.py` enforces this
+over the Python surface: `pqc_backends.py`'s AST and the keygens of the Cython
+binding extensions (`src/cython/*.pyx`), which are importable,
+`check_crypto_permitted`-gated entry points of the package too. A C consumer that
+links the shared object directly — the audience the SONAME, the pkg-config file
+and `Dockerfile.c-api` serve — gets the constant-time primitives but **not**
+POST, the error-state inhibition, or the PCT; those are supplied by the Python
+wrapper. This invariant, and the FIPS-140-3-alignment claims in README and the
+`CSRC_*` documents, are therefore scoped to the Python API surface until the
+controls are either moved into the C boundary or the boundary is formally
+defined as the Python package (INVARIANT-16, honest compliance claims).
+
 The test is deliberately **unconditional**. Gating it behind an environment
 flag would make the default configuration the non-compliant one; validation
 applies to a configuration, not to a runtime toggle. Where a pairwise test's
@@ -2137,11 +2765,35 @@ the module ERROR state, which is reserved for a test that *ran and failed*. A
 failed pairwise test enters ERROR through the shared helpers and inhibits all
 further output (INVARIANT-39).
 
-**Enforcement.** `tests/test_keygen_pct.py` pins the wiring (every keygen
-entry point invokes its helper — a new keygen path that forgets the test
-fails the coverage assertion), both failure directions (a verify that lies →
-`CryptoModuleError` + ERROR state; the ERROR state then refuses further
-keygen), and the positive path on real keypairs for every fast family.
+**Enforcement.** Two halves, and until 5.0.0 only one of them existed.
+
+`tools/check_keygen_pct.py` is the coverage half: it DISCOVERS every keygen
+entry point from `ama_cryptography/pqc_backends.py`'s own AST — 19 today — and
+fails on any that does not reach `pairwise_test_signature` / `_kem` /
+`_agreement`, directly or through one level of delegation. Exemptions must
+name a reason and are checked for staleness. It also reads the Cython binding
+sources (`src/cython/*.pyx`) by indentation and requires each keygen there to
+call a pairwise test as a top-level statement before any `return`: until
+2026-09-24 it read `pqc_backends.py` alone, and `cy_dilithium_keygen` and
+`cy_ed25519_keypair` released untested keypairs (found by the partitioned
+review of PR #394; both now run the test). It runs in `ci.yml` and both
+directions are pinned by `tests/test_keygen_pct_gate.py`.
+
+`tests/test_keygen_pct.py` is the behaviour half: both failure directions (a
+verify that lies → `CryptoModuleError` + ERROR state; the ERROR state then
+refuses further keygen) and the positive path on real keypairs for every fast
+family.
+
+This paragraph used to credit the second file with the first file's job — "a
+new keygen path that forgets the test fails the coverage assertion". It does
+not, and could not: that test monkeypatches the three helpers into recorders,
+calls a hand-written list of thirteen entry points, builds its `expected` list
+alongside, and asserts the two match. A fourteenth keygen that omits its
+pairwise test is never called by it, so both lists are unchanged and it passes.
+Measured: an unwired `native_widget_keypair()` appended to `pqc_backends.py`
+left that test at 17 passed / exit 0 while the new gate named the violation
+and exited 1. This is the same gap INVARIANT-39 had before
+`tools/check_error_state_gating.py`, closed the same way.
 
 **Measured cost.** Sub-millisecond for every family except the hash-based
 signatures: ~220 ms for SPHINCS+-SHA2-256f, ~1.0 s for SLH-DSA-SHAKE-128s —
@@ -2151,7 +2803,7 @@ here rather than averaged away.
 ## INVARIANT-42 — The Declared ctypes ABI Must Match the C Header, and the Loaded Library Must Match the Package
 
 A ctypes symbol probe proves a name is exported — not its arity, not its
-parameter types, not its return convention. The 2026-08 audit's finding #7:
+parameter types, not its return convention. The gap this invariant closes:
 a stale major-version library, or any object exporting `ama_`-prefixed
 names, satisfied every `hasattr` check and would corrupt the call frame at
 the first mismatched invocation. A shared object carries no parameter
@@ -2160,8 +2812,12 @@ does carry is the contract the library was compiled from.
 
 **Two halves, static and runtime.** `tools/check_ctypes_abi.py` parses every
 `AMA_API` prototype out of the C headers and every `argtypes`/`restype`
-assignment out of the Python sources (`pqc_backends`, `ascon`,
-`agent_binding`, `secure_memory` — 124 symbols), and requires agreement on
+assignment out of every package module that declares one — the scope is
+DISCOVERED from the package's ASTs rather than enumerated, with
+`REQUIRED_MODULES` as a seven-module floor beneath it (`pqc_backends`,
+`ascon`, `agent_binding`, `secure_memory`, `hybrid_combiner`, `_build_sign`,
+`_self_test`; the gate prints both counts on every run) — and requires
+agreement on
 arity and on a coarse class per position (pointer-like vs. integer-like,
 pointer/integer/void for returns) — the classes that decide call-frame
 layout. Coverage is closed in both directions: a symbol called without a
@@ -2185,7 +2841,1031 @@ against a fake library object reporting a foreign version.
 **Measured cost.** The static gate is CI-only. The handshake is one call
 returning three compile-time constants, once per import.
 
+## INVARIANT-43 — Every Logged Literal Must Survive a cp1252 Handler
+
+`logging` fails closed and silent: when a handler cannot encode a record's
+text, the encode raises inside `Handler.emit`, `logging` routes it to
+`Handler.handleError`, prints a traceback to stderr, and **discards the
+record** — the call site is told nothing. `logging.FileHandler` opens with
+`encoding=None`, which resolves to the platform's preferred encoding —
+cp1252 on a default Windows install. The 2026-08 audit found
+`adaptive_posture` logging both the posture-triggered key rotation and the
+algorithm switch with a `→` (U+2192) between the old and new identifiers,
+so on Windows the two records stating that a signing key had changed were
+exactly the two records a file handler dropped. An audit trail that
+silently loses its key-rotation entries is worse than one never claimed:
+the absence is indistinguishable from "no rotation happened".
+
+**The rule is cp1252-encodable, not ASCII.** `—` and `§` encode in cp1252
+and appear, correctly, in over a thousand POST and diagnostic strings;
+cp1252 is precisely the line at which a record stops being written, so it
+is the line this invariant draws. Only literal text is checked —
+interpolated values are runtime data and cannot be decided statically.
+
+**Enforcement.** `tools/check_log_message_encodability.py` walks every
+module's AST for logger and `warnings.warn` emission sites — bound-name
+loggers, `self.logger`, and the inline
+`logging.getLogger(__name__).<level>(...)` idiom alike — and fails on any
+literal a cp1252 handler would refuse. It runs in ci.yml's Security Checks
+job; both directions, including the inline idiom the first version of the
+gate could not see, are pinned by
+`tests/test_log_message_encodability_gate.py`.
+
+**Measured cost.** CI-only; one AST pass over the shipped package.
+
+---
+
+## INVARIANT-44 — A Fetched Conformance Corpus Is Pinned by Its Bytes, Not by a Name
+
+`nist_vectors/fetch_vectors.py` downloads ten ACVP-Server projections and
+`nist_vectors/run_vectors.py` validates the library against them; the
+attestation in `docs/compliance/` publishes the result. The download was
+pinned to a release tag and to nothing else. A tag names a snapshot; it does
+not fix its bytes — it is a movable ref served through a CDN. A projection
+already on disk was skipped and used as found, so an edited or truncated
+local copy validated without a word. And the fetcher re-serialised what it
+received, so nothing on disk could ever have been compared with upstream.
+The attestation could say `v1.1.0.42` while the harness ran against bytes
+nobody had identified.
+
+**The rule.** Every conformance vector that is fetched rather than vendored
+is pinned by SHA-256 and length in a committed manifest
+(`docs/compliance/acvp_vector_digests.json`), and every consumer verifies
+against it independently: the fetcher before it writes (and it refuses a
+local file that does not match rather than trusting it), the harness before
+it reads, and the workflow between the two. The bytes written are the bytes
+published. The pin is advanced only by a deliberate command
+(`fetch_vectors.py --refresh-manifest`) that refuses to run under GitHub
+Actions, in the same commit as the attestation it underwrites.
+
+**Enforcement.** `tools/acvp_vector_pin.py` is the verifier and the
+`--check` CLI; `.github/workflows/acvp_validation.yml` runs it between the
+fetch and the run and cross-checks the manifest's ref against the
+attestation's. `tests/test_acvp_vector_digests_gate.py` pins anchor digests
+in its own source (so a regenerated manifest alone cannot make a corrupted
+corpus verify), holds the manifest to the two independent records this tree
+already carries for three of the ten files (`tests/kat/PROVENANCE.json` and
+the ML-KEM derivative's source block), and drives every refusal with a
+negative control.
+
+**Measured cost.** One streamed SHA-256 per projection per run; the largest
+is 30 MB.
+
+---
+
+## INVARIANT-45 — Every SIMD Kernel Has a Pin, and the Published Vectors Run Under It
+
+`AMA_DISPATCH_ONLY=<slot>` leaves every dispatch kernel at its scalar
+fallback except one. `tests/c/test_dispatch_only_env.c` proved that the pin
+resolves; it executes no cryptography. No CTest case ran a published-vector
+KAT with a SIMD kernel pinned, so every AVX2, AVX-512, NEON and SVE2 kernel
+was checked against the standards' answers only when a host's default wiring
+happened to select it — and the auto-tune could, and on some hosts did,
+revert a kernel before the KAT ran. Four wired kernels had no pin name at
+all, and three of those (the AVX2 4-way Keccak that expands every ML-KEM and
+ML-DSA matrix, and both x86 AES-GCM hardware kernels) were switched *off* by
+every other pin. Both MemorySanitizer lanes built with `AMA_ENABLE_SIMD=OFF`,
+so no SIMD kernel had ever run under the one sanitizer that sees
+uninitialised reads.
+
+**The rule.** Every kernel the dispatch table can install has an
+`AMA_DISPATCH_ONLY` name, and the inventory is one list — in
+`src/c/dispatch/ama_dispatch.c`, `tests/c/test_dispatch_only_env.c`,
+`include/ama_dispatch.h`, `tests/c/CMakeLists.txt` and `dudect.yml`. For
+every slot, the published-vector KATs whose primitive routes through it run
+with the slot pinned and the auto-tune off, on every ctest lane including
+MemorySanitizer. A KAT cannot pass under a pin the host did not honour:
+`tests/c/kat_slot_guard.h`, the first statement of every swept executable's
+`main()`, exits 77 (Skipped) when the pin was refused — or 1 when the build's
+CI runner class mandates the slot, so a wiring regression is red rather than
+a skip. Which slots are mandated follows `dudect.yml`: AVX2 and
+AES-NI+PCLMULQDQ on every hosted x86-64 runner, NEON and the Crypto
+Extensions on AArch64; AVX-512, VAES and SVE2 may skip.
+
+**Enforcement.** The sweep is registered in `tests/c/CMakeLists.txt` with
+two negative-control cells that pass only on the guard's own verdict line
+(`PASS_REGULAR_EXPRESSION`), so deleting the guard fails them.
+`tests/test_kat_slot_sweep_gate.py` holds the five inventories to one list,
+requires a published-vector cell per slot, requires the guard to be the
+first statement of every swept `main()`, and requires both MSan lanes to
+build the SIMD kernels.
+
+**Measured cost.** The sweep adds 37 cells to ctest; on the x86-64 Release
+build they run in under two seconds in total, and the full suite under MSan
+with SIMD on takes 85 s against the lane's 25-minute budget.
+
+---
+
+## INVARIANT-46 — Fuzzing Must Be Able to Deepen
+
+Every run of the libFuzzer lane started from `fuzz/seed_corpus` and threw
+away what it found after 60 seconds. No run stood on the previous one, so
+the deep branches — the ML-DSA verify path at 5,262 bytes, SLH-DSA verify at
+49,921 — were reachable in principle and reached by nobody; libFuzzer grows
+its mutation length with executions, and measured 20-second runs of the
+slow targets never mutated at their derived ceiling. The `oss-fuzz/`
+submission files had never been built by anything.
+
+**The rule.** The corpus persists across runs (restored before fuzzing,
+merged to its coverage-adding units after, saved under a run-unique key so
+every run starts from the newest corpus and leaves a newer one), a scheduled
+campaign runs an order of magnitude longer than a pull-request run and saves
+what it finds on the default branch where every branch can restore it, and
+the OSS-Fuzz build integration is executed by OSS-Fuzz's own driver — build
+inside `base-builder` with the checkout mounted, then `check_build` — on
+every push, through the same script a developer runs. Continuous fuzzing on
+OSS-Fuzz's infrastructure runs nightly through ClusterFuzzLite from the same
+build integration, under three sanitizers, with the corpus kept between
+runs.
+
+**Enforcement.** `tests/test_fuzz_corpus_persistence_gate.py` pins the
+restore → fuzz → merge → save order and keys in both matrix jobs, the merge
+running after a crash, the growth numbers in the step summary, the nightly
+schedule and its budgets, the OSS-Fuzz job in the fuzzing gate, the script
+mounting the checkout, and the ClusterFuzzLite modes and pins.
+`tools/check_fuzz_target_registration.py` continues to hold
+`oss-fuzz/build.sh` to the harness set, and `.clusterfuzzlite/build.sh` execs
+it so there is one build integration.
+
+**Measured cost.** One cache restore and save per matrix cell (corpora are
+tens of KB to a few MB); a merge of a few seconds; the OSS-Fuzz job pulls
+`base-builder` and `base-runner` and builds 17 fuzzers, roughly ten
+minutes in parallel with the other lanes.
+
+---
+
+## INVARIANT-47 — A Lane That Provisions a Resource Fails the Skip of It
+
+Both pytest lanes checked out at depth 1, so four guards that read git
+objects — the baseline validity window against `origin/main`,
+calibration-commit drift, the benchmark snapshot's provenance commit, the
+embedded v4.0.0 tag bytes — skipped on every CI run for as long as they
+existed; nothing installed Flask, so the six attack-surface pins on the Flask
+demo never ran; twelve skip reasons gated on native features the CI build
+produces and named none of the keywords the backend escalation matches; the
+`.clang-format` validity test skipped everywhere for want of the tool. A skip
+is green, and every one of these was green on every run. One was worse than
+a skip: with `origin/main` absent the validity-window guard compared nothing
+with nothing and passed.
+
+**The rule.** When a lane is configured to provide what a test needs — the
+native backends, the interoperability oracles, the full git history, an
+example's third-party dependency, a tool the lane installs — a skip of that
+test in that lane is a failure, not a skip. The lane says what it provides
+with a flag (`AMA_CI_REQUIRE_BACKENDS`, `AMA_CI_REQUIRE_HISTORY`); a test says
+what it needs with a marker (`requires_interop_oracle`,
+`requires_git_history`, `requires_example_deps`) or, for the native backends,
+by naming the backend in its skip reason; and `tests/conftest.py` turns the
+skip into a failure only where the two meet. A flag never escalates a skip
+outside its own promise: the history flag leaves backend skips alone and the
+backends flag leaves history skips alone, so a lane that builds the C
+library on a shallow checkout is still allowed to skip the history guards.
+Outside CI, every one of these remains an ordinary skip.
+
+**Why a marker and not a keyword, wherever possible.** A keyword match on the
+reason text is a functional property of prose, and prose drifts; the markers
+are the escalation for everything added after the backend keywords, and the
+backend keywords themselves are held to their modules by a completeness guard
+that reads `skipif` markers and `pytest.skip` calls alike and allowlists
+host-OS reasons verbatim. A guard that cannot skip silently is only half the
+rule; the other half is that it cannot pass silently either, which is why
+the baseline guard resolves its refs before comparing anything.
+
+**A capability the host cannot supply is not a missing provision.** The
+BTI libgcc probe (`tests/test_binding_control_flow_integrity.py`) compiles
+an atomic read-modify-write with a real AArch64 ELF compiler. Its skip reason
+said the probe "runs natively" on the ARM lanes, the backend keyword `native`
+matched that word, and on 2026-09-24 every x86-64, macOS and Windows pytest
+lane failed the probe as a missing backend — a resource no build of the
+library produces and no such lane had been asked to install. The probe now
+carries `requires_aarch64_toolchain`, which `tests/conftest.py` re-asks of
+the real host (a Linux AArch64 host, or `aarch64-linux-gnu-gcc` on `PATH`)
+exactly as `requires_host_isa` does: where the lane declares
+`AMA_CI_REQUIRE_AARCH64_TOOLCHAIN` — the `ubuntu-latest` lanes, which now
+install `gcc-aarch64-linux-gnu`, and the native `ubuntu-24.04-arm` lanes —
+the skip is a failure; where the host cannot supply the compiler and no lane
+promised it, the skip stands; where the host can supply it and the probe
+still skipped, the ordinary escalation applies. The exemption is a declared
+capability, never a rewording of the reason.
+
+**Enforcement.** `tests/conftest.py` escalates the markers
+(`requires_interop_oracle`, `requires_example_deps` and `requires_c_library`
+under `AMA_CI_REQUIRE_BACKENDS`; `requires_git_history` under
+`AMA_CI_REQUIRE_HISTORY`; `requires_memcheck` under `AMA_CI_REQUIRE_MEMCHECK`;
+`requires_aarch64_toolchain` under `AMA_CI_REQUIRE_AARCH64_TOOLCHAIN`) and
+the backend keywords under their flags;
+`tests/test_conftest_backend_skip_scoping.py` drives the production hook
+through pytester for every marker in both directions, holds every history
+skip and every `[examples]` importorskip under its marker, holds the BTI
+probe to its toolchain marker and every lane that sets the toolchain flag to
+an install of the toolchain, and holds the eight backend-only modules'
+reasons to the keyword set; `ci.yml` and `ci-build-test.yml` check out with
+`fetch-depth: 0`, install `[examples]`, `clang-format` and (on x86-64 Linux)
+`gcc-aarch64-linux-gnu`, and set the flags on their pytest steps;
+`benchmarks/check_baseline_justification.py` refuses a ref it cannot
+resolve and an empty base ref, with tests against real git.
+
+---
+
+## INVARIANT-48 — Ed25519 Must Reject Small-Order Public Keys and R Halves
+
+**Statement.** Every Ed25519 verification path must reject a signature whose
+public key `A`, or whose signature half `R`, is one of the fourteen 32-byte
+encodings of the eight points of the order-8 subgroup — the identity
+included, the non-canonical spellings included, both settings of the x-sign
+bit included. This applies to single verification and to batch verification.
+
+**Why.** AMA's verifier is **cofactorless**: it decides
+`[S]B - R - [h]A = O`, not the cofactored `8([S]B - R - [h]A) = O`. RFC 8032
+§5.1.7 permits either, and AMA's choice was recorded nowhere but an
+implementation comment. The choice has a consequence that the RFC does not
+spell out and that this library did not act on: a cofactorless verifier
+accepts the identity as a public key unless something else rejects it, and an
+identity public key makes the `[h]A` term vanish for **every** `h`. The
+equation collapses to `[S]B = R`, so the pair `(R = [s]B, S = s)` verifies
+against **every message**.
+
+Measured in the 2026-09 audit against a pure-Python RFC 8032 reference at
+`s ∈ {1, 5, 12345}` — all below `L`, so INVARIANT-26 does not intercept
+them — all three were **accepted** for all four messages tried: 12 of 12,
+through single verify and through batch verify alike. One 64-byte string,
+produced with no secret of any kind, authenticating anything. It reached the
+package layer, where `crypto_api` embeds the public key inside the package it
+verifies: swapping that embedded key to the identity and the signature to the
+forgery reported `primary_signature: True`, `primary: True`,
+`core_valid: True`. Only `key_pinned` — which is optional, while `core_valid`
+and `primary_signature` are offered as verdicts — kept `all_valid` false.
+
+**The finding is wider than the identity**, and the fix is stated for the
+wider case. For a small-order `A` of order `n`, `[h]A = [h mod n]A`, so an
+attacker holding no secret picks any `S`, walks `j` over `[0, n)`, sets
+`R = [S]B - [j]A` and keeps the first candidate whose `h = H(R ‖ A ‖ M)`
+satisfies `h ≡ j (mod n)`. One in `n` candidates lands and `n ≤ 8`, so this
+costs at most eight hash evaluations. Constructed for all **eight**
+canonically encoded small-order points: 8 of 8 accepted before the fix, 0 of
+8 after. The identity is the only one of them for which a single signature
+works for every message; the other seven forge per message, which is not a
+meaningful mitigation.
+
+**What was NOT the gap.** A sub-review measured that cofactorless
+verification already **rejects** the torsion-shifted key `A + T8` — 0 of 400
+accepted — so the "one signature valid under several public keys" trick that
+cofactored verifiers admit does not work here and never did. Stating the fix
+as "reject small-order inputs" rather than as the cofactored-verifier repair
+it resembles is deliberate.
+
+**The third member of the input-canonicalisation family.** INVARIANT-26
+requires `0 ≤ S < L`; INVARIANT-38 requires a canonical point encoding
+(`y < p`, and an admissible x-sign bit) for `R` and for `A`; this requires the
+point that encoding names not to be small-order. The three now live together
+in `src/c/internal/ama_ed25519_canonical.h` as pure byte predicates over
+public input, and they are applied together at one call site, because the
+rules are read together and drift apart when they are stored apart. They are
+not redundant with each other: six of the fourteen encodings here are already
+refused by INVARIANT-38 (`y = p` and `y = p+1` under either sign fail the
+`y < p` rule; `y = 1` and `y = p-1` with the sign bit **set** fail the `x = 0`
+sign rule), and the remaining eight are canonical encodings of genuine curve
+points that INVARIANT-38 has no quarrel with at all. The overlap is kept
+rather than trimmed so that each predicate's contract is independent of the
+order the call site applies them in.
+
+They differ from each other in kind, and the difference is worth stating.
+INVARIANT-26 and INVARIANT-38 are **encoding-uniqueness** rules: their defect
+is that one key or one signature had two accepted byte spellings, which
+breaks anything treating those bytes as an identity. This one is not about
+spelling. Every one of the eight canonical encodings it blocks is the unique,
+correct spelling of a real point on the curve. It is a **semantic** rule about
+which points may be presented as a verification key at all, and its defect was
+a working universal forgery, not a second name for one thing.
+
+**It is a policy, and the policy is now published.** RFC 8032 does not mandate
+small-order rejection, so this is AMA's choice twice over — once in taking the
+cofactorless equation, once in guarding it. Both are stated at
+`ama_ed25519_verify` in `include/ama_cryptography.h`, together with the
+interoperability consequence: a cofactored verifier (ZIP-215, libsodium's
+permissive mode) and a cofactorless one disagree on torsion-carrying
+signatures, so a consensus system whose participants run a mixture of the two
+can be shown an input that **splits** it. Fix one rule across every
+participant; do not mix implementations and assume they agree. The rule itself
+is also a narrowing, never a widening: no legitimate signature is affected,
+because an honest `R` is `[r]B` with `r = H(prefix ‖ M) mod L` and is
+small-order only when `r ≡ 0 (mod L)` — probability about `2^-252`.
+
+**Enforcement.** `ama_ed25519_point_is_small_order()` in
+`src/c/internal/ama_ed25519_canonical.h`, applied to `public_key` and to the
+signature's `R` half in `ama_ed25519_verify` (`src/c/ama_ed25519.c`), which
+batch verification calls per entry — so the two cannot disagree, the same
+construction INVARIANT-26 and INVARIANT-38 rely on, and there is deliberately
+no second copy of the check in the batch path. The predicate is a
+sign-bit-masked byte comparison against seven stored `y` values, which is what
+turns seven rows into fourteen blocked encodings. The table is derived and
+exhaustively checked rather than copied: the eight points of `E[8]` have five
+distinct `y` values, and a sweep of the whole nineteen-value band `[p, 2^255)`
+found exactly two more (`p` and `p+1`) reducing into the set.
+
+**A blocklist rather than a cofactor-clearing order check**, and the
+measurement is the reason. Both decide exactly the same predicate — the table
+is the complete set of encodings any decoder maps into `E[8]`, not a
+heuristic. Measured on this tree (Release, gcc `-O2`, x86-64, min of three
+runs): the byte predicate costs **127 ns**; a cofactor-clearing `[8]A == O`
+built from the library's own `ama_ed25519_scalarmult_public` costs **9,065
+ns**; a bare point decode alone costs **10,927 ns**; a whole
+`ama_ed25519_verify` costs **34,951 ns**. That is 71× per call — the two
+calls this rule adds cost 0.25 µs against 18.1 µs, `+0.7%` on a verify rather
+than `+52%`. The gap is structural rather than an artefact of that ladder: an
+order check must decode first, and a decode is a field square root. The
+second reason is placement: `ama_ed25519_canonical.h` carries no field
+arithmetic, so an order check could not live beside its two sibling rules at
+all — it would have to go inside the `GE_SYM`-templated
+`internal/ama_ed25519_ge.h` and be instantiated once per field, which is more
+code in the one place the two instantiations can diverge.
+
+**Not a constant-time requirement.** `A` arrives in a public key and `R` in a
+signature; both are public. The comparison is branch-free anyway, for the same
+reason as its two siblings — it costs nothing at this size, not because
+INVARIANT-12 reaches here.
+
+**Verification.** `tests/c/test_ed25519_small_order.c` (140 checks) and
+`tests/test_ed25519_small_order.py` (68 checks) carry the forgery vectors
+themselves — the library's signer cannot produce them, so they are fixed data
+generated by a pure-Python RFC 8032 reference whose own correctness is pinned
+by the §7.1 vectors it regenerates. Every assertion is labelled FORGERY (the
+signature satisfies the group equation under its small-order input, so only
+this rule can reject it), RANGE (a direct unit test of the predicate,
+including the near-misses that must *not* be blocked) or SMOKE (behavioural,
+rejected either way). The labels are measured, not asserted: with the
+predicate neutered to `return 0`, the C file reports 102 passed / 38 failed,
+and the 38 are exactly the 15 RANGE, 21 FORGERY and 2 mixed-batch assertions,
+with every SMOKE line still green. Every vector in both files is put to
+single verify *and* batch verify with the two verdicts required to agree, so
+the inheritance through the per-entry loop is asserted rather than assumed.
+
+Nothing else moved. The 150 vendored Wycheproof Ed25519 vectors still pass
+with **no new divergence to declare**: the sixteen that carry a small-order
+`R` (`tc10`–`tc19`, `tc25`–`tc29`, `tc60`) are all scored `invalid` upstream,
+and no vector in that corpus uses a small-order public key. The frozen oracle
+(`tests/oracle/ed25519_frozen_oracle.txt`) replays clean at all 2,022 records:
+the only eleven that touch a small-order `A` or `R` are batch records whose
+recorded verdict is already `0`.
+
+**One piece of existing coverage was weakened by this, and is relabelled
+rather than quietly left.** `tests/c/test_ed25519_canonical_s.c` proved its
+INVARIANT-38 forgery pins non-vacuous with a control asserting that the
+canonical identity encoding *accepts* the forgery — justified at the time by
+"RFC 8032 does not require rejecting it", which was true of the RFC and wrong
+as a policy. That control now asserts the opposite and is the PIN; the four
+assertions it was supporting are SMOKE. Measured with the §5.1.3 guard
+neutered and this rule in place: 6 failed / 44 passed, and all four of those
+lines printed `[ OK ]`. INVARIANT-38's live coverage is what those 6 failures
+were — the RANGE band and the decode-path `y = 0` / `y = p` pair, which this
+rule does not touch, because the predicate is applied at
+`ama_ed25519_verify` and not inside the decoder.
+
+---
+
+## INVARIANT-49 — A FROST Nonce Pair Is Single-Use and the Library Consumes It; Aggregation Verifies Every Share Before It Returns Success
+
+Two properties of the threshold-signing API, stated together because the
+2026-09 independent audit found both absent and because a coordinator that
+can induce the first failure is exactly the party positioned to exploit the
+second.
+
+**The rule, part 1.** A nonce pair produced by `ama_frost_round1_commit` is
+good for **exactly one** `ama_frost_round2_sign` call, over exactly one
+message, and **round 2 consumes it**: `nonce_pair` is non-`const`, it is
+`ama_secure_memzero`'d on every exit from round 2 — success, argument
+refusal, internal error alike — and an all-zero (already-consumed) pair is
+refused on entry with `AMA_ERROR_INVALID_PARAM`. Not "callers must not reuse
+it". The library makes a second use unobtainable through the API.
+
+**The rule, part 2.** `ama_frost_aggregate` verifies **every** signature
+share against the RFC 9591 §5.3 relation before that share contributes to the
+sum, reports the offending participant's 1-based index to the caller, and
+then verifies the assembled `(R, z)` against the group public key with the
+ordinary RFC 8032 verifier before writing anything to the caller's buffer. A
+refusal writes no signature.
+
+**Why part 1 — measured.** Until this change `ama_frost_round2_sign` took
+`nonce_pair` as `const uint8_t *`, held no state, and neither marked,
+consumed nor zeroized it, so calling it repeatedly with one pair over
+different messages returned `AMA_SUCCESS` every time. Each call emits
+`z = d + e·rho + (λ·s)·c` with `rho` and `c` varying per message and
+`(d, e, λ·s)` fixed, so three calls are three independent linear equations in
+three unknowns mod `l`. The audit's sub-review solved that system:
+
+```
+recovered d == hiding nonce  : True
+recovered e == binding nonce : True
+recovered secret share s_1   : True
+```
+
+Full recovery of the participant's long-term share, from the protocol outputs
+alone, with no host access; with `t` shares so recovered the group secret is
+reconstructible. Nothing exotic reaches it — a cached round-1 result, a retry
+of a failed round 2 against a different message, or a coordinator that asks
+for a re-sign. `SECURITY.md` documented the *repeating-CSPRNG* hazard as a
+deployment obligation, and `nonce_generate`'s SCOPE note documented the
+stateless hedge's limits, but neither said that the API **itself** permitted
+reuse inside one healthy process. It is not fixable by documentation: a
+`const` pointer plus a warning is exactly what was already there.
+
+Scrubbing on **every** exit rather than only where a share was emitted is
+deliberate. The weaker rule — "dead unless it returned `INVALID_PARAM`" —
+must be re-derived at every call site and is not one testable property;
+"round 2 consumes the nonce, whatever the outcome" is. A caller whose
+arguments were malformed re-runs round 1, which costs 23 µs.
+
+The consumed-nonce check is **constant-time** (`frost_is_all_zero`, an
+OR-fold over all 64 bytes with a single branch on the aggregate). The
+tempting argument against is that the buffer belongs to the caller and the
+answer — "has this been consumed?" — is published by the return code anyway.
+Both halves are true and neither is the point: what a short-circuiting scan
+leaks is not the answer but the *shape* of a nonce that is **not** all-zero,
+because an early-exit loop runs for as many iterations as the hiding nonce
+has leading zero bytes. That is a repeatable per-round measurement of a
+secret scalar's high-order structure, available to any observer co-resident
+with the signer, and the caller owning the buffer does not licence the
+library to leak it to a third party in the same address space. The fold costs
+64 byte-ORs against a round 2 that retires ~2.09 million instructions (2-of-3,
+callgrind, x86-64 gcc 13.3.0 -O3, measured 2026-09-24 after the section 5.2
+own-commitment check below added two fixed-base multiplications to it).
+
+**Why part 2 — measured.** Aggregation summed `z_i` mod `l`, concatenated
+with `R`, and returned `AMA_SUCCESS` unconditionally: it checked nothing.
+Flipping one bit of one share gave `aggregate rc=0` followed by
+`ed25519_verify -> -4`, with no indication of which participant was at fault,
+and there was **no share-verification entry point in the API at all**. So one
+faulty or malicious signer could destroy every ceremony it joined,
+anonymously, and a caller trusting the return code would publish an invalid
+signature. Identifiable abort is the robustness property FROST's two-round
+structure exists to buy, and it was the property that was missing.
+
+Verifying a share requires that signer's PUBLIC key share `PK_i`, which the
+old parameter list did not carry and which cannot be recovered from what it
+did carry — the commitments are nonce points, not key shares. Hence the
+breaking signature change (`signer_public_shares`), and hence the attribution
+out-parameter (`bad_participant_index`): the single `ama_error_t` return
+cannot carry both a verdict and an identity, and the alternatives — one error
+code per participant, or a new public struct for one byte — are worse than an
+optional out-parameter a caller who does not want blame may pass `NULL`. It
+is written to 0 **on entry**, so it is never stale, and 0 means "not
+attributable to one participant" unambiguously because participant indices
+are 1-based and validated non-zero. `AMA_ERROR_VERIFY_FAILED` is reused
+rather than given a new `ama_error_t` enumerator: `ama_frost_aggregate` could
+not previously return it at all, so within that entry point it means
+"verification failed" and nothing else, and one family does not get to widen
+an enum every family shares.
+
+**Measured cost**, 2-of-3 over a 30-byte message, medians of 1000 iterations,
+old and new code built from the same tree and timed in the same process on
+one host: `ama_frost_aggregate` 120.8 µs → 470.0 µs. Of the ~349 µs added,
+~35 µs is the defence-in-depth RFC 8032 verify and the rest is two per-share
+verifications; it scales linearly in the number of signers. Round 2 is
+unchanged — 165.2 µs → 163.7 µs, i.e. within noise: the OR-fold and the extra
+`ama_secure_memzero` do not register. Aggregation is the once-per-ceremony
+operation and the one whose result is published, so ~4x on it to buy
+identifiable abort and a verified output is the right side of that trade. The
+later section 5.2 own-commitment check is not free the same way: it re-derives
+two points, and round 2 went from 1,837,532 to 2,085,691 retired instructions
+(+13.5%; callgrind difference method, 2-of-3, x86-64 gcc 13.3.0 -O3,
+2026-09-24).
+
+**The header now says what the implementation does.** The same change
+retitled the public header's section from "FROST THRESHOLD ED25519 SIGNATURES
+(RFC 9591)" to "**RFC 9591-STYLE, NOT RFC 9591 CIPHERSUITE-INTEROPERABLE**"
+and moved the caveat `src/c/ama_frost.c` had always carried into the section
+banner and into every function's doc block. The protocol structure follows
+RFC 9591; the hash derivations do not prefix the `"FROST-ED25519-SHA512-v1"`
+contextString and do not use the per-role H1–H5 domain separation, so partial
+signatures, commitments and binding factors are **not** interoperable with an
+RFC 9591 ciphersuite implementation and every participant in a ceremony must
+run this library. The aggregated signature's RFC 8032 conformance is
+unconditional. This was **not** "fixed" by quietly adding the contextString:
+that changes every derivation and breaks every deployed ceremony's wire
+format, and is a separate decision with its own migration. The standard the
+register holds elsewhere — the claim must match the artefact — is met by
+correcting the claim, not by silently changing the artefact.
+
+**Enforcement.** `src/c/ama_frost.c`. `ama_frost_round2_sign` takes
+`uint8_t *nonce_pair` and, right after its NULL check and before any other
+validation or any hashing, claims it: `frost_claim_nonce_pair` copies the
+pair into a local and zeroes the caller's buffer under one process-wide lock,
+and the call is refused unless the copy is non-zero (`frost_is_all_zero`).
+Every later read of the nonces is from the local copy, which the single
+`consume:` label scrubs on every exit. The claim replaced an entry check plus
+an exit scrub with the nonces read from the caller's buffer in between: two
+calls on one buffer that overlapped in time both passed the check and both
+signed, and eight threads released together onto one buffer measured 7 or 8
+`AMA_SUCCESS` per round (2026-09-24). Zeroing at entry without the lock still
+leaves a two-statement window in which two callers can both copy before either
+zeroes; the lock closes it. Since 2026-09-24 it also refuses — and consumes the pair
+on — a commitment list whose row at the signer's own position is not the
+`(D, E)` its nonce pair derives, re-derived from the local copy with the
+fixed-base multiplication round 1 used: RFC 9591 section 5.2 makes that check
+a MUST, and before it a coordinator could hand a signer a substituted row and
+still obtain a share. `verify_share_core`
+implements the §5.3 relation; `ama_frost_verify_share` is the new public
+entry point over it; `ama_frost_aggregate` calls it per share with the
+session values computed once, sets `*bad_participant_index` on rejection, and
+runs `ama_ed25519_verify` on the assembled signature before copying it out.
+The Python surface enforces the same contract in
+`ama_cryptography/pqc_backends.py`: `frost_round1_commit` returns the nonce
+pair as a `bytearray` (an immutable `bytes` cannot be consumed, and writing
+through a pointer into one is undefined behaviour in CPython),
+`frost_round2_sign` requires a writable buffer and scrubs it in a `finally`
+so the Python-side argument refusals consume it too — every one of them,
+and the module-state and backend refusals, since 2026-09-24: until then the
+view was taken only after the `num_signers`, `participant_share`,
+`participant_index` and nonce-length checks, so those refusals returned with
+the pair intact — and `frost_aggregate`
+raises `FrostShareRejected` carrying `participant_index`. Callers updated in
+the same change: the dealer's pairwise-consistency round trip in
+`frost_keygen_trusted_dealer` (INVARIANT-41), `benchmarks/benchmark_c_raw.c`
+— which now re-runs round 1 outside the timed window, because a benchmark
+loop cannot reuse a consumed nonce — and `fuzz/fuzz_frost.c`, which fuzzes
+the public key shares and the new entry point as well.
+
+**Verification.** `tests/c/test_frost.c` Test 8 pins part 1 at the C
+boundary: the buffer is zeroed after a successful round 2 **and** after a
+failed one, a second call with it is refused, an all-zero pair supplied
+directly is refused without a prior round 2 (so the entry check is pinned
+independently of the scrub), and `ATTACK BLOCKED` runs the audit's
+three-signings-under-one-nonce sequence and asserts only the first succeeds.
+`tests/c/test_frost_round2_concurrent.c` pins the same property for calls
+that overlap: eight threads on one nonce buffer over distinct 1 MiB messages,
+sixteen rounds, exactly one `AMA_SUCCESS` per round, the buffer zero after,
+and the one share verifying. Against the exit-scrub code it fails every round;
+it cannot see the two-statement window the lock closes, which the
+ThreadSanitizer lane reports as a data race in `frost_claim_nonce_pair` when
+the lock is removed (both measured by mutation, 2026-09-24).
+Test 10 pins the section 5.2 own-row check: a substituted row, a substituted
+`D` alone, a substituted `E` alone, and the signer's own row at the other
+signer's position (for each signer) are each refused with the nonce pair
+consumed and no share written, and the honest list still signs.
+Test 9 pins part 2: `ama_frost_verify_share` accepts honest shares and
+rejects a corrupted one, aggregation rejects a corrupted share with the
+culprit's index — asserted for two different culprits, so a constant cannot
+pass — leaves the caller's signature buffer untouched, accepts a `NULL` blame
+channel, rejects mismatched public key shares, and an honest ceremony still
+aggregates to a signature `ama_ed25519_verify` accepts.
+`tests/test_frost.py` mirrors both on the Python surface
+(`TestFROSTNonceSingleUse`, including
+`test_attack_three_signings_under_one_nonce`, the `TypeError` on an
+immutable nonce pair, and `test_nonce_is_zeroed_on_every_python_side_refusal`
+with one row per refusal the wrapper makes before the native call;
+`TestFROSTOwnCommitmentCheck` for the section 5.2 refusal;
+`TestFROSTShareVerification`, including the
+parametrised attribution test and the end-to-end RFC 8032 check).
+`tools/check_ctypes_abi.py` holds the new arities against the header
+(INVARIANT-42).
+
+---
+
+## INVARIANT-50 — An Approved-Mode Signing API Is Context-Separated, and the Internal Interface Does Not Ship
+
+FIPS 205 §9 specifies `slh_sign_internal` / `slh_verify_internal` over the raw
+byte string and states that the internal functions shall not be exposed to
+applications other than for testing. §10.2 wraps them:
+`M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M`. Three production entry
+points signed and verified the raw message instead —
+`ama_sphincs_sign` / `ama_sphincs_verify`, the generic context API
+(`ama_sign` / `ama_verify` with `AMA_ALG_SPHINCS_256F`, which delegates to
+them), and `ama_slhdsa_sign_internal`, which carried `AMA_API` and was present
+in the shipped shared object by name (`nm -D` found it).
+
+That is not merely a missing wrapper. Both interpretations of a signature
+lived under ONE key, so they cross-verified. Measured on this tree before the
+fix, in both directions:
+
+```
+slhdsa_sign(M, ctx=b"")          accepted by sphincs_verify(b"\x00\x00" + M)   -> True
+sphincs_sign(b"\x00\x01x" + M)   accepted by slhdsa_verify(M, ctx=b"x")        -> True
+```
+
+The second line is the one that matters. A caller who signs any
+attacker-influenced bytes through the legacy or the generic API — the API a
+consumer reaches with no algorithm-specific knowledge — is a signing oracle
+for FIPS 205 pure signatures on attacker-chosen `(ctx, M)` pairs under that
+key. The context string is the mechanism the standard provides for keeping one
+key's uses apart, and it separated nothing as long as a second entry point
+would hash whatever it was handed.
+
+**The rule.** Every signing and verification entry point in a shipped library
+applies its scheme's domain separation before it reaches the core, and a
+"legacy" or "compatibility" name is not an exemption — it is the name most
+likely to be called by code that has not read the specification. The internal
+interface is compiled only under `AMA_TESTING_MODE`, so it is absent from
+every shipped artefact by construction rather than by export control: not
+compiled is the only construction the ELF version script and the Mach-O
+exported-symbols list cannot disagree about (the reasoning
+`ama_ascon_permutation_for_test` established, INVARIANT-1's vendoring addendum
+aside). Where a test genuinely needs a knob the approved mode does not expose,
+the knob goes on the CONTEXT-SEPARATED entry point, not on a raw one.
+
+**What that cost, and what it bought.** `ama_sphincs_sign` / `ama_sphincs_verify`
+are now §10.2 with the empty context; this is a wire-format break, taken
+deliberately because v5.0.0 was never tagged and the alternative is shipping
+the oracle as a compatibility guarantee. `ama_slhdsa_sign_internal` left the
+public surface and `ama_slhdsa_sign_addrnd` took its place: same
+caller-supplied `addrnd`, but it takes `ctx` and `M` separately and builds `M'`
+itself, so it cannot produce a signature over an unprefixed string. One export
+out, one strictly narrower export in. NIST ACVP's hedged sigGen replay moved
+onto it and got stronger in the move — the test used to build `M'` in Python,
+which left the wrapper outside the vector.
+
+**Enforcement.** `tests/c/test_slhdsa_context_separation.c` asserts both probes
+above as negative results, that a §9 signature is rejected by every shipped
+verifier and vice versa, that `sign_addrnd` is byte-identical to
+`sign_internal` over the wrapper it builds, and replays all 14 NIST ACVP
+`signatureInterface == "internal"` sigVer vectors for SLH-DSA-SHA2-256f
+against `ama_slhdsa_verify_internal` — it links `ama_cryptography_test`,
+because those vectors can only be replayed through the interface that no
+longer ships. `tests/test_slhdsa_context_separation.py` holds the Python
+surface: the same two probes, the generic API through `crypto_api`, that
+`dlsym` finds neither §9 symbol in the loaded library, and that the C replay
+still requires all fourteen — dropping coverage is the cheapest way to make a
+conformance fix look clean. `tests/test_pqc_kat.py` asserts the other half:
+that a shipped verifier rejects every one of NIST's VALID internal-interface
+signatures. `cmake/ama_exports.map` localises both §9 names as defence in
+depth, and `tools/check_ctypes_abi.py` refuses a ctypes declaration for a
+symbol the public header no longer declares.
+
+<!-- claim-check: quoting-retired-wording -->
+**ML-DSA, the same finding one scheme over (2026-09-23).** FIPS 204 §5.2
+restricts `ML-DSA.Sign_internal` (Algorithm 7) the same way, and the library
+still shipped it as `ama_ml_dsa_sign` / `ama_ml_dsa_verify`, with the Python
+wrappers defaulting to it (`ctx=None`). The oracle reproduced: a signature from
+`ama_ml_dsa_sign(0x00 || 0x01 || "x" || M)` was accepted by
+`ama_ml_dsa_verify_ctx(M, ctx = "x")`. Both are now `ama_ml_dsa_sign_internal`
+/ `_verify_internal` in the `AMA_TESTING_MODE` archive only, localised in
+`cmake/ama_exports.map`, and `native_ml_dsa_sign` / `_verify` take the empty
+context by default. The header's justification for shipping them — "the ACVP
+internal-interface vectors replay through it" — was false for the C side and
+true only of `tests/test_pqc_param_sets.py`'s Python replay of the vendored
+`tests/kat/fips204` corpus; those 30 records now replay byte-exact in
+`tests/c/test_ml_dsa_context_separation.c`, which also pins that the context
+API is the §5.2 wrapper over Algorithm 7 for empty, short and 255-byte
+contexts. `tests/test_ml_dsa_interfaces.py` asserts none of the four names is
+in the shipped library and repeats the oracle probe against every shipped
+signer.
+
+**The empty message is a message.** The same entry points rejected
+`message == NULL` outright, so whether a zero-length message could be signed
+depended on whether the caller's allocator returned a non-NULL pointer for a
+zero-byte request — a property of the caller's `malloc`, not of FIPS 205,
+which is defined over `M ∈ B*`. These functions already read
+`ctx = NULL, ctx_len = 0` as the empty context; message and ctx are now read
+the same way, and `(NULL, non-zero)` is still a caller bug.
+
+**Measured cost: negative.** The wrapper used to be materialised by `calloc`ing
+`2 + |ctx| + |M|` bytes, copying the whole message in, scrubbing it and
+freeing it — three extra passes over the message and a heap allocation of
+caller-controlled size on the signing path, in three entry points. Routing the
+legacy API through §10.2 would have added that copy to a path that did not
+have it: signing 64 MiB through `ama_slhdsa_sign` cost **59.8 ms (+10.7 %)**
+more than signing the same bytes raw, and 6.6 ms (+2.2 %) at 16 MiB. So the
+wrapper became a separate absorbed segment instead. `PRF_msg` and `H_msg`
+already stream, and the prefix is at most 257 bytes; it now rides in
+`ama_hmac_sha512_3`'s third message slot (previously passed `NULL`) and in one
+more `SHAKE-256` absorb. After the change the §10.2 path at 64 MiB runs in
+560.8 ms against the old 618.9 ms — the conformance fix made signing large
+messages **9.4 % faster** than the interface it replaced, and the legacy path
+pays nothing measurable. It also removes an `AMA_ERROR_MEMORY` failure mode
+and an attacker influence over allocator state from the signing path, which is
+the reasoning `sha2_HT`'s fixed stack buffer already recorded one level down.
+That was the last heap use in `src/c/ama_slhdsa.c`: the file no longer includes
+`<stdlib.h>`, so SLH-DSA keygen, signing and verification run entirely on fixed
+stack buffers and adding an allocation back has to be a deliberate edit.
+
+---
+
+## INVARIANT-51 — An Ed25519 Signer Derives Its Own Public Half
+
+**Statement.** No Ed25519 signing entry point in this library hashes a public
+half into `H(R ‖ A ‖ M)` that its own secret scalar did not generate.
+`ama_ed25519_sign` must derive `A = [a]B` from the scalar it computed and
+refuse any 64-byte secret key whose stored bytes 32..63 differ from it.
+`ama_ed25519_expand_secret_key` must perform the same derivation and refusal
+once, at load, and bind the scalar, the nonce prefix and `A` under a tag that
+`ama_ed25519_sign_expanded` must re-verify on every signature, refusing an
+expanded key whose tag disagrees. Refusal on every path is
+`AMA_ERROR_INVALID_PARAM` with the output written as zeros (64 signature
+bytes, or the 128 expanded bytes), never left untouched.
+
+**Why.** The 64-byte layout `seed ‖ A` carries `A` so that a signer can skip a
+scalar multiplication, and implementations that trust it do exactly that; this
+one treats it as a layout, not a cache. Trusting it is a private-key recovery hazard,
+not a hygiene issue. `r = H(h[32..63] ‖ M)` depends on the seed and the message
+alone, so two signatures over **one** message under two different `A` halves
+share `R`, and
+
+    s₁ − s₂ = (h₁ − h₂)·a  (mod L)
+
+yields the private scalar outright. This is the "Taming the many EdDSAs" fault
+hazard, shared with Go and libsodium. What made it worse here is that the
+header documented the key layout in detail and said nothing about the integrity
+requirement on bytes 32..63 (2026-09 audit, B-2) — so a caller storing the two
+halves separately, rebuilding a key from a corrupted record, or copying 32
+bytes from the wrong buffer produced exactly this input with no reason to think
+it mattered. No fault injection is needed; ordinary storage corruption suffices.
+
+**Two paths, one property.** The per-call path pays the derivation on every
+signature and needs no state. The expanded path (2026-09-22) pays it once:
+`ama_ed25519_expand_secret_key` derives `A`, refuses a disagreeing half by the
+same masked comparison, and writes `a ‖ prefix ‖ A ‖ tag` with
+`tag = SHA-512("AMA/Ed25519/expanded-key/v1" ‖ a ‖ prefix ‖ A)[0..31]`. The
+tag is what lets the signer skip the derivation without re-opening the
+hazard: `A` cannot change in that form — nor can `a` or `prefix` — without
+the tag failing to verify, and the tag is a preimage-bound function of all
+three, so a fault or a mis-copy that alters any bit of the 128 is refused.
+A party able to rewrite the tag consistently can read `a` from the same
+bytes and needs no fault. The expanded form is not a storage format: it holds
+the scalar in the clear (the same secrecy class as the seed it is one SHA-512
+from), it is documented as opaque, and its Python owner
+(`pqc_backends.Ed25519SigningKey`) zeroes it on close and on collection.
+There is still no opt-out: neither path can be asked to trust a stored half.
+
+**Cost, measured rather than asserted.** The per-call check is one fixed-base
+scalar multiplication — the same operation that computes `R` — so that path
+does roughly twice the curve work. The tag check is two SHA-512 compressions.
+Measured on 2026-09-22 (`build/bin/benchmark_c_raw`, median of 1,000, 63-byte
+message, Intel Xeon @2.80GHz container, `taskset -c 0`):
+`ama_ed25519_sign` **24,780 ns**, `ama_ed25519_sign_expanded` **13,613 ns**
+(0.55×), `ama_ed25519_expand_secret_key` 12,632 ns once. Through the Python
+API on the same host and harness as the regression floors: `ed25519_sign`
+34,566–34,977 ops/s, `ed25519_sign_expanded` 55,524–55,728 ops/s (three runs),
+0.62× the per-call time — the C ratio plus the ctypes call both paths share.
+The earlier figures for this invariant (13,189 ns before the check, 23,915 ns
+after, median over 3,000) were taken on a different host and are superseded
+by the above as the record for the per-call cost. Verification is untouched.
+
+**Enforcement.** `src/c/ama_ed25519.c`. Both entry points share
+`ed25519_sign_core`, which takes the caller's verdict as a 0/~0 mask and
+applies it at a single exit by masking the 64 output bytes and the return
+code; the signature is computed unconditionally, so the instruction-count and
+secret-taint lanes see one path whatever the key. The comparisons — the
+derived `A` against the stored half, and the recomputed tag against the
+stored one — are `ed25519_mismatch_mask32`: an XOR-accumulate with no
+relational operator, laundered through `ama_ct_value_barrier_u64`. An earlier
+revision of this paragraph said the comparison was `ama_consttime_memcmp`
+placed before any buffer was allocated, and that refusal wrote no signature;
+the shipped code has never done either — the first version branched and was
+caught by the secret-taint lane, and the mask form that replaced it runs the
+full computation and zeroes the output — so that text is withdrawn (§6.6).
+The scalar, `derived_a`, the recomputed tag and every buffer the core writes
+are scrubbed on every exit (INVARIANT-6).
+
+**Verification.** `tests/test_ed25519_key_half_integrity.py` drives single-bit
+flips at five positions across the public half, a half taken from a different
+key, and an all-zero half, and asserts the two-signature transcript the attack
+needs cannot be produced. `tests/c/test_ed25519_expanded.c` and
+`tests/test_ed25519_expanded_key.py` do the same for the expanded path. The C
+suite replays the RFC 8032 §7.1 vectors through it, checks byte-equality with
+the per-call path over 32 keys and 20 message lengths that cross the 4 KiB
+stack threshold, flips every one of the 1,024 expanded-key bits and requires
+each to be refused, and drives refusal at load, all on both field backends. The
+Python suite does the same through `Ed25519SigningKey`: the RFC vectors, four
+fresh keys over an 18-length sweep, one bit flipped in each of the 128 bytes of
+the buffer the object owns, the frozen oracle's 24 sign records, PyCA
+cross-verification, and refusal at load with nothing retained.
+Every assertion is a refusal or an inequality rather than a pinned signature:
+a pinned value would also pass against a signer that had started returning a
+constant. The positive controls — a well-formed key still signs and verifies,
+and the RFC vectors reproduce — are what keep the rest non-vacuous. The
+`ed25519-sign-expanded` targets of `tools/check_ghash_constant_time.py`
+(instruction-count and secret-taint, on the test archive and on the shipped
+shared object) hold the expanded entry point to the same 0/0 standard as
+`ed25519-sign`.
+
+---
+
+## INVARIANT-52 — A Package Signature Covers the Whole Package
+
+**Statement.** Every field a crypto package carries, and the *presence* of every
+optional one, must be inside the signature that package presents as its
+authenticity claim. The creator and the verifier must derive the signed bytes
+from the same function, and a field that cannot be encoded into those bytes
+must fail the signature rather than be silently omitted.
+
+**Why.** `create_crypto_package` signed the `content` bytes. Everything around
+the content — the add-on signatures, the KEM ciphertext, the timestamp token,
+the metadata — was therefore outside the signature. *Corrupting* an add-on was
+caught, because the verifier re-checks it; **removing** one was not, because
+nothing said it had been there. The 2026-09 audit (A-2) measured the
+consequence on a package built with every layer enabled and verified with
+`expected_public_key` pinned: stripping the SLH-DSA signature, stripping the
+ML-KEM ciphertext, replacing the timestamp token and rewriting the metadata all
+returned `all_valid: True`. Ten of seventeen tamper cases were detected; seven
+were not, and no key material was needed for any of them. That is a downgrade
+attack on the project's central claim — the post-quantum layers could be
+removed from an artefact and it still verified as fully valid.
+
+The audit also observed that **no invariant governed what the package signature
+must cover**, and that A-2 sat precisely in that hole. This invariant is the
+hole filled.
+
+The same defect class held on the legacy surface, where the HMAC covered
+`content_hash` alone: `author`, `timestamp`, `version` and `ethical_vector`
+were forgeable under a package whose every reported check passed — which
+contradicted `ARCHITECTURE.md`'s claim that ethical metadata "cannot be
+separated from cryptographic proofs".
+
+**Enforcement.** `ama_cryptography/_package_transcript.py` is the encoding: a
+type-tagged, length-prefixed, domain-separated form in which two different
+packages cannot produce the same bytes. `crypto_api.package_transcript` is the
+single extraction point — `create_crypto_package` assembles the package with a
+placeholder signature, takes the transcript from the function the verifier will
+call, and fills the real signature in, so the two views cannot drift apart.
+`legacy_compat.build_package_transcript` does the same for `SIGNATURE_FORMAT_V3`
+under separate `"signature"` and `"hmac"` purposes, and
+`legacy_compat.recompute_ethical_hash` derives the ethical digest from the
+vector rather than trusting the stored hex. `canonical()` raises `TypeError`
+for a type it cannot represent: a value the transcript cannot bind is the exact
+hole this closes, so it is refused at signing time rather than discovered by an
+auditor.
+
+Secrets are deliberately *not* in the transcript — `hmac_key`,
+`hkdf_master_secret`, `derived_keys` and `kem_shared_secret` are each pinned
+through a public value that is signed (`hmac_tag`;
+`metadata["derived_keys_commitment"]` for the derived keys and, through them,
+the master secret; and `metadata["kem_shared_secret_commitment"]`; each
+commitment a domain-separated SHA3-256), and including them would make the
+transcript uncomputable from the redacted form `to_dict()` and a pickle emit.
+The KEM commitment was missing until 2026-09-23: the Kyber secret key and the
+shared secret were both unsigned, so a substituted key together with the
+secret it decapsulates to left the KEM layer passing. The derived keys were
+bound directly until 2026-09-24, so a redacted package failed Layer 3 — the
+one layer that carries origin. They must still be pinned, and the reason is
+worth stating because binding the salt, info and count alone looks sufficient
+and is not: an attacker who swaps `hkdf_master_secret` and recomputes the
+derived keys to match leaves Layer 4 self-consistent and salt, info and count
+unchanged. Layer 4 therefore compares the keys with their signed commitment.
+
+**Verification.** `tests/test_crypto_package_transcript.py` runs the audit's
+tamper matrix as a parametrised test — eighteen cases on the modern package,
+seven on the legacy one — with an untampered-clone control, because a clone that
+quietly lost a field would make the whole matrix pass while proving nothing
+(`copy.deepcopy` does exactly that here: `__getstate__` strips secrets). The
+same file verifies Layer 3 on both redacted forms. The encoder's injectivity is
+tested separately and without a backend. Measured
+against the code as it stood, seven of the seventeen and four of the six
+returned success.
+
+---
+
+## INVARIANT-53 — A Documented Claim Must Resolve Against the Implementation
+
+**Statement.** Every claim the tracked documentation makes about this library
+must be **derivable from the library**, and a gate must derive it. That covers
+four kinds of claim, each with its own oracle:
+
+1. **Examples.** Every fenced `python` or `c` block on a user-facing page runs,
+   compiles and links — or carries an explicit `pseudocode: <reason>` marker.
+2. **Constructions.** Every security-relevant description — a fallback, a
+   weighting, a threshold, a zeroing strategy, a symbol's existence — matches
+   what the source does, with the expected value **parsed out of the source**
+   rather than written into the gate.
+3. **Public API.** Every documented import, signature, return type, context
+   manager and exported symbol matches what a user can actually reach.
+4. **Measurements.** Every published performance figure is re-derivable from a
+   record that states the command, host, units, sampling and aggregation behind
+   it.
+
+**Why.** Documentation is not commentary on this library; for an integrator it
+*is* the specification. When it disagrees with the code, either they build
+against something that does not exist or they trust a property the code does
+not provide — and both are defects in the deployment, not typos in a file.
+
+The 2026-09 documentation-integrity pass found every one of those four kinds,
+and the worst of them was an example:
+
+<!-- example: pseudocode: quotes the retired defective example verbatim; running it is the defect it records -->
+```c
+uint8_t sk[AMA_ED25519_SECRET_KEY_BYTES];   /* 64 */
+ama_ed25519_keypair(pk, sk);
+```
+
+`ama_ed25519_keypair` does not generate the seed. The caller must place 32
+bytes of CSPRNG output in `secret_key[0..31]` before the call — the header says
+so in the `ama_ed25519_keypair` contract of [`include/ama_cryptography.h`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h),
+and the first statement of `ama_ed25519_keypair` in `src/c/ama_ed25519.c` is
+the line that reads them (`sha512(secret_key, 32, hash)`). That example, on the page a C consumer is
+pointed at, minted an Ed25519 private key from uninitialised stack memory. It
+compiled clean under `-Wall -Wextra -Werror` and printed `valid=1`.
+
+<!-- claim-check: quoting-retired-wording -->
+The rest were the same shape, smaller: `create_crypto_package(codes, helix,
+kms)` raising `TypeError` because `author` has always been required;
+`package['package_id']` subscripting a dataclass; `buf.data` inside
+`with SecureBuffer(...) as buf`, where `__enter__` yields the bytearray;
+`get_pqc_status()` documented as a dict with a worked JSON example, returning a
+`PQCStatus` enum; `locked: bool = secure_mlock(...)` against a function that
+returns `None` and raises on failure; `MASTER_OMNI_CODES`, a name that has
+never existed, used thirteen times; an `extern` link recipe for
+`ama_randombytes`, which `cmake/ama_exports.map` localises and which exports no
+symbol; eight "always available" submodules of which five raise
+`AttributeError`; a "pure Python HKDF fallback" for a combiner that raises
+(INVARIANT-7); posture thresholds of 0.3/0.6/0.8 against 0.15/0.45/0.80, and a
+three-signal weighting against a four-signal one; "AMA does not implement
+HSS/LMS" while `ama_lms_verify` and `ama_hss_verify` were exported; and
+"ML-DSA-65 signing (4.20 ms)" three lines below a table putting a whole package
+creation at 2.17 ms.
+
+**Do not weaken the implementation to make a document true.** Where a claim and
+the code disagree, the code and the invariants are authoritative unless testing
+shows the code defective. `secure_wipe()` is the one case in this pass where it
+was: `CRYPTOGRAPHY.md` described memory barriers the three Python `for` loops
+did not have, so the function now delegates to the native barrier-backed
+`secure_memzero` — the claim was right about what the library should do, and
+the code was what moved.
+
+**Enforcement.** Four gates, run in `ci.yml`:
+
+* `tools/check_doc_examples.py` — `security-checks` (Python and C against the
+  build tree) and `c-consumer` (C against an *installed* prefix, under gcc and
+  clang, which is the only place the documented `#include <ama_cryptography.h>`
+  and pkg-config flags are the ones a downstream consumer gets). The pages it
+  covers are **every Markdown file the repository tracks** except the
+  historical record (`CHANGELOG.md` and `docs/changelog/`), derived from
+  `git ls-files` rather than listed, so a new page is covered by the commit
+  that adds it. Every Python or C block on a covered page — any CommonMark
+  fence (backticks or tildes, any length) tagged `python`, `py`, `python3`,
+  `py3`, `pyi`, `pycon`, `c` or `h` — must declare its mode; an unmarked block
+  fails, which is what stops coverage decaying as pages grow. A `pycon`
+  transcript runs under doctest, so its output lines are checked too. A block
+  that is the next step of the page's running example is
+  `python-run continues` and executes after the one before it. `c-run` blocks
+  execute under `valgrind --track-origins=yes`, because compiling is not enough
+  — the uninitialised-seed example compiles and succeeds, and only a memory
+  checker can see it — and a C example with no built library to link is exit
+  2, never "skipped".
+
+  <!-- claim-check: quoting-retired-wording -->
+  Until 2026-09-24 this bullet was true of seven wiki pages only. The gate
+  carried a fixed seven-entry list while the Statement above said "every fenced
+  block on a user-facing page", and 83 blocks on seventeen other pages ran
+  under nothing. Bringing them under the gate found what an unchecked example
+  accumulates: `wiki/Adaptive-Posture.md` called `compute_resonance`,
+  `compute_recursion`, `compute_refactoring`, `get_current_state` and
+  `get_monitoring_metrics`, none of which exist, and compared an unordered
+  `ThreatLevel` with `>=`; `IMPLEMENTATION_GUIDE.md`'s encrypted keystore
+  imported a `PBKDF2` class PyCA does not have and read back 16 bytes of the
+  32-byte salt it wrote, its migration test asserted `all(results.values())`
+  over a result that is `None` for a check that does not apply, and its
+  parallel-verification example had no `__main__` guard;
+  `wiki/Cryptography-Algorithms.md` passed `p_cost=` to a function whose
+  parameter is `parallelism`; and `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`'s
+  worked example built a `KeyManagementSystem` from fields it has never had.
+* `tools/check_crypto_construction_docs.py` — `security-checks`. Derives its
+  authority with `ast` from `hybrid_combiner.py`, `adaptive_posture.py`,
+  `equations.py`, `legacy_compat.py`, `src/c/ama_consttime.c` and
+  `src/c/ama_lms.c`, so implementing a fallback stops the fallback rule firing
+  on its own and changing a weight changes the weight the gate demands. It
+  fails closed (exit 2) on a partial derivation: a gate that silently learns
+  nothing reports green on everything. Its scan covers source comments and
+  docstrings as well as prose — they drift identically and are read by the
+  same people — and the four gate scripts and their test module are exempt by
+  name, because a gate cannot be written without quoting what it rejects. That
+  exemption list is checked at startup, so an entry outliving its file fails
+  rather than quietly widening. Symbol existence is checked for both
+  languages: a documented `from ama_cryptography… import` must name something
+  the package binds, and a documented C function — a backticked bare call whose
+  prefix is the prefix of some function `src/c/` or `include/` defines or calls
+  — must appear in the implementation's code, comments and strings excluded.
+  The header's symbol set was derived and printed for as long as the gate
+  existed and compared against nothing, so `wiki/Security-Model.md` and
+  `wiki/Cryptography-Algorithms.md` could name a `fe25519_sq` squaring
+  function that has never existed (it is `fe51_sq`).
+* `tools/check_public_api_docs.py` — `security-checks`, with
+  `--require-library`. Bare-import reachability (measured in a fresh
+  subprocess, because Python binds a submodule as a package attribute the
+  moment anything in the process imports it), signatures, return types asserted
+  from real calls, `__enter__` return values, the version script against
+  `nm --dynamic` in both directions, and the per-architecture SIMD inventory.
+* `tools/check_benchmark_claims.py` — `security-checks`. Re-derives every cell
+  of the generated benchmark blocks, requires every floor cited in prose to
+  exist in `baseline.json` or `arm-baseline.json`, requires the results record
+  to carry reproduction provenance, and rejects a measured figure more than 8x
+  above or below its own floor as a units or identity error, and a throughput
+  that is not a positive, finite number as no measurement at all.
+
+A **correction note** may quote the wording it retires — a reader cannot
+otherwise tell what changed — but only behind an explicit
+`<!-- claim-check: quoting-retired-wording -->` marker. A waiver that can be
+inferred is a waiver that arrives by accident.
+
+**Verification.** `tests/test_documentation_integrity_gates.py` pins all four
+in both directions. The negative controls are not invented: each is the literal
+text this pass removed, so a regression to any of them fails a named test.
+Positive controls assert that the *corrected* wording passes, because a gate
+nobody can satisfy is a gate that gets disabled.
+
+**Why a gate and not just a correction.** INVARIANT-16's BIP32 case is the
+precedent recorded in this document: that claim was corrected once
+(CHANGELOG KM-HD-001), shipped with no gate, and came back in six places.
+`tools/check_hd_interop_honesty.py` exists because of it.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-08-13_
+_Last updated: 2026-09-19_

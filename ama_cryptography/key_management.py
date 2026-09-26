@@ -16,11 +16,11 @@ Enterprise-grade key management with:
 
 import base64
 import contextlib
-import hashlib
 import json
 import logging
 import os
 import secrets
+import stat
 import tempfile
 import warnings
 from dataclasses import dataclass
@@ -30,6 +30,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
+from ama_cryptography import _owner_only
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import (
@@ -45,7 +46,13 @@ from ama_cryptography.exceptions import (
 from ama_cryptography.exceptions import (
     SecurityWarning as SecurityWarning,
 )
-from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
+from ama_cryptography.pqc_backends import (
+    _HMAC_SHA512_NATIVE_AVAILABLE,
+    native_hmac_sha512,
+    native_pbkdf2_hmac_sha256,
+    native_pbkdf2_hmac_sha512,
+    native_sha3_256,
+)
 from ama_cryptography.secure_memory import secure_memzero
 
 
@@ -64,7 +71,7 @@ def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
     """Atomically write ``data`` to ``path`` with restrictive permissions.
 
     Two properties matter for on-disk key material:
@@ -94,14 +101,13 @@ def _atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
     # Knowing precisely who owns the descriptor removes the need to guess.
     fd_is_ours = True
     try:
-        if hasattr(os, "fchmod"):
-            # Best-effort: mkstemp already creates the file 0o600 on POSIX, so a
-            # platform without fchmod (or a filesystem that refuses it) is not a
-            # failure — the restrictive creation mode still holds.
-            try:
-                os.fchmod(fd, mode)
-            except OSError as exc:  # pragma: no cover - platform dependent
-                logger.debug("fchmod(%s) unsupported here: %s", tmp_name, exc)
+        # Narrow the staging file BEFORE any bytes are written, and narrow it
+        # on Windows too: ``mkstemp``'s 0o600 is a POSIX guarantee, and on
+        # Windows the staging file otherwise inherits whatever the store's
+        # parent grants.  ``restrict_fd_to_owner`` uses ``fchmod`` where there
+        # is one and a protected DACL where there is not.
+        if not _owner_only.restrict_fd_to_owner(fd, tmp_name):  # pragma: no cover - platform
+            logger.debug("owner-only access could not be enforced on %s", tmp_name)
 
         handle = os.fdopen(fd, "wb")
         fd_is_ours = False  # ownership transferred to ``handle``
@@ -201,8 +207,10 @@ HSM_AVAILABLE: bool = importlib.util.find_spec("PyKCS11") is not None
 # see ``_kdf_binding``) is what makes an attempt *diagnosable* rather than an
 # opaque authentication failure.
 #
-# The floors match the values this class writes for new stores: OWASP 2024 for
-# PBKDF2-HMAC-SHA256 and the RFC 9106 second recommended option for Argon2id.
+# The floors match the values this class has written: the RFC 9106 second
+# recommended option for Argon2id, which every new or migrated store uses, and
+# OWASP 2024 for the PBKDF2-HMAC-SHA256 that legacy v2 stores were written with
+# (read only, under ``allow_legacy_kdf``, so they can be migrated).
 MIN_PBKDF2_ITERATIONS = 600000
 MIN_ARGON2_T_COST = 3
 MIN_ARGON2_M_COST = 65536  # KiB, i.e. 64 MiB
@@ -268,12 +276,23 @@ class KeyMetadata:
 
 
 class HDKeyDerivation:
-    """
-    Hierarchical Deterministic Key Derivation (BIP32-compliant)
+    """BIP32-style child key derivation over an AMA-specific root.
 
-    Derives child keys from a master seed using HMAC-SHA512.
-    Supports hardened and non-hardened derivation with proper
-    modular arithmetic using the secp256k1 curve order.
+    **This is not BIP32, and it is not interoperable with a BIP32 wallet.**
+    The child key derivation function follows BIP32's formulae exactly --
+    HMAC-SHA512 keyed by the parent chain code, ``0x00 || ser256(k_par) ||
+    ser32(i)`` for a hardened index and ``serP(point(k_par)) || ser32(i)``
+    otherwise, then ``k_i = (parse256(I_L) + k_par) mod n`` over the
+    secp256k1 order -- but the MASTER key is generated with the HMAC key
+    ``b"AMA Cryptography Master Key"`` where BIP32 specifies
+    ``b"Bitcoin seed"``.  Every key in the tree therefore descends from a
+    different root, so no BIP32 test vector can pass here and no BIP32
+    wallet or library derives the same keys from the same seed.
+
+    The wording is corrected rather than the derivation: changing the
+    master HMAC key would silently move every key any existing deployment
+    has derived.  A caller that needs keys a BIP32 wallet can reproduce
+    needs a BIP32 implementation, not this class.
 
     Derivation Path Format:
         m/purpose'/coin_type'/account'/change/address_index
@@ -282,8 +301,17 @@ class HDKeyDerivation:
         m/44'/0'/0'/0/0 - First address of first account
         m/44'/0'/0'/1/0 - First change address
 
-    Standard: BIP32 (Bitcoin Improvement Proposal 32)
-    Security: Uses secp256k1 curve order for modular addition
+    Standard:
+        the child KDF follows BIP32 (Bitcoin Improvement Proposal 32)
+        section "Private parent key -> private child key"; the root does not.
+
+    Security:
+        uses the secp256k1 curve order for modular addition
+
+    Vectors:
+        ``tests/test_hd_key_derivation_vectors.py`` pins the AMA-specific
+        master and per-path known answers, which is what makes the modular
+        arithmetic and the key/chain-code split regression-tested.
     """
 
     HARDENED_OFFSET = 2**31
@@ -313,15 +341,28 @@ class HDKeyDerivation:
             # seed_phrase is guaranteed non-None here: the first `if` excluded
             # the (seed is None AND seed_phrase is None) case, and the `elif`
             # excluded seed is not None, so seed is None and seed_phrase is not None.
-            self.master_seed = hashlib.pbkdf2_hmac(
-                "sha512", cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
+            # BIP39 seed derivation (PBKDF2-HMAC-SHA512, c=2048, salt
+            # "mnemonic" + passphrase, empty here) on this module's own KDF
+            # (SP 800-132, src/c/ama_pbkdf2.c).  hashlib.pbkdf2_hmac is
+            # OpenSSL's PBKDF2 — a master-seed derivation delegated to an
+            # unauthorized vendor (INVARIANT-1).  Byte-identical: pinned
+            # against the official BIP39 vector and differentially against
+            # hashlib in tests/test_sha2_pbkdf2_native.py.
+            self.master_seed = native_pbkdf2_hmac_sha512(
+                cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
             )
 
         # Generate master key
         self.master_key, self.master_chain_code = self._generate_master_key()
 
     def _generate_master_key(self) -> Tuple[bytes, bytes]:
-        """Generate master key and chain code from seed"""
+        """Generate the master key and chain code from the seed.
+
+        AMA-specific: BIP32 specifies the HMAC key ``b"Bitcoin seed"`` here.
+        This root is deliberately different and is NOT interoperable; see the
+        class docstring.  The split of the 64-byte HMAC output into
+        ``key = I[:32]`` and ``chain_code = I[32:]`` follows BIP32.
+        """
         hmac_result = _hmac_sha512(b"AMA Cryptography Master Key", self.master_seed)
 
         master_key = hmac_result[:32]
@@ -372,6 +413,7 @@ class HDKeyDerivation:
             native_secp256k1_ecdsa_verify,
             native_secp256k1_pubkey_decompress,
             native_secp256k1_pubkey_from_privkey,
+            native_sha256,
         )
 
         if not _SECP256K1_NATIVE_AVAILABLE:
@@ -394,11 +436,16 @@ class HDKeyDerivation:
                 f"Module in error state: Pairwise test failed for {label}"
             ) from exc
         # The ECDSA primitives take a 32-byte digest, not a message; hash the
-        # helper's test message on both sides so sign and verify agree.
+        # helper's test message on both sides so sign and verify agree.  The
+        # digest comes from this module's own SHA-256 kernel: a FIPS pairwise
+        # test that hashed through stdlib hashlib was routing part of itself
+        # through OpenSSL (INVARIANT-1), and the native hash is definitionally
+        # present here — the keypair that is being tested came from the same
+        # library.
         pairwise_test_signature(
-            lambda message, sk: native_secp256k1_ecdsa_sign(hashlib.sha256(message).digest(), sk),
+            lambda message, sk: native_secp256k1_ecdsa_sign(native_sha256(message), sk),
             lambda message, signature, pk: native_secp256k1_ecdsa_verify(
-                signature, hashlib.sha256(message).digest(), pk
+                signature, native_sha256(message), pk
             ),
             private_key,
             public_key_64,
@@ -409,10 +456,12 @@ class HDKeyDerivation:
         self, parent_key: bytes, parent_chain: bytes, index: int
     ) -> Tuple[bytes, bytes]:
         """
-        Child Key Derivation (Private) - BIP32 Compliant
+        Child Key Derivation (Private), following the BIP32 formulae.
 
-        Implements proper BIP32 child key derivation using modular
-        arithmetic with the secp256k1 curve order (N).
+        The CKD function itself is BIP32's; the tree it operates on is not,
+        because the master key it descends from uses an AMA-specific HMAC
+        key (see the class docstring).  Modular arithmetic is over the
+        secp256k1 curve order (N), as BIP32 specifies.
 
         Args:
             parent_key: Parent private key (32 bytes)
@@ -725,7 +774,7 @@ class KeyRotationManager:
             }
 
         if filepath:
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2)
 
         return export_data
@@ -740,11 +789,18 @@ class SecureKeyStorage:
 
     Security Features:
         - AES-256-GCM authenticated encryption (integrity + confidentiality)
-        - PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2024)
+        - Argon2id (RFC 9106; t=3, m=64 MiB, p=4) for every password-protected
+          store this class creates or migrates.  There is no PBKDF2 fallback:
+          a loaded library without the Argon2id symbols is refused with
+          ``NativeBackendUnavailableError`` rather than silently given a
+          weaker derivation (INVARIANT-7).  PBKDF2-HMAC-SHA256 is only ever
+          *read*, to open a legacy v1/v2 store under ``allow_legacy_kdf`` so
+          it can be migrated.
         - Per-installation random salt (32 bytes)
         - Secure file permissions (0600)
         - KDF versioning for future algorithm upgrades
-        - Backward compatibility with legacy AES-CFB encrypted keys
+        - Legacy AES-CFB records are recognised and refused with a re-store
+          instruction; they are not decrypted
     """
 
     def __init__(
@@ -771,23 +827,31 @@ class SecureKeyStorage:
         Raises:
             KDFPolicyError: If the stored KDF parameters are below the policy
                 floor and ``allow_legacy_kdf`` is False.
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If
+                ``master_password`` would create
+                a new store and the loaded library does not provide Argon2id.
+                Nothing is written to the store directory in that case.
         """
         self.allow_legacy_kdf = allow_legacy_kdf
         self.storage_path = Path(storage_path)
-        # Create the key store 0o700 so key-id filenames are not enumerable and
-        # the encrypted key files are not world-traversable.  ``mkdir(mode=...)``
-        # is subject to umask and is a no-op when the directory already exists,
-        # so follow with a best-effort ``chmod`` to tighten a pre-existing dir.
+        # Create the key store owner-only so key-id filenames are not
+        # enumerable and the encrypted key files are not traversable by other
+        # local users.  ``mkdir(mode=...)`` is subject to umask, is a no-op
+        # when the directory already exists, and is ignored outright on
+        # Windows -- where a store under the profile root would otherwise
+        # inherit that root's ACEs.  So the mode argument is a first
+        # approximation and ``restrict_to_owner`` is the control: chmod 0700
+        # on POSIX, a protected owner-only DACL on Windows, applied whether
+        # the directory is new or pre-existing.
         self.storage_path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if hasattr(os, "chmod"):
-            try:
-                os.chmod(self.storage_path, 0o700)
-            except OSError:  # pragma: no cover - platform dependent
-                pass
+        if not _owner_only.restrict_to_owner(
+            self.storage_path, directory=True
+        ):  # pragma: no cover - platform dependent
+            logger.debug("owner-only access could not be enforced on %s", self.storage_path)
 
         # Key derivation parameters (versioned for future upgrades)
         self.KDF_VERSION = 3  # v3 = Argon2id, v2 = PBKDF2 600k, v1 = PBKDF2 100k
-        self.KDF_ITERATIONS = 600000  # OWASP 2024 recommendation (PBKDF2 fallback)
+        self.KDF_ITERATIONS = 600000  # OWASP 2024; legacy v2 stores (read, never written)
         self.KDF_LEGACY_ITERATIONS = 100000  # Pre-v2 default iterations
         self.KDF_SALT_BYTES = 32  # Salt size in bytes
         self.KDF_KEY_BYTES = 32  # Derived key size (AES-256)
@@ -809,7 +873,11 @@ class SecureKeyStorage:
             self._derive_key_from_password(master_password)
         else:
             # Generate random encryption key (should be HSM-backed in production)
-            self.encryption_key = bytearray(secrets.token_bytes(32))
+            # INVARIANT-41: this key protects every key at rest — draw it
+            # through the health-tested, error-state-gated CSPRNG, not a bare
+            # secrets.token_bytes (which neither detects a stuck DRBG nor
+            # refuses to mint key material while the module is in ERROR).
+            self.encryption_key = bytearray(secure_token_bytes(32))
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
     @staticmethod
@@ -873,22 +941,27 @@ class SecureKeyStorage:
         # cracking. The parameter floors above cannot see this: they only ever
         # compare a number against the floor for whichever algorithm was named.
         #
-        # So the algorithm is floored too. PBKDF2 is accepted only where it is
-        # the genuine best available — a build with no native Argon2id, which
-        # is what ``_derive_key_from_password`` itself falls back to when it
-        # creates a store. Where Argon2id *is* available, a store claiming
-        # PBKDF2 is either a real legacy store or a downgrade attempt, and
-        # nothing in the unauthenticated file distinguishes them. Both are
+        # So the algorithm is floored too, and unconditionally. A store
+        # claiming PBKDF2 is either a real legacy store or a downgrade attempt,
+        # and nothing in the unauthenticated file distinguishes them. Both are
         # handled the same way as sub-floor costs: refuse, and point at
         # ``allow_legacy_kdf`` + ``migrate_kdf()``.
+        #
+        # This floor used to stand down when the loaded library lacked the
+        # Argon2id symbols, on the reasoning that PBKDF2 was then "the genuine
+        # best available" because ``_derive_key_from_password`` fell back to it
+        # when creating a store. Both halves were the same defect: a partial or
+        # stale library silently created PBKDF2 stores, and on that library an
+        # Argon2id store whose metadata was rewritten to PBKDF2 at 600k opened
+        # without a word. Creation and migration now refuse without Argon2id
+        # (``_require_argon2id``), so no PBKDF2 store is ever legitimately new,
+        # and the completeness of the loaded library no longer decides what
+        # this check accepts.
         if algorithm != "Argon2id":
-            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
-
-            if _ARGON2_NATIVE_AVAILABLE:
-                shortfalls.append(
-                    f"algorithm {algorithm!r} is weaker than the Argon2id this "
-                    "build supports (no memory-hardness)"
-                )
+            shortfalls.append(
+                f"algorithm {algorithm!r} is weaker than the Argon2id every new "
+                "or migrated store is created with (no memory-hardness)"
+            )
 
         # Cost floors, read through _policy_cost() rather than bare int().
         #
@@ -988,6 +1061,31 @@ class SecureKeyStorage:
             )
         )
 
+    def _require_argon2id(self, action: str) -> None:
+        """Refuse ``action`` unless the loaded library provides Argon2id.
+
+        Creating a store and migrating one are the two places this class
+        *chooses* a KDF, and Argon2id is the only one it chooses.  A library
+        without the Argon2id symbols is partial or stale -- the native build
+        compiles ``ama_argon2.c`` whenever it compiles the rest of the
+        backend -- and the answer to it is the same as for every other missing
+        family: refuse at call time, never substitute (INVARIANT-7).
+
+        Raises:
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If
+                Argon2id is unavailable.
+        """
+        from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+
+        if not _ARGON2_NATIVE_AVAILABLE:
+            raise NativeBackendUnavailableError(
+                f"Argon2id native backend not available: refusing to {action} at "
+                f"{self.storage_path}. Every key store this library creates or "
+                "migrates is protected with Argon2id; there is no PBKDF2 fallback "
+                "(INVARIANT-7). The loaded library is partial or stale. Rebuild: "
+                "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+            )
+
     def _derive_key_from_password(self, master_password: str) -> None:
         """Derive encryption key from password with proper salt handling.
 
@@ -998,6 +1096,9 @@ class SecureKeyStorage:
         Raises:
             KDFPolicyError: If the stored parameters are below the floor and
                 ``allow_legacy_kdf`` is False.
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If this
+                would create a new store and
+                the loaded library does not provide Argon2id.
         """
         # Check for existing salt (migration support)
         if self.salt_file.exists():
@@ -1006,7 +1107,7 @@ class SecureKeyStorage:
 
             # Load metadata to get iteration count
             if self.metadata_file.exists():
-                with open(self.metadata_file, "r") as f:
+                with open(self.metadata_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
                 iterations = metadata.get("iterations", self.KDF_LEGACY_ITERATIONS)
                 version = metadata.get("version", 1)
@@ -1015,41 +1116,43 @@ class SecureKeyStorage:
                 iterations = self.KDF_LEGACY_ITERATIONS
                 version = 1
         else:
-            # New installation: generate random salt
-            self.salt = secrets.token_bytes(self.KDF_SALT_BYTES)
+            # New installation.  Argon2id or nothing, and decided BEFORE the
+            # salt is written, so a refused creation leaves no half-initialised
+            # store behind.
+            #
+            # This branch used to "prefer Argon2id, fall back to PBKDF2": when
+            # the loaded library lacked the Argon2id symbols (a partial or
+            # stale build -- every build of this tree with the native backend
+            # compiles ama_argon2.c) it created a v2 PBKDF2 store and said
+            # nothing beyond the load-time missing-families warning.  Every
+            # other missing family refuses at call time; this one silently
+            # selected a KDF with no memory-hardness for the key that protects
+            # every stored key (INVARIANT-7, and INVARIANT-35's selection axis).
+            self._require_argon2id("create a new password-protected key store")
+
+            self.salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
             # Save salt with secure permissions (0600), no world-readable window.
             _atomic_write_bytes(self.salt_file, self.salt)
 
-            # Determine algorithm: prefer Argon2id, fall back to PBKDF2
-            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
-
-            use_argon2 = _ARGON2_NATIVE_AVAILABLE
-
-            if use_argon2:
-                algorithm = "Argon2id"
-                version = 3
-            else:
-                algorithm = "PBKDF2-HMAC-SHA256"
-                version = 2
-
-            # Save KDF metadata
+            version = self.KDF_VERSION
             metadata = {
                 "version": version,
-                "algorithm": algorithm,
+                "algorithm": "Argon2id",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "t_cost": self.ARGON2_T_COST,
+                "m_cost": self.ARGON2_M_COST,
+                "parallelism": self.ARGON2_PARALLELISM,
             }
-            if algorithm == "PBKDF2-HMAC-SHA256":
-                metadata["iterations"] = self.KDF_ITERATIONS
-            else:
-                metadata["t_cost"] = self.ARGON2_T_COST
-                metadata["m_cost"] = self.ARGON2_M_COST
-                metadata["parallelism"] = self.ARGON2_PARALLELISM
-            with open(self.metadata_file, "w") as f:
-                json.dump(metadata, f, indent=2)
-            os.chmod(self.metadata_file, 0o600)
-            iterations = self.KDF_ITERATIONS
+            # Through the same atomic owner-only writer as the salt one screen
+            # up: this used to be open() + chmod, the ordering the writer's
+            # docstring names as the world-readable window, for the file the
+            # store later reads back as untrusted input.
+            _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
+            # Argon2id has no iteration count; version 3 takes the Argon2id
+            # branch below and never reads this.
+            iterations = None
 
         # Derive key using the appropriate algorithm
         if version >= 3:
@@ -1077,7 +1180,7 @@ class SecureKeyStorage:
                 #
                 # Read the values raw and let the policy check adjudicate.
                 try:
-                    with open(self.metadata_file, "r") as _f:
+                    with open(self.metadata_file, "r", encoding="utf-8") as _f:
                         _meta = json.load(_f)
                 except (OSError, json.JSONDecodeError) as _exc:
                     logger.warning(
@@ -1149,9 +1252,10 @@ class SecureKeyStorage:
             self._enforce_kdf_policy(self.kdf_params)
             iterations = self._usable_cost(iterations, self.KDF_ITERATIONS)
             self.kdf_params["iterations"] = iterations
+            # Key-encryption-key derivation on this module's own PBKDF2
+            # (INVARIANT-1; see the BIP39 site above for the full rationale).
             self.encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
+                native_pbkdf2_hmac_sha256(
                     master_password.encode("utf-8"),
                     self.salt,
                     iterations,
@@ -1171,11 +1275,24 @@ class SecureKeyStorage:
         """
         Migrate to current KDF parameters.
 
-        Re-encrypts all stored keys with new salt and iteration count.
-        Returns True on success.
+        Re-encrypts all stored keys under a new salt and an Argon2id key at the
+        current parameters (KDF version 3).  Returns True on success, False
+        when there is no salt file and so nothing to migrate.
+
+        Raises:
+            ama_cryptography.exceptions.NativeBackendUnavailableError: If the
+                loaded library does not
+                provide Argon2id.  Raised before any key is read or any file
+                is written; the store is left exactly as it was.
         """
         if not self.salt_file.exists():
             return False  # Nothing to migrate
+
+        # Argon2id or nothing, checked before a key is read or a byte written.
+        # This used to fall back to PBKDF2 on a library without the Argon2id
+        # symbols, which re-keyed an Argon2id store DOWN to PBKDF2 under the
+        # name "migrate", and reported success.
+        self._require_argon2id("migrate the key store")
 
         # Read all existing keys with old parameters
         old_keys: Dict[str, Tuple[bytes, Dict[str, Any]]] = {}
@@ -1193,39 +1310,26 @@ class SecureKeyStorage:
             # permanently unreadable, while list_keys() went on reporting it.
             # Silent, and not recoverable once the old salt is gone.
             if key_data is not None:
-                with open(key_file, "r") as f:
+                with open(key_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f).get("metadata", {})
                 old_keys[key_id] = (key_data, metadata)
 
         # Generate new salt
-        new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
+        new_salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
-        # Derive new key — prefer Argon2id, fall back to PBKDF2
-        from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
+        # Derive the new key with Argon2id (availability checked above).
+        from ama_cryptography.pqc_backends import native_argon2id
 
-        use_argon2 = _ARGON2_NATIVE_AVAILABLE
-
-        if use_argon2:
-            new_encryption_key = bytearray(
-                native_argon2id(
-                    master_password.encode("utf-8"),
-                    new_salt,
-                    t_cost=self.ARGON2_T_COST,
-                    m_cost=self.ARGON2_M_COST,
-                    parallelism=self.ARGON2_PARALLELISM,
-                    out_len=self.KDF_KEY_BYTES,
-                )
+        new_encryption_key = bytearray(
+            native_argon2id(
+                master_password.encode("utf-8"),
+                new_salt,
+                t_cost=self.ARGON2_T_COST,
+                m_cost=self.ARGON2_M_COST,
+                parallelism=self.ARGON2_PARALLELISM,
+                out_len=self.KDF_KEY_BYTES,
             )
-        else:
-            new_encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
-                    master_password.encode("utf-8"),
-                    new_salt,
-                    self.KDF_ITERATIONS,
-                    self.KDF_KEY_BYTES,
-                )
-            )
+        )
 
         # Re-encrypt all keys under the new key.  This is the dangerous part:
         # each ``{key_id}.json`` is rewritten in place under ``new_encryption_key``
@@ -1261,18 +1365,12 @@ class SecureKeyStorage:
         # Swap the recorded parameters over with the key, so the keys written
         # below are bound to the parameters they are actually protected by
         # rather than to the ones being migrated away from.
-        if use_argon2:
-            self.kdf_params = {
-                "algorithm": "Argon2id",
-                "t_cost": self.ARGON2_T_COST,
-                "m_cost": self.ARGON2_M_COST,
-                "parallelism": self.ARGON2_PARALLELISM,
-            }
-        else:
-            self.kdf_params = {
-                "algorithm": "PBKDF2-HMAC-SHA256",
-                "iterations": self.KDF_ITERATIONS,
-            }
+        self.kdf_params = {
+            "algorithm": "Argon2id",
+            "t_cost": self.ARGON2_T_COST,
+            "m_cost": self.ARGON2_M_COST,
+            "parallelism": self.ARGON2_PARALLELISM,
+        }
 
         try:
             for key_id, (key_data, key_metadata) in old_keys.items():
@@ -1283,17 +1381,14 @@ class SecureKeyStorage:
 
             # Update metadata (atomic, 0600).
             metadata = {
-                "version": self.KDF_VERSION if use_argon2 else 2,
-                "algorithm": "Argon2id" if use_argon2 else "PBKDF2-HMAC-SHA256",
+                "version": self.KDF_VERSION,
+                "algorithm": "Argon2id",
                 "salt_bytes": self.KDF_SALT_BYTES,
                 "migrated_at": datetime.now(timezone.utc).isoformat(),
+                "t_cost": self.ARGON2_T_COST,
+                "m_cost": self.ARGON2_M_COST,
+                "parallelism": self.ARGON2_PARALLELISM,
             }
-            if use_argon2:
-                metadata["t_cost"] = self.ARGON2_T_COST
-                metadata["m_cost"] = self.ARGON2_M_COST
-                metadata["parallelism"] = self.ARGON2_PARALLELISM
-            else:
-                metadata["iterations"] = self.KDF_ITERATIONS
             _atomic_write_bytes(self.metadata_file, json.dumps(metadata, indent=2).encode("utf-8"))
 
             return True
@@ -1395,7 +1490,10 @@ class SecureKeyStorage:
         # from escaping ``storage_path`` — see ``_validate_key_id``).
         self._validate_key_id(key_id)
 
-        nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
+        # INVARIANT-41: a repeated GCM nonce under one key is catastrophic
+        # (keystream reuse + GHASH subkey recovery), so the draw that mints it
+        # must be the one carrying the continuous repeated-output test.
+        nonce = secure_token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
         # Associated data binds the ciphertext to key_id and, from format v3,
         # to the KDF parameters this instance derived its key with.  The
@@ -1448,7 +1546,7 @@ class SecureKeyStorage:
         if not key_file.exists():
             return None
 
-        with open(key_file, "r") as f:
+        with open(key_file, "r", encoding="utf-8") as f:
             storage_data = json.load(f)
 
         algorithm = storage_data.get("algorithm", "AES-256-GCM")
@@ -1526,16 +1624,59 @@ class SecureKeyStorage:
         self._validate_key_id(key_id)
 
         key_file = self.storage_path / f"{key_id}.json"
-        if key_file.exists():
-            # Best-effort overwrite before unlinking (see note below on the
-            # limits of this on journaling/CoW/SSD filesystems).
-            with open(key_file, "wb") as f:
-                f.write(secrets.token_bytes(1024))
-                f.flush()
-                os.fsync(f.fileno())
-            key_file.unlink()
-            return True
-        return False
+        # Open the descriptor first, refusing to follow a symlink, and do the
+        # overwrite through THAT descriptor.  The traversal guard above only
+        # constrains the name: it cannot stop `<key_id>.json` from being a
+        # symlink planted inside the storage directory, and the previous
+        # `open(key_file, "wb")` followed it -- overwriting the target with
+        # 1 KiB of random bytes and then unlinking the link.  O_NOFOLLOW makes
+        # that an ELOOP rather than a write, and the S_ISREG check refuses a
+        # FIFO or device node, which O_NOFOLLOW does not cover.
+        #
+        # O_NONBLOCK is required, not decorative: opening the WRITE end of a
+        # FIFO with no reader BLOCKS INDEFINITELY without it, so a FIFO
+        # planted in the store would hang delete_key rather than being
+        # refused by the S_ISREG check below -- the check never runs, because
+        # the open never returns.  With O_NONBLOCK that open fails ENXIO.  On
+        # a regular file the flag has no effect.
+        #
+        # O_BINARY (Windows only) keeps the overwrite byte-exact: os.open
+        # defaults to text mode there, where every 0x0A in the random bytes
+        # is written as 0x0D 0x0A and the overwrite runs past the key's size.
+        flags = (
+            os.O_WRONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_BINARY", 0)
+        )
+        try:
+            fd = os.open(key_file, flags)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise ValueError(
+                f"Refusing to delete key {key_id!r}: its file is not a regular "
+                f"file this process may open directly ({exc.strerror})"
+            ) from exc
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(
+                    f"Refusing to delete key {key_id!r}: {key_file} is not a regular file"
+                )
+            # Best-effort overwrite of the key's own bytes before unlinking
+            # (limited on journaling/CoW/SSD filesystems).  In place and in
+            # full: truncating first sent the random bytes to fresh blocks and
+            # left the old ones untouched, and a short os.write went unnoticed.
+            remaining = st.st_size
+            while remaining > 0:
+                written = os.write(fd, secrets.token_bytes(min(remaining, 65536)))
+                remaining -= written
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        key_file.unlink()
+        return True
 
     def list_keys(self) -> List[str]:
         """
@@ -1600,8 +1741,25 @@ class HSMKeyStorage:
         ],
         "softhsm": [
             "/usr/lib/softhsm/libsofthsm2.so",
+            # Debian-style multiarch layouts install under the triplet
+            # directory instead.  The test suite's availability probe knew
+            # both spellings while this list knew only the first, so on a
+            # multiarch host the probe lifted the skip and this resolver
+            # then raised "PKCS#11 library not found" — and outside the
+            # tests, the class simply could not find a SoftHSM2 the distro
+            # had installed.  tests/test_hsm_integration.py now pins that
+            # every path the probe accepts is one this list can resolve.
+            "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+            "/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so",
             "/usr/local/lib/softhsm/libsofthsm2.so",
             "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # macOS ARM
+            # Windows (Disig MSI, via `choco install softhsm.install`).  The
+            # MSI parents its directory to TARGETDIR, so the drive follows
+            # ROOTDRIVE unless INSTALLDIR is pinned; both the drive-root form
+            # the installer defaults to and the Program Files form an operator
+            # may choose are listed.
+            "C:\\SoftHSM2\\lib\\softhsm2-x64.dll",
+            "C:\\Program Files\\SoftHSM2\\lib\\softhsm2-x64.dll",
         ],
         "aws-cloudhsm": [
             "/opt/cloudhsm/lib/libcloudhsm_pkcs11.so",
@@ -1826,7 +1984,7 @@ class HSMKeyStorage:
         handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
 
         try:
-            nonce = secrets.token_bytes(12)
+            nonce = secure_token_bytes(12)  # INVARIANT-41 (see store_key)
             mechanism = self.pkcs11.AES_GCM_Mechanism(nonce, b"", 128)
             ciphertext_with_tag = bytes(self.session.encrypt(handle, plaintext, mechanism))
 
@@ -1953,8 +2111,11 @@ if __name__ == "__main__":
     # to logs / terminal scrollback.  A SHA3-256 fingerprint is one-way,
     # supports `grep` / log-correlation just as well as a hex prefix,
     # and reveals nothing about the key value itself.
-    sk_fp = hashlib.sha3_256(signing_key).hexdigest()[:16]
-    ek_fp = hashlib.sha3_256(encryption_key).hexdigest()[:16]
+    # The fingerprint input IS key material, so even this display path uses
+    # the module's own SHA3-256 rather than OpenSSL-backed hashlib
+    # (INVARIANT-1).
+    sk_fp = native_sha3_256(signing_key).hex()[:16]
+    ek_fp = native_sha3_256(encryption_key).hex()[:16]
     logger.info(f"Signing key fingerprint:    sha3-256:{sk_fp}")
     logger.info(f"Encryption key fingerprint: sha3-256:{ek_fp}")
 
@@ -1986,14 +2147,14 @@ if __name__ == "__main__":
     # Store a key
     test_key = secrets.token_bytes(32)
     storage.store_key("master-key-001", test_key, metadata={"purpose": "signing"})
-    logger.info("✓ Key stored securely")
+    logger.info("[OK] Key stored securely")
 
     # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
     logger.info(
-        f"✓ Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
+        f"[OK] Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
     )
 
     logger.info("\n" + "=" * 70)
-    logger.info("✓ Key Management System operational")
+    logger.info("[OK] Key Management System operational")
     logger.info("=" * 70)

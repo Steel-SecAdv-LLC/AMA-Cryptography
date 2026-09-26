@@ -82,6 +82,7 @@ clang-format -i src/c/*.c include/*.h
 ```
 
 C source files include the public header as:
+<!-- example: pseudocode: a single include line showing how in-tree C sources reference the public header -->
 ```c
 #include "../include/ama_cryptography.h"
 ```

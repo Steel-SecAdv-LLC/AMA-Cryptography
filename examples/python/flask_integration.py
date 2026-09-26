@@ -45,9 +45,11 @@ Then visit:
 
 import json
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
+from typing import Any
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -76,19 +78,45 @@ app = Flask(__name__)
 # In production, load keys from secure storage (HSM, Vault, etc.)
 KMS = generate_key_management_system("Flask API Server")
 CRYPTO = AmaCryptography(algorithm=AlgorithmType.ED25519)
-KEYPAIR = CRYPTO.generate_keypair()
+
+# Two keys for two jobs, and they must never be one key.
+#
+# RESPONSE_KEYPAIR signs only this server's own response bodies (the
+# X-Signature header), so a client can check a response came from here.
+# SIGNING_KEYPAIR is the key behind POST /api/sign, an unauthenticated service
+# that signs whatever bytes a caller sends.  When both jobs shared one key,
+# /api/sign was a signing oracle for the authenticity header: a caller posted
+# json.dumps(forged_body, sort_keys=True) as "data" and got back a valid
+# X-Signature for a response this server never sent.  An endpoint that signs
+# caller-chosen bytes must never share a key with an authenticity header.  A
+# domain prefix on the header's signature alone would not have closed this:
+# /api/sign signs whatever it is sent, so a caller can send the prefix too.
+RESPONSE_KEYPAIR = CRYPTO.generate_keypair()
+SIGNING_KEYPAIR = CRYPTO.generate_keypair()
 
 
-def sign_response(f):
+def sign_response(f: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator to sign API responses with Ed25519.
 
-    Adds X-Signature header to responses for client verification.
+    Adds X-Signature header to responses for client verification.  The
+    signature is made with ``RESPONSE_KEYPAIR`` over
+    ``json.dumps(body, sort_keys=True)``, and ``RESPONSE_KEYPAIR`` signs
+    nothing else.
     """
 
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
         response = f(*args, **kwargs)
+
+        # A (body, status) tuple — the way every 400 in this file is
+        # returned — passes through unsigned: re-serializing it below would
+        # json.dumps a Response object and turn each documented 400 into a
+        # 500.  Only success bodies carry the signature header, which is
+        # also the honest contract (a client verifies data it will use, and
+        # error bodies carry no payload worth signing).
+        if isinstance(response, tuple):
+            return response
 
         # Get response data
         if hasattr(response, "get_json"):
@@ -96,14 +124,14 @@ def sign_response(f):
         else:
             data = response
 
-        # Sign the response
+        # Sign the response with the response-only key
         message = json.dumps(data, sort_keys=True).encode()
-        signature = CRYPTO.sign(message, KEYPAIR.secret_key)
+        signature = CRYPTO.sign(message, RESPONSE_KEYPAIR.secret_key)
 
         # Create Flask response with signature header
         resp = jsonify(data)
         resp.headers["X-Signature"] = signature.signature.hex()
-        resp.headers["X-Public-Key"] = KEYPAIR.public_key.hex()
+        resp.headers["X-Public-Key"] = RESPONSE_KEYPAIR.public_key.hex()
         resp.headers["X-Algorithm"] = "Ed25519"
 
         return resp
@@ -111,7 +139,7 @@ def sign_response(f):
     return decorated_function
 
 
-def require_hmac_auth(f):
+def require_hmac_auth(f: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator to require HMAC authentication on requests.
 
@@ -119,7 +147,7 @@ def require_hmac_auth(f):
     """
 
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
         from ama_cryptography.legacy_compat import hmac_authenticate
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -143,7 +171,7 @@ def require_hmac_auth(f):
 
 @app.route("/api/health")
 @sign_response
-def health_check():
+def health_check() -> Any:
     """Health check endpoint with signed response."""
     capabilities = get_pqc_capabilities()
 
@@ -160,9 +188,13 @@ def health_check():
 
 @app.route("/api/sign", methods=["POST"])
 @sign_response
-def sign_data():
+def sign_data() -> Any:
     """
     Sign arbitrary data with AMA Cryptography.
+
+    Signs with ``SIGNING_KEYPAIR``, never with the key behind the
+    X-Signature response header: this endpoint signs caller-chosen bytes, so
+    sharing that key would let any caller mint response signatures.
 
     Request body:
         {"data": "your data to sign"}
@@ -176,19 +208,19 @@ def sign_data():
 
     message = data["data"].encode() if isinstance(data["data"], str) else data["data"]
 
-    # Sign with Ed25519
-    signature = CRYPTO.sign(message, KEYPAIR.secret_key)
+    # Sign with Ed25519, under the signing-service key
+    signature = CRYPTO.sign(message, SIGNING_KEYPAIR.secret_key)
 
     return {
         "signature": signature.signature.hex(),
-        "public_key": KEYPAIR.public_key.hex(),
+        "public_key": SIGNING_KEYPAIR.public_key.hex(),
         "algorithm": "Ed25519",
         "message_hash": signature.message_hash.hex(),
     }
 
 
 @app.route("/api/verify", methods=["POST"])
-def verify_signature():
+def verify_signature() -> Any:
     """
     Verify a signature.
 
@@ -199,10 +231,13 @@ def verify_signature():
             "public_key": "hex public key"
         }
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     required = ["data", "signature", "public_key"]
 
-    if not all(k in data for k in required):
+    # A JSON `null` (or a non-object) body makes get_json return None/a
+    # non-dict; `k in data` would raise TypeError and surface as an
+    # unhandled 500.  Refuse it as a clean 400, matching /api/sign.
+    if not isinstance(data, dict) or not all(k in data for k in required):
         return jsonify({"error": f"Missing required fields: {required}"}), 400
 
     try:
@@ -224,7 +259,7 @@ def verify_signature():
 
 @app.route("/api/protected-data", methods=["GET"])
 @sign_response
-def get_protected_data():
+def get_protected_data() -> Any:
     """
     Get cryptographically protected data package.
 
@@ -247,7 +282,7 @@ def get_protected_data():
 
     # Create protected package
     package = create_crypto_package(
-        dna_codes=data_str,
+        codes=data_str,
         helix_params=helix_params,
         kms=KMS,
         author="Flask API",
@@ -270,7 +305,7 @@ def get_protected_data():
 @app.route("/api/protected-data", methods=["POST"])
 @require_hmac_auth
 @sign_response
-def create_protected_data():
+def create_protected_data() -> Any:
     """
     Create a new protected data package.
 
@@ -287,7 +322,7 @@ def create_protected_data():
     helix_params = [(1.0, 2.0)]
 
     package = create_crypto_package(
-        dna_codes=data_str,
+        codes=data_str,
         helix_params=helix_params,
         kms=KMS,
         author="Flask API Client",
@@ -302,19 +337,30 @@ def create_protected_data():
 
 
 @app.route("/api/keys/public")
-def get_public_keys():
-    """Get server's public keys for client-side verification."""
+def get_public_keys() -> Any:
+    """Get server's public keys for client-side verification.
+
+    Two keys, labelled by role: ``response`` verifies the X-Signature header
+    (over the sorted-key JSON body), ``signing_service`` verifies signatures
+    issued by POST /api/sign.
+    """
     return jsonify(
         {
-            "ed25519_public_key": KEYPAIR.public_key.hex(),
             "algorithm": "Ed25519",
-            "key_id": "flask-api-server-v1",
+            "response": {
+                "ed25519_public_key": RESPONSE_KEYPAIR.public_key.hex(),
+                "key_id": "flask-api-response-v1",
+            },
+            "signing_service": {
+                "ed25519_public_key": SIGNING_KEYPAIR.public_key.hex(),
+                "key_id": "flask-api-signing-service-v1",
+            },
         }
     )
 
 
 @app.errorhandler(500)
-def handle_error(error):
+def handle_error(error: Exception) -> Any:
     """Handle internal errors securely."""
     return (
         jsonify(
@@ -327,7 +373,7 @@ def handle_error(error):
     )
 
 
-def main():
+def main() -> None:
     """Run the Flask development server."""
     print("=" * 60)
     print("AMA CRYPTOGRAPHY - FLASK INTEGRATION EXAMPLE")
@@ -343,7 +389,8 @@ def main():
     print("  POST /api/protected-data  - Create protected data (HMAC auth)")
     print("  GET  /api/keys/public     - Get public keys")
     print()
-    print("Server public key:", KEYPAIR.public_key.hex()[:32] + "...")
+    print("Response public key:", RESPONSE_KEYPAIR.public_key.hex()[:32] + "...")
+    print("Signing-service public key:", SIGNING_KEYPAIR.public_key.hex()[:32] + "...")
     print()
 
     # Run development server

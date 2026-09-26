@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 4.0.0 |
-| Last Updated | 2026-07-25 |
+| Document Version | 5.0.0 |
+| Last Updated | 2026-09-19 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -118,12 +118,21 @@ see [`CSRC_ALIGN_REPORT.md §2.3–§2.5`](docs/compliance/CSRC_ALIGN_REPORT.md)
 provenance statements and known divergences from the reference pseudocode,
 see [`src/c/PROVENANCE.md`](src/c/PROVENANCE.md).
 
-Ed25519 is **vendored** rather than clean-room: the radix-2^51 field
-arithmetic and base-point tables come from the public-domain
-[ed25519-donna](https://github.com/floodyberry/ed25519-donna) project under
-`src/c/vendor/ed25519-donna/`, with the upstream LICENSE preserved. The
-AMA-specific wrapper (API contract, FROST integration, expanded-key fast
-path) is in-house.
+Ed25519 is **in-house** on every platform: the radix-2^51 field arithmetic,
+the group arithmetic (`src/c/internal/ama_ed25519_ge.h`) and the static
+base-point tables (generated in-tree by `tools/gen_ed25519_tables.py` into
+`src/c/internal/ama_ed25519_tables.h`) are written against RFC 8032, with no
+upstream code copied — with one exception, which is adapted rather than
+written from the standard alone: the constant-time field inversion
+(`src/c/internal/ama_fe25519_safegcd.h`) follows the batched 62-bit structure
+of libsecp256k1's safegcd `modinv64` reference implementation, under its MIT
+licence, attributed in [`NOTICE`](NOTICE) and recorded as the `ama_ed25519`
+pedigree in the C-library SBOM. Earlier revisions described a vendored public-domain
+x86-64 backend; it was removed in the twenty-first maintenance pass (see
+CHANGELOG), and its recorded behaviour is replayed against the in-house code
+by the frozen oracle `tests/oracle/ed25519_frozen_oracle.txt`. The AMA API
+wrapper (API contract, FROST integration, expanded-key fast path) is likewise
+in-house.
 
 ## Classical Cryptography
 
@@ -143,11 +152,11 @@ Ed25519 provides classical digital signatures for hybrid mode (Ed25519 + ML-DSA-
 
 **Standard:** RFC 8032
 
-**Implementation (v2.0):** Native C (`ama_ed25519.c`) with:
-- Dedicated `fe25519_sq()` field squaring (~55 muls vs ~100, based on SUPERCOP ref10)
-- C11 `_Atomic` with `memory_order_acquire`/`memory_order_release` for thread-safe initialization
-- Sign/verify roundtrip validated against RFC 8032 Test Vector 1 (12 tests)
-- Fallback to volatile for pre-C11 compilers (MSVC compatibility)
+**Implementation:** Native C (`ama_ed25519.c` with the group-arithmetic template `src/c/internal/ama_ed25519_ge.h`) with:
+- Dedicated `fe51_sq()` field squaring (15 cross-products against 25 for a general multiply) on radix 2^51, with a byte-identical radix-2^64 MULX+ADX instantiation on x86-64 GCC/Clang
+- Static precomputed base-point tables (`tools/gen_ed25519_tables.py`), so there is no run-time initialization, no `_Atomic` and no lock on the Ed25519 path
+- Sign/verify roundtrip validated against the RFC 8032 §7.1 vectors, the 2,022-record frozen oracle and the Wycheproof corpus
+- The same arithmetic on MSVC through `_umul128` / `__umulh` (x64 / ARM64)
 
 **Usage:** Classical signatures and hybrid signatures (Ed25519 + ML-DSA-65).
 
@@ -167,7 +176,7 @@ AES-256-GCM provides authenticated encryption with associated data (AEAD).
 
 **Standard:** NIST SP 800-38D
 
-**Implementation:** Native C (`ama_aes_gcm.c`). Uses 256-byte lookup table S-box — **not** constant-time with respect to cache-timing in shared-tenant environments. For such deployments, hardware AES-NI or bitsliced implementations are recommended.
+**Implementation:** Native C (`ama_aes_gcm.c`). The default build (`AMA_AES_CONSTTIME=ON`) uses the constant-time bitsliced S-box (`ama_aes_bitsliced.c`), and the runtime dispatcher promotes to a hardware AES kernel where available (VAES+AVX2, AES-NI+PCLMULQDQ, or ARMv8 AES+PMULL). The cache-timing-unsafe 256-byte lookup table S-box is built only when explicitly opted in via `-DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON`; the active backend is reported at runtime by `ama_aes_gcm_active_backend()`.
 
 ### SHA3-256
 
@@ -279,7 +288,7 @@ All cryptographic primitives are implemented natively in C with zero external de
 |-------------|-----------|----------|
 | `ama_sha3.c` | SHA3-256, SHAKE128/256 | FIPS 202 |
 | `ama_hkdf.c` | HKDF-SHA3-256 | RFC 5869 |
-| `ama_ed25519.c` | Ed25519 (C11 atomics) | RFC 8032 |
+| `ama_ed25519.c` | Ed25519 (static tables, no run-time init) | RFC 8032 |
 | `ama_aes_gcm.c` | AES-256-GCM | SP 800-38D |
 | `ama_dilithium.c` | ML-DSA-65 | FIPS 204 |
 | `ama_kyber.c` | ML-KEM-1024 | FIPS 203 |
@@ -306,10 +315,29 @@ All verified via dudect-style timing analysis (see [CONSTANT_TIME_VERIFICATION.m
 
 ### Key Zeroization
 
-All key material is securely wiped after use via `secure_wipe()` which:
-1. Overwrites memory with zeros
-2. Uses memory barriers to prevent compiler optimization
-3. Verifies the wipe completed
+Key material is wiped through one kernel. `ama_cryptography.secure_memory.secure_memzero()`
+— and `legacy_compat.secure_wipe()`, which delegates to it — calls
+`ama_secure_memzero()` in `src/c/ama_consttime.c`, which:
+
+1. writes zeros **once**, through `volatile` 64-bit stores; then
+2. issues a compiler barrier.
+
+The barrier is the mechanism, not a repeat count: it denies the compiler the
+proof that the stores are dead, which is what dead-store elimination needs.
+There is no third "verification" pass on the native path — the barrier makes
+one unnecessary, and a read-back would itself be removable.
+
+**Fail-closed, not best-effort.** With no native backend and no
+`AMA_ALLOW_PYTHON_MEMZERO=1` opt-in, `secure_memzero()` raises
+`SecureMemoryError` rather than degrading to an interpreter loop (INVARIANT-7).
+The opt-in fallback is the only path that loops, and it *does* verify, because
+it has no barrier to rely on; if it observes a residual non-zero byte it raises.
+
+Until 5.0.x this section described memory barriers and a verification pass that
+`secure_wipe()` did not have — it was three plain Python `for` loops
+(0x00 / 0xFF / 0x00) with no barrier of any kind. The function now routes
+through the native kernel, so the property described here is the property
+implemented. `tools/check_crypto_construction_docs.py` holds the two together.
 
 ### Backend Selection
 
@@ -319,24 +347,39 @@ PQC is provided by the native C library (`libama_cryptography.so`):
 - **SPHINCS+-SHA2-256f** - Native C (FIPS 205)
 
 Check availability with:
+
+<!-- example: python-run -->
 ```python
-from ama_cryptography.pqc_backends import get_pqc_status
-status = get_pqc_status()
-print(f"Dilithium: {status.dilithium_available}")
-print(f"Kyber: {status.kyber_available}")
-print(f"SPHINCS+: {status.sphincs_available}")
+from ama_cryptography.pqc_backends import PQCStatus, get_pqc_status, get_pqc_backend_info
+
+# get_pqc_status() returns a PQCStatus ENUM — it has no per-algorithm
+# attributes. The per-algorithm view is get_pqc_backend_info()'s dict.
+assert get_pqc_status() is PQCStatus.AVAILABLE
+
+info = get_pqc_backend_info()
+print(f"Dilithium: {info['dilithium_available']}")
+print(f"Kyber: {info['kyber_available']}")
+print(f"SPHINCS+: {info['sphincs_available']}")
 ```
 
 ### Adaptive Cryptographic Posture
 
 The adaptive posture system (`ama_cryptography/adaptive_posture.py`) bridges the 3R monitor with runtime security responses:
 
-| Threat Level | Score | Response |
-|-------------|-------|----------|
-| NOMINAL | 0.0-0.3 | No action |
-| ELEVATED | 0.3-0.6 | Increase monitoring |
-| HIGH | 0.6-0.8 | Rotate keys |
-| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+| Threat Level | Composite score | Response |
+|-------------|-----------------|----------|
+| NOMINAL | < 0.15 | No action |
+| ELEVATED | 0.15 – 0.45 | Increase monitoring |
+| HIGH | 0.45 – 0.80 | Rotate keys |
+| CRITICAL | ≥ 0.80 | Rotate keys + switch algorithm + alert |
+
+The boundaries are `PostureEvaluator.DEFAULT_ELEVATED_THRESHOLD` /
+`DEFAULT_HIGH_THRESHOLD` / `DEFAULT_CRITICAL_THRESHOLD`
+(`adaptive_posture.py:148-150`), calibrated as 3σ / 5σ / 7σ in the composite
+score space rather than as round fractions — which is why they are not
+0.3 / 0.6 / 0.8. The composite is four weighted signals, not three:
+timing 0.45, pattern 0.25, resonance 0.15, Lyapunov 0.15
+(`adaptive_posture.py:265-268`).
 
 Algorithm strength ordering: ED25519 (0) → ML_DSA_65 (1) → SPHINCS_256F (2) → HYBRID_SIG (3)
 
@@ -377,7 +420,7 @@ ChaCha20-Poly1305 provides authenticated encryption as an alternative to AES-256
 
 **Standard:** RFC 8439
 
-**Implementation:** Native C (`ama_chacha20poly1305.c`). Software-only, constant-time — recommended for shared-tenant environments where AES cache-timing is a concern.
+**Implementation:** Native C (`ama_chacha20poly1305.c`). Software-only, constant-time — preferred over AES-GCM in environments without hardware AES acceleration, or in builds where `AMA_AES_CONSTTIME` has been explicitly disabled.
 
 ### Argon2id (Password Hashing)
 
@@ -400,7 +443,7 @@ Argon2id provides memory-hard password hashing, combining data-dependent and dat
 
 ### secp256k1 (Elliptic Curve Operations)
 
-secp256k1 provides elliptic curve operations supporting BIP32-compliant hierarchical deterministic (HD) key derivation.
+secp256k1 provides the elliptic curve operations under BIP32-style hierarchical deterministic (HD) key derivation. The child KDF follows BIP32; the master key is derived with an AMA-specific HMAC key rather than BIP32's `"Bitcoin seed"`, so the derived tree is deliberately not interoperable with a BIP32 wallet.
 
 **Parameters:**
 - Private Key: 32 bytes (scalar)
@@ -410,7 +453,8 @@ secp256k1 provides elliptic curve operations supporting BIP32-compliant hierarch
 **Security Properties:**
 - 128-bit classical security
 - NOT quantum-resistant
-- Used for HD key derivation (BIP32 compliance)
+- Used for BIP32-style HD key derivation (AMA-specific root; NOT BIP32
+  interoperable — see the derivation note above)
 
 **Standard:** SEC 2 (Standards for Efficient Cryptography)
 

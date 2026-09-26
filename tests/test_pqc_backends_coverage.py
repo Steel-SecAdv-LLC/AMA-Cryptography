@@ -12,6 +12,7 @@ all public cryptographic functions.
 AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
+import copy
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -133,26 +134,49 @@ class TestLibraryLoading:
         result = _setup_native_ctypes(mock_lib)
         assert result is False
 
-    def test_find_native_library_with_env_override_file(self) -> None:
-        """AMA_CRYPTO_LIB_PATH pointing to a file is tried first."""
-        from ama_cryptography.pqc_backends import _find_native_library
+    def test_find_native_library_with_env_override_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AMA_CRYPTO_LIB_PATH naming a file is the whole search.
 
-        with patch.dict("os.environ", {"AMA_CRYPTO_LIB_PATH": "/fake/path/lib.so"}):
-            with patch("ama_cryptography.pqc_backends.Path.is_file", return_value=True):
-                with patch("ama_cryptography.pqc_backends._try_load_library", return_value=None):
-                    # Should not crash even if loading fails
-                    _find_native_library()
+        Every path "exists" here, so any candidate after the override would be
+        tried too: a refused override must end discovery, not fall back.
+        """
+        from ama_cryptography import pqc_backends
 
-    def test_find_native_library_with_env_override_dir(self) -> None:
-        """AMA_CRYPTO_LIB_PATH pointing to a directory is searched."""
-        from ama_cryptography.pqc_backends import _find_native_library
+        monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: False)
+        saved = copy.deepcopy(pqc_backends._LOAD_DIAGNOSTICS)
+        try:
+            with patch.dict("os.environ", {"AMA_CRYPTO_LIB_PATH": "/fake/path/lib.so"}):
+                with patch("ama_cryptography.pqc_backends.Path.is_file", return_value=True):
+                    with patch(
+                        "ama_cryptography.pqc_backends._try_load_library", return_value=None
+                    ) as tried:
+                        assert pqc_backends._find_native_library() is None
+            assert [c.args[0] for c in tried.call_args_list] == [Path("/fake/path/lib.so")]
+            assert pqc_backends._LOAD_DIAGNOSTICS["override_refusal"]
+        finally:
+            pqc_backends._LOAD_DIAGNOSTICS.clear()
+            pqc_backends._LOAD_DIAGNOSTICS.update(saved)
 
-        with patch.dict("os.environ", {"AMA_CRYPTO_LIB_PATH": "/fake/dir"}):
-            with patch("ama_cryptography.pqc_backends.Path.is_file", return_value=False):
-                with patch("ama_cryptography.pqc_backends.Path.is_dir", return_value=True):
-                    _find_native_library()
-                    # Returns None because no real library at /fake/dir
-                    # but shouldn't crash
+    def test_find_native_library_with_env_override_dir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AMA_CRYPTO_LIB_PATH naming a directory is the only directory searched."""
+        from ama_cryptography import pqc_backends
+
+        monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: False)
+        saved = copy.deepcopy(pqc_backends._LOAD_DIAGNOSTICS)
+        try:
+            with patch.dict("os.environ", {"AMA_CRYPTO_LIB_PATH": "/fake/dir"}):
+                with patch("ama_cryptography.pqc_backends.Path.is_file", return_value=False):
+                    with patch("ama_cryptography.pqc_backends.Path.is_dir", return_value=True):
+                        assert pqc_backends._find_native_library() is None
+            assert pqc_backends._LOAD_DIAGNOSTICS["searched_dirs"] == [str(Path("/fake/dir"))]
+            assert "names no file" in pqc_backends._LOAD_DIAGNOSTICS["override_refusal"]
+        finally:
+            pqc_backends._LOAD_DIAGNOSTICS.clear()
+            pqc_backends._LOAD_DIAGNOSTICS.update(saved)
 
 
 # ===========================================================================
@@ -1108,7 +1132,7 @@ class TestAdditionalNativeFunctions:
         )
 
         if not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
-            pytest.skip("ChaCha20-Poly1305 not available")
+            pytest.skip("native ChaCha20-Poly1305 backend not available")
 
         key = secrets.token_bytes(32)
         nonce = secrets.token_bytes(12)

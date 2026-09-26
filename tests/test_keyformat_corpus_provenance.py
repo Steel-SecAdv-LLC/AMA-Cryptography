@@ -24,14 +24,25 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import io
 import json
 import shutil
+import sys
+import urllib.request
+import urllib.response
+from email import message_from_string
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
 TOOL_PATH = REPO_ROOT / "tools" / "build_keyformat_corpus.py"
 CORPUS = REPO_ROOT / "tests" / "kat" / "keyformats"
 
@@ -102,27 +113,27 @@ def test_an_absent_source_revision_is_caught(tool: ModuleType, scratch: Path) ->
     """The provenance property proper: bytes whose origin revision is not
     recorded cannot be re-derived from the document they claim to come from."""
     path = scratch / "rfc9881_ml_dsa.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     del data["source"]["revision"]
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(scratch)
     assert any("source.revision" in p for p in problems), problems
 
 
 def test_an_entirely_absent_source_block_is_caught(tool: ModuleType, scratch: Path) -> None:
     path = scratch / "lamps_ml_kem.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     del data["source"]
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(scratch)
     assert any("no 'source' block" in p for p in problems), problems
 
 
 def test_corrupt_base64_is_caught(tool: ModuleType, scratch: Path) -> None:
     path = scratch / "rfc9881_ml_dsa.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["records"][0]["pem_b64"] = "!!!not base64!!!"
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(scratch)
     assert any("bad base64" in p for p in problems), problems
 
@@ -131,18 +142,18 @@ def test_a_body_that_is_not_der_is_caught(tool: ModuleType, scratch: Path) -> No
     """Valid base64 of the wrong thing is the shape a page-furniture bug
     produces: it decodes cleanly and is not a key."""
     path = scratch / "rfc8410_okp.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["records"][0]["pem_b64"] = base64.b64encode(b"RFC 8410  Ed25519").decode()
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(scratch)
     assert any("DER SEQUENCE" in p for p in problems), problems
 
 
 def test_an_empty_record_list_is_caught(tool: ModuleType, scratch: Path) -> None:
     path = scratch / "jose_cose.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["records"] = []
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(scratch)
     assert any("'records' is missing or empty" in p for p in problems), problems
 
@@ -160,9 +171,9 @@ def test_an_emptied_negative_corpus_is_caught(
     the remaining records all parsed.
     """
     path = scratch / filename
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["records"] = [r for r in data["records"] if r.get("kind") != "inconsistent"]
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(scratch)
     assert any("no 'inconsistent' records" in p for p in problems), problems
 
@@ -193,7 +204,7 @@ def test_the_corpus_contains_no_third_party_key_material(tool: ModuleType) -> No
     written from the RFCs' own ASN.1, which is AMA's work.
     """
     for filename in tool.EXPECTED_JSON:
-        data = json.loads((CORPUS / filename).read_text())
+        data = json.loads((CORPUS / filename).read_text(encoding="utf-8"))
         url = data["source"].get("url", "")
         assert any(
             host in url for host in ("rfc-editor.org", "ietf.org")
@@ -225,9 +236,9 @@ def test_a_gutted_hex_corpus_is_caught(tool: ModuleType, tmp_path: Path) -> None
     assert tool.verify_offline(corpus) == []
 
     path = corpus / "rfc8554_hss_lms.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["records"] = data["records"][:1]
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(corpus)
     assert any("carries 1 records" in p for p in problems), problems
 
@@ -237,13 +248,13 @@ def test_a_truncated_hex_vector_is_caught(tool: ModuleType, tmp_path: Path) -> N
     extractor mis-assembled — and it looks entirely usable."""
     corpus = _corpus_copy(tmp_path)
     path = corpus / "rfc8554_hss_lms.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     for record in data["records"]:
         if record["kind"] == "signature":
             record["hex"] = record["hex"][:200]
             record["bytes"] = 100
             break
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(corpus)
     assert any("expected one of" in p for p in problems), problems
 
@@ -253,9 +264,9 @@ def test_a_declared_length_that_disagrees_with_the_value_is_caught(
 ) -> None:
     corpus = _corpus_copy(tmp_path)
     path = corpus / "rfc8554_hss_lms.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["records"][0]["bytes"] = 1
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(corpus)
     assert any("declares 1 bytes" in p for p in problems), problems
 
@@ -263,10 +274,116 @@ def test_a_declared_length_that_disagrees_with_the_value_is_caught(
 def test_a_jose_record_stripped_of_its_members_is_caught(tool: ModuleType, tmp_path: Path) -> None:
     corpus = _corpus_copy(tmp_path)
     path = corpus / "jose_cose.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     for record in data["records"]:
         record.pop("jwk", None)
         record.pop("cose_labels", None)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     problems = tool.verify_offline(corpus)
     assert len(problems) >= 2, problems
+
+
+# ---------------------------------------------------------------------------
+# The fetch transport: HTTPS on every hop, through the shared policy
+# ---------------------------------------------------------------------------
+class TestFetchTransportPolicy:
+    """``fetch`` must ride ``tools/http_fetch.py``, not its own ``urlopen``.
+
+    ``fetch`` validated the URL it was handed and then called
+    ``urllib.request.urlopen``, whose default ``HTTPRedirectHandler`` follows a
+    ``Location:`` whose scheme is in ``("http", "https", "ftp", "")`` — so the
+    first hop was HTTPS and every hop after it could be plaintext, under a
+    ``# nosec B310 -- https enforced directly above`` that was true of one hop.
+    The hardened transport (HTTPS re-checked on every redirect target by
+    ``_HTTPSOnlyRedirectHandler``, bounded retry) lives once, in
+    ``tools/http_fetch.py``; these tests pin the delegation and drive the
+    previously-bypassing input — a 302 off HTTPS — through ``fetch`` itself.
+    """
+
+    def test_the_fetch_goes_through_the_shared_policy(self) -> None:
+        """Source-level pin, exactly as ``tests/test_acvp_fetch_fails_closed.py``
+        pins the ACVP fetcher: this defect class has now appeared three times
+        against the same helper, and a private transport is how it returns."""
+        body = TOOL_PATH.read_text(encoding="utf-8")
+        assert "http_fetch.fetch_bytes" in body, "corpus fetch bypasses the shared policy"
+        assert "urlopen" not in body, "corpus fetch has grown its own unhardened transport"
+
+    def test_fetch_delegates_at_runtime(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-vacuity for the source pin: the delegation must actually run."""
+        seen: list[str] = []
+
+        def fake(url: str, *, user_agent: str, timeout: int = 0, **_: Any) -> bytes:
+            assert user_agent, "the shared policy requires an identifying User-Agent"
+            seen.append(url)
+            return "answer key é".encode()
+
+        monkeypatch.setattr(http_fetch, "fetch_bytes", fake)
+        text = tool.fetch("https://www.rfc-editor.org/rfc/rfc9881.txt")
+        assert text == "answer key é"
+        assert seen == ["https://www.rfc-editor.org/rfc/rfc9881.txt"]
+
+    def test_a_non_https_source_url_is_refused(self, tool: ModuleType) -> None:
+        """The first-hop guard that always existed must survive the delegation."""
+        with pytest.raises(ValueError, match="non-HTTPS corpus source URL"):
+            tool.fetch("file:///etc/passwd")
+
+    def test_a_redirect_off_https_is_refused_end_to_end(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bypassing input: first hop HTTPS, ``Location: http://``.
+
+        The fakes stand in for the network one layer below the redirect logic,
+        so the real opener chain — including whatever redirect handler the
+        transport actually installs — is what processes the 302. Before the
+        delegation, this request was followed onto the recorded plaintext hop;
+        now it must be refused with the reason, and the plaintext handler must
+        never run.
+        """
+        followed: list[str] = []
+        bodies: list[io.BytesIO] = []
+        # The responses are kept ALIVE here on purpose: CPython's refcounting
+        # otherwise collects the abandoned 302 the instant the refusal
+        # propagates, and addinfourl.__del__ closes the body silently — which
+        # made a naive closed-check pass against a leaking implementation.
+        # With the response pinned, only an explicit close on the refusal
+        # path can mark the body closed.
+        responses: list[Any] = []
+
+        def _response(req: urllib.request.Request, code: int, msg: str, headers: str) -> Any:
+            body = io.BytesIO(b"")
+            bodies.append(body)
+            resp: Any = urllib.response.addinfourl(
+                body, message_from_string(headers), req.full_url, code
+            )
+            resp.msg = msg
+            responses.append(resp)
+            return resp
+
+        class RedirectingHTTPSHandler(urllib.request.HTTPSHandler):
+            def https_open(self, req: urllib.request.Request) -> Any:
+                return _response(req, 302, "Found", "Location: http://mirror.invalid/rfc9881.txt\n")
+
+        class RecordingHTTPHandler(urllib.request.HTTPHandler):
+            def http_open(self, req: urllib.request.Request) -> Any:
+                followed.append(req.full_url)
+                return _response(req, 200, "OK", "")
+
+        monkeypatch.setattr(urllib.request, "HTTPSHandler", RedirectingHTTPSHandler)
+        monkeypatch.setattr(urllib.request, "HTTPHandler", RecordingHTTPHandler)
+        with pytest.raises(ValueError, match="non-HTTPS redirect target"):
+            tool.fetch("https://www.rfc-editor.org/rfc/rfc9881.txt")
+        assert followed == [], f"the plaintext hop was followed: {followed}"
+        # The refusal must also RELEASE the abandoned 302 transfer: an fp left
+        # to the garbage collector is the ResourceWarning that Python 3.14's
+        # finalizer handling escalated into a deallocator-unraisable failure
+        # on the arm64 3.14 lane the first time this test ran there.  Pinned
+        # deterministically so every interpreter enforces it, not just the
+        # one whose GC happens to notice.
+        assert bodies, "the fake transport was never driven"
+        unclosed = [i for i, body in enumerate(bodies) if not body.closed]
+        assert not unclosed, (
+            f"the refusal path abandoned open response(s) {unclosed} to the "
+            f"garbage collector instead of closing them"
+        )

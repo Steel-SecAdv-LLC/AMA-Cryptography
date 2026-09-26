@@ -16,11 +16,14 @@
  *      output.
  *   4. The unrestricted (ephemeral, non-restricted-capability) path needs no
  *      authority key at all, so the common case stays a plain HKDF call.
+ *   5. Both derivations produce exactly the layouts the header documents
+ *      under "Derivations" (byte KATs computed outside this library).
  */
 
 #include <stdio.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 #define TEST_ASSERT(condition, message) \
     do { \
@@ -90,6 +93,54 @@ static const uint8_t EXPECTED_ENCODING[AMA_AGENT_BINDING_ENCODED_BYTES] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
+/*
+ * Derivation KATs (header, AGENT-INSTANCE BINDING, "Derivations"):
+ *
+ *   ctx   = SHA3-256(0x02 || enc(b) || binder_ctx)
+ *   okm   = HKDF-SHA3-256(salt, ikm, enc(b) || binder_kdf || u32be(len) || info)
+ *   binder_kdf = HMAC-SHA3-256(K_auth, 0x03 || enc(b))  } binding requires
+ *   binder_ctx = HMAC-SHA3-256(K_auth, 0x04 || enc(b))  } authorization
+ *   binder_kdf = binder_ctx = 0^32                         otherwise
+ *
+ * The expected bytes were computed OUTSIDE this library, from the formulas
+ * above, with Python's hashlib.sha3_256 and hmac over the fixtures in this
+ * file (salt absent; ikm = IKM).  They pin the published contract, not
+ * whatever the implementation happens to do: until the 2026-09-24 review the
+ * header still stated the 4.x layouts -- SHA3-256(0x02 || enc(b)) and
+ * enc(b) || u32be(len) || info -- which no binding, restricted or not, has
+ * produced since the binder landed (c-sym-core#0), and no test compared the
+ * two.  For the record, the 4.x values for the ephemeral binding were
+ * ctx 62becc27...6f77dc95 and okm("session") 46957769...e33a626f; 5.0.0
+ * produces neither, which is the compatibility break the header now states.
+ */
+static const uint8_t KAT_EPH_CTX[32] = {
+    0xa2, 0x55, 0x47, 0x24, 0xd0, 0x2a, 0xbd, 0x7b,
+    0xa4, 0x54, 0xc0, 0xbd, 0x0f, 0x13, 0xec, 0x6d,
+    0x5e, 0x5e, 0xfd, 0x74, 0x01, 0xe7, 0xc6, 0xd9,
+    0xdf, 0xd2, 0x51, 0x5e, 0x57, 0x25, 0x81, 0xf2
+};
+/* ephemeral / DATA_SIGN, no key, info = "session" */
+static const uint8_t KAT_EPH_OKM_SESSION[32] = {
+    0xfb, 0x84, 0xeb, 0xaa, 0xfd, 0x48, 0xe0, 0xf4,
+    0x0a, 0x70, 0x1e, 0x96, 0x9f, 0xf1, 0xd4, 0x51,
+    0x81, 0x87, 0xe8, 0x11, 0xc1, 0xf7, 0xae, 0xef,
+    0x9c, 0xe5, 0xce, 0xa6, 0x6a, 0xb6, 0xdf, 0x00
+};
+/* persistent / DATA_SIGN|PERSISTENCE|SELF_REPLICATE, PROFILE, AUTHORITY_KEY */
+static const uint8_t KAT_PERS_CTX[32] = {
+    0x12, 0x8f, 0x48, 0xd5, 0x4e, 0xd5, 0xc5, 0x6a,
+    0x7a, 0x23, 0xca, 0xed, 0xc4, 0xde, 0x25, 0xda,
+    0x75, 0x4b, 0xd7, 0x30, 0x33, 0xdc, 0x97, 0xac,
+    0xb8, 0x8f, 0x36, 0x52, 0x4e, 0xea, 0x0b, 0x4e
+};
+/* same binding and key, info absent */
+static const uint8_t KAT_PERS_OKM[32] = {
+    0x7a, 0xc7, 0xd8, 0x82, 0xee, 0x50, 0xb6, 0x4c,
+    0x31, 0x71, 0x77, 0xa2, 0x62, 0x02, 0x31, 0x28,
+    0x12, 0x15, 0x40, 0xd3, 0x0f, 0xd5, 0xb2, 0xe5,
+    0x55, 0xdd, 0xb9, 0xdc, 0x07, 0x80, 0x8e, 0xf5
+};
+
 static int buffer_is_zero(const uint8_t *p, size_t n) {
     size_t i;
     for (i = 0; i < n; i++) {
@@ -98,7 +149,93 @@ static int buffer_is_zero(const uint8_t *p, size_t n) {
     return 1;
 }
 
+/*
+ * Property 5.  `eph` is the ephemeral/DATA_SIGN binding with no profile;
+ * `pers` is the authorized persistent binding.  The byte KATs pin the
+ * contract; the recomputation from the public primitives beside them names
+ * which part of the layout moved when a KAT fails.
+ */
+static int check_derivation_layouts(const ama_agent_binding_t *eph,
+                                    const ama_agent_binding_t *pers) {
+    uint8_t enc[AMA_AGENT_BINDING_ENCODED_BYTES];
+    uint8_t ctx_msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES + 32];
+    uint8_t bind_msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES];
+    uint8_t info[AMA_AGENT_BINDING_ENCODED_BYTES + 32 + 4 + 7];
+    uint8_t got[32], want[32];
+    ama_error_t rc;
+
+    /* ---- unrestricted: a 32-byte ZERO binder, whatever key is passed ---- */
+    rc = ama_agent_binding_context(eph, NULL, 0, got);
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: ephemeral context derives");
+    TEST_ASSERT(memcmp(got, KAT_EPH_CTX, sizeof(got)) == 0,
+                "layout: ephemeral context matches the byte KAT");
+    rc = ama_agent_binding_encode(eph, enc, sizeof(enc));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: ephemeral record encodes");
+    ctx_msg[0] = 0x02;
+    memcpy(ctx_msg + 1, enc, sizeof(enc));
+    memset(ctx_msg + 1 + sizeof(enc), 0, 32);
+    rc = ama_sha3_256(ctx_msg, sizeof(ctx_msg), want);
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: SHA3-256(0x02 || enc(b) || 0^32) runs");
+    TEST_ASSERT(memcmp(got, want, sizeof(got)) == 0,
+                "layout: ephemeral context == SHA3-256(0x02 || enc(b) || 0^32)");
+
+    rc = ama_hkdf_agent_bound(eph, NULL, 0, NULL, 0, IKM, sizeof(IKM),
+                              (const uint8_t *)"session", 7, got, sizeof(got));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: ephemeral HKDF derives");
+    TEST_ASSERT(memcmp(got, KAT_EPH_OKM_SESSION, sizeof(got)) == 0,
+                "layout: ephemeral HKDF output matches the byte KAT");
+    memcpy(info, enc, sizeof(enc));
+    memset(info + sizeof(enc), 0, 32);
+    info[sizeof(enc) + 32 + 0] = 0x00;
+    info[sizeof(enc) + 32 + 1] = 0x00;
+    info[sizeof(enc) + 32 + 2] = 0x00;
+    info[sizeof(enc) + 32 + 3] = 0x07;
+    memcpy(info + sizeof(enc) + 32 + 4, "session", 7);
+    rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM), info, sizeof(info), want, sizeof(want));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: HKDF over enc(b) || 0^32 || u32be(7) || info runs");
+    TEST_ASSERT(memcmp(got, want, sizeof(got)) == 0,
+                "layout: ephemeral HKDF info' == enc(b) || 0^32 || u32be(len) || info");
+
+    /* ---- restricted: binder = HMAC-SHA3-256(K_auth, subdomain || enc(b)) ---- */
+    rc = ama_agent_binding_context(pers, AUTHORITY_KEY, sizeof(AUTHORITY_KEY), got);
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: persistent context derives");
+    TEST_ASSERT(memcmp(got, KAT_PERS_CTX, sizeof(got)) == 0,
+                "layout: persistent context matches the byte KAT");
+    rc = ama_agent_binding_encode(pers, enc, sizeof(enc));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: persistent record encodes");
+    bind_msg[0] = 0x04;
+    memcpy(bind_msg + 1, enc, sizeof(enc));
+    ctx_msg[0] = 0x02;
+    memcpy(ctx_msg + 1, enc, sizeof(enc));
+    rc = ama_hmac_sha3_256(AUTHORITY_KEY, sizeof(AUTHORITY_KEY), bind_msg,
+                           sizeof(bind_msg), ctx_msg + 1 + sizeof(enc));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: context binder HMAC(K_auth, 0x04 || enc(b)) runs");
+    rc = ama_sha3_256(ctx_msg, sizeof(ctx_msg), want);
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: SHA3-256(0x02 || enc(b) || binder) runs");
+    TEST_ASSERT(memcmp(got, want, sizeof(got)) == 0,
+                "layout: persistent context == SHA3-256(0x02 || enc(b) || HMAC(K, 0x04 || enc(b)))");
+
+    rc = ama_hkdf_agent_bound(pers, AUTHORITY_KEY, sizeof(AUTHORITY_KEY),
+                              NULL, 0, IKM, sizeof(IKM), NULL, 0, got, sizeof(got));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: persistent HKDF derives");
+    TEST_ASSERT(memcmp(got, KAT_PERS_OKM, sizeof(got)) == 0,
+                "layout: persistent HKDF output matches the byte KAT");
+    bind_msg[0] = 0x03;
+    memcpy(info, enc, sizeof(enc));
+    rc = ama_hmac_sha3_256(AUTHORITY_KEY, sizeof(AUTHORITY_KEY), bind_msg,
+                           sizeof(bind_msg), info + sizeof(enc));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: HKDF binder HMAC(K_auth, 0x03 || enc(b)) runs");
+    memset(info + sizeof(enc) + 32, 0, 4);   /* u32be(0): info absent */
+    rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM), info, sizeof(enc) + 32u + 4u,
+                  want, sizeof(want));
+    TEST_ASSERT(rc == AMA_SUCCESS, "layout: HKDF over enc(b) || binder || u32be(0) runs");
+    TEST_ASSERT(memcmp(got, want, sizeof(got)) == 0,
+                "layout: persistent HKDF info' == enc(b) || HMAC(K, 0x03 || enc(b)) || u32be(0)");
+    return 0;
+}
+
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     ama_agent_binding_t eph, sess, pers, tampered;
     uint8_t enc[AMA_AGENT_BINDING_ENCODED_BYTES];
     uint8_t enc2[AMA_AGENT_BINDING_ENCODED_BYTES];
@@ -251,6 +388,136 @@ int main(void) {
                               NULL, 0, IKM, sizeof(IKM), NULL, 0,
                               okm_b, sizeof(okm_b));
     TEST_ASSERT(rc == AMA_SUCCESS, "derive: authorized persistence derivation succeeds");
+
+    /* ---------------------------------------------------------------- */
+    /* The authority key is an INPUT, not only a gate (2026-09 audit A-6) */
+    /* ---------------------------------------------------------------- */
+    /* The gate above is sound, and both derivations call it.  Until the
+     * audit, neither passed the key to the primitive underneath: the HKDF
+     * info was `enc(b) || u32be(info_len) || info`, which is a function of
+     * public values only.  `ama_agent_binding_encode` works on an
+     * unauthorized record, and the adversary this file is about can call
+     * `ama_hkdf` itself — so the derived bytes were obtainable without ever
+     * holding the key, and the audit obtained them.
+     *
+     * The first two checks below are inequalities rather than pinned expected
+     * values: a KAT would also pass if the derivation started returning a
+     * constant.  They are not sufficient on their own, which the
+     * reconstruction after them exists to close. */
+    {
+        uint8_t bypass_info[AMA_AGENT_BINDING_ENCODED_BYTES + 32 + 4];
+        uint8_t bypass_okm[32];
+
+        rc = ama_agent_binding_encode(&pers, enc2, sizeof(enc2));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the record still encodes (it is public)");
+
+        /* The pre-fix layout: enc(b) || u32be(0). */
+        memcpy(bypass_info, enc2, sizeof(enc2));
+        memset(bypass_info + sizeof(enc2), 0, 4);
+        rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                      bypass_info, sizeof(enc2) + 4u, bypass_okm, sizeof(bypass_okm));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the bypass derivation itself runs");
+        TEST_ASSERT(memcmp(bypass_okm, okm_b, sizeof(okm_b)) != 0,
+                    "binder: the audit's public-encoding bypass no longer reproduces the key");
+
+        /* The current layout with a guessed all-zero binder. */
+        memcpy(bypass_info, enc2, sizeof(enc2));
+        memset(bypass_info + sizeof(enc2), 0, 32 + 4);
+        rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                      bypass_info, sizeof(bypass_info), bypass_okm, sizeof(bypass_okm));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the zero-binder derivation itself runs");
+        TEST_ASSERT(memcmp(bypass_okm, okm_b, sizeof(okm_b)) != 0,
+                    "binder: a guessed zero binder does not reproduce a restricted key");
+
+        /* Neither inequality above can tell WHICH key the binder was taken
+         * under.  A binder keyed by a public constant (the all-zero key that
+         * compute_binding_tag substitutes for a NULL key, say) fails both of
+         * them exactly as a real one does, and is recomputable by anyone who
+         * holds enc(b), which is the audit's bypass again.  Measured: with
+         * authority_binder() passing NULL/0 instead of the authority key,
+         * every check in this block up to here passed.  So the layout is
+         * rebuilt from its parts: HMAC-SHA3-256(K, subdomain || enc(b)) under
+         * the authority key must reproduce both outputs, and the same
+         * construction under the zero key or a foreign key must not.  A
+         * reconstruction from K is not a constant KAT: it moves with K. */
+        {
+            static const uint8_t ZERO_KEY[32] = {0};
+            static const char *const HKDF_LABELS[3] = {
+                "binder: HMAC(K_auth, 0x03 || enc(b)) reproduces the restricted key",
+                "binder: the same construction under the zero key does not",
+                "binder: the same construction under a foreign key does not",
+            };
+            static const char *const CTX_LABELS[3] = {
+                "binder: SHA3(0x02 || enc(b) || HMAC(K_auth, 0x04 || enc(b))) is the context",
+                "binder: the context construction under the zero key does not match",
+                "binder: the context construction under a foreign key does not match",
+            };
+            const uint8_t *const binder_keys[3] = {AUTHORITY_KEY, ZERO_KEY, OTHER_KEY};
+            uint8_t binder_msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES];
+            uint8_t ctx_msg[1 + AMA_AGENT_BINDING_ENCODED_BYTES + 32];
+            uint8_t ctx_real[AMA_AGENT_BINDING_CONTEXT_BYTES];
+            uint8_t ctx_ref[AMA_AGENT_BINDING_CONTEXT_BYTES];
+            size_t k;
+
+            rc = ama_agent_binding_context(&pers, AUTHORITY_KEY, sizeof(AUTHORITY_KEY),
+                                           ctx_real);
+            TEST_ASSERT(rc == AMA_SUCCESS, "binder: the authorized context derives");
+
+            memcpy(binder_msg + 1, enc2, sizeof(enc2));
+            for (k = 0; k < 3; k++) {
+                const int must_match = (k == 0);
+
+                /* enc(b) || HMAC(K, 0x03 || enc(b)) || u32be(0) */
+                binder_msg[0] = 0x03u;
+                memcpy(bypass_info, enc2, sizeof(enc2));
+                rc = ama_hmac_sha3_256(binder_keys[k], 32u, binder_msg, sizeof(binder_msg),
+                                       bypass_info + sizeof(enc2));
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference HKDF binder computes");
+                memset(bypass_info + sizeof(enc2) + 32u, 0, 4);
+                rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                              bypass_info, sizeof(bypass_info), bypass_okm, sizeof(bypass_okm));
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference derivation runs");
+                TEST_ASSERT((memcmp(bypass_okm, okm_b, sizeof(okm_b)) == 0) == must_match,
+                            HKDF_LABELS[k]);
+
+                /* SHA3-256(0x02 || enc(b) || HMAC(K, 0x04 || enc(b))) */
+                binder_msg[0] = 0x04u;
+                ctx_msg[0] = 0x02u;
+                memcpy(ctx_msg + 1, enc2, sizeof(enc2));
+                rc = ama_hmac_sha3_256(binder_keys[k], 32u, binder_msg, sizeof(binder_msg),
+                                       ctx_msg + 1 + sizeof(enc2));
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference context binder computes");
+                rc = ama_sha3_256(ctx_msg, sizeof(ctx_msg), ctx_ref);
+                TEST_ASSERT(rc == AMA_SUCCESS, "binder: the reference context hashes");
+                TEST_ASSERT((memcmp(ctx_ref, ctx_real, sizeof(ctx_real)) == 0) == must_match,
+                            CTX_LABELS[k]);
+            }
+        }
+
+        /* An UNRESTRICTED binding has no operator secret, so it takes a zero
+         * binder by design.  Pinned positively: it is what proves the two
+         * inequalities above fail because of a real binder rather than
+         * because the layout moved under them. */
+        rc = ama_agent_binding_encode(&eph, enc2, sizeof(enc2));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the ephemeral record encodes");
+        memcpy(bypass_info, enc2, sizeof(enc2));
+        memset(bypass_info + sizeof(enc2), 0, 32 + 4);
+        rc = ama_hkdf(NULL, 0, IKM, sizeof(IKM),
+                      bypass_info, sizeof(bypass_info), bypass_okm, sizeof(bypass_okm));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the unrestricted reference derivation runs");
+        rc = ama_hkdf_agent_bound(&eph, NULL, 0, NULL, 0, IKM, sizeof(IKM), NULL, 0,
+                                  okm_a, sizeof(okm_a));
+        TEST_ASSERT(rc == AMA_SUCCESS, "binder: the unrestricted derivation runs");
+        TEST_ASSERT(memcmp(bypass_okm, okm_a, sizeof(okm_a)) == 0,
+                    "binder: an unrestricted binding uses the documented zero-binder layout");
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* 5. The derivations are the layouts the header documents           */
+    /* ---------------------------------------------------------------- */
+    if (check_derivation_layouts(&eph, &pers) != 0) {
+        return 1;
+    }
 
     /* A tag minted under a different authority key must not verify — this is
      * the property that an escaped agent cannot satisfy. */

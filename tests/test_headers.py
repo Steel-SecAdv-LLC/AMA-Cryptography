@@ -336,11 +336,12 @@ def test_generated_signature_module_carries_the_header() -> None:
     ), "the generated integrity-signature module would not carry the canonical header"
 
 
-def test_vendored_tree_is_exempt(tool_module: ModuleType) -> None:
+def test_dudect_is_exempt_and_the_c_tree_is_not(tool_module: ModuleType) -> None:
     """Vendored third-party sources must keep upstream provenance
-    byte-identical, so they are never rewritten."""
-    assert tool_module.is_exempt("src/c/vendor/ed25519-donna/ed25519-donna.h")
+    byte-identical, so they are never rewritten.  The only vendored tree left
+    is the dudect harness; the C tree carries no exemption any more."""
     assert tool_module.is_exempt("tests/c/dudect/dudect.h")
+    assert not tool_module.is_exempt("src/c/vendor/anything.h")
     assert not tool_module.is_exempt("src/c/ama_ed25519.c")
 
 
@@ -364,3 +365,37 @@ def test_data_files_are_not_selected(tool_module: ModuleType) -> None:
         ".gitignore",
     ):
         assert tool_module.style_for(rel) is None, rel
+
+
+def test_apply_keeps_a_block_comment_openable(tool_module: ModuleType) -> None:
+    """Normalising a header that OPENS a longer block must not orphan the body.
+
+    ``--apply`` deleted every license line in a mixed block, including the
+    ``/*`` opener when the copyright sat on it.  The surviving ``* ...`` lines
+    then became code, so the rewritten C no longer compiled — and ``--check``
+    reported the corrupted file as clean, because the canonical header was
+    present.  The gate's own remedy silently broke three source files before
+    this was caught.  The opener is now kept as a bare ``/*``."""
+    src = (
+        "/* Copyright (C) 2025-2026 Steel Security Advisors LLC\n"
+        " * SPDX-License-Identifier: Apache-2.0\n"
+        " *\n"
+        " * Descriptive text that must survive.\n"
+        " */\n"
+        "#include <stdio.h>\n"
+    )
+    out = tool_module.render(src, "c")
+
+    # The descriptive body survived...
+    assert "Descriptive text that must survive." in out
+    # ...and it is still inside a comment: every block opened is closed, and no
+    # continuation line is left dangling outside one.
+    assert out.count("/*") == out.count("*/"), out
+    body_line = next(
+        i
+        for i, line in enumerate(out.splitlines())
+        if "Descriptive text that must survive." in line
+    )
+    opened = "\n".join(out.splitlines()[:body_line]).count("/*")
+    closed = "\n".join(out.splitlines()[:body_line]).count("*/")
+    assert opened > closed, f"body line is not inside an open comment:\n{out}"

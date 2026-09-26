@@ -58,10 +58,12 @@ jobs:
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
+        # No libssl-dev here or in the two jobs below (INVARIANT-1): the
+        # Docker images already omit it, and a build that can find OpenSSL
+        # headers could pick up an accidental include without failing.
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake libssl-dev ${{ matrix.cc }} ${{ matrix.cxx }}
+          .github/scripts/apt-install.sh cmake ${{ matrix.cc }} ${{ matrix.cxx }}
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -109,9 +111,14 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          if cmake --build build --config Release -j4; then
-            exit 0
-          fi
+          # Capture the BUILD's exit status, not the `if` statement's.  In bash
+          # an `if` whose condition fails and whose branches do not run returns
+          # 0, so the previous `if cmake …; then exit 0; fi; rc=$?` form always
+          # recorded rc=0 and the final `exit "$rc"` reported success — a failed
+          # compile or link went green whenever ctest did not independently
+          # notice (e.g. the shared library failing to link while the tests link
+          # the static one).  Assign from the command itself.
+          cmake --build build --config Release -j4 && exit 0
           rc=$?
           echo "::group::Re-running build with --verbose to surface the failing command"
           # `--clean-first` discards the partial build state from the
@@ -178,8 +185,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake gcc-13 g++-13
+          .github/scripts/apt-install.sh cmake gcc-13 g++-13
 
       - name: Configure CMake (native PQC disabled)
         run: |
@@ -198,6 +204,55 @@ jobs:
 
       - name: Test
         run: cd build-nopqc && ctest --output-on-failure
+
+      - name: Cross-link the MinGW DLL (native PQC disabled)
+        # The PE export table is a generated .def (cmake/generate_pe_def.cmake),
+        # and GNU ld refuses a .def entry that nothing defines: "cannot export
+        # ama_argon2id: symbol not defined".  The headers declare every entry
+        # point whatever the configuration, so while the list was derived from
+        # them alone it named 92 functions this configuration does not compile
+        # and the DLL did not link -- measured with this exact configure on
+        # 2026-09-24.  The Linux build above cannot see that: ELF has no .def,
+        # and no other lane links a MinGW DLL with native PQC off.  This is a
+        # compile-and-link check; the PE32+ image does not run on this host.
+        # The export directory is then read back and must be exactly the .def,
+        # which is the property AMA_EXPORTS_FROM_DEF exists to give.
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/apt-install.sh gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          cmake -S . -B build-mingw-nopqc \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/x86_64-w64-mingw32.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=OFF \
+            -DAMA_BUILD_SHARED=ON \
+            -DAMA_BUILD_STATIC=OFF \
+            -DAMA_BUILD_TESTS=OFF \
+            -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-mingw-nopqc --target ama_cryptography_shared -j4
+          python3 - <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location("gate", "tools/check_public_api_docs.py")
+          gate = importlib.util.module_from_spec(spec)
+          sys.modules["gate"] = gate
+          spec.loader.exec_module(gate)
+          dll = Path("build-mingw-nopqc/bin/libama_cryptography.dll")
+          listed = {
+              line.strip()
+              for line in Path("build-mingw-nopqc/ama_cryptography.def").read_text().splitlines()
+              if line.startswith("    ama_")
+          }
+          exported = set(gate.pe_export_names(dll))
+          print(f"{dll}: {len(exported)} exports, .def lists {len(listed)}")
+          if not listed or exported != listed:
+              print("::error::the DLL export table is not the generated .def")
+              print("  exported, not listed:", sorted(exported - listed))
+              print("  listed, not exported:", sorted(listed - exported))
+              sys.exit(1)
+          PY
 
       - name: Assert the default is still ON
         # A regression that flipped the default would make the job above green
@@ -226,15 +281,105 @@ jobs:
   python-package:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The 4-core Intel macOS runners are SLOW and, more importantly, they
+    # are INCONSISTENT.  A timeout is an infrastructure ceiling, not a gate:
+    # the tests themselves still have to pass identically, so the number has
+    # to cover the pool's spread rather than its median.
+    #
+    # 35 was the second value here (the first was a flat 20, which killed the
+    # 3.10 and 3.11 lanes with the suite mid-run).  It was set from a median
+    # and under-provisioned the same way.  Five legs of ONE run, same commit,
+    # same runner class:
+    #
+    #     Python 3.10   21m05s     Python 3.14   22m48s
+    #     Python 3.11   21m55s     Python 3.12   34m45s  <- cancelled at 35
+    #     Python 3.13   22m41s
+    #
+    # a 1.65x spread with no code difference between them.  The 3.12 leg is
+    # the case worth reading: every one of its 41 steps SUCCEEDED, `Run
+    # tests` included, finishing at 05:54:57 — and the job was still marked
+    # `cancelled`, because the 05:55:10 deadline arrived before the runner
+    # finalised it.  A passing test run reported as a failed job is the
+    # timeout measuring the runner pool, not the code.  The immediately
+    # preceding head lost a different leg (3.13) the same way.
+    #
+    # 50 is ~2.3x the ~22-minute median, so a genuine hang is still caught
+    # well before the 6-hour platform ceiling, while the observed variance
+    # stops turning a green suite red.  Raise it again only with the same
+    # kind of evidence: the per-leg durations of one run, not a single
+    # sample.
+    #
+    # The other legs outgrew their flat 20 the same way.  Per-leg job wall
+    # clock of ONE run (35955250803, head dfd35dcb, check-runs API):
+    #
+    #     windows-latest  3.11 18m07s  3.12 19m43s  3.13 18m46s  3.14 17m03s
+    #                     3.10 cancelled at 20m07s, pytest at 94% (7,798
+    #                          passed, 0 failed) when the deadline hit
+    #     ubuntu-latest   3.10 16m48s  3.11 15m22s  3.12 16m02s  3.13 15m41s
+    #                     3.14 10m48s
+    #
+    # The cancelled leg failed `Build and Test Gate` with no test failing, and
+    # the slowest completed Windows leg used 98.6% of the budget.  30 is the
+    # budget ci.yml::test already gives the same suite on windows-latest
+    # (evidence recorded there): 1.6x this run's Windows median and 52% over
+    # its slowest completed leg.  macOS arm64 (9m37s-12m38s) is well inside it.
+    #
+    # 30 was then outgrown on windows-latest the same way.  Per-leg job wall
+    # clock of ONE run (36169465118, head e8c83df5, check-runs API), the first
+    # head of the maintenance branch on which every test passed on every leg:
+    #
+    #     windows-latest  3.11 24m12s  3.12 26m16s  3.13 29m45s  3.14 21m06s
+    #                     3.10 cancelled at 30m10s, pytest at 93% (8,927
+    #                          passed, 0 failed) when the deadline hit
+    #     ubuntu-latest   3.10 20m49s  3.11 19m09s  3.12 13m56s  3.13 18m32s
+    #                     3.14 14m09s
+    #     macos-latest    14m10s-15m50s     macos-15-intel  32m00s-41m43s
+    #
+    # The slowest completed Windows leg used 99.2% of the budget; ci.yml::test
+    # runs the same suite on the same runner class without `--cov` in
+    # 20m28s-23m06s on that head, so the coverage run here is the slower one
+    # by design and needs the larger budget.  45 is 1.5x the slowest completed
+    # Windows leg and 1.8x the Windows median (~25m); a hang is still caught
+    # eight times before the platform ceiling.  macOS Intel's 50 stands at 83%
+    # of its slowest leg and is the next to watch.  Raise either again only
+    # with the per-leg durations of one run.
+    #
+    # macOS Intel outgrew 50 on the very next run (36182818333, head
+    # 4237a8d8, check-runs API), again with no test failing:
+    #
+    #     macos-15-intel  3.11 45m49s  3.12 35m30s  3.13 39m11s  3.14 32m52s
+    #                     3.10 cancelled at 50m21s, pytest at 93% (0 failed)
+    #                          when the deadline hit
+    #     (the previous run's legs: 31m09s-41m43s, same commit content)
+    #
+    # 75 is 1.6x the slowest completed Intel leg and 1.9x this run's Intel
+    # median (~39m); the pool's spread on this class is now 31m-50m+ across
+    # two runs of identical content, and 50 sat inside it.  A hang is still
+    # caught almost five times before the platform ceiling.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 75 || matrix.os == 'windows-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macos-15-intel (x86_64) sits beside macos-latest (arm64) because
+        # release.yml builds wheels on BOTH macOS architectures and its
+        # matrix comment states the invariant: a wheel for a platform and
+        # interpreter no CI lane exercises ships untested.  Until this entry
+        # existed, all five macOS x86_64 wheels shipped with only
+        # cibuildwheel's import smoke test — no pytest lane anywhere ran on
+        # an Intel Mac.  The SoftHSM/PyKCS11 provisioning below is already
+        # prefix-relative (brew --prefix), so the x86_64 lane runs the same
+        # real-token lifecycle as the arm64 one.
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history and tags, for the same four history-dependent guards
+          # ci.yml::test names on its checkout; AMA_CI_REQUIRE_HISTORY on the
+          # test step below turns a recurrence of the shallow-clone skip into
+          # a failure.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         id: setup-python
@@ -254,13 +399,26 @@ jobs:
 
       - name: Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
+        # gcc-aarch64-linux-gnu: the BTI libgcc probe
+        # (tests/test_binding_control_flow_integrity.py::
+        # TestLibgccCannotClearTheBtiProperty) compiles an atomic
+        # read-modify-write with a real AArch64 compiler and reads the cross
+        # object with binutils' readelf, which reads any ELF machine.  It is
+        # installed HERE because this lane sets AMA_CI_REQUIRE_BACKENDS and ran
+        # that probe as a failure on every ubuntu-latest leg of run 36074261255
+        # (2026-09-24): the probe's skip reason said it "runs natively" on the
+        # arm64 lanes, the backend keyword escalation matched "native", and
+        # nothing in this job had provisioned the compiler the skip was about.
+        # "Run tests" below sets AMA_CI_REQUIRE_AARCH64_TOOLCHAIN on this OS so
+        # a recurrence of that skip fails instead of hiding behind the install.
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential python3-dev cmake libssl-dev
+          .github/scripts/apt-install.sh build-essential python3-dev cmake gcc-aarch64-linux-gnu
 
       - name: Install system dependencies (macOS)
-        if: matrix.os == 'macos-latest'
+        # startsWith, not equality: this job's matrix carries both macOS
+        # architectures (macos-latest arm64, macos-15-intel x86_64).
+        if: startsWith(matrix.os, 'macos')
         run: brew install cmake
 
       - name: Install system dependencies (Windows)
@@ -274,24 +432,13 @@ jobs:
             Write-Host "CMake already available: $(cmake --version | Select-Object -First 1)"
           } else {
             Write-Host "CMake not found; installing via Chocolatey with retries..."
-            $maxAttempts = 5
-            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-              Write-Host "Attempt ${attempt}/${maxAttempts}: choco install cmake..."
-              choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y 2>&1
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "Successfully installed cmake"
-                break
-              }
-              if ($attempt -lt $maxAttempts) {
-                $delay = $attempt * 15
-                Write-Host "Install failed, waiting ${delay}s before retry..."
-                Start-Sleep -Seconds $delay
-              }
-            }
-            if ($LASTEXITCODE -ne 0) {
-              Write-Error "All ${maxAttempts} attempts to install cmake via Chocolatey failed"
-              exit 1
-            }
+            # Retries live in the script, and they key on the OUTCOME rather
+            # than on Chocolatey's exit code, which is 0 even when the feed is
+            # down and nothing was installed.  See
+            # .github/scripts/choco-install.ps1.
+            & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1" `
+              -Package cmake -InstallArgs 'ADD_CMAKE_TO_PATH=System'
+            if ($LASTEXITCODE -ne 0) { exit 1 }
             # Refresh PATH so cmake is available to subsequent steps
             Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
             refreshenv
@@ -323,11 +470,184 @@ jobs:
           cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build --config Release --parallel
 
+      - name: Install SoftHSM2 (PKCS#11 test token)
+        # This job runs with AMA_CI_REQUIRE_BACKENDS=1, which promises every
+        # backend is provisioned — and SoftHSM2 was not, so the only real
+        # PKCS#11 coverage in the tree skipped here while the flag claimed
+        # otherwise.  ci.yml gained this step in 5.0.0; this workflow needs it
+        # for the same reason, because it makes the same promise.
+        #
+        # Linux via apt, macOS via Homebrew.  The first version of this step
+        # was Linux-only and the macOS gap was written up as a known
+        # limitation instead of being closed — but `brew install softhsm`
+        # ships the same PKCS#11 module, so the limitation was a choice, not a
+        # constraint.  Both platforms now execute the real token lifecycle.
+        #
+        # Windows went through the same arc one revision later: it was excused
+        # as "no maintained package on any runner-available manager", but
+        # Chocolatey's softhsm.install package (wrapping the Disig
+        # SoftHSM2-for-Windows MSI) is live on the community feed, so that
+        # claim was also a choice wearing a constraint's clothes.  The next
+        # step provisions it, and all three OSes run the real token lifecycle.
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+            .github/scripts/apt-install.sh --no-install-recommends softhsm2
+            test -f /usr/lib/softhsm/libsofthsm2.so
+          else
+            brew install softhsm
+            # Homebrew is prefix-relative (/opt/homebrew on arm64,
+            # /usr/local on x86-64), so the module path is discovered rather
+            # than hard-coded — the same mistake as the .so.2 SONAME pin.
+            test -f "$(brew --prefix)/lib/softhsm/libsofthsm2.so"
+          fi
+          command -v softhsm2-util
+
+      - name: Install SoftHSM2 (PKCS#11 test token, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # Chocolatey's softhsm.install embeds the Disig SoftHSM2-for-Windows
+        # MSI, which statically links OpenSSL 1.1.1 (EOL) — acceptable ONLY as
+        # a test token that never executes in or for product code, the same
+        # posture as the OpenSSL-linked apt/brew builds above.  Retry shape
+        # matches the cmake choco step (transient CDN outages).
+        run: |
+          # INSTALLDIR is pinned, not assumed.  The Disig MSI parents its
+          # install directory to TARGETDIR, which Windows Installer resolves
+          # to ROOTDRIVE — the fixed drive with the MOST FREE SPACE, which on
+          # GitHub's Windows runners is D:, not C:.  The first revision of
+          # this step asserted C:\SoftHSM2\lib\softhsm2-x64.dll and every
+          # Windows lane in both workflows failed on a *successful* install.
+          # Pinning the property makes the location deterministic and keeps
+          # the constant in HSMKeyStorage.PKCS11_PATHS truthful.
+          $installDir = 'C:\SoftHSM2'
+          # Retries live in the script, and -RequirePath makes them key on the
+          # OUTCOME.  Chocolatey exits 0 when the community feed is down and it
+          # installed nothing, so the inline loop that used to sit here "succeeded"
+          # on attempt 1 of 5 and this step then failed at the DLL check below with
+          # no retry ever attempted — every Windows lane in both workflows went red
+          # on a 503.  See .github/scripts/choco-install.ps1.
+          & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1" `
+            -Package softhsm.install `
+            -InstallArgs "INSTALLDIR=$installDir" `
+            -RequirePath (Join-Path $installDir 'lib\softhsm2-x64.dll')
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # Discover rather than assume.  The pin above should make the first
+          # candidate exact; searching every fixed drive's two plausible roots
+          # means a future runner-image or MSI change degrades into a slower
+          # success instead of a red lane, while a genuine miss still fails.
+          $roots = @($installDir)
+          foreach ($fs in (Get-PSDrive -PSProvider FileSystem)) {
+            $roots += (Join-Path $fs.Root 'SoftHSM2')
+            $roots += (Join-Path $fs.Root 'Program Files\SoftHSM2')
+          }
+          $dll = $null
+          foreach ($root in ($roots | Select-Object -Unique)) {
+            $candidate = Join-Path $root 'lib\softhsm2-x64.dll'
+            if (Test-Path $candidate) { $dll = $candidate; break }
+          }
+          # Fail loudly WITH evidence: a missing DLL fails the step rather
+          # than quietly returning the HSM lane to a skip.
+          if (-not $dll) {
+            Write-Error "softhsm2-x64.dll not found after a successful install. Roots searched:`n$($roots -join "`n")"
+            Get-ChildItem -Path $installDir -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 50 -ExpandProperty FullName
+            exit 1
+          }
+          $root = Split-Path -Parent (Split-Path -Parent $dll)
+          Write-Host "SoftHSM2 resolved at $root (module: $dll)"
+          # TestSoftHSMIntegration constructs HSMKeyStorage("softhsm") with NO
+          # library_path override, so the module must land somewhere
+          # PKCS11_PATHS lists.  If the INSTALLDIR pin did not take effect the
+          # install is still "successful" but the lane would fail later with
+          # an opaque PKCS#11 error, so assert the contract here, where the
+          # message can name the real location.
+          if ($root -ne $installDir) {
+            Write-Error "SoftHSM2 installed to $root, not the pinned $installDir; HSMKeyStorage's PKCS11_PATHS would not find it. The INSTALLDIR property did not take effect."
+            exit 1
+          }
+          # Publish BOTH bin\ and lib\ to the remaining steps.  The MSI appends
+          # INSTALLDIR\lib to the *machine* PATH, which a running job never
+          # re-reads — and lib\ is the half that matters to the loader:
+          # softhsm2-util.exe lives in bin\ but the PKCS#11 module it loads is
+          # softhsm2-x64.dll in lib\, so publishing bin\ alone made the util
+          # resolvable and the module not, failing token init with
+          # "LoadLibraryA failed: 0x0000007E" (ERROR_MOD_NOT_FOUND).  The test
+          # also passes --module explicitly, so this is defence in depth rather
+          # than the only thing holding the lane up.
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'bin')
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'lib')
+          & (Join-Path $root 'bin\softhsm2-util.exe') --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "softhsm2-util --version failed (exit ${LASTEXITCODE})"
+            exit 1
+          }
+
+      # MUST run before the install below: `pip install -e .` runs setup.py's
+      # build_ext, which signs and thereby REWRITES
+      # ama_cryptography/_integrity_digest.txt in the source tree.  Reading it
+      # afterwards would compare the signer's own output to itself.  Same
+      # change, same reason, as in ci.yml.
+      - name: Snapshot the committed .py integrity digest (before any build re-signs it)
+        shell: bash
+        run: |
+          cp ama_cryptography/_integrity_digest.txt "${RUNNER_TEMP}/committed_integrity_digest.txt"
+          echo "Committed digest recorded: $(cat "${RUNNER_TEMP}/committed_integrity_digest.txt")"
+
+      # Same step, same reasons, as ci.yml — see the comment block there for
+      # both records in full.  Short form: the CPPFLAGS/CL defines restore
+      # the Python 2 alias the 1.5.18 sdist's SWIG typemap needs under SWIG
+      # >= 4.3 (the 1.5.19 sdist self-provisions SWIG >= 4.5 and no longer
+      # needs them), and Windows excludes 1.5.19 because that release's
+      # Windows wheels crash the interpreter with an access violation inside
+      # PyKCS11Lib.load() of SoftHSM2's x64 module — measured on cp310-cp314
+      # at run 33031586721 (e.g. job 98385102879) against the same commit,
+      # runner image and SoftHSM2 install that pass on 1.5.18 (run
+      # 32968055782's ci-build-test twin).  macOS wheels and the sdist of the
+      # same release are unaffected, so the exclusion is scoped to win32.
+      # pyproject.toml's [hsm] extra carries the same split, and
+      # tests/test_hsm_integration.py pins both.
+      - name: Install PyKCS11 (PKCS#11 binding for the HSM lane)
+        shell: bash
+        env:
+          CPPFLAGS: "-DPyInt_FromLong=PyLong_FromLong"
+          # -D, not /D: cl.exe accepts both, but Git Bash (this step's
+          # shell) applies MSYS path conversion to environment values that
+          # look like absolute POSIX paths, and "/DPyInt..." reached the
+          # compiler as "C:/Program Files/Git/DPyInt..." split across two
+          # bogus source-file arguments (job 97256304451). A leading dash
+          # is never path-converted.
+          CL: "-DPyInt_FromLong=PyLong_FromLong"
+        run: |
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            pip install "PyKCS11>=1.5.18,!=1.5.19"
+          else
+            pip install "PyKCS11>=1.5.18"
+          fi
+
       - name: Install Python dependencies + package (with [dev] extras)
         # Use the [dev] extras so hypothesis / pytest-cov / mypy / etc.
         # come in via the canonical pyproject.toml declaration rather
         # than the legacy requirements-dev.txt.  Matches ci.yml::test.
-        run: pip install -e ".[dev]"
+        #
+        # [hsm] supplies PyKCS11: SoftHSM2 alone does not make the HSM lane
+        # executable, because HSMKeyStorage reaches the token through that
+        # binding.  The token is provisioned on all three OSes, so the extra
+        # stays unconditional; the step above has already satisfied it.
+        #
+        # [examples] supplies Flask for the attack-surface pins on
+        # examples/python/flask_integration.py; "Run tests" below sets
+        # AMA_CI_REQUIRE_BACKENDS=1, under which tests/conftest.py escalates a
+        # skipped requires_example_deps test to a failure, so the extra must be
+        # installed wherever that flag is set.
+        run: |
+          pip install -e ".[dev,hsm,examples]"
+          # clang-format for tests/test_compiler_warning_gate.py — see ci.yml.
+          pip install "clang-format==23.1.1"
+        shell: bash
 
       - name: Install differential/interop reference libraries (test-only)
         # Independent third-party implementations that let the cross-library
@@ -336,10 +656,42 @@ jobs:
         # in every CI lane because these libs were never installed.  They are
         # test-only references, NOT a runtime dependency (INVARIANT-1 forbids
         # product code importing them; the invariant lint enforces that only
-        # ama_cryptography/*.py stays clean).  Linux-gated to avoid cross-OS
-        # wheel flakiness on the primary differential lane.
-        if: runner.os == 'Linux'
-        run: pip install cryptography pynacl pycryptodome
+        # ama_cryptography/*.py stays clean).
+        #
+        # Installed on EVERY OS, not Linux only.  The "Run tests" step sets
+        # AMA_CI_REQUIRE_BACKENDS=1 on all three OSes, and tests/conftest.py
+        # escalates a skipped `requires_interop_oracle` test to a hard failure
+        # under that flag (audit M18) — its rationale states outright that "the
+        # require-backends lane installs all three".  Gating this step to Linux
+        # while requiring the oracle everywhere left the macOS and Windows lanes
+        # running the interop tests with no oracle present, so each errored on
+        # ~14 `requires_interop_oracle` cases (PyCA/PyNaCl/pycryptodome).
+        #
+        # Wheels: PyNaCl and pycryptodome publish binaries for every leg.
+        # cryptography does not on macos-15-intel: 48.0.1 (2026-06-09) was the
+        # last release with a macOS x86_64 (universal2) wheel, and 49.0.0,
+        # 50.0.0 and 50.0.1 ship none (PyPI release files, checked
+        # 2026-09-26).  Pinning back to 48.0.1 is not an option -- PyPI lists
+        # six advisories against it and [legacy] requires >=50.0.0 -- so that
+        # leg builds cryptography from source, which needs its Rust crates
+        # from index.crates.io.  Run 36204830608 (7dfb67b3) lost the 3.11
+        # Intel leg to "Could not resolve host: index.crates.io" after cargo's
+        # three built-in retries, with no test run.  The install is therefore
+        # retried as a whole, and cargo's own network retries are raised; a
+        # failure that survives both still fails the step.  Every other leg
+        # resolves wheels and is unaffected.
+        env:
+          CARGO_NET_RETRY: "10"
+        run: |
+          for attempt in 1 2 3; do
+            if pip install cryptography pynacl pycryptodome; then
+              exit 0
+            fi
+            echo "::warning::reference-library install failed (attempt ${attempt}/3)"
+            [ "${attempt}" -lt 3 ] && sleep $((attempt * 30))
+          done
+          exit 1
+        shell: bash
 
       # The signed artefact's native digest is specific to the exact build it
       # was signed against; this job builds the native library itself, so that
@@ -349,14 +701,17 @@ jobs:
       # same per-build re-sign setup.py's _run_integrity_signer does per wheel.
       - name: Verify committed .py integrity digest is current (platform-independent)
         shell: bash
-        env:
-          AMA_BUILD_PIPELINE: "1"
+        # Compares the pre-install SNAPSHOT against the digest computed now.
+        # No AMA_BUILD_PIPELINE: the install signs and binds on every build so
+        # POST passes outright, and the variable would not confer an import
+        # anyway — __init__'s repairable-POST carve-out is gated on the process
+        # BEING the signer, which a `python -` heredoc is not.
         run: |
-          python - <<'PY'
+          python - "${RUNNER_TEMP}/committed_integrity_digest.txt" <<'PY'
+          import sys
           from pathlib import Path
-          import ama_cryptography as a
           from ama_cryptography._self_test import _compute_module_digest
-          committed = (Path(a.__file__).parent / "_integrity_digest.txt").read_text().strip()
+          committed = Path(sys.argv[1]).read_text().strip()
           computed = _compute_module_digest()
           if committed != computed:
               raise SystemExit(
@@ -382,6 +737,12 @@ jobs:
           # native C library didn't build / didn't load — otherwise
           # tests silently skip and mask backend regressions.
           AMA_CI_REQUIRE_BACKENDS: "1"
+          # The checkout is fetch-depth: 0, so a history-dependent guard that
+          # skips here is a broken checkout, not a shallow one.
+          AMA_CI_REQUIRE_HISTORY: "1"
+          # ubuntu-latest installed gcc-aarch64-linux-gnu above, so the BTI
+          # libgcc probe (marker requires_aarch64_toolchain) must run there, not skip.
+          AMA_CI_REQUIRE_AARCH64_TOOLCHAIN: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
           # UTF-8 encoding for Windows to support Unicode symbols in output
           PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'utf-8' || '' }}
           PYTHONUTF8: ${{ matrix.os == 'windows-latest' && '1' || '' }}
@@ -389,7 +750,7 @@ jobs:
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
@@ -420,8 +781,9 @@ jobs:
           # `mypy --strict tests/` types every pytest call as `Any` and its
           # verdict changes with whether pytest happens to be installed.
           # See the longer note in ci.yml::code-quality.
-          pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
-                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
+          pip install "black==26.5.1" "ruff==0.16.8" "mypy==2.3.1" \
+                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260906" \
+                      "types-setuptools==84.0.0.20260812" \
                       "pytest==9.1.1"
 
       - name: Lint (ruff)
@@ -431,8 +793,20 @@ jobs:
         run: black --check --diff .
 
       - name: Type check (mypy --strict)
-        run: mypy --strict ama_cryptography/ tests/
+        # Same scope as ci.yml::code-quality — every Python file in the
+        # repository, not just the shipped package and the test tree. The two
+        # jobs must agree, or one of them reports a verdict the other does not
+        # hold to.
+        run: |
+          MYPYPATH=. mypy --strict --explicit-package-bases \
+            --linecoverage-report .mypy-coverage \
+            ama_cryptography/ tests/ tools/ benchmarks/ examples/ \
+            fuzz/python/ nist_vectors/ schemas/ wycheproof_vectors/ \
+            docs/conf.py setup.py ama_cryptography_monitor.py
         continue-on-error: false
+
+      - name: "Type-check scope: every tracked .py file was actually checked"
+        run: python tools/check_type_check_scope.py .mypy-coverage/coverage.json
 
   # Security Audit
   security:
@@ -450,7 +824,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pip-audit bandit
+          # Pinned (bandit to the requirements-lock.txt version): both feed
+          # fail-closed gates, and an unpinned release changes what they can
+          # catch with nothing to review here.
+          pip install "pip-audit==2.10.1" "bandit==1.9.4"
           # Use the audit-time dependency closure so pip-audit's strict
           # mode (below) is reproducible across runner image versions.
           pip install -r requirements-lock.txt
@@ -480,7 +857,9 @@ jobs:
       # `grep -E '^\s*(Medium|High):\s*[1-9]'` matched the confidence
       # one and fired on a tree with zero Medium+ severity findings.
       - name: Security scan (bandit, unfiltered JSON report)
-        run: bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+        # Includes setup.py and tools/ (build/release code CI trusts), not just
+        # the runtime package — same scope as the ci.yml gate (audit Low).
+        run: bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
 
       - name: Bandit severity gate (fail on Medium+)
         run: python3 tools/check_bandit_severity.py bandit-report.json
@@ -517,8 +896,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev
+          .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build wheel via PEP 517 (isolated build env, signed integrity)
         # `python -m build --wheel` runs the build in an isolated env that
@@ -579,6 +957,7 @@ jobs:
           "
           python "$SRCDIR/benchmarks/benchmark_runner.py" \
             --verbose \
+            --require-populated-baseline \
             --baseline "$SRCDIR/benchmarks/baseline.json" \
             --output "$SRCDIR/benchmarks/regression_results.json" \
             --markdown "$SRCDIR/benchmarks/regression_report.md"
@@ -606,16 +985,217 @@ jobs:
   # If you find yourself wanting to re-add continue-on-error here,
   # diagnose the underlying flake instead — silencing this gate masks
   # exactly the class of regression it exists to catch.
+  instruction-count-regression:
+    name: Instruction Count Regression (A/B)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [c-library]
+    # Retired instruction count is a property of the binary and its input, not
+    # of the runner. The wall-clock lane in `benchmark-regression` cannot be:
+    # benchmarks/benchmark_runner.py records one UNCHANGED binary measuring
+    # 917, 1845 and 3086 ops/sec, and the x86 tolerances were widened to 45%
+    # so it would stop flapping — a band that cannot detect a 30% regression.
+    #
+    # Measured while building this job, one binary, all inputs fixed:
+    #   wall clock        idle 200,150-209,714 ops/sec
+    #                     under load 99,478-125,248 ops/sec   (2.1x swing)
+    #   instruction count idle and under load BIT-IDENTICAL   (zero variance)
+    #
+    # So this lane runs at 2% where the wall-clock lane needs 45%.
+    #
+    # The 2% is for codegen drift, and with LTO on (the shipped configuration)
+    # that includes whole-program re-optimisation: a change in one translation
+    # unit can move an operation whose sources did not change. Measured:
+    # e9956d7, a barrier in the AVX2 AES-GCM decrypt kernels, moved
+    # x25519_scalarmult by -3.2% under LTO and by nothing without it. The
+    # acknowledgements file records such a move with its cause; the band is
+    # not widened for it.
+    #
+    # A/B rather than a stored baseline: ubuntu-latest spans two CPU classes
+    # about 1.45x apart, and a recorded baseline would fail closed on whichever
+    # class did not record it. Both builds are measured on THIS runner in THIS
+    # job, so the machine cancels out entirely.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0   # the merge-base build is the reference
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh build-essential cmake ninja-build valgrind
+
+      - name: Build head
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-head -DCMAKE_BUILD_TYPE=Release \
+                -DAMA_USE_NATIVE_PQC=ON -G Ninja
+          ninja -C build-head libama_cryptography_static.a
+          # ic_symbol_flags.py emits -DAMA_IC_HAVE_<FEATURE>=0 for anything the
+          # library does not export. For the head build that is normally
+          # nothing; it is run anyway so both sides use the identical command.
+          HEAD_FLAGS=$(python3 benchmarks/ic_symbol_flags.py \
+                         build-head/lib/libama_cryptography_static.a)
+          echo "head flags: ${HEAD_FLAGS:-none}"
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -Iinclude $HEAD_FLAGS \
+              -o ic_driver_head benchmarks/ic_driver.c \
+              build-head/lib/libama_cryptography_static.a -lm
+
+      - name: Resolve the reference commit
+        id: base
+        # The reference is the merge-base with the default branch, except
+        # where HEAD IS that merge-base -- every push to main, and a push of a
+        # branch sitting exactly on main's tip. There the lane measures what
+        # the push changed: HEAD against the commit the push advanced from
+        # (`github.event.before`, when it is an ancestor of HEAD, which covers
+        # every commit of a multi-commit push), else HEAD's first parent. A
+        # HEAD with neither is a failure, not a pass.
+        #
+        # This used to run `cp head.json base.json` in that case -- before
+        # head.json existed -- so under `set -e` every push to main failed the
+        # job with "cp: cannot stat 'head.json'". Skipping the comparison
+        # instead is not open to this job: ci-gate fails a `skipped` job, and
+        # a step skipped on a self-probe inside a gated job is what
+        # tools/check_workflow_commands.py (check_gate_jobs_run_their_payload)
+        # rejects, because the job would report success having compared
+        # nothing. tests/test_instruction_count_gate.py runs this script
+        # against real git repositories in each of these states.
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # Prefer the PR's own base sha, as baseline-guard.yml does: it needs
+          # no origin/<branch> ref to exist locally and it is correct when the
+          # PR targets something other than main. On a push event there is no
+          # pull_request payload, so fall back to fetching the default branch.
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then
+            git fetch --no-tags origin "${{ github.event.repository.default_branch }}"
+            BASE=$(git merge-base FETCH_HEAD HEAD)
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::could not determine a merge-base to compare against." >&2
+            exit 1
+          fi
+          echo "merge-base: $BASE"
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$BASE" = "$HEAD_SHA" ]; then
+            if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$HEAD_SHA" ] \
+               && git merge-base --is-ancestor "$PUSH_BEFORE" HEAD 2>/dev/null; then
+              BASE="$PUSH_BEFORE"
+              echo "HEAD is its own merge-base; comparing against the commit this push advanced from: $BASE"
+            elif BASE=$(git rev-parse --verify --quiet "HEAD^1"); then
+              echo "HEAD is its own merge-base; comparing against its first parent: $BASE"
+            else
+              echo "::error::HEAD is its own merge-base and has no parent, so there is nothing to compare it against." >&2
+              exit 1
+            fi
+          fi
+          echo "reference: $BASE"
+          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Build the reference and measure
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE" ]; then
+            echo "::error::the reference step recorded no sha." >&2
+            exit 1
+          fi
+          git worktree add ../base-tree "$BASE"
+          cmake -S ../base-tree -B build-base -DCMAKE_BUILD_TYPE=Release \
+                -DAMA_USE_NATIVE_PQC=ON -G Ninja
+          ninja -C build-base libama_cryptography_static.a
+          # The driver is taken from HEAD in both cases: it is the measuring
+          # instrument, not the thing measured, and a base commit that predates
+          # it has no driver at all. Only the LIBRARY differs between the two.
+          #
+          # A base that predates a primitive does not export it, and the link
+          # fails outright -- measured: main at 2dcef5c has no `ama_sha512`,
+          # which this branch added. ic_symbol_flags.py reads the base library
+          # with nm and compiles those primitives out, so the base driver
+          # builds and the comparison runs on the INTERSECTION. A primitive
+          # that exists only on the head has nothing to be compared against,
+          # which is correct: it is new, and its first measurement is its
+          # baseline.
+          BASE_FLAGS=$(python3 benchmarks/ic_symbol_flags.py \
+                         build-base/lib/libama_cryptography_static.a)
+          echo "base flags: ${BASE_FLAGS:-none}"
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -Iinclude $BASE_FLAGS \
+              -o ic_driver_base benchmarks/ic_driver.c \
+              build-base/lib/libama_cryptography_static.a -lm
+
+          # Both measurements cover exactly what the BASE driver supports.
+          COMMON=$(./ic_driver_base --list | tr '\n' ' ')
+          echo "comparing $(echo $COMMON | wc -w) operation(s)"
+          python3 benchmarks/measure_instruction_counts.py \
+            --driver ./ic_driver_base --iterations 10 \
+            --operations $COMMON --output base.json
+          python3 benchmarks/measure_instruction_counts.py \
+            --driver ./ic_driver_head --iterations 10 \
+            --operations $COMMON --output head.json
+
+      - name: Compare head against the reference
+        run: |
+          # An out-of-tolerance operation passes only if
+          # benchmarks/instruction-count-acknowledgements.json records it with
+          # matching measured values and a reason. A stale entry, or one whose
+          # operation has moved again since, fails — so the file cannot become
+          # a blanket exemption. An entry whose change the merge-base already
+          # contains (the reference measures its `to`) is reported as landed
+          # and excuses nothing, so the first pull request after a merge is
+          # not failed for an entry it never touched.
+          python3 tools/check_instruction_counts.py \
+            --baseline base.json --measured head.json --tolerance-percent 2 \
+            --acknowledgements benchmarks/instruction-count-acknowledgements.json
+
+      # tests/test_instruction_count_gate.py is deliberately NOT run here.
+      # ci.yml's `python -m pytest tests/` already covers it in a job that
+      # installs the package, and this job installs only build tools — a
+      # pytest step here fails with "No module named pytest", which is exactly
+      # how the first run of this lane ended.
+
+      - name: Dispatch auto-tune startup cost
+        # The dispatcher microbenchmarks its SIMD kernels against scalar at the
+        # first call that touches one. Measured on an AVX-512 host that costs
+        # 2,602,494,880 retired instructions and takes the first cryptographic
+        # operation from 4-5 ms to 130-170 ms of wall time — invisible in a
+        # long-lived server, dominant in a CLI or a serverless cold start.
+        # This does not change the design; it stops the cost growing unnoticed.
+        run: |
+          python3 benchmarks/measure_instruction_counts.py \
+            --driver ./ic_driver_head --measure-startup --output startup.json
+
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: instruction-counts
+          path: |
+            head.json
+            base.json
+            startup.json
+          retention-days: 14
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Job-level env so the optional-login step can gate on env.* in `if:`.
-    # `secrets.*` is not allowed in step-level `if:` expressions, which
-    # otherwise causes a workflow-validation error before any job runs.
+    # Job-level env carries only a BOOLEAN, never the secrets themselves.
+    # `secrets.*` is not allowed in a step-level `if:`, so the optional-login
+    # step needs something job-scoped to gate on — but hoisting the credentials
+    # to job env would widen their reach from that one step to all nine,
+    # including the docker build steps that run repository-controlled
+    # Dockerfiles (audit Low).  A boolean gate keeps the token step-scoped: it
+    # appears only in the login step's own `with:` below.
     env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      DOCKERHUB_CONFIGURED: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -668,11 +1248,12 @@ jobs:
           echo "::warning::All 8 pull attempts for ${IMAGE} failed over ~340s; buildx setup will retry internally"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
-          # The base-image pulls (ubuntu:22.04, alpine:3.18) happen INSIDE the
-          # BuildKit container, which does not share the runner's local image
-          # cache — so the host-side pre-pull above cannot cover them, and
+          # The base-image pulls (the Dockerfiles' `FROM` bases, all
+          # digest-pinned) happen INSIDE the BuildKit container, which does
+          # not share the runner's local image cache — so the host-side
+          # pre-pull above cannot cover them, and
           # they were the part of this job still exposed to unauthenticated
           # Docker Hub. Docker Hub timeouts blocked PR #370 three times in one
           # day, all of them here.
@@ -691,17 +1272,19 @@ jobs:
               mirrors = ["mirror.gcr.io"]
 
       - name: Log in to Docker Hub (optional, avoids rate limits)
-        # Gate on BOTH secrets: a half-configured fork (e.g. username
-        # set but token missing) would otherwise reach docker/login-action
-        # and fail noisily, defeating the "optional" intent of the step.
-        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
-        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c  # v4.5.2
+        # Gate on the job-level boolean (which is true only when BOTH secrets
+        # are set — a half-configured fork with username but no token would
+        # otherwise reach docker/login-action and fail noisily, defeating the
+        # "optional" intent).  The credentials themselves are referenced only
+        # here, in this step's `with:`, so they never reach the other steps.
+        if: env.DOCKERHUB_CONFIGURED == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build Ubuntu image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           file: docker/Dockerfile
@@ -712,7 +1295,7 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=ubuntu,mode=max' || '' }}
 
       - name: Build Alpine image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           file: docker/Dockerfile.alpine
@@ -753,6 +1336,7 @@ jobs:
       - lint
       - security
       - benchmark-regression
+      - instruction-count-regression
       - docker
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -763,10 +1347,16 @@ jobs:
         # be `success`. `skipped` now fails the gate too: on this workflow it can
         # only mean a `needs:` dependency failed (already red) or a future job's
         # `if:` drifted so it silently stopped running — exactly the gap a
-        # lenient gate hides. `cancelled` also fails, but only ever appears on a
-        # run superseded by a newer push or a manual abort, neither of which
-        # gates the latest head commit. Matrix jobs are fail-fast:false and
-        # timeouts report as `failure`.
+        # lenient gate hides. `cancelled` fails too, and it is not only a
+        # superseded run or a manual abort: a job that reaches its
+        # `timeout-minutes` ends `cancelled`, not `failure`. Measured on run
+        # 35955250803 (head dfd35dcb): the `python-package` job's
+        # windows-latest 3.10 leg (recorded at that job's timeout-minutes
+        # above) hit the 20-minute cap it then had, mid-`Run tests`, and the
+        # Actions jobs API reports the job and that step as `cancelled`. A
+        # gate that tolerated `cancelled` would therefore pass a hung or
+        # over-budget leg. tools/check_gate_coverage.py requires all three
+        # results in this condition. Matrix jobs are fail-fast:false.
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
         run: |
           echo "::error::Build and Test Gate failed — a required job did not succeed."

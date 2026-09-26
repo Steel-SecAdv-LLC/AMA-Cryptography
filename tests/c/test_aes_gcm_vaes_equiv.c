@@ -44,7 +44,8 @@
  *     from the seed.
  *   - Tag-tamper rejection: flipping a single tag bit must cause
  *     decrypt to return AMA_ERROR_VERIFY_FAILED (including for
- *     pt_len == 0, because AES-GCM authenticates empty messages).
+ *     pt_len == 0, because AES-GCM authenticates empty messages) and
+ *     leave the re-poisoned plaintext buffer untouched.
  *
  * If this test fails, the dispatched AES-GCM implementation diverges
  * from the AES-NI reference, which would silently break interop with
@@ -94,6 +95,12 @@ static int passed = 0;
 /* Deterministic PRNG (splitmix-ish).  Gives reproducible random
  * inputs from a single seed so the exact failure case can be
  * replayed.  Not cryptographic. */
+/* Guarded by the same predicate as the only call sites below.  Defining
+ * these unconditionally left them unused on every non-x86-64 target — the
+ * -Wunused-function class `-Werror=unused-function` makes fatal in the
+ * strict-warnings gate, unreported until that gate covered AArch64. */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+
 static uint64_t prng_state;
 static uint64_t prng_next(void) {
     uint64_t z = (prng_state += 0x9E3779B97F4A7C15ULL);
@@ -104,6 +111,8 @@ static uint64_t prng_next(void) {
 static void prng_fill(uint8_t *buf, size_t n) {
     for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)(prng_next() >> 24);
 }
+
+#endif /* AMA_HAVE_AVX2_IMPL && x86-64 */
 
 /* Compare dispatched encrypt against AES-NI reference for one tuple.
  * Returns 1 on byte-identical match, 0 on mismatch (and increments
@@ -175,11 +184,17 @@ static int check_one_encrypt(const ama_dispatch_table_t *dt,
      * Asserting the exact error code (not just "anything other than AMA_SUCCESS")
      * catches regressions where decrypt fails for the wrong reason (e.g. a new
      * length-check or OOM path masquerading as a tag-mismatch).  Also exercise
-     * pt_len == 0 because AES-GCM authenticates empty-plaintext messages. */
+     * pt_len == 0 because AES-GCM authenticates empty-plaintext messages.
+     *
+     * The rejected decrypt must also write NO plaintext.  pt_back holds the
+     * correct plaintext from the round trip above, so it is re-poisoned
+     * first: a kernel that released CTR output before its tag compare would
+     * otherwise rewrite identical bytes and pass. */
     {
         uint8_t bad_tag[16];
         memcpy(bad_tag, tag_dispatch, 16);
         bad_tag[trial & 15] ^= (uint8_t)(1u << ((trial >> 4) & 7));
+        memset(pt_back, 0x5C, pt_len);
         r = dt->aes_gcm_decrypt(ct_dispatch, pt_len, aad, aad_len,
                                  key, nonce, bad_tag, pt_back);
         if (r != AMA_ERROR_VERIFY_FAILED) {
@@ -187,6 +202,14 @@ static int check_one_encrypt(const ama_dispatch_table_t *dt,
                    label_prefix, trial, pt_len, (int)r, (int)AMA_ERROR_VERIFY_FAILED);
             failed++;
             return 0;
+        }
+        for (size_t i = 0; i < pt_len; i++) {
+            if (pt_back[i] != 0x5C) {
+                printf("  FAIL: %s trial=%d pt_len=%zu rejected tag released plaintext (byte %zu written)\n",
+                       label_prefix, trial, pt_len, i);
+                failed++;
+                return 0;
+            }
         }
     }
 
@@ -225,7 +248,7 @@ int main(void) {
                "        and ACVP.\n",
                ama_has_aes_ni(), ama_has_pclmulqdq());
         printf("\nAll AES-GCM equivalence checks SKIPPED.\n");
-        return 0;
+        return 77;
     }
 #endif
 
@@ -238,7 +261,7 @@ int main(void) {
                "        src/c/ama_aes_gcm.c is already covered by test_kat\n"
                "        and ACVP.\n");
         printf("\nAll AES-GCM equivalence checks SKIPPED.\n");
-        return 0;
+        return 77;
     }
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
@@ -269,7 +292,7 @@ int main(void) {
                "        GCC/Clang build for meaningful VAES coverage.\n",
                ama_cpuid_has_vaes_aesgcm());
         printf("\nAll AES-GCM equivalence checks SKIPPED (VAES not active).\n");
-        return 0;
+        return 77;
     }
 
     /* Boundary plaintext lengths from the brief.  AAD is exercised
@@ -322,6 +345,6 @@ int main(void) {
      * main() handles that case separately). */
     (void)dt;
     printf("\nAll AES-GCM equivalence checks SKIPPED (no AVX2 build).\n");
-    return 0;
+    return 77;
 #endif
 }

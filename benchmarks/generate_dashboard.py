@@ -112,6 +112,83 @@ PRETTY = {
 }
 
 
+#: The template's placeholder markers.  ``DATA_MARKER`` sits where a JavaScript
+#: expression belongs, so it is written as a comment and the unrendered
+#: template still parses as a script.
+DATA_MARKER = "/*__DATA__*/"
+MEASURED_MARKER = "__MEASURED__"
+GENERATED_MARKER = "__GENERATED__"
+VERSION_MARKER = "__VERSION__"
+_MARKER_RE = re.compile(
+    "|".join(re.escape(t) for t in (DATA_MARKER, MEASURED_MARKER, GENERATED_MARKER, VERSION_MARKER))
+)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+#: How often each marker must occur.  The data, the measured clause and the
+#: generated time each have exactly one place; the version is shown in the
+#: title, the header and one sentence of prose, so it is only required to be
+#: present.
+_EXACTLY_ONCE = (DATA_MARKER, MEASURED_MARKER, GENERATED_MARKER)
+
+
+def script_json(payload: Any) -> str:
+    """``payload`` as JSON that cannot end the ``<script>`` element it sits in.
+
+    The payload carries free text -- change-log prose from
+    ``benchmarks/baseline.json``, provenance strings, descriptions -- and
+    ``json.dumps`` leaves ``<``, ``>`` and ``&`` alone, so a string containing
+    ``</script>`` would close the element and render the rest of the data as
+    page text, and one containing ``<!--`` would change how the parser reads
+    the rest of the script.  Each of the three is written as its JSON escape
+    (``\\u003c``, ``\\u003e``, ``\\u0026``) instead, so no markup sequence
+    can come from the data.  JSON has none of the three outside a string, so
+    the value a reader parses back is unchanged.
+    """
+    return (
+        json.dumps(payload).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    )
+
+
+def fill_template(tmpl: str, values: dict[str, str]) -> str:
+    """Substitute every marker in ``tmpl`` once, where it stands.
+
+    Two defects this replaces.  The template's own header comment named the
+    markers it documents, and ``str.replace`` substitutes every occurrence, so
+    each render carried a second copy of the whole data payload inside that
+    ``<!-- -->`` comment -- where any ``-->`` in the free text would have
+    closed the comment early and printed the remainder as visible page text.
+    And the substitutions were chained, so a marker spelled inside the
+    already-substituted JSON would itself have been replaced by the next
+    ``.replace``.  One regular-expression pass fills the template's markers and
+    never rescans what it inserted.
+
+    The template is checked first, and a malformed one is refused rather than
+    rendered: no marker may sit inside an HTML comment, the data, measured and
+    generated markers must each occur exactly once, and the version at least
+    once.
+    """
+    for comment in _HTML_COMMENT_RE.findall(tmpl):
+        named = sorted(set(_MARKER_RE.findall(comment)))
+        if named:
+            raise RuntimeError(
+                f"the dashboard template names {named} inside an HTML comment; the "
+                "generator would fill it there and publish a second copy of what "
+                "it substitutes. Describe the marker without spelling it."
+            )
+    for marker in _EXACTLY_ONCE:
+        count = tmpl.count(marker)
+        if count != 1:
+            raise RuntimeError(
+                f"the dashboard template must carry {marker} exactly once; it has {count}"
+            )
+    if VERSION_MARKER not in tmpl:
+        raise RuntimeError(f"the dashboard template does not carry {VERSION_MARKER}")
+    missing = sorted(set(_MARKER_RE.findall(tmpl)) - set(values))
+    if missing:
+        raise RuntimeError(f"no value supplied for template marker(s) {missing}")
+    return _MARKER_RE.sub(lambda match: values[match.group(0)], tmpl)
+
+
 def parse_raw_c(path: Path) -> list[dict[str, Any]]:
     """Parse the fixed-width table emitted by build/bin/benchmark_c_raw."""
     rows: list[dict[str, Any]] = []
@@ -132,17 +209,76 @@ def parse_raw_c(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _utc_minute(timestamp: object) -> str | None:
+    """``timestamp`` as ``YYYY-MM-DD HH:MM UTC``, or None when it is not an
+    ISO-8601 string."""
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str, Any]) -> str:
     results = bench["results"]
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    version = re.search(
-        r'__version__\s*=\s*"([^"]+)"',
-        (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-    ).group(1)
+
+    # The version and measured-at come from the measurement artefact's own
+    # provenance block (written by benchmark_runner.generate_report), not from
+    # the working tree at render time.  Stamping render-time state over
+    # archived measurements is the relabelling defect generate_competitive.py
+    # documents — a page regenerated at 5.0.0 from numbers measured at 3.4.0
+    # claimed the 5.0.0 label for them.  The tree lookup below survives only
+    # as the fallback for inputs that predate the provenance block, and the
+    # page says so when it is used.
+    provenance = bench.get("provenance")
+    measured_html: str
+    if isinstance(provenance, dict) and provenance.get("version") and provenance.get("commit"):
+        version = str(provenance["version"]).strip("`")
+        raw_commit = str(provenance["commit"]).strip("`")
+        # Older records carried dirtiness as a suffix on the commit string;
+        # newer ones carry a separate "tree" row. Honour both.
+        commit_id = raw_commit.split()[0]
+        dirty = "DIRTY" in raw_commit or "DIRTY" in str(provenance.get("tree", ""))
+        # A timestamp that does not parse is still a measurement: the page
+        # says the time is unrecorded rather than failing over one string.
+        measured_when = _utc_minute(bench.get("timestamp")) or "an unrecorded time"
+        measured_html = (
+            f"Measured at commit <code>{html.escape(commit_id[:12])}</code> "
+            f"(v{html.escape(version)}), {html.escape(measured_when)}"
+            + (" — working tree DIRTY at measurement" if dirty else "")
+            + "."
+        )
+    else:
+        version_match = re.search(
+            r'__version__\s*=\s*"([^"]+)"',
+            (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
+        )
+        if version_match is None:
+            # Not a fallback literal: a dashboard stamped with a version that
+            # was not read from anywhere real is the defect this exists to
+            # avoid.
+            raise RuntimeError(
+                "the measurement artefact carries no provenance block and "
+                "ama_cryptography/__init__.py declares no __version__; refusing "
+                "to label the dashboard with an invented version"
+            )
+        version = version_match.group(1)
+        measured_html = (
+            "The measurement artefact predates its provenance block, so nothing "
+            "records when or at which commit these numbers were produced; the "
+            "version shown was read from the working tree at generation time."
+        )
 
     payload = {
         "generated": generated,
         "version": version,
+        # Carried through verbatim so the page's embedded data is as
+        # attributable as the page text.
+        "measuredAt": bench.get("timestamp"),
+        "provenance": provenance if isinstance(provenance, dict) else None,
         "results": [
             {
                 "key": r["name"],
@@ -163,10 +299,14 @@ def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str,
     tmpl = (Path(__file__).resolve().parent / "_dashboard_template.html").read_text(
         encoding="utf-8"
     )
-    return (
-        tmpl.replace("/*__DATA__*/", json.dumps(payload))
-        .replace("__GENERATED__", html.escape(generated))
-        .replace("__VERSION__", html.escape(version))
+    return fill_template(
+        tmpl,
+        {
+            DATA_MARKER: script_json(payload),
+            MEASURED_MARKER: measured_html,
+            GENERATED_MARKER: html.escape(generated),
+            VERSION_MARKER: html.escape(version),
+        },
     )
 
 

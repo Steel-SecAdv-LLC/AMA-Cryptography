@@ -3,7 +3,7 @@
 /**
  * @file ama_cryptography.h
  * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
- * @version 4.0.0
+ * @version 5.0.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-04-25
  *
@@ -24,9 +24,23 @@ extern "C" {
  *
  * When compiling the library itself (shared or static), AMA_API is either
  * __declspec(dllexport) or empty.  Only external consumers of the shared
- * DLL get __declspec(dllimport). */
+ * DLL get __declspec(dllimport).
+ *
+ * AMA_EXPORTS_FROM_DEF is set by CMakeLists.txt for the MinGW shared build,
+ * where the export table is stated by a generated module-definition file
+ * instead (cmake/generate_pe_def.cmake).  It has to make AMA_API EMPTY rather
+ * than merely adding the .def, because GNU ld UNIONS a .def with whatever
+ * carries __declspec(dllexport) -- measured: a .def naming one of two
+ * dllexport'd functions exports both.  That union is how
+ * `ama_hmac_sha256.part.0` reached the ABI: GCC propagates the attribute from
+ * a public entry point to the clones its interprocedural passes create, so no
+ * linker flag can take it back off.  With nothing marked, the .def is the sole
+ * authority and a clone cannot appear in it, because nothing declares one.
+ * MSVC is unaffected and keeps dllexport: it emits no such clones. */
 #if defined(_WIN32) || defined(_WIN64)
-  #ifdef AMA_BUILDING_SHARED
+  #if defined(AMA_BUILDING_SHARED) && defined(AMA_EXPORTS_FROM_DEF)
+    #define AMA_API  /* exports stated by the generated .def */
+  #elif defined(AMA_BUILDING_SHARED)
     #define AMA_API __declspec(dllexport)
   #elif defined(AMA_BUILDING_STATIC) || defined(AMA_TESTING_MODE)
     #define AMA_API  /* static library or test build — no dllimport */
@@ -41,10 +55,10 @@ extern "C" {
  * VERSION INFORMATION
  * ============================================================================ */
 
-#define AMA_CRYPTOGRAPHY_VERSION_MAJOR 4
+#define AMA_CRYPTOGRAPHY_VERSION_MAJOR 5
 #define AMA_CRYPTOGRAPHY_VERSION_MINOR 0
 #define AMA_CRYPTOGRAPHY_VERSION_PATCH 0
-#define AMA_CRYPTOGRAPHY_VERSION_STRING "4.0.0"
+#define AMA_CRYPTOGRAPHY_VERSION_STRING "5.0.0"
 
 /* ============================================================================
  * ALGORITHM IDENTIFIERS
@@ -55,7 +69,12 @@ typedef enum {
     AMA_ALG_KYBER_1024 = 1,   /**< CRYSTALS-Kyber (Kyber-1024) */
     AMA_ALG_SPHINCS_256F = 2, /**< SPHINCS+-256f */
     AMA_ALG_ED25519 = 3,      /**< Ed25519 (classical) */
-    AMA_ALG_HYBRID = 4        /**< Hybrid mode (classical + PQC) */
+    AMA_ALG_HYBRID = 4        /**< Hybrid: Ed25519 + ML-DSA-65, both components
+                                   over the message bound to AMA_HYBRID_SIG_DOMAIN
+                                   (format v2, byte-compatible with the Python
+                                   HybridSignatureProvider).  Keys and signatures
+                                   are the Ed25519 part followed by the ML-DSA-65
+                                   part; see AMA_HYBRID_*_BYTES. */
 } ama_algorithm_t;
 
 /* ============================================================================
@@ -185,14 +204,35 @@ typedef enum {
 #define AMA_ED25519_PUBLIC_KEY_BYTES 32
 #define AMA_ED25519_SECRET_KEY_BYTES 64
 #define AMA_ED25519_SIGNATURE_BYTES 64
+/* The expanded signing form ama_ed25519_expand_secret_key produces:
+ * a(32) || prefix(32) || A(32) || tag(32).  See the function's contract. */
+#define AMA_ED25519_EXPANDED_KEY_BYTES 128
+#define AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET 64
+
+/* ----------------------------------------------------------------------------
+ * Hybrid signature (AMA_ALG_HYBRID): Ed25519 + ML-DSA-65, format v2.
+ *
+ * Both components sign the message bound to one domain string, so neither
+ * half is a valid standalone signature over the raw message and no standalone
+ * signature can be spliced in under key reuse.  Ed25519 (RFC 8032 pure, no
+ * context parameter) signs 0x00 || len(domain) || domain || M explicitly;
+ * ML-DSA-65 carries the same domain as its FIPS 204 Sec 5.2 context string,
+ * which applies the identical wrapper internally.  The Python
+ * HybridSignatureProvider (ama_cryptography/crypto_api.py) uses the same
+ * string and wrapper, and tests/test_hybrid_c_interop.py verifies signatures
+ * across the two.  The string is part of the signature format: changing it
+ * invalidates every existing hybrid signature.
+ * ------------------------------------------------------------------------- */
+#define AMA_HYBRID_SIG_DOMAIN "AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65"
+#define AMA_HYBRID_PUBLIC_KEY_BYTES (AMA_ED25519_PUBLIC_KEY_BYTES + AMA_ML_DSA_65_PUBLIC_KEY_BYTES)
+#define AMA_HYBRID_SECRET_KEY_BYTES (AMA_ED25519_SECRET_KEY_BYTES + AMA_ML_DSA_65_SECRET_KEY_BYTES)
+#define AMA_HYBRID_SIGNATURE_BYTES  (AMA_ED25519_SIGNATURE_BYTES + AMA_ML_DSA_65_SIGNATURE_BYTES)
 
 /* ============================================================================
  * OPAQUE TYPES
  * ============================================================================ */
 
 typedef struct ama_context_t ama_context_t;
-typedef struct ama_keypair_t ama_keypair_t;
-typedef struct ama_signature_t ama_signature_t;
 
 /* ============================================================================
  * CONTEXT MANAGEMENT
@@ -247,6 +287,11 @@ AMA_API ama_error_t ama_keypair_generate(
  * Signs a message using the algorithm specified in the context.
  * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
  *
+ * ML-DSA-65 and SPHINCS+-256f sign under the EMPTY FIPS 204 / FIPS 205
+ * context: the signature is the one ama_dilithium_sign() / ama_sphincs_sign()
+ * produce. Before 5.0.0 both signed the raw message (INVARIANT-50), so a 4.x
+ * signature from this function does not verify with 5.x ama_verify().
+ *
  * @param ctx Initialized context
  * @param message Message to sign
  * @param message_len Length of message
@@ -271,6 +316,11 @@ AMA_API ama_error_t ama_sign(
  *
  * Verifies a signature using the algorithm specified in the context.
  * Supports ML-DSA-65, SPHINCS+-256f, and Ed25519 natively.
+ *
+ * ML-DSA-65 and SPHINCS+-256f verify under the EMPTY FIPS 204 / FIPS 205
+ * context, as ama_dilithium_verify() / ama_sphincs_verify() do; a signature
+ * made by a 4.x ama_sign() is rejected with AMA_ERROR_VERIFY_FAILED
+ * (INVARIANT-50).
  *
  * @param ctx Initialized context
  * @param message Message to verify
@@ -367,8 +417,92 @@ AMA_API int ama_consttime_memcmp(const void* a, const void* b, size_t len);
  */
 AMA_API void ama_secure_memzero(void* ptr, size_t len);
 
+/** Bytes of dead stack `ama_secure_stack_wipe()` clears. */
+#define AMA_STACK_WIPE_BYTES 4096u
+
 /**
- * @brief Lock memory pages to prevent swapping to disk.
+ * @brief Zero the dead stack a just-returned primitive left behind.
+ *
+ * `ama_secure_memzero()` scrubs the buffers a function names; it cannot reach
+ * the copies an optimizing compiler spills of them.  The shipped AES-GCM
+ * hardware kernels are the measured case: they scrub their `rk[15]` key
+ * schedule at exit, and gcc had already hoisted the round keys into separate
+ * unscrubbed stack slots — including the two that, for AES-256, are the raw
+ * key.  This function extends the stack over that region and zeroes
+ * `AMA_STACK_WIPE_BYTES` of it.
+ *
+ * Call it from the frame that called the primitive, immediately after it
+ * returns, so the wipe lands where the primitive's frame was.  Every AEAD
+ * entry point in this library does.  It is a backstop for compiler-made
+ * copies, not a substitute for scrubbing named buffers, and it clears only
+ * what is BELOW the current frame — never the caller's own locals.
+ */
+AMA_API void ama_secure_stack_wipe(void);
+
+/**
+ * @brief HMAC-SHA-256 (RFC 2104 / FIPS 198-1) over one message.
+ *
+ * Declared here because the Python layer resolves it through ctypes, so it
+ * is part of the shipped ABI whether or not it was ever written down — and
+ * the export map now localises every other internal `ama_*` symbol, which
+ * would have taken this one with it.  A zero-length key is permitted (RFC
+ * 2104); `key` may then be NULL.
+ *
+ * Contract violation: the function has no error channel, so a NULL @p key
+ * with a non-zero @p key_len, or a NULL @p data with a non-zero @p data_len,
+ * calls abort().  It neither dereferences the NULL nor returns, because any
+ * value it left in @p out (a zeroed buffer included) is a predictable tag a
+ * verifier would compare against.  A NULL @p out writes nothing and returns.
+ *
+ * @param key      HMAC key (may be NULL when @p key_len is 0)
+ * @param key_len  Key length in bytes
+ * @param data     Message (may be NULL when @p data_len is 0)
+ * @param data_len Message length in bytes
+ * @param out      Output: 32-byte tag
+ */
+AMA_API void ama_hmac_sha256(const uint8_t *key, size_t key_len,
+                             const uint8_t *data, size_t data_len,
+                             uint8_t out[32]);
+
+/**
+ * @brief HMAC-SHA-256 over the concatenation of two buffers.
+ *
+ * Equivalent to :c:func:`ama_hmac_sha256` over `data1 || data2` without
+ * materialising the concatenation.  Same ABI note and the same contract
+ * violation as above: a NULL buffer with a non-zero length (@p key, @p data1
+ * or @p data2) calls abort().
+ */
+AMA_API void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
+                               const uint8_t *data1, size_t data1_len,
+                               const uint8_t *data2, size_t data2_len,
+                               uint8_t out[32]);
+
+/**
+ * @brief One-shot SHA-256 (FIPS 180-4): hash @p inlen bytes to 32.
+ *
+ * Exported because the Python layer binds it (`pqc_backends.native_sha256`).
+ * It was exported before this declaration existed — declared `AMA_API` only
+ * in the uninstalled `src/c/ama_sha256.h` — so a C consumer had an ABI symbol
+ * with no published prototype, and the MinGW `.def`, generated from the
+ * installed headers' declarations, could not name it.
+ *
+ * @param out   Output: 32-byte digest
+ * @param in    Message (may be NULL when @p inlen is 0)
+ * @param inlen Message length in bytes
+ */
+AMA_API void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen);
+
+/**
+ * @brief Lock memory pages to prevent swapping to disk, and mark them
+ *        non-dumpable (MADV_DONTDUMP where the platform has it).
+ *
+ * The kernel locks and unlocks whole pages: this call and
+ * ama_secure_munlock() act on every page that [ptr, ptr+len) touches,
+ * including bytes belonging to neighbouring allocations on a shared page.
+ * Buffers from ama_secure_alloc() own their pages and are not affected by
+ * anyone else's unlock; for caller-provided memory that shares pages, an
+ * unlock of one region unlocks the others on those pages.
+ *
  * @param ptr Pointer to memory region
  * @param len Length of memory region
  * @return AMA_SUCCESS or AMA_ERROR_MEMORY
@@ -384,16 +518,35 @@ AMA_API ama_error_t ama_secure_mlock(void* ptr, size_t len);
 AMA_API ama_error_t ama_secure_munlock(void* ptr, size_t len);
 
 /**
- * @brief Allocate a secure buffer with mlock and DONTDUMP.
- * @param size Number of bytes to allocate
- * @return Pointer to locked, zeroed memory, or NULL on failure
+ * @brief Allocate a zeroed buffer in a private page-aligned mapping, mark
+ *        it non-dumpable, and attempt to lock it into RAM.
+ *
+ * The buffer owns whole pages (one anonymous mapping per allocation), so
+ * locking, the MADV_DONTDUMP advice and ama_secure_free() act on this
+ * allocation's pages only and never on a neighbour's.
+ *
+ * @warning Locking is best-effort and NOT guaranteed: mlock() fails when
+ * the allocation would exceed RLIMIT_MEMLOCK (often 64 KiB by default) and
+ * this function still returns a usable buffer rather than NULL.  An mlock()
+ * failure costs ONLY the lock.  The returned buffer is still (a) zeroed,
+ * (b) a private page-aligned mapping of its own, and (c) on platforms with
+ * MADV_DONTDUMP (Linux), excluded from core dumps: the advice is applied
+ * to the mapping before and independently of the lock attempt, so it does
+ * not depend on RLIMIT_MEMLOCK and survives an mlock() failure.  Only
+ * (d), "never paged to swap", is lost.  Platforms without MADV_DONTDUMP
+ * (Windows, macOS) never had (c).  When the locked property is
+ * load-bearing, call ama_secure_mlock() on the returned buffer and act on
+ * its return value; that call keeps its own fail-closed contract.
+ *
+ * @param size Number of bytes to allocate (rounded up to whole pages)
+ * @return Pointer to zeroed memory, or NULL on failure
  */
 AMA_API void* ama_secure_alloc(size_t size);
 
 /**
- * @brief Free a secure buffer with guaranteed zeroization and munlock.
+ * @brief Free a secure buffer with guaranteed zeroization, munlock and unmap.
  * @param ptr Pointer from ama_secure_alloc
- * @param size Size of the allocation
+ * @param size The size passed to ama_secure_alloc
  */
 AMA_API void ama_secure_free(void* ptr, size_t size);
 
@@ -471,6 +624,24 @@ AMA_API ama_error_t ama_sha3_512(
 );
 
 /**
+ * @brief SHA3-384 hash function (FIPS 202)
+ *
+ * One-shot SHA3-384 (capacity 768, rate 104).  Byte-identical to
+ * hashlib.sha3_384(input).digest().  Exported so the Python layer's
+ * RFC 3161 digest table is natively backed end to end (INVARIANT-1).
+ *
+ * @param input Input data (may be NULL iff input_len == 0)
+ * @param input_len Length of input
+ * @param output Output buffer (48 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sha3_384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
  * @brief SHAKE128 / SHAKE256 extendable-output functions (FIPS 202)
  *
  * One-shot XOF: absorb `input`, squeeze `output_len` bytes into `output`.
@@ -508,7 +679,11 @@ typedef struct {
     uint64_t state[25];     /**< Keccak state (1600 bits) */
     uint8_t buffer[168];    /**< Rate buffer (168 bytes max for SHAKE128; 136 for SHA3-256/SHAKE256) */
     size_t buffer_len;      /**< Current bytes in buffer */
-    int finalized;          /**< Set to 1 after final() called */
+    int finalized;          /**< 0 before final(); afterwards the finalizing
+                             *   family's rate in bytes (nonzero), so a
+                             *   squeeze through a different family's entry
+                             *   point is rejected rather than emitting
+                             *   another sponge's capacity bytes */
 } ama_sha3_ctx;
 
 /**
@@ -699,6 +874,92 @@ AMA_API ama_error_t ama_hmac_sha384(
 );
 
 /**
+ * @brief One-shot SHA-512 (FIPS 180-4 Section 6.4)
+ *
+ * Byte-identical to hashlib.sha512(input).digest().  Surfaces the in-tree
+ * SHA-512 core (internal/ama_sha2.h — the one Ed25519, SLH-DSA-SHA2,
+ * HKDF-SHA-512 and HMAC-SHA-384 already run on) to public callers, so the
+ * Python layer's FIPS 186-5 hash pairings and RFC 3161 digest table need
+ * no stdlib hashlib (INVARIANT-1).  Argument order follows the SHA-3
+ * family (input-first, rc-checked), not the older output-first ama_sha256.
+ *
+ * @param input     Input data (may be NULL iff input_len == 0)
+ * @param input_len Input length in bytes
+ * @param output    Output buffer (must be at least 64 bytes)
+ * @return          AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_sha512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
+ * @brief One-shot SHA-384 (FIPS 180-4 Section 6.5)
+ *
+ * Byte-identical to hashlib.sha384(input).digest().  Shares the SHA-512
+ * compression function; differs only in IV and 48-byte truncation.
+ *
+ * @param input     Input data (may be NULL iff input_len == 0)
+ * @param input_len Input length in bytes
+ * @param output    Output buffer (must be at least 48 bytes)
+ * @return          AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_sha384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
+ * @brief PBKDF2-HMAC-SHA256 (NIST SP 800-132 / RFC 8018 Section 5.2)
+ *
+ * Byte-identical to hashlib.pbkdf2_hmac("sha256", password, salt,
+ * iterations, out_len).  Backs the Python key-encryption-key derivation
+ * so no KDF is delegated to stdlib hashlib's OpenSSL PBKDF2 (INVARIANT-1).
+ * The HMAC key schedule is hoisted out of the iteration loop (two
+ * compression passes per iteration, not four).
+ *
+ * @param password      Password bytes (may be NULL iff password_len == 0)
+ * @param password_len  Password length in bytes
+ * @param salt          Salt bytes (may be NULL iff salt_len == 0)
+ * @param salt_len      Salt length in bytes
+ * @param iterations    Iteration count (must be >= 1)
+ * @param out           Output buffer for the derived key
+ * @param out_len       Derived key length (>= 1, <= (2^32 - 1) * 32)
+ * @return              AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
+);
+
+/**
+ * @brief PBKDF2-HMAC-SHA512 (NIST SP 800-132 / RFC 8018 Section 5.2)
+ *
+ * Byte-identical to hashlib.pbkdf2_hmac("sha512", password, salt,
+ * iterations, out_len).  This is the BIP39 seed-derivation KDF
+ * (2048 iterations, salt "mnemonic" || passphrase).
+ *
+ * @param password      Password bytes (may be NULL iff password_len == 0)
+ * @param password_len  Password length in bytes
+ * @param salt          Salt bytes (may be NULL iff salt_len == 0)
+ * @param salt_len      Salt length in bytes
+ * @param iterations    Iteration count (must be >= 1)
+ * @param out           Output buffer for the derived key
+ * @param out_len       Derived key length (>= 1, <= (2^32 - 1) * 64)
+ * @return              AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_pbkdf2_hmac_sha512(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
+);
+
+/**
  * @brief HKDF key derivation (RFC 5869)
  *
  * Derives key material using HKDF with HMAC-SHA3-256.
@@ -798,7 +1059,8 @@ AMA_API ama_error_t ama_hkdf_sha512(
  *
  * enc(b) is folded into HKDF's `info` (ama_hkdf_agent_bound) and hashed into
  * a 32-byte signature context string (ama_agent_binding_context) that callers
- * pass as the ML-DSA / SLH-DSA `ctx` argument.  Consequence: a key or a
+ * pass as the ML-DSA / SLH-DSA `ctx` argument; the exact layouts are under
+ * "Derivations" below.  Consequence: a key or a
  * signature produced under one binding is cryptographically unrelated to the
  * same input under any other binding, INCLUDING a binding that differs only
  * in its lifetime or capability bits.  An agent cannot relabel ephemeral
@@ -816,9 +1078,62 @@ AMA_API ama_error_t ama_hkdf_sha512(
  *       constant time against an authority key K_auth supplied by the caller.
  *
  * K_auth is held by the human-controlled supervisor that issues bindings, not
- * by the agent.  An agent that has escaped its sandbox still cannot mint a
- * persistent binding: it has enc(b) but not K_auth, and the check is a MAC
- * verification, not a flag test.
+ * by the agent.  The check is a MAC verification, not a flag test: it recomputes
+ * HMAC-SHA3-256(K_auth, 0x01 || enc(b)) using the K_auth the VERIFIER supplies
+ * at check time and compares it to `authorization`.  The security property is
+ * therefore relative to the verifier's key: against a verifier that supplies
+ * the supervisor's real K_auth, an escaped agent cannot present a binding that
+ * verifies, because it has enc(b) but not K_auth and so cannot produce the
+ * matching tag.
+ *
+ * This is NOT a claim that the binding is self-proving.  An escaped agent that
+ * drives this API can `authorize()` a binding under ITS OWN key and `check()`
+ * it under that same key — a self-consistent but empty act: such a binding
+ * verifies only against the agent's key, is rejected by any verifier pinning
+ * K_auth, and confers nothing.  For a binding that requires authorization the
+ * derived key (ama_hkdf_agent_bound) and signing context
+ * (ama_agent_binding_context) are keyed by the authority key the caller passes
+ * (the binder, below), so the self-authorized binding yields material under
+ * the agent's own key, unrelated to what the same binding yields under the
+ * supervisor's K_auth — and those values the agent cannot compute, through
+ * this library or around it, because it does not hold K_auth.  Holding a
+ * genuine `authorization` tag does not help either: the tag is not an input to
+ * either derivation, and the binders are MACs under their own sub-domains
+ * (0x03, 0x04), so the tag (0x01) cannot stand in for one.  A caller MUST
+ * verify a binding under the supervisor's K_auth (never under a key the
+ * untrusted producer chose) for the check to mean "the supervisor authorized
+ * this".
+ *
+ * Derivations
+ * -----------
+ * Both derivations take a 32-byte binder beside enc(b):
+ *
+ *   ama_hkdf_agent_bound:       info' = enc(b) || binder_kdf || u32be(info_len) || info
+ *   ama_agent_binding_context:  ctx   = SHA3-256(0x02 || enc(b) || binder_ctx)
+ *
+ *   binder_kdf = HMAC-SHA3-256(K_auth, 0x03 || enc(b))   } the binding requires
+ *   binder_ctx = HMAC-SHA3-256(K_auth, 0x04 || enc(b))   } authorization
+ *   binder_kdf = binder_ctx = 0^32                          otherwise
+ *
+ * K_auth here is the authority key passed to the derivation, which
+ * ama_agent_binding_check() has just verified the tag under.  The binder is
+ * what makes K_auth an input to a restricted binding's outputs rather than
+ * only to the gate in front of them: without it both outputs are public
+ * functions of enc(b), reproducible by anyone who can call ama_hkdf() or
+ * ama_sha3_256() directly.  An unrestricted binding has no operator secret;
+ * its binder is 32 zero bytes whatever key is passed, so it derives one value
+ * rather than one per key argument, and its outputs remain public functions of
+ * enc(b) and the caller's inputs — which is what "unrestricted" means.
+ *
+ * Compatibility.  These are the 5.0.0 layouts.  Every release before 5.0.0
+ * derived without a binder for EVERY binding — info' = enc(b) ||
+ * u32be(info_len) || info and ctx = SHA3-256(0x02 || enc(b)) — so for the same
+ * inputs 5.0.0 produces a different key and a different signature context for
+ * all bindings, unrestricted ones included: 4.x-derived keys cannot be
+ * re-derived and ML-DSA / SLH-DSA signatures made under a 4.x context do not
+ * verify under a 5.0.0 one.  enc(b), its "AMA-AGENT-BIND-v1" label and the
+ * authorization tag are unchanged, so nothing in the record tells the two
+ * derivations apart; the library version does.
  *
  * Everything here is fail-closed: a NULL argument, a malformed record, a
  * reserved byte that is not zero, an absent authority key, or a tag mismatch
@@ -979,9 +1294,13 @@ AMA_API ama_error_t ama_agent_binding_check(
  * @brief Derive the signature-context string for a binding.
  *
  * Runs ama_agent_binding_check() first and writes nothing on refusal.  The
- * result is SHA3-256(0x02 || enc(b)) and is intended to be passed verbatim as
- * the `ctx` argument of ama_dilithium_sign_ctx() / ama_sphincs_verify_ctx(),
- * binding the signature to the agent instance and its capability set.
+ * result is SHA3-256(0x02 || enc(b) || binder), where binder is
+ * HMAC-SHA3-256(authority_key, 0x04 || enc(b)) for a binding that requires
+ * authorization and 32 zero bytes for an unrestricted one (see "Derivations"
+ * above — releases before 5.0.0 hashed 0x02 || enc(b) alone, for every
+ * binding).  It is intended to be passed verbatim as the `ctx` argument of
+ * ama_dilithium_sign_ctx() / ama_sphincs_verify_ctx(), binding the signature
+ * to the agent instance and its capability set.
  *
  * @param b            Binding
  * @param authority_key Operator authority key, or NULL for unrestricted bindings
@@ -1000,9 +1319,13 @@ AMA_API ama_error_t ama_agent_binding_context(
  * @brief HKDF-SHA3-256 with the agent binding folded into `info`.
  *
  * Equivalent to ama_hkdf() with
- *   info' = enc(b) || u32be(info_len) || info
- * after ama_agent_binding_check() passes.  On refusal @p okm is left
- * untouched and AMA_ERROR_ETHICAL_BINDING is returned.
+ *   info' = enc(b) || binder || u32be(info_len) || info
+ * after ama_agent_binding_check() passes, where binder is
+ * HMAC-SHA3-256(authority_key, 0x03 || enc(b)) for a binding that requires
+ * authorization and 32 zero bytes for an unrestricted one (see "Derivations"
+ * above — releases before 5.0.0 used enc(b) || u32be(info_len) || info, for
+ * every binding).  On refusal @p okm is left untouched and
+ * AMA_ERROR_ETHICAL_BINDING is returned.
  *
  * @param b            Binding
  * @param authority_key Operator authority key, or NULL for unrestricted bindings
@@ -1115,7 +1438,24 @@ AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_k
  *                     `ama_ed25519_keypair` produces. No length parameter,
  *                     no validation. Passing only the 32-byte seed reads 32
  *                     bytes past the end of the buffer.
- * @return AMA_SUCCESS or error code
+ *
+ *                     INVARIANT-51: bytes 32..63 must be the public key this
+ *                     seed generates. The signer derives A = [a]B and refuses
+ *                     a key whose stored half disagrees, because signing one
+ *                     message twice under two different halves shares R and
+ *                     discloses the private scalar. A caller that stores the
+ *                     halves separately, or reassembles a key from a
+ *                     corrupted record, reaches that input without a fault
+ *                     injector.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the stored public half
+ *         is not the derived one (also for a NULL argument or a
+ *         `message_len` above `SIZE_MAX - 64`); AMA_ERROR_MEMORY when a
+ *         message above the 4 KiB stack threshold cannot be buffered. On
+ *         every failing exit after the NULL checks, all 64 signature bytes
+ *         are written as zero rather than left untouched, so a caller that
+ *         ignores the return code gets an unusable signature instead of a
+ *         valid one produced under a public half it did not supply, or a
+ *         stale one left in a reused buffer.
  *
  * See the fixed-length buffer contract above.
  */
@@ -1124,6 +1464,91 @@ AMA_API ama_error_t ama_ed25519_sign(
     const uint8_t *message,
     size_t message_len,
     const uint8_t secret_key[64]
+);
+
+/**
+ * @brief Expand a 64-byte Ed25519 secret key into the 128-byte signing form
+ *
+ * INVARIANT-51 at key load. `ama_ed25519_sign` derives `A = [a]B` on every
+ * signature to refuse a stored public half that is not the one its scalar
+ * generates. This function performs that derivation ONCE and produces a
+ * form `ama_ed25519_sign_expanded` can use without repeating it:
+ *
+ *     [  0.. 31]  a       the clamped secret scalar, SHA-512(seed)[0..31]
+ *     [ 32.. 63]  prefix  the nonce PRF key, SHA-512(seed)[32..63]
+ *     [ 64.. 95]  A       the public key, computed here as [a]B
+ *     [ 96..127]  tag     SHA-512("AMA/Ed25519/expanded-key/v1" || a || prefix || A)[0..31]
+ *
+ * The tag is the property's carrier. The hazard INVARIANT-51 closes is a
+ * stored `A` that differs from `[a]B`: two signatures over one message under
+ * two different halves share `R` and disclose the scalar. In this form
+ * neither `A`, `a` nor `prefix` can change without the tag failing to
+ * verify, and the signer re-checks the tag on every signature at the cost of
+ * two SHA-512 compressions rather than a fixed-base scalar multiplication.
+ * A single flipped bit anywhere in the 128 bytes — what a storage fault or a
+ * mis-copied record produces — is refused. A party able to rewrite the tag
+ * consistently can read `a` from the same bytes and needs no fault.
+ *
+ * This is NOT a storage or interchange format. It holds the private scalar
+ * in the clear (the same secrecy class as the seed, which is one SHA-512
+ * from it) and exists so a caller signing many times under one key pays the
+ * derivation once. Hold it exactly as long as the signing session and scrub
+ * it with `ama_secure_memzero` (INVARIANT-6). Read the public key from
+ * offset `AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET`; do not construct or edit
+ * the form by hand — a hand-assembled buffer is refused unless its tag is
+ * correct, and the only supported way to obtain a correct tag is this
+ * function.
+ *
+ * @param expanded    Output. Caller MUST supply exactly
+ *                    `AMA_ED25519_EXPANDED_KEY_BYTES` (128) writable bytes;
+ *                    all 128 are written. On refusal all 128 are zero, a
+ *                    buffer `ama_ed25519_sign_expanded` also refuses.
+ * @param secret_key  Caller MUST supply exactly 64 readable bytes laid out
+ *                    as seed(32) || public_key(32), the form
+ *                    `ama_ed25519_keypair` produces. No length parameter.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the stored public
+ *         half is not the derived one (or an argument is NULL).
+ *
+ * See the fixed-length buffer contract above.
+ */
+AMA_API ama_error_t ama_ed25519_expand_secret_key(
+    uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES],
+    const uint8_t secret_key[64]
+);
+
+/**
+ * @brief Sign a message with an expanded Ed25519 key
+ *
+ * Produces, for a message and the expanded form of a key, exactly the bytes
+ * `ama_ed25519_sign` produces for the same message and the 64-byte key —
+ * RFC 8032 Ed25519 (pure EdDSA), deterministic — after re-verifying the
+ * expanded key's tag. The tag check is a mask, not a branch, and the
+ * verdict is applied at a single exit (the construction `ama_ed25519_sign`
+ * uses for its INVARIANT-51 verdict), so the instruction stream does not
+ * depend on the key.
+ *
+ * @param signature   Output. Caller MUST supply exactly 64 writable bytes;
+ *                    all 64 are written. On every failing exit after the
+ *                    NULL checks all 64 are zero.
+ * @param message     Message to sign. Bounded by `message_len`, which IS
+ *                    checked; a zero-length message is valid.
+ * @param message_len Length of `message` in bytes.
+ * @param expanded    Caller MUST supply exactly
+ *                    `AMA_ED25519_EXPANDED_KEY_BYTES` (128) readable bytes
+ *                    as produced by `ama_ed25519_expand_secret_key`. No
+ *                    length parameter.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM when the tag does not
+ *         verify (or an argument is NULL, or `message_len` exceeds
+ *         `SIZE_MAX - 64`); AMA_ERROR_MEMORY when a message above the 4 KiB
+ *         stack threshold cannot be buffered.
+ *
+ * See the fixed-length buffer contract above.
+ */
+AMA_API ama_error_t ama_ed25519_sign_expanded(
+    uint8_t signature[64],
+    const uint8_t *message,
+    size_t message_len,
+    const uint8_t expanded[AMA_ED25519_EXPANDED_KEY_BYTES]
 );
 
 /**
@@ -1147,11 +1572,53 @@ AMA_API ama_error_t ama_ed25519_sign(
  * @param public_key    Caller MUST supply exactly 32 readable bytes. Same
  *                      terms as `signature`: no length parameter, short is
  *                      undefined behaviour, long is ignored not rejected.
- * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid,
+ *         AMA_ERROR_INVALID_PARAM for a NULL `signature` or `public_key`, a
+ *         NULL `message` with a non-zero `message_len`, or a `message_len`
+ *         whose working buffer size would overflow, and AMA_ERROR_MEMORY
+ *         when a message longer than the 4 KiB stack buffer cannot be
+ *         allocated for.  Only AMA_SUCCESS means "verified".
  *
  * See the fixed-length buffer contract above. Note that a rejected
  * signature and a malformed-length signature are NOT distinguishable
  * through this API — the latter is not detected at all.
+ *
+ * VERIFICATION EQUATION: COFACTORLESS. This function decides
+ * `[S]B - R - [h]A = O`, not the cofactored `8([S]B - R - [h]A) = O`.
+ * RFC 8032 §5.1.7 permits either, and the two do not agree on every input:
+ * a cofactored verifier — ZIP-215, or libsodium's permissive mode — ACCEPTS
+ * a signature whose `R` or `A` carries a torsion component that this one
+ * REJECTS, because multiplying by the cofactor annihilates exactly that
+ * component. The difference is invisible on honestly produced signatures and
+ * appears only on deliberately constructed ones.
+ *
+ * The consequence is interoperability, and it is not academic: a system in
+ * which some participants run a cofactored verifier and some run this one
+ * can be shown a signature the two halves score differently, and a consensus
+ * system built that way SPLITS on it. If you are validating a shared,
+ * replicated log, fix ONE verification rule across every participant — do
+ * not mix implementations and assume they agree. AMA's rule is the
+ * cofactorless one, on every path: batch verification is a per-entry loop
+ * over this function (see `ama_ed25519_batch_verify`), so the two cannot
+ * diverge inside this library.
+ *
+ * SMALL-ORDER INPUTS ARE REJECTED (INVARIANT-48). All fourteen 32-byte
+ * encodings of the eight points of the order-8 subgroup — the identity
+ * included, and the non-canonical spellings included — are refused as
+ * `public_key` and as the signature's `R` half. RFC 8032 does not mandate
+ * this, but a cofactorless verifier that omits it admits a universal
+ * forgery: with `A` = the identity the `[h]A` term vanishes for every
+ * message, so `(R = [S]B, S)` verifies against ANY message with no secret
+ * involved. A verifier that accepts an attacker-supplied or
+ * attacker-registered public key — which is what an embedded-key package
+ * format does — would otherwise stop meaning "the signer holds a secret".
+ * No legitimate signature is affected: an honest `R` is `[r]B` with
+ * `r = H(prefix || M) mod L`, small-order only when `r = 0 mod L`.
+ *
+ * `ama_ed25519_verify` therefore enforces three input rules beyond the group
+ * equation, all of them in `src/c/internal/ama_ed25519_canonical.h`:
+ * `0 <= S < L` (INVARIANT-26), canonical point encodings for `R`
+ * (INVARIANT-38), and the small-order rejection above (INVARIANT-48).
  */
 AMA_API ama_error_t ama_ed25519_verify(
     const uint8_t signature[64],
@@ -1197,7 +1664,19 @@ typedef struct {
  * @param entries   Array of `count` batch entries. Each entry's
  *                  `signature` and `public_key` must satisfy the
  *                  fixed-length contract documented on the struct above;
- *                  none of it is checked here.
+ *                  the LENGTHS cannot be checked here, because the struct
+ *                  does not record them. The POINTERS are: an entry with a
+ *                  NULL `signature`, a NULL `public_key`, or a NULL
+ *                  `message` with a non-zero `message_len` is rejected as
+ *                  an invalid entry (`results[i] = 0`, and the call returns
+ *                  `AMA_ERROR_VERIFY_FAILED`): every non-success return of
+ *                  `ama_ed25519_verify` for an entry, its
+ *                  `AMA_ERROR_INVALID_PARAM` and `AMA_ERROR_MEMORY`
+ *                  included, is recorded as that entry failing. Until this
+ *                  was added the since-removed vendored backend dereferenced
+ *                  them and took SIGSEGV while the in-tree backend rejected
+ *                  cleanly, so the same call crashed on x86-64 and returned
+ *                  on aarch64.
  * @param count     Number of entries in `entries`, and the minimum number
  *                  of `int` slots in `results`.
  * @param results   Output: caller MUST supply at least `count` writable
@@ -1205,13 +1684,105 @@ typedef struct {
  *                  0=invalid). There is no capacity parameter, so a
  *                  short array is undefined behaviour.
  * @return AMA_SUCCESS if all verified, AMA_ERROR_VERIFY_FAILED if any failed,
- *         AMA_ERROR_INVALID_PARAM if entries or results is NULL
+ *         AMA_ERROR_INVALID_PARAM if `entries` or `results` is NULL, or if
+ *         `count` is large enough that `count * sizeof(void *)` would overflow.
+ *
+ * Batch verification is a per-entry loop over `ama_ed25519_verify` (the
+ * in-tree path always was; the since-removed vendored backend became one in
+ * 5.0.0 — see B1 in the pre-tag audit, which retired its randomized
+ * multi-scalar aggregate because its predicate accepted canonically encoded
+ * small-order residues that single verify rejects). The batch verdict for an
+ * entry is therefore exactly the single-verify verdict for the same 64 bytes:
+ * there is no separate aggregate predicate, no randomizer draw and no
+ * working-array allocation, and so no `AMA_ERROR_MEMORY` or `AMA_ERROR_CRYPTO`
+ * return (an entry whose own verification could not allocate is an entry
+ * that did not verify). A caller MUST treat any non-`AMA_SUCCESS` return as "at least one
+ * entry in this batch did not verify" and read `results` per entry rather than
+ * switching only on `AMA_ERROR_VERIFY_FAILED`.
+ *
+ * Once the arguments are accepted, all `count` slots of `results` are written
+ * and none carries a 1 unless that entry verified — the array is zeroed up
+ * front so no path can leave a stale 1 from an earlier batch visible to a
+ * caller that reads `results` before the return code.
+ *
+ * The two argument-rejection returns write nothing, because at that point
+ * there is nothing safe to write: `AMA_ERROR_INVALID_PARAM` for a NULL
+ * `entries` or `results`, and for a `count` so large that `count *
+ * sizeof(void *)` would overflow — a `count` that by definition does not
+ * describe a real array, so touching `results[0..count)` would be the wild
+ * write the check exists to prevent. Both are caller errors detected before
+ * any work; on either, `results` holds whatever it held before the call.
  */
 AMA_API ama_error_t ama_ed25519_batch_verify(
     const ama_ed25519_batch_entry *entries,
     size_t count,
     int *results
 );
+
+/**
+ * @brief Name the Ed25519 group-arithmetic instantiation the next call runs on.
+ * @return A static string: "fe51" (the portable radix-2^51 instantiation,
+ *         the default on every host and the only one on AArch64 and MSVC),
+ *         or "fe64-mulx" when the radix-2^64 MULX+ADX instantiation is
+ *         compiled in (x86-64 GCC/Clang build), the host has BMI2 and ADX,
+ *         and `ama_ed25519_set_mulx_override(1)` has selected it.  Both are
+ *         in-house; there is no third-party Ed25519 code in the library.
+ *
+ * Build and dispatch introspection, not a cryptographic operation.  The
+ * fe51-versus-MULX differential (tests/c/test_ed25519_fe51_mulx_equiv.c) uses
+ * it, together with `ama_ed25519_set_mulx_override()`, to prove it exercised
+ * two different instantiations rather than one twice.
+ */
+AMA_API const char *ama_ed25519_active_backend(void);
+
+/**
+ * @brief Benchmark/test-only selector for the Ed25519 fe64 MULX+ADX instantiation.
+ *
+ * The in-house Ed25519 backend carries two instantiations of one group
+ * arithmetic: the portable radix-2^51 field (fe51), the default everywhere,
+ * and, on x86-64 GCC/Clang builds, the radix-2^64 field on the MULX+ADX
+ * kernel.  fe51 is the default by measurement: alternating the two in one
+ * process on the reference x86-64 host, the MULX instantiation ties on
+ * keygen and sign and is 10-15% slower on verify and double-scalar-mult,
+ * because the group formulas carry every radix-2^64 addition while radix
+ * 2^51 leaves them carry-free (src/c/ama_ed25519.c, BACKEND DISPATCH).
+ * This sets a process-wide selection: -1 or 0 = fe51 (default), 1 = the
+ * MULX instantiation (a no-op unless the unit was compiled in AND
+ * `ama_cpuid_has_x25519_mulx()` reports BMI2 and ADX).
+ *
+ * **NOT a production policy knob.**  Both instantiations are byte-identical
+ * (tests/c/test_ed25519_fe51_mulx_equiv.c); the selector exists so
+ * benchmarks can measure both on one host and so the equivalence test can
+ * drive both.  Single-threaded by contract: call it during harness setup
+ * with no Ed25519 work in flight on any thread.  On builds without the MULX
+ * unit it is a no-op.  `ama_ed25519_active_backend()` reports the selection
+ * in effect.
+ */
+AMA_API void ama_ed25519_set_mulx_override(int mode);
+
+/**
+ * @brief Name the Niels-table select fold the next Ed25519 call runs on.
+ * @return "avx2" (x86-64 with AVX2, the default there), "sse2" (x86-64
+ *         without AVX2, or with `ama_ed25519_set_avx2_fold_override(0)`), or
+ *         "portable" elsewhere.  Introspection only; the three folds are
+ *         mask selects over the whole table row and produce identical
+ *         results (tests/c/test_ed25519_comb_equiv.c drives them).
+ */
+AMA_API const char *ama_ed25519_active_fold(void);
+
+/**
+ * @brief Benchmark/test-only selector for the Ed25519 Niels-select fold.
+ *
+ * -1 = the CPU decides (default), 0 = force the SSE2 fold on an AVX2 host,
+ * any other value = default.  Exists so the deterministic constant-time
+ * gates can measure the SSE2 fold on the AVX2 hosts every CI runner is
+ * (tools/check_ghash_constant_time.py --target ed25519-sign-sse2fold);
+ * until it existed that fold was unmeasurable anywhere the gate runs.
+ * **NOT a production policy knob**; single-threaded by contract, like
+ * `ama_ed25519_set_mulx_override()`.  A no-op on builds without the AVX2
+ * unit.  `ama_ed25519_active_fold()` reports the selection in effect.
+ */
+AMA_API void ama_ed25519_set_avx2_fold_override(int mode);
 
 /* ----------------------------------------------------------------------------
  * Ed25519 Group Primitives (for FROST / Threshold Signatures)
@@ -1250,6 +1821,16 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
  *
  * Renamed from ama_ed25519_scalar_mult (audit finding C7) to make the
  * public-only constraint impossible to miss.
+ *
+ * SCALAR RANGE: any 32-byte little-endian value in [0, 2^256) is accepted,
+ * and the result depends on it only through `public_scalar mod l`, where l
+ * is the Ed25519 group order.  That is the same canonicalisation
+ * ama_ed25519_point_from_scalar has always applied, and it is enforced on
+ * every entry point, so both field instantiations return byte-identical
+ * results for every input.  Callers holding an unreduced
+ * scalar do not need to reduce it first; callers relying on a distinction
+ * between s and s mod l (which differ on points outside the prime-order
+ * subgroup) will not find one here.
  */
 AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
     const uint8_t public_scalar[32], const uint8_t point[32]);
@@ -1268,6 +1849,10 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
  *
  * Exposed as a regression / equivalence-test surface and a
  * micro-benchmark target for tuning the wNAF window default.
+ *
+ * SCALAR RANGE: as for ama_ed25519_scalarmult_public — both scalars are
+ * taken modulo l, and both field instantiations agree byte-for-byte on every
+ * input.
  */
 AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     uint8_t result[32],
@@ -1285,7 +1870,47 @@ AMA_API void ama_ed25519_sc_muladd(uint8_t s[32], const uint8_t a[32],
     const uint8_t b[32], const uint8_t c[32]);
 
 /* ============================================================================
- * FROST THRESHOLD ED25519 SIGNATURES (RFC 9591)
+ * FROST THRESHOLD ED25519 SIGNATURES — RFC 9591-STYLE, **NOT** RFC 9591
+ * CIPHERSUITE-INTEROPERABLE
+ * ============================================================================
+ *
+ * READ THIS BEFORE PLANNING AN INTEROPERABLE DEPLOYMENT.  This section used
+ * to be titled "FROST THRESHOLD ED25519 SIGNATURES (RFC 9591)" with no
+ * qualification, while `src/c/ama_frost.c` accurately stated the opposite in
+ * its file header.  The header is what a consumer reads, so the header is
+ * where the caveat belongs.
+ *
+ * What DOES follow RFC 9591: the protocol structure — trusted-dealer Shamir
+ * sharing, the two-round sign with hiding/binding nonce commitments, binding
+ * factors, Lagrange aggregation, and the section 5.3 per-share verification
+ * relation.
+ *
+ * What does NOT: the hash derivations.  This implementation does **not**
+ * prefix the ciphersuite's "FROST-ED25519-SHA512-v1" contextString and does
+ * **not** use the RFC's per-role H1/H2/H3/H4/H5 domain separation; it uses
+ * its own labels (see AMA_FROST_LABEL_HIDING / compute_binding_factor /
+ * compute_challenge in src/c/ama_frost.c).  Therefore **partial signatures,
+ * nonce commitments and binding factors are NOT interoperable with any RFC
+ * 9591 ciphersuite implementation: every participant in a ceremony must run
+ * this library.**
+ *
+ * What is unconditional: the AGGREGATED signature is an ordinary RFC 8032
+ * Ed25519 signature and verifies with ama_ed25519_verify(), or with any
+ * other conforming Ed25519 verifier, under the group public key.  Verifiers
+ * need know nothing about FROST.
+ *
+ * This is deliberately NOT "fixed" by quietly adding the contextString.
+ * Doing so would change every derivation, break every deployed ceremony's
+ * wire format, and is a separate decision with its own migration; see
+ * INVARIANT-49.
+ *
+ * ONE-SHOT NONCES AND VERIFIED AGGREGATION (INVARIANT-49).  Two properties
+ * this API enforces, both added after the 2026-09 audit demonstrated the
+ * failures: a nonce pair from ama_frost_round1_commit() is good for exactly
+ * one ama_frost_round2_sign() call and is ZEROIZED BY THAT CALL; and
+ * ama_frost_aggregate() verifies every signature share, and the assembled
+ * signature, before it returns success.  Each function's doc block below
+ * states its part of that contract.
  * ============================================================================ */
 
 #define AMA_FROST_SHARE_BYTES       64  /* 32 secret + 32 public */
@@ -1297,10 +1922,18 @@ AMA_API void ama_ed25519_sc_muladd(uint8_t s[32], const uint8_t a[32],
 /**
  * @brief Trusted dealer key generation via Shamir secret sharing.
  *
+ * RFC 9591-STYLE, NOT ciphersuite-interoperable — see the section banner
+ * above.  The dealt shares are usable only with this library's FROST
+ * functions; the group public key is an ordinary Ed25519 public key.
+ *
  * @param threshold         Minimum signers required (t >= 2)
  * @param num_participants  Total participants (n >= t)
  * @param group_public_key  Output: 32 bytes
- * @param participant_shares Output: n * 64 bytes (secret || public)
+ * @param participant_shares Output: n * 64 bytes (secret || public).  The
+ *                           PUBLIC half, participant_shares[i*64+32 .. +64),
+ *                           is participant (i+1)'s public key share PK_i;
+ *                           ama_frost_aggregate() and
+ *                           ama_frost_verify_share() require it.
  * @param secret_key        Optional input: 32-byte secret (NULL = random)
  */
 AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
@@ -1311,7 +1944,30 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
 /**
  * @brief Round 1: Generate nonce commitment.
  *
- * @param nonce_pair         Output: 64 bytes (SECRET — must be kept until round 2)
+ * RFC 9591-STYLE, NOT ciphersuite-interoperable — the emitted commitment is
+ * consumed only by this library's round 2 and aggregation.
+ *
+ * **ONE-SHOT NONCE CONTRACT (INVARIANT-49).**  The nonce pair written here is
+ * valid for **exactly one** ama_frost_round2_sign() call, over exactly one
+ * message.  Round 2 CONSUMES it: it zeroizes the buffer on every exit,
+ * success or failure, and refuses an already-consumed (all-zero) pair with
+ * AMA_ERROR_INVALID_PARAM.  It follows that the caller must:
+ *
+ *   - **not copy the nonce pair** anywhere the library cannot reach.  A copy
+ *     defeats the consumption exactly as a memcpy of any other secret
+ *     defeats its scrubbing, and the library cannot stop you;
+ *   - **not persist it** across a process restart, checkpoint or VM
+ *     snapshot — the derivation is stateless, so restored RNG state
+ *     reproduces the nonce;
+ *   - **run round 1 again** to sign a second message.
+ *
+ * The penalty for ignoring this is not degraded security but total
+ * compromise: the 2026-09 audit recovered a participant's long-term secret
+ * share, and both of its nonces, from three partial signatures made under
+ * one nonce pair.
+ *
+ * @param nonce_pair         Output: 64 bytes (SECRET, SINGLE-USE — consumed
+ *                           and zeroized by ama_frost_round2_sign())
  * @param commitment         Output: 64 bytes (PUBLIC — sent to coordinator)
  * @param participant_share  Input:  64-byte participant share
  */
@@ -1320,48 +1976,206 @@ AMA_API ama_error_t ama_frost_round1_commit(
     const uint8_t *participant_share);
 
 /**
- * @brief Round 2: Generate signature share.
+ * @brief Round 2: Generate signature share — **consumes the nonce pair**.
+ *
+ * RFC 9591-STYLE, NOT ciphersuite-interoperable — the emitted partial
+ * signature is verifiable only by this library's ama_frost_verify_share() /
+ * ama_frost_aggregate(), not by an RFC 9591 ciphersuite implementation.
+ *
+ * **ONE-SHOT NONCE CONTRACT (INVARIANT-49).**  `nonce_pair` is an **IN/OUT**
+ * parameter, not an input.  On return it is 64 zero bytes — on the success
+ * path and on **every** failure path alike, including the argument-validation
+ * refusals.  Presenting the same buffer again yields AMA_ERROR_INVALID_PARAM
+ * (the all-zero pair is refused), so a second signature under one nonce pair
+ * is not obtainable through this API.  That holds for calls that overlap in
+ * time too: the pair is claimed on entry -- copied out, and the caller's
+ * buffer zeroed, under one process-wide lock -- before anything reads it, so
+ * of any number of concurrent calls on one buffer (a thread pool answering a
+ * coordinator's retries, Python threads sharing one bytearray) at most one
+ * returns AMA_SUCCESS and the rest are refused.
+ *
+ * BREAKING (unreleased; 2026-09 audit finding A-4): `nonce_pair` changed from
+ * `const uint8_t *` to `uint8_t *` and must now point at WRITABLE memory.
+ * The old signature made
+ * the API itself the vulnerability: the function held no state and did not
+ * mark, consume or zeroize the pair, so repeated calls over different
+ * messages each returned AMA_SUCCESS.  Each emits
+ * z = d + e*rho + (lambda*s)*c with rho and c varying per message and
+ * (d, e, lambda*s) fixed, so three calls are three independent linear
+ * equations in three unknowns mod l.  The 2026-09 audit solved that system
+ * and recovered the hiding nonce, the binding nonce and the participant's
+ * long-term secret share — from the protocol outputs alone, with no host
+ * access.  Reachable by ordinary misuse: a cached round-1 result, a retry of
+ * a failed round 2 against a different message, or a coordinator that asks
+ * for a re-sign.  A `const` pointer plus documentation could not prevent it;
+ * consuming the buffer does.  Callers must pass a writable buffer and must
+ * re-run ama_frost_round1_commit() for each message.
  *
  * @param sig_share          Output: 32 bytes
  * @param message            Message to sign
  * @param message_len        Message length
  * @param participant_share  64-byte participant share
  * @param participant_index  1-based participant index
- * @param nonce_pair         64-byte nonce pair from round 1
+ * @param nonce_pair         IN/OUT: 64-byte WRITABLE nonce pair from round 1.
+ *                           Zeroized on entry, before any other argument is
+ *                           checked, so it is zero whatever this function
+ *                           returns.  An all-zero pair is rejected with
+ *                           AMA_ERROR_INVALID_PARAM.
  * @param commitments        num_signers * 64 bytes of commitments.
  *                           MUST be ordered to match signer_indices:
  *                           commitments[i*64..(i+1)*64] is the commitment
- *                           from participant signer_indices[i].
+ *                           from participant signer_indices[i].  The row at
+ *                           this participant's own position MUST be the
+ *                           commitment ama_frost_round1_commit() returned
+ *                           with `nonce_pair` (RFC 9591 section 5.2); it is
+ *                           re-derived from the nonces and compared.
  * @param signer_indices     num_signers participant indices (1-based, unique)
  * @param num_signers        Number of signers in this session
  * @param group_public_key   32-byte group public key
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM (NULL argument, bad signer
+ *         set, an already-consumed/all-zero nonce pair, or a commitment list
+ *         whose row for this participant is not its own round-1
+ *         commitment).  The nonce pair is consumed either way.
  */
 AMA_API ama_error_t ama_frost_round2_sign(
     uint8_t *sig_share,
     const uint8_t *message, size_t message_len,
     const uint8_t *participant_share, uint8_t participant_index,
-    const uint8_t *nonce_pair,
+    uint8_t *nonce_pair,
     const uint8_t *commitments, const uint8_t *signer_indices,
     uint8_t num_signers, const uint8_t *group_public_key);
 
 /**
- * @brief Aggregate signature shares into a standard Ed25519 signature.
+ * @brief Verify one signature share (RFC 9591 section 5.3 relation).
  *
- * @param signature         Output: 64-byte Ed25519-compatible signature
- * @param sig_shares        num_signers * 32 bytes
- * @param commitments       num_signers * 64 bytes
- * @param signer_indices    num_signers participant indices (1-based)
- * @param num_signers       Number of signers
- * @param message           Message that was signed
- * @param message_len       Message length
- * @param group_public_key  32-byte group public key
+ * RFC 9591-STYLE, NOT ciphersuite-interoperable: the RELATION checked is the
+ * RFC's, but the binding factor and challenge it is checked against are
+ * derived with this library's own domain separation, so this function
+ * verifies shares produced by this library's ama_frost_round2_sign() and no
+ * other implementation's.
+ *
+ * Checks  g^{z_i} == D_i + rho_i * E_i + (lambda_i * c) * PK_i,  where
+ * (D_i, E_i) is participant i's commitment, rho_i its binding factor,
+ * lambda_i its Lagrange coefficient over the signing set, c the group
+ * challenge and PK_i its public key share.
+ *
+ * Added unreleased (2026-09 audit finding A-5).  There was previously no
+ * share-verification entry point in this API at all, which is why
+ * ama_frost_aggregate() could not attribute a bad share and callers had no
+ * way to implement identifiable abort themselves.  ama_frost_aggregate() calls this check on every share, so a
+ * coordinator that only aggregates does not need to call it; it is exported
+ * for coordinators that want to validate shares as they arrive, and for
+ * participants auditing a ceremony.
+ *
+ * @param sig_share                32-byte signature share z_i to check
+ * @param participant_index        1-based index of the share's author; MUST
+ *                                 appear in signer_indices
+ * @param participant_public_share 32-byte PUBLIC key share PK_i — the second
+ *                                 half of that participant's 64-byte share
+ *                                 as dealt (participant_share + 32)
+ * @param commitments              num_signers * 64 bytes, ordered to match
+ *                                 signer_indices
+ * @param signer_indices           num_signers participant indices (1-based,
+ *                                 unique)
+ * @param num_signers              Number of signers in this session
+ * @param message                  Message that was signed
+ * @param message_len              Message length
+ * @param group_public_key         32-byte group public key
+ * @return AMA_SUCCESS if the share satisfies the relation;
+ *         AMA_ERROR_VERIFY_FAILED if it does not, if `sig_share` is not a
+ *         canonical scalar (0 <= z < L, RFC 9591 section 4.1), or if a
+ *         commitment or the public share is non-canonical or small-order;
+ *         AMA_ERROR_INVALID_PARAM on a NULL argument, a signer set that does
+ *         not contain participant_index, or a point that does not decode.
+ */
+AMA_API ama_error_t ama_frost_verify_share(
+    const uint8_t *sig_share,
+    uint8_t participant_index,
+    const uint8_t *participant_public_share,
+    const uint8_t *commitments, const uint8_t *signer_indices,
+    uint8_t num_signers,
+    const uint8_t *message, size_t message_len,
+    const uint8_t *group_public_key);
+
+/**
+ * @brief Aggregate verified signature shares into a standard Ed25519 signature.
+ *
+ * The INPUTS are RFC 9591-STYLE and not ciphersuite-interoperable (see the
+ * section banner); the OUTPUT is an ordinary RFC 8032 Ed25519 signature that
+ * ama_ed25519_verify() — or any conforming verifier — accepts under the
+ * group public key.
+ *
+ * **IDENTIFIABLE ABORT (INVARIANT-49).**  Every share is verified against the
+ * RFC 9591 section 5.3 relation (see ama_frost_verify_share) BEFORE it
+ * contributes to the sum, and the assembled signature is then verified
+ * against the group public key as defence in depth.  On a share rejection
+ * the offending participant's index is reported through
+ * @p bad_participant_index.  Nothing is written to @p signature unless this
+ * function returns AMA_SUCCESS.
+ *
+ * BREAKING (unreleased; 2026-09 audit finding A-5), in two ways, both forced
+ * by the same defect.  This function used to sum z_i mod l, concatenate with
+ * R, and return
+ * AMA_SUCCESS **unconditionally** — it verified nothing.  Flipping one bit of
+ * one share gave rc == 0 here and AMA_ERROR_VERIFY_FAILED from
+ * ama_ed25519_verify() afterwards, with no way to tell which participant was
+ * at fault, so one faulty or malicious signer could anonymously destroy every
+ * ceremony it joined and a caller trusting the return code would publish an
+ * invalid signature.  Verifying a share requires that signer's PUBLIC key
+ * share, which the old parameter list did not carry and which cannot be
+ * recovered from what it did carry (the commitments are nonce points, not key
+ * shares) — hence @p signer_public_shares.  Reporting WHICH share failed
+ * needs an output the single ama_error_t return cannot carry — hence
+ * @p bad_participant_index.  Both are additive; every existing argument keeps
+ * its meaning.
+ *
+ * Callers: @p signer_public_shares is built by concatenating, in
+ * signer_indices order, bytes [32,64) of each signer's 64-byte dealt share.
+ *
+ * @param signature            Output: 64-byte Ed25519-compatible signature.
+ *                             Written only on AMA_SUCCESS.
+ * @param sig_shares           num_signers * 32 bytes, ordered to match
+ *                             signer_indices
+ * @param commitments          num_signers * 64 bytes, ordered to match
+ *                             signer_indices
+ * @param signer_public_shares num_signers * 32 bytes — signer i's PUBLIC key
+ *                             share PK_i, ordered to match signer_indices
+ * @param signer_indices       num_signers participant indices (1-based)
+ * @param num_signers          Number of signers
+ * @param message              Message that was signed
+ * @param message_len          Message length
+ * @param group_public_key     32-byte group public key
+ * @param bad_participant_index Optional out-parameter (may be NULL).  Set to
+ *                             0 on entry, so it is never stale.  On a share
+ *                             rejection it holds the 1-based PARTICIPANT
+ *                             index (signer_indices[i], not the array
+ *                             position i).  It stays 0 for failures that no
+ *                             single participant caused — malformed
+ *                             arguments, allocation failure, or the final
+ *                             aggregate check — which is unambiguous because
+ *                             participant indices are 1-based.
+ * @return AMA_SUCCESS; AMA_ERROR_VERIFY_FAILED if a share failed the section
+ *         5.3 relation (index reported) or the assembled signature failed
+ *         RFC 8032 verification under the group key (index 0);
+ *         AMA_ERROR_INVALID_PARAM on a NULL argument, a malformed signer set,
+ *         or a point that does not decode (index reported when it is one
+ *         participant's point); AMA_ERROR_MEMORY on allocation failure.
+ *
+ *         AMA_ERROR_VERIFY_FAILED is reused rather than given a new
+ *         ama_error_t enumerator: this function could not previously return
+ *         it at all, so within this entry point it unambiguously means
+ *         "verification failed" and never "bad argument", and adding an
+ *         enumerator would change an enum shared by every family in this
+ *         header for one family's benefit.
  */
 AMA_API ama_error_t ama_frost_aggregate(
     uint8_t *signature,
     const uint8_t *sig_shares, const uint8_t *commitments,
+    const uint8_t *signer_public_shares,
     const uint8_t *signer_indices, uint8_t num_signers,
     const uint8_t *message, size_t message_len,
-    const uint8_t *group_public_key);
+    const uint8_t *group_public_key,
+    uint8_t *bad_participant_index);
 
 /* ============================================================================
  * AES-256-GCM AUTHENTICATED ENCRYPTION (NIST SP 800-38D)
@@ -1437,12 +2251,27 @@ AMA_API ama_error_t ama_aes256_gcm_decrypt(
  *
  * Computes out = scalar * (point_x, point_y) using a constant-time Montgomery ladder.
  *
+ * The input point is validated before any secret-dependent arithmetic runs:
+ * a coordinate >= p (a non-canonical encoding of the reduced value) or a
+ * point not on y^2 = x^3 + 7 is rejected with AMA_ERROR_INVALID_PARAM,
+ * never reduced or multiplied.  The a = 0 formulas never reference b, so an
+ * off-curve input would otherwise run valid arithmetic on a different curve
+ * chosen by whoever supplied the point — the invalid-curve attack — under
+ * the one secret scalar this file's public API takes.  secp256k1's cofactor
+ * is 1, so on-curve is also in-group.  A zero scalar is rejected the same
+ * way.  A nonzero scalar that is a multiple of the group order n (in 32 bytes,
+ * n itself) yields the point at infinity, which has no affine encoding, and
+ * returns AMA_ERROR_CRYPTO.  On both scalar refusals out_x and out_y are
+ * written as zeros; on a NULL argument or an invalid point they are not
+ * written.
+ *
  * @param scalar    32-byte big-endian scalar
  * @param point_x   32-byte big-endian X coordinate of input point
  * @param point_y   32-byte big-endian Y coordinate of input point
  * @param out_x     Output: 32-byte big-endian X coordinate of result
  * @param out_y     Output: 32-byte big-endian Y coordinate of result
- * @return AMA_SUCCESS or error code
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM for a NULL argument, an invalid
+ *         point or a zero scalar; AMA_ERROR_CRYPTO for a result at infinity.
  */
 AMA_API ama_error_t ama_secp256k1_point_mul(
     const uint8_t scalar[32],
@@ -1472,10 +2301,27 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
  *
  * 2 (SEQUENCE tag + length) + 2 * (2 (INTEGER tag + length) + 33 (a
  * 32-byte value plus a leading zero when its top bit is set)) = 72.
+ * That is the structural bound and it is what a caller must allocate.
+ *
+ * The value actually written is at most 71, because this implementation
+ * normalises to low `s`: s <= (n-1)/2 has its top bit clear, so its INTEGER
+ * never needs the leading 0x00 and the maximum is 2 + 2+33 + 2+32 = 71.
+ * `tests/c/test_secp256k1.c` measures 69, 70 or 71 over 20,000 signatures and
+ * never 72.  The constant stays 72 so the buffer contract does not depend on
+ * the low-s policy; it is a capacity, not a prediction.
+ *
  * The encoding is variable length: `ama_secp256k1_ecdsa_sign` writes
- * between 8 and 72 bytes and reports the exact count.
+ * between 8 and 71 bytes and reports the exact count.
  */
 #define AMA_SECP256K1_ECDSA_MAX_SIG_LEN 72
+
+/**
+ * Length of a fixed-width secp256k1 ECDSA signature, in bytes.
+ *
+ * `r || s`, 32 octets each, leading zeros preserved. Unlike the DER
+ * form this length is constant and carries no information about the key.
+ */
+#define AMA_SECP256K1_ECDSA_RAW_SIG_LEN 64
 
 /**
  * @brief Sign a 32-byte message digest with ECDSA over secp256k1
@@ -1509,8 +2355,10 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
  *                       caller MUST provide that much space; the
  *                       function does not know the buffer's size and
  *                       cannot check it.
- * @param signature_len  Output: number of bytes actually written
- *                       (8..AMA_SECP256K1_ECDSA_MAX_SIG_LEN).
+ * @param signature_len  Output: number of bytes actually written (8..71 —
+ *                       see AMA_SECP256K1_ECDSA_MAX_SIG_LEN, which is the
+ *                       72-byte structural capacity a caller must allocate,
+ *                       not the maximum this function emits).
  * @param message        Exactly 32 bytes: the message *digest*, not the
  *                       message. This function does not hash its input.
  * @param private_key    Exactly 32 bytes, big-endian, in [1, n-1].
@@ -1523,6 +2371,37 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
     const uint8_t message[32],
     const uint8_t private_key[32]
 );
+
+/**
+ * @brief Fixed-width secp256k1 ECDSA signature, `r || s`.
+ *
+ * Identical arithmetic to `ama_secp256k1_ecdsa_sign` — deterministic RFC 6979
+ * nonce, low-`s` normalisation — differing only in the encoding: exactly
+ * `AMA_SECP256K1_ECDSA_RAW_SIG_LEN` octets, `r` then `s`, each a 32-octet
+ * big-endian scalar with leading zeros preserved. This is the compact wire
+ * form; `ama_secp256k1_ecdsa_verify` consumes DER, so a signature produced
+ * here must be re-encoded before it is verified through that entry point.
+ *
+ * It is also what makes the deterministic constant-time gate exact for this
+ * curve. DER omits the leading zero octets of `r` and `s`, so a DER signature
+ * has a key-dependent length; that term is public, but it lands inside a
+ * retired-instruction count taken over the whole call and forced
+ * `check_ghash_constant_time.py` to hold the `ecdsa` target at a non-zero
+ * threshold. Measured through this entry point the encoder is outside the
+ * measurement and the target sits at 0, like every other target in that
+ * tool's THRESHOLDS table (the tool pins its own count; none is restated
+ * here).
+ *
+ * @param signature   Output buffer of exactly 64 octets.
+ * @param message     32-octet digest. This function does NOT hash.
+ * @param private_key 32-octet scalar in [1, n-1].
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM. On any non-success the
+ *         output buffer is zeroized rather than left partly written.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(
+    uint8_t signature[64],
+    const uint8_t message[32],
+    const uint8_t private_key[32]);
 
 /**
  * @brief Verify a DER-encoded ECDSA signature over secp256k1
@@ -2008,7 +2887,7 @@ AMA_API ama_error_t ama_x25519_keypair(
  * encodings — the values in [p, 2^255) — that are representable but not
  * canonical.  This library REDUCES such a u modulo p before the ladder, so
  * the shared secret is the one every reference implementation (ref10,
- * curve25519-donna, libsodium) computes for the reduced value: the
+ * Andrew Moon's curve25519, libsodium) computes for the reduced value: the
  * Wycheproof x25519 tc88 input `p + 3`, for instance, is treated as `3`.
  * RFC 7748 permits either reducing or consuming the value unreduced;
  * reducing is chosen deliberately, so two peers that agree on a public key
@@ -2042,7 +2921,7 @@ AMA_API ama_error_t ama_x25519_key_exchange(
  * batch wrapper never pads short calls up to four lanes.  The 4-way
  * kernel is opt-in because on hosts with the scalar fe64 (MULX/ADX)
  * field path, four sequential scalar ladders are faster than four
- * AVX2 lanes of the donna-32bit ladder; the kernel is provided for
+ * AVX2 lanes of the 32-bit-limb ladder; the kernel is provided for
  * the future AVX-512 IFMA port and for CI/test coverage of the SIMD
  * path.  Single-element batches (N == 1) bypass the 4-way kernel
  * entirely so callers do not pay the 3-lane zero-fill cost on the
@@ -2183,7 +3062,8 @@ AMA_API int ama_x25519_get_mulx_override(void);
  * `bench_dilithium_sign()` measures end-to-end.
  *
  * Not part of the production ML-DSA API; production callers go through
- * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §6.1 / §6.2).
+ * `ama_dilithium_sign()` / `ama_dilithium_verify()` (FIPS 204 §5.2 / §5.3,
+ * ML-DSA.Sign / ML-DSA.Verify with the empty context).
  */
 AMA_API void ama_dilithium_ntt_bench(int32_t poly[256], int use_dispatch);
 
@@ -2264,16 +3144,20 @@ AMA_API int ama_dilithium_invntt_dispatch_slot_wired(void);
  * Memory-hard KDF with resistance to GPU/ASIC attacks.
  * Single-threaded execution (parallelism affects block layout only).
  *
+ * Parameters outside the RFC 9106 Sec 3.1 domain are rejected with
+ * ``AMA_ERROR_INVALID_PARAM`` — never silently clamped — so a tag is only
+ * ever derived under exactly the parameters the caller supplied.
+ *
  * @param password    Password bytes
  * @param pwd_len     Password length
- * @param salt        Salt (16+ bytes recommended)
- * @param salt_len    Salt length
+ * @param salt        Salt (>= 8 bytes required, 16 recommended)
+ * @param salt_len    Salt length (>= 8)
  * @param t_cost      Time cost (iterations, >= 1)
  * @param m_cost      Memory cost in KiB (>= 8 * parallelism)
- * @param parallelism Degree of parallelism (lanes)
+ * @param parallelism Degree of parallelism (lanes, 1..255)
  * @param output      Output tag buffer
- * @param out_len     Desired output length (>= 4)
- * @return AMA_SUCCESS or error code
+ * @param out_len     Desired output length (4..AMA_ARGON2ID_MAX_TAG_LEN)
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM for any out-of-domain input
  */
 AMA_API ama_error_t ama_argon2id(
     const uint8_t *password, size_t pwd_len,
@@ -2496,19 +3380,6 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
     uint8_t *plaintext
 );
 
-/**
- * @brief Apply Ascon-p[rounds] to a raw state — test support only
- *
- * Exposed so the known-answer tests can check the permutation directly
- * against the precomputed initialization state published in SP 800-232
- * Appendix A.3 and the S-box lookup table in Table 6.  A permutation verified
- * only through the modes would let a fault in one cancel a fault in the
- * other.  Not part of the supported API surface.
- *
- * @param state  In/out: five 64-bit state words
- * @param rounds Round count, 1..16; the call is a no-op outside that range
- */
-AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 
 /* ============================================================================
  * HSS / LMS — RFC 8554 hash-based signature VERIFICATION
@@ -2662,7 +3533,23 @@ AMA_API ama_error_t ama_dilithium_keypair(
 );
 
 /**
- * @brief Sign message with ML-DSA-65 (Dilithium)
+ * @brief Sign message with ML-DSA-65 (Dilithium, FIPS 204, empty context)
+ *
+ * FIPS 204 §5.2 ML-DSA.Sign (Algorithm 2) with `ctx = ""`: the bytes signed
+ * are M' = 0x00 || 0x00 || M, identical to
+ * ama_ml_dsa_sign_ctx(AMA_ML_DSA_65, ..., ctx = NULL, ctx_len = 0), which is
+ * what this entry point calls. ama_dilithium_sign_ctx() is the same function
+ * with a caller-supplied context.
+ *
+ * **Wire-format break (5.0.0).** Through 4.x this entry point was FIPS 204
+ * Algorithm 7, ML-DSA.Sign_internal over the RAW message, with no domain
+ * separator: an interface FIPS 204 restricts to testing and to protocols that
+ * do their own domain separation, whose signatures a conforming ML-DSA.Verify
+ * rejects, and which under one key was a signing oracle for context
+ * signatures on attacker-chosen (ctx, M) pairs. See INVARIANT-50.
+ * A signature made by the previous behaviour -- here, or through ama_sign()
+ * with AMA_ALG_ML_DSA_65 -- does not verify with ama_dilithium_verify(), and
+ * it returns AMA_ERROR_VERIFY_FAILED.
  *
  * @param signature     Output: signature buffer
  * @param signature_len Output: actual signature length
@@ -2680,10 +3567,14 @@ AMA_API ama_error_t ama_dilithium_sign(
 /**
  * @brief Sign message with ML-DSA-65 (Dilithium) using FIPS 204 §5.2 binding context
  *
- * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
- * before delegating to ama_dilithium_sign(). This is the symmetric
- * counterpart of ama_dilithium_verify_ctx() — identical wrapper, so
- * sign/verify round-trip with the same ctx always succeeds.
+ * FIPS 204 §5.2 ML-DSA.Sign over M' = 0x00 || len(ctx) || ctx || M: this
+ * delegates to ama_ml_dsa_sign_ctx() with AMA_ML_DSA_65, which applies the
+ * wrapper exactly once. ama_dilithium_sign() is the `ctx = ""` case of this
+ * function, not a step inside it -- routing through it would sign
+ * 0x00 || 0x00 || (0x00 || len(ctx) || ctx || M), which no FIPS 204
+ * verifier accepts. This is the symmetric counterpart of
+ * ama_dilithium_verify_ctx() — identical wrapper, so sign/verify round-trip
+ * with the same ctx always succeeds.
  *
  * Per FIPS 204 §5.2 line 4, ctx_len > 255 is rejected with a non-zero error.
  *
@@ -2704,7 +3595,18 @@ AMA_API ama_error_t ama_dilithium_sign_ctx(
 );
 
 /**
- * @brief Verify ML-DSA-65 (Dilithium) signature
+ * @brief Verify ML-DSA-65 (Dilithium) signature (FIPS 204, empty context)
+ *
+ * FIPS 204 §5.3 ML-DSA.Verify (Algorithm 3) with `ctx = ""` -- the exact
+ * counterpart of ama_dilithium_sign(), and identical to
+ * ama_ml_dsa_verify_ctx(AMA_ML_DSA_65, ..., ctx = NULL, ctx_len = 0).
+ *
+ * **Wire-format break (5.0.0).** Through 4.x this verified with FIPS 204
+ * Algorithm 8, ML-DSA.Verify_internal over the RAW message (INVARIANT-50).
+ * A signature made by the previous ama_dilithium_sign(), or by ama_sign()
+ * with AMA_ALG_ML_DSA_65 before 5.0.0, is rejected here with
+ * AMA_ERROR_VERIFY_FAILED; such signatures have to be re-issued, not
+ * re-verified.
  *
  * @param message       Message to verify
  * @param message_len   Length of message
@@ -2722,8 +3624,10 @@ AMA_API ama_error_t ama_dilithium_verify(
 /**
  * @brief Verify ML-DSA-65 signature with context (FIPS 204 external/pure)
  *
- * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
- * before delegating to ama_dilithium_verify().
+ * FIPS 204 §5.3 ML-DSA.Verify over M' = 0x00 || len(ctx) || ctx || M: this
+ * delegates to ama_ml_dsa_verify_ctx() with AMA_ML_DSA_65, which applies the
+ * wrapper exactly once. ama_dilithium_verify() is the `ctx = ""` case of this
+ * function, not a step inside it.
  *
  * @param message       Message to verify
  * @param message_len   Length of message
@@ -2888,24 +3792,13 @@ AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
  * row to save the 57 KB would multiply the dominant cost of signing several
  * times over, on the one ML-DSA path where the parameter set is chosen by the
  * key holder rather than by an attacker. `ama_ml_dsa_keypair` (61 KB) and
- * `ama_ml_dsa_verify` (58 KB) *do* expand A row-wise, because verification is
+ * `ama_ml_dsa_verify_ctx` (58 KB) *do* expand A row-wise, because verification is
  * driven by whoever supplies the signature and has to fit a small stack.
  *
  * All three figures are measured, not asserted:
  * `tests/c/test_pq_parser_stack.c` runs each on a painted, caller-supplied
  * thread stack and holds it under a stated budget.
  */
-AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
-                                    uint8_t *signature, size_t *signature_len,
-                                    const uint8_t *message, size_t message_len,
-                                    const uint8_t *secret_key);
-
-/** @brief ML-DSA verification, "internal interface" (no context wrapper). */
-AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
-                                      const uint8_t *message, size_t message_len,
-                                      const uint8_t *signature, size_t signature_len,
-                                      const uint8_t *public_key);
-
 /**
  * @brief ML-DSA signing with the FIPS 204 §5.2 external/pure context wrapper.
  *
@@ -2924,6 +3817,35 @@ AMA_API ama_error_t ama_ml_dsa_verify_ctx(ama_ml_dsa_param_set_t ps,
                                           const uint8_t *ctx, size_t ctx_len,
                                           const uint8_t *signature, size_t signature_len,
                                           const uint8_t *public_key);
+
+/**
+ * @brief ML-DSA signing, HEDGED variant (FIPS 204 Algorithm 2, `rnd` fresh).
+ *
+ * Identical to :c:func:`ama_ml_dsa_sign_ctx` except that the 32-byte `rnd`
+ * field of Algorithm 7 line 3 is drawn from the platform CSPRNG per signature
+ * instead of being fixed at 0^256.  FIPS 204 §3.4 makes this the default
+ * variant and cautions that the deterministic one is more exposed to
+ * fault-injection and side-channel analysis, precisely because every timing
+ * observation on a fixed (key, message) is then exactly repeatable.
+ *
+ * The deterministic variant remains what every other signer in this library
+ * uses, because reproducibility is what the ACVP known-answer gates and the
+ * hybrid signature format rely on; this is the entry point for a caller that
+ * wants the hedged posture, and its output is NOT reproducible.  Both verify
+ * under the same verifier — `rnd` is not transmitted.
+ *
+ * Fails closed: if the CSPRNG cannot supply `rnd`, the call returns that
+ * error rather than falling back to the deterministic form.
+ *
+ * `src/c/PROVENANCE.md` used to describe the shipped signer as hedged while
+ * no hedged path existed anywhere in C or Python; this is that path, and the
+ * document now says which variant each entry point is.
+ */
+AMA_API ama_error_t ama_ml_dsa_sign_hedged(ama_ml_dsa_param_set_t ps,
+                                           uint8_t *signature, size_t *signature_len,
+                                           const uint8_t *message, size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *secret_key);
 
 /* ============================================================================
  * ML-KEM (FIPS 203) — parameter-driven public API
@@ -3076,11 +3998,23 @@ AMA_API ama_error_t ama_sphincs_keypair(
 );
 
 /**
- * @brief Sign message with SPHINCS+-256f
+ * @brief Sign message with SPHINCS+-256f (SLH-DSA-SHA2-256f, empty context)
+ *
+ * FIPS 205 §10.2 `slh_sign` with `ctx = ""`: the bytes signed are
+ * M' = 0x00 || 0x00 || M, identical to
+ * ama_slhdsa_sign(AMA_SLHDSA_SHA2_256F, ..., ctx = NULL, ctx_len = 0).
+ * Hedged — a fresh randomizer is drawn per call.
+ *
+ * **Wire-format break.** This entry point signed the RAW message until the
+ * context-separation fix, which made it FIPS 205 §9.2 `slh_sign_internal`
+ * under a public name and let it cross-verify with the §10.2 API under the
+ * same key — a signing oracle for pure signatures on attacker-chosen
+ * (ctx, M) pairs. See INVARIANT-50. Signatures produced by the previous
+ * behaviour do not verify here.
  *
  * @param signature     Output: signature buffer
  * @param signature_len Output: actual signature length
- * @param message       Message to sign
+ * @param message       Message to sign; may be NULL only when message_len is 0
  * @param message_len   Length of message
  * @param secret_key    Secret key (128 bytes)
  * @return AMA_SUCCESS or error code
@@ -3092,9 +4026,14 @@ AMA_API ama_error_t ama_sphincs_sign(
 );
 
 /**
- * @brief Verify SPHINCS+-256f signature
+ * @brief Verify SPHINCS+-256f signature (SLH-DSA-SHA2-256f, empty context)
  *
- * @param message       Message to verify
+ * FIPS 205 §10.3 `slh_verify` with `ctx = ""` — the exact counterpart of
+ * ama_sphincs_sign(). Equivalent to ama_sphincs_verify_ctx() with a
+ * zero-length context. Like ama_sphincs_sign() this verified the RAW message
+ * before the context-separation fix (INVARIANT-50).
+ *
+ * @param message       Message to verify; may be NULL only when message_len is 0
  * @param message_len   Length of message
  * @param signature     Signature to verify
  * @param signature_len Length of signature
@@ -3110,8 +4049,10 @@ AMA_API ama_error_t ama_sphincs_verify(
 /**
  * @brief Verify SPHINCS+-256f signature with context (FIPS 205 external/pure)
  *
- * Applies domain-separation wrapper M' = 0x00 || len(ctx) || ctx || M
- * before delegating to ama_sphincs_verify().
+ * FIPS 205 §10.3 slh_verify over M' = 0x00 || len(ctx) || ctx || M: this
+ * delegates to ama_slhdsa_verify() with AMA_SLHDSA_SHA2_256F, which applies
+ * the wrapper exactly once. ama_sphincs_verify() is the `ctx = ""` case of
+ * this function, not a step inside it.
  *
  * @param message       Message to verify
  * @param message_len   Length of message
@@ -3168,9 +4109,18 @@ AMA_API ama_error_t ama_slhdsa_keygen_from_seed(ama_slhdsa_param_set_t ps,
  * a fresh randomizer (hedged variant). Pass `ctx = NULL`, `ctx_len = 0` for
  * the empty-context form. Rejects `ctx_len > 255`.
  *
+ * The wrapper is absorbed by the message hashes as its own segment, so M is
+ * never copied and no allocation of caller-controlled size happens here.
+ *
  * @param ps             Parameter set selector.
  * @param signature      Output buffer of at least `sig_bytes`.
  * @param signature_len  In: capacity; Out: bytes written.
+ * @param message        Message to sign. FIPS 205 is defined over M in B*, so
+ *                       the EMPTY message is legitimate: pass
+ *                       `message = NULL, message_len = 0`, exactly as `ctx`
+ *                       already accepted `NULL, 0`. A NULL pointer with a
+ *                       non-zero length is rejected.
+ * @param message_len    Length of message.
  */
 AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
                                     uint8_t *signature, size_t *signature_len,
@@ -3180,6 +4130,9 @@ AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
 
 /**
  * @brief SLH-DSA verification with FIPS 205 §10.2 external/pure context wrapper.
+ *
+ * `message = NULL, message_len = 0` is the empty message, as for
+ * ama_slhdsa_sign(); a NULL pointer with a non-zero length is rejected.
  */
 AMA_API ama_error_t ama_slhdsa_verify(ama_slhdsa_param_set_t ps,
                                       const uint8_t *signature,
@@ -3193,6 +4146,12 @@ AMA_API ama_error_t ama_slhdsa_verify(ama_slhdsa_param_set_t ps,
  *
  * Exposed for ACVP byte-exact KAT validation against NIST's deterministic
  * sigGen vectors. Production code should call ama_slhdsa_sign() (hedged).
+ *
+ * This is an approved §10.2 variant, not the §9 internal interface: FIPS 205
+ * Algorithm 22 selects `addrnd = PK.seed` when the deterministic form is
+ * chosen, and the context wrapper is applied either way. It is therefore not
+ * reachable as a cross-context signing oracle and stays in the shipped ABI.
+ * `message = NULL, message_len = 0` is the empty message.
  */
 AMA_API ama_error_t ama_slhdsa_sign_deterministic(ama_slhdsa_param_set_t ps,
                                                   uint8_t *signature,
@@ -3204,18 +4163,44 @@ AMA_API ama_error_t ama_slhdsa_sign_deterministic(ama_slhdsa_param_set_t ps,
                                                   const uint8_t *sk);
 
 /**
- * @brief SLH-DSA "internal interface" signing with explicit `addrnd`.
+ * @brief SLH-DSA hedged signing (FIPS 205 §10.2) with a caller-supplied `addrnd`.
  *
- * Skips the §10.2 context wrapper and signs `message` directly. Exposed for
- * ACVP `signatureInterface == "internal"` KAT validation.
+ * Applies the same M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M wrapper
+ * as ama_slhdsa_sign(); the only difference is that `addrnd` comes from the
+ * caller instead of the platform CSPRNG. Exposed so NIST ACVP's HEDGED sigGen
+ * vectors — which publish `additionalRandomness` — can be reproduced
+ * byte-for-byte *through the wrapper*, rather than by having the test build M'
+ * itself and call the §9 internal interface.
+ *
+ * This replaced ama_slhdsa_sign_internal in the public surface. That function
+ * was FIPS 205 §9.2 slh_sign_internal: it signed the raw message, so it
+ * cross-verified with this §10.2 API under one key and was a signing oracle
+ * for pure signatures on attacker-chosen (ctx, M) pairs. The §9 interface now
+ * exists only under AMA_TESTING_MODE (src/c/internal/ama_testing_exports.h),
+ * per FIPS 205 §9 and INVARIANT-50.
+ *
+ * `addrnd` is `n` bytes (16 for SHAKE-128s, 32 for SHA2-256f).
+ * **Production code should call ama_slhdsa_sign()**: an `addrnd` that does not
+ * come from an approved RBG is not the approved hedged variant.
+ *
+ * @param ps             Parameter set selector.
+ * @param signature      Output buffer of at least `sig_bytes`.
+ * @param signature_len  In: capacity; Out: bytes written.
+ * @param message        Message to sign; may be NULL only when message_len is 0.
+ * @param message_len    Length of message.
+ * @param ctx            Context string (0–255 bytes); NULL for the empty context.
+ * @param ctx_len        Length of context (must be <= 255).
+ * @param addrnd         Randomizer, `n` bytes.
+ * @param sk             Secret key (`4n` bytes).
  */
-AMA_API ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
-                                             uint8_t *signature,
-                                             size_t *signature_len,
-                                             const uint8_t *message,
-                                             size_t message_len,
-                                             const uint8_t *addrnd,
-                                             const uint8_t *sk);
+AMA_API ama_error_t ama_slhdsa_sign_addrnd(ama_slhdsa_param_set_t ps,
+                                           uint8_t *signature,
+                                           size_t *signature_len,
+                                           const uint8_t *message,
+                                           size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *addrnd,
+                                           const uint8_t *sk);
 
 /* ============================================================================
  * DETERMINISTIC KEYGEN FROM SEED (KAT TESTING)

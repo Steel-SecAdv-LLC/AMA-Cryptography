@@ -37,9 +37,21 @@
  *   AMA_SPHINCS_256F_*_BYTES constants — is DEFINED at the foot of this file
  *   (search "Legacy SPHINCS+ ... compatibility API"). Those entry points
  *   dispatch into this file's parameter-driven core with AMA_SLHDSA_SHA2_256F;
- *   ama_sphincs_sign/verify sign/verify the RAW message (no §10.2 wrapper).
+ *   ama_sphincs_sign/verify are the §10.2 external interface with the EMPTY
+ *   context (M' = 0x00 || 0x00 || M). They signed the RAW message until the
+ *   context-separation fix — see the "Legacy SPHINCS+" banner at the foot of
+ *   this file for the cross-verification oracle that made that untenable,
+ *   and INVARIANT-50.
  *   The former standalone src/c/ama_sphincs.c has been removed — its signer
  *   was proven byte-identical to this core, so there is no drift to maintain.
+ *
+ * FIPS 205 §9 internal interface:
+ *   slh_sign_internal / slh_verify_internal are static, and every AMA_API
+ *   entry point in this file applies the §10.2 wrapper before reaching them.
+ *   The only names that reach them unwrapped are ama_slhdsa_sign_internal /
+ *   ama_slhdsa_verify_internal, compiled only under AMA_TESTING_MODE and
+ *   declared in src/c/internal/ama_testing_exports.h — so they are absent
+ *   from every shipped library by construction.
  */
 
 #include "../include/ama_cryptography.h"
@@ -47,7 +59,14 @@
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_sha2.h"
-#include <stdlib.h>
+#include "internal/ama_ct_declassify.h"
+/* No <stdlib.h>: this translation unit allocates nothing.  The last heap use
+ * was the §10.2 wrapper's whole-message calloc in the three external entry
+ * points, and absorbing the wrapper as its own hash segment removed it — so
+ * SLH-DSA signing and verification now run entirely on fixed stack buffers,
+ * with no allocation of caller-controlled size and no AMA_ERROR_MEMORY path
+ * reachable from a message length.  The include is dropped rather than left
+ * in place so that adding an allocation back has to be a deliberate edit. */
 #include <string.h>
 #include <stdint.h>
 
@@ -95,11 +114,36 @@ typedef struct slhdsa_params {
     void (*prf)(const struct slhdsa_params *p, uint8_t *out,
                 const uint8_t *pub_seed, const uint32_t adrs[8],
                 const uint8_t *sk_seed);
+    /* PRF_msg / H_msg take the FIPS 205 §10.2 wrapper as a SEPARATE leading
+     * segment (`prefix`, `prefix_len`) rather than as part of `msg`.
+     *
+     * WHY THE SPLIT.  M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M is at
+     * most 257 bytes longer than M, and both hashes already absorb their
+     * inputs incrementally.  Passing M' as one contiguous buffer forced every
+     * §10.2 entry point to calloc |M| + 2 + |ctx| bytes, memcpy the whole
+     * message into it, scrub it and free it — three extra passes over the
+     * message plus a heap allocation of caller-controlled size on the signing
+     * path.  Measured on this tree before the split: signing a 64 MiB message
+     * through ama_slhdsa_sign cost 59.8 ms (+10.7%) more than signing the same
+     * bytes raw, and 6.6 ms (+2.2%) at 16 MiB.
+     *
+     * That allocation was also a failure mode the raw path did not have: a
+     * calloc of an attacker-influenced size that turns a signature request
+     * into AMA_ERROR_MEMORY.  sha2_HT above took a fixed stack buffer for
+     * exactly this reason ("removes a silent OOM-on-calloc corruption path on
+     * the hot signing/verification loop and removes an attacker influence over
+     * heap allocator state during signing"); the message-level hashes now do
+     * the same thing, one level up.
+     *
+     * `prefix` may be NULL only when `prefix_len` is 0 (the §9 internal
+     * interface, test-only). */
     int  (*prf_msg)(const struct slhdsa_params *p, uint8_t *out,
                     const uint8_t *sk_prf, const uint8_t *opt_rand,
+                    const uint8_t *prefix, size_t prefix_len,
                     const uint8_t *msg, size_t msglen);
     int  (*hash_msg)(const struct slhdsa_params *p, uint8_t *out,
                      const uint8_t *R, const uint8_t *pk,
+                     const uint8_t *prefix, size_t prefix_len,
                      const uint8_t *msg, size_t msglen);
 } slhdsa_params_t;
 
@@ -222,7 +266,7 @@ static void sha2_mgf1_sha512(uint8_t *out, size_t outlen,
         hashbuf[seedlen + 1] = (uint8_t)(i >> 16);
         hashbuf[seedlen + 2] = (uint8_t)(i >> 8);
         hashbuf[seedlen + 3] = (uint8_t)i;
-        ama_sha512(hashbuf, seedlen + 4, buf);
+        ama_sha512_oneshot(hashbuf, seedlen + 4, buf);
         tocopy = (outlen - i * 64 < 64) ? outlen - i * 64 : 64;
         memcpy(out + i * 64, buf, tocopy);
     }
@@ -298,7 +342,7 @@ static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
     /* toByte(0, 128-n) is left as zeros from the memset above. */
     memcpy(buf + 128, addr_c, 22);
     if (msglen > 0) memcpy(buf + 150, m, msglen);
-    ama_sha512(buf, total, hash);
+    ama_sha512_oneshot(buf, total, hash);
     memcpy(out, hash, p->n);
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(buf, total);
@@ -332,11 +376,15 @@ static void sha2_PRF(const slhdsa_params_t *p, uint8_t *out,
 
 static int sha2_PRF_msg(const slhdsa_params_t *p, uint8_t *out,
                         const uint8_t *sk_prf, const uint8_t *opt_rand,
+                        const uint8_t *prefix, size_t prefix_len,
                         const uint8_t *msg, size_t msglen) {
-    /* PRF_msg = Trunc_n(HMAC-SHA-512(SK.prf, opt_rand || M)) */
+    /* PRF_msg = Trunc_n(HMAC-SHA-512(SK.prf, opt_rand || M')), M' = prefix || M.
+     * ama_hmac_sha512_3 already streams three message segments through one
+     * SHA-512 context, so the §10.2 wrapper occupies the segment that used to
+     * be passed NULL — no concatenation buffer anywhere on this path. */
     uint8_t hmac_out[64];
-    if (ama_hmac_sha512_3(sk_prf, p->n, opt_rand, p->n, msg, msglen,
-                          NULL, 0, hmac_out) != 0) {
+    if (ama_hmac_sha512_3(sk_prf, p->n, opt_rand, p->n, prefix, prefix_len,
+                          msg, msglen, hmac_out) != 0) {
         return -1;
     }
     memcpy(out, hmac_out, p->n);
@@ -346,20 +394,25 @@ static int sha2_PRF_msg(const slhdsa_params_t *p, uint8_t *out,
 
 static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
                       const uint8_t *R, const uint8_t *pk,
+                      const uint8_t *prefix, size_t prefix_len,
                       const uint8_t *msg, size_t msglen) {
-    /* H_msg = MGF1-SHA-512(R || PK.seed || SHA-512(R || PK.seed || PK.root || M), m)
-     * Categories 3/5 only — see FIPS 205 §11.2 Table 5. */
+    /* H_msg = MGF1-SHA-512(R || PK.seed || SHA-512(R || PK.seed || PK.root || M'), m)
+     * with M' = prefix || M.  Categories 3/5 only — see FIPS 205 §11.2 Table 5. */
     uint8_t hash[64];
     uint8_t mgf_seed[160];   /* n + n + 64, ≤ 32+32+64 = 128 */
     size_t mgf_seed_len = p->n + p->n + 64;
 
-    /* Inner hash: SHA-512(R || PK.seed || PK.root || M), streamed through the
-     * SHA-512 context so no message-length-dependent heap buffer is needed. */
+    /* Inner hash: SHA-512(R || PK.seed || PK.root || M'), streamed through the
+     * SHA-512 context so no message-length-dependent heap buffer is needed.
+     * The §10.2 wrapper is one more update, not one more copy of M. */
     {
         ama_sha512_ctx sctx;
         ama_sha512_ctx_init(&sctx);
         ama_sha512_ctx_update(&sctx, R, p->n);
         ama_sha512_ctx_update(&sctx, pk, 2 * p->n);
+        if (prefix_len > 0) {
+            ama_sha512_ctx_update(&sctx, prefix, prefix_len);
+        }
         if (msglen > 0) {
             ama_sha512_ctx_update(&sctx, msg, msglen);
         }
@@ -416,6 +469,29 @@ static int shake_absorb_four(const uint8_t *a, size_t alen,
     return 0;
 }
 
+/* Five segments: the widest absorb this file needs is H_msg with the §10.2
+ * wrapper in place — R || PK.seed || PK.root || prefix || M.  Written out
+ * rather than folded into a segment-array loop so every caller's argument
+ * order is visible at the call site, matching shake_absorb_three/four. */
+static int shake_absorb_five(const uint8_t *a, size_t alen,
+                             const uint8_t *b, size_t blen,
+                             const uint8_t *c, size_t clen,
+                             const uint8_t *d, size_t dlen,
+                             const uint8_t *e, size_t elen,
+                             uint8_t *out, size_t outlen) {
+    ama_sha3_ctx ctx;
+    if (ama_shake256_inc_init(&ctx) != AMA_SUCCESS) return -1;
+    if (alen && ama_shake256_inc_absorb(&ctx, a, alen) != AMA_SUCCESS) return -1;
+    if (blen && ama_shake256_inc_absorb(&ctx, b, blen) != AMA_SUCCESS) return -1;
+    if (clen && ama_shake256_inc_absorb(&ctx, c, clen) != AMA_SUCCESS) return -1;
+    if (dlen && ama_shake256_inc_absorb(&ctx, d, dlen) != AMA_SUCCESS) return -1;
+    if (elen && ama_shake256_inc_absorb(&ctx, e, elen) != AMA_SUCCESS) return -1;
+    if (ama_shake256_inc_finalize(&ctx) != AMA_SUCCESS) return -1;
+    if (ama_shake256_inc_squeeze(&ctx, out, outlen) != AMA_SUCCESS) return -1;
+    ama_secure_memzero(&ctx, sizeof(ctx));
+    return 0;
+}
+
 static void shake_F(const slhdsa_params_t *p, uint8_t *out,
                     const uint8_t *pub_seed, const uint32_t adrs[8],
                     const uint8_t *m) {
@@ -450,18 +526,21 @@ static void shake_PRF(const slhdsa_params_t *p, uint8_t *out,
 
 static int shake_PRF_msg(const slhdsa_params_t *p, uint8_t *out,
                          const uint8_t *sk_prf, const uint8_t *opt_rand,
+                         const uint8_t *prefix, size_t prefix_len,
                          const uint8_t *msg, size_t msglen) {
-    /* PRF_msg(SK.prf, opt_rand, M) = SHAKE-256(SK.prf || opt_rand || M, 8n) */
-    return shake_absorb_three(sk_prf, p->n, opt_rand, p->n,
-                              msg, msglen, out, p->n);
+    /* PRF_msg(SK.prf, opt_rand, M') = SHAKE-256(SK.prf || opt_rand || M', 8n),
+     * M' = prefix || M absorbed as two segments. */
+    return shake_absorb_four(sk_prf, p->n, opt_rand, p->n,
+                             prefix, prefix_len, msg, msglen, out, p->n);
 }
 
 static int shake_H_msg(const slhdsa_params_t *p, uint8_t *out,
                        const uint8_t *R, const uint8_t *pk,
+                       const uint8_t *prefix, size_t prefix_len,
                        const uint8_t *msg, size_t msglen) {
-    /* H_msg(R, PK.seed, PK.root, M) = SHAKE-256(R || PK.seed || PK.root || M, 8m) */
-    return shake_absorb_four(R, p->n, pk, p->n, pk + p->n, p->n,
-                             msg, msglen, out, p->md_bytes);
+    /* H_msg(R, PK.seed, PK.root, M') = SHAKE-256(R || PK.seed || PK.root || M', 8m) */
+    return shake_absorb_five(R, p->n, pk, p->n, pk + p->n, p->n,
+                             prefix, prefix_len, msg, msglen, out, p->md_bytes);
 }
 
 /* ============================================================================
@@ -904,6 +983,16 @@ static void slh_ht_sign(const slhdsa_params_t *p, uint8_t *sig,
 
     slh_set_type(addr, SLH_ADDR_TYPE_HASHTREE);
     slh_xmss_treehash(p, root, sig, sk_seed, pub_seed, leaf_idx, addr);
+    /* Declassified (src/c/internal/ama_ct_declassify.h): `root` is the XMSS
+     * root the next layer's WOTS+ key signs, and its base-w digits are that
+     * layer's chain lengths.  It is computed here from SK.seed, but it is
+     * PUBLIC BY CONTRACT: FIPS 205 Algorithm 13 (ht_verify) recomputes it
+     * from the WOTS+ signature and authentication path this layer has just
+     * written into the signature (xmss_pkFromSig, Algorithm 11), and the
+     * top layer's root is PK.root itself.  Branching on it reveals nothing
+     * the signature does not.  Every other SK.seed-derived value -- the
+     * WOTS+ and tree-node secrets -- stays tainted and must decide nothing. */
+    AMA_CT_DECLASSIFY(root, p->n);
     sig += p->tree_height * p->n;
 
     for (layer = 1; layer < p->d; ++layer) {
@@ -920,6 +1009,7 @@ static void slh_ht_sign(const slhdsa_params_t *p, uint8_t *sig,
 
         slh_set_type(addr, SLH_ADDR_TYPE_HASHTREE);
         slh_xmss_treehash(p, root, sig, sk_seed, pub_seed, leaf_idx, addr);
+        AMA_CT_DECLASSIFY(root, p->n);  /* public by contract; see above */
         sig += p->tree_height * p->n;
     }
     ama_secure_memzero(root, sizeof(root));
@@ -1001,16 +1091,7 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
  * Top-level keygen / sign / verify (parameter-driven, exposed C API)
  * ============================================================================ */
 
-#ifdef AMA_TESTING_MODE
-ama_error_t (*ama_slhdsa_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
 static ama_error_t slh_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_slhdsa_randombytes_hook) {
-        return ama_slhdsa_randombytes_hook(buf, len);
-    }
-#endif
     return ama_randombytes(buf, len);
 }
 
@@ -1072,12 +1153,19 @@ AMA_API ama_error_t ama_slhdsa_keygen_from_seed(ama_slhdsa_param_set_t ps,
     return slh_keygen_internal(p, sk_seed, sk_prf, pk_seed, pk, sk);
 }
 
-/* slh_sign_internal: writes p->sig_bytes into signature given a fully-formed
- * secret key (sk = sk_seed || sk_prf || pk_seed || pk_root), randomizer
- * `opt_rand` (n bytes), and a (already context-wrapped) message. */
+/* slh_sign_internal: FIPS 205 §9.2 slh_sign_internal.  Writes p->sig_bytes
+ * into signature given a fully-formed secret key (sk = sk_seed || sk_prf ||
+ * pk_seed || pk_root), randomizer `opt_rand` (n bytes), and the message to
+ * sign presented as `prefix || message`.
+ *
+ * The signed byte string is the CONCATENATION of the two segments; splitting
+ * it is a plumbing detail, not a semantic one.  §10.2 callers pass the
+ * wrapper 0x00 || IntegerToBytes(|ctx|, 1) || ctx as `prefix`; the §9 internal
+ * interface (test-only) passes prefix = NULL, prefix_len = 0. */
 static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
                                      uint8_t *signature,
                                      const uint8_t *opt_rand,
+                                     const uint8_t *prefix, size_t prefix_len,
                                      const uint8_t *message, size_t message_len,
                                      const uint8_t *sk) {
     uint8_t pk[2 * 32];
@@ -1097,15 +1185,29 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     memcpy(pk, pub_seed, p->n);
     memcpy(pk + p->n, pk_root, p->n);
 
-    /* R = PRF_msg(SK.prf, opt_rand, M) */
-    if (p->prf_msg(p, R, sk_prf, opt_rand, message, message_len) != 0) {
+    /* R = PRF_msg(SK.prf, opt_rand, M') */
+    if (p->prf_msg(p, R, sk_prf, opt_rand, prefix, prefix_len,
+                   message, message_len) != 0) {
         return AMA_ERROR_MEMORY;
     }
+    /* Declassified (src/c/internal/ama_ct_declassify.h): R is derived from
+     * SK.prf, but it is the first n bytes of the signature (FIPS 205
+     * Algorithm 19 starts SIG with R), so it is PUBLIC BY CONTRACT.  The
+     * digest it feeds, and the FORS indices, idx_tree and idx_leaf split out
+     * of it, are H_msg(R, PK.seed, PK.root, M') -- functions of public data.
+     * With the FORS public key and each layer's XMSS root (declassified
+     * below, same argument), those are everything the signing work varies
+     * with.  That is why SLH-DSA signing is variable-work WITHOUT being a
+     * secret-dependent construct, and why it needs no carve-out from
+     * INVARIANT-12: FIPS 205 has no rejection loop.  SK.seed and SK.prf
+     * themselves stay tainted. */
+    AMA_CT_DECLASSIFY(R, p->n);
     memcpy(sig_ptr, R, p->n);
     sig_ptr += p->n;
 
-    /* digest = H_msg(R, PK.seed, PK.root, M); split into FORS msg + tree + leaf. */
-    if (p->hash_msg(p, fors_msg, R, pk, message, message_len) != 0) {
+    /* digest = H_msg(R, PK.seed, PK.root, M'); split into FORS msg + tree + leaf. */
+    if (p->hash_msg(p, fors_msg, R, pk, prefix, prefix_len,
+                    message, message_len) != 0) {
         return AMA_ERROR_MEMORY;
     }
     slh_split_digest(p, fors_msg, &tree, &leaf_idx);
@@ -1116,6 +1218,11 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     slh_set_type(fors_addr, SLH_ADDR_TYPE_FORSTREE);
     slh_set_keypair(fors_addr, leaf_idx);
     slh_fors_sign(p, sig_ptr, fors_pk, fors_msg, sk_seed, pub_seed, fors_addr);
+    /* Declassified: the FORS public key is what the hypertree signs, so its
+     * base-w digits are layer 0's chain lengths.  It is PUBLIC BY CONTRACT --
+     * the verifier recomputes it from SIG_FORS (fors_pkFromSig, FIPS 205
+     * Algorithm 17), which was just written into the signature. */
+    AMA_CT_DECLASSIFY(fors_pk, p->n);
     sig_ptr += p->fors_bytes;
 
     /* HT sign over FORS pk. */
@@ -1127,7 +1234,46 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     return AMA_SUCCESS;
 }
 
-/* ama_slhdsa_sign / verify use the FIPS 205 §10.2 external context wrapper. */
+/* ============================================================================
+ * FIPS 205 §10.2 external interface (slh_sign / slh_verify)
+ * ============================================================================ */
+
+/* The §10.2 wrapper is bounded: M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx
+ * || M, and |ctx| <= 255, so the part that precedes M is at most 257 bytes.
+ * Building it on the stack and handing it to slh_sign_internal as its own
+ * segment is what removed the whole-message calloc/memcpy/memzero/free from
+ * every entry point below — see the prf_msg/hash_msg comment in
+ * slhdsa_params_t for the measurement that motivated it. */
+#define AMA_SLHDSA_CTX_PREFIX_MAX 257u
+
+static ama_error_t slh_build_ctx_prefix(uint8_t *prefix, size_t *prefix_len,
+                                        const uint8_t *ctx, size_t ctx_len) {
+    if (ctx_len > 255) return AMA_ERROR_INVALID_PARAM;
+    if (ctx_len > 0 && ctx == NULL) return AMA_ERROR_INVALID_PARAM;
+    prefix[0] = 0x00;                  /* domain separator: pure, not pre-hash */
+    prefix[1] = (uint8_t)ctx_len;      /* IntegerToBytes(|ctx|, 1)            */
+    if (ctx_len) memcpy(prefix + 2, ctx, ctx_len);
+    *prefix_len = (size_t)2 + ctx_len;
+    return AMA_SUCCESS;
+}
+
+/* (message == NULL, message_len == 0) is the EMPTY MESSAGE, not an error.
+ *
+ * FIPS 205 defines slh_sign over M ∈ B* — the empty string is a member, and
+ * §10.2 hashes M' = 0x00 || 0x00 || M, which is two bytes long and perfectly
+ * well defined when M is empty.  These entry points used to reject a NULL
+ * message pointer unconditionally, so a caller signing a zero-length buffer
+ * got AMA_ERROR_INVALID_PARAM or not depending on whether their allocator
+ * had handed them a non-NULL pointer for a zero-byte request — undefined
+ * behaviour in the caller's malloc decided whether a signature was produced.
+ * The same functions already accept (ctx == NULL, ctx_len == 0) as the empty
+ * context; message and ctx are now read the same way.  A NULL pointer with a
+ * NON-zero length is still rejected: that is a caller bug, not an empty
+ * message. */
+static int slh_msg_ptr_invalid(const uint8_t *message, size_t message_len) {
+    return (message == NULL && message_len != 0);
+}
+
 AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
                                     uint8_t *signature, size_t *signature_len,
                                     const uint8_t *message, size_t message_len,
@@ -1135,55 +1281,50 @@ AMA_API ama_error_t ama_slhdsa_sign(ama_slhdsa_param_set_t ps,
                                     const uint8_t *sk) {
     const slhdsa_params_t *p = slh_lookup(ps);
     uint8_t opt_rand[32];
-    uint8_t *wrapped = NULL;
-    size_t wrapped_len;
+    uint8_t prefix[AMA_SLHDSA_CTX_PREFIX_MAX];
+    size_t prefix_len;
     ama_error_t rc;
 
-    if (!p || !signature || !signature_len || !message || !sk) {
+    if (!p || !signature || !signature_len || !sk) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (ctx_len > 0 && ctx == NULL) return AMA_ERROR_INVALID_PARAM;
-    if (ctx_len > 255) return AMA_ERROR_INVALID_PARAM;
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
+    rc = slh_build_ctx_prefix(prefix, &prefix_len, ctx, ctx_len);
+    if (rc != AMA_SUCCESS) return rc;
     if (*signature_len < p->sig_bytes) {
         *signature_len = p->sig_bytes;
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (message_len > SIZE_MAX - 2 - ctx_len) return AMA_ERROR_INVALID_PARAM;
+    /* No `message_len > SIZE_MAX - 2 - ctx_len` guard any more: it existed
+     * solely to keep `wrapped_len = 2 + ctx_len + message_len` from wrapping
+     * before the calloc, and there is no such sum now — the wrapper and the
+     * message are absorbed as separate segments and never added together. */
 
     /* opt_rand: per FIPS 205 §10.2 the hedged variant draws addrnd <- $;
      * deterministic mode uses addrnd = PK.seed (pub_seed of the secret key,
      * which equals sk[2n:3n]). NIST ACVP's deterministic vectors are the
      * latter, so we must support both. We expose the hedged form here; the
-     * deterministic form is reachable via ama_slhdsa_sign_internal_det
-     * for KAT validation. */
+     * deterministic form is ama_slhdsa_sign_deterministic. */
     rc = slh_randombytes(opt_rand, p->n);
     if (rc != AMA_SUCCESS) return rc;
 
-    /* M' = 0x00 || len(ctx) || ctx || M */
-    wrapped_len = 2 + ctx_len + message_len;
-    wrapped = (uint8_t *)calloc((size_t)1, wrapped_len);
-    if (!wrapped) {
-        ama_secure_memzero(opt_rand, sizeof(opt_rand));
-        return AMA_ERROR_MEMORY;
-    }
-    wrapped[0] = 0x00;
-    wrapped[1] = (uint8_t)ctx_len;
-    if (ctx_len) memcpy(wrapped + 2, ctx, ctx_len);
-    memcpy(wrapped + 2 + ctx_len, message, message_len);
-
-    rc = slh_sign_internal(p, signature, opt_rand, wrapped, wrapped_len, sk);
+    rc = slh_sign_internal(p, signature, opt_rand, prefix, prefix_len,
+                           message, message_len, sk);
     if (rc == AMA_SUCCESS) *signature_len = p->sig_bytes;
 
     ama_secure_memzero(opt_rand, sizeof(opt_rand));
-    ama_secure_memzero(wrapped, wrapped_len);
-    free(wrapped);
+    /* prefix holds the caller's ctx, which is public by construction (FIPS 205
+     * §10.2 domain separation; a verifier must supply the same bytes). */
     return rc;
 }
 
-/* slh_verify_internal: verifies (already context-wrapped) message against pk. */
+/* slh_verify_internal: FIPS 205 §9.3 slh_verify_internal.  Verifies the
+ * signed byte string `prefix || message` against pk; see slh_sign_internal
+ * for why the wrapper arrives as its own segment. */
 static ama_error_t slh_verify_internal(const slhdsa_params_t *p,
                                        const uint8_t *signature,
                                        size_t signature_len,
+                                       const uint8_t *prefix, size_t prefix_len,
                                        const uint8_t *message,
                                        size_t message_len,
                                        const uint8_t *pk) {
@@ -1201,7 +1342,8 @@ static ama_error_t slh_verify_internal(const slhdsa_params_t *p,
     fors_sig = R + p->n;
     ht_sig = fors_sig + p->fors_bytes;
 
-    if (p->hash_msg(p, fors_msg, R, pk, message, message_len) != 0) {
+    if (p->hash_msg(p, fors_msg, R, pk, prefix, prefix_len,
+                    message, message_len) != 0) {
         return AMA_ERROR_MEMORY;
     }
     slh_split_digest(p, fors_msg, &tree, &leaf_idx);
@@ -1227,28 +1369,17 @@ AMA_API ama_error_t ama_slhdsa_verify(ama_slhdsa_param_set_t ps,
                                       const uint8_t *ctx, size_t ctx_len,
                                       const uint8_t *pk) {
     const slhdsa_params_t *p = slh_lookup(ps);
-    uint8_t *wrapped;
-    size_t wrapped_len;
+    uint8_t prefix[AMA_SLHDSA_CTX_PREFIX_MAX];
+    size_t prefix_len;
     ama_error_t rc;
 
-    if (!p || !signature || !message || !pk) return AMA_ERROR_INVALID_PARAM;
-    if (ctx_len > 0 && ctx == NULL) return AMA_ERROR_INVALID_PARAM;
-    if (ctx_len > 255) return AMA_ERROR_INVALID_PARAM;
-    if (message_len > SIZE_MAX - 2 - ctx_len) return AMA_ERROR_INVALID_PARAM;
+    if (!p || !signature || !pk) return AMA_ERROR_INVALID_PARAM;
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
+    rc = slh_build_ctx_prefix(prefix, &prefix_len, ctx, ctx_len);
+    if (rc != AMA_SUCCESS) return rc;
 
-    wrapped_len = 2 + ctx_len + message_len;
-    wrapped = (uint8_t *)calloc((size_t)1, wrapped_len);
-    if (!wrapped) return AMA_ERROR_MEMORY;
-    wrapped[0] = 0x00;
-    wrapped[1] = (uint8_t)ctx_len;
-    if (ctx_len) memcpy(wrapped + 2, ctx, ctx_len);
-    memcpy(wrapped + 2 + ctx_len, message, message_len);
-
-    rc = slh_verify_internal(p, signature, signature_len,
-                             wrapped, wrapped_len, pk);
-    ama_secure_memzero(wrapped, wrapped_len);
-    free(wrapped);
-    return rc;
+    return slh_verify_internal(p, signature, signature_len,
+                               prefix, prefix_len, message, message_len, pk);
 }
 
 /* ============================================================================
@@ -1269,63 +1400,153 @@ AMA_API ama_error_t ama_slhdsa_sign_deterministic(ama_slhdsa_param_set_t ps,
                                                   size_t ctx_len,
                                                   const uint8_t *sk) {
     const slhdsa_params_t *p = slh_lookup(ps);
-    uint8_t *wrapped;
-    size_t wrapped_len;
+    uint8_t prefix[AMA_SLHDSA_CTX_PREFIX_MAX];
+    size_t prefix_len;
     ama_error_t rc;
 
-    if (!p || !signature || !signature_len || !message || !sk) {
+    if (!p || !signature || !signature_len || !sk) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (ctx_len > 0 && ctx == NULL) return AMA_ERROR_INVALID_PARAM;
-    if (ctx_len > 255) return AMA_ERROR_INVALID_PARAM;
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
+    rc = slh_build_ctx_prefix(prefix, &prefix_len, ctx, ctx_len);
+    if (rc != AMA_SUCCESS) return rc;
     if (*signature_len < p->sig_bytes) {
         *signature_len = p->sig_bytes;
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (message_len > SIZE_MAX - 2 - ctx_len) return AMA_ERROR_INVALID_PARAM;
-
-    wrapped_len = 2 + ctx_len + message_len;
-    wrapped = (uint8_t *)calloc((size_t)1, wrapped_len);
-    if (!wrapped) return AMA_ERROR_MEMORY;
-    wrapped[0] = 0x00;
-    wrapped[1] = (uint8_t)ctx_len;
-    if (ctx_len) memcpy(wrapped + 2, ctx, ctx_len);
-    memcpy(wrapped + 2 + ctx_len, message, message_len);
 
     /* Deterministic addrnd = PK.seed (sk[2n .. 3n)). */
     rc = slh_sign_internal(p, signature, sk + 2 * p->n,
-                           wrapped, wrapped_len, sk);
+                           prefix, prefix_len, message, message_len, sk);
     if (rc == AMA_SUCCESS) *signature_len = p->sig_bytes;
-
-    ama_secure_memzero(wrapped, wrapped_len);
-    free(wrapped);
     return rc;
 }
 
-/* For ACVP "internal interface" (signatureInterface == "internal") tests we
- * need to sign the raw message with no §10.2 wrapper and an explicit
- * addrnd. Expose this as ama_slhdsa_sign_internal so KATs can call it
- * without having the public API leak addrnd injection. */
-AMA_API ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
-                                             uint8_t *signature,
-                                             size_t *signature_len,
-                                             const uint8_t *message,
-                                             size_t message_len,
-                                             const uint8_t *addrnd,
-                                             const uint8_t *sk) {
+/* ============================================================================
+ * FIPS 205 §10.2 hedged signing with a caller-supplied addrnd.
+ *
+ * WHY THIS EXISTS, AND WHY IT REPLACED ama_slhdsa_sign_internal.
+ *
+ * NIST ACVP's SLH-DSA-sigGen HEDGED vectors publish `additionalRandomness`
+ * alongside (sk, message, context, signature): reproducing them byte-for-byte
+ * requires supplying addrnd, which ama_slhdsa_sign() deliberately draws
+ * itself.  Until now the only way in was ama_slhdsa_sign_internal — the §9.2
+ * internal interface — and the test had to build M' = 0x00 || len(ctx) ||
+ * ctx || M in Python before calling it.  Two things were wrong with that.
+ *
+ * 1. FIPS 205 §9 states the internal functions shall not be exposed to
+ *    applications other than for testing, and that entry point was AMA_API,
+ *    in the shipped .so, reachable by name from any consumer (confirmed with
+ *    `nm -D`).  It signed RAW caller bytes, so anything that reached it was a
+ *    signing oracle for §10.2 pure signatures on attacker-chosen (ctx, M)
+ *    pairs under the same key — see INVARIANT-50.
+ * 2. A KAT that builds M' itself does not test the implementation's wrapper.
+ *    The bytes under test began after the wrapper, which is precisely the
+ *    construction this defect was about.
+ *
+ * This entry point is strictly narrower than the one it replaces: every byte
+ * it signs carries the §10.2 prefix, so it cannot produce a signature over an
+ * unprefixed string and cannot cross-verify with any other interface.  It
+ * takes ctx and M separately and builds M' itself, so the ACVP replay now
+ * covers the wrapper too.  What it adds over ama_slhdsa_sign() is control of
+ * addrnd only, and addrnd is not a nonce in the ECDSA sense: FIPS 205 §9.2
+ * computes R = PRF_msg(SK.prf, addrnd, M') with SK.prf secret, so a repeated
+ * or attacker-chosen addrnd degrades at worst to the deterministic variant
+ * that §10.2 itself defines (addrnd = PK.seed).  Callers outside ACVP replay
+ * should use ama_slhdsa_sign(), which draws addrnd from the platform CSPRNG;
+ * an addrnd not from an approved RBG is not the approved hedged variant.
+ * ============================================================================ */
+AMA_API ama_error_t ama_slhdsa_sign_addrnd(ama_slhdsa_param_set_t ps,
+                                           uint8_t *signature,
+                                           size_t *signature_len,
+                                           const uint8_t *message,
+                                           size_t message_len,
+                                           const uint8_t *ctx, size_t ctx_len,
+                                           const uint8_t *addrnd,
+                                           const uint8_t *sk) {
     const slhdsa_params_t *p = slh_lookup(ps);
+    uint8_t prefix[AMA_SLHDSA_CTX_PREFIX_MAX];
+    size_t prefix_len;
     ama_error_t rc;
-    if (!p || !signature || !signature_len || !message || !addrnd || !sk) {
+
+    if (!p || !signature || !signature_len || !addrnd || !sk) {
         return AMA_ERROR_INVALID_PARAM;
     }
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
+    rc = slh_build_ctx_prefix(prefix, &prefix_len, ctx, ctx_len);
+    if (rc != AMA_SUCCESS) return rc;
     if (*signature_len < p->sig_bytes) {
         *signature_len = p->sig_bytes;
         return AMA_ERROR_INVALID_PARAM;
     }
-    rc = slh_sign_internal(p, signature, addrnd, message, message_len, sk);
+
+    rc = slh_sign_internal(p, signature, addrnd, prefix, prefix_len,
+                           message, message_len, sk);
     if (rc == AMA_SUCCESS) *signature_len = p->sig_bytes;
     return rc;
 }
+
+/* ============================================================================
+ * FIPS 205 §9 internal interface — TEST BUILDS ONLY
+ *
+ * slh_sign_internal / slh_verify_internal operate on the raw byte string with
+ * no §10.2 wrapper.  FIPS 205 §9 says these shall not be exposed to
+ * applications other than for testing, and the ACVP
+ * `signatureInterface == "internal"` groups are exactly that testing.
+ *
+ * So they are compiled ONLY into the AMA_TESTING_MODE archive — absent from
+ * every shipped library by construction rather than by export control, the
+ * same reasoning (and the same three mechanisms) as
+ * ama_ascon_permutation_for_test: no AMA_API, declared in
+ * src/c/internal/ama_testing_exports.h rather than the installed public
+ * header, and named in cmake/ama_exports.map's `local:` list so the `ama_*`
+ * wildcard cannot publish them if a future build does compile them in.  The
+ * Mach-O exported-symbols list is an allow-list with no exclusion form, so
+ * "not compiled" is the only construction the two platforms cannot disagree
+ * about.
+ *
+ * tests/c/test_slhdsa_context_separation.c is the only caller in the
+ * repository and links ama_cryptography_test.
+ * ============================================================================ */
+#ifdef AMA_TESTING_MODE
+#include "internal/ama_testing_exports.h"
+
+ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
+                                     uint8_t *signature,
+                                     size_t *signature_len,
+                                     const uint8_t *message,
+                                     size_t message_len,
+                                     const uint8_t *addrnd,
+                                     const uint8_t *sk) {
+    const slhdsa_params_t *p = slh_lookup(ps);
+    ama_error_t rc;
+    if (!p || !signature || !signature_len || !addrnd || !sk) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
+    if (*signature_len < p->sig_bytes) {
+        *signature_len = p->sig_bytes;
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    rc = slh_sign_internal(p, signature, addrnd, NULL, 0,
+                           message, message_len, sk);
+    if (rc == AMA_SUCCESS) *signature_len = p->sig_bytes;
+    return rc;
+}
+
+ama_error_t ama_slhdsa_verify_internal(ama_slhdsa_param_set_t ps,
+                                       const uint8_t *signature,
+                                       size_t signature_len,
+                                       const uint8_t *message,
+                                       size_t message_len,
+                                       const uint8_t *pk) {
+    const slhdsa_params_t *p = slh_lookup(ps);
+    if (!p || !signature || !pk) return AMA_ERROR_INVALID_PARAM;
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
+    return slh_verify_internal(p, signature, signature_len, NULL, 0,
+                               message, message_len, pk);
+}
+#endif /* AMA_TESTING_MODE */
 
 /* ============================================================================
  * Legacy SPHINCS+-SHA2-256f-simple compatibility API
@@ -1338,20 +1559,45 @@ AMA_API ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
  * merge (identical pk/sk/signature for the same seeds and addrnd), so this is
  * a true consolidation, not a shim over a divergent code path.
  *
- * Semantic contract preserved from the original SPHINCS+ API:
- *   - ama_sphincs_sign / ama_sphincs_verify operate on the RAW message with
- *     NO FIPS 205 §10.2 context wrapper (they dispatch to the unwrapped
- *     slh_sign_internal / slh_verify_internal).
- *   - ama_sphincs_verify_ctx applies the §9.2 M' = 0x00 || len(ctx) || ctx ||
- *     M wrapper, which is byte-identical to the §10.2 wrapper, so it delegates
- *     to ama_slhdsa_verify.
+ * Semantic contract (CHANGED — see INVARIANT-50):
+ *   - ama_sphincs_sign / ama_sphincs_verify are FIPS 205 §10.2 slh_sign /
+ *     slh_verify with the EMPTY context: they sign and verify
+ *     M' = 0x00 || 0x00 || M.  They are ama_slhdsa_sign/verify(SHA2_256F,
+ *     ..., ctx = "") with the signature shape the legacy API always had.
+ *   - ama_sphincs_verify_ctx applies the same wrapper with a caller-supplied
+ *     ctx and delegates to ama_slhdsa_verify.
  *   - ama_sphincs_sign stays HEDGED: it draws a fresh n-byte opt_rand per call.
+ *
+ * WHAT CHANGED AND WHY.  These two entry points used to sign and verify the
+ * RAW message with no wrapper — they were FIPS 205 §9 slh_sign_internal /
+ * slh_verify_internal under a public name, in the shipped .so, and reachable
+ * from the generic context API (ama_sign/ama_verify with
+ * AMA_ALG_SPHINCS_256F) as well.  Because the §10.2 API signs
+ * 0x00 || len(ctx) || ctx || M under the SAME key, the two interfaces
+ * cross-verified, in both directions.  Measured on this tree before the fix:
+ *
+ *     ama_slhdsa_sign(M, ctx = "")      verified by ama_sphincs_verify(00 00 || M)
+ *     ama_sphincs_sign(00 01 'x' || M)  verified by ama_slhdsa_verify(M, ctx = "x")
+ *
+ * both returned true.  Any component that signed caller-influenced bytes
+ * through the legacy or the generic API was therefore a signing oracle for
+ * FIPS 205 pure signatures on attacker-chosen (ctx, M) pairs.  Routing both
+ * through the §10.2 wrapper closes it: the raw interface is no longer
+ * reachable from any shipped symbol, so there is no second interpretation of
+ * a signature to confuse with the first.
+ *
+ * This is a WIRE-FORMAT BREAK for the legacy API — a signature produced by
+ * the old ama_sphincs_sign does not verify under the new ama_sphincs_verify.
+ * It is taken deliberately and now: nothing has been released (v5.0.0 was
+ * never tagged), so the break costs nothing today and the alternative is
+ * shipping the oracle as a compatibility guarantee.  Callers that must verify
+ * a pre-fix signature can do so through the AMA_TESTING_MODE §9 interface,
+ * which is where that behaviour now lives.
  * ============================================================================ */
 
 /* Deterministic-randomness hook for KAT testing (test-only), preserved from
  * the original ama_sphincs.c so tests/c/test_kat.c keeps linking and driving
- * the SPHINCS+ vectors deterministically. Kept distinct from
- * ama_slhdsa_randombytes_hook. */
+ * the SPHINCS+ vectors deterministically. */
 #ifdef AMA_TESTING_MODE
 ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
 #endif
@@ -1390,23 +1636,31 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
                                      const uint8_t *secret_key) {
     const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
     uint8_t opt_rand[32];
+    /* M' = 0x00 || IntegerToBytes(0, 1) || M — the §10.2 wrapper with the
+     * empty context.  Two bytes on the stack; the message is not copied. */
+    static const uint8_t empty_ctx_prefix[2] = { 0x00, 0x00 };
     ama_error_t rc;
 
-    if (!p || !signature || !signature_len || !message || !secret_key) {
+    if (!p || !signature || !signature_len || !secret_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
     if (*signature_len < p->sig_bytes) {
         *signature_len = p->sig_bytes;
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Hedged randomizer: fresh addrnd per signature. */
+    /* Hedged randomizer: fresh addrnd per signature.  Drawn through
+     * spx_compat_randombytes, which keeps the AMA_TESTING_MODE KAT hook —
+     * routing through ama_slhdsa_sign() instead would silently drop it and
+     * take tests/c/test_kat.c's deterministic SPHINCS+ driver with it. */
     rc = spx_compat_randombytes(opt_rand, p->n);
     if (rc != AMA_SUCCESS) {
         return rc;
     }
-    /* RAW message — no §10.2 context wrapper (legacy SPHINCS+ semantics). */
-    rc = slh_sign_internal(p, signature, opt_rand, message, message_len, secret_key);
+    rc = slh_sign_internal(p, signature, opt_rand,
+                           empty_ctx_prefix, sizeof(empty_ctx_prefix),
+                           message, message_len, secret_key);
     if (rc == AMA_SUCCESS) {
         *signature_len = p->sig_bytes;
     }
@@ -1418,13 +1672,17 @@ AMA_API ama_error_t ama_sphincs_verify(const uint8_t *message, size_t message_le
                                        const uint8_t *signature, size_t signature_len,
                                        const uint8_t *public_key) {
     const slhdsa_params_t *p = slh_lookup(AMA_SLHDSA_SHA2_256F);
+    static const uint8_t empty_ctx_prefix[2] = { 0x00, 0x00 };
 
-    if (!p || !message || !signature || !public_key) {
+    if (!p || !signature || !public_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    /* RAW message verify — no §10.2 context wrapper. slh_verify_internal
-     * enforces the exact-length precondition (VERIFY_FAILED on mismatch). */
+    if (slh_msg_ptr_invalid(message, message_len)) return AMA_ERROR_INVALID_PARAM;
+    /* §10.2 verify with the empty context — the exact counterpart of what
+     * ama_sphincs_sign now produces.  slh_verify_internal enforces the
+     * exact-length precondition (VERIFY_FAILED on mismatch). */
     return slh_verify_internal(p, signature, signature_len,
+                               empty_ctx_prefix, sizeof(empty_ctx_prefix),
                                message, message_len, public_key);
 }
 

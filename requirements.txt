@@ -27,7 +27,7 @@
 # PyKCS11>=1.5.18
 
 # Mathematical monitoring dependencies (OPTIONAL)
-# Core cryptographic operations work without numpy/scipy.
+# Core cryptographic operations work without numpy.  (SciPy is no longer a
+# dependency of any extra.)
 # Install with: pip install "ama-cryptography[monitoring]"
 # numpy>=1.24.0,<3.0.0
-# scipy>=1.7.0

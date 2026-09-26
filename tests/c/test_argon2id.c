@@ -16,9 +16,19 @@
  * dispatch via the test-only hook ama_test_force_argon2_g_scalar(),
  * and asserts the tag bytes match exactly.
  *
- * A second block fixes the KAT: a known tag computed from the scalar
- * implementation is hard-coded, so the test also catches scalar
- * regressions — not just AVX2/scalar mismatches.
+ * A second block pins three tags this implementation did not produce:
+ * each is the upstream reference implementation's output
+ * (phc-winner-argon2, via argon2-cffi) for the stated parameters, so the
+ * test also catches a regression the scalar and SIMD G paths share — which
+ * the parity block above cannot see.  Re-derived on 2026-09-24 with
+ * argon2-cffi 25.1.0 / argon2-cffi-bindings 26.1.0
+ * (`argon2.low_level.hash_secret_raw(..., type=Type.ID, version=0x13)`):
+ * all three byte-identical to the arrays below.  None of the three is a
+ * vector RFC 9106 publishes; its one Argon2id answer (§5.3, with secret and
+ * associated data) is replayed by test_argon2_rfc9106.c.  An earlier
+ * revision of this paragraph said the pinned tag was "computed from the
+ * scalar implementation"; the blocks' own provenance notes and the
+ * re-derivation both contradict that.
  */
 
 #include <stdio.h>
@@ -26,6 +36,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "ama_cryptography.h"
+#include "kat_slot_guard.h"
 
 /* Declared here because these are AMA_TESTING_MODE-only (no public
  * header): the test library links them from ama_dispatch.c. */
@@ -296,6 +307,49 @@ static void test_parameter_validation(void) {
                       1, 8, 1, tag, 0);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
                 "validation: zero-length output rejected");
+
+    /* RFC 9106 Sec 3.1 domain: out-of-range parameters are rejected,
+     * never silently clamped to the nearest legal value.  Each row
+     * below used to derive a tag under substituted parameters. */
+    const uint8_t salt16[16] = "argon2-validate!";
+    const uint8_t pw[8] = "password";
+    static const struct {
+        size_t salt_len;
+        uint32_t t_cost, m_cost, parallelism;
+        const char *label;
+    } bad[] = {
+        {16, 1, 8,    0,   "validation: parallelism=0 rejected (not clamped to 1)"},
+        {16, 1, 8192, 256, "validation: parallelism=256 rejected (not clamped to 255)"},
+        {16, 1, 8192, 0xFFFFFFFFu, "validation: parallelism=UINT32_MAX rejected"},
+        {16, 0, 8,    1,   "validation: t_cost=0 rejected (not clamped to 1)"},
+        {16, 1, 7,    1,   "validation: m_cost < 8*p rejected (p=1)"},
+        {16, 1, 15,   2,   "validation: m_cost < 8*p rejected (p=2)"},
+        {16, 1, 2039, 255, "validation: m_cost < 8*p rejected (p=255)"},
+        {7,  1, 8,    1,   "validation: salt shorter than 8 bytes rejected"},
+        {0,  1, 8,    1,   "validation: empty salt rejected"},
+    };
+    size_t i;
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        memset(tag, 0xA5, sizeof(tag));
+        rc = ama_argon2id(pw, sizeof(pw), salt16, bad[i].salt_len,
+                          bad[i].t_cost, bad[i].m_cost, bad[i].parallelism,
+                          tag, sizeof(tag));
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, bad[i].label);
+        rc = ama_argon2id_legacy(pw, sizeof(pw), salt16, bad[i].salt_len,
+                                 bad[i].t_cost, bad[i].m_cost, bad[i].parallelism,
+                                 tag, sizeof(tag));
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, bad[i].label);
+        rc = ama_argon2id_legacy_verify(pw, sizeof(pw), salt16, bad[i].salt_len,
+                                        bad[i].t_cost, bad[i].m_cost,
+                                        bad[i].parallelism, tag, sizeof(tag));
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, bad[i].label);
+    }
+
+    /* Boundary values on the legal side still derive. */
+    rc = ama_argon2id(pw, sizeof(pw), salt16, 8, 1, 8, 1, tag, sizeof(tag));
+    TEST_ASSERT(rc == AMA_SUCCESS, "validation: salt_len=8, t=1, m=8, p=1 accepted");
+    rc = ama_argon2id(pw, sizeof(pw), salt16, 16, 1, 16, 2, tag, sizeof(tag));
+    TEST_ASSERT(rc == AMA_SUCCESS, "validation: m=8*p boundary accepted (p=2)");
 }
 
 /* ----------------------------------------------------------------
@@ -395,6 +449,7 @@ static void test_legacy_shim_self_consistency(void) {
 }
 
 int main(void) {
+    KAT_SLOT_GUARD_OR_EXIT();  /* per-slot KAT sweep: refuse a pin the host did not honour */
     printf("===========================================\n");
     printf("Argon2id KAT + AVX2-G vs scalar-G parity\n");
     printf("===========================================\n\n");

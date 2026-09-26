@@ -56,9 +56,15 @@ What is checked
 ---------------
 1. **No claim of an unperformed check.** For every capability that is ``False``,
    the claim patterns bound to it must not appear in shipped code or
-   documentation *unless negated on the same line*. Same line, deliberately: a
-   disclaimer three paragraphs from the claim is how this repository came to
-   assert attestation in fifty places while the module docstring disclaimed it.
+   documentation *unless negated in the same sentence*. The same sentence,
+   deliberately: a disclaimer three paragraphs from the claim is how this
+   repository came to assert attestation in fifty places while the module
+   docstring disclaimed it. (The unit was once the physical line; prose here is
+   hard-wrapped, so a sentence is what the reader actually reads as one claim.)
+   Whether generic assurance vocabulary is *about* RFC 3161 at all is judged
+   over the whole paragraph (blank-line-delimited block), not the sentence: in
+   "AMA attaches RFC 3161 timestamps. They provide independent verification."
+   the subject of the claim is carried into the second sentence by a pronoun.
 2. **The misnamed result key is not taught.** No document or docstring may show
    ``results["rfc3161"]``. That key is retained in code for compatibility and
    now warns when read, but a copy-pasteable example teaching it defeats the
@@ -151,17 +157,23 @@ CLAIM_SCAN_EXEMPT: frozenset[str] = frozenset(
     }
 )
 
-#: Cues that a line is talking about RFC 3161 at all.
+#: Cues that a paragraph is talking about RFC 3161 at all.
 #:
 #: Without this, generic assurance vocabulary is caught wherever it appears:
 #: "requires independent verification" about side-channel review of the C code,
 #: or "# Round trip and independent verification" in an ECDSA test, are true
 #: statements about other things. A pattern marked ``requires_context`` is only
-#: a violation on a line that is about timestamping.
+#: a violation in a paragraph (blank-line-delimited block) that is about
+#: timestamping — the paragraph, not the sentence, because a claim routinely
+#: names its subject one sentence earlier ("RFC 3161 timestamps ... They
+#: provide ...").
 CONTEXT_CUES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"rfc\s*-?\s*3161", re.I),
+    # ``\s*-?\s*`` is two nullable quantifiers around an optional atom — the
+    # same adjacent-nullable shape fixed elsewhere in this branch, quadratic on
+    # a long whitespace run. One character class has a single way to match.
+    re.compile(r"rfc[\s-]{0,8}3161", re.I),
     re.compile(r"\bTSA\b"),
-    re.compile(r"\btime\s*-?\s*stamp", re.I),
+    re.compile(r"\btime[\s-]{0,8}stamp", re.I),
     re.compile(r"\bTST\b|\bTSTInfo\b"),
     re.compile(r"\bgenTime\b", re.I),
 )
@@ -172,7 +184,7 @@ CONTEXT_CUES: tuple[re.Pattern[str], ...] = (
 # Each entry is (compiled pattern, human description, requires_context). A
 # pattern is enforced only while its capability is False in
 # RFC3161_CAPABILITIES. ``requires_context`` marks generic assurance vocabulary
-# that is only a violation on a line already talking about timestamping; a
+# that is only a violation in a paragraph already talking about timestamping; a
 # pattern that names the TSA or the timestamp itself is self-scoping and needs
 # no such gate.
 _P = re.compile
@@ -299,6 +311,29 @@ NEGATION_CUES: tuple[re.Pattern[str], ...] = (
     _P(r"\bwrongly\b", re.I),
     _P(r"\bincorrect\w*", re.I),
     _P(r"\bclaimed\b", re.I),
+    # Past-tense attribution: the sentence reports what a document USED TO say.
+    # Needed once the scan became sentence-scoped rather than line-scoped: the
+    # CHANGELOG entry that withdrew the RFC 3161 claims quotes each retired
+    # sentence and refutes it in the NEXT one ('...was "Verify TSA signature and
+    # time bounds". Neither happens.'), which the line rule happened to cover
+    # and a sentence rule does not.
+    #
+    # These two cues are the whole set, and both name the act of reporting
+    # ("told readers ...", "used to say ..."), which is why they cannot be
+    # written by accident.  A third was tried —
+    #
+    #     (said|stated|read|listed|recorded|documented|asserted|promised)
+    #     [^.]{0,80}?\bwas\b
+    #
+    # — and removed: "read", "listed" and "recorded" are ordinary words in this
+    # repository's prose, so an eighty-character window to any "was" made
+    # sentences like "the verifier read the token and the result was returned"
+    # suppress every claim beside them.  Measured on the tree at the time it was
+    # removed: it suppressed NOTHING (the gate reported the same six OK lines
+    # and exit 0 without it), so its entire effect was latent over-suppression
+    # on a fail-open path.
+    _P(r"\btold readers\b", re.I),
+    _P(r"\bused\s+to\s+(?:say|read|state|claim|list|record|document)\b", re.I),
 )
 
 #: The retained-but-misnamed result key, in the form a copy-paste teaches.
@@ -380,16 +415,20 @@ def load_capabilities(source: Path | None = None) -> dict[str, bool]:
     raise ValueError(f"{CAPABILITY_SYMBOL} not found in {path}")
 
 
-def _scanned_files(repo: Path) -> list[Path]:
+def _scanned_files(
+    repo: Path,
+    roots: Sequence[str] = SCAN_ROOTS,
+    suffixes: frozenset[str] = SCAN_SUFFIXES,
+) -> list[Path]:
     seen: list[Path] = []
     for glob in SCAN_ROOT_GLOBS:
         seen.extend(sorted(repo.glob(glob)))
-    for root in SCAN_ROOTS:
+    for root in roots:
         base = repo / root
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("*")):
-            if not path.is_file() or path.suffix not in SCAN_SUFFIXES:
+            if not path.is_file() or path.suffix not in suffixes:
                 continue
             if any(part in EXCLUDED_DIRS for part in path.relative_to(repo).parts):
                 continue
@@ -431,21 +470,41 @@ def scan_for_unperformed_claims(
     if not active:
         return []
     problems: list[str] = []
-    for path, number, line in _iter_lines(_scanned_files(repo)):
-        if _is_negated(line):
-            continue
-        in_context = _has_rfc3161_context(line)
-        for capability, pattern, description, needs_context in active:
-            if needs_context and not in_context:
+    # The unit is the SENTENCE, inside a blank-line-delimited prose block.
+    #
+    # It used to be the physical line, with the negation test applied to the
+    # whole of it — so a single negation-flavoured word anywhere on a line
+    # suppressed every claim on that line, whatever it was attached to.  A line
+    # reading "The nonce is not echoed here. The TSA signature is verified."
+    # passed on the strength of the first sentence's "not".  And because this
+    # repository's prose is hard-wrapped, the same line rule cut the other way
+    # too: a genuinely negated claim whose negation wrapped onto the previous
+    # line was reported as a violation.  Blocks fix the wrapping; sentences fix
+    # the over-suppression.
+    #
+    # CONTEXT is the one thing judged per block, not per sentence.  Moving it
+    # to the sentence along with the negation window dropped every claim whose
+    # subject sat in the preceding sentence: "AMA attaches RFC 3161 timestamps.
+    # They provide independent verification of when a package was signed." —
+    # which the line rule caught (cue and claim on one line) and the sentence
+    # rule passed, because sentence two carries no cue.  Widening the context
+    # can only report more; the negation window stays the claim's sentence.
+    for path, number, block in _iter_prose_blocks(_scanned_files(repo)):
+        in_context = _has_rfc3161_context(block)
+        for sentence in _SENTENCE_SPLIT_RE.split(block):
+            if _is_negated(sentence):
                 continue
-            match = pattern.search(line)
-            if match is None:
-                continue
-            problems.append(
-                f"{_rel(path, repo)}:{number} {description} — {match.group(0)!r} — while "
-                f"RFC3161_CAPABILITIES[{capability!r}] is False. Either negate the "
-                "claim on this line, or implement the check and flip the capability."
-            )
+            for capability, pattern, description, needs_context in active:
+                if needs_context and not in_context:
+                    continue
+                match = pattern.search(sentence)
+                if match is None:
+                    continue
+                problems.append(
+                    f"{_rel(path, repo)}:{number} {description} — {match.group(0)!r} — while "
+                    f"RFC3161_CAPABILITIES[{capability!r}] is False. Either negate the "
+                    "claim in this sentence, or implement the check and flip the capability."
+                )
     return problems
 
 
@@ -585,6 +644,210 @@ def check_pattern_coverage(capabilities: Mapping[str, bool] | None = None) -> li
     return problems
 
 
+# ---------------------------------------------------------------------------
+# Check 6 — no unqualified claim of formal verification
+# ---------------------------------------------------------------------------
+#
+# INVARIANT-16 ("Honest Compliance and Audit Claims") forbids this, and every
+# canonical statement in the tree already says the opposite:
+# AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md — "This library is **not** FIPS-validated
+# and has **not** been formally verified"; CSRC_STANDARDS.md — "No CAVP
+# certificate has been issued"; docs/DESIGN_NOTES.md — "has not undergone
+# independent formal verification".  Nothing checked the rest of the tree
+# against them, and ARCHITECTURE.md carried
+# "Mathematical correctness: Provably correct implementation with formal
+# verification" — the exact bullet this branch had already withdrawn from the
+# pillars document — for the whole of that time.
+#
+# The checks above cannot see it: they are scoped to the RFC 3161 capability
+# table by construction, as their own docstrings say.  This pass is separate
+# and phrase-based.
+#
+# It also reads further than they do.  It first reused their file set, which
+# never opens src/, include/ or .github/ and reads no .c or .h at all — so
+# the C library, the code any "formally verified" claim would be ABOUT, was
+# the one tree it could not see, and src/c/sve2/ama_kyber_sve2.c carried an
+# unqualified "provably correct" past it.
+
+#: Roots for the formal-verification pass: everything checks 1-4 read, plus
+#: the C sources and public headers and the repository's GitHub metadata.
+FORMAL_SCAN_ROOTS: tuple[str, ...] = (*SCAN_ROOTS, "src", "include", ".github")
+
+#: Suffixes for the formal-verification pass: the documentation suffixes, plus
+#: C and Cython sources (whose comments are where such a claim would sit) and
+#: the workflow and template YAML under ``.github/``.
+FORMAL_SCAN_SUFFIXES: frozenset[str] = SCAN_SUFFIXES | frozenset(
+    {".c", ".h", ".pyx", ".pxd", ".yml", ".yaml"}
+)
+
+#: Phrases that assert the library HAS been formally verified / proven.
+#:
+#: The first version listed six spellings and missed the commonest others:
+#: "formally proven", "provably secure", "machine-checked", and every
+#: hyphenated form ("formally-verified AES") — each passed this gate
+#: unqualified.  The separator is ``[\s-]+`` for every adverb form, so the
+#: hyphenated spellings are claims too.  ``formal verification`` / ``formal
+#: proof`` keep a whitespace separator: hyphenated, they are the compound
+#: modifier this repository uses to NAME the gate ("the formal-verification
+#: exemption"), which is not a claim.  Each claim is anchored to a qualifier
+#: word ("secure", "checked", "verified", ...) so the tree's ordinary uses of
+#: "provably" ("a provable no-op", "provably unambiguous", "provably inert")
+#: are not read as claims of formal verification.
+_FORMAL_CLAIM_RE = re.compile(
+    r"(?:provably|proven|proved)[\s-]+(?:correct|secure)"
+    r"|mathematically[\s-]+(?:proven|proved|verified)"
+    r"|formally[\s-]+(?:verified|proven|proved|checked)"
+    r"|formal\s+(?:verification|proofs?)"
+    r"|machine[\s-]+(?:checked|verified)"
+    r"|mechani(?:cally|[sz]ed)[\s-]+(?:checked|verified|proven|proofs?)",
+    re.IGNORECASE,
+)
+
+#: Exemptions, deliberately anchored to the CLAIM rather than to the presence
+#: of a negative word somewhere on the line.  A line saying "no timestamp is
+#: formally verified here, but the module is provably correct" contains "no"
+#: and must still fail, which is why a generic negation cue is not used: that
+#: looseness is a defect this repository has already found in one gate.
+#: Markdown emphasis is stripped before matching, so ``**not** been formally
+#: verified`` is recognised.
+_FORMAL_EXEMPT_RE = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        # Explicit denials.
+        r"\b(?:has|have|had|is|are|was|were)\s+not\s+(?:been\s+|yet\s+)?"
+        r"(?:formally[\s-]+verified|undergone[^.]{0,40}?formal\s+verification)",
+        r"\bnot\s+(?:been\s+|yet\s+)?formally[\s-]+(?:verified|proven|proved|checked)\b",
+        r"\bnot\s+(?:been\s+|yet\s+)?mathematically[\s-]+(?:proven|proved|verified)\b",
+        r"\bnot\s+(?:been\s+|yet\s+)?(?:machine|mechanically)[\s-]+(?:checked|verified)\b",
+        r"\bnot\s+(?:been\s+|yet\s+)?(?:a\s+|an\s+)?(?:provably|proven|proved)[\s-]+"
+        r"(?:correct|secure)\b",
+        r"\bnot\s+undergone[^.]{0,60}?formal\s+verification\b",
+        r"\bno\s+formal\s+(?:verification|proof)\b",
+        r"\bno\s+(?:machine[\s-]+checked|mechani[sz]ed)\s+proofs?\b",
+        r"\bnever\s+(?:been\s+)?formally[\s-]+(?:verified|proven|proved)\b",
+        r"\bwithout\s+formal\s+(?:verification|proof)\b",
+        # Naming the thing in order to distinguish this project from it.
+        r"\bnot\s+formal\s+(?:verification|proof)\b",
+        r"\brather\s+than\s+formal\s+(?:verification|proof)\b",
+        r"\bcited\s+as\s+the\s+reference\s+point\s+for\s+what\s+formal\s+verification",
+        r"\blacks?\s+formal\s+(?:verification|proof)\b",
+        r"\bindependent\s+audit,\s+formal\s+verification,\s+or\s+peer-reviewed\s+proof\b",
+        r"\bnot\s+a\s+(?:claim\s+of\s+)?(?:independent\s+)?formal\s+(?:proof|verification)\b",
+        r"\bnot\s+a\s+claim\s+of[^.]{0,60}?formal\s+(?:proof|verification)\b",
+        r"\bnot\s+(?:a\s+)?formal\s+proof\s+of\s+correctness\b",
+        # The "does not claim:" list form — src/c/PROVENANCE.md's attestation
+        # ends with a list of what it does NOT claim, whose first item is the
+        # claim itself.  Anchored to the list's opening, so it covers that
+        # first item only.
+        r"\bdoes\s+not\s+claim[\s:-]{0,8}formal\s+(?:proof|verification)\b",
+        # This gate itself, and the record of removing such claims.
+        r"\bclaimed\s+FIPS\s+validation,\s+formal\s+verification\b",
+    )
+)
+
+#: Markdown emphasis and inline-code markers, removed before matching so a
+#: claim cannot be hidden from the exemption patterns by bolding one word.
+_MD_EMPHASIS_RE = re.compile(r"[*_`]+")
+
+#: A double-quoted span.  A claim inside one is text this document REPORTS —
+#: the title of a cited paper, a heading that used to read that way — not text
+#: it asserts.  Bounded length so an unbalanced quote cannot swallow the rest
+#: of a sentence and exempt everything in it.
+_QUOTED_SPAN_RE = re.compile(r"\"[^\"\n]{0,300}\"|“[^”\n]{0,300}”")
+
+
+def unqualified_formal_claims(text: str) -> list[str]:
+    """The claims in ``text`` that no exemption covers, as matched substrings.
+
+    The exemption is tested against the CLAIM's own span, not against the
+    sentence.  Every pattern in :data:`_FORMAL_EXEMPT_RE` quotes the claim it
+    denies ("not been formally verified" contains "formally verified"), so an
+    overlap test is exact — and it closes a laundering hole the sentence-scoped
+    version had::
+
+        This is not a claim of formal verification; the AES core is formally
+        verified.
+
+    One sentence, one denial, one live claim, and the denial exempted both.
+    Markdown emphasis is stripped first, so ``**not** been formally verified``
+    is recognised; offsets are taken in the stripped text so the spans line up.
+    """
+    plain = _MD_EMPHASIS_RE.sub("", text)
+    exemptions = [
+        match.span() for pattern in _FORMAL_EXEMPT_RE for match in pattern.finditer(plain)
+    ]
+    quoted = [match.span() for match in _QUOTED_SPAN_RE.finditer(plain)]
+    unqualified: list[str] = []
+    for claim in _FORMAL_CLAIM_RE.finditer(plain):
+        start, end = claim.span()
+        if any(e_start < end and start < e_end for e_start, e_end in exemptions):
+            continue
+        # Second, narrower arm: the claim sits inside a quotation AND the
+        # sentence carries a denial elsewhere.  That is the citation form this
+        # repository uses — Klein et al.'s paper title, and the heading that
+        # "used to read 'Formal Verification Checklist'" — where the quoted
+        # words are the subject being discussed rather than a claim being made.
+        # Narrower than the sentence-wide rule this replaced, because an
+        # UNQUOTED claim beside a denial is still reported, which is the
+        # laundering the sentence-wide rule allowed.
+        if exemptions and any(q_start <= start and end <= q_end for q_start, q_end in quoted):
+            continue
+        unqualified.append(claim.group(0))
+    return unqualified
+
+
+#: Sentence boundary: a full stop, question or exclamation mark followed by
+#: whitespace.  Crude, and deliberately so — the alternative is a per-line
+#: scan, which reports the honest sentences in this repository as violations
+#: whenever the negation happens to wrap onto a different line.  Every one of
+#: the tree's five correctly-qualified statements is wrapped that way.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _iter_prose_blocks(paths: Iterable[Path]) -> Iterable[tuple[Path, int, str]]:
+    """Yield ``(path, first_line_number, joined_text)`` per blank-line block.
+
+    Prose in this repository is hard-wrapped, so a claim and its qualifier
+    routinely sit on different physical lines.  Judging a claim by the line it
+    appears on is therefore not a strict reading — it is the wrong unit.
+    """
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        block: list[str] = []
+        start: int | None = None
+        for number, line in enumerate(text.splitlines(), start=1):
+            if line.strip():
+                if start is None:
+                    start = number
+                block.append(line.strip())
+                continue
+            if block and start is not None:
+                yield path, start, " ".join(block)
+            block, start = [], None
+        if block and start is not None:
+            yield path, start, " ".join(block)
+
+
+def scan_for_formal_verification_claims(repo: Path = REPO) -> list[str]:
+    """Every unqualified claim of formal verification, with its location."""
+    problems: list[str] = []
+    files = _scanned_files(repo, FORMAL_SCAN_ROOTS, FORMAL_SCAN_SUFFIXES)
+    for path, number, block in _iter_prose_blocks(files):
+        if not _FORMAL_CLAIM_RE.search(block):
+            continue
+        for sentence in _SENTENCE_SPLIT_RE.split(block):
+            for claim in unqualified_formal_claims(sentence):
+                problems.append(
+                    f"{_rel(path, repo)}:{number}: claims formal verification "
+                    f"({claim!r}), which this library has not undergone — "
+                    f"{sentence.strip()[:160]}"
+                )
+    return problems
+
+
 def main() -> int:
     try:
         capabilities = load_capabilities()
@@ -603,6 +866,7 @@ def main() -> int:
         ("refusing arguments documented as refusing", check_refusing_parameters()),
         ("removed third-party dependency", scan_for_removed_dependency()),
         ("capability/pattern coverage", check_pattern_coverage(capabilities)),
+        ("unqualified formal-verification claims", scan_for_formal_verification_claims()),
     )
     failures = [(title, problems) for title, problems in sections if problems]
     for title, problems in sections:

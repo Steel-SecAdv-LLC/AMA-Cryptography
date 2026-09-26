@@ -131,13 +131,13 @@ class TestItem1_AESGCMReservationAtomic:
         assert n == 0
         # Disk file must exist with the new high-water mark already
         assert aesgcm_persist_dir.exists()
-        data = json.loads(aesgcm_persist_dir.read_text())
+        data = json.loads(aesgcm_persist_dir.read_text(encoding="utf-8"))
         assert data[key_id.hex()] == 1
 
         # Next call sees the disk reflect it
         m = AESGCMProvider._reserve_counter_slot(key_id)
         assert m == 1
-        data = json.loads(aesgcm_persist_dir.read_text())
+        data = json.loads(aesgcm_persist_dir.read_text(encoding="utf-8"))
         assert data[key_id.hex()] == 2
 
     def test_reserve_slot_rolls_back_on_persist_failure(self, aesgcm_persist_dir: Path) -> None:
@@ -196,7 +196,7 @@ class TestItem1_AESGCMReservationAtomic:
         # And the high-water mark equals the number of reservations
         assert AESGCMProvider._encrypt_counters[key_id] == n_threads
         # And disk reflects it
-        data = json.loads(aesgcm_persist_dir.read_text())
+        data = json.loads(aesgcm_persist_dir.read_text(encoding="utf-8"))
         assert data[key_id.hex()] == n_threads
 
     def test_reserve_slot_refuses_at_safety_limit(self, aesgcm_persist_dir: Path) -> None:
@@ -274,7 +274,7 @@ class TestItem1_AESGCMReservationAtomic:
 
         def spy_encrypt(*args: Any, **kw: Any) -> tuple[bytes, bytes]:
             # When AEAD runs, the on-disk counter MUST already be 1.
-            data = json.loads(aesgcm_persist_dir.read_text())
+            data = json.loads(aesgcm_persist_dir.read_text(encoding="utf-8"))
             key_id = __import__("hashlib").sha256(key).digest()
             observations.append(data.get(key_id.hex(), 0))
             return real_encrypt(*args, **kw)

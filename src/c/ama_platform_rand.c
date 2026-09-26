@@ -35,8 +35,18 @@
     #pragma comment(lib, "bcrypt.lib")
 #else
     /* BSD / generic POSIX fallback */
-    #include <stdio.h>
+    #include <fcntl.h>          /* open, O_RDONLY, O_CLOEXEC, O_NOCTTY */
+    #include <unistd.h>         /* read, close */
+    #include <sys/stat.h>       /* fstat, S_ISCHR */
     #include <errno.h>
+    /* The device the generic arm opens.  Overridable for one purpose only:
+     * tests/c/test_platform_rand_device_symlink.c points it at a path it
+     * controls, so the FreeBSD devfs shape (/dev/urandom is a symlink to
+     * random) and a replaced device can be executed on a host whose
+     * /dev/urandom is neither.  No production build defines it. */
+    #ifndef AMA_PLATFORM_RAND_DEVICE
+    #define AMA_PLATFORM_RAND_DEVICE "/dev/urandom"
+    #endif
 #endif
 
 /* ============================================================================
@@ -93,32 +103,95 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     /*
      * BCryptGenRandom: Windows Vista+ CSPRNG.
      * BCRYPT_USE_SYSTEM_PREFERRED_RNG avoids needing an algorithm handle.
+     *
+     * cbBuffer is a ULONG (32-bit).  A bare (ULONG)len cast silently truncates
+     * any request larger than 2^32-1 bytes, filling only the low bits' worth
+     * and returning success — the caller would then treat the untouched tail
+     * as random.  Chunk the draw so every byte is covered regardless of len's
+     * width (size_t is 64-bit on x64 Windows).
      */
-    NTSTATUS status = BCryptGenRandom(
-        NULL, buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG
-    );
-    return (status == 0) ? AMA_SUCCESS : AMA_ERROR_CRYPTO;
+    size_t offset = 0;
+    while (offset < len) {
+        size_t remaining = len - offset;
+        ULONG chunk = (remaining > 0x40000000UL) ? 0x40000000UL /* 1 GiB */
+                                                  : (ULONG)remaining;
+        NTSTATUS status = BCryptGenRandom(
+            NULL, buf + offset, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG
+        );
+        if (status != 0) {
+            return AMA_ERROR_CRYPTO;
+        }
+        offset += chunk;
+    }
+    return AMA_SUCCESS;
 
 #else
     /*
      * Generic POSIX fallback: /dev/urandom.
      * Used for BSDs and other POSIX systems without getentropy/getrandom.
+     *
+     * Raw open/read, deliberately not stdio: fread() stages every draw
+     * through FILE's internal heap buffer, which is freed unzeroized at
+     * fclose() — a copy of RNG output (frequently key material seed bytes)
+     * left on the heap outside every wipe path.  O_CLOEXEC keeps the
+     * descriptor from leaking across exec into child processes.  EINTR is
+     * retried: a signal during the read is routine, not an entropy failure.
      */
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (f == NULL) {
+    #ifndef O_CLOEXEC
+    #define O_CLOEXEC 0
+    #endif
+    #ifndef O_NOCTTY
+    #define O_NOCTTY 0
+    #endif
+    /* An fstat(2) that the OPENED descriptor is a character device: on a host
+     * where /dev/urandom has been replaced by a regular file, or by a symlink
+     * to one, the previous open+read produced "random" bytes from whatever
+     * was there.  The check inspects the object actually opened, so it holds
+     * however the path resolved.  A FIFO blocks in open(2) until a writer
+     * appears and is then refused by the same check.  A device-node check is
+     * the cheapest fact the descriptor can prove about itself; the
+     * major/minor numbers are not portable across the BSDs this branch
+     * serves, so the check stops at "character device" -- any character
+     * device passes it, a terminal included, and O_NOCTTY only keeps a
+     * terminal from becoming the controlling one.  Any refusal fails closed:
+     * the caller receives AMA_ERROR_CRYPTO, never bytes.
+     *
+     * NOT O_NOFOLLOW.  It was here, and it made this arm fail on every call
+     * on FreeBSD: devfs registers urandom as an alias of random
+     * (make_dev_alias) and presents the alias as a symlink,
+     * /dev/urandom -> random, and O_NOFOLLOW refuses a symlink in the final
+     * component (ELOOP).  It bought nothing the fstat check does not: a
+     * symlink to a regular file is refused below either way.
+     * tests/c/test_platform_rand_device_symlink.c executes both shapes. */
+    int fd = open(AMA_PLATFORM_RAND_DEVICE, O_RDONLY | O_CLOEXEC | O_NOCTTY);
+    if (fd < 0) {
         return AMA_ERROR_CRYPTO;
+    }
+    {
+        struct stat st;
+        if (fstat(fd, &st) != 0 || !S_ISCHR(st.st_mode)) {
+            close(fd);
+            return AMA_ERROR_CRYPTO;
+        }
     }
     size_t offset = 0;
     while (offset < len) {
-        size_t nread = fread(buf + offset, 1, len - offset, f);
-        if (nread == 0) {
-            /* EOF or error — cannot recover */
-            fclose(f);
+        ssize_t nread = read(fd, buf + offset, len - offset);
+        if (nread < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            close(fd);
             return AMA_ERROR_CRYPTO;
         }
-        offset += nread;
+        if (nread == 0) {
+            /* EOF from /dev/urandom — cannot recover */
+            close(fd);
+            return AMA_ERROR_CRYPTO;
+        }
+        offset += (size_t)nread;
     }
-    fclose(f);
+    close(fd);
     return AMA_SUCCESS;
 
 #endif

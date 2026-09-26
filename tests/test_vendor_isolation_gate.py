@@ -1,0 +1,1655 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""
+Tests for ``tools/check_vendor_isolation.py`` (INVARIANT-1).
+
+The gate exists because "no third-party cryptographic implementation is linked,
+imported or called" was, before it, enforced against *subprocess invocations*
+only (``tools/check_corpus_originality.py``) and otherwise asserted by comments
+and intent.  A control that has never been shown to fail is indistinguishable
+from one that cannot, so every check here is exercised in both directions:
+
+* the **source** check must flag a vendor import, a ``ctypes`` load naming a
+  vendor library, and an import of the comparator package;
+* the **library** check must flag a genuinely OpenSSL-linked object — the
+  interpreter's own ``_ssl`` extension is used as the positive control, so the
+  ELF/Mach-O/PE parsing is validated against a real binary rather than a
+  fixture;
+* the parsers must agree with the platform's own tools where those exist;
+* and a check whose evidence is absent (missing library, unparseable file, a
+  package directory with no sources) must be a failure, not a silent pass.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import sysconfig
+from pathlib import Path
+
+import pytest
+
+from tests.conftest import native_library_path
+from tools import check_vendor_isolation as gate
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GATE_PATH = REPO_ROOT / "tools" / "check_vendor_isolation.py"
+
+#: Where CMake leaves the built shared library, across generators.
+#:
+#: ``CMakeLists.txt`` sets LIBRARY_OUTPUT_DIRECTORY to ``build/lib`` and
+#: RUNTIME_OUTPUT_DIRECTORY to ``build/bin`` (Windows puts a DLL in the
+#: latter), and multi-config generators add a per-configuration subdirectory.
+_LIBRARY_DIRS = (
+    Path("build") / "lib",
+    Path("build") / "lib" / "Release",
+    Path("build") / "bin",
+    Path("build") / "bin" / "Release",
+    Path("ama_cryptography"),
+)
+
+
+def built_library() -> Path | None:
+    """The shared library this tree built, whatever the platform names it.
+
+    Three tests here looked for ``build/lib/libama_cryptography.so`` by exact
+    name.  That name exists only on Linux, so on macOS and Windows — where
+    the same CI job builds ``.dylib`` and ``.dll`` and sets
+    ``AMA_CI_REQUIRE_BACKENDS=1`` — they skipped, and ``conftest`` correctly
+    escalated the skip into a failure because its reason claimed a build that
+    had in fact happened.  Ten jobs went red on a test-side naming
+    assumption, and until they did, the shipped macOS and Windows artefacts
+    were never examined by these tests at all.
+    """
+    for relative in _LIBRARY_DIRS:
+        directory = REPO_ROOT / relative
+        if directory.is_dir():
+            found = native_library_path(directory)
+            if found is not None:
+                return found
+    return None
+
+
+def write_package(tmp_path: Path, body: str, name: str = "mod.py") -> Path:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir(exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / name).write_text(body, encoding="utf-8")
+    return pkg
+
+
+class TestSourceCheck:
+    def test_clean_package_passes(self, tmp_path: Path) -> None:
+        pkg = write_package(tmp_path, "import hashlib\nimport os\n")
+        assert gate.check_source(pkg) == []
+
+    @pytest.mark.parametrize(
+        ("statement", "vendor"),
+        [
+            ("import nacl", "libsodium"),
+            ("import nacl.signing", "libsodium"),
+            ("from cryptography.hazmat.primitives import hashes", "OpenSSL"),
+            ("import OpenSSL", "OpenSSL"),
+            ("from Crypto.Cipher import AES", "PyCryptodome"),
+            ("import wolfcrypt", "wolfSSL"),
+            ("import botan3", "Botan"),
+            ("import nettle", "Nettle"),
+            ("import gcrypt", "libgcrypt"),
+            ("import mbedtls", "mbedTLS"),
+        ],
+    )
+    def test_vendor_import_is_flagged(self, tmp_path: Path, statement: str, vendor: str) -> None:
+        pkg = write_package(tmp_path, statement + "\n")
+        violations = gate.check_source(pkg)
+        assert len(violations) == 1
+        assert vendor in violations[0].detail
+
+    def test_comparator_package_import_is_flagged(self, tmp_path: Path) -> None:
+        pkg = write_package(tmp_path, "from benchmarks import benchmark_runner\n")
+        violations = gate.check_source(pkg)
+        assert len(violations) == 1
+        assert "comparator package" in violations[0].detail
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'ctypes.CDLL("libcrypto.so.3")',
+            'ctypes.cdll.LoadLibrary("/usr/lib/libsodium.so.23")',
+            'ctypes.util.find_library("libmbedcrypto")',
+        ],
+    )
+    def test_ctypes_load_of_a_vendor_library_is_flagged(self, tmp_path: Path, call: str) -> None:
+        """No import statement names these, which is the point."""
+        pkg = write_package(tmp_path, f"import ctypes\nlib = {call}\n")
+        violations = gate.check_source(pkg)
+        assert violations, "a ctypes load naming a vendor library must be flagged"
+
+    def test_ctypes_load_of_our_own_library_passes(self, tmp_path: Path) -> None:
+        pkg = write_package(
+            tmp_path, 'import ctypes\nlib = ctypes.CDLL("libama_cryptography.so.5")\n'
+        )
+        assert gate.check_source(pkg) == []
+
+    def test_naming_a_vendor_in_prose_is_not_a_violation(self, tmp_path: Path) -> None:
+        """Scholarship and wire-format spellings are not invocations."""
+        pkg = write_package(
+            tmp_path,
+            '"""Accepts the SEC 1 / OpenSSL alias prime256v1."""\n'
+            "# Approach follows libsodium's ed25519 clamping.\n"
+            'CURVE_ALIASES = {"prime256v1": "P-256"}\n',
+        )
+        assert gate.check_source(pkg) == []
+
+    def test_relative_imports_are_not_vendor_imports(self, tmp_path: Path) -> None:
+        pkg = write_package(tmp_path, "from . import sibling\nfrom .sub import thing\n")
+        assert gate.check_source(pkg) == []
+
+    def test_empty_directory_is_a_failure_not_a_clean_scan(self, tmp_path: Path) -> None:
+        empty = tmp_path / "nothing"
+        empty.mkdir()
+        violations = gate.check_source(empty)
+        assert violations
+        assert "refusing to report a clean scan of nothing" in violations[0].detail
+
+
+class TestDynamicSourceForms:
+    """What the static-import / literal-CDLL scan could not see.
+
+    Measured before the fix: each of the first three shapes below produced
+    zero violations from ``check_source``.
+    """
+
+    @pytest.mark.parametrize(
+        ("body", "vendor"),
+        [
+            (
+                'import importlib\nm = importlib.import_module("cryptography.hazmat.primitives")\n',
+                "OpenSSL",
+            ),
+            ('b = __import__("nacl.bindings")\n', "libsodium"),
+            (
+                'import importlib\nm = importlib.import_module("Cry" + "pto.Cipher")\n',
+                "PyCryptodome",
+            ),
+            ('import sys\nm = sys.modules["nacl"]\n', "libsodium"),
+            (
+                (
+                    "import importlib\n"
+                    "def _load(name):\n"
+                    "    return importlib.import_module(name)\n"
+                    '_load("OpenSSL.crypto")\n'
+                ),
+                "OpenSSL",
+            ),
+        ],
+    )
+    def test_a_dynamic_vendor_import_is_flagged(
+        self, tmp_path: Path, body: str, vendor: str
+    ) -> None:
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1, violations
+        assert vendor in violations[0].detail
+
+    def test_a_dynamic_comparator_import_is_flagged(self, tmp_path: Path) -> None:
+        body = 'import importlib\nm = importlib.import_module("benchmarks.runner")\n'
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1 and "comparator package" in violations[0].detail
+
+    def test_an_unresolvable_dynamic_import_is_flagged(self, tmp_path: Path) -> None:
+        body = "import importlib\ndef load(n):\n    return importlib.import_module(n)\n"
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1, violations
+        assert "chosen at run time" in violations[0].detail
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "import ctypes\ndef load(_n):\n    return ctypes.CDLL(_n)\n",
+            "import ctypes, os\nlib = ctypes.cdll.LoadLibrary(os.environ['LIB'])\n",
+            "import ctypes\ndef load(p):\n    return ctypes.WinDLL(str(p))\n",
+            "import ctypes\ndef load(p):\n    return ctypes.cdll[p]\n",
+        ],
+    )
+    def test_a_ctypes_load_of_an_unprovable_library_is_flagged(
+        self, tmp_path: Path, body: str
+    ) -> None:
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert len(violations) == 1, violations
+        assert "chosen at run time" in violations[0].detail
+        assert violations[0].check == gate.INVENTORY
+
+    def test_an_unprovable_load_is_inventoried_not_failed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        pkg = write_package(tmp_path, "import ctypes\ndef load(p):\n    return ctypes.CDLL(p)\n")
+        assert gate.main(["--source", "--package", str(pkg)]) == 0
+        assert "Reviewed inventory" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            'import ctypes\nN = "libcry" + "pto.so.3"\nlib = ctypes.CDLL(N)\n',
+            "import ctypes\nlib = ctypes.cdll.libssl\n",
+            'import ctypes\nlib = ctypes.cdll["libsodium.so.23"]\n',
+            'import ctypes, ctypes.util\nlib = ctypes.CDLL(ctypes.util.find_library("crypto"))\n',
+            'import ctypes.util\nname = ctypes.util.find_library("ssl")\n',
+        ],
+    )
+    def test_a_resolvable_vendor_library_load_is_flagged(self, tmp_path: Path, body: str) -> None:
+        violations = gate.check_source(write_package(tmp_path, body))
+        assert violations, body
+        assert all(
+            ("resolves to" in v.detail or "ctypes load of" in v.detail)
+            and ("OpenSSL" in v.detail or "libsodium" in v.detail)
+            for v in violations
+        ), violations
+
+    def test_provable_non_vendor_loads_pass(self, tmp_path: Path) -> None:
+        """The shapes the shipped package uses (control)."""
+        body = (
+            "import ctypes, ctypes.util, importlib\n"
+            "def libc():\n"
+            '    libc_name = ctypes.util.find_library("c")\n'
+            "    if not libc_name:\n"
+            "        return None\n"
+            "    return ctypes.CDLL(libc_name, use_errno=True)\n"
+            "PROCESS = ctypes.CDLL(None)\n"
+            "_CACHE = {}\n"
+            "def _win(library, function):\n"
+            "    return getattr(ctypes.WinDLL(library, use_last_error=True), function)\n"
+            '_win("advapi32", "OpenProcessToken")\n'
+            '_win("kernel32", "CloseHandle")\n'
+            "def baselines():\n"
+            '    for name in ["pkg.a", "pkg.b"]:\n'
+            "        importlib.import_module(name)\n"
+        )
+        assert gate.check_source(write_package(tmp_path, body)) == []
+
+
+class TestCSourceCheck:
+    """The C tree: no vendored directory, no forbidden vendor include anywhere.
+
+    Until 2026-09 a vendored Ed25519 tree under ``src/c/vendor/`` carried OpenSSL fallback arms
+    that a shim's macros kept out of the build, and the check had to track
+    those.  The vendored tree is gone; the rule is now that it must stay gone
+    and that no file under ``src/c`` names a forbidden vendor header at all.
+    """
+
+    def test_the_real_tree_is_clean(self) -> None:
+        assert gate.check_c_source(REPO_ROOT / "src" / "c", REPO_ROOT) == []
+
+    def test_the_vendored_tree_does_not_exist(self) -> None:
+        """Stated directly, because it is the whole boundary."""
+        assert not (REPO_ROOT / gate.VENDOR_TREE).exists()
+
+    def test_a_vendored_tree_is_flagged(self, tmp_path: Path) -> None:
+        root = tmp_path / "src" / "c"
+        (root / "vendor" / "something").mkdir(parents=True)
+        (root / "ama_thing.c").write_text("int x;\n", encoding="utf-8")
+        (root / "vendor" / "something" / "x.h").write_text("/* vendored */\n", encoding="utf-8")
+        violations = gate.check_c_source(root, tmp_path)
+        assert any(gate.VENDOR_TREE in v.where for v in violations)
+
+    def test_a_vendor_include_is_flagged(self, tmp_path: Path) -> None:
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        (root / "ama_thing.c").write_text("#include <openssl/evp.h>\n", encoding="utf-8")
+        violations = gate.check_c_source(root, tmp_path)
+        assert any("OpenSSL" in v.detail for v in violations)
+
+    def test_a_vendor_include_in_a_fallback_arm_is_still_flagged(self, tmp_path: Path) -> None:
+        """No inventory of tolerated arms exists any more: an #else arm counts."""
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        (root / "ama_hash.h").write_text(
+            '#if defined(OWN_HASH)\n#include "own.h"\n#else\n#include <openssl/sha.h>\n#endif\n',
+            encoding="utf-8",
+        )
+        violations = gate.check_c_source(root, tmp_path)
+        assert any("OpenSSL" in v.detail for v in violations)
+
+    @pytest.mark.parametrize(
+        ("include", "vendor"),
+        [
+            ("<sodium.h>", "libsodium"),
+            ("<wolfssl/ssl.h>", "wolfSSL"),
+            ("<botan/ffi.h>", "Botan"),
+            ("<nettle/sha2.h>", "Nettle"),
+            ("<gcrypt.h>", "libgcrypt"),
+            ("<mbedtls/sha512.h>", "mbedTLS"),
+            ("<psa/crypto.h>", "mbedTLS"),
+        ],
+    )
+    def test_every_forbidden_vendor_is_recognised_in_c(
+        self, tmp_path: Path, include: str, vendor: str
+    ) -> None:
+        """A vendor with no C include root would be invisible to this check."""
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        (root / "ama_thing.c").write_text(f"#include {include}\n", encoding="utf-8")
+        violations = gate.check_c_source(root, tmp_path)
+        assert any(vendor in v.detail for v in violations)
+
+    def test_an_empty_c_tree_is_not_a_clean_scan(self, tmp_path: Path) -> None:
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        violations = gate.check_c_source(root, tmp_path)
+        assert violations
+        assert "refusing to report a clean scan of nothing" in violations[0].detail
+
+
+class TestShippedPackageIsClean:
+    """The property itself, on the tree as committed."""
+
+    def test_package_source_is_clean(self) -> None:
+        findings = gate.check_source(REPO_ROOT / "ama_cryptography")
+        assert [f for f in findings if f.check != gate.INVENTORY] == []
+
+    def test_the_inventory_is_the_native_loader_and_nothing_else(self) -> None:
+        """The reviewed inventory, pinned to the one function it was reviewed in.
+
+        An inventory entry does not fail the gate, and ``--runtime`` decides
+        such a load only if it executes during import.  So the inventory is
+        the only control on a run-time-chosen load that does not, and it was
+        pinned to a whole FILE: a new ``ctypes.CDLL(<computed name>)`` anywhere
+        in ``pqc_backends.py`` — 3,000 lines — was pre-approved.  It is pinned
+        to the function now: ``_try_load_library``, which opens the signed
+        native library by the path the pre-load digest check has already
+        hashed.  A new site anywhere else fails here for review.
+        """
+        findings = [
+            f
+            for f in gate.check_source(REPO_ROOT / "ama_cryptography")
+            if f.check == gate.INVENTORY
+        ]
+        sites = set()
+        for finding in findings:
+            # rsplit: `where` is "path:line", and a Windows path has its own colon.
+            file_part, line = finding.where.rsplit(":", 1)
+            sites.add((Path(file_part).name, _enclosing_function(Path(file_part), int(line))))
+        assert sites <= {("pqc_backends.py", "_try_load_library")}, sites
+
+
+def _enclosing_function(path: Path, line: int) -> str | None:
+    """The innermost function whose body spans ``line`` in ``path``."""
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    best: tuple[int, str] | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            if node.lineno <= line <= end and (best is None or node.lineno > best[0]):
+                best = (node.lineno, node.name)
+    return best[1] if best else None
+
+
+class TestLibraryCheck:
+    def test_missing_library_is_a_failure(self, tmp_path: Path) -> None:
+        violations = gate.check_library(tmp_path / "absent.so")
+        assert violations
+        assert "refusing to report clean" in violations[0].detail
+
+    def test_unparseable_file_is_a_failure(self, tmp_path: Path) -> None:
+        junk = tmp_path / "not-a-binary.so"
+        junk.write_bytes(b"this is not an object file at all\n")
+        violations = gate.check_library(junk)
+        assert violations
+        assert "could not parse" in violations[0].detail
+
+    def test_the_interpreters_ssl_extension_is_read_correctly(self) -> None:
+        """Positive control: the interpreter's own ``_ssl`` extension.
+
+        This validates the parser against a real, vendor-linked binary on
+        whatever platform the suite runs on, rather than against a fixture
+        that could agree with a wrong parser.
+
+        The assertion is on the *evidence*, not on the platform.  Parsing
+        must succeed everywhere — a refusal to parse was the actual macOS
+        defect, where ``_ssl`` is a universal binary and the parser knew only
+        thin Mach-O.  If the object names a vendor library dynamically, the
+        gate must flag it.  If it does not, that absence is itself checked
+        against the platform's own tool, so "no vendor found" can never be a
+        parser miss dressed up as a clean result.
+        """
+        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+        candidates = [
+            Path(sysconfig.get_config_var("DESTSHARED") or "") / f"_ssl{ext_suffix}",
+        ]
+        try:
+            import _ssl
+
+            if getattr(_ssl, "__file__", None):
+                candidates.insert(0, Path(_ssl.__file__))
+        except ImportError:  # pragma: no cover - _ssl is present on CI
+            pass
+
+        target = next((p for p in candidates if p.is_file()), None)
+        if target is None:  # pragma: no cover - statically linked interpreter
+            pytest.skip("this interpreter ships no _ssl extension module")
+
+        # Must parse.  Not "must parse on Linux".
+        info = gate.parse_binary(target)
+        assert info.fmt
+
+        violations = gate.check_library(target)
+        if violations:
+            assert any(
+                "OpenSSL" in violation.detail for violation in violations
+            ), f"{target}: {violations}"
+            return
+
+        # No vendor found.  Prove that is a property of the binary and not of
+        # the parser, by asking the platform what it depends on.
+        reported = _platform_dependencies(target)
+        if reported is None:  # pragma: no cover - depends on runner tooling
+            pytest.skip("no dependency-listing tool available to confirm the absence")
+        assert not [
+            dependency
+            for dependency in reported
+            if any(name in dependency.lower() for name in ("libssl", "libcrypto"))
+        ], (
+            f"{target} names an OpenSSL library according to the platform "
+            f"({reported}) but the gate reported it clean — the parser missed it"
+        )
+
+    def test_ama_library_is_clean_when_built(self) -> None:
+        built = built_library()
+        if built is None:
+            pytest.skip("native library not built in this tree")
+        assert gate.check_library(built) == []
+
+
+class TestTheLibraryIsFoundWhereverCMakePutsIt:
+    """Regression protection for the naming assumption that reddened CI.
+
+    A test that cannot find a library which *was* built does not merely skip:
+    ``conftest`` escalates a skip whose reason names the backend into a hard
+    CI failure, because a job that builds the library and then reports it
+    missing is reporting something untrue.  So the locator being wrong shows
+    up as ten red jobs, and — until they went red — as the macOS and Windows
+    artefacts never being examined at all.
+    """
+
+    def test_the_candidate_directories_match_what_cmake_configures(self) -> None:
+        """``_LIBRARY_DIRS`` must track ``CMakeLists.txt``, not a memory of it."""
+        cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        configured = set(
+            re.findall(
+                r"set\(CMAKE_(?:LIBRARY|RUNTIME)_OUTPUT_DIRECTORY\s+"
+                r"\$\{CMAKE_BINARY_DIR\}/(\w+)\)",
+                cmake,
+            )
+        )
+        assert configured, "CMakeLists.txt no longer sets the output directories by that name"
+        searched = {part.parts[-1] for part in _LIBRARY_DIRS if part.parts[0] == "build"}
+        missing = configured - searched
+        assert not missing, f"CMake writes the library to build/{missing} and nothing looks there"
+
+    def test_ci_that_promises_a_build_must_find_one(self) -> None:
+        """The exact invariant the escalation in ``conftest`` encodes.
+
+        ``AMA_CI_REQUIRE_BACKENDS=1`` is set by the jobs that have just built
+        the library.  If it is set and this locator finds nothing, the
+        locator is wrong — which is a defect to surface here, in the test
+        that owns the locator, rather than as an escalated skip in whichever
+        unrelated test happened to call it first.
+        """
+        if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() not in ("true", "1", "yes"):
+            pytest.skip("not a CI job that promises a built library")
+        found = built_library()
+        assert found is not None, (
+            "AMA_CI_REQUIRE_BACKENDS=1 promises the C library was built, but "
+            f"none of {[str(d) for d in _LIBRARY_DIRS]} holds one"
+        )
+        assert found.is_file()
+
+
+def _platform_dependencies(path: Path) -> list[str] | None:
+    """What the platform's own tool says ``path`` depends on, or ``None``.
+
+    ``None`` means no tool was available — never "no dependencies", which is
+    the confusion that lets a gate report clean having examined nothing.
+    """
+    readelf = shutil.which("readelf")
+    if readelf is not None:
+        result = subprocess.run(
+            [readelf, "-d", str(path)], capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0 and "Dynamic section" in result.stdout:
+            return [
+                line.split("[", 1)[1].rstrip("]").strip()
+                for line in result.stdout.splitlines()
+                if "(NEEDED)" in line and "[" in line
+            ]
+
+    otool = shutil.which("otool")
+    if otool is not None:
+        result = subprocess.run(
+            [otool, "-L", str(path)], capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0:
+            # First line is the file name; each remaining line is indented and
+            # carries "(compatibility version ...)".
+            listed = [
+                line.strip().split(" (", 1)[0]
+                for line in result.stdout.splitlines()[1:]
+                if line.startswith(("\t", " ")) and "(" in line
+            ]
+            # ...but for a DYLIB the first of those is the image's own install
+            # name (LC_ID_DYLIB), not something it depends on.  `otool -L`
+            # does not distinguish them; `otool -D` prints exactly the install
+            # name, so subtracting it is precise rather than positional.  The
+            # gate parses LC_LOAD_DYLIB and correctly never reported the
+            # install name — this helper did, and called the gate wrong for it.
+            identity = subprocess.run(
+                [otool, "-D", str(path)], capture_output=True, text=True, check=False
+            )
+            if identity.returncode == 0:
+                own = [
+                    line.strip()
+                    for line in identity.stdout.splitlines()[1:]
+                    if line.strip() and not line.strip().endswith(":")
+                ]
+                for name in own:
+                    if name in listed:
+                        listed.remove(name)
+            return listed
+
+    dumpbin = shutil.which("dumpbin")
+    if dumpbin is not None:  # pragma: no cover - Windows-only path
+        result = subprocess.run(
+            [dumpbin, "/DEPENDENTS", str(path)], capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0:
+            return [
+                line.strip()
+                for line in result.stdout.splitlines()
+                if line.strip().lower().endswith(".dll")
+            ]
+    return None
+
+
+class TestBinaryParsers:
+    """The parsers must agree with the platform's own tools."""
+
+    def test_dependencies_match_the_platforms_own_tool(self) -> None:
+        built = built_library()
+        if built is None:
+            pytest.skip("native library not built in this tree")
+        reported = _platform_dependencies(built)
+        if reported is None:  # pragma: no cover - depends on runner tooling
+            pytest.skip("no dependency-listing tool available on this runner")
+
+        info = gate.parse_binary(built)
+        assert reported, (
+            f"{built} must depend on at least the platform C library; "
+            "an empty result means the tool's output was not parsed"
+        )
+        if info.fmt.startswith("Mach-O universal"):
+            # `otool -L` reports the host slice; the gate unions every slice,
+            # so the gate's set is a superset by construction.  That relation
+            # is the correct one, not a relaxed one: a dependency present in
+            # only a non-host slice still ships.
+            assert set(reported) <= set(info.dependencies)
+        else:
+            assert set(info.dependencies) == set(reported)
+
+    def test_elf_undefined_symbols_match_nm(self) -> None:
+        built = built_library()
+        if built is None:
+            pytest.skip("native library not built in this tree")
+        info = gate.parse_binary(built)
+        if info.fmt != "ELF":
+            pytest.skip(
+                f"built library is {info.fmt}; this cross-check is ELF-only "
+                "(the Mach-O symbol parsing is covered deterministically on every "
+                "runner by TestMachOParsing's constructed images, not left unchecked)"
+            )
+        nm = shutil.which("nm")
+        if nm is None:
+            pytest.skip("nm is not installed on this runner")
+
+        out = subprocess.run(
+            [nm, "-D", "--undefined-only", str(built)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        expected = {line.split()[-1] for line in out.splitlines() if line.strip()}
+        # nm strips the @GLIBC_x.y version suffix from some spellings and not
+        # others, so compare on the bare symbol name.
+        got = {sym.split("@", 1)[0] for sym in info.undefined_symbols}
+        assert got == {sym.split("@", 1)[0] for sym in expected}
+
+    def test_elf_defined_symbols_match_nm(self) -> None:
+        """The static-link screen reads the same set the platform reports."""
+        built = built_library()
+        if built is None:
+            pytest.skip("native library not built in this tree")
+        info = gate.parse_binary(built)
+        if info.fmt != "ELF":
+            pytest.skip(
+                f"built library is {info.fmt}; this cross-check is ELF-only "
+                "(the Mach-O symbol parsing is covered deterministically on every "
+                "runner by TestMachOParsing's constructed images, not left unchecked)"
+            )
+        nm = shutil.which("nm")
+        if nm is None:
+            pytest.skip("nm is not installed on this runner")
+
+        out = subprocess.run(
+            [nm, "-D", "--defined-only", str(built)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        expected = {line.split()[-1].split("@", 1)[0] for line in out.splitlines() if line.strip()}
+        got = {sym.split("@", 1)[0] for sym in info.defined_symbols}
+        assert expected, "the library must export symbols; an empty set means a parse failure"
+        assert got == expected
+
+    def test_truncated_elf_raises_rather_than_reporting_clean(self, tmp_path: Path) -> None:
+        truncated = tmp_path / "truncated.so"
+        truncated.write_bytes(b"\x7fELF\x02\x01\x01" + b"\x00" * 32)
+        with pytest.raises((ValueError, struct.error, IndexError)):
+            gate.parse_binary(truncated)
+
+    def test_32_bit_elf_is_rejected_rather_than_misparsed(self, tmp_path: Path) -> None:
+        elf32 = tmp_path / "elf32.so"
+        elf32.write_bytes(b"\x7fELF\x01\x01\x01" + b"\x00" * 128)
+        with pytest.raises(ValueError, match="64-bit"):
+            gate.parse_binary(elf32)
+
+
+# ---------------------------------------------------------------------------
+# Mach-O, built here rather than borrowed from the host
+# ---------------------------------------------------------------------------
+#
+# The macOS branch of the parser cannot be exercised by a Linux or Windows
+# runner against a real file, and the branch that was wrong — universal
+# binaries — is the one the shipped ``universal2`` wheel actually is.  These
+# builders produce genuine Mach-O images from the format's own field layout,
+# so every runner tests the macOS path, and a fixture cannot silently agree
+# with a wrong parser because the parser plays no part in producing it.
+
+_LC_SYMTAB = 0x02
+_LC_LOAD_DYLIB = 0x0C
+_N_EXT = 0x01
+_N_SECT = 0x0E
+
+
+def thin_macho(
+    dylibs: tuple[str, ...] = (),
+    undefined: tuple[str, ...] = (),
+    defined: tuple[str, ...] = (),
+    *,
+    big_endian: bool = False,
+) -> bytes:
+    """A 64-bit Mach-O image carrying the given load commands and symbols."""
+    end = ">" if big_endian else "<"
+    header_size = 32
+
+    commands = b""
+    for name in dylibs:
+        raw = name.encode() + b"\0"
+        raw += b"\0" * (-(24 + len(raw)) % 8)
+        commands += struct.pack(end + "IIIIII", _LC_LOAD_DYLIB, 24 + len(raw), 24, 0, 0, 0) + raw
+
+    strings = b"\0"
+    entries: list[tuple[int, int]] = []
+    for name in tuple(undefined) + tuple(defined):
+        offset = len(strings)
+        strings += name.encode() + b"\0"
+        entries.append((offset, _N_EXT if name in undefined else _N_EXT | _N_SECT))
+
+    symbol_offset = header_size + len(commands) + 24
+    string_offset = symbol_offset + len(entries) * 16
+    commands += struct.pack(
+        end + "IIIIII",
+        _LC_SYMTAB,
+        24,
+        symbol_offset,
+        len(entries),
+        string_offset,
+        len(strings),
+    )
+
+    header = struct.pack(
+        end + "IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 6, len(dylibs) + 1, len(commands), 0, 0
+    )
+    symbols = b"".join(
+        struct.pack(end + "IBBHQ", offset, kind, 1 if kind & _N_SECT else 0, 0, 0)
+        for offset, kind in entries
+    )
+    return header + commands + symbols + strings
+
+
+def fat_macho(slices: tuple[bytes, ...], *, wide: bool = False) -> bytes:
+    """A universal wrapper around the given thin images."""
+    arch_size = 32 if wide else 20
+    table_end = 8 + arch_size * len(slices)
+    body_start = (table_end + 0x3FFF) & ~0x3FFF
+
+    table = b""
+    cursor = body_start
+    for index, image in enumerate(slices):
+        if wide:
+            table += struct.pack(">iiQQII", 0x0100000C, index, cursor, len(image), 14, 0)
+        else:
+            table += struct.pack(">iiIII", 0x0100000C, index, cursor, len(image), 14)
+        cursor += len(image)
+
+    head = struct.pack(">II", 0xCAFEBABF if wide else 0xCAFEBABE, len(slices))
+    return head + table + b"\0" * (body_start - table_end) + b"".join(slices)
+
+
+class TestMachOParsing:
+    def _write(self, tmp_path: Path, data: bytes, name: str = "image.dylib") -> Path:
+        path = tmp_path / name
+        path.write_bytes(data)
+        return path
+
+    def test_thin_image_yields_dependencies_and_both_symbol_sets(self, tmp_path: Path) -> None:
+        path = self._write(
+            tmp_path,
+            thin_macho(
+                dylibs=("/usr/lib/libSystem.B.dylib",),
+                undefined=("_memcpy",),
+                defined=("_ama_kem_keypair",),
+            ),
+        )
+        info = gate.parse_binary(path)
+        assert info.fmt == "Mach-O"
+        assert info.dependencies == ("/usr/lib/libSystem.B.dylib",)
+        assert info.undefined_symbols == ("_memcpy",)
+        assert info.defined_symbols == ("_ama_kem_keypair",)
+        assert gate.check_library(path) == []
+
+    def test_a_dynamically_linked_vendor_is_flagged(self, tmp_path: Path) -> None:
+        path = self._write(tmp_path, thin_macho(dylibs=("/opt/homebrew/lib/libcrypto.3.dylib",)))
+        assert any("OpenSSL" in v.detail for v in gate.check_library(path))
+
+    def test_an_imported_vendor_symbol_is_flagged(self, tmp_path: Path) -> None:
+        """The underscore Mach-O prepends must not hide the prefix."""
+        path = self._write(tmp_path, thin_macho(undefined=("_EVP_DigestInit_ex",)))
+        violations = gate.check_library(path)
+        assert any("OpenSSL" in v.detail for v in violations), violations
+
+    def test_a_statically_linked_vendor_is_flagged(self, tmp_path: Path) -> None:
+        """No dependency record, nothing imported — only its own symbols.
+
+        This is the case the dependency and undefined-symbol screens cannot
+        see, and it is the one a vendor would take if it wanted to run inside
+        the library unnoticed.
+        """
+        path = self._write(tmp_path, thin_macho(defined=("_sodium_init",)))
+        violations = gate.check_library(path)
+        assert any("libsodium" in v.detail for v in violations), violations
+        assert any("statically" in v.detail for v in violations)
+
+    def test_local_symbols_are_not_screened(self, tmp_path: Path) -> None:
+        """A non-external symbol is not evidence of a vendor.
+
+        Screening locals would make the gate fire on any private name that
+        happens to share a prefix, which is a false positive that would
+        eventually be silenced by loosening the prefix list.
+        """
+        image = bytearray(thin_macho(defined=("_sodium_init",)))
+        # Clear N_EXT on the single symbol: find the nlist and strip the bit.
+        marker = image.index(b"_sodium_init")
+        for offset in range(32, marker - 16):
+            n_strx, n_type = struct.unpack_from("<IB", image, offset)
+            if n_type == _N_EXT | _N_SECT and n_strx == 1:
+                image[offset + 4] = _N_SECT
+                break
+        else:  # pragma: no cover - the builder's layout changed
+            pytest.fail("could not locate the symbol table entry to de-externalise")
+        path = self._write(tmp_path, bytes(image))
+        assert gate.parse_binary(path).defined_symbols == ()
+        assert gate.check_library(path) == []
+
+    @pytest.mark.parametrize("wide", [False, True], ids=["fat32", "fat64"])
+    def test_a_vendor_in_a_non_first_slice_is_still_found(self, tmp_path: Path, wide: bool) -> None:
+        """Reading only one slice would be an evasion path.
+
+        A universal binary ships every slice.  A vendor linked into the arm64
+        image alone runs on every Apple-silicon machine, and a gate that read
+        the x86-64 slice — or the host's — would report it clean.
+        """
+        clean = thin_macho(dylibs=("/usr/lib/libSystem.B.dylib",))
+        dirty = thin_macho(dylibs=("/usr/lib/libSystem.B.dylib", "/usr/lib/libcrypto.dylib"))
+        path = self._write(tmp_path, fat_macho((clean, dirty), wide=wide))
+
+        info = gate.parse_binary(path)
+        assert info.fmt.startswith("Mach-O universal")
+        assert "/usr/lib/libcrypto.dylib" in info.dependencies
+        assert any("OpenSSL" in v.detail for v in gate.check_library(path))
+
+    def test_a_universal_binary_of_clean_slices_is_clean(self, tmp_path: Path) -> None:
+        clean = thin_macho(dylibs=("/usr/lib/libSystem.B.dylib",), defined=("_ama_init",))
+        path = self._write(tmp_path, fat_macho((clean, clean)))
+        assert gate.check_library(path) == []
+        # Unioned, not concatenated: the same dependency in both slices is
+        # one dependency.
+        assert gate.parse_binary(path).dependencies == ("/usr/lib/libSystem.B.dylib",)
+
+    def test_big_endian_image_is_decoded_with_the_right_byte_order(self, tmp_path: Path) -> None:
+        """The swapped magic means big-endian fields, not little-endian ones.
+
+        Both swapped spellings were mapped to little-endian when this parser
+        was written; decoding a big-endian image that way reads ``ncmds`` in
+        the millions and walks load commands from nonsense offsets.
+        """
+        path = self._write(
+            tmp_path, thin_macho(dylibs=("/usr/lib/libcrypto.dylib",), big_endian=True)
+        )
+        assert gate.parse_binary(path).dependencies == ("/usr/lib/libcrypto.dylib",)
+        assert any("OpenSSL" in v.detail for v in gate.check_library(path))
+
+    def test_a_java_class_file_is_not_read_as_a_universal_binary(self, tmp_path: Path) -> None:
+        """``0xCAFEBABE`` is also Java's magic; a wrong reading must raise."""
+        path = self._write(tmp_path, b"\xca\xfe\xba\xbe\x00\x00\x00\x34" + b"\x00" * 128)
+        with pytest.raises(ValueError):
+            gate.parse_binary(path)
+
+    def test_a_slice_pointing_outside_the_file_raises(self, tmp_path: Path) -> None:
+        image = bytearray(fat_macho((thin_macho(dylibs=("/usr/lib/libSystem.B.dylib",)),)))
+        struct.pack_into(">I", image, 8 + 8, 0xFFFF0000)  # slice offset
+        path = self._write(tmp_path, bytes(image))
+        with pytest.raises(ValueError, match="outside"):
+            gate.parse_binary(path)
+
+    def test_a_symtab_pointing_outside_the_file_raises(self, tmp_path: Path) -> None:
+        """A truncated image must raise, never report an empty symbol set."""
+        image = thin_macho(defined=("_sodium_init",))
+        path = self._write(tmp_path, image[: len(image) - 8])
+        with pytest.raises(ValueError, match="outside"):
+            gate.parse_binary(path)
+
+
+def tiny_pe(
+    *,
+    dll: str = "KERNEL32.dll",
+    import_name: str | None = None,
+    export_name: str | None = None,
+) -> bytes:
+    """A minimal PE32+ image with one import descriptor and optional exports.
+
+    One section whose virtual address equals its file offset, so RVAs in the
+    payload region are file offsets too.  Enough structure for _parse_pe:
+    DOS stub -> PE signature -> COFF header -> PE32+ optional header with
+    16 data directories -> one section header -> payload holding the import
+    descriptor table, ILT/IAT, hint/name entries, DLL name, and (optionally)
+    an export directory with one named export.
+    """
+    payload_base = 0x200
+    payload = bytearray(0x400)
+
+    def put(rva: int, blob: bytes) -> None:
+        payload[rva - payload_base : rva - payload_base + len(blob)] = blob
+
+    ilt_rva, dllname_rva, hint_rva = 0x240, 0x280, 0x2A0
+    export_dir_rva, names_arr_rva, expname_rva = 0x300, 0x340, 0x350
+
+    # Import descriptor: ILT, timestamp, forwarder, name, IAT — then the
+    # all-zero terminator.
+    put(payload_base, struct.pack("<IIIII", ilt_rva, 0, 0, dllname_rva, ilt_rva))
+    put(dllname_rva, dll.encode("ascii") + b"\0")
+    if import_name is not None:
+        put(ilt_rva, struct.pack("<Q", hint_rva))  # name thunk, high bit clear
+        put(hint_rva, b"\0\0" + import_name.encode("ascii") + b"\0")
+    export_size = 0
+    if export_name is not None:
+        directory = bytearray(40)
+        struct.pack_into("<I", directory, 24, 1)  # NumberOfNames
+        struct.pack_into("<I", directory, 32, names_arr_rva)  # AddressOfNames
+        put(export_dir_rva, bytes(directory))
+        put(names_arr_rva, struct.pack("<I", expname_rva))
+        put(expname_rva, export_name.encode("ascii") + b"\0")
+        export_size = 40
+
+    dos = bytearray(64)
+    dos[:2] = b"MZ"
+    struct.pack_into("<I", dos, 0x3C, 0x40)
+
+    coff = struct.pack("<HHIIIHH", 0x8664, 1, 0, 0, 0, 240, 0x2022)
+
+    opt = bytearray(240)
+    struct.pack_into("<H", opt, 0, 0x20B)  # PE32+ magic
+    struct.pack_into("<H", opt, 108, 16)  # NumberOfRvaAndSizes... (unread)
+    dd = 112  # data directories offset inside the optional header
+    struct.pack_into("<II", opt, dd, export_dir_rva if export_name else 0, export_size)
+    struct.pack_into("<II", opt, dd + 8, payload_base, 40)  # import table
+
+    section = bytearray(40)
+    section[:6] = b".rdata"
+    struct.pack_into("<IIII", section, 8, len(payload), payload_base, len(payload), payload_base)
+
+    image = bytearray(dos) + b"PE\0\0" + coff + opt + section
+    image += b"\0" * (payload_base - len(image))
+    image += payload
+    return bytes(image)
+
+
+class TestPEParsing:
+    """The PE legs of the screen, previously inert.
+
+    ``_parse_pe`` returned ``BinaryInfo("PE", deps, ())`` — no undefined and
+    no defined symbols — so on PE only the dependency-record leg of
+    check_library did anything: a statically linked libcrypto inside
+    ``ama_cryptography.dll`` produced zero violations, the same gap that
+    earned Mach-O a dedicated fix (``_read_macho_symbols``) while this
+    branch kept it undisclosed.
+    """
+
+    def _write(self, tmp_path: Path, data: bytes) -> Path:
+        path = tmp_path / "image.dll"
+        path.write_bytes(data)
+        return path
+
+    def test_a_clean_image_yields_dependencies_and_both_symbol_sets(self, tmp_path: Path) -> None:
+        path = self._write(
+            tmp_path,
+            tiny_pe(dll="KERNEL32.dll", import_name="HeapAlloc", export_name="ama_kem_keypair"),
+        )
+        info = gate.parse_binary(path)
+        assert info.fmt == "PE"
+        assert info.dependencies == ("KERNEL32.dll",)
+        assert info.undefined_symbols == ("HeapAlloc",)
+        assert info.defined_symbols == ("ama_kem_keypair",)
+        assert gate.check_library(path) == []
+
+    def test_an_imported_vendor_symbol_is_flagged(self, tmp_path: Path) -> None:
+        path = self._write(tmp_path, tiny_pe(import_name="EVP_DigestInit_ex"))
+        violations = gate.check_library(path)
+        assert any("OpenSSL" in v.detail for v in violations), violations
+
+    def test_a_statically_linked_vendor_is_flagged(self, tmp_path: Path) -> None:
+        """Exports are the one linkage trace a static vendor leaves."""
+        path = self._write(tmp_path, tiny_pe(export_name="sodium_init"))
+        violations = gate.check_library(path)
+        assert any("libsodium" in v.detail for v in violations), violations
+
+    def test_a_vendor_dll_dependency_is_flagged(self, tmp_path: Path) -> None:
+        path = self._write(tmp_path, tiny_pe(dll="libcrypto-3-x64.dll"))
+        assert any("OpenSSL" in v.detail for v in gate.check_library(path))
+
+
+class TestBuildConfigCheck:
+    """A vendor linked by the build files leaves no trace to find later.
+
+    ``check_library`` reads a built artefact.  A static link with hidden
+    visibility produces an artefact with no dependency record, no imported
+    symbol and no exported one — clean by every linkage measure while running
+    vendor code.  The decision is visible in exactly one place: the build
+    files.
+    """
+
+    def _cmake(self, tmp_path: Path, body: str) -> Path:
+        (tmp_path / "CMakeLists.txt").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_the_repository_itself_is_clean(self) -> None:
+        assert gate.check_build_config(REPO_ROOT) == []
+
+    def test_the_repository_check_actually_examined_files(self) -> None:
+        """A clean result must come from having looked, not from an empty list."""
+        assert gate.check_build_config(REPO_ROOT / "tools") == [
+            gate.Violation(
+                "build-config",
+                str(REPO_ROOT / "tools"),
+                "no build files found — refusing to report clean having examined nothing",
+            )
+        ]
+
+    @pytest.mark.parametrize(
+        ("body", "vendor"),
+        [
+            ("find_package(OpenSSL REQUIRED)\n", "OpenSSL"),
+            ("target_link_libraries(ama PRIVATE OpenSSL::Crypto)\n", "OpenSSL"),
+            ("target_link_libraries(ama PRIVATE sodium)\n", "libsodium"),
+            ("target_link_libraries(ama PRIVATE /usr/lib/libcrypto.so.3)\n", "OpenSSL"),
+            ('set(CMAKE_EXE_LINKER_FLAGS "-lgcrypt")\n', "libgcrypt"),
+            ("pkg_check_modules(MBED REQUIRED mbedtls)\n", "mbedTLS"),
+            ("target_link_libraries(ama PRIVATE $<$<BOOL:${X}>:wolfssl>)\n", "wolfSSL"),
+            ("find_library(NETTLE_LIB nettle)\n", "Nettle"),
+            ("target_link_libraries(ama PRIVATE botan-3)\n", "Botan"),
+        ],
+    )
+    def test_each_way_a_vendor_reaches_the_link_line_is_flagged(
+        self, tmp_path: Path, body: str, vendor: str
+    ) -> None:
+        violations = gate.check_build_config(self._cmake(tmp_path, body))
+        assert violations, body
+        assert any(vendor in v.detail for v in violations), violations
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "# OpenSSL: deliberately NOT probed. No find_package(OpenSSL) here.\n",
+            'message(STATUS "Native PQC enabled (zero OpenSSL dependency)")\n',
+            "target_link_libraries(ama_cryptography PRIVATE m Threads::Threads)\n",
+            "find_package(Python3 COMPONENTS Development REQUIRED)\n",
+        ],
+    )
+    def test_a_mention_is_not_a_link(self, tmp_path: Path, body: str) -> None:
+        """The tree documents why OpenSSL is not used, in prose that names it.
+
+        A word-level scan would fire on the documentation of the boundary it
+        exists to enforce, and the fix for that false positive would be to
+        weaken the scan.  Matching commands instead of words avoids needing
+        the exemption at all.
+        """
+        assert gate.check_build_config(self._cmake(tmp_path, body)) == []
+
+    def test_a_hash_inside_a_quoted_string_does_not_hide_the_rest_of_the_line(
+        self, tmp_path: Path
+    ) -> None:
+        body = 'set(BANNER "release #1")\nfind_package(OpenSSL REQUIRED)\n'
+        assert gate.check_build_config(self._cmake(tmp_path, body))
+
+    def test_the_comparator_package_may_link_its_comparators(self, tmp_path: Path) -> None:
+        """A comparative benchmark that cannot link its comparators measures nothing."""
+        benchmarks = tmp_path / "benchmarks"
+        benchmarks.mkdir()
+        (benchmarks / "CMakeLists.txt").write_text(
+            "find_package(OpenSSL REQUIRED)\n"
+            "target_link_libraries(bench PRIVATE OpenSSL::Crypto)\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "CMakeLists.txt").write_text("add_subdirectory(benchmarks)\n", encoding="utf-8")
+        assert gate.check_build_config(tmp_path) == []
+
+    def test_generated_build_output_is_not_scanned(self, tmp_path: Path) -> None:
+        """``build/`` holds CMake's own generated files, not AMA's choices."""
+        generated = tmp_path / "build" / "CMakeFiles"
+        generated.mkdir(parents=True)
+        (generated / "CMakeLists.txt").write_text("find_package(OpenSSL)\n", encoding="utf-8")
+        (tmp_path / "CMakeLists.txt").write_text("project(ama)\n", encoding="utf-8")
+        assert gate.check_build_config(tmp_path) == []
+
+    def test_every_screened_vendor_has_at_least_one_link_token(self) -> None:
+        tokens = gate._vendor_link_tokens()
+        for vendor in gate.VENDORS:
+            assert vendor.name.lower() in tokens, vendor.name
+
+    def test_openssl_owns_the_crypto_token(self) -> None:
+        """``-lcrypto`` is OpenSSL, not PyCryptodome's ``Crypto`` module.
+
+        Both spell a token ``crypto``; attributing a linker flag to a Python
+        package would send a reader looking in the wrong place.
+        """
+        assert gate._vendor_link_tokens()["crypto"] == "OpenSSL"
+
+    @pytest.mark.parametrize(
+        ("body", "vendor"),
+        [
+            (
+                'Extension("m", ["m.c"], libraries=["ama_cryptography", "crypto"])\n',
+                "OpenSSL",
+            ),
+            (
+                (
+                    'Extension("m", ["m.c"],'
+                    ' extra_objects=["/usr/lib/x86_64-linux-gnu/libcrypto.a"])\n'
+                ),
+                "OpenSSL",
+            ),
+            (
+                (
+                    'flags = ["-Wl,-O1"]\nflags.append("/usr/lib/libssl.so.3")\n'
+                    'Extension("m", ["m.c"], extra_link_args=flags)\n'
+                ),
+                "OpenSSL",
+            ),
+            (
+                (
+                    "def get_flags():\n"
+                    "    compile_flags = []\n"
+                    '    link_flags = ["-Wl,--whole-archive,/opt/lib/libsodium.a"]\n'
+                    "    return compile_flags, link_flags\n"
+                    "cflags, lflags = get_flags()\n"
+                    'Extension("m", ["m.c"], extra_link_args=lflags)\n'
+                ),
+                "libsodium",
+            ),
+            ('Extension("m", ["m.c"], extra_link_args=["-lgcrypt"])\n', "libgcrypt"),
+            ("for ext in extensions:\n    ext.libraries.append('nettle')\n", "Nettle"),
+            ('ext.extra_objects += ["libmbedcrypto.a"]\n', "mbedTLS"),
+        ],
+    )
+    def test_a_vendor_on_a_binding_link_line_in_setup_py_is_flagged(
+        self, tmp_path: Path, body: str, vendor: str
+    ) -> None:
+        """``setup.py`` links the Cython extensions itself, not through CMake.
+
+        Measured before the fix: every body here but ``-lgcrypt`` (which the
+        text-wide ``-l`` regex already saw) produced no finding, because a
+        ``libraries=[...]`` entry, an ``extra_objects`` path or a bare path in
+        ``extra_link_args`` is neither a CMake command nor a ``-l`` flag.
+        """
+        (tmp_path / "setup.py").write_text(
+            "from setuptools import Extension\n" + body, encoding="utf-8"
+        )
+        violations = gate.check_build_config(tmp_path)
+        assert any(vendor in v.detail for v in violations), violations
+
+    def test_the_shipped_setup_py_link_values_are_read_and_clean(self) -> None:
+        """Not vacuous: the real file's extensions resolve to real link values."""
+        import ast
+
+        values = gate._python_link_values(
+            ast.parse((REPO_ROOT / "setup.py").read_text(encoding="utf-8"))
+        )
+        contexts = {context for _, context, _ in values}
+        assert "Extension(libraries=...)" in contexts, values
+        assert "Extension(extra_link_args=...)" in contexts, values
+        assert "ama_cryptography" in {value for _, _, value in values}
+
+    def test_a_clean_setup_py_passes(self, tmp_path: Path) -> None:
+        (tmp_path / "setup.py").write_text(
+            "from setuptools import Extension\n"
+            'Extension("m", ["m.c"], libraries=["ama_cryptography"],'
+            ' extra_link_args=["-Wl,-z,relro", "/guard:cf"])\n'
+            'print("Native PQC enabled (zero OpenSSL dependency; no crypto library)")\n',
+            encoding="utf-8",
+        )
+        assert gate.check_build_config(tmp_path) == []
+
+
+class TestBindingsCheck:
+    """Every compiled object the package ships, not only the CMake library."""
+
+    @staticmethod
+    def _package(tmp_path: Path, objects: dict[str, bytes]) -> Path:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        for name, data in objects.items():
+            (package / name).write_bytes(data)
+        return package
+
+    def test_a_binding_that_links_a_vendor_is_flagged(self, tmp_path: Path) -> None:
+        package = self._package(
+            tmp_path,
+            {
+                "clean_binding.cpython-311-darwin.so": thin_macho(
+                    ("@rpath/libama_cryptography.dylib",), ("_ama_sha3_256",)
+                ),
+                "evil_binding.cpython-311-darwin.so": thin_macho(("/usr/lib/libcrypto.3.dylib",)),
+            },
+        )
+        violations = gate.check_bindings(package)
+        assert len(violations) == 1, violations
+        assert "evil_binding" in violations[0].where and "OpenSSL" in violations[0].detail
+
+    def test_a_binding_with_a_vendor_linked_statically_is_flagged(self, tmp_path: Path) -> None:
+        package = self._package(
+            tmp_path,
+            {"static_binding.cpython-311-darwin.so": thin_macho(defined=("_EVP_DigestInit_ex",))},
+        )
+        violations = gate.check_bindings(package)
+        assert violations and "statically" in violations[0].detail
+
+    def test_a_package_with_nothing_compiled_fails_closed(self, tmp_path: Path) -> None:
+        violations = gate.check_bindings(self._package(tmp_path, {}))
+        assert violations and "examined nothing" in violations[0].detail
+
+    def test_the_command_line_flag_runs_it(self, tmp_path: Path) -> None:
+        package = self._package(
+            tmp_path, {"evil.cpython-311-darwin.so": thin_macho(("libssl.3.dylib",))}
+        )
+        assert gate.main(["--source", "--bindings", "--package", str(package)]) == 1
+
+    def test_the_shipped_binaries_are_clean_when_built(self) -> None:
+        binaries = gate.package_binaries(REPO_ROOT / "ama_cryptography")
+        if not binaries:
+            pytest.skip("no compiled objects in this tree")
+        assert gate.check_bindings(REPO_ROOT / "ama_cryptography") == []
+
+
+class TestRuntimeCheck:
+    def test_runtime_check_is_clean_on_this_tree(self) -> None:
+        violations = gate.check_runtime(REPO_ROOT)
+        # A tree without a built library cannot import the package at all;
+        # that is reported as a violation (fail-closed), not as clean.
+        if violations and "could not be imported" in violations[0].detail:
+            pytest.skip("native library not built in this tree")
+        assert violations == []
+
+    # M18: the planted binding is PyCA, which the require-backends lanes
+    # install; a skip here means that install broke and this control went
+    # silent, so the marker escalates it there like any other oracle skip.
+    @pytest.mark.requires_interop_oracle
+    def test_a_resident_vendor_binding_is_flagged(self, tmp_path: Path) -> None:
+        """Inject an OpenSSL binding into every interpreter via sitecustomize.
+
+        This is the transitive-import case the source scan cannot see: no
+        `import` statement in this repository names the module, and it is
+        nonetheless resident in the process that runs AMA's code.
+        """
+        pytest.importorskip("cryptography")
+        inject = tmp_path / "inject"
+        inject.mkdir()
+        (inject / "sitecustomize.py").write_text("import cryptography\n", encoding="utf-8")
+
+        proc = subprocess.run(
+            [sys.executable, str(GATE_PATH), "--runtime"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            env={**_clean_env(), "PYTHONPATH": str(inject)},
+        )
+        if "could not be imported" in proc.stderr:
+            pytest.skip("native library not built in this tree")
+        assert proc.returncode == 1
+        assert "'cryptography' is resident" in proc.stderr
+
+
+def _stand_in_package(tmp_path: Path, init_body: str) -> Path:
+    """A tree whose ``ama_cryptography`` is ``init_body``, for the runtime probe.
+
+    The probe runs ``import ama_cryptography`` with the tree as its working
+    directory, and ``python -c`` puts that directory first on ``sys.path``, so
+    the stand-in is what imports — the same mechanism that makes the probe
+    import this checkout rather than an installed wheel.
+    """
+    package = tmp_path / "ama_cryptography"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(init_body, encoding="utf-8")
+    return tmp_path
+
+
+def _mapped_libcrypto() -> Path | None:
+    """The libcrypto this interpreter maps for ``hashlib``, on Linux, if any."""
+    import importlib
+
+    try:
+        importlib.import_module("_hashlib")  # maps libcrypto on a stock build
+    except ImportError:
+        return None
+    maps = Path("/proc/self/maps")
+    if not maps.is_file():
+        return None
+    for line in maps.read_text(encoding="utf-8", errors="replace").splitlines():
+        fields = line.split(None, 5)
+        if len(fields) == 6 and "/libcrypto" in fields[5]:
+            return Path(fields[5].strip())
+    return None
+
+
+class TestRuntimeSeesWhatTheImportLoads:
+    """The run-time-chosen loads the source inventory defers to, decided.
+
+    The source check files ``ctypes.CDLL(<computed name>)`` as inventory and
+    exits 0, on the stated ground that "the runtime check inspects every
+    library the imported package has actually loaded".  It inspected
+    ``sys.modules`` names only.  Measured before the fix: a stand-in package
+    whose ``__init__`` ran ``ctypes.CDLL("".join(["libcry", "pto.so.3"]))``
+    printed ``LOADED libcrypto`` in the probe, got INVENTORY from the source
+    check, and ``check_runtime`` returned ``[]`` — every leg passed while
+    OpenSSL was mapped and callable.
+    """
+
+    def test_a_run_time_chosen_vendor_load_during_import_is_flagged(self, tmp_path: Path) -> None:
+        # The load is attempted whether or not the host has the library: the
+        # audit event fires before dlopen does, so a failed attempt is still
+        # evidence the import reaches for a vendor.
+        root = _stand_in_package(
+            tmp_path,
+            "import ctypes\n"
+            "try:\n"
+            '    ctypes.CDLL("".join(["libcry", "pto.so.3"]))\n'
+            "except OSError:\n"
+            "    pass\n",
+        )
+        findings = gate.check_source(root / "ama_cryptography")
+        assert [f.check for f in findings] == [gate.INVENTORY], findings
+        violations = gate.check_runtime(root)
+        assert any(
+            "libcrypto.so.3" in v.detail and "OpenSSL" in v.detail for v in violations
+        ), violations
+
+    def test_a_clean_stand_in_passes(self, tmp_path: Path) -> None:
+        """Control: the same probe, a package that loads nothing."""
+        root = _stand_in_package(tmp_path, "import ctypes\n")
+        assert gate.check_runtime(root) == []
+
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="copies an ELF shared object; Linux only"
+    )
+    def test_a_vendor_library_under_an_innocent_name_is_flagged(self, tmp_path: Path) -> None:
+        """A name proves nothing about the bytes: the opened file is parsed too."""
+        libcrypto = _mapped_libcrypto()
+        if libcrypto is None:
+            pytest.skip("this interpreter maps no libcrypto to copy")
+        disguised = tmp_path / "libinnocuous.so"
+        shutil.copyfile(libcrypto, disguised)
+        root = _stand_in_package(
+            tmp_path / "tree", f"import ctypes\nctypes.CDLL({str(disguised)!r})\n"
+        )
+        violations = gate.check_runtime(root)
+        assert any(
+            "libinnocuous.so" in v.detail and "OpenSSL" in v.detail for v in violations
+        ), violations
+
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="reads /proc/self/maps; Linux only"
+    )
+    def test_a_newly_mapped_vendor_object_is_flagged(self, tmp_path: Path) -> None:
+        """The mapped-object leg, isolated from the other two.
+
+        The request names ``libinnocuous.so`` and the file it opens defines
+        nothing vendor-shaped (it is a copy of this package's own clean
+        library), so neither the requested name nor the parsed file flags it.
+        What the process MAPS is the symlink's target, named like libsodium.
+        """
+        own = built_library()
+        if own is None:
+            pytest.skip("no compiled library in this tree to copy")
+        vendor_named = tmp_path / "libsodium.so.23"
+        shutil.copyfile(own, vendor_named)
+        (tmp_path / "libinnocuous.so").symlink_to(vendor_named)
+        root = _stand_in_package(
+            tmp_path / "tree",
+            f"import ctypes\nctypes.CDLL({str(tmp_path / 'libinnocuous.so')!r})\n",
+        )
+        violations = gate.check_runtime(root)
+        assert [v.where for v in violations] == ["mapped shared objects"], violations
+        assert "libsodium" in violations[0].detail
+
+    def test_the_probe_sees_the_packages_own_run_time_chosen_load(self) -> None:
+        """Not vacuous on the real tree: the inventory's loads are observed.
+
+        Every entry in the source inventory is the native loader.  If the
+        probe did not record that load, "the runtime check decides it" would
+        be a claim about evidence nobody collected.
+        """
+        evidence = gate.runtime_evidence(REPO_ROOT)
+        if isinstance(evidence, gate.Violation):
+            pytest.skip("native library not built in this tree")
+        loads = evidence["dlopen"]
+        assert isinstance(loads, list)
+        opened = [
+            str(load.get("target") or load.get("name") or "")
+            for load in loads
+            if isinstance(load, dict)
+        ]
+        assert any("ama_cryptography" in Path(name).name for name in opened), opened
+        assert evidence["mapped_error"] is None, evidence["mapped_error"]
+        assert isinstance(evidence["mapped"], list)
+
+    @pytest.mark.parametrize(
+        "evidence",
+        [
+            {"modules": [], "dlopen": [], "mapped": None, "mapped_error": "enumeration failed"},
+            {"modules": [], "dlopen": [], "mapped": None, "mapped_error": None},
+            {"modules": [], "dlopen": None, "mapped": [], "mapped_error": None},
+        ],
+    )
+    def test_missing_evidence_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch, evidence: dict[str, object]
+    ) -> None:
+        monkeypatch.setattr(gate, "runtime_evidence", lambda _root: evidence)
+        violations = gate.check_runtime(REPO_ROOT)
+        assert violations and all("refusing to report clean" in v.detail for v in violations)
+
+
+def _clean_env() -> dict[str, str]:
+    import os
+
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    return env
+
+
+def _ci_invocations() -> list[str]:
+    """Every command in ci.yml that runs the gate, continuation lines joined.
+
+    There are two: the security-checks job's (the CMake library) and the test
+    matrix's (``--bindings``).  The previous tests read the first occurrence
+    only, which silently stops describing the job it was written for the
+    moment a second invocation appears above it.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    joined = re.sub(r"\\\n\s*", " ", workflow)
+    return [
+        line.strip()
+        for line in joined.splitlines()
+        if "python tools/check_vendor_isolation.py" in line and not line.lstrip().startswith("#")
+    ]
+
+
+class TestWiredIntoCI:
+    def test_ci_workflow_invokes_the_gate(self) -> None:
+        assert _ci_invocations()
+
+    def test_ci_invocation_passes_a_library(self) -> None:
+        """The source and runtime checks run by default; the library check
+        only runs when a path is given, so the CI call must give one."""
+        assert any("--library" in line for line in _ci_invocations()), _ci_invocations()
+
+    def test_ci_invocation_checks_the_built_bindings(self) -> None:
+        """The binding extensions are linked by setup.py and were never parsed.
+
+        ``--library`` was given the CMake product only.  A vendor added to a
+        binding's link line reached neither it nor the build-config scan (which
+        did not read ``Extension(...)`` arguments), so CI must also run the
+        library check over what the package actually ships.
+        """
+        assert any("--bindings" in line for line in _ci_invocations()), _ci_invocations()
+
+    def test_ci_invocation_does_not_narrow_to_one_check(self) -> None:
+        """Selecting any single check switches the others off.
+
+        ``--source``, ``--build-config`` and ``--runtime`` are selectors: the
+        default runs all of them, and naming one runs only that one.  A CI
+        line that grew a selector would keep exiting 0 while silently
+        checking a quarter of what its name implies.
+        """
+        invocations = _ci_invocations()
+        assert invocations
+        for invocation in invocations:
+            for selector in ("--source", "--build-config", "--runtime", "--no-runtime"):
+                assert (
+                    selector not in invocation
+                ), f"{selector} in the CI invocation disables another check: {invocation!r}"
+
+    def test_the_default_run_selects_every_check(self) -> None:
+        """What the CI line relies on, asserted rather than assumed."""
+        result = subprocess.run(
+            [sys.executable, str(GATE_PATH), "--no-runtime"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "source (" in result.stdout
+        assert "build config" in result.stdout
+
+
+class TestVendorTableIsComplete:
+    def test_every_owner_forbidden_vendor_is_screened(self) -> None:
+        """The seven implementations named in the repository's policy."""
+        screened = {v.name for v in gate.VENDORS}
+        required = {
+            "OpenSSL",
+            "libsodium",
+            "wolfSSL",
+            "Botan",
+            "Nettle",
+            "libgcrypt",
+            "mbedTLS",
+        }
+        assert required <= screened
+
+    def test_every_vendor_is_identifiable_somehow(self) -> None:
+        for vendor in gate.VENDORS:
+            assert (
+                vendor.modules or vendor.library_names or vendor.symbol_prefixes
+            ), f"{vendor.name} has no identifying marker and can never be detected"
+
+    def test_stdlib_openssl_accelerators_are_not_screened(self) -> None:
+        """`hashlib`/`_hashlib`/`_ssl` are CPython's own stdlib.
+
+        INVARIANT-1 admits `hashlib` for hashing; screening the interpreter's
+        accelerator modules would make this gate fail on a stock CPython
+        rather than on an AMA defect.
+        """
+        screened_modules = {m for v in gate.VENDORS for m in v.modules}
+        assert screened_modules.isdisjoint({"hashlib", "_hashlib", "_ssl", "ssl"})
+
+
+class TestContainerRecipes:
+    """Dockerfiles are build inputs, and nothing read them.
+
+    ``docker/Dockerfile`` and ``docker/Dockerfile.alpine`` each carried an
+    explicit INVARIANT-1 paragraph — "libssl-dev is NOT installed",
+    "openssl-dev is deliberately absent" — while ``docker/Dockerfile.c-api``
+    installed ``libssl-dev`` in its builder stage and ``libssl3`` in its output
+    stage, and ``Dockerfile.alpine``'s own runtime stage installed ``libssl3``:
+    the runtime half of the thing its builder stage says is absent.
+
+    ``_BUILD_CONFIG_GLOBS`` covered ``CMakeLists.txt``, ``**/CMakeLists.txt``,
+    ``cmake/**/*.cmake`` and ``setup.py``.  No Dockerfile could reach it, so
+    the gate reported clean over all three, and the rule lived only in prose in
+    the files that broke it.
+
+    Installing OpenSSL does not link it — nothing in this tree does — but it
+    puts a CVE-prone library on disk in an image whose own comments say it is
+    not there, and a runtime image is exactly where a future ``dlopen`` would
+    find one.
+    """
+
+    @staticmethod
+    def _recipe(tmp_path: Path, body: str, name: str = "Dockerfile") -> Path:
+        directory = tmp_path / "docker"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(body, encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        "body,package",
+        [
+            (
+                "RUN apt-get update && apt-get install -y \\\n    libssl-dev \\\n    cmake\n",
+                "libssl-dev",
+            ),
+            (
+                "RUN apt-get update && apt-get install -y \\\n    libssl3 \\\n && rm -rf /x\n",
+                "libssl3",
+            ),
+            ("RUN apk add --no-cache \\\n    libsodium-dev \\\n    python3\n", "libsodium-dev"),
+            ("RUN apk add --no-cache openssl-dev musl-dev\n", "openssl-dev"),
+            ("RUN dnf install -y libgcrypt-devel\n", "libgcrypt-devel"),
+            # pip installs of the vendor table's own Python bindings.
+            ("RUN pip3 install --no-cache-dir cryptography\n", "cryptography"),
+            ("RUN python3 -m pip install 'PyNaCl>=1.5'\n", "PyNaCl"),
+            ("RUN pip install --upgrade pip && pip install pycryptodomex==3.20\n", "pycryptodomex"),
+            (
+                (
+                    "RUN pip3 install --no-cache-dir \\\n"
+                    "    /tmp/cryptography-43.0.0-cp39-abi3-linux.whl\n"
+                ),
+                "cryptography",
+            ),
+            # A distribution's packaging of a binding.
+            ("RUN apt-get install -y python3-cryptography\n", "python3-cryptography"),
+            ("RUN apk add --no-cache py3-cryptography\n", "py3-cryptography"),
+        ],
+    )
+    def test_a_vendor_package_install_is_reported(
+        self, tmp_path: Path, body: str, package: str
+    ) -> None:
+        root = self._recipe(tmp_path, body)
+        violations = gate.check_container_recipes(root)
+        assert violations, f"accepted an install of {package}"
+        assert package in violations[0].detail
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "RUN apt-get update && apt-get install -y \\\n    cmake \\\n    python3\n",
+            "RUN apk add --no-cache python3 py3-pip musl-dev\n",
+            "# libssl-dev is NOT installed (INVARIANT-1)\nRUN apk add --no-cache python3\n",
+            "RUN apt-cache policy libssl-dev\n",
+            (
+                "RUN pip3 install --no-cache-dir -r /tmp/requirements.txt"
+                " -r /tmp/requirements-dev.txt\n"
+            ),
+            (
+                "RUN pip3 install --no-cache-dir /tmp/*.whl && \\\n"
+                "    pip3 install --no-cache-dir numpy\n"
+            ),
+            "RUN pip3 install build && python3 -m build && openssl version\n",
+            "RUN apt-get install -y python3 python3-pip python3-venv\n",
+        ],
+    )
+    def test_a_clean_recipe_passes(self, tmp_path: Path, body: str) -> None:
+        assert gate.check_container_recipes(self._recipe(tmp_path, body)) == []
+
+    def test_a_package_after_a_line_continuation_is_still_seen(self, tmp_path: Path) -> None:
+        """Every package name in these files is on a continued line.
+
+        With the continuation alternative ordered after ``[^\\n]`` the scan
+        stops at the end of the first physical line, so ``RUN apk add
+        --no-cache \\`` reads as installing nothing — the shape of every
+        install in this repository.
+        """
+        body = "RUN apk add --no-cache \\\n    python3 \\\n    libssl3 \\\n    py3-pip\n"
+        assert gate.check_container_recipes(self._recipe(tmp_path, body))
+
+    def test_options_are_not_mistaken_for_packages(self, tmp_path: Path) -> None:
+        body = "RUN apt-get install -y --no-install-recommends cmake\n"
+        assert gate.check_container_recipes(self._recipe(tmp_path, body)) == []
+
+    def test_an_empty_scope_fails_closed(self, tmp_path: Path) -> None:
+        violations = gate.check_container_recipes(tmp_path)
+        assert violations and "examined nothing" in violations[0].detail
+
+    def test_the_shipped_recipes_are_clean(self) -> None:
+        assert gate.check_container_recipes(REPO_ROOT) == []
+
+    def test_the_scan_is_not_vacuous_on_the_real_tree(self) -> None:
+        """Being "clean" must mean recipes were found and read."""
+        found = sorted(
+            p.relative_to(REPO_ROOT).as_posix() for p in gate._container_recipes(REPO_ROOT)
+        )
+        assert len(found) >= 3, found
+
+    def test_every_recipe_in_the_tree_is_scanned(self) -> None:
+        """Three fixed globs named ``oss-fuzz/Dockerfile`` and missed its twin.
+
+        ``.clusterfuzzlite/Dockerfile`` builds FROM the same base-builder image
+        with the same ``apt-get install`` block; a ``libssl-dev`` added there
+        was invisible.  Every recipe in the tree is scanned now.
+        """
+        found = {p.relative_to(REPO_ROOT).as_posix() for p in gate._container_recipes(REPO_ROOT)}
+        assert ".clusterfuzzlite/Dockerfile" in found, found
+        assert "oss-fuzz/Dockerfile" in found, found
+
+    def test_a_recipe_outside_the_old_globs_is_scanned(self, tmp_path: Path) -> None:
+        recipe = tmp_path / ".clusterfuzzlite" / "Dockerfile"
+        recipe.parent.mkdir()
+        recipe.write_text(
+            "FROM base-builder\n"
+            "RUN apt-get update && apt-get install -y \\\n    libssl-dev \\\n    cmake\n",
+            encoding="utf-8",
+        )
+        violations = gate.check_container_recipes(tmp_path)
+        assert violations and "libssl-dev" in violations[0].detail
+
+    def test_generated_trees_are_not_scanned(self, tmp_path: Path) -> None:
+        (tmp_path / "docker").mkdir()
+        (tmp_path / "docker" / "Dockerfile").write_text("FROM x\n", encoding="utf-8")
+        generated = tmp_path / "build" / "_deps"
+        generated.mkdir(parents=True)
+        (generated / "Dockerfile").write_text(
+            "RUN apt-get install -y libssl-dev\n", encoding="utf-8"
+        )
+        assert gate.check_container_recipes(tmp_path) == []

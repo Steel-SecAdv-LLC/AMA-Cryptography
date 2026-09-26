@@ -87,9 +87,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         size_t msg_len = payload_len - AMA_SPHINCS_256F_SIGNATURE_BYTES -
                          AMA_SPHINCS_256F_PUBLIC_KEY_BYTES;
 
-        /* Must not crash */
-        ama_sphincs_verify(msg, msg_len, sig,
-                            AMA_SPHINCS_256F_SIGNATURE_BYTES, pk);
+/* A signature and public key drawn from fuzz data verify with
+         * probability far below 2^-100, so ANY success here is a broken
+         * verifier — the kind of defect "must not crash" cannot see.  A
+         * genuine forgery found by the fuzzer traps, which is the outcome
+         * this harness exists for. */
+        if (ama_sphincs_verify(msg, msg_len, sig,
+                               AMA_SPHINCS_256F_SIGNATURE_BYTES, pk) == AMA_SUCCESS) {
+            __builtin_trap();
+        }
         break;
     }
     case 2: {
@@ -99,8 +105,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         if (payload_len < AMA_SPHINCS_256F_SIGNATURE_BYTES) break;
 
         const uint8_t *msg = (const uint8_t *)"fuzz";
-        ama_sphincs_verify(msg, 4, payload,
-                            AMA_SPHINCS_256F_SIGNATURE_BYTES, cached_pk);
+        /* Real public key, fuzzed signature: a success is a forgery. */
+        if (ama_sphincs_verify(msg, 4, payload,
+                               AMA_SPHINCS_256F_SIGNATURE_BYTES,
+                               cached_pk) == AMA_SUCCESS) {
+            __builtin_trap();
+        }
         break;
     }
     }

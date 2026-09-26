@@ -24,7 +24,15 @@ Enforcement mechanisms:
 - `.github/workflows/baseline-guard.yml` runs
   `benchmarks/check_baseline_justification.py` on every PR touching
   either baseline JSON and fails CI if any of the three requirements
-  is missing.
+  is missing. A lowered floor must also cite an ops/sec figure between
+  the old and new floors and the CI run id it came from, and a floor may
+  not be deleted while `benchmarks/benchmark_runner.py` still defines its
+  benchmark: no text justifies that, because the deletion stops the
+  primitive being measured at all.
+- `benchmarks/benchmark_runner.py` refuses, whatever its flags, a baseline
+  entry with no benchmark function behind it and a benchmark function with
+  no floor in its section, so neither a rename nor a deletion can retire a
+  gate while the run stays green.
 - The benchmark-regression CI job passes `--require-runner-class` and
   `--require-populated-baseline`, so x86 and AArch64 matrix entries
   must consume their matching baseline file and no `baseline_value: 0`
@@ -97,8 +105,10 @@ The 10× jump is therefore not explained by code.
 
 - The C primitives themselves have not been degraded. The commit
   history of `src/c/ama_{sha3,ed25519,kyber,dilithium,aes_gcm}.c`
-  shows monotonic improvement (donna integration `3ea4aa6`, SIMD
-  dispatch `86f02bd`/`c9f4722`, AVX2 wiring `2c26a90`, etc.).
+  shows monotonic improvement (integration of the formerly vendored
+  Ed25519 x86-64 backend `3ea4aa6` — since removed in the twenty-first
+  maintenance pass — SIMD dispatch `86f02bd`/`c9f4722`, AVX2 wiring
+  `2c26a90`, etc.).
   The code got faster; only the *baselines* moved unaccountably.
 
 - The current baselines (post-`6b2cf82`, stable through v2.1.5)
@@ -152,7 +162,7 @@ close the gap list audited in the May 2026 review:
 |--------------------------------------------|---------------------------------|
 | SLH-DSA (FIPS 205 L1, SHAKE-128s)          | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` |
 | secp256k1 pubkey-from-privkey              | `secp256k1 pubkey` |
-| FROST 2-of-3 (RFC 9591)                    | `FROST round1 commit` / `round2 sign` / `aggregate` |
+| FROST 2-of-3 (RFC 9591-style)              | `FROST round1 commit` / `round2 sign` / `aggregate` |
 | Dilithium NTT kernel isolation             | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
 | X25519 MULX/ADX kernel on-vs-off ratio     | `X25519 DH (MULX off)` / `X25519 DH (MULX on)` |
 
@@ -165,7 +175,9 @@ binary can produce paired scalar-vs-dispatched and kernel-on-vs-off
 rows without per-row rebuilds.
 
 Sample raw-C medians on the sandbox host (Linux x86-64, GCC, AVX2,
-ed25519-donna + ML-DSA AVX2 dispatched, MULX+ADX kernel available):
+the Ed25519 x86-64 backend of the time — the formerly vendored one, since
+removed in the twenty-first maintenance pass — and ML-DSA AVX2 dispatched,
+MULX+ADX kernel available):
 
 | Row | Median latency | Throughput |
 |-----|---------------:|-----------:|
@@ -385,3 +397,357 @@ reference implementations vectorise rejection sampling, CBD, compression and
 the full NTT chain, where AMA vectorises a subset. Closing it is a
 vectorisation project measured in weeks, not a configuration change, and
 nothing here should be read as implying a quick fix exists.
+
+## 2026-09-24: canonical-host tables re-measured on the 5.0.0 tree
+
+The `README.md` canonical-bench region and `benchmarks/canonical-host.json` carried figures measured 2026-04-25 to 2026-04-27 against the 4.x code. 5.0.0 changed most of the paths they timed (the INVARIANT-41 pairwise-consistency test on every Python keypair, the INVARIANT-51 per-signature derivation, the INVARIANT-52 package transcript, the in-house Ed25519 backend, FIPS 204 §5.2 external ML-DSA), so they described neither the code nor any host this repository could reproduce them on. They are replaced here; the figures they replace are kept in the table below.
+
+**Host.** Intel Xeon, family 6 model 207 (Emerald Rapids) @ 2.10 GHz, 4 vCPU KVM guest (Firecracker), flags `avx512f avx512vl avx512bw avx512dq avx512vbmi avx512ifma vaes vpclmulqdq sha_ni bmi2 adx hypervisor`; Linux 6.18.44; gcc 13.3.0, CMake Release, `-DAMA_USE_NATIVE_PQC=ON`; Python 3.11.15; native library and all six Cython bindings built by `python setup.py build_ext --inplace` at `974cb019` (runner provenance: `python_bindings: 6 of 6 compiled bindings imported`). The previous record's own note called its canonical host a VM, with the same ISA list and the same Python; this one is a VM too, and says so. It is not bare metal. Whether bare metal would move these figures is not measured here.
+
+**Method.** Five rounds; each round ran `taskset -c 0 python benchmarks/benchmark_runner.py --output runner_N.json`, then `taskset -c 0 build/bin/benchmark_c_raw --json`, then the X25519 kernel pair (`ama_x25519_set_mulx_override(0)` and `(1)` around `benchmark_runner.run_x25519_benchmark`), so the three harnesses interleave across host phases. Published figure: the median of the five rounds; the ranges in `README.md` are min–max. No other benchmark ran concurrently; unrelated work was confined to cores 2–3 with `nice -n 19`.
+
+**Auto-tune.** The dispatcher demoted the AVX-512 four-way Keccak to the scalar BMI1/BMI2 path in 5 of 5 benchmark-runner process starts, four-way against scalar 676,105 / 466,984 ns, 766,260 / 528,823 ns, 742,740 / 518,622 ns, 1,193,889 / 957,746 ns, 678,014 / 465,534 ns (1.45×, 1.45×, 1.43×, 1.25×, 1.46×). The SHA3 and ML-KEM rows therefore measure the scalar Keccak on this host, as the 2026-07-29 section above found on the earlier AVX-512 host.
+
+### Python API rows (`benchmark_runner.py`), ops/sec
+
+| Row | 2026-04 (4.x) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|---|
+| `dilithium_keygen` | 3,626 | 1,578 | 1,699 | 1,617 | 1,616 | 1,627 | **1,617** |
+| `dilithium_sign` | 2,976 | 3,028 | 3,125 | 3,171 | 3,244 | 3,242 | **3,171** |
+| `dilithium_verify` | 7,576 | 11,443 | 11,368 | 10,815 | 10,630 | 10,817 | **10,817** |
+| `kyber_keygen` | 4,965 | 3,891 | 3,865 | 3,515 | 3,402 | 3,602 | **3,602** |
+| `kyber_encapsulate` | 10,253 | 17,417 | 17,984 | 18,171 | 16,715 | 18,398 | **17,984** |
+| `full_package_create` | 2,853 | 1,939 | 2,050 | 1,900 | 1,955 | 2,044 | **1,955** |
+| `full_package_verify` | 4,973 | 3,455 | 3,402 | 3,270 | 3,128 | 3,336 | **3,336** |
+| `ama_sha3_256_hash` | 184,112 | 411,552 | 412,231 | 420,412 | 427,840 | 408,425 | **412,231** |
+| `hmac_sha3_256` | 115,408 | 270,827 | 275,758 | 297,557 | 289,167 | 276,791 | **276,791** |
+| `hkdf_derive` | 81,703 | 187,480 | 182,789 | 184,618 | 174,595 | 197,367 | **184,618** |
+| `ed25519_keygen` | 55,716 | 13,361 | 13,939 | 13,354 | 14,028 | 13,191 | **13,361** |
+| `ed25519_sign` | 51,488 | 40,547 | 41,626 | 41,825 | 41,300 | 39,986 | **41,300** |
+| `ed25519_sign_expanded` | — | 63,692 | 63,939 | 66,512 | 66,228 | 65,411 | **65,411** |
+| `ed25519_verify` | 21,338 | 30,299 | 29,664 | 32,200 | 30,659 | 30,199 | **30,299** |
+| `aes_256_gcm_encrypt` | 293,143 | 297,439 | 314,871 | 299,214 | 292,062 | 304,615 | **299,214** |
+| `chacha20poly1305_encrypt` | 256,249 | 279,284 | 288,960 | 311,899 | 289,768 | 281,060 | **288,960** |
+| `x25519_scalarmult` | 15,401 | 20,284 | 20,329 | 20,026 | 20,828 | 21,738 | **20,329** |
+
+### Raw C rows (`benchmark_c_raw --json`, median-of-iterations basis), ops/sec
+
+| Row | 2026-04 (4.x) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|---|
+| ML-DSA-65 KeyGen | ~4,845 | 9,321 | 9,397 | 9,358 | 9,299 | 9,498 | **9,358** |
+| ML-DSA-65 Sign | ~3,929 | 6,023 | 3,716 | 2,826 | 7,713 | 7,196 | **6,023** |
+| ML-DSA-65 Verify | ~7,773 | 11,559 | 11,101 | 11,532 | 11,666 | 7,568 | **11,532** |
+| ML-KEM-1024 KeyGen | — | 16,734 | 17,254 | 10,684 | 18,931 | 10,229 | **16,734** |
+| ML-KEM-1024 Encaps | — | 19,016 | 19,977 | 11,626 | 19,604 | 15,783 | **19,016** |
+| ML-KEM-1024 Decaps | ~10,834 | 15,839 | 17,094 | 9,383 | 16,466 | 16,117 | **16,117** |
+| X25519 DH (MULX off) | — | 12,383 | 12,486 | 12,115 | 12,819 | 12,465 | **12,465** |
+| X25519 DH (MULX on) | ~16,983 | 20,592 | 21,188 | 19,848 | 21,369 | 20,709 | **20,709** |
+
+Four raw-C PQC rows were not stable across rounds: ML-KEM-1024 KeyGen and Encaps were slow in rounds 3 and 5 and Decaps in round 3, ML-DSA-65 Verify in round 5, and ML-DSA-65 Sign ranged 2,826–7,713 (its signing time varies by design with rejection sampling, and 200 iterations per round do not average that out). The Python-API rows of the same rounds stayed within 4.3–13.6% (max–min over median). The median is what is published; the spread is stated here rather than trimmed.
+
+*Added 2026-09-24, after these runs.* The ML-DSA-65 Sign spread above was not noise, and 200 iterations could not average it out, because all 200 did the same work: the row signed one fixed message under one per-run key, and `ama_dilithium_sign` is FIPS 204's deterministic signer, whose rejection count is a constant per (key, message) pair. Measured with callgrind on the development host (retired instructions per signature of the harness's message, sixteen seeded keys): 2,153,304 to 10,761,001, a 5.00x spread from the key alone. The row now times whole passes over a pool of 256 distinct messages — the pool `benchmark_runner.py` cycles — and reports the pass time per signature, which puts a run on its key's pool-mean cost: 4,442,497 to 5,176,191 instructions per signature over the same sixteen keys (1.17x). The ML-DSA-65 Sign column in the table above was measured with the one-pair row and is left as measured; it is not comparable with the row's output from this change on. The row was re-measured on the canonical host the same day, and the README's raw-C Sign figure now quotes that measurement instead of this table's:
+
+| Row | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|
+| ML-DSA-65 Sign (pooled, per signature) | 3,435 | 3,199 | 3,360 | 3,880 | 3,356 | **3,360** |
+
+`build/bin/benchmark_c_raw --json` built at `352fb916` (gcc 13.3.0, CMake Release, `-DAMA_USE_NATIVE_PQC=ON`), five consecutive rounds on an otherwise idle host, each pinned with `taskset -c 0`; 25 passes of 256 signatures per round. The one-pair median it replaces, 6,023, sat inside a 2,826–7,713 spread; the pooled rounds span 3,199–3,880. `tests/c/test_benchmark_mldsa_sign_pool.c` pins what the row signs.
+
+### X25519 through the Python harness, kernel pinned, ops/sec
+
+| Configuration | 2026-04 (4.x) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | **Median** |
+|---|---|---|---|---|---|---|---|
+| MULX+ADX pinned off (pure-C fe64) | ~11,500 | 11,561 | 11,283 | 10,580 | 12,027 | 11,412 | **11,412** |
+| MULX+ADX pinned on | ~15,401 | 19,931 | 20,213 | 20,830 | 19,348 | 20,632 | **20,213** |
+| default dispatch | — | 21,360 | 19,303 | 20,373 | 20,955 | 21,937 | **20,955** |
+
+**Why rows moved.** Throughput rows that now include work 4.x did not do fell: ML-DSA-65 and ML-KEM-1024 KeyGen and Ed25519 KeyGen run a pairwise-consistency test on every Python keypair (INVARIANT-41), Ed25519 Sign on the 64-byte key derives `A = [a]B` per call (INVARIANT-51; the expanded-key row is the once-at-load form), and the package rows carry the INVARIANT-52 transcript and the KEM commitment. Rows whose work did not grow rose on this host (SHA3, HMAC, HKDF, Ed25519 Verify, the AEADs, X25519, ML-KEM Encapsulate, ML-DSA Sign and Verify). The two sets were measured on different VMs five months apart, so a row-by-row ratio between them is not a code-only comparison and is not published as one.
+
+
+## 2026-09-07: Ed25519 floors on the in-house backend — a single-run floor replaced by four-run medians
+
+PR #394's twenty-first maintenance pass replaced the vendored ed25519-donna
+backend with the in-house backend (radix-2^51 and, on BMI2+ADX hosts,
+radix-2^64 field arithmetic), and commit `6892863` raised the three Ed25519
+floors in both baseline files to the benchmark-regression jobs' measurement of
+it at head `c6020ac`: 16,751 / 77,991 / 32,019 ops/sec (keygen / sign /
+verify) on `ubuntu-latest` x86_64 and 14,595 / 58,452 / 31,259 on
+`ubuntu-24.04-arm`. One run each.
+
+The four benchmark-regression runs that followed on identical Ed25519 code
+(heads `f2ac1d8`, `4a45408`, `755cd22`, `447cdf0`; workflow runs 34070019745,
+34082980156, 34084425292, 34084821515) showed the x86_64 sample to be a
+fast-class one: keygen 16,622 / 14,436 / 16,304 / 14,349, sign 73,660 /
+67,625 / 73,366 / 67,521, verify 33,234 / 28,003 / 32,777 / 28,306 ops/sec —
+the two-class `ubuntu-latest` fleet the 2026-08-14 recalibration already
+documents. The aarch64 runs sat within 1.5% of each other.
+
+Per "The guard" above, the floors are re-based to the median of those four
+runs (even count: mean of the middle two, rounded), computed by script from
+the job logs:
+
+| Primitive | x86_64 before → after | aarch64 before → after |
+|---|---|---|
+| `ed25519_keygen` | 16,751 → 15,370 | 14,595 → 14,678 |
+| `ed25519_sign` | 77,991 → 70,496 | 58,452 → 58,762 |
+| `ed25519_verify` | 32,019 → 30,542 | 31,259 → 31,270 |
+
+Tolerances are unchanged (45% x86_64, 15% aarch64). The x86_64 effective
+minimums (floor × 0.55) fall with the floors — 9,213 → 8,454, 42,895 → 38,773,
+17,610 → 16,798 ops/sec — which is stated rather than hidden: it is the same
+convention every other x86_64 row uses (the floor is the measured median, the
+tolerance is the fleet's spread), applied to a measured median instead of one
+fast sample. Every one of the four runs clears the new minimums by 67–74%, and
+the slowest of them is above the removed donna backend's last measurement on
+the same runner class (11,855 / 59,847 / 21,322) on every row. The other
+sixteen floors, `calibration_evidence` and `floor_drift_acknowledged` are
+untouched; both `baseline_change_log`s carry the run and job IDs. `README.md`
+publishes the same four runs' medians for all nineteen benchmarks on both
+runner classes.
+
+## 2026-09-16: the audit remediation's cost, measured rather than derived
+
+The 2026-09 audit remediation added work to three benchmarked paths, and the
+first attempt to floor one of them was a derivation rather than a measurement.
+This section records the correction.
+
+`ama_ed25519_sign` now derives `A = [a]B` and refuses a key whose stored
+public half disagrees (INVARIANT-51, audit finding B-2), so signing does two
+fixed-base scalar multiplications where it did one. On x86_64 that is a
+measured 1.85x, and the x86_64 floor was re-based from it. No aarch64 host was
+available, so the aarch64 floor was set at the worst case the structure
+admits — `58,762 / 2.0 = 29,381 ops/sec` — with the change log entry saying
+plainly that it was **derived, not measured**, and marking the first aarch64
+benchmark run after it as ACTION REQUIRED.
+
+That run is workflow run `35155721711`, job `104994944714`, at head
+`84ad90d2`, on `ubuntu-24.04-arm`. It measured `ed25519_sign` at **32,852
+ops/sec** — above the 30,266 the branch inherited from `main`, so on aarch64
+the second multiplication costs less than the conservative bound allowed for,
+and the derived floor was 11% below what the runner actually delivers.
+
+The same run showed two floors that a derivation had not anticipated at all:
+
+| Primitive | aarch64 before → after | measured | cause |
+|---|---|---|---|
+| `ed25519_keygen` | 14,678 → 12,271 | 12,271 ops/sec | the row times the Python `keypair()` call, which runs a FIPS 140-3 pairwise-consistency **sign** on every key, so it pays the INVARIANT-51 multiplication too |
+| `ed25519_sign` | 29,381 → 32,852 | 32,852 ops/sec | derived bound replaced by the runner's own figure |
+| `full_package_verify` | 4,426 → 3,441 | 3,441 ops/sec | the verify path now rebuilds and checks the INVARIANT-52 canonical transcript and rejects small-order Ed25519 points (audit A-2, A-3) |
+
+`ed25519_keygen` is the entry worth reading twice. Nothing in Ed25519 key
+generation changed; the row moved 16.4% because the benchmark measures the
+public API call, and that call signs. x86_64 shows the same movement — 14,405
+against a 15,370 floor — and passed only because that file's tolerance is 45
+where this one's is 15. A floor that describes a composite operation moves
+when any part of the composite moves, which is the property that makes the
+tolerance, not the floor, the wrong place to absorb a known change.
+
+Tolerances are unchanged (15% on all three). These are single-run figures
+rather than four-run medians: the fleet this file describes has a documented
+cross-run spread of <= 3% on these rows, so 15% is a 5x margin over it, and
+the next aarch64 run on this branch is the confirmation.
+
+
+## 2026-09-22: `ed25519_sign_expanded` — INVARIANT-51 paid once, at key load, and a new row at a derived floor
+
+The 2026-09-16 section below re-based `ed25519_sign` for a deliberate
+slowdown: INVARIANT-51 makes `ama_ed25519_sign` derive `A = [a]B` on every
+signature and refuse a stored public half that disagrees. That is the cost of
+the property when the key is a bare 64-byte string with nothing binding its
+halves. The tree now carries a form in which the binding travels with the
+key — `ama_ed25519_expand_secret_key` derives `A` once and writes
+`a ‖ prefix ‖ A ‖ tag`, and `ama_ed25519_sign_expanded` re-checks the tag
+(two SHA-512 compressions) instead of re-deriving (a fixed-base scalar
+multiplication). Same core, identical signature bytes; every one of the 128
+bytes is load-bearing. `pqc_backends.Ed25519SigningKey` owns it in Python.
+
+**Measured, one host, one session** (Intel Xeon @2.80GHz, 4 vCPU container,
+Linux 6.18.44, `taskset -c 0`, tree `24341f8`):
+
+| level | `ed25519_sign` | `ed25519_sign_expanded` | ratio |
+|---|---|---|---|
+| C, `build/bin/benchmark_c_raw`, median of 1,000, 63-byte message | 24,780 ns | 13,613 ns | 1.820× |
+| C, CI benchmark flags (`AMA_ENABLE_AVX512=ON`, `AMA_ENABLE_NATIVE_ARCH=ON`) | 22,977 ns | 12,605 ns | 1.823× |
+| Python API, `benchmark_runner.py` harness, 240-byte message, run 1 | 34,566 ops/s | 55,524 ops/s | 1.606× |
+| Python API, run 2 | 34,977 ops/s | 55,607 ops/s | 1.590× |
+| Python API, run 3 | 34,713 ops/s | 55,728 ops/s | 1.605× |
+| Python API, a full snapshot run at `24341f8` (superseded, see below) | 34,900 ops/s | 55,465 ops/s | 1.589× |
+| Python API, the committed record (`benchmarks/benchmark-results.json`, run at `4e4fa7f`) | 35,287 ops/s | 56,746 ops/s | 1.608× |
+
+`ama_ed25519_expand_secret_key` itself: 12,632 ns, paid once per key. The
+Python ratio sits below the C ratio by the fixed ctypes cost each call
+carries (and `ed25519_sign` reaches the C through the Cython binding when
+one is built, while the expanded path is ctypes). `ama_ed25519_sign`'s own
+instruction count is unchanged by the shared core: 331,814 → 331,864 Ir,
++0.02%, `benchmarks/ic_driver.c` base against head.
+
+**Correction, 2026-09-24.** The committed record's `ed25519_sign` row went on
+carrying the ledger's older description, "native C, expanded key", after
+`c126037` rewrote the ledger to say what the row measures: the 64-byte
+`seed ‖ A` key with INVARIANT-51's derivation on every call. The once-at-load
+form is the separate `ed25519_sign_expanded` row, so the record labelled the
+two rows the wrong way round. That one copied field was corrected in place to
+the ledger's text, and `benchmark-report.md` re-rendered from the record. The
+measurement, floor, tolerance and provenance are unchanged. The record could
+not be re-run that day: the only host available was a 4-vCPU container with a
+load average above 50. `tests/test_published_benchmark_artefacts_are_current.py`
+now compares every description and tolerance a row copies with the ledger,
+as it already did the floor.
+
+**The new row's floors are derived, not measured on the canonical runners,
+and say so.** The canonical runner has never run this row, so there is no
+four-run median to take. Both change-log entries record the derivation:
+
+| file | source floor | ratio applied | floor | tolerance | failure point |
+|---|---|---|---|---|---|
+| `baseline.json` (x86_64) | `ed25519_sign` 38,811 | 1.589 (the lowest of the five Python ratios above; the run it came from was re-run at `4e4fa7f` and only this table and the change-log entry keep its figures — the lower ratio is the conservative floor) | **61,671** | 45% | 33,919 |
+| `arm-baseline.json` (aarch64) | `ed25519_sign` 32,852 | 1.5 (conservative: no aarch64 host was available, and this file's band is 15%) | **49,278** | 15% | 41,886 |
+
+The operation removed from the timed path is one of two fixed-base scalar
+multiplications, the same fraction of the work on any microarchitecture, so
+a ratio below the measured one is a floor a correct build cannot miss. Both
+entries say the floor is to be re-based to the runner's own median after its
+first run — as this file did for `ed25519_sign` on aarch64 (derived 29,381,
+then measured 32,852). A derived floor is a placeholder for a measurement,
+not a substitute for one.
+
+`ed25519_sign` itself is not re-based: its floor describes the per-call path,
+which is unchanged. The property test that pins it
+(`test_the_ed25519_sign_floor_tracks_invariant_51`) still holds because that
+path still pays the derivation.
+
+**AEAD encrypt wrappers, same commit.** `native_aes256_gcm_encrypt` and
+`native_chacha20poly1305_encrypt` allocate one output buffer instead of two.
+A/B in one process against the previous wrapper under identical checks
+(20,000-call windows, best of five, `taskset -c 0`): AES-256-GCM 64 B
+3.367 → 3.001 µs, 1 KiB 3.959 → 3.647 µs (−7.9%), 16 KiB 11.434 → 11.407 µs;
+ChaCha20-Poly1305 1 KiB 4.493 → 4.390 µs. No floor moves for it: the change
+is inside the 45% band and the rows' floors describe the same operation.
+For the record, the kernel behind the AES row measures 0.65 µs per 1 KiB
+(`benchmark_c_raw`, 1.54 M ops/s); the Python row's ~3.6 µs is mostly
+marshalling, and that is what the row's floor has always measured.
+
+## 2026-09-22: the audit remediation's cost on both runner classes — four-run re-base, and the 2026-09-16 floors confirmed
+
+The 2026-09-16 section above re-based three aarch64 floors from a single run
+and left the x86_64 file with one derived floor (`ed25519_sign`) and three
+rows it acknowledged were sitting below their floors inside the 45% band
+(`ed25519_keygen`, `full_package_create`, `full_package_verify`). Four
+`benchmark-regression` runs have since landed on identical measured paths —
+heads `ebc80b9`, `1bf806b`, `da8901d` and `1e79cd1` (a gate pin, a benchmark
+skip message, a dead FROST store and a dead Argon2 branch); workflow runs
+35545407750, 35548705329, 35608144468 and 35611329428, 2026-09-20 to
+2026-09-21 — which is the protocol the 2026-09-07 section established.
+Medians are the mean of the middle two, rounded half up, computed by script
+from the job logs.
+
+**x86_64 — `ubuntu-latest`, jobs 106170292775, 106179299451, 106360245063,
+106370902549.** Run 35548705329 is a fast-class sample on every row (20–45%
+above the other three), so the medians are slow-class medians:
+
+| primitive | runs ebc80b9, 1bf806b, da8901d, 1e79cd1 (ops/sec) | median | floor before → after | note |
+|---|---|---|---|---|
+| `ama_sha3_256_hash` | 362,192 / 484,921 / 364,191 / 362,956 | 363,574 | 327,222 | unchanged; median +11.1% vs floor |
+| `hmac_sha3_256` | 248,186 / 331,652 / 249,009 / 247,946 | 248,598 | 215,299 | unchanged; median +15.5% vs floor |
+| `ed25519_keygen` | 12,374 / 16,618 / 12,362 / 12,343 | 12,368 | 15,370 → **12,368** | re-based (median) |
+| `ed25519_sign` | 38,655 / 50,286 / 38,813 / 38,808 | 38,811 | 38,170 → **38,811** | re-based (median) |
+| `ed25519_verify` | 27,759 / 38,799 / 27,942 / 27,925 | 27,934 | 30,542 → **27,934** | re-based (median) |
+| `hkdf_derive` | 166,632 / 220,752 / 166,598 / 166,721 | 166,677 | 131,341 | unchanged; median +26.9% vs floor |
+| `full_package_create` | 1,857 / 2,479 / 1,836 / 1,855 | 1,856 | 1,983 → **1,856** | re-based (median) |
+| `full_package_verify` | 2,793 / 4,244 / 2,803 / 2,811 | 2,807 | 3,442 → **2,807** | re-based (median) |
+| `secp256k1_ecdsa_sign` | 9,211 / 11,869 / 9,179 / 9,187 | 9,199 | 8,068 | unchanged; median +14.0% vs floor |
+| `secp256k1_ecdsa_verify` | 3,717 / 4,874 / 3,724 / 3,722 | 3,723 | 3,302 | unchanged; median +12.7% vs floor |
+| `dilithium_keygen` | 1,511 / 1,907 / 1,548 / 1,497 | 1,530 | 1,312 | unchanged; median +16.6% vs floor |
+| `dilithium_sign` | 3,143 / 3,905 / 3,106 / 3,126 | 3,135 | 2,636 | unchanged; median +18.9% vs floor |
+| `dilithium_verify` | 10,367 / 13,208 / 10,379 / 10,383 | 10,381 | 8,897 | unchanged; median +16.7% vs floor |
+| `kyber_keygen` | 3,238 / 4,360 / 3,262 / 3,265 | 3,264 | 2,726 | unchanged; median +19.7% vs floor |
+| `kyber_encapsulate` | 15,894 / 21,394 / 15,950 / 16,006 | 15,978 | 11,994 | unchanged; median +33.2% vs floor |
+| `aes_256_gcm_encrypt` | 230,869 / 315,191 / 233,991 / 231,406 | 232,699 | 224,406 | unchanged; median +3.7% vs floor |
+| `chacha20poly1305_encrypt` | 231,429 / 306,089 / 235,640 / 234,548 | 235,094 | 227,521 | unchanged; median +3.3% vs floor |
+| `x25519_scalarmult` | 18,894 / 24,705 / 18,966 / 19,001 | 18,984 | 16,876 | unchanged; median +12.5% vs floor |
+| `x25519_scalarmult_batch4` | 4,540 / 5,906 / 4,547 / 4,554 | 4,551 | 4,074 | unchanged; median +11.7% vs floor |
+
+**aarch64 — `ubuntu-24.04-arm`, jobs 106170292802, 106179299071,
+106360244481, 106370902832.** Homogeneous; every row but `dilithium_sign`
+(rejection-sampled) spreads 1.5% or less:
+
+| primitive | runs ebc80b9, 1bf806b, da8901d, 1e79cd1 (ops/sec) | median | floor before → after | note |
+|---|---|---|---|---|
+| `ama_sha3_256_hash` | 436,301 / 436,555 / 433,513 / 436,658 | 436,428 | 426,967 | unchanged; median +2.2% vs floor |
+| `hmac_sha3_256` | 304,312 / 303,642 / 303,360 / 303,993 | 303,818 | 285,176 | unchanged; median +6.5% vs floor |
+| `ed25519_keygen` | 12,315 / 12,278 / 12,269 / 12,286 | 12,282 | 12,271 | unchanged; median +0.1% vs floor |
+| `ed25519_sign` | 32,843 / 32,839 / 32,848 / 32,852 | 32,846 | 32,852 | unchanged; median -0.0% vs floor |
+| `ed25519_verify` | 31,111 / 31,101 / 31,031 / 30,719 | 31,066 | 31,270 | unchanged; median -0.7% vs floor |
+| `hkdf_derive` | 209,182 / 209,407 / 209,153 / 208,684 | 209,168 | 176,697 | unchanged; median +18.4% vs floor |
+| `full_package_create` | 2,114 / 2,155 / 2,110 / 2,177 | 2,135 | 2,379 → **2,135** | re-based (median) |
+| `full_package_verify` | 3,556 / 3,509 / 3,482 / 3,522 | 3,516 | 3,441 | unchanged; median +2.2% vs floor |
+| `secp256k1_ecdsa_sign` | 10,924 / 10,897 / 10,927 / 10,899 | 10,912 | 10,342 | unchanged; median +5.5% vs floor |
+| `secp256k1_ecdsa_verify` | 4,530 / 4,532 / 4,517 / 4,518 | 4,524 | 4,316 | unchanged; median +4.8% vs floor |
+| `dilithium_keygen` | 1,682 / 1,670 / 1,664 / 1,670 | 1,670 | 1,634 | unchanged; median +2.2% vs floor |
+| `dilithium_sign` | 3,944 / 3,570 / 3,456 / 3,637 | 3,604 | 3,316 | unchanged; median +8.7% vs floor |
+| `dilithium_verify` | 11,678 / 11,664 / 11,683 / 11,672 | 11,675 | 11,733 | unchanged; median -0.5% vs floor |
+| `kyber_keygen` | 3,860 / 3,861 / 3,853 / 3,842 | 3,857 | 3,729 | unchanged; median +3.4% vs floor |
+| `kyber_encapsulate` | 21,999 / 21,989 / 21,950 / 21,586 | 21,970 | 20,105 | unchanged; median +9.3% vs floor |
+| `aes_256_gcm_encrypt` | 234,782 / 233,826 / 235,180 / 233,887 | 234,335 | 234,678 | unchanged; median -0.1% vs floor |
+| `chacha20poly1305_encrypt` | 195,505 / 195,800 / 197,531 / 196,184 | 195,992 | 195,365 | unchanged; median +0.3% vs floor |
+| `x25519_scalarmult` | 25,410 / 25,406 / 25,394 / 25,394 | 25,400 | 25,167 | unchanged; median +0.9% vs floor |
+| `x25519_scalarmult_batch4` | 6,070 / 6,075 / 6,062 / 6,053 | 6,066 | 6,011 | unchanged; median +0.9% vs floor |
+
+Six floors move, all for changes already recorded in this ledger:
+
+* x86_64 `ed25519_keygen` 15,370 → 12,368: `keypair()` runs a FIPS 140-3
+  pairwise-consistency sign on every key, so it pays the INVARIANT-51
+  multiplication; the aarch64 file re-based this row on 2026-09-16 and the
+  x86_64 file did not.
+* x86_64 `ed25519_sign` 38,170 → 38,811: the derived floor (70,496 / 1.8469)
+  replaced by the runner's own median, which sits 1.7% above the derivation.
+  A raise, on the three-token rule.
+* x86_64 `ed25519_verify` 30,542 → 27,934. **Correction, per AGENTS.md §6.6.**
+  The 2026-09-16 x86_64 ledger entry stated that verify "gains the two
+  INVARIANT-48 small-order byte predicates at +0.7% and needs no re-base".
+  That was a C-level estimate of the two predicates alone, measured on a
+  development host; the canonical runner measures the whole Python-API verify
+  at −8.5% between the two medians, across a window that also carries the
+  constant-time passes `e8b9c8c` and `1f43143` and the audit remediation
+  `9b86086`. The statement is withdrawn; this entry records the measurement
+  and does not attribute it between those commits.
+* x86_64 `full_package_create` 1,983 → 1,856 and aarch64 `full_package_create`
+  2,379 → 2,135: the INVARIANT-51 multiplication inside the package's Ed25519
+  signature plus the INVARIANT-52 canonical transcript. The aarch64 row sat
+  10.3% under its floor on a 25% band — the same "known change absorbed by the
+  tolerance" the 2026-09-16 section argued against.
+* x86_64 `full_package_verify` 3,442 → 2,807: the INVARIANT-52 transcript
+  rebuild and the small-order rejection before verify (audit A-2, A-3) — the
+  change the aarch64 file re-based for on 2026-09-16 (4,426 → 3,441), now
+  applied to the x86_64 file from its own runner.
+
+Tolerances are unchanged everywhere (45 x86_64; 15 aarch64, 25 for the two
+composites). The x86_64 effective minimums (floor × 0.55) move 8,454 → 6,802,
+20,994 → 21,346, 16,798 → 15,364, 1,091 → 1,021 and 1,893 → 1,544; the
+slowest of the four runs clears each new minimum by at least 79%. The aarch64
+`full_package_create` minimum (floor × 0.75) moves 1,784 → 1,601, cleared by
+32% at the slowest run.
+
+The three aarch64 floors the 2026-09-16 entry set from one run are confirmed
+and left as set: `ed25519_keygen` median 12,282 against 12,271 (+0.1%),
+`ed25519_sign` 32,846 against 32,852 (−0.02%), `full_package_verify` 3,516
+against 3,441 (+2.2%). No other floor moves; every other row measured above
+its floor on all four runs of both classes, the closest being aarch64
+`aes_256_gcm_encrypt` (median 0.1% under a floor taken from two runs on
+2026-08-14, inside its 15% band) and aarch64 `ed25519_verify` (0.7% under).
+
+`README.md`'s 5.0.0 throughput table now publishes these four runs' medians
+for all nineteen rows on both classes, superseding the 2026-09-07 table
+(kept in the section above). Both `baseline_change_log`s carry the run and job
+ids.
+
+**The committed snapshot, and what its provenance now says.** In the same
+pass `benchmarks/benchmark_runner.py` gained two provenance rows and changed
+no measurement path: the `Tree` row names the paths `git status --porcelain`
+reported (every CI benchmark lane re-signs
+`ama_cryptography/_integrity_signature.py` before the package will import, so
+every record those lanes ever produced read `DIRTY` for that one file,
+indistinguishable from uncommitted changes to a primitive), and a
+`Python bindings` row records which of the six Cython extensions were imported
+— a source checkout without them built and a wheel measure different code on
+the hash, MAC, KDF and signature rows, and nothing in the record said which.

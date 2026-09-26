@@ -1,6 +1,6 @@
 # Security Design Notes — Original Constructions
 
-**Version:** 4.0.0
+**Version:** 5.0.0
 **Date:** 2026-07-25
 **Classification:** Public
 **Maintainer:** Steel Security Advisors LLC
@@ -35,8 +35,8 @@ that provides mathematical modeling and analytical utilities for the 3R
 monitoring subsystem. It implements state evolution, convergence, and
 constraint-satisfaction algorithms inspired by biological and physical systems.
 
-This is stated normatively in the module docstring
-(`ama_cryptography/double_helix_engine.py` lines 20–33):
+This is stated normatively in the module docstring of
+`ama_cryptography/double_helix_engine.py`, under its NON-CRYPTOGRAPHIC MODULE heading:
 
 > **IMPORTANT: NON-CRYPTOGRAPHIC MODULE** […] It is NOT a cryptographic
 > primitive and should NOT be relied upon for security guarantees.

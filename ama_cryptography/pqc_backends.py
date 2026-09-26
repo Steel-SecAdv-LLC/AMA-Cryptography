@@ -30,6 +30,7 @@ import errno as _errno
 import functools
 import hashlib
 import logging
+import operator
 import os
 import platform
 import sys
@@ -38,7 +39,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional, Union, cast
+from typing import Any, Callable, List, Optional, Sequence, Tuple, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 
@@ -59,6 +60,9 @@ from ama_cryptography._module_state import (
     pairwise_test_signature,
     secure_token_bytes,
 )
+from ama_cryptography._module_state import (
+    register_health_digest as _register_health_digest,
+)
 from ama_cryptography.exceptions import (
     NativeBackendUnavailableError,
     PQCUnavailableError,
@@ -75,7 +79,7 @@ __all__ = [
     "SecurityWarning",
     # Context-based API
     "AmaContext",
-    # FROST threshold Ed25519 (RFC 9591)
+    # FROST threshold Ed25519 (RFC 9591-style)
     "FROST_AVAILABLE",
     "FROST_BACKEND",
     "FROST_SHARE_BYTES",
@@ -101,6 +105,18 @@ __all__ = [
     "native_shake256",
     # Native FIPS 180-4 hash (raw one-shot SHA-256)
     "native_sha256",
+    "native_sha384",
+    "native_sha512",
+    "native_sha3_384",
+    "native_pbkdf2_hmac_sha256",
+    "native_pbkdf2_hmac_sha512",
+    # SLH-DSA (FIPS 205), parameter-driven: "SHAKE-128s" and "SHA2-256f"
+    "SPHINCS_AVAILABLE",
+    "SlhDsaKeyPair",
+    "generate_slhdsa_keypair",
+    "generate_slhdsa_keypair_from_seed",
+    "slhdsa_sign",
+    "slhdsa_verify",
 ]
 
 
@@ -123,15 +139,6 @@ class SphincsUnavailableError(PQCUnavailableError):
     pass
 
 
-# Environment variable to require constant-time backends
-# Set AMA_REQUIRE_CONSTANT_TIME=true to refuse non-constant-time backends
-AMA_REQUIRE_CONSTANT_TIME = os.getenv("AMA_REQUIRE_CONSTANT_TIME", "").lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-
 # Backend detection — native C library only
 _DILITHIUM_AVAILABLE = False
 _KYBER_AVAILABLE = False
@@ -151,34 +158,100 @@ _native_lib: Any = None
 _BufferInput = Union[bytes, bytearray, memoryview]
 
 
-@contextlib.contextmanager
-def _c_buffer_view(data: _BufferInput) -> Iterator[Any]:
-    """Yield a ctypes buffer view without copying writable key material.
+def _byte_view(data: _BufferInput) -> memoryview:
+    """A memoryview of ``data`` that is safe to hand to C as ``len(data)`` bytes.
+
+    The one rule every borrow helper in this module applies.  A view whose
+    items are not single bytes, or that is not one contiguous run, is refused
+    with ``TypeError`` rather than copied: the callers length-check with
+    ``len()``, which counts ITEMS, so a 32-item ``array('I')`` would otherwise
+    pass a 32-byte key check while carrying 128 bytes.
+    """
+    view = memoryview(data)
+    if view.ndim != 1 or view.itemsize != 1 or not view.c_contiguous:
+        view.release()
+        raise TypeError("buffer must be a one-dimensional, contiguous byte buffer")
+    return view
+
+
+class _CBufferViews:
+    """Borrow one or more inputs as ctypes-compatible buffers without copying
+    writable key material, releasing every borrowed view on exit.
 
     SECURITY: ``ctypes.c_char_p`` accepts immutable ``bytes`` directly but
     rejects ``bytearray``.  For mutable buffers we borrow the exporter with
     ``from_buffer`` so session keys stay in their wipeable bytearray storage
-    instead of being materialised as transient heap copies.
+    instead of being materialised as transient heap copies.  Read-only
+    memoryviews may not expose a writable buffer for ``from_buffer``;
+    converting those to bytes is limited to non-wipeable public inputs and
+    never used by SecureSession key storage.
+
+    PERFORMANCE: this is a hand-written context manager, not a
+    ``@contextlib.contextmanager`` generator, and it handles all of a call's
+    buffers in one enter/exit.  The generator form cost ~1 us per buffer per
+    call in the generator/``contextlib`` machinery alone — four of them
+    halved the one-shot AEAD wrappers' throughput (measured 8.4 us vs 3.4 us
+    per 1 KiB AES-256-GCM call), which is why the regression floors recorded
+    in May 2026 sat ~2.1x above what the wrappers could deliver.  ``bytes``
+    inputs — the overwhelmingly common case — take no view at all and are
+    passed straight through, exactly as ctypes itself accepts them.
+
+    ``__enter__`` returns a tuple of per-input arguments in input order, so
+    call sites unpack: ``with _CBufferViews(a, b) as (a_buf, b_buf):``.
     """
-    if isinstance(data, bytes):
-        yield data
-        return
-    view = memoryview(data)
-    if view.readonly:
-        # Read-only memoryviews may not expose a writable buffer for
-        # ``from_buffer``; converting to bytes is limited to non-wipeable
-        # public inputs and never used by SecureSession key storage.
+
+    __slots__ = ("_args", "_data", "_views")
+
+    def __init__(self, *data: _BufferInput) -> None:
+        self._data = data
+        self._views: list[memoryview] = []
+        self._args: Optional[tuple[Any, ...]] = None
+
+    def __enter__(self) -> tuple[Any, ...]:
+        views = self._views
+        args: list[Any] = []
         try:
-            yield view.tobytes()
-        finally:
+            for data in self._data:
+                if isinstance(data, bytes):
+                    args.append(data)
+                    continue
+                view = _byte_view(data)
+                views.append(view)
+                if view.readonly:
+                    args.append(view.tobytes())
+                    continue
+                args.append((ctypes.c_char * view.nbytes).from_buffer(view))
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        self._args = tuple(args)
+        return self._args
+
+    def __exit__(self, *exc: Any) -> None:
+        # Drop the ctypes borrows before releasing the views they came from.
+        self._args = None
+        views, self._views = self._views, []
+        for view in views:
             view.release()
-        return
-    try:
-        if view.ndim != 1 or view.itemsize != 1:
-            raise TypeError("buffer must be a one-dimensional byte buffer")
-        yield (ctypes.c_char * view.nbytes).from_buffer(view)
-    finally:
-        view.release()
+
+
+def _all_bytes(*data: _BufferInput) -> bool:
+    """True when every input is exactly ``bytes`` — the AEAD fast path.
+
+    ``bytes`` passes straight through to ctypes with no view to take and no
+    release obligation, so the hot one-shot AEAD wrappers skip the borrow
+    context manager entirely for the overwhelmingly-common all-``bytes``
+    call.  Measured on the ubuntu-24.04-arm CI runner, the context-manager
+    protocol alone cost ChaCha20-Poly1305's one-shot path ~14% (205k ->
+    178k ops/sec); this predicate is two-digit nanoseconds per argument.
+    Exact ``type`` check, not ``isinstance``: a ``bytes`` subclass could
+    override behaviour observed elsewhere, and it takes the borrow path,
+    which handles it correctly through the buffer protocol.
+    """
+    for item in data:
+        if type(item) is not bytes:
+            return False
+    return True
 
 
 def _get_lib_names() -> list:
@@ -224,11 +297,15 @@ def _get_search_dirs() -> list:
     for build_dir in build_dirs:
         search_dirs.append(pkg_dir / build_dir)
 
-    # System paths (Unix only)
-    if platform.system() != "Windows":
-        search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
-
     # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH (Windows).
+    #
+    # ORDERING: these are collected into `env_dirs` and appended BEFORE the
+    # system directories below.  The dynamic loader consults LD_LIBRARY_PATH
+    # ahead of the system defaults, and this search used to do the opposite —
+    # so an operator who pointed LD_LIBRARY_PATH at a patched or newer
+    # libama_cryptography could still be served a stale copy from
+    # /usr/local/lib, with the ABI handshake (major version only) accepting it
+    # and nothing but the load-diagnostics record showing which file won.
     #
     # SECURITY: these variables are controlled by the process's caller and steer
     # which shared object provides every cryptographic primitive — the same
@@ -243,6 +320,7 @@ def _get_search_dirs() -> list:
     # secure-execution mode, loudly.  On Windows _in_secure_execution_mode()
     # is always False (the concept has no referent there), so PATH-based DLL
     # resolution is unaffected.
+    env_dirs: list = []
     if _in_secure_execution_mode():
         logging.getLogger(__name__).warning(
             "Ignoring LD_LIBRARY_PATH/DYLD_LIBRARY_PATH for native-backend "
@@ -260,7 +338,15 @@ def _get_search_dirs() -> list:
             env_path = os.getenv(var, "")
             for p in env_path.split(os.pathsep):
                 if p:
-                    search_dirs.append(Path(p))
+                    env_dirs.append(Path(p))
+
+    # Operator-selected directories first, then the system defaults — see the
+    # ordering note above.
+    search_dirs.extend(env_dirs)
+
+    # System paths (Unix only)
+    if platform.system() != "Windows":
+        search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
 
     return search_dirs
 
@@ -279,9 +365,13 @@ def _get_search_dirs() -> list:
 _LOAD_DIAGNOSTICS: dict = {
     "loaded": False,
     "path": None,  # str: the library that loaded, when one did
-    "override": None,  # str: AMA_CRYPTO_LIB_PATH value, when honoured
-    "loaded_via_override": False,  # bool: the loaded library IS the override file
-    "override_ignored_reason": None,  # str: why an override was refused
+    # str: AMA_CRYPTO_LIB_PATH value, when honoured.  An honoured override
+    # CONFINES the search to itself, so a load with this set came from it.
+    "override": None,
+    "override_ignored_reason": None,  # str: why an override was not honoured
+    # str: why nothing loaded from an honoured override, or None.  The search
+    # does not continue past a failed override (INVARIANT-7: no fallbacks).
+    "override_refusal": None,
     "searched_dirs": [],  # list[str]: every directory consulted, in order
     "candidates": [],  # list[str]: files that existed and were tried
     "errors": [],  # list[(path, str)]: dlopen failure per candidate
@@ -299,7 +389,358 @@ _LOAD_DIAGNOSTICS: dict = {
     # was observed to erase the rejection before POST could report it.  This
     # field is the durable record native_backend_load_summary() reads first.
     "abi_rejection": None,
+    # str: hex SHA3-256 of the candidate's bytes, computed BEFORE the object
+    # was mapped (see _try_load_library).  On Linux the same file descriptor
+    # that was hashed is the one dlopen maps, so this is the digest of the
+    # bytes actually executing; the integrity POST stage prefers it over
+    # re-reading the path, which closes the hash-after-load race.
+    "preload_digest_hex": None,
+    # bool: True only when the mapping went through /proc/self/fd on the very
+    # descriptor that was hashed, i.e. only when "preload_digest_hex" above
+    # really is the digest of the bytes now executing.  Every other branch —
+    # Windows' CDLL(path, winmode=0), and the plain CDLL(path) fallback used
+    # on macOS and on any Linux without procfs — performs a SECOND, independent
+    # path resolution, so the recorded digest describes bytes that need not be
+    # the mapped ones.
+    #
+    # This flag exists because the POST stage preferred preload_digest_hex
+    # unconditionally.  The docstring of _try_load_library says the window on
+    # non-procfs platforms is accepted precisely because "the POST stage
+    # re-verifies after load as before"; without this flag it no longer did,
+    # and a file swapped between the hash and the dlopen was reported "native
+    # library verified" on macOS and Windows.
+    "preload_digest_is_of_mapped_bytes": False,
+    # list[str]: candidates refused by the PRE-LOAD digest check, as opposed to
+    # refused by the loader.  A structured record rather than a substring of
+    # the message, because __init__ distinguishes on it: a native-backend
+    # failure whose every cause is a digest refusal is the "stale artefact in a
+    # tree about to be re-signed" case that AMA_BUILD_PIPELINE=1 legitimately
+    # expects, and it is the ONLY native-backend failure that flag may excuse.
+    # A missing library, a wrong architecture or a loader error must still hard
+    # fail, or a release container (which carries the flag for its whole
+    # lifetime) could smoke-test a broken wheel and call it built.
+    #
+    # Like "abi_rejection", this is deliberately OUTSIDE the per-run reset in
+    # _find_native_library: discovery legitimately re-runs during import
+    # (secure_memory's probes, the build signer), and a reset would erase the
+    # refusal before POST could classify it.  It is append-only for the process
+    # lifetime; nothing clears it.
+    #
+    # This comment used to end "_reset_digest_refusals() clears it explicitly
+    # where a fresh verdict is wanted."  No such function has ever existed, and
+    # its absence was load-bearing rather than cosmetic: pairing a PERSISTENT
+    # refusal list with the PER-RUN "errors" list let a later discovery run
+    # that recorded no errors at all satisfy native_backend_refused_on_digest()
+    # vacuously — see the explicit non-empty requirement there.
+    "digest_refused": [],
 }
+
+
+def _expected_native_digest() -> Optional[bytes]:
+    """The build-signed SHA3-256 of ``libama_cryptography``, or ``None``.
+
+    Read from ``_integrity_signature.py`` for the PRE-LOAD check in
+    ``_try_load_library``.  At this point the artefact's Ed25519 signature has
+    not been verified — the verifier that checks it lives inside the library
+    being loaded — so this value is authoritative exactly against the attacker
+    who can replace the shared object but cannot rewrite and re-sign the
+    artefact.  An attacker who rewrites both is caught after load, by the
+    signature (unforgeable) or, having re-signed with their own key, by the
+    trust-anchor comparison on anchored builds; that residue is the OS-level
+    code-signing boundary SECURITY.md documents.  Returns ``None`` when the
+    artefact is absent or malformed, in which case there is nothing to check
+    against and discovery proceeds as before (the POST integrity stage then
+    reports the unverifiable state as it always has).
+    """
+    # Read from source text, NOT through the import system: an ordinary import
+    # of the artefact resolves to its `__pycache__` bytecode, which nothing has
+    # validated at this point, so a poisoned `.pyc` carrying a forged digest
+    # made this check compare the tampered object against the tampered object's
+    # own digest.  See `_artefact_source` for the measured reproduction and for
+    # what this does and does not establish.
+    from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+    try:
+        sig_mod = load_artefact_fields()
+    except ArtefactSourceError:
+        # There is no digest to return: the artefact is present but unreadable.
+        #
+        # None is what `_try_load_library` reads as "nothing to check against",
+        # so on this branch the pre-load comparison does not happen.  That is
+        # only safe because it is unreachable on the import path:
+        # `__init__._refuse_tampered_bindings_before_import` calls
+        # `load_artefact_fields` first and raises ImportError on exactly this
+        # exception, so a tree with an unreadable artefact never reaches a load.
+        # Raising here instead would turn an already-refused import into a
+        # second, less specific error from a lower layer.
+        return None
+    if sig_mod is None:
+        return None
+    digest_hex = getattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", None)
+    if not isinstance(digest_hex, str):
+        return None
+    try:
+        digest_raw = bytes.fromhex(digest_hex)
+    except ValueError:
+        return None
+    return digest_raw if len(digest_raw) == 32 else None
+
+
+def _digest_fd(fd: int) -> bytes:
+    """SHA3-256 over an open file descriptor, without moving its offset users."""
+    hasher = hashlib.sha3_256()
+    os.lseek(fd, 0, os.SEEK_SET)
+    while True:
+        chunk = os.read(fd, 1 << 20)
+        if not chunk:
+            return hasher.digest()
+        hasher.update(chunk)
+
+
+#: Hint appended to a pre-load digest refusal.  The repair tools live inside
+#: this package, so the refusal message must carry the way back in — the same
+#: reasoning INVARIANT-39 applied to the integrity-stage import completion.
+_PRELOAD_MISMATCH_HINT = (
+    "refused before mapping: the object's SHA3-256 does not match the signed "
+    "INTEGRITY_NATIVE_DIGEST_HEX, and a shared object executes its "
+    "constructors the moment it is mapped. If you rebuilt the library, "
+    "refresh the artefact with: AMA_BUILD_PIPELINE=1 python -m "
+    "ama_cryptography.integrity --update --sign"
+)
+
+
+#: In-process opt-in that lets the signing tool map a library whose digest does
+#: not (yet) match the artefact it is about to rewrite.
+#:
+#: Deliberately NOT an environment variable.  The predecessor of this flag was
+#: ``AMA_BUILD_PIPELINE=1``, read from ``os.environ`` on every import, which
+#: meant the pre-load digest refusal could be disabled by anyone able to set a
+#: variable in the target process — no code execution required.  A module
+#: attribute costs an attacker code execution inside the interpreter, which is
+#: strictly more than the check was ever defending against.
+_SIGNING_LOAD_OVERRIDE = False
+
+
+def _process_is_the_integrity_signer() -> bool:
+    """True when THIS PROCESS was started as the integrity signing tool.
+
+    The in-process override above cannot cover the whole need on its own, and
+    the release dry run proved it.  `python -m ama_cryptography._build_sign`
+    imports the package before `_build_sign` runs a single line, so by the time
+    it could enter the context manager, discovery has already refused the
+    freshly-built library, `pqc_backends._native_lib` is None, and
+    `secure_memory` — which takes its OWN handle at its own import time — has
+    already concluded there is no native backend.  `secure_memzero` then
+    refuses (correctly, fail-closed), the signer cannot produce a signature,
+    and the wheel build fails.  Observed on windows-latest; the same shape
+    applies to every platform whose freshly-built library necessarily differs
+    from the committed artefact, which is all of them.
+
+    The capability tested here is deliberately NOT "this process inherited an
+    environment variable".  That was the fail-open being removed:
+    `AMA_BUILD_PIPELINE=1` sitting in a Dockerfile `ENV`, a CI environment or a
+    systemd unit made every ordinary import in that environment map unverified
+    native code, with the attacker needing to run nothing at all.
+
+    What is tested is `__main__`'s identity AND, for a mixed-mode entry point,
+    the mode: the process must BE the signer and be running its writing
+    subcommand.  An attacker who can choose which program the victim runs can
+    already run anything; an attacker who can only set a variable cannot
+    change `__main__` or `sys.orig_argv`.  `AMA_BUILD_PIPELINE=1` is still
+    required alongside it — the signing entry points refuse to act without it
+    — so this narrows the old condition rather than replacing it with a
+    different one of equal breadth.
+
+    The mode half is not decoration.  Identity alone answered for the whole
+    of `ama_cryptography.integrity`, whose `--verify` and `--show` subcommands
+    are the documented way to CHECK an installation and write nothing.  In an
+    environment that carries the build-pipeline variable — the Dockerfile
+    `ENV` / CI / systemd shape named above — running the documented verify
+    command therefore mapped a shared object that had just failed its digest
+    check, executing its constructors before any verdict was printed.  The
+    variable was still a necessary ingredient of a fail-open, which is what
+    this check was written to end, so `--update` must now also be present.
+
+    Secure-execution mode revokes it regardless, at the call site, exactly as
+    it already did for the environment variable.
+
+    Two windows are recognised, because ``__main__``'s spec is not populated
+    for the whole life of a ``python -m`` process:
+
+    1. ``__main__.__spec__.name`` — authoritative once runpy has bound the
+       target module into ``__main__``.  This is the check as originally
+       built, and it covers every call made while the signer's own code runs
+       (``secure_memzero`` during signing, the native-load override, …).
+    2. ``sys.orig_argv`` — the interpreter's own record of the command line
+       (Python >= 3.10, this package's floor).  runpy imports the *parent
+       package* before it rebinds ``__main__``, so during that import —
+       where POST runs — the spec is still ``None`` and check 1 cannot
+       identify anyone.  The first exercised release dry run failed exactly
+       there: ``tools/resign_wheel.py`` launches
+       ``python -m ama_cryptography._build_sign`` against an anchored wheel
+       tree whose artefact it just deleted, and the anchored missing-artefact
+       refusal fired during the parent import with the identity check blind.
+       ``sys.orig_argv`` records how the interpreter was started.  Stated
+       precisely, because an earlier revision called it "immutable truth":
+       it is a plain mutable list, and anything executing in-process can
+       rewrite it, exactly as it can rewrite ``__main__.__spec__``.  Neither
+       window resists an in-process adversary; both resist one who can only
+       set an environment variable, which is the boundary being drawn.  Note
+       that PYTHONPATH plus a planted ``sitecustomize.py`` (or a ``.pth``
+       file) turns an environment-variable adversary into an in-process one
+       — that is a gap in the surrounding design, not something this check
+       can close by itself.
+    """
+    # Secure-execution mode revokes the identity outright: a set-uid/set-gid
+    # or file-capability process runs on behalf of a less-privileged caller,
+    # who must not be able to steer this decision at all.  Stated here, once,
+    # rather than beside each of the three consumers that used to repeat it.
+    if os.environ.get("AMA_BUILD_PIPELINE") != "1" or _in_secure_execution_mode():
+        return False
+    main_module = sys.modules.get("__main__")
+    spec = getattr(main_module, "__spec__", None)
+    name = getattr(spec, "name", None)
+    if _module_confers_signing_scope(name):
+        return True
+    return _launched_as_signer_module()
+
+
+#: The two module entry points whose process identity can confer signing scope.
+_INTEGRITY_SIGNER_MODULES = ("ama_cryptography._build_sign", "ama_cryptography.integrity")
+
+#: Signer modules that are NOT signers in every mode.  ``_build_sign`` exists
+#: only to sign, so being it is enough.  ``ama_cryptography.integrity`` is a
+#: mixed CLI: ``--update`` writes the artefact and needs the pre-load escape,
+#: while ``--verify`` and ``--show`` are read-only and documented as the way
+#: to *check* an installation.  Granting them signing scope let the identity
+#: check answer for the whole module rather than for the run: an operator (or
+#: a health check) running the documented verify command in an environment
+#: that carries ``AMA_BUILD_PIPELINE=1`` would map a digest-mismatching shared
+#: object — executing its ELF constructors, which is the entire event the
+#: pre-load refusal exists to prevent — while doing nothing that needs it.
+_MIXED_MODE_SIGNER_MODULES = ("ama_cryptography.integrity",)
+
+#: The subcommand that makes a mixed-mode signer run actually write.  ``--sign``
+#: is deliberately NOT accepted on its own: ``integrity`` rejects it without
+#: ``--update`` (they are one mutually-exclusive group plus a modifier), so
+#: ``--update`` is the token that distinguishes a writing run.
+_SIGNING_INTENT_FLAGS = ("--update",)
+
+
+#: Interpreter options that take a value.  Short ones may carry it joined
+#: (``-Wignore``) or as the next argv element (``-W ignore``); the long one
+#: only as the next element.  ``-c`` and ``-m`` also take a value but END
+#: option parsing, so they are handled separately below.
+_SHORT_OPTIONS_TAKING_A_VALUE = frozenset("WX")
+_LONG_OPTIONS_TAKING_A_VALUE = frozenset({"--check-hash-based-pycs"})
+
+
+def _parse_interpreter_argv(argv: Sequence[str]) -> Tuple[str, Optional[str], List[str]]:
+    """Split an interpreter command line the way CPython does.
+
+    Returns ``(mode, target, program_args)``: mode is ``"m"`` (``-m target``),
+    ``"c"`` (``-c code``), ``"script"`` (a path or ``-`` for stdin) or
+    ``"none"``; ``program_args`` are the arguments the running program sees.
+
+    Short options cluster (``-bb``, ``-Ic``), and ``-c``/``-m`` inside a
+    cluster end it and take the rest of the cluster, or the next element, as
+    their value.  The earlier scanners recognised only exact spellings, so
+    ``python "-c<code>" -mama_cryptography._build_sign`` was read as a
+    ``-m`` launch of the signer and granted signing scope to ``<code>``, and
+    ``--update`` was matched anywhere in argv, option values included.
+    """
+    index = 1
+    while index < len(argv):
+        argument = argv[index]
+        if argument == "--":
+            rest = list(argv[index + 1 :])
+            return ("script", rest[0], rest[1:]) if rest else ("none", None, [])
+        if argument == "-" or not argument.startswith("-"):
+            return "script", argument, list(argv[index + 1 :])
+        if argument.startswith("--"):
+            index += 2 if argument in _LONG_OPTIONS_TAKING_A_VALUE else 1
+            continue
+        for position, flag in enumerate(argument[1:], start=2):
+            if flag in "cm":
+                joined = argument[position:]
+                if joined:
+                    return flag, joined, list(argv[index + 1 :])
+                if index + 1 < len(argv):
+                    return flag, argv[index + 1], list(argv[index + 2 :])
+                return "none", None, []
+            if flag in _SHORT_OPTIONS_TAKING_A_VALUE:
+                if not argument[position:]:
+                    index += 1  # the value is the next element
+                break
+        index += 1
+    return "none", None, []
+
+
+def _interpreter_argv() -> Tuple[str, Optional[str], List[str]]:
+    """``_parse_interpreter_argv`` over this process's ``sys.orig_argv``.
+
+    ``sys.orig_argv`` is a plain mutable list: in-process code can rewrite it,
+    exactly as it can rewrite ``__main__.__spec__``.  It resists an adversary
+    who can only set environment variables, which is the boundary drawn here.
+    """
+    return _parse_interpreter_argv(list(getattr(sys, "orig_argv", []) or []))
+
+
+def _argv_shows_signing_intent() -> bool:
+    """True when the running program's own arguments ask for a writing run."""
+    _mode, _target, program_args = _interpreter_argv()
+    return any(argument in _SIGNING_INTENT_FLAGS for argument in program_args)
+
+
+def _module_confers_signing_scope(name: object) -> bool:
+    """True when being *this* module, in *this* mode, is signing scope.
+
+    Split from the raw membership test because module identity alone answers
+    the wrong question for a mixed-mode CLI — see ``_MIXED_MODE_SIGNER_MODULES``.
+    """
+    if name not in _INTEGRITY_SIGNER_MODULES:
+        return False
+    if name in _MIXED_MODE_SIGNER_MODULES:
+        return _argv_shows_signing_intent()
+    return True
+
+
+def _launched_as_signer_module() -> bool:
+    """True when this process was launched as ``python -m <signer module>``.
+
+    Needed alongside the ``__main__.__spec__`` check because runpy imports the
+    parent package (where POST runs) before it rebinds ``__main__``.
+    """
+    mode, target, _program_args = _interpreter_argv()
+    return mode == "m" and _module_confers_signing_scope(target)
+
+
+@contextlib.contextmanager
+def unverified_load_for_signing() -> Iterator[None]:
+    """Permit ONE region of code to map a digest-mismatching native library.
+
+    For ``ama_cryptography._build_sign`` only.  Re-signing has to map the
+    library because the signature is produced by the in-tree Ed25519 kernel
+    (INVARIANT-1: no PyCA dependency), and the library being signed is by
+    definition the one whose digest does not match the artefact yet.
+
+    Scope is the whole point: enter it around the discovery call, leave it
+    immediately, and an ordinary import — including one in a process that
+    happens to carry the build pipeline's environment — is unaffected.
+    Restored on every exit path, exceptions included, and nested entries are
+    handled by saving the previous value rather than assuming False.
+
+    Refused outright under secure-execution mode by _try_load_library, which
+    checks that separately: a set-uid process must not be talked into mapping
+    an unverified object by any means.
+    """
+    global _SIGNING_LOAD_OVERRIDE
+    previous = _SIGNING_LOAD_OVERRIDE
+    _SIGNING_LOAD_OVERRIDE = True
+    try:
+        yield
+    finally:
+        _SIGNING_LOAD_OVERRIDE = previous
 
 
 def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
@@ -310,17 +751,160 @@ def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
     be told apart from one that was never built.  The OSError is still
     swallowed (discovery must keep walking the search path), but it is no
     longer discarded.
+
+    PRE-LOAD VERIFICATION.  A shared object executes its constructors the
+    moment it is mapped, before any power-on self-test can examine it — so a
+    check that runs only after ``dlopen`` detects tampering but does not
+    prevent the tampered code from running.  Every candidate's bytes are
+    therefore hashed *first*, and when the integrity artefact carries a
+    native digest, a mismatch refuses to map the object at all.  On Linux the
+    mapping then goes through ``/proc/self/fd`` on the very descriptor that
+    was hashed: a path swap
+    between the two steps cannot occur (the descriptor pins the inode), so
+    what remains is an in-place overwrite of that inode inside the window —
+    an attacker who could do that could have pre-written the file, which the
+    hash catches — and platforms without procfs, where hash-then-load's
+    window is accepted and the POST stage re-verifies after load as before.
+    The recorded ``preload_digest_hex`` is the digest of the mapped bytes ON
+    THAT BRANCH ONLY, and ``preload_digest_is_of_mapped_bytes`` records which
+    branch was taken.  The POST integrity stage prefers the recorded digest
+    when that flag is set and re-reads the path when it is not — which is what
+    makes "the POST stage re-verifies after load as before" true on the
+    platforms this paragraph accepts the window for.
+
+    Every candidate goes through this check, ``AMA_CRYPTO_LIB_PATH`` included.
+    The override used to be a carve-out: it was mapped with the comparison
+    skipped (a ``verify_digest=False`` parameter this function no longer has)
+    and POST then reported it UNVERIFIED — so one environment variable mapped
+    arbitrary native code into the crypto process.  It may now relocate the
+    signed library, never substitute it; see :func:`_find_native_library`.
+
+    ``AMA_BUILD_PIPELINE=1`` is not a carve-out either, and used to be.  It
+    demoted the refusal to a warning and then mapped the object anyway, on the
+    reasoning that the tools which refresh a stale artefact after a rebuild
+    live inside this package and must be able to import it.  The premise is
+    right; the scope was not.  ``os.environ`` is read on EVERY import, so any
+    attacker who could set one variable in the victim's process turned this
+    pre-execution refusal into a post-hoc report — the definition of a
+    fail-open, and it required no code execution to reach.
+
+    The premise is honoured by scope instead of by severity.  The re-signing
+    run does need the library mapped (it signs with the in-tree Ed25519 kernel;
+    INVARIANT-1 forbids a PyCA dependency), so a mapping has to be possible —
+    but only from inside the tool that is deliberately blessing that library,
+    never from an ordinary import that merely inherited an environment.
+    :func:`unverified_load_for_signing` is that opt-in: an explicit,
+    narrowly-scoped in-process context manager, entered by
+    ``ama_cryptography._build_sign`` around its own discovery call and exited
+    immediately after.  Setting a module attribute inside the victim's
+    interpreter is not a capability an environment variable confers; it
+    requires already executing code there, at which point this check is moot.
+
+    Secure-execution mode (set-uid/set-gid) revokes even that, for the same
+    reason the dynamic loader drops ``LD_PRELOAD``.
     """
     _LOAD_DIAGNOSTICS["candidates"].append(str(lib_path))
+    # Per-attempt state: a digest recorded for an earlier candidate that then
+    # failed to map must not be attributed to this one.
+    _LOAD_DIAGNOSTICS["preload_digest_hex"] = None
+    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] = False
+    expected = _expected_native_digest()
+    fd: Optional[int] = None
     try:
-        if platform.system() == "Windows":
-            # On Windows with Python 3.8+, DLL search paths are restricted.
-            # Use winmode=0 to search the DLL's directory and PATH.
-            return ctypes.CDLL(str(lib_path), winmode=0)
-        return ctypes.CDLL(str(lib_path))
-    except OSError as exc:
-        _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
-        return None
+        try:
+            if platform.system() != "Windows":
+                fd = os.open(
+                    str(lib_path),
+                    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0),
+                )
+                digest: Optional[bytes] = _digest_fd(fd)
+            else:
+                digest = hashlib.sha3_256(lib_path.read_bytes()).digest()
+        except OSError as exc:
+            # One handler for every platform: bytes that cannot be read
+            # cannot be verified, and when there IS a signed digest to check
+            # against, an unreadable candidate is refused rather than loaded
+            # unverified.  (The first draft applied this only on POSIX; on
+            # Windows a read failure silently skipped the check — a fail-open
+            # on exactly the error path a fail-closed control must cover.)
+            if expected is not None:
+                _LOAD_DIAGNOSTICS["errors"].append(
+                    (str(lib_path), f"pre-load digest read failed: {exc}")
+                )
+                return None
+            digest = None
+        if expected is not None and digest is not None and digest != expected:
+            # Refused on every ORDINARY path: mapping is execution, and no
+            # environment variable alone may buy execution of bytes that
+            # failed verification.  Precisely: `AMA_BUILD_PIPELINE=1` is a
+            # NECESSARY but not sufficient condition below — it must be
+            # accompanied by this process being a signing entry point running
+            # its writing subcommand (`_process_is_the_integrity_signer`), or
+            # by the in-process override the signer sets around its own
+            # discovery call.  Stating it as "the variable is ignored" would
+            # be false, and was: the variable is still read, and the whole
+            # weight of the boundary rests on the identity/mode test beside
+            # it.  See that function's docstring for why the build pipeline
+            # needs the map at all.
+            override_grant = _SIGNING_LOAD_OVERRIDE and not _in_secure_execution_mode()
+            if override_grant or _process_is_the_integrity_signer():
+                # The signing tool is explicitly blessing this object. It is
+                # about to become the signed digest, so mapping it is the
+                # operator's stated intent rather than an inherited default.
+                #
+                # The warning names the grant that actually applied.  It used
+                # to say "the in-process signing override is active" for both,
+                # which was false on the path every signing run takes first:
+                # `python -m ama_cryptography.integrity --update --sign` maps
+                # the library while importing the package, before any code
+                # enters `unverified_load_for_signing`, so the grant there is
+                # the launch-identity test and the override is still False.
+                grant = (
+                    "the in-process signing override (unverified_load_for_signing) is active"
+                    if override_grant
+                    else "this process is the integrity signer running its writing "
+                    "subcommand (_process_is_the_integrity_signer)"
+                )
+                logging.getLogger(__name__).warning(
+                    "Native library %s does not match the signed digest; "
+                    "mapping it anyway because %s (the artefact is being "
+                    "re-signed for this build).",
+                    lib_path,
+                    grant,
+                )
+            else:
+                _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), _PRELOAD_MISMATCH_HINT))
+                if str(lib_path) not in _LOAD_DIAGNOSTICS["digest_refused"]:
+                    _LOAD_DIAGNOSTICS["digest_refused"].append(str(lib_path))
+                return None
+        if digest is not None:
+            _LOAD_DIAGNOSTICS["preload_digest_hex"] = digest.hex()
+        if fd is not None and platform.system() == "Linux":
+            proc_fd_path = f"/proc/self/fd/{fd}"
+            if os.path.exists(proc_fd_path):
+                try:
+                    handle = ctypes.CDLL(proc_fd_path)
+                except OSError as exc:
+                    _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
+                    return None
+                # Set ONLY here.  This is the one branch that maps the
+                # descriptor that was hashed, so it is the one branch on which
+                # the recorded digest describes the executing bytes.
+                if digest is not None:
+                    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] = True
+                return handle
+        try:
+            if platform.system() == "Windows":
+                # On Windows with Python 3.8+, DLL search paths are restricted.
+                # Use winmode=0 to search the DLL's directory and PATH.
+                return ctypes.CDLL(str(lib_path), winmode=0)
+            return ctypes.CDLL(str(lib_path))
+        except OSError as exc:
+            _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
+            return None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 #: ``AT_SECURE`` / ``AT_NULL`` from ``elf.h``.  Stable kernel ABI constants.
@@ -504,7 +1088,6 @@ def _in_secure_execution_mode() -> bool:
 def _find_native_library() -> Optional[ctypes.CDLL]:
     """Locate and load the native ama_cryptography shared library."""
     lib_names = _get_lib_names()
-    search_dirs = _get_search_dirs()
 
     # Reset the per-run discovery record.  _find_native_library() runs more than
     # once in-process (secure_memory during import, the build-time signer, tests),
@@ -519,8 +1102,8 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         loaded=False,
         path=None,
         override=None,
-        loaded_via_override=False,
         override_ignored_reason=None,
+        override_refusal=None,
         searched_dirs=[],
         candidates=[],
         errors=[],
@@ -537,12 +1120,8 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
     # loader-hijack the platform just prevented.  Under set-uid/set-gid the
     # variable is therefore ignored, loudly.
     #
-    # Outside secure-execution mode the override remains available (it is how
-    # developers point at an out-of-tree build), but it is logged at WARNING
-    # so that a substituted backend is visible in operational logs.  Note that
-    # the module-integrity digest covers the package's .py files only and
-    # never the native library, so this log line is the only signal that the
-    # backend was not the shipped one.
+    # Outside secure-execution mode it is honoured as a RELOCATION: see
+    # _load_from_override.
     override = os.getenv("AMA_CRYPTO_LIB_PATH")
     if override and _in_secure_execution_mode():
         logging.getLogger(__name__).warning(
@@ -558,26 +1137,9 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         )
         override = None
     if override:
-        _LOAD_DIAGNOSTICS["override"] = override
-        override_path = Path(override)
-        if override_path.is_file() or override_path.is_dir():
-            logging.getLogger(__name__).warning(
-                "Loading the native cryptographic backend from "
-                "AMA_CRYPTO_LIB_PATH=%r instead of the shipped library. The "
-                "module-integrity digest does not cover the native library, "
-                "so this override is not tamper-evident.",
-                override,
-            )
-        if override_path.is_file():
-            lib = _try_load_library(override_path)
-            if lib is not None:
-                _LOAD_DIAGNOSTICS["loaded"] = True
-                _LOAD_DIAGNOSTICS["path"] = str(override_path)
-                _LOAD_DIAGNOSTICS["loaded_via_override"] = True
-                return lib
-        elif override_path.is_dir():
-            search_dirs.insert(0, override_path)
+        return _load_from_override(override, lib_names)
 
+    search_dirs = _get_search_dirs()
     _LOAD_DIAGNOSTICS["searched_dirs"] = [str(d) for d in search_dirs]
 
     for search_dir in search_dirs:
@@ -593,6 +1155,116 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
     return None
 
 
+def _override_candidates(override_path: Path, lib_names: Sequence[str]) -> List[Path]:
+    """The files an honoured ``AMA_CRYPTO_LIB_PATH`` names, in search order.
+
+    A file names itself; a directory names the platform library names inside
+    it.  Anything else names nothing.  Shared by the loading and the path-only
+    discovery so the signer hashes the file the runtime would map.
+    """
+    if override_path.is_file():
+        return [override_path]
+    if override_path.is_dir():
+        return [override_path / name for name in lib_names if (override_path / name).is_file()]
+    return []
+
+
+def _load_from_override(override: str, lib_names: Sequence[str]) -> Optional[ctypes.CDLL]:
+    """Load the backend from an honoured ``AMA_CRYPTO_LIB_PATH``, or from nowhere.
+
+    The override RELOCATES the signed library; it never SUBSTITUTES it.  Every
+    candidate goes through the same pre-load digest check as any other
+    (:func:`_try_load_library`), so an object whose bytes differ from the
+    signed native digest is refused before it is mapped.  It used to be mapped
+    with that check skipped and reported UNVERIFIED by POST afterwards, which
+    let one environment variable execute arbitrary native code in the crypto
+    process; the only way left to map a digest-mismatching object is the
+    signer's in-process opt-in, :func:`unverified_load_for_signing`.
+
+    The search is CONFINED to the override.  When nothing there loads —
+    refused, unloadable, or absent — this returns None and the import fails
+    closed.  Falling back to the shipped library would run a different object
+    than the one the operator named, silently: that is a fallback, and
+    INVARIANT-7 forbids it.
+    """
+    _LOAD_DIAGNOSTICS["override"] = override
+    override_path = Path(override)
+    if override_path.is_dir():
+        _LOAD_DIAGNOSTICS["searched_dirs"] = [str(override_path)]
+    logging.getLogger(__name__).warning(
+        "Loading the native cryptographic backend from AMA_CRYPTO_LIB_PATH=%r. "
+        "The override relocates the signed library and cannot substitute it: "
+        "an object that does not match the signed native digest is refused, "
+        "and no other location is searched.",
+        override,
+    )
+    candidates = _override_candidates(override_path, lib_names)
+    for lib_path in candidates:
+        lib = _try_load_library(lib_path)
+        if lib is not None:
+            _LOAD_DIAGNOSTICS["loaded"] = True
+            _LOAD_DIAGNOSTICS["path"] = str(lib_path)
+            return lib
+
+    found = (
+        "every candidate there was refused or failed to load"
+        if candidates
+        else f"it names no file, and no directory holding {' or '.join(lib_names)}"
+    )
+    refusal = (
+        f"AMA_CRYPTO_LIB_PATH={override!r} was honoured and nothing loaded from "
+        f"it: {found}. The override may relocate the signed library, never "
+        "substitute it — an object whose bytes do not match the signed native "
+        "digest is refused before it is mapped — and no other location, the "
+        "shipped library included, is tried in its place (INVARIANT-7)."
+    )
+    _LOAD_DIAGNOSTICS["override_refusal"] = refusal
+    logging.getLogger(__name__).error("%s", refusal)
+    return None
+
+
+def _find_native_library_path() -> Optional[Path]:
+    """The path discovery would select — WITHOUT mapping the object.
+
+    Same search order as :func:`_find_native_library`, same handling of
+    ``AMA_CRYPTO_LIB_PATH`` (its suppression under secure-execution mode, and
+    the confinement of the search to it when honoured), but it stops at "this
+    file exists" instead of going on to ``dlopen`` it.
+
+    This exists for the build-time signer.  Signing needs the *bytes* of the
+    library that will ship, which is a read; it never calls into the library.
+    Asking for a loaded handle instead coupled signing to mapping, and once
+    the pre-load digest check became unconditional (see _try_load_library)
+    that coupling had a sharp edge: the repair flow's whole purpose is to
+    re-bless a library whose digest no longer matches, so requiring a
+    successful load meant the one file the operator wanted re-signed was the
+    one file discovery would refuse — and the signer would silently fall
+    through to a *different* candidate and sign that instead.
+
+    Returns None when no candidate exists at all, which is a real error for
+    the signer (there is nothing to bind) and is reported as one.
+    """
+    override = os.getenv("AMA_CRYPTO_LIB_PATH")
+    if override and _in_secure_execution_mode():
+        # Identical rule to the loading path: a caller-controlled variable
+        # must not select the backend under set-uid/set-gid, and it must not
+        # select what gets signed either.
+        override = None
+
+    if override:
+        # Confined, exactly as the loading path is: an override that names
+        # nothing must not quietly hand the signer the shipped library.
+        candidates = _override_candidates(Path(override), _get_lib_names())
+        return candidates[0] if candidates else None
+
+    for search_dir in _get_search_dirs():
+        for lib_name in _get_lib_names():
+            lib_path = Path(search_dir) / str(lib_name)
+            if lib_path.is_file():
+                return lib_path
+    return None
+
+
 def native_backend_diagnostics() -> dict:
     """Return the native-library backend record.
 
@@ -602,25 +1274,68 @@ def native_backend_diagnostics() -> dict:
     ``_find_native_library`` call (the build signer, a test) cannot change what
     this reports about the loaded backend.  ``loaded`` reflects the real module
     state (``_native_lib``); ``path`` is that object's file; ``override`` is the
-    AMA_CRYPTO_LIB_PATH value only when the loaded object actually came from it.
+    AMA_CRYPTO_LIB_PATH value only when the loaded object actually came from it
+    (a relocation: the object passed the same pre-load digest check as any
+    other candidate).
 
-    The remaining fields — ``override_ignored_reason``, ``searched_dirs``,
-    ``candidates``, ``errors`` — come from the last discovery and exist to
-    explain a FAILED load (see ``native_backend_load_summary``).  Safe to call
-    at any time; performs no I/O and never raises.
+    The remaining fields — ``override_ignored_reason``, ``override_refusal``,
+    ``searched_dirs``, ``candidates``, ``errors`` — come from the last
+    discovery and exist to explain a FAILED load (see
+    ``native_backend_load_summary``).  Safe to call at any time; performs no
+    I/O and never raises.
     """
     return {
         "loaded": _native_lib is not None,
         "path": _NATIVE_LIB_PATH,
         "override": _NATIVE_LIB_VIA_OVERRIDE,
         "override_ignored_reason": _LOAD_DIAGNOSTICS["override_ignored_reason"],
+        "override_refusal": _LOAD_DIAGNOSTICS["override_refusal"],
         "searched_dirs": list(_LOAD_DIAGNOSTICS["searched_dirs"]),
         "candidates": list(_LOAD_DIAGNOSTICS["candidates"]),
         "errors": [(p, e) for p, e in _LOAD_DIAGNOSTICS["errors"]],
         "missing_families": list(_LOAD_DIAGNOSTICS["missing_families"]),
         "native_version": _LOAD_DIAGNOSTICS["native_version"],
         "abi_rejection": _LOAD_DIAGNOSTICS["abi_rejection"],
+        "preload_digest_hex": _NATIVE_LIB_PRELOAD_DIGEST_HEX,
+        "preload_digest_is_of_mapped_bytes": _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED,
+        "digest_refused": list(_LOAD_DIAGNOSTICS["digest_refused"]),
     }
+
+
+def native_backend_refused_on_digest() -> bool:
+    """True when the native backend is absent SOLELY because of digest refusal.
+
+    The distinction __init__ needs to decide whether ``AMA_BUILD_PIPELINE=1``
+    may complete the import: a library refused for failing its signed digest is
+    the one native-backend fault a re-signing run legitimately expects to meet,
+    because clearing it is precisely what that run does.  Anything else — no
+    library at all, a wrong architecture, an ABI rejection, a loader error — is
+    a broken build and must keep hard-failing, so that a release container
+    holding the flag for its whole lifetime cannot smoke-test a broken wheel
+    and report success.
+
+    Requires that EVERY recorded candidate error be a digest refusal, not just
+    one of them: a tree with one stale library and one genuinely corrupt one is
+    a broken build.  And requires that THIS run recorded at least one error at
+    all.  ``digest_refused`` is append-only for the process lifetime while
+    ``errors`` is reset at the top of every ``_find_native_library`` call, so
+    without the emptiness check a later run that found no library whatsoever
+    left ``all(...)`` vacuously true over an empty list and inherited an
+    earlier run's refusal — turning "no library at all", which this function's
+    own contract says must keep hard-failing, into a fault
+    ``AMA_BUILD_PIPELINE=1`` would excuse.
+    """
+    if _native_lib is not None:
+        return False
+    refused = _LOAD_DIAGNOSTICS["digest_refused"]
+    if not refused:
+        return False
+    if _LOAD_DIAGNOSTICS["abi_rejection"]:
+        return False
+    errors = _LOAD_DIAGNOSTICS["errors"]
+    if not errors:
+        return False
+    return all(err is _PRELOAD_MISMATCH_HINT for _, err in errors)
 
 
 def native_backend_load_summary() -> str:
@@ -655,6 +1370,13 @@ def native_backend_load_summary() -> str:
             f"(it reported {diag['native_version'] or 'no version'})"
         )
 
+    if diag["override_refusal"]:
+        # Before "errors": those name WHAT failed at the override, this says
+        # why nothing else was tried — without it the "FOUND but could not be
+        # loaded" line below sent the reader to ldd over a refusal by design.
+        detail = "; ".join(f"{path}: {err}" for path, err in diag["errors"][:3])
+        return f"{diag['override_refusal']}" + (f" Candidates: {detail}" if detail else "")
+
     if diag["errors"]:
         detail = "; ".join(f"{path}: {err}" for path, err in diag["errors"][:3])
         return (
@@ -671,11 +1393,21 @@ def native_backend_load_summary() -> str:
         if diag["override_ignored_reason"]
         else ""
     )
+    # The remedy names the package build first.  `cmake --build` alone yields
+    # the library but neither the binding extensions nor the signed integrity
+    # artefact, and the artefact is not tracked in git (AGENTS.md section 8.4):
+    # a checkout that followed the cmake-only advice imported at digest-only
+    # strength, "NOT fully verified", with no pointer to the step it skipped.
     return (
         f"no native library found in any of {n_dirs} searched directories "
-        f"(first: {shown}).{ignored} Build it with: "
-        "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build — or "
-        "point AMA_CRYPTO_LIB_PATH at an existing build."
+        f"(first: {shown}).{ignored} Build this checkout with: "
+        "pip install -e .  (or: python setup.py build_ext --inplace), which "
+        "builds the native library and the binding extensions and generates "
+        "the signed integrity artefact, which a fresh clone does not carry. "
+        "A bare `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build` "
+        "builds the library only. Or point AMA_CRYPTO_LIB_PATH at the signed "
+        "library's location (it relocates the signed library; it cannot "
+        "substitute another build)."
     )
 
 
@@ -843,16 +1575,25 @@ def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_slhdsa_sign_deterministic.restype = ctypes.c_int
 
-        lib.ama_slhdsa_sign_internal.argtypes = [
+        # ama_slhdsa_sign_addrnd, not ama_slhdsa_sign_internal: the FIPS 205
+        # §9.2 internal interface is no longer in the shared object (§9 says it
+        # must not be exposed to applications other than for testing, and while
+        # it was exposed it cross-verified with the §10.2 API under one key —
+        # INVARIANT-50).  This is §10.2 with a caller-supplied addrnd, which is
+        # what NIST ACVP's hedged sigGen vectors need and cannot be used to
+        # sign an unprefixed string.
+        lib.ama_slhdsa_sign_addrnd.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_size_t),
-            ctypes.c_char_p,
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,
+            ctypes.c_char_p,  # ctx
             ctypes.c_size_t,
             ctypes.c_char_p,  # addrnd (n bytes)
-            ctypes.c_char_p,
+            ctypes.c_char_p,  # sk
         ]
-        lib.ama_slhdsa_sign_internal.restype = ctypes.c_int
+        lib.ama_slhdsa_sign_addrnd.restype = ctypes.c_int
 
         return True
     except AttributeError:
@@ -896,6 +1637,21 @@ def _setup_ed25519_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # public_key[32]
         ]
         lib.ama_ed25519_verify.restype = ctypes.c_int
+
+        # The expanded signing form (INVARIANT-51 verified at key load).
+        lib.ama_ed25519_expand_secret_key.argtypes = [
+            ctypes.c_char_p,  # expanded[128]
+            ctypes.c_char_p,  # secret_key[64]
+        ]
+        lib.ama_ed25519_expand_secret_key.restype = ctypes.c_int
+
+        lib.ama_ed25519_sign_expanded.argtypes = [
+            ctypes.c_char_p,  # signature[64]
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # expanded[128]
+        ]
+        lib.ama_ed25519_sign_expanded.restype = ctypes.c_int
 
     except AttributeError:
         return False
@@ -1067,6 +1823,61 @@ def _setup_sha3_ext_ctypes(lib: ctypes.CDLL) -> bool:
                 ctypes.c_size_t,  # input_len
                 ctypes.c_char_p,  # output
                 ctypes.c_size_t,  # output_len
+            ]
+            fn.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# SHA-512 / SHA-384 / SHA3-384 one-shot native availability (FIPS 180-4 /
+# FIPS 202).  These C symbols are the closure of the INVARIANT-1 sweep: the
+# SHA-512 core always existed in-tree (internal/ama_sha2.h, backing Ed25519,
+# SLH-DSA-SHA2, HKDF-SHA-512 and HMAC-SHA-384) but was never surfaced, so
+# Python callers needing SHA-384/512 — the FIPS 186-5 hash pairings for
+# P-384/P-521, the RFC 3161 digest table — reached for stdlib hashlib, whose
+# constructors resolve to OpenSSL.  Fail-closed per INVARIANT-7.
+_SHA2_EXT_NATIVE_AVAILABLE = False
+
+# PBKDF2-HMAC-SHA256/512 native availability (SP 800-132).  Backs the BIP39
+# master-seed derivation and the key-encryption-key derivation, which
+# previously ran on hashlib.pbkdf2_hmac — OpenSSL's PBKDF2.
+_PBKDF2_NATIVE_AVAILABLE = False
+
+
+def _setup_sha2_ext_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for SHA-512/SHA-384/SHA3-384 one-shots.
+
+    All three follow the SHA-3 family convention (input, input_len, output;
+    rc-checked) — NOT ama_sha256's output-first void convention.
+    """
+    try:
+        for name in ("ama_sha512", "ama_sha384", "ama_sha3_384"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_char_p,  # input
+                ctypes.c_size_t,  # input_len
+                ctypes.c_char_p,  # output (64 / 48 / 48 bytes)
+            ]
+            fn.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_pbkdf2_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for PBKDF2-HMAC-SHA256/512 (SP 800-132)."""
+    try:
+        for name in ("ama_pbkdf2_hmac_sha256", "ama_pbkdf2_hmac_sha512"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_char_p,  # password
+                ctypes.c_size_t,  # password_len
+                ctypes.c_char_p,  # salt
+                ctypes.c_size_t,  # salt_len
+                ctypes.c_uint32,  # iterations
+                ctypes.c_char_p,  # out
+                ctypes.c_size_t,  # out_len
             ]
             fn.restype = ctypes.c_int
         return True
@@ -1450,26 +2261,6 @@ def _setup_ml_dsa_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ama_ml_dsa_privkey_check.argtypes = [ctypes.c_int, ctypes.c_char_p]
         lib.ama_ml_dsa_privkey_check.restype = ctypes.c_int
 
-        lib.ama_ml_dsa_sign.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.POINTER(ctypes.c_size_t),
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-        ]
-        lib.ama_ml_dsa_sign.restype = ctypes.c_int
-
-        lib.ama_ml_dsa_verify.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-        ]
-        lib.ama_ml_dsa_verify.restype = ctypes.c_int
-
         lib.ama_ml_dsa_sign_ctx.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -1481,6 +2272,19 @@ def _setup_ml_dsa_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,
         ]
         lib.ama_ml_dsa_sign_ctx.restype = ctypes.c_int
+
+        # Hedged variant: same shape, fresh FIPS 204 `rnd` per signature.
+        lib.ama_ml_dsa_sign_hedged.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_ml_dsa_sign_hedged.restype = ctypes.c_int
 
         lib.ama_ml_dsa_verify_ctx.argtypes = [
             ctypes.c_int,
@@ -1838,6 +2642,10 @@ _ARGON2_NATIVE_AVAILABLE = False
 # ``ama_argon2id_legacy_verify``'s ``calloc(tag_len, 1)`` path.  Kept in
 # sync with ``AMA_ARGON2ID_MAX_TAG_LEN`` in ``include/ama_cryptography.h``.
 _ARGON2ID_MAX_TAG_LEN = 1024
+# Lane ceiling of the C implementation (``ARGON2_MAX_PARALLELISM`` in
+# ``src/c/ama_argon2.c``).  The C core rejects, never clamps, anything
+# above it; mirrored here so the Python boundary raises the same domain.
+_ARGON2ID_MAX_PARALLELISM = 255
 
 
 def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
@@ -1892,8 +2700,8 @@ def _setup_chacha20poly1305_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # pt_len
             ctypes.c_char_p,  # aad
             ctypes.c_size_t,  # aad_len
-            ctypes.c_char_p,  # ciphertext
-            ctypes.c_char_p,  # tag[16]
+            ctypes.c_void_p,  # ciphertext (output; c_void_p so an offset into one buffer is accepted)
+            ctypes.c_void_p,  # tag[16]    (output, at pt_len into the same buffer)
         ]
         lib.ama_chacha20poly1305_encrypt.restype = ctypes.c_int
 
@@ -1939,7 +2747,7 @@ def _setup_deterministic_keygen_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
-# FROST threshold Ed25519 (RFC 9591) availability
+# FROST threshold Ed25519 (RFC 9591-style) availability
 _FROST_AVAILABLE = False
 _FROST_BACKEND: Optional[str] = None
 FROST_SHARE_BYTES = 64  # 32 secret + 32 public
@@ -1973,7 +2781,7 @@ def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # message_len
             ctypes.c_char_p,  # participant_share
             ctypes.c_uint8,  # participant_index
-            ctypes.c_char_p,  # nonce_pair
+            ctypes.c_char_p,  # nonce_pair (IN/OUT — zeroized by the callee)
             ctypes.c_char_p,  # commitments
             ctypes.c_char_p,  # signer_indices
             ctypes.c_uint8,  # num_signers
@@ -1981,15 +2789,30 @@ def _setup_frost_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_frost_round2_sign.restype = ctypes.c_int
 
-        lib.ama_frost_aggregate.argtypes = [
-            ctypes.c_char_p,  # signature
-            ctypes.c_char_p,  # sig_shares
+        lib.ama_frost_verify_share.argtypes = [
+            ctypes.c_char_p,  # sig_share
+            ctypes.c_uint8,  # participant_index
+            ctypes.c_char_p,  # participant_public_share
             ctypes.c_char_p,  # commitments
             ctypes.c_char_p,  # signer_indices
             ctypes.c_uint8,  # num_signers
             ctypes.c_char_p,  # message
             ctypes.c_size_t,  # message_len
             ctypes.c_char_p,  # group_public_key
+        ]
+        lib.ama_frost_verify_share.restype = ctypes.c_int
+
+        lib.ama_frost_aggregate.argtypes = [
+            ctypes.c_char_p,  # signature
+            ctypes.c_char_p,  # sig_shares
+            ctypes.c_char_p,  # commitments
+            ctypes.c_char_p,  # signer_public_shares
+            ctypes.c_char_p,  # signer_indices
+            ctypes.c_uint8,  # num_signers
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # group_public_key
+            ctypes.POINTER(ctypes.c_uint8),  # bad_participant_index (out)
         ]
         lib.ama_frost_aggregate.restype = ctypes.c_int
         return True
@@ -2088,16 +2911,39 @@ _native_lib = _find_native_library()
 # actually running and never change after import, so the verifier's answer does
 # not depend on who called discovery last.
 _NATIVE_LIB_PATH: Optional[str] = (
-    getattr(_native_lib, "_name", None) if _native_lib is not None else None
+    # Prefer the discovery record: a pre-load-verified library is mapped via
+    # /proc/self/fd on Linux, so the CDLL's ``_name`` is a transient fd path
+    # while the discovery record holds the real filesystem location.
+    (_LOAD_DIAGNOSTICS["path"] or getattr(_native_lib, "_name", None))
+    if _native_lib is not None
+    else None
 )
 _NATIVE_LIB_VIA_OVERRIDE: Optional[str] = (
+    # An honoured override confines the search, so a load with it set is
+    # a load from it.
     _LOAD_DIAGNOSTICS["override"]
-    if (_native_lib is not None and _LOAD_DIAGNOSTICS["loaded_via_override"])
+    if _native_lib is not None
     else None
+)
+#: Digest of the bytes that were actually hashed-then-mapped at load time
+#: (None when the candidate's bytes could not be read before mapping, which
+#: is only permitted when there is no signed digest to compare against).
+#: Snapshotted here for the same reason as the two names above: the POST
+#: integrity stage must describe the library the process is running, not
+#: whatever a later discovery re-run scribbled into the scratch record.
+_NATIVE_LIB_PRELOAD_DIGEST_HEX: Optional[str] = (
+    _LOAD_DIAGNOSTICS["preload_digest_hex"] if _native_lib is not None else None
+)
+
+#: Whether the digest above is of the bytes actually mapped, snapshotted for
+#: the same reason.  False on every platform that does not map through
+#: /proc/self/fd, where POST must re-read the path instead of trusting it.
+_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED: bool = bool(
+    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] if _native_lib is not None else False
 )
 
 # ---------------------------------------------------------------------------
-# ABI version handshake (audit finding #7 close-out).
+# ABI version handshake (INVARIANT-42, runtime half).
 #
 # A ctypes symbol probe proves a NAME is exported, not that the object behind
 # it implements this package's ABI: a stale major-version library, or a
@@ -2120,7 +2966,7 @@ _NATIVE_LIB_VIA_OVERRIDE: Optional[str] = (
 #: ``include/ama_cryptography.h``.  tools/check_version_consistency.py
 #: cross-checks every Python mirror of a header constant, so this value
 #: cannot drift from the header silently.
-_CRYPTOGRAPHY_VERSION_MAJOR = 4
+_CRYPTOGRAPHY_VERSION_MAJOR = 5
 
 
 def _native_abi_version(lib: ctypes.CDLL) -> Optional[tuple]:
@@ -2177,22 +3023,56 @@ def _abi_handshake(lib: ctypes.CDLL) -> tuple:
     )
 
 
+def _disown_rejected_native_library(reason: str) -> None:
+    """Drop every trace of a library the ABI handshake refused.
+
+    Called from the module-scope handshake below.  It exists as a function
+    rather than an inline block for the same reason :func:`_abi_handshake` is
+    pure — the reject branch runs once, at import, against whatever object the
+    build produced, so a test that cannot call it directly cannot verify it at
+    all.
+
+    The postcondition is one sentence: after this returns, nothing in this
+    module describes a loaded library, because none is loaded.  That includes
+    the pre-load digest.  Leaving the digest set is not a cosmetic
+    inconsistency -- ``_check_loaded_native_library`` PREFERS it over
+    re-reading the path, so a surviving value sends the POST integrity stage
+    down its "I can see the bytes that are executing" branch, where it reports
+    a digest MISMATCH ("libama_cryptography has been modified since signing")
+    and records a stale binding.  A stale binding is the one fault a re-signing
+    run legitimately clears, and re-signing is the wrong remedy for a wrong-ABI
+    object -- rebuilding is.  With the digest cleared the stage finds none,
+    cannot read a path that is now ``None``, and lands where it belongs:
+    "could not verify", fatal on an anchored build.
+
+    This is the invariant the digest-refusal path in :func:`_try_load_library`
+    already holds (``tests/test_preload_native_digest.py``): refused means
+    never attributed a mapped digest.
+    """
+    global _native_lib, _NATIVE_LIB_PATH, _NATIVE_LIB_VIA_OVERRIDE
+    global _NATIVE_LIB_PRELOAD_DIGEST_HEX, _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED
+
+    logging.getLogger(__name__).critical("Native library %s rejected: %s", _NATIVE_LIB_PATH, reason)
+    _LOAD_DIAGNOSTICS["errors"].append((_NATIVE_LIB_PATH or "<unknown>", reason))
+    # The durable copy: "errors" above is per-discovery scratch that a
+    # later _find_native_library() call resets before POST reads it.
+    _LOAD_DIAGNOSTICS["abi_rejection"] = reason
+    _LOAD_DIAGNOSTICS["loaded"] = False
+    _LOAD_DIAGNOSTICS["path"] = None
+    _LOAD_DIAGNOSTICS["preload_digest_hex"] = None
+    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] = False
+    _native_lib = None
+    _NATIVE_LIB_PATH = None
+    _NATIVE_LIB_VIA_OVERRIDE = None
+    _NATIVE_LIB_PRELOAD_DIGEST_HEX = None
+    _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED = False
+
+
 if _native_lib is not None:
     _abi_version_string, _abi_reject = _abi_handshake(_native_lib)
     _LOAD_DIAGNOSTICS["native_version"] = _abi_version_string
     if _abi_reject is not None:
-        logging.getLogger(__name__).critical(
-            "Native library %s rejected: %s", _NATIVE_LIB_PATH, _abi_reject
-        )
-        _LOAD_DIAGNOSTICS["errors"].append((_NATIVE_LIB_PATH or "<unknown>", _abi_reject))
-        # The durable copy: "errors" above is per-discovery scratch that a
-        # later _find_native_library() call resets before POST reads it.
-        _LOAD_DIAGNOSTICS["abi_rejection"] = _abi_reject
-        _LOAD_DIAGNOSTICS["loaded"] = False
-        _LOAD_DIAGNOSTICS["path"] = None
-        _native_lib = None
-        _NATIVE_LIB_PATH = None
-        _NATIVE_LIB_VIA_OVERRIDE = None
+        _disown_rejected_native_library(_abi_reject)
 
 
 def _find_verified_native_library() -> Optional[ctypes.CDLL]:
@@ -2240,6 +3120,8 @@ if _native_lib is not None:
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
     _SHA256_NATIVE_AVAILABLE = _setup_sha256_ctypes(_native_lib)
     _SHA3_EXT_NATIVE_AVAILABLE = _setup_sha3_ext_ctypes(_native_lib)
+    _SHA2_EXT_NATIVE_AVAILABLE = _setup_sha2_ext_ctypes(_native_lib)
+    _PBKDF2_NATIVE_AVAILABLE = _setup_pbkdf2_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
     _HMAC_SHA384_NATIVE_AVAILABLE = _setup_hmac_sha384_ctypes(_native_lib)
@@ -2353,14 +3235,6 @@ if os.environ.get("AMA_REQUIRE_CONSTANT_TIME"):
         "This env var has no effect and should be removed from your configuration."
     )
 
-# Enforce constant-time requirement if AMA_REQUIRE_CONSTANT_TIME is set
-if AMA_REQUIRE_CONSTANT_TIME:
-    if not _DILITHIUM_AVAILABLE:
-        raise PQCUnavailableError(
-            "PQC_UNAVAILABLE: AMA_REQUIRE_CONSTANT_TIME is set but no "
-            "constant-time PQC backend is available. " + _INSTALL_HINT
-        )
-
 # Key sizes per NIST FIPS 203/204/205 specifications
 # ML-DSA-65 (Dilithium3)
 DILITHIUM_PUBLIC_KEY_BYTES = 1952
@@ -2412,6 +3286,11 @@ _SLHDSA_PARAM_SETS = {
 ED25519_PUBLIC_KEY_BYTES = 32
 ED25519_SECRET_KEY_BYTES = 64
 ED25519_SIGNATURE_BYTES = 64
+# The expanded signing form ama_ed25519_expand_secret_key produces:
+# a(32) || prefix(32) || A(32) || tag(32).  AMA_ED25519_EXPANDED_KEY_BYTES and
+# AMA_ED25519_EXPANDED_PUBLIC_KEY_OFFSET in include/ama_cryptography.h.
+ED25519_EXPANDED_KEY_BYTES = 128
+ED25519_EXPANDED_PUBLIC_KEY_OFFSET = 64
 
 # AES-256-GCM (NIST SP 800-38D)
 AES256_KEY_BYTES = 32
@@ -2443,6 +3322,193 @@ _KYBER_UNAVAILABLE_MSG = f"KYBER_UNAVAILABLE: Kyber-1024 backend not available. 
 _SPHINCS_UNAVAILABLE_MSG = (
     f"SPHINCS_UNAVAILABLE: SPHINCS+-256f backend not available. {_INSTALL_HINT}"
 )
+
+
+def _require_bytes_like(name: str, value: Any) -> None:
+    """Refuse an argument the C side would receive as a NULL pointer.
+
+    ``ctypes.c_char_p`` marshals ``None`` to NULL without complaint, so a
+    Python-level ``None`` arrives at a C function as a null pointer with
+    whatever length the wrapper computed beside it.  For a ``void`` primitive
+    that is a crash with no diagnosis; here it is a ``TypeError`` naming the
+    parameter (2026-09 audit, C-5).
+
+    ``name`` is a literal at every call site — never a value — for the same
+    CodeQL clear-text-logging reason documented on
+    :func:`_declared_length_fits`.
+    """
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{name} must be bytes-like, got {type(value).__name__}")
+
+
+def _output_buffer_capacity(buf: Any) -> Optional[int]:
+    """How many bytes ``buf`` can actually hold, or ``None`` if unknowable.
+
+    Only two kinds of argument carry a capacity the caller can be held to:
+
+    * a ``ctypes`` **array** (``create_string_buffer``, ``(c_ubyte * n)()``),
+      whose ``sizeof`` is the allocation; and
+    * an object exporting the **buffer protocol** (``bytes``, ``bytearray``,
+      ``memoryview``), whose ``nbytes`` is the allocation.
+
+    Everything else — a ``c_char_p``, a ``POINTER(...)``, ``NULL`` — is a
+    pointer, and a pointer's capacity is not visible from Python at all.
+    ``ctypes.sizeof`` answers 8 for every one of them, which is the width of
+    the pointer and not of the buffer behind it; comparing a declared length
+    against that 8 would refuse ``ctypes.cast(buf, c_char_p)`` — a legitimate
+    spelling for a buffer of any size — while proving nothing about the real
+    allocation.  So a pointer returns ``None``: unknowable, left to the
+    caller's contract, exactly as the C ABI has always left it.
+    """
+    if isinstance(buf, ctypes.Array):
+        return ctypes.sizeof(buf)
+    try:
+        ctypes.sizeof(buf)
+    except TypeError:
+        pass  # not a ctypes object at all — the buffer protocol may know
+    else:
+        # A ctypes pointer or scalar.  It exports the buffer protocol over
+        # its OWN storage, so ``memoryview`` would answer 8 here for the same
+        # reason ``sizeof`` does.  Neither number describes the allocation.
+        return None
+    try:
+        return memoryview(buf).nbytes
+    except TypeError:
+        return None
+
+
+def _declared_length_fits(buf: Any, declared: int) -> bool:
+    """Whether ``declared`` bytes fit in ``buf``, when ``buf`` knows its size.
+
+    A buffer whose capacity is unknowable (see
+    :func:`_output_buffer_capacity`) is accepted rather than refused: a
+    refusal there would break working callers to close a hazard this function
+    cannot see in the first place.
+
+    Split out of ``keypair_generate`` so each buffer is checked on its own
+    with a literal log message.  The loop this replaced iterated
+    ``(buf, declared, name)`` tuples, and CodeQL's clear-text-logging taint
+    follows the whole tuple: ``name`` — a literal ``"public_key"`` or
+    ``"secret_key"`` — arrived at the logger carrying the secret-key buffer's
+    taint and was reported as clear-text logging of sensitive data.  Nothing
+    but the parameter's NAME was ever logged; restructuring removes the flow
+    rather than explaining it.
+    """
+    actual = _output_buffer_capacity(buf)
+    if actual is None:
+        return True  # capacity not knowable — nothing to compare
+    return bool(declared <= actual)
+
+
+#: The type ``ctypes.byref`` returns.  CPython does not export it by name.
+_CArgObject = type(ctypes.byref(ctypes.c_int()))
+
+
+def _declared_out_len(value: Any) -> Optional[int]:
+    """The integer C will read as an output buffer's length, or ``None``.
+
+    ``ama_sign`` and ``ama_kem_encapsulate`` take their output length as
+    ``POINTER(c_size_t)`` (in/out), while both KEM methods take the shared
+    secret's length as a plain ``c_size_t``.  This resolves every spelling
+    ``ctypes`` accepts for either, to the value the C side will see:
+
+    * a Python ``int`` or any object with ``__index__`` (a NumPy integer),
+      reduced to ``size_t`` width exactly as ``ctypes`` marshals it;
+    * a ``c_size_t``, which ``ctypes`` passes by reference to a pointer
+      parameter;
+    * a ``pointer()`` or ``cast()`` pointer, read through;
+    * a ``byref()`` (a ``CArgObject``), read through its ``_obj``;
+    * a ``c_size_t`` array, which decays to a pointer to element 0;
+    * an object with ``_as_parameter_``, resolved as ``ctypes`` resolves it.
+
+    ``byref()`` was the gap (2026-09 review).  This function used to return
+    ``None`` for it on the premise that a ``CArgObject`` exposes nothing, and
+    its callers skipped the capacity check on ``None``, so the heap overflow
+    audit A-1 measured through ``pointer()`` came straight back through the
+    spelling the ``ctypes`` documentation recommends for out-parameters.  The
+    premise was false: ``_obj`` is a read-only member of every ``CArgObject``.
+    The array, ``_as_parameter_`` and ``__index__`` spellings were skipped the
+    same way; each reproduced the overflow in a child interpreter.
+
+    ``None`` means the declaration cannot be read: a NULL pointer, a
+    ``byref()`` with a non-zero offset (which points somewhere other than the
+    object it wraps), an empty array, a ``bool``, or a value ``ctypes`` would
+    not marshal as a length at all.  :func:`_declared_out_len_fits` refuses
+    every one of them when the output buffer's size is known; none is a
+    declaration a working caller makes.
+    """
+    if isinstance(value, bool):
+        # bool is an int subclass and True would silently read as a length.
+        return None
+    if isinstance(value, _CArgObject):
+        obj = getattr(value, "_obj", None)
+        if not isinstance(obj, ctypes._SimpleCData):
+            return None
+        try:
+            address = ctypes.cast(value, ctypes.c_void_p).value
+        except (TypeError, ctypes.ArgumentError):
+            return None  # not a pointer-tagged CArgObject: nothing byref made
+        if address != ctypes.addressof(obj):
+            # byref(x, offset): C reads the word at x + offset, not x.
+            return None
+        return _declared_out_len(obj.value)
+    if isinstance(value, ctypes.Array):
+        return _declared_out_len(value[0]) if len(value) > 0 else None
+    if isinstance(value, ctypes._Pointer):
+        return _declared_out_len(value.contents.value) if value else None
+    if isinstance(value, ctypes._SimpleCData):
+        return _declared_out_len(value.value)
+    try:
+        index = operator.index(value)
+    except TypeError:
+        parameter = getattr(value, "_as_parameter_", None)
+        return None if parameter is None else _declared_out_len(parameter)
+    return ctypes.c_size_t(index).value
+
+
+def _declared_out_len_fits(buf: Any, declared: Any) -> bool:
+    """Whether the length ``declared`` fits ``buf``, in whatever spelling.
+
+    When ``buf``'s capacity is knowable (see :func:`_output_buffer_capacity`)
+    a declaration that cannot be read is refused rather than passed through:
+    the C side would write through it with nothing having checked it, which is
+    the overflow this guard exists to stop.  Every spelling ``ctypes`` accepts
+    is resolved by :func:`_declared_out_len`, so what is refused here is a
+    NULL pointer (which ``ama_core.c`` refuses as well), an offset ``byref()``
+    or a value no working caller passes as a length.  When the capacity is not
+    knowable the buffer is a raw pointer and nothing can be compared, exactly
+    as before.
+    """
+    if _output_buffer_capacity(buf) is None:
+        return True
+    length = _declared_out_len(declared)
+    return length is not None and _declared_length_fits(buf, length)
+
+
+def _out_buffer_is_writable(buf: Any) -> bool:
+    """Whether C may write its output through ``buf``.
+
+    ``ctypes`` marshals an immutable ``bytes`` through a ``c_char_p`` parameter
+    without complaint, so a caller who passes one as an *output* buffer has the
+    native side write through an object CPython guarantees is immutable.  The
+    2026-09 audit reached that state through ``keypair_generate``: the C side
+    wrote a real keypair into a ``bytes``, every alias of that object observed
+    the mutation, and the pairwise consistency test then died with
+    ``TypeError: underlying buffer is not writable`` — *after* the write, so
+    INVARIANT-41's "no keypair is released untested" was skipped while the key
+    sat in caller-visible storage, and the failure was a ``TypeError`` rather
+    than a ``CryptoModuleError``, so the module never entered the ERROR state.
+
+    ``memoryview`` answers the question directly for anything exposing the
+    buffer protocol.  A raw ``ctypes`` pointer exposes no buffer at all and
+    raises ``TypeError``; that is the documented "caller's contract" case
+    :func:`_declared_length_fits` already leaves alone, so it reads as writable
+    here for the same reason.
+    """
+    try:
+        return not memoryview(buf).readonly
+    except TypeError:
+        return True  # not a buffer object (a raw pointer) — caller's contract
 
 
 class AmaContext:
@@ -2543,29 +3609,82 @@ class AmaContext:
         pk_size, sk_size = self._KEY_SIZES[self._algorithm]
         if public_key_len < pk_size or secret_key_len < sk_size:
             return -1  # AMA_ERROR_INVALID_PARAM
+        # ...and the declared capacity must not EXCEED the buffer it describes.
+        # The lengths above are plain ints supplied alongside the buffers; the
+        # C side writes public_key_len / secret_key_len bytes on their word, so
+        # a caller passing a 100-byte array with public_key_len=1952 gets 1952
+        # bytes written past it — heap corruption reachable from pure Python,
+        # and the pairwise test's string_at() would then over-read the same
+        # buffer.  ctypes arrays know their own size, so check it when it is
+        # knowable; buffers whose size cannot be determined (raw pointers) are
+        # left to the caller's contract, as before.
+        # One buffer at a time, each with a LITERAL message: see
+        # _declared_length_fits.  Nothing numeric is logged — the caller knows
+        # the lengths it passed, and a log line a scanner must special-case is
+        # not worth two integers of context it already has.
+        if not _declared_length_fits(public_key, public_key_len):
+            logging.getLogger(__name__).error(
+                "keypair_generate: public_key_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _declared_length_fits(secret_key, secret_key_len):
+            logging.getLogger(__name__).error(
+                "keypair_generate: secret_key_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        # Writability, checked BEFORE the native call rather than discovered
+        # after it.  An immutable `bytes` marshals through `c_char_p` happily,
+        # so the C side wrote a real keypair into it and only then did
+        # `_keypair_pairwise_test`'s `from_buffer` raise
+        # `TypeError: underlying buffer is not writable` — leaving an UNTESTED
+        # keypair in caller-visible storage (INVARIANT-41's one promise), with
+        # a `TypeError` rather than a `CryptoModuleError` so the module never
+        # entered the ERROR state and the secret key was never wiped.
+        # Refusing up front makes the failure a clean -1 before anything is
+        # generated.  See `_out_buffer_is_writable`.
+        if not _out_buffer_is_writable(public_key):
+            logging.getLogger(__name__).error(
+                "keypair_generate: the public_key buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(secret_key):
+            logging.getLogger(__name__).error(
+                "keypair_generate: the secret_key buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         rc = int(
             _native_lib.ama_keypair_generate(
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len
             )
         )
-        if rc == 0:
-            # FIPS 140-3 pairwise consistency test (INVARIANT-41), run with
-            # the context's OWN sign/verify or encaps/decaps so the algorithm
-            # under test is exactly the one that generated the keys.
-            self._keypair_pairwise_test(public_key, secret_key)
+        if rc != 0:
+            return rc
+        # FIPS 140-3 pairwise consistency test (INVARIANT-41), run with the
+        # context's OWN sign/verify or encaps/decaps so the algorithm under
+        # test is exactly the one that generated the keys.  Unconditional on
+        # the success path, so tools/check_keygen_pct.py can see that no path
+        # releases a keypair without it.
+        self._keypair_pairwise_test(public_key, secret_key)
         return rc
 
     #: Exact per-algorithm key sizes — mirrors ``get_key_sizes()`` in
     #: ``ama_core.c``.  The caller's buffer arguments are capacities (the C
     #: side accepts anything large enough), so the pairwise test slices the
-    #: actual key lengths rather than trusting the capacities.  ALG_HYBRID
-    #: generates and signs with ML-DSA-65 in the current C implementation.
+    #: actual key lengths rather than trusting the capacities.
+    #:
+    #: ALG_HYBRID is Ed25519 + ML-DSA-65 concatenated, Ed25519 part first
+    #: (``AMA_HYBRID_*_BYTES`` in the public header).  Until 5.0.0 it was an
+    #: alias for ML-DSA-65 alone while the header promised "classical + PQC";
+    #: these entries mirror the C `get_key_sizes()` that now implements it.
     _KEY_SIZES = {
         ALG_ML_DSA_65: (DILITHIUM_PUBLIC_KEY_BYTES, DILITHIUM_SECRET_KEY_BYTES),
         ALG_KYBER_1024: (KYBER_PUBLIC_KEY_BYTES, KYBER_SECRET_KEY_BYTES),
         ALG_SPHINCS_256F: (SPHINCS_PUBLIC_KEY_BYTES, SPHINCS_SECRET_KEY_BYTES),
         ALG_ED25519: (ED25519_PUBLIC_KEY_BYTES, ED25519_SECRET_KEY_BYTES),
-        ALG_HYBRID: (DILITHIUM_PUBLIC_KEY_BYTES, DILITHIUM_SECRET_KEY_BYTES),
+        ALG_HYBRID: (
+            ED25519_PUBLIC_KEY_BYTES + DILITHIUM_PUBLIC_KEY_BYTES,
+            ED25519_SECRET_KEY_BYTES + DILITHIUM_SECRET_KEY_BYTES,
+        ),
     }
 
     #: Maximum signature size per algorithm — sized exactly so the Ed25519
@@ -2575,7 +3694,7 @@ class AmaContext:
         ALG_ML_DSA_65: DILITHIUM_SIGNATURE_BYTES,
         ALG_SPHINCS_256F: SPHINCS_SIGNATURE_BYTES,
         ALG_ED25519: ED25519_SIGNATURE_BYTES,
-        ALG_HYBRID: DILITHIUM_SIGNATURE_BYTES,
+        ALG_HYBRID: ED25519_SIGNATURE_BYTES + DILITHIUM_SIGNATURE_BYTES,
     }
 
     def _keypair_pairwise_test(self, public_key: ctypes.Array, secret_key: ctypes.Array) -> None:
@@ -2633,7 +3752,7 @@ class AmaContext:
                 return bytes(sig.raw[: sig_len.value])
 
             def _verify(message: bytes, signature: bytes, pub: bytes) -> bool:
-                return self.verify(message, signature, pub) == 0
+                return self.verify(message, signature, pub)
 
             pairwise_test_signature(
                 _sign, _verify, sk_view, pk, f"AmaContext(alg={self._algorithm})"
@@ -2653,6 +3772,30 @@ class AmaContext:
         """Call ``ama_sign``. Returns ``AMA_SUCCESS`` (0) on success."""
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
+        # Output-buffer capacity, checked HERE because the C side cannot.
+        #
+        # `ama_sign` validates only that the DECLARED length is large enough
+        # for the algorithm (`*signature_len < AMA_ML_DSA_65_SIGNATURE_BYTES`
+        # in ama_core.c), which a caller-declared 3309 satisfies whatever the
+        # real allocation is — so a 64-byte buffer declared as 3309 took 3309
+        # bytes of signature.  Measured by the 2026-09 audit: rc = 0 returned
+        # (success), `*signature_len` = 3309, process dead with SIGSEGV.
+        #
+        # `keypair_generate` has carried this guard since the gap was found on
+        # ITS arguments, with a comment explaining exactly why Python has to
+        # make the check.  The reasoning was never applied to the three sibling
+        # methods that take the same (buffer, declared-length) shape, which is
+        # the whole of the defect: the guard existed one method away.
+        if not _declared_out_len_fits(signature, signature_len):
+            logging.getLogger(__name__).error(
+                "sign: signature_len exceeds the supplied buffer's size or cannot be read"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(signature):
+            logging.getLogger(__name__).error(
+                "sign: the signature buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         return int(
             _native_lib.ama_sign(
                 self._ctx,
@@ -2665,17 +3808,27 @@ class AmaContext:
             )
         )
 
-    def verify(
+    def verify_rc(
         self,
         message: bytes,
         signature: bytes,
         public_key: bytes,
     ) -> int:
         """
-        Call ``ama_verify``.
+        Call ``ama_verify`` and return its raw ``ama_error_t``.
 
-        Returns ``AMA_SUCCESS`` (0) if the signature is valid,
-        ``AMA_ERROR_VERIFY_FAILED`` (-4) if it is not.
+        ``AMA_SUCCESS`` (0) if the signature is valid,
+        ``AMA_ERROR_VERIFY_FAILED`` (-4) if it is not, and other negative
+        codes for a malformed call.  Use this only when the distinction
+        matters; :meth:`verify` is the answer to "is this signature good".
+
+        This method used to be called ``verify``, and that was a sharp edge
+        pointing the wrong way (2026-09 audit, B-14).  C convention makes
+        success ``0``, so ``if ctx.verify(...)`` accepted every forgery and
+        rejected every genuine signature — silently, in the direction that
+        fails open.  It was the only ``verify`` in this module that did not
+        return ``bool``.  The raw code is still available, under a name that
+        cannot be mistaken for a predicate.
         """
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
@@ -2690,6 +3843,21 @@ class AmaContext:
                 len(public_key),
             )
         )
+
+    def verify(
+        self,
+        message: bytes,
+        signature: bytes,
+        public_key: bytes,
+    ) -> bool:
+        """Whether ``signature`` is a valid signature on ``message``.
+
+        ``True`` only for ``AMA_SUCCESS``: every other code — a verification
+        failure, a closed context, a malformed length — is ``False``.  That
+        is the same contract as every other ``verify`` in this module, which
+        is the point (see :meth:`verify_rc`).
+        """
+        return self.verify_rc(message, signature, public_key) == 0
 
     # ------------------------------------------------------------------
     # KEM operations (Kyber-1024 context)
@@ -2706,6 +3874,32 @@ class AmaContext:
         """Call ``ama_kem_encapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
+        # Two output buffers, same reasoning as `sign` above — see the comment
+        # there for the measurement.  Both are checked, because a caller that
+        # gets one right and the other wrong is exactly the shape that produced
+        # the defect in the first place.
+        if not _declared_out_len_fits(ciphertext, ciphertext_len):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: ciphertext_len exceeds the supplied buffer's size "
+                "or cannot be read"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(ciphertext):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: the ciphertext buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _declared_out_len_fits(shared_secret, shared_secret_len):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: shared_secret_len exceeds the supplied buffer's size "
+                "or cannot be read"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(shared_secret):
+            logging.getLogger(__name__).error(
+                "kem_encapsulate: the shared_secret buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         return int(
             _native_lib.ama_kem_encapsulate(
                 self._ctx,
@@ -2728,6 +3922,20 @@ class AmaContext:
         """Call ``ama_kem_decapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
+        # Same guard as `sign` and `kem_encapsulate` above.  Here the declared
+        # length is a by-value `c_size_t` rather than an in/out pointer, which
+        # is why `_declared_out_len` resolves both shapes.
+        if not _declared_out_len_fits(shared_secret, shared_secret_len):
+            logging.getLogger(__name__).error(
+                "kem_decapsulate: shared_secret_len exceeds the supplied buffer's size "
+                "or cannot be read"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _out_buffer_is_writable(shared_secret):
+            logging.getLogger(__name__).error(
+                "kem_decapsulate: the shared_secret buffer is read-only and cannot receive output"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         return int(
             _native_lib.ama_kem_decapsulate(
                 self._ctx,
@@ -3060,7 +4268,19 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
 
 def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
-    Sign message with CRYSTALS-Dilithium (ML-DSA-65).
+    Sign message with ML-DSA-65 (FIPS 204), external interface, empty context.
+
+    **Signature format changed in 5.0.0.** This used to call the FIPS 204
+    *internal* interface (Algorithm 7, ``mu = H(tr || M)``, no domain
+    separator), whose signatures no conforming ML-DSA-65 verifier accepts.
+    It now applies the Sec 5.2 pure/external wrapper with the empty context,
+    which is what "an ML-DSA-65 signature" means to every other
+    implementation. Signatures produced by 4.x do not verify here and vice
+    versa.
+
+    The internal interface (Algorithm 7) is not shipped (INVARIANT-50): a
+    raw signer under the same key would sign pure signatures on
+    attacker-chosen ``(ctx, M)`` pairs.
 
     Args:
         message: Data to sign
@@ -3331,7 +4551,11 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
 
     Raises:
         KyberUnavailableError: If Kyber backend is not available
-        ValueError: If public_key has incorrect length
+        ValueError: If public_key has incorrect length, or is not an
+            encapsulation key at all — FIPS 203 Sec 7.2 input check 2 (the
+            modulus check) found a coefficient outside ``[0, q)``.  A
+            conformant peer rejects such a key before use; so does this
+            binding, as an input error rather than a backend fault.
 
     Example:
         >>> keypair = generate_kyber_keypair()
@@ -3363,6 +4587,18 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
             ss_buf,
             ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
         )
+        if rc == -4:
+            # AMA_ERROR_VERIFY_FAILED after the Python length check above can
+            # only be FIPS 203 Sec 7.2 input check 2: a 12-bit coefficient of
+            # the encapsulation key is >= q, so these bytes are not an
+            # encapsulation key.  That is a rejected INPUT, not a missing
+            # backend — the same distinction kyber_decapsulate draws for the
+            # Sec 7.3 hash check — and it used to surface here as
+            # KyberUnavailableError("... error code -4").
+            raise ValueError(
+                "Kyber-1024 encapsulation key rejected: a coefficient is outside "
+                "[0, q) (FIPS 203 Sec 7.2 modulus check)"
+            )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
@@ -3428,6 +4664,17 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
             ss_buf,
             ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
         )
+        if rc == -1:
+            # AMA_ERROR_INVALID_PARAM after the Python length checks above can
+            # only be FIPS 203 Sec 7.3 input check 3: the decapsulation key's
+            # embedded H(ek) does not match its embedded ek.  That is a
+            # malformed KEY, not an attacker-chosen ciphertext, so it is an
+            # error rather than an implicit-rejection secret.
+            raise ValueError(
+                "Kyber-1024 decapsulation key is internally inconsistent: the "
+                "embedded H(ek) does not match the embedded encapsulation key "
+                "(FIPS 203 Sec 7.3 hash check)"
+            )
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
         return bytes(ss_buf)
@@ -3491,13 +4738,24 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
 
 def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     """
-    Sign message with SPHINCS+-SHA2-256f-simple.
+    Sign message with SPHINCS+-SHA2-256f-simple (FIPS 205 §10.2, empty context).
 
     SPHINCS+ signatures are large (~49KB) but provide strong security
     guarantees based only on hash function security assumptions.
 
+    The bytes signed are ``M' = 0x00 || 0x00 || message`` — FIPS 205 §10.2
+    ``slh_sign`` with ``ctx = b""``, identical to
+    ``slhdsa_sign(message, secret_key, b"", param_set="SHA2-256f")``.
+
+    **Wire-format break.** This signed the RAW message until the
+    context-separation fix, which made it the FIPS 205 §9.2 internal interface
+    under a public name and let it cross-verify with :func:`slhdsa_verify`
+    under the same key — a signing oracle for pure signatures on
+    attacker-chosen ``(ctx, M)`` pairs (INVARIANT-50). Signatures produced by
+    the previous behaviour do not verify here.
+
     Args:
-        message: Data to sign (arbitrary length)
+        message: Data to sign (arbitrary length, including empty)
         secret_key: SPHINCS+-256f secret key (128 bytes)
 
     Returns:
@@ -3546,7 +4804,13 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
 
 def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
     """
-    Verify SPHINCS+-SHA2-256f-simple signature.
+    Verify SPHINCS+-SHA2-256f-simple signature (FIPS 205 §10.2, empty context).
+
+    The exact counterpart of :func:`sphincs_sign`: verifies
+    ``M' = 0x00 || 0x00 || message``, equivalent to
+    ``sphincs_verify_ctx(message, signature, public_key, b"")``. Like
+    :func:`sphincs_sign` this verified the RAW message before the
+    context-separation fix (INVARIANT-50).
 
     Args:
         message: Original data
@@ -3715,6 +4979,9 @@ def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
         SphincsUnavailableError: If the native SLH-DSA backend is not built.
         ValueError: On unsupported param_set.
         RuntimeError: On native key generation failure.
+
+    See :func:`generate_slhdsa_keypair_from_seed` for a keypair derived
+    deterministically from caller-supplied FIPS 205 §10.1 seeds.
     """
     check_crypto_permitted()
     enum_id, pk_len, sk_len, _, _ = _slhdsa_resolve(param_set)
@@ -3951,18 +5218,42 @@ def slhdsa_sign_deterministic(
     return bytes(sig_buf.raw[: sig_buf_len.value])
 
 
-def slhdsa_sign_internal(
+def slhdsa_sign_addrnd(
     message: bytes,
     secret_key: Union[bytes, bytearray],
     addrnd: bytes,
+    ctx: bytes = b"",
     param_set: str = "SHAKE-128s",
 ) -> bytes:
-    """SLH-DSA "internal interface" sign with explicit ``addrnd``.
+    """SLH-DSA §10.2 hedged sign with a caller-supplied ``addrnd``.
 
-    Skips the FIPS 205 §10.2 context wrapper and signs ``message`` directly.
-    Exposed for ACVP ``signatureInterface == "internal"`` KAT validation.
+    Applies the same ``M' = 0x00 || len(ctx) || ctx || M`` wrapper as
+    :func:`slhdsa_sign`; only the randomizer differs. Exposed so NIST ACVP's
+    **hedged** sigGen vectors — which publish ``additionalRandomness`` — can be
+    reproduced byte-for-byte *through* the wrapper.
+
+    This replaced ``slhdsa_sign_internal``, which called the FIPS 205 §9.2
+    internal interface. That entry point signed the raw message, so it
+    cross-verified with the §10.2 API under one key and was a signing oracle
+    for pure signatures on attacker-chosen ``(ctx, M)`` pairs; FIPS 205 §9 says
+    the internal functions must not be exposed to applications other than for
+    testing, and it is now compiled only under ``AMA_TESTING_MODE`` and absent
+    from the shared object this module loads (INVARIANT-50). The ACVP replay
+    got *stronger* in the move: the test used to build ``M'`` itself, so the
+    wrapper — the thing the defect was about — was outside the vector.
+
+    **Production code should call** :func:`slhdsa_sign`: an ``addrnd`` that
+    does not come from an approved RBG is not the approved hedged variant.
+
+    Raises:
+        ValueError: If ``len(ctx) > 255``, or ``secret_key`` / ``addrnd`` is
+            the wrong length.
+        SphincsUnavailableError: If the native backend is not built.
+        RuntimeError: On native signing failure.
     """
     check_crypto_permitted()
+    if len(ctx) > 255:
+        raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     enum_id, _, sk_len, sig_len, n = _slhdsa_resolve(param_set)
     if not SPHINCS_AVAILABLE or _native_lib is None:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
@@ -3986,17 +5277,19 @@ def slhdsa_sign_internal(
     sk_buf = _borrow(secret_key)
     addrnd_buf = ctypes.create_string_buffer(bytes(addrnd), n)
     try:
-        rc = _native_lib.ama_slhdsa_sign_internal(
+        rc = _native_lib.ama_slhdsa_sign_addrnd(
             ctypes.c_int(enum_id),
             sig_buf,
             ctypes.byref(sig_buf_len),
             message,
             ctypes.c_size_t(len(message)),
+            ctx if ctx else None,
+            ctypes.c_size_t(len(ctx)),
             addrnd_buf,
             sk_buf,
         )
         if rc != 0:
-            raise RuntimeError(f"ama_slhdsa_sign_internal({param_set}) failed: rc={rc}")
+            raise RuntimeError(f"ama_slhdsa_sign_addrnd({param_set}) failed: rc={rc}")
         return bytes(sig_buf.raw[: sig_buf_len.value])
     finally:
         # sk_buf is a BORROW of the caller's storage (see above) and is not
@@ -4150,10 +5443,222 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
     return bytes(sig_buf)
 
 
+class Ed25519SigningKey:
+    """An Ed25519 key loaded once for many signatures.
+
+    INVARIANT-51 verified at key load. :func:`native_ed25519_sign` derives
+    ``A = [a]B`` on every call to refuse a 64-byte key whose stored public
+    half is not the one its seed generates, which doubles the curve work per
+    signature. This object performs that derivation once, in
+    ``ama_ed25519_expand_secret_key``, and signs with
+    ``ama_ed25519_sign_expanded``, which re-checks a SHA-512 tag binding the
+    scalar, the nonce prefix and the public key instead of re-deriving.
+    Measured on the tree that introduced it, the C entry point costs 0.55x
+    the per-call one and a signature through this object about 0.625x of
+    ``native_ed25519_sign`` (the difference is the ctypes call the two paths
+    share); the signature bytes are identical (RFC 8032, pinned by
+    ``tests/test_ed25519_expanded_key.py`` against the RFC vectors, the
+    frozen oracle and the per-call path).
+
+    Construction:
+
+    * a 64-byte ``seed || A`` key is expanded directly; a public half that
+      is not ``[a]B`` raises :class:`ValueError` and nothing is retained;
+    * a 32-byte seed is completed to ``seed || A`` by ``ama_ed25519_keypair``
+      in a ctypes buffer this constructor owns and zeroes before returning,
+      so no ``bytes`` copy of the seed-derived key is ever made; it then pays
+      the FIPS 140-3 pairwise-consistency test INVARIANT-41 requires of every
+      seed-derived keypair, once, here, on the expanded form it will sign
+      with, rather than on every signature as the seed arms of
+      ``crypto_api`` and ``legacy_compat`` do.
+
+    Lifetime (INVARIANT-6): the expanded form holds the private scalar. It
+    lives in a ctypes buffer this object owns, is zeroed by :meth:`close`
+    (also on context-manager exit and on garbage collection), and a closed
+    key refuses to sign. Hold the object exactly as long as the signing
+    session. It is not a storage format and has no serialisation.
+
+    The object is safe to share between threads: signing reads the buffer
+    and the C entry point keeps no state.
+    """
+
+    __slots__ = ("__weakref__", "_closed", "_expanded", "_public_key")
+
+    def __init__(self, secret_key: Union[bytes, bytearray]) -> None:
+        check_crypto_permitted()
+        if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
+            raise NativeBackendUnavailableError(
+                "Ed25519 native backend not available. " + _INSTALL_HINT
+            )
+        self._closed = True  # until the expansion below succeeds
+        self._expanded: Any = None
+        self._public_key = b""
+
+        if len(secret_key) not in (32, ED25519_SECRET_KEY_BYTES):
+            raise ValueError(
+                "Ed25519 secret key must be 32 bytes (seed) or "
+                f"{ED25519_SECRET_KEY_BYTES} bytes (seed || public key), got {len(secret_key)}"
+            )
+
+        expanded = ctypes.create_string_buffer(ED25519_EXPANDED_KEY_BYTES)
+        seed_derived = len(secret_key) == 32
+        # A seed is completed to seed || A in a buffer this frame owns and
+        # wipes (INVARIANT-6); a 64-byte key is borrowed from the caller's
+        # storage rather than snapshotted.
+        sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES) if seed_derived else None
+        try:
+            if sk_buf is not None:
+                pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
+                ctypes.memmove(sk_buf, _borrow(secret_key), 32)
+                rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
+                if rc != 0:
+                    raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
+                rc = _native_lib.ama_ed25519_expand_secret_key(expanded, sk_buf)
+            else:
+                rc = _native_lib.ama_ed25519_expand_secret_key(expanded, _borrow(secret_key))
+        finally:
+            if sk_buf is not None:
+                ctypes.memset(sk_buf, 0, ED25519_SECRET_KEY_BYTES)
+        if rc != 0:
+            # The C side has already zeroed the buffer on refusal; nothing of
+            # the key is retained either way.
+            raise ValueError(
+                "Ed25519 secret key refused: its stored public half is not the "
+                "one its seed generates (INVARIANT-51)"
+            )
+        self._expanded = expanded
+        # Only the public half is read out.  ``expanded.raw[...]`` would first
+        # build a ``bytes`` of all 128 bytes — the scalar and the nonce prefix
+        # with it — which nothing can wipe, so :meth:`close` would zero this
+        # object's buffer while an immutable copy of the scalar outlived it.
+        self._public_key = ctypes.string_at(
+            ctypes.addressof(expanded) + ED25519_EXPANDED_PUBLIC_KEY_OFFSET,
+            ED25519_PUBLIC_KEY_BYTES,
+        )
+        self._closed = False
+        if seed_derived:
+            # INVARIANT-41: a seed-derived keypair is released only after it
+            # signs and verifies.  Run on the expanded form this object will
+            # sign with; a failure puts the module in the error state and
+            # this object is closed before the exception propagates.
+            try:
+                pairwise_test_signature(
+                    lambda m, _k: self.sign(m),
+                    lambda m, s, p: native_ed25519_verify(s, m, p),
+                    None,
+                    self._public_key,
+                    "Ed25519",
+                )
+            except BaseException:
+                self.close()
+                raise
+
+    @property
+    def public_key(self) -> bytes:
+        """The 32-byte public key, as derived at load."""
+        return self._public_key
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def sign(self, message: _BufferInput) -> bytes:
+        """Sign ``message``; the bytes :func:`native_ed25519_sign` would return.
+
+        ``message`` is ``bytes``, ``bytearray`` or a ``memoryview``; anything
+        else raises :class:`TypeError` here rather than as a ctypes argument
+        error (INVARIANT-5).  The message is public, so a mutable input is
+        passed by value.
+
+        Raises :class:`RuntimeError` if the key is closed, or if the expanded
+        form no longer verifies against its tag — a corruption of this
+        object's memory after load, which the C side refuses with a zero
+        signature rather than signing under a public half it did not derive.
+        """
+        check_crypto_permitted()
+        if isinstance(message, (bytearray, memoryview)):
+            message = bytes(message)
+        elif not isinstance(message, bytes):
+            raise TypeError(
+                f"message must be bytes, bytearray or memoryview, got {type(message).__name__}"
+            )
+        if self._closed:
+            raise RuntimeError("Ed25519 signing key is closed")
+        sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
+        rc = _native_lib.ama_ed25519_sign_expanded(
+            sig_buf, message, ctypes.c_size_t(len(message)), self._expanded
+        )
+        if rc != 0:
+            raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
+        return bytes(sig_buf)
+
+    def close(self) -> None:
+        """Zero the expanded key. Idempotent; the key cannot sign afterwards."""
+        if self._expanded is not None:
+            ctypes.memset(self._expanded, 0, ED25519_EXPANDED_KEY_BYTES)
+        self._closed = True
+
+    def __enter__(self) -> "Ed25519SigningKey":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # A constructor that raised before the buffer existed leaves the slot
+        # unset; there is then nothing to zero.
+        if getattr(self, "_expanded", None) is not None:
+            self.close()
+
+    def __repr__(self) -> str:
+        state = "closed" if self._closed else "open"
+        return f"<Ed25519SigningKey {state} public_key={self._public_key.hex()[:16]}...>"
+
+
+def _binding_imports_permitted() -> bool:
+    """May this process import a Cython binding extension?
+
+    Only if the native library was verified and loaded first — and this is a
+    memory-safety gate, not a convenience check.
+
+    Every one of the five binding extensions carries
+    ``DT_NEEDED [libama_cryptography.so.5]`` and
+    ``RUNPATH [$ORIGIN:...]`` (verified with ``readelf -dW``).  Importing one
+    therefore makes the dynamic loader map ``libama_cryptography.so.5`` out of
+    the package directory, and a shared object runs its ELF constructors the
+    moment it is mapped.  The loader performs no digest check; it cannot.
+
+    ``_find_native_library`` exists to make sure that never happens to an
+    unverified object: it opens the candidate, hashes the bytes, and loads it
+    through ``/proc/self/fd/N`` so the bytes mapped are the bytes hashed, and
+    on a mismatch it refuses and returns ``None`` **without mapping** — the
+    refusal message says exactly that.
+
+    The probes below then ran unconditionally, so on the refusal path the
+    package imported ``ed25519_binding`` a few statements later and the loader
+    mapped the very object that had just been rejected.  Measured, with one
+    byte flipped in the in-package ``libama_cryptography.so.5.0.0`` and the
+    other candidates removed: the import raises ``CryptoModuleError`` as it
+    should, and ``/proc/self/maps`` nevertheless contains the tampered library,
+    whose constructors have run.  An attacker able to replace that file got
+    code execution in the victim's process *despite* the integrity check
+    correctly detecting the tampering — which is the whole of what the pre-load
+    refusal was for.
+
+    So: no verified native library, no binding import.  A binding cannot work
+    without the library in any case (it is a DT_NEEDED, not a soft dependency),
+    so nothing is lost, and the docs-build override that reaches OPERATIONAL
+    with no native library simply runs without the Cython accelerators.
+    """
+    return _native_lib is not None
+
+
 def _probe_cython_ed25519() -> "tuple[Any, Any]":
     """Detect Cython Ed25519 bindings at module load time."""
+    if not _binding_imports_permitted():
+        return None, None
     try:
-        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
+        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -4165,8 +5670,10 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
 
 def _probe_cython_dilithium() -> "tuple[Any, Any]":
     """Detect Cython Dilithium bindings at module load time."""
+    if not _binding_imports_permitted():
+        return None, None
     try:
-        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
+        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -4178,8 +5685,10 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
 
 def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
+    if not _binding_imports_permitted():
+        return None
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
+        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
             cy_hkdf,
         )
 
@@ -4245,7 +5754,7 @@ def native_ed25519_batch_verify(
     Batch verify multiple Ed25519 signatures using native C backend.
 
     This is intentionally non-constant-time (vartime) because verification
-    scalars are public. This is safe and documented in the donna header.
+    scalars are public; the C backend documents the same (src/c/ama_ed25519.c).
 
     Args:
         entries: List of (message, signature, public_key) tuples.
@@ -4353,32 +5862,48 @@ def native_aes256_gcm_encrypt(
             f"AES-256-GCM nonce must be {AES256_GCM_NONCE_BYTES} bytes, " f"got {len(nonce)}"
         )
 
-    ct_buf = ctypes.create_string_buffer(len(plaintext))
-    tag_buf = ctypes.create_string_buffer(AES256_GCM_TAG_BYTES)
+    # One output allocation for ciphertext || tag, split on the way out.  The
+    # two-buffer form cost a second ctypes allocation per call; measured on
+    # the tree that changed it (1 KiB, 20,000-call windows, best of 5) the
+    # wrapper went from 4.215 us to 3.673 us per call, the C kernel being
+    # 0.65 us of either.  The tag pointer is the same buffer at offset
+    # pt_len, so the kernel's contract (two distinct output pointers) is
+    # unchanged.
+    pt_len = len(plaintext)
+    out_buf = ctypes.create_string_buffer(pt_len + AES256_GCM_TAG_BYTES)
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; do not call bytes(key), which leaves an immutable
-    # transient copy outside the secure wipe path.
-    with (
-        _c_buffer_view(key) as key_buf,
-        _c_buffer_view(nonce) as nonce_buf,
-        _c_buffer_view(plaintext) as pt_buf,
-        _c_buffer_view(aad) as aad_buf,
-    ):
+    # transient copy outside the secure wipe path.  All-bytes calls skip the
+    # borrow entirely (see _all_bytes); one FFI expression serves both paths
+    # so the marshalling cannot drift between them.
+    borrow = (
+        None
+        if _all_bytes(key, nonce, plaintext, aad)
+        else _CBufferViews(key, nonce, plaintext, aad)
+    )
+    key_buf, nonce_buf, pt_buf, aad_buf = (
+        (key, nonce, plaintext, aad) if borrow is None else borrow.__enter__()
+    )
+    try:
         rc = _native_lib.ama_aes256_gcm_encrypt(
             key_buf,
             nonce_buf,
-            pt_buf if len(plaintext) > 0 else None,
-            ctypes.c_size_t(len(plaintext)),
+            pt_buf if pt_len > 0 else None,
+            pt_len,
             aad_buf if len(aad) > 0 else None,
-            ctypes.c_size_t(len(aad)),
-            ct_buf,
-            tag_buf,
+            len(aad),
+            out_buf,
+            ctypes.byref(out_buf, pt_len),
         )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise RuntimeError(f"AES-256-GCM encryption failed (rc={rc})")
 
-    return bytes(ct_buf), bytes(tag_buf)
+    out = out_buf.raw
+    return out[:pt_len], out[pt_len:]
 
 
 def native_aes256_gcm_decrypt(
@@ -4427,13 +5952,15 @@ def native_aes256_gcm_decrypt(
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; authentication failure never observes a copied key.
-    with (
-        _c_buffer_view(key) as key_buf,
-        _c_buffer_view(nonce) as nonce_buf,
-        _c_buffer_view(ciphertext) as ct_buf,
-        _c_buffer_view(aad) as aad_buf,
-        _c_buffer_view(tag) as tag_buf,
-    ):
+    borrow = (
+        None
+        if _all_bytes(key, nonce, ciphertext, aad, tag)
+        else _CBufferViews(key, nonce, ciphertext, aad, tag)
+    )
+    key_buf, nonce_buf, ct_buf, aad_buf, tag_buf = (
+        (key, nonce, ciphertext, aad, tag) if borrow is None else borrow.__enter__()
+    )
+    try:
         rc = _native_lib.ama_aes256_gcm_decrypt(
             key_buf,
             nonce_buf,
@@ -4444,6 +5971,9 @@ def native_aes256_gcm_decrypt(
             tag_buf,
             pt_buf,
         )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise ValueError("AES-256-GCM authentication tag verification failed")
 
@@ -4509,11 +6039,7 @@ def native_hkdf(
     # SECURITY: rekey derives from live bytearray key storage via a
     # borrowed ctypes view.  This removes the previous bytes(self.key)
     # transient heap copy while preserving the native HKDF implementation.
-    with (
-        _c_buffer_view(ikm) as ikm_buf,
-        _c_buffer_view(salt or b"") as salt_buf,
-        _c_buffer_view(info) as info_buf,
-    ):
+    with _CBufferViews(ikm, salt or b"", info) as (ikm_buf, salt_buf, info_buf):
         rc = _native_lib.ama_hkdf(
             salt_buf if salt_len > 0 else None,
             ctypes.c_size_t(salt_len),
@@ -4565,10 +6091,10 @@ def _native_hkdf_sha2(
     # material is read in place through a c_char view rather than coerced via
     # the c_void_p argtype — the latter rejects bytearray outright (TypeError)
     # and never exposes the wipeable buffer to the native kernel directly.
-    with (
-        _c_buffer_view(ikm) as ikm_buf,
-        _c_buffer_view(salt if salt is not None else b"") as salt_buf,
-        _c_buffer_view(info) as info_buf,
+    with _CBufferViews(ikm, salt if salt is not None else b"", info) as (
+        ikm_buf,
+        salt_buf,
+        info_buf,
     ):
         rc = getattr(_native_lib, fn_name)(
             salt_buf if salt_len > 0 else None,
@@ -4652,6 +6178,8 @@ def native_hkdf_sha512(
 
 def _probe_cython_sha3() -> "Optional[Callable[[bytes], bytes]]":
     """Detect Cython SHA3-256 binding at module load time."""
+    if not _binding_imports_permitted():
+        return None
     try:
         from ama_cryptography.sha3_binding import cy_sha3_256
 
@@ -4737,6 +6265,28 @@ def native_sha256(data: bytes) -> bytes:
     # to match ama_sha3_256(in, len, out) — that would corrupt memory.
     _native_lib.ama_sha256(out_buf, data, ctypes.c_size_t(len(data)))
     return bytes(out_buf)
+
+
+# Hand the continuous-RNG health test its SHA-256 kernel.
+#
+# _module_state is the leaf this module imports at module scope, so it cannot
+# import back without creating a genuine import cycle (CodeQL "Cyclic import"
+# on the previous function-local form).  Injecting the callable here reverses
+# the edge: the dependency now runs the same direction as the import, and the
+# cycle is gone from the graph rather than merely deferred past import time.
+#
+# Placement: immediately after `native_sha256` is bound, which is the earliest
+# point the kernel exists.  What makes that sufficient is NOT that the keygen
+# entry points sit below this line — `native_ed25519_keypair` is at ~4701 and
+# draws through `secure_token_bytes`, above here — but that a `def` body does
+# not execute at import.  The only module-scope calls that run before this
+# point are library discovery, the ABI handshake, the `_setup_*_ctypes`
+# binders, logging, and the `_probe_cython_*` probes; an AST enumeration of
+# module-scope calls confirms none of them draws randomness or reaches
+# `secure_token_bytes`.  So the kernel is registered before any caller can
+# arrive, and if one somehow did, `secure_token_bytes` fails closed rather
+# than falling back to OpenSSL (INVARIANT-1).
+_register_health_digest(native_sha256)
 
 
 def native_sha3_512(data: bytes) -> bytes:
@@ -4829,6 +6379,164 @@ def native_shake256(data: bytes, length: int) -> bytes:
         `length` bytes of XOF output.
     """
     return _native_shake("ama_shake256", data, length)
+
+
+def _native_sha2_ext(fn_name: str, data: bytes, digest_len: int, label: str) -> bytes:
+    """Shared body for the SHA-512/SHA-384/SHA3-384 one-shot bindings.
+
+    FIPS 140-3 §4.9.2: no output in the ERROR state.  The three wrappers
+    reach the native kernels only through this helper, so the guard lives
+    here; tests/test_post_failclosed.py drives each wrapper in the ERROR
+    state and asserts refusal.
+    """
+    check_crypto_permitted()
+    if _native_lib is None or not _SHA2_EXT_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(
+            f"{label} native backend not available. " + _INSTALL_HINT
+        )
+    out_buf = ctypes.create_string_buffer(digest_len)
+    rc = getattr(_native_lib, fn_name)(_borrow(data), ctypes.c_size_t(len(data)), out_buf)
+    if rc != 0:
+        raise RuntimeError(f"{label} failed (rc={rc})")
+    return bytes(out_buf)
+
+
+def native_sha512(data: bytes) -> bytes:
+    """SHA-512 (FIPS 180-4) via native C implementation (ama_sha512).
+
+    Byte-identical to ``hashlib.sha512(data).digest()``.  INVARIANT-1
+    compliant (zero external crypto dependencies); fail-closed per
+    INVARIANT-7 (no stdlib fallback).
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        64-byte SHA-512 digest.
+
+    Raises:
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_sha2_ext("ama_sha512", data, 64, "SHA-512")
+
+
+def native_sha384(data: bytes) -> bytes:
+    """SHA-384 (FIPS 180-4) via native C implementation (ama_sha384).
+
+    Byte-identical to ``hashlib.sha384(data).digest()``.  INVARIANT-1
+    compliant; fail-closed per INVARIANT-7.
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        48-byte SHA-384 digest.
+
+    Raises:
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_sha2_ext("ama_sha384", data, 48, "SHA-384")
+
+
+def native_sha3_384(data: bytes) -> bytes:
+    """SHA3-384 (FIPS 202) via native C implementation (ama_sha3_384).
+
+    Byte-identical to ``hashlib.sha3_384(data).digest()``.  INVARIANT-1
+    compliant; fail-closed per INVARIANT-7.
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        48-byte SHA3-384 digest.
+
+    Raises:
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_sha2_ext("ama_sha3_384", data, 48, "SHA3-384")
+
+
+def _native_pbkdf2(
+    fn_name: str, password: bytes, salt: bytes, iterations: int, out_len: int, label: str
+) -> bytes:
+    """Shared body for the PBKDF2-HMAC-SHA256/512 bindings (SP 800-132).
+
+    Same §4.9.2 gating rationale as _native_sha2_ext: one choke point, both
+    wrappers pass through it.
+    """
+    check_crypto_permitted()
+    if not 1 <= iterations <= 0xFFFFFFFF:
+        raise ValueError(f"PBKDF2 iterations must be in [1, 2**32 - 1], got {iterations}")
+    if out_len < 1:
+        raise ValueError(f"PBKDF2 output length must be >= 1, got {out_len}")
+    if _native_lib is None or not _PBKDF2_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(
+            f"{label} native backend not available. " + _INSTALL_HINT
+        )
+    out_buf = ctypes.create_string_buffer(out_len)
+    rc = getattr(_native_lib, fn_name)(
+        _borrow(password),
+        ctypes.c_size_t(len(password)),
+        _borrow(salt),
+        ctypes.c_size_t(len(salt)),
+        ctypes.c_uint32(iterations),
+        out_buf,
+        ctypes.c_size_t(out_len),
+    )
+    if rc != 0:
+        raise RuntimeError(f"{label} failed (rc={rc})")
+    return bytes(out_buf.raw[:out_len])
+
+
+def native_pbkdf2_hmac_sha256(password: bytes, salt: bytes, iterations: int, out_len: int) -> bytes:
+    """PBKDF2-HMAC-SHA256 (SP 800-132) via native C (ama_pbkdf2_hmac_sha256).
+
+    Byte-identical to ``hashlib.pbkdf2_hmac("sha256", password, salt,
+    iterations, out_len)``.  INVARIANT-1 compliant: the KDF runs on the
+    in-tree SHA-256 core, not OpenSSL's PBKDF2.  Fail-closed per INVARIANT-7.
+
+    Args:
+        password: Password bytes.
+        salt: Salt bytes.
+        iterations: Iteration count (>= 1).
+        out_len: Derived key length in bytes (>= 1).
+
+    Returns:
+        ``out_len`` bytes of derived key.
+
+    Raises:
+        ValueError: On an out-of-range iteration count or output length.
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_pbkdf2(
+        "ama_pbkdf2_hmac_sha256", password, salt, iterations, out_len, "PBKDF2-HMAC-SHA256"
+    )
+
+
+def native_pbkdf2_hmac_sha512(password: bytes, salt: bytes, iterations: int, out_len: int) -> bytes:
+    """PBKDF2-HMAC-SHA512 (SP 800-132) via native C (ama_pbkdf2_hmac_sha512).
+
+    Byte-identical to ``hashlib.pbkdf2_hmac("sha512", password, salt,
+    iterations, out_len)``.  This is the BIP39 seed-derivation KDF (2048
+    iterations, salt ``b"mnemonic" + passphrase``).  INVARIANT-1 compliant;
+    fail-closed per INVARIANT-7.
+
+    Args:
+        password: Password bytes.
+        salt: Salt bytes.
+        iterations: Iteration count (>= 1).
+        out_len: Derived key length in bytes (>= 1).
+
+    Returns:
+        ``out_len`` bytes of derived key.
+
+    Raises:
+        ValueError: On an out-of-range iteration count or output length.
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_pbkdf2(
+        "ama_pbkdf2_hmac_sha512", password, salt, iterations, out_len, "PBKDF2-HMAC-SHA512"
+    )
 
 
 # ============================================================================
@@ -5004,12 +6712,18 @@ def native_hmac_sha256(key: bytes, msg: bytes) -> bytes:
             "HMAC-SHA-256 native backend not available. " + _INSTALL_HINT
         )
 
+    # ama_hmac_sha256 returns void at the C level, so this boundary is the
+    # only place a bad argument can be REPORTED rather than merely survived.
+    # The previous comment here claimed invalid pointers were "all caught
+    # before the call by ctypes marshalling"; they are not — `c_char_p`
+    # accepts `None` as NULL, and the C side dereferenced it (2026-09 audit,
+    # C-5, a SIGSEGV).  The C side no longer dereferences, but it cannot say
+    # why it produced nothing, so the type check lives here.
+    _require_bytes_like("key", key)
+    _require_bytes_like("msg", msg)
+
     out_buf = ctypes.create_string_buffer(32)
 
-    # ama_hmac_sha256 returns void at the C level (no failure path that
-    # isn't a programmer error — invalid pointer / negative length /
-    # etc., all caught before the call by ctypes marshalling), so no
-    # rc check.  Matches the signature ama_hmac_sha256.h declares.
     _native_lib.ama_hmac_sha256(
         key,
         ctypes.c_size_t(len(key)),
@@ -5052,6 +6766,10 @@ def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
             "HMAC-SHA-256 native backend not available. " + _INSTALL_HINT
         )
 
+    _require_bytes_like("key", key)
+    _require_bytes_like("msg1", msg1)
+    _require_bytes_like("msg2", msg2)
+
     out_buf = ctypes.create_string_buffer(32)
 
     _native_lib.ama_hmac_sha256_2(
@@ -5069,6 +6787,8 @@ def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
 
 def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
     """Detect Cython HMAC-SHA3-256 binding at module load time."""
+    if not _binding_imports_permitted():
+        return None
     try:
         from ama_cryptography.hmac_binding import cy_hmac_sha3_256
 
@@ -5539,16 +7259,6 @@ def _ml_dsa_require_native() -> None:
         raise PQCUnavailableError("ML-DSA native backend not available. " + _INSTALL_HINT)
 
 
-def ml_kem_sizes(ps: Union[int, str]) -> dict:
-    """Public-key / secret-key / ciphertext octet widths for an ML-KEM set."""
-    return dict(ML_KEM_SIZES[_ml_kem_id(ps)])
-
-
-def ml_dsa_sizes(ps: Union[int, str]) -> dict:
-    """Public-key / secret-key / signature octet widths for an ML-DSA set."""
-    return dict(ML_DSA_SIZES[_ml_dsa_id(ps)])
-
-
 # ---------------------------------------------------------------------------
 # INVARIANT-6 helpers for the ctypes boundary
 # ---------------------------------------------------------------------------
@@ -5560,11 +7270,11 @@ def _borrow(secret: _BufferInput) -> Any:
     storage INVARIANT-6 asks callers to use precisely so they *can* wipe — this
     borrows the buffer in place with ``from_buffer`` rather than copying it.
 
-    This is the non-context-manager sibling of :func:`_c_buffer_view`, which
-    the AEAD wrappers already use; the flat form suits the ``try``/``finally``
-    shape these wrappers need for their *output* buffers. The borrow is
-    released when the returned object is collected, which is at latest when the
-    wrapper returns.
+    This is the non-context-manager sibling of :class:`_CBufferViews`, which
+    the AEAD wrappers use, and it applies the same rule (:func:`_byte_view`).
+    The flat form suits the ``try``/``finally`` shape these wrappers need for
+    their *output* buffers. The borrow is released when the returned object is
+    collected, which is at latest when the wrapper returns.
 
     Deliberately not a copy-then-wipe helper. Copying to wipe the copy leaves
     the transient ``bytes`` that had to be made to get there — the exact
@@ -5573,8 +7283,8 @@ def _borrow(secret: _BufferInput) -> Any:
     """
     if isinstance(secret, bytes):
         return secret
-    view = memoryview(secret)
-    if view.readonly or view.ndim != 1 or view.itemsize != 1:
+    view = _byte_view(secret)
+    if view.readonly:
         return view.tobytes()
     return (ctypes.c_char * view.nbytes).from_buffer(view)
 
@@ -5589,8 +7299,8 @@ def _wipe(*buffers: Any) -> None:
     ``memset`` them in a ``finally``, and this is that idiom named once instead
     of open-coded at every site.
 
-    *Input* secrets go through :func:`_c_buffer_view` instead, which borrows a
-    ``bytearray`` in place rather than copying it. A wipe-the-copy helper for
+    *Input* secrets go through :func:`_borrow` or :class:`_CBufferViews`
+    instead, which borrow a ``bytearray`` in place rather than copying it. A wipe-the-copy helper for
     inputs is worse than useless: the copy it wipes is the second one, and the
     transient it had to make to get there is the un-wipeable ``bytes`` the
     exercise was supposed to avoid.
@@ -5848,9 +7558,14 @@ def native_ml_kem_decapsulate(
     A malformed ciphertext does NOT raise: FIPS 203 mandates implicit
     rejection, so decapsulation returns a deterministic pseudorandom secret
     that differs from the sender's. Treating a mismatch as an error here would
-    reintroduce the very oracle implicit rejection exists to close. Only a
-    wrong *length* is an error, because that is a caller bug rather than an
-    attacker-supplied ciphertext.
+    reintroduce the very oracle implicit rejection exists to close. A wrong
+    *length* is an error, because that is a caller bug rather than an
+    attacker-supplied ciphertext, and so is a decapsulation key whose stored
+    ``H(ek)`` does not match its embedded ``ek`` (FIPS 203 Sec 7.3, input
+    check 3): the standard requires every key to have passed that check
+    before decapsulation runs, and the native library performs it on every
+    call, so an inconsistent key raises ``ValueError`` instead of silently
+    decapsulating to a secret the peer never derived.
     """
     check_crypto_permitted()
     pid = _ml_kem_id(ps)
@@ -5876,6 +7591,14 @@ def native_ml_kem_decapsulate(
             ss,
             ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES),
         )
+        if rc == -1:
+            # See kyber_decapsulate: after the length checks above, -1 is the
+            # FIPS 203 Sec 7.3 hash check refusing an inconsistent key.
+            raise ValueError(
+                f"ML-KEM-{pid} decapsulation key is internally inconsistent: the "
+                "embedded H(ek) does not match the embedded encapsulation key "
+                "(FIPS 203 Sec 7.3 hash check)"
+            )
         if rc != 0:
             raise RuntimeError(f"ML-KEM decapsulation failed (rc={rc})")
         return bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
@@ -6018,17 +7741,16 @@ def native_ml_dsa_sign(
     message: bytes,
     secret_key: Union[bytes, bytearray],
     *,
-    ctx: Optional[bytes] = None,
+    ctx: bytes = b"",
 ) -> bytes:
     """
-    Sign with ML-DSA (FIPS 204), deterministic variant (rnd = 0^256).
+    Sign with ML-DSA (FIPS 204 Algorithm 2), deterministic variant (rnd = 0^256).
 
     Args:
-        ctx: When not None, applies the FIPS 204 §5.2 external/pure context
-            wrapper ``0x00 || len(ctx) || ctx || M``. ``ctx=b""`` is the
-            empty-context *external* form and is NOT the same signature as
-            ``ctx=None`` (the internal interface) — they are different
-            domains, which is the entire point of the wrapper.
+        ctx: The FIPS 204 §5.2 context; the message signed is
+            ``0x00 || len(ctx) || ctx || M``.  The default is the empty
+            context.  There is no raw (Algorithm 7) mode: the internal
+            interface is not shipped (INVARIANT-50).
 
     Raises:
         ValueError: On a wrong key length or a context longer than 255 bytes.
@@ -6040,46 +7762,101 @@ def native_ml_dsa_sign(
         raise ValueError(
             f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
         )
-    if ctx is not None and len(ctx) > 255:
+    if len(ctx) > 255:
         raise ValueError(f"ML-DSA context must be at most 255 bytes, got {len(ctx)}")
     _ml_dsa_require_native()
 
     sig = ctypes.create_string_buffer(sz["signature"])
     sig_len = ctypes.c_size_t(sz["signature"])
-    sk_buf = _borrow(secret_key)
-    if ctx is None:
-        rc = _native_lib.ama_ml_dsa_sign(
-            pid,
-            sig,
-            ctypes.byref(sig_len),
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            sk_buf,
-        )
-    else:
-        rc = _native_lib.ama_ml_dsa_sign_ctx(
-            pid,
-            sig,
-            ctypes.byref(sig_len),
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(ctx),
-            ctypes.c_size_t(len(ctx)),
-            sk_buf,
-        )
+    rc = _native_lib.ama_ml_dsa_sign_ctx(
+        pid,
+        sig,
+        ctypes.byref(sig_len),
+        bytes(message),
+        ctypes.c_size_t(len(message)),
+        bytes(ctx),
+        ctypes.c_size_t(len(ctx)),
+        _borrow(secret_key),
+    )
+    _ml_dsa_check_sign_rc(rc, "ML-DSA signing")
+    return bytes(sig.raw[: sig_len.value])
+
+
+def _ml_dsa_check_sign_rc(rc: int, label: str) -> None:
+    """Map a native ML-DSA signing return code onto this module's exceptions."""
     if rc == AMA_ERROR_INVALID_PARAM:
         # The signer applies FIPS 204 Algorithm 25's range gate to s1/s2, so a
         # secret key of the right length can still be refused here. That is a
         # property of the key the caller passed, not a failure of the operation,
         # and every other bad-input refusal in this module is a ValueError.
         raise ValueError(
-            "ML-DSA signing refused the secret key: its s1/s2 carry a "
+            f"{label} refused the secret key: its s1/s2 carry a "
             "coefficient outside [-eta, eta] (FIPS 204 Algorithm 25), so it is "
             "not a well-formed private key"
         )
     if rc != 0:
-        raise RuntimeError(f"ML-DSA signing failed (rc={rc})")
-    return bytes(sig.raw[: sig_len.value])
+        raise RuntimeError(f"{label} failed (rc={rc})")
+
+
+def native_ml_dsa_sign_hedged(
+    ps: Union[int, str],
+    message: bytes,
+    secret_key: Union[bytes, bytearray],
+    *,
+    ctx: bytes = b"",
+) -> bytes:
+    """
+    Sign with ML-DSA (FIPS 204), HEDGED variant — ``rnd`` fresh per signature.
+
+    Identical to :func:`native_ml_dsa_sign` with a context, except that FIPS
+    204 Algorithm 7 line 3's 32-byte ``rnd`` field is drawn from the platform
+    CSPRNG instead of being fixed at ``0^256``. FIPS 204 Sec 3.4 makes this
+    the default variant and cautions that the deterministic one is more
+    exposed to fault-injection and side-channel analysis, because every
+    timing observation on a fixed (key, message) is then exactly repeatable.
+
+    The output is NOT reproducible: two calls on the same inputs return
+    different signatures, both valid under the same verifier (``rnd`` is not
+    transmitted). Every other signer in this package is deterministic, which
+    is what the known-answer gates and the hybrid signature format rely on.
+
+    Fails closed: a CSPRNG failure raises rather than silently producing the
+    deterministic signature.
+
+    Args:
+        ps: Parameter set (44, 65 or 87, or the string form).
+        message: Data to sign.
+        secret_key: ML-DSA secret key for ``ps``.
+        ctx: FIPS 204 Sec 5.2 context string, at most 255 bytes. The default
+            ``b""`` is the empty-context external form.
+
+    Returns:
+        Signature bytes.
+    """
+    check_crypto_permitted()
+    pid = _ml_dsa_id(ps)
+    sz = ML_DSA_SIZES[pid]
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    if len(ctx) > 255:
+        raise ValueError(f"ML-DSA context must be at most 255 bytes, got {len(ctx)}")
+    _ml_dsa_require_native()
+    out = ctypes.create_string_buffer(sz["signature"])
+    out_len = ctypes.c_size_t(sz["signature"])
+    rc = _native_lib.ama_ml_dsa_sign_hedged(
+        pid,
+        out,
+        ctypes.byref(out_len),
+        bytes(message),
+        ctypes.c_size_t(len(message)),
+        bytes(ctx) if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        _borrow(secret_key),
+    )
+    _ml_dsa_check_sign_rc(rc, f"ML-DSA-{pid} hedged signing")
+    return bytes(out.raw[: out_len.value])
 
 
 def native_ml_dsa_verify(
@@ -6088,13 +7865,13 @@ def native_ml_dsa_verify(
     signature: bytes,
     public_key: bytes,
     *,
-    ctx: Optional[bytes] = None,
+    ctx: bytes = b"",
 ) -> bool:
     """
-    Verify an ML-DSA signature (FIPS 204).
+    Verify an ML-DSA signature (FIPS 204 Algorithm 3).
 
-    ``ctx`` must match what the signer used: ``None`` for the internal
-    interface, or the same context octets for the external/pure form.
+    ``ctx`` must be the context the signer used; the default is the empty
+    context.
 
     Returns:
         True if valid. A wrong-length signature or public key returns False
@@ -6109,29 +7886,18 @@ def native_ml_dsa_verify(
     _ml_dsa_require_native()
     if len(public_key) != sz["public_key"] or len(signature) != sz["signature"]:
         return False
-    if ctx is not None and len(ctx) > 255:
+    if len(ctx) > 255:
         return False
-
-    if ctx is None:
-        rc = _native_lib.ama_ml_dsa_verify(
-            pid,
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(signature),
-            ctypes.c_size_t(len(signature)),
-            bytes(public_key),
-        )
-    else:
-        rc = _native_lib.ama_ml_dsa_verify_ctx(
-            pid,
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(ctx),
-            ctypes.c_size_t(len(ctx)),
-            bytes(signature),
-            ctypes.c_size_t(len(signature)),
-            bytes(public_key),
-        )
+    rc = _native_lib.ama_ml_dsa_verify_ctx(
+        pid,
+        bytes(message),
+        ctypes.c_size_t(len(message)),
+        bytes(ctx),
+        ctypes.c_size_t(len(ctx)),
+        bytes(signature),
+        ctypes.c_size_t(len(signature)),
+        bytes(public_key),
+    )
     return int(rc) == 0
 
 
@@ -6240,14 +8006,22 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         # only catch transient faults (INVARIANT-41).  Correspondence of the
         # halves is what the roundtrip proves, so it covers the keypair's
         # ECDH use as well.  The digest is produced with the curve's FIPS
-        # 186-5 hash pairing; stdlib hashlib here mirrors what crypto_api
-        # ships for message hashing and carries no key material.
+        # 186-5 hash pairing, on this module's own SHA-2 kernels.  An earlier
+        # revision hashed with stdlib hashlib under a comment claiming that
+        # "mirrors what crypto_api ships for message hashing" — the opposite
+        # of what crypto_api.hash_message documents ("Per INVARIANT-7 there
+        # is no hashlib fallback: a hash is a cryptographic primitive"), and
+        # hashlib's constructors resolve to OpenSSL, so a FIPS self-test of
+        # THIS module was routing its digests through an unauthorized vendor
+        # (INVARIANT-1).  A keypair generator cannot run without the native
+        # library, so the native hash is definitionally present here.
         digest_name = nistp_default_hash(cid)
+        pct_hash = {"sha256": native_sha256, "sha384": native_sha384, "sha512": native_sha512}[
+            digest_name
+        ]
         pairwise_test_signature(
-            lambda m, sk_: native_nistp_ecdsa_sign(cid, hashlib.new(digest_name, m).digest(), sk_),
-            lambda m, sig, pk_: native_nistp_ecdsa_verify(
-                cid, sig, hashlib.new(digest_name, m).digest(), pk_
-            ),
+            lambda m, sk_: native_nistp_ecdsa_sign(cid, pct_hash(m), sk_),
+            lambda m, sig, pk_: native_nistp_ecdsa_verify(cid, sig, pct_hash(m), pk_),
             private_key,
             public_key,
             f"P-{cid}",
@@ -7086,8 +8860,11 @@ def native_argon2id(
         )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
-    if parallelism < 1 or parallelism > _UINT32_MAX:
-        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if parallelism < 1 or parallelism > _ARGON2ID_MAX_PARALLELISM:
+        raise ValueError(
+            f"Argon2id parallelism must be in [1, {_ARGON2ID_MAX_PARALLELISM}], "
+            f"got {parallelism}"
+        )
     if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
         raise ValueError(
             f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB "
@@ -7139,7 +8916,7 @@ def native_argon2id_legacy(
         salt:        Salt bytes (≥ 8-byte minimum).
         t_cost:      Time cost (iterations, ≥ 1).
         m_cost:      Memory cost (KiB, ≥ 8 * parallelism).
-        parallelism: Parallelism (lanes, ≥ 1).
+        parallelism: Parallelism (lanes, 1..255).
         out_len:     Output tag length (≥ 4 bytes).
 
     Returns:
@@ -7176,8 +8953,11 @@ def native_argon2id_legacy(
         )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
-    if parallelism < 1 or parallelism > _UINT32_MAX:
-        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if parallelism < 1 or parallelism > _ARGON2ID_MAX_PARALLELISM:
+        raise ValueError(
+            f"Argon2id parallelism must be in [1, {_ARGON2ID_MAX_PARALLELISM}], "
+            f"got {parallelism}"
+        )
     if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
         raise ValueError(
             f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"
@@ -7288,8 +9068,11 @@ def native_argon2id_legacy_verify(
         )
     if t_cost < 1 or t_cost > _UINT32_MAX:
         raise ValueError(f"Argon2id t_cost must be in [1, {_UINT32_MAX}], got {t_cost}")
-    if parallelism < 1 or parallelism > _UINT32_MAX:
-        raise ValueError(f"Argon2id parallelism must be in [1, {_UINT32_MAX}], got {parallelism}")
+    if parallelism < 1 or parallelism > _ARGON2ID_MAX_PARALLELISM:
+        raise ValueError(
+            f"Argon2id parallelism must be in [1, {_ARGON2ID_MAX_PARALLELISM}], "
+            f"got {parallelism}"
+        )
     if m_cost < 8 * parallelism or m_cost > _UINT32_MAX:
         raise ValueError(
             f"Argon2id m_cost must be in [{8 * parallelism}, {_UINT32_MAX}] KiB, got {m_cost}"
@@ -7321,13 +9104,20 @@ def native_argon2id_legacy_verify(
 
 
 def native_chacha20poly1305_encrypt(
-    key: bytes,
-    nonce: bytes,
-    plaintext: bytes,
-    aad: bytes = b"",
+    key: _BufferInput,
+    nonce: _BufferInput,
+    plaintext: _BufferInput,
+    aad: _BufferInput = b"",
 ) -> tuple:
     """
     ChaCha20-Poly1305 AEAD encryption (RFC 8439).
+
+    ``key`` (and every other input) may be ``bytes``, ``bytearray`` or a
+    ``memoryview`` — the same wipeable-key contract as the AES-256-GCM
+    wrappers.  Until 5.0.0 this wrapper accepted ``bytes`` only, so a caller
+    holding its session key in the zeroizable ``bytearray`` storage the
+    project recommends had to materialise an immutable copy first — the
+    exact transient-copy hazard ``_CBufferViews`` exists to remove.
 
     Returns:
         (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
@@ -7344,38 +9134,55 @@ def native_chacha20poly1305_encrypt(
         raise ValueError(f"ChaCha20-Poly1305 nonce must be 12 bytes, got {len(nonce)}")
 
     pt_len = len(plaintext)
-    pt_ptr = plaintext if pt_len > 0 else None
-    aad_ptr = aad if aad and len(aad) > 0 else None
     aad_len = len(aad) if aad else 0
 
-    ct_buf = ctypes.create_string_buffer(pt_len)
-    tag_buf = ctypes.create_string_buffer(POLY1305_TAG_BYTES)
+    # One output allocation for ciphertext || tag, split on the way out (the
+    # same change as native_aes256_gcm_encrypt, for the same reason).
+    out_buf = ctypes.create_string_buffer(pt_len + POLY1305_TAG_BYTES)
 
-    rc = _native_lib.ama_chacha20poly1305_encrypt(
-        key,
-        nonce,
-        pt_ptr,
-        pt_len,
-        aad_ptr,
-        aad_len,
-        ct_buf,
-        tag_buf,
+    aad_in = aad if aad else b""
+    borrow = (
+        None
+        if _all_bytes(key, nonce, plaintext, aad_in)
+        else _CBufferViews(key, nonce, plaintext, aad_in)
     )
+    key_buf, nonce_buf, pt_buf, aad_buf = (
+        (key, nonce, plaintext, aad_in) if borrow is None else borrow.__enter__()
+    )
+    try:
+        rc = _native_lib.ama_chacha20poly1305_encrypt(
+            key_buf,
+            nonce_buf,
+            pt_buf if pt_len > 0 else None,
+            pt_len,
+            aad_buf if aad_len > 0 else None,
+            aad_len,
+            out_buf,
+            ctypes.byref(out_buf, pt_len),
+        )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed (rc={rc})")
 
-    return bytes(ct_buf), bytes(tag_buf)
+    out = out_buf.raw
+    return out[:pt_len], out[pt_len:]
 
 
 def native_chacha20poly1305_decrypt(
-    key: bytes,
-    nonce: bytes,
-    ciphertext: bytes,
-    tag: bytes,
-    aad: bytes = b"",
+    key: _BufferInput,
+    nonce: _BufferInput,
+    ciphertext: _BufferInput,
+    tag: _BufferInput,
+    aad: _BufferInput = b"",
 ) -> bytes:
     """
     ChaCha20-Poly1305 AEAD decryption (RFC 8439).
+
+    Accepts ``bytes``, ``bytearray`` or ``memoryview`` inputs — the same
+    wipeable-key contract as the AES-256-GCM wrappers (see the encrypt
+    sibling above).
 
     Returns:
         Decrypted plaintext
@@ -7401,22 +9208,33 @@ def native_chacha20poly1305_decrypt(
         raise ValueError(f"ChaCha20-Poly1305 tag must be 16 bytes, got {len(tag)}")
 
     ct_len = len(ciphertext)
-    ct_ptr = ciphertext if ct_len > 0 else None
-    aad_ptr = aad if aad and len(aad) > 0 else None
     aad_len = len(aad) if aad else 0
 
     pt_buf = ctypes.create_string_buffer(ct_len)
 
-    rc = _native_lib.ama_chacha20poly1305_decrypt(
-        key,
-        nonce,
-        ct_ptr,
-        ct_len,
-        aad_ptr,
-        aad_len,
-        tag,
-        pt_buf,
+    aad_in = aad if aad else b""
+    borrow = (
+        None
+        if _all_bytes(key, nonce, ciphertext, tag, aad_in)
+        else _CBufferViews(key, nonce, ciphertext, tag, aad_in)
     )
+    key_buf, nonce_buf, ct_buf, tag_buf, aad_buf = (
+        (key, nonce, ciphertext, tag, aad_in) if borrow is None else borrow.__enter__()
+    )
+    try:
+        rc = _native_lib.ama_chacha20poly1305_decrypt(
+            key_buf,
+            nonce_buf,
+            ct_buf if ct_len > 0 else None,
+            ct_len,
+            aad_buf if aad_len > 0 else None,
+            aad_len,
+            tag_buf,
+            pt_buf,
+        )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
 
@@ -7521,12 +9339,19 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
 
 
 # ============================================================================
-# FROST THRESHOLD ED25519 (RFC 9591) — NATIVE WRAPPERS
+# FROST THRESHOLD ED25519 (RFC 9591-STYLE) — NATIVE WRAPPERS
 # ============================================================================
 
 # Module-level availability aliases
 FROST_AVAILABLE = _FROST_AVAILABLE
 FROST_BACKEND = _FROST_BACKEND
+
+#: ``AMA_ERROR_VERIFY_FAILED`` from ``include/ama_cryptography.h``.  Named
+#: here rather than written as a bare ``-4`` because the FROST wrappers below
+#: have to tell "a share is invalid" (a verdict, reported as False or as
+#: FrostShareRejected) apart from "the check could not run" (an exception),
+#: and a bare literal at three call sites is how that distinction rots.
+_AMA_ERROR_VERIFY_FAILED = -4
 
 
 def frost_keygen_trusted_dealer(
@@ -7604,13 +9429,27 @@ def frost_keygen_trusted_dealer(
             nonces.append(nonce)
             commitment_list.append(commitment)
         commitments = b"".join(commitment_list)
+        # INVARIANT-49: one nonce pair, one round-2 call.  Each ``nonces[i]``
+        # is a bytearray that ``frost_round2_sign`` zeroizes in place, so this
+        # loop consumes each exactly once and none survives the closure.
         sig_shares = b"".join(
             frost_round2_sign(
                 message, signer_shares[i], i + 1, nonces[i], commitments, indices, threshold, gpk
             )
             for i in range(threshold)
         )
-        return frost_aggregate(sig_shares, commitments, indices, threshold, message, gpk)
+        # INVARIANT-49: aggregation verifies every share against the RFC 9591
+        # section 5.3 relation, which needs each signer's PUBLIC key share —
+        # bytes [32, 64) of its dealt 64-byte share, in signer_indices order.
+        # That makes the pairwise consistency test strictly stronger than it
+        # was: a dealer that mints a secret half not matching the public half
+        # it publishes now fails at aggregation with the culprit named,
+        # instead of producing a signature that only the final Ed25519 verify
+        # rejects.
+        public_shares = b"".join(share[32:64] for share in signer_shares)
+        return frost_aggregate(
+            sig_shares, commitments, public_shares, indices, threshold, message, gpk
+        )
 
     pairwise_test_signature(
         _frost_roundtrip_sign,
@@ -7625,12 +9464,27 @@ def frost_keygen_trusted_dealer(
 def frost_round1_commit(participant_share: bytes) -> tuple:
     """FROST Round 1: Generate nonce commitment.
 
+    **ONE-SHOT NONCE CONTRACT (INVARIANT-49).**  The returned ``nonce_pair``
+    is valid for exactly ONE ``frost_round2_sign`` call, over exactly one
+    message, and that call ZEROIZES it in place.  To sign a second message,
+    call this function again.
+
+    It is returned as a ``bytearray`` rather than ``bytes`` precisely so that
+    the consumption is possible: the C library writes 64 zero bytes over the
+    buffer on its way out of round 2, and an immutable ``bytes`` object cannot
+    be written to (attempting it is undefined behaviour in CPython, not merely
+    ineffective).  Do not take a ``bytes`` copy of it; a copy is outside
+    anything the library can consume, and three partial signatures made under
+    one nonce pair disclose the participant's long-term secret share (the
+    2026-09 audit recovered one).
+
     Args:
         participant_share: 64-byte participant share from keygen.
 
     Returns:
-        Tuple of (nonce_pair, commitment) — nonce_pair is SECRET (64 bytes),
-        commitment is PUBLIC (64 bytes).
+        Tuple of (nonce_pair, commitment) — nonce_pair is SECRET, SINGLE-USE
+        and mutable (``bytearray``, 64 bytes); commitment is PUBLIC
+        (``bytes``, 64 bytes).
     """
     check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
@@ -7641,49 +9495,243 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
     nonce_buf = ctypes.create_string_buffer(FROST_NONCE_BYTES)
     commit_buf = ctypes.create_string_buffer(FROST_COMMITMENT_BYTES)
 
-    rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, participant_share)
+    rc = _native_lib.ama_frost_round1_commit(nonce_buf, commit_buf, _borrow(participant_share))
     if rc != 0:
         raise RuntimeError(f"FROST round1 commit failed (rc={rc})")
 
-    return bytes(nonce_buf), bytes(commit_buf)
+    # Copied C-to-C into a bytearray so the caller holds a buffer round 2 can
+    # scrub, then the staging buffer is scrubbed here so the nonce is not left
+    # in a second place.  No ``bytes`` is made on the way: ``nonce_buf.raw``
+    # would be one — a full-length slice of it is the same object — and an
+    # immutable copy of (d, e) is beyond both scrubs.
+    nonce_pair = bytearray(FROST_NONCE_BYTES)
+    ctypes.memmove(
+        (ctypes.c_char * FROST_NONCE_BYTES).from_buffer(nonce_pair), nonce_buf, FROST_NONCE_BYTES
+    )
+    ctypes.memset(nonce_buf, 0, FROST_NONCE_BYTES)
+    return nonce_pair, bytes(commit_buf.raw[:FROST_COMMITMENT_BYTES])
 
 
 def frost_round2_sign(
     message: bytes,
     participant_share: bytes,
     participant_index: int,
-    nonce_pair: bytes,
+    nonce_pair: bytearray,
     commitments: bytes,
     signer_indices: bytes,
     num_signers: int,
     group_public_key: bytes,
 ) -> bytes:
-    """FROST Round 2: Generate signature share.
+    """FROST Round 2: Generate signature share — **consumes the nonce pair**.
+
+    **ONE-SHOT NONCE CONTRACT (INVARIANT-49).**  ``nonce_pair`` is an IN/OUT
+    argument: the native library zeroizes it on every exit, success and
+    failure alike, and refuses an already-consumed (all-zero) pair.  On return
+    the caller's ``bytearray`` therefore holds 64 zero bytes, and a second
+    call with it raises ``RuntimeError``.  Call ``frost_round1_commit`` again
+    for each further message.
+
+    Why a writable buffer is *required* rather than accepted-if-offered: the C
+    entry point takes ``uint8_t *`` and writes through it, and writing through
+    a pointer into an immutable ``bytes`` object is undefined behaviour in
+    CPython (short ``bytes`` are interned and shared process-wide).  Copying
+    into a scratch buffer instead would let the caller's copy survive, which
+    is exactly the reuse this contract exists to make impossible — the copy
+    would still verify, and three signatures under one nonce pair disclose the
+    participant's long-term secret share.  So an immutable argument is a
+    ``TypeError``, not a silently weaker mode.
+
+    This wrapper also scrubs the buffer for every refusal it makes BEFORE
+    calling C, so "round 2 consumes the nonce, whatever the outcome" holds at
+    the Python boundary exactly as it does at the C boundary, and a caller
+    never has to ask which layer refused.  The writable view is taken as the
+    first statement, before the module-state check, the backend check and
+    every argument check (``num_signers``, ``participant_share``,
+    ``participant_index``, the nonce pair's own length, ``commitments``,
+    ``signer_indices``, ``group_public_key``), so each of those refusals runs
+    inside the scrubbing ``finally``.  The whole buffer is scrubbed, whatever
+    its length: a 63- or 65-byte buffer is refused as the wrong size AND
+    zeroized, because a truncated or padded copy of a nonce pair is still a
+    nonce pair's worth of secret.  The one refusal that cannot scrub is the
+    ``TypeError`` for an argument that is not a writable buffer — there is
+    nothing this function may write to.
 
     Args:
         message: Message to sign.
         participant_share: 64-byte share.
         participant_index: 1-based participant index.
-        nonce_pair: 64-byte nonce pair from round 1 (SECRET).
-        commitments: Concatenated commitments (num_signers * 64 bytes).
+        nonce_pair: 64-byte WRITABLE nonce pair from ``frost_round1_commit``
+            (SECRET, SINGLE-USE).  Zeroized in place, every byte of it,
+            before this function returns or raises — unless it is not a
+            writable buffer, which is the ``TypeError`` below.
+        commitments: Concatenated commitments (num_signers * 64 bytes), row
+            ``i`` belonging to ``signer_indices[i]``.  The row at this
+            participant's own position must be the commitment
+            ``frost_round1_commit`` returned with ``nonce_pair`` (RFC 9591
+            section 5.2); the native call re-derives it from the nonces and
+            refuses the list otherwise.
         signer_indices: Byte array of 1-based signer indices.
         num_signers: Number of signers in this session.
         group_public_key: 32-byte group public key.
 
     Returns:
         32-byte signature share.
+
+    Raises:
+        TypeError: ``nonce_pair`` is not a writable buffer.
+        ValueError: any argument has the wrong length or range.
+        RuntimeError: the native call refused — including the refusal of an
+            already-consumed nonce pair and of a commitment list whose row for
+            this participant is not its own round-1 commitment.  The nonce
+            pair is consumed on every one of these refusals.
+    """
+    # Take the writable view FIRST — before the module-state check, the
+    # backend check and every argument check — so that every refusal below is
+    # inside the scrubbing ``finally``.  The view spans the caller's whole
+    # buffer (its ``nbytes``, not a fixed 64), so a wrong-length buffer is
+    # zeroized as well as refused.  This ordering is what the docstring's
+    # "whatever the outcome" rests on: a review of an earlier revision found
+    # the ``num_signers``, ``participant_share``, ``participant_index`` and
+    # nonce-length checks running before the view existed, so each of those
+    # refusals returned with the caller's nonce pair intact.
+    try:
+        with memoryview(nonce_pair) as nonce_probe:
+            nonce_nbytes = nonce_probe.nbytes
+        nonce_view = (ctypes.c_char * nonce_nbytes).from_buffer(nonce_pair)
+    except TypeError as exc:
+        raise TypeError(
+            "nonce_pair must be a writable buffer (bytearray / memoryview), not "
+            f"{type(nonce_pair).__name__}: FROST round 2 consumes the nonce pair "
+            "in place (INVARIANT-49).  Use the bytearray returned by "
+            "frost_round1_commit()."
+        ) from exc
+
+    try:
+        check_crypto_permitted()
+        if not _FROST_AVAILABLE or _native_lib is None:
+            raise NativeBackendUnavailableError("FROST native library not available")
+        if not (2 <= num_signers <= 255):
+            raise ValueError("num_signers must be in [2, 255]")
+        if len(participant_share) != FROST_SHARE_BYTES:
+            raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
+        if not (1 <= participant_index <= 255):
+            raise ValueError("participant_index must be in [1, 255]")
+        # Both measures, so accepting the whole-buffer view loosens nothing:
+        # ``len`` is what this check always compared (a 16-item ``array('I')``
+        # stays refused), and ``nbytes`` refuses a 64-item buffer of wider
+        # items that the fixed 64-byte view used to accept by truncation.
+        if len(nonce_pair) != FROST_NONCE_BYTES or nonce_nbytes != FROST_NONCE_BYTES:
+            raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
+        if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
+            raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+        if len(signer_indices) != num_signers:
+            raise ValueError(f"signer_indices must be {num_signers} bytes")
+        if len(group_public_key) != 32:
+            raise ValueError("group_public_key must be 32 bytes")
+
+        sig_share_buf = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
+
+        rc = _native_lib.ama_frost_round2_sign(
+            sig_share_buf,
+            _borrow(message),
+            ctypes.c_size_t(len(message)),
+            _borrow(participant_share),
+            ctypes.c_uint8(participant_index),
+            nonce_view,
+            _borrow(commitments),
+            _borrow(signer_indices),
+            ctypes.c_uint8(num_signers),
+            _borrow(group_public_key),
+        )
+    finally:
+        # Belt and braces.  The C side already scrubbed on every path it
+        # reached; this covers the paths it did not (every check above) and
+        # makes the consumption unconditional at this boundary too.
+        # `del` releases the exported buffer so the caller's bytearray can be
+        # resized again — ctypes keeps a buffer export alive for the life of
+        # the view.
+        ctypes.memset(nonce_view, 0, nonce_nbytes)
+        del nonce_view
+    if rc != 0:
+        raise RuntimeError(
+            f"FROST round2 sign failed (rc={rc}).  rc=-1 with a nonce pair that "
+            "has already been used is the INVARIANT-49 one-shot refusal: run "
+            "frost_round1_commit() again for each message."
+        )
+
+    return bytes(sig_share_buf.raw[:FROST_SIG_SHARE_BYTES])
+
+
+class FrostShareRejected(RuntimeError):
+    """A FROST signature share failed verification, and we know whose it was.
+
+    Raised by :func:`frost_aggregate` when a share does not satisfy the
+    RFC 9591 section 5.3 relation.  ``participant_index`` carries the 1-based
+    index of the participant that supplied it — the attribution that makes
+    identifiable abort possible (INVARIANT-49).  It is ``0`` when the failure
+    is not attributable to one participant, which today means the final
+    whole-signature check against the group public key.
+
+    A ``RuntimeError`` subclass so that callers written against the previous
+    ``RuntimeError`` contract keep working unchanged.
+    """
+
+    def __init__(self, message: str, participant_index: int) -> None:
+        super().__init__(message)
+        self.participant_index = participant_index
+
+
+def frost_verify_share(
+    sig_share: bytes,
+    participant_index: int,
+    participant_public_share: bytes,
+    commitments: bytes,
+    signer_indices: bytes,
+    num_signers: int,
+    message: bytes,
+    group_public_key: bytes,
+) -> bool:
+    """Verify one FROST signature share (RFC 9591 section 5.3 relation).
+
+    Checks ``g^z_i == D_i + rho_i * E_i + (lambda_i * c) * PK_i``.
+    :func:`frost_aggregate` applies this to every share already, so a
+    coordinator that only aggregates need not call it; it is exposed for
+    coordinators that want to validate shares as they arrive (and so drop a
+    bad one before the round completes), and for auditing a ceremony
+    after the fact.
+
+    Args:
+        sig_share: 32-byte signature share z_i.
+        participant_index: 1-based index of the share's author.
+        participant_public_share: 32-byte PUBLIC key share PK_i — bytes
+            [32, 64) of that participant's dealt 64-byte share.
+        commitments: Concatenated commitments (num_signers * 64 bytes),
+            ordered to match ``signer_indices``.
+        signer_indices: Byte array of 1-based signer indices.
+        num_signers: Number of signers in this session.
+        message: Message that was signed.
+        group_public_key: 32-byte group public key.
+
+    Returns:
+        True if the share satisfies the relation, False if it does not.
+
+    Raises:
+        ValueError: an argument has the wrong length or range.
+        RuntimeError: the native call could not reach a verdict (a point that
+            does not decode, a signer set that omits ``participant_index``).
+            A *verdict* of "invalid" is ``False``, not an exception.
     """
     check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
         raise NativeBackendUnavailableError("FROST native library not available")
     if not (2 <= num_signers <= 255):
         raise ValueError("num_signers must be in [2, 255]")
-    if len(participant_share) != FROST_SHARE_BYTES:
-        raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
+    if len(sig_share) != FROST_SIG_SHARE_BYTES:
+        raise ValueError(f"sig_share must be {FROST_SIG_SHARE_BYTES} bytes")
     if not (1 <= participant_index <= 255):
         raise ValueError("participant_index must be in [1, 255]")
-    if len(nonce_pair) != FROST_NONCE_BYTES:
-        raise ValueError(f"nonce_pair must be {FROST_NONCE_BYTES} bytes")
+    if len(participant_public_share) != 32:
+        raise ValueError("participant_public_share must be 32 bytes")
     if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
         raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
     if len(signer_indices) != num_signers:
@@ -7691,39 +9739,53 @@ def frost_round2_sign(
     if len(group_public_key) != 32:
         raise ValueError("group_public_key must be 32 bytes")
 
-    sig_share_buf = ctypes.create_string_buffer(FROST_SIG_SHARE_BYTES)
-
-    rc = _native_lib.ama_frost_round2_sign(
-        sig_share_buf,
-        message,
-        ctypes.c_size_t(len(message)),
-        participant_share,
+    rc = _native_lib.ama_frost_verify_share(
+        sig_share,
         ctypes.c_uint8(participant_index),
-        nonce_pair,
+        participant_public_share,
         commitments,
         signer_indices,
         ctypes.c_uint8(num_signers),
+        message,
+        ctypes.c_size_t(len(message)),
         group_public_key,
     )
-    if rc != 0:
-        raise RuntimeError(f"FROST round2 sign failed (rc={rc})")
-
-    return bytes(sig_share_buf)
+    if rc == 0:
+        return True
+    if rc == _AMA_ERROR_VERIFY_FAILED:
+        return False
+    raise RuntimeError(f"FROST share verification could not run (rc={rc})")
 
 
 def frost_aggregate(
     sig_shares: bytes,
     commitments: bytes,
+    signer_public_shares: bytes,
     signer_indices: bytes,
     num_signers: int,
     message: bytes,
     group_public_key: bytes,
 ) -> bytes:
-    """Aggregate FROST signature shares into an Ed25519-compatible signature.
+    """Aggregate VERIFIED FROST signature shares into an Ed25519 signature.
+
+    **IDENTIFIABLE ABORT (INVARIANT-49).**  Every share is verified against
+    the RFC 9591 section 5.3 relation before it contributes to the sum, and
+    the assembled signature is verified against the group public key as
+    defence in depth.  A bad share raises :class:`FrostShareRejected`, whose
+    ``participant_index`` names the culprit.
+
+    BREAKING: ``signer_public_shares`` is a new required argument, positioned
+    with the other per-signer arrays.  Share verification is against each
+    signer's PUBLIC key share PK_i, and the previous argument list carried no
+    way to obtain one — the commitments are nonce points, not key shares.
+    Build it by concatenating ``share[32:64]`` of each signer's dealt 64-byte
+    share, in ``signer_indices`` order.
 
     Args:
         sig_shares: Concatenated signature shares (num_signers * 32 bytes).
         commitments: Concatenated commitments (num_signers * 64 bytes).
+        signer_public_shares: Concatenated PUBLIC key shares
+            (num_signers * 32 bytes), ordered to match ``signer_indices``.
         signer_indices: Byte array of 1-based signer indices.
         num_signers: Number of signers.
         message: Original message.
@@ -7731,6 +9793,14 @@ def frost_aggregate(
 
     Returns:
         64-byte Ed25519-format signature (R || z).
+
+    Raises:
+        ValueError: an argument has the wrong length or the signer set is
+            malformed.
+        FrostShareRejected: a share failed verification (``participant_index``
+            names it), or the assembled signature failed verification under
+            the group public key (``participant_index == 0``).
+        RuntimeError: any other native failure.
     """
     check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
@@ -7741,6 +9811,8 @@ def frost_aggregate(
         raise ValueError(f"sig_shares must be {num_signers * FROST_SIG_SHARE_BYTES} bytes")
     if len(commitments) != num_signers * FROST_COMMITMENT_BYTES:
         raise ValueError(f"commitments must be {num_signers * FROST_COMMITMENT_BYTES} bytes")
+    if len(signer_public_shares) != num_signers * 32:
+        raise ValueError(f"signer_public_shares must be {num_signers * 32} bytes")
     if len(signer_indices) != num_signers:
         raise ValueError(f"signer_indices must be {num_signers} bytes")
     if any(idx == 0 for idx in signer_indices):
@@ -7751,18 +9823,39 @@ def frost_aggregate(
         raise ValueError("group_public_key must be 32 bytes")
 
     sig_buf = ctypes.create_string_buffer(64)
+    bad_index = ctypes.c_uint8(0)
 
     rc = _native_lib.ama_frost_aggregate(
         sig_buf,
         sig_shares,
         commitments,
+        signer_public_shares,
         signer_indices,
         ctypes.c_uint8(num_signers),
         message,
         ctypes.c_size_t(len(message)),
         group_public_key,
+        ctypes.byref(bad_index),
     )
+    if rc == _AMA_ERROR_VERIFY_FAILED:
+        culprit = int(bad_index.value)
+        if culprit:
+            raise FrostShareRejected(
+                f"FROST aggregate rejected the signature share from participant "
+                f"{culprit}: it does not satisfy the RFC 9591 section 5.3 "
+                f"relation.  Exclude that participant and re-run the round.",
+                culprit,
+            )
+        raise FrostShareRejected(
+            "FROST aggregate: every share verified but the assembled signature "
+            "does not verify under the group public key.  No participant is "
+            "implicated; this is the defence-in-depth check and it failing "
+            "indicates a library or input-ordering defect, not a bad signer.",
+            0,
+        )
     if rc != 0:
-        raise RuntimeError(f"FROST aggregate failed (rc={rc})")
+        culprit = int(bad_index.value)
+        blame = f" (participant {culprit})" if culprit else ""
+        raise RuntimeError(f"FROST aggregate failed (rc={rc}){blame}")
 
-    return bytes(sig_buf)
+    return bytes(sig_buf.raw[:64])

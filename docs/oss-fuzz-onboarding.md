@@ -4,7 +4,7 @@
 
 [OSS-Fuzz](https://github.com/google/oss-fuzz) is Google's continuous fuzzing infrastructure for open-source software. It runs fuzzing engines (libFuzzer, AFL++, Honggfuzz) with sanitizers (ASan, MSan, UBSan) against your code 24/7, automatically reporting crashes, memory errors, and undefined behavior.
 
-AMA Cryptography already has 15 libFuzzer fuzz targets running in CI. Onboarding to OSS-Fuzz provides:
+AMA Cryptography already has 17 libFuzzer fuzz targets running in CI. Onboarding to OSS-Fuzz provides:
 
 - **Continuous 24/7 fuzzing** with massive compute resources
 - **Multiple fuzzing engines** (libFuzzer, AFL++, Honggfuzz) for coverage diversity
@@ -40,20 +40,47 @@ Executed inside the Docker container to compile all fuzz targets. It:
 2. Compiles each fuzz target against `$LIB_FUZZING_ENGINE`
 3. Copies seed corpora and dictionaries to `$OUT/`
 
-## Testing the Build Locally
+## Testing the Build
 
-Before submitting the PR to google/oss-fuzz, verify the build works locally:
+The build is exercised by CI on every push and pull request: the
+`oss-fuzz-build` job in `.github/workflows/fuzzing.yml` runs
+`tools/test_oss_fuzz_build.sh`, which is also the command to run locally
+before submitting the PR to google/oss-fuzz:
 
 ### Quick Test
 
 ```bash
-./tools/test_oss_fuzz_build.sh
+./tools/test_oss_fuzz_build.sh            # needs Docker; ~10 minutes
+OSS_FUZZ_REF=<commit> ./tools/test_oss_fuzz_build.sh   # a different infra commit
 ```
 
 This script:
-1. Clones google/oss-fuzz to `/tmp/oss-fuzz`
-2. Copies the configuration files
-3. Runs `build_image`, `build_fuzzers`, and `check_build`
+1. Fetches google/oss-fuzz at a pinned commit (`OSS_FUZZ_REF`) into
+   `$RUNNER_TEMP/oss-fuzz` or `/tmp/oss-fuzz`, unless a checkout is given
+2. Copies the configuration files into `projects/ama-cryptography/`
+3. Runs `build_fuzzers` with **this checkout** mounted over the Dockerfile's
+   clone (the trailing source-path argument to `infra/helper.py`), so the tree that
+   is built is the one you are standing in, not the default branch
+4. Runs `check_build`, OSS-Fuzz's bad-build check: every fuzzer must start,
+   be linked against the requested engine and sanitizer, and run its seed
+   corpus
+
+`oss-fuzz/build.sh` writes its intermediates under `$WORK`, so the mounted
+checkout is left untouched.
+
+### Continuous fuzzing before onboarding
+
+`.github/workflows/clusterfuzzlite.yml` runs the same build integration on
+OSS-Fuzz's infrastructure inside GitHub Actions
+([ClusterFuzzLite](https://google.github.io/clusterfuzzlite/)): nightly
+batch fuzzing under ASan, UBSan and MSan, with the corpus kept between runs
+as workflow artifacts, a weekly prune and a weekly coverage report.
+`.clusterfuzzlite/build.sh` execs `oss-fuzz/build.sh`, so there is one build
+integration, not two. The workflow has no pull-request trigger, and GitHub
+refuses a `workflow_dispatch` of a workflow file that is not yet on the
+default branch, so its first run happens only after the workflow lands on
+`main`; the per-push `oss-fuzz-build` job in `fuzzing.yml` is what checks
+the build integration before that.
 
 ### Manual Test
 
@@ -67,10 +94,9 @@ cp oss-fuzz/project.yaml /tmp/oss-fuzz/projects/ama-cryptography/
 cp oss-fuzz/Dockerfile /tmp/oss-fuzz/projects/ama-cryptography/
 cp oss-fuzz/build.sh /tmp/oss-fuzz/projects/ama-cryptography/
 
-# Test the build
+# Test the build of THIS checkout (the trailing path is mounted over the clone)
 cd /tmp/oss-fuzz
-python3 infra/helper.py build_image ama-cryptography
-python3 infra/helper.py build_fuzzers ama-cryptography
+python3 infra/helper.py build_fuzzers ama-cryptography <repo>
 python3 infra/helper.py check_build ama-cryptography
 
 # Run a fuzzer locally (optional)
@@ -93,7 +119,7 @@ python3 infra/helper.py run_fuzzer ama-cryptography fuzz_sha3 -- -max_total_time
 
 4. **Submit a PR** to google/oss-fuzz with:
    - Title: "Add ama-cryptography project"
-   - Description: Brief project description, link to repository, mention the 15 C fuzz targets
+   - Description: Brief project description, link to repository, mention the 17 C fuzz targets
 
 5. **Wait for review** — Google's OSS-Fuzz team will review and merge
 

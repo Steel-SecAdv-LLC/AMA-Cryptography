@@ -78,7 +78,7 @@ __m256i montgomery_reduce_avx2(__m256i a_lo, __m256i a_hi) {
 
     /* Extract high 32 bits */
     __m256i tq_hi_even = _mm256_srli_epi64(tq_even, 32);
-    __m256i tq_hi_odd  = _mm256_and_si256(tq_odd, _mm256_set1_epi64x(0xFFFFFFFF00000000LL));
+    __m256i tq_hi_odd  = _mm256_and_si256(tq_odd, _mm256_set1_epi64x(-0x100000000LL) /* 0xFFFFFFFF00000000 */);
     __m256i tq_hi = _mm256_or_si256(tq_hi_even, tq_hi_odd);
 
     return _mm256_sub_epi32(a_hi, tq_hi);
@@ -264,6 +264,15 @@ void ama_dilithium_ntt_avx2(int32_t poly[DILITHIUM_N],
     for (int i = 0; i < 32; i++) {
         _mm256_storeu_si256((__m256i *)(poly + i * 8), f[i]);
     }
+
+    /* SECRET SCRATCH (INVARIANT-6/12): f staged the complete polynomial —
+     * s1/s2 and the signing mask y on the ML-DSA signing path.  1 KiB is
+     * twice the 16-register YMM file, so most of it lives in the frame;
+     * erase it before the function ends, exactly as the SVE2 kernel
+     * (src/c/sve2/ama_dilithium_sve2.c) erases its staging buffers.  One
+     * barrier per public call, same cost argument as there. */
+    ama_secure_memzero(f, sizeof(f));
+
     for (int len = 4; len > 0; len >>= 1) {
         for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
             int32_t zeta = zetas[++k];
@@ -427,6 +436,10 @@ void ama_dilithium_invntt_avx2(int32_t poly[DILITHIUM_N],
     for (int i = 0; i < 32; i++) {
         _mm256_storeu_si256((__m256i *)(poly + i * 8), f[i]);
     }
+
+    /* SECRET SCRATCH (INVARIANT-6/12): same staging buffer as the forward
+     * NTT above — erase before returning. */
+    ama_secure_memzero(f, sizeof(f));
 }
 
 /* ============================================================================

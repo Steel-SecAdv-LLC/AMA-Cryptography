@@ -31,6 +31,13 @@ concurrency:
 jobs:
   sync-wiki:
     runs-on: ubuntu-latest
+    # This job holds `contents: write`; without a bound a hung clone or push
+    # would keep it for GitHub's 360-minute default.  Measured over all 42
+    # runs of this workflow (2026-03-10 to 2026-08-02): the longest took 0.9
+    # minutes, the median 0.2.  Five minutes is over five times the longest.
+    # The push updates the wiki's single ref in one step, so a timeout that
+    # lands mid-push leaves the old pages or the new ones, not a mixture.
+    timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -43,10 +50,28 @@ jobs:
 
           # Try to clone the wiki. The GitHub wiki is a separate git repository
           # that only exists after at least one page has been created through the UI.
-          if git clone "$WIKI_URL" /tmp/wiki; then
+          #
+          # Exactly one failure is a setup reminder rather than a broken
+          # publish: the wiki repository not existing yet, which GitHub
+          # reports as "Repository not found".  Every other clone failure —
+          # a token without the permission, a network fault, a moved
+          # repository — used to take the same branch and exit 0, so the
+          # public wiki could go stale indefinitely with a green run and an
+          # annotation nobody reads.  Those now fail the job.
+          # No pipe here on purpose: this step runs under GitHub's default
+          # `bash -e {0}`, which does not set pipefail, so `git clone | tee`
+          # would report tee's status and every failure would read as success.
+          clone_log="$(mktemp)"
+          if git clone "$WIKI_URL" /tmp/wiki >"$clone_log" 2>&1; then
+            cat "$clone_log"
             echo "✓ Cloned existing wiki repository."
+          elif ! grep -qi "repository not found" "$clone_log"; then
+            cat "$clone_log"
+            echo "::error::Failed to clone the wiki repository for a reason other than it not existing yet — see the git output above (token permissions? network?). The wiki was NOT published."
+            exit 1
           else
-            echo "::error::Failed to clone wiki repository — check GH_TOKEN permissions"
+            cat "$clone_log"
+            echo "::warning::The wiki repository does not exist yet — one-time setup required"
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "  WIKI NOT INITIALIZED — one-time setup required"
@@ -66,8 +91,9 @@ jobs:
             echo "  The workflow will then overwrite that placeholder with all"
             echo "  17 wiki pages from the wiki/ directory automatically."
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            # Exit 0 so the PR/push is not marked as failed — this is a setup
-            # reminder, not a code error.
+            # Exit 0 only in this one state: nothing is published because
+            # there is nowhere to publish to yet, and the steps above are
+            # the remedy.  Any other clone failure exited 1 above.
             exit 0
           fi
 

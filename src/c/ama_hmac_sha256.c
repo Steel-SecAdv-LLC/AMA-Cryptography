@@ -16,10 +16,50 @@
 
 #include "ama_hmac_sha256.h"
 #include "ama_sha256.h"
+#include <stdlib.h>
 #include <string.h>
 
 /* Scrub sensitive stack data */
 extern void ama_secure_memzero(void *ptr, size_t len);
+
+/**
+ * Whether the caller's arguments can be dereferenced as described.
+ *
+ * Both entry points are `void`, and both are exported and ctypes-facing, so
+ * a downstream binding that gets a length wrong hands this code a NULL with a
+ * non-zero length and the SHA-256 kernel dereferences it.  The 2026-09 audit
+ * reached a SIGSEGV that way (C-5).
+ *
+ * A `void` function cannot report a caller bug, and the return type is not
+ * changed here because eighteen internal call sites pass stack arrays and
+ * would gain a return value nobody could act on.  The one place an error can
+ * actually be reported is the Python boundary, and `native_hmac_sha256` /
+ * `native_hmac_sha256_2` reject these arguments before they arrive.
+ *
+ * Everywhere else a refusal must neither dereference nor RETURN, because
+ * every value a MAC function can leave in `out` is a value some caller will
+ * compare a received tag against.  The previous revision zeroed `out` and
+ * returned; 0^32 is a public constant, so a verifier whose expected-tag
+ * computation hit this branch accepted the tag 00..00 for any message it was
+ * handed (2026-09-24 review of PR #394, c-sym-core#1).  Filling `out` with
+ * CSPRNG bytes instead is not available to this translation unit: it is in
+ * the unconditional source list, and ama_platform_rand.c is linked only when
+ * AMA_USE_NATIVE_PQC=ON.  So a contract violation ends the process with
+ * abort(): fail-closed and defined, which is the outcome the 4.x releases
+ * reached through the SIGSEGV, without the undefined behaviour.  abort() is
+ * declared noreturn by every C library this builds against, so no path
+ * falls through from the refusal into the dereference.
+ */
+static int hmac_args_are_dereferenceable(const uint8_t *key, size_t key_len,
+                                          const uint8_t *data, size_t data_len) {
+    if (!key && key_len > 0) {
+        return 0;
+    }
+    if (!data && data_len > 0) {
+        return 0;
+    }
+    return 1;
+}
 
 void ama_hmac_sha256(const uint8_t *key, size_t key_len,
                       const uint8_t *data, size_t data_len,
@@ -31,6 +71,13 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
     ama_sha256_ctx ctx;
     unsigned int i;
 
+    if (!out) {
+        return;  /* nowhere to write; nothing else is safe to touch either */
+    }
+    if (!hmac_args_are_dereferenceable(key, key_len, data, data_len)) {
+        abort();  /* never returns a tag for a call it could not compute */
+    }
+
     /* Step 1: Derive K' from key.  `k_prime` will hold the HMAC key
      * (possibly truncated via SHA-256) for the lifetime of the call —
      * use the secure scrub primitive on the initial zero pad so the
@@ -41,8 +88,13 @@ void ama_hmac_sha256(const uint8_t *key, size_t key_len,
         /* Key longer than block size: K' = SHA-256(key), zero-padded */
         ama_sha256(k_prime, key, key_len);
     } else {
-        /* Key fits in block: K' = key, zero-padded */
-        memcpy(k_prime, key, key_len);
+        /* Key fits in block: K' = key, zero-padded.  A zero-length key
+         * (RFC 2104 permits it; callers may pass NULL for it) must not
+         * reach memcpy: memcpy(dst, NULL, 0) is undefined behaviour and
+         * a UBSan/ASan trap. */
+        if (key_len > 0) {
+            memcpy(k_prime, key, key_len);
+        }
     }
 
     /* Step 2: Compute ipad and opad */
@@ -81,11 +133,19 @@ void ama_hmac_sha256_2(const uint8_t *key, size_t key_len,
     ama_sha256_ctx ctx;
     unsigned int i;
 
+    if (!out) {
+        return;
+    }
+    if (!hmac_args_are_dereferenceable(key, key_len, data1, data1_len) ||
+        !hmac_args_are_dereferenceable(key, key_len, data2, data2_len)) {
+        abort();  /* never returns a tag for a call it could not compute */
+    }
+
     /* Derive K' — see ama_hmac_sha256() for INVARIANT-6 rationale. */
     ama_secure_memzero(k_prime, AMA_SHA256_BLOCK_SIZE);
     if (key_len > AMA_SHA256_BLOCK_SIZE) {
         ama_sha256(k_prime, key, key_len);
-    } else {
+    } else if (key_len > 0) {
         memcpy(k_prime, key, key_len);
     }
 

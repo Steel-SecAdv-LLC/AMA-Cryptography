@@ -9,7 +9,7 @@ Professional-grade test coverage for the key_management module.
 Targets 95%+ code coverage with edge cases, error paths, and security validations.
 
 Test Categories:
-- HDKeyDerivation: BIP32-compliant key derivation
+- HDKeyDerivation: BIP32-style CKD over an AMA-specific root (not BIP32-interoperable)
 - KeyRotationManager: Key lifecycle management
 - SecureKeyStorage: Encrypted key storage with AES-256-GCM
 - KeyMetadata: Data structure validation
@@ -389,7 +389,7 @@ class TestKeyRotationManagerComprehensive:
 
         assert filepath.exists()
 
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             loaded = json.load(f)
 
         assert loaded == export
@@ -419,9 +419,9 @@ class TestKeyRotationManagerComprehensive:
 class TestSecureKeyStorageComprehensive:
     """Comprehensive tests for SecureKeyStorage class."""
 
-    def test_init_with_password(self, temp_storage_path: Any, test_password: Any) -> None:
+    def test_init_with_password(self, temp_storage_path: Any, sample_password: Any) -> None:
         """Initialize with master password."""
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
         assert storage.encryption_key is not None
         assert len(storage.encryption_key) == 32
@@ -442,12 +442,12 @@ class TestSecureKeyStorageComprehensive:
 
         assert storage_path.exists()
 
-    def test_store_retrieve_roundtrip(self, secure_storage: Any, test_key_material: Any) -> None:
+    def test_store_retrieve_roundtrip(self, secure_storage: Any, sample_key_material: Any) -> None:
         """Store and retrieve key successfully."""
-        secure_storage.store_key("test-key", test_key_material)
+        secure_storage.store_key("test-key", sample_key_material)
         retrieved = secure_storage.retrieve_key("test-key")
 
-        assert retrieved == test_key_material
+        assert retrieved == sample_key_material
 
     def test_store_retrieve_uses_wipeable_key_buffer(
         self, secure_storage: Any, monkeypatch: pytest.MonkeyPatch
@@ -477,15 +477,15 @@ class TestSecureKeyStorageComprehensive:
     def test_store_retrieve_with_metadata(
         self,
         secure_storage: Any,
-        test_key_material: Any,
+        sample_key_material: Any,
     ) -> None:
         """Store key with metadata."""
         metadata = {"purpose": "signing", "created_by": "test"}
-        secure_storage.store_key("test-key", test_key_material, metadata=metadata)
+        secure_storage.store_key("test-key", sample_key_material, metadata=metadata)
 
         # Metadata is stored but not returned by retrieve_key
         retrieved = secure_storage.retrieve_key("test-key")
-        assert retrieved == test_key_material
+        assert retrieved == sample_key_material
 
     def test_store_overwrites_existing(self, secure_storage: Any) -> None:
         """Store overwrites existing key."""
@@ -499,9 +499,9 @@ class TestSecureKeyStorageComprehensive:
         """Retrieve nonexistent key returns None."""
         assert secure_storage.retrieve_key("nonexistent") is None
 
-    def test_delete_key_success(self, secure_storage: Any, test_key_material: Any) -> None:
+    def test_delete_key_success(self, secure_storage: Any, sample_key_material: Any) -> None:
         """Delete existing key returns True."""
-        secure_storage.store_key("test-key", test_key_material)
+        secure_storage.store_key("test-key", sample_key_material)
 
         assert secure_storage.delete_key("test-key") is True
         assert secure_storage.retrieve_key("test-key") is None
@@ -511,10 +511,10 @@ class TestSecureKeyStorageComprehensive:
         assert secure_storage.delete_key("nonexistent") is False
 
     def test_delete_key_secure_overwrite(
-        self, secure_storage: Any, test_key_material: Any, temp_storage_path: Any
+        self, secure_storage: Any, sample_key_material: Any, temp_storage_path: Any
     ) -> None:
         """Delete key overwrites file before removal."""
-        secure_storage.store_key("test-key", test_key_material)
+        secure_storage.store_key("test-key", sample_key_material)
         key_file = temp_storage_path / "test-key.json"
 
         # Verify file exists
@@ -527,11 +527,11 @@ class TestSecureKeyStorageComprehensive:
     def test_wrong_password_fails_decryption(
         self,
         temp_storage_path: Any,
-        test_key_material: Any,
+        sample_key_material: Any,
     ) -> None:
         """Wrong password fails to decrypt (AES-GCM authentication failure)."""
         storage1 = SecureKeyStorage(temp_storage_path, master_password="correct")
-        storage1.store_key("test-key", test_key_material)
+        storage1.store_key("test-key", sample_key_material)
 
         storage2 = SecureKeyStorage(temp_storage_path, master_password="wrong")
 
@@ -548,23 +548,23 @@ class TestSecureKeyStorageComprehensive:
         with pytest.raises(ValueError):
             secure_storage.store_key("invalid!key", b"data")
 
-    def test_valid_key_id_with_dash(self, secure_storage: Any, test_key_material: Any) -> None:
+    def test_valid_key_id_with_dash(self, secure_storage: Any, sample_key_material: Any) -> None:
         """Key_id with dash is valid."""
-        secure_storage.store_key("test-key-v1", test_key_material)
-        assert secure_storage.retrieve_key("test-key-v1") == test_key_material
+        secure_storage.store_key("test-key-v1", sample_key_material)
+        assert secure_storage.retrieve_key("test-key-v1") == sample_key_material
 
     def test_valid_key_id_with_underscore(
         self,
         secure_storage: Any,
-        test_key_material: Any,
+        sample_key_material: Any,
     ) -> None:
         """Key_id with underscore is valid."""
-        secure_storage.store_key("test_key_v1", test_key_material)
-        assert secure_storage.retrieve_key("test_key_v1") == test_key_material
+        secure_storage.store_key("test_key_v1", sample_key_material)
+        assert secure_storage.retrieve_key("test_key_v1") == sample_key_material
 
-    def test_salt_file_created(self, temp_storage_path: Any, test_password: Any) -> None:
+    def test_salt_file_created(self, temp_storage_path: Any, sample_password: Any) -> None:
         """Salt file is created on init."""
-        SecureKeyStorage(temp_storage_path, master_password=test_password)
+        SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
         salt_file = temp_storage_path / ".salt"
         assert salt_file.exists()
@@ -573,32 +573,32 @@ class TestSecureKeyStorageComprehensive:
             salt = f.read()
         assert len(salt) == 32
 
-    def test_metadata_file_created(self, temp_storage_path: Any, test_password: Any) -> None:
+    def test_metadata_file_created(self, temp_storage_path: Any, sample_password: Any) -> None:
         """KDF metadata file is created."""
-        SecureKeyStorage(temp_storage_path, master_password=test_password)
+        SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
         metadata_file = temp_storage_path / ".kdf_metadata.json"
         assert metadata_file.exists()
 
-        with open(metadata_file) as f:
+        with open(metadata_file, encoding="utf-8") as f:
             metadata = json.load(f)
 
-        # v3 = Argon2id (preferred when native lib available), v2 = PBKDF2
-        assert metadata["version"] in (2, 3)
-        if metadata["version"] == 3:
-            assert metadata["algorithm"] == "Argon2id"
-            assert "t_cost" in metadata
-            assert "m_cost" in metadata
-        else:
-            assert metadata["algorithm"] == "PBKDF2-HMAC-SHA256"
-            assert metadata["iterations"] == 600000
+        # A new store is always v3 Argon2id.  There is no v2 PBKDF2 branch to
+        # accept: a library without Argon2id refuses to create the store
+        # (TestArgon2idIsRequiredNotSubstituted in
+        # tests/test_key_management_comprehensive.py).
+        assert metadata["version"] == 3
+        assert metadata["algorithm"] == "Argon2id"
+        assert "t_cost" in metadata
+        assert "m_cost" in metadata
+        assert "iterations" not in metadata
 
-    def test_salt_file_reused(self, temp_storage_path: Any, test_password: Any) -> None:
+    def test_salt_file_reused(self, temp_storage_path: Any, sample_password: Any) -> None:
         """Existing salt file is reused."""
-        storage1 = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage1 = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         salt1 = storage1.salt
 
-        storage2 = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage2 = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         salt2 = storage2.salt
 
         assert salt1 == salt2
@@ -606,17 +606,17 @@ class TestSecureKeyStorageComprehensive:
     def test_from_existing_success(
         self,
         temp_storage_path: Any,
-        test_password: Any,
-        test_key_material: Any,
+        sample_password: Any,
+        sample_key_material: Any,
     ) -> None:
         """Recover storage from existing salt file."""
-        storage1 = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        storage1.store_key("test-key", test_key_material)
+        storage1 = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        storage1.store_key("test-key", sample_key_material)
 
-        storage2 = SecureKeyStorage.from_existing(temp_storage_path, test_password)
+        storage2 = SecureKeyStorage.from_existing(temp_storage_path, sample_password)
         retrieved = storage2.retrieve_key("test-key")
 
-        assert retrieved == test_key_material
+        assert retrieved == sample_key_material
 
     def test_from_existing_no_salt_file(self, temp_dir: Any) -> None:
         """from_existing raises FileNotFoundError without salt file."""
@@ -627,12 +627,12 @@ class TestSecureKeyStorageComprehensive:
     def test_file_permissions(
         self,
         temp_storage_path: Any,
-        test_password: Any,
-        test_key_material: Any,
+        sample_password: Any,
+        sample_key_material: Any,
     ) -> None:
         """Key files have secure permissions (0600)."""
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        storage.store_key("test-key", test_key_material)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        storage.store_key("test-key", sample_key_material)
 
         key_file = temp_storage_path / "test-key.json"
         mode = os.stat(key_file).st_mode & 0o777
@@ -662,34 +662,34 @@ class TestSecureKeyStorageMigration:
     def test_migrate_kdf_success(
         self,
         temp_storage_path: Any,
-        test_password: Any,
-        test_key_material: Any,
+        sample_password: Any,
+        sample_key_material: Any,
     ) -> None:
         """migrate_kdf re-encrypts keys with new parameters."""
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        storage.store_key("key-1", test_key_material)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        storage.store_key("key-1", sample_key_material)
         storage.store_key("key-2", b"another-key-material-here!!")
 
         # Migrate
-        result = storage.migrate_kdf(test_password)
+        result = storage.migrate_kdf(sample_password)
         assert result is True
 
         # Verify metadata updated
-        with open(temp_storage_path / ".kdf_metadata.json") as f:
+        with open(temp_storage_path / ".kdf_metadata.json", encoding="utf-8") as f:
             metadata = json.load(f)
         assert "migrated_at" in metadata
 
         # Verify keys still accessible (with new encryption)
-        new_storage = SecureKeyStorage.from_existing(temp_storage_path, test_password)
-        assert new_storage.retrieve_key("key-1") == test_key_material
+        new_storage = SecureKeyStorage.from_existing(temp_storage_path, sample_password)
+        assert new_storage.retrieve_key("key-1") == sample_key_material
 
 
 class TestSecureKeyStorageLegacy:
     """Tests for legacy AES-CFB format support."""
 
-    def test_retrieve_unknown_algorithm(self, temp_storage_path: Any, test_password: Any) -> None:
+    def test_retrieve_unknown_algorithm(self, temp_storage_path: Any, sample_password: Any) -> None:
         """Retrieving unknown algorithm raises ValueError."""
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
         # Manually create file with unknown algorithm
         unknown_data = {
@@ -700,7 +700,7 @@ class TestSecureKeyStorageLegacy:
         }
 
         key_file = temp_storage_path / "unknown-key.json"
-        with open(key_file, "w") as f:
+        with open(key_file, "w", encoding="utf-8") as f:
             json.dump(unknown_data, f)
 
         with pytest.raises(ValueError, match="Unknown encryption algorithm"):
@@ -710,7 +710,7 @@ class TestSecureKeyStorageLegacy:
 class TestSecureKeyStorageLegacyKDF:
     """Tests for legacy KDF parameter handling."""
 
-    def test_legacy_kdf_warning(self, temp_storage_path: Any, test_password: Any) -> None:
+    def test_legacy_kdf_warning(self, temp_storage_path: Any, sample_password: Any) -> None:
         """Legacy KDF parameters emit warning."""
         # Create salt file manually (simulating v1)
         salt = secrets.token_bytes(32)
@@ -725,7 +725,7 @@ class TestSecureKeyStorageLegacyKDF:
             "iterations": 100000,
         }
         metadata_file = temp_storage_path / ".kdf_metadata.json"
-        with open(metadata_file, "w") as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(v1_metadata, f)
 
         # Opening is refused by default: the metadata naming those parameters
@@ -734,14 +734,14 @@ class TestSecureKeyStorageLegacyKDF:
         from ama_cryptography.key_management import KDFPolicyError
 
         with pytest.raises(KDFPolicyError, match="iterations 100000 < 600000"):
-            SecureKeyStorage(temp_storage_path, master_password=test_password)
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
         # With the explicit opt-in the store opens and warns instead.
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             SecureKeyStorage(
                 temp_storage_path,
-                master_password=test_password,
+                master_password=sample_password,
                 allow_legacy_kdf=True,
             )
 
@@ -751,7 +751,7 @@ class TestSecureKeyStorageLegacyKDF:
             assert any("legacy KDF v1" in m for m in messages)
 
     def test_legacy_store_upgrades_via_migrate(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """A legacy store opened with the opt-in can be migrated and reopened.
 
@@ -764,7 +764,7 @@ class TestSecureKeyStorageLegacyKDF:
         with open(salt_file, "wb") as f:
             f.write(secrets.token_bytes(32))
         metadata_file = temp_storage_path / ".kdf_metadata.json"
-        with open(metadata_file, "w") as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(
                 {"version": 1, "algorithm": "PBKDF2-HMAC-SHA256", "iterations": 100000},
                 f,
@@ -774,20 +774,20 @@ class TestSecureKeyStorageLegacyKDF:
             warnings.simplefilter("ignore")
             legacy = SecureKeyStorage(
                 temp_storage_path,
-                master_password=test_password,
+                master_password=sample_password,
                 allow_legacy_kdf=True,
             )
             legacy.store_key("legacy-key", b"\x11" * 32)
-            assert legacy.migrate_kdf(test_password) is True
+            assert legacy.migrate_kdf(sample_password) is True
 
         # After migration the store opens under the default policy, and the
         # key stored before the migration is still readable.
-        upgraded = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        upgraded = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         assert upgraded.retrieve_key("legacy-key") == b"\x11" * 32
 
         # And the refusal is genuinely gone, not merely suppressed.
         try:
-            SecureKeyStorage(temp_storage_path, master_password=test_password)
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
         except KDFPolicyError as exc:  # pragma: no cover - regression guard
             raise AssertionError(f"migrated store still refused: {exc}") from exc
 
@@ -804,10 +804,10 @@ class TestKDFMetadataIsUntrusted:
 
     def _weaken(self, path: Any, **overrides: Any) -> dict[str, Any]:
         metadata_file = path / ".kdf_metadata.json"
-        with open(metadata_file) as f:
+        with open(metadata_file, encoding="utf-8") as f:
             metadata: dict[str, Any] = json.load(f)
         metadata.update(overrides)
-        with open(metadata_file, "w") as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f)
         return metadata
 
@@ -824,7 +824,7 @@ class TestKDFMetadataIsUntrusted:
         ],
     )
     def test_a_non_numeric_cost_fails_closed_as_a_policy_error(
-        self, temp_storage_path: Any, test_password: Any, field: str, value: Any
+        self, temp_storage_path: Any, sample_password: Any, field: str, value: Any
     ) -> None:
         """A tampered value that is not a number must not escape as TypeError.
 
@@ -848,36 +848,38 @@ class TestKDFMetadataIsUntrusted:
         """
         from ama_cryptography.key_management import KDFPolicyError
 
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        if storage.kdf_params.get("algorithm") != "Argon2id":
-            pytest.skip("store did not select Argon2id")
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        # Not a skip: a new store is always Argon2id, and a library without it
+        # refuses to create one (TestArgon2idIsRequiredNotSubstituted).
+        assert storage.kdf_params["algorithm"] == "Argon2id"
 
         self._weaken(temp_storage_path, **{field: value})
 
         with pytest.raises(KDFPolicyError):
-            SecureKeyStorage(temp_storage_path, master_password=test_password)
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
     def test_a_non_numeric_cost_still_honours_allow_legacy_kdf(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """The migration escape hatch must survive a malformed value.
 
         This is the half that makes the fix more than cosmetic: without it a
         damaged store could not be opened even to ``migrate_kdf()`` it.
         """
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        if storage.kdf_params.get("algorithm") != "Argon2id":
-            pytest.skip("store did not select Argon2id")
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        # Not a skip: a new store is always Argon2id, and a library without it
+        # refuses to create one (TestArgon2idIsRequiredNotSubstituted).
+        assert storage.kdf_params["algorithm"] == "Argon2id"
 
         self._weaken(temp_storage_path, m_cost=None)
 
         with pytest.warns(SecurityWarning):
             SecureKeyStorage(
-                temp_storage_path, master_password=test_password, allow_legacy_kdf=True
+                temp_storage_path, master_password=sample_password, allow_legacy_kdf=True
             )
 
     def test_an_integral_float_is_accepted(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """Non-detection: JSON has one number type, so 65536.0 is legitimate.
 
@@ -885,33 +887,35 @@ class TestKDFMetadataIsUntrusted:
         the failure mode INVARIANT-2 records as the way a gate gets routed
         around.
         """
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        if storage.kdf_params.get("algorithm") != "Argon2id":
-            pytest.skip("store did not select Argon2id")
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        # Not a skip: a new store is always Argon2id, and a library without it
+        # refuses to create one (TestArgon2idIsRequiredNotSubstituted).
+        assert storage.kdf_params["algorithm"] == "Argon2id"
 
         current = float(storage.kdf_params["m_cost"])
         self._weaken(temp_storage_path, m_cost=current)
 
         # No raise, no warning: the value is the same number, spelled as a float.
-        SecureKeyStorage(temp_storage_path, master_password=test_password)
+        SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
     def test_argon2_cost_downgrade_is_refused(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """Rewriting m_cost downward is refused rather than honoured."""
         from ama_cryptography.key_management import KDFPolicyError
 
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        if storage.kdf_params.get("algorithm") != "Argon2id":
-            pytest.skip("store did not select Argon2id")
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        # Not a skip: a new store is always Argon2id, and a library without it
+        # refuses to create one (TestArgon2idIsRequiredNotSubstituted).
+        assert storage.kdf_params["algorithm"] == "Argon2id"
 
         self._weaken(temp_storage_path, m_cost=8)
 
         with pytest.raises(KDFPolicyError, match="m_cost 8 <"):
-            SecureKeyStorage(temp_storage_path, master_password=test_password)
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
     def test_algorithm_downgrade_to_weak_pbkdf2_is_refused(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """Swapping Argon2id for cheap PBKDF2 is refused.
 
@@ -920,7 +924,7 @@ class TestKDFMetadataIsUntrusted:
         """
         from ama_cryptography.key_management import KDFPolicyError
 
-        SecureKeyStorage(temp_storage_path, master_password=test_password)
+        SecureKeyStorage(temp_storage_path, master_password=sample_password)
         self._weaken(
             temp_storage_path,
             version=2,
@@ -929,10 +933,10 @@ class TestKDFMetadataIsUntrusted:
         )
 
         with pytest.raises(KDFPolicyError, match="iterations 100000 <"):
-            SecureKeyStorage(temp_storage_path, master_password=test_password)
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
     def test_algorithm_downgrade_to_at_floor_pbkdf2_is_refused(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """The downgrade that clears every cost floor must still be refused.
 
@@ -950,9 +954,10 @@ class TestKDFMetadataIsUntrusted:
         """
         from ama_cryptography.key_management import MIN_PBKDF2_ITERATIONS, KDFPolicyError
 
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        if storage.kdf_params.get("algorithm") != "Argon2id":
-            pytest.skip("build has no native Argon2id, so PBKDF2 is legitimate here")
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        # Not a skip: a new store is always Argon2id, and a library without it
+        # refuses to create one (TestArgon2idIsRequiredNotSubstituted).
+        assert storage.kdf_params["algorithm"] == "Argon2id"
 
         # Every per-parameter floor is satisfied; only the algorithm changed.
         self._weaken(
@@ -963,10 +968,10 @@ class TestKDFMetadataIsUntrusted:
         )
 
         with pytest.raises(KDFPolicyError, match="weaker than the Argon2id"):
-            SecureKeyStorage(temp_storage_path, master_password=test_password)
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
     def test_at_floor_pbkdf2_downgrade_is_recoverable(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """The refusal is recoverable, and the honest store still opens.
 
@@ -975,9 +980,10 @@ class TestKDFMetadataIsUntrusted:
         """
         from ama_cryptography.key_management import MIN_PBKDF2_ITERATIONS
 
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
-        if storage.kdf_params.get("algorithm") != "Argon2id":
-            pytest.skip("build has no native Argon2id, so PBKDF2 is legitimate here")
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        # Not a skip: a new store is always Argon2id, and a library without it
+        # refuses to create one (TestArgon2idIsRequiredNotSubstituted).
+        assert storage.kdf_params["algorithm"] == "Argon2id"
         storage.store_key("survivor", b"payload", {})
         original = self._weaken(temp_storage_path)  # read back unmodified
 
@@ -990,28 +996,28 @@ class TestKDFMetadataIsUntrusted:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             legacy = SecureKeyStorage(
-                temp_storage_path, master_password=test_password, allow_legacy_kdf=True
+                temp_storage_path, master_password=sample_password, allow_legacy_kdf=True
             )
         assert legacy.kdf_params["algorithm"] == "PBKDF2-HMAC-SHA256"
 
         # Restoring the genuine metadata reopens without the flag, and the key
         # written under Argon2id is still readable.
         self._weaken(temp_storage_path, **original)
-        reopened = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        reopened = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         assert reopened.kdf_params["algorithm"] == "Argon2id"
         assert reopened.retrieve_key("survivor") == b"payload"
 
     def test_floor_is_checked_before_any_derivation(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """No usable key is produced when the parameters are sub-floor."""
         from ama_cryptography.key_management import KDFPolicyError
 
-        SecureKeyStorage(temp_storage_path, master_password=test_password)
+        SecureKeyStorage(temp_storage_path, master_password=sample_password)
         self._weaken(temp_storage_path, t_cost=1, m_cost=8, parallelism=1)
 
         try:
-            SecureKeyStorage(temp_storage_path, master_password=test_password)
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
         except KDFPolicyError as exc:
             # The failure names every shortfall at once, so one round trip
             # tells an operator the whole story.
@@ -1021,15 +1027,15 @@ class TestKDFMetadataIsUntrusted:
             raise AssertionError("sub-floor parameters were accepted")
 
     def test_stored_key_records_its_kdf_parameters(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """Format v3 writes the parameters a key was protected under."""
         from ama_cryptography.key_management import STORAGE_FORMAT_VERSION
 
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         storage.store_key("provenance", b"\x42" * 32)
 
-        with open(temp_storage_path / "provenance.json") as f:
+        with open(temp_storage_path / "provenance.json", encoding="utf-8") as f:
             record = json.load(f)
 
         assert record["version"] == STORAGE_FORMAT_VERSION
@@ -1037,18 +1043,18 @@ class TestKDFMetadataIsUntrusted:
         assert storage.retrieve_key("provenance") == b"\x42" * 32
 
     def test_recorded_parameters_are_covered_by_the_tag(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
         """The recorded provenance cannot be edited independently.
 
         Without the AAD binding, `kdf_params` would be a decorative field an
         attacker could rewrite to make a weakly-protected key look strong.
         """
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         storage.store_key("bound", b"\x37" * 32)
 
         key_file = temp_storage_path / "bound.json"
-        with open(key_file) as f:
+        with open(key_file, encoding="utf-8") as f:
             record = json.load(f)
         record["kdf_params"] = {
             "algorithm": "Argon2id",
@@ -1056,7 +1062,7 @@ class TestKDFMetadataIsUntrusted:
             "m_cost": 99,
             "parallelism": 9,
         }
-        with open(key_file, "w") as f:
+        with open(key_file, "w", encoding="utf-8") as f:
             json.dump(record, f)
 
         from ama_cryptography.key_management import KDFPolicyError
@@ -1067,13 +1073,13 @@ class TestKDFMetadataIsUntrusted:
         with pytest.raises(KDFPolicyError, match="was stored under KDF parameters"):
             storage.retrieve_key("bound")
 
-    def test_v2_key_files_still_open(self, temp_storage_path: Any, test_password: Any) -> None:
+    def test_v2_key_files_still_open(self, temp_storage_path: Any, sample_password: Any) -> None:
         """Existing v2 records keep working.
 
         v2 bound `key_id` alone. Those files predate this change and must not
         be orphaned by it.
         """
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
 
         # Write a v2 record by hand, exactly as the previous format did.
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
@@ -1082,7 +1088,7 @@ class TestKDFMetadataIsUntrusted:
         ct, tag = native_aes256_gcm_encrypt(
             storage.encryption_key, nonce, b"\x5a" * 32, b"legacy-record"
         )
-        with open(temp_storage_path / "legacy-record.json", "w") as f:
+        with open(temp_storage_path / "legacy-record.json", "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "key_id": "legacy-record",
@@ -1096,6 +1102,175 @@ class TestKDFMetadataIsUntrusted:
             )
 
         assert storage.retrieve_key("legacy-record") == b"\x5a" * 32
+
+
+class TestArgon2idIsRequiredNotSubstituted:
+    """A library without Argon2id gets a refusal, never a PBKDF2 store.
+
+    ``pqc_backends`` records ``_ARGON2_NATIVE_AVAILABLE = False`` for a loaded
+    library that lacks ``ama_argon2id`` (a partial or stale build) and only
+    logs a load-time warning.  ``SecureKeyStorage`` then used to fall back to
+    PBKDF2 in three places, all silently:
+
+    * a NEW store was created as a v2 PBKDF2 store;
+    * ``migrate_kdf()`` re-keyed an Argon2id store DOWN to PBKDF2 and returned
+      ``True``;
+    * the algorithm floor stood down, so an Argon2id store whose metadata was
+      rewritten to PBKDF2 at the 600k floor opened without a word.
+
+    Every other missing family refuses at call time (INVARIANT-7).  Flipping
+    the module flag is exactly the state such a library produces: the flag is
+    the single thing every one of these code paths consults.
+    """
+
+    @staticmethod
+    def _without_argon2id(monkeypatch: pytest.MonkeyPatch) -> None:
+        from ama_cryptography import pqc_backends
+
+        monkeypatch.setattr(pqc_backends, "_ARGON2_NATIVE_AVAILABLE", False)
+
+    @staticmethod
+    def _snapshot(path: Any) -> dict[str, bytes]:
+        return {p.name: p.read_bytes() for p in sorted(path.iterdir()) if p.is_file()}
+
+    def test_a_new_store_is_argon2id(self, temp_storage_path: Any, sample_password: Any) -> None:
+        """The positive control: on a complete library a new store is v3 Argon2id.
+
+        Without this half, a store that refused to be created on EVERY library
+        would pass the refusal test below.
+        """
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        with open(temp_storage_path / ".kdf_metadata.json", encoding="utf-8") as f:
+            metadata = json.load(f)
+        assert metadata["version"] == 3
+        assert metadata["algorithm"] == "Argon2id"
+        assert "iterations" not in metadata
+        assert storage.kdf_params["algorithm"] == "Argon2id"
+
+    def test_a_new_store_is_refused_without_argon2id(
+        self,
+        temp_storage_path: Any,
+        sample_password: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No PBKDF2 store is created, and nothing is left on disk."""
+        from ama_cryptography.exceptions import NativeBackendUnavailableError
+
+        self._without_argon2id(monkeypatch)
+
+        with pytest.raises(NativeBackendUnavailableError, match="no PBKDF2 fallback"):
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
+
+        # Refused BEFORE the salt is written: a half-initialised store would
+        # be reopened later as if it were real.
+        assert not (temp_storage_path / ".salt").exists()
+        assert not (temp_storage_path / ".kdf_metadata.json").exists()
+
+    def test_a_passwordless_store_does_not_need_argon2id(
+        self,
+        temp_storage_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The refusal is scoped to KDF selection, not to the class.
+
+        A store with no master password draws a random key and derives
+        nothing, so it has no KDF to choose and must still open.
+        """
+        self._without_argon2id(monkeypatch)
+        storage = SecureKeyStorage(temp_storage_path)
+        storage.store_key("k", b"\x01" * 32)
+        assert storage.retrieve_key("k") == b"\x01" * 32
+
+    def test_migrate_refuses_without_argon2id_and_changes_nothing(
+        self,
+        temp_storage_path: Any,
+        sample_password: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``migrate_kdf`` must not re-key an Argon2id store down to PBKDF2."""
+        from ama_cryptography.exceptions import NativeBackendUnavailableError
+
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        storage.store_key("kept", b"\x22" * 32, {})
+        before = self._snapshot(temp_storage_path)
+        params_before = dict(storage.kdf_params)
+
+        self._without_argon2id(monkeypatch)
+        with pytest.raises(NativeBackendUnavailableError, match="migrate the key store"):
+            storage.migrate_kdf(sample_password)
+
+        assert self._snapshot(temp_storage_path) == before, "migrate_kdf touched the store"
+        assert storage.kdf_params == params_before
+
+        # And the store is intact once the library is complete again.
+        monkeypatch.undo()
+        reopened = SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        assert reopened.kdf_params["algorithm"] == "Argon2id"
+        assert reopened.retrieve_key("kept") == b"\x22" * 32
+
+    def test_pbkdf2_metadata_is_refused_without_argon2id(
+        self,
+        temp_storage_path: Any,
+        sample_password: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The algorithm floor does not depend on what the library provides.
+
+        The at-floor downgrade (PBKDF2 at exactly 600k, so every cost check
+        passes) is refused on a complete library by
+        ``test_algorithm_downgrade_to_at_floor_pbkdf2_is_refused``.  It used
+        to be accepted on a library without Argon2id.
+        """
+        from ama_cryptography.key_management import MIN_PBKDF2_ITERATIONS, KDFPolicyError
+
+        SecureKeyStorage(temp_storage_path, master_password=sample_password)
+        metadata_file = temp_storage_path / ".kdf_metadata.json"
+        with open(metadata_file, encoding="utf-8") as f:
+            metadata = json.load(f)
+        metadata.update(version=2, algorithm="PBKDF2-HMAC-SHA256", iterations=MIN_PBKDF2_ITERATIONS)
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f)
+
+        self._without_argon2id(monkeypatch)
+        with pytest.raises(KDFPolicyError, match="weaker than the Argon2id"):
+            SecureKeyStorage(temp_storage_path, master_password=sample_password)
+
+    def test_a_legacy_store_still_opens_under_the_opt_in_without_argon2id(
+        self,
+        temp_storage_path: Any,
+        sample_password: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """PBKDF2 remains readable: a genuine v2 store opens under the opt-in.
+
+        The refusal must not strand a legacy store; reading it needs only
+        PBKDF2, which the library still provides.
+        """
+        from ama_cryptography.key_management import MIN_PBKDF2_ITERATIONS
+
+        with open(temp_storage_path / ".salt", "wb") as f:
+            f.write(secrets.token_bytes(32))
+        with open(temp_storage_path / ".kdf_metadata.json", "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "version": 2,
+                    "algorithm": "PBKDF2-HMAC-SHA256",
+                    "iterations": MIN_PBKDF2_ITERATIONS,
+                },
+                f,
+            )
+
+        self._without_argon2id(monkeypatch)
+        with pytest.warns(SecurityWarning, match="below the policy floor"):
+            legacy = SecureKeyStorage(
+                temp_storage_path, master_password=sample_password, allow_legacy_kdf=True
+            )
+        assert legacy.kdf_params == {
+            "algorithm": "PBKDF2-HMAC-SHA256",
+            "iterations": MIN_PBKDF2_ITERATIONS,
+        }
+        legacy.store_key("v2", b"\x5b" * 32, {})
+        assert legacy.retrieve_key("v2") == b"\x5b" * 32
 
 
 # =============================================================================
@@ -1242,16 +1417,16 @@ class TestMigrateKdfPreservesEveryRecord:
     """
 
     def test_zero_length_value_survives_migration(
-        self, temp_storage_path: Any, test_password: Any
+        self, temp_storage_path: Any, sample_password: Any
     ) -> None:
-        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage = SecureKeyStorage(temp_storage_path, master_password=sample_password)
         storage.store_key("normal", b"payload", {})
         storage.store_key("sentinel", b"", {})
         assert storage.retrieve_key("sentinel") == b""
 
-        assert storage.migrate_kdf(test_password) is True
+        assert storage.migrate_kdf(sample_password) is True
 
-        reopened = SecureKeyStorage.from_existing(temp_storage_path, test_password)
+        reopened = SecureKeyStorage.from_existing(temp_storage_path, sample_password)
         assert sorted(reopened.list_keys()) == ["normal", "sentinel"]
         # The ordinary value is the non-vacuity control: if migration were
         # broken outright, this would fail too and the assertion below would

@@ -44,7 +44,12 @@ extern int ama_has_arm_sha2(void);
 extern void ama_sha256_compress_x86_shani(uint32_t state[8], const uint8_t block[64]);
 #define AMA_SHA256_HAVE_X86_SHANI 1
 #elif (defined(__aarch64__) || defined(_M_ARM64)) && defined(AMA_HAVE_NEON_IMPL)
-extern void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
+/* Declared by the NEON kernels' own internal header rather than re-typed
+ * here.  This file, src/c/dispatch/ama_dispatch.c and
+ * tests/c/test_sha256_neon_kat.c each carried an independent transcription
+ * of this signature while the definition in src/c/neon/ama_sphincs_neon.c
+ * had no declaration at all. */
+#include "neon/ama_neon_internal.h"
 #define AMA_SHA256_HAVE_ARM_SHA2 1
 #endif
 
@@ -149,6 +154,13 @@ static void sha256_compress_scalar(uint32_t state[8], const uint8_t block[64]) {
     /* Compute intermediate hash (Step 4) */
     state[0] += a; state[1] += b; state[2] += c; state[3] += d;
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+
+    /* W[0..15] is the input block VERBATIM — for an HMAC that is K^ipad or
+     * K^opad, for PBKDF2 it is password-derived — and it outlives the
+     * return in this frame's dead stack otherwise, defeating the k_pad
+     * scrubs the callers perform (INVARIANT-6).  ~256 bytes against a
+     * multi-thousand-cycle compress. */
+    ama_secure_memzero(W, sizeof(W));
 }
 
 /* Runtime-dispatched single-block compression.  The CPU-feature probe is
@@ -192,6 +204,11 @@ void ama_sha256_init(ama_sha256_ctx *ctx) {
 }
 
 void ama_sha256_update(ama_sha256_ctx *ctx, const uint8_t *data, size_t len) {
+    /* Zero-length updates are a no-op (and may carry data == NULL, which
+     * must never reach memcpy — memcpy(dst, NULL, 0) is undefined). */
+    if (len == 0) {
+        return;
+    }
     ctx->total_len += len;
 
     /* Fill partial buffer first */
@@ -226,20 +243,19 @@ void ama_sha256_update(ama_sha256_ctx *ctx, const uint8_t *data, size_t len) {
 void ama_sha256_final(ama_sha256_ctx *ctx, uint8_t digest[32]) {
     uint64_t total_bits = ctx->total_len * 8;
 
-    /* Padding: append 1-bit, zeros, then 64-bit length (FIPS 180-4 Section 5.1.1) */
-    uint8_t pad = 0x80;
-    ama_sha256_update(ctx, &pad, 1);
-
-    /* Pad with zeros until buffer_len == 56 mod 64 */
-    uint8_t zero = 0x00;
-    while (ctx->buffer_len != 56) {
-        ama_sha256_update(ctx, &zero, 1);
-    }
-
-    /* Append 64-bit big-endian bit count */
-    uint8_t len_bytes[8];
-    store_be64(len_bytes, total_bits);
-    ama_sha256_update(ctx, len_bytes, 8);
+    /* Padding (FIPS 180-4 Section 5.1.1): a single 0x80 byte, then the
+     * fewest zero bytes that bring the buffered length to 56 mod 64, then
+     * the 64-bit big-endian bit count.  Built once and absorbed in one
+     * update — the byte-at-a-time loop this replaces issued up to 64
+     * separate update calls per finalisation, a measurable cost for
+     * callers such as SLH-DSA that finalise millions of short hashes. */
+    uint8_t pad[72];
+    size_t pad_len = (ctx->buffer_len < 56) ? (56 - ctx->buffer_len)
+                                            : (120 - ctx->buffer_len);
+    pad[0] = 0x80;
+    memset(pad + 1, 0, pad_len - 1);  /* PUBLIC-DATA: FIPS 180-4 padding zeros */
+    store_be64(pad + pad_len, total_bits);
+    ama_sha256_update(ctx, pad, pad_len + 8);
 
     /* Extract digest */
     for (int i = 0; i < 8; i++) {
@@ -254,14 +270,5 @@ void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen) {
     ama_sha256_ctx ctx;
     ama_sha256_init(&ctx);
     ama_sha256_update(&ctx, in, inlen);
-    ama_sha256_final(&ctx, out);
-}
-
-void ama_sha256_2(uint8_t *out, const uint8_t *in1, size_t in1len,
-                   const uint8_t *in2, size_t in2len) {
-    ama_sha256_ctx ctx;
-    ama_sha256_init(&ctx);
-    ama_sha256_update(&ctx, in1, in1len);
-    ama_sha256_update(&ctx, in2, in2len);
     ama_sha256_final(&ctx, out);
 }

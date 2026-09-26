@@ -61,7 +61,7 @@ cdef extern from "ama_cryptography.h":
 # forces ama_cryptography.__init__ to run POST, and calling it at the head of
 # each entry point refuses cryptographic output while the module is in the
 # error state, closing both bypasses.
-from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted, pairwise_test_signature
 
 
 def cy_ed25519_keypair(bytes seed):
@@ -78,14 +78,27 @@ def cy_ed25519_keypair(bytes seed):
     cdef unsigned char sk[64]
     cdef int ret
 
-    memcpy(sk, <const unsigned char*>seed, 32)
-    ret = ama_ed25519_keypair(pk, sk)
-    if ret != 0:
-        raise RuntimeError(f"ama_ed25519_keypair failed (rc={ret})")
-
-    result = (bytes(pk[:32]), bytes(sk[:64]))
-    ama_secure_memzero(sk, 64)
-    return result
+    # sk holds the caller's seed from the memcpy on, so it is wiped on every
+    # way out, the failed-keypair raise included (INVARIANT-6).
+    try:
+        memcpy(sk, <const unsigned char*>seed, 32)
+        ret = ama_ed25519_keypair(pk, sk)
+        if ret != 0:
+            raise RuntimeError(f"ama_ed25519_keypair failed (rc={ret})")
+        public_key = bytes(pk[:32])
+        secret_key = bytes(sk[:64])
+    finally:
+        ama_secure_memzero(sk, 64)
+    # FIPS 140-3 pairwise consistency test (INVARIANT-41), as in
+    # pqc_backends: the keypair leaves only after its halves sign and verify.
+    pairwise_test_signature(
+        cy_ed25519_sign,
+        lambda message, signature, pk_: cy_ed25519_verify(signature, message, pk_),
+        secret_key,
+        public_key,
+        "Ed25519 (ed25519_binding)",
+    )
+    return (public_key, secret_key)
 
 
 def cy_ed25519_sign(bytes message, bytes secret_key):

@@ -11,16 +11,25 @@ one of the artifacts below (or to live output regenerated from them):
 
 | Artifact | Scope | Produced by |
 |----------|-------|-------------|
-| [`baseline.json`](baseline.json) | CI regression tolerances (65% of measured performance) | Edited manually when primitives land/change |
+| [`baseline.json`](baseline.json), [`arm-baseline.json`](arm-baseline.json) | CI regression FLOORS. `baseline_value` is a measured median on the runner class named in `metadata.runner_cpu_class` — not a discount of one — EXCEPT on a row whose latest `metadata.baseline_change_log` entry records its floor as DERIVED: a row the canonical runner has not yet measured is floored from a measured sibling's floor times a ratio taken from development-host measurements, and carries that placeholder until the runner's own median replaces it. A derived floor is not a calibration; its change-log entry gives the derivation and the host. `tolerance_percent` (45 on x86-64, 15/25 on aarch64) is the separate allowance. The pre-5.0.0 "65% of measured, then a 35-70% tolerance on top" convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM regression without firing; both baseline files now say so in their own `metadata.description`. | Re-measured on the canonical runner when primitives land/change |
+| [`benchmark-results.json`](benchmark-results.json) | The committed record of one `benchmark_runner.py` run: ops/sec per row, the floor, tolerance and description each row copies from `baseline.json`, and a `provenance` block naming the commit, tree state, host, dispatch wiring and command that produced it. It is the input of [`dashboard.html`](dashboard.html), of [`benchmark-report.md`](../benchmark-report.md) (a pure render of it), and of the latency and throughput tables `tools/update_docs.py` writes into `ARCHITECTURE.md` and `wiki/Performance-Benchmarks.md`. `tests/test_published_benchmark_artefacts_are_current.py` fails when a copied floor, tolerance or description no longer matches `baseline.json` | `python benchmarks/benchmark_runner.py --baseline benchmarks/baseline.json --output benchmarks/benchmark-results.json --markdown benchmark-report.md` (the exact command that produced the committed record is in its `provenance.command`) |
+| [`canonical-host.json`](canonical-host.json) | Every figure `README.md` publishes between its `canonical-bench` markers, held as data with the host, date and command that measured it; `tools/check_canonical_benchmarks.py` fails when a README figure and this record disagree, or when a figure cites no source | Measured on the canonical bench host its `sources` block describes; re-measuring needs that host |
 | [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
-| `benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
+| `benchmark_results.json` (runtime-only) | `benchmark_suite.py` output: read by `tools/generate_dashboards.py` (the PNG dashboards under `assets/`) and by [`generate_charts.py`](generate_charts.py), whose live-data branch overrides its anchored tables with it. Both read `benchmarks/benchmark_results.json`, the path the command beside this writes. It is not the input of [`dashboard.html`](dashboard.html), which renders `benchmark-results.json` | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
 | `../build/bin/benchmark_c_raw` (runtime-only) | Raw C per-op medians (no ctypes overhead) | `cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build --target benchmark_c_raw && build/bin/benchmark_c_raw --json` |
 | [`../docs/compliance/CSRC_ALIGN_REPORT.md`](../docs/compliance/CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (1,215/1,215/0 — 815 AFT + 400 SHA-3 MCT) | Updated with each alignment run |
+| [`multi_library_results.json`](multi_library_results.json) | Competitive comparator measurements (AMA + 7 peer libraries, 12 primitives). `provenance` names the commit, AMA version and date of the measurement run | `python benchmarks/comparative_benchmark.py` on the measurement host |
+| [`pqc_results.json`](pqc_results.json) | Competitive PQC measurements (separate host; the page labels them as a prior record) | Same harness, PQC surface |
+| [`competitive.html`](competitive.html) | The rendered competitive page — a pure function of the two JSONs above plus the generator's pinned versions/coverage/notes. `tests/test_competitive_page.py` fails if the committed page is not a fresh render (modulo the render timestamp) | `python benchmarks/generate_competitive.py` |
+| [`dashboard.html`](dashboard.html) | The rendered performance dashboard — a function of `benchmark-results.json`, a `benchmark_c_raw` stdout capture and `baseline.json`. The generator labels the numbers with the commit, version and time recorded in the record's `provenance` block, not with the tree that renders them. The raw-C capture is a run product and is not committed, so no test re-renders the committed page, and the committed page is still the 2026-07-29 render of a v3.4.0 run (its header and embedded data say so): it predates the current record, template and generator, and re-rendering it needs a raw-C capture taken on the host the record names | `python benchmarks/generate_dashboard.py --bench benchmarks/benchmark-results.json --raw-c <capture> --out benchmarks/dashboard.html` |
 
 If a chart cannot cite one of these, it should not be in the repository.
 The fallback tables in [`generate_charts.py`](generate_charts.py) are
-anchored to `phase0_baseline_results.json` and `benchmark_c_raw`; they
-are overridden by live data from `benchmark_results.json` when available.
+anchored to `phase0_baseline_results.json`, `benchmark_c_raw`, a
+`benchmark_suite.py` scalability sweep and one row of
+`benchmark-results.json` (its header comment names the run behind each);
+they are overridden by live data from `benchmarks/benchmark_results.json`
+when that file exists.
 
 
 ## Raw C Benchmark (`benchmark_c_raw.c`)
@@ -30,7 +39,8 @@ Directly calls C library functions without Python or ctypes involvement. Provide
 ### Build
 
 ```bash
-# Option 1: Build via the benchmarks Makefile (auto-detects library)
+# Option 1: Build via the benchmarks Makefile (links build/lib; with no
+# library there, it builds the static one with CMake first)
 make -C benchmarks benchmark_c_raw
 
 # Option 2: Build via cmake (adds benchmark_c_raw target)
@@ -66,7 +76,7 @@ make -C benchmarks benchmark_c_raw
 | Password hashing | Argon2id (m=64 KiB, m=1 MiB) |
 | Key Exchange | X25519 (keygen, DH exchange, batch×{1,4,8,16}); X25519 DH with MULX/ADX kernel **off** vs **on** (BMI2+ADX gate quantification) |
 | Elliptic curves (Bitcoin) | secp256k1 pubkey-from-privkey (SEC1 compressed); ECDSA sign (RFC 6979) and verify |
-| Threshold signatures | FROST 2-of-3 round1 commit / round2 sign / aggregate (RFC 9591) |
+| Threshold signatures | FROST 2-of-3 round1 commit / round2 sign / aggregate (RFC 9591-style) |
 
 #### Kernel-isolation rows
 
@@ -95,8 +105,13 @@ end-to-end primitive cost:
 
 - Timer: `clock_gettime(CLOCK_MONOTONIC)` (nanosecond resolution)
 - Warmup: 50 iterations discarded before measurement
-- Iterations: 200–5,000 depending on operation speed
-- Statistics: mean, median, stddev, min, max, ops/sec
+- Iterations: 5–5,000 depending on operation speed (`ITERS_*` in
+  `benchmark_c_raw.c`)
+- ML-DSA-65 Sign: each sample is one whole pass over 256 distinct messages,
+  reported per signature, and `iterations` counts passes.  The signer is
+  deterministic, so one fixed message under one key would time that pair's
+  rejection count on every sample (see the comment on `bench_dilithium_sign`)
+- Statistics: mean, median, stddev, min, max, ops/sec (ops/sec from the median)
 
 ### Output Format
 
@@ -143,10 +158,10 @@ an explicit claim on that axis (not necessarily "no" — absence of claim).
 
 | Property                         | AMA Cryptography | PyNaCl / libsodium | cryptography / OpenSSL | liboqs |
 |----------------------------------|------------------|--------------------|-----------------------|--------|
-| Constant-time guarantee          | Documented per-primitive in [`CONSTANT_TIME_VERIFICATION.md`](../CONSTANT_TIME_VERIFICATION.md); empirical verification via in-tree [dudect](https://github.com/oreparaz/dudect) harness under `-DAMA_ENABLE_DUDECT=ON`. | Documented at the library level; "designed to be constant-time in secret data" per [libsodium docs](https://doc.libsodium.org/internals). No dudect harness shipped. | OpenSSL 3.x documents constant-time for ECDSA, ECDH; historical audit findings (CVE-2020-0601, CVE-2020-1971) show carve-outs on some codepaths. | liboqs [Constant-time Policy](https://github.com/open-quantum-safe/liboqs/wiki/Contributing-Guide#constant-time) applies to PQC kernels; upstream CI runs `valgrind --tool=memcheck` with uninit-tainting. |
-| Supply-chain surface             | **Zero runtime crypto deps** (INVARIANT-1); only in-tree C + optional vendored ed25519-donna (public domain, compiled from source). SBOM at `schemas/*.spdx`. | libsodium native binary (`libsodium.so`) installed via OS package or wheel; PyNaCl is a thin CFFI wrapper. | OpenSSL native binary (`libcrypto.so`); `cryptography` wheels ship a Rust binding on top. | liboqs native binary (`liboqs.so`) compiled from C source; Python wrapper is a thin ctypes shim. |
-| Self-test (FIPS-style POST)      | Startup POST via `ama_self_test()` covers AES-GCM, SHA3, Ed25519, ML-DSA, ML-KEM, HKDF self-tests (see `src/c/ama_core.c`). | None shipped with libsodium / PyNaCl. | OpenSSL FIPS provider (when built) runs full FIPS 140-3 KAT suite at init; default build does not. | liboqs ships KAT test binaries (`tests/kat_sig_algs`, `tests/kat_kem_algs`), run offline; no startup POST. |
-| Audit LoC (native C)             | ~12 k lines in `src/c/*.c` + `*.h`; plus ~3 k lines of vendored ed25519-donna under `src/c/vendor/`. Per-primitive provenance in [`src/c/PROVENANCE.md`](../src/c/PROVENANCE.md). | libsodium: ~45 k lines of hand-tuned C + assembly (including portable / assembly / ARM / SSE variants). | OpenSSL libcrypto: ~500 k lines of C covering TLS, PKCS#11, legacy algorithms, engines, FIPS module. | liboqs: ~60 k lines for PQC primitives alone (ML-KEM, ML-DSA, SLH-DSA, HQC, Classic McEliece, Frodo, etc.). |
+| Constant-time guarantee          | Documented per-primitive in [`CONSTANT_TIME_VERIFICATION.md`](../CONSTANT_TIME_VERIFICATION.md); empirical verification via in-tree [dudect](https://github.com/oreparaz/dudect) harness under `-DAMA_ENABLE_DUDECT=ON`. | Documented at the library level; "designed to be constant-time in secret data" per [libsodium docs](https://doc.libsodium.org/internals). No dudect harness shipped. | OpenSSL 3.x documents constant-time for ECDSA, ECDH; historical audit findings (CVE-2020-0601, CVE-2020-1971) show carve-outs on some codepaths. | liboqs's constant-time policy ([repository](https://github.com/open-quantum-safe/liboqs)) applies to PQC kernels; upstream CI runs `valgrind --tool=memcheck` with uninit-tainting. |
+| Supply-chain surface             | **Zero runtime crypto deps** (INVARIANT-1); in-tree C only — no vendored third-party crypto source (the formerly vendored Ed25519 x86-64 backend was removed in the twenty-first maintenance pass). SBOM at [`docs/compliance/sbom-c-library.json`](../docs/compliance/sbom-c-library.json). | libsodium native binary (`libsodium.so`) installed via OS package or wheel; PyNaCl is a thin CFFI wrapper. | OpenSSL native binary (`libcrypto.so`); `cryptography` wheels ship a Rust binding on top. | liboqs native binary (`liboqs.so`) compiled from C source; Python wrapper is a thin ctypes shim. |
+| Self-test (FIPS-style POST)      | Power-on self-tests run at import (`ama_cryptography/_self_test.py`): known-answer tests over the approved primitives, and a failure fails the import and inhibits output (INVARIANT-39). | None shipped with libsodium / PyNaCl. | OpenSSL FIPS provider (when built) runs full FIPS 140-3 KAT suite at init; default build does not. | liboqs ships KAT test binaries (`tests/kat_sig_algs`, `tests/kat_kem_algs`), run offline; no startup POST. |
+| Audit LoC (native C)             | ~26 k lines in `src/c/*.c` + `*.h` (~45 k with the SIMD and x86 kernel subdirectories); no vendored third-party crypto source. Per-primitive provenance in [`src/c/PROVENANCE.md`](../src/c/PROVENANCE.md). | libsodium: ~45 k lines of hand-tuned C + assembly (including portable / assembly / ARM / SSE variants). | OpenSSL libcrypto: ~500 k lines of C covering TLS, PKCS#11, legacy algorithms, engines, FIPS module. | liboqs: ~60 k lines for PQC primitives alone (ML-KEM, ML-DSA, SLH-DSA, HQC, Classic McEliece, Frodo, etc.). |
 | ACVP / NIST KAT coverage         | 1,215 / 1,215 vectors in-tree (see `docs/compliance/CSRC_ALIGN_REPORT.md`); continuously enforced in `.github/workflows/acvp_validation.yml`. | No ACVP self-attestation; libsodium has not pursued FIPS. | OpenSSL FIPS provider validated against NIST ACVP when built in FIPS mode. | PQClean upstream ships KAT vectors; liboqs CI runs them. |
 
 ### Why this table matters
@@ -171,7 +186,7 @@ output:
 | MULX/ADX on-vs-off X25519 ratio                     | ✅ closed | `X25519 DH (MULX off)`, `X25519 DH (MULX on)` |
 | SLH-DSA / SPHINCS+ (FIPS 205)                       | ✅ closed | `SLH-DSA-SHAKE-128s KeyGen` / `Sign` / `Verify` (NIST L1) |
 | secp256k1                                            | ✅ closed | `secp256k1 pubkey` (compressed SEC1), `secp256k1 ecdsa sign` (RFC 6979), `secp256k1 ecdsa verify` |
-| FROST                                                | ✅ closed | `FROST round1 commit` / `round2 sign` / `aggregate` (2-of-3, RFC 9591) |
+| FROST                                                | ✅ closed | `FROST round1 commit` / `round2 sign` / `aggregate` (2-of-3, RFC 9591-style) |
 | Dilithium NTT kernel isolation                       | ✅ closed | `ML-DSA-65 NTT (scalar)` / `NTT (dispatch)` / `invNTT (scalar)` / `invNTT (dispatch)` |
 | ML-KEM-1024 decapsulate                              | ✅ already covered | `ML-KEM-1024 Decaps` (`benchmark_c_raw.c` decaps row) |
 | X25519 batch×4 (no env gating)                       | ✅ already covered | `X25519 DH Batch×4` (unconditional) |

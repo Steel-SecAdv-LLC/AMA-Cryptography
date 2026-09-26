@@ -38,6 +38,7 @@ with ``numpy`` installed would contradict that.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -431,3 +432,161 @@ class TestTheHarnessReadsWhatTheProgramWrote:
                 "explicit encoding=; it would decode the example's UTF-8 output "
                 "with the parent's locale codec, which is cp1252 on Windows"
             )
+
+
+@pytest.mark.requires_example_deps
+class TestFlaskIntegrationSurface:
+    """Attack-surface pins for the Flask demo (hardened in commit 17e5d79d).
+
+    The demo listens on a socket, so it is reviewed as an attack surface.
+    ``/api/verify`` used ``request.get_json()`` in ``all(k in data ...)`` with
+    no None/dict guard: a JSON ``null`` (or non-object) body raised TypeError
+    and surfaced as an unhandled HTTP 500, while ``/api/sign`` returned a clean
+    400 for the same input.  These pins assert every malformed body fails
+    clean (400) and a valid request still verifies — the first fails against
+    the pre-fix code.
+
+    ``/api/sign`` signed caller-chosen bytes with the same key and the same
+    function as the X-Signature response header, so it minted valid response
+    signatures for any body a caller chose.
+    ``test_sign_endpoint_is_not_a_response_signature_oracle`` pins that it no
+    longer does.
+    """
+
+    def _client(self):  # type: ignore[no-untyped-def]  # dynamic (module, Flask test client) tuple; typing the import adds no value in a skip-guarded helper (VAUDIT-001)
+        flask = pytest.importorskip("flask")
+        _ = flask
+        sys.path.insert(0, str(EXAMPLES.parent.parent))
+        import importlib
+
+        mod = importlib.import_module("examples.python.flask_integration")
+        return mod, mod.app.test_client()
+
+    @pytest.mark.parametrize("body", ["null", "[]", '"str"', "123", "{}"])
+    def test_verify_rejects_malformed_body_as_400_not_500(self, body: str) -> None:
+        _mod, client = self._client()
+        resp = client.post("/api/verify", data=body, content_type="application/json")
+        assert resp.status_code == 400, (
+            f"malformed /api/verify body {body!r} returned {resp.status_code}; "
+            "a non-object JSON body must fail clean (400), never crash to 500"
+        )
+
+    def test_verify_accepts_a_valid_signature(self) -> None:
+        mod, client = self._client()
+        sig = mod.CRYPTO.sign(b"audit", mod.SIGNING_KEYPAIR.secret_key)
+        resp = client.post(
+            "/api/verify",
+            json={
+                "data": "audit",
+                "signature": sig.signature.hex(),
+                "public_key": mod.SIGNING_KEYPAIR.public_key.hex(),
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["valid"] is True
+
+    def test_sign_endpoint_is_not_a_response_signature_oracle(self) -> None:
+        """No body a caller submits to /api/sign comes back as a valid X-Signature.
+
+        The attack: post the canonical JSON of a forged response body --
+        exactly the bytes the X-Signature header covers -- to the
+        unauthenticated /api/sign, then serve the forged body with the
+        signature it returns.  While one key did both jobs that signature
+        verified under the server's pinned response key.
+
+        The genuine header on /api/health is verified first under the same
+        rule and key, so a verify that could never succeed cannot pass this
+        test.  /api/keys/public must then publish the two keys under their
+        roles, agreeing with the header and with what /api/sign reports.
+        """
+        mod, client = self._client()
+
+        health = client.get("/api/health")
+        assert health.status_code == 200
+        response_pk = bytes.fromhex(health.headers["X-Public-Key"])
+
+        genuine_body = json.dumps(health.get_json(), sort_keys=True).encode()
+        genuine_sig = bytes.fromhex(health.headers["X-Signature"])
+        assert mod.CRYPTO.verify(genuine_body, genuine_sig, response_pk), (
+            "the genuine X-Signature does not verify over its body; the "
+            "negative check below would be vacuous"
+        )
+
+        forged = {
+            "data": {"patient_id": "ATTACKER", "record_type": "medical"},
+            "protection": {"ed25519_signature": "00" * 64},
+        }
+        canonical = json.dumps(forged, sort_keys=True)
+        resp = client.post("/api/sign", json={"data": canonical})
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        issued = resp.get_json()
+        assert not mod.CRYPTO.verify(
+            canonical.encode(), bytes.fromhex(issued["signature"]), response_pk
+        ), "/api/sign returned a valid X-Signature for a forged response body"
+
+        # The two keys are distinct and published under their roles.
+        assert (
+            issued["public_key"] != response_pk.hex()
+        ), "/api/sign signs with the response-authenticity key"
+        published = client.get("/api/keys/public").get_json()
+        assert published["response"]["ed25519_public_key"] == response_pk.hex()
+        assert published["signing_service"]["ed25519_public_key"] == issued["public_key"]
+
+
+class TestWebExampleKeySeparation:
+    """Both web examples keep the response key and the /api/sign key apart.
+
+    The runtime pin above drives the Flask app.  The FastAPI example cannot be
+    driven here -- FastAPI is not in the ``[examples]`` extra, so no CI lane
+    has it -- and it had the identical defect, so this reads both sources:
+    the response-signing code and the ``/api/sign`` handler must reach
+    DIFFERENT module-level keypairs, each bound by its own
+    ``generate_keypair()`` call (an alias ``A = B`` would be one key under two
+    names).  Reverting either file to one shared key fails this.
+    """
+
+    #: (file, the response-signing definition, the /api/sign handler)
+    CASES = (
+        ("flask_integration.py", "sign_response", "sign_data"),
+        ("fastapi_integration.py", "SignedResponse", "sign_data"),
+    )
+
+    @staticmethod
+    def _module_keypairs(tree: ast.Module) -> set[str]:
+        """Module-level names bound directly to a ``*.generate_keypair()`` call."""
+        bound: set[str] = set()
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute)
+                and node.value.func.attr == "generate_keypair"
+            ):
+                bound.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        return bound
+
+    @staticmethod
+    def _names_used(tree: ast.Module, definition: str) -> set[str]:
+        for node in tree.body:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name == definition
+            ):
+                return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        raise AssertionError(f"{definition} not found; this test has lost its subject")
+
+    @pytest.mark.parametrize("name,responder,signer", CASES)
+    def test_response_key_is_not_the_signing_service_key(
+        self, name: str, responder: str, signer: str
+    ) -> None:
+        tree = ast.parse((EXAMPLES / name).read_text(encoding="utf-8"), filename=name)
+        keypairs = self._module_keypairs(tree)
+        response_keys = self._names_used(tree, responder) & keypairs
+        service_keys = self._names_used(tree, signer) & keypairs
+        assert response_keys, f"{name}: {responder} reaches no module-level keypair"
+        assert service_keys, f"{name}: {signer} reaches no module-level keypair"
+        assert not response_keys & service_keys, (
+            f"{name}: {responder} and {signer} share {sorted(response_keys & service_keys)}; "
+            "an endpoint that signs caller-chosen bytes must not hold the key "
+            "behind the response-authenticity header"
+        )

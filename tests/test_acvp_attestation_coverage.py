@@ -36,14 +36,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ATTESTATION = REPO_ROOT / "docs" / "compliance" / "acvp_attestation.json"
 
-DATA: dict[str, Any] = json.loads(ATTESTATION.read_text())
+DATA: dict[str, Any] = json.loads(ATTESTATION.read_text(encoding="utf-8"))
 COVERAGE: list[dict[str, Any]] = DATA.get("additional_validated_coverage", [])
 
 
 def _record_count(path: Path) -> int:
     """Records in a ``.kat`` file, counted by its per-record leading field."""
     markers = ("seed = ", "d = ")
-    text = path.read_text().splitlines()
+    text = path.read_text(encoding="utf-8").splitlines()
     for marker in markers:
         found = sum(1 for line in text if line.startswith(marker))
         if found:
@@ -110,7 +110,7 @@ def test_every_gate_names_a_test_that_exists(entry: dict[str, Any]) -> None:
         path = REPO_ROOT / module.strip()
         assert path.is_file(), f"{entry['name']}: gate module {module} does not exist"
         if test_name:
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             assert f"def {test_name}" in source, f"{entry['name']}: {module} has no {test_name}"
 
 

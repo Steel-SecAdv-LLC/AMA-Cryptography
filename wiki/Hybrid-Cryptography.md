@@ -64,6 +64,7 @@ X25519 ∥ ML-KEM-1024, ECDH ∥ ML-KEM, or any pairing. The
 `AmaCryptography(AlgorithmType.HYBRID_KEM)` entry point wires this up
 for the default X25519 + ML-KEM-1024 pair.
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.hybrid_combiner import HybridCombiner, HybridEncapsulation
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType, KyberProvider
@@ -93,9 +94,28 @@ def _kyber_encaps(pk: bytes):
 
 # kyber_decapsulate already returns bytes, so no adapter is needed.
 
+# The classical half: ephemeral X25519. The "ciphertext" of a DH-as-KEM is the
+# ephemeral public key.
+from ama_cryptography.pqc_backends import (
+    native_x25519_keypair,
+    native_x25519_key_exchange,
+)
+
+
+def my_x25519_encapsulate(their_pk: bytes):
+    """(pk) -> (ciphertext, shared_secret)."""
+    ephemeral_pk, ephemeral_sk = native_x25519_keypair()
+    return ephemeral_pk, native_x25519_key_exchange(ephemeral_sk, their_pk)
+
+
+def my_x25519_decapsulate(ciphertext: bytes, our_sk: bytes) -> bytes:
+    """(ct, sk) -> shared_secret."""
+    return native_x25519_key_exchange(our_sk, ciphertext)
+
+
 combiner = HybridCombiner()
 
-classical_pk, classical_sk = b"...", b"..."     # X25519 keypair (your wrapper)
+classical_pk, classical_sk = native_x25519_keypair()   # (public, secret)
 pqc_kp   = generate_kyber_keypair()             # KyberKeyPair dataclass
 pqc_pk   = pqc_kp.public_key
 pqc_sk   = pqc_kp.secret_key
@@ -118,10 +138,12 @@ recovered = combiner.decapsulate_hybrid(
     pqc_pk=pqc_pk,
 )
 assert recovered == encapsulation.combined_secret
+print("hybrid KEM agreement:", recovered.hex()[:16], "...")
 ```
 
 ### `HybridEncapsulation` Object
 
+<!-- example: python-names module=ama_cryptography.hybrid_combiner -->
 ```python
 @dataclass
 class HybridEncapsulation:
@@ -145,8 +167,34 @@ production default. It is exposed through the unified
 
 > **Dual-signature security:** Both Ed25519 and ML-DSA-65 signatures must independently verify for the package to be accepted. An attacker must forge **both** simultaneously — one classical forgery (2^128 classical operations) and one quantum-resistant forgery (2^190 quantum operations).
 
+**That guarantee depends on domain separation, and format v1 did not have it.**
+
+In **v2** — the shipped format — each half signs the message bound to
+`HYBRID_SIG_DOMAIN`
+(`b"AMA-Cryptography/hybrid-sig/v2/Ed25519+ML-DSA-65"`, `crypto_api.py:1608`).
+ML-DSA-65 carries it as its FIPS 204 §5.2 context string; Ed25519 (RFC 8032
+pure, which has no context parameter) signs the identical
+`0x00 || len(label) || label || M` wrapper by hand, via
+`hybrid_classical_input()`. Both halves therefore bind the same prefix, and
+neither half is a valid standalone signature over the raw message.
+
+In **v1** both components signed the raw message. Against a key reused across
+contexts that is a splicing hazard in both directions: a standalone Ed25519
+signature over `M` was *also* a valid classical half of a hybrid signature over
+`M`, and a standalone ML-DSA-65 signature over `M` was a valid quantum half. An
+attacker holding one standalone signature and one component forgery could
+assemble an accepted hybrid signature without forging both halves of the hybrid
+— which is the guarantee above, defeated. Signatures made by the v1 format do
+not verify under v2, deliberately: the label is part of the format, and
+changing it changes every signature.
+
+`tests/test_hybrid_signature_domain_separation.py` pins both directions —
+neither a standalone Ed25519 nor a standalone ML-DSA-65 signature can be
+spliced into a v2 hybrid signature.
+
 ### Hybrid signing API
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
@@ -176,6 +224,7 @@ flow — which internally uses hybrid Ed25519 + ML-DSA-65 signatures at
 layer 3. It lives in `ama_cryptography.legacy_compat` (new code should
 prefer `AmaCryptography(AlgorithmType.HYBRID_SIG)` above):
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.legacy_compat import (
     generate_key_management_system,
@@ -183,8 +232,13 @@ from ama_cryptography.legacy_compat import (
     verify_crypto_package,
 )
 
+codes = "1. example\n"
+helix_params = [(20.0, 0.7), (15.0, 1.1)]
+
 kms = generate_key_management_system("MyOrg")
-package = create_crypto_package(codes, helix_params, kms)
+# `author` is a REQUIRED fourth argument; the result is a CryptoPackage
+# dataclass, not a dict.
+package = create_crypto_package(codes, helix_params, kms, author="MyOrg")
 
 results = verify_crypto_package(codes, helix_params, package, kms.hmac_key)
 
@@ -197,6 +251,7 @@ print(f"ML-DSA-65 valid: {results['dilithium']}")
 
 ## Algorithm Selection
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
@@ -229,6 +284,7 @@ between algorithm choices based on threat level — e.g., elevating from
 `HYBRID_SIG` to `ML_DSA_65` when timing anomalies signal potential
 classical compromise:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.adaptive_posture import (
     CryptoPostureController,
@@ -257,7 +313,7 @@ evaluation = controller.evaluate_and_respond()  # returns PostureEvaluation
 if evaluation.action != PostureAction.NONE:
     # Surface the action in your application logs / alerting. The controller
     # has already updated the crypto stance by the time this returns.
-    ...
+    print("posture action applied:", evaluation.action)
 ```
 
 ---

@@ -14,7 +14,7 @@
  *     intermediates) on x86-64 GCC/Clang where the 64x64→128 native
  *     multiply is single-cycle and `__int128` is available. The fewest
  *     possible limbs on a 64-bit target — 16 cross-products per mul.
- *   - **fe51** (radix 2^51, 5 limbs) — the donna64 layout, 25 cross-
+ *   - **fe51** (radix 2^51, 5 limbs) — the classic 64-bit layout, 25 cross-
  *     products per mul. Used on non-x86-64 GCC/Clang 64-bit targets
  *     (e.g. aarch64, ppc64le) where `__int128` is available but the
  *     fe64 carry chain is less of a win or unverified at perf level.
@@ -69,34 +69,6 @@
 #if defined(AMA_HAVE_X25519_FE64_MULX_IMPL) && defined(AMA_FE64_AVAILABLE)
 #include "internal/ama_x25519_fe64_mulx.h"
 #endif
-
-/* Benchmark/test-only runtime override for the MULX+ADX gate.
- *
- *   -1 = auto (default; honour CPUID)
- *    0 = force off (pure-C fe64 even when MULX kernel is built + CPUID OK)
- *    1 = force on  (only effective when the kernel TU is linked AND
- *                   CPUID exposes BMI2+ADX; otherwise no-op)
- *
- * Set via the documented `ama_x25519_set_mulx_override()` public API
- * (`include/ama_cryptography.h`). The accessor is consumed only by the
- * `x25519_scalarmult` runtime branch below; non-fe64 build paths
- * ignore it entirely.
- *
- * Storage is a plain `int`, not `_Atomic int`, by design: the public API
- * contract (header docs) restricts the setter to single-threaded harness
- * / test-setup use with no concurrent scalarmult work in flight, so the
- * cost of an `atomic_load_explicit(..., memory_order_relaxed)` on the
- * scalarmult hot path is not justified. The plain `int` does NOT make
- * unsynchronised concurrent reads + writes safe — that would be a C-
- * language-level data race (UB) regardless of how the underlying word
- * write happens to be implemented at the architecture level. The
- * safety guarantee here is the single-threaded contract, not any
- * architecture-atomicity claim. */
-static int ama_x25519_mulx_override = -1;
-
-static inline int ama_x25519_mulx_override_get(void) {
-    return ama_x25519_mulx_override;
-}
 
 /* Test-only observation of which kernel the most recent fe64 scalarmult
  * actually selected. -1 = no fe64 scalarmult has run yet (or this build has
@@ -158,6 +130,36 @@ AMA_API int ama_x25519_mulx_last_used_get(void) {
 #  define AMA_X25519_LADDER_LINKAGE static
 #endif
 
+/* Benchmark/test-only runtime override for the MULX+ADX gate.
+ *
+ *   -1 = auto (default; honour CPUID)
+ *    0 = force off (pure-C fe64 even when MULX kernel is built + CPUID OK)
+ *    1 = force on  (only effective when the kernel TU is linked AND
+ *                   CPUID exposes BMI2+ADX; otherwise no-op)
+ *
+ * Set via the documented `ama_x25519_set_mulx_override()` public API
+ * (`include/ama_cryptography.h`). It is read only by the
+ * `x25519_scalarmult` runtime branch below and by the public getter;
+ * non-fe64 build paths ignore it entirely.
+ *
+ * Storage is a plain `int`, not `_Atomic int`, by design: the public API
+ * contract (header docs) restricts the setter to single-threaded harness
+ * / test-setup use with no concurrent scalarmult work in flight, so the
+ * cost of an `atomic_load_explicit(..., memory_order_relaxed)` on the
+ * scalarmult hot path is not justified. The plain `int` does NOT make
+ * unsynchronised concurrent reads + writes safe — that would be a C-
+ * language-level data race (UB) regardless of how the underlying word
+ * write happens to be implemented at the architecture level. The
+ * safety guarantee here is the single-threaded contract, not any
+ * architecture-atomicity claim. */
+#if !defined(AMA_X25519_NO_PUBLIC_API) || \
+    (defined(AMA_X25519_FIELD_FE64) && defined(AMA_HAVE_X25519_FE64_MULX_IMPL))
+/* Defined only where something reads it: the public setter/getter, or the
+ * fe64 MULX branch.  The equivalence TUs that compile this file without the
+ * public API on another field path have neither. */
+static int ama_x25519_mulx_override = -1;
+#endif
+
 /* ============================================================================
  * Non-canonical u-coordinate handling (RFC 7748 §5) — INVARIANT-27
  * ============================================================================
@@ -173,7 +175,7 @@ AMA_API int ama_x25519_mulx_last_used_get(void) {
  * so a u in that band was consumed unreduced and produced a shared secret
  * that no other implementation computes.  Wycheproof x25519 tc88 is exactly
  * this case: its u is p + 3, and every reference implementation (ref10,
- * curve25519-donna, libsodium) derives the secret for u = 3.
+ * Andrew Moon's curve25519, libsodium) derives the secret for u = 3.
  *
  * Wycheproof classes the case `acceptable` — the RFC does not *require* the
  * reduction — so this is an interoperability decision rather than a break.
@@ -417,7 +419,7 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32],
      * `ama_cpuid_has_x25519_mulx()` is evaluated once and cached in
      * `has_mulx` so the hot path makes a single CPUID-result load even
      * when both the override decision and the safety guard need it. */
-    int override_mode = ama_x25519_mulx_override_get();
+    int override_mode = ama_x25519_mulx_override;
     int has_mulx = ama_cpuid_has_x25519_mulx();
     int use_mulx = (override_mode == -1) ? has_mulx : (override_mode != 0);
     if (use_mulx && has_mulx) {
@@ -812,18 +814,24 @@ AMA_API ama_error_t ama_x25519_key_exchange(
 
     x25519_scalarmult(shared_secret, our_secret_key, their_public_key);
 
-    uint8_t zero_check = 0;
+    /* RFC 7748 Sec 6.1 all-zero output check, written without a branch on
+     * the output.  The output is a function of the secret scalar, so a
+     * branch here is a secret-dependent branch as far as any taint or
+     * instruction-trace gate can tell — even though, for a clamped scalar,
+     * "output is all-zero" is decided by the peer's point alone.  The
+     * all-zero case needs no wipe (the buffer already holds zeros), so the
+     * only thing the branch ever selected was the return code; select it
+     * with a mask instead. */
+    uint32_t zero_or = 0;
     int i;
     for (i = 0; i < 32; i++) {
-        zero_check |= shared_secret[i];
+        zero_or |= shared_secret[i];
     }
-
-    if (zero_check == 0) {
-        ama_secure_memzero(shared_secret, 32);
-        return AMA_ERROR_CRYPTO;
-    }
-
-    return AMA_SUCCESS;
+    /* is_zero_mask = 0xFFFFFFFF iff zero_or == 0 (zero_or < 256). */
+    uint32_t is_zero_mask = 0u - ((zero_or - 1u) >> 31);
+    int32_t rc = (int32_t)(((uint32_t)AMA_SUCCESS & ~is_zero_mask) |
+                           ((uint32_t)AMA_ERROR_CRYPTO & is_zero_mask));
+    return (ama_error_t)rc;
 }
 
 /* ============================================================================
@@ -866,8 +874,8 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
     /* 4-way SIMD path: process full chunks of 4 lanes at a time when
      * the AVX2 kernel is wired in AND the batch contains at least one
      * full 4-lane chunk.  The dispatcher leaves `tbl->x25519_x4 ==
-     * NULL` by default on x86-64 (the scalar fe64 path beats 4×
-     * donna-32bit on Skylake-class cores; the kernel is opt-in via
+     * NULL` by default on x86-64 (the scalar fe64 path beats four
+     * 32-bit-limb lanes on Skylake-class cores; the kernel is opt-in via
      * `AMA_DISPATCH_USE_X25519_AVX2=1` for the constant-time test lane
      * and a future AVX-512 IFMA port).  `count >= 4` matches the only
      * way the kernel is actually invoked: `chunks = count / 4` would
@@ -918,18 +926,30 @@ AMA_API ama_error_t ama_x25519_scalarmult_batch(
         uint8_t lane_zero_mask = (uint8_t)((((uint32_t)lane_or) - 1u) >> 8) & 0xFFu;
         batch_zero_mask |= lane_zero_mask;
     }
-    if (batch_zero_mask) {
-        /* RFC 7748 §6.1: implementations MAY reject all-zero shared
-         * secrets.  AMA does — and per the single-shot contract,
-         * scrub the whole batch so a caller that ignores the error
-         * code can't leak partial results. */
+    /* RFC 7748 Sec 6.1: implementations MAY reject all-zero shared
+     * secrets.  AMA does — and per the single-shot contract, scrubs the
+     * whole batch so a caller that ignores the error code can't leak
+     * partial results.  Both the scrub and the return code are applied
+     * through the mask, never through a branch on it: the mask is a
+     * function of the lane scalars, so a branch here is a secret-
+     * dependent branch to every taint or trace gate, even though for
+     * clamped scalars the outcome is decided by the peer points alone.
+     * ANDing every lane with ~mask is a no-op when nothing is rejected
+     * and a wipe when something is. */
+    {
+        uint8_t keep = (uint8_t)~batch_zero_mask;
+        uint32_t reject_mask = 0u - (uint32_t)(batch_zero_mask & 1u);
+        int32_t rc;
         for (i = 0; i < count; i++) {
-            ama_secure_memzero(out[i], 32);
+            size_t j;
+            for (j = 0; j < 32; j++) {
+                out[i][j] &= keep;
+            }
         }
-        return AMA_ERROR_CRYPTO;
+        rc = (int32_t)(((uint32_t)AMA_SUCCESS & ~reject_mask) |
+                       ((uint32_t)AMA_ERROR_CRYPTO & reject_mask));
+        return (ama_error_t)rc;
     }
-
-    return AMA_SUCCESS;
 }
 
 /**

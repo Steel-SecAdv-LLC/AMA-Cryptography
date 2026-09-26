@@ -389,7 +389,17 @@ static void ama_ascon_aead_final(
     ama_ascon_store64(tag + 8, s->x[4] ^ k1);
 }
 
-AMA_API ama_error_t ama_ascon_aead128_encrypt(
+/* The AEAD bodies run in their own noinline frame so the public entry points
+ * below can wipe it after return.  Measured with a dead-stack probe: with the
+ * body in the entry point itself, gcc -O2 left a key word in that frame after
+ * every encrypt and after a rejected decrypt, where a wipe issued from the
+ * same frame cannot reach it. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#elif defined(_MSC_VER)
+__declspec(noinline)
+#endif
+static ama_error_t ascon_aead128_encrypt_frame(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
     const uint8_t *plaintext, size_t pt_len,
@@ -507,7 +517,12 @@ static void ama_ascon_aead_absorb_ct(
     }
 }
 
-AMA_API ama_error_t ama_ascon_aead128_decrypt(
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#elif defined(_MSC_VER)
+__declspec(noinline)
+#endif
+static ama_error_t ascon_aead128_decrypt_frame(
     const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
     const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
     const uint8_t *ciphertext, size_t ct_len,
@@ -573,6 +588,34 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
     return AMA_SUCCESS;
 }
 
+AMA_API ama_error_t ama_ascon_aead128_encrypt(
+    const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
+    const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
+    const uint8_t *plaintext, size_t pt_len,
+    const uint8_t *aad, size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN]
+) {
+    const ama_error_t rc = ascon_aead128_encrypt_frame(
+        key, nonce, plaintext, pt_len, aad, aad_len, ciphertext, tag);
+    ama_secure_stack_wipe();
+    return rc;
+}
+
+AMA_API ama_error_t ama_ascon_aead128_decrypt(
+    const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
+    const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
+    const uint8_t *ciphertext, size_t ct_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN],
+    uint8_t *plaintext
+) {
+    const ama_error_t rc = ascon_aead128_decrypt_frame(
+        key, nonce, ciphertext, ct_len, aad, aad_len, tag, plaintext);
+    ama_secure_stack_wipe();
+    return rc;
+}
+
 /* ============================================================================
  * TEST SUPPORT
  * ============================================================================ */
@@ -587,7 +630,41 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
  * permutation verified only indirectly through the modes would let a fault in
  * one cancel a fault in the other.
  */
-AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) {
+/* Compiled ONLY into the AMA_TESTING_MODE archive, so it is absent from every
+ * shipped library by construction rather than by export control.
+ *
+ * It carries no AMA_API, is declared in internal/ama_testing_exports.h rather
+ * than the installed public header, and `cmake/ama_exports.map` localises its
+ * exact name so the `ama_*` wildcard above it cannot publish it — because a
+ * raw permutation in a FIPS-aligned module's public surface invites
+ * non-approved constructions.
+ *
+ * That reasoning was once enforced on ELF only.  macOS then linked with
+ * `cmake/ama_exports.macos.sym`, a Mach-O exported-symbols list — an
+ * ALLOW-list with no exclusion form — whose single `_ama_*` entry matched
+ * `_ama_ascon_permutation_for_test` and would have published from the .dylib
+ * exactly the symbol the version script withheld from the .so.  Two
+ * platform-specific export mechanisms encoding one security decision had
+ * diverged.
+ *
+ * Two changes closed it, and this comment used to describe only the first as
+ * if the second had been rejected.  First, the function is not compiled
+ * outside the test archive, so no shipped library contains it and there is
+ * nothing for any export mechanism to publish, on any platform.  Second, the
+ * macOS link was later moved to exactly the control this comment once called
+ * a mere patch: CMakeLists.txt now GENERATES an `-unexported_symbols_list`
+ * from the `local:` block of `cmake/ama_exports.map` (and the .sym file is
+ * gone), so ELF and Mach-O read one list and cannot disagree about any name
+ * on it.  The `local:` entry for this function therefore localises it on
+ * both platforms; with the first change in place it is defence in depth.
+ *
+ * `tests/c/test_ascon.c` is the only caller in the repository and links
+ * `ama_cryptography_test`, which is the one target CMake gives
+ * AMA_TESTING_MODE. */
+#ifdef AMA_TESTING_MODE
+#include "internal/ama_testing_exports.h"
+
+void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) {
     ama_ascon_state_t s;
     unsigned i;
 
@@ -604,3 +681,4 @@ AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) 
         state[i] = s.x[i];
     }
 }
+#endif /* AMA_TESTING_MODE */

@@ -2,11 +2,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file test_keccak_equiv.c
- * @brief Byte-equivalence test for the dispatched Keccak-f[1600]
- *        permutation (AVX2 on x86-64, NEON on AArch64, AVX-512 4-way
- *        for the x4 wrapper when ``AMA_ENABLE_AVX512=ON``) against
- *        ``ama_keccak_f1600_generic`` — the scalar reference baked
- *        into ``src/c/ama_sha3.c``.
+ * @brief Byte-equivalence test for the SIMD Keccak-f[1600] kernels
+ *        (NEON / SVE2 single-state on AArch64; the AVX2 4-way batch on
+ *        x86-64, where no single-state SIMD kernel exists; AVX-512
+ *        4-way for the x4 wrapper when ``AMA_ENABLE_AVX512=ON``)
+ *        against ``ama_keccak_f1600_generic`` — the scalar reference
+ *        baked into ``src/c/ama_sha3.c``.
  *
  * Goes through ``ama_get_dispatch_table()->keccak_f1600`` and
  * ``ama_get_dispatch_table()->keccak_f1600_x4`` to exercise the
@@ -45,7 +46,6 @@ extern void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
  * to actually exercise the SIMD kernel regardless of what auto-tune
  * picks. */
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-extern void ama_keccak_f1600_avx2(uint64_t state[25]);
 extern void ama_keccak_f1600_x4_avx2(uint64_t states[4][25]);
 #endif
 #if defined(AMA_HAVE_NEON_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
@@ -86,20 +86,13 @@ static int cmp_state(const uint64_t a[25], const uint64_t b[25],
 
 /* Pick the SIMD kernel for this build/arch — direct symbol reference,
  * not the dispatch pointer, so the test runs regardless of what the
- * dispatch auto-tune picks at init time.  Returns NULL when no SIMD
- * kernel is compiled in (test SKIPs in that case). */
+ * dispatch auto-tune picks at init time.  Each picker returns NULL when
+ * its kernel is not compiled in; the test SKIPs only when BOTH do. */
 typedef void (*keccak_single_fn)(uint64_t state[25]);
 typedef void (*keccak_x4_fn)(uint64_t states[4][25]);
 
 static keccak_single_fn simd_keccak_single(const char **label) {
-#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
-    if (!ama_has_avx2()) {
-        (void)label;
-        return NULL;
-    }
-    *label = "AVX2";
-    return ama_keccak_f1600_avx2;
-#elif defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
+#if defined(AMA_HAVE_SVE2_IMPL) && (defined(__aarch64__) || defined(_M_ARM64))
     /* Prefer the SVE2 kernel where available — `ama_has_arm_sve2()`
      * gates the kernel pointer; if SVE2 is compiled in but the host
      * doesn't expose it at runtime we fall through to NEON below. */
@@ -118,6 +111,12 @@ static keccak_single_fn simd_keccak_single(const char **label) {
     *label = "NEON";
     return ama_keccak_f1600_neon;
 #else
+    /* x86-64 ships no single-state SIMD Keccak.  The former
+     * `ama_keccak_f1600_avx2` lost to the BMI1/BMI2 scalar kernel on
+     * every measured host, was never installed in the dispatch table,
+     * and was deleted (see the AVX2 block in src/c/dispatch/
+     * ama_dispatch.c); its equivalence lane here went with it.  The
+     * AVX2 4-way kernel is covered by simd_keccak_x4 below. */
     (void)label;
     return NULL;
 #endif
@@ -150,18 +149,26 @@ int main(void) {
     keccak_single_fn k_single = simd_keccak_single(&single_label);
     keccak_x4_fn     k_x4     = simd_keccak_x4(&x4_label);
 
-    if (k_single == NULL) {
+    if (k_single == NULL && k_x4 == NULL) {
         printf("SKIP: no SIMD Keccak kernel built in for this target\n"
-               "      (non-x86-64, non-AArch64, or SIMD disabled).\n");
+               "      (non-x86-64, non-AArch64, SIMD disabled, or the\n"
+               "      host CPU lacks the ISA the kernels were built for).\n");
         printf("================================================\n");
         return 77;
     }
 
     int fail = 0;
 
-    /* Single-state permutation: 4096 random initial states. */
+    /* Single-state permutation: 4096 random initial states.  AArch64
+     * only; x86-64 has no single-state SIMD kernel (see
+     * simd_keccak_single) and its SIMD surface is the x4 pass below. */
     const int N_SINGLE = 4096;
-    for (int trial = 0; trial < N_SINGLE; trial++) {
+    if (k_single == NULL) {
+        printf("INFO: no single-state SIMD kernel on this target — the\n"
+               "      single-state slot dispatches the scalar baseline;\n"
+               "      the x4 pass covers the SIMD surface\n");
+    }
+    for (int trial = 0; k_single != NULL && trial < N_SINGLE; trial++) {
         uint64_t state_s[25];
         uint64_t state_v[25];
         for (int i = 0; i < 25; i++) {
@@ -179,7 +186,9 @@ int main(void) {
                 fail, single_label);
         return 1;
     }
-    printf("PASS: %s single-state (%d trials)\n", single_label, N_SINGLE);
+    if (k_single != NULL) {
+        printf("PASS: %s single-state (%d trials)\n", single_label, N_SINGLE);
+    }
 
     /* 4-way x4 permutation: 1024 random 4-state batches. */
     if (k_x4 != NULL) {
@@ -228,9 +237,9 @@ int main(void) {
      *      reference also exercises any inter-lane state management
      *      inside the generic x4 wrapper.
      *   2. On x86-64 with the AVX2 x4 kernel wired, the dispatched
-     *      x4 pointer is `ama_keccak_f1600_x4_avx2`; the lane still
-     *      runs (the AVX2 single-state has already been validated
-     *      above) and provides a second independent witness via the
+     *      x4 pointer is `ama_keccak_f1600_x4_avx2` (the single-state
+     *      pointer is the scalar baseline there); the lane still runs
+     *      and provides a second independent witness via the
      *      production dispatch surface. */
     {
         const ama_dispatch_table_t *dt = ama_get_dispatch_table();

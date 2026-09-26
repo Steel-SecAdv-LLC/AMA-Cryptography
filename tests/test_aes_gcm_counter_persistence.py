@@ -73,7 +73,7 @@ class TestPersistenceHappyPath:
         AESGCMProvider._persist_counters(_raising=True)
 
         assert persist_dir.exists()
-        data = json.loads(persist_dir.read_text())
+        data = json.loads(persist_dir.read_text(encoding="utf-8"))
         assert data[("01" * 32)] == 42
         assert data[("02" * 32)] == 7
 
@@ -85,20 +85,20 @@ class TestPersistenceHappyPath:
 
     def test_persist_merges_max(self, persist_dir: Path) -> None:
         # Disk has higher count for key1; memory has higher for key2.
-        persist_dir.write_text(json.dumps({"0a" * 32: 200, "0b" * 32: 3}))
+        persist_dir.write_text(json.dumps({"0a" * 32: 200, "0b" * 32: 3}), encoding="utf-8")
         AESGCMProvider._encrypt_counters = {
             b"\x0a" * 32: 50,  # lower than disk
             b"\x0b" * 32: 99,  # higher than disk
         }
         AESGCMProvider._persist_counters(_raising=True)
-        merged = json.loads(persist_dir.read_text())
+        merged = json.loads(persist_dir.read_text(encoding="utf-8"))
         assert merged["0a" * 32] == 200  # keep disk max
         assert merged["0b" * 32] == 99  # keep in-memory max
 
 
 class TestPersistenceErrorPaths:
     def test_load_bad_json_raises(self, persist_dir: Path) -> None:
-        persist_dir.write_text("{ not valid json")
+        persist_dir.write_text("{ not valid json", encoding="utf-8")
         AESGCMProvider._encrypt_counters = {}
         # Catches both RuntimeError (from the legacy corrupt-file path) and
         # json.JSONDecodeError depending on where the parse happens; pin the
@@ -107,19 +107,19 @@ class TestPersistenceErrorPaths:
             AESGCMProvider._load_persisted_counters()
 
     def test_persist_raising_on_corrupt_file(self, persist_dir: Path) -> None:
-        persist_dir.write_text("corrupt contents")
+        persist_dir.write_text("corrupt contents", encoding="utf-8")
         AESGCMProvider._encrypt_counters = {b"\x01" * 32: 1}
         with pytest.raises(RuntimeError):
             AESGCMProvider._persist_counters(_raising=True)
 
     def test_persist_nonraising_on_corrupt_file(self, persist_dir: Path) -> None:
-        persist_dir.write_text("still corrupt")
+        persist_dir.write_text("still corrupt", encoding="utf-8")
         AESGCMProvider._encrypt_counters = {b"\x01" * 32: 1}
         # With _raising=False the corrupt file is renamed to .corrupt and
         # the fresh in-memory state is persisted.
         AESGCMProvider._persist_counters(_raising=False)
         assert (persist_dir.parent / (persist_dir.name + ".corrupt")).exists()
-        assert json.loads(persist_dir.read_text())
+        assert json.loads(persist_dir.read_text(encoding="utf-8"))
 
 
 class TestGetPersistPath:

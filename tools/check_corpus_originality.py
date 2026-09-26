@@ -79,10 +79,12 @@ Exit code:
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
+from types import ModuleType
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -194,7 +196,7 @@ def _module_string_constants(tree: ast.AST) -> dict[str, list[str]]:
         targets: list[ast.expr] = []
         if isinstance(node, ast.Assign):
             targets = list(node.targets)
-            value: ast.expr | None = node.value
+            value: ast.expr = node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             targets = [node.target]
             value = node.value
@@ -333,6 +335,272 @@ def check_reference_encoder(path: Path = REFERENCE_ENCODER) -> list[str]:
     return []
 
 
+#: Vector corpora AMA validates itself against.  Their expected values must be
+#: TRANSCRIBED from a specification or produced by AMA's own reference encoder
+#: — never computed by another implementation at generation time.
+VECTOR_ROOTS = ("nist_vectors",)
+
+#: Standard-library hash and HMAC constructors.  On any libcrypto-linked
+#: CPython — every manylinux wheel and every mainstream distribution Python,
+#: as ``tools/check_stdlib_hash_boundary.py``'s docstring states — these ARE
+#: OpenSSL.  A generator that computes an expected digest with one of them
+#: writes OpenSSL's output into a file labelled with a NIST publication, and
+#: the run then validates AMA against it.
+_STDLIB_DIGEST_CALLS = (
+    "hashlib.sha1",
+    "hashlib.sha224",
+    "hashlib.sha256",
+    "hashlib.sha384",
+    "hashlib.sha512",
+    "hashlib.sha3_224",
+    "hashlib.sha3_256",
+    "hashlib.sha3_384",
+    "hashlib.sha3_512",
+    "hashlib.shake_128",
+    "hashlib.shake_256",
+    "hashlib.blake2b",
+    "hashlib.blake2s",
+    "hashlib.md5",
+    "hashlib.new",
+    "hashlib.pbkdf2_hmac",
+    "hmac.new",
+    "hmac.digest",
+)
+
+#: The modules those calls live in.  Refused outright in a vector generator.
+_STDLIB_DIGEST_MODULES = frozenset({"hashlib", "hmac", "_hashlib"})
+
+
+def _dotted_call_name(node: ast.Call) -> str | None:
+    func = node.func
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return f"{func.value.id}.{func.attr}"
+    return None
+
+
+#: The callables that turn a string into a module object.
+_IMPORTERS = frozenset({"import_module", "__import__"})
+
+
+def _hash_boundary() -> ModuleType:
+    """``tools/check_stdlib_hash_boundary.py``, loaded by path.
+
+    Its :func:`dynamic_imports` walker and :class:`StringResolver` are the one
+    definition in this tree of "which module does this ``import_module`` /
+    ``__import__`` / ``sys.modules`` lookup reach" — constant folding,
+    single-binding names, f-strings — and ``tools/check_vendor_isolation.py``
+    already imports them rather than copying them.  Loaded by path because
+    ``tools/`` is not on ``sys.path`` when this runs as a script.
+    """
+    path = REPO / "tools" / "check_stdlib_hash_boundary.py"
+    spec = importlib.util.spec_from_file_location("_hash_boundary_for_originality", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable on a real tree
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _is_digest_module(name: str) -> bool:
+    return name.split(".", 1)[0] in _STDLIB_DIGEST_MODULES
+
+
+def _digest_module_reach(tree: ast.Module) -> list[tuple[int, str]]:
+    """``(line, what)`` for every way ``tree`` reaches a digest module WITHOUT
+    an import statement.
+
+    Three spellings, because enumerating one is how the last one got through:
+
+    * a dynamic import or ``sys.modules`` lookup — ``importlib.import_module``,
+      ``builtins.__import__``, ``from importlib import import_module``,
+      ``sys.modules["hashlib"]`` and ``.get``/``.pop``/``.setdefault`` on it —
+      resolved by the shared walker, so ``"hash" + "lib"`` and a name bound to
+      the string resolve too.  One whose module cannot be resolved from the
+      source is reported as well: a module chosen at run time is a module this
+      gate cannot bound.
+    * an importer that escapes the call position — ``im =
+      importlib.import_module``, ``from importlib import import_module as
+      im``, ``f(__import__)`` — after which the walker, which matches the
+      callable by name, cannot see the call.
+    * a string that names a digest module, or an importer, anywhere else —
+      ``getattr(builtins, "__import__")("hashlib")``,
+      ``importlib.util.find_spec("hashlib")``.  A vector generator has no
+      reason to spell either.
+
+    The walker only recognised ``__import__("<literal>")`` before this, so
+    ``importlib.import_module("hashlib").sha256(...)`` — the spelling a
+    reviewer reaches for first — computed a "NIST" digest with OpenSSL and
+    passed.
+    """
+    boundary = _hash_boundary()
+    found: list[tuple[int, str]] = []
+    reported: set[int] = set()
+
+    for site in boundary.dynamic_imports(tree):
+        if site.names is None:
+            found.append(
+                (
+                    site.lineno,
+                    f"{site.kind}({site.argument}) chooses its module at run time, "
+                    "so it could be a stdlib digest module and this gate cannot "
+                    "tell. Name the module with an import statement.",
+                )
+            )
+        elif any(_is_digest_module(name) for name in site.names):
+            found.append(
+                (
+                    site.lineno,
+                    f"{site.kind}({site.argument}) reaches "
+                    f"{', '.join(sorted(site.names))} — the same rule as a plain "
+                    "import, spelled around it.",
+                )
+            )
+        else:
+            continue
+        reported.add(site.lineno)
+
+    call_targets = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    resolver = boundary.StringResolver(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            for alias in node.names:
+                if alias.name == "import_module" and alias.asname not in (None, "import_module"):
+                    found.append(
+                        (
+                            node.lineno,
+                            f"import_module is bound as {alias.asname!r}; a call "
+                            "through that name is invisible to the dynamic-import "
+                            "scan.",
+                        )
+                    )
+            continue
+        importer: str | None = None
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            importer = node.id if node.id in _IMPORTERS else None
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            importer = node.attr if node.attr in _IMPORTERS else None
+        if importer is not None:
+            if id(node) not in call_targets:
+                found.append(
+                    (
+                        getattr(node, "lineno", 0),
+                        f"{importer} is referenced other than as a call; once it "
+                        "is bound or passed on, the call it makes cannot be seen.",
+                    )
+                )
+            continue
+        if not isinstance(node, (ast.Constant, ast.BinOp, ast.JoinedStr)):
+            continue
+        lineno = getattr(node, "lineno", 0)
+        if lineno in reported:
+            continue
+        values = resolver.resolve(node)
+        if not values:
+            continue
+        hits = sorted(
+            value
+            for value in values
+            if isinstance(value, str) and (value in _STDLIB_DIGEST_MODULES or value in _IMPORTERS)
+        )
+        if hits:
+            found.append(
+                (
+                    lineno,
+                    f"the string {hits[0]!r} names a stdlib digest module or an "
+                    "importer; a vector generator has no reason to spell either.",
+                )
+            )
+            reported.add(lineno)
+    return sorted(set(found))
+
+
+def scan_vector_generators(repo: Path = REPO) -> list[str]:
+    """No expected value in a vector corpus may be computed by the stdlib.
+
+    ``nist_vectors/fetch_vectors.py`` wrote ``SHA-256-FIPS180-4.json`` with
+    ``"source": "FIPS 180-4 Section B.1"`` and every digest in it produced by
+    ``hashlib.sha256(...).hexdigest()`` at generation time, and
+    ``nist_vectors/run_vectors.py`` validated AMA's SHA-256 against that file.
+    So on every regeneration the "NIST vectors" were OpenSSL's output wearing a
+    NIST label: a differential test against another implementation, presented
+    as conformance to a specification, in the one place this invariant exists
+    to keep clean.  The committed values happened to be right; where the next
+    regeneration would have got them was not.
+
+    The scan is over the GENERATORS rather than the JSON, because a digest in
+    a committed file carries no evidence of where it came from — which is
+    precisely how this survived.
+
+    Two rules, not one.  Enumerating call spellings catches
+    ``hashlib.sha256(...)`` and misses ``__import__("hashlib").sha256(...)``,
+    which is the usual fate of a name-matching scan.  So the IMPORT is refused
+    as well: nothing in this tree has a legitimate reason to reach a
+    stdlib digest — the corpora are transcribed from publications, and AMA's
+    own primitives are what the run validates, not what it validates against.
+    Neither file imports one today.  That is the same shape
+    ``tools/check_stdlib_hash_boundary.py`` applies to the package itself.
+
+    "The import" means every way of obtaining the module, not only the
+    statement: :func:`_digest_module_reach` covers the dynamic spellings.
+    The first version of this rule special-cased ``__import__("<literal>")``
+    and nothing else, so ``importlib.import_module("hashlib")``,
+    ``builtins.__import__("hashlib")``, ``sys.modules["hashlib"]`` and
+    ``__import__("hash" + "lib")`` all passed.
+    """
+    problems: list[str] = []
+    scanned = 0
+    for root in VECTOR_ROOTS:
+        base = repo / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, SyntaxError) as exc:  # pragma: no cover - unparseable
+                problems.append(f"{_rel(path)}: cannot be parsed ({exc})")
+                continue
+            scanned += 1
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] in _STDLIB_DIGEST_MODULES:
+                            problems.append(
+                                f"{_rel(path)}:{node.lineno}: imports {alias.name!r}. "
+                                "A vector generator transcribes published values; a "
+                                "stdlib digest module here is a second implementation "
+                                "in the validation path."
+                            )
+                    continue
+                if isinstance(node, ast.ImportFrom):
+                    if (node.module or "").split(".")[0] in _STDLIB_DIGEST_MODULES:
+                        problems.append(
+                            f"{_rel(path)}:{node.lineno}: imports from "
+                            f"{node.module!r}. A vector generator transcribes "
+                            "published values; a stdlib digest module here is a "
+                            "second implementation in the validation path."
+                        )
+                    continue
+                if not isinstance(node, ast.Call):
+                    continue
+                name = _dotted_call_name(node)
+                if name in _STDLIB_DIGEST_CALLS:
+                    problems.append(
+                        f"{_rel(path)}:{node.lineno}: {name}() computes a value in a "
+                        "vector generator. On a libcrypto-linked CPython that is "
+                        "OpenSSL, so the corpus would record another "
+                        "implementation's output as the specification's. "
+                        "Transcribe the published value instead."
+                    )
+            for lineno, what in _digest_module_reach(tree):
+                problems.append(f"{_rel(path)}:{lineno}: {what}")
+    if scanned == 0:
+        problems.append(
+            "no vector generators found under " + "/, ".join(VECTOR_ROOTS) + "/ — "
+            "refusing to report clean having examined nothing"
+        )
+    return problems
+
+
 def main() -> int:
     sections = (
         (
@@ -341,6 +609,7 @@ def main() -> int:
         ),
         ("vendored corpus provenance", scan_corpus_sources()),
         ("reference-encoder independence", check_reference_encoder()),
+        ("vector generators compute nothing", scan_vector_generators()),
     )
     failures = [(title, problems) for title, problems in sections if problems]
     for title, problems in sections:
@@ -358,8 +627,13 @@ def main() -> int:
                 print(f"    - {problem}", file=sys.stderr)
         return 1
     print(
-        "\nINVARIANT-36 holds: AMA is checked against specifications and its own "
-        "reference encoder, not against another implementation."
+        "\nINVARIANT-36 holds over what this gate can see: no third-party "
+        "cryptographic binary is spawned from ama_cryptography/, tests/ or tools/, "
+        "the vendored corpora carry their provenance, the reference encoder is "
+        "independent, and the vector generators compute nothing.  The two "
+        "recorded exceptions — benchmarks/ and the requires_interop_oracle tests, "
+        "which import PyCA / PyNaCl / pycryptodome as interoperability oracles — "
+        "are outside its scope by design; see INVARIANTS.md."
     )
     return 0
 

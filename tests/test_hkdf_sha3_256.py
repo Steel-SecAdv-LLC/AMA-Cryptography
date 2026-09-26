@@ -223,6 +223,32 @@ class TestEthicalHKDFContext:
         # Different ethical vectors should produce different keys
         assert keys1[0] != keys2[0]
 
+    def test_ethical_context_ignores_key_order(self) -> None:
+        """Canonical encoding: the vector's contents decide, not its key order.
+
+        Both the HKDF context and the package's ethical hash are computed over
+        sorted-key JSON, so two dicts with the same entries inserted in
+        different orders are one vector.  AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md's
+        "Canonical Encoding" checklist item names this test.
+        """
+        from ama_cryptography.legacy_compat import (
+            create_ethical_hkdf_context,
+            recompute_ethical_hash,
+        )
+
+        forward = {
+            "omniscient": 4.0,
+            "omnipotent": 3.0,
+            "omnidirectional": 3.0,
+            "omnibenevolent": 2.0,
+        }
+        backward = dict(reversed(list(forward.items())))
+        assert list(forward) != list(backward), "the two dicts must differ in key order"
+        assert create_ethical_hkdf_context(b"ctx", forward) == create_ethical_hkdf_context(
+            b"ctx", backward
+        )
+        assert recompute_ethical_hash(forward) == recompute_ethical_hash(backward)
+
 
 class TestHMACSHA3256:
     """Test suite for HMAC-SHA3-256 authentication."""
@@ -309,6 +335,7 @@ class TestNISTSHA3256Vectors:
 
 
 @pytest.mark.skipif(not _PYCA_AVAILABLE, reason="PyCA cryptography not installed")
+@pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
 class TestRFC5869HKDFStructure:
     """
     Validate HKDF structure against RFC 5869 test vectors (using SHA-256).
@@ -405,6 +432,7 @@ class TestProjectSpecificVectors:
         assert tag.hex() == expected_hex, "HMAC-SHA3-256 project vector #2 failed"
 
     @pytest.mark.skipif(not _PYCA_AVAILABLE, reason="PyCA cryptography not installed")
+    @pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
     def test_hkdf_sha3_256_project_vector(self) -> None:
         """
         Project-specific HKDF-SHA3-256 test vector.

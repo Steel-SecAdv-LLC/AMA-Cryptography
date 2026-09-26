@@ -15,8 +15,8 @@
  * is purely additive.
  *
  * Field representation:
- *   radix-2^25.5 (10 limbs, alternating 26 / 25 bits) — donna's
- *   reference layout from `vendor/ed25519-donna/curve25519-donna-32bit.h`.
+ *   radix-2^25.5 (10 limbs, alternating 26 / 25 bits) — the 32-bit
+ *   reference layout of Andrew Moon's public-domain curve25519 code.
  *   Packed 4-way as 10 × __m256i.  Each __m256i holds four 64-bit lanes;
  *   the LOW 32 bits of each lane carry one ladder's limb_i, the HIGH
  *   32 bits are kept zero so `_mm256_mul_epu32` (low32 × low32 → 64)
@@ -46,13 +46,17 @@
  *   vectors against the scalar reference, matching the cross-check
  *   budget of `tests/c/test_x25519_field_equiv.c`).
  *
- * TODO(AVX-512-IFMA): the kernel's real home is AVX-512 IFMA
- * (`vpmadd52luq` / `vpmadd52huq` on Cannon Lake+, Ice Lake+,
- * Sapphire Rapids, Zen 5).  IFMA gives a 4-way 52-bit lane-wise
- * multiply that drops donna-32bit's ~100-cross-product schedule to
- * ~25 — the regime where 4× SIMD finally beats 4× scalar fe64.
- * The field layout, cswap, and dispatch glue carry over
- * unchanged; only `fe_mul_x4` / `fe_sqr_x4` swap to IFMA intrinsics.
+ * Design note — AVX-512-IFMA successor (deliberately not implemented
+ * here): the kernel's real home is AVX-512 IFMA (`vpmadd52luq` /
+ * `vpmadd52huq` on Cannon Lake+, Ice Lake+, Sapphire Rapids, Zen 5).
+ * IFMA gives a 4-way 52-bit lane-wise multiply that drops the 32-bit
+ * schedule's ~100 cross-products to ~25 — the regime where
+ * 4× SIMD finally beats 4× scalar fe64.  The field layout, cswap, and
+ * dispatch glue carry over unchanged; only `fe_mul_x4` / `fe_sqr_x4`
+ * swap to IFMA intrinsics.  This AVX2 kernel is complete as shipped;
+ * an IFMA kernel is new work that requires IFMA silicon to validate
+ * and is recorded here as the design direction, not as a defect in
+ * this one.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -69,13 +73,10 @@
 /* ============================================================================
  * Scalar 10-limb radix-2^25.5 helpers
  *
- * These mirror `vendor/ed25519-donna/curve25519-donna-32bit.h` but are
- * kept as private static helpers in this TU so the AVX2 path stays
- * self-contained.  The donna header is `DONNA_INLINE static` and not
- * directly callable from outside its includer; redeclaring the few
- * helpers we need (expand / contract) keeps the dependency surface
- * minimal and avoids re-pulling the entire ed25519-donna scalar
- * field-element implementation into this kernel.
+ * These follow the 32-bit scalar reference (Andrew Moon's public-domain
+ * curve25519 code, which the tree no longer carries) and are kept as
+ * private static helpers in this TU so the AVX2 path stays
+ * self-contained: the few helpers needed (expand / contract) live here.
  * ============================================================================ */
 
 typedef uint32_t fe25519_10[10];
@@ -84,7 +85,7 @@ static const uint32_t reduce_mask_25 = (1u << 25) - 1u;
 static const uint32_t reduce_mask_26 = (1u << 26) - 1u;
 
 /* Decode a 32-byte little-endian u-coordinate into 10-limb form.
- * Equivalent to donna's `curve25519_expand`; the high bit of byte 31
+ * Equivalent to the reference's `curve25519_expand`; the high bit of byte 31
  * is silently dropped (RFC 7748 §5: ignore the most significant bit of
  * the u-coordinate). */
 static void fe25519_10_expand(fe25519_10 out, const uint8_t in[32]) {
@@ -117,7 +118,7 @@ static void fe25519_10_expand(fe25519_10 out, const uint8_t in[32]) {
     out[9] = ((                       x7) >>  6) & 0x1ffffff;
 }
 
-/* Canonical 32-byte little-endian encoding.  Equivalent to donna's
+/* Canonical 32-byte little-endian encoding.  Equivalent to the reference's
  * `curve25519_contract`: three carry passes to fully reduce, then
  * conditionally subtract p = 2^255 - 19 via the `+19; -(2^255-19)`
  * branchless trick. */
@@ -242,8 +243,8 @@ static inline void unpack_4way(fe25519_10 a, fe25519_10 b,
 /* ============================================================================
  * 4-way field arithmetic (radix-2^25.5)
  *
- * Each routine is a direct lift of the donna scalar reference at
- * `vendor/ed25519-donna/curve25519-donna-32bit.h`:
+ * Each routine is a direct lift of the 32-bit scalar reference
+ * (Andrew Moon's curve25519, 32-bit limb layout):
  *   - uint32_t r0..r9          → __m256i (low 32 bits per lane = limb)
  *   - uint64_t m0..m9, c        → __m256i (full 64-bit lane = accumulator)
  *   - mul32x32_64(a, b)         → _mm256_mul_epu32(a, b)
@@ -263,11 +264,11 @@ static inline void fe_add_x4(bignum25519_x4 out,
 }
 
 /* out = a - b (with `2P` offset to keep limbs non-negative).
- * Mirrors donna's `curve25519_sub` plus a single reduction pass so
- * the output's per-limb magnitude stays bounded for subsequent
+ * Mirrors the reference's `curve25519_sub` plus a single reduction pass
+ * so the output's per-limb magnitude stays bounded for subsequent
  * mul / sq calls.
  *
- * Donna's twoP / fourP constants are pre-computed multiples of p
+ * The reference's twoP / fourP constants are pre-computed multiples of p
  * spread across the limbs so the subtraction never underflows a
  * uint32_t lane.  Since our packed lanes are 64-bit, we use the
  * `twoP` constants (sufficient for one chained sub before the next
@@ -292,7 +293,7 @@ static inline void fe_sub_x4(bignum25519_x4 out,
     out[9] = _mm256_add_epi64(twoP13579, _mm256_sub_epi64(a[9], b[9]));
 }
 
-/* Final carry-propagate + reduce.  Identical structure to donna's
+/* Final carry-propagate + reduce.  Identical structure to the reference's
  * post-multiplication carry chain (see scalar mul lines after the
  * cross-product accumulation).  Brings every limb back into its
  * canonical 26 / 25 bit window with a final `* 19` wraparound from
@@ -328,7 +329,7 @@ static inline void fe_reduce_x4(bignum25519_x4 out, const __m256i m_in[10]) {
 
     /* m0 = r0 + p * 19; bottom 26 bits → r0, carry → r1.
      * NOTE: `_mm256_mul_epu32(p, v19)` would truncate p to 32 bits.
-     * In donna's scalar reference that's fine because reduced-limb
+     * In the scalar reference that's fine because reduced-limb
      * inputs bound m9 below 2^57, keeping `p = m9 >> 25` inside
      * uint32_t.  Our ladder feeds fe_mul_x4 with *unreduced* outputs
      * of fe_add_x4 / fe_sub_x4 (limbs up to ~2^28), which lifts m9 to
@@ -349,14 +350,14 @@ static inline void fe_reduce_x4(bignum25519_x4 out, const __m256i m_in[10]) {
     out[5] = r5; out[6] = r6; out[7] = r7; out[8] = r8; out[9] = r9;
 }
 
-/* out = a * b, reduced.  Direct lift of donna's `curve25519_mul`. */
+/* out = a * b, reduced.  Direct lift of the reference's `curve25519_mul`. */
 static inline void fe_mul_x4(bignum25519_x4 out,
                              const bignum25519_x4 a,
                              const bignum25519_x4 b) {
     const __m256i v2  = _mm256_set1_epi64x(2);
     const __m256i v19 = _mm256_set1_epi64x(19);
 
-    /* Local copies — donna's scalar reuses r0..r9 and s0..s9 and
+    /* Local copies — the scalar reference reuses r0..r9 and s0..s9 and
      * mutates r1, r3, r5, r7 (×2) then most of r1..r9 (×19).  We do
      * the same in-place trick on YMM registers since they're cheap. */
     __m256i r0 = b[0], r1 = b[1], r2 = b[2], r3 = b[3], r4 = b[4];
@@ -379,7 +380,7 @@ static inline void fe_mul_x4(bignum25519_x4 out,
              ADD(ADD(ADD(MUL(r4, s5), MUL(r5, s4)), ADD(MUL(r6, s3), MUL(r7, s2))),
                  ADD(MUL(r8, s1), MUL(r9, s0))));
 
-    /* Double odd-indexed limbs (matches donna's `r1 *= 2; ...`) */
+    /* Double odd-indexed limbs (matches the reference's `r1 *= 2; ...`) */
     r1 = MUL(r1, v2);
     r3 = MUL(r3, v2);
     r5 = MUL(r5, v2);
@@ -395,9 +396,9 @@ static inline void fe_mul_x4(bignum25519_x4 out,
              ADD(ADD(MUL(r4, s4), MUL(r5, s3)), ADD(MUL(r6, s2), ADD(MUL(r7, s1), MUL(r8, s0)))));
 
     /* `r3 = (r3 / 2) * 19` in the scalar reference — r3 was doubled
-     * above, and donna recomputes r3 = r3_orig * 19.  We mirror that
+     * above, and the reference recomputes r3 = r3_orig * 19.  We mirror that
      * by multiplying the doubled values by `19/2` is not integer, so
-     * we instead derive from the original b[i] values (donna does the
+     * we instead derive from the original b[i] values (the reference does the
      * `(r3 / 2) * 19` because in scalar, /2 of an even number is a
      * shift). For us: rebuild from b[i] (cheap — single mul). */
     r1 = MUL(b[1], v19);
@@ -419,12 +420,12 @@ static inline void fe_mul_x4(bignum25519_x4 out,
     m7 = ADD(m7, ADD(MUL(r9, s8), MUL(r8, s9)));
 
     /* Double *19'd odd limbs again for the even wrapped partials.
-     * Donna's scalar reaches the same final values via two separate
+     * The scalar reference reaches the same final values via two separate
      * passes (first `r{1,3,5,7} *= 2` before the m_even computation,
      * then `r{1,2,...,9} *= 19` with `r{3,5,7} = (r/2)*19` to undo
      * the earlier *2 selectively, then `r{3,5,7,9} *= 2` to restore).
      * We rebuilt r1..r9 directly from b[i]*19 above; here we double
-     * r1 / r3 / r5 / r7 / r9 to land on the donna-final values
+     * r1 / r3 / r5 / r7 / r9 to land on the reference's final values
      * { 38·b1, 19·b2, 38·b3, 19·b4, 38·b5, 19·b6, 38·b7, 19·b8,
      *   38·b9 } that the wrapped-even partials need. */
     r1 = MUL(r1, v2);
@@ -451,7 +452,7 @@ static inline void fe_mul_x4(bignum25519_x4 out,
     fe_reduce_x4(out, m);
 }
 
-/* out = in^2 — implemented via fe_mul_x4(in, in).  Donna provides a
+/* out = in^2 — implemented via fe_mul_x4(in, in).  The reference provides a
  * dedicated squaring kernel for performance, but for the 4-way path
  * the bottleneck is the carry chain (which dominates over the mul
  * count), and a separate sq kernel adds significant code surface for
@@ -501,7 +502,7 @@ static inline void fe_set1_x4(bignum25519_x4 out, uint32_t v) {
 }
 
 /* 4-way Fermat inversion (1/z = z^(p-2) mod p).  Same straight-line
- * addition chain as donna's `curve25519_recip`, executed lane-wise
+ * addition chain as the reference's `curve25519_recip`, executed lane-wise
  * across all four ladders simultaneously. */
 static void fe_invert_x4(bignum25519_x4 out, const bignum25519_x4 z) {
     bignum25519_x4 t0, t1, t2, t3;
@@ -578,7 +579,7 @@ void ama_x25519_scalarmult_x4_avx2(uint8_t out[4][32],
 
     pack_4way(s.x1, s.u_a, s.u_b, s.u_c, s.u_d);
 
-    /* Ladder initial state — same as RFC 7748 / donna scalar:
+    /* Ladder initial state — same as RFC 7748 / the scalar reference:
      *   x2 = 1, z2 = 0, x3 = x1, z3 = 1.
      * Set as broadcast constants since all four lanes start identically. */
     fe_set1_x4(s.x2, 1);

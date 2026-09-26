@@ -231,4 +231,12 @@ void ama_sha256_compress_x86_shani(uint32_t state[8], const uint8_t block[64]) {
     _mm_storeu_si128((__m128i *)&state[4], STATE1);
 }
 
+#else
+/* This translation unit is in the unconditional source list on every target,
+ * so on non-x86 it compiles to nothing at all — which ISO C forbids, and
+ * which -Wpedantic reports.  The same placeholder typedef the NEON and SVE2
+ * translation units already use for their inactive targets (see e.g.
+ * src/c/neon/ama_kyber_neon.c) keeps the unit non-empty without emitting any
+ * code or symbol. */
+typedef int ama_sha256_ni_not_available;
 #endif /* x86 */

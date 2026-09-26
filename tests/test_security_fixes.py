@@ -100,12 +100,31 @@ class TestS2_DisabledTimestampIntegrity:
             ts_mod.verify_timestamp(payload_b, ts_result) is False
         ), "S2 REGRESSION: disabled timestamp validated wrong payload"
 
-    def test_disabled_timestamp_correct_data_passes(self) -> None:
-        """A disabled TimestampResult should still pass with correct data."""
+    def test_disabled_timestamp_correct_data_passes_when_the_caller_opts_in(self) -> None:
+        """A disabled TimestampResult still checks the data hash — S2's point.
+
+        ``allow_disabled=True`` is now required to reach that check at all
+        (2026-09 audit, B-7).  S2 asserted the data-hash comparison runs on
+        the disabled path; it still does, on the caller's own statement that
+        timestamping is off rather than on the artefact's claim about itself.
+        """
         data = b"correct data for S2"
         ts_result = ts_mod.get_timestamp(data, tsa_mode="disabled")
         assert ts_result is not None
-        assert ts_mod.verify_timestamp(data, ts_result) is True
+        assert ts_mod.verify_timestamp(data, ts_result, allow_disabled=True) is True
+
+    def test_a_disabled_result_is_refused_by_default(self) -> None:
+        """B-7: 'disabled' is a claim the result makes about itself.
+
+        Both fields that select the branch and the digest it compares against
+        come from the same unauthenticated structure, so anyone able to edit a
+        stored result could blank a real token, write their own digest, and be
+        told the binding held.  The default refuses.
+        """
+        data = b"correct data for S2"
+        ts_result = ts_mod.get_timestamp(data, tsa_mode="disabled")
+        assert ts_result is not None
+        assert ts_mod.verify_timestamp(data, ts_result) is False
 
 
 # ---------------------------------------------------------------------------

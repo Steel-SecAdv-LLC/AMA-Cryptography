@@ -62,11 +62,15 @@ Features:
 - NTT-based polynomial multiplication over the ring Zq[X]/(X^256 + 1), q = 8,380,417
 - Rejection sampling for uniform distribution
 - Deterministic signing (no per-signature randomness required)
-- Full NIST KAT validation: 10/10 known-answer tests pass
+- NIST KAT validation: 10/10 exercised known-answer vectors pass (the
+  harnesses read the first 10 records of each 100-vector vendored corpus —
+  see the `kat_tested < 10` cap in `tests/c/test_kat.c` and `max_vectors`
+  in `tests/test_nist_kat.py`)
 - Zero external dependencies
 
 ### Python API
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_dilithium_keypair,
@@ -111,7 +115,7 @@ print(f"Tampered: {is_tampered}")  # False
 > packs four SHAKE128 and four SHAKE256 absorptions into a single AVX2
 > 4-way kernel and uses an AVX2-vectorised CBD2 noise sampler — same
 > backend that benefits ML-KEM-1024.  Dispatched automatically when
-> `ama_cpuid_has_avx2()` returns true.  See the
+> `ama_has_avx2()` returns true.  See the
 > [SIMD Acceleration Paths](Performance-Benchmarks#simd-acceleration-paths-300)
 > matrix for the full per-primitive engineered-path inventory and
 > opt-out env vars.
@@ -152,11 +156,15 @@ ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared s
 Features:
 - Full NTT-based polynomial arithmetic over Zq[X]/(X^256 + 1), q = 3,329
 - Complete Fujisaki-Okamoto transform for IND-CCA2 security
-- Full NIST KAT validation: 10/10 known-answer tests pass
+- NIST KAT validation: 10/10 exercised known-answer vectors pass (the
+  harnesses read the first 10 records of each 100-vector vendored corpus —
+  see the `kat_tested < 10` cap in `tests/c/test_kat.c` and `max_vectors`
+  in `tests/test_nist_kat.py`)
 - Zero external dependencies (all required PRFs natively implemented)
 
 ### Python API
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_kyber_keypair,
@@ -223,6 +231,7 @@ Features:
 
 ### Python API
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     generate_sphincs_keypair,
@@ -241,6 +250,7 @@ print(f"Signature size: {len(sig)} bytes")        # 49856
 
 ## Checking PQC Availability
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.pqc_backends import (
     get_pqc_status,
@@ -296,13 +306,16 @@ AMA Cryptography combines Ed25519 + ML-DSA-65 in a dual-signature scheme,
 driven through the unified `AmaCryptography` dispatcher with
 `AlgorithmType.HYBRID_SIG`:
 
+<!-- example: python-run -->
 ```python
 from ama_cryptography.crypto_api import AmaCryptography, AlgorithmType
 
+message = b"hybrid-signed payload"
 crypto = AmaCryptography(algorithm=AlgorithmType.HYBRID_SIG)
 kp = crypto.generate_keypair()             # KeyPair: pk = Ed25519_pk || ML-DSA_pk
 sig = crypto.sign(message, kp.secret_key)  # Signature: Ed25519_sig || ML-DSA_sig
 valid = crypto.verify(message, sig, kp.public_key)   # both layers must verify
+assert valid
 ```
 
 For direct access to the provider (same inputs/outputs, no

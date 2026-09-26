@@ -22,6 +22,10 @@ These tests pin BOTH directions, because a checker that only ever reports
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from tools.check_fdopen_safety import check_source
@@ -129,3 +133,158 @@ class TestRealPackageIsGuarded:
             p.read_text(encoding="utf-8") for p in (REPO_ROOT / "ama_cryptography").glob("*.py")
         ]
         assert sum(s.count("os.fdopen(") for s in sources) >= 1
+
+
+class TestNothingCheckedIsNotClean:
+    """An explicit path the checker cannot read is an error, not a clean run:
+    it used to be dropped and the run printed "clean: 0 os.fdopen call
+    site(s)"."""
+
+    def test_an_unreadable_explicit_path_is_an_error(self, tmp_path: Path) -> None:
+        from tools.check_fdopen_safety import main
+
+        assert main(["--paths", str(tmp_path / "missing.py")]) == 2
+
+    def test_a_readable_clean_path_passes(self, tmp_path: Path) -> None:
+        from tools.check_fdopen_safety import main
+
+        clean = tmp_path / "clean.py"
+        clean.write_text("x = 1\n", encoding="utf-8")
+        assert main(["--paths", str(clean)]) == 0
+
+
+class TestEverySpellingOfTheCallIsExamined:
+    """``_is_fdopen_call`` matched ``<x>.fdopen(...)`` and the literal name
+    ``fdopen(...)`` only, so a call through an alias was never examined.
+    Each source below is unguarded and was reported clean before the fix."""
+
+    def test_an_import_alias_is_followed(self) -> None:
+        src = "from os import fdopen as f\n\n\ndef w(fd):\n    return f(fd, 'wb')\n"
+        found = check_source("bad.py", src)
+        assert [v.line_no for v in found] == [5], found
+
+    def test_an_assigned_alias_is_followed_through_a_chain(self) -> None:
+        src = (
+            "import os\nopen_fd = os.fdopen\nagain = open_fd\n\n\n"
+            "def w(fd):\n    return again(fd, 'wb')\n"
+        )
+        assert [v.line_no for v in check_source("bad.py", src)] == [7]
+
+    def test_a_getattr_spelling_is_a_call(self) -> None:
+        src = "import os\n\n\ndef w(fd):\n    return getattr(os, 'fdopen')(fd, 'wb')\n"
+        assert [v.line_no for v in check_source("bad.py", src)] == [5]
+
+    def test_a_guarded_alias_call_is_accepted(self) -> None:
+        """Non-detection: following the alias must not over-report."""
+        src = (
+            "from os import fdopen as f\n\n\ndef w(fd):\n    try:\n"
+            "        return f(fd, 'wb')\n    except BaseException:\n"
+            "        os.close(fd)\n        raise\n"
+        )
+        assert check_source("good.py", src) == []
+
+    def test_an_unrelated_name_is_not_an_alias(self) -> None:
+        src = "from io import open as f\n\n\ndef w(fd):\n    return f(fd, 'wb')\n"
+        assert check_source("plain.py", src) == []
+
+
+class TestATryGuardsOnlyWhatRunsInsideIt:
+    """A ``try`` around a ``def`` guards the DEFINITION.
+
+    The ancestor walk went straight through the function boundary, so a call
+    in a body that runs later — outside any handler — counted as guarded by
+    the ``try`` that happened to enclose its ``def``.  Both sources below were
+    reported clean before the fix.
+    """
+
+    def test_a_try_around_a_def_does_not_guard_its_body(self) -> None:
+        src = (
+            "import os\ntry:\n    def opener(fd):\n"
+            "        return os.fdopen(fd, 'wb')\nexcept OSError:\n    pass\n"
+        )
+        assert [v.line_no for v in check_source("bad.py", src)] == [4]
+
+    def test_a_try_around_a_lambda_does_not_guard_its_body(self) -> None:
+        src = (
+            "import os\ntry:\n    opener = lambda fd: os.fdopen(fd, 'wb')\n"
+            "except OSError:\n    pass\n"
+        )
+        assert [v.line_no for v in check_source("bad.py", src)] == [3]
+
+    def test_a_generator_element_runs_when_iterated_not_when_built(self) -> None:
+        src = (
+            "import os\ntry:\n    handles = (os.fdopen(fd) for fd in (3, 4))\n"
+            "except OSError:\n    pass\n"
+        )
+        assert [v.line_no for v in check_source("bad.py", src)] == [3]
+
+    def test_the_eager_parts_of_a_deferred_scope_are_still_guarded(self) -> None:
+        """Non-detection: a default value, and a generator's first iterable,
+        are evaluated where they are written, inside the ``try``."""
+        src = (
+            "import os\ntry:\n    def w(h=os.fdopen(3, 'wb')):\n        return h\n"
+            "    lines = (x for x in os.fdopen(4))\nexcept BaseException:\n    raise\n"
+        )
+        assert check_source("good.py", src) == []
+
+    def test_a_try_inside_the_function_still_guards(self) -> None:
+        src = (
+            "import os\n\n\ndef f(fd):\n    try:\n        return os.fdopen(fd, 'wb')\n"
+            "    except OSError:\n        os.close(fd)\n        raise\n"
+        )
+        assert check_source("good.py", src) == []
+
+
+class TestATrackedFileInAnotherEncodingIsParsed:
+    """Enumeration mode read every tracked file as UTF-8 and ``continue``d past
+    a ``UnicodeDecodeError``: a PEP 263 latin-1 module with an unguarded
+    ``os.fdopen`` was never parsed and the run printed "clean".  Driven the
+    way CI runs the gate — as a script, over a git repository's tracked files.
+    """
+
+    @staticmethod
+    def _repo(tmp_path: Path) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "tools").mkdir(parents=True)
+        for name in ("__init__.py", "_repo.py", "check_fdopen_safety.py"):
+            shutil.copyfile(REPO_ROOT / "tools" / name, repo / "tools" / name)
+        (repo / "clean.py").write_text("X = 1\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        return repo
+
+    @staticmethod
+    def _run(repo: Path) -> subprocess.CompletedProcess[str]:
+        subprocess.run(["git", "add", "--", "."], cwd=repo, check=True)
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        return subprocess.run(
+            [sys.executable, str(repo / "tools" / "check_fdopen_safety.py")],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            check=False,
+        )
+
+    def test_a_declared_latin1_module_is_checked(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path)
+        (repo / "legacy.py").write_bytes(
+            "# -*- coding: latin-1 -*-\nimport os\nNAME = 'café'\n\n\n"
+            "def f(fd):\n    return os.fdopen(fd, 'wb')\n".encode("latin-1")
+        )
+        proc = self._run(repo)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "legacy.py:7" in proc.stdout
+
+    def test_an_undecodable_module_is_reported_not_skipped(self, tmp_path: Path) -> None:
+        """No declaration and not UTF-8: Python cannot import it either, so it
+        is a parse failure — never a silent skip."""
+        repo = self._repo(tmp_path)
+        (repo / "broken.py").write_bytes(
+            "import os\nNAME = 'café'\nh = os.fdopen(3)\n".encode("latin-1")
+        )
+        proc = self._run(repo)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "broken.py" in proc.stdout and "could not parse" in proc.stdout

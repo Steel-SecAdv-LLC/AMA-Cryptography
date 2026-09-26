@@ -29,6 +29,7 @@ import importlib.util
 import textwrap
 from pathlib import Path
 from types import ModuleType
+from typing import ClassVar
 
 import pytest
 
@@ -456,3 +457,391 @@ def test_a_bare_dict_table_is_accepted(tool: ModuleType, tmp_path: Path) -> None
         'RFC3161_CAPABILITIES = {"tsa_signature": False, "gen_time": True}\n',
     )
     assert tool.load_capabilities(source) == {"tsa_signature": False, "gen_time": True}
+
+
+# ---------------------------------------------------------------------------
+# The negation window: a sentence, not a line
+# ---------------------------------------------------------------------------
+class TestNegationIsScopedToTheClaim:
+    """A negative word elsewhere on the line used to suppress every claim on it.
+
+    ``_is_negated`` was applied to the whole physical line, so one "not"
+    anywhere silenced the scan for the rest of it.  Measured against the
+    shipped checker at the previous commit, this two-sentence line produced
+    **zero** findings::
+
+        The nonce is not echoed here. The verifier verifies the TSA signature
+        for the RFC 3161 token.
+
+    The unit is now the sentence, inside a blank-line-delimited block — the
+    block part matters because this repository hard-wraps prose, so a genuinely
+    negated claim routinely has its negation on a different physical line, and
+    a plain per-line rule reports those honest statements as violations.
+    """
+
+    CAPS: ClassVar[dict[str, bool]] = {
+        "tsa_signature": False,
+        "gen_time": False,
+        "tsa_certificate_chain": False,
+    }
+
+    def test_a_negation_in_another_sentence_does_not_suppress(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "ARCHITECTURE.md",
+            "The nonce is not echoed here. The verifier verifies the TSA signature "
+            "for the RFC 3161 token.\n",
+        )
+        problems = tool.scan_for_unperformed_claims(tmp_path, self.CAPS)
+        assert problems, "an unqualified claim was suppressed by a neighbouring sentence"
+
+    def test_a_negation_attached_to_the_claim_still_suppresses(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "ARCHITECTURE.md",
+            "The verifier does not verify the TSA signature of the RFC 3161 token.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS) == []
+
+    def test_a_negation_wrapped_onto_the_previous_line_still_suppresses(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The reason the unit is a block and not a line.
+
+        Every correctly-qualified statement in this repository is hard-wrapped
+        like this.
+        """
+        _write(
+            tmp_path,
+            "ARCHITECTURE.md",
+            "This implementation does not\nverify the TSA signature of the token.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS) == []
+
+
+# ---------------------------------------------------------------------------
+# Formal-verification claims
+# ---------------------------------------------------------------------------
+class TestFormalVerificationClaimsAreRefused:
+    """INVARIANT-16, which nothing enforced.
+
+    ARCHITECTURE.md carried "Mathematical correctness: Provably correct
+    implementation with formal verification" — the exact bullet this branch had
+    already withdrawn from AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md, and the direct
+    contradiction of that file's own "This library is **not** FIPS-validated and
+    has **not** been formally verified".  The checks above cannot see it: they
+    are derived from the RFC 3161 capability table by construction.
+    """
+
+    @pytest.mark.parametrize(
+        "claim",
+        [
+            "Mathematical correctness: Provably correct implementation with formal verification",
+            "The composition protocol has been formally verified.",
+            "A formal proof of correctness accompanies the release.",
+            "The construction is mathematically proven.",
+            "No timestamp is checked here, but the module is provably correct.",
+            # Spellings the first pattern set missed; each passed the gate.
+            "The ML-KEM core is formally proven.",
+            "The hybrid combiner is provably secure.",
+            "The NTT kernel is machine-checked.",
+            "Ships a formally-verified AES core.",
+            "The KEM is proven secure under IND-CCA2.",
+            "The reduction was mechanically verified.",
+            "Our mechanized proofs cover the whole handshake.",
+            "Constant-time behaviour is formally checked.",
+        ],
+    )
+    def test_an_unqualified_claim_is_reported(
+        self, tool: ModuleType, tmp_path: Path, claim: str
+    ) -> None:
+        _write(tmp_path, "ARCHITECTURE.md", claim + "\n")
+        problems = tool.scan_for_formal_verification_claims(tmp_path)
+        assert problems, f"not reported: {claim!r}"
+        assert "ARCHITECTURE.md" in problems[0]
+
+    @pytest.mark.parametrize(
+        "statement",
+        [
+            "This library is **not** FIPS-validated and has **not** been formally verified.",
+            "The system has not undergone independent formal verification.",
+            "This is statistical timing analysis, not formal verification.",
+            "It is **not** a claim of independent formal proof.",
+            "a mechanical transcription, not a formal proof of correctness",
+            # The two honest denials in the tree the wider pattern set reaches:
+            # ARCHITECTURE.md's PRF assumption and docs/DESIGN_NOTES.md's
+            # description of the adaptive-posture layer.
+            (
+                "HMAC-SHA3-256 is a secure PRF (widely believed, not formally proven "
+                "for sponge constructions)"
+            ),
+            "a heuristic response layer, not a provably secure protocol.",
+            "The kernel has not been machine-checked.",
+            "The scheme has not been proven secure in the QROM.",
+            "There is no machine-checked proof of the combiner.",
+            # Ordinary uses of "provably" that make no verification claim.
+            "Length-prefixed encoding (provably unambiguous)",
+            "The advertised enforcement was a provable no-op.",
+        ],
+    )
+    def test_a_qualified_statement_is_permitted(
+        self, tool: ModuleType, tmp_path: Path, statement: str
+    ) -> None:
+        _write(tmp_path, "ARCHITECTURE.md", statement + "\n")
+        assert tool.scan_for_formal_verification_claims(tmp_path) == []
+
+    def test_a_qualifier_that_wraps_across_lines_is_permitted(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "ARCHITECTURE.md",
+            "The original constructions have written security arguments but have\n"
+            "**not** undergone independent formal verification.\n",
+        )
+        assert tool.scan_for_formal_verification_claims(tmp_path) == []
+
+    def test_the_repository_carries_no_such_claim(self, tool: ModuleType) -> None:
+        assert tool.scan_for_formal_verification_claims(REPO_ROOT) == []
+
+
+# ---------------------------------------------------------------------------
+# The exemption is anchored to the claim, not to the sentence
+# ---------------------------------------------------------------------------
+
+
+class TestTheFormalVerificationExemptionIsAnchored:
+    """A denial about one clause must not launder a claim in another.
+
+    ``_formal_claim_is_qualified(sentence)`` returned True if ANY exemption
+    pattern matched anywhere in the sentence, so a sentence could carry a
+    denial and a live claim and pass on the strength of the denial.  The
+    exemption is now tested against the claim's own span.
+    """
+
+    def test_a_denial_does_not_cover_a_second_live_claim(self, tool: ModuleType) -> None:
+        sentence = (
+            "This is not a claim of formal verification; the AES core is " "formally verified."
+        )
+        assert tool.unqualified_formal_claims(sentence) == [
+            "formally verified"
+        ], "the denial in the first clause exempted the claim in the second"
+
+    def test_a_denial_still_covers_the_claim_it_quotes(self, tool: ModuleType) -> None:
+        for sentence in (
+            "This library has not been formally verified.",
+            "The module has **not** been formally verified.",
+            "No formal verification has been performed on this tree.",
+            "It has not undergone independent formal verification.",
+        ):
+            assert tool.unqualified_formal_claims(sentence) == [], sentence
+
+    def test_a_bare_claim_is_reported(self, tool: ModuleType) -> None:
+        assert tool.unqualified_formal_claims("The kernel is provably correct.") == [
+            "provably correct"
+        ]
+
+    def test_a_cited_title_beside_a_denial_is_not_a_claim(self, tool: ModuleType) -> None:
+        """The citation form this repository uses, kept working deliberately."""
+        sentence = (
+            '(2014) "Comprehensive formal verification of an OS microkernel" '
+            "(cited as the reference point for what formal verification means; "
+            "this library has not undergone it)"
+        )
+        assert tool.unqualified_formal_claims(sentence) == [], sentence
+
+    def test_a_quotation_without_a_denial_is_still_a_claim(self, tool: ModuleType) -> None:
+        """The quoted arm requires a denial in the sentence; alone it exempts nothing."""
+        sentence = 'The datasheet calls the core "formally verified".'
+        assert tool.unqualified_formal_claims(sentence) == ["formally verified"], sentence
+
+    def test_two_quotations_do_not_merge_into_one(self, tool: ModuleType) -> None:
+        """A greedy span would join them and exempt the claim in between."""
+        sentence = (
+            'It has not been formally verified. The note said "alpha" and the '
+            'ML-KEM core is provably correct and the footer said "beta".'
+        )
+        assert tool.unqualified_formal_claims(sentence) == ["provably correct"], sentence
+
+    def test_an_over_long_quotation_is_not_treated_as_one(self, tool: ModuleType) -> None:
+        """Fail closed: past the bound the span stops being a quotation."""
+        filler = "x " * 200
+        sentence = (
+            'It has not been formally verified. A stray " opens here, '
+            + filler
+            + 'and the ML-KEM core is provably correct, then another " closes.'
+        )
+        assert "provably correct" in tool.unqualified_formal_claims(sentence), sentence
+
+    def test_a_quotation_containing_a_newline_is_not_a_quotation(self, tool: ModuleType) -> None:
+        sentence = (
+            'It has not been formally verified. A stray " opens here,\n'
+            'the ML-KEM core is provably correct, then another " closes.'
+        )
+        assert "provably correct" in tool.unqualified_formal_claims(sentence), sentence
+
+
+class TestThePastTenseAttributionCues:
+    """The two cues that remain, and the one that was removed.
+
+    A third cue matched any of eight reporting verbs within eighty characters
+    of a ``was``.  "read", "listed" and "recorded" are ordinary words, so it
+    could suppress a live claim by accident, and it suppressed nothing real.
+    """
+
+    def test_the_two_reporting_cues_still_work(self, tool: ModuleType) -> None:
+        assert tool._is_negated('ARCHITECTURE.md told readers step 6 was "Verify TSA signature".')
+        assert tool._is_negated("The paragraph used to say the opposite.")
+
+    def test_an_ordinary_sentence_with_read_and_was_is_not_negated(self, tool: ModuleType) -> None:
+        """The over-suppression the removed cue would have caused."""
+        assert not tool._is_negated(
+            "The verifier read the token and the result was returned to the caller."
+        )
+        assert not tool._is_negated(
+            "Each vector is listed in the corpus and its status was recorded."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Context is the paragraph; negation is the sentence
+# ---------------------------------------------------------------------------
+class TestContextSpansTheParagraph:
+    """A claim whose subject sits one sentence earlier is still about RFC 3161.
+
+    When the negation window narrowed from the line to the sentence, the
+    RFC 3161 context test narrowed with it, so a ``requires_context`` claim
+    was checked only when the cue shared its sentence.  "AMA attaches RFC 3161
+    timestamps. They provide independent verification ..." — caught by the
+    line rule, which saw the cue and the claim on one line — then passed,
+    because the second sentence names its subject with a pronoun.  Context is
+    now judged over the blank-line-delimited block; negation still has to sit
+    in the claim's own sentence.
+    """
+
+    CAPS: ClassVar[dict[str, bool]] = {
+        "tsa_signature": False,
+        "gen_time": False,
+        "tsa_certificate_chain": False,
+    }
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            (
+                "AMA attaches RFC 3161 timestamps. They provide independent verification "
+                "of when a package was signed.\n"
+            ),
+            (
+                "AMA attaches RFC 3161 timestamps.\nThey provide independent verification\n"
+                "of when a package was signed.\n"
+            ),
+            "Each package carries a TSA token. It is proof of existence at signing time.\n",
+            (
+                "RFC 3161 support is built in. Verification is simple. The chain gives "
+                "third-party attestation of the signing time.\n"
+            ),
+        ],
+    )
+    def test_a_claim_whose_subject_is_in_an_earlier_sentence_is_caught(
+        self, tool: ModuleType, tmp_path: Path, text: str
+    ) -> None:
+        _write(tmp_path, "README.md", text)
+        problems = tool.scan_for_unperformed_claims(tmp_path, self.CAPS)
+        assert problems, f"a claim passed because its RFC 3161 cue was a sentence up: {text!r}"
+        assert "README.md:1" in problems[0]
+
+    def test_a_negated_claim_in_a_timestamp_paragraph_is_still_allowed(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "README.md",
+            "AMA attaches RFC 3161 timestamps. They do not provide independent "
+            "verification of when a package was signed.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS) == []
+
+    def test_a_negation_in_the_cue_sentence_does_not_excuse_the_next_one(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Widening the context must not widen the negation window with it."""
+        _write(
+            tmp_path,
+            "README.md",
+            "AMA does not fetch RFC 3161 timestamps itself. They provide independent "
+            "verification of when a package was signed.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS)
+
+    def test_generic_vocabulary_in_a_different_paragraph_is_not_caught(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The paragraph is the boundary: a blank line ends the RFC 3161 context."""
+        _write(
+            tmp_path,
+            "README.md",
+            "AMA binds RFC 3161 tokens to the package digest.\n\n"
+            "The constant-time C core requires independent verification.\n",
+        )
+        assert tool.scan_for_unperformed_claims(tmp_path, self.CAPS) == []
+
+
+# ---------------------------------------------------------------------------
+# The formal-verification pass reads the C tree too
+# ---------------------------------------------------------------------------
+class TestFormalVerificationScanCoversTheCTree:
+    """Check 6 used to reuse checks 1-4's file set.
+
+    That set never opens ``src/``, ``include/`` or ``.github/`` and reads no
+    ``.c`` or ``.h`` file, so the C library — the code a "formally verified"
+    claim would be about — was invisible to it, and
+    ``src/c/sve2/ama_kyber_sve2.c`` carried an unqualified "provably correct"
+    while the gate reported clean.
+    """
+
+    @pytest.mark.parametrize(
+        ("relative", "text"),
+        [
+            ("src/c/sve2/kernel.c", "/* Montgomery reduction (provably correct). */\n"),
+            ("include/ama_cryptography.h", "/** @brief Formally verified constant-time AES. */\n"),
+            ("src/cython/binding.pyx", "# The wrapper is mathematically proven.\n"),
+            (".github/PULL_REQUEST_TEMPLATE.md", "The core has been formally verified.\n"),
+            (".github/workflows/ci.yml", "# formal proof of the NTT\njobs: {}\n"),
+        ],
+    )
+    def test_a_claim_outside_the_documentation_roots_is_reported(
+        self, tool: ModuleType, tmp_path: Path, relative: str, text: str
+    ) -> None:
+        _write(tmp_path, relative, text)
+        problems = tool.scan_for_formal_verification_claims(tmp_path)
+        assert problems, f"{relative} was not scanned"
+        assert relative in problems[0]
+
+    def test_the_does_not_claim_list_form_is_permitted(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """src/c/PROVENANCE.md's disclaimer, which the wider scan now reads."""
+        _write(
+            tmp_path,
+            "src/c/PROVENANCE.md",
+            "This attestation does **not** claim:\n"
+            "- Formal proof of correctness. See `docs/DESIGN_NOTES.md`.\n"
+            "- Immunity from implementation bugs.\n",
+        )
+        assert tool.scan_for_formal_verification_claims(tmp_path) == []
+
+    def test_does_not_claim_covers_only_the_item_it_introduces(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "src/c/PROVENANCE.md",
+            "This attestation does not claim FIPS validation; the AES core is "
+            "formally verified.\n",
+        )
+        assert tool.scan_for_formal_verification_claims(tmp_path)

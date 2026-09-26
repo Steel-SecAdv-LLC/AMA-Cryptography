@@ -49,9 +49,13 @@ name: Release — Build, Sign, and Publish
 #                          repo = Steel-SecAdv-LLC/AMA-Cryptography
 #                          workflow = release.yml
 #                          environment = pypi
-#                        Until this is configured on PyPI, publish-pypi
-#                        is gated by the `environment: pypi` block on the
-#                        deployment that requires manual approval.
+#                        publish-pypi carries `environment: pypi`, but
+#                        referencing an environment does NOT by itself require
+#                        approval: the required-reviewer protection must be
+#                        configured on Settings -> Environments (same as the
+#                        `release` environment note on github-release below).
+#                        Until it is, the block documents the intended gate
+#                        rather than enforcing it (audit M10).
 #
 #   7. github-release  — create the GitHub Release with the changelog,
 #                        attach the wheels + sdist + provenance +
@@ -83,6 +87,58 @@ name: Release — Build, Sign, and Publish
 #      sees it — a dry run is the only thing that exercises the real repair
 #      step against the real matrix and runner fleet.
 #
+#      A recorded green dry run covers a COMMIT, not a branch, and this
+#      file is not the only input that invalidates it.  The release path
+#      the dry run exercises is: this workflow, `setup.py` (the
+#      AMA_BUILD_PIPELINE post-build signer cibuildwheel invokes),
+#      `ama_cryptography/_build_sign.py`, `tools/resign_wheel.py` (the
+#      Linux post-repair re-signer), `tools/wheel_smoke_test.py`
+#      (CIBW_TEST_COMMAND), `tools/check_release_tag.py`, and the two
+#      hash-pinned manifests `requirements-release-build.txt` and
+#      `requirements-release-tools.txt` — every pip install below reads one
+#      of them with --require-hashes, and a hash set that lacks the wheel
+#      pip selects on some matrix row fails on that row, which only the
+#      dry run exercises on all five.  If ANY of those changed since the
+#      last green dispatch run, the dry run is stale and must be re-run
+#      before tagging — this is a procedural obligation (INVARIANT-25
+#      records why no static checker can discharge it), and it has been
+#      missed in the exact inverse direction before: a re-run was once
+#      demanded "because release.yml changed" when release.yml was
+#      byte-identical to the recorded run and it was setup.py that had
+#      moved.
+#
+#      What a dry run does NOT cover, stated so nobody reads green as
+#      complete: the ANCHORED signer path.  A workflow_dispatch run never
+#      sees AMA_INTEGRITY_SIGNING_SEED_HEX — every reference to that secret
+#      in this file is guarded on `github.event_name == 'push' &&
+#      startsWith(github.ref, 'refs/tags/v')`, and the anchor variable and
+#      AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR are guarded the same way, so a
+#      dispatch of ANY branch builds the honest UNANCHORED artefact (a
+#      per-build ephemeral key, exactly what a fork gets) rather than a
+#      fail-closed one.  Before that guard existed, a dispatch dry run of an
+#      arbitrary branch ran that branch's setup.py, _build_sign.py and
+#      resign_wheel.py with the release signing seed in its environment.
+#      The anchored path — seed and anchor together, the signer refusing an
+#      unanchored artefact — is exercised only by a tag push, whose
+#      preflight `verify-anchor` gate is where a mismatched pair is caught,
+#      before the matrix builds.  The guard is workflow content, and the
+#      workflow file comes from the ref being run; the administrative
+#      complement that makes it binding is the secret living in an
+#      environment whose deployment policy admits only `v*` tags
+#      (Settings -> Environments), which no branch can edit.
+#
+#      Build dependencies are hash-pinned, not floored: CIBW_BEFORE_BUILD_*
+#      and build-sdist install `requirements-release-build.txt` and
+#      `requirements-release-tools.txt` with `pip install --require-hashes`,
+#      and every build runs WITHOUT isolation (CIBW_BUILD_FRONTEND,
+#      `python -m build --no-isolation`, `pip install --no-build-isolation`)
+#      so that set is the only set that reaches the compiler.  To move a
+#      pin, edit its version and run
+#        python tools/check_release_pins.py --refresh --as-of YYYY-MM-DD
+#      then dry-run again; `python tools/check_release_pins.py` (CI, offline)
+#      refuses a floating install, an unhashed line and a pin below the
+#      pyproject.toml / setup.py floors.
+#
 #   2. Tag only after the dry run is green.  The tag MUST be annotated and
 #      signed — `-s`, not a bare `git tag` — and preflight now enforces it
 #      (tools/check_release_tag.py).  This is not ceremony either: of the
@@ -91,14 +147,21 @@ name: Release — Build, Sign, and Publish
 #      and the other five were annotated but unsigned.  Every one of those
 #      releases went out through a pipeline whose runbook said `git tag -s`.
 #
-#        $ git tag -s v4.0.0 -m "ama-cryptography 4.0.0"
-#        $ git push origin v4.0.0
+#        $ git tag -s v5.0.0 -m "ama-cryptography 5.0.0"
+#        $ git push origin v5.0.0
 #
 #      For GitHub to show the tag as Verified, the signing key must also be
 #      registered on the account under Settings -> SSH and GPG keys with type
 #      "Signing Key" — an authentication key of the same material does not
 #      satisfy it.  preflight reports GitHub's verdict without gating on it,
 #      since that setting is account state, not repository state.
+#
+#      The tag must also point at a commit reachable from `main`.  Preflight
+#      reads `.github/release-trust.json` out of origin/main — never from the
+#      tag's own tree — and runs `tools/check_release_tag.py --trust-config`
+#      with it, on a tag push only, so a signed tag on a side branch is a red
+#      preflight rather than a release.  Merge first, then tag the merged
+#      commit.
 #
 # All of stages 1-7 then run automatically.  A failure in any stage halts
 # the pipeline before the next; the published artefact is exactly the
@@ -125,10 +188,27 @@ permissions:
 # Avoid clobbering an in-flight release if a maintainer accidentally
 # pushes a second tag while the first is still building.  Cancellation
 # is OFF — we never cancel a release in progress; the second tag must
-# wait.
+# wait.  The group is STATIC for exactly that reason: a per-ref group
+# (the previous `release-${{ github.ref }}`) serialized only re-pushes
+# of the SAME tag, while two different tags — the accident this block's
+# own comment names — ran fully in parallel.
+#
+# `cancel-in-progress: false` alone made the second tag wait only until a
+# third run was queued.  It protects the RUNNING release: under the
+# default `queue: single` a concurrency group holds at most one PENDING
+# run, and queuing another cancels the one already pending.  So with
+# release A building and tag B pending, a third tag push — or a
+# workflow_dispatch dry run, which shares this group — cancelled B before
+# it started, and a pushed tag was left with no release and no
+# artefacts.  `queue: max` keeps up to 100 pending runs, first in first
+# out (GitHub's documented concurrency `queue` property; it may not be
+# combined with `cancel-in-progress: true`, which this block never sets).
+# tests/test_release_tag_gate.py::TestAQueuedTagReleaseIsNeverCancelled
+# pins all three settings.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   preflight:
@@ -138,9 +218,18 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag_clean: ${{ steps.version.outputs.tag_clean }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Full history: the provenance step below asks git whether the tag's
+        # commit is an ancestor of origin/main, and `merge-base --is-ancestor`
+        # cannot answer over a depth-1 checkout holding only the tagged
+        # commit.  The tag ref is still re-fetched with --force before the
+        # shape check (see that step): one round trip, and the check stays
+        # independent of how checkout happened to write the local tag ref.
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -166,9 +255,26 @@ jobs:
               sys.exit('pyproject.toml has no [project].version')
           print(m.group(1))
           ")
+          # Classify the release channel from the CANONICAL pyproject version,
+          # not from the tag string.  The tag must equal pyproject exactly
+          # (the equality gate below), and pyproject is PEP 440 — where a
+          # pre-release is `rcN`/`aN`/`bN` and a dev release is `.devN`, with
+          # NO hyphen.  The GitHub-release job used to sniff the tag for the
+          # SemVer spellings `-rc`/`-alpha`/`-beta`, which a PEP 440 tag such
+          # as v5.0.0rc1 never contains, so an rc tag published as a full,
+          # non-draft release.  Deriving the flag here, from the same string
+          # the equality gate anchors on, closes that gap.  `.postN` is a
+          # final release, not a pre-release, and must NOT match.
+          is_prerelease=$(AMA_PYPROJECT_VERSION="$pyproject_version" python -c "
+          import os, re
+          v = os.environ['AMA_PYPROJECT_VERSION']
+          # PEP 440 pre-release (aN/bN/rcN) or dev-release (.devN) segment.
+          print('true' if re.search(r'(?:a|b|rc)[0-9]+|\.dev[0-9]+', v) else 'false')
+          ")
           echo "Tag (raw):           $tag"
           echo "Tag (clean):         $tag_clean"
           echo "pyproject.toml:      $pyproject_version"
+          echo "Pre-release channel: $is_prerelease"
           if [ "${{ github.event_name }}" = "push" ]; then
             if [ "$tag_clean" != "$pyproject_version" ]; then
               echo "::error::Tag $tag_clean does not match pyproject.toml version $pyproject_version."
@@ -180,6 +286,7 @@ jobs:
           {
             echo "version=$pyproject_version"
             echo "tag_clean=$tag_clean"
+            echo "is_prerelease=$is_prerelease"
           } >> "$GITHUB_OUTPUT"
 
       - name: Require an annotated, signed tag (INVARIANT-10)
@@ -197,6 +304,15 @@ jobs:
           # with --force, so the annotated object is what gets inspected.
           git fetch --force --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
           python tools/check_release_tag.py "${TAG}"
+          # The cryptographic half of INVARIANT-10.  The shape check above
+          # proves the tag carries a signature; this proves the signature was
+          # made by a key the repository itself lists (.github/allowed_signers,
+          # SSH signing).  The signer list is repository content under review,
+          # so — unlike the account-level GitHub verdict printed below — a
+          # failure here is a release blocker.
+          git -c gpg.format=ssh \
+              -c gpg.ssh.allowedSignersFile=.github/allowed_signers \
+              verify-tag "${TAG}"
           # The shape check above is fail-closed and needs no key material.
           # GitHub's own verified/unverified verdict is account-level state —
           # it turns on when the signing key is registered under
@@ -213,6 +329,80 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - name: Require the tag to descend from the trusted branch (release provenance)
+        # The checks above are about the tag OBJECT: annotated, signed, by a
+        # listed key.  None of them asks which COMMIT it names.  The signing
+        # key signs a tag on any commit, including one on a branch that never
+        # passed the review branch protection enforces on main, and nothing
+        # here stopped such a tag from becoming a signed, attested release.
+        #
+        # The trust configuration is read from origin/main with `git show`,
+        # NOT from the checkout: a tag is pushed together with a tree the
+        # tagger controls, so a file in that tree would let the tagger define
+        # what "trusted" means (a side branch could ship a release-trust.json
+        # naming itself).  Reading it from the protected branch binds the
+        # definition to main's branch protection — changing it takes a
+        # reviewed merge, not a tag push.  The branch is fetched explicitly
+        # into its remote-tracking ref so resolution does not depend on what
+        # actions/checkout happened to fetch, and the checker resolves it by
+        # full ref name so a tag called `origin/main` cannot shadow it.
+        #
+        # Stated plainly (INVARIANT-37): this workflow file itself comes from
+        # the tag, so whoever can push a `v*` tag can push one without this
+        # step.  The administrative tag ruleset (who may create `v*` tags,
+        # signed) and the seed's environment deployment policy are what make
+        # the gate binding; what it does on its own is turn an honest
+        # wrong-commit tag into a red preflight instead of a published
+        # release.  Tag pushes only: a dispatch has no tag to place.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF##*/}"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git show origin/main:.github/release-trust.json > "$RUNNER_TEMP/release-trust.json"
+          python tools/check_release_tag.py "${TAG}" --trust-config "$RUNNER_TEMP/release-trust.json"
+
+      - name: Refuse an unanchored release from the canonical repository (H3)
+        # The anchored/unanchored split is load-bearing: an anchored build
+        # compiles a long-lived trust anchor into the native library and the
+        # import-time check requires the signature key to equal it, so
+        # re-signing edited sources with another key no longer verifies; an
+        # unanchored build is signed with a per-build ephemeral key and is
+        # self-referential.  The unanchored path is a deliberate accommodation
+        # for FORKS and for the canonical repo BEFORE the key is installed --
+        # but nothing stopped a real tag on the canonical repository from
+        # taking it silently: verify-anchor is skipped when the variable is
+        # empty, build-wheels accepts the skip, and the wheel smoke test did
+        # not check anchoring either (audit H3).
+        #
+        # This step runs on EVERY tag push (not only when it will fail) so it
+        # can never silently skip the way the check it replaces effectively
+        # did; it prints the status every time and fails closed only on the
+        # canonical repository with no anchor configured.  GitHub repository
+        # names are case-insensitive, so both sides are lower-cased first.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          ANCHOR_PUBKEY: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          CANONICAL_REPO: Steel-SecAdv-LLC/AMA-Cryptography
+        run: |
+          set -euo pipefail
+          if [ -n "${ANCHOR_PUBKEY}" ]; then
+            echo "Integrity anchoring: ANCHORED — trust-anchor variable is set for ${GITHUB_REPOSITORY}."
+            exit 0
+          fi
+          repo_lc=$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          canon_lc=$(printf '%s' "${CANONICAL_REPO}" | tr '[:upper:]' '[:lower:]')
+          if [ "${repo_lc}" = "${canon_lc}" ]; then
+            echo "::error::Refusing to release ${GITHUB_REF##*/} from ${GITHUB_REPOSITORY} with no integrity trust anchor."
+            echo "         AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX is empty, so every wheel would ship a per-build"
+            echo "         ephemeral signing key and self-referential integrity — a re-sign of edited sources would"
+            echo "         verify, which is exactly what the anchor exists to prevent. Set the variable (Settings ->"
+            echo "         Secrets and variables -> Actions -> Variables) together with the AMA_INTEGRITY_SIGNING_SEED_HEX"
+            echo "         secret before tagging, or cut the release from a fork if an unanchored build is intended."
+            exit 1
+          fi
+          echo "Integrity anchoring: UNANCHORED on non-canonical repository ${GITHUB_REPOSITORY} — the supported fork / pre-anchor path."
+
       - name: Run version consistency check
         # Cross-validate that every other version anchor (CMakeLists.txt,
         # include/ama_cryptography.h, docs/conf.py, Dockerfiles, etc.)
@@ -220,6 +410,30 @@ jobs:
         # already runs; gating the release on it again is the
         # belt-and-suspenders pattern INVARIANT-11 expects.
         run: python tools/check_version_consistency.py
+
+      - name: Refuse a tag whose own docs still call the release unreleased (M12)
+        # The gates above check the tag SHAPE, the tag↔pyproject version and
+        # cross-file version consistency — but none checks whether the shipped
+        # prose still says the release has not happened.  A tag pushed while
+        # CHANGELOG.md carries "## [x.y.z] - Unreleased", or the README says
+        # "v5.0.0 is not tagged yet", ships a document that contradicts the tag
+        # (audit M12).  Tag-state markers become false the instant this tag
+        # exists (the push triggered this run), so they are enforced always.
+        # The PyPI availability rows are decoupled: publish-pypi is opt-in on
+        # vars.AMA_PUBLISH_TO_PYPI, so on a release that does NOT publish to PyPI
+        # those rows are correct and must not be flipped — they are enforced with
+        # --require-published only when this run does publish.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          PUBLISH_TO_PYPI: ${{ vars.AMA_PUBLISH_TO_PYPI }}
+        run: |
+          set -euo pipefail
+          if [ "${PUBLISH_TO_PYPI}" = "true" ]; then
+            python tools/check_release_state.py --version "${RELEASE_VERSION}" --require-published
+          else
+            python tools/check_release_state.py --version "${RELEASE_VERSION}"
+          fi
 
       - name: Regenerate + check SBOM
         # Audit Issue 2: SBOM is driven from pyproject.toml.  We
@@ -234,17 +448,37 @@ jobs:
   # round trip to learn that a repository variable is wrong.  Here it costs one
   # ubuntu build.
   #
+  # Runs on a `v*` tag push with an anchor configured, and nowhere else.
   # Skipped when no anchor is configured, which is the supported unanchored
-  # path (forks, and repositories before the key is installed); `build-wheels`
-  # below treats "skipped" as permission to proceed.  The check itself lives in
+  # path (forks, and repositories before the key is installed); skipped on a
+  # workflow_dispatch too, because the seed is withheld from a dispatch (see
+  # the runbook: a dry run builds the unanchored artefact and never sees the
+  # secret), so on a dispatch this gate would otherwise fail closed on
+  # "secret not set" and take `build-wheels` down with it.  `build-wheels`
+  # below treats "skipped" as permission to proceed, and every job below it
+  # tests its dependencies by name so the skip does not propagate down the
+  # signing chain (see `hash-artefacts`).  The check itself lives in
   # integrity-anchor-check.yml so the dispatchable job and this gate cannot
   # drift apart.
   verify-anchor:
     name: Verify the integrity trust anchor pair
     needs: [preflight]
-    if: vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != ''
+    if: >-
+      github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/v')
+      && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != ''
     uses: ./.github/workflows/integrity-anchor-check.yml
-    secrets: inherit
+    # Forward ONLY the seed the anchor check reads, not the whole secret set
+    # (`secrets: inherit`) — this is the one job handling long-lived signing-key
+    # material, so it gets least privilege.  The trust-anchor value it also
+    # reads is a repo variable (vars.*), inherited automatically.  The value
+    # is guarded on a version-tag push like every other reference to the
+    # secret in this file (tests/test_release_tag_gate.py::
+    # TestTheSigningSeedIsWithheldOutsideTagPushes pins all of them): the
+    # job's own `if:` already excludes a dispatch, and the guard keeps the
+    # forwarded value empty even if that condition is ever loosened.
+    secrets:
+      AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && secrets.AMA_INTEGRITY_SIGNING_SEED_HEX || '' }}
 
   build-wheels:
     name: cibuildwheel ${{ matrix.os }}
@@ -285,19 +519,19 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels via cibuildwheel
-        # Real v4.1.1 commit, verified with
-        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v4.1.1
-        # (This block previously said v3.2.0 and quoted the v3.2.0^{} lookup,
-        # left behind when the pin was bumped; the SHA below is the v4.1.1 tag
-        # — 7c619ef… is v3.2.0^{} — and the trailing marker was already
-        # correct, which is why check_action_pins.py never flagged it.)
+        # Real v4.2.1 commit, verified with
+        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v4.2.1
+        # (This block once said v3.2.0 and quoted the v3.2.0^{} lookup, left
+        # behind when the pin was bumped; the trailing marker was correct, which
+        # is why check_action_pins.py never flagged it.  Keep this provenance
+        # line in step with the pin: check_action_pins.py reads only the marker.)
         #
         # Background, kept because it explains a real outage: an earlier pin
         # (e9c4a96e…) did not exist in pypa/cibuildwheel at all — it matched
         # neither the v3.2.0 tag object nor its commit — so every wheel job
         # aborted with "Unable to resolve action … unable to find version".
         # That is why no release before then produced artifacts.
-        uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c  # v4.1.1
+        uses: pypa/cibuildwheel@e090b81e30c4d855ea63bf4b6e59204c09a101ae  # v4.2.1
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already
@@ -305,6 +539,19 @@ jobs:
           # interpreter no CI lane exercises ships untested, so cp314 was
           # added to ci.yml and ci-build-test.yml in the same commit as
           # this line. Keep the three in step.
+          #
+          # The equality is per (runner architecture x interpreter), not
+          # merely per Python range — this matrix ships five OS/arch rows,
+          # and each one must have a pytest lane somewhere: linux x86_64 and
+          # windows run all five interpreters in ci.yml AND ci-build-test;
+          # linux aarch64 runs all five in ci.yml's ubuntu-24.04-arm
+          # includes; macOS arm64 (macos-latest) and macOS x86_64
+          # (macos-15-intel) each run all five in ci-build-test.  Before
+          # the aarch64 includes were completed and the macos-15-intel
+          # column existed, 8 of these 25 wheels — every macOS x86_64
+          # wheel and aarch64 cp310/cp312/cp314 — shipped with only
+          # cibuildwheel's import smoke test.  Extend the test matrices in
+          # the same commit as any extension here.
           #
           # Skip PyPy and 32-bit musllinux variants; the native build under
           # setup.py CMakeBuild is x86-64 / arm64 only, and the ctypes shims
@@ -331,24 +578,33 @@ jobs:
           # production wheels ship without the ~600 lines of printf-emitting
           # Kyber debug code (audit Issue 7).
           #
-          # INTEGRITY TRUST ANCHOR (optional, opt-in per repository).
+          # INTEGRITY TRUST ANCHOR (optional, opt-in per repository; tag
+          # pushes only).
           # When the AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX *variable* and the
-          # AMA_INTEGRITY_SIGNING_SEED_HEX *secret* are both configured, the
-          # wheel is built with the anchor compiled into the native library
-          # (setup.py forwards it to CMake) and signed with the matching
-          # long-lived key, and AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 makes the
-          # signer refuse to emit an unanchored artefact.  That combination is
-          # what makes a released wheel tamper-evident: the import-time check
-          # then requires the signature's public key to equal a value baked
-          # into the compiled .so, so re-signing edited .py files with an
-          # attacker-chosen key no longer verifies.
+          # AMA_INTEGRITY_SIGNING_SEED_HEX *secret* are both configured, a
+          # `v*` tag push builds the wheel with the anchor compiled into the
+          # native library (setup.py forwards it to CMake) and signed with the
+          # matching long-lived key, and AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1
+          # makes the signer refuse to emit an unanchored artefact.  That
+          # combination is what makes a released wheel tamper-evident: the
+          # import-time check then requires the signature's public key to
+          # equal a value baked into the compiled .so, so re-signing edited
+          # .py files with an attacker-chosen key no longer verifies.
           #
-          # When they are NOT configured, both expand to empty and the build
-          # behaves exactly as before — a per-build ephemeral signing key, an
+          # When they are NOT configured — and on EVERY workflow_dispatch,
+          # whatever is configured — all three expand to empty and the build
+          # is the unanchored one: a per-build ephemeral signing key, an
           # unanchored (still signed) artefact.  Releases therefore keep
-          # working on a fork or before the key is installed, rather than
-          # failing on a missing secret.  Run the "Integrity anchor check"
-          # workflow after installing the key to confirm the pair matches.
+          # working on a fork or before the key is installed, and a dry run
+          # of any branch never sees the seed.  That last point is the reason
+          # for the tag-push guard on each of the three lines below: this
+          # step runs the dispatched ref's own setup.py, _build_sign.py and
+          # resign_wheel.py, and before the guard a dispatch of an arbitrary
+          # branch ran that code with the release signing key in its
+          # environment.  The anchored path is exercised only by a tag push,
+          # whose preflight `verify-anchor` gate catches a mismatched pair
+          # first; run the "Integrity anchor check" workflow after installing
+          # the key to confirm the pair matches without cutting a tag.
           CIBW_ENVIRONMENT: >-
             AMA_BUILD_PIPELINE=1
             CMAKE_BUILD_PARALLEL_LEVEL=4
@@ -374,34 +630,62 @@ jobs:
             AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
             AMA_INTEGRITY_SIGNING_SEED_HEX
             AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR
-          AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
-          AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
-          AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != '' && '1' || '' }}
-          # PRE-BUILD COMMANDS — install cmake + the cython/numpy build
-          # deps that setup.py CMakeBuild needs.  cibuildwheel runs in
-          # an isolated build env that only sees pyproject.toml's
-          # [build-system].requires, so any missing build-time dep
-          # fails the wheel build closed.
+          # Each value is `<tag push> && <value> || ''`: on anything but a
+          # `v*` tag push the expression short-circuits to the empty string,
+          # which is the unanchored configuration.  The seed's guard is what
+          # keeps the release key out of a dispatch; the anchor's and the
+          # REQUIRE flag's guards keep the three CONSISTENT, so a dispatch is
+          # an honest unanchored build rather than a fail-closed one (an
+          # anchor plus REQUIRE=1 with no seed makes the signer refuse).
+          AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX || '' }}
+          AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && secrets.AMA_INTEGRITY_SIGNING_SEED_HEX || '' }}
+          AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != '' && '1' || '' }}
+          # PRE-BUILD COMMANDS — install the toolchain setup.py CMakeBuild
+          # needs (setuptools, wheel, cmake, Cython, numpy) from the
+          # hash-pinned manifest, and nothing else from an index.  Every
+          # requirement in requirements-release-build.txt is an exact `==` pin
+          # carrying the sha256 of every file PyPI publishes for that version
+          # (every platform and interpreter, plus the sdist), so
+          # `--require-hashes` resolves on all five matrix rows and refuses a
+          # substituted upload.  tools/check_release_pins.py (CI, offline)
+          # keeps every pin at or above the floors pyproject.toml
+          # [build-system].requires and setup.py's preflight declare — those
+          # floors and this line used to be three hand-synchronised copies of
+          # the same numbers; now the floors live in two places and the pins
+          # in one, checked against them.  To move a pin:
+          #   python tools/check_release_pins.py --refresh --as-of YYYY-MM-DD
           #
-          # Each requirement specifier is single-quoted so the cibuildwheel
-          # subshell doesn't interpret `>=` as output redirection
-          # (Copilot review #322 — without the quotes, `pip install
-          # cmake>=4.4.0` runs as `pip install cmake` plus `>` redirect
-          # to a file named `=4.4.0`, silently floating to whatever
-          # pip resolves and missing the INVARIANT-8 toolchain floor).
-          # Floors match pyproject.toml [build-system].requires + setup.py's
-          # preflight so all three build-dependency sources stay in lockstep.
-          #
-          # The Windows variant uses DOUBLE quotes.  cibuildwheel runs
+          # This used to be `pip install 'cmake>=4.4.3' 'cython>=3.3.0'
+          # 'numpy>=1.24.0'` — floors resolved from PyPI on release day — and
+          # quoting `>=` against shell redirection (Copilot review #322) was
+          # the whole subject of this comment.  There is no `>=` left to
+          # shield.  The Windows variant still uses DOUBLE quotes, and only
+          # double quotes, around its one argument: cibuildwheel runs
           # before-build commands through `cmd.exe` on Windows, where a single
           # quote is an ordinary character rather than a quoting operator, so
           # the POSIX form reached pip verbatim and every Windows wheel job
-          # died on `Invalid requirement: "'cmake"`.  Double quotes are honoured
-          # by cmd.exe *and* still shield `>=` from being read as redirection,
-          # which is the property the quoting exists for in the first place.
-          CIBW_BEFORE_BUILD_LINUX: "pip install 'cmake>=4.4.0' 'cython>=3.2.8' 'numpy>=1.24.0'"
-          CIBW_BEFORE_BUILD_MACOS: "pip install 'cmake>=4.4.0' 'cython>=3.2.8' 'numpy>=1.24.0'"
-          CIBW_BEFORE_BUILD_WINDOWS: 'pip install "cmake>=4.4.0" "cython>=3.2.8" "numpy>=1.24.0"'
+          # died on `Invalid requirement: "'cmake"`.  The {project} path
+          # carries no spaces on any hosted runner; the quotes are the form
+          # cmd.exe honours should that ever change, and
+          # tools/check_workflow_commands.py fails a single-quoted argument in
+          # any *_WINDOWS key.
+          CIBW_BEFORE_BUILD_LINUX: "pip install --require-hashes -r {project}/requirements-release-build.txt"
+          CIBW_BEFORE_BUILD_MACOS: "pip install --require-hashes -r {project}/requirements-release-build.txt"
+          CIBW_BEFORE_BUILD_WINDOWS: 'pip install --require-hashes -r "{project}/requirements-release-build.txt"'
+          # NO BUILD ISOLATION.  cibuildwheel's default front end builds each
+          # wheel in a fresh isolated environment that resolves
+          # [build-system].requires — the floors — from the index, so the
+          # before-build install above pinned an environment the build did
+          # not use.  `--no-build-isolation` makes the pinned set the set that
+          # compiles the wheel; setup.py's preflight still enforces the floors
+          # inside it.  The syntax is cibuildwheel's `<name>; args: <args>`
+          # (BuildFrontendConfig.from_config_string in the pinned 4.2.1).  The
+          # pip that runs the before-build command, and auditwheel/delocate,
+          # come from the pinned cibuildwheel commit's own dependency
+          # constraints, not from the manifest.  tools/check_release_pins.py
+          # requires this on every cibuildwheel step; verify-reproducible-wheel
+          # below mirrors it.
+          CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
           # MANYLINUX BASELINE: manylinux_2_28 has GCC 12 baseline (the
           # INVARIANT-8 minimum), AVX-512 intrinsics, and is supported
           # by every modern pip.
@@ -442,11 +726,73 @@ jobs:
           # LOAD_WITH_ALTERED_SEARCH_PATH (the module's own directory is
           # searched first) and the ctypes path loads it by absolute path.
           # An empty command skips repair on Windows only; Linux (auditwheel)
-          # and macOS (delocate) repair are untouched and still run.
+          # repair is untouched and still runs.  macOS repair is disabled
+          # separately below, for a related reason the 5.0.0 release dry run
+          # surfaced.
           # tools/check_workflow_commands.py already tracks
           # CIBW_REPAIR_WHEEL_COMMAND_WINDOWS in WINDOWS_COMMAND_KEYS; an empty
           # value has no payload or quoting for it to flag.
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: ""
+          # MACOS WHEEL REPAIR: disabled on purpose, for the same reason as
+          # Windows above and for a second one this release introduced.
+          #
+          # Found by the mandatory release dry run, which is the only thing
+          # that runs this path: the macos-15 and macos-15-intel wheels BUILT
+          # and SIGNED green and then failed their own smoke test with
+          #     dilithium_binding.cpython-310-darwin.so: digest MISMATCH
+          #     ed25519_binding... hkdf_binding... hmac_binding... sha3_binding...
+          # every one of the five binding extensions.  `delocate-wheel` runs
+          # AFTER the integrity signer, and it rewrites each extension's Mach-O
+          # load commands — so the bytes the wheel ships are, by construction,
+          # not the bytes the artefact signed.  Since 5.0.0 binds those digests
+          # (v3 artefact), that is a hard import failure on every macOS wheel.
+          # The check is working; the pipeline ordering was not.
+          #
+          # There is nothing for delocate to do here.  This project links no
+          # external libraries — INVARIANT-1, zero external crypto
+          # dependencies — so the only shared object involved is
+          # `libama_cryptography.dylib`, which setup.py's
+          # CMakeBuild._copy_native_library_into_package already vendors INTO
+          # the package beside the .so bindings, resolved via `@loader_path`.
+          # And as on Windows, letting the repair tool vendor + name-mangle it
+          # would be actively harmful: `pqc_backends._find_native_library`
+          # loads the library through ctypes by FIXED name, so a mangled
+          # `libama_cryptography-<hash>.dylib` would silently drop the native
+          # backend even though the bindings themselves still resolved.
+          #
+          # The wheel smoke test is the proof that skipping repair is safe: it
+          # imports the built wheel in a throwaway venv, asserts the native
+          # backend loaded and that nothing degraded to a fallback, and — added
+          # with this change — asserts explicitly that every shipped binding
+          # extension is covered by the signature and matches it, so a future
+          # post-signing rewrite is reported as what it is rather than as an
+          # opaque import failure.
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: ""
+          # LINUX WHEEL REPAIR: default repair preserved, then RE-SIGN.
+          #
+          # The integrity artefact is minted by setup.py's post-build signer,
+          # BEFORE this repair step — so a repair tool that rewrites the
+          # binding ELFs after signing invalidates the signature on every
+          # wheel it touches.  That is not hypothetical: it is exactly what
+          # delocate did on macOS in the 5.0.0 release dry run (see the MACOS
+          # block above), and today's auditwheel leaving the bindings alone
+          # (verified on the v4.0.0 assets: nothing grafted, the library
+          # resolves in-package via $ORIGIN) is a property of the current
+          # auditwheel, not a guarantee.  Instead of betting the release on
+          # that staying true, keep the DEFAULT Linux repair (the first half
+          # below is cibuildwheel's own default command — manylinux retagging
+          # is worth having) and then re-sign each repaired wheel over its
+          # POST-repair bytes: tools/resign_wheel.py unpacks the wheel, runs
+          # the signer against the unpacked tree (with a guard that the bound
+          # native library came from INSIDE the wheel), regenerates RECORD and
+          # repacks in place.  The binding digests then describe what ships by
+          # construction, so the failure mode delocate exhibited cannot
+          # invalidate a shipped Linux signature no matter what a future
+          # auditwheel rewrites.  CIBW_TEST_COMMAND's smoke test
+          # (check_binding_extensions_are_bound) still verifies every
+          # re-signed wheel end to end.  macOS/Windows repair stay disabled
+          # above — nothing here re-enables them.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} && python {project}/tools/resign_wheel.py {dest_dir}"
           # TEST COMMAND: smoke-test the built wheel inside the throwaway
           # virtualenv cibuildwheel creates for it.  The full pytest suite
           # runs in ci-build-test.yml; this gate answers the narrower
@@ -486,13 +832,52 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install build
+      - name: Install the pinned build tooling (hash-checked)
+        # No `pip install --upgrade pip` and no `pip install build`: both
+        # floated to whatever PyPI served on release day.  The tools manifest
+        # pins pip, build, packaging and pyproject_hooks by version and
+        # sha256; the build manifest pins setuptools, wheel, cmake, Cython and
+        # numpy the same way, and `python -m build --no-isolation` below then
+        # builds against exactly those, with nothing resolved from
+        # [build-system].requires.  Tools first: `python -m pip install`
+        # replaces the runner's pip with the pinned one, and the second
+        # install runs under it.
         run: |
-          python -m pip install --upgrade pip
-          pip install build
+          python -m pip install --require-hashes -r requirements-release-tools.txt
+          python -m pip install --require-hashes -r requirements-release-build.txt
 
       - name: Build sdist
-        run: python -m build --sdist
+        # --no-isolation: `build` otherwise creates a fresh environment and
+        # installs [build-system].requires into it from the index, unpinned.
+        # With isolation off it checks those requirements against what the
+        # step above installed and fails on a missing one — the fail-closed
+        # direction.
+        run: python -m build --sdist --no-isolation
+
+      - name: Install the sdist from source and smoke-test it
+        # audit B3/H6.  The sdist is the artefact this release signs, attests
+        # and publishes to PyPI, and the channel every user on --no-binary or a
+        # platform without a matching wheel takes.  It shipped uninstallable
+        # before MANIFEST.in existed (no CMakeLists.txt, no src/c, no .pyx), and
+        # nothing in the pipeline ever tried to install it.  Build the wheel
+        # FROM the tarball in a throwaway venv and run the release smoke test
+        # against the installed distribution, so a missing build input is a red
+        # build here rather than a signed, attested, unbuildable release.
+        #
+        # The venv installs the same two manifests, hash-checked, and then the
+        # tarball WITHOUT build isolation, so the wheel built from the sdist is
+        # compiled by the pinned toolchain and nothing is resolved from an
+        # index: [project].dependencies is empty (INVARIANT-1), and
+        # tools/check_release_pins.py refuses this step should that change.
+        run: |
+          set -euxo pipefail
+          python -m venv /tmp/sdist-venv
+          /tmp/sdist-venv/bin/python -m pip install --require-hashes -r requirements-release-tools.txt
+          /tmp/sdist-venv/bin/python -m pip install --require-hashes -r requirements-release-build.txt
+          /tmp/sdist-venv/bin/pip install --no-build-isolation dist/*.tar.gz
+          # Run from OUTSIDE the checkout so wheel_smoke_test.py's source-tree
+          # guard resolves `import ama_cryptography` to the installed wheel.
+          ( cd /tmp && /tmp/sdist-venv/bin/python "$GITHUB_WORKSPACE/tools/wheel_smoke_test.py" )
 
       - name: Upload sdist artefact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -508,9 +893,126 @@ jobs:
   # we compute that here so the provenance job is matrix-free and the
   # attestation file is one .intoto.jsonl rather than one per OS.
   # =========================================================================
+  # ==========================================================================
+  # INVARIANT-8 at the point of release.
+  # ==========================================================================
+  # `static-analysis.yml`'s `reproducible-build` job proves determinism
+  # honestly — and then throws the build away.  It is gated
+  # `schedule || workflow_dispatch || pull_request`, and this workflow never
+  # called it, so every artefact sigstore signs, SLSA attests and PyPI serves
+  # was verified on a DIFFERENT build than the one shipped.  The property was
+  # demonstrated on one wheel and claimed for another.
+  #
+  # This job closes that by rebuilding the Linux x86-64 wheels from the tagged
+  # commit and comparing them, member by member, against the wheels
+  # `build-wheels` actually uploaded.  `publish-pypi` and `github-release`
+  # both depend on it, so a wheel that does not reproduce cannot be published.
+  #
+  # Scope, stated rather than implied: ubuntu-latest (manylinux x86-64) only.
+  # The other four rows of the `build-wheels` matrix are NOT covered — macOS
+  # and Windows have no pinned-container equivalent, and claiming more than
+  # one platform's worth of evidence is the exact failure this gate exists to
+  # correct.  Extending it means adding rows here, not widening the wording.
+  verify-reproducible-wheel:
+    name: Release reproducibility (shipped wheels vs. independent rebuild)
+    needs: [preflight, build-wheels]
+    if: >-
+      !cancelled()
+      && needs.preflight.result == 'success'
+      && needs['build-wheels'].result == 'success'
+    runs-on: ubuntu-latest
+    # The rebuild is a second full cibuildwheel pass over five interpreters,
+    # so it costs roughly what build-wheels costs on this row.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Download the wheels this release actually built
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: wheels-ubuntu-latest
+          path: shipped
+
+      - name: Rebuild the same commit with the same toolchain
+        # EVERY variable that reaches the compiler is mirrored from
+        # `build-wheels` above, deliberately, including the trust anchor and
+        # the pinned toolchain.  An anchored build compiles
+        # AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX INTO the native library, so a
+        # rebuild without it would produce a legitimately different `.so` and
+        # this gate would report a false difference on every anchored
+        # release; and a rebuild that resolved its own cmake/Cython/numpy
+        # from the index — what this step did before the manifests existed,
+        # under pip's isolated build environment — compared two toolchains,
+        # not two builds of one.  So: the same tag-push-guarded expressions
+        # (empty on a dispatch, like build-wheels), the same
+        # CIBW_BEFORE_BUILD_LINUX installing the same hashed bytes, the same
+        # CIBW_BUILD_FRONTEND with isolation off.  Keep the two blocks in
+        # step; only the Linux before-build is needed here because this job
+        # runs the ubuntu-latest row alone.
+        #
+        # The one deliberate divergence is CIBW_TEST_COMMAND: the smoke test
+        # runs after a wheel is built and cannot change its contents, so
+        # skipping it here halves the wall clock without weakening the
+        # comparison.  `build-wheels` still runs it on the wheels that ship.
+        uses: pypa/cibuildwheel@e090b81e30c4d855ea63bf4b6e59204c09a101ae  # v4.2.1
+        env:
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+          CIBW_SKIP: "pp* *_i686 *_ppc64le *_s390x *-musllinux_*"
+          CIBW_ARCHS_LINUX: "auto64"
+          CIBW_ENVIRONMENT: >-
+            AMA_BUILD_PIPELINE=1
+            CMAKE_BUILD_PARALLEL_LEVEL=4
+          CIBW_ENVIRONMENT_PASS_LINUX: >-
+            AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
+            AMA_INTEGRITY_SIGNING_SEED_HEX
+            AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR
+          AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX || '' }}
+          AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && secrets.AMA_INTEGRITY_SIGNING_SEED_HEX || '' }}
+          AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != '' && '1' || '' }}
+          CIBW_BEFORE_BUILD_LINUX: "pip install --require-hashes -r {project}/requirements-release-build.txt"
+          CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
+          CIBW_TEST_SKIP: "*"
+
+      - name: The shipped wheels must be the wheels this source produces
+        run: |
+          python tools/verify_wheel_reproducible.py \
+            --shipped shipped \
+            --rebuilt wheelhouse
+
+      - name: Upload the rebuild for comparison if it did not match
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: reproducibility-rebuild
+          path: wheelhouse/*.whl
+          retention-days: 14
+
   hash-artefacts:
     name: Hash artefacts for SLSA subject set
     needs: [build-wheels, build-sdist]
+    # Explicit, like every job below `verify-anchor`.  A job with no status
+    # function in its `if:` gets an implicit `success()`, and GitHub evaluates
+    # that over the TRANSITIVE `needs:` chain: a skipped ancestor anywhere
+    # above makes it false (actions/runner#2205).  `verify-anchor` is skipped
+    # on the supported unanchored path, so with the implicit check this job,
+    # `provenance`, `sign`, `publish-pypi` and `github-release` were all
+    # skipped on that path — a green run that signed, attested and released
+    # nothing — even though `build-wheels` had been told a skipped anchor
+    # check is permission to proceed.  `!cancelled()` replaces the implicit
+    # check and the direct results are tested by name;
+    # tools/check_workflow_commands.py (check_skip_propagation) fails any job
+    # that inherits a conditional ancestor's skip implicitly, or that uses
+    # `!cancelled()` without testing each job it needs.
+    if: >-
+      !cancelled()
+      && needs['build-wheels'].result == 'success'
+      && needs['build-sdist'].result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -531,6 +1033,19 @@ jobs:
 
       - name: Compute base64 subjects
         id: hash
+        # `shell: bash` is REQUIRED, not cosmetic.  The default shell for a
+        # `run:` block is `bash -e {0}` — which has `-e` but NOT `pipefail`.
+        # In `sha256sum ... | sort > subjects.txt` the pipeline's status is
+        # `sort`'s, and `sort` exits 0 on empty input.  So if either
+        # download-artifact step yielded nothing, sha256sum failed, `-e` did
+        # not fire, subjects.txt was empty, and the base64 of an empty file
+        # was handed to slsa-github-generator as the subject set: green
+        # provenance attesting to NOTHING, on a release tag.  `shell: bash`
+        # selects `bash --noprofile --norc -eo pipefail {0}`, so the failing
+        # sha256sum now fails the step.  The explicit emptiness assertion
+        # below is the second line of defence, because a subject set that is
+        # empty for ANY reason must never reach the generator.
+        shell: bash
         run: |
           # The SLSA generator expects a single base64-encoded string
           # containing one "DIGEST  FILENAME" line per artefact, in
@@ -540,12 +1055,26 @@ jobs:
           sha256sum *.whl *.tar.gz | LC_ALL=C sort > ../subjects.txt
           cd ..
           cat subjects.txt
+          if [ ! -s subjects.txt ]; then
+            echo "::error::subjects.txt is empty — no wheel or sdist artefact was" \
+                 "downloaded, so the SLSA provenance would attest to nothing." >&2
+            exit 1
+          fi
           subjects_b64=$(base64 --wrap=0 subjects.txt)
+          if [ -z "$subjects_b64" ]; then
+            echo "::error::base64 subject encoding is empty; refusing to emit an" \
+                 "empty SLSA subject set." >&2
+            exit 1
+          fi
           echo "subjects=$subjects_b64" >> "$GITHUB_OUTPUT"
 
   provenance:
     name: SLSA v1 provenance attestation
     needs: [hash-artefacts]
+    # Explicit for the reason recorded on `hash-artefacts`.
+    if: >-
+      !cancelled()
+      && needs['hash-artefacts'].result == 'success'
     permissions:
       id-token: write       # OIDC for the keyless attestation
       # The slsa-github-generator reusable workflow's internal upload-assets
@@ -572,6 +1101,11 @@ jobs:
   sign:
     name: Sigstore sign (wheels + sdist)
     needs: [build-wheels, build-sdist]
+    # Explicit for the reason recorded on `hash-artefacts`.
+    if: >-
+      !cancelled()
+      && needs['build-wheels'].result == 'success'
+      && needs['build-sdist'].result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -592,7 +1126,7 @@ jobs:
           path: dist
 
       - name: Sign distribution with sigstore-python
-        uses: sigstore/gh-action-sigstore-python@5b79a39c381910c090341a2c9b0bf022c8b387e1  # v3.4.0
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9  # v3.5.0
         with:
           inputs: ./dist/*.whl ./dist/*.tar.gz
           upload-signing-artifacts: true
@@ -612,14 +1146,18 @@ jobs:
   # =========================================================================
   # PyPI Trusted Publishing — no long-lived token.  Requires the PyPI
   # project to have a "trusted publisher" configured for this repo /
-  # workflow / environment trio.  The `environment: pypi` block gates
-  # publishing on a maintainer approval click in the GitHub Actions
-  # UI — that's an intentional human-in-the-loop barrier between a
-  # tag push and a published release.
+  # workflow / environment trio.  The `environment: pypi` block is the HOOK
+  # for a maintainer-approval barrier between a tag push and a published
+  # release — but, exactly as the `release` environment note on github-release
+  # below records, referencing an environment creates it WITHOUT protection
+  # rules: the required-reviewer protection must be configured once on the
+  # repository's Settings -> Environments page for the approval to be
+  # enforced.  Until it is, this block documents the intended gate rather than
+  # enforcing it (audit M10).
   # =========================================================================
   publish-pypi:
     name: Publish to PyPI (Trusted Publishing)
-    needs: [preflight, sign, provenance]
+    needs: [preflight, sign, provenance, verify-reproducible-wheel]
     # Publish ONLY on tag pushes.  A manually-dispatched run from an
     # arbitrary branch ref bypasses the preflight tag-vs-pyproject
     # version check (which only fires under `github.event_name ==
@@ -642,10 +1180,20 @@ jobs:
     # Actions -> Variables) once the PyPI trusted publisher and the `pypi`
     # environment both exist. Leaving it unset skips publishing; the skip is
     # stated in the release notes rather than passing silently.
+    #
+    # Every dependency is tested by name under `!cancelled()`, for the reason
+    # recorded on `hash-artefacts`: the implicit `success()` this job used to
+    # carry was false on the unanchored path, because `verify-anchor` — an
+    # ancestor through build-wheels — is skipped there.
     if: >-
-      github.event_name == 'push'
+      !cancelled()
+      && github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
       && vars.AMA_PUBLISH_TO_PYPI == 'true'
+      && needs.preflight.result == 'success'
+      && needs.sign.result == 'success'
+      && needs.provenance.result == 'success'
+      && needs['verify-reproducible-wheel'].result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -671,7 +1219,7 @@ jobs:
           ls -la signatures/
 
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247  # v1.14.1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           packages-dir: dist/
           # No `password` — Trusted Publishing handles OIDC exchange.
@@ -692,7 +1240,7 @@ jobs:
     # GitHub Release with body text "Published to PyPI" — false
     # advertising and a credibility hit.  Sequencing via `needs` makes
     # the release announcement strictly downstream of the PyPI upload.
-    needs: [preflight, sign, provenance, publish-pypi]
+    needs: [preflight, sign, provenance, publish-pypi, verify-reproducible-wheel]
     #
     # The original guard was a bare `needs: [... publish-pypi]`, which is
     # correct about the hazard (never announce a PyPI upload that failed) but
@@ -706,23 +1254,52 @@ jobs:
     #   * publish-pypi FAILED   -> no release  (the original hazard)
     #   * publish-pypi SKIPPED  -> release proceeds, notes say PyPI was skipped
     #   * sign / provenance not successful -> no release, unconditionally
+    #   * verify-reproducible-wheel not successful -> no release.  It is in
+    #     `needs`, but `!cancelled()` replaces the implicit success() check,
+    #     so without this line a failed rebuild comparison skipped PyPI
+    #     (publish-pypi now tests it by name as well), and that SKIP then read
+    #     as "PyPI not configured" here: the unreproducible artefacts shipped
+    #     as a GitHub Release.
+    #   * preflight not successful -> no release.  Implied already (sign
+    #     cannot succeed without it), and tested by name anyway: under
+    #     `!cancelled()` every job in `needs:` is checked explicitly, which
+    #     is what tools/check_workflow_commands.py requires.
     #
-    # Bracket indexing, not dot notation: `needs.publish-pypi.result` asks an
-    # expression grammar in which `-` is also subtraction to read a hyphenated
-    # job id as a single identifier.  No other workflow here dereferences a
-    # hyphenated job name, so there is no in-repo evidence the dot form is
-    # safe, and this file only ever executes on a tag push — the one place a
-    # wrong guess is discovered at the worst moment.  `needs['publish-pypi']`
-    # is unambiguous under any reading.
+    # Bracket indexing for hyphenated job ids.  The dot form is valid too —
+    # GitHub's expression syntax admits `-` in a property name ("must start
+    # with a letter or _ and contain only alphanumeric characters, -, or _"),
+    # and the gate jobs of static-analysis.yml and dudect.yml dereference
+    # hyphenated ids with it on every run of those workflows
+    # (`needs.clang-analyzer.result` resolved to `success` and
+    # `needs.valgrind-memcheck.result` to `skipped` in run 35970161919), as
+    # does `provenance` above (`needs.hash-artefacts.outputs.subjects`).
+    # Brackets are kept because they read the same under any grammar, in the
+    # one file that executes only on a tag push.
     if: >-
       !cancelled()
       && github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
+      && needs.preflight.result == 'success'
       && needs.sign.result == 'success'
       && needs.provenance.result == 'success'
+      && needs['verify-reproducible-wheel'].result == 'success'
       && needs['publish-pypi'].result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The release narrative has always said publication happens "under the
+    # protected `release` environment", and until this block existed the
+    # workflow disagreed: `publish-pypi` carried `environment: pypi` while
+    # the job that actually creates the immutable release — the one holding
+    # `contents: write` — was gated by nothing but its `if:`.  Referencing
+    # the environment here creates it on first run WITHOUT protection
+    # rules; the required-reviewer / branch-and-tag protections must be
+    # configured once on the repository's Settings -> Environments page for
+    # the gate to hold anything.  Until they are, this line documents the
+    # intended gate rather than enforcing it, and the release runbook above
+    # treats configuring it as part of the tag-time procedure.
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.preflight.outputs.version }}
     permissions:
       contents: write
     steps:
@@ -754,6 +1331,25 @@ jobs:
           echo "line=$line" >> "$GITHUB_OUTPUT"
           echo "PyPI publish result: ${PYPI_RESULT:-<none>}"
 
+      - name: Resolve the integrity anchoring line for the release notes
+        id: anchor_line
+        # Audit H3: the release notes must STATE whether the wheels are anchored,
+        # the same way the PyPI line above states whether they were published.
+        # The signal is the trust-anchor repository VARIABLE — the identical
+        # value that decides whether build-wheels compiled an anchor into the
+        # native library — so the notes describe what the assets actually are.
+        # Computed in a step, not inline, for the same reason as the PyPI line.
+        env:
+          ANCHOR_PUBKEY: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+        run: |
+          if [ -n "$ANCHOR_PUBKEY" ]; then
+            line="anchored — the import-time integrity check requires the signature key to equal a trust anchor compiled into the native library, so re-signing edited sources with another key does not verify."
+          else
+            line="unanchored — signed with a per-build ephemeral key and self-referential (tamper-evident against corruption, not against a re-sign). The supported fork / pre-anchor path; see SECURITY.md, Module Integrity Verification."
+          fi
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "integrity anchoring for notes: ${ANCHOR_PUBKEY:+anchored}${ANCHOR_PUBKEY:+ }${ANCHOR_PUBKEY:-unanchored}"
+
       - name: Aggregate release assets
         run: |
           mkdir -p release-assets
@@ -767,6 +1363,38 @@ jobs:
           # SBOM (committed)
           cp docs/compliance/sbom-c-library.json release-assets/
           ls -la release-assets/
+
+          # audit H14: `find` exits 0 when it matches nothing, so an empty
+          # artefacts/ tree (a broken download, a renamed upstream artefact, a
+          # sign job whose output pattern drifted) would copy only the committed
+          # SBOM and publish a release whose notes promise "signed wheels" and
+          # "SLSA provenance" over an asset list of one JSON file — and the
+          # release is IMMUTABLE, so it cannot be repaired. Assert every asset
+          # CLASS is present, in the expected quantity, before the freeze.
+          #
+          # EXPECTED_WHEELS is the build-wheels matrix size: 5 CPython
+          # (cp310-cp314) x 5 platform-arches (ubuntu-latest, ubuntu-24.04-arm,
+          # macos-15-intel, macos-15, windows-latest). Update it here, under
+          # review, whenever that matrix changes.
+          EXPECTED_WHEELS=25
+          n_whl=$(find release-assets -name '*.whl' | wc -l)
+          n_sdist=$(find release-assets -name '*.tar.gz' | wc -l)
+          n_sig=$(find release-assets -name '*.sigstore*' | wc -l)
+          n_prov=$(find release-assets -name '*.intoto.jsonl' | wc -l)
+          n_sbom=$(find release-assets -name 'sbom-c-library.json' | wc -l)
+          echo "asset inventory: wheels=$n_whl sdist=$n_sdist signatures=$n_sig provenance=$n_prov sbom=$n_sbom"
+          fail=0
+          [ "$n_whl" -eq "$EXPECTED_WHEELS" ] || { echo "::error::expected $EXPECTED_WHEELS wheels, found $n_whl"; fail=1; }
+          [ "$n_sdist" -eq 1 ] || { echo "::error::expected 1 sdist, found $n_sdist"; fail=1; }
+          # sigstore signs every wheel and the sdist, so there is at least one
+          # signature per distributable; fewer means a whole class went missing.
+          [ "$n_sig" -ge "$((EXPECTED_WHEELS + 1))" ] || { echo "::error::expected >= $((EXPECTED_WHEELS + 1)) sigstore signatures, found $n_sig"; fail=1; }
+          [ "$n_prov" -ge 1 ] || { echo "::error::expected >= 1 SLSA provenance attestation, found $n_prov"; fail=1; }
+          [ "$n_sbom" -eq 1 ] || { echo "::error::expected the committed SBOM, found $n_sbom"; fail=1; }
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::release asset inventory incomplete — refusing to publish an immutable release with a missing asset class"
+            exit 1
+          fi
 
       # IMMUTABLE RELEASES: assets freeze at publish, so every asset must be
       # attached while the release is still a draft.  At the pinned v3.0.1 this
@@ -804,7 +1432,7 @@ jobs:
       # release and takes the update path).  Without them a re-run silently
       # resets the title to the bare tag and overwrites the notes.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           # `name:` is deliberately NOT set.  On the update path the action
@@ -821,6 +1449,7 @@ jobs:
             * SLSA v1 provenance attestations attached.
             * C-library SBOM (CycloneDX) attached; the Python SBOM is published per-commit by security.yml as the `sbom` workflow artifact.
             * PyPI: ${{ steps.pypi_line.outputs.line }}
+            * Integrity: ${{ steps.anchor_line.outputs.line }}
 
             Verify with:
 
@@ -848,12 +1477,19 @@ jobs:
           # Draft the PRERELEASE case only.  A non-prerelease resolves to false
           # and is published by finalizeRelease() once the assets are attached
           # (the v3.4.0 path).  A prerelease must stay a draft instead: the
-          # action only auto-drafts non-prereleases, so a published `-rc` would
-          # be frozen by immutable releases before its assets uploaded and the
-          # job would die on "Cannot upload assets to an immutable release".
+          # action only auto-drafts non-prereleases, so a published pre-release
+          # would be frozen by immutable releases before its assets uploaded and
+          # the job would die on "Cannot upload assets to an immutable release".
           # This mirrors the guidance in the action's own `draft` input docs.
           # Consequence: a prerelease is left as a draft for a maintainer to
           # publish by hand, and it fires `release.published` rather than
           # `release.prereleased`.
-          draft: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
+          #
+          # The flag comes from preflight, which derives it from the PEP 440
+          # pyproject version (rcN/aN/bN/.devN) — the same string the tag must
+          # equal.  It deliberately does NOT sniff github.ref_name for SemVer
+          # `-rc`/`-alpha`/`-beta`: a PEP 440 tag (v5.0.0rc1) has no hyphen, so
+          # that older test never fired and every rc would have shipped as a
+          # full, non-draft release.
+          draft: ${{ needs.preflight.outputs.is_prerelease == 'true' }}
+          prerelease: ${{ needs.preflight.outputs.is_prerelease == 'true' }}

@@ -50,7 +50,7 @@ cdef extern from "ama_cryptography.h":
 # calls the C kernel directly, bypassing pqc_backends' gated wrappers (and,
 # imported as a top-level module, POST itself); the guard refuses output in
 # the FIPS error state and the import forces POST to run.
-from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted, pairwise_test_signature
 
 
 def cy_dilithium_keygen():
@@ -74,11 +74,23 @@ def cy_dilithium_keygen():
         ret = ama_dilithium_keypair(pk, sk)
         if ret != 0:
             raise RuntimeError(f"ama_dilithium_keypair failed (rc={ret})")
-        return (bytes(pk[:DILITHIUM_PK_BYTES]), bytes(sk[:DILITHIUM_SK_BYTES]))
+        public_key = bytes(pk[:DILITHIUM_PK_BYTES])
+        secret_key = bytes(sk[:DILITHIUM_SK_BYTES])
     finally:
         ama_secure_memzero(sk, DILITHIUM_SK_BYTES)
         free(pk)
         free(sk)
+    # FIPS 140-3 pairwise consistency test (INVARIANT-41): this is a keygen
+    # surface of the package like pqc_backends' own, so the keypair leaves only
+    # after its halves sign and verify.  A failure enters the ERROR state.
+    pairwise_test_signature(
+        cy_dilithium_sign,
+        lambda message, signature, pk_: cy_dilithium_verify(signature, message, pk_),
+        secret_key,
+        public_key,
+        "ML-DSA-65 (dilithium_binding)",
+    )
+    return (public_key, secret_key)
 
 
 def cy_dilithium_sign(bytes message, bytes secret_key):

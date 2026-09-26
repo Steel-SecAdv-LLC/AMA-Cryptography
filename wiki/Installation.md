@@ -9,8 +9,16 @@ This page covers all supported ways to install and build AMA Cryptography.
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
 | Python | 3.10 | 3.11+ |
-| C Compiler | GCC 7 / Clang 6 | GCC 12 / Clang 16 |
+| C Compiler | GCC 12 / Clang 15 | GCC 13+ / Clang 17+ |
 | CMake | 3.15 | 3.25+ |
+
+> **The compiler minimum is enforced by the build, not advisory.**
+> `CMakeLists.txt:89-107` calls `message(FATAL_ERROR ...)` for GCC below 12
+> and Clang below 15 — the versions below which AMA does not trust the
+> toolchain to preserve constant-time code generation (INVARIANT-8,
+> INVARIANT-12). Configure fails; it does not warn and continue. MSVC is
+> accepted without a version floor; any other compiler ID is refused.
+> The reference build is ubuntu:22.04 + GCC 12.
 | RAM | 512 MB | 2 GB |
 | Platforms | Linux, macOS, Windows | Ubuntu 22.04+ / macOS 13+ |
 
@@ -117,7 +125,7 @@ The complete set of extras declared in `pyproject.toml`:
 # Cython + NumPy build/runtime support for the math layer
 pip install -e ".[math]"
 
-# Full monitoring stack (NumPy + SciPy for 3R engine)
+# Full monitoring stack (NumPy for 3R engine)
 pip install -e ".[monitoring]"
 
 # Legacy classical cryptography fallback
@@ -128,6 +136,11 @@ pip install -e ".[hsm]"
 
 # Comparative benchmarking against external reference implementations
 pip install -e ".[benchmark]"
+
+# Third-party packages the shipped examples import (Flask for
+# examples/python/flask_integration.py); the CI test lanes install this so the
+# examples' tests run rather than skip
+pip install -e ".[examples]"
 
 # Development tools (pytest, black, ruff, mypy, coverage)
 pip install -e ".[dev]"
@@ -158,19 +171,31 @@ pip install -e ".[all]"
 
 ### Check PQC Status
 
+<!-- example: python-run -->
 ```python
-from ama_cryptography.pqc_backends import get_pqc_status
-print(get_pqc_status())
+from ama_cryptography.pqc_backends import PQCStatus, get_pqc_status, get_pqc_backend_info
+
+# get_pqc_status() returns a PQCStatus ENUM — not a dict, not a string.
+status = get_pqc_status()
+print(status)                 # PQCStatus.AVAILABLE
+print(status.value)           # 'AVAILABLE'
+assert status is PQCStatus.AVAILABLE
+
+# The dict lives behind get_pqc_backend_info().
+info = get_pqc_backend_info()
+print(info["status"], info["dilithium_backend"])
+for name, meta in sorted(info["algorithms"].items()):
+    print(f"  {name}: available={meta['available']} backend={meta['backend']}")
 ```
 
 Expected output:
 ```
-{
-  "ml_dsa_65": "available",
-  "ml_kem_1024": "available",
-  "sphincs_sha2_256f": "available",
-  "backend": "native"
-}
+PQCStatus.AVAILABLE
+AVAILABLE
+AVAILABLE native
+  Kyber-1024: available=True backend=native
+  ML-DSA-65: available=True backend=native
+  SPHINCS+-256f: available=True backend=native
 ```
 
 ### Run the Demo
@@ -200,7 +225,7 @@ AMA Cryptography: SHA3-256 Security Hash
 
 ## Optional: Build with Cython Acceleration
 
-Cython provides 18–37x speedup for mathematical operations:
+Cython accelerates the 3R mathematical operations (ratio host-specific and unpublished — see README):
 
 ```bash
 # Install Cython first

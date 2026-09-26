@@ -31,6 +31,7 @@ The two dashes are not gaps in the implementation — see
 
 ## Using it
 
+<!-- example: python-run -->
 ```python
 from pathlib import Path
 
@@ -239,6 +240,7 @@ the only place it is visible.
 
 Both checks are exposed on the backend as well:
 
+<!-- example: pseudocode: a signature sketch in which sk stands for a key the reader already has -->
 ```python
 # doc-example: not runnable — a signature sketch, not a program. `sk` stands
 # for a key the reader already has, and tests/test_documented_examples.py skips
@@ -263,7 +265,7 @@ signer itself. `skDecode` (Algorithm 25) requires every `s1`/`s2` coefficient to
 be in `[-eta, eta]` and the key to be rejected otherwise — but the packing is
 not surjective onto its bit width (eta = 2 stores a five-value range in three
 bits), so a malformed key decoded to coefficients the specification forbids and
-was accepted. `ama_ml_dsa_sign` now refuses such a key rather than producing
+was accepted. The ML-DSA signers now refuse such a key rather than producing
 signatures nothing verifies and driving the rejection loop off its calibrated
 bounds.
 
@@ -277,7 +279,7 @@ bounds.
 | RFC 8037 Appendix A / RFC 8152 Appendix C.7.1 | Ed25519 JWK, the RFC 7638 thumbprint *and its canonical input string*, P-256 and P-521 `COSE_Key` |
 | `tests/kat/keyformats/rfc9500_ec.json` — 3 records | the IETF's own P-256/P-384/P-521 `ECPrivateKey`, the structure RFC 5915 defines without an example |
 | `tests/ref_keyformat.py` | a second encoder transcribed from the RFCs' ASN.1 — AMA's own, importing nothing from `ama_cryptography` — covering every algorithm and option, anchored against RFC 9500 §2.3 and RFC 8410 §10.1 |
-| `tests/test_key_formats.py` — 583 tests | the above in both directions, plus the negative space |
+| `tests/test_key_formats.py` — 587 tests | the above in both directions, plus the negative space |
 | `fuzz/python/fuzz_key_formats.py` | continuous hostile input across all ten parser entry points, run per PR by `fuzzing.yml` (INVARIANT-33) |
 
 The counts above are not decoration and they are not taken on trust:

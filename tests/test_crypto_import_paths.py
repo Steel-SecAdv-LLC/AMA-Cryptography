@@ -363,7 +363,7 @@ class TestDilithiumUnavailablePaths:
         out_dir = tmp_path / "keys"
         with caplog.at_level(logging.DEBUG, logger="ama_cryptography.legacy_compat"):
             dgs.export_public_keys(kms, out_dir)
-        readme = (out_dir / "README.txt").read_text()
+        readme = (out_dir / "README.txt").read_text(encoding="utf-8")
         assert "Dilithium Public Key: NOT AVAILABLE" in readme
         assert "Dilithium: NOT AVAILABLE" in caplog.text
 
@@ -554,27 +554,6 @@ class TestMainFunctionBranches:
         dgs.main()
         out = capsys.readouterr().out
         assert "VERIFICATION FAILED" in out or "INVALID" in out
-
-
-# ============================================================================
-# TSA INTEGRATION SKELETON (requires live TSA endpoint)
-# ============================================================================
-
-
-class TestTSAIntegration:
-    """Integration tests for RFC 3161 TSA interaction.
-
-    These tests require a live TSA endpoint and are skipped by default.
-    Run with: pytest -m integration tests/test_crypto_import_paths.py
-    """
-
-    @pytest.mark.integration
-    def test_rfc3161_live_tsa_roundtrip(self) -> None:
-        """End-to-end RFC 3161 timestamp with a live TSA (when available)."""
-        pytest.skip(
-            reason="Live TSA integration test — requires network and a TSA endpoint. "
-            "Enable by providing TSA_URL env var and running with -m integration."
-        )
 
 
 if __name__ == "__main__":

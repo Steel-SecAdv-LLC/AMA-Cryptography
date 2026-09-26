@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""Negative controls for ``tools/check_suppression_hygiene.py``'s optional-import pass.
+
+INVARIANT-13's third-party-import pass exists for one hazard: a bare
+``# type: ignore`` on the fallback assignment of a guarded optional import::
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError:
+        np = None  # type: ignore[assignment]
+
+is *required* on a machine where the package is installed and an *error* under
+``warn_unused_ignores`` on one where it is not, so the verdict depends on the
+environment rather than on the code.
+
+The pass reached that shape through a substring pre-filter, ``"ImportError" not
+in source``, and ``"ModuleNotFoundError"`` does not contain ``"ImportError"``.
+So a file guarded with the ``ModuleNotFoundError`` spelling was dropped before
+it was ever parsed — while :func:`_third_party_import_fallback_lines`, the AST
+pass behind the filter, has always accepted both spellings.  The gate reported
+clean on exactly the files it could not see.
+
+This pass had no tests, which is how that survived.  The MODULE was not
+untested — ``tests/test_invariant_upgrades.py`` covers the first pass
+(``check_source``, ``effective_suppressions``, ``main``) and the second
+(``scan_c_tree``, ``c_tree_files``) in both directions — it touches neither
+``scan_optional_imports`` nor ``_third_party_import_fallback_lines``.  Two
+passes of three read as a covered tool.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import re as _re
+import shutil as _shutil
+import subprocess as _subprocess
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import ClassVar
+
+import pytest
+import pytest as _pytest
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GATE_PATH = REPO_ROOT / "tools" / "check_suppression_hygiene.py"
+
+
+@pytest.fixture(scope="module")
+def gate() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("check_suppression_hygiene", GATE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+#: The same file, written with every except-clause spelling the AST pass
+#: accepts.  Each must be seen by the pre-filter AND reported.
+_GUARDED = {
+    "import-error": (
+        "try:\n"
+        "    import numpy as np\n"
+        "except ImportError:\n"
+        "    np = None  # type: ignore[assignment]\n"
+    ),
+    "module-not-found-error": (
+        "try:\n"
+        "    import numpy as np\n"
+        "except ModuleNotFoundError:\n"
+        "    np = None  # type: ignore[assignment]\n"
+    ),
+    "tuple-clause": (
+        "try:\n"
+        "    import numpy as np\n"
+        "except (ModuleNotFoundError, AttributeError):\n"
+        "    np = None  # type: ignore[assignment]\n"
+    ),
+    "nested-try": (
+        "try:\n"
+        "    try:\n"
+        "        import numpy as np\n"
+        "    except ModuleNotFoundError:\n"
+        "        np = None  # type: ignore[assignment]\n"
+        "except Exception:\n"
+        "    raise\n"
+    ),
+}
+
+
+class TestThePreFilter:
+    @pytest.mark.parametrize("label", sorted(_GUARDED))
+    def test_every_spelling_reaches_the_parser(self, gate: ModuleType, label: str) -> None:
+        assert gate._may_hold_a_guarded_import(_GUARDED[label]) is True, label
+
+    @pytest.mark.parametrize("label", sorted(_GUARDED))
+    def test_every_spelling_is_found_by_the_ast_pass(self, gate: ModuleType, label: str) -> None:
+        """Non-vacuity: the filter must not be the only thing that agrees."""
+        assert gate._third_party_import_fallback_lines(_GUARDED[label]), label
+
+    def test_a_file_with_no_suppression_is_filtered_out(self, gate: ModuleType) -> None:
+        assert gate._may_hold_a_guarded_import("import numpy as np\n") is False
+
+    def test_a_file_with_a_suppression_but_no_guard_is_filtered_out(self, gate: ModuleType) -> None:
+        assert gate._may_hold_a_guarded_import("x = y  # type: ignore[assignment]\n") is False
+
+
+class TestTheScan:
+    @pytest.mark.parametrize("label", sorted(_GUARDED))
+    def test_every_spelling_is_reported(self, gate: ModuleType, tmp_path: Path, label: str) -> None:
+        pkg = tmp_path / "ama_cryptography"
+        pkg.mkdir()
+        (pkg / "thing.py").write_text(_GUARDED[label], encoding="utf-8")
+        violations = gate.scan_optional_imports(tmp_path)
+        assert violations, f"{label}: a bare type: ignore on a guarded import went unreported"
+        assert any("thing.py" in v for v in violations), violations
+
+    def test_an_aliased_annotation_is_accepted(self, gate: ModuleType, tmp_path: Path) -> None:
+        """The remedy the message names must actually pass the gate."""
+        pkg = tmp_path / "ama_cryptography"
+        pkg.mkdir()
+        (pkg / "thing.py").write_text(
+            "from typing import Any\n"
+            "try:\n"
+            "    import numpy as _np\n"
+            "except ModuleNotFoundError:\n"
+            "    _np = None\n"
+            "np: Any = _np\n",
+            encoding="utf-8",
+        )
+        assert gate.scan_optional_imports(tmp_path) == []
+
+
+class TestAnUnparseableFileIsRefused:
+    """Tokenizing stops at a syntax error, so a suppression after it is unseen.
+
+    ``scan_comments`` keeps what it read before the error, which is right for
+    the candidate listing and wrong for a verdict: an unjustified ``noqa``
+    written below an indentation error was not reported at all.  The file is
+    refused whole instead.
+    """
+
+    SOURCE = "def f():\n    return 1\n  x = 2\ny = 3  # noqa\n"
+
+    def test_the_scan_really_stops_at_the_error(self, gate: ModuleType) -> None:
+        comments, _first = gate.scan_comments(self.SOURCE)
+        assert comments == [], "fixture: the noqa must lie past the tokenize error"
+
+    def test_the_file_is_refused(self, gate: ModuleType) -> None:
+        violations = gate.check_source("bad.py", self.SOURCE)
+        assert len(violations) == 1, violations
+        assert violations[0].startswith("bad.py:3: cannot be parsed")
+
+
+def test_the_shipped_tree_is_clean(gate: ModuleType) -> None:
+    """The gate CI runs, run here — now that the pre-filter can see everything."""
+    assert gate.scan_optional_imports(REPO_ROOT) == []
+
+
+class TestCppcheckHasNoSuppressions:
+    """INVARIANT-13 applied to the cppcheck configuration -- the strong form.
+
+    The static-analysis workflow once silenced whole error IDs for whole
+    files on the command line::
+
+        --suppress=uninitvar:src/c/ama_nistp.c
+        --suppress=arrayIndexOutOfBounds:src/c/dispatch/ama_dispatch.c
+
+    then moved them to per-site pins in a ``.cppcheck-suppressions`` file,
+    then -- the state this test now guards -- resolved every one AT SOURCE:
+    the out-parameter ``uninitvar`` false positives by zero-initialising each
+    output aggregate at its declaration (``ama_kyber.c``'s caller-owned matrix
+    by a leading ``memset``), and the ``x >> 31`` / ``x >> 63`` sign-broadcast
+    masks by the fully-defined ``0 - ((uint64_t)x >> n)`` rewrite that is
+    bit-identical on two's-complement.  ``arrayIndexOutOfBounds`` stays live
+    because ``-DPATH_MAX=4096`` removes it without a suppression.
+
+    So the invariants are inverted from the per-site era: there must be NO
+    suppressions file, NO ``--suppressions-list`` flag, and NO file- or
+    class-wide command-line suppression -- only the run-wide
+    environment/vendor-noise IDs.  Resolving a finding at source, not
+    suppressing it, is the only way back to green.
+    """
+
+    WORKFLOW = REPO_ROOT / ".github" / "workflows" / "static-analysis.yml"
+    SUPPRESSIONS = REPO_ROOT / ".cppcheck-suppressions"
+
+    #: IDs that are legitimately run-wide: cppcheck's own environment or
+    #: vendored/system noise, not a finding in a file this project maintains.
+    RUN_WIDE_IDS: ClassVar[set[str]] = {
+        "missingIncludeSystem",
+        "unusedFunction",
+    }
+
+    def test_no_per_site_suppressions_file(self) -> None:
+        assert not self.SUPPRESSIONS.exists(), (
+            ".cppcheck-suppressions is back; every historical entry was resolved "
+            "at source (zero-init out-parameters, defined-form shift masks), so "
+            "the file and its --suppressions-list flag should stay gone."
+        )
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        assert "--suppressions-list=" not in text, (
+            "the workflow references a --suppressions-list again; there are no "
+            "per-site suppressions to list."
+        )
+
+    #: Every ``--suppress=`` argument, wherever it sits on a command line.
+    _SUPPRESS_ARG = _re.compile(r"--suppress=([^\s\\'\"]+)")
+
+    @classmethod
+    def _command_suppressions(cls, workflow_text: str) -> list[str]:
+        """The ``--suppress=`` bodies of every ``run:`` script, comments dropped.
+
+        Read from the parsed workflow rather than line by line: the first
+        revision inspected only lines that STARTED with ``--suppress=``, so the
+        flag on the ``cppcheck`` line itself, or a one-line invocation, was
+        never read.  Shell comments are dropped so the workflow's prose about
+        past suppressions is not mistaken for one.
+        """
+        found: list[str] = []
+        data = yaml.safe_load(workflow_text) or {}
+        for job in (data.get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                run = step.get("run") if isinstance(step, dict) else None
+                if not isinstance(run, str):
+                    continue
+                code = "\n".join(
+                    line for line in run.splitlines() if not line.lstrip().startswith("#")
+                )
+                found.extend(cls._SUPPRESS_ARG.findall(code))
+        return found
+
+    def _offenders(self, workflow_text: str) -> list[str]:
+        offenders: list[str] = []
+        for body in self._command_suppressions(workflow_text):
+            error_id, _, target = body.partition(":")
+            if target or error_id not in self.RUN_WIDE_IDS:
+                offenders.append(f"--suppress={body}")
+        return offenders
+
+    def test_no_file_or_class_wide_suppression_on_the_command_line(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        assert self._command_suppressions(text), "no --suppress= read at all: the scan is broken"
+        offenders = self._offenders(text)
+        assert not offenders, (
+            f"cppcheck suppressions are back on the command line: {offenders}. "
+            "Every finding this project maintains is resolved at source; only the "
+            f"run-wide environment IDs {sorted(self.RUN_WIDE_IDS)} may remain."
+        )
+
+    @pytest.mark.parametrize(
+        "run",
+        [
+            "cppcheck --suppress=uninitvar:src/c/ama_nistp.c \\\n  --force src/c",
+            "cppcheck --force --suppress=uninitvar src/c",
+            (
+                "cppcheck \\\n  --suppress=missingIncludeSystem "
+                "--suppress=knownConditionTrueFalse \\\n  src/c"
+            ),
+        ],
+        ids=["file-scoped-on-the-invocation-line", "one-line", "second-flag-on-a-line"],
+    )
+    def test_a_suppression_anywhere_on_the_command_is_read(self, run: str) -> None:
+        workflow = yaml.safe_dump({"jobs": {"cppcheck": {"steps": [{"run": run}]}}})
+        assert self._offenders(workflow), run
+
+    def test_prose_about_a_suppression_is_not_one(self) -> None:
+        run = (
+            "# was: --suppress=uninitvar:src/c/x.c\ncppcheck --suppress=missingIncludeSystem src/c"
+        )
+        workflow = yaml.safe_dump({"jobs": {"cppcheck": {"steps": [{"run": run}]}}})
+        assert self._offenders(workflow) == []
+
+    def test_array_index_out_of_bounds_needs_no_suppression(self) -> None:
+        """-DPATH_MAX=4096 removes it and leaves the bounds check live."""
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        assert "-DPATH_MAX=4096" in text, (
+            "the real PATH_MAX define is gone; without it --force invents "
+            "dir[1] and arrayIndexOutOfBounds returns, needing a suppression."
+        )
+        assert "--suppress=arrayIndexOutOfBounds" not in text, (
+            "arrayIndexOutOfBounds is suppressed again; -DPATH_MAX=4096 removes " "it without one."
+        )
+
+
+class TestFileScopedSuppressionsAreRefused:
+    """INVARIANT-13's FIRST condition had no enforcement anywhere.
+
+    The invariant states that a suppression must be "line-scoped, not
+    file-scoped".  Every file-level linter directive is a STANDALONE comment,
+    and ``effective_suppressions`` discarded standalone comments before
+    ``_SUPPRESSION_RE`` ever saw them — the mechanism that stops the gate
+    firing on its own prose is exactly what guaranteed the file-scoped forms
+    were never examined.  ``mypy:`` was not in the marker set at all, so
+    ``# mypy: ignore-errors`` was unrecognised even as a marker.
+
+    The tree carried one: ``tests/test_fuzzing.py`` opened with
+    ``# mypy: disable-error-code="misc"``.  It turned out to be dead — mypy
+    --strict passes over that file without it — which is the ordinary fate of
+    a suppression nothing checks.
+    """
+
+    FILE_SCOPED = (
+        '# mypy: disable-error-code="misc"',
+        "# mypy: ignore-errors",
+        "# ruff: noqa",
+        "# ruff: noqa: E501",
+        "# flake8: noqa",
+        "# pylint: skip-file",
+    )
+
+    @pytest.mark.parametrize("directive", FILE_SCOPED)
+    def test_a_file_scoped_directive_is_refused(self, gate: ModuleType, directive: str) -> None:
+        source = f"{directive}\n\n\ndef f() -> None:\n    pass\n"
+        found = gate.check_source("pkg/mod.py", source)
+        assert len(found) == 1, found
+        assert "FILE-SCOPED" in found[0], found[0]
+
+    @pytest.mark.parametrize("directive", FILE_SCOPED)
+    def test_a_justification_does_not_make_it_acceptable(
+        self, gate: ModuleType, directive: str
+    ) -> None:
+        """The invariant forbids the SCOPE, not the absence of a reason."""
+        source = f"{directive}  -- needed for X (TAG-001)\n\ndef f() -> None:\n    pass\n"
+        found = gate.check_source("pkg/mod.py", source)
+        assert found and "FILE-SCOPED" in found[0], found
+
+    def test_a_line_one_whole_file_type_ignore_is_refused(self, gate: ModuleType) -> None:
+        source = "# type: ignore\n\ndef f() -> None:\n    pass\n"
+        found = gate.check_source("pkg/mod.py", source)
+        assert len(found) == 1 and "FILE-SCOPED" in found[0], found
+
+    def test_a_trailing_type_ignore_is_still_line_scoped(self, gate: ModuleType) -> None:
+        """The control: the ordinary line-scoped form must not be swept up.
+
+        Same spelling, different position — so a position-blind pattern would
+        break every justified suppression in the tree.
+        """
+        source = "def f() -> None:\n    x = 1  # type: ignore[assignment]  -- why (TAG-001)\n"
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_prose_about_a_directive_is_not_a_directive(self, gate: ModuleType) -> None:
+        """A standalone comment that only DISCUSSES a directive is prose."""
+        source = (
+            "# A file-scoped `# ruff: noqa` would be refused here.\n\ndef f() -> None:\n    pass\n"
+        )
+        assert gate.check_source("pkg/mod.py", source) == []
+
+
+#: The opening every tracked ``.py`` file must carry (``check_headers.py``).
+#: It occupies lines 1-3, which is why a whole-module ``# type: ignore`` in a
+#: compliant file can never be on line 1.
+_HEADER = (
+    "#!/usr/bin/env python3\n"
+    "# Copyright (C) 2025-2026 Steel Security Advisors LLC\n"
+    "# SPDX-License-Identifier: Apache-2.0\n"
+)
+
+#: A module ``mypy --strict`` rejects: an untyped def returning a bad sum.
+_BODY = '"""Doc."""\n\n\ndef f(x):\n    return x + "a" + 1\n'
+
+#: Every file-scoped mypy form that sits AFTER the mandatory header, each
+#: paired with the line it occupies.  The gate used to report none of them.
+_FILE_SCOPED_AFTER_HEADER = {
+    "type-ignore-before-docstring": (_HEADER + "# type: ignore\n" + _BODY, 4),
+    "type-ignore-after-blank": (_HEADER + "\n# type: ignore\n\n" + _BODY, 5),
+    "type-ignore-before-decorator": (
+        _HEADER + "# type: ignore\nimport functools\n\n\n@functools.cache\ndef f(x):\n"
+        '    return x + "a" + 1\n',
+        4,
+    ),
+    "mypy-allow-untyped-defs": (
+        _HEADER + "# mypy: allow-untyped-defs, no-warn-unused-ignores\n" + _BODY,
+        4,
+    ),
+    "mypy-flag-false": (_HEADER + "# mypy: disallow-untyped-defs=False\n" + _BODY, 4),
+    "mypy-inside-docstring": (
+        _HEADER + '"""Doc.\n\n# mypy: ignore-errors\n"""\n\n\ndef f(x):\n'
+        '    return x + "a" + 1\n',
+        6,
+    ),
+}
+
+
+class TestFileScopedMypyFormsAreFoundWhereMypyFindsThem:
+    """mypy's file-scoped forms are defined by POSITION, not by line 1.
+
+    A ``# type: ignore`` anywhere before the module's first statement makes
+    mypy skip the whole module, and mypy reads ``# mypy: <options>`` from any
+    raw line beginning with that prefix — including one inside a string.  The
+    gate used to recognise the first only on line 1, which the header
+    ``check_headers.py`` requires always occupies, and the second only for
+    ``ignore-errors``/``disable-error-code`` in a real comment token.  Each
+    case below was reported clean.
+    """
+
+    @pytest.mark.parametrize("label", sorted(_FILE_SCOPED_AFTER_HEADER))
+    def test_it_is_refused_as_file_scoped(self, gate: ModuleType, label: str) -> None:
+        source, lineno = _FILE_SCOPED_AFTER_HEADER[label]
+        found = gate.check_source("pkg/mod.py", source)
+        assert len(found) == 1, found
+        assert found[0].startswith(f"pkg/mod.py:{lineno}: FILE-SCOPED"), found[0]
+
+    @pytest.mark.parametrize("label", sorted(_FILE_SCOPED_AFTER_HEADER))
+    def test_mypy_really_skips_the_module(self, label: str, tmp_path: Path) -> None:
+        """The premise, measured: each form silences ``mypy --strict``.
+
+        Paired with the control below, which proves the same body fails
+        without the directive — so a mypy that stopped honouring a form would
+        turn this red rather than leave the gate refusing a harmless line.
+        """
+        api = pytest.importorskip("mypy.api")
+        source, _ = _FILE_SCOPED_AFTER_HEADER[label]
+        target = tmp_path / "mod.py"
+        target.write_text(source, encoding="utf-8")
+        out, err, status = api.run(
+            [
+                "--strict",
+                "--no-incremental",
+                "--config-file=",
+                f"--cache-dir={os.devnull}",
+                str(target),
+            ]
+        )
+        assert status == 0, f"{label}: mypy was NOT silenced:\n{out}{err}"
+
+    def test_the_control_body_fails_mypy(self, tmp_path: Path) -> None:
+        api = pytest.importorskip("mypy.api")
+        target = tmp_path / "mod.py"
+        target.write_text(_HEADER + _BODY, encoding="utf-8")
+        out, _err, status = api.run(
+            [
+                "--strict",
+                "--no-incremental",
+                "--config-file=",
+                f"--cache-dir={os.devnull}",
+                str(target),
+            ]
+        )
+        assert status == 1 and "error:" in out, out
+
+    def test_a_standalone_type_ignore_after_the_first_statement_is_not_file_scoped(
+        self, gate: ModuleType
+    ) -> None:
+        """The boundary: past the first statement mypy no longer reads it as whole-module."""
+        source = _HEADER + '"""Doc."""\n# type: ignore\nx = 1\n'
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_a_trailing_type_ignore_on_the_first_statement_is_line_scoped(
+        self, gate: ModuleType
+    ) -> None:
+        """The boundary is strict: ON the first statement's line mypy scopes it to that line."""
+        source = _HEADER + "import os  # type: ignore[import-untyped]  -- why (TAG-001)\n"
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_a_type_ignore_between_a_decorator_and_its_def_is_not_file_scoped(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """A decorated first statement starts at its decorator, as mypy counts it.
+
+        So a ``# type: ignore`` below the decorator is past the first statement
+        and mypy still checks the module — measured here, so the gate's
+        boundary is pinned to mypy's rather than to the ``def`` line.
+        """
+        source = _HEADER + '@staticmethod\n# type: ignore\ndef f(x):\n    return x + "a" + 1\n'
+        assert gate.check_source("pkg/mod.py", source) == []
+        api = pytest.importorskip("mypy.api")
+        target = tmp_path / "mod.py"
+        target.write_text(source, encoding="utf-8")
+        out, _err, status = api.run(
+            [
+                "--strict",
+                "--no-incremental",
+                "--config-file=",
+                f"--cache-dir={os.devnull}",
+                str(target),
+            ]
+        )
+        assert status == 1 and "error:" in out, out
+
+    def test_an_indented_mypy_line_in_a_string_is_not_configuration(self, gate: ModuleType) -> None:
+        """mypy matches the prefix at column 0 only; an indented quotation is prose."""
+        source = _HEADER + '"""Doc.\n\n    # mypy: ignore-errors\n"""\nx = 1\n'
+        assert gate.check_source("pkg/mod.py", source) == []
+
+
+class TestCppcheckRunsCleanWithoutSuppressions:
+    """The positive proof behind the inverted invariant above.
+
+    The per-site era guaranteed each pin still named a live finding; with no
+    pins, the guarantee that matters is the stronger one -- the cppcheck the
+    CI runs, minus only the two run-wide environment suppressions, reports
+    NOTHING over ``src/c``.  If a real finding appears, or a source resolution
+    regresses (a dropped ``= {0}`` on an out-parameter, a signed shift mask
+    creeping back), this goes red locally in a few seconds instead of only in
+    the gate.
+
+    Skipped where cppcheck is not installed or cannot load its own std.cfg --
+    the Static Analysis job always has a working one, so the enforcement is
+    not lost, and a developer who has it gets the answer before pushing.
+    """
+
+    _REPORT = _re.compile(r"^[^:]+:\d+:\d+: (error|warning|performance|portability):")
+
+    @staticmethod
+    def _repo_root() -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    def test_cppcheck_reports_nothing_over_src_c(self) -> None:
+        cppcheck = _shutil.which("cppcheck")
+        if cppcheck is None:
+            _pytest.skip("cppcheck is not installed (no `cppcheck` on PATH)")
+
+        root = self._repo_root()
+        proc = _subprocess.run(
+            [
+                cppcheck,
+                "--enable=warning,performance,portability",
+                "--suppress=missingIncludeSystem",
+                "--suppress=unusedFunction",
+                "--inline-suppr",
+                "--std=c11",
+                "-Iinclude/",
+                "-DAMA_USE_NATIVE_PQC",
+                "-DPATH_MAX=4096",
+                "--force",
+                "src/c/",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        combined = proc.stdout + proc.stderr
+
+        # A cppcheck that cannot load its own std.cfg analyses nothing and says
+        # so; keyed to its words rather than to an empty report, so a cppcheck
+        # that really ran and found nothing still exercises the assertion.
+        if "installation is broken" in combined or "Failed to load std.cfg" in combined:
+            first = next((ln for ln in combined.splitlines() if ln.strip()), "no output")
+            _pytest.skip(
+                f"the cppcheck at {cppcheck} cannot load its own std.cfg, so it "
+                f"analysed nothing: {first.strip()[:200]}"
+            )
+
+        findings = [ln for ln in combined.splitlines() if self._REPORT.match(ln.strip())]
+        assert not findings, (
+            "cppcheck reported findings that are no longer suppressed. Resolve "
+            "each at source -- zero-init the out-parameter, or write the shift "
+            "mask in the defined `0 - ((uint64_t)x >> n)` form -- rather than "
+            "re-adding a suppression:\n" + "\n".join(findings[:40])
+        )
+
+
+# ---------------------------------------------------------------------------
+# The C-tree scan sees compiler- and sanitizer-level suppressions
+# ---------------------------------------------------------------------------
+#
+# The scan recognised analyser comment markers (NOLINT, cppcheck-suppress, …)
+# only, so `#pragma GCC diagnostic ignored`, `no_sanitize` attributes and
+# `optnone` silenced diagnostics in the crypto core while the gate reported the
+# tree "carries none at all".  The real tree carried three.
+
+
+def _c_tree(tmp_path: Path, **files: str) -> Path:
+    """A repository-shaped tree with the given files under src/c/."""
+    for name, body in files.items():
+        path = tmp_path / "src" / "c" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '#pragma GCC diagnostic ignored "-Wpedantic"',
+        '#pragma clang diagnostic ignored "-Wcast-align"',
+        "#pragma warning(disable: 4996)",
+        "#pragma warning( suppress : 4127 )",
+        '__attribute__((no_sanitize("address")))',
+        "__attribute__((noinline, no_sanitize_address))",
+        "__attribute__((no_sanitize_memory))",
+        "__attribute__((optnone))",
+    ],
+)
+def test_compiler_and_sanitizer_suppressions_are_violations(tmp_path: Path, line: str) -> None:
+    from tools.check_suppression_hygiene import scan_c_tree
+
+    violations = scan_c_tree(_c_tree(tmp_path, **{"a.c": f"int x;\n{line}\nvoid f(void) {{}}\n"}))
+    assert len(violations) == 1, violations
+    assert "src/c/a.c:2" in violations[0]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "__attribute__((noinline, no_sanitize_address))",
+        '_Pragma("GCC diagnostic ignored \\"-Wconversion\\"")',
+        "__attribute__((noinline, optnone))",
+        "[[clang::optnone]] void g(void);",
+        '#pragma GCC optimize("O0")',
+        "#pragma clang optimize off",
+        "__attribute__((disable_sanitizer_instrumentation))",
+    ],
+)
+def test_every_spelling_is_a_violation_in_every_file(tmp_path: Path, line: str) -> None:
+    """No exemption register, and no spelling the regex misses.
+
+    ``no_sanitize_address`` on ``ama_secure_stack_wipe`` was the one recorded
+    exception, keyed by file, so the same marker anywhere else in that file
+    passed.  It turned out to be unnecessary — the function writes only its own
+    locals, and the ASan lane runs clean without it — so the register is gone.
+    The other rows are spellings the scan used to miss.
+    """
+    from tools.check_suppression_hygiene import scan_c_tree
+
+    violations = scan_c_tree(
+        _c_tree(tmp_path, **{"ama_consttime.c": f"int x;\n{line}\nvoid f(void) {{}}\n"})
+    )
+    assert len(violations) == 1 and "src/c/ama_consttime.c:2" in violations[0], violations
+
+
+def test_the_real_tree_carries_none() -> None:
+    from tools.check_suppression_hygiene import scan_c_tree
+
+    assert scan_c_tree(REPO_ROOT) == []
+    for unit in ("ama_nistp.c", "ama_secp256k1.c"):
+        assert "diagnostic ignored" not in (REPO_ROOT / "src" / "c" / unit).read_text(
+            encoding="utf-8"
+        ), f"{unit} hides a warning behind a pragma again"
