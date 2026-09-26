@@ -31,7 +31,7 @@
 # --- Core test framework ---
 pytest==9.1.1
 pytest-cov==7.1.0
-hypothesis==6.168.0
+hypothesis==6.168.1
 coverage==7.16.1
 
 # --- Linting & formatting ---
@@ -67,7 +67,7 @@ markdown-it-py==4.2.0
 mdurl==0.1.2
 packaging==26.3
 pathspec==1.1.1
-platformdirs==4.11.10
+platformdirs==4.11.12
 pluggy==1.6.0
 # Pygments >= 2.20.0 includes the CVE-2026-4539 AdlLexer ReDoS fix.
 # Pygments remains a transitive dev dependency only; it is not used at runtime.
