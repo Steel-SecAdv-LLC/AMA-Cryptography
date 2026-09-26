@@ -13,8 +13,8 @@ Usage (CI):
 
 from __future__ import annotations
 
-import io
 import ast
+import io
 import os
 import re
 import sys
@@ -171,7 +171,12 @@ def scan_comments(source: str) -> tuple[list[tuple[int, str, bool]], Optional[in
             elif first is None and tok.type not in _NOT_A_STATEMENT:
                 first = tok.start[0]
     except (tokenize.TokenError, SyntaxError, IndentationError):
-        pass
+        # Keep what was seen before the error: file_scoped_lines and the
+        # candidate listing want every comment they can get.  This is NOT
+        # where an unparseable file is judged -- check_source refuses one
+        # outright, because a suppression written after the error point is
+        # invisible to this pass and would otherwise go unreported.
+        return comments, first
     return comments, first
 
 
@@ -309,6 +314,15 @@ def effective_suppressions(source: str) -> list[tuple[int, str]]:
 def check_source(filepath: str, source: str) -> list[str]:
     """Return violation messages for already-loaded Python ``source``."""
     violations: list[str] = []
+    try:
+        ast.parse(source, filename=filepath)
+    except SyntaxError as exc:  # IndentationError and TabError are subclasses
+        # Fail closed: tokenizing stops at the error, so every comment after
+        # it -- and every suppression those comments carry -- is unseen.
+        return [
+            f"{filepath}:{exc.lineno or 0}: cannot be parsed ({exc.msg}); no "
+            f"suppression after this line can be verified, so the file is refused"
+        ]
     # File-scoped first, and unconditionally: INVARIANT-13 forbids the SCOPE.
     # A justification and a tracking id do not make a file-scoped `ruff: noqa`
     # comment line-scoped, so there is no form of it to accept.

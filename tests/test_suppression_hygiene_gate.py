@@ -136,6 +136,27 @@ class TestTheScan:
         assert gate.scan_optional_imports(tmp_path) == []
 
 
+class TestAnUnparseableFileIsRefused:
+    """Tokenizing stops at a syntax error, so a suppression after it is unseen.
+
+    ``scan_comments`` keeps what it read before the error, which is right for
+    the candidate listing and wrong for a verdict: an unjustified ``noqa``
+    written below an indentation error was not reported at all.  The file is
+    refused whole instead.
+    """
+
+    SOURCE = "def f():\n    return 1\n  x = 2\ny = 3  # noqa\n"
+
+    def test_the_scan_really_stops_at_the_error(self, gate: ModuleType) -> None:
+        comments, _first = gate.scan_comments(self.SOURCE)
+        assert comments == [], "fixture: the noqa must lie past the tokenize error"
+
+    def test_the_file_is_refused(self, gate: ModuleType) -> None:
+        violations = gate.check_source("bad.py", self.SOURCE)
+        assert len(violations) == 1, violations
+        assert violations[0].startswith("bad.py:3: cannot be parsed")
+
+
 def test_the_shipped_tree_is_clean(gate: ModuleType) -> None:
     """The gate CI runs, run here — now that the pre-filter can see everything."""
     assert gate.scan_optional_imports(REPO_ROOT) == []
@@ -237,8 +258,10 @@ class TestCppcheckHasNoSuppressions:
         [
             "cppcheck --suppress=uninitvar:src/c/ama_nistp.c \\\n  --force src/c",
             "cppcheck --force --suppress=uninitvar src/c",
-            "cppcheck \\\n  --suppress=missingIncludeSystem "
-            "--suppress=knownConditionTrueFalse \\\n  src/c",
+            (
+                "cppcheck \\\n  --suppress=missingIncludeSystem "
+                "--suppress=knownConditionTrueFalse \\\n  src/c"
+            ),
         ],
         ids=["file-scoped-on-the-invocation-line", "one-line", "second-flag-on-a-line"],
     )

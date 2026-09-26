@@ -356,8 +356,7 @@ class TestLifetime:
         copies = record_char_buffer_copies(
             monkeypatch, {pb.ED25519_SECRET_KEY_BYTES, pb.ED25519_EXPANDED_KEY_BYTES}
         )
-        key = pb.Ed25519SigningKey(sk[:length])
-        try:
+        with pb.Ed25519SigningKey(sk[:length]) as key:
             assert key.public_key == pk
             view = memoryview(key._expanded)
             private_parts = {
@@ -372,8 +371,6 @@ class TestLifetime:
             probe = key._expanded.raw
             assert private_parts["scalar"] in probe
             assert any(c is probe for c in copies)
-        finally:
-            key.close()
 
     def test_the_public_key_survives_close(self) -> None:
         pk, sk = _fresh()

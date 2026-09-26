@@ -30,6 +30,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import marshal
+import math
 import os
 import py_compile
 import shutil
@@ -42,7 +43,7 @@ from types import CodeType, FunctionType, ModuleType
 import pytest
 
 import ama_cryptography
-from ama_cryptography import _self_test as st
+import ama_cryptography._self_test as st
 from tests.conftest import native_library_present
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -228,7 +229,7 @@ class TestCodeMatches:
         )
         py = _make_module(tmp_path, "folded", body)
         fresh = compile(body, str(py), "exec")
-        assert any(isinstance(c, float) and c != c for c in fresh.co_consts), "fixture: NaN"
+        assert any(isinstance(c, float) and math.isnan(c) for c in fresh.co_consts), "fixture: NaN"
         py_compile.compile(str(py), doraise=True)
         assert st._verify_source_file_bytecode(py) == ("verified", None)
 

@@ -575,8 +575,10 @@ class TestFormalVerificationClaimsAreRefused:
             # The two honest denials in the tree the wider pattern set reaches:
             # ARCHITECTURE.md's PRF assumption and docs/DESIGN_NOTES.md's
             # description of the adaptive-posture layer.
-            "HMAC-SHA3-256 is a secure PRF (widely believed, not formally proven "
-            "for sponge constructions)",
+            (
+                "HMAC-SHA3-256 is a secure PRF (widely believed, not formally proven "
+                "for sponge constructions)"
+            ),
             "a heuristic response layer, not a provably secure protocol.",
             "The kernel has not been machine-checked.",
             "The scheme has not been proven secure in the QROM.",
@@ -730,13 +732,19 @@ class TestContextSpansTheParagraph:
     @pytest.mark.parametrize(
         "text",
         [
-            "AMA attaches RFC 3161 timestamps. They provide independent verification "
-            "of when a package was signed.\n",
-            "AMA attaches RFC 3161 timestamps.\nThey provide independent verification\n"
-            "of when a package was signed.\n",
+            (
+                "AMA attaches RFC 3161 timestamps. They provide independent verification "
+                "of when a package was signed.\n"
+            ),
+            (
+                "AMA attaches RFC 3161 timestamps.\nThey provide independent verification\n"
+                "of when a package was signed.\n"
+            ),
             "Each package carries a TSA token. It is proof of existence at signing time.\n",
-            "RFC 3161 support is built in. Verification is simple. The chain gives "
-            "third-party attestation of the signing time.\n",
+            (
+                "RFC 3161 support is built in. Verification is simple. The chain gives "
+                "third-party attestation of the signing time.\n"
+            ),
         ],
     )
     def test_a_claim_whose_subject_is_in_an_earlier_sentence_is_caught(

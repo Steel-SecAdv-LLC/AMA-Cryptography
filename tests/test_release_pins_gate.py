@@ -345,6 +345,17 @@ class TestWorkflowNegativeControls:
             assert len(problems) == 1, problems
             assert f"`pip {subcommand}` resolves from the index" in problems[0]
 
+    def test_a_read_only_pip_subcommand_is_not_an_install(self) -> None:
+        """Only install/download/wheel fetch from an index.
+
+        `pip check` after a pinned install is a verification step, not a
+        fetch; refusing it, or counting it toward the install floor, would
+        make the gate reject a safer workflow and over-count the pinned one.
+        """
+        for command in ("pip check", "pip list", "python -m pip --version", "pip show cmake"):
+            document = _workflow(before_build=f"{MANIFEST_INSTALL} && {command}")
+            assert _workflow_problems(document) == [], command
+
     def test_python_dash_m_pip_and_a_venv_pip_are_recognised(self) -> None:
         for command in (
             "/opt/venv/bin/python -X utf8 -m pip install cmake",

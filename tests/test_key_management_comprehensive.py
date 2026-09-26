@@ -1125,7 +1125,7 @@ class TestArgon2idIsRequiredNotSubstituted:
 
     @staticmethod
     def _without_argon2id(monkeypatch: pytest.MonkeyPatch) -> None:
-        import ama_cryptography.pqc_backends as pqc_backends
+        from ama_cryptography import pqc_backends
 
         monkeypatch.setattr(pqc_backends, "_ARGON2_NATIVE_AVAILABLE", False)
 

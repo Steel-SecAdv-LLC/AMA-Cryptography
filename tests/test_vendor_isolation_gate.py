@@ -177,10 +177,12 @@ class TestDynamicSourceForms:
             ),
             ('import sys\nm = sys.modules["nacl"]\n', "libsodium"),
             (
-                "import importlib\n"
-                "def _load(name):\n"
-                "    return importlib.import_module(name)\n"
-                '_load("OpenSSL.crypto")\n',
+                (
+                    "import importlib\n"
+                    "def _load(name):\n"
+                    "    return importlib.import_module(name)\n"
+                    '_load("OpenSSL.crypto")\n'
+                ),
                 "OpenSSL",
             ),
         ],
@@ -1092,22 +1094,28 @@ class TestBuildConfigCheck:
                 "OpenSSL",
             ),
             (
-                'Extension("m", ["m.c"],'
-                ' extra_objects=["/usr/lib/x86_64-linux-gnu/libcrypto.a"])\n',
+                (
+                    'Extension("m", ["m.c"],'
+                    ' extra_objects=["/usr/lib/x86_64-linux-gnu/libcrypto.a"])\n'
+                ),
                 "OpenSSL",
             ),
             (
-                'flags = ["-Wl,-O1"]\nflags.append("/usr/lib/libssl.so.3")\n'
-                'Extension("m", ["m.c"], extra_link_args=flags)\n',
+                (
+                    'flags = ["-Wl,-O1"]\nflags.append("/usr/lib/libssl.so.3")\n'
+                    'Extension("m", ["m.c"], extra_link_args=flags)\n'
+                ),
                 "OpenSSL",
             ),
             (
-                "def get_flags():\n"
-                "    compile_flags = []\n"
-                '    link_flags = ["-Wl,--whole-archive,/opt/lib/libsodium.a"]\n'
-                "    return compile_flags, link_flags\n"
-                "cflags, lflags = get_flags()\n"
-                'Extension("m", ["m.c"], extra_link_args=lflags)\n',
+                (
+                    "def get_flags():\n"
+                    "    compile_flags = []\n"
+                    '    link_flags = ["-Wl,--whole-archive,/opt/lib/libsodium.a"]\n'
+                    "    return compile_flags, link_flags\n"
+                    "cflags, lflags = get_flags()\n"
+                    'Extension("m", ["m.c"], extra_link_args=lflags)\n'
+                ),
                 "libsodium",
             ),
             ('Extension("m", ["m.c"], extra_link_args=["-lgcrypt"])\n', "libgcrypt"),
@@ -1544,8 +1552,10 @@ class TestContainerRecipes:
             ("RUN python3 -m pip install 'PyNaCl>=1.5'\n", "PyNaCl"),
             ("RUN pip install --upgrade pip && pip install pycryptodomex==3.20\n", "pycryptodomex"),
             (
-                "RUN pip3 install --no-cache-dir \\\n"
-                "    /tmp/cryptography-43.0.0-cp39-abi3-linux.whl\n",
+                (
+                    "RUN pip3 install --no-cache-dir \\\n"
+                    "    /tmp/cryptography-43.0.0-cp39-abi3-linux.whl\n"
+                ),
                 "cryptography",
             ),
             # A distribution's packaging of a binding.
@@ -1568,10 +1578,14 @@ class TestContainerRecipes:
             "RUN apk add --no-cache python3 py3-pip musl-dev\n",
             "# libssl-dev is NOT installed (INVARIANT-1)\nRUN apk add --no-cache python3\n",
             "RUN apt-cache policy libssl-dev\n",
-            "RUN pip3 install --no-cache-dir -r /tmp/requirements.txt"
-            " -r /tmp/requirements-dev.txt\n",
-            "RUN pip3 install --no-cache-dir /tmp/*.whl && \\\n"
-            "    pip3 install --no-cache-dir numpy\n",
+            (
+                "RUN pip3 install --no-cache-dir -r /tmp/requirements.txt"
+                " -r /tmp/requirements-dev.txt\n"
+            ),
+            (
+                "RUN pip3 install --no-cache-dir /tmp/*.whl && \\\n"
+                "    pip3 install --no-cache-dir numpy\n"
+            ),
             "RUN pip3 install build && python3 -m build && openssl version\n",
             "RUN apt-get install -y python3 python3-pip python3-venv\n",
         ],

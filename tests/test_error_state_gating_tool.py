@@ -1314,24 +1314,34 @@ class TestTheGuardMustDominateTheNativeCall:
         "source",
         [
             # an early return that emits nothing, then the guard
-            "def f(data):\n    if not data:\n        return b''\n"
-            "    check_crypto_permitted()\n    return _native_lib.ama_x(data)\n",
+            (
+                "def f(data):\n    if not data:\n        return b''\n"
+                "    check_crypto_permitted()\n    return _native_lib.ama_x(data)\n"
+            ),
             # the module-qualified guard form
-            "def f(data):\n    _module_state.check_crypto_permitted()\n"
-            "    return _native_lib.ama_x(data)\n",
+            (
+                "def f(data):\n    _module_state.check_crypto_permitted()\n"
+                "    return _native_lib.ama_x(data)\n"
+            ),
             # guard and call on one physical line: statements, not lines, decide
             "def f(data):\n    check_crypto_permitted(); return _native_lib.ama_x(data)\n",
             # a symbol bound BEFORE the guard and called after it
-            "def f(data):\n    fn = _native_lib.ama_x\n    check_crypto_permitted()\n"
-            "    return fn(data)\n",
+            (
+                "def f(data):\n    fn = _native_lib.ama_x\n    check_crypto_permitted()\n"
+                "    return fn(data)\n"
+            ),
             # the kept result of a guard-delegating helper
-            "def _require_native():\n    check_crypto_permitted()\n    return _lib\n\n\n"
-            "def f(data):\n    lib = _require_native()\n    return lib.ama_x(data)\n",
+            (
+                "def _require_native():\n    check_crypto_permitted()\n    return _lib\n\n\n"
+                "def f(data):\n    lib = _require_native()\n    return lib.ama_x(data)\n"
+            ),
             # a helper that guards AND calls native is guarded wherever it is called
-            "def _native_x(data):\n    check_crypto_permitted()\n"
-            "    return _native_lib.ama_x(data)\n\n\n"
-            "def f(data, fast=False):\n    if fast:\n        return _native_x(data)\n"
-            "    return _native_x(data[:1])\n",
+            (
+                "def _native_x(data):\n    check_crypto_permitted()\n"
+                "    return _native_lib.ama_x(data)\n\n\n"
+                "def f(data, fast=False):\n    if fast:\n        return _native_x(data)\n"
+                "    return _native_x(data[:1])\n"
+            ),
         ],
         ids=[
             "early-return",
@@ -1352,19 +1362,27 @@ class TestTheGuardMustDominateTheNativeCall:
         [
             # frost_round2_sign's shape: the guard opens the try whose finally
             # scrubs, so a refusal is scrubbed too, and the call follows it
-            "def f(data, buf):\n    try:\n        check_crypto_permitted()\n"
-            "        rc = _native_lib.ama_x(data)\n    finally:\n        scrub(buf)\n"
-            "    return rc\n",
+            (
+                "def f(data, buf):\n    try:\n        check_crypto_permitted()\n"
+                "        rc = _native_lib.ama_x(data)\n    finally:\n        scrub(buf)\n"
+                "    return rc\n"
+            ),
             # a guard earlier in the same branch as the call
-            "def f(data, fast=False):\n    if fast:\n        check_crypto_permitted()\n"
-            "        return _native_lib.ama_x(data)\n    return b''\n",
+            (
+                "def f(data, fast=False):\n    if fast:\n        check_crypto_permitted()\n"
+                "        return _native_lib.ama_x(data)\n    return b''\n"
+            ),
             # try's else runs only after the body completed, guard included
-            "def f(data):\n    try:\n        check_crypto_permitted()\n"
-            "    except ValueError:\n        raise\n    else:\n"
-            "        return _native_lib.ama_x(data)\n",
+            (
+                "def f(data):\n    try:\n        check_crypto_permitted()\n"
+                "    except ValueError:\n        raise\n    else:\n"
+                "        return _native_lib.ama_x(data)\n"
+            ),
             # a with body is a block of its own
-            "def f(data, lock):\n    with lock:\n        check_crypto_permitted()\n"
-            "        return _native_lib.ama_x(data)\n",
+            (
+                "def f(data, lock):\n    with lock:\n        check_crypto_permitted()\n"
+                "        return _native_lib.ama_x(data)\n"
+            ),
         ],
         ids=["try-finally-body", "same-branch", "try-else", "with-body"],
     )
@@ -1378,33 +1396,49 @@ class TestTheGuardMustDominateTheNativeCall:
         "source",
         [
             # a handler runs after the body raised -- possibly from the guard
-            "def f(data):\n    try:\n        check_crypto_permitted()\n"
-            "    except Exception:\n        return _native_lib.ama_x(data)\n"
-            "    return b''\n",
+            (
+                "def f(data):\n    try:\n        check_crypto_permitted()\n"
+                "    except Exception:\n        return _native_lib.ama_x(data)\n"
+                "    return b''\n"
+            ),
             # a finally runs whether or not the guard completed
-            "def f(data):\n    try:\n        check_crypto_permitted()\n"
-            "    finally:\n        _native_lib.ama_x(data)\n",
+            (
+                "def f(data):\n    try:\n        check_crypto_permitted()\n"
+                "    finally:\n        _native_lib.ama_x(data)\n"
+            ),
             # the other branch is not dominated by this one's guard
-            "def f(data, fast=False):\n    if fast:\n        check_crypto_permitted()\n"
-            "    else:\n        return _native_lib.ama_x(data)\n    return b''\n",
+            (
+                "def f(data, fast=False):\n    if fast:\n        check_crypto_permitted()\n"
+                "    else:\n        return _native_lib.ama_x(data)\n    return b''\n"
+            ),
             # a call in the condition runs before either branch
-            "def f(data):\n    if _native_lib.ama_x(data):\n"
-            "        check_crypto_permitted()\n    return b''\n",
+            (
+                "def f(data):\n    if _native_lib.ama_x(data):\n"
+                "        check_crypto_permitted()\n    return b''\n"
+            ),
             # a call in a with item runs before the body
-            "def f(data):\n    with _native_lib.ama_x(data):\n"
-            "        check_crypto_permitted()\n    return b''\n",
+            (
+                "def f(data):\n    with _native_lib.ama_x(data):\n"
+                "        check_crypto_permitted()\n    return b''\n"
+            ),
             # a context manager can swallow the guard's raise
-            "def f(data):\n    with contextlib.suppress(Exception):\n"
-            "        check_crypto_permitted()\n    return _native_lib.ama_x(data)\n",
+            (
+                "def f(data):\n    with contextlib.suppress(Exception):\n"
+                "        check_crypto_permitted()\n    return _native_lib.ama_x(data)\n"
+            ),
             # the guard's arguments are evaluated before the guard runs
-            "def _require_native(_token):\n    check_crypto_permitted()\n"
-            "    return _native_lib\n\n\n"
-            "def f(data):\n    lib = _require_native(_native_lib.ama_x(data))\n"
-            "    return lib.ama_x(data)\n",
+            (
+                "def _require_native(_token):\n    check_crypto_permitted()\n"
+                "    return _native_lib\n\n\n"
+                "def f(data):\n    lib = _require_native(_native_lib.ama_x(data))\n"
+                "    return lib.ama_x(data)\n"
+            ),
             # a delegating helper on one arm of a conditional expression
-            "def _require_native():\n    check_crypto_permitted()\n    return _native_lib\n\n\n"
-            "def f(data, fast=False):\n    lib = _native_lib if fast else _require_native()\n"
-            "    return lib.ama_x(data)\n",
+            (
+                "def _require_native():\n    check_crypto_permitted()\n    return _native_lib\n\n\n"
+                "def f(data, fast=False):\n    lib = _native_lib if fast else _require_native()\n"
+                "    return lib.ama_x(data)\n"
+            ),
         ],
         ids=[
             "except-handler",
@@ -1448,12 +1482,19 @@ class TestModulesWithTheirOwnHandle:
     @pytest.mark.parametrize(
         "body",
         [
-            "from ama_cryptography.pqc_backends import _find_native_library\n"
-            "def sign(m):\n    lib = _find_native_library()\n    return lib.ama_ed25519_sign(m)\n",
-            "from ama_cryptography.pqc_backends import _find_native_library as load\n"
-            "def handle():\n    return load()\n",
-            "from ama_cryptography import pqc_backends\n"
-            "def handle():\n    return pqc_backends._find_native_library()\n",
+            (
+                "from ama_cryptography.pqc_backends import _find_native_library\n"
+                "def sign(m):\n    lib = _find_native_library()\n"
+                "    return lib.ama_ed25519_sign(m)\n"
+            ),
+            (
+                "from ama_cryptography.pqc_backends import _find_native_library as load\n"
+                "def handle():\n    return load()\n"
+            ),
+            (
+                "from ama_cryptography import pqc_backends\n"
+                "def handle():\n    return pqc_backends._find_native_library()\n"
+            ),
             "import ctypes\ndef handle(p):\n    return ctypes.CDLL(p)\n",
             "import ctypes\ndef handle(p):\n    return ctypes.cdll.LoadLibrary(p)\n",
             "def sign(lib, m):\n    return lib.ama_ed25519_sign(m)\n",

@@ -105,31 +105,41 @@ BARE_DRAW_CALLS = frozenset(
 ALLOWED_BARE_DRAWS: dict[tuple[str, str], tuple[int, str]] = {
     ("_module_state.py", "secure_token_bytes"): (
         1,
-        "the health-tested wrapper itself — this call IS the entropy source "
-        "the continuous check wraps",
+        (
+            "the health-tested wrapper itself — this call IS the entropy source "
+            "the continuous check wraps"
+        ),
     ),
     ("adaptive_posture.py", "CryptoPostureController.evaluate_and_respond"): (
         1,
-        "uuid4 names a PendingAction: an identifier that is logged in clear and "
-        "only addresses the queued action through confirm_action(); it is not "
-        "key material and nothing derives from it",
+        (
+            "uuid4 names a PendingAction: an identifier that is logged in clear and "
+            "only addresses the queued action through confirm_action(); it is not "
+            "key material and nothing derives from it"
+        ),
     ),
     ("_self_test.py", "_run_rng_stage"): (
         2,
-        "POST's RNG stage draws bare on purpose: it is the test that decides "
-        "whether the gated wrapper may be trusted at all",
+        (
+            "POST's RNG stage draws bare on purpose: it is the test that decides "
+            "whether the gated wrapper may be trusted at all"
+        ),
     ),
     ("_build_sign.py", "_generate_keypair_and_sign"): (
         2,
-        "build-time ephemeral signer; runs while the package may be mid-"
-        "re-sign with POST structurally unavailable, and carries its own "
-        "two-draw stuck-entropy check at the call site",
+        (
+            "build-time ephemeral signer; runs while the package may be mid-"
+            "re-sign with POST structurally unavailable, and carries its own "
+            "two-draw stuck-entropy check at the call site"
+        ),
     ),
     ("key_management.py", "SecureKeyStorage.delete_key"): (
         1,
-        "random overwrite passes for secure deletion; the bytes are never "
-        "secret and predictability is not load-bearing (zeros would satisfy "
-        "the same contract)",
+        (
+            "random overwrite passes for secure deletion; the bytes are never "
+            "secret and predictability is not load-bearing (zeros would satisfy "
+            "the same contract)"
+        ),
     ),
 }
 
@@ -495,10 +505,14 @@ class TestTheMainGuardExemptionIsTheScriptIdiomAndNothingElse:
     @pytest.mark.parametrize(
         "source",
         [
-            'import os\n\nif __name__ == "__main__":\n    pass\n'
-            "else:\n    KEY = os.urandom(32)\n",
-            'import os\n\nif __name__ == "__main__":\n    pass\n'
-            "elif True:\n    KEY = os.urandom(32)\n",
+            (
+                'import os\n\nif __name__ == "__main__":\n    pass\n'
+                "else:\n    KEY = os.urandom(32)\n"
+            ),
+            (
+                'import os\n\nif __name__ == "__main__":\n    pass\n'
+                "elif True:\n    KEY = os.urandom(32)\n"
+            ),
         ],
         ids=["else-arm", "elif-arm"],
     )

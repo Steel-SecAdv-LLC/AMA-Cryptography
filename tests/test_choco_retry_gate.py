@@ -364,10 +364,14 @@ class TestLogicalLinesAndSegmentScopedExemption:
         "text",
         [
             "  run: .github/scripts/choco-install.ps1 -Package choco $extra\n",
-            '    & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1"'
-            " -Package choco $extra\n",
-            "  run: pwsh -NoProfile -File .github/scripts/choco-install.ps1"
-            " -Package choco @extra\n",
+            (
+                '    & "$env:GITHUB_WORKSPACE/.github/scripts/choco-install.ps1"'
+                " -Package choco $extra\n"
+            ),
+            (
+                "  run: pwsh -NoProfile -File .github/scripts/choco-install.ps1"
+                " -Package choco @extra\n"
+            ),
         ],
     )
     def test_a_choco_shaped_helper_argument_is_exempt(self, text: str) -> None:

@@ -948,7 +948,10 @@ def check_workflow(document: Any, report: Report) -> None:
     for location, text in _iter_command_sources(document):
         for tokens in commands(text):
             pip = pip_subcommand(tokens)
-            if pip is not None:
+            if pip is not None and pip[0] in _INDEX_SUBCOMMANDS:
+                # `pip check`, `pip list`, `pip show`, `pip --version` resolve
+                # nothing from an index; only these subcommands can fetch an
+                # unpinned distribution, so only they are pins to verify.
                 subcommand, arguments = pip
                 report.pip_installs += 1
                 kind, detail = classify_pip_command(subcommand, arguments)

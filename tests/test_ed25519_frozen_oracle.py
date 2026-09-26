@@ -106,7 +106,7 @@ class TestTheCommittedFixtureCannotBeReRecorded:
             return "fake"
 
     def _patch(self, monkeypatch: pytest.MonkeyPatch, committed: Path) -> None:
-        import tools.freeze_ed25519_oracle as tool
+        from tools import freeze_ed25519_oracle as tool
 
         monkeypatch.setattr(tool, "FIXTURE_PATH", committed)
         monkeypatch.setattr(tool, "Library", self._FakeLibrary)
@@ -118,7 +118,7 @@ class TestTheCommittedFixtureCannotBeReRecorded:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        import tools.freeze_ed25519_oracle as tool
+        from tools import freeze_ed25519_oracle as tool
 
         committed = tmp_path / "oracle" / "ed25519_frozen_oracle.txt"
         committed.parent.mkdir()
@@ -139,7 +139,7 @@ class TestTheCommittedFixtureCannotBeReRecorded:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        import tools.freeze_ed25519_oracle as tool
+        from tools import freeze_ed25519_oracle as tool
 
         committed = tmp_path / "oracle" / "ed25519_frozen_oracle.txt"
         self._patch(monkeypatch, committed)

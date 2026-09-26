@@ -1317,8 +1317,10 @@ void wipe(const unsigned char *in) {
                 "an MSVC-only arm",
             ),
             (
-                '#if defined(__GNUC__)\n    __asm__ __volatile__("" : : "r"(secret_key) : '
-                '"memory");\n#endif',
+                (
+                    '#if defined(__GNUC__)\n    __asm__ __volatile__("" : : "r"(secret_key) : '
+                    '"memory");\n#endif'
+                ),
                 "a gcc arm with no #else",
             ),
             (
@@ -1330,8 +1332,10 @@ void wipe(const unsigned char *in) {
                 "a barrier quoted in a string",
             ),
             (
-                '}\nvoid next(unsigned char *secret_key) {\n    __asm__ __volatile__("" : : '
-                '"r"(secret_key) : "memory");',
+                (
+                    '}\nvoid next(unsigned char *secret_key) {\n    __asm__ __volatile__("" : : '
+                    '"r"(secret_key) : "memory");'
+                ),
                 "a barrier in the next function",
             ),
         ],
@@ -1384,17 +1388,23 @@ void wipe(const unsigned char *in) {
         "src",
         [
             # After the call's own group closes, the barrier runs after the call.
-            "void wipe(void) {\n    unsigned char secret_key[64];\n#ifdef A\n"
-            "    memset(secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n#endif\n"
-            '    __asm__ __volatile__("" : : "r"(secret_key) : "memory");\n}\n',
+            (
+                "void wipe(void) {\n    unsigned char secret_key[64];\n#ifdef A\n"
+                "    memset(secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n#endif\n"
+                '    __asm__ __volatile__("" : : "r"(secret_key) : "memory");\n}\n'
+            ),
             # The operand may name the object whose member is scrubbed.
-            "void wipe(struct ctx *c) {\n"
-            "    memset(c->secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n"
-            '    __asm__ __volatile__("" : : "r"(c) : "memory");\n}\n',
+            (
+                "void wipe(struct ctx *c) {\n"
+                "    memset(c->secret_key, 0, 64);  // SCRUB-BARRIER: secret_key\n"
+                '    __asm__ __volatile__("" : : "r"(c) : "memory");\n}\n'
+            ),
             # A comment-only line above annotates, as it does for PUBLIC-DATA.
-            "void wipe(void) {\n    unsigned char secret_key[64];\n"
-            "    /* SCRUB-BARRIER: secret_key */\n    memset(secret_key, 0, 64);\n"
-            '    __asm__ __volatile__("" : : "r"(secret_key) : "memory");\n}\n',
+            (
+                "void wipe(void) {\n    unsigned char secret_key[64];\n"
+                "    /* SCRUB-BARRIER: secret_key */\n    memset(secret_key, 0, 64);\n"
+                '    __asm__ __volatile__("" : : "r"(secret_key) : "memory");\n}\n'
+            ),
         ],
     )
     def test_real_barriers_in_other_positions_are_accepted(self, src: str) -> None:

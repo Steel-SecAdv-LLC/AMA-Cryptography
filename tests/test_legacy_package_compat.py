@@ -48,7 +48,7 @@ def _fixture() -> dict[str, Any]:
 
 
 def _verify(label: str, **kwargs: Any) -> Any:
-    import ama_cryptography.legacy_compat as lc
+    from ama_cryptography import legacy_compat as lc
 
     fx = _fixture()
     package = lc.CryptoPackage(**fx["packages"][label])
@@ -137,7 +137,7 @@ class TestTheRfc3161TokenIsOutsideTheV2Transcripts:
     def test_injecting_a_token_moves_only_the_binding_verdict(self) -> None:
         import dataclasses
 
-        import ama_cryptography.legacy_compat as lc
+        from ama_cryptography import legacy_compat as lc
 
         fx = _fixture()
         package = lc.CryptoPackage(**fx["packages"]["with_ml_dsa_65"])

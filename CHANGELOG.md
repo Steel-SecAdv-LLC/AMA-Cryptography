@@ -156,6 +156,22 @@ messages and the file comments.
   not flag the `tmp_path / ...` receiver the Windows failure came from. This
   replaces the earlier entry that recorded the remaining sites instead of
   fixing them.
+- The 46 remaining CodeQL results on this branch, all below the blocking
+  level, are fixed at source rather than left standing. Three were real:
+  `tools/check_release_pins.py` declared the pip subcommands that fetch from
+  an index but never used the set, so it refused a harmless `pip check` and
+  counted it toward the install floor (it now inspects only `install`,
+  `download` and `wheel`); `tools/check_suppression_hygiene.py` kept the
+  comments it read before a tokenize error, so a suppression written below
+  an indentation error went unreported (an unparseable file is now refused
+  outright); and a NaN fixture compared a value with itself (now
+  `math.isnan`). The rest: the 34 flagged implicitly concatenated strings in
+  test parameter lists, and 12 more of the same shape in the same files, are
+  parenthesized so each join is explicit (each was checked to be intended,
+  not a missing comma); eight modules imported both
+  as `import a.b` and `from a.b import` use one form, and a key closed in a
+  `finally` block uses `with`. The first two fixes carry tests that fail
+  when the fix is reverted.
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to

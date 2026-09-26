@@ -1735,7 +1735,7 @@ def capture_dispatch_report() -> str:
             with tempfile.TemporaryFile() as sink:
                 os.dup2(sink.fileno(), 2)
                 try:
-                    import ama_cryptography.pqc_backends as pb
+                    from ama_cryptography import pqc_backends as pb
 
                     pb.native_sha3_256(b"provenance")
                 except Exception as exc:
