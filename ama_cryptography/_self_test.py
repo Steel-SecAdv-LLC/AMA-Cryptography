@@ -103,6 +103,11 @@ logger = logging.getLogger(__name__)
 #             specific skip conditions of each algorithm.
 _SELF_TEST_RESULTS: List[Tuple[str, Optional[bool], str]] = []  # (name, passed, detail)
 _POST_DURATION_MS: float = 0.0
+#: Wall-clock per POST stage of the last run, in execution order, so a slow
+#: POST names the stage that was slow.  Added after a Windows / CPython
+#: 3.14.7 CI run where one POST took 6,234 ms while every other POST in the
+#: same process took ~1 s, and nothing recorded where the time went.
+_POST_STAGE_DURATIONS_MS: Dict[str, float] = {}
 
 # Serialises POST runs and the state transitions they drive.  ``reset_module()``
 # is callable from any thread at any time, and without this two concurrent
@@ -112,7 +117,12 @@ _POST_LOCK = threading.RLock()
 
 #: Evidence from the last POST failure, retained across a successful
 #: ``reset_module()`` so recovery does not erase the record of what failed.
-_LAST_FAILURE: Dict[str, Any] = {"reason": None, "results": [], "duration_ms": 0.0}
+_LAST_FAILURE: Dict[str, Any] = {
+    "reason": None,
+    "results": [],
+    "duration_ms": 0.0,
+    "stage_durations_ms": {},
+}
 
 # Strict mode env: when set, a skipped KAT is treated as a failure so
 # release builds (and any deployment that demands every approved
@@ -196,6 +206,9 @@ def module_attestation() -> Dict[str, Any]:
         ``failed``           — ``[(name, detail), ...]``; at most one entry,
                                since POST short-circuits on the first failure.
         ``duration_ms``      — POST wall-clock.
+        ``stage_durations_ms`` — wall-clock of each POST stage that ran, in
+                               order, keyed by stage name; a stage after the
+                               first failure is absent.
         ``native_backend``   — provenance of the native library that backed the
                                run (see ``pqc_backends.native_backend_diagnostics``),
                                or an explanation of why there was none.
@@ -225,6 +238,7 @@ def module_attestation() -> Dict[str, Any]:
         "skipped": skipped,
         "failed": failed,
         "duration_ms": _POST_DURATION_MS,
+        "stage_durations_ms": dict(_POST_STAGE_DURATIONS_MS),
         "native_backend": native,
     }
 
@@ -250,22 +264,32 @@ def reset_module() -> bool:
     """
     with _POST_LOCK:
         if module_status() == "ERROR":
-            _LAST_FAILURE["reason"] = module_error_reason()
-            _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
-            _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
+            _record_last_failure()
         return _run_self_tests()
+
+
+def _record_last_failure() -> None:
+    """Snapshot the current failure for :func:`last_failure`."""
+    _LAST_FAILURE["reason"] = module_error_reason()
+    _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
+    _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
+    _LAST_FAILURE["stage_durations_ms"] = dict(_POST_STAGE_DURATIONS_MS)
 
 
 def last_failure() -> Dict[str, Any]:
     """Return the most recent POST failure, or empty when there has not been one.
 
     Keys mirror the failing run: ``reason``, ``results`` (the full tri-state
-    table as it stood when POST failed) and ``duration_ms``.
+    table as it stood when POST failed), ``duration_ms`` and
+    ``stage_durations_ms`` (each stage that ran, the failing one last), so the
+    failed run's timing survives the recovery run that overwrites
+    :func:`module_attestation`.
     """
     return {
         "reason": _LAST_FAILURE["reason"],
         "results": list(_LAST_FAILURE["results"]),
         "duration_ms": _LAST_FAILURE["duration_ms"],
+        "stage_durations_ms": dict(_LAST_FAILURE["stage_durations_ms"]),
     }
 
 
@@ -3195,7 +3219,7 @@ def _run_self_tests() -> bool:
     cyclomatic-complexity ceiling and each stage is independently
     testable.
     """
-    global _SELF_TEST_RESULTS, _POST_DURATION_MS
+    global _SELF_TEST_RESULTS, _POST_DURATION_MS, _POST_STAGE_DURATIONS_MS
 
     with _POST_LOCK:
         # Enter SELF_TEST and pin the guard's allowance to this thread — the
@@ -3234,9 +3258,15 @@ def _run_self_tests() -> bool:
         )
 
         all_passed = True
+        stage_name = ""
+        stage_durations: Dict[str, float] = {}
         try:
-            for _stage_name, stage_fn in stages:
-                stage_ok, err = stage_fn()
+            for stage_name, stage_fn in stages:
+                stage_start = time.monotonic()
+                try:
+                    stage_ok, err = stage_fn()
+                finally:
+                    stage_durations[stage_name] = (time.monotonic() - stage_start) * 1000
                 if not stage_ok:
                     if err is None:
                         # SECURITY: asserts can be stripped with ``python -O``;
@@ -3246,24 +3276,38 @@ def _run_self_tests() -> bool:
                     _set_error(err)
                     all_passed = False
                     break
+        except BaseException as exc:
+            # A stage that raises is a failed POST, and it is recorded as one
+            # before the exception continues (the import still fails, per
+            # INVARIANT-39).  Left alone it exited with the module in
+            # SELF_TEST, no reason and nothing in last_failure(): crypto was
+            # refused and the exception propagated, but the module's own
+            # status reported no failure at all.
+            all_passed = False
+            _set_error(
+                f"FIPS POST internal error: stage {stage_name!r} raised "
+                f"{type(exc).__name__}: {exc}"
+            )
+            raise
         finally:
             # Drop the self-test allowance before returning by ANY path,
             # including an unexpected exception escaping a stage.  Leaving it
             # set would keep ``check_crypto_permitted`` permissive on this
             # thread for the rest of the process's life.
             _clear_self_test_thread()
-
-        _POST_DURATION_MS = (time.monotonic() - start) * 1000
-
-        if not all_passed:
-            # Snapshot the failed run for :func:`last_failure` NOW.  Until this
-            # line the record was written only by ``reset_module()``, so a
-            # failed POST that nobody had yet tried to recover from reported
-            # "no failure" — the opposite of the truth, and exactly when an
-            # operator reads it.
-            _LAST_FAILURE["reason"] = module_error_reason()
-            _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
-            _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
+            # Publish this run's timing by the same paths: a stage that raises
+            # is the one an operator most needs named, and publishing only on
+            # a normal return left the previous run's timing in its place.
+            _POST_DURATION_MS = (time.monotonic() - start) * 1000
+            _POST_STAGE_DURATIONS_MS = stage_durations
+            if not all_passed:
+                # Snapshot the failed run for :func:`last_failure` NOW, on
+                # every failing exit.  Until this was written here the record
+                # came only from ``reset_module()``, so a failed POST that
+                # nobody had yet tried to recover from reported "no failure" —
+                # the opposite of the truth, and exactly when an operator
+                # reads it.
+                _record_last_failure()
 
         if all_passed:
             _set_operational()

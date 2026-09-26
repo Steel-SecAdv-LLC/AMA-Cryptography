@@ -28,6 +28,10 @@
  *     row at the signer's own position is not the commitment its nonce pair
  *     derives — whole row, either half, or its own row at another position —
  *     and consumes the nonce pair on that refusal too
+ *   - Test 11: the refusals no suite executed before 2026-09-26 — a zero
+ *     scalar from a CSPRNG that reports success, a CSPRNG failing on a later
+ *     draw (keygen coefficient, round-1 binding nonce), a signer outside the
+ *     signing set, a non-canonical commitment point, and the argument guards
  */
 
 #include <stdio.h>
@@ -69,6 +73,46 @@ static ama_error_t failing_randombytes(uint8_t *buf, size_t len) {
 static ama_error_t constant_randombytes(uint8_t *buf, size_t len) {
     memset(buf, 0xA5, len);
     return AMA_SUCCESS;
+}
+
+/* A CSPRNG that REPORTS SUCCESS but whose 64 bytes reduce to the scalar 0:
+ * all-zero output, or the little-endian group order l followed by zeros.  The
+ * failing hook above cannot reach scalar_random()'s zero-scalar refusal,
+ * because it returns an error first. */
+static const uint8_t ED25519_L[32] = {
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+    0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
+};
+static ama_error_t zero_success_randombytes(uint8_t *buf, size_t len) {
+    memset(buf, 0, len);
+    return AMA_SUCCESS;
+}
+static ama_error_t order_success_randombytes(uint8_t *buf, size_t len) {
+    memset(buf, 0, len);
+    memcpy(buf, ED25519_L, len < 32 ? len : 32);
+    return AMA_SUCCESS;
+}
+
+/* A CSPRNG that serves `healthy_draws` good draws and then fails, so a
+ * failure can be placed at the SECOND draw of a keygen or round 1 -- the
+ * draws the always-failing hook never reaches. */
+static int healthy_draws = 0;
+static ama_error_t fail_later_randombytes(uint8_t *buf, size_t len) {
+    if (healthy_draws <= 0) {
+        memset(buf, 0, len);
+        return AMA_ERROR_CRYPTO;
+    }
+    healthy_draws--;
+    for (size_t i = 0; i < len; i++) buf[i] = (uint8_t)(0x5A ^ (i * 7u) ^ (unsigned)healthy_draws);
+    return AMA_SUCCESS;
+}
+
+static int all_zero(const uint8_t *buf, size_t len) {
+    uint8_t acc = 0;
+    for (size_t i = 0; i < len; i++) acc |= buf[i];
+    return acc == 0;
 }
 
 /* Run a single scalar_negate boundary check: assert
@@ -1009,6 +1053,237 @@ int main(void) {
                 TEST_ASSERT(rc == AMA_SUCCESS,
                             "the share round 2 accepted verifies (RFC 9591 5.3)");
             }
+        }
+    }
+
+    /* Test 11: the guards no suite executed (2026-09-26 measurement).
+     *
+     * `tools/measure_branch_coverage.py --python-suite`, over ctest, pytest,
+     * the Wycheproof runner and the ACVP runner together, found each of the
+     * refusals below executed by nothing.  Every case is built so that the
+     * guard's removal changes an observable outcome; the mutation that
+     * demonstrates it is named beside each (AGENTS.md 6.2). */
+    {
+        uint8_t group_pk[32];
+        uint8_t shares[3 * 64];
+        uint8_t signer_indices[] = {1, 2};
+        uint8_t nonces[3 * 64], commitments[3 * 64];
+        uint8_t sig_shares[2 * 32], public_shares[2 * 32];
+        uint8_t signature[64], sig_share[32];
+        uint8_t bad_index;
+        const uint8_t msg[] = "FROST unreached-guard test";
+        const size_t msg_len = sizeof(msg) - 1;
+
+        /* 11a — a CSPRNG that reports success with output reducing to 0.
+         * scalar_random() must refuse the zero scalar: kept, the group
+         * secret would be 0 and every share a share of 0.  Mutation: delete
+         * its `acc == 0` refusal -> keygen returns AMA_SUCCESS. */
+        ama_frost_randombytes_hook = zero_success_randombytes;
+        rc = ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL);
+        TEST_ASSERT(rc == AMA_ERROR_CRYPTO,
+                    "keygen refuses a CSPRNG draw of 64 zero bytes (scalar 0)");
+        ama_frost_randombytes_hook = order_success_randombytes;
+        rc = ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares, NULL);
+        TEST_ASSERT(rc == AMA_ERROR_CRYPTO,
+                    "keygen refuses a CSPRNG draw equal to l (reduces to scalar 0)");
+
+        /* 11b — the CSPRNG fails on a COEFFICIENT draw, after the group
+         * secret was drawn.  scalar_random() zeroes its output on failure, so
+         * without the check every coefficient past the failure is 0 and, at
+         * t = 2, every participant's share IS the group secret.  Mutation:
+         * delete the `rc_coeff` check -> keygen returns AMA_SUCCESS. */
+        for (uint8_t t = 2; t <= 3; t++) {
+            memset(group_pk, 0xEE, sizeof group_pk);
+            healthy_draws = t - 1;  /* the group secret and t-2 coefficients */
+            ama_frost_randombytes_hook = fail_later_randombytes;
+            rc = ama_frost_keygen_trusted_dealer(t, 3, group_pk, shares, NULL);
+            TEST_ASSERT(rc == AMA_ERROR_CRYPTO && all_zero(group_pk, 32),
+                        "keygen fails closed when the last coefficient draw fails, "
+                        "and scrubs the group key it had written");
+        }
+
+        /* 11c — round 1's SECOND draw fails (the binding nonce).  Without the
+         * check the pair would carry a hiding nonce and a zero binding nonce,
+         * and a commitment would be emitted.  Mutation: delete the second
+         * `rc != AMA_SUCCESS` check -> AMA_SUCCESS. */
+        ama_frost_randombytes_hook = NULL;
+        rc = ama_frost_keygen_trusted_dealer(2, 3, group_pk, shares,
+                                             FIXED_GROUP_SECRET);
+        TEST_ASSERT(rc == AMA_SUCCESS, "keygen for the unreached-guard tests");
+        healthy_draws = 1;
+        ama_frost_randombytes_hook = fail_later_randombytes;
+        memset(nonces, 0xEE, 64);
+        memset(commitments, 0xEE, 64);
+        rc = ama_frost_round1_commit(nonces, commitments, shares);
+        ama_frost_randombytes_hook = NULL;
+        {
+            int untouched = 1;
+            for (int i = 0; i < 64; i++) if (commitments[i] != 0xEE) untouched = 0;
+            TEST_ASSERT(rc == AMA_ERROR_CRYPTO && all_zero(nonces, 64) && untouched,
+                        "round 1 fails closed on a failed binding-nonce draw: "
+                        "pair scrubbed, no commitment emitted");
+        }
+
+        /* 11d — a signer that is NOT in the signing set, holding its own
+         * commitment at row 0.  Round 2's own-commitment check finds its row
+         * at position 0 (the position search falls through), so only the
+         * membership test in validate_signer_indices() refuses.  Mutation:
+         * make that function return 1 after the loop -> AMA_SUCCESS, a share
+         * with a Lagrange coefficient for a set it is not in. */
+        for (int i = 0; i < 3; i++) {
+            rc = ama_frost_round1_commit(nonces + i * 64, commitments + i * 64,
+                                         shares + i * 64);
+            TEST_ASSERT(rc == AMA_SUCCESS, "round 1 for the membership case");
+        }
+        {
+            uint8_t list[2 * 64];
+            memcpy(list, commitments + 2 * 64, 64);   /* participant 3's row... */
+            memcpy(list + 64, commitments + 64, 64);  /* ...labelled index 1 */
+            memset(sig_share, 0xEE, sizeof sig_share);
+            rc = ama_frost_round2_sign(sig_share, msg, msg_len, shares + 2 * 64, 3,
+                                       nonces + 2 * 64, list, signer_indices, 2,
+                                       group_pk);
+            int untouched = 1;
+            for (int i = 0; i < 32; i++) if (sig_share[i] != 0xEE) untouched = 0;
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM && all_zero(nonces + 2 * 64, 64) &&
+                            untouched,
+                        "round 2 refuses a participant outside the signing set, "
+                        "consumes its nonce pair, emits no share");
+        }
+
+        /* An honest {1, 2} ceremony for the remaining cases. */
+        for (int i = 0; i < 2; i++) {
+            rc = ama_frost_round2_sign(sig_shares + i * 32, msg, msg_len,
+                                       shares + i * 64, signer_indices[i],
+                                       nonces + i * 64, commitments,
+                                       signer_indices, 2, group_pk);
+            TEST_ASSERT(rc == AMA_SUCCESS, "round 2 for the unreached-guard tests");
+            memcpy(public_shares + i * 32, shares + i * 64 + 32, 32);
+        }
+        rc = ama_frost_verify_share(sig_shares, 3, public_shares, commitments,
+                                    signer_indices, 2, msg, msg_len, group_pk);
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                    "verify_share refuses a participant index outside the set");
+
+        /* 11e — a NON-CANONICAL commitment point: y = p + y0 for the smallest
+         * y0 that decodes, so the encoding names a real point under
+         * reduction.  Aggregation must refuse it as participant 2's.  Without
+         * the canonical clause of frost_point_is_admissible() the point
+         * decodes, R and every binding factor move, and the first share
+         * checked -- participant 1's -- fails instead: the blame lands on the
+         * wrong participant.  Mutation: drop the canonical clause -> blame 1. */
+        {
+            uint8_t canon[32] = {0}, noncanon[32], sum[32], list[2 * 64];
+            uint8_t y0 = 0;
+            for (uint8_t y = 2; y < 19 && !y0; y++) {
+                canon[0] = y;
+                if (ama_ed25519_point_add(sum, canon, canon) == AMA_SUCCESS) y0 = y;
+            }
+            TEST_ASSERT(y0 != 0, "a y0 in [2, 18] decodes to a point");
+            memset(noncanon, 0xFF, sizeof noncanon);
+            noncanon[0] = (uint8_t)(0xED + y0);   /* p = 2^255 - 19, little-endian */
+            noncanon[31] = 0x7F;
+            memcpy(list, commitments, sizeof list);
+            memcpy(list + 64, noncanon, 32);      /* participant 2's D_2 */
+
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, sig_shares, list, public_shares,
+                                     signer_indices, 2, msg, msg_len, group_pk,
+                                     &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED && bad_index == 2,
+                        "aggregate refuses a non-canonical commitment and blames "
+                        "the participant who sent it");
+            rc = ama_frost_verify_share(sig_shares + 32, 2, public_shares + 32, list,
+                                        signer_indices, 2, msg, msg_len, group_pk);
+            /* The header's verdict for this input, and aggregation's: until
+             * 2026-09-26 verify_share built R before admitting its own row,
+             * and the strict decoder turned this into INVALID_PARAM. */
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "verify_share refuses its own non-canonical commitment as "
+                        "VERIFY_FAILED, the verdict its header and aggregate give");
+            /* The blame pointer is optional: the refusal stands without it. */
+            rc = ama_frost_aggregate(signature, sig_shares, list, public_shares,
+                                     signer_indices, 2, msg, msg_len, group_pk, NULL);
+            TEST_ASSERT(rc == AMA_ERROR_VERIFY_FAILED,
+                        "aggregate refuses it with no blame pointer supplied");
+        }
+
+        /* 11f — argument guards (INVARIANT-5).  Round 2's matter beyond
+         * INVARIANT-5: every refusal past the nonce_pair NULL check must
+         * still consume the pair (INVARIANT-49). */
+        {
+            const uint8_t *const in_args[5] = { msg, shares, commitments,
+                                                signer_indices, group_pk };
+            for (int which = 0; which < 6; which++) {
+                uint8_t pair[64], commit[64];
+                rc = ama_frost_round1_commit(pair, commit, shares);
+                TEST_ASSERT(rc == AMA_SUCCESS, "round 1 for an argument-guard case");
+                rc = ama_frost_round2_sign(
+                    which == 0 ? NULL : sig_share,
+                    which == 1 ? NULL : in_args[0], msg_len,
+                    which == 2 ? NULL : in_args[1], 1, pair,
+                    which == 3 ? NULL : in_args[2],
+                    which == 4 ? NULL : in_args[3], 2,
+                    which == 5 ? NULL : in_args[4]);
+                TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM && all_zero(pair, 64),
+                            "round 2 refuses a NULL argument and still consumes the pair");
+            }
+            TEST_ASSERT(ama_frost_round2_sign(sig_share, msg, msg_len, shares, 1, NULL,
+                                              commitments, signer_indices, 2,
+                                              group_pk) == AMA_ERROR_INVALID_PARAM,
+                        "round 2 refuses a NULL nonce pair");
+            TEST_ASSERT(ama_frost_round1_commit(NULL, commitments, shares) ==
+                                AMA_ERROR_INVALID_PARAM &&
+                            ama_frost_round1_commit(nonces, NULL, shares) ==
+                                AMA_ERROR_INVALID_PARAM &&
+                            ama_frost_round1_commit(nonces, commitments, NULL) ==
+                                AMA_ERROR_INVALID_PARAM,
+                        "round 1 refuses each NULL argument");
+            TEST_ASSERT(ama_frost_keygen_trusted_dealer(2, 3, NULL, shares, NULL) ==
+                                AMA_ERROR_INVALID_PARAM &&
+                            ama_frost_keygen_trusted_dealer(2, 3, group_pk, NULL, NULL) ==
+                                AMA_ERROR_INVALID_PARAM,
+                        "keygen refuses each NULL output");
+            for (int which = 0; which < 6; which++) {
+                rc = ama_frost_verify_share(
+                    which == 0 ? NULL : sig_shares, 1,
+                    which == 1 ? NULL : public_shares,
+                    which == 2 ? NULL : commitments,
+                    which == 3 ? NULL : signer_indices, 2,
+                    which == 4 ? NULL : msg, msg_len,
+                    which == 5 ? NULL : group_pk);
+                TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                            "verify_share refuses a NULL argument");
+            }
+            TEST_ASSERT(ama_frost_verify_share(sig_shares, 1, public_shares, commitments,
+                                               signer_indices, 1, msg, msg_len,
+                                               group_pk) == AMA_ERROR_INVALID_PARAM,
+                        "verify_share refuses a signing set of one");
+            {
+                const uint8_t dup[] = {1, 1};
+                TEST_ASSERT(ama_frost_verify_share(sig_shares, 1, public_shares,
+                                                   commitments, dup, 2, msg, msg_len,
+                                                   group_pk) == AMA_ERROR_INVALID_PARAM,
+                            "verify_share refuses a duplicated index");
+            }
+            for (int which = 0; which < 7; which++) {
+                bad_index = 0xFF;
+                rc = ama_frost_aggregate(
+                    which == 0 ? NULL : signature,
+                    which == 1 ? NULL : sig_shares,
+                    which == 2 ? NULL : commitments,
+                    which == 3 ? NULL : public_shares,
+                    which == 4 ? NULL : signer_indices, 2,
+                    which == 5 ? NULL : msg, msg_len,
+                    which == 6 ? NULL : group_pk, &bad_index);
+                TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM && bad_index == 0,
+                            "aggregate refuses a NULL argument, blaming nobody");
+            }
+            TEST_ASSERT(ama_frost_aggregate(signature, sig_shares, commitments,
+                                            public_shares, signer_indices, 1, msg,
+                                            msg_len, group_pk, NULL) ==
+                            AMA_ERROR_INVALID_PARAM,
+                        "aggregate refuses a signing set of one");
         }
     }
 

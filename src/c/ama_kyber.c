@@ -913,6 +913,10 @@ static ama_error_t kyber_keygen_internal(const kyber_params* P,
         } else {
             err = kyber_randombytes(d, 32);
             if (err != AMA_SUCCESS) {
+                /* A failed draw may already have written CSPRNG output:
+                 * ama_randombytes' getrandom(2) and getentropy(3) paths
+                 * loop and can fail after earlier iterations succeeded. */
+                ama_secure_memzero(d, sizeof(d));
                 return err;
             }
         }
@@ -1165,6 +1169,8 @@ static ama_error_t kyber_encapsulate_internal(
         } else {
             err = kyber_randombytes(m, 32);
             if (err != AMA_SUCCESS) {
+                /* m determines the shared secret; see the keygen draw. */
+                ama_secure_memzero(m, sizeof(m));
                 return err;
             }
         }

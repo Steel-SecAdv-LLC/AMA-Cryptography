@@ -42,15 +42,44 @@ USAGE
 
     python tools/measure_branch_coverage.py build-cov --detail ama_ed25519
 
+EVERY SUITE
+
+Without `--python-suite` this measures `ctest` alone, and an arc only the
+Python side reaches is reported as never taken: an inventory of what the C
+suite misses, not of the guards no test protects.  `--python-suite` closes
+that gap.  It needs an editable install (`pip install -e .`) whose package
+directory holds the native library the bindings load.  It copies the
+instrumented native library (`libama_cryptography.so.*`, or the
+`libama_cryptography*.dylib` chain on macOS) from the build tree over the
+installed one, re-signs the integrity artefact so the import-time self-test accepts it,
+runs the two offline Python suites CI runs against the library -- `pytest
+tests/` and `wycheproof_vectors/run_wycheproof.py` -- and restores and
+re-signs the original library whatever the outcome.  The Wycheproof runner is
+not a pytest module; leaving it out reports every ECDSA DER-parser rejection
+in `ama_nistp.c` as never taken, although CI executes each one on every PR.
+The instrumented library writes its counters into the same `.gcda` files
+`ctest` did, so the inventory is then of the arcs NO suite takes:
+
+    ctest --test-dir build-cov
+    python tools/measure_branch_coverage.py build-cov --python-suite
+
+The ACVP runner (`nist_vectors/run_vectors.py`) is left out because its
+corpus is fetched over the network; run it by hand between the two commands
+above, with the instrumented library still installed, to include it.
+
 Exit codes:
     0  the inventory was produced
-    2  the build directory carries no coverage data
+    2  the build directory carries no coverage data, or `--python-suite`
+       could not find the two libraries it swaps
+    3  `--python-suite` ran and a Python suite failed; the inventory is still
+       printed, and describes a suite that did not pass
 """
 
 from __future__ import annotations
 
 import argparse
 import collections
+import os
 import re
 import shutil
 import subprocess
@@ -131,6 +160,80 @@ def _parse(report: Path, taken: set[Arc], seen: set[Arc], text: dict[tuple[str, 
                 taken.add(arc)
 
 
+#: The native library's file names: the Linux soname chain and the macOS
+#: install-name chain, the same two shapes setup.py bundles into the package.
+#: Each chain ends in exactly one real file; the rest are symlinks.
+_LIBRARY_GLOBS = ("libama_cryptography.so.*", "libama_cryptography*.dylib")
+
+
+def _real_library(directory: Path) -> Path | None:
+    """The one non-symlink native library in ``directory``, or None when there
+    is none or more than one (an ambiguous tree is refused, not guessed at)."""
+    found = {p for pattern in _LIBRARY_GLOBS for p in directory.glob(pattern) if not p.is_symlink()}
+    return found.pop() if len(found) == 1 else None
+
+
+def _resign() -> None:
+    """Bind the package's current native library into the integrity artefact.
+
+    The same command CI runs after its editable install; without it the
+    import-time self-test refuses a library whose digest it was not signed
+    over, and every test that loads the backend fails.
+    """
+    subprocess.run(
+        [sys.executable, "-m", "ama_cryptography.integrity", "--update", "--sign"],
+        cwd=REPO_ROOT,
+        env={**os.environ, "AMA_BUILD_PIPELINE": "1"},
+        stdout=subprocess.DEVNULL,
+        check=True,
+    )
+
+
+def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
+    """Run the Python suites against the instrumented library.
+
+    Returns the first non-zero exit status (0 when both pass), or None when
+    the two libraries to swap were not both found.  The installed library is
+    restored, and the artefact re-signed over it, on every path out.  If the
+    restore itself fails, the backup is kept and its path is in the error:
+    deleting it then would leave the instrumented build installed with no
+    copy of the release one.
+    """
+    installed = _real_library(REPO_ROOT / "ama_cryptography")
+    instrumented = _real_library(build_dir / "lib")
+    if installed is None or instrumented is None:
+        return None
+    backup_dir = Path(tempfile.mkdtemp(prefix="ama-release-library-"))
+    saved = backup_dir / installed.name
+    try:
+        shutil.copy2(installed, saved)
+    except OSError:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        raise
+    try:
+        shutil.copy2(instrumented, installed)
+        _resign()
+        status = 0
+        for command in (
+            [sys.executable, "-m", "pytest", "tests/", "-q", "--no-cov", *pytest_args],
+            [sys.executable, "wycheproof_vectors/run_wycheproof.py"],
+        ):
+            # Both run whatever the first returns: each one's counters are data.
+            returncode = subprocess.run(command, cwd=REPO_ROOT, check=False).returncode
+            status = status or returncode
+        return status
+    finally:
+        try:
+            shutil.copy2(saved, installed)
+        except OSError as exc:
+            raise RuntimeError(
+                f"could not restore the release library to {installed}; "
+                f"the backup is kept at {saved}"
+            ) from exc
+        _resign()
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("build_dir", type=Path, help="a build tree configured with --coverage")
@@ -139,6 +242,18 @@ def main() -> int:
         metavar="SUBSTRING",
         help="also list each never-taken arc for source paths containing SUBSTRING",
     )
+    parser.add_argument(
+        "--python-suite",
+        action="store_true",
+        help="first run the Python suites against the instrumented library (see EVERY SUITE)",
+    )
+    parser.add_argument(
+        "--pytest-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="extra argument for pytest under --python-suite (repeatable)",
+    )
     args = parser.parse_args()
 
     if shutil.which("gcov") is None:
@@ -146,6 +261,18 @@ def main() -> int:
         return 2
 
     build_dir = args.build_dir.resolve()
+    suite_status = 0
+    if args.python_suite:
+        status = _run_python_suite(build_dir, args.pytest_arg)
+        if status is None:
+            print(
+                "--python-suite needs exactly one native library (libama_cryptography.so.* "
+                "or libama_cryptography*.dylib) in both "
+                f"{REPO_ROOT / 'ama_cryptography'} (an editable install) and {build_dir / 'lib'}",
+                file=sys.stderr,
+            )
+            return 2
+        suite_status = status
     objects = _objects_with_coverage(build_dir)
     if not objects:
         print(
@@ -191,6 +318,12 @@ def main() -> int:
                 body = text.get((prefix + name, line_no), "?").strip()
                 print(f"  L{line_no:<6d} [{by_line[line_no]}] {body[:88]}")
 
+    if suite_status != 0:
+        print(
+            f"\na Python suite exited {suite_status}: this inventory is of a failing suite",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

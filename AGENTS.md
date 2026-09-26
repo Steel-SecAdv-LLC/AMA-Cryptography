@@ -66,7 +66,7 @@ the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference).
 | `src/c/dispatch/` | Runtime backend selection |
 | `include/` | Public C ABI; every exported symbol is declared here |
 | `ama_cryptography/` | Python package: crypto_api, key_management, posture, monitoring |
-| `tests/c/`, `tests/` | 91 C test suites, 270 Python test modules |
+| `tests/c/`, `tests/` | 94 C test suites, 270 Python test modules |
 | `tools/check_*.py` | Gate scripts that enforce the invariants |
 
 Design constraints governing all changes:
@@ -328,39 +328,67 @@ repository maintainer.
 
 Open item, carried forward and unassigned:
 
-`tools/measure_branch_coverage.py` reports 1,741 of 11,315 instrumented
-branch arcs under `src/c` never taken by the C suite (measured 2026-09-22 on
-the tree just before `test_ed25519_stack_residue` was added: gcc 13.3.0, Debug
-`--coverage -O0 -g`, 143 translation units, `ctest` 138 tests; the suite has
-grown since, so this is a dated measurement, not a current count). The 839b66b4 commit message
-reported 1,765 of 11,053; re-measuring that revision on this host gives
-1,792 of 11,081 over 142 translation units, so the earlier figure belongs to
-a different host and toolchain and is superseded here. The Ed25519 rows have been triaged
-and two Medium findings closed. The dispatch and CPUID buckets (285 and 60
-arcs) are structurally unreachable on any single host and require no action.
-The following have not been examined: `ama_nistp.c` (152 arcs),
-`ama_dilithium.c` (143), `ama_slhdsa.c` (116), `ama_kyber.c` (113),
-`ama_frost.c` (67).
+`tools/measure_branch_coverage.py` reports the branch arcs under `src/c` that
+no suite takes. Measured 2026-09-26 (gcc 13.3.0, Debug `--coverage -O0 -g`,
+x86-64 with BMI2 and ADX, 202 translation units, 13,437 arcs, `ctest` 154
+tests): 1,265 arcs never taken by the C suite alone, and 991 never taken by
+the C suite, `pytest tests/` and the Wycheproof runner together
+(`--python-suite`). These are dated measurements; the suite grows. They supersede the 2026-09-22 figure
+this paragraph carried (1,741 of 11,315 over 143 translation units) and the
+839b66b4 commit message's 1,765 of 11,053, which belongs to a different host
+and toolchain. The dispatch and CPUID buckets (202 and 42 arcs) are
+structurally unreachable on any single host and require no action.
+
+The five files this section listed as never examined -- `ama_nistp.c`,
+`ama_dilithium.c`, `ama_slhdsa.c`, `ama_kyber.c` and `ama_frost.c` -- were
+triaged on 2026-09-26 (CHANGELOG, same date). A Critical finding (eight
+CSPRNG-failure exits in the ML-KEM, ML-DSA, SLH-DSA and X25519 files left
+the failed draw's output unscrubbed, an INVARIANT-6 gap; the rest of `src/c`
+was swept and already scrubbed), a High one (FROST
+`ama_frost_verify_share` returned a verdict its header contradicts) and a
+Medium one (three ML-DSA hint-encoding rejections, an SUF-CMA property,
+executed by no suite, under a comment citing a test that never existed) were
+remediated, and each guard found reachable was given a test. Its label
+follows §6.4: PIN where deleting the guard made the test fail, SMOKE where
+the guard proved redundant under the same mutation, and RANGE for the NULL,
+unknown-set and short-buffer refusals of `tests/c/test_input_guards.c`,
+which exercise the refusal's domain and were not mutation-tested. What remains in them (all-suite
+figures:
+`ama_slhdsa.c` 62, `ama_dilithium.c` 51, `ama_kyber.c` 48, `ama_frost.c` 38,
+`ama_nistp.c` 36; two of the ML-DSA arcs are in the testing-only MakeHint
+helpers, the unknown-set return and the counter's `a1 != 0` side) is classified in that entry: propagation from calls that
+cannot fail once their inputs are validated, allocation and mutex failure,
+parameter-table self-checks, dispatch arms another ISA takes, build
+diagnostics, exits of negligible probability, and guards measured
+redundant -- except the samplers' rare continuation paths (ML-DSA's XOF
+re-squeeze and underfill fallback, ML-KEM's x4 per-lane stop), which are
+reachable and not yet pinned by a seed that reaches them. The largest rows
+not yet examined are `ama_sha3.c` (89), `ama_core.c` (72) and `ama_hkdf.c`
+(45).
 
 **What this inventory is, and what it is not.** Two corrections, per §6.6,
-because the paragraph above has twice been read as a defect list and worked as
-one.
+because this section has twice been read as a defect list and worked as one.
 
-First, the instrument measures one suite. Its own docstring says so — "the
-branch arcs under `src/c` that the C suite never takes" — and its documented
-procedure builds with `--coverage` and runs `ctest`, nothing else. The Python suite
-never executes under it. An arc reached only from Python is
-therefore counted here as never taken, so the number is an inventory of what
-the C suite does not reach, which is not the same set as the guards no test
-protects. Extending the measurement to cover both suites is open and unsolved;
-until it is, a row in this inventory is a question, not a finding.
+First, the instrument used to measure one suite: its documented procedure
+built with `--coverage` and ran `ctest`, so an arc reached only from Python
+counted as never taken. `--python-suite` now runs `pytest tests/` and
+`wycheproof_vectors/run_wycheproof.py` against the same instrumented library,
+and the figures above use it. Measured on the tree before the 2026-09-26
+pass, the C suite alone left 1,464 arcs untaken, the C and Python suites
+1,178, and those with the Wycheproof and ACVP runners 1,148 -- the Wycheproof
+runner alone reaches every ECDSA DER-parser rejection in `ama_nistp.c`. The
+ACVP runner needs its fetched corpus and is run by hand; fuzzing is not
+measured. A row is still a question, not a finding, until mutation answers
+it.
 
-Second, `839b66b4` — the commit that produced this inventory — already
+Second, `839b66b4` -- the commit that produced this inventory -- already
 classified NULL-argument returns and allocation-failure returns among the arcs
 that are legitimately never taken. Arc count recovered against that class is
 not triage progress, and reporting it as such is a measurement error. `abde8640`
 made exactly that error and its claim is withdrawn; the test it added is kept,
-because it pins real INVARIANT-5 guards.
+because it pins real INVARIANT-5 guards. The 2026-09-26 figures include arcs
+recovered by `tests/c/test_input_guards.c`, whose NULL and short-buffer rows
+are RANGE and are counted as coverage, not as findings.
 
 The required approach is unchanged in kind but not in target: identify guards
 *no test in either suite* executes, construct tests that fail without them, and
@@ -369,9 +397,9 @@ triaged when its classification is established by mutation, not when it stops
 appearing in a count. Per §10, a coverage gate carrying an exemption list is
 not an acceptable substitute.
 
-`ama_nistp.c` now also has exploratory coverage: `fuzz/fuzz_nistp.c` drives its
+`ama_nistp.c` also has exploratory coverage: `fuzz/fuzz_nistp.c` drives its
 four parsers and asserts four properties across them. That is a standing check,
-not a reduction in the figure above, which is a `ctest` measurement.
+not a reduction in the figures above, which count no fuzzing.
 
 Release prerequisites are recorded in the pull request description. Each
 requires hardware, a protected credential, or a workflow dispatch; none is

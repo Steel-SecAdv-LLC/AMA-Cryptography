@@ -126,7 +126,7 @@ class TestADeletedFigureIsRejected:
     def test_removing_a_published_row_fails(self, tree: Path) -> None:
         readme = tree / gate.README
         lines = readme.read_text(encoding="utf-8").splitlines()
-        kept = [ln for ln in lines if "| **Encapsulate** | 17,985 ops/sec" not in ln]
+        kept = [ln for ln in lines if "| **Encapsulate** | 17,984 ops/sec" not in ln]
         assert len(kept) == len(lines) - 1
         readme.write_text("\n".join(kept) + "\n", encoding="utf-8")
         assert _run(tree) == 1

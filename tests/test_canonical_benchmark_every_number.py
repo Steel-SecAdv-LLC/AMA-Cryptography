@@ -63,8 +63,8 @@ class TestNumbersWithoutAnAdjacentUnit:
                 "measured 2026-09-25; median of five runs, min–max KeyGen 3,402",
             ),
             ("Python 3.11.15", "Python 3.12.1"),
-            ("over 60,000 samples", "over 90,000 samples"),
-            ("**|t| = 0.29**", "**|t| = 0.09**"),
+            ("(3,199–3,880)", "(3,199–3,980)"),
+            ("~12,465 →", "~12,965 →"),
         ],
     )
     def test_an_edited_figure_fails(self, tree: Path, old: str, new: str) -> None:
@@ -128,8 +128,14 @@ class TestNumbersWithoutAnAdjacentUnit:
         assert _run(tree) == 1
 
     def test_deleting_one_of_two_identical_figures_fails(self, tree: Path) -> None:
-        """The comb sentence's "256 doublings + 256 additions" is two figures, one key."""
-        _edit(tree, "256 doublings + 256 additions", "256 doublings + additions")
+        """The Core Primitives table dates each of its rows "2026-09-24": ten
+        figures under one key, so dropping one of them must still be seen."""
+        assert _run(tree) == 0
+        _edit(
+            tree,
+            "| 412,231 ops/sec | canonical bench, 2026-09-24 |",
+            "| 412,231 ops/sec | canonical bench |",
+        )
         assert _run(tree) == 1
 
 

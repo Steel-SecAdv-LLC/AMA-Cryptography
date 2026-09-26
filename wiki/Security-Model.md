@@ -10,7 +10,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 |----------|-------|
 | Audit Status | Community-tested; **not externally audited** |
 | Version | 5.0.0 |
-| Last Updated | 2026-09-23 |
+| Last Updated | 2026-09-26 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
 > **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit. Production use **requires**:
@@ -155,7 +155,7 @@ which is authoritative.
 
 | Version | Security Support |
 |---------|-----------------|
-| 5.0.x | ✓ Active (development and security updates) |
+| 5.0.x | ✓ Current line; 5.0.0 is not yet tagged, so security fixes land on `main` |
 | 4.0.x | ✗ Superseded by v5.0 (eleven breaking changes — see CHANGELOG `[5.0.0]`) |
 | 3.5.x | ✗ Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | ✗ Superseded by v3.5 (no public API removals) |
@@ -163,7 +163,7 @@ which is authoritative.
 | 3.2.x | ✗ Superseded by v3.3 (no public API removals) |
 | 3.1.x | ✗ Superseded by v3.2 (no public API removals) |
 | 3.0.x | ✗ Superseded by v3.1 (no public API removals) |
-| 2.1.x | ✗ Superseded by v3.0 (`legacy_compat` Argon2id shim available for one-shot migration) |
+| 2.1.x | ✗ Superseded by v3.0 (`pqc_backends.native_argon2id_legacy_verify` available for one-shot migration) |
 | 2.0.x | ✗ Superseded by v2.1 |
 | 1.0.x | ✗ Superseded by v2.0 |
 

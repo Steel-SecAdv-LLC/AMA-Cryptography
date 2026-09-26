@@ -754,6 +754,23 @@ AMA_API const char *ama_x25519_field_path(void) {
 #endif
 }
 
+#ifdef AMA_TESTING_MODE
+/* CSPRNG override for tests, in the shape the ML-KEM, ML-DSA, SLH-DSA, FROST
+ * and NIST-P files use; compiled only into the AMA_TESTING_MODE archive, so
+ * the shipped library carries neither the pointer nor the branch.  Without it
+ * the failure exit of ama_x25519_keypair was executed by no suite. */
+ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
+#endif
+
+static ama_error_t x25519_randombytes(uint8_t *buf, size_t len) {
+#ifdef AMA_TESTING_MODE
+    if (ama_x25519_randombytes_hook) {
+        return ama_x25519_randombytes_hook(buf, len);
+    }
+#endif
+    return ama_randombytes(buf, len);
+}
+
 /**
  * @brief Generate X25519 keypair.
  *
@@ -774,8 +791,13 @@ AMA_API ama_error_t ama_x25519_keypair(
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    err = ama_randombytes(secret_key, 32);
+    err = x25519_randombytes(secret_key, 32);
     if (err != AMA_SUCCESS) {
+        /* The draw writes straight into the caller's secret_key, and
+         * ama_randombytes is not all-or-nothing (its getrandom(2) and
+         * getentropy(3) loops can fail after writing output): an error
+         * return must not hand the caller partial key material. */
+        ama_secure_memzero(secret_key, 32);
         return err;
     }
 

@@ -19,6 +19,184 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### README, ARCHITECTURE and SECURITY brought up to the 5.0.0 tree; unsupported claims removed — 2026-09-26
+
+The three front-door documents still described pre-#394 code in places and carried claims nothing in the tree supports. Each change below was checked against the code, a gate, or a record.
+
+- **Removed as unsupported (INVARIANT-16, INVARIANT-53):** HIPAA and classified-data suitability, "community-tested", the sector use-case catalogue, the Mercury Agent performance metrics and the FINDΩYOU™ product description (neither is recorded in this repository), "~15% / <2%" ethical and 3R overhead, "MISRA C", the "50+ years" horizon, vendor HSM certification levels, and SECURITY.md's "bare-metal" throughput and "security proofs".
+- **Corrected:** SHA-NI is built on every x86 target, not opt-in; `benchmark-report.md` is a regression-run report, not the published figures; the round-3 `.rsp` KATs are parse-only history, not a conformance gate; the Docker runtime images carry no test suite; `libssl-dev`/`openssl` is not a build dependency; install channel 1 waits on a `v5.0.0` tag; `crypto_api`'s HMAC key travels with the package, so that layer is integrity only; the legacy KMS derives no ML-DSA key; only the legacy API applies the ethical binding; the HKDF salt is random, not zero; POST is described stage by stage with its fail-closed import.
+- **README:** Performance Metrics is collapsible. The canonical record's per-run table gives 17,984 (ML-KEM encapsulate median) and 11,443 (ML-DSA verify maximum); README and `benchmarks/canonical-host.json` said 17,985 and 11,444 and now agree with it. The literature 1.8–2.2× citation and the 2026-07-29 secp256k1 comb figures (no host provenance) left the canonical region; the comb record stays in `docs/BENCHMARK_HISTORY.md`.
+- **Tooling:** `_FUZZ_COUNT_RE` read the `65` of "ML-DSA-65 … harnesses" as a fuzz-target count, and `update_docs --counts` rewrote ARCHITECTURE.md to "ML-DSA-17". A look-behind now rejects a number that follows a hyphen, dot or word character; `test_a_number_inside_an_algorithm_name_is_not_a_count` fails without it (PIN, mutation-checked). The fuzz non-vacuity floor drops from 14 to 13, the retired false match. ARCHITECTURE.md's generated latency block now prints the record's commit, tree state and bindings, and no longer an absolute local path.
+
+### The five unexamined C files triaged: an ML-DSA malleability guard no suite ran, a FROST verdict that contradicted its header, and a coverage instrument that measures both suites — 2026-09-26
+
+AGENTS.md §11 listed `ama_nistp.c`, `ama_dilithium.c`, `ama_slhdsa.c`,
+`ama_kyber.c` and `ama_frost.c` as never examined, and said the inventory
+measured the C suite only, so a row in it was "a question, not a finding".
+Both are closed. Every test labelled PIN or SMOKE here was run against its
+guard with the guard deleted (AGENTS.md 6.2), and the mutation record is in
+each test file's header; the NULL, unknown-set and short-buffer rows of
+`tests/c/test_input_guards.c` are RANGE and were not.
+
+**The instrument** (`tools/measure_branch_coverage.py --python-suite`)
+- Swaps the instrumented native library (the `.so` soname chain, or the
+  `.dylib` chain on macOS) into an editable install,
+  re-signs the integrity artefact, runs `pytest tests/` and the Wycheproof
+  runner against it, and restores and re-signs the release library on every
+  path out; if the restore itself fails, the backup is kept and named rather
+  than deleted with its temporary directory. The Wycheproof runner is not a
+  pytest module, and without it every ECDSA DER-parser rejection in
+  `ama_nistp.c` read as never taken.
+  Measured on the tree before this pass (gcc 13.3.0, Debug `--coverage
+  -O0 -g`, x86-64): 1,464 arcs under `src/c` never taken by the C suite,
+  1,178 by the C and Python suites, 1,148 with the Wycheproof and ACVP
+  runners added. After it, re-measured on the final tree: 1,265 by the C
+  suite, 991 by the C suite, pytest and Wycheproof (202 translation units,
+  13,437 arcs, `ctest` 154 tests). Its
+  own test caught a defect in its first draft: a short-circuit `or` skipped
+  the Wycheproof run whenever pytest failed.
+
+**Defects**
+- Critical (INVARIANT-6) — eight CSPRNG-failure exits returned without
+  scrubbing the buffer the failed draw had written: the seed buffers of
+  `ama_slhdsa_keygen` and `ama_sphincs_keypair`, the hedged randomizer of
+  `ama_slhdsa_sign` and `ama_sphincs_sign`, ML-KEM key generation's `d`,
+  ML-KEM encapsulation's `m`, ML-DSA key generation's `xi`, and the
+  caller's `secret_key` in `ama_x25519_keypair`, which received the error
+  together with the partial draw.
+  `ama_randombytes` is not all-or-nothing -- its getrandom(2) and
+  getentropy(3) loops can fail after writing output -- so each exit could
+  leave live seed or message octets in a dead frame. Reaching it takes a
+  CSPRNG failure and, separately, a read of freed stack (for X25519, a
+  caller that keeps the buffer after an error); the classification is the
+  invariant's. Each exit now scrubs, as `ama_nistp.c`'s hedged signer and
+  `ama_core.c`'s Ed25519 and hybrid key generation already did; every other
+  CSPRNG call in `src/c` was read and already scrubs. `ama_x25519.c` gains
+  the `AMA_TESTING_MODE` hook the other files have.
+  `tests/c/test_csprng_failure_residue.c` drives every exit with a hook that
+  fills the buffer and then fails, scans the dead stack (`residue_probe.h`)
+  and reads X25519's output buffer; deleting any one scrub fails exactly its
+  own verdict. Found in review of this pass, which had made the SLH-DSA
+  exits reachable.
+- High — `ama_frost_verify_share` returned `AMA_ERROR_INVALID_PARAM` for a
+  participant whose own commitment is non-canonical; the header promises
+  `AMA_ERROR_VERIFY_FAILED`, and `ama_frost_aggregate` gives that verdict for
+  the same input. It built the group commitment, whose strict decoder
+  refuses the encoding, before admitting the participant's inputs. The
+  admission now runs first, through one helper shared with
+  `verify_share_core`. Through Python, `frost_verify_share` raised
+  "could not run" where it now answers `False`. The input was refused
+  either way; the contract was not met.
+- Medium — the ML-DSA hint-ordering rule (FIPS 204 Algorithm 21, SUF-CMA),
+  the non-zero-padding rule and the `limit < prev` half of the count rule
+  were executed by no suite. The comment above them cited
+  `test_a_permuted_hint_is_refused` in `tests/test_pqc_param_sets.py` as the
+  pin; that test does not exist in the tree's history.
+  `tests/c/test_ml_dsa_hint_encoding.c` builds, for each rule, an encoding
+  that denotes the honest flag set, so the check's removal makes it verify.
+  An honest signature with an empty interior polynomial -- the precondition
+  for the `limit < prev` malleation -- occurs about once in 20,000 under
+  ML-DSA-65 and -87 (10 in 200,000 each) and not once in 3,200,000 under
+  ML-DSA-44; the test pins the first qualifying message of each.
+- Four comments in `src/c` cited test files or tests that do not exist.
+  `tools/check_reference_integrity.py` gains the shape (a `tests/...` path
+  that is not tracked, or `test_x` in a file that defines no `test_x`: a
+  Python definition read with `ast`, or a C function with a body once
+  comments and literals are removed -- a mention in prose, a string, a call
+  or a prototype does not count), scoped to
+  `ama_cryptography/`, `src/` and `include/` so that no exemption list is
+  needed; `tests/` and `tools/` cite imaginary paths as fixtures.
+- Low — `sha2_mgf1_sha512` in `ama_slhdsa.c` returned silently with its
+  output unwritten when its seed bound was exceeded, and `sha2_H_msg` then
+  reported success. Unreachable with every FIPS 205 parameter set; it now
+  fails closed through the call sites' existing checks.
+
+**CI on main: `Python 3.14 on windows-latest` (and the Build and Test Gate)**
+- `test_post_duration_is_under_budget` failed at 2db626de with "POST took
+  6234.3ms". It read `post_duration_ms()`, the duration of whichever POST
+  another test ran last -- here `test_reset_module_recovers_from_error`'s.
+  Measured from the job logs: that POST took 6.24 s, every other POST in the
+  same process about 1 s, the same test 0.23-0.50 s on Windows CPython
+  3.10-3.13 and 0.18 s on macOS 3.14 in the same run, and 0.32 s on
+  Windows 3.14.6 at 2dcef5c6; it did not reproduce on Linux CPython 3.14
+  with or without coverage, or with a 6,000,000-object heap. One stall of the
+  host, charged to POST.
+- The test now runs POST five times itself and asserts the 2,000 ms budget
+  on the median run: a stall adds time to one sample, and the median absorbs
+  up to two, while a POST slow in three or more of five runs fails. The
+  budget is unchanged.
+- POST now records each stage's wall-clock, and `module_attestation()`
+  reports it as `stage_durations_ms`, so a slow POST names its stage -- in
+  the budget test's failure message and for an operator. Nothing recorded
+  where the 6.2 s went. The map is published on every exit, a stage that
+  raises included, so it never shows a previous run's timing.
+- Medium (observability) -- a POST stage that raised left the module in
+  SELF_TEST with no reason and nothing in `last_failure()`: crypto was
+  refused and the exception propagated, but the module's own status
+  reported no failure. It now enters ERROR naming the stage and the
+  exception, is recorded in `last_failure()`, and still raises (the import
+  still fails, INVARIANT-39). `last_failure()` also carries the failed
+  run's `stage_durations_ms`, which the recovery run used to overwrite.
+
+**Tests for guards nothing executed**
+- `tests/c/test_frost.c` Test 11: a CSPRNG that reports success with bytes
+  reducing to the scalar 0 (keygen must refuse: kept, the group secret is
+  0); a CSPRNG failing on a coefficient draw (kept, every share at t = 2 IS
+  the group secret) and on round 1's binding nonce; a signer outside the
+  signing set holding its own commitment at row 0; a non-canonical
+  commitment, which aggregation must attribute to its sender (without the
+  canonical clause the blame lands on participant 1); every argument guard,
+  with round 2 consuming the nonce pair on each refusal.
+- `tests/c/test_ml_dsa_hint_encoding.c` also pins the signer's side:
+  MakeHint's `a0 = -gamma2, a1 = 0` case, reached by honest signing about
+  once in 10,000 signatures and by no suite. It is tested at the predicate's
+  exact bounds for both gamma2 values, through an `AMA_TESTING_MODE` export
+  (either comparison made inclusive fails it), and end to end on a pinned
+  message per set, whose accepted attempt is confirmed by a testing-only
+  counter to still meet the clause -- armed by that test alone, so the
+  dudect lane that links the same archive never evaluates it.
+- `tests/c/test_input_guards.c`: ML-KEM ciphertext and key one octet long,
+  ciphertext buffer one octet short, the modulus check's second packed
+  coefficient; ML-DSA and SLH-DSA 256-octet contexts refused and 255-octet
+  contexts accepted, so a cap loosened or tightened by one fails (deleting
+  ML-DSA's cap aborts under the stack protector: the 257-octet prefix
+  overflows); ECDSA
+  private keys of 0 and >= n, undefined flag bits and digest lengths
+  (deleting the length check makes a 0-octet digest hang the signer),
+  r and s out of range in both converters, key generation's rejection
+  sampling; every CSPRNG-failure exit of key generation, encapsulation and
+  hedged signing in all four files; the NULL and short-buffer guards.
+- `ama_nistp.c` gains the `AMA_TESTING_MODE` CSPRNG hook the other four
+  files already had, and `ama_slhdsa.c`'s hook now covers
+  `ama_slhdsa_keygen` and `ama_slhdsa_sign`, not only the legacy pair.
+  Neither exists in the shipped library.
+
+**Measured, and left**
+- ML-DSA's `ct0` norm rejection in signing: impossible for ML-DSA-65 and
+  -87 (tau * 2^(d-1) < gamma2) and not reached in 12,000,000 ML-DSA-44
+  signatures.
+- ML-DSA's `limit > omega`: for the verdict, redundant with the c-tilde
+  comparison (deleting it fails nothing); it also bounds the hint unpack.
+- ML-KEM encapsulation checks the key length twice; either check alone
+  keeps the refusal, and the test pins the rule rather than either copy.
+- The identity-point refusal in `nistp_load_point` is redundant with the
+  curve equation for all three curves (b != 0); its test is SMOKE.
+- Reachable but not pinned: the samplers' continuation paths -- ML-DSA's
+  XOF re-squeeze and scalar fallback on an underfilled stream (the code's
+  own estimates: about 1e-5 per polynomial for the eta sampler, below
+  1e-30 for the uniform one) and ML-KEM's x4 per-lane stop. No test holds a
+  seed that reaches them.
+- The rest of what remains in the five files (all-suite figures on the
+  final tree: slhdsa 62, dilithium 51, kyber 48, frost 38, nistp 36; two of
+  the ML-DSA arcs are this pass's testing-only MakeHint helpers, the
+  unknown-set return and the counter's a1 != 0 side) is structural:
+  propagation from calls that cannot fail once their inputs are validated,
+  allocation and mutex failure, parameter-table self-checks, dispatch arms
+  another ISA takes, diagnostics compiled under
+  `AMA_KYBER_BUILD_DIAGNOSTICS`, and exits of negligible probability
+  (a zero ECDSA r or s, a zero FROST nonce from SHA-512, an exhausted
+  rejection loop).
+
 ### CI restored on every lane the integrated head failed, and the release pipeline holds its seed, its tag and its dependencies — 2026-09-25
 
 Run 36074261249/255/276 on `a4c3bf0d` failed four roll-up gates (Build and

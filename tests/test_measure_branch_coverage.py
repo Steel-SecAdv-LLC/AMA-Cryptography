@@ -131,3 +131,177 @@ def test_every_gcov_count_form_starts_a_source_line(tool: ModuleType, count: str
     hit = tool._SRC_RE.match(line)
     assert hit is not None, f"{count!r} not recognised as a source line"
     assert hit.group(2) == "42"
+
+
+# --------------------------------------------------------------------------
+# --python-suite: the swap is restored on every path out
+# --------------------------------------------------------------------------
+
+
+def _python_suite_tree(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    """A fake repo whose package holds the release library and whose build
+    tree holds the instrumented one, each behind the usual symlink chain."""
+    repo = tmp_path / "repo"
+    pkg = repo / "ama_cryptography"
+    lib = repo / "build-cov" / "lib"
+    for directory, body in ((pkg, b"release"), (lib, b"instrumented")):
+        directory.mkdir(parents=True)
+        (directory / "libama_cryptography.so.5.0.0").write_bytes(body)
+        (directory / "libama_cryptography.so.5").symlink_to("libama_cryptography.so.5.0.0")
+    monkeypatch.setattr(tool, "REPO_ROOT", repo)
+    return pkg / "libama_cryptography.so.5.0.0", lib.parent
+
+
+@pytest.mark.parametrize("statuses", [(0, 0), (1, 0), (0, 2)])
+def test_both_python_suites_run_on_the_instrumented_library_and_the_release_one_is_restored(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: tuple[int, int],
+) -> None:
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    signed_over: list[bytes] = []
+    ran: list[tuple[str, bytes]] = []
+    monkeypatch.setattr(tool, "_resign", lambda: signed_over.append(installed.read_bytes()))
+    pending = list(statuses)
+
+    class _Done:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+
+    def fake_run(cmd: list[str], **_: object) -> _Done:
+        ran.append((" ".join(cmd[1:3]), installed.read_bytes()))
+        return _Done(pending.pop(0))
+
+    monkeypatch.setattr(tool.subprocess, "run", fake_run)
+    expected = next((s for s in statuses if s != 0), 0)
+    assert tool._run_python_suite(build_dir, []) == expected
+    assert ran == [
+        ("-m pytest", b"instrumented"),
+        ("wycheproof_vectors/run_wycheproof.py", b"instrumented"),
+    ], "a suite was skipped, or ran against the release library"
+    assert signed_over == [b"instrumented", b"release"], "artefact not re-signed over each library"
+    assert installed.read_bytes() == b"release", "the release library was not restored"
+
+
+def test_the_release_library_is_restored_when_pytest_cannot_start(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    signed_over: list[bytes] = []
+    monkeypatch.setattr(tool, "_resign", lambda: signed_over.append(installed.read_bytes()))
+
+    def broken_run(*_: object, **__: object) -> None:
+        raise OSError("no interpreter")
+
+    monkeypatch.setattr(tool.subprocess, "run", broken_run)
+    with pytest.raises(OSError):
+        tool._run_python_suite(build_dir, [])
+    assert installed.read_bytes() == b"release"
+    assert (
+        signed_over[-1] == b"release"
+    ), "the artefact was left signed over the instrumented library"
+
+
+def test_a_failed_restore_keeps_the_backup_and_names_it(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backup is the only copy of the release library once the swap is
+    made; a restore that fails must not delete it."""
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    real_mkdtemp = tool.tempfile.mkdtemp
+    monkeypatch.setattr(
+        tool.tempfile, "mkdtemp", lambda **kwargs: real_mkdtemp(dir=tmp_path, **kwargs)
+    )
+    real_copy = tool.shutil.copy2
+    copies: list[Path] = []
+
+    def copy_then_fail_the_restore(src: Path, dst: Path) -> object:
+        copies.append(Path(dst))
+        if len(copies) == 3:  # backup, swap, restore
+            raise OSError("No space left on device")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(tool.shutil, "copy2", copy_then_fail_the_restore)
+    with pytest.raises(RuntimeError, match="the backup is kept at") as caught:
+        tool._run_python_suite(build_dir, [])
+    backup = Path(str(caught.value).rsplit("kept at ", 1)[1])
+    assert backup.read_bytes() == b"release", "the backup was deleted or is not the release library"
+    assert isinstance(caught.value.__cause__, OSError)
+    assert installed.read_bytes() == b"instrumented", "the backup is the only release copy"
+
+
+def test_a_restored_run_leaves_no_backup_behind(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    made: list[str] = []
+    real_mkdtemp = tool.tempfile.mkdtemp
+
+    def recording_mkdtemp(**kwargs: str) -> str:
+        made.append(real_mkdtemp(dir=tmp_path, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(tool.tempfile, "mkdtemp", recording_mkdtemp)
+    assert tool._run_python_suite(build_dir, []) == 0
+    assert installed.read_bytes() == b"release"
+    assert len(made) == 1 and not Path(made[0]).exists(), "the backup directory was left behind"
+
+
+def test_a_macos_install_name_chain_is_found(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """clang --coverage writes gcov data on macOS too; the library there is
+    libama_cryptography.<version>.dylib behind symlinks, not .so.<version>."""
+    repo = tmp_path / "repo"
+    pkg = repo / "ama_cryptography"
+    lib = repo / "build-cov" / "lib"
+    for directory, body in ((pkg, b"release"), (lib, b"instrumented")):
+        directory.mkdir(parents=True)
+        (directory / "libama_cryptography.5.0.0.dylib").write_bytes(body)
+        (directory / "libama_cryptography.5.dylib").symlink_to("libama_cryptography.5.0.0.dylib")
+        (directory / "libama_cryptography.dylib").symlink_to("libama_cryptography.5.dylib")
+    monkeypatch.setattr(tool, "REPO_ROOT", repo)
+    installed = pkg / "libama_cryptography.5.0.0.dylib"
+    signed_over: list[bytes] = []
+    monkeypatch.setattr(tool, "_resign", lambda: signed_over.append(installed.read_bytes()))
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    assert tool._run_python_suite(lib.parent, []) == 0
+    assert signed_over == [b"instrumented", b"release"]
+    assert installed.read_bytes() == b"release"
+
+
+def test_two_real_libraries_are_refused_not_guessed(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    (installed.parent / "libama_cryptography.5.0.0.dylib").write_bytes(b"stray")
+    monkeypatch.setattr(tool, "_resign", lambda: pytest.fail("signed an ambiguous tree"))
+    assert tool._run_python_suite(build_dir, []) is None
+
+
+def test_the_python_suite_refuses_without_both_libraries(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    installed.unlink()
+    monkeypatch.setattr(tool, "_resign", lambda: pytest.fail("signed with nothing to swap"))
+    assert tool._run_python_suite(build_dir, []) is None

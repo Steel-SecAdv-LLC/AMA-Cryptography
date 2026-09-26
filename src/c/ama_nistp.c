@@ -1524,6 +1524,25 @@ static int nistp_rfc6979_nonce(uint64_t *k_out, uint8_t *k_bytes,
  * (a non-minimal long form) is still rejected.
  * ============================================================================ */
 
+#ifdef AMA_TESTING_MODE
+/* CSPRNG override for tests, in the shape ama_kyber.c, ama_dilithium.c,
+ * ama_frost.c and ama_slhdsa.c already use; compiled only into the
+ * AMA_TESTING_MODE archive, so the shipped library carries neither the
+ * pointer nor the branch.  Without it the fail-closed exits of key generation
+ * and hedged signing on a CSPRNG failure were executed by no suite
+ * (measured 2026-09-26); tests/c/test_input_guards.c drives both. */
+ama_error_t (*ama_nistp_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
+#endif
+
+static ama_error_t nistp_randombytes(uint8_t *buf, size_t len) {
+#ifdef AMA_TESTING_MODE
+    if (ama_nistp_randombytes_hook) {
+        return ama_nistp_randombytes_hook(buf, len);
+    }
+#endif
+    return ama_randombytes(buf, len);
+}
+
 /** Maximum DER length: 3 header octets + 2 * (2 + 1 + 66) for P-521. */
 #define NISTP_DER_MAX 141
 
@@ -1732,7 +1751,7 @@ AMA_API ama_error_t ama_nistp_keypair(ama_nist_curve_t curve,
      * distribution exactly uniform, which matters for P-521 where the top
      * octet carries only 9 significant bits and the rejection rate is high. */
     for (attempt = 0; attempt < 256; attempt++) {
-        if (ama_randombytes(candidate, c->nbytes) != AMA_SUCCESS) {
+        if (nistp_randombytes(candidate, c->nbytes) != AMA_SUCCESS) {
             rc = AMA_ERROR_CRYPTO;
             goto done;
         }
@@ -2146,7 +2165,7 @@ static ama_error_t nistp_sign_dispatch(const nistp_curve *c,
         return AMA_ERROR_INVALID_PARAM;   /* unknown flag bits are rejected */
 
     if (flags & AMA_NISTP_ECDSA_SIGN_HEDGED) {
-        if (ama_randombytes(entropy, sizeof(entropy)) != AMA_SUCCESS) {
+        if (nistp_randombytes(entropy, sizeof(entropy)) != AMA_SUCCESS) {
             /* `ama_randombytes` is not all-or-nothing: the getrandom(2) and
              * getentropy(3) paths both loop, advancing the offset, and can
              * return an error after earlier iterations have already written

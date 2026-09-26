@@ -569,6 +569,7 @@ class TestRunSelfTestsFailures:
             _run_self_tests,
             _set_operational,
             last_failure,
+            module_attestation,
             module_error_reason,
             module_self_test_results,
             module_status,
@@ -588,6 +589,7 @@ class TestRunSelfTestsFailures:
             failed_reason = module_error_reason()
             failed_results = module_self_test_results()
             failed_duration = post_duration_ms()
+            failed_stages = module_attestation()["stage_durations_ms"]
             assert failed_reason is not None and "synthetic soft failure" in failed_reason
             assert any(ok is False for _, ok, _ in failed_results), "no failing stage in the table"
 
@@ -596,6 +598,7 @@ class TestRunSelfTestsFailures:
                 "reason": failed_reason,
                 "results": failed_results,
                 "duration_ms": failed_duration,
+                "stage_durations_ms": failed_stages,
             }
             # The record is a copy: a caller cannot edit the module's memory.
             record["results"].append(("tampered", True, ""))
@@ -612,7 +615,12 @@ class TestRunSelfTestsFailures:
                 "reason": failed_reason,
                 "results": failed_results,
                 "duration_ms": failed_duration,
+                "stage_durations_ms": failed_stages,
             }
+            # The failed run's stage timing is the record's own: the recovery
+            # run replaced the attestation's map, which now reaches "rng".
+            assert "rng" in module_attestation()["stage_durations_ms"]
+            assert "rng" not in last_failure()["stage_durations_ms"]
         finally:
             st.update_integrity_digest()
             _set_operational()

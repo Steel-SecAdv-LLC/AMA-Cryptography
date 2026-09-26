@@ -683,8 +683,11 @@ _NUMBER_WORD_ALTERNATION = "|".join(sorted(_WORD_NUMBERS, key=len, reverse=True)
 #: "standalone libFuzzer targets" reads as "one libFuzzer targets".  "fuzzers"
 #: is accepted only in the plural, because "non-zero causes the fuzzer to
 #: abort" is an instruction, not a count.
+#: The count must not follow a hyphen, dot or word character: "ML-DSA-65 and
+#: Ed25519 verifiers the harnesses drive" is an algorithm name, not a count,
+#: and without the look-behind the regenerator rewrote it to "ML-DSA-17".
 _FUZZ_COUNT_RE = re.compile(
-    rf"\b(\d{{1,9}}|{_NUMBER_WORD_ALTERNATION})\s{{1,8}}"
+    rf"(?<![\w.-])\b(\d{{1,9}}|{_NUMBER_WORD_ALTERNATION})\s{{1,8}}"
     r"(?:[A-Za-z][\w-]{0,40}\s{1,8}){0,2}(?:targets?|harnesses?|fuzzers)\b",
     re.IGNORECASE,
 )
@@ -1309,7 +1312,10 @@ CLAIM_FAMILY_FLOORS: dict[str, int] = {
     "native_entry": 1,
     "cython_entry": 1,
     "c_suite_bare": 3,
-    "fuzz": 14,
+    # 13, not 14: the fourteenth match was "ML-DSA-65 ... harnesses" in
+    # ARCHITECTURE.md, an algorithm name the pattern misread as a count (see
+    # _FUZZ_COUNT_RE); the look-behind retired it.
+    "fuzz": 13,
     "breaking": 4,
     "breaking_times": 5,
     "py_test_modules": 1,

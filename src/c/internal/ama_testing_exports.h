@@ -260,6 +260,23 @@ void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 void ama_dilithium_test_invntt_bound_reset(void);
 int32_t ama_dilithium_test_invntt_bound_get(void);
 
+/**
+ * MakeHint (FIPS 204 Algorithm 39) for tests.
+ *
+ * `ama_dilithium_test_make_hint` evaluates the predicate itself for a
+ * parameter set (-1 for an unknown one), so its boundary can be tested at
+ * exact values.  `..._edge_arm(1)` clears and arms a thread-local counter of
+ * coefficients in the most recent hint computation that met a0 == -gamma2
+ * with a1 == 0 -- the clause an honest signature reaches only for particular
+ * messages -- and `..._edge_hits()` reads it, so a test pinning such a
+ * message can confirm it still reaches the clause.  Disarmed by default (see
+ * the dudect note on the invntt accumulator above); `..._edge_arm(0)`
+ * disarms.  Testing archive only.
+ */
+int ama_dilithium_test_make_hint(ama_ml_dsa_param_set_t ps, int32_t a0, int32_t a1);
+void ama_dilithium_test_make_hint_edge_arm(int armed);
+unsigned int ama_dilithium_test_make_hint_edge_hits(void);
+
 /* --- src/c/ama_slhdsa.c -------------------------------------------------- */
 
 /**

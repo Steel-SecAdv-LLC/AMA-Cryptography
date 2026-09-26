@@ -625,6 +625,42 @@ static unsigned int dil_make_hint(int32_t a0, int32_t a1, const dil_params *P) {
     return 0;
 }
 
+#ifdef AMA_TESTING_MODE
+/* MakeHint's boundary clause, `a0 == -gamma2 && a1 != 0`, is reached by an
+ * honest signature only for particular messages, and nothing public says
+ * whether a given signing run reached it.  tests/c/test_ml_dsa_hint_encoding.c
+ * pins one such message per parameter set; without a way to observe the
+ * clause, a change to signing that moved the edge elsewhere would leave that
+ * case verifying a signature that no longer exercises it.  This counter is
+ * the observation: the number of coefficients of the LAST hint computation on
+ * this thread (the accepted attempt's, since it is the last to compute hints)
+ * that met a0 == -gamma2 with a1 == 0.
+ *
+ * Disarmed until a test arms it, for the reason dil_test_invntt_bound_armed
+ * records: tests/c/test_dudect.c links this archive, and the comparison is on
+ * secret-derived coefficients.  With the flag clear the && short-circuits
+ * before any of them is read.  The shipped libraries carry none of this. */
+static _Thread_local int dil_test_make_hint_edge_armed = 0;
+static _Thread_local unsigned int dil_test_make_hint_edge_hits = 0;
+
+void ama_dilithium_test_make_hint_edge_arm(int armed) {
+    dil_test_make_hint_edge_hits = 0;
+    dil_test_make_hint_edge_armed = armed ? 1 : 0;
+}
+
+unsigned int ama_dilithium_test_make_hint_edge_hits(void) {
+    return dil_test_make_hint_edge_hits;
+}
+
+int ama_dilithium_test_make_hint(ama_ml_dsa_param_set_t ps, int32_t a0, int32_t a1) {
+    const dil_params *P = dil_params_for(ps);
+    if (!P) {
+        return -1;
+    }
+    return (int)dil_make_hint(a0, a1, P);
+}
+#endif /* AMA_TESTING_MODE */
+
 /**
  * UseHint: recover high bits from hint (FIPS 204 Algorithm 40).
  *
@@ -1491,6 +1527,12 @@ static unsigned int dil_polyveck_make_hint(uint8_t *hint,
                                             const dil_params *P) {
     unsigned int i, j, s = 0;
 
+#ifdef AMA_TESTING_MODE
+    if (dil_test_make_hint_edge_armed) {
+        dil_test_make_hint_edge_hits = 0;
+    }
+#endif
+
     /* The scan always runs to completion.  Returning at the first hint past
      * omega made a rejected attempt's cost a function of WHERE the overflow
      * happened, which is a function of w0 - c*s2 + c*t0 and therefore of the
@@ -1506,6 +1548,12 @@ static unsigned int dil_polyveck_make_hint(uint8_t *hint,
         for (j = 0; j < DIL_N; ++j) {
             unsigned int h =
                 dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P) ? 1u : 0u;
+#ifdef AMA_TESTING_MODE
+            if (dil_test_make_hint_edge_armed && v0->vec[i].coeffs[j] == -P->gamma2 &&
+                v1->vec[i].coeffs[j] == 0) {
+                dil_test_make_hint_edge_hits++;
+            }
+#endif
             if (h && s < (unsigned int)P->omega) {
                 hint[s] = (uint8_t)j;
             }
@@ -1692,8 +1740,9 @@ static void dil_expand_matrix(dil_poly *mat,
  * Byte-for-byte identical to the corresponding slice of dil_expand_matrix: the
  * SHAKE-128 stream for A[i][j] depends only on (rho, nonce), and the nonce is
  * (i << 8) + j regardless of how the samples are grouped into x4 batches.
- * tests/c/test_dilithium_matrix_row_equiv.c asserts that against the whole-
- * matrix expansion for every parameter set rather than leaving it as a claim.
+ * ama_ml_dsa_test_matrix_row_equiv(), run by tests/c/test_nistp.c, asserts
+ * that against the whole-matrix expansion for every parameter set rather than
+ * leaving it as a claim.
  */
 static void dil_expand_matrix_row(dil_poly *row,
                                    const uint8_t rho[DIL_SEEDBYTES],
@@ -1805,6 +1854,10 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     } else {
         rc = dil_randombytes(seedbuf, DIL_SEEDBYTES);
         if (rc != AMA_SUCCESS) {
+            /* A failed draw may already have written CSPRNG output (xi):
+             * ama_randombytes' getrandom(2) and getentropy(3) paths loop and
+             * can fail after earlier iterations succeeded. */
+            ama_secure_memzero(seedbuf, sizeof(seedbuf));
             return rc;
         }
     }
@@ -2576,8 +2629,22 @@ static ama_error_t dil_verify_internal(const dil_params *P,
      * malleability, and a break of SUF-CMA rather than of EUF-CMA.  With eight
      * indices in one polynomial, as a randomly sampled ML-DSA-65 signature
      * routinely has, that is 8! = 40,320 valid encodings of one signature.
-     * Reproduced on the first randomly generated signature; pinned by
-     * `test_a_permuted_hint_is_refused` in tests/test_pqc_param_sets.py.
+     * Reproduced on the first randomly generated signature.
+     *
+     * Rules 1 and 2 close the same hole from the other side: a non-zero
+     * octet in the unused tail, or the count of an EMPTY polynomial lowered
+     * below its predecessor (the unpack loop below never rewinds, so the
+     * flags do not change), each denote the same flag set as the honest
+     * encoding.  An honest signature has an empty interior polynomial about
+     * once in 20,000 under ML-DSA-65 and -87 (measured, 200,000 messages).
+     *
+     * All three are pinned by tests/c/test_ml_dsa_hint_encoding.c: deleting
+     * any one of them fails it.  This comment used to cite a Python test
+     * for rule 3 that never existed, and until that file was added no suite
+     * executed rule 2, rule 3, or the `limit < prev` half of rule 1.
+     * `limit > omega` is also what keeps the unpack inside `hint`; for the
+     * verdict alone it is redundant with the c-tilde comparison, which
+     * refuses such a signature anyway.
      *
      * Every input here is public (it is a signature), so the loop's data
      * dependence is not a timing concern — the same posture as the rest of

@@ -128,11 +128,118 @@ class TestPowerOnSelfTests:
         assert module_status() == "OPERATIONAL"
 
     def test_post_duration_is_under_budget(self) -> None:
-        from ama_cryptography._self_test import post_duration_ms
+        """POST's own cost stays under 2 s.
 
-        duration = post_duration_ms()
-        assert duration > 0, "POST duration should be positive"
-        assert duration < 2000, f"POST took {duration:.1f}ms, exceeding 2000ms budget"
+        Measured here, on five POST runs, against the median.  This used to
+        read ``post_duration_ms()`` -- the duration of whichever POST some
+        other test ran last.  On main's Windows / CPython 3.14.7 lane that was
+        ``test_reset_module_recovers_from_error``'s POST, at 6,234 ms, while
+        every other POST in the same process took about 1 s and the same lane
+        on CPython 3.14.6 took 0.32 s: one stall of the host, charged to POST.
+
+        The median, not the minimum: a stall adds time to one sample, and the
+        median absorbs up to two; a regression that slows most runs --
+        deterministic, or intermittent in three of five -- moves the median
+        over the budget, where the minimum would let one fast run hide it.
+        Every sample's per-stage breakdown is in the message.
+        """
+        from ama_cryptography._self_test import _run_self_tests, module_attestation
+
+        samples = []
+        for _ in range(5):
+            assert _run_self_tests() is True
+            attestation = module_attestation()
+            samples.append((attestation["duration_ms"], attestation["stage_durations_ms"]))
+        median = sorted(duration for duration, _ in samples)[len(samples) // 2]
+        report = "; ".join(
+            f"{duration:.1f}ms " + ", ".join(f"{k}={v:.1f}" for k, v in stages.items())
+            for duration, stages in samples
+        )
+        assert median > 0, "POST duration should be positive"
+        assert median < 2000, (
+            f"POST's median of 5 runs took {median:.1f}ms, exceeding the 2000ms "
+            f"budget; runs: {report}"
+        )
+
+    def test_stage_durations_account_for_the_run(self) -> None:
+        """Every stage is timed, in order, and the stages fit in the run."""
+        from ama_cryptography._self_test import _run_self_tests, module_attestation
+
+        assert _run_self_tests() is True
+        attestation = module_attestation()
+        stages = attestation["stage_durations_ms"]
+        assert list(stages) == [
+            "native-backend",
+            "kat-pre-integrity",
+            "integrity",
+            "execution-integrity",
+            "kat",
+            "oracle",
+            "rng",
+        ]
+        assert all(v >= 0 for v in stages.values())
+        assert sum(stages.values()) <= attestation["duration_ms"] + 1.0
+
+    def test_stage_durations_stop_at_the_failing_stage(self) -> None:
+        """A failed stage is timed; the stages POST never reached are absent."""
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            module_attestation,
+            module_status,
+        )
+
+        try:
+            with patch(
+                "ama_cryptography._self_test._run_timing_oracle_stage",
+                return_value=(False, "forced"),
+            ):
+                assert _run_self_tests() is False
+            stages = module_attestation()["stage_durations_ms"]
+            assert list(stages)[-1] == "oracle"
+            assert "rng" not in stages
+        finally:
+            assert _run_self_tests() is True
+            assert module_status() == "OPERATIONAL"
+
+    def test_stage_durations_name_a_stage_that_raises(self) -> None:
+        """A stage that raises is a recorded POST failure: timed and published
+        (not the previous run's map), the module in ERROR naming the stage, and
+        the run in last_failure(); the exception still propagates."""
+        from ama_cryptography._self_test import (
+            _LAST_FAILURE,
+            _run_self_tests,
+            last_failure,
+            module_attestation,
+            module_error_reason,
+            module_status,
+        )
+
+        untouched_record = last_failure()
+        try:
+            assert _run_self_tests() is True
+            before = module_attestation()["stage_durations_ms"]
+            assert "rng" in before
+            with (
+                patch(
+                    "ama_cryptography._self_test._run_timing_oracle_stage",
+                    side_effect=RuntimeError("stage escaped"),
+                ),
+                pytest.raises(RuntimeError, match="stage escaped"),
+            ):
+                _run_self_tests()
+            stages = module_attestation()["stage_durations_ms"]
+            assert list(stages)[-1] == "oracle"
+            assert "rng" not in stages
+            assert module_status() == "ERROR"
+            reason = module_error_reason() or ""
+            assert "'oracle'" in reason and "RuntimeError" in reason
+            record = last_failure()
+            assert record["reason"] == reason
+            assert record["stage_durations_ms"] == stages
+        finally:
+            assert _run_self_tests() is True
+            assert module_status() == "OPERATIONAL"
+            _LAST_FAILURE.update(untouched_record)
 
     def test_all_kats_passed(self) -> None:
         """Every recorded KAT either passed or was an explicit skip.
