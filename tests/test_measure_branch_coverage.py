@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import ModuleType
 
@@ -143,6 +144,8 @@ def _python_suite_tree(
 ) -> tuple[Path, Path]:
     """A fake repo whose package holds the release library and whose build
     tree holds the instrumented one, each behind the usual symlink chain."""
+    if sys.platform == "win32":
+        pytest.skip("the Python-suite swap resolves .so/.dylib chains; there is no Windows glob")
     repo = tmp_path / "repo"
     pkg = repo / "ama_cryptography"
     lib = repo / "build-cov" / "lib"
@@ -152,6 +155,13 @@ def _python_suite_tree(
         (directory / "libama_cryptography.so.5").symlink_to("libama_cryptography.so.5.0.0")
     monkeypatch.setattr(tool, "REPO_ROOT", repo)
     return pkg / "libama_cryptography.so.5.0.0", lib.parent
+
+
+def _counters_move(build_dir: Path) -> None:
+    """What a suite that reached the instrumented library leaves behind."""
+    counter = build_dir / "CMakeFiles" / "ama_kyber.c.gcda"
+    counter.parent.mkdir(parents=True, exist_ok=True)
+    counter.write_bytes(counter.read_bytes() + b"\x01" if counter.exists() else b"\x01")
 
 
 @pytest.mark.parametrize("statuses", [(0, 0), (1, 0), (0, 2)])
@@ -173,6 +183,7 @@ def test_both_python_suites_run_on_the_instrumented_library_and_the_release_one_
 
     def fake_run(cmd: list[str], **_: object) -> _Done:
         ran.append((" ".join(cmd[1:3]), installed.read_bytes()))
+        _counters_move(build_dir)
         return _Done(pending.pop(0))
 
     monkeypatch.setattr(tool.subprocess, "run", fake_run)
@@ -195,16 +206,75 @@ def test_no_cov_is_passed_only_where_pytest_cov_is_installed(
     _python_suite_tree(tool, tmp_path, monkeypatch)
     real_find_spec = importlib.util.find_spec
 
-    def find_spec(name: str, *args: object) -> object:
+    def find_spec(name: str, package: str | None = None) -> ModuleSpec | None:
         if name == "pytest_cov":
-            return object() if installed_plugin else None
-        return real_find_spec(name, *args)  # type: ignore[arg-type]
+            return ModuleSpec("pytest_cov", None) if installed_plugin else None
+        return real_find_spec(name, package)
 
     monkeypatch.setattr(tool.importlib.util, "find_spec", find_spec)
     command = tool._pytest_command(["-x"])
     assert command[:5] == [sys.executable, "-m", "pytest", "tests/", "-q"]
     assert ("--no-cov" in command) is installed_plugin
     assert command[-1] == "-x", "the caller's pytest arguments were dropped"
+
+
+def test_suites_that_move_no_counter_are_refused_not_published(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run whose Python suites left every ``.gcda`` untouched measured the
+    release library, or nothing; its inventory must not become the all-suite
+    figure.  The release library is restored on that path as on every other."""
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    (build_dir / "lib" / "ama_kyber.c.gcda").write_bytes(b"\x00")
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_a, **_k: _Done())
+    with pytest.raises(tool.SuitesTookNoArcError, match="moved no coverage counter"):
+        tool._run_python_suite(build_dir, [])
+    assert installed.read_bytes() == b"release"
+
+
+def test_a_failed_resign_after_a_restore_says_so_and_drops_the_backup(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the release library is back the backup is redundant, and the
+    error must say which library the package holds — not surface as a bare
+    signing failure in place of the suite's own error."""
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    calls = {"n": 0}
+
+    def resign_fails_after_restore() -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("signer refused")
+
+    monkeypatch.setattr(tool, "_resign", resign_fails_after_restore)
+    backups: list[Path] = []
+    real_mkdtemp = tool.tempfile.mkdtemp
+
+    def recording_mkdtemp(**kwargs: str) -> str:
+        made = str(real_mkdtemp(**kwargs))
+        backups.append(Path(made))
+        return made
+
+    monkeypatch.setattr(tool.tempfile, "mkdtemp", recording_mkdtemp)
+
+    class _Done:
+        returncode = 0
+
+    def run_and_move(*_a: object, **_k: object) -> _Done:
+        _counters_move(build_dir)
+        return _Done()
+
+    monkeypatch.setattr(tool.subprocess, "run", run_and_move)
+    with pytest.raises(RuntimeError, match=r"was restored to .* but re-signing") as info:
+        tool._run_python_suite(build_dir, [])
+    assert isinstance(info.value.__cause__, RuntimeError)
+    assert installed.read_bytes() == b"release"
+    assert backups and not backups[0].exists(), "the backup directory was left behind"
 
 
 def test_the_release_library_is_restored_when_pytest_cannot_start(
@@ -269,7 +339,11 @@ def test_a_restored_run_leaves_no_backup_behind(
     class _Done:
         returncode = 0
 
-    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    def run_and_move(*_: object, **__: object) -> _Done:
+        _counters_move(build_dir)
+        return _Done()
+
+    monkeypatch.setattr(tool.subprocess, "run", run_and_move)
     made: list[str] = []
     real_mkdtemp = tool.tempfile.mkdtemp
 
@@ -304,7 +378,11 @@ def test_a_macos_install_name_chain_is_found(
     class _Done:
         returncode = 0
 
-    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    def run_and_move(*_: object, **__: object) -> _Done:
+        _counters_move(lib.parent)
+        return _Done()
+
+    monkeypatch.setattr(tool.subprocess, "run", run_and_move)
     assert tool._run_python_suite(lib.parent, []) == 0
     assert signed_over == [b"instrumented", b"release"]
     assert installed.read_bytes() == b"release"

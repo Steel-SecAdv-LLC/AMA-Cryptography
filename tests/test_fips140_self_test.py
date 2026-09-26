@@ -143,13 +143,25 @@ class TestPowerOnSelfTests:
         over the budget, where the minimum would let one fast run hide it.
         Every sample's per-stage breakdown is in the message.
         """
-        from ama_cryptography._self_test import _run_self_tests, module_attestation
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            module_attestation,
+            module_status,
+        )
 
         samples = []
-        for _ in range(5):
-            assert _run_self_tests() is True
-            attestation = module_attestation()
-            samples.append((attestation["duration_ms"], attestation["stage_durations_ms"]))
+        try:
+            for run in range(1, 6):
+                assert _run_self_tests() is True, f"POST run {run} of 5 failed"
+                attestation = module_attestation()
+                samples.append((attestation["duration_ms"], attestation["stage_durations_ms"]))
+        finally:
+            # A run that failed above left the module in ERROR; every later
+            # test in this process needs it OPERATIONAL, as the sibling tests
+            # that drive POST to failure restore it.
+            if module_status() != "OPERATIONAL":
+                assert _run_self_tests() is True
+                assert module_status() == "OPERATIONAL"
         median = sorted(duration for duration, _ in samples)[len(samples) // 2]
         report = "; ".join(
             f"{duration:.1f}ms " + ", ".join(f"{k}={v:.1f}" for k, v in stages.items())
@@ -197,6 +209,45 @@ class TestPowerOnSelfTests:
             stages = module_attestation()["stage_durations_ms"]
             assert list(stages)[-1] == "oracle"
             assert "rng" not in stages
+        finally:
+            assert _run_self_tests() is True
+            assert module_status() == "OPERATIONAL"
+
+    def test_an_interrupt_during_post_is_not_recorded_as_a_failed_post(self) -> None:
+        """Ctrl-C during POST is an interrupted self-test, not a failed one.
+
+        The module still must not operate: SELF_TEST stands, the thread
+        allowance is dropped and crypto is refused.  But no CRITICAL "POST
+        FAILURE" is logged, no reason is set, last_failure() is untouched and
+        the interrupt propagates; the stage timings are still published."""
+        from ama_cryptography._module_state import check_crypto_permitted
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            last_failure,
+            module_attestation,
+            module_error_reason,
+            module_status,
+        )
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        untouched_record = last_failure()
+        try:
+            assert _run_self_tests() is True
+            with (
+                patch(
+                    "ama_cryptography._self_test._run_timing_oracle_stage",
+                    side_effect=KeyboardInterrupt,
+                ),
+                pytest.raises(KeyboardInterrupt),
+            ):
+                _run_self_tests()
+            assert module_status() == "SELF_TEST"
+            assert module_error_reason() is None
+            assert last_failure() == untouched_record
+            with pytest.raises(CryptoModuleError):
+                check_crypto_permitted()
+            stages = module_attestation()["stage_durations_ms"]
+            assert list(stages)[-1] == "oracle"
         finally:
             assert _run_self_tests() is True
             assert module_status() == "OPERATIONAL"

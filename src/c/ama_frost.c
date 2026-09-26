@@ -64,6 +64,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
 #include "internal/ama_ed25519_canonical.h"
 #include <stdlib.h>
 #include <string.h>
@@ -86,26 +87,11 @@
  * internal/ama_sha2.h which triggers -Werror=unused-function). */
 #define sha512 ama_ed25519_sha512
 
-#ifdef AMA_TESTING_MODE
-/**
- * Random bytes hook for fail-closed testing.
- * When non-NULL, replaces the platform CSPRNG so a test can simulate an
- * entropy-source failure and assert that FROST aborts instead of emitting
- * predictable key material.  Only available in test builds
- * (AMA_TESTING_MODE); the shipped shared/static libraries never define it.
- */
-ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
-/* Get random bytes from the OS CSPRNG (or from the test hook if set). */
-static ama_error_t frost_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_frost_randombytes_hook) {
-        return ama_frost_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
-}
+/* Random bytes from the OS CSPRNG, or from the hook a test has set so it can
+ * simulate an entropy-source failure and assert that FROST aborts instead of
+ * emitting predictable key material (AMA_TESTING_MODE only; see
+ * internal/ama_test_csprng.h). */
+AMA_TEST_CSPRNG(ama_frost_randombytes_hook, frost_randombytes)
 
 /* ======================================================================
  * SCALAR ARITHMETIC (mod l)

@@ -206,6 +206,17 @@ def _pytest_command(pytest_args: list[str]) -> list[str]:
     return command + list(pytest_args)
 
 
+class SuitesTookNoArcError(RuntimeError):
+    """The Python suites ran, and no coverage counter under the build tree moved."""
+
+
+def _gcda_state(build_dir: Path) -> dict[Path, tuple[int, int]]:
+    """Every ``.gcda`` counter file under ``build_dir`` with its mtime and size."""
+    return {
+        path: (path.stat().st_mtime_ns, path.stat().st_size) for path in build_dir.rglob("*.gcda")
+    }
+
+
 def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
     """Run the Python suites against the instrumented library.
 
@@ -230,6 +241,11 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
     try:
         shutil.copy2(instrumented, installed)
         _resign()
+        # Whether the suites reach the instrumented library is measured, not
+        # assumed from import order: the counters it writes are the evidence,
+        # and a run that moved none of them measured the release library (or
+        # nothing) and must not be published as the all-suite figure.
+        before = _gcda_state(build_dir)
         status = 0
         for command in (
             _pytest_command(pytest_args),
@@ -238,6 +254,11 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
             # Both run whatever the first returns: each one's counters are data.
             returncode = subprocess.run(command, cwd=REPO_ROOT, check=False).returncode
             status = status or returncode
+        if _gcda_state(build_dir) == before:
+            raise SuitesTookNoArcError(
+                f"the Python suites moved no coverage counter under {build_dir}: they "
+                f"did not execute the instrumented library installed at {installed}"
+            )
         return status
     finally:
         try:
@@ -247,8 +268,21 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
                 f"could not restore the release library to {installed}; "
                 f"the backup is kept at {saved}"
             ) from exc
-        _resign()
-        shutil.rmtree(backup_dir, ignore_errors=True)
+        # The library is back; the backup has done its job whatever happens
+        # to the re-sign, so it is removed on both paths.  A re-sign failure
+        # here says so in its own words: a bare CalledProcessError replacing
+        # a pytest error would not tell the operator which library the
+        # package now holds.
+        try:
+            _resign()
+        except Exception as exc:
+            raise RuntimeError(
+                f"the release library was restored to {installed}, but re-signing the "
+                "integrity artefact over it failed; run "
+                "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+            ) from exc
+        finally:
+            shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def main() -> int:
@@ -280,7 +314,11 @@ def main() -> int:
     build_dir = args.build_dir.resolve()
     suite_status = 0
     if args.python_suite:
-        status = _run_python_suite(build_dir, args.pytest_arg)
+        try:
+            status = _run_python_suite(build_dir, args.pytest_arg)
+        except SuitesTookNoArcError as exc:
+            print(exc, file=sys.stderr)
+            return 2
         if status is None:
             print(
                 "--python-suite needs exactly one native library (libama_cryptography.so.* "

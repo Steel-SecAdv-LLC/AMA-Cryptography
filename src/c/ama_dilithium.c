@@ -47,6 +47,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
 
 /* Forward declarations from ama_sha3.c */
 extern ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);
@@ -626,15 +627,18 @@ static unsigned int dil_make_hint(int32_t a0, int32_t a1, const dil_params *P) {
 }
 
 #ifdef AMA_TESTING_MODE
-/* MakeHint's boundary clause, `a0 == -gamma2 && a1 != 0`, is reached by an
- * honest signature only for particular messages, and nothing public says
- * whether a given signing run reached it.  tests/c/test_ml_dsa_hint_encoding.c
- * pins one such message per parameter set; without a way to observe the
- * clause, a change to signing that moved the edge elsewhere would leave that
- * case verifying a signature that no longer exercises it.  This counter is
- * the observation: the number of coefficients of the LAST hint computation on
- * this thread (the accepted attempt's, since it is the last to compute hints)
- * that met a0 == -gamma2 with a1 == 0.
+/* MakeHint's boundary clause, `a0 == -gamma2 && a1 != 0`, decides the hint
+ * only for coefficients with a0 == -gamma2, and the case that tells the
+ * clause from its absence is a0 == -gamma2 with a1 == 0: hint 0 with the
+ * clause, hint 1 without it.  An honest signature reaches that case only for
+ * particular messages, and nothing public says whether a given signing run
+ * did.  tests/c/test_ml_dsa_hint_encoding.c pins one such message per
+ * parameter set; without a way to observe the case, a change to signing that
+ * moved the edge elsewhere would leave that test verifying a signature that
+ * no longer exercises it.  This counter is the observation: the number of
+ * coefficients of the LAST hint computation on this thread (the accepted
+ * attempt's, since it is the last to compute hints) that met a0 == -gamma2
+ * with a1 == 0.
  *
  * Disarmed until a test arms it, for the reason dil_test_invntt_bound_armed
  * records: tests/c/test_dudect.c links this archive, and the comparison is on
@@ -1804,24 +1808,9 @@ static void dil_matrix_pointwise_rowwise(dil_polyveck *w,
     ama_secure_memzero(&t, sizeof(t));
 }
 
-#ifdef AMA_TESTING_MODE
-/**
- * Random bytes hook for KAT testing.
- * When non-NULL, replaces /dev/urandom for deterministic output.
- * Only available in test builds (AMA_TESTING_MODE).
- */
-ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t* buf, size_t len) = NULL;
-#endif
-
-/* Get random bytes from OS (or from test hook if set) */
-static ama_error_t dil_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_dilithium_randombytes_hook) {
-        return ama_dilithium_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
-}
+/* Random bytes from the OS, or from the KAT-replay hook a test has set
+ * (AMA_TESTING_MODE only; see internal/ama_test_csprng.h). */
+AMA_TEST_CSPRNG(ama_dilithium_randombytes_hook, dil_randombytes)
 
 /**
  * ML-DSA key generation (FIPS 204 Algorithm 6 `ML-DSA.KeyGen_internal`).

@@ -69,6 +69,7 @@
 #include "../include/ama_cpuid.h"
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
 #include "internal/ama_once.h"
 #include "internal/ama_ct_barrier.h"
 #include "internal/ama_ct_declassify.h"
@@ -1524,24 +1525,11 @@ static int nistp_rfc6979_nonce(uint64_t *k_out, uint8_t *k_bytes,
  * (a non-minimal long form) is still rejected.
  * ============================================================================ */
 
-#ifdef AMA_TESTING_MODE
-/* CSPRNG override for tests, in the shape ama_kyber.c, ama_dilithium.c,
- * ama_frost.c and ama_slhdsa.c already use; compiled only into the
- * AMA_TESTING_MODE archive, so the shipped library carries neither the
- * pointer nor the branch.  Without it the fail-closed exits of key generation
- * and hedged signing on a CSPRNG failure were executed by no suite
- * (measured 2026-09-26); tests/c/test_input_guards.c drives both. */
-ama_error_t (*ama_nistp_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
-static ama_error_t nistp_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_nistp_randombytes_hook) {
-        return ama_nistp_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
-}
+/* CSPRNG override for tests (AMA_TESTING_MODE only; see
+ * internal/ama_test_csprng.h).  Without it the fail-closed exits of key
+ * generation and hedged signing on a CSPRNG failure were executed by no
+ * suite (measured 2026-09-26); tests/c/test_input_guards.c drives both. */
+AMA_TEST_CSPRNG(ama_nistp_randombytes_hook, nistp_randombytes)
 
 /** Maximum DER length: 3 header octets + 2 * (2 + 1 + 66) for P-521. */
 #define NISTP_DER_MAX 141

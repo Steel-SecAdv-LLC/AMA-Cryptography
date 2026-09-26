@@ -21,9 +21,16 @@ endmacro()
 # no stack protector because the defect only exists in optimized code and the
 # probe's frame arithmetic assumes a plain prologue; 77 is the skip under a
 # sanitizer that moves or instruments the read (see the TUs).
+# An optional third argument names the library to link instead of the
+# default shared/test choice below: a probe driven through the
+# AMA_TESTING_MODE hooks must link the test archive, and it must still be
+# built under exactly these flags -- residue_probe.h records how a second
+# hand-copied set of them drifted from the first.
 macro(add_ama_residue_probe test_name test_source)
     add_executable(${test_name} ${test_source})
-    if(AMA_BUILD_SHARED AND NOT WIN32)
+    if(${ARGC} GREATER 2)
+        target_link_libraries(${test_name} ${ARGV2})
+    elseif(AMA_BUILD_SHARED AND NOT WIN32)
         target_link_libraries(${test_name} ama_cryptography_shared)
     else()
         target_link_libraries(${test_name} ama_cryptography_test)
@@ -579,13 +586,9 @@ if(AMA_USE_NATIVE_PQC)
     # the exit must scrub it.  Linked against the test archive, not the shared
     # library add_ama_residue_probe uses, because the failure is driven through
     # the AMA_TESTING_MODE CSPRNG hooks; the test file records why LTO cannot
-    # hide this needle.  Same -O2, stack-protector and sanitizer-skip terms.
-    add_executable(test_csprng_failure_residue test_csprng_failure_residue.c)
-    target_link_libraries(test_csprng_failure_residue ama_cryptography_test)
-    add_test(NAME test_csprng_failure_residue COMMAND test_csprng_failure_residue)
-    set_tests_properties(test_csprng_failure_residue PROPERTIES SKIP_RETURN_CODE 77)
-    target_compile_options(test_csprng_failure_residue PRIVATE
-        $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-O2 -fno-stack-protector>)
+    # hide this needle.  The probe flags come from the one macro.
+    add_ama_residue_probe(test_csprng_failure_residue test_csprng_failure_residue.c
+                          ama_cryptography_test)
 endif()
 
 # Constant-time bitsliced AES-256 (NIST SP 800-38A §F.1.5 KAT).

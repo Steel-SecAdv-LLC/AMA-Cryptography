@@ -56,7 +56,6 @@
 
 /* AMA_TESTING_MODE-only CSPRNG override from src/c/ama_frost.c.  Used by
  * the fail-closed and nonce-hedging regression tests below. */
-extern ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len);
 
 /* Simulates an entropy-source failure: reports failure AND leaves the
  * buffer zeroed, which is the exact shape that previously collapsed the

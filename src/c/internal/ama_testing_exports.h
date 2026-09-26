@@ -48,6 +48,24 @@
  * types rather than relying on include order at each consumer. */
 #include "ama_cryptography.h"
 
+/* --- Test CSPRNG hooks (internal/ama_test_csprng.h) --------------------- */
+
+/**
+ * The per-file CSPRNG overrides AMA_TEST_CSPRNG defines, each NULL until a
+ * test sets it: a test that installs one replays a KAT seed, or fails the
+ * draw to reach a fail-closed exit (tests/c/test_csprng_failure_residue.c,
+ * test_input_guards.c, test_frost.c, test_kat.c).  Declared here so the
+ * tests compile against the one prototype instead of restating it by hand.
+ * Unconditional, like every declaration in this header: the tests that use
+ * them are compiled without AMA_TESTING_MODE and link the archive that was.
+ */
+extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_nistp_randombytes_hook)(uint8_t *buf, size_t len);
+extern ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len);
+
 /* --- src/c/ama_frost.c -------------------------------------------------- */
 
 /**

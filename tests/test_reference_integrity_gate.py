@@ -309,6 +309,14 @@ class TestTestCitationsInTheShippedCode:
         found = self._scan(f"/* pinned by `{name}` in {path} */\n")
         assert [cited for _, cited, _ in found] == [f"{name} in {path}"]
 
+    def test_the_node_id_form_is_checked_too(self) -> None:
+        """``tests/test_x.py::test_y`` is as common in comments as
+        "test_y in tests/test_x.py"; a dangling citation in that form used to
+        pass the gate unread."""
+        found = self._scan("# pinned by `tests/test_real.py::test_absent`\n")
+        assert [cited for _, cited, _ in found] == ["test_absent in tests/test_real.py"]
+        assert self._scan("# pinned by tests/test_real.py::test_present\n") == []
+
     def test_a_named_test_in_a_missing_file_is_reported_once(self) -> None:
         found = self._scan("# `test_x` in tests/test_gone.py\n")
         assert [cited for _, cited, _ in found] == ["tests/test_gone.py"]

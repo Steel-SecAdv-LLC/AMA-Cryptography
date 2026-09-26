@@ -3276,13 +3276,21 @@ def _run_self_tests() -> bool:
                     _set_error(err)
                     all_passed = False
                     break
-        except BaseException as exc:
+        except Exception as exc:
             # A stage that raises is a failed POST, and it is recorded as one
             # before the exception continues (the import still fails, per
             # INVARIANT-39).  Left alone it exited with the module in
             # SELF_TEST, no reason and nothing in last_failure(): crypto was
             # refused and the exception propagated, but the module's own
             # status reported no failure at all.
+            #
+            # ``Exception``, not ``BaseException``: a KeyboardInterrupt or
+            # SystemExit during POST is an interrupted self-test, not a
+            # failed one, and recording it would log a CRITICAL "POST
+            # FAILURE" and hand last_failure() a failure that never happened.
+            # The module still does not become OPERATIONAL (SELF_TEST is left
+            # as it stands), the thread allowance is dropped in the finally,
+            # and the interrupt propagates.
             all_passed = False
             _set_error(
                 f"FIPS POST internal error: stage {stage_name!r} raised "

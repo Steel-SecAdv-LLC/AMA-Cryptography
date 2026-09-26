@@ -72,6 +72,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "../../src/c/internal/ama_testing_exports.h"
 
 static int failures = 0;
 
@@ -163,8 +164,6 @@ static void ml_kem_guards(ama_ml_kem_param_set_t ps, const char *name) {
           "%s: keypair_from_seed refuses NULLs and short buffers", name);
 }
 
-extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t *buf, size_t len);
-extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t *buf, size_t len);
 
 /* Reports failure AFTER writing: `ama_randombytes` is not all-or-nothing (its
  * getrandom loop can fail after earlier iterations wrote), so a refusal must
@@ -377,7 +376,6 @@ static void ml_dsa_unknown_set(void) {
 /* SLH-DSA                                                                   */
 /* ------------------------------------------------------------------------ */
 
-extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len);
 
 static void slh_dsa_guards(ama_slhdsa_param_set_t ps, const char *name,
                            size_t pk_bytes, size_t sk_bytes, size_t sig_bytes) {
@@ -657,7 +655,6 @@ static void nistp_guards(ama_nist_curve_t curve, const char *name) {
     }
 }
 
-extern ama_error_t (*ama_nistp_randombytes_hook)(uint8_t *buf, size_t len);
 
 
 /* PIN: key generation and hedged signing fail closed on a CSPRNG failure --

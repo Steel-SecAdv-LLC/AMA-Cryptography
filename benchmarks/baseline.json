@@ -831,6 +831,10 @@
       {
         "path": "src/c/sve2/ama_chacha20poly1305_sve2.c",
         "reason": "2026-09-26: comment only (the NEON equivalence test's path corrected to tests/c/test_chacha20_x8_neon_equiv.c); the file is the SVE2 placeholder with no kernel wired, compiled only on AArch64, and no benchmarked path runs through it."
+      },
+      {
+        "path": "src/c/internal/ama_test_csprng.h",
+        "reason": "2026-09-27: new header, src/c/internal/ama_test_csprng.h, defining the AMA_TESTING_MODE CSPRNG hook and its draw wrapper once (AMA_TEST_CSPRNG) for ama_kyber.c, ama_dilithium.c, ama_slhdsa.c, ama_frost.c, ama_nistp.c and ama_x25519.c, which included it in place of six hand-written copies. Measured: the Release objects of all six files (gcc 13.3.0, -DAMA_USE_NATIVE_PQC=ON, LTO off, sha256 of each .o) are byte-identical before and after, so no benchmarked path changes and no floor can move."
       }
     ]
   },

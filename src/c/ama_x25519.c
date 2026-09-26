@@ -45,6 +45,7 @@
 #include "../include/ama_cpuid.h"
 #include "../include/ama_dispatch.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -754,22 +755,10 @@ AMA_API const char *ama_x25519_field_path(void) {
 #endif
 }
 
-#ifdef AMA_TESTING_MODE
-/* CSPRNG override for tests, in the shape the ML-KEM, ML-DSA, SLH-DSA, FROST
- * and NIST-P files use; compiled only into the AMA_TESTING_MODE archive, so
- * the shipped library carries neither the pointer nor the branch.  Without it
- * the failure exit of ama_x25519_keypair was executed by no suite. */
-ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
-static ama_error_t x25519_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_x25519_randombytes_hook) {
-        return ama_x25519_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
-}
+/* CSPRNG override for tests (AMA_TESTING_MODE only; see
+ * internal/ama_test_csprng.h).  Without it the failure exit of
+ * ama_x25519_keypair was executed by no suite. */
+AMA_TEST_CSPRNG(ama_x25519_randombytes_hook, x25519_randombytes)
 
 /**
  * @brief Generate X25519 keypair.

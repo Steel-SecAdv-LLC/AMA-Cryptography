@@ -58,6 +58,7 @@
 #include "ama_sha256.h"
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_test_csprng.h"
 #include "internal/ama_sha2.h"
 #include "internal/ama_ct_declassify.h"
 /* No <stdlib.h>: this translation unit allocates nothing.  The last heap use
@@ -1101,25 +1102,14 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
  * Top-level keygen / sign / verify (parameter-driven, exposed C API)
  * ============================================================================ */
 
-/* CSPRNG override for tests (AMA_TESTING_MODE only; the shipped library
- * carries neither the pointer nor the branch).  Every draw in this file goes
- * through slh_randombytes().  The hook used to be consulted only by the
- * legacy ama_sphincs_* entry points, through a second draw function, so the
+/* CSPRNG override for tests (AMA_TESTING_MODE only; see
+ * internal/ama_test_csprng.h).  Every draw in this file goes through
+ * slh_randombytes().  The hook used to be consulted only by the legacy
+ * ama_sphincs_* entry points, through a second draw function, so the
  * fail-closed exits of ama_slhdsa_keygen() and ama_slhdsa_sign() on a CSPRNG
  * failure could not be reached by any test (measured 2026-09-26);
  * tests/c/test_input_guards.c now drives all four. */
-#ifdef AMA_TESTING_MODE
-ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
-static ama_error_t slh_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_sphincs_randombytes_hook) {
-        return ama_sphincs_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
-}
+AMA_TEST_CSPRNG(ama_sphincs_randombytes_hook, slh_randombytes)
 
 /* keygen_internal: given (sk_seed, sk_prf, pk_seed) all of length n, fill pk
  * (= pk_seed || pk_root) and sk (= sk_seed || sk_prf || pk_seed || pk_root). */

@@ -17,6 +17,7 @@
 
 #define _POSIX_C_SOURCE 200809L  /* for strdup */
 #include "../../include/ama_cryptography.h"
+#include "../../src/c/internal/ama_testing_exports.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -155,7 +156,6 @@ static void nist_drbg_generate(nist_drbg_ctx *ctx, uint8_t *out, size_t outlen) 
  * deterministic output for KAT vector reproduction.
  * ============================================================================ */
 
-extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t* buf, size_t len);
 extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t* buf, size_t len);
 extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t* buf, size_t len);
 

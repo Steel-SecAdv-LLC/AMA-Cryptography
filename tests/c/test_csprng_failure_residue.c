@@ -58,13 +58,10 @@
 #include "ama_cryptography.h"
 
 #include "residue_probe.h"
+#include "../../src/c/internal/ama_testing_exports.h"
 
 #if !AMA_PROBE_IS_INSTRUMENTED
 
-extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t *buf, size_t len);
-extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t *buf, size_t len);
-extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len);
-extern ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len);
 
 static int checks = 0;
 static int failures = 0;

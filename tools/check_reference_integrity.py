@@ -288,6 +288,11 @@ NAMED_TEST = re.compile(
     r"`?(tests/(?:[\w/\-]|(?<=[_/\-])" + _CONTINUATION + r")+\.(?:py|c))\b"
 )
 
+#: The pytest node-id form of the same citation, ``tests/test_x.py::test_y``:
+#: as common in comments as "test_y in tests/test_x.py", and until it was
+#: matched a dangling citation written this way passed the gate unread.
+NODE_ID_TEST = re.compile(r"`?\b(tests/[\w/\-]+\.(?:py|c))::(test_\w+)\b")
+
 
 #: A C comment or string/character literal, removed before a definition is
 #: looked for, so prose and literals cannot supply one.
@@ -353,10 +358,12 @@ def scan_test_citations(
         if path not in tracked:
             line = text.count("\n", 0, match.start()) + 1
             findings.append((line, path, "cites a test file that is not in the repository"))
-    for match in NAMED_TEST.finditer(text):
-        name, path = match.group(1), _unwrap(match.group(2))
+    named = [(m.start(), m.group(1), _unwrap(m.group(2))) for m in NAMED_TEST.finditer(text)] + [
+        (m.start(), m.group(2), m.group(1)) for m in NODE_ID_TEST.finditer(text)
+    ]
+    for start, name, path in named:
         if path in tracked and not defines_test(read(path), name, path):
-            line = text.count("\n", 0, match.start()) + 1
+            line = text.count("\n", 0, start) + 1
             findings.append((line, f"{name} in {path}", f"{path} has no test named {name}"))
     return sorted(findings)
 
