@@ -186,30 +186,44 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
 
     Returns the first non-zero exit status (0 when both pass), or None when
     the two libraries to swap were not both found.  The installed library is
-    restored, and the artefact re-signed over it, on every path out.
+    restored, and the artefact re-signed over it, on every path out.  If the
+    restore itself fails, the backup is kept and its path is in the error:
+    deleting it then would leave the instrumented build installed with no
+    copy of the release one.
     """
     installed = _real_library(REPO_ROOT / "ama_cryptography")
     instrumented = _real_library(build_dir / "lib")
     if installed is None or instrumented is None:
         return None
-    with tempfile.TemporaryDirectory() as tmp:
-        saved = Path(tmp) / installed.name
+    backup_dir = Path(tempfile.mkdtemp(prefix="ama-release-library-"))
+    saved = backup_dir / installed.name
+    try:
         shutil.copy2(installed, saved)
+    except OSError:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        raise
+    try:
+        shutil.copy2(instrumented, installed)
+        _resign()
+        status = 0
+        for command in (
+            [sys.executable, "-m", "pytest", "tests/", "-q", "--no-cov", *pytest_args],
+            [sys.executable, "wycheproof_vectors/run_wycheproof.py"],
+        ):
+            # Both run whatever the first returns: each one's counters are data.
+            returncode = subprocess.run(command, cwd=REPO_ROOT, check=False).returncode
+            status = status or returncode
+        return status
+    finally:
         try:
-            shutil.copy2(instrumented, installed)
-            _resign()
-            status = 0
-            for command in (
-                [sys.executable, "-m", "pytest", "tests/", "-q", "--no-cov", *pytest_args],
-                [sys.executable, "wycheproof_vectors/run_wycheproof.py"],
-            ):
-                # Both run whatever the first returns: each one's counters are data.
-                returncode = subprocess.run(command, cwd=REPO_ROOT, check=False).returncode
-                status = status or returncode
-            return status
-        finally:
             shutil.copy2(saved, installed)
-            _resign()
+        except OSError as exc:
+            raise RuntimeError(
+                f"could not restore the release library to {installed}; "
+                f"the backup is kept at {saved}"
+            ) from exc
+        _resign()
+        shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def main() -> int:

@@ -32,7 +32,8 @@ test file's header.
 - Swaps the instrumented `libama_cryptography.so` into an editable install,
   re-signs the integrity artefact, runs `pytest tests/` and the Wycheproof
   runner against it, and restores and re-signs the release library on every
-  path out. The Wycheproof runner is not a pytest module, and without it
+  path out; if the restore itself fails, the backup is kept and named rather
+  than deleted with its temporary directory. The Wycheproof runner is not a pytest module, and without it
   every ECDSA DER-parser rejection in `ama_nistp.c` read as never taken.
   Measured on the tree before this pass (gcc 13.3.0, Debug `--coverage
   -O0 -g`, x86-64): 1,464 arcs under `src/c` never taken by the C suite,
@@ -91,7 +92,8 @@ test file's header.
 - POST now records each stage's wall-clock, and `module_attestation()`
   reports it as `stage_durations_ms`, so a slow POST names its stage -- in
   the budget test's failure message and for an operator. Nothing recorded
-  where the 6.2 s went.
+  where the 6.2 s went. The map is published on every exit, a stage that
+  raises included, so it never shows a previous run's timing.
 
 **Tests for guards nothing executed**
 - `tests/c/test_frost.c` Test 11: a CSPRNG that reports success with bytes

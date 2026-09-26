@@ -201,6 +201,33 @@ class TestPowerOnSelfTests:
             assert _run_self_tests() is True
             assert module_status() == "OPERATIONAL"
 
+    def test_stage_durations_name_a_stage_that_raises(self) -> None:
+        """A stage that raises is timed and published, not the previous run's map."""
+        from ama_cryptography._self_test import (
+            _run_self_tests,
+            module_attestation,
+            module_status,
+        )
+
+        try:
+            assert _run_self_tests() is True
+            before = module_attestation()["stage_durations_ms"]
+            assert "rng" in before
+            with (
+                patch(
+                    "ama_cryptography._self_test._run_timing_oracle_stage",
+                    side_effect=RuntimeError("stage escaped"),
+                ),
+                pytest.raises(RuntimeError, match="stage escaped"),
+            ):
+                _run_self_tests()
+            stages = module_attestation()["stage_durations_ms"]
+            assert list(stages)[-1] == "oracle"
+            assert "rng" not in stages
+        finally:
+            assert _run_self_tests() is True
+            assert module_status() == "OPERATIONAL"
+
     def test_all_kats_passed(self) -> None:
         """Every recorded KAT either passed or was an explicit skip.
 

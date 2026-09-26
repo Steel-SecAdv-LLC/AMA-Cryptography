@@ -205,6 +205,63 @@ def test_the_release_library_is_restored_when_pytest_cannot_start(
     ), "the artefact was left signed over the instrumented library"
 
 
+def test_a_failed_restore_keeps_the_backup_and_names_it(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backup is the only copy of the release library once the swap is
+    made; a restore that fails must not delete it."""
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    real_mkdtemp = tool.tempfile.mkdtemp
+    monkeypatch.setattr(
+        tool.tempfile, "mkdtemp", lambda **kwargs: real_mkdtemp(dir=tmp_path, **kwargs)
+    )
+    real_copy = tool.shutil.copy2
+    copies: list[Path] = []
+
+    def copy_then_fail_the_restore(src: Path, dst: Path) -> object:
+        copies.append(Path(dst))
+        if len(copies) == 3:  # backup, swap, restore
+            raise OSError("No space left on device")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(tool.shutil, "copy2", copy_then_fail_the_restore)
+    with pytest.raises(RuntimeError, match="the backup is kept at") as caught:
+        tool._run_python_suite(build_dir, [])
+    backup = Path(str(caught.value).rsplit("kept at ", 1)[1])
+    assert backup.read_bytes() == b"release", "the backup was deleted or is not the release library"
+    assert isinstance(caught.value.__cause__, OSError)
+    assert installed.read_bytes() == b"instrumented", "the backup is the only release copy"
+
+
+def test_a_restored_run_leaves_no_backup_behind(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    made: list[str] = []
+    real_mkdtemp = tool.tempfile.mkdtemp
+
+    def recording_mkdtemp(**kwargs: str) -> str:
+        made.append(real_mkdtemp(dir=tmp_path, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(tool.tempfile, "mkdtemp", recording_mkdtemp)
+    assert tool._run_python_suite(build_dir, []) == 0
+    assert installed.read_bytes() == b"release"
+    assert len(made) == 1 and not Path(made[0]).exists(), "the backup directory was left behind"
+
+
 def test_the_python_suite_refuses_without_both_libraries(
     tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -3266,9 +3266,11 @@ def _run_self_tests() -> bool:
             # set would keep ``check_crypto_permitted`` permissive on this
             # thread for the rest of the process's life.
             _clear_self_test_thread()
-
-        _POST_DURATION_MS = (time.monotonic() - start) * 1000
-        _POST_STAGE_DURATIONS_MS = stage_durations
+            # Publish this run's timing by the same paths: a stage that raises
+            # is the one an operator most needs named, and publishing only on
+            # a normal return left the previous run's timing in its place.
+            _POST_DURATION_MS = (time.monotonic() - start) * 1000
+            _POST_STAGE_DURATIONS_MS = stage_durations
 
         if not all_passed:
             # Snapshot the failed run for :func:`last_failure` NOW.  Until this
