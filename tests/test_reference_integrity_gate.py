@@ -24,6 +24,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -37,11 +38,13 @@ from tools.check_reference_integrity import (  # noqa: E402 -- repo-root path in
     SCANNED_NAMES,
     SCANNED_ROOT_FILES,
     SUFFIXES,
+    TEST_CITATION_DIRS,
     _is_historical_record,
     _tracked_files,
     check,
     file_type,
     main,
+    scan_test_citations,
     scan_text,
 )
 
@@ -213,6 +216,62 @@ class TestTheExemptionsAreHonest:
         _, problems = check(REPO_ROOT)
         for name in EXEMPT:
             assert not any(p.startswith(f"{name}:") for p in problems)
+
+
+class TestTestCitationsInTheShippedCode:
+    """Shape 3: a comment in the shipped code that names a test names one that exists.
+
+    ``src/c/ama_dilithium.c`` cited ``test_a_permuted_hint_is_refused`` as the
+    pin for ML-DSA's hint-ordering rule; the test never existed and the rule's
+    rejection ran under no suite.
+    """
+
+    TRACKED: ClassVar[frozenset[str]] = frozenset({"tests/c/test_real.c", "tests/test_real.py"})
+    SOURCES: ClassVar[dict[str, str]] = {"tests/test_real.py": "def test_present() -> None: ...\n"}
+
+    def _scan(self, text: str) -> list[tuple[int, str, str]]:
+        return scan_test_citations(text, set(self.TRACKED), self.SOURCES.__getitem__)
+
+    def test_a_missing_test_file_is_reported(self) -> None:
+        found = self._scan("/* pinned by tests/c/test_imagined.c */\n")
+        assert [(line, cited) for line, cited, _ in found] == [(1, "tests/c/test_imagined.c")]
+
+    def test_a_tracked_test_file_passes(self) -> None:
+        assert self._scan("/* pinned by tests/c/test_real.c */\n") == []
+
+    def test_a_path_wrapped_onto_a_comment_continuation_is_joined(self) -> None:
+        assert self._scan("/* see tests/test_\n * real.py for the pin */\n") == []
+        found = self._scan("/* see tests/test_\n * imagined.py for the pin */\n")
+        assert [cited for _, cited, _ in found] == ["tests/test_imagined.py"]
+
+    def test_a_missing_named_test_is_reported(self) -> None:
+        found = self._scan("# pinned by `test_absent` in tests/test_real.py\n")
+        assert [cited for _, cited, _ in found] == ["test_absent in tests/test_real.py"]
+
+    def test_a_present_named_test_passes_even_when_wrapped(self) -> None:
+        assert self._scan("/* pinned by\n * `test_present` in\n * tests/test_real.py */\n") == []
+
+    def test_a_named_test_in_a_missing_file_is_reported_once(self) -> None:
+        found = self._scan("# `test_x` in tests/test_gone.py\n")
+        assert [cited for _, cited, _ in found] == ["tests/test_gone.py"]
+
+    def test_the_scope_is_the_shipped_code(self) -> None:
+        assert TEST_CITATION_DIRS == ("ama_cryptography", "src", "include")
+
+    @pytest.mark.parametrize(
+        ("where", "expected"),
+        [("src/c/planted.c", 1), ("include/planted.h", 1), ("tests/c/planted.c", 0)],
+    )
+    def test_the_cli_fails_on_a_dangling_test_citation_in_scope(
+        self, tmp_path: Path, where: str, expected: int
+    ) -> None:
+        """In tests/ a fictional path is a fixture, so the same text passes there."""
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        planted = tmp_path / where
+        planted.parent.mkdir(parents=True)
+        planted.write_text("/* pinned by tests/c/test_imagined.c */\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        assert main(["--repo", str(tmp_path)]) == expected
 
 
 class TestTheTreeIsClean:

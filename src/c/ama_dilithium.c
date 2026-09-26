@@ -1692,8 +1692,9 @@ static void dil_expand_matrix(dil_poly *mat,
  * Byte-for-byte identical to the corresponding slice of dil_expand_matrix: the
  * SHAKE-128 stream for A[i][j] depends only on (rho, nonce), and the nonce is
  * (i << 8) + j regardless of how the samples are grouped into x4 batches.
- * tests/c/test_dilithium_matrix_row_equiv.c asserts that against the whole-
- * matrix expansion for every parameter set rather than leaving it as a claim.
+ * ama_ml_dsa_test_matrix_row_equiv(), run by tests/c/test_nistp.c, asserts
+ * that against the whole-matrix expansion for every parameter set rather than
+ * leaving it as a claim.
  */
 static void dil_expand_matrix_row(dil_poly *row,
                                    const uint8_t rho[DIL_SEEDBYTES],
@@ -2576,8 +2577,22 @@ static ama_error_t dil_verify_internal(const dil_params *P,
      * malleability, and a break of SUF-CMA rather than of EUF-CMA.  With eight
      * indices in one polynomial, as a randomly sampled ML-DSA-65 signature
      * routinely has, that is 8! = 40,320 valid encodings of one signature.
-     * Reproduced on the first randomly generated signature; pinned by
-     * `test_a_permuted_hint_is_refused` in tests/test_pqc_param_sets.py.
+     * Reproduced on the first randomly generated signature.
+     *
+     * Rules 1 and 2 close the same hole from the other side: a non-zero
+     * octet in the unused tail, or the count of an EMPTY polynomial lowered
+     * below its predecessor (the unpack loop below never rewinds, so the
+     * flags do not change), each denote the same flag set as the honest
+     * encoding.  An honest signature has an empty interior polynomial about
+     * once in 20,000 under ML-DSA-65 and -87 (measured, 200,000 messages).
+     *
+     * All three are pinned by tests/c/test_ml_dsa_hint_encoding.c: deleting
+     * any one of them fails it.  This comment used to cite a Python test
+     * for rule 3 that never existed, and until that file was added no suite
+     * executed rule 2, rule 3, or the `limit < prev` half of rule 1.
+     * `limit > omega` is also what keeps the unpack inside `hint`; for the
+     * verdict alone it is redundant with the c-tilde comparison, which
+     * refuses such a signature anyway.
      *
      * Every input here is public (it is a signature), so the loop's data
      * dependence is not a timing concern — the same posture as the rest of

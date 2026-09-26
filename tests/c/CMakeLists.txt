@@ -300,6 +300,9 @@ if(AMA_USE_NATIVE_PQC)
     add_test(NAME test_slhdsa_context_separation COMMAND test_slhdsa_context_separation
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(test_slhdsa_context_separation PROPERTIES SKIP_RETURN_CODE 77)
+    # FIPS 204 Algorithm 21: every non-canonical hint encoding is refused.
+    # Three of its four rejections were executed by no suite until this test.
+    add_ama_test(test_ml_dsa_hint_encoding test_ml_dsa_hint_encoding.c)
 endif()
 add_ama_test(test_ed25519 test_ed25519.c)
 # The expanded signing form (INVARIANT-51 verified at key load): RFC 8032
@@ -566,6 +569,11 @@ if(AMA_USE_NATIVE_PQC)
     # ML-KEM / ML-DSA parameter blocks.  All three use AMA_TESTING_MODE-only
     # exports that appear in no public header.
     add_ama_test(test_nistp test_nistp.c)
+    # Public-API input guards in ama_kyber.c, ama_dilithium.c, ama_slhdsa.c
+    # and ama_nistp.c that no suite executed until 2026-09-26: over-long
+    # ciphertexts and keys, 256-octet contexts, out-of-range ECDSA scalars,
+    # undefined flags and digest lengths, and every NULL argument.
+    add_ama_test(test_input_guards test_input_guards.c)
 endif()
 
 # Constant-time bitsliced AES-256 (NIST SP 800-38A §F.1.5 KAT).

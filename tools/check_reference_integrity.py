@@ -44,6 +44,19 @@ Over the shipped tree (``ama_cryptography/``, ``src/``, ``include/``,
 2. **Source-line citations** — ``at line 632``, ``see lines 314 and 339``. Cite
    the identifier, the marker, or the function instead; those move with the
    code.
+3. **Test citations in the shipped code** — a ``tests/...`` path that is not a
+   tracked file, or ``test_x in tests/y.py`` where ``y.py`` has no ``test_x``.
+   A comment beside a guard that names its test is the reader's evidence that
+   the guard is protected.  On 2026-09-26 ``src/c/ama_dilithium.c`` named
+   ``test_a_permuted_hint_is_refused`` in ``tests/test_pqc_param_sets.py`` as
+   the pin for ML-DSA's hint-ordering rule; no such test existed in the
+   tree's history, and the rule's rejection was executed by no suite.  Three
+   more ``src/c`` comments cited test files under names they never had.
+   Scoped to ``ama_cryptography/``, ``src/`` and ``include/``: ``tests/`` and
+   ``tools/`` cite imaginary test paths on purpose, as fixtures for the path
+   gates (``tests/x.py``), and scanning them would need a standing exemption
+   list, which is not a gate.  Wrapped paths are joined across a comment
+   continuation after ``_``, ``/`` or ``-``, the points a path is broken at.
 
 The shapes, as widened after measuring what the first patterns let through
 ("in line 632", "(line 632)", "see line 7", "(v5 audit, 2026-08, item 15)",
@@ -130,6 +143,7 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -251,6 +265,50 @@ CHECKS: tuple[tuple[re.Pattern[str], str, re.Pattern[str] | None], ...] = (
 )
 
 
+#: Where a citation of a test is checked against the tests that exist -- the
+#: shipped code only; see shape 3 in the module docstring for why not tests/.
+TEST_CITATION_DIRS = ("ama_cryptography", "src", "include")
+
+#: A line break and the next line's comment leader.
+_CONTINUATION = r"[ \t]*\n[ \t]*(?:\*|\#|//|>)?[ \t]*"
+
+#: A cited test file, possibly wrapped after ``_``, ``/`` or ``-``.
+TEST_PATH = re.compile(
+    r"(?<![\w/.\-])tests/(?:[\w/\-]|(?<=[_/\-])" + _CONTINUATION + r")+\.(?:py|c|h)\b"
+)
+
+#: A named test in a named file: ``test_x`` in ``tests/y.py``.
+NAMED_TEST = re.compile(
+    r"`?\b(test_\w+)`?(?:[ \t]+|" + _CONTINUATION + r")+in(?:[ \t]+|" + _CONTINUATION + r")+"
+    r"`?(tests/[\w/\-]+\.(?:py|c))\b"
+)
+
+
+def _unwrap(matched: str) -> str:
+    """A citation with its comment continuations removed."""
+    return re.sub(_CONTINUATION, "", matched)
+
+
+def scan_test_citations(
+    text: str, tracked: set[str], read: Callable[[str], str]
+) -> list[tuple[int, str, str]]:
+    """Return ``(line_number, citation, reason)`` for every test citation that
+    does not resolve.  ``tracked`` is the set of tracked paths; ``read``
+    returns a tracked file's text."""
+    findings: list[tuple[int, str, str]] = []
+    for match in TEST_PATH.finditer(text):
+        path = _unwrap(match.group(0))
+        if path not in tracked:
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append((line, path, "cites a test file that is not in the repository"))
+    for match in NAMED_TEST.finditer(text):
+        name, path = match.group(1), _unwrap(match.group(2))
+        if path in tracked and not re.search(r"\b" + re.escape(name) + r"\b", read(path)):
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append((line, f"{name} in {path}", f"{path} has no test named {name}"))
+    return sorted(findings)
+
+
 def _is_historical_record(name: str) -> bool:
     """CHANGELOG.md and ``docs/changelog/``: out of scope, see the module docstring."""
     root = str(Path(__file__).resolve().parents[1])
@@ -316,13 +374,29 @@ def check(repo_root: Path) -> tuple[int, list[str]]:
     """Scan the tree.  Returns ``(files_checked, problem_lines)``."""
     problems: list[str] = []
     files = _tracked_files(repo_root)
+    tracked = set(
+        subprocess.run(
+            ["git", "ls-files", "-z", "tests"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split("\0")
+    )
+
+    def read(rel: str) -> str:
+        return (repo_root / rel).read_text(encoding="utf-8", errors="replace")
+
     for path in files:
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:  # a binary file that slipped the suffix net
             continue
         rel = path.relative_to(repo_root).as_posix()
-        for line, matched, reason in scan_text(text):
+        findings = scan_text(text)
+        if rel.split("/", 1)[0] in TEST_CITATION_DIRS:
+            findings += scan_test_citations(text, tracked, read)
+        for line, matched, reason in sorted(findings):
             problems.append(f"{rel}:{line}: {matched!r} — {reason}")
     return len(files), problems
 
@@ -332,8 +406,10 @@ def main(argv: list[str] | None = None) -> int:
         description="Reject citations a reader cannot resolve.",
         epilog=(
             "checked: process citations (a dated audit such as "
-            "'2026-08 v5 audit', or an 'item N of the audit') and source-line "
-            "citations ('at line 632').\n"
+            "'2026-08 v5 audit', or an 'item N of the audit'), source-line "
+            "citations ('at line 632'), and, in ama_cryptography/, src/ and "
+            "include/, citations of a test file or a named test that does not "
+            "exist.\n"
             "NOT checked: whether a resolvable citation is the RIGHT one — this "
             "gate checks that a reader can follow a reference, not that the "
             "reference is correct.  Ambiguous phrasings ('a previous session', "

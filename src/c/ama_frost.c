@@ -1081,6 +1081,19 @@ static int frost_commitment_is_admissible(const uint8_t c[64]) {
     return frost_point_is_admissible(c) && frost_point_is_admissible(c + 32);
 }
 
+/* The inputs one participant contributes to its own share check: z_i a
+ * canonical scalar, (D_i, E_i) and PK_i admissible points.  See
+ * verify_share_core() for why each is refused rather than left to the
+ * relation.  Stated once because it has two callers that must agree:
+ * verify_share_core(), and ama_frost_verify_share() BEFORE it builds R. */
+static int frost_share_inputs_are_admissible(const uint8_t sig_share[32],
+                                             const uint8_t public_share[32],
+                                             const uint8_t commitment[64]) {
+    return ama_ed25519_scalar_is_canonical(sig_share) &&
+           frost_commitment_is_admissible(commitment) &&
+           frost_point_is_admissible(public_share);
+}
+
 /* Check one share against the section 5.3 relation, given the per-session
  * values (R-derived challenge, and this participant's binding factor) that
  * the caller has already computed.  Splitting it this way keeps
@@ -1132,9 +1145,7 @@ static ama_error_t verify_share_core(
      * sum reduces it away.  Accepting it would make shares malleable, which
      * is exactly the property canonical S removes from Ed25519 itself
      * (INVARIANT-26). */
-    if (!ama_ed25519_scalar_is_canonical(sig_share) ||
-        !frost_commitment_is_admissible(commitment) ||
-        !frost_point_is_admissible(public_share)) {
+    if (!frost_share_inputs_are_admissible(sig_share, public_share, commitment)) {
         return AMA_ERROR_VERIFY_FAILED;
     }
 
@@ -1207,6 +1218,19 @@ AMA_API ama_error_t ama_frost_verify_share(
     uint8_t pos = 0;
     for (uint8_t i = 0; i < num_signers; i++) {
         if (signer_indices[i] == participant_index) { pos = i; break; }
+    }
+
+    /* Admit this participant's inputs BEFORE any arithmetic, the order
+     * ama_frost_aggregate() already uses.  Building R first decodes every
+     * row, and the decoder refuses a non-canonical encoding as undecodable,
+     * so a non-canonical D_i or E_i in this participant's own row came back
+     * as AMA_ERROR_INVALID_PARAM -- contradicting the header, which promises
+     * AMA_ERROR_VERIFY_FAILED for it, and contradicting aggregation, which
+     * gives that verdict for the same input.  Measured 2026-09-26 by
+     * tests/c/test_frost.c Test 11e, the first test to present one. */
+    if (!frost_share_inputs_are_admissible(sig_share, participant_public_share,
+                                           commitments + (size_t)pos * 64)) {
+        return AMA_ERROR_VERIFY_FAILED;
     }
 
     uint8_t rho[32], R[32], challenge[32];

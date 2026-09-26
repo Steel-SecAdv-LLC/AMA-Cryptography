@@ -249,15 +249,24 @@ static void slh_addr_serialize(const slhdsa_params_t *p, uint8_t *out,
  * SHA2-256f-simple hash chain (FIPS 205 §11.2, NIST category 5)
  * ============================================================================ */
 
-/* MGF1-SHA-512 used for H_msg in NIST categories 3/5. */
-static void sha2_mgf1_sha512(uint8_t *out, size_t outlen,
-                             const uint8_t *seed, size_t seedlen) {
+/* MGF1-SHA-512 used for H_msg in NIST categories 3/5.  Returns 0, or -1 when
+ * the seed exceeds the static envelope.
+ *
+ * That bound is unreachable with every FIPS 205 parameter set (the seed is
+ * 2n + 64 <= 128 octets), but it used to `return;` with `out` unwritten, and
+ * sha2_H_msg went on to report success -- signing or verifying over whatever
+ * the caller's digest buffer held.  A guard that cannot fire should at least
+ * fail closed if a future parameter row makes it fire; sha2_H_msg now
+ * propagates it, and both H_msg call sites already refuse a non-zero
+ * return. */
+static int sha2_mgf1_sha512(uint8_t *out, size_t outlen,
+                            const uint8_t *seed, size_t seedlen) {
     uint8_t buf[64];
     /* Max seed in our use: R(n) + PK.seed(n) + SHA-512(64) = 32+32+64 = 128. */
     uint8_t hashbuf[160 + 4];
     size_t i, blocks, tocopy;
     if (seedlen > sizeof(hashbuf) - 4) {
-        return;
+        return -1;
     }
     memcpy(hashbuf, seed, seedlen);
     blocks = (outlen + 63) / 64;
@@ -272,6 +281,7 @@ static void sha2_mgf1_sha512(uint8_t *out, size_t outlen,
     }
     ama_secure_memzero(buf, sizeof(buf));
     ama_secure_memzero(hashbuf, sizeof(hashbuf));
+    return 0;
 }
 
 static void sha2_F(const slhdsa_params_t *p, uint8_t *out,
@@ -422,11 +432,11 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
     memcpy(mgf_seed, R, p->n);
     memcpy(mgf_seed + p->n, pk, p->n);   /* PK.seed only */
     memcpy(mgf_seed + 2 * p->n, hash, 64);
-    sha2_mgf1_sha512(out, p->md_bytes, mgf_seed, mgf_seed_len);
+    int rc = sha2_mgf1_sha512(out, p->md_bytes, mgf_seed, mgf_seed_len);
 
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(mgf_seed, sizeof(mgf_seed));
-    return 0;
+    return rc;
 }
 
 /* ============================================================================
@@ -1091,7 +1101,23 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
  * Top-level keygen / sign / verify (parameter-driven, exposed C API)
  * ============================================================================ */
 
+/* CSPRNG override for tests (AMA_TESTING_MODE only; the shipped library
+ * carries neither the pointer nor the branch).  Every draw in this file goes
+ * through slh_randombytes().  The hook used to be consulted only by the
+ * legacy ama_sphincs_* entry points, through a second draw function, so the
+ * fail-closed exits of ama_slhdsa_keygen() and ama_slhdsa_sign() on a CSPRNG
+ * failure could not be reached by any test (measured 2026-09-26);
+ * tests/c/test_input_guards.c now drives all four. */
+#ifdef AMA_TESTING_MODE
+ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
+#endif
+
 static ama_error_t slh_randombytes(uint8_t *buf, size_t len) {
+#ifdef AMA_TESTING_MODE
+    if (ama_sphincs_randombytes_hook) {
+        return ama_sphincs_randombytes_hook(buf, len);
+    }
+#endif
     return ama_randombytes(buf, len);
 }
 
@@ -1595,20 +1621,12 @@ ama_error_t ama_slhdsa_verify_internal(ama_slhdsa_param_set_t ps,
  * which is where that behaviour now lives.
  * ============================================================================ */
 
-/* Deterministic-randomness hook for KAT testing (test-only), preserved from
- * the original ama_sphincs.c so tests/c/test_kat.c keeps linking and driving
- * the SPHINCS+ vectors deterministically. */
-#ifdef AMA_TESTING_MODE
-ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
+/* The legacy SPHINCS+ layer's draw.  It kept the test hook to itself until
+ * 2026-09-26; slh_randombytes() now honours the same hook, so this is that
+ * function under the compatibility layer's name, and the two layers cannot
+ * disagree about where their randomness comes from. */
 static ama_error_t spx_compat_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_sphincs_randombytes_hook) {
-        return ama_sphincs_randombytes_hook(buf, len);
-    }
-#endif
-    return ama_randombytes(buf, len);
+    return slh_randombytes(buf, len);
 }
 
 AMA_API ama_error_t ama_sphincs_keypair(uint8_t *public_key, uint8_t *secret_key) {
@@ -1650,10 +1668,7 @@ AMA_API ama_error_t ama_sphincs_sign(uint8_t *signature, size_t *signature_len,
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Hedged randomizer: fresh addrnd per signature.  Drawn through
-     * spx_compat_randombytes, which keeps the AMA_TESTING_MODE KAT hook —
-     * routing through ama_slhdsa_sign() instead would silently drop it and
-     * take tests/c/test_kat.c's deterministic SPHINCS+ driver with it. */
+    /* Hedged randomizer: fresh addrnd per signature. */
     rc = spx_compat_randombytes(opt_rand, p->n);
     if (rc != AMA_SUCCESS) {
         return rc;

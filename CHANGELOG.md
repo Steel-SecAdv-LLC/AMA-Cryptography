@@ -19,6 +19,111 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### The five unexamined C files triaged: an ML-DSA malleability guard no suite ran, a FROST verdict that contradicted its header, and a coverage instrument that measures both suites — 2026-09-26
+
+AGENTS.md §11 listed `ama_nistp.c`, `ama_dilithium.c`, `ama_slhdsa.c`,
+`ama_kyber.c` and `ama_frost.c` as never examined, and said the inventory
+measured the C suite only, so a row in it was "a question, not a finding".
+Both are closed. Every test added here was run against the guard it pins
+with that guard deleted (AGENTS.md 6.2); the mutation record is in each
+test file's header.
+
+**The instrument** (`tools/measure_branch_coverage.py --python-suite`)
+- Swaps the instrumented `libama_cryptography.so` into an editable install,
+  re-signs the integrity artefact, runs `pytest tests/` and the Wycheproof
+  runner against it, and restores and re-signs the release library on every
+  path out. The Wycheproof runner is not a pytest module, and without it
+  every ECDSA DER-parser rejection in `ama_nistp.c` read as never taken.
+  Measured on the tree before this pass (gcc 13.3.0, Debug `--coverage
+  -O0 -g`, x86-64): 1,464 arcs under `src/c` never taken by the C suite,
+  1,178 by the C and Python suites, 1,148 with the Wycheproof and ACVP
+  runners added. After it: 1,265 by the C suite, 989 by the C suite,
+  pytest and Wycheproof (201 translation units, `ctest` 153 tests). Its
+  own test caught a defect in its first draft: a short-circuit `or` skipped
+  the Wycheproof run whenever pytest failed.
+
+**Defects**
+- High — `ama_frost_verify_share` returned `AMA_ERROR_INVALID_PARAM` for a
+  participant whose own commitment is non-canonical; the header promises
+  `AMA_ERROR_VERIFY_FAILED`, and `ama_frost_aggregate` gives that verdict for
+  the same input. It built the group commitment, whose strict decoder
+  refuses the encoding, before admitting the participant's inputs. The
+  admission now runs first, through one helper shared with
+  `verify_share_core`. Through Python, `frost_verify_share` raised
+  "could not run" where it now answers `False`. The input was refused
+  either way; the contract was not met.
+- Medium — the ML-DSA hint-ordering rule (FIPS 204 Algorithm 21, SUF-CMA),
+  the non-zero-padding rule and the `limit < prev` half of the count rule
+  were executed by no suite. The comment above them cited
+  `test_a_permuted_hint_is_refused` in `tests/test_pqc_param_sets.py` as the
+  pin; that test does not exist in the tree's history.
+  `tests/c/test_ml_dsa_hint_encoding.c` builds, for each rule, an encoding
+  that denotes the honest flag set, so the check's removal makes it verify.
+  An honest signature with an empty interior polynomial -- the precondition
+  for the `limit < prev` malleation -- occurs about once in 20,000 under
+  ML-DSA-65 and -87 (10 in 200,000 each) and not once in 3,200,000 under
+  ML-DSA-44; the test pins the first qualifying message of each.
+- Four comments in `src/c` cited test files or tests that do not exist.
+  `tools/check_reference_integrity.py` gains the shape (a `tests/...` path
+  that is not tracked, or `test_x` in a file that has no `test_x`), scoped to
+  `ama_cryptography/`, `src/` and `include/` so that no exemption list is
+  needed; `tests/` and `tools/` cite imaginary paths as fixtures.
+- Low — `sha2_mgf1_sha512` in `ama_slhdsa.c` returned silently with its
+  output unwritten when its seed bound was exceeded, and `sha2_H_msg` then
+  reported success. Unreachable with every FIPS 205 parameter set; it now
+  fails closed through the call sites' existing checks.
+
+**Tests for guards nothing executed**
+- `tests/c/test_frost.c` Test 11: a CSPRNG that reports success with bytes
+  reducing to the scalar 0 (keygen must refuse: kept, the group secret is
+  0); a CSPRNG failing on a coefficient draw (kept, every share at t = 2 IS
+  the group secret) and on round 1's binding nonce; a signer outside the
+  signing set holding its own commitment at row 0; a non-canonical
+  commitment, which aggregation must attribute to its sender (without the
+  canonical clause the blame lands on participant 1); every argument guard,
+  with round 2 consuming the nonce pair on each refusal.
+- `tests/c/test_ml_dsa_hint_encoding.c` also pins the signer's side:
+  MakeHint's `a0 = -gamma2, a1 = 0` case, reached by honest signing about
+  once in 10,000 signatures and by no suite; the messages whose accepted
+  attempt meets it were found by instrumenting the branch.
+- `tests/c/test_input_guards.c`: ML-KEM ciphertext and key one octet long,
+  ciphertext buffer one octet short, the modulus check's second packed
+  coefficient; ML-DSA and SLH-DSA 256-octet contexts (deleting ML-DSA's cap
+  aborts under the stack protector: the 257-octet prefix overflows); ECDSA
+  private keys of 0 and >= n, undefined flag bits and digest lengths
+  (deleting the length check makes a 0-octet digest hang the signer),
+  r and s out of range in both converters, key generation's rejection
+  sampling; every CSPRNG-failure exit of key generation, encapsulation and
+  hedged signing in all four files; the NULL and short-buffer guards.
+- `ama_nistp.c` gains the `AMA_TESTING_MODE` CSPRNG hook the other four
+  files already had, and `ama_slhdsa.c`'s hook now covers
+  `ama_slhdsa_keygen` and `ama_slhdsa_sign`, not only the legacy pair.
+  Neither exists in the shipped library.
+
+**Measured, and left**
+- ML-DSA's `ct0` norm rejection in signing: impossible for ML-DSA-65 and
+  -87 (tau * 2^(d-1) < gamma2) and not reached in 12,000,000 ML-DSA-44
+  signatures.
+- ML-DSA's `limit > omega`: for the verdict, redundant with the c-tilde
+  comparison (deleting it fails nothing); it also bounds the hint unpack.
+- ML-KEM encapsulation checks the key length twice; either check alone
+  keeps the refusal, and the test pins the rule rather than either copy.
+- The identity-point refusal in `nistp_load_point` is redundant with the
+  curve equation for all three curves (b != 0); its test is SMOKE.
+- Reachable but not pinned: the samplers' continuation paths -- ML-DSA's
+  XOF re-squeeze and scalar fallback on an underfilled stream (the code's
+  own estimates: about 1e-5 per polynomial for the eta sampler, below
+  1e-30 for the uniform one) and ML-KEM's x4 per-lane stop. No test holds a
+  seed that reaches them.
+- The rest of what remains in the five files (all-suite figures: slhdsa
+  62, dilithium 50, kyber 48, frost 38, nistp 36) is structural:
+  propagation from calls that cannot fail once their inputs are validated,
+  allocation and mutex failure, parameter-table self-checks, dispatch arms
+  another ISA takes, diagnostics compiled under
+  `AMA_KYBER_BUILD_DIAGNOSTICS`, and exits of negligible probability
+  (a zero ECDSA r or s, a zero FROST nonce from SHA-512, an exhausted
+  rejection loop).
+
 ### CI restored on every lane the integrated head failed, and the release pipeline holds its seed, its tag and its dependencies — 2026-09-25
 
 Run 36074261249/255/276 on `a4c3bf0d` failed four roll-up gates (Build and
