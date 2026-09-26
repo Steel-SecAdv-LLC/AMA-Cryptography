@@ -172,6 +172,13 @@ messages and the file comments.
   as `import a.b` and `from a.b import` use one form, and a key closed in a
   `finally` block uses `with`. The first two fixes carry tests that fail
   when the fix is reverted.
+- Build and Test, macOS Intel: the reference-library install claimed every
+  leg resolves wheels. cryptography stopped publishing a macOS x86_64
+  wheel after 48.0.1, and that release carries six advisories, so the Intel
+  legs build it from source against index.crates.io; run 36204830608 lost
+  its 3.11 Intel leg to a DNS failure there before any test ran. The
+  install is retried as a whole (three attempts) with cargo's network
+  retries raised, and the step's comment states the measured wheel matrix.
 
 **Not fixable in the tree** (unchanged from batch 1): the `v*` tag ruleset,
 the seed's protected environment, and adding the aggregating gates to

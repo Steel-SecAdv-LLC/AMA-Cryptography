@@ -665,14 +665,33 @@ jobs:
         # require-backends lane installs all three".  Gating this step to Linux
         # while requiring the oracle everywhere left the macOS and Windows lanes
         # running the interop tests with no oracle present, so each errored on
-        # ~14 `requires_interop_oracle` cases (PyCA/PyNaCl/pycryptodome).  The
-        # earlier "cross-OS wheel flakiness" caveat predates current wheels:
-        # cryptography (cp39-abi3), PyNaCl (cp38-abi3 + cp314) and pycryptodome
-        # publish macosx_11_0_arm64 and win_amd64 binaries across the whole
-        # 3.10–3.14 matrix, so pip resolves wheels rather than building from
-        # source.  ci.yml::test already installs the same three unconditionally
-        # (via the [legacy,benchmark] extras) and its Windows lane is green.
-        run: pip install cryptography pynacl pycryptodome
+        # ~14 `requires_interop_oracle` cases (PyCA/PyNaCl/pycryptodome).
+        #
+        # Wheels: PyNaCl and pycryptodome publish binaries for every leg.
+        # cryptography does not on macos-15-intel: 48.0.1 (2026-06-09) was the
+        # last release with a macOS x86_64 (universal2) wheel, and 49.0.0,
+        # 50.0.0 and 50.0.1 ship none (PyPI release files, checked
+        # 2026-09-26).  Pinning back to 48.0.1 is not an option -- PyPI lists
+        # six advisories against it and [legacy] requires >=50.0.0 -- so that
+        # leg builds cryptography from source, which needs its Rust crates
+        # from index.crates.io.  Run 36204830608 (7dfb67b3) lost the 3.11
+        # Intel leg to "Could not resolve host: index.crates.io" after cargo's
+        # three built-in retries, with no test run.  The install is therefore
+        # retried as a whole, and cargo's own network retries are raised; a
+        # failure that survives both still fails the step.  Every other leg
+        # resolves wheels and is unaffected.
+        env:
+          CARGO_NET_RETRY: "10"
+        run: |
+          for attempt in 1 2 3; do
+            if pip install cryptography pynacl pycryptodome; then
+              exit 0
+            fi
+            echo "::warning::reference-library install failed (attempt ${attempt}/3)"
+            [ "${attempt}" -lt 3 ] && sleep $((attempt * 30))
+          done
+          exit 1
+        shell: bash
 
       # The signed artefact's native digest is specific to the exact build it
       # was signed against; this job builds the native library itself, so that
