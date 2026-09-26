@@ -125,7 +125,7 @@ legacy = [
     # a CVE followed the next major (this package is test/benchmark-only;
     # INVARIANT-1 keeps it off the production path, and CI already resolves
     # the newest release through this range).
-    "cryptography>=50.0.0",
+    "cryptography>=50.0.1",
 ]
 hsm = [
     # PKCS#11 support for hardware security modules.
@@ -168,7 +168,7 @@ benchmark = [
     "pynacl>=1.6.2",
     # Same 50.0.0 floor as [legacy] above, for the same advisories.
     # Mirrors benchmarks/requirements-bench.txt.
-    "cryptography>=50.0.0",
+    "cryptography>=50.0.1",
 ]
 examples = [
     # Third-party packages the shipped examples under examples/python/ import
@@ -194,7 +194,7 @@ docs = [
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=4.0.0",
-    "hypothesis>=6.168.0",
+    "hypothesis>=6.168.1",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
     # so no version guard is needed.
