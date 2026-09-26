@@ -575,6 +575,22 @@ class TestFuzzTargetCountsAreRegenerated:
         assert counts.check_fuzz_target_counts(tmp_path, 3) == []
         assert update_docs.update_fuzz_target_counts(root=tmp_path) is False
 
+    def test_a_number_inside_an_algorithm_name_is_not_a_count(self, tmp_path: Path) -> None:
+        """ARCHITECTURE.md's "the Ed25519 and ML-DSA-65 verifiers the harnesses
+        do drive" was rewritten to "ML-DSA-17": the ``-65`` matched as a count
+        followed by two words and "harnesses"."""
+        self._tree(tmp_path, harnesses=3)
+        doc = tmp_path / "README.md"
+        text = (
+            "Fuzzing reaches the ML-DSA-65 verifiers the harnesses drive,\n"
+            "and SHA3-256 hash harnesses, through 3 fuzz targets.\n"
+        )
+        doc.write_text(text, encoding="utf-8")
+        counts = update_docs._counts_module()
+        assert counts.check_fuzz_target_counts(tmp_path, 3) == []
+        assert update_docs.update_fuzz_target_counts(root=tmp_path) is False
+        assert doc.read_text(encoding="utf-8") == text
+
 
 class TestThePublishedBenchmarkTableTracksTheRecord:
     """`wiki/Performance-Benchmarks.md`'s auto-table must match the record.

@@ -694,6 +694,15 @@ def _generate_pipeline_latency_table() -> str:
     sampling = str(provenance.get("sampling", "")).strip()
     aggregation = str(provenance.get("aggregation", "")).strip()
     native = str(provenance.get("native_backend", "")).strip()
+    # The record names the loaded library by absolute path, which is the
+    # measuring checkout's home directory, not a property of the build.
+    native = " · ".join(
+        Path(part.strip()).name if "/" in part or "\\" in part else part.strip()
+        for part in native.split("·")
+    )
+    commit = str(provenance.get("commit", "")).strip()
+    tree_state = str(provenance.get("tree", "")).strip()
+    bindings = str(provenance.get("python_bindings", "")).strip()
 
     # Each of the long entries below is hoisted to a name rather than written
     # as an adjacent-literal concatenation inside the list.  CodeQL flags the
@@ -759,6 +768,11 @@ def _generate_pipeline_latency_table() -> str:
         "`security-checks`) re-derives every cell here from the record and "
         "fails on a mismatch, so a hand-edited number cannot survive a push."
     )
+    scope_bullet = (
+        "- **Scope:** one run on the host named above. CMake flags are not "
+        "recorded by the runner. These are not the canonical-host figures "
+        "(README, Performance Metrics) and not the CI regression floors."
+    )
     refresh_note = (
         "To refresh: re-run the command above on the host you want published, "
         "then `python tools/update_docs.py`."
@@ -772,6 +786,13 @@ def _generate_pipeline_latency_table() -> str:
         f"- **Source record:** `benchmarks/benchmark-results.json`, run {captured}",
         f"- **Platform:** {host}" + (f" — {cpu}" if cpu else ""),
         f"- **Build:** {native}" if native else "- **Build:** (unrecorded)",
+        (
+            f"- **Commit:** `{commit[:12]}`" + (f" — {tree_state}" if tree_state else "")
+            if commit
+            else "- **Commit:** (unrecorded)"
+        ),
+        f"- **Python bindings:** {bindings}" if bindings else "- **Python bindings:** (unrecorded)",
+        scope_bullet,
         units_bullet,
         f"- **Sampling:** {sampling}" if sampling else "- **Sampling:** (unrecorded)",
         f"- **Aggregation:** {aggregation}" if aggregation else "- **Aggregation:** (unrecorded)",

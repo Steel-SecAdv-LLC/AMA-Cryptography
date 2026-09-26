@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 5.0.0 |
-| Last Updated | 2026-09-23 |
+| Last Updated | 2026-09-26 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -13,17 +13,17 @@
 
 ## Overview
 
-AMA Cryptography is a quantum-resistant cryptographic protection system released under the Apache License 2.0 as free and open-source software. As of v2.0, all production cryptographic primitives are implemented natively in C with zero runtime cryptographic dependencies. Security is our highest priority. We take all vulnerabilities seriously and appreciate responsible disclosure from the security research community.
+AMA Cryptography is a post-quantum and classical cryptographic library released under the Apache License 2.0. Every cryptographic primitive is implemented in C in this repository, and the Python package declares no runtime dependencies (`pyproject.toml`: `dependencies = []`). The last vendored implementation, ed25519-donna, was replaced by an in-house backend and removed in 5.0.0 (#394); `tools/check_vendor_isolation.py` fails the build if `src/c/vendor/` reappears. One file is adapted rather than written from a standard: `src/c/internal/ama_fe25519_safegcd.h` follows libsecp256k1's safegcd implementation (MIT) and is attributed in `NOTICE`.
+
+The library has **not** been externally audited, and it is **not** CAVP- or CMVP-validated. See [Security Audits](#security-audits) and [Standards Conformance and Validation Status](#standards-conformance-and-validation-status).
 
 ---
 
 ## Supported Versions
 
-We actively maintain and provide security updates for the following versions:
-
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 5.0.x | Yes | Active development and security updates |
+| 5.0.x | Yes | Current line. 5.0.0 is not yet tagged; until it is, security fixes land on `main` |
 | 4.0.x | No | Superseded by v5.0 (eleven breaking changes — see CHANGELOG `[5.0.0]`) |
 | 3.5.x | No | Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |
@@ -31,7 +31,7 @@ We actively maintain and provide security updates for the following versions:
 | 3.2.x | No | Superseded by v3.3; no public API removals |
 | 3.1.x | No | Superseded by v3.2; no public API removals |
 | 3.0.x | No | Superseded by v3.1; no public API removals |
-| 2.1.x | No | Superseded by v3.0 (legacy_compat Argon2id shim available for one-shot migration; see CHANGELOG `[3.0.0] → ### BREAKING`) |
+| 2.1.x | No | Superseded by v3.0 (a legacy Argon2id verifier, `pqc_backends.native_argon2id_legacy_verify`, is available for one-shot migration; see CHANGELOG `[3.0.0] → ### BREAKING`) |
 | 2.0.x | No | Superseded by v2.1 |
 | 1.0.x | No | Superseded by v2.0 |
 
@@ -39,23 +39,26 @@ We actively maintain and provide security updates for the following versions:
 
 ## Security Features
 
-AMA Cryptography implements defense-in-depth with multiple independent security layers — four core cryptographic operations supported by key derivation, plus an optional timestamp binding that is **not** an independent security layer (see item 6):
+A protected package applies four cryptographic operations, supported by key derivation, plus an optional timestamp binding that is **not** a security layer (item 6). The two signatures rest on different hardness assumptions, so forging a package requires forging both Ed25519 and ML-DSA-65. SHA3-256 is shared: the HMAC and both signatures are computed over a transcript that carries the SHA3-256 content digest, so SHA3-256 collision resistance underlies every layer. The composition argument is informal and has not been independently reviewed ([docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md) §3).
 
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
 3. **Ed25519 Digital Signatures** (RFC 8032; constant-time fixed-base comb over `static const` tables — no run-time initialisation, so no atomics or locks)
-4. **ML-DSA-65 Quantum-Resistant Signatures** (NIST FIPS 204)
+4. **ML-DSA-65 Post-Quantum Signatures** (NIST FIPS 204)
 5. **HKDF-SHA3-256 Key Derivation** (RFC 5869)
 6. **RFC 3161 Timestamp Binding** — *not an independent layer.* AMA verifies the §2.4.2 message-imprint binding only. It does not verify the TSA's CMS `SignerInfo` signature or validate its certificate chain, so an adversary who can supply a token satisfies this check unaided, with any `genTime` they choose, using no key. It contributes no adversarial resistance and must not be counted toward the security bound. See [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform) and [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).
 
 ### Additional Cryptographic Capabilities
 
-- **AES-256-GCM Authenticated Encryption** (NIST SP 800-38D)
-- **ML-KEM-1024 Key Encapsulation** (NIST FIPS 203)
-- **SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s Hash-Based Signatures** (NIST FIPS 205)
-- **Adaptive Cryptographic Posture System** (runtime threat-level response)
-- **Hybrid KEM Combiner** (IND-CCA2 binding construction per Bindel et al.)
-- **Agent-Instance Key/Signature Binding** (INVARIANT-30) — see below
+The complete registry — each algorithm with its governing standard and parameter set — is [CSRC_STANDARDS.md](CSRC_STANDARDS.md), kept in step with the code by `tools/check_algorithm_registry.py`. It covers:
+
+- **Authenticated encryption:** AES-256-GCM (SP 800-38D), ChaCha20-Poly1305 (RFC 8439), Ascon-AEAD128 (SP 800-232)
+- **Post-quantum KEM and signatures:** ML-KEM-512/768/1024 (FIPS 203), ML-DSA-44/65/87 (FIPS 204), SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s (FIPS 205), LMS/HSS verification only (SP 800-208)
+- **Elliptic curves:** ECDSA and ECDH on P-256/384/521 (FIPS 186-5, SP 800-56A r3), secp256k1 (SEC 2), X25519 (RFC 7748), FROST threshold Ed25519 (RFC 9591-style; not ciphersuite-interoperable)
+- **Hashing and key derivation:** SHA-2, SHA-3 and SHAKE, HMAC, HKDF, PBKDF2, Argon2id (RFC 9106), Ascon-Hash256
+- **Hybrid KEM combiner** — IND-CCA2 if either component KEM is IND-CCA2, under the dual-PRF assumption on HKDF-SHA3-256 (Bindel et al., PQCrypto 2019); an informal argument, not independently reviewed
+- **Adaptive cryptographic posture** (runtime threat-level response)
+- **Agent-instance key/signature binding** (INVARIANT-30) — see below
 
 ### Agent-Instance Binding (INVARIANT-30)
 
@@ -78,12 +81,12 @@ For a restricted binding the authority key is an **input to those two
 derivations**, not only to the policy gate in front of them: each takes a
 32-byte `HMAC-SHA3-256(K_auth, subdomain || enc(b))` binder. The distinction is
 the whole of the guarantee against the adversary this feature names. Until the
-2026-09 audit the key authenticated the binding record and nothing more, while
-the HKDF `info` and the signature context were functions of `enc(b)` alone —
-public, and obtainable from an unauthorized binding via
+2026-09 internal review the key authenticated the binding record and nothing
+more, while the HKDF `info` and the signature context were functions of
+`enc(b)` alone — public, and obtainable from an unauthorized binding via
 `ama_agent_binding_encode()`. An agent with in-process access can call
 `ama_hkdf` itself, so it could reproduce the derived bytes without holding the
-key at all, and the audit did. Unrestricted bindings take a fixed zero binder:
+key at all, and that review did. Unrestricted bindings take a fixed zero binder:
 they have no operator secret, and the guarantee is scoped to the population
 named above.
 
@@ -108,58 +111,15 @@ and signed payloads shaped like instructions for a successor — for human
 review. They never block an operation, and a negative result is not a statement
 that a payload is benign.
 
-### Performance — Framing
+### Performance
 
-Throughput is a continuously-improving axis, not a ceiling.  On x86-64
-AVX2 AMA's checked-in benchmark artifacts and generated reports provide the
-only supported throughput claims; avoid quoting relative speedups unless the
-source artifact and host class are named. Recent work (see `CHANGELOG.md` from v2.1 onward) added 4-way Keccak
-batching, Ed25519 signed-window combs, merged-layer ML-DSA NTT, and
-Ed25519 verify via Shamir/Straus joint scalar multiplication with a
-width-5 wNAF — roughly doubling verify throughput.
+This document makes no performance claims. Published figures, each with the
+host, build flags and run that produced it, are in the README's
+[Performance Metrics](README.md#performance-metrics), `benchmarks/canonical-host.json`
+and `docs/BENCHMARK_HISTORY.md`;
+`tools/check_benchmark_claims.py` and `tools/check_canonical_benchmarks.py`
+fail CI when a published figure departs from its record.
 
-#### What "2× verify" means in practice
-
-Ed25519 verify dominates wall-clock time in three protocol families
-that AMA consumers run at scale:
-
-- **X.509 certificate-chain validation** (TLS handshake, code-signing).
-  A typical chain is 3–4 certificates deep; each certificate signature
-  is one Ed25519 verify.  Doubling per-verify throughput halves the
-  CPU budget per chain validation, which on a busy gateway is the
-  difference between handling N and 2N concurrent handshakes per core.
-- **Noise Protocol Framework handshakes** (WireGuard, Lightning,
-  Nym).  The XX, IK and IKpsk2 patterns each do at least one Ed25519
-  verify of the responder's static key per handshake; mixed-PQ
-  patterns (e.g. `Noise_XXhfs_25519+ML-KEM-1024_*`) keep the same
-  verify on the classical leg.  Faster verify shortens the
-  Diffie-Hellman-bound handshake critical path.
-- **MLS (RFC 9420) group operations.**  Each Welcome / Commit
-  message carries one or more Ed25519 signatures over the GroupContext
-  and KeyPackages.  In a 1000-member group an Add/Remove can require
-  verifying O(log N) signatures along the ratchet-tree path; verify
-  speed sets the floor on group-rekey latency.
-
-The change is purely algorithmic — same group-element math, no new
-external dependency, no new dispatch slot.  (The compile-time knobs that
-once selected between two verify layouts are gone: verify now runs one
-path, the half-size-scalar check of `src/c/internal/ama_ed25519_halfsize.h`,
-whose verdict is proven identical to the direct group equation and pinned by
-the frozen oracle and the RFC 8032 / Wycheproof vectors.)
-
-The deliberate choices that constitute AMA's security posture —
-zero external cryptographic dependencies, in-tree constant-time
-implementations audited under `INVARIANT-12`, and an in-tree
-build-from-source supply chain — auto-bound peak ops/sec against
-libraries that lean on AVX-512 or hand-tuned assembly across 500 k+
-LoC of audit surface.  Readers who value raw speed over supply-chain
-minimalism are unlikely to be the target audience for this library;
-readers who need auditable, small-surface post-quantum primitives
-with headroom to keep improving should find the trade-off
-acceptable.  Measured ops/sec numbers are in `benchmark-report.md`
-and `benchmarks/README.md` — any claim to the contrary elsewhere in
-the repository should be treated as aspirational and reported as a
-documentation bug.
 
 ## Reporting a Vulnerability
 
@@ -173,8 +133,8 @@ If you discover a security vulnerability in AMA Cryptography, please report it r
 
 1. **Preferred — GitHub Private Vulnerability Reporting:**
    [Open a private advisory](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories/new).
-   GitHub encrypts the report in transit and storage; no PGP key management
-   is required on either side.
+   The report is visible only to the repository's maintainers until an
+   advisory is published; no PGP key management is required on either side.
 2. **Email fallback:** steel.sa.llc@gmail.com with subject `[SECURITY] AMA Cryptography Vulnerability Report`.
 
 **Include in your report:**
@@ -187,39 +147,34 @@ If you discover a security vulnerability in AMA Cryptography, please report it r
 
 ### What Constitutes a Security Vulnerability
 
-We consider the following to be security vulnerabilities worthy of immediate attention:
+Severity follows the classification in [AGENTS.md §7](AGENTS.md):
 
 **Critical:**
-- Cryptographic primitive failures (hash collision, signature forgery)
-- Key extraction or recovery attacks
-- Authentication bypass
-- Arbitrary code execution
-- Privilege escalation
+- Signature forgery, or acceptance of an invalid signature, ciphertext, key or encoding
+- Key or secret recovery, or secret material left in memory or returned in output
+- An entropy or RNG failure that affects keys or nonces
 - Cryptographic oracle attacks
+- Authentication bypass, arbitrary code execution, privilege escalation
 
 **High:**
-- Side-channel attacks (timing, power analysis)
-- Denial of service affecting cryptographic operations
-- Information disclosure of sensitive cryptographic material
-- Dependency vulnerabilities in cryptographic libraries
+- Side channels on secret data (timing, cache, power)
+- Deviation from a cited standard
+- Bypass of the integrity check, the power-on self-test or the error-state gating
+- A build or release-pipeline flaw that lets a tampered artefact verify
 
 **Medium:**
-- Input validation issues leading to unexpected behavior
-- Insufficient entropy in key generation
-- Weak random number generation
-- Implementation deviations from cryptographic standards
+- Input-validation defects without a cryptographic consequence
+- Denial of service
 
 **Low:**
-- Documentation inconsistencies affecting security
-- Missing security headers or best practices
-- Informational security improvements
+- Documentation that misstates a security property
 
 ### Out of Scope
 
 The following are generally **not** considered security vulnerabilities:
 
 - Theoretical attacks requiring impractical computational resources (e.g., 2^128 operations)
-- Issues in third-party dependencies (report to upstream maintainers)
+- Issues in the optional, non-cryptographic extras (numpy, PyKCS11) — report to their maintainers
 - Social engineering attacks
 - Physical access attacks on user systems
 - Issues requiring user misconfiguration or ignoring documentation
@@ -269,71 +224,67 @@ Security updates are released as follows:
 
 Security advisories are published:
 - GitHub Security Advisories (https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories)
-- Release notes with [SECURITY] tag
-- Email notification to users who have starred the repository (when critical)
+- A `### Security` entry in the CHANGELOG for the release that carries the fix
 
 ## Responsible Disclosure Recognition
 
-We deeply appreciate security researchers who help keep AMA Cryptography secure. Reporters who follow responsible disclosure will be:
+Reporters who follow this policy are:
 
 - **Credited** in the security advisory (unless anonymity is requested)
 - **Acknowledged** in the CHANGELOG and release notes
-- **Thanked** publicly on our GitHub repository
-- **Recognized** in our Hall of Fame for significant contributions
 
-We do not currently offer a bug bounty program but may consider recognition rewards for exceptional discoveries.
+There is no bug bounty program.
 
 ## Security Best Practices
 
 Users deploying AMA Cryptography in production should:
 
 ### Key Management
-- **REQUIRED:** Store master secrets in FIPS 140-2 Level 3+ HSMs for production
-- **REQUIRED:** Implement key rotation every 90 days
-- **REQUIRED:** Use hardware security modules (AWS CloudHSM, YubiKey, etc.)
+- **REQUIRED:** Store master secrets in an HSM validated to FIPS 140-3 (or FIPS 140-2 while its certificate is active), Level 3 or higher, for production
+- **REQUIRED:** Define a cryptoperiod per key type (NIST SP 800-57 Part 1) and rotate accordingly
 - **NEVER:** Store private keys in plain text or version control
-- **NEVER:** Reuse keys across different Omni-Code packages
+- **NEVER:** Reuse a signing or KEM key across unrelated applications or trust domains
 
-### Zero-Dependency Architecture (v2.1)
-- **REQUIRED:** Build native C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
-- All production cryptographic primitives (SHA3, HKDF, Ed25519, AES-256-GCM, ML-DSA-65, ML-KEM-1024, SLH-DSA, X25519, ChaCha20-Poly1305, Argon2id, secp256k1) are native C — no external cryptographic dependencies required
-- Optional: numpy/scipy for 3R monitoring, PyKCS11 for HSM
+### Installation
+- **REQUIRED:** Install from a signed release tag or a release wheel (README → Distribution Channels). The package build compiles the native library and writes the signed integrity artefact. A `cmake`-only build has no signed artefact and runs a digest-only integrity check (see [Module Integrity Verification](#module-integrity-verification)).
+- Optional extras: `[math]` and `[monitoring]` (numpy, for 3R monitoring), `[hsm]` (PyKCS11)
 
 ### Cryptographic Operations
-- **REQUIRED:** Build native PQC C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
-- **REQUIRED:** Enable all cryptographic layers (no fallbacks in production)
+- There is no fallback mode: a missing or failing native backend fails the import (INVARIANT-7, INVARIANT-39).
 - **REQUIRED (if timestamps are relied upon):** Establish the token's issuer through a control *outside* AMA — an authenticated channel to the TSA, or out-of-band validation of the token before it is stored. AMA verifies the RFC 3161 §2.4.2 message-imprint binding only; configuring a reputable TSA has no verification consequence here, because no TSA signature is checked and a forged token is accepted identically (INVARIANT-37).
 - **RECOMMENDED:** Use multiple TSAs for redundancy of *availability*. This is not redundancy of trust: AMA does not verify any of them.
 - **RECOMMENDED:** Verify all signatures before trusting package contents
 
 ### Dependency Management
-- **NOTE:** v2.0 has zero core cryptographic dependencies — all primitives are native C
-- **REQUIRED:** Keep optional dependencies up to date (numpy, scipy, pynacl if used)
-- **REQUIRED:** Enable Dependabot for automated security updates
-- **RECOMMENDED:** Pin dependency versions for reproducible builds
-- **RECOMMENDED:** Verify package signatures from PyPI
+- The package has no runtime dependencies; every cryptographic primitive is in-tree C
+- **RECOMMENDED:** Track advisories for the optional extras you install, and pin their versions
+- **REQUIRED for release deployments:** Verify an installed tree out of band with `tools/verify_install_oob.py --expected-pubkey <release anchor>`
 
 ### Monitoring and Auditing
 - **REQUIRED:** Log all cryptographic operations for audit trails
 - **REQUIRED:** Monitor for signature verification failures
-- **REQUIRED:** Alert on quantum library unavailability
+- **REQUIRED:** Alert on an import failure (`CryptoModuleError`), and in release deployments on `module_attestation()["fully_verified"]` or `module_attestation()["anchored"]` being false
 - **RECOMMENDED:** Implement rate limiting for signature operations
 - **RECOMMENDED:** Regular security audits of deployment configuration
 
-## Module Integrity Verification (FIPS 140-3 §4.9.1)
+## Module Integrity Verification
+
+Modelled on the FIPS 140-3 pre-operational software-integrity test. This is a
+design reference: the module is not CMVP-validated.
 
 ### Threat model
 
 The integrity check verifies that an installed wheel's `.py` files
 **and its native library** have not been tampered with after build.  It
-is **not** a supply-chain identity check (PyPI's existing PGP / sigstore
-mechanisms cover that) and it does **not** prove anything about a
+is **not** a supply-chain identity check (release wheels carry a keyless
+sigstore signature and SLSA provenance for that — README → Distribution
+Channels) and it does **not** prove anything about a
 malicious build pipeline — both the digest and the signing key are
 produced by the same build that produced the code being signed.  The
 contract is:
 
-1. The wheel build computes SHA3-256 over the package's `.py` files
-   **and a second SHA3-256 over the native library
+1. The wheel build computes SHA3-256 over the package's `.py` files and
+   its POST KAT vectors (`_post_kats/`) **and a second SHA3-256 over the native library
    (`libama_cryptography`) it is about to ship**, generates an
    **ephemeral, per-build Ed25519 key** by default (or uses
    `AMA_INTEGRITY_SIGNING_SEED_HEX` in release CI), and signs the
@@ -349,8 +300,10 @@ contract is:
    dependency), and then **re-hashes the shared object it actually
    loaded and requires it to match the signed native digest**.  Any
    mismatch — edited `.py` file, edited `.so`, or a swapped signature —
-   transitions the module to the ERROR state and refuses every
-   cryptographic operation.
+   fails the power-on self-test, so the import raises `CryptoModuleError`
+   and every cryptographic operation is refused (INVARIANT-39).  Version 3
+   artefacts additionally bind the per-file digests of the binding
+   extensions (see below).
 
    Binding the native library closes the gap where the Python wrapper
    was tamper-evident but the code doing the cryptography was not: a
@@ -594,19 +547,19 @@ carries this same repair hint. It matches how the native library is
 already treated: rebuild it without re-signing and import fails closed,
 because the artefact names bytes that are no longer there.
 
-The artefact this repository commits carries a populated binding map:
-six extensions, signed on the platform that built them, keyed by exact
-filename (ABI tag included). It is a local artefact in the sense above,
-and it stays valid only while the tree carries the bytes it names:
-rebuild an extension without re-signing and import fails closed on the
-digest mismatch — the same treatment the native library gets — while a
-checkout whose extensions are not built at all sees six
-listed-but-missing entries, a logged warning on developer builds per
-the severity split above. Both states are refreshed the same way:
-`AMA_BUILD_PIPELINE=1` with `integrity --update --sign` re-signs the
-tree as it stands and rewrites the map. The binding guarantee remains
-exact-or-fatal in a shipped wheel, where the artefact and the
-extensions are produced by one pipeline.
+The artefact is not tracked in this repository (`.gitignore`,
+`MANIFEST.in`; AGENTS.md §8 item 4). Every build writes its own, signed
+with a fresh per-build key and binding the extensions that build
+produced — six on a full build — keyed by exact filename (ABI tag
+included). It stays valid only while the tree carries the bytes it
+names: rebuild an extension without re-signing and import fails closed
+on the digest mismatch — the same treatment the native library gets —
+while an artefact listing extensions the tree no longer has reports
+them as listed-but-missing, a logged warning on developer builds per the
+severity split above. `AMA_BUILD_PIPELINE=1` with
+`integrity --update --sign` re-signs the tree as it stands and rewrites
+the map. The binding guarantee is exact-or-fatal in a shipped wheel,
+where the artefact and the extensions are produced by one pipeline.
 
 An earlier revision of this section recorded the gap as blocked on a
 release-pipeline change, on the claim that repair tools rewrite the
@@ -619,8 +572,8 @@ unmangled `DT_NEEDED`, verified on the release assets), and a local
 `auditwheel repair` of a freshly built wheel changes only
 `RECORD`/`WHEEL` metadata. It was **not** false for delocate on macOS:
 the 5.0.0 release dry run showed `delocate-wheel` rewriting every
-binding's Mach-O load commands *after* the signer ran, so all five
-bindings in the macOS wheels failed their signed digests at the wheels'
+binding's Mach-O load commands *after* the signer ran, so every
+binding in the macOS wheels failed its signed digest at the wheels'
 own smoke test. The mitigation there is to disable macOS repair
 outright (`CIBW_REPAIR_WHEEL_COMMAND_MACOS: ""` in `release.yml`),
 which this project can afford because delocate has nothing to vendor;
@@ -681,15 +634,15 @@ re-bless tampered code and defeat the tamper-detection contract.
 
 ### Implementation status
 
-Both halves ship together in the AArch64-completeness PR (2026-05):
+The mechanism has three parts:
 
 1. **`--update` gate** — `python -m ama_cryptography.integrity --update`
    requires `AMA_BUILD_PIPELINE=1` in the environment.  Outside that
    gate the command exits 2 with a remediation message.  See
    `ama_cryptography/integrity.py`.
 2. **Signing pipeline** — `python -m ama_cryptography._build_sign`
-    (invoked by the build pipeline, e.g. `setup.py` post-build hook /
-    CMake post-install step / wheel CI workflow) generates an ephemeral
+    (invoked by `setup.py`'s build step, `tools/resign_wheel.py` and
+    `integrity --update --sign`) generates an ephemeral
     Ed25519 keypair (or uses `AMA_INTEGRITY_SIGNING_SEED_HEX` in
     release CI) via the in-tree `ama_ed25519_keypair` C symbol
     (INVARIANT-1: no PyCA dependency), checks the resulting public key
@@ -698,7 +651,7 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
     `ama_cryptography/_integrity_signature.py` with the embedded pubkey
     + signature + digest, and discards the private key before exit.
     See `ama_cryptography/_build_sign.py`.
-3. **Import-time verifier** — `_self_test._verify_integrity()` calls
+3. **Import-time verifier** — `_self_test.verify_module_integrity()` calls
     `_verify_signed_integrity()` first.  When the signature artefact is
     present (the normal post-wheel-build state), it recomputes the
     digest, reads any native trust anchor via
@@ -725,8 +678,8 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
       `_integrity_digest.txt` with a logged WARNING.  Developer
       ergonomics do not require a full wheel build on every edit;
       packagers still see the missing signature in CI logs.
-    - **`=1` (release path):** the module refuses to fall back and
-      transitions to ERROR state — release wheels MUST ship the
+    - **`=1` (release path):** the module refuses to fall back and the
+      import fails (INVARIANT-39) — release wheels MUST ship the
       Ed25519-signed artefact or every crypto call is rejected.  This
       makes a forgotten `AMA_BUILD_PIPELINE=1` in the release pipeline
       a hard failure instead of a silent posture downgrade.
@@ -862,8 +815,9 @@ matching the loader's own rule. On Windows the concept has no referent and
 #### Partial or mismatched native builds
 
 A shared object can export some primitives and not others — a build with
-`AMA_USE_NATIVE_PQC=OFF`, a stale library from a previous major version, or
-a cross-architecture mismatch. Such a library now surfaces the families it
+`AMA_USE_NATIVE_PQC=OFF`, or a cross-architecture mismatch. (A library from
+another major version is refused outright by the INVARIANT-42 version
+handshake.) Such a library now surfaces the families it
 does **not** provide in `native_backend_diagnostics()["missing_families"]`
 and a one-time WARNING at import, rather than presenting as a clean load
 with a scattering of unrelated failures at first use. The POST known-answer
@@ -878,8 +832,8 @@ End-to-end smoke test (from the AArch64-completeness PR's CI):
     AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
     python -m ama_cryptography.integrity --verify   # → "OK (signed integrity verified, ...)"
     # Now edit a .py file and re-import WITHOUT re-running the signer:
-    python -c "import ama_cryptography; ama_cryptography._self_test._run_self_tests()"
-    # → ERROR state, all crypto operations refused
+    python -c "import ama_cryptography"
+    # → CryptoModuleError naming the integrity stage; the import fails (INVARIANT-39)
     # (Re-running the signer over the edited tree makes the check pass again —
     #  see "What the integrity check does and does not defend against" above.)
 
@@ -897,6 +851,42 @@ The release job normally supplies the trust anchor via the compiled
 form above is a reproducible local equivalent used by tests to prove
 the strict path rejects unanchored artefacts.
 
+### Power-on self-test and the error state (INVARIANT-39)
+
+The power-on self-test (POST) is modelled on FIPS 140-3 §4.9; the module is
+not CMVP-validated. It runs at import, in seven stages:
+
+1. `native-backend` — the native library loads and passes the INVARIANT-42
+   ABI and major-version checks.
+2. `kat-pre-integrity` — SHA3-256 and Ed25519 known-answer tests, the two
+   primitives the integrity check itself uses.
+3. `integrity` — the signed integrity artefact (see
+   [Module Integrity Verification](#module-integrity-verification)).
+4. `execution-integrity` — the executed bytecode matches the signed source
+   (INVARIANT-40).
+5. `kat` — HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65,
+   SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s.
+6. `oracle` — a Welch t-test on `ama_consttime_memcmp`.
+7. `rng` — two 32-byte draws from the OS CSPRNG must differ.
+
+A failed stage puts the module in the `ERROR` state, and the import raises
+`CryptoModuleError` naming the stage and its reason. In `ERROR`, every
+cryptographic entry point refuses to run; `tools/check_error_state_gating.py`
+fails CI if a public `pqc_backends` function that reaches the native library
+lacks that gate. A stage that
+raises an unexpected exception is treated the same way: the module enters
+`ERROR`, the failure is recorded, and the exception propagates.
+
+- `module_attestation()` reports the state, the per-KAT results,
+  `duration_ms` and `stage_durations_ms`.
+- `last_failure()` keeps the most recent failed run (reason, results and
+  stage timings), so a later successful `reset_module()` does not erase it.
+- `AMA_POST_DIAGNOSTIC_IMPORT=1` completes the import for diagnosis only;
+  the module stays in `ERROR` and refuses cryptography.
+
+Outside POST, every asymmetric key generation runs a pairwise consistency
+test before the key is returned (INVARIANT-41); a failure enters `ERROR`.
+
 ### `AMA_FIPS_STRICT` — escalate skipped KATs to POST failure
 
 Released wheels and deployments requiring FIPS-style strictness should set
@@ -904,22 +894,23 @@ Released wheels and deployments requiring FIPS-style strictness should set
 approved-algorithm self-test set:
 
   * **Unset (default, developer / docs / CI matrix builds):** when a
-    KAT cannot run because its backend is unavailable (e.g. SPHINCS+
+    KAT cannot run because its backend is unavailable (e.g. SLH-DSA
     was not built into the C library), the POST runner logs a WARNING,
     records the skip with `passed=None` in
     `module_self_test_results()`, and continues.  Skip is NOT a pass —
     consumers filtering for "everything passed" must compare
     `passed is True`.
   * **`=1` (release / FIPS-strict path):** a skipped KAT is
-    escalated to a hard POST failure.  The module enters ERROR state
-    and refuses every cryptographic operation until the missing
-    backend is built and the process restarted.  This makes a
+    escalated to a hard POST failure, so the import raises
+    `CryptoModuleError` until the missing backend is built.  This makes a
     forgotten `cmake -DAMA_USE_NATIVE_PQC=ON` in the release build a
     visible failure rather than a silent posture downgrade.
 
 The strict-mode flag applies uniformly to every KAT (SHA3-256,
 HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA,
 SLH-DSA-SHAKE-128s, Ed25519) and the constant-time timing oracle.
+Whatever the mode, `module_attestation()["fully_verified"]` is false when any
+KAT was skipped.
 
 ### `AMA_ALLOW_PYTHON_MEMZERO` — opt into best-effort Python memzero
 
@@ -1058,74 +1049,105 @@ To open a genuine legacy store, pass `allow_legacy_kdf=True` — which warns
 instead of raising — then call `migrate_kdf(password)` to re-encrypt at current
 strength and reopen without the flag.
 
+## Implementation Assurance
+
+What is enforced mechanically, and where. Each item names the invariant and
+the test or gate that fails if the property is removed.
+
+### Constant-time execution (INVARIANT-12)
+
+- **Statistical:** dudect lanes in `.github/workflows/dudect.yml` and the
+  harnesses under `tools/constant_time/`.
+- **Deterministic:** `tools/check_ghash_constant_time.py` compares
+  callgrind instruction counts across secret classes for each covered
+  target (scalar AES-GCM, ECDSA on secp256k1 and the NIST curves, ML-KEM
+  decapsulation, Ed25519 signing, X25519, the `ama_consttime_*` helpers and
+  others); `--taint` marks the secret undefined under Valgrind Memcheck and
+  reports any branch or memory address that depends on it.
+- **Object-level:** `tools/check_secret_division.py` fails if a divide
+  instruction takes a secret operand (the KyberSlash class).
+
+Method and scope: [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md).
+
+### Secret zeroization (INVARIANT-6)
+
+Secret buffers are scrubbed on every exit path, including error returns.
+In the 2026-09-26 review, eight exits that follow a failed CSPRNG draw
+(SLH-DSA, ML-KEM, ML-DSA and X25519 key generation and hedged signing) did
+not scrub the partial output; they now do, and
+`tests/c/test_csprng_failure_residue.c` fails if any of those scrubs is
+removed.
+
+### Encoding strictness
+
+Verification rejects every non-canonical or malleable encoding the relevant
+standard permits an implementation to reject:
+
+| Primitive | Rule | Invariant |
+|---|---|---|
+| Ed25519 | `S < L`; canonical `y` in `A` and `R`; small-order `A` and `R` refused; signer derives its own public half | 26, 38, 48, 51 |
+| X25519 | low-order outputs refused; `u` reduced before use | 21, 27 |
+| ECDSA (P-256/384/521, secp256k1) | low-`s` on sign and verify; strict DER; canonical public-key coordinates | 28, 29, 34 |
+| ML-DSA | hint encoding: strictly increasing indices, zero padding, bounded counts (FIPS 204 Alg. 21; SUF-CMA) | — (`tests/c/test_ml_dsa_hint_encoding.c`) |
+| FROST | every share verified before aggregation returns success; nonce pairs single-use | 49 |
+
+The Ed25519 backend is the in-house `fe51` implementation on every host; the
+`fe64-mulx` backend runs only after `ama_ed25519_set_mulx_override(1)` on a
+BMI2 + ADX CPU, and `tests/c/test_ed25519_fe51_mulx_equiv.c` pins the two to
+byte-identical output.
+
 ## Cryptographic Algorithm Security
 
-### Current Algorithms
+### Security Strength
 
-| Algorithm | Classical Security | Quantum Security | Status |
-|-----------|-------------------|------------------|--------|
-| SHA3-256 | 2^128 | 2^128 | ✓ Secure |
-| HMAC-SHA3-256 | 2^128 | 2^128 | ✓ Secure |
-| Ed25519 | 2^126 | ~10^7 gates* | ⚠ Quantum-vulnerable |
-| ML-DSA-65 (Dilithium-3) | 2^207 | 2^192 | ✓ Quantum-secure |
-| ML-KEM-1024 (Kyber) | 2^256 | 2^128 | ✓ Quantum-secure |
-| SPHINCS+-SHA2-256f | 2^256 | 2^128 | ✓ Quantum-secure |
-| AES-256-GCM | 2^256 | 2^128 | ✓ Quantum-secure |
-| HKDF | 2^128 | 2^128 | ✓ Secure |
-| X25519 | 2^128 | ~10^7 gates* | ⚠ Quantum-vulnerable |
-| ChaCha20-Poly1305 | 2^256 | 2^128 | ✓ Quantum-secure |
-| Argon2id | Memory-hard | Memory-hard | ✓ Secure |
+| Algorithm | Classical strength | Against a quantum adversary |
+|---|---|---|
+| ML-KEM-512 / 768 / 1024 | NIST PQC category 1 / 3 / 5 | Same categories (FIPS 203) |
+| ML-DSA-44 / 65 / 87 | NIST PQC category 2 / 3 / 5 | Same categories (FIPS 204) |
+| SLH-DSA-SHA2-256f / -SHAKE-128s | NIST PQC category 5 / 1 | Same categories (FIPS 205) |
+| AES-256-GCM, ChaCha20-Poly1305 | 256-bit key | ~128-bit (Grover) |
+| SHA3-256, HMAC-SHA3-256, HKDF-SHA3-256 | 128-bit collision / 256-bit preimage | ~128-bit preimage |
+| Ed25519, X25519 | ~128-bit | None (Shor) |
+| ECDSA / ECDH P-256 / P-384 / P-521, secp256k1 | 128 / 192 / 256 / 128-bit | None (Shor) |
+| Argon2id | Memory-hard (RFC 9106) | Memory-hard |
 
-*Ed25519 and X25519 are vulnerable to sufficiently large quantum computers, but ML-DSA-65 provides quantum-resistant backup.
+A hybrid package requires both an Ed25519 and an ML-DSA-65 forgery, so it
+remains unforgeable against a quantum adversary while ML-DSA-65 holds.
 
 ### Cryptographic Deprecation Policy
 
-We will deprecate cryptographic algorithms when:
-- Practical attacks reduce security below 112-bit classical security
-- NIST or other authoritative bodies recommend deprecation
-- Quantum computers pose imminent threat to classical algorithms
-- More efficient quantum-resistant alternatives become available
+An algorithm or parameter set is deprecated when:
 
-**30 days notice** will be provided before deprecating any algorithm, with migration guides and backwards compatibility support.
+- A practical attack reduces its security below 112 bits (NIST SP 800-131A)
+- NIST or the IETF deprecates or withdraws it
 
-### Performance note on the VAES AES-GCM dispatch path (x86-64)
-
-The library ships an optional VAES + VPCLMULQDQ AES-256-GCM kernel
-(PR A, 2026-04) behind runtime CPUID + XCR0 gating
-(`ama_cpuid_has_vaes_aesgcm()`). The VAES + VPCLMULQDQ AES-GCM path
-targets **YMM (256-bit), not ZMM**: Zen 3+ / Ice Lake+ CPUs execute
-these without the AVX-512 ZMM frequency penalty documented for
-Skylake-SP / Cascade Lake. Cloud VM variance on shared hosts is still
-the dominant noise source; published throughput numbers are from
-bare-metal runs, not CI. Hosts without VAES — or any non-x86-64
-host — automatically route through the AVX2 AES-NI + PCLMULQDQ path
-shipped in #253 / #254 / #260 / #261, which remains the regression
-baseline tracked in `benchmarks/baseline.json`.
+Deprecation is announced in the CHANGELOG, and removal happens in a later
+major version with a migration path, as the 3.0.0 Argon2id change did.
 
 ## Security Audits
 
-AMA Cryptography has undergone internal security analysis documented in this file. We welcome:
+AMA Cryptography has **not** been audited by an independent third party.
+The analysis to date is the maintainers' own: the invariant framework
+([INVARIANTS.md](INVARIANTS.md)), the design arguments in
+[docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md), the threat model
+([THREAT_MODEL.md](THREAT_MODEL.md)) and the review checklist
+([CRYPTO_REVIEW_CHECKLIST.md](CRYPTO_REVIEW_CHECKLIST.md)). Independent
+audits, academic review and cryptographic code review are welcome; contact
+steel.sa.llc@gmail.com to coordinate.
 
-- Independent security audits from qualified cryptographers
-- Academic review of our mathematical proofs
-- Penetration testing of the implementation
-- Code reviews focusing on cryptographic correctness
+## Standards Conformance and Validation Status
 
-Please contact us at steel.sa.llc@gmail.com to coordinate security audit efforts.
+The primitives implement the standards listed in
+[CSRC_STANDARDS.md](CSRC_STANDARDS.md) (FIPS 180-4, 186-5, 198-1, 202, 203,
+204 and 205; SP 800-38D, 800-56A rev. 3, 800-132, 800-208 and 800-232;
+RFC 5869, 7748, 8032, 8439 and 9106; RFC 9591-style FROST; SEC 2).
 
-## Compliance and Standards
-
-AMA Cryptography is designed to comply with:
-
-- **NIST FIPS 202** - SHA-3 Standard (SHA3-256, SHAKE128, SHAKE256)
-- **NIST FIPS 203** - Module-Lattice-Based Key-Encapsulation Mechanism (ML-KEM / Kyber)
-- **NIST FIPS 204** - Module-Lattice-Based Digital Signature Standard (ML-DSA / Dilithium)
-- **NIST FIPS 205** - Stateless Hash-Based Digital Signature Standard (SLH-DSA / SPHINCS+)
-- **NIST SP 800-38D** - Recommendation for Block Cipher Modes: GCM (AES-256-GCM)
-- **NIST SP 800-57** - Recommendation for Key Management
-- **RFC 2104** - HMAC: Keyed-Hashing for Message Authentication
-- **RFC 5869** - HMAC-based Extract-and-Expand Key Derivation Function (HKDF)
-- **RFC 8032** - Edwards-Curve Digital Signature Algorithm (EdDSA)
+**Validation status.** No algorithm is CAVP-validated and the module is not
+CMVP-certified. Conformance is **self-attested**: CI runs the NIST ACVP-Server
+vectors for the covered algorithms, and the results are recorded in
+[docs/compliance/acvp_attestation.json](docs/compliance/acvp_attestation.json)
+with `cavp_validated` and `cmvp_certified` set to `false`. Wycheproof vectors
+are run as a further check.
 
 **Partial, and deliberately so:**
 
@@ -1139,14 +1161,15 @@ AMA Cryptography is designed to comply with:
   It contributes no adversarial resistance and must not be counted toward the
   security bound.
 
-Non-compliance with the fully-implemented standards above should be reported as a high-severity security issue.
+A deviation from a fully implemented standard is a High-severity security
+issue; report it as described above.
 
 ## Contact
 
 **Preferred channel:** [GitHub Private Vulnerability Reporting](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/security/advisories/new)
 **Email fallback:** steel.sa.llc@gmail.com
 **security.txt:** [`.well-known/security.txt`](.well-known/security.txt) (RFC 9116)
-**Response Time:** 24-48 hours for critical issues
+**Initial response:** see [Response Timeline](#response-timeline)
 **Organization:** Steel Security Advisors LLC
 
 ## See Also
@@ -1154,9 +1177,10 @@ Non-compliance with the fully-implemented standards above should be reported as 
 - [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — Security arguments for original constructions (double-helix engine, adaptive posture, composition protocol)
 - [`THREAT_MODEL.md`](THREAT_MODEL.md) — System threat model and risk assessment
 - [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) — Cryptographic algorithm overview
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — System architecture and invariants
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — System architecture
 - [`CONSTANT_TIME_VERIFICATION.md`](CONSTANT_TIME_VERIFICATION.md) — Timing-side-channel validation
 - [`INVARIANTS.md`](INVARIANTS.md) — Library invariants (canonical)
+- [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md) — Algorithm registry and governing standards
 
 ---
 
@@ -1169,14 +1193,14 @@ Non-compliance with the fully-implemented standards above should be reported as 
 | 2.0.0 | 2026-03-08 | Zero-dependency native C architecture, FIPS 203/204/205 compliance, AES-256-GCM, adaptive posture system, hybrid KEM combiner, Ed25519 atomics hardening, Phase 2 primitives, fuzzing harnesses, threat model documentation |
 | 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, bitsliced constant-time AES default |
 | 2.1.5 | 2026-04-17 | Security audit fixes (length-prefixed HKDF encoding, constant-time ops, finding C6/C7/H2), HSM support via PyKCS11, fd leak protection (CodeQL #297), secure channel protocol v2 with `rekey_epoch` AAD, INVARIANT-13 restoration |
-| 3.0.0 | 2026-04-27 | RFC 9106 Argon2id byte-identity fix (BREAKING — legacy verify-only shim provided) and `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN = 1024`; in-house AVX-512 4-way Keccak permutation kernel (opt-in via `-DAMA_ENABLE_AVX512=ON`, XCR0 5+6+7 gated) with `docs/AVX512_KECCAK_ADR.md` ADR; X25519 fe64 (radix-2⁶⁴) ladder + hand-written MULX+ADX inline-asm kernel under BMI2∧ADX bundle gate; X25519 4-way AVX2 batch API (`ama_x25519_scalarmult_batch`, opt-in); VAES YMM AES-256-GCM; Ed25519 verify-path SWE rectification + base-point comb + merged NTT + AVX2 rejection; batch ML-DSA-65 / ML-KEM-1024 sampling via 4-way SHAKE; ChaCha20-Poly1305 AVX2 (≥ 512 B) and Argon2 BlaMka G AVX2; SHA-3 auto-tune hysteresis; NIST ACVP self-attestation (815/815 AFT) under continuous validation; D-1…D-10 distribution / tooling audit (wheel SONAME bundling, Cython/numpy build pins, `setuptools≥78.1.1` / `wheel≥0.46.2`, dudect AES-GCM tag-compare redesign, `.semgrep.yml` 341 FP → 0, X25519 dispatch-policy contract test, fallthrough annotations in the formerly vendored Ed25519 x86-64 backend — since removed in the twenty-first maintenance pass) |
+| 3.0.0 | 2026-04-27 | RFC 9106 Argon2id byte-identity fix (BREAKING — legacy verify-only shim provided) and `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN = 1024`; in-house AVX-512 4-way Keccak permutation kernel (opt-in via `-DAMA_ENABLE_AVX512=ON`, XCR0 5+6+7 gated) with `docs/AVX512_KECCAK_ADR.md` ADR; X25519 fe64 (radix-2⁶⁴) ladder + hand-written MULX+ADX inline-asm kernel under BMI2∧ADX bundle gate; X25519 4-way AVX2 batch API (`ama_x25519_scalarmult_batch`, opt-in); VAES YMM AES-256-GCM; Ed25519 verify-path SWE rectification + base-point comb + merged NTT + AVX2 rejection; batch ML-DSA-65 / ML-KEM-1024 sampling via 4-way SHAKE; ChaCha20-Poly1305 AVX2 (≥ 512 B) and Argon2 BlaMka G AVX2; SHA-3 auto-tune hysteresis; NIST ACVP self-attestation (815/815 AFT) under continuous validation; D-1…D-10 distribution / tooling audit (wheel SONAME bundling, Cython/numpy build pins, `setuptools≥78.1.1` / `wheel≥0.46.2`, dudect AES-GCM tag-compare redesign, `.semgrep.yml` 341 FP → 0, X25519 dispatch-policy contract test, fallthrough annotations in the formerly vendored Ed25519 x86-64 backend — since removed in 5.0.0, #394) |
 | 3.1.0 | 2026-05-14 | Security hygiene release documentation alignment for current consumers, v3.1.0 tag legitimacy, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
 | 3.2.0 | 2026-05-20 | Mercury Agent v1.7.0 alignment; per-slot SIMD auto-tune + file-based cross-process dispatch cache with dispatch-cache safety; NTT benchmark overflow guard; dudect CI hygiene; native HMAC-SHA-256 Python bindings; no breaking public API changes |
 | 3.3.0 | 2026-07-05 | Native one-shot SHA-256; documented public MAC/KDF surface (`quick_hmac` / `quick_hkdf`, native HMAC/HKDF SHA-2/3, `AmaCryptographyError` exception root); SLH-DSA-SHA2-256f signer consolidation; native-hashing purity in `crypto_api`; SLSA provenance permissions + CodeQL unused-static resolution |
 | 3.4.0 | 2026-07-25 | Support matrix rolled (3.4.x active); vendored Wycheproof gate; Ed25519 canonical-`S` enforcement (INVARIANT-26) and X25519 u-coordinate canonicalization (INVARIANT-27); agent-instance binding (INVARIANT-30) with 3R detectors; Ascon-AEAD128/Hash256 (SP 800-232) |
 | 3.5.0 | 2026-07-30 | Support matrix rolled (3.5.x active, 3.4.x superseded — no public API removals); INVARIANT-22 nonce-counter rollback residual risk documented; NIST P-256/384/521 ECDSA (FIPS 186-5, INVARIANT-34 low-`s` policy), ML-KEM/ML-DSA parameter sets, HSS/LMS verification enter the supported surface |
 | 4.0.0 | 2026-08-01 | Support matrix rolled (4.0.x active, 3.5.x superseded — six breaking changes); trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor on both cost and algorithm; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material; RFC 8439 length limit on ChaCha20-Poly1305 |
-| 5.0.0 | Unreleased | Support matrix rolled (5.0.x active, 4.0.x superseded — eleven breaking changes); fail-closed FIPS 140-3 POST import with output inhibition on every surface (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check and loaded-library major-version handshake (INVARIANT-42); pre-load native-library digest verification with the fail-closed unreadable-candidate rule; the six binding extensions digest-bound into the v3 integrity artefact (every build signs and binds, including the repair flow; anchored/developer severity split); Ed25519 `x = 0` twin-encoding rejection, extended to the signature's R half on every verify path in both backends so batch and single verify cannot disagree; `CryptoPostureController` fail-closed on an algorithm it cannot rank, with per-family strength ladders so an escalation cannot answer a KEM with a signature scheme; pre-load refusal of a binding extension whose digest does not match the signed artefact (previously verified only after it had executed); the `AMA_BUILD_PIPELINE` carve-out that let an environment variable buy a mapping of an unverified native library replaced with an in-process signing-only scope; ML-KEM `Compress_d` applies its own `mod 2^d` with an exhaustive 16,645-pair proof; SoftHSM2, the semgrep end-to-end assertion, `test_dispatch_cache_file` on SIMD-off builds and `test_pq_parser_stack` under Valgrind all made executable; the dudect verdict rule distinguishes a directional leak from an unusable measurement |
+| 5.0.0 | Unreleased | Support matrix rolled (5.0.x active, 4.0.x superseded — eleven breaking changes); fail-closed FIPS 140-3 POST import with output inhibition on every surface (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check and loaded-library major-version handshake (INVARIANT-42); pre-load native-library digest verification with the fail-closed unreadable-candidate rule; the six binding extensions digest-bound into the v3 integrity artefact (every build signs and binds, including the repair flow; anchored/developer severity split); Ed25519 `x = 0` twin-encoding rejection, extended to the signature's R half on every verify path in both backends so batch and single verify cannot disagree; `CryptoPostureController` fail-closed on an algorithm it cannot rank, with per-family strength ladders so an escalation cannot answer a KEM with a signature scheme; pre-load refusal of a binding extension whose digest does not match the signed artefact (previously verified only after it had executed); the `AMA_BUILD_PIPELINE` carve-out that let an environment variable buy a mapping of an unverified native library replaced with an in-process signing-only scope; ML-KEM `Compress_d` applies its own `mod 2^d` with an exhaustive 16,645-pair proof; SoftHSM2, the semgrep end-to-end assertion, `test_dispatch_cache_file` on SIMD-off builds and `test_pq_parser_stack` under Valgrind all made executable; the dudect verdict rule distinguishes a directional leak from an unusable measurement; ed25519-donna replaced by an in-house fe51 / fe64-mulx backend (#394); scrub on every CSPRNG-failure exit (INVARIANT-6), FROST `verify_share` verdict aligned with its header, ML-DSA hint-encoding rules pinned, POST stage timing and failure recording |
 
 ---
 

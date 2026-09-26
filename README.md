@@ -17,64 +17,55 @@
 ```
               +==============================================================================+
               |                            AMA CRYPTOGRAPHY ♱                                |
-              |                       Post-Quantum Security System                           |
-              |                                                                              |
-              |   Multi-Layer Defense  |   Quantum-Resistant    |   Defense-in-Depth         |
-              |   Cython 3R Math       |   3R Anomaly Monitor   |   Cross-Platform           |
-              |   HD Key Derivation    |   Algorithm-Agnostic   |   NIST PQC Standards       |
+              |               Post-Quantum and Classical Cryptographic Library               |
               |                                                                              |
               |   C Layer (Native)     |   Cython Layer         |   Python API               |
               |   ─────────────────    |   ─────────────────    |   ─────────────────        |
-              |   SHA3/HKDF/AEAD       |   3R Math (Lyap/NTT)   |   Algorithm-Agnostic       |
-              |   ML-DSA/ML-KEM/SLH    |   NumPy Integration    |   Key Management           |
-              |   Ed25519/X25519       |   Math Engine          |   3R Monitoring            |
-              |   NIST P-curves        |                        |                            |
-              |   secp256k1/FROST      |                        |                            |
-              |   Ascon/LMS/HSS        |                        |                            |
+              |   ML-KEM, ML-DSA       |   FFI bindings:        |   Algorithm-agnostic API   |
+              |   SLH-DSA, LMS/HSS     |   SHA3, HMAC, HKDF,    |   Hybrid signed packages   |
+              |   Ed25519, FROST       |   Ed25519, ML-DSA      |   Key management           |
+              |   X25519, P-curves     |                        |   Adaptive posture         |
+              |   secp256k1            |   3R math engine       |   3R monitoring            |
+              |   AES-GCM, ChaCha20    |                        |   HD key derivation        |
+              |   Ascon, SHA-2, SHA-3  |                        |                            |
+              |   HMAC, HKDF, PBKDF2   |                        |                            |
+              |   Argon2id             |                        |                            |
               |                                                                              |
-              |                       Built for a civilized evolution.                       |
               +==============================================================================+
 ```
 
-**Copyright 2025-2026 Steel Security Advisors LLC**
-**Author/Inventor:** Andrew E. A.
-**Contact:** steel.sa.llc@gmail.com
-**License:** Apache License 2.0
+**Copyright 2025-2026 Steel Security Advisors LLC**\
+**Author/Inventor:** Andrew E. A.\
+**Contact:** steel.sa.llc@gmail.com\
+**License:** Apache License 2.0\
+**AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛\
 **Version:** 5.0.0
-**AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
-## Executive Summary 🌎
+## Executive Summary
 
-AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
+AMA Cryptography is a cryptographic library: a native C core that implements post-quantum and classical primitives from their published standards, and a Python API over it. Every primitive is implemented in this repository; there is no third-party cryptographic code, and one file is adapted under the MIT licence (see [License](#license)).
 
-The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations. 3R overhead is not part of the CI regression gate; measure it locally with `python benchmarks/validation_suite.py` (its 3R monitoring section times the per-call instrumentation) before relying on an environment-specific figure. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. That workload is the Lyapunov exponent, NTT-shaped rotation matrix-vector product and helix evolution kernels in `src/cython/math_engine.pyx`; no speed-up ratio over the pure-Python NumPy baseline is published for it, because none has been measured in this tree (`python benchmarks/performance_suite.py` measures the Lyapunov and matrix-vector kernels against their NumPy baselines on your host — see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md)). The Cython engine accelerates 3R monitoring math only and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
+- **Post-quantum:** ML-KEM-512/768/1024 (FIPS 203), ML-DSA-44/65/87 (FIPS 204), SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s (FIPS 205), LMS/HSS verification (SP 800-208)
+- **Classical public key:** Ed25519 (RFC 8032), FROST-Ed25519 threshold signing (RFC 9591-style), X25519 (RFC 7748), ECDSA and ECDH on P-256/384/521 (FIPS 186-5, SP 800-56A), secp256k1 (SEC 2)
+- **Symmetric, hashing and KDFs:** AES-256-GCM, ChaCha20-Poly1305, Ascon-AEAD128, SHA-2, SHA-3/SHAKE, HMAC, HKDF, PBKDF2, Argon2id
 
-**Protecting people, data, and networks with quantum-resistant cryptography**
+The Python layer adds a hybrid Ed25519 + ML-DSA-65 signed-package format, key management and storage, an adaptive posture controller, and the 3R runtime monitor. The Cython layer has two parts: five FFI bindings (`sha3_binding`, `hmac_binding`, `hkdf_binding`, `ed25519_binding`, `dilithium_binding`) that call the C entry points without ctypes marshalling, and `math_engine`, which accelerates only the 3R monitor's math. No speed-up ratio is published for `math_engine`, because none has been measured in this tree. 3R overhead is not part of the CI regression gate; measure it with `python benchmarks/validation_suite.py`. Cryptographic throughput, with host and method, is in [Performance Metrics](#performance-metrics).
 
-> **Design Philosophy:** Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol — how primitives are combined into the multi-layer defense architecture, double-helix key evolution, and adaptive posture system — is an original design by Steel Security Advisors LLC. AMA Cryptography provides post-quantum cryptography for <a href="https://github.com/Steel-SecAdv-LLC/Mercury-Agent">Mercury Agent</a> and FINDΩYOU™, both of which derive their cryptographic foundation from this library.
->
-> **The Trio — Kin Systems:** AMA Cryptography, Mercury Agent, and FINDΩYOU™ form a single civilization-first lineage. Each is independently deployable, but they are designed as kin — sharing the same cryptographic backbone, the same ethical alignment posture, and the same survivor-first mission.
->
-> - **AMA Cryptography ♱** — the cryptographic foundation. Hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Standalone library; any Python project can install and use it independently.
->
-> - **Mercury Agent ♱** — a neuro-symbolic autonomous AI prototype built on a 7-phase cognitive architecture (Neural Memory → Symbolic Logic → Hybrid Fusion → Enhanced Detection → Autonomous OODA Agent → Ethical Bounding → Cognitive Evolution). Pairs a cognitive subsystem (`NeuralPredicateEncoder`, `DifferentiableRuleModule`, `NeuralTheoremProver`, `CounterfactualReasoner`) with a 22+ detector ensemble measured across 65 real-world datasets (mean ROC-AUC 0.8464). Every decision is gated by a dual hard-enforcement layer: Benevolence ≥ 0.99 (Gini-equity + empathy + value-preservation) and σ_Immutable (a trained 99.6% val-acc gate over a signed corpus). Designed for STEM exploration, humanitarian crisis response, and civilization-first/AI evolution.
->
-> - **FINDΩYOU™** — a near-future addition with a people-first mission: locating the lost, missing, and abducted to reunite families, and accounting for the predators responsible so they answer to justice. A comprehensive, ethical biometric platform — facial, iris, fingerprint, and voice recognition with AgeTransGAN-driven age progression — bound by neuro-symbolic ethical constraints (Logic Tensor Networks) and audited for bias. Integrates real-time emergency channels (FEMA IPAWS Amber Alerts, NOAA, USGS) and operates under geo-consent with strict privacy compliance (BIPA, CCPA/CPRA, GDPR, COPPA). US-focused, survivor-first.
->
-> **Integration:** AMA Cryptography is a standalone cryptographic library — any Python project can install and use it independently for quantum-resistant security. The library is designed for general-purpose use across AI agents, AI systems, and any application requiring post-quantum protection.
->
-> **Project Philosophy:** Promoting action over inaction in the hope of helping secure critical systems against emerging quantum threats. This project is under active development. While we strive for cryptographic rigor, users should remain cautious and conduct independent security reviews before production deployment. The perceived absence of a threat does not constitute the lack of a threat. Our goal is to deter, mitigate, and elevate security posture — not create new vulnerabilities.
+The security analysis is self-assessed. The library has **not** been externally audited, and it is **not** CAVP- or CMVP-validated; CI checks conformance against NIST ACVP vectors as a self-attestation ([NIST Algorithm Compliance](#nist-algorithm-compliance)).
 
-> **Security Disclosure:** This is a self-assessed cryptographic implementation without third-party audit. Production use REQUIRES:
-> - FIPS 140-2 Level 3+ HSM for master secrets (no software-only keys in high-security environments)
-> - Independent security review by qualified cryptographers
-> - Constant-time implementation verification for side-channel resistance
-> - Secure file permissions for key files and cryptographic packages (store on encrypted volumes with restricted access)
+> **Design.** Built exclusively from standardized primitives (NIST FIPS and SP, IETF RFC, SECG SEC 2) — no custom ciphers, hash functions or signature schemes. The composition protocol — how the primitives combine into the signed package, double-helix key evolution and the adaptive posture system — is an original design by Steel Security Advisors LLC, and has no formal proof ([docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md)).
 >
-> **Status:** Community-tested | Not externally audited
-> **Last Updated:** 2026-09-23
+> **Consumers.** AMA Cryptography is a standalone library that any Python project can use. It is the cryptographic library of <a href="https://github.com/Steel-SecAdv-LLC/Mercury-Agent">Mercury Agent</a>.
+
+> **Before production use.** This is a self-assessed implementation under active development. We recommend:
+> - an HSM validated to FIPS 140-3, Level 3 or higher, for master secrets
+> - independent review by qualified cryptographers
+> - constant-time verification on your target hardware
+> - restrictive permissions and encrypted volumes for key files and signed packages
+>
+> **Status:** Self-assessed | Not externally audited
 
 ---
 
@@ -83,9 +74,8 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 <details>
 <summary><strong>Click to expand navigation</strong></summary>
 
-- [Executive Summary](#executive-summary-)
+- [Executive Summary](#executive-summary)
 - [Key Capabilities](#key-capabilities)
-- [Use Cases by Sector](#use-cases-by-sector-)
 - [Performance Metrics](#performance-metrics)
 - [Quick Start](#quick-start)
 - [Testing and Quality Assurance](#testing-and-quality-assurance)
@@ -93,9 +83,9 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 - [Documentation](#documentation)
 - [Cross-Platform Support](#cross-platform-support)
 - [Build System](#build-system)
-- [Mathematical Foundations](#mathematical-foundations)
+- [3R Monitoring and Mathematical Engine](#3r-monitoring-and-mathematical-engine)
 - [Contributing](#contributing)
-- [Unique Features](#unique-features)
+- [Ethical Binding and Omni-Codes](#ethical-binding-and-omni-codes)
 - [License](#license)
 - [Contact and Support](#contact-and-support)
 - [Acknowledgments](#acknowledgments)
@@ -108,34 +98,15 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 ## Key Capabilities
 
 <details>
-<summary><strong>Problem Statement and Solution</strong></summary>
+<summary><strong>Scope</strong></summary>
 
-### The Problem
+- **Primitives:** every algorithm in the [Implementation Status Matrix](#implementation-status-matrix), implemented in C from its standard, with a Python API.
+- **Hybrid signed packages:** content hashing, HMAC, and paired Ed25519 + ML-DSA-65 signatures, so a forgery requires breaking both signature schemes.
+- **Hybrid KEM combiner:** classical and post-quantum shared secrets combined through HKDF (INVARIANT-19).
+- **Key management:** HD key derivation, rotation lifecycle, and encrypted storage at rest under an Argon2id-derived key.
+- **Runtime monitoring:** the 3R monitor surfaces statistical anomalies for review. It is advisory and does not detect or prevent attacks.
 
-Current cryptographic systems face three critical challenges:
-
-1. **Quantum Threat**: Traditional cryptography (RSA, ECDSA) is expected to be vulnerable to large-scale quantum computers, with timelines estimated at 5-15+ years (debated)
-2. **Black Box Security**: Most cryptographic libraries provide no runtime visibility into side-channel vulnerabilities or anomalous behavior
-3. **Performance vs Security Trade-off**: Quantum-resistant algorithms are significantly slower, creating adoption barriers
-
-### The AMA Cryptography Solution
-
-AMA Cryptography addresses all three challenges through:
-
-- **Quantum Resistance**: NIST-standardized ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203), and SLH-DSA parameter sets (FIPS 205) designed for long-term protection against quantum threats
-- **Transparent Security**: 3R monitoring (Resonance-Recursion-Refactoring) provides real-time cryptographic operation analysis
-- **Optimized Performance**: Cython acceleration for the 3R math engine (manual build required). No speed-up ratio is published: the ratio this line used to carry had no benchmark, results file or history entry behind it anywhere in the tree, and this repository does not publish numbers it did not measure (INVARIANT-36). `python benchmarks/performance_suite.py` measures the Lyapunov and matrix-vector kernels against their NumPy baselines on your own host
-
-### Target Use Cases
-
-- **Humanitarian and Conservation**: Crisis response, whistleblower protection, sensitive field data
-- **Government and Defense**: Classified data protection with quantum resistance
-- **Financial Services**: Transaction security future-proofed against quantum threats
-- **Healthcare**: HIPAA-compliant data encryption with audit trails
-- **Critical Infrastructure**: SCADA systems requiring long-term quantum-resistant protection
-- **Blockchain and Crypto**: Post-quantum secure digital signatures
-
-See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
+The post-quantum algorithms protect against an adversary with a cryptographically relevant quantum computer, including one that records traffic now to decrypt later. When such a machine will exist is not known.
 
 </details>
 
@@ -152,8 +123,8 @@ See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
 |-------|------------|----------------|
 | 1. SHA3-256 | Content integrity | 128-bit collision resistance |
 | 2. HMAC-SHA3-256 | Keyed message authentication | Authenticated integrity |
-| 3. Ed25519 | Classical digital signature | 128-bit classical security |
-| 4. ML-DSA-65 | Quantum-resistant digital signature | 192-bit quantum security (FIPS 204) |
+| 3. Ed25519 | Classical digital signature | ~128-bit classical; none against a quantum adversary |
+| 4. ML-DSA-65 | Quantum-resistant digital signature | NIST PQC security category 3 (FIPS 204) |
 
 **Supporting Cryptographic Infrastructure:**
 
@@ -164,11 +135,11 @@ See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
 
 Canonical encoding serves as the input normalization step, ensuring deterministic serialization before cryptographic operations.
 
-**Why defense-in-depth matters:** Overall security is bounded by the weakest cryptographic layer (~128-bit classical, ~192-bit quantum). Defense-in-depth provides continued protection if one layer is compromised. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for detailed analysis.
+**Why defense-in-depth matters:** A forgery must defeat both signatures, so the package stays unforgeable while either Ed25519 (classically) or ML-DSA-65 holds. SHA3-256 is shared by every layer, so its collision resistance bounds all of them. See [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) for detailed analysis.
 
 ![Defense Architecture](assets/defense_layers.png)
 
-*Package authenticity is protected by four independent cryptographic operations — content hashing, keyed authentication, classical signature, and quantum-resistant signature — supported by independent key derivation and optional third-party timestamping.*
+*Package authenticity is protected by four independent cryptographic operations — content hashing, keyed authentication, classical signature, and quantum-resistant signature — supported by independent key derivation and an optional RFC 3161 timestamp token (message-imprint binding only; the TSA signature and certificate chain are not verified).*
 
 ### 3R Runtime Security Monitoring
 
@@ -178,13 +149,12 @@ A runtime monitoring framework providing cryptographic operation analysis:
 - **Recursion Engine**: Multi-scale hierarchical pattern analysis for anomaly detection
 - **Refactoring Engine**: Code complexity metrics for security review
 
-Two optional agentic-abuse detectors (on by default, advisory-only) extend the Resonance and Recursion components against the July 2026 autonomous-agent escape pattern:
+Two advisory detectors, enabled by default (`detect_volume_spikes=True`, `detect_note_artifacts=True` in `AmaCryptographyMonitor`), extend the Resonance and Recursion components to agentic misuse:
 
 - **Volume-spike detector** (`VolumeSpikeDetector`): statistical detection of anomalous KEM/signature bursts, scored in the Anscombe variance-stabilising transform so a quiet baseline cannot manufacture false spikes; an optional key fingerprint separates ephemeral-key churn from a hot loop over one key.
 - **Note-like artifact detector** (`NoteArtifactDetector`): surfaces signed payloads shaped like instructions addressed to a later instance ("notes for future versions"). Calibrated against the repository's own text as a hard-negative corpus.
 
 - **Performance overhead**: Not tracked in the CI regression suite; measure locally with `python benchmarks/validation_suite.py` (3R monitoring section)
-- **Visibility**: Runtime insight into cryptographic operation behavior
 
 > **Note:** The 3R system is a runtime anomaly monitoring framework. It surfaces statistical anomalies for security review but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities. The agentic-abuse detectors are advisory heuristics: they flag payloads and bursts for human review and never block a cryptographic operation.
 >
@@ -194,18 +164,18 @@ Two optional agentic-abuse detectors (on by default, advisory-only) extend the R
 
 Three-layer architecture balancing security and usability:
 
-- **C Layer**: Native SHA3-256, HKDF-SHA3-256, Ed25519, AES-256-GCM, ML-DSA-44/65/87, ML-KEM-512/768/1024, SLH-DSA parameter sets, X25519, ChaCha20-Poly1305, Argon2id, secp256k1, NIST P-256/P-384/P-521, and FROST implementations — zero external production crypto dependencies (see [Implementation Status Matrix](#implementation-status-matrix))
-- **Cython Layer**: Optimized 3R mathematical operations (no published ratio — see the Key Features note)
-- **Python API**: High-level, user-friendly interface for rapid development (primary production API)
+- **C Layer**: every primitive in the [Implementation Status Matrix](#implementation-status-matrix); no third-party cryptographic dependency
+- **Cython Layer**: five FFI bindings to the C primitives, plus the 3R `math_engine` (no speed-up ratio published; see [Cython modules](#cython-modules-srccython-7-files))
+- **Python API**: the primary interface; `crypto_api` is algorithm-agnostic
 
 ### Advanced Features
 
 - Hierarchical Deterministic (HD) key derivation
-- Zero-downtime key rotation with lifecycle management
-- Algorithm-agnostic API for seamless algorithm switching
+- Key rotation lifecycle (`KeyRotationManager`: rotation period, initiate and complete)
+- Algorithm-agnostic API (`AmaCryptography(algorithm=AlgorithmType.…)`)
 - Secure encrypted key storage at rest
 - AES-256-GCM authenticated encryption (NIST SP 800-38D)
-- Adaptive cryptographic posture system (runtime threat response)
+- Adaptive cryptographic posture controller (escalates algorithm strength on monitor signals; fail-closed on an algorithm it cannot rank)
 - Hybrid KEM combiner (classical + PQC key encapsulation)
 - Agent-instance key/signature binding (INVARIANT-30): long-lived persistence material and successor-authorizing signatures cannot be *derived* without a human-held operator key — the key is an input to the HKDF and to the signature context, not only to the policy gate beside them, so an agent with in-process access cannot reproduce the bytes by calling the primitive directly. Domain separation and policy over existing SHA3-256/HMAC-SHA3-256/HKDF, no new algorithms
 
@@ -213,40 +183,26 @@ Three-layer architecture balancing security and usability:
 
 NIST-standardized post-quantum algorithms:
 
-- ML-DSA-65 (NIST FIPS 204 - Dilithium)
-- ML-KEM-1024 (NIST FIPS 203; Kyber lineage)
+- ML-DSA-44 / -65 / -87 (NIST FIPS 204; Dilithium lineage)
+- ML-KEM-512 / -768 / -1024 (NIST FIPS 203; Kyber lineage)
 - SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s (NIST FIPS 205; SPHINCS+ lineage)
+- LMS / HSS verification (NIST SP 800-208)
 - Hybrid classical+PQC modes with binding combiner
 
 </details>
 
-<details>
-<summary><strong>Key Achievements</strong></summary>
-
-| Achievement | Description |
-|-------------|-------------|
-| Defense-in-Depth | Multi-layer cryptographic protection (4 core + 2 supporting) |
-| Performance | Cython math engine optimization (unpublished ratio — measure locally) |
-| Quantum Resistance | NIST-standardized PQC algorithms (ML-DSA-65, ML-KEM-1024, SLH-DSA) |
-| Mathematical Foundations | 5 frameworks with machine-precision validation (self-assessed) |
-| Cross-Platform | Linux, macOS, Windows, ARM64 |
-| Production Infrastructure | Docker, CI/CD, comprehensive testing |
-| 3R Monitoring | Runtime security anomaly monitoring; overhead must be measured per environment |
-
-</details>
-
 <a id="implementation-status-matrix"></a>
 
 <details>
-<a id="implementation-status-matrix"></a>
 <summary><strong>Implementation Status Matrix</strong></summary>
 
 | Algorithm / Family | C API | Python API | Notes |
 |---|---|---|---|
-| SHA-256, SHA-512 | Full | Full | FIPS 180-4; SHA-256 has an opt-in SHA-NI single-block kernel (`ama_sha256_ni.c`) selected by dispatch |
+| SHA-256, SHA-512 | Full | Full | FIPS 180-4; SHA-NI compression (`ama_sha256_ni.c`, built on every x86 target) selected at runtime when CPUID reports SHA-NI; ARMv8 SHA2 instructions on AArch64 |
 | SHA3-256 / -512, SHAKE-128 / -256 | Full | Full | FIPS 202; AVX-512 4-way Keccak available opt-in via `-DAMA_ENABLE_AVX512=ON` |
 | HMAC-SHA-256 / -384 / -512, HMAC-SHA3-256 | Full | Full | RFC 2104, FIPS 198-1 |
 | HKDF (any supported hash) | Full | Full | RFC 5869 |
+| PBKDF2-HMAC-SHA-256 / -512 | Full | Full | SP 800-132 / RFC 8018 (`ama_pbkdf2.c`) |
 | AES-256-GCM | Full | Full | SP 800-38D; constant-time bitsliced S-box default; VAES + VPCLMULQDQ YMM kernel selected at runtime when CPUID reports both |
 | ChaCha20-Poly1305 | Full | Full | RFC 8439; AVX2 8-way + NEON kernels |
 | Ascon-AEAD128 & Ascon-Hash256 | Full | Full | SP 800-232 |
@@ -260,7 +216,7 @@ NIST-standardized post-quantum algorithms:
 | SLH-DSA-SHA2-256f | Full (native) | Full | FIPS 205; WOTS+ / FORS / hypertree d=17 |
 | SLH-DSA-SHAKE-128s | Full (native) | Full | FIPS 205 |
 | LMS / HSS verify | Full | Full | SP 800-208; verification and parameter reads (`ama_lms_verify`, `ama_hss_verify`, `ama_lms_signature_length`, `ama_hss_pubkey_levels`) — signing is not exposed at the Python layer |
-| FROST-Ed25519 (RFC 9591-style) | Full | Full | Trusted-dealer keygen, two-round commit / sign, aggregate. Protocol structure per RFC 9591; hash derivations are library-internal (no ciphersuite contextString), so partial signatures interoperate only between AMA participants — the aggregated signature verifies as standard RFC 8032 Ed25519 anywhere |
+| FROST-Ed25519 (RFC 9591-style) | Full | Full | Trusted-dealer keygen, two-round commit / sign, aggregate. Protocol structure per RFC 9591; hash derivations are library-internal (no ciphersuite contextString), so partial signatures interoperate only between AMA participants — the aggregated signature verifies as standard RFC 8032 Ed25519 anywhere. Aggregation verifies every share (INVARIANT-49) |
 | Hybrid Ed25519 + ML-DSA-65 | N/A | Full | See `ama_cryptography.hybrid_combiner` (INVARIANT-19) |
 | Key formats — PKCS#8 / SPKI / PEM / JWK / COSE_Key | N/A | Full | 12 algorithms: Ed25519, X25519, P-256/-384/-521, secp256k1, ML-DSA-44/-65/-87, ML-KEM-512/-768/-1024. See [docs/KEY_FORMATS.md](docs/KEY_FORMATS.md) |
 
@@ -278,17 +234,17 @@ Additional C sources:
 
 - `src/c/dispatch/ama_dispatch.c` — runtime CPU-feature detection and function-pointer dispatch. On x86 the SHA-3 slot promotes to the AVX-512 kernel when `AMA_ENABLE_AVX512=ON` at build time and `ama_cpuid_has_avx512_keccak()` (AVX-512F + AVX-512VL + XCR0 5+6+7) holds at runtime; every other x86 slot ceiling is AVX2. On AArch64 the order is SVE2 → NEON → generic (for the three slots wired to SVE2; see below). Best-of-5 SHA-3 auto-tune with a 10 % revert threshold. Overrides: `AMA_DISPATCH_NO_AUTOTUNE=1`, `AMA_DISPATCH_VERBOSE=1`.
 - `src/c/x86/` (3 files) — `ama_keccak_f1600_bmi.c` (Keccak-f[1600] BMI1/BMI2 kernel where `ANDN` collapses chi's `(~b) & c`); `ama_nistp_mont_mulx.c` (P-256 4-limb MULX+ADCX/ADOX Montgomery multiply); `ama_ed25519_fe64_mulx.c` (the radix-2^64 MULX+ADX instantiation of the Ed25519 group arithmetic, selectable through `ama_ed25519_set_mulx_override(1)`).
-- `src/c/internal/` — 1 `.c`: `ama_x25519_fe64_mulx.c` (fe64 multiply / square / reduce with `MULX` + `ADCX` + `ADOX` dual-carry chains); 17 `.h`: `ama_ct_barrier.h` (compiler barrier that keeps constant-time selects from being branch-optimized), `ama_ct_declassify.h` (explicit declassification points for the secret-taint gate, no-ops outside AMA_TESTING_MODE), `ama_ed25519_backend.h` (hidden prototypes of the MULX instantiation), `ama_ed25519_canonical.h`, `ama_ed25519_ge.h` (the Ed25519 group-arithmetic template both field instantiations compile), `ama_ed25519_halfsize.h` (half-size-scalar decomposition for verify), `ama_ed25519_tables.h` (generated static base-point tables), `ama_fe25519_safegcd.h` (Bernstein–Yang constant-time inversion), `ama_fe64_mulx_kernel.h` (the fused MULX/ADX multiply and square, shared by X25519 and Ed25519), `ama_keccak_round.h` (macro-based round header shared by scalar / BMI paths), `ama_once.h` (platform once-primitive for INVARIANT-15), `ama_sha2.h` (SHA-512 header-only), `ama_sha3_x4.h` (4-way Keccak interface), `ama_testing_exports.h` (visibility macro that exposes internals to the C test suite only), `ama_wide_mul.h` (64×64→128 multiply on every toolchain), `ama_x25519_fe64_mulx.h` (the prototypes for the `.c` above).
+- `src/c/internal/` — 1 `.c`: `ama_x25519_fe64_mulx.c` (fe64 multiply / square / reduce with `MULX` + `ADCX` + `ADOX` dual-carry chains); 17 `.h`: `ama_ct_barrier.h` (compiler barrier that keeps constant-time selects from being branch-optimized), `ama_ct_declassify.h` (explicit declassification points for the secret-taint gate, no-ops outside AMA_TESTING_MODE), `ama_ed25519_backend.h` (hidden prototypes of the MULX instantiation), `ama_ed25519_canonical.h` (the RFC 8032 §5.1.7 `S < L` check, INVARIANT-26), `ama_ed25519_ge.h` (the Ed25519 group-arithmetic template both field instantiations compile), `ama_ed25519_halfsize.h` (half-size-scalar decomposition for verify), `ama_ed25519_tables.h` (generated static base-point tables), `ama_fe25519_safegcd.h` (Bernstein–Yang constant-time inversion), `ama_fe64_mulx_kernel.h` (the fused MULX/ADX multiply and square, shared by X25519 and Ed25519), `ama_keccak_round.h` (macro-based round header shared by scalar / BMI paths), `ama_once.h` (platform once-primitive for INVARIANT-15), `ama_sha2.h` (SHA-512 header-only), `ama_sha3_x4.h` (4-way Keccak interface), `ama_stack_wipe.h` (depth-parameterised stack wipe used by the Ed25519 signing chain), `ama_testing_exports.h` (visibility macro that exposes internals to the C test suite only), `ama_wide_mul.h` (64×64→128 multiply on every toolchain), `ama_x25519_fe64_mulx.h` (the prototypes for the `.c` above).
 
-### Hand-written SIMD kernels — 26 translation units
+### SIMD translation units — 26 (20 carry kernels, 6 are documented placeholders)
 
-**AVX2 (`src/c/avx2/`, 10 files):** SHA3 4-way Keccak-f[1600], ML-KEM (NTT / Barrett / batch CBD2), ML-DSA (NTT q=8380417 / batch SHAKE rejection), AES-256-GCM pipelined AES-NI + PCLMULQDQ GHASH with H^1..H^8 power-table folding and deferred one-iteration GHASH pipeline, VAES + VPCLMULQDQ YMM AES-256-GCM (`ama_aes_gcm_vaes_avx2.c` — gated by `ama_cpuid_has_vaes_aesgcm()`), ChaCha20-Poly1305 8-way, Argon2 4-way BlaMka, X25519 4-way ladder (`ama_x25519_avx2.c` — opt-in via `AMA_DISPATCH_USE_X25519_AVX2=1`; intentionally not the default on MULX/ADX hosts, retained for CI matrix coverage and a future AVX-512-IFMA port), and the Ed25519 comb's constant-time 256-bit table fold (`ama_ed25519_select_avx2.c` — dispatched on `ama_has_avx2()`).
+**AVX2 (`src/c/avx2/`, 10 files):** SHA3 4-way Keccak-f[1600], ML-KEM (NTT / Barrett / batch CBD2), ML-DSA (NTT q=8380417 / batch SHAKE rejection), AES-256-GCM pipelined AES-NI + PCLMULQDQ GHASH with H^1..H^8 power-table folding and deferred one-iteration GHASH pipeline, VAES + VPCLMULQDQ YMM AES-256-GCM (`ama_aes_gcm_vaes_avx2.c` — gated by `ama_cpuid_has_vaes_aesgcm()`), ChaCha20-Poly1305 8-way, Argon2 4-way BlaMka, X25519 4-way ladder (`ama_x25519_avx2.c` — opt-in via `AMA_DISPATCH_USE_X25519_AVX2=1`; intentionally not the default on MULX/ADX hosts, retained for CI matrix coverage and a future AVX-512-IFMA port), and the Ed25519 comb's constant-time 256-bit table fold (`ama_ed25519_select_avx2.c` — dispatched on `ama_has_avx2()`). `ama_sphincs_avx2.c` is a documented placeholder with no kernel; SLH-DSA on x86-64 gains from the Keccak dispatch slot and SHA-NI only.
 
 **AVX-512 (`src/c/avx512/`, 1 file, opt-in via `-DAMA_ENABLE_AVX512=ON`):** EVEX-encoded YMM-width 4-way Keccak permutation (`ama_sha3_x4_avx512.c` — `vprolq` for the 64-bit rotate, `vpternlogq` for the theta `0x96` and chi `0xD2` collapses). No ZMM register touched. XCR0 5+6+7-gated so an EVEX YMM op cannot `#UD` on a host whose hypervisor advertises CPUID without the ZMM save area. See [docs/AVX512_KECCAK_ADR.md](docs/AVX512_KECCAK_ADR.md).
 
-**NEON (`src/c/neon/`, 7 files):** ARM NEON 128-bit vector equivalents using `<arm_neon.h>` intrinsics + ARM Crypto Extensions — ML-KEM (`ama_kyber_neon.c`), ML-DSA (`ama_dilithium_neon.c`), SPHINCS+ (`ama_sphincs_neon.c`), SHA3 (`ama_sha3_neon.c`), AES-GCM (`ama_aes_gcm_neon.c`), ChaCha20-Poly1305 (`ama_chacha20poly1305_neon.c`), Argon2 (`ama_argon2_neon.c`). **There is no Ed25519 NEON kernel** — no `ama_ed25519_neon.c` exists, and this line listed one for eight algorithms against seven files. On AArch64 the Ed25519 group arithmetic runs the portable radix-2^51 backend (`src/c/internal/ama_ed25519_ge.h` instantiated over `fe51`); the MULX/ADX instantiation is x86-64-only. The file count is checked by `tools/check_documented_counts.py` and the per-algorithm claim by `tools/check_public_api_docs.py`.
+**NEON (`src/c/neon/`, 7 files):** `<arm_neon.h>` intrinsics and the ARMv8 Crypto Extensions — ML-KEM (`ama_kyber_neon.c`), ML-DSA (`ama_dilithium_neon.c`), SHA3 (`ama_sha3_neon.c`), AES-GCM (`ama_aes_gcm_neon.c`), ChaCha20-Poly1305 (`ama_chacha20poly1305_neon.c`), Argon2 (`ama_argon2_neon.c`), and SHA-256 compression through the ARMv8 SHA2 instructions for SLH-DSA (`ama_sphincs_neon.c`). There is no Ed25519 NEON kernel (`ama_ed25519_neon.c` does not exist): AArch64 runs the portable radix-2^51 Ed25519 backend (`src/c/internal/ama_ed25519_ge.h` over `fe51`). `tools/check_public_api_docs.py` pins this file set against the tree.
 
-**SVE2 (`src/c/sve2/`, 8 files): three wired via dispatch**, their externs in `src/c/dispatch/ama_dispatch.c`. Two are genuine scalable-vector kernels — ML-KEM forward/inverse NTT + add/sub/reduce (`ama_kyber_sve2.c`; the `kyber_pointwise` dispatch slot is NULL on every tier and no SVE2 basemul kernel exists) and ML-DSA NTT trio (`ama_dilithium_sve2.c`): VL-agnostic `svwhilelt`-predicated load/store/add/sub, with the modular (Montgomery/Barrett) reductions done scalar — each file's header states the split. The third, SHA3/Keccak (`ama_sha3_sve2.c`), is wired and auto-tuned but its `ama_keccak_f1600_sve2` is a **scalar** permutation, not a vector one: a correctly strip-mined VL-agnostic theta measured slower than scalar at every vector length (a 5-element column-parity reduction cannot fill a vector), so the SVE intrinsics were removed and the file documents it. The remaining five (`ama_aes_gcm_sve2.c`, `ama_chacha20poly1305_sve2.c`, `ama_argon2_sve2.c`, `ama_sphincs_sve2.c`, `ama_ed25519_sve2.c`) are documented placeholders — their per-file headers state the specific reason each cannot be wired today (dispatch-signature mismatch, algorithmic non-conformance to RFC 9106 BlaMka, absent dispatch surface, no production batched caller) and the preconditions a future kernel must meet. Until those hold, SVE2 hosts dispatch those five algorithms to the validated NEON kernels — a strict upgrade over the generic-C fallback.
+**SVE2 (`src/c/sve2/`, 8 files): three wired via dispatch**, their externs in `src/c/dispatch/ama_dispatch.c`. Two are genuine scalable-vector kernels — ML-KEM forward/inverse NTT + add/sub/reduce (`ama_kyber_sve2.c`; the `kyber_pointwise` dispatch slot is NULL on every tier and no SVE2 basemul kernel exists) and ML-DSA NTT trio (`ama_dilithium_sve2.c`): VL-agnostic `svwhilelt`-predicated load/store/add/sub, with the modular (Montgomery/Barrett) reductions done scalar — each file's header states the split. The third, SHA3/Keccak (`ama_sha3_sve2.c`), is wired and auto-tuned but its `ama_keccak_f1600_sve2` is a **scalar** permutation, not a vector one: a correctly strip-mined VL-agnostic theta measured slower than scalar at every vector length (a 5-element column-parity reduction cannot fill a vector), so the SVE intrinsics were removed and the file documents it. The remaining five (`ama_aes_gcm_sve2.c`, `ama_chacha20poly1305_sve2.c`, `ama_argon2_sve2.c`, `ama_sphincs_sve2.c`, `ama_ed25519_sve2.c`) are documented placeholders — their per-file headers state the specific reason each cannot be wired today (dispatch-signature mismatch, algorithmic non-conformance to RFC 9106 BlaMka, absent dispatch surface, no production batched caller) and the preconditions a future kernel must meet. Until those hold, AES-GCM, ChaCha20-Poly1305 and Argon2 dispatch to their NEON kernels on SVE2 hosts; SLH-DSA has no dispatch slot and uses the SHA-3 and SHA-256 paths; Ed25519 runs the portable fe51 backend on every AArch64 host.
 
 ### Cython modules (`src/cython/`, 7 files)
 
@@ -298,80 +254,7 @@ Additional C sources:
 
 ### Python package (`ama_cryptography/`, 28 modules + `__init__` + `__main__`)
 
-`crypto_api` (algorithm-agnostic top-level API + `AlgorithmType`), `pqc_backends` (native C bindings for every primitive), `key_formats` (PKCS#8 / SPKI / PEM / JWK / COSE_Key across 12 algorithms), `key_management`, `hybrid_combiner`, `adaptive_posture`, `agent_binding`, `session`, `secure_channel`, `secure_memory`, `integrity`, `equations`, `double_helix_engine`, `monitor`, `monitoring`, `ascon`, `rfc3161_timestamp`, `legacy_compat`, `exceptions`, `_self_test`, `_asn1`, `_artefact_source`, `_build_sign`, `_integrity_signature`, `_finalizer_health`, `_module_state`, `_numeric`, `_owner_only`, `_package_transcript` (the canonical transcript a package signature covers, INVARIANT-52) (owner-only file and directory access: `chmod` on POSIX, a protected owner-only DACL on Windows), `__main__`.
-
-</details>
-
----
-
-## Use Cases by Sector 🌐
-
-> **Research Areas:** The use cases below represent targeted applications where AMA Cryptography's quantum-resistant cryptography may provide value. These implementations require independent validation before deployment in regulated, clinical, or mission-critical environments.
-
-<details>
-<summary><strong>Real-world scenarios (click to expand)</strong></summary>
-
-### Humanitarian and Conservation
-
-**Unique Value:** Protection of sensitive field data with runtime attack detection (Not approved for clinical, medical, or regulated government deployment without independent audit):
-
-- **Crisis Response**: GPS coordinates, victim data, and safe house locations protected with ML-DSA-65 quantum-resistant signatures. 3R monitoring surfaces timing anomalies that may indicate compromise in hostile environments.
-- **Conservation**: Wildlife tracking data, ranger locations, and anti-poaching intelligence with integrity verification using helical invariants. Detects if data has been tampered with.
-- **Whistleblower Protection**: Document signing and verification designed to resist "harvest now, decrypt later" quantum threats.
-- **Sensitive Record Preservation**: Ethical framework promotes respectful handling of records for victims and individuals, with audit trails.
-
-### Government and Defense
-
-**Unique Value:** Classified data with quantum resistance and runtime anomaly monitoring
-
-- **Long-term Classified Data**: Documents requiring long-term secrecy protected with quantum-resistant algorithms.
-- **Secure Communications**: ML-KEM-1024 key encapsulation designed to resist "harvest now, decrypt later" attacks.
-- **Runtime Anomaly Monitoring**: 3R monitoring surfaces statistical anomalies in operation timing that may be consistent with cache-timing or power-analysis behavior, but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities.
-- **Integrity Verification**: Mathematical invariant checking provides additional tampering detection beyond standard checksums.
-- **Zero-Trust Environments**: Runtime monitoring provides continuous observation of cryptographic operations.
-
-### Financial Services
-
-**Unique Value:** Transaction security with real-time anomaly detection
-
-- **Quantum-Resistant Signatures**: ML-DSA-65 signatures on transactions designed to remain valid against quantum attacks.
-- **Low-Latency Verification**: Cython-optimized 3R monitoring (ratio unpublished — measure locally) with sub-millisecond signature verification.
-- **Anomaly Detection**: 3R timing analysis surfaces anomalous cryptographic behavior that may indicate potential attacks.
-- **Audit Compliance**: Cryptographic audit trail with ethical constraint enforcement.
-- **Long-term Archival**: Financial records with quantum-resistant protection for long-term security.
-
-### Healthcare
-
-**Unique Value:** Quantum-resistant encryption with integrity monitoring (independent compliance validation required for HIPAA and other regulations)
-
-- **Patient Records**: Quantum-resistant encryption designed to protect medical records against long-term cryptanalytic threats.
-- **Prescription Signatures**: ML-DSA-65 digital signatures on prescriptions providing quantum-resistant authenticity.
-- **Medical Device Security**: Constant-time C implementations aim to reduce side-channel attack surface (requires independent verification).
-- **Data Integrity**: Helical invariant verification detects if medical records have been altered.
-- **Research Data**: Sensitive research data with ethical policy enforcement and audit trails.
-- **Telemedicine**: Secure video consultations with hybrid classical+quantum key exchange.
-
-### Critical Infrastructure
-
-**Unique Value:** SCADA/ICS security with runtime anomaly monitoring
-
-- **Power Grid Control**: Quantum-resistant authentication for grid control systems.
-- **Water Treatment**: Signed commands with runtime verification. 3R surfaces timing anomalies that may warrant investigation.
-- **Transportation**: Railway and air traffic control with quantum-resistant protection for long-lived systems.
-- **Nuclear Facilities**: Constant-time C implementations aim to reduce side-channel attack surface (requires independent verification for high-assurance environments).
-- **Anomaly Monitoring**: 3R system surfaces statistical anomalies in cryptographic operations for security review.
-- **Legacy System Protection**: Wrapper for older systems needing quantum resistance without full replacement.
-
-### Blockchain and Cryptocurrency
-
-**Unique Value:** Post-quantum secure signatures with high-performance verification
-
-- **Wallet Security**: ML-DSA-65 quantum-resistant signatures for wallet transaction authentication.
-- **Smart Contract Signing**: Quantum-resistant signatures for long-lived contracts.
-- **Transaction Throughput**: Sub-millisecond Ed25519 verification (30,542 ops/sec, four-run median via ctypes on the `ubuntu-latest` x86_64 CI runner, 5.0.0 in-house backend, 2026-09-07; 30,299 on the canonical bench host, 2026-09-24); ML-DSA-65 adds quantum resistance at higher latency (~315µs sign, ~92µs verify — Python API via ctypes, canonical bench host, 2026-09-24; see Performance Metrics section for methodology).
-- **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
-- **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
-- **Timestamp Binding**: RFC 3161 tokens bound to content by the §2.4.2 message imprint. AMA does not verify the TSA's signature or certificate chain, so the token's issuer must be trusted through a separate control.
+`crypto_api` (algorithm-agnostic top-level API + `AlgorithmType`), `pqc_backends` (native C bindings for every primitive), `key_formats` (PKCS#8 / SPKI / PEM / JWK / COSE_Key across 12 algorithms), `key_management`, `hybrid_combiner`, `adaptive_posture`, `agent_binding`, `session`, `secure_channel`, `secure_memory`, `integrity`, `equations`, `double_helix_engine`, `monitor`, `monitoring`, `ascon`, `rfc3161_timestamp`, `legacy_compat`, `exceptions`, `_self_test`, `_asn1`, `_artefact_source`, `_build_sign`, `_finalizer_health`, `_module_state`, `_numeric`, `_owner_only` (owner-only file and directory access: `chmod` on POSIX, a protected owner-only DACL on Windows), `_package_transcript` (the canonical transcript a package signature covers, INVARIANT-52), `__main__`. The build also writes `_integrity_signature.py`, the per-build signed integrity artefact; it is not tracked.
 
 </details>
 
@@ -379,13 +262,16 @@ Additional C sources:
 
 ## Performance Metrics
 
+<details>
+<summary><strong>5.0.0 throughput: CI-runner medians and canonical-host tables</strong></summary>
+
 > **Reading the numbers below.** All ops/sec figures in the collapsible tables below are from the **canonical bench host** — an Emerald Rapids VM (KVM guest, 4 vCPU) with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ — measured 2026-09-24 on the 5.0.0 tree with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json`: five interleaved runs pinned to one core, medians, min–max stated. They describe **that host**, not a runner you are likely to have; reproduce them on equivalent silicon. The host, method and every per-run figure are in [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md).
 >
 > **What the rows include.** The canonical rows measure the 5.0.0 code paths, including the work 5.0.0 added: the FIPS 140-3 pairwise-consistency test every Python keypair runs (INVARIANT-41), the per-signature derivation of `A = [a]B` on the 64-byte Ed25519 key (INVARIANT-51; the expanded-key row is the once-at-load form), the small-order rejection in Ed25519 verification (INVARIANT-48), the package transcript and KEM commitment (INVARIANT-52), and the `check_crypto_permitted()` guard on each gated native entry point (INVARIANT-39). The April 2026 figures these replace measured the 4.x code; they are kept, with the reason each row moved, in [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md).
 >
 > **Virtualised, and said so.** The canonical host is a VM, as the host of the figures it replaces was. Whether bare-metal silicon of the same class would move these rows is not measured; the result most likely to differ is the dispatcher's demotion of the AVX-512 four-way Keccak to the scalar BMI1/BMI2 path, which this host reproduced in 5 of 5 process starts.
 >
-> **Where the current, per-runner numbers live.** `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` carry **measured medians** on their named CI runners with a single derived tolerance each — they are regression *floors*, and since 5.0.0 they are no longer pre-discounted guesses (`x86` uses the slow-class median of a measurably two-class `ubuntu-latest` fleet with a uniform 45% tolerance; `aarch64`, a homogeneous fleet with spreads ≤3%, uses 15% — 25% for the two rejection-averaged composites). `benchmark-report.md` is regenerated from a run of the suite and records the exact commit, host, command, repeat count and aggregation. A floor and a canonical-host figure are different numbers on purpose; neither is an estimate of the other.
+> **Where the current, per-runner numbers live.** `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` carry **measured medians** on their named CI runners with a single derived tolerance each — they are regression *floors*, and since 5.0.0 they are no longer pre-discounted guesses (`x86` uses the slow-class median of a measurably two-class `ubuntu-latest` fleet with a uniform 45% tolerance; `aarch64`, a homogeneous fleet with spreads ≤3%, uses 15% — 25% for the two rejection-averaged composites). `benchmark-report.md` is a regression-run report: it records the exact commit, host, command, repeat count and aggregation of one run of the suite, and is not where the published figures below come from. A floor and a canonical-host figure are different numbers on purpose; neither is an estimate of the other.
 
 ### 5.0.0 on the canonical CI runners — four-run medians (2026-09-20/21)
 
@@ -414,13 +300,15 @@ These are the only 5.0.0 throughput measurements this repository publishes, and 
 | `x25519_scalarmult_batch4` — X25519 batch-4 scalar-mult (native C, default dispatch) — batches/sec, not per-op rate | 4,551 (4,540–5,906) | 6,066 (6,053–6,075) |
 
 > **`ed25519_sign`, `ed25519_keygen`, `ed25519_verify` and the package rows moved for documented reasons, not regressions.** [INVARIANT-51](INVARIANTS.md#invariant-51--an-ed25519-signer-derives-its-own-public-half) makes `ama_ed25519_sign` derive `A = [a]B` and refuse a key whose stored public half disagrees — a second fixed-base scalar multiplication on every signature, with no opt-out — and `keypair()` pays it again inside its FIPS 140-3 pairwise-consistency sign. The package rows additionally rebuild and check the INVARIANT-52 canonical transcript and reject small-order Ed25519 points before verifying (2026-09 audit A-2 and A-3), and `ed25519_verify` carries the INVARIANT-48 small-order public-key and R rejection. The 2026-09-07 medians (Ed25519 70,496 / 58,762 sign, 15,370 / 14,678 keygen, 30,542 / 31,270 verify) predate all of that. The x86_64 `ed25519_sign` floor was first set by a host-independent derivation (70,496 / 1.8469 = 38,170) and is now the runner's own four-run median; the derivation sat 1.7% under the measurement. The aarch64 floors set from one run on 2026-09-16 are reproduced by these four runs to within 0.1% (keygen), 0.02% (sign) and 2.2% (package verify).
+
 *The x86_64 `ed25519_keygen`, `ed25519_sign`, `ed25519_verify`, `full_package_create` and `full_package_verify` medians and the aarch64 `full_package_create` median are the `baseline_value` floors in `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` as of 2026-09-22; the aarch64 `ed25519_keygen`, `ed25519_sign` and `full_package_verify` floors are the 2026-09-16 single-run values these four runs confirm; the other rows keep their earlier calibration floors, which all four runs passed on both runner classes. Tolerances: 45% on x86_64, 15% on aarch64 (25% for the two rejection-averaged composites).*
+
 <details>
-<summary><strong>Cryptographic Operation Benchmarks</strong></summary>
+<summary><strong>Cryptographic Operation Benchmarks (canonical host)</strong></summary>
 
 ![Performance Dashboard](assets/performance_dashboard.png)
 
-*Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, multi-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
+*Dashboard generated by `tools/generate_dashboards.py` from a `benchmarks/benchmark_suite.py` run on 2026-09-22 (timestamp in `assets/visuals_manifest.json`). It is not the canonical-host measurement below.*
 
 <!-- canonical-bench: begin -->
 <!-- Every measurement between these markers is pinned by
@@ -437,14 +325,14 @@ These are the only 5.0.0 throughput measurements this repository publishes, and 
 | **Sign** | 3,171 ops/sec | ~315µs | Rejection sampling — intentional, by-design timing variation (leaks no key); NTT/arithmetic constant-time, NTT q=8380417 |
 | **Verify** | 10,817 ops/sec | ~92µs | Verified against NIST ACVP test vectors (self-attested) |
 
-*Source: canonical bench host (see the host note below), measured 2026-09-24; median of five interleaved runs, min–max KeyGen 1,578–1,699, Sign 3,028–3,244, Verify 10,630–11,444 ops/sec. Raw C on the same host and runs, `build/bin/benchmark_c_raw --json`, no ctypes and no pairwise test: ~9,358 KeyGen, ~11,532 Verify ops/sec (medians); Sign ~3,360 ops/sec, re-measured on the same host the same day in five further rounds (3,199–3,880) after the raw-C Sign row moved from one fixed (key, message) pair to a 256-message pool, which the one-pair median of those runs did not measure. The checked-in `benchmarks/benchmark-results.json` carries a measured run on the host its own provenance names plus the slow-runner CI regression floors in `baseline_value` — neither column is these canonical numbers; see [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the per-run record and the 4.x figures these replace.*
+*Source: canonical bench host (see the host note below), measured 2026-09-24; median of five interleaved runs, min–max KeyGen 1,578–1,699, Sign 3,028–3,244, Verify 10,630–11,443 ops/sec. Raw C on the same host and runs, `build/bin/benchmark_c_raw --json`, no ctypes and no pairwise test: ~9,358 KeyGen, ~11,532 Verify ops/sec (medians); Sign ~3,360 ops/sec, re-measured on the same host the same day in five further rounds (3,199–3,880) after the raw-C Sign row moved from one fixed (key, message) pair to a 256-message pool, which the one-pair median of those runs did not measure. The checked-in `benchmarks/benchmark-results.json` carries a measured run on the host its own provenance names plus the slow-runner CI regression floors in `baseline_value` — neither column is these canonical numbers; see [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the per-run record and the 4.x figures these replace.*
 
 ### ML-KEM-1024 (Post-Quantum Key Encapsulation — FIPS 203)
 
 | Operation | Throughput (Python API via ctypes) | Notes |
 |-----------|-----------|-------|
 | **KeyGen** | 3,602 ops/sec | Native C keygen plus the pairwise-consistency encapsulate/decapsulate (INVARIANT-41); no OpenSSL dependency |
-| **Encapsulate** | 17,985 ops/sec | Fujisaki–Okamoto transform, IND-CCA2 |
+| **Encapsulate** | 17,984 ops/sec | Fujisaki–Okamoto transform, IND-CCA2 |
 
 *Source: canonical bench host, measured 2026-09-24; median of five runs, min–max KeyGen 3,402–3,891, Encapsulate 16,715–18,398 ops/sec. Raw C on the same host: ~16,734 KeyGen, ~19,016 Encaps, ~16,117 Decaps ops/sec (medians). The checked-in `benchmarks/benchmark-results.json` carries a measured run on the host its own provenance names plus the slow-runner CI regression floors in `baseline_value` — neither column is these canonical numbers.*
 
@@ -476,22 +364,15 @@ Complete security package with all defense layers (Python API via ctypes):
 | ChaCha20-Poly1305 Encrypt (1KB) | 288,960 ops/sec | canonical bench, 2026-09-24 |
 | X25519 Scalar-mult (fe64 + MULX+ADX kernel) | 20,329 ops/sec | canonical bench, 2026-09-24 |
 
-**Performance Note:** The 64-byte Ed25519 secret key is RFC 8032's `seed || A` layout, not a cache: `ama_ed25519_sign` re-hashes the seed and re-derives `A = [a]B` on every call and refuses a stored half that disagrees (INVARIANT-51). A caller signing repeatedly under one key pays that derivation once by loading the key into the 128-byte expanded form (`ama_ed25519_expand_secret_key` / `Ed25519SigningKey`), which signs without repeating it — the two Ed25519 Sign rows above are the two paths on the same host. X25519 uses the radix-2^64 (`fe64.h`) field arithmetic on x86-64 GCC/Clang (default) with the radix-2^51 (`fe51.h`) layout retained as a fallback for non-x86-64 64-bit GCC/Clang and the portable radix-2^16 path retained for MSVC and 32-bit targets. On hosts where CPUID reports both BMI2 (`EBX[8]`) and ADX (`EBX[19]`), the dispatcher promotes the ladder's multiply / square *and* the Fermat inversion to the in-house MULX+ADCX/ADOX kernel in `src/c/internal/ama_x25519_fe64_mulx.c` — gated by `ama_cpuid_has_x25519_mulx()` and pinned byte-identical to the pure-C fe64 reference across 4096 random vectors by `tests/c/test_x25519_fe64_mulx_equiv.c`. The kernel is hand-written GCC inline assembly: `fe64_mul512_mulx` issues explicit `ADCX` (CF chain) and `ADOX` (OF chain) so the lo-column and hi-column accumulations propagate in parallel, and `fe64_sq512_mulx` is a dedicated squaring kernel that exploits off-diagonal symmetry (10 multiplications vs 16 for the full schoolbook). The fe51 and fe64 ladders are pinned byte-identical over 1024 random vectors by `tests/c/test_x25519_field_equiv.c`. On the canonical host the MULX+ADX kernel takes the Python-via-ctypes harness from ~11,412 ops/sec with the kernel pinned off to ~20,213 ops/sec pinned on (~77 %); the raw-C harness `build/bin/benchmark_c_raw` measures ~12,465 → ~20,709 ops/sec (~66 %) in the same runs, the gap between the harnesses being per-call FFI overhead, not field arithmetic. The literature-reported 1.8-2.2× over pure-C schoolbook (OpenSSL `crypto/ec/asm/x25519-x86_64.pl`, BoringSSL fiat-crypto MULX/ADX) shows up on uncontended Skylake+/Zen+ silicon; the dispatcher lights this kernel up automatically wherever BMI2+ADX are reported. See [benchmarks/](benchmarks/) for full performance data including all algorithms.
+**Performance Note:** The 64-byte Ed25519 secret key is RFC 8032's `seed || A` layout, not a cache: `ama_ed25519_sign` re-hashes the seed and re-derives `A = [a]B` on every call and refuses a stored half that disagrees (INVARIANT-51). A caller signing repeatedly under one key pays that derivation once by loading the key into the 128-byte expanded form (`ama_ed25519_expand_secret_key` / `Ed25519SigningKey`), which signs without repeating it — the two Ed25519 Sign rows above are the two paths on the same host. X25519 uses the radix-2^64 (`fe64.h`) field arithmetic on x86-64 GCC/Clang (default) with the radix-2^51 (`fe51.h`) layout retained as a fallback for non-x86-64 64-bit GCC/Clang and the portable radix-2^16 path retained for MSVC and 32-bit targets. On hosts where CPUID reports both BMI2 (`EBX[8]`) and ADX (`EBX[19]`), the dispatcher promotes the ladder's multiply / square *and* the Fermat inversion to the in-house MULX+ADCX/ADOX kernel in `src/c/internal/ama_x25519_fe64_mulx.c` — gated by `ama_cpuid_has_x25519_mulx()` and pinned byte-identical to the pure-C fe64 reference across 4096 random vectors by `tests/c/test_x25519_fe64_mulx_equiv.c`. The kernel is hand-written GCC inline assembly: `fe64_mul512_mulx` issues explicit `ADCX` (CF chain) and `ADOX` (OF chain) so the lo-column and hi-column accumulations propagate in parallel, and `fe64_sq512_mulx` is a dedicated squaring kernel that exploits off-diagonal symmetry (10 multiplications vs 16 for the full schoolbook). The fe51 and fe64 ladders are pinned byte-identical over 1024 random vectors by `tests/c/test_x25519_field_equiv.c`. On the canonical host the MULX+ADX kernel takes the Python-via-ctypes harness from ~11,412 ops/sec with the kernel pinned off to ~20,213 ops/sec pinned on (~77 %); the raw-C harness `build/bin/benchmark_c_raw` measures ~12,465 → ~20,709 ops/sec (~66 %) in the same runs, the gap between the harnesses being per-call FFI overhead, not field arithmetic. The dispatcher selects this kernel wherever BMI2 and ADX are reported. See [benchmarks/](benchmarks/) for the harnesses.
 
 *Canonical bench host: Intel Xeon (family 6, model 207 — Emerald Rapids) @ 2.10 GHz, 4 vCPU, a KVM guest (the note these figures replace called its canonical host a VM as well), with AVX-512F/VL/BW/DQ/VBMI/IFMA + VAES + VPCLMULQDQ + SHA-NI + BMI2/ADX; Linux 6.18, gcc 13.3.0 Release (`-DAMA_USE_NATIVE_PQC=ON`), Python 3.11.15, the native library and all six Cython bindings built by `python setup.py build_ext --inplace` at `974cb019`. Every run pinned to one core (`taskset -c 0`); five rounds, each round running `python benchmarks/benchmark_runner.py`, then `build/bin/benchmark_c_raw --json`, then the X25519 override pair, so the harnesses interleave across host phases; the published figure is the median of the five. On this host the dispatcher's auto-tune demoted the AVX-512 four-way Keccak to the scalar BMI1/BMI2 path in 5 of 5 process starts (four-way 1.25–1.46× slower), so the SHA3 and ML-KEM rows measure that path. Per-run figures, and the April 2026 figures these replace, are in [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md).*
 
 
-### secp256k1 Fixed-Base Comb (2026-07-29)
-
-Public-key derivation and the ECDSA signing nonce both compute `d·G` against the compile-time generator. A 4-block fixed-base comb (16 entries, ~1.9 KB, L1-resident) replaces 256 doublings + 256 additions with 64 of each. Measured on the sandbox host (raw C):
-
-- Public-key derivation: **354.97 µs → 83.36 µs (4.26×)**
-- ECDSA signing: **392.94 µs → 125.54 µs (3.13×)**
-- ECDSA verification: unchanged — already variable-time by design (Shamir's trick).
-
-`ama_secp256k1_point_mul` (caller-supplied base) keeps the constant-time Montgomery ladder. Constant-time preserved: scalar read at fixed indices, table read by masked full-table scan. Welch's t-test over 60,000 samples: **|t| = 0.29** fixed-vs-random and **|t| = 1.03** on a Hamming-weight split, against dudect's 4.5 threshold. See [`docs/BENCHMARK_HISTORY.md`](docs/BENCHMARK_HISTORY.md).
-
 <!-- canonical-bench: end -->
+
+The secp256k1 fixed-base comb (pubkey derivation and signing) and its constant-time check are recorded in [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) §2026-07-29; those figures predate 5.0.0 and are not re-measured on the canonical host.
+
 ### Benchmark Charts
 
 | Chart | Description |
@@ -503,7 +384,7 @@ Public-key derivation and the ECDSA signing nonce both compute `d·G` against th
 | ![Scalability](benchmarks/charts/scalability.svg) | Package creation scalability across data sizes |
 | ![PQC Benchmark Overview](benchmarks/charts/pqc_benchmark_overview.svg) | 2×2 collage of the 2026-05 coverage expansion: X25519 MULX/ADX kernel on-vs-off, ML-DSA-65 NTT/invNTT scalar-vs-dispatched, signature-family sign latency (log), and FROST 2-of-3 per-role cost |
 
-*Charts generated by `python benchmarks/generate_charts.py` with a professional dark theme. The X25519 MULX on/off panel of the PQC Benchmark Overview collage is regenerated from the raw-C harness output (`benchmarks/benchmark_c_raw_results.json`) when present; the other three panels of that collage (ML-DSA-65 NTT/invNTT, signature-family sign latency, FROST 2-of-3) and the remaining standalone charts render from anchored measurement constants checked in alongside the generator. The anchors are refreshed whenever the published numbers change so the charts track the documented measurements without requiring a local benchmark run.*
+*Charts generated by `python benchmarks/generate_charts.py`. Without a local benchmark run they render from constants anchored to 2026-09-22 measurements on a 4-vCPU Xeon @ 2.80 GHz container (AVX-512F/BW/DQ/VL; no VBMI, VAES or VPCLMULQDQ), GCC 13.3.0 Release, tree `1e79cd1`, ctypes path with no Cython bindings built; the generator's header records the source of each table. The X25519 MULX on/off panel is redrawn from `benchmarks/benchmark_c_raw_results.json` when a raw-C run has written it. They are not the canonical-host figures above.*
 
 </details>
 
@@ -520,7 +401,7 @@ Public-key derivation and the ECDSA signing nonce both compute `d·G` against th
 Scalability across input sizes is not yet tracked in the CI regression suite. Measure locally:
 
 ```bash
-python benchmarks/benchmark_suite.py   # varies message size automatically
+python benchmarks/benchmark_suite.py   # scalability sweep over 1, 10, 100 and 1,000 copies of the Omni-Code payload
 ```
 
 </details>
@@ -528,11 +409,13 @@ python benchmarks/benchmark_suite.py   # varies message size automatically
 <details>
 <summary><strong>Ethical Integration Overhead</strong></summary>
 
-Ethical integration overhead is not tracked in the CI regression suite. The ethical layer adds cryptographic binding to the 4 Omni-Code Ethical Pillars via HKDF context. End-to-end package creation overhead depends on host, build flags, and workload; measure locally before quoting a percentage:
+Ethical integration overhead is not tracked in the CI regression suite. The legacy package API (`legacy_compat.derive_keys`) binds the 4 Omni-Code Ethical Pillars into the HKDF context. End-to-end package creation overhead depends on host, build flags, and workload; measure locally before quoting a percentage:
 
 ```bash
 python benchmarks/benchmark_suite.py   # includes ethical overhead breakdown
 ```
+
+</details>
 
 </details>
 
@@ -553,7 +436,7 @@ installs byte-identical source.
 
 | Channel | Status | Needs a C toolchain? |
 |---|---|---|
-| Source install from a git tag | **Verified working today** | Yes |
+| Source install from a git tag | Available once `v5.0.0` is tagged; `v5.0.0` is not tagged yet (latest tag: v4.0.0) | Yes |
 | Prebuilt wheel from a GitHub Release | From the first release built by `release.yml` onward | No |
 | PyPI (`pip install ama-cryptography`) | **Not published yet** — see channel 3 before using | No |
 | Self-hosted PEP 503 index | Supported pattern, opt-in | No |
@@ -627,7 +510,7 @@ sigstore verify identity \
   <WHEEL_FILENAME>
 
 # SLSA v1 build provenance
-pip install slsa-verifier || true   # or use the slsa-verifier binary
+go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest   # or download a release binary
 slsa-verifier verify-artifact <WHEEL_FILENAME> \
   --provenance-path ama-cryptography.intoto.jsonl \
   --source-uri github.com/Steel-SecAdv-LLC/AMA-Cryptography
@@ -688,8 +571,8 @@ says the copy you installed has not been altered since.
 > must not be trusted as this library.** Do not add `ama-cryptography` to a
 > `requirements.txt`, `pyproject.toml`, or lockfile that resolves against
 > PyPI until this section says the channel is live and you have verified the
-> uploader. Use channel 1 or channel 2 — both are verified working today, and
-> both are independently signature-checkable.
+> uploader. Use channel 1 or channel 2 once a 5.0.0 tag and release exist; both
+> are independently signature-checkable.
 
 PyPI is intended as a *mirror of convenience*, never the source of truth.
 Nothing in this library requires an index: it has zero runtime cryptographic
@@ -738,8 +621,8 @@ for a fully locked, index-independent install.
 
 ### Downstream Consumers (hard runtime dependency)
 
-Mercury Agent and FINDΩYOU™ import this library on their runtime path — they
-do not start without it. For a dependency of that class, declare it with an
+Mercury Agent imports this library on its runtime path and does not start
+without it. For a dependency of that class, declare it with an
 exact, verifiable pin rather than a floating range.
 
 **Pin by tag, no index required** (PEP 508 direct reference — valid in
@@ -763,9 +646,9 @@ ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases
 > PyPI rejects `Requires-Dist` entries carrying direct references. So the
 > choice is a stack-wide one, not a per-project one:
 >
-> - If Mercury Agent / FINDΩYOU™ are themselves distributed from GitHub, the
+> - If a consumer such as Mercury Agent is itself distributed from GitHub, the
 >   `git+https` pin above is fully supported and no index is involved anywhere.
-> - If any of them is to be installable from PyPI, then `ama-cryptography`
+> - If a consumer is to be installable from PyPI, then `ama-cryptography`
 >   must also resolve from PyPI (or from an index configured via
 >   `--extra-index-url`), because a direct reference would block their upload.
 
@@ -822,7 +705,7 @@ sudo make install
 **Linux (Ubuntu/Debian)**:
 ```bash
 # Install build dependencies
-sudo apt-get install build-essential cmake python3-dev libssl-dev
+sudo apt-get install build-essential cmake python3-dev
 
 # Build and install
 make all && sudo make install
@@ -831,7 +714,7 @@ make all && sudo make install
 **macOS**:
 ```bash
 # Install dependencies via Homebrew
-brew install cmake openssl
+brew install cmake
 
 # Build and install
 make all && sudo make install
@@ -843,8 +726,9 @@ make all && sudo make install
 # Install CMake and Python from official websites
 
 # Build
+cmake -S . -B build -DAMA_USE_NATIVE_PQC=ON
 cmake --build build --config Release
-python setup.py install
+pip install .
 ```
 
 ### External Dependencies
@@ -895,7 +779,7 @@ record.binding_verified          # True
 sorted(record.not_verified)      # ['gen_time', 'tsa_certificate_chain', 'tsa_signature']
 ```
 
-The online timestamp feature contacts external TSA (Time Stamping Authority) servers. Default: FreeTSA (https://freetsa.org/tsr). Commercial TSAs (DigiCert, GlobalSign) are recommended for production use.
+The online timestamp feature contacts an external TSA (Time Stamping Authority) server; the default is FreeTSA (https://freetsa.org/tsr). AMA verifies only the message-imprint binding, so whichever TSA you use, its identity must be established by a separate control.
 
 </details>
 
@@ -955,20 +839,20 @@ print(f"Anomalies detected: {report['total_alerts']}")
 ### Ubuntu Image (Production)
 
 ```bash
-# Build Ubuntu-based image (~200MB)
+# Build the Ubuntu-based image
 docker build -t ama-cryptography -f docker/Dockerfile .
 
-# Run interactive session
-docker run -it ama-cryptography /bin/bash
+# Run: imports the package (POST runs at import) and prints the version
+docker run --rm ama-cryptography
 
-# Run tests
-docker run --rm ama-cryptography make test
+# Interactive shell
+docker run -it ama-cryptography /bin/bash
 ```
 
 ### Alpine Image (Minimal)
 
 ```bash
-# Build Alpine image (~50MB)
+# Build the Alpine image
 docker build -t ama-cryptography:alpine -f docker/Dockerfile.alpine .
 
 # Run
@@ -987,10 +871,10 @@ docker compose -f docker/docker-compose.yml up -d
 
 # View logs
 docker compose -f docker/docker-compose.yml logs -f ama-cryptography
-
-# Execute commands
-docker compose -f docker/docker-compose.yml exec ama-cryptography python -m pytest
 ```
+
+The runtime images carry the installed wheel and `examples/`, not the test
+suite; run the tests from a source checkout.
 
 </details>
 
@@ -1017,7 +901,7 @@ make test
 # Performance benchmarks
 make benchmark
 
-# PQC sanity check
+# PQC sanity check (after the package is installed)
 python tools/sanity_check.py
 ```
 
@@ -1027,7 +911,7 @@ The test suite includes:
 - Unit tests for all cryptographic primitives (Python and C)
 - Integration tests for package creation and verification
 - Edge case testing for error handling
-- Performance regression tests with tiered tolerances
+- Performance regression floors per CI runner class (x86_64 45%; aarch64 15%, 25% for the two rejection-averaged composites)
 - NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md)). The 1,215 is the byte-aligned, in-scope subset of the pinned ACVP-Server files, not the whole of them: the harness skips 5,789 further vectors (4,667 filtered inside AFT groups — non-byte-aligned inputs, parameter sets the library does not ship — and 1,122 non-AFT LDT/VOT/MCT groups), each skip class named and counted in [ACVP_SELF_ATTESTATION.md](docs/compliance/ACVP_SELF_ATTESTATION.md)
 - Fuzz harnesses for 17 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, Ascon, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, HSS/LMS, Kyber, NIST P-curves, secp256k1, SHA3, SPHINCS+, X25519. (`fuzz_rng.c` is a shared PRNG helper linked into `fuzz_frost`, not a harness of its own — 18 `fuzz_*.c` sources, 17 libFuzzer entry points.) The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
@@ -1035,43 +919,37 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*6,559 test functions across 270 Python test files plus 94 C test suites (96 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*6,560 test functions across 270 Python test files plus 94 C test suites (96 translation units) covering core crypto and NIST KATs (including the AVX-512 4-way Keccak KAT, CSPRNG-failure scrubbing (`tests/c/test_csprng_failure_residue.c`), ML-DSA hint encoding (`tests/c/test_ml_dsa_hint_encoding.c`), input guards (`tests/c/test_input_guards.c`), fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
 <details>
 <summary><strong>Continuous Integration</strong></summary>
 
-GitHub Actions automatically tests:
-
-| Check | Description |
-|-------|-------------|
-| C library | GCC, Clang on Ubuntu/macOS |
-| Python package | Python 3.10-3.14 on Linux, macOS and Windows (plus `ubuntu-24.04-arm` entries) |
-| Code quality | ruff (lint + import sorting), black, `mypy --strict` over every tracked `.py` file (scope enforced by `tools/check_type_check_scope.py`) |
-| Security scanning | pip-audit, bandit, Semgrep, CodeQL static analysis |
-| Docker builds | Ubuntu + Alpine images |
+Pull-request workflows are fail-closed, and every job is reachable from its workflow's gate (INVARIANT-2, INVARIANT-31).
 
 ### CI Matrix
 
-- **Python Versions**: 3.10, 3.11, 3.12, 3.13, 3.14
-- **Platforms**: Ubuntu Latest, macOS Latest, Windows Latest (+ `ubuntu-24.04-arm` lane)
-- **Jobs**: test, code-quality, security-checks
+- **C library:** gcc-13 and clang-18 on `ubuntu-latest`; gcc-12 and Apple clang on `macos-latest`; AArch64 under QEMU, including SVE2
+- **Python package:** CPython 3.10–3.14 on `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `macos-15-intel` and `windows-latest`
+- **Code quality:** ruff, black, and `mypy --strict` over every tracked `.py` file (scope enforced by `tools/check_type_check_scope.py`)
 
 ### CI Workflows
 
 | Workflow | File | Purpose |
 |----------|------|---------|
-| CI - Testing and Code Quality | `ci.yml` | Python test matrix + C build + KAT validation + lint/format/type |
-| CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite across compilers/platforms |
-| Static Analysis (C) | `static-analysis.yml` | cppcheck, clang-analyzer, CodeQL, Werror, ASan+UBSan, MSan-KAT, clang-tidy fail-closed |
-| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (17 targets) + dictionary-validity gate |
-| dudect Constant-Time | `dudect.yml` | Welch's t-test on execution timings |
+| CI - Testing and Code Quality | `ci.yml` | Python test matrix, code quality, docs build, security checks (including Semgrep), benchmark regression, constant-time checks, AVX-512 lane, C-consumer build |
+| CI - Build and Test | `ci-build-test.yml` | C library across compilers and platforms, Python package matrix, instruction-count regression, Docker images |
+| Static Analysis (C) | `static-analysis.yml` | cppcheck, clang-analyzer, CodeQL, `-Werror` on x86-64 and AArch64, ASan, MSan, TSan, Valgrind memcheck, clang-tidy, reproducible build |
+| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (17 targets), Python parser fuzzing, dictionary-validity gate, OSS-Fuzz build |
+| ClusterFuzzLite | `clusterfuzzlite.yml` | Nightly batch fuzzing, corpus pruning and coverage |
+| dudect Constant-Time | `dudect.yml` | Welch's t-test lanes and callgrind instruction-count invariance |
 | ACVP Vector Validation | `acvp_validation.yml` | 1,215 / 1,215 gate; pushes to `main`/`develop`/`feature/**`/`fix/**` and `v*` tags, PRs to `main`/`develop`, + weekly |
 | Vendored Corpus Provenance | `corpus-provenance.yml` | Wycheproof + NIST digest manifest gate |
-| ARM (QEMU) Cross-Test | `arm-qemu.yml` | AArch64 test lane under QEMU |
+| ARM (QEMU) Cross-Test | `arm-qemu.yml` | AArch64 test lanes under QEMU (with and without Crypto Extensions, SVE2, UBSan) |
 | Baseline Change Guard | `baseline-guard.yml` | Enforces baseline-justification on any `benchmarks/baseline.json` edit |
-| Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
+| Integrity anchor check | `integrity-anchor-check.yml` | Checks that the release signing seed and trust-anchor public key are a matching Ed25519 pair |
+| Security | `security.yml` | pip-audit, bandit, CycloneDX SBOM, TruffleHog secret scanning |
 | Auto Docs | `auto-docs.yml` | Auto-generate documentation via PR |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync `wiki/` to GitHub Wiki |
 | Release | `release.yml` | `cibuildwheel` matrix, sigstore, SLSA v1 provenance, GitHub Release, gated PyPI publish |
@@ -1081,22 +959,23 @@ GitHub Actions automatically tests:
 <details>
 <summary><strong>Security Analysis</strong></summary>
 
-| Layer | Protection |
+| Area | Mechanism |
 |-------|------------|
-| Defense-in-Depth | Multi-layer cryptographic protection |
-| Quantum Resistance | NIST-standardized ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203), SLH-DSA (FIPS 205) |
-| Side-Channel Protection | Constant-time operations, masked table selection, data-independent control flow |
-| Memory Safety | Secure wiping, bounds checking, magic number validation |
-| 3R Monitoring | Runtime security analysis; overhead must be measured per environment |
+| Signed packages | SHA3-256, HMAC-SHA3-256, Ed25519 and ML-DSA-65 over one canonical transcript (INVARIANT-52) |
+| Quantum resistance | ML-KEM (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) |
+| Side channels | Constant-time secret-dependent code (INVARIANT-12), checked by dudect, callgrind instruction counts and Valgrind taint |
+| Memory | Secret zeroization on every exit path (INVARIANT-6); sanitizer and Valgrind lanes |
+| Encodings | Canonical-encoding and small-order checks on Ed25519, X25519 and ECDSA (INVARIANT-21, -26 to -29, -34, -38, -48) |
+| 3R Monitoring | Advisory runtime anomaly monitoring; overhead must be measured per environment |
 
-See [SECURITY.md](SECURITY.md) for complete cryptographic analysis.
+See [SECURITY.md](SECURITY.md) for the security policy, the POST and integrity controls, and the implementation assurance table.
 
 <details>
 <summary>Classic vs Quantum Security Comparison</summary>
 
 ![Quantum Security Comparison](assets/quantum_comparison.png)
 
-*Classical algorithms (RSA, ECDSA, Ed25519) are broken by quantum computers. ML-DSA-65 provides 192-bit security against both classical and quantum attacks.*
+*RSA, ECDSA and Ed25519 would be broken by a cryptographically relevant quantum computer (Shor's algorithm). ML-DSA-65 targets NIST PQC security category 3.*
 
 </details>
 
@@ -1108,7 +987,8 @@ See [SECURITY.md](SECURITY.md) for complete cryptographic analysis.
 The constant-time utility functions in `src/c/ama_consttime.c` are verified using a dudect-style timing analysis harness:
 
 ```bash
-# Build and run the constant-time verification harness
+# Build and run the constant-time verification harness (10^5 measurements;
+# `make test-full` runs the 10^6 the threshold below is calibrated for)
 cd tools/constant_time && make test
 ```
 
@@ -1141,45 +1021,44 @@ cd build && ctest --output-on-failure
 pytest tests/test_nist_kat.py tests/test_pqc_kat.py -v
 ```
 
-<a id="nist-algorithm-compliance"></a>
 ### FIPS-Format KAT Vectors (Native C — Self-Attested Coverage)
 
-These KAT tests validate the native C implementations against official NIST FIPS test vectors:
+`ml_kem_1024.kat` is regenerated from the pq-crystals reference generator (see `tests/kat/README.md`); `ml_dsa_65.kat` and the ACVP harness use NIST ACVP-Server vectors:
 
 | Algorithm | Standard | KAT File | Test Coverage | Status |
 |-----------|----------|----------|---------------|--------|
 | ML-KEM-1024 | FIPS 203 | `tests/kat/fips203/ml_kem_1024.kat` plus ACVP harness | KeyGen, Encaps, Decaps | See `docs/compliance/CSRC_ALIGN_REPORT.md` |
 | ML-DSA-65 | FIPS 204 | `tests/kat/fips204/ml_dsa_65.kat` plus ACVP harness | KeyGen, Sign, Verify | See `docs/compliance/CSRC_ALIGN_REPORT.md` |
 
-### Legacy-Format KAT Vectors (Python Backend Validation)
+### Pre-FIPS Round-3 KATs (historical; parsed and size-checked only, not a conformance gate)
 
 | Algorithm | KAT File | Test Coverage |
 |-----------|----------|---------------|
-| ML-DSA-44 (Dilithium2) | `tests/kat/ml_dsa/dilithium2.rsp` | KeyGen, Sign, Verify |
-| ML-DSA-65 (Dilithium3) | `tests/kat/ml_dsa/dilithium3.rsp` | KeyGen, Sign, Verify |
-| ML-DSA-87 (Dilithium5) | `tests/kat/ml_dsa/dilithium5.rsp` | KeyGen, Sign, Verify |
-| ML-KEM-512 (Kyber512) | `tests/kat/ml_kem/kyber512.rsp` | KeyGen, Encaps, Decaps |
-| ML-KEM-768 (Kyber768) | `tests/kat/ml_kem/kyber768.rsp` | KeyGen, Encaps, Decaps |
-| ML-KEM-1024 (Kyber1024) | `tests/kat/ml_kem/kyber1024.rsp` | KeyGen, Encaps, Decaps |
+| ML-DSA-44 (Dilithium2) | `tests/kat/ml_dsa/dilithium2.rsp` | Parse and sizes; round-3 signatures asserted *not* to verify under FIPS 204 |
+| ML-DSA-65 (Dilithium3) | `tests/kat/ml_dsa/dilithium3.rsp` | Parse and sizes; round-3 signatures asserted *not* to verify under FIPS 204 |
+| ML-DSA-87 (Dilithium5) | `tests/kat/ml_dsa/dilithium5.rsp` | Parse and sizes; round-3 signatures asserted *not* to verify under FIPS 204 |
+| ML-KEM-512 (Kyber512) | `tests/kat/ml_kem/kyber512.rsp` | Parse and sizes |
+| ML-KEM-768 (Kyber768) | `tests/kat/ml_kem/kyber768.rsp` | Parse and sizes |
+| ML-KEM-1024 (Kyber1024) | `tests/kat/ml_kem/kyber1024.rsp` | Parse and sizes |
 
 ### Key Implementation Details
 
 - **FIPS 203 (ML-KEM-1024):** Full Fujisaki-Okamoto transform with IND-CCA2 security, NTT-based polynomial multiplication (q=3329), implicit rejection for ciphertext validation
 - **FIPS 204 (ML-DSA-65):** Constant-time NTT/arithmetic (q=8380417); signing's rejection-sampling loop has intentional timing variation by design (leaks no private-key material); deterministic (hedged-off) signing
-- **FIPS 205 (SPHINCS+-SHA2-256f-simple):** WOTS+ one-time signatures, FORS few-time signatures, hypertree (d=17) construction
+- **FIPS 205 (SLH-DSA-SHA2-256f, SLH-DSA-SHAKE-128s):** WOTS+ one-time signatures, FORS few-time signatures, hypertree (d=17) construction
 - **SHA3/SHAKE:** Incremental XOF (SHAKE128/SHAKE256) with proper multi-block squeeze for FIPS 203/204 compliance
 
-KAT vectors are sourced from NIST PQC standardization and validate that the native implementations produce bit-exact outputs for known inputs per the FIPS specifications.
+The FIPS 203/204 `.kat` files and the ACVP harness check that the native implementations produce bit-exact outputs for known inputs. The round-3 `.rsp` files are kept for historical comparison only.
 
 ### Design Alignment with FIPS 140-3 Level 1 Requirements (Pending Future CMVP Validation)
 
 The module implements technical controls aligned with FIPS 140-3 Security Level 1 requirements:
 
-- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, and Ed25519 run at module import (~260ms). This is a **subset** of the approved primitives, not full per-algorithm coverage — see `CSRC_ALIGN_REPORT.md` §4.1 for the algorithms POST does and does not cover
-- **Module Integrity Verification:** SHA3-256 digest of all source files checked at startup
-- **Error State Machine:** OPERATIONAL / ERROR / SELF_TEST with automatic lockout on failure
+- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA-SHA2-256f, SLH-DSA-SHAKE-128s and Ed25519 run at import; the CI budget is 2,000 ms (median of five runs), and `module_attestation()["stage_durations_ms"]` reports each stage's time. This is a **subset** of the approved primitives, not full per-algorithm coverage — see `CSRC_ALIGN_REPORT.md` §4.1 for the algorithms POST does and does not cover
+- **Module Integrity Verification:** an Ed25519-signed integrity artefact covering the package sources, the native library and the six binding extensions, verified at import; the executed bytecode is then checked against the signed source (INVARIANT-40)
+- **Error State Machine:** OPERATIONAL / ERROR / SELF_TEST; a failed POST raises at import (INVARIANT-39), every cryptographic entry point refuses to run in ERROR, and `last_failure()` names the failing stage
 - **Repeated-output CSPRNG check:** Detects consecutive identical outputs from the OS CSPRNG (defence-in-depth; not the SP 800-90B health tests FIPS 140-3 specifies — see `CSRC_STANDARDS.md` §3.1(e))
-- **Pairwise Consistency Tests:** Sign-verify / encaps-decaps after key generation
+- **Pairwise Consistency Tests:** every asymmetric key generation runs a sign-verify or encaps-decaps test before the key is returned (INVARIANT-41)
 
 > **Important:** This library implements algorithms specified in FIPS 203, FIPS 204, and FIPS 205. This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. The controls above represent design alignment with FIPS 140-3 Level 1 technical requirements as a step toward future CMVP validation. See `CSRC_STANDARDS.md` for details.
 >
@@ -1194,7 +1073,7 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 <details>
 <summary><strong>NIST Algorithm Compliance</strong></summary>
 
-AMA Cryptography is continuously validated against official
+AMA Cryptography is tested in CI against
 [NIST ACVP](https://github.com/usnistgov/ACVP-Server) Algorithm Functional
 Test (AFT) vectors plus the four SHA-3 family Monte Carlo Test (MCT)
 groups and NIST reference vectors from the applicable FIPS/SP
@@ -1207,7 +1086,7 @@ two are not sourced from ACVP-Server). The current attestation is
 - **Formal attestation:** [`docs/compliance/ACVP_SELF_ATTESTATION.md`](docs/compliance/ACVP_SELF_ATTESTATION.md)
 - **Machine-readable:** [`docs/compliance/acvp_attestation.json`](docs/compliance/acvp_attestation.json)
 - **Full evidence report:** [`docs/compliance/CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md)
-- **Continuous validation:** [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml) — runs on every push to `main` and weekly on Mondays; fails if any vector regresses.
+- **CI gate:** [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml) — runs on pushes to `main`, `develop`, `feature/**` and `fix/**`, on `v*` tags, on PRs to `main` and `develop`, and weekly; fails if any vector regresses.
 
 ### Coverage Summary
 
@@ -1242,7 +1121,7 @@ python3 nist_vectors/run_vectors.py     # writes nist_vectors/results.json
 Full reproduction instructions:
 [`docs/compliance/ACVP_SELF_ATTESTATION.md §5`](docs/compliance/ACVP_SELF_ATTESTATION.md#5-reproduction-instructions).
 
-### ⚠ CAVP / FIPS Disclaimer
+### CAVP / FIPS Disclaimer
 
 > **This is a NIST ACVP self-attestation — it is NOT a CAVP validation
 > certificate, NOT a CMVP certificate, and NOT a claim of FIPS 140-3
@@ -1264,7 +1143,7 @@ Full reproduction instructions:
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Quick start and overview |
-| [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) | Comprehensive deployment and build guide |
+| [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) | Deployment and build guide |
 | [ENHANCED_FEATURES.md](ENHANCED_FEATURES.md) | In-depth feature documentation |
 | [MONITORING.md](MONITORING.md) | 3R security monitoring guide |
 | [docs/KEY_FORMATS.md](docs/KEY_FORMATS.md) | PKCS#8 / SPKI / PEM / JWK / COSE_Key across 12 algorithms |
@@ -1278,9 +1157,10 @@ Full reproduction instructions:
 | Document | Description |
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design |
-| [SECURITY.md](SECURITY.md) | Complete security analysis |
+| [SECURITY.md](SECURITY.md) | Security policy, disclosure process and security controls |
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Threat model and risk assessment |
-| [benchmarks/](benchmarks/) | Performance measurements |
+| [benchmarks/](benchmarks/) | Benchmark harnesses and regression floors |
+| [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) | Every published figure, with host, method and per-run data |
 | [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) | Cryptographic algorithm overview |
 | [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md) | NIST ACVP vector validation evidence (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT) |
 | [docs/compliance/ACVP_SELF_ATTESTATION.md](docs/compliance/ACVP_SELF_ATTESTATION.md) | **Customer-facing** NIST ACVP self-attestation (NOT CAVP, NOT CMVP, NOT FIPS 140-3) |
@@ -1298,6 +1178,8 @@ Full reproduction instructions:
 | Document | Description |
 |----------|-------------|
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
+| [AGENTS.md](AGENTS.md) | Engineering directive: evidence standard, severity classes, verification procedure |
+| [CRYPTO_REVIEW_CHECKLIST.md](CRYPTO_REVIEW_CHECKLIST.md) | Review checklist for cryptographic changes |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [INVARIANTS.md](INVARIANTS.md) | Canonical architectural invariants (INVARIANT-1 through INVARIANT-53) and vendoring policy |
 | [AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md) | Ethical pillar specification |
@@ -1308,12 +1190,13 @@ Full reproduction instructions:
 
 ## Cross-Platform Support
 
-| Platform | Status | Tested On |
-|----------|--------|-----------|
-| Linux | Full support | Ubuntu 22.04, Debian 11, CentOS 8 |
-| macOS | Full support | macOS 12+ (Intel and Apple Silicon) |
-| Windows | Full support (x64) | Windows 10/11 (MSVC x64, MinGW); MSVC ARM64 emits configure-time error — use GCC/Clang |
-| ARM64 | Full support | Raspberry Pi, AWS Graviton |
+| Platform | CI coverage |
+|----------|-------------|
+| Linux x86-64 | `ubuntu-latest` (gcc-13, clang-18); CPython 3.10–3.14 |
+| Linux AArch64 | `ubuntu-24.04-arm` (CPython 3.10–3.14); QEMU lanes with and without Crypto Extensions, SVE2 and UBSan |
+| macOS | `macos-latest` (Apple Silicon) and `macos-15-intel`; CPython 3.10–3.14 |
+| Windows x64 | `windows-latest` (MSVC); CPython 3.10–3.14. MinGW x86-64 is cross-linked only, with native PQC off |
+| Windows ARM64 (MSVC) | Configures; no CI lane |
 
 ---
 
@@ -1322,15 +1205,15 @@ Full reproduction instructions:
 <details>
 <summary><strong>CMake (C Library with Native PQC)</strong></summary>
 
-The C library provides full native implementations of all post-quantum cryptographic algorithms. No external PQC dependencies (liboqs, pqcrypto) are required.
+The C library provides native implementations of all post-quantum algorithms (LMS/HSS: verification only). No external PQC dependency (liboqs, pqcrypto) is required.
 
 **Prerequisites:**
 ```bash
 # Install build dependencies (Ubuntu/Debian)
-sudo apt-get install build-essential cmake libssl-dev
+sudo apt-get install build-essential cmake
 
 # macOS
-brew install cmake openssl
+brew install cmake
 ```
 
 **Build with native PQC (default):**
@@ -1356,7 +1239,7 @@ sudo cmake --install .
 
 **CMake Options**:
 - `AMA_USE_NATIVE_PQC` - Enable native PQC implementations (default: ON)
-- `AMA_AES_CONSTTIME` - Enable bitsliced AES S-box for cache-timing hardening (default: ON)
+- `AMA_AES_CONSTTIME` - Enable bitsliced AES S-box for cache-timing hardening (default: ON). Turning it off also requires `AMA_AES_TABLE_INSECURE=ON` (INVARIANT-20)
 - `AMA_BUILD_SHARED` - Build shared library (default: ON)
 - `AMA_BUILD_STATIC` - Build static library (default: ON)
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
@@ -1372,7 +1255,10 @@ sudo cmake --install .
 - `AMA_ENABLE_NATIVE_ARCH` - Enable `-march=native` for host-optimized builds (default: OFF)
 - `AMA_ENABLE_DUDECT` - Build dudect-style empirical constant-time verification tests (default: OFF)
 - `AMA_ALLOW_UNVERIFIED_TOOLCHAIN` - Downgrade INVARIANT-8 toolchain pin (GCC ≥ 12, Clang ≥ 15, MSVC) from FATAL_ERROR to WARNING (default: OFF)
-- `AMA_TESTING_MODE` - Build test-only library exposing `ama_test_force_*_scalar` / `ama_test_restore_*_avx2` dispatch hooks (internal; default: OFF)
+- `AMA_KYBER_BUILD_DIAGNOSTICS` - Compile the Kyber NTT/CPA debug block (test-only; default: OFF, enabled with the tests)
+- `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` - Ed25519 public key compiled in as the module-integrity trust anchor (release builds; default: empty)
+
+`AMA_TESTING_MODE` is not a user option: it is defined only on the `ama_cryptography_test` library that the C tests link, which exposes the dispatch and CSPRNG test hooks.
 
 > **Note:** ML-DSA-65, ML-KEM-1024, and SLH-DSA parameter sets are implemented natively in C with the self-attested NIST-vector scope documented in `docs/compliance/CSRC_ALIGN_REPORT.md`. No external PQC libraries are needed.
 
@@ -1386,10 +1272,10 @@ sudo cmake --install .
 python setup.py build_ext --inplace
 
 # Development mode
-python setup.py develop
+pip install -e .
 
 # Create distribution
-python setup.py sdist bdist_wheel
+python -m build
 ```
 
 **Environment Variables**:
@@ -1411,9 +1297,9 @@ make test         # Run all tests
 make test-c       # C tests only
 make test-python  # Python tests only
 make benchmark    # Performance benchmarks
-make docker       # Build Docker images
+make docker       # Build the Ubuntu Docker image
 make docs         # Generate documentation
-make format       # Format code (clang-format, black)
+make format       # Format code (black, ruff import sorting)
 make lint         # Lint code (ruff, mypy)
 make clean        # Clean build artifacts
 make install      # Install system-wide
@@ -1423,38 +1309,20 @@ make install      # Install system-wide
 
 ---
 
-## Mathematical Foundations
+## 3R Monitoring and Mathematical Engine
 
 <details>
-<summary><strong>Research and Innovation</strong></summary>
+<summary><strong>3R monitor and the double-helix engine</strong></summary>
 
-### Mathematical Frameworks (Self-Assessed)
+The **3R Mechanism** (Resonance-Recursion-Refactoring) is an advisory runtime monitor:
 
-1. **Helical Geometric Invariants**
-   - Curvature and torsion relationship verified to 10^-10 error
+- **Resonance:** FFT-based timing anomaly monitoring (statistical anomaly detection, not timing-attack detection)
+- **Recursion:** multi-scale hierarchical pattern analysis
+- **Refactoring:** code complexity metrics for security review
 
-2. **Lyapunov Stability Theory**
-   - Exponential convergence O(e^{-0.18t}) verified numerically
+Its overhead is not tracked in CI; measure it with `python benchmarks/validation_suite.py`. See [MONITORING.md](MONITORING.md).
 
-3. **Golden Ratio Harmonics**
-   - phi^3-amplification with Fibonacci convergence less than 10^-8
-
-4. **Quadratic Form Constraints**
-   - sigma_quadratic >= 0.96 enforcement
-
-5. **Double-Helix Evolution**
-   - 18+ equation variants for adaptive security
-
-### 3R Security Monitoring
-
-The **3R Mechanism** (Resonance-Recursion-Refactoring) is a runtime monitoring framework providing:
-
-- **Runtime Timing Anomaly Monitoring** via FFT frequency-domain analysis (statistical anomaly detection, not guaranteed timing attack detection)
-- **Pattern Anomaly Detection** through multi-scale hierarchical analysis
-- **Code Complexity Metrics** for security review
-- **Less than 2% Performance Overhead** in production
-
-See [MONITORING.md](MONITORING.md) for complete technical details.
+`ama_cryptography/equations.py` and `ama_cryptography/double_helix_engine.py` implement the mathematics behind 3R and the double-helix key evolution: helix curvature and torsion, a Lyapunov function with decay constant `LAMBDA_DECAY = 0.18`, golden-ratio convergence, and a quadratic-form threshold (`sigma_quadratic >= 0.96`). Their numerical self-checks are in `tests/test_equations.py`. They have no bearing on the security of the cryptographic primitives.
 
 </details>
 
@@ -1496,48 +1364,33 @@ make security-audit
 | Language | Standards |
 |----------|-----------|
 | Python | PEP 8, type hints, docstrings |
-| C | MISRA C guidelines, Doxygen comments |
+| C | C11; clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` on gcc and clang; Doxygen comments |
 | Security | Constant-time operations, no undefined behavior |
-| Testing | Greater than 80% code coverage target |
+| Testing | Python line coverage gated at ≥ 75% (`pyproject.toml`); C branch coverage measured by `tools/measure_branch_coverage.py`; new tests mutation-checked (AGENTS.md §6) |
 
 </details>
 
 ---
 
-## Unique Features
+## Ethical Binding and Omni-Codes
 
 <details>
-<summary><strong>Ethical Cryptography</strong> - Mathematically-Bound Ethical Constraints</summary>
+<summary><strong>Ethical vector and Omni-Code payload</strong></summary>
 
-AMA Cryptography integrates ethical principles directly into cryptographic operations through mathematical constraints. Rather than treating ethics as policy overlays, AMA Cryptography embeds ethical considerations into key derivation and data integrity verification.
+**Ethical vector.** `ETHICAL_VECTOR` (`ama_cryptography/equations.py`) holds four pillar weights of 3.0 each (Σw = 12.0, checked at import). The legacy package API (`legacy_compat.derive_keys` / `create_ethical_hkdf_context`) appends the first 16 bytes of the vector's SHA3-256 hash to the HKDF context, so keys derived under a different vector are unrelated. This is domain separation: it makes the policy explicit in the derivation, and it adds no cryptographic strength. `crypto_api` does not use it. Agent-instance bindings (INVARIANT-30) carry a separate ethical-profile hash into HKDF and the signature context.
 
-**4 Omni-Code Ethical Pillars** are mathematically integrated into key derivation:
+| Pillar | Triad |
+|--------|-------|
+| **Omniscient** | Wisdom |
+| **Omnipotent** | Agency |
+| **Omnidirectional** | Geography |
+| **Omnibenevolent** | Integrity |
 
-| Pillar | Triad | Sub-Properties |
-|--------|-------|----------------|
-| **Omniscient** | Wisdom | Complete verification, multi-dimensional detection, data validation |
-| **Omnipotent** | Agency | Maximum strength, secure key generation, real-time protection |
-| **Omnidirectional** | Geography | Multi-layer defense, temporal binding (not temporal integrity — RFC 3161 `genTime` is unauthenticated), attack surface coverage |
-| **Omnibenevolent** | Integrity | Ethical foundation, mathematical correctness, hybrid security |
-
-The ethical integration achieves:
-- **Balanced weighting**: Σw = 12.0 across all pillars
-- **SHA3-256 ethical signatures** in key derivation context
-- **Low performance impact**: ~15% overhead on HKDF derivation, <2% on end-to-end package operations
-- **Survivor-first principles** with bias audits and dynamic compliance
+The pillar definitions are in [AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md).
 
 ![Ethical Binding Flow](assets/ethical_binding.png)
 
-*Keys and signatures are cryptographically bound to an explicit ethical profile hash via HKDF domain separation. This makes policy explicit and verifiable.*
-
-</details>
-
-<details>
-<summary><strong>Bio-Inspired Security</strong> - Omni-Code Architecture for Data Structures</summary>
-
-AMA Cryptography employs a bio-inspired approach where data structures draw from the structural properties of biological DNA. This metaphor extends beyond naming conventions into the architecture of cryptographic packages.
-
-**Master Omni-Codes** - Seven foundational codes govern the system:
+**Omni-Codes.** Seven memorial codes (`OMNI_CODES`), each with helix parameters (`HELIX_PARAMS`), are the example payload the package API, benchmarks and 3R engine use:
 
 | Code | Symbol | Domain | Helical Parameters |
 |------|--------|--------|-------------------|
@@ -1548,37 +1401,6 @@ AMA Cryptography employs a bio-inspired approach where data structures draw from
 | `Ω20V11ϖ_ΨΔSΛΨ_ϵ20A15Θ` | Ωϖ | Omni-Scient Curiosity | r=20.0, p=1.1 |
 | `Θ25M01ϵ_ΞΛLΔΞ_ϖ19A91Γ` | Θϵ | Omni-Universal Discipline | r=25.0, p=0.1 |
 | `Γ19L11ϖ_XΔHΛX_∞19A84♰` | Γϖ | Omni-Potent Lifeforce | r=19.0, p=1.1 |
-
-**Architectural Benefits**:
-- **Helical data encoding** draws from DNA double-helix structure for key evolution
-- **Redundant verification** through multiple verification chains
-- **Algorithm agility** supports switching between cryptographic algorithms
-- **Canonical hashing** preserves data integrity across transformations
-
-</details>
-
-<details>
-<summary><strong>Multi-Disciplinary Approach</strong> - Quantum-Cyber-Ancient Synergies</summary>
-
-AMA Cryptography draws from multiple disciplines — quantum mechanics, mathematics, philosophy, and biological systems — to inform its security framework design.
-
-**Cross-Domain Synergies**:
-
-| Domain | Contribution | Implementation |
-|--------|--------------|----------------|
-| **Quantum Mechanics** | Lattice-based cryptography, uncertainty principles | ML-DSA-65 and ML-KEM-1024 post-quantum algorithms |
-| **Ancient Mathematics** | Prime number theory, geometric scaling | Helical parameters, golden ratio optimizations |
-| **Philosophy** | Ethical frameworks, epistemology | 4 Ethical Pillars, truth verification |
-| **Biology** | DNA structure, evolutionary resilience | Bio-inspired data architecture, adaptive security |
-| **Physics** | Resonance detection, timing analysis | 3R monitoring (Resonance-Recursion-Refactoring) |
-
-**Philosophical Foundation**:
-- **Epistemological rigor**: Claims backed by mathematical derivation where possible (self-assessed)
-- **Ethical alignment**: Compassion, evidence, justice, altruism as core values
-- **Character-driven design**: Competence, commitment, control embedded in architecture
-- **Survivor-first principles**: Security designed to protect the vulnerable
-
-This multi-disciplinary synthesis uses NIST-standard primitives (SHA3-256, HMAC-SHA3-256, Ed25519, ML-DSA-65, HKDF) with ~128-bit classical and ~192-bit quantum security margins. All security analysis is self-assessed; see SECURITY.md for derivations and caveats.
 
 </details>
 
@@ -1594,25 +1416,22 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 AMA Cryptography v5.0.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C, and the Python layer's production hashing and key derivation run on those C kernels rather than stdlib `hashlib` (which is OpenSSL-backed in every libcrypto-linked CPython). The deliberate exceptions are the pre-execution trust bootstrap — the code that hashes the shared object and sources *before* the native library may be trusted — and two comparators whose output the library never emits (POST's hashlib cross-check of the SHA3-256 KAT, and `hybrid_combiner`'s test-only HKDF reference, which raises unless a test opts in). All of it is pinned file-by-file with exact reference counts by `tools/check_stdlib_hash_boundary.py` and fails CI if it grows.
 
-**Algorithm implementations (all native, written in this repository from the published standards; one file adapted under the MIT licence):**
-- **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
-- **ML-KEM-1024** (Kyber): Public domain (NIST FIPS 203)
-- **SPHINCS+-SHA2-256f**: Public domain (NIST FIPS 205)
+**Algorithm implementations.** Every implementation is Apache-2.0 code written in this repository from the cited standards (the NIST and IETF publications are specifications, not code), with one exception:
 - **Ed25519**: in-house (RFC 8032), not ref10. Its constant-time field inversion (`src/c/internal/ama_fe25519_safegcd.h`) is **adapted** from libsecp256k1's safegcd `modinv64` reference implementation, **MIT licence** — the notice is in [`NOTICE`](NOTICE) and must accompany redistributed binaries; the C-library SBOM records it as the `ama_ed25519` pedigree (`Apache-2.0 AND MIT`)
-- **AES-256-GCM**: Public domain (NIST SP 800-38D)
-- **SHA3-256/SHAKE**: Public domain (NIST FIPS 202)
 
 **Optional dependency groups:**
 - `[math]`: numpy (≥ 1.24), Cython (≥ 3.3.0) — required only for the optional `math_engine` Cython extension
 - `[monitoring]`: numpy (3R engine)
-- `[legacy]`: cryptography — used ONLY by tests/benchmarks for cross-checking; NOT a runtime fallback (INVARIANT-1 prohibits a PyCA dependency in the production path)
+- `[legacy]`: cryptography — used only by interoperability-oracle tests (`@pytest.mark.requires_interop_oracle`) and comparative benchmarks, never as an answer key (INVARIANT-36) and never as a runtime fallback (INVARIANT-1)
 - `[hsm]`: PyKCS11 ≥ 1.5.18 (HSM support)
 - `[docs]`: sphinx, sphinx-rtd-theme ≥ 3.1.0 (documentation build)
-- `[benchmark]`: pynacl, liboqs-python, cryptography (peer libraries for `benchmarks/comparative_benchmark.py` only — not linked into the production library; INVARIANT-1 still holds)
+- `[benchmark]`: pynacl, cryptography (peer libraries for `benchmarks/comparative_benchmark.py` only — not linked into the production library; INVARIANT-1 still holds)
+- `[examples]`: flask (the example web service under `examples/`)
+- `[dev]`: test, lint and type-check tooling; `[all]`: every extra above
 
 ### Dependency Graph
 
-GitHub's dependency graph is enabled for this repository. Once the repository is public, you can view the complete dependency tree at: `Insights > Dependency graph`. This provides visibility into all direct and transitive dependencies, security advisories, and Dependabot alerts for automated vulnerability detection.
+GitHub's dependency graph is enabled for this repository: `Insights > Dependency graph`. It provides visibility into all direct and transitive dependencies, security advisories, and Dependabot alerts for automated vulnerability detection.
 
 ---
 
@@ -1656,13 +1475,13 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 ### Design Principles
 
-- **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
-- **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 6,559 test functions across 270 Python files plus 94 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
-- **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
+- **Standards-based design:** Built on the standards in [CSRC_STANDARDS.md](CSRC_STANDARDS.md) — not custom cryptography
+- **Quantified claims:** Every published figure names its host, command and record ([docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md), `benchmarks/canonical-host.json`)
+- **Rigorous testing:** 6,560 test functions across 270 Python files plus 94 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and benchmark-regression checks
+- **Regression detection:** Benchmark floors measured on each CI runner class (x86_64 45% tolerance; aarch64 15–25%)
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
-- **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
-- **Academic grounding:** Security proofs reference peer-reviewed literature (Bellare, Krawczyk, Bernstein, et al.)
+- **Defense-in-depth:** Security bounded by the weakest layer (~128-bit classical), not inflated aggregate claims
+- **Proofs:** The primitives rely on their published security proofs; AMA's composition has no formal proof ([docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md))
 
 ### What Requires Caution
 
@@ -1677,7 +1496,7 @@ Before production use:
 
 - Commission independent security audit by qualified cryptographers
 - Verify constant-time implementations (ctgrind, dudect)
-- Deploy with FIPS 140-2 Level 3+ HSM for master secrets
+- Deploy master secrets in an HSM validated to FIPS 140-3, Level 3 or higher
 - Conduct penetration testing
 
 ### No Warranty
@@ -1690,9 +1509,7 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 <div align="center">
 
-**AMA Cryptography - Protecting people, data, and networks with quantum-resistant cryptography**
-
-*Architected with inherent radical honesty, unconventional methodology, protective servitude, and ethical immutability.*
+**AMA Cryptography** — post-quantum and classical cryptography, implemented in-tree
 
 <div align="center">
 
@@ -1700,6 +1517,5 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 </div>
 
-*Last updated: 2026-08-24*
 
 </div>

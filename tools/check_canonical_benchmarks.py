@@ -326,10 +326,10 @@ def extract_measurements(region: str) -> list[dict[str, Any]]:
 def check_sources(report: Report, record: dict[str, Any]) -> set[str]:
     """Every source in the record must state how its figures were produced.
 
-    Most sources are hosts. Two are not: the comb table size is a property of
-    the code rather than of any machine, and the 1.8-2.2x range is reported by
-    OpenSSL and BoringSSL, not measured here. Calling either a "host" would be
-    false provenance, so the record names sources and each one says what it is.
+    Most sources are hosts. Some are not: a number a specification defines,
+    or a count fixed by this repository's source code, describes no machine.
+    Calling either a "host" would be false provenance, so the record names
+    sources and each one says what it is.
     """
     sources = record.get("sources")
     if not isinstance(sources, dict) or not sources:

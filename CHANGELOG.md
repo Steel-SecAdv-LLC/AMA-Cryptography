@@ -19,6 +19,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### README, ARCHITECTURE and SECURITY brought up to the 5.0.0 tree; unsupported claims removed — 2026-09-26
+
+The three front-door documents still described pre-#394 code in places and carried claims nothing in the tree supports. Each change below was checked against the code, a gate, or a record.
+
+- **Removed as unsupported (INVARIANT-16, INVARIANT-53):** HIPAA and classified-data suitability, "community-tested", the sector use-case catalogue, the Mercury Agent performance metrics and the FINDΩYOU™ product description (neither is recorded in this repository), "~15% / <2%" ethical and 3R overhead, "MISRA C", the "50+ years" horizon, vendor HSM certification levels, and SECURITY.md's "bare-metal" throughput and "security proofs".
+- **Corrected:** SHA-NI is built on every x86 target, not opt-in; `benchmark-report.md` is a regression-run report, not the published figures; the round-3 `.rsp` KATs are parse-only history, not a conformance gate; the Docker runtime images carry no test suite; `libssl-dev`/`openssl` is not a build dependency; install channel 1 waits on a `v5.0.0` tag; `crypto_api`'s HMAC key travels with the package, so that layer is integrity only; the legacy KMS derives no ML-DSA key; only the legacy API applies the ethical binding; the HKDF salt is random, not zero; POST is described stage by stage with its fail-closed import.
+- **README:** Performance Metrics is collapsible. The canonical record's per-run table gives 17,984 (ML-KEM encapsulate median) and 11,443 (ML-DSA verify maximum); README and `benchmarks/canonical-host.json` said 17,985 and 11,444 and now agree with it. The literature 1.8–2.2× citation and the 2026-07-29 secp256k1 comb figures (no host provenance) left the canonical region; the comb record stays in `docs/BENCHMARK_HISTORY.md`.
+- **Tooling:** `_FUZZ_COUNT_RE` read the `65` of "ML-DSA-65 … harnesses" as a fuzz-target count, and `update_docs --counts` rewrote ARCHITECTURE.md to "ML-DSA-17". A look-behind now rejects a number that follows a hyphen, dot or word character; `test_a_number_inside_an_algorithm_name_is_not_a_count` fails without it (PIN, mutation-checked). The fuzz non-vacuity floor drops from 14 to 13, the retired false match. ARCHITECTURE.md's generated latency block now prints the record's commit, tree state and bindings, and no longer an absolute local path.
+
 ### The five unexamined C files triaged: an ML-DSA malleability guard no suite ran, a FROST verdict that contradicted its header, and a coverage instrument that measures both suites — 2026-09-26
 
 AGENTS.md §11 listed `ama_nistp.c`, `ama_dilithium.c`, `ama_slhdsa.c`,
