@@ -251,6 +251,12 @@ class TestTestCitationsInTheShippedCode:
     def test_a_present_named_test_passes_even_when_wrapped(self) -> None:
         assert self._scan("/* pinned by\n * `test_present` in\n * tests/test_real.py */\n") == []
 
+    def test_a_named_test_whose_path_wraps_is_still_checked(self) -> None:
+        """The file resolves after unwrapping, so only the name can be wrong."""
+        found = self._scan("/* pinned by `test_absent` in tests/test_\n * real.py */\n")
+        assert [cited for _, cited, _ in found] == ["test_absent in tests/test_real.py"]
+        assert self._scan("/* pinned by `test_present` in tests/test_\n * real.py */\n") == []
+
     def test_a_named_test_in_a_missing_file_is_reported_once(self) -> None:
         found = self._scan("# `test_x` in tests/test_gone.py\n")
         assert [cited for _, cited, _ in found] == ["tests/test_gone.py"]

@@ -130,15 +130,18 @@ class TestPowerOnSelfTests:
     def test_post_duration_is_under_budget(self) -> None:
         """POST's own cost stays under 2 s.
 
-        Measured here, on five POST runs, against the fastest.  This used to
+        Measured here, on five POST runs, against the median.  This used to
         read ``post_duration_ms()`` -- the duration of whichever POST some
         other test ran last.  On main's Windows / CPython 3.14.7 lane that was
         ``test_reset_module_recovers_from_error``'s POST, at 6,234 ms, while
         every other POST in the same process took about 1 s and the same lane
-        on CPython 3.14.6 took 0.32 s: a stall of the host, charged to POST.
-        A stall only ever adds time to a sample; a slower POST raises every
-        sample, the fastest included.  The minimum therefore measures the
-        code, and every sample's per-stage breakdown is in the message.
+        on CPython 3.14.6 took 0.32 s: one stall of the host, charged to POST.
+
+        The median, not the minimum: a stall adds time to one sample, and the
+        median absorbs up to two; a regression that slows most runs --
+        deterministic, or intermittent in three of five -- moves the median
+        over the budget, where the minimum would let one fast run hide it.
+        Every sample's per-stage breakdown is in the message.
         """
         from ama_cryptography._self_test import _run_self_tests, module_attestation
 
@@ -147,14 +150,14 @@ class TestPowerOnSelfTests:
             assert _run_self_tests() is True
             attestation = module_attestation()
             samples.append((attestation["duration_ms"], attestation["stage_durations_ms"]))
-        fastest = min(duration for duration, _ in samples)
+        median = sorted(duration for duration, _ in samples)[len(samples) // 2]
         report = "; ".join(
             f"{duration:.1f}ms " + ", ".join(f"{k}={v:.1f}" for k, v in stages.items())
             for duration, stages in samples
         )
-        assert fastest > 0, "POST duration should be positive"
-        assert fastest < 2000, (
-            f"POST's fastest of 5 runs took {fastest:.1f}ms, exceeding the 2000ms "
+        assert median > 0, "POST duration should be positive"
+        assert median < 2000, (
+            f"POST's median of 5 runs took {median:.1f}ms, exceeding the 2000ms "
             f"budget; runs: {report}"
         )
 
@@ -176,6 +179,20 @@ class TestPowerOnSelfTests:
         ]
         assert all(v >= 0 for v in stages.values())
         assert sum(stages.values()) <= attestation["duration_ms"] + 1.0
+
+    def test_stage_durations_stop_at_the_failing_stage(self) -> None:
+        """A failed stage is timed; the stages POST never reached are absent."""
+        import ama_cryptography._self_test as st
+
+        try:
+            with patch.object(st, "_run_timing_oracle_stage", return_value=(False, "forced")):
+                assert st._run_self_tests() is False
+            stages = st.module_attestation()["stage_durations_ms"]
+            assert list(stages)[-1] == "oracle"
+            assert "rng" not in stages
+        finally:
+            assert st._run_self_tests() is True
+            assert st.module_status() == "OPERATIONAL"
 
     def test_all_kats_passed(self) -> None:
         """Every recorded KAT either passed or was an explicit skip.

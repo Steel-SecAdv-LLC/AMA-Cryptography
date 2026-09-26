@@ -2083,10 +2083,15 @@ AMA_API ama_error_t ama_frost_round2_sign(
  * @param group_public_key         32-byte group public key
  * @return AMA_SUCCESS if the share satisfies the relation;
  *         AMA_ERROR_VERIFY_FAILED if it does not, if `sig_share` is not a
- *         canonical scalar (0 <= z < L, RFC 9591 section 4.1), or if a
- *         commitment or the public share is non-canonical or small-order;
+ *         canonical scalar (0 <= z < L, RFC 9591 section 4.1), or if THIS
+ *         participant's commitment (its row in `commitments`) or public
+ *         share is non-canonical or small-order;
  *         AMA_ERROR_INVALID_PARAM on a NULL argument, a signer set that does
- *         not contain participant_index, or a point that does not decode.
+ *         not contain participant_index, or ANOTHER participant's row that
+ *         does not decode.  This call judges one participant's share, so
+ *         another row's defect is not attributed to it: a small-order row of
+ *         another participant is admitted here and refused by
+ *         ama_frost_aggregate(), which judges every row.
  */
 AMA_API ama_error_t ama_frost_verify_share(
     const uint8_t *sig_share,

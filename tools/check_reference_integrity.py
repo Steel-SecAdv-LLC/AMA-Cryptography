@@ -277,10 +277,12 @@ TEST_PATH = re.compile(
     r"(?<![\w/.\-])tests/(?:[\w/\-]|(?<=[_/\-])" + _CONTINUATION + r")+\.(?:py|c|h)\b"
 )
 
-#: A named test in a named file: ``test_x`` in ``tests/y.py``.
+#: A named test in a named file: ``test_x`` in ``tests/y.py``, the path
+#: wrapped the same way TEST_PATH allows (a wrapped path used to end the
+#: match, so the named test after it went unchecked).
 NAMED_TEST = re.compile(
     r"`?\b(test_\w+)`?(?:[ \t]+|" + _CONTINUATION + r")+in(?:[ \t]+|" + _CONTINUATION + r")+"
-    r"`?(tests/[\w/\-]+\.(?:py|c))\b"
+    r"`?(tests/(?:[\w/\-]|(?<=[_/\-])" + _CONTINUATION + r")+\.(?:py|c))\b"
 )
 
 
