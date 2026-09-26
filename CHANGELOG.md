@@ -24,9 +24,10 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 AGENTS.md §11 listed `ama_nistp.c`, `ama_dilithium.c`, `ama_slhdsa.c`,
 `ama_kyber.c` and `ama_frost.c` as never examined, and said the inventory
 measured the C suite only, so a row in it was "a question, not a finding".
-Both are closed. Every test added here was run against the guard it pins
-with that guard deleted (AGENTS.md 6.2); the mutation record is in each
-test file's header.
+Both are closed. Every test labelled PIN or SMOKE here was run against its
+guard with the guard deleted (AGENTS.md 6.2), and the mutation record is in
+each test file's header; the NULL, unknown-set and short-buffer rows of
+`tests/c/test_input_guards.c` are RANGE and were not.
 
 **The instrument** (`tools/measure_branch_coverage.py --python-suite`)
 - Swaps the instrumented `libama_cryptography.so` into an editable install,
@@ -87,8 +88,10 @@ test file's header.
   ML-DSA-44; the test pins the first qualifying message of each.
 - Four comments in `src/c` cited test files or tests that do not exist.
   `tools/check_reference_integrity.py` gains the shape (a `tests/...` path
-  that is not tracked, or `test_x` in a file that defines no `test_x`; a
-  mention in prose does not count), scoped to
+  that is not tracked, or `test_x` in a file that defines no `test_x`: a
+  Python definition read with `ast`, or a C function with a body once
+  comments and literals are removed -- a mention in prose, a string, a call
+  or a prototype does not count), scoped to
   `ama_cryptography/`, `src/` and `include/` so that no exemption list is
   needed; `tests/` and `tools/` cite imaginary paths as fixtures.
 - Low — `sha2_mgf1_sha512` in `ama_slhdsa.c` returned silently with its
@@ -115,6 +118,13 @@ test file's header.
   the budget test's failure message and for an operator. Nothing recorded
   where the 6.2 s went. The map is published on every exit, a stage that
   raises included, so it never shows a previous run's timing.
+- Medium (observability) -- a POST stage that raised left the module in
+  SELF_TEST with no reason and nothing in `last_failure()`: crypto was
+  refused and the exception propagated, but the module's own status
+  reported no failure. It now enters ERROR naming the stage and the
+  exception, is recorded in `last_failure()`, and still raises (the import
+  still fails, INVARIANT-39). `last_failure()` also carries the failed
+  run's `stage_durations_ms`, which the recovery run used to overwrite.
 
 **Tests for guards nothing executed**
 - `tests/c/test_frost.c` Test 11: a CSPRNG that reports success with bytes
@@ -127,12 +137,18 @@ test file's header.
   with round 2 consuming the nonce pair on each refusal.
 - `tests/c/test_ml_dsa_hint_encoding.c` also pins the signer's side:
   MakeHint's `a0 = -gamma2, a1 = 0` case, reached by honest signing about
-  once in 10,000 signatures and by no suite; the messages whose accepted
-  attempt meets it were found by instrumenting the branch.
+  once in 10,000 signatures and by no suite. It is tested at the predicate's
+  exact bounds for both gamma2 values, through an `AMA_TESTING_MODE` export
+  (either comparison made inclusive fails it), and end to end on a pinned
+  message per set, whose accepted attempt is confirmed by a testing-only
+  counter to still meet the clause -- armed by that test alone, so the
+  dudect lane that links the same archive never evaluates it.
 - `tests/c/test_input_guards.c`: ML-KEM ciphertext and key one octet long,
   ciphertext buffer one octet short, the modulus check's second packed
-  coefficient; ML-DSA and SLH-DSA 256-octet contexts (deleting ML-DSA's cap
-  aborts under the stack protector: the 257-octet prefix overflows); ECDSA
+  coefficient; ML-DSA and SLH-DSA 256-octet contexts refused and 255-octet
+  contexts accepted, so a cap loosened or tightened by one fails (deleting
+  ML-DSA's cap aborts under the stack protector: the 257-octet prefix
+  overflows); ECDSA
   private keys of 0 and >= n, undefined flag bits and digest lengths
   (deleting the length check makes a 0-octet digest hang the signer),
   r and s out of range in both converters, key generation's rejection

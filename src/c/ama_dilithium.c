@@ -625,6 +625,42 @@ static unsigned int dil_make_hint(int32_t a0, int32_t a1, const dil_params *P) {
     return 0;
 }
 
+#ifdef AMA_TESTING_MODE
+/* MakeHint's boundary clause, `a0 == -gamma2 && a1 != 0`, is reached by an
+ * honest signature only for particular messages, and nothing public says
+ * whether a given signing run reached it.  tests/c/test_ml_dsa_hint_encoding.c
+ * pins one such message per parameter set; without a way to observe the
+ * clause, a change to signing that moved the edge elsewhere would leave that
+ * case verifying a signature that no longer exercises it.  This counter is
+ * the observation: the number of coefficients of the LAST hint computation on
+ * this thread (the accepted attempt's, since it is the last to compute hints)
+ * that met a0 == -gamma2 with a1 == 0.
+ *
+ * Disarmed until a test arms it, for the reason dil_test_invntt_bound_armed
+ * records: tests/c/test_dudect.c links this archive, and the comparison is on
+ * secret-derived coefficients.  With the flag clear the && short-circuits
+ * before any of them is read.  The shipped libraries carry none of this. */
+static _Thread_local int dil_test_make_hint_edge_armed = 0;
+static _Thread_local unsigned int dil_test_make_hint_edge_hits = 0;
+
+void ama_dilithium_test_make_hint_edge_arm(int armed) {
+    dil_test_make_hint_edge_hits = 0;
+    dil_test_make_hint_edge_armed = armed ? 1 : 0;
+}
+
+unsigned int ama_dilithium_test_make_hint_edge_hits(void) {
+    return dil_test_make_hint_edge_hits;
+}
+
+int ama_dilithium_test_make_hint(ama_ml_dsa_param_set_t ps, int32_t a0, int32_t a1) {
+    const dil_params *P = dil_params_for(ps);
+    if (!P) {
+        return -1;
+    }
+    return (int)dil_make_hint(a0, a1, P);
+}
+#endif /* AMA_TESTING_MODE */
+
 /**
  * UseHint: recover high bits from hint (FIPS 204 Algorithm 40).
  *
@@ -1491,6 +1527,12 @@ static unsigned int dil_polyveck_make_hint(uint8_t *hint,
                                             const dil_params *P) {
     unsigned int i, j, s = 0;
 
+#ifdef AMA_TESTING_MODE
+    if (dil_test_make_hint_edge_armed) {
+        dil_test_make_hint_edge_hits = 0;
+    }
+#endif
+
     /* The scan always runs to completion.  Returning at the first hint past
      * omega made a rejected attempt's cost a function of WHERE the overflow
      * happened, which is a function of w0 - c*s2 + c*t0 and therefore of the
@@ -1506,6 +1548,12 @@ static unsigned int dil_polyveck_make_hint(uint8_t *hint,
         for (j = 0; j < DIL_N; ++j) {
             unsigned int h =
                 dil_make_hint(v0->vec[i].coeffs[j], v1->vec[i].coeffs[j], P) ? 1u : 0u;
+#ifdef AMA_TESTING_MODE
+            if (dil_test_make_hint_edge_armed && v0->vec[i].coeffs[j] == -P->gamma2 &&
+                v1->vec[i].coeffs[j] == 0) {
+                dil_test_make_hint_edge_hits++;
+            }
+#endif
             if (h && s < (unsigned int)P->omega) {
                 hint[s] = (uint8_t)j;
             }

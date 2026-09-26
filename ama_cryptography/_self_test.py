@@ -117,7 +117,12 @@ _POST_LOCK = threading.RLock()
 
 #: Evidence from the last POST failure, retained across a successful
 #: ``reset_module()`` so recovery does not erase the record of what failed.
-_LAST_FAILURE: Dict[str, Any] = {"reason": None, "results": [], "duration_ms": 0.0}
+_LAST_FAILURE: Dict[str, Any] = {
+    "reason": None,
+    "results": [],
+    "duration_ms": 0.0,
+    "stage_durations_ms": {},
+}
 
 # Strict mode env: when set, a skipped KAT is treated as a failure so
 # release builds (and any deployment that demands every approved
@@ -259,22 +264,32 @@ def reset_module() -> bool:
     """
     with _POST_LOCK:
         if module_status() == "ERROR":
-            _LAST_FAILURE["reason"] = module_error_reason()
-            _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
-            _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
+            _record_last_failure()
         return _run_self_tests()
+
+
+def _record_last_failure() -> None:
+    """Snapshot the current failure for :func:`last_failure`."""
+    _LAST_FAILURE["reason"] = module_error_reason()
+    _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
+    _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
+    _LAST_FAILURE["stage_durations_ms"] = dict(_POST_STAGE_DURATIONS_MS)
 
 
 def last_failure() -> Dict[str, Any]:
     """Return the most recent POST failure, or empty when there has not been one.
 
     Keys mirror the failing run: ``reason``, ``results`` (the full tri-state
-    table as it stood when POST failed) and ``duration_ms``.
+    table as it stood when POST failed), ``duration_ms`` and
+    ``stage_durations_ms`` (each stage that ran, the failing one last), so the
+    failed run's timing survives the recovery run that overwrites
+    :func:`module_attestation`.
     """
     return {
         "reason": _LAST_FAILURE["reason"],
         "results": list(_LAST_FAILURE["results"]),
         "duration_ms": _LAST_FAILURE["duration_ms"],
+        "stage_durations_ms": dict(_LAST_FAILURE["stage_durations_ms"]),
     }
 
 
@@ -3243,6 +3258,7 @@ def _run_self_tests() -> bool:
         )
 
         all_passed = True
+        stage_name = ""
         stage_durations: Dict[str, float] = {}
         try:
             for stage_name, stage_fn in stages:
@@ -3260,6 +3276,19 @@ def _run_self_tests() -> bool:
                     _set_error(err)
                     all_passed = False
                     break
+        except BaseException as exc:
+            # A stage that raises is a failed POST, and it is recorded as one
+            # before the exception continues (the import still fails, per
+            # INVARIANT-39).  Left alone it exited with the module in
+            # SELF_TEST, no reason and nothing in last_failure(): crypto was
+            # refused and the exception propagated, but the module's own
+            # status reported no failure at all.
+            all_passed = False
+            _set_error(
+                f"FIPS POST internal error: stage {stage_name!r} raised "
+                f"{type(exc).__name__}: {exc}"
+            )
+            raise
         finally:
             # Drop the self-test allowance before returning by ANY path,
             # including an unexpected exception escaping a stage.  Leaving it
@@ -3271,16 +3300,14 @@ def _run_self_tests() -> bool:
             # a normal return left the previous run's timing in its place.
             _POST_DURATION_MS = (time.monotonic() - start) * 1000
             _POST_STAGE_DURATIONS_MS = stage_durations
-
-        if not all_passed:
-            # Snapshot the failed run for :func:`last_failure` NOW.  Until this
-            # line the record was written only by ``reset_module()``, so a
-            # failed POST that nobody had yet tried to recover from reported
-            # "no failure" — the opposite of the truth, and exactly when an
-            # operator reads it.
-            _LAST_FAILURE["reason"] = module_error_reason()
-            _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
-            _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
+            if not all_passed:
+                # Snapshot the failed run for :func:`last_failure` NOW, on
+                # every failing exit.  Until this was written here the record
+                # came only from ``reset_module()``, so a failed POST that
+                # nobody had yet tried to recover from reported "no failure" —
+                # the opposite of the truth, and exactly when an operator
+                # reads it.
+                _record_last_failure()
 
         if all_passed:
             _set_operational()

@@ -41,6 +41,13 @@
  *   ML-DSA's |ctx| <= 255 ........................ aborts (stack protector:
  *                                                  the prefix overflows)
  *   SLH-DSA's |ctx| <= 255 ....................... fails
+ *   SLH-DSA's cap tightened to |ctx| < 255 ....... fails (the 255-octet
+ *                                                  control)
+ *   ML-DSA's cap tightened to |ctx| < 255 ........ fails here, and is the
+ *                                                  one row where another
+ *                                                  test also fails
+ *                                                  (test_ml_dsa_context_
+ *                                                  separation)
  *   ECDSA private-key range, sign flags, verify
  *   flags, digest length, raw -> DER s range ..... each fails
  *   ML-KEM modulus check's c1 operand ............ fails
@@ -400,6 +407,14 @@ static void slh_dsa_guards(ama_slhdsa_param_set_t ps, const char *name,
               ama_slhdsa_verify(ps, sig, sig_bytes, msg, 3, ctx, 256, pk) == INVALID,
           "%s: sign, deterministic sign, addrnd sign and verify refuse a 256-octet context",
           name);
+    /* The accepting side of the same boundary: 255 is the largest length the
+     * one-octet field encodes, so a cap tightened by one (`>= 255`) must fail
+     * here.  Sign and verify each build the prefix, so both are checked. */
+    sig_len = sizeof sig;
+    CHECK(ama_slhdsa_sign(ps, sig, &sig_len, msg, 3, ctx, 255, sk) == AMA_SUCCESS &&
+              sig_len == sig_bytes &&
+              ama_slhdsa_verify(ps, sig, sig_len, msg, 3, ctx, 255, pk) == AMA_SUCCESS,
+          "%s: control: a 255-octet context signs and verifies", name);
     CHECK(ama_slhdsa_sign(ps, sig, &sig_len, msg, 3, NULL, 1, sk) == INVALID &&
               ama_slhdsa_verify(ps, sig, sig_bytes, msg, 3, NULL, 1, pk) == INVALID,
           "%s: a NULL context with a non-zero length is refused", name);

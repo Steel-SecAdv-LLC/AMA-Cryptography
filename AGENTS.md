@@ -348,8 +348,11 @@ was swept and already scrubbed), a High one (FROST
 `ama_frost_verify_share` returned a verdict its header contradicts) and a
 Medium one (three ML-DSA hint-encoding rejections, an SUF-CMA property,
 executed by no suite, under a comment citing a test that never existed) were
-remediated, and each guard found reachable was given a test whose PIN or
-SMOKE status was established by mutation. What remains in them (all-suite
+remediated, and each guard found reachable was given a test. Its label
+follows §6.4: PIN where deleting the guard made the test fail, SMOKE where
+the guard proved redundant under the same mutation, and RANGE for the NULL,
+unknown-set and short-buffer refusals of `tests/c/test_input_guards.c`,
+which exercise the refusal's domain and were not mutation-tested. What remains in them (all-suite
 figures:
 `ama_slhdsa.c` 62, `ama_dilithium.c` 50, `ama_kyber.c` 48, `ama_frost.c` 38,
 `ama_nistp.c` 36) is classified in that entry: propagation from calls that

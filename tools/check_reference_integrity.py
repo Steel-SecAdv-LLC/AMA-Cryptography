@@ -46,7 +46,8 @@ Over the shipped tree (``ama_cryptography/``, ``src/``, ``include/``,
    code.
 3. **Test citations in the shipped code** — a ``tests/...`` path that is not a
    tracked file, or ``test_x in tests/y.py`` where ``y.py`` defines no
-   ``test_x`` (a mention in a docstring, comment or string is not a test).
+   ``test_x`` (a mention in a docstring, comment, string, call or prototype
+   is not a test; see :func:`defines_test`).
    A comment beside a guard that names its test is the reader's evidence that
    the guard is protected.  On 2026-09-26 ``src/c/ama_dilithium.c`` named
    ``test_a_permuted_hint_is_refused`` in ``tests/test_pqc_param_sets.py`` as
@@ -141,6 +142,7 @@ Exit code:
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -287,19 +289,51 @@ NAMED_TEST = re.compile(
 )
 
 
+#: A C comment or string/character literal, removed before a definition is
+#: looked for, so prose and literals cannot supply one.
+_C_NON_CODE = re.compile(
+    r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.DOTALL
+)
+
+
+def _python_defines(source: str, name: str) -> bool:
+    """Whether a function (or method) named ``name`` is defined in ``source``."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # Not Python this gate can read; a line-anchored ``def`` is the best
+        # available evidence, and prose rarely starts a line with one.
+        shape = r"^[ \t]*(?:async[ \t]+)?def[ \t]+" + re.escape(name) + r"[ \t]*\("
+        return re.search(shape, source, re.MULTILINE) is not None
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+        for node in ast.walk(tree)
+    )
+
+
+def _c_defines(source: str, name: str) -> bool:
+    """Whether a C function named ``name`` is defined (with a body) in ``source``.
+
+    Comments and literals are blanked first.  A definition is the name at the
+    start of a line, after nothing or after its return type (which may sit on
+    the line above), followed by a parameter list and an opening brace: a
+    prototype ends in ``;`` and a call sits inside an expression, so neither
+    matches."""
+    code = _C_NON_CODE.sub(lambda m: "\n" * m.group(0).count("\n") or " ", source)
+    shape = r"^[ \t]*(?:[A-Za-z_]\w*[ \t\n\*]+)*" + re.escape(name) + r"[ \t]*\([^;{}]*\)[ \t\n]*\{"
+    return re.search(shape, code, re.MULTILINE) is not None
+
+
 def defines_test(source: str, name: str, path: str) -> bool:
     """Whether ``source`` (the text of ``path``) defines the test ``name``.
 
-    A definition, not a mention: a Python ``def``, or a C function whose
-    return type precedes the name at the start of a line.  A name that
-    appears only in a docstring, comment or string does not resolve the
-    citation."""
-    escaped = re.escape(name)
+    A definition, not a mention: a Python function or method definition, read
+    with :mod:`ast`, or a C function definition with a body.  A name that
+    appears only in a docstring, comment, string, prototype or call does not
+    resolve the citation."""
     if path.endswith(".py"):
-        shape = r"^[ \t]*(?:async[ \t]+)?def[ \t]+" + escaped + r"[ \t]*\("
-    else:
-        shape = r"^(?:[A-Za-z_]\w*[ \t\*]+)+" + escaped + r"[ \t]*\("
-    return re.search(shape, source, re.MULTILINE) is not None
+        return _python_defines(source, name)
+    return _c_defines(source, name)
 
 
 def _unwrap(matched: str) -> str:

@@ -202,13 +202,19 @@ class TestPowerOnSelfTests:
             assert module_status() == "OPERATIONAL"
 
     def test_stage_durations_name_a_stage_that_raises(self) -> None:
-        """A stage that raises is timed and published, not the previous run's map."""
+        """A stage that raises is a recorded POST failure: timed and published
+        (not the previous run's map), the module in ERROR naming the stage, and
+        the run in last_failure(); the exception still propagates."""
         from ama_cryptography._self_test import (
+            _LAST_FAILURE,
             _run_self_tests,
+            last_failure,
             module_attestation,
+            module_error_reason,
             module_status,
         )
 
+        untouched_record = last_failure()
         try:
             assert _run_self_tests() is True
             before = module_attestation()["stage_durations_ms"]
@@ -224,9 +230,16 @@ class TestPowerOnSelfTests:
             stages = module_attestation()["stage_durations_ms"]
             assert list(stages)[-1] == "oracle"
             assert "rng" not in stages
+            assert module_status() == "ERROR"
+            reason = module_error_reason() or ""
+            assert "'oracle'" in reason and "RuntimeError" in reason
+            record = last_failure()
+            assert record["reason"] == reason
+            assert record["stage_durations_ms"] == stages
         finally:
             assert _run_self_tests() is True
             assert module_status() == "OPERATIONAL"
+            _LAST_FAILURE.update(untouched_record)
 
     def test_all_kats_passed(self) -> None:
         """Every recorded KAT either passed or was an explicit skip.

@@ -39,14 +39,21 @@
  *
  * The signer's side of the same encoding is here too: MakeHint's boundary
  * case (a0 = -gamma2 with a1 = 0 must give hint 0), which no suite executed
- * either -- see case_make_hint_edge.
+ * either.  It is tested twice, because each form covers what the other
+ * cannot: case_make_hint_boundary evaluates the predicate at the exact
+ * values either side of both gamma2 bounds (RANGE, and a PIN for each
+ * comparison), and case_make_hint_edge signs a pinned message whose accepted
+ * attempt meets the clause and requires it to verify end to end, first
+ * confirming through a testing-only counter that it still meets the clause.
  *
  * Mutation record (AGENTS.md 6.2), gcc 13.3.0 Release, x86-64, full ctest:
  * deleting the ordering check or the padding check fails this test on all
  * three parameter sets, deleting the `limit < prev` operand fails it on
  * ML-DSA-65 and -87 (see case_decreasing_count for ML-DSA-44), deleting
- * MakeHint's `&& a1 != 0` fails it on all three, and in each case this is
- * the only C test that fails.
+ * MakeHint's `&& a1 != 0` fails it on all three (both the boundary table and
+ * the end-to-end case), and in each case this is the only C test that fails.
+ * Turning either bound comparison inclusive (`>=` for `>`, `<=` for `<`)
+ * fails the boundary table on all three.
  *
  * The message search is deterministic: ML-DSA signing here is the FIPS 204
  * deterministic variant, so the same key and message always produce the
@@ -56,6 +63,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ama_cryptography.h"
+#include "../../src/c/internal/ama_testing_exports.h"
 
 typedef struct {
     ama_ml_dsa_param_set_t ps;
@@ -224,13 +232,50 @@ static void case_decreasing_count(const hint_layout *L) {
 static void case_make_hint_edge(const hint_layout *L) {
     uint8_t msg[4];
     size_t sig_len;
-    if (!sign_message(L, L->make_hint_edge_msg, msg, &sig_len)) {
+    unsigned hits;
+    int signed_ok;
+    ama_dilithium_test_make_hint_edge_arm(1);
+    signed_ok = sign_message(L, L->make_hint_edge_msg, msg, &sig_len);
+    hits = ama_dilithium_test_make_hint_edge_hits();
+    ama_dilithium_test_make_hint_edge_arm(0);
+    if (!signed_ok) {
         CHECK(0, "%s: signing failed", L->name);
         return;
     }
+    /* The precondition, checked rather than assumed: without it this case
+     * verifies a signature that never met the clause and pins nothing. */
+    CHECK(hits > 0,
+          "%s: message %u meets a0 = -gamma2, a1 = 0 in its accepted attempt "
+          "(%u coefficient(s); none means signing changed: re-measure and re-pin)",
+          L->name, L->make_hint_edge_msg, hits);
     CHECK(verify(L, msg, sig, sig_len) == AMA_SUCCESS,
           "%s: a signature whose MakeHint met a0 = -gamma2, a1 = 0 verifies (m=%u)",
           L->name, L->make_hint_edge_msg);
+}
+
+/* MakeHint at its exact bounds.  gamma2 is (q-1)/88 for ML-DSA-44 and
+ * (q-1)/32 for -65 and -87; hint = 1 exactly when a0 lies outside
+ * [-gamma2, gamma2], or a0 == -gamma2 with a1 != 0. */
+static void case_make_hint_boundary(const hint_layout *L) {
+    const int32_t q = 8380417;
+    const int32_t g = (L->ps == AMA_ML_DSA_44) ? (q - 1) / 88 : (q - 1) / 32;
+    static const struct { int32_t da0; int32_t a1; int expect; } rows[] = {
+        /* a0 = -gamma2 + da0 for the first four, gamma2 + da0 for the rest */
+        { 0, 0, 0 },   /* -gamma2, a1 = 0: the clause under test */
+        { 0, 1, 1 },   /* -gamma2, a1 != 0 */
+        { -1, 0, 1 },  /* below -gamma2 */
+        { 1, 1, 0 },   /* just inside */
+        { 0, 0, 0 },   /* +gamma2 is inside */
+        { 0, 5, 0 },
+        { 1, 0, 1 },   /* above +gamma2 */
+        { -1, 3, 0 },
+    };
+    for (size_t r = 0; r < sizeof rows / sizeof rows[0]; r++) {
+        int32_t a0 = (r < 4 ? -g : g) + rows[r].da0;
+        int got = ama_dilithium_test_make_hint(L->ps, a0, rows[r].a1);
+        CHECK(got == rows[r].expect, "%s: MakeHint(a0 = %ld, a1 = %ld) = %d, expected %d",
+              L->name, (long)a0, (long)rows[r].a1, got, rows[r].expect);
+    }
 }
 
 /* `limit > omega`: the bound that keeps use_hint inside the hint array. */
@@ -269,6 +314,7 @@ int main(void) {
         case_decreasing_count(L);
         case_count_past_omega(L);
         case_make_hint_edge(L);
+        case_make_hint_boundary(L);
     }
     printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
