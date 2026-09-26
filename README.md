@@ -55,9 +55,17 @@ The Python layer adds a hybrid Ed25519 + ML-DSA-65 signed-package format, key ma
 
 The security analysis is self-assessed. The library has **not** been externally audited, and it is **not** CAVP- or CMVP-validated; CI checks conformance against NIST ACVP vectors as a self-attestation ([NIST Algorithm Compliance](#nist-algorithm-compliance)).
 
-> **Design.** Built exclusively from standardized primitives (NIST FIPS and SP, IETF RFC, SECG SEC 2) — no custom ciphers, hash functions or signature schemes. The composition protocol — how the primitives combine into the signed package, double-helix key evolution and the adaptive posture system — is an original design by Steel Security Advisors LLC, and has no formal proof ([docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md)).
+> **Design.** Built exclusively from standardized primitives (NIST FIPS and SP, IETF RFC, SECG SEC 2) — no custom ciphers, hash functions or signature schemes. The composition protocol — how the primitives combine into the signed package, double-helix key evolution and the adaptive posture system — is an original design by Steel Security Advisors LLC, and has no formal proof ([docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md)). AMA Cryptography provides post-quantum cryptography for <a href="https://github.com/Steel-SecAdv-LLC/Mercury-Agent">Mercury Agent</a> and FINDΩYOU™, both of which derive their cryptographic foundation from this library.
 >
-> **Consumers.** AMA Cryptography is a standalone library that any Python project can use. It is the cryptographic library of <a href="https://github.com/Steel-SecAdv-LLC/Mercury-Agent">Mercury Agent</a>.
+> **The Trio — Kin Systems:** AMA Cryptography, Mercury Agent, and FINDΩYOU™ form a single civilization-first lineage. Each is independently deployable, but they are designed as kin — sharing the same cryptographic backbone, the same ethical alignment posture, and the same civilization-first mission.
+>
+> - **AMA Cryptography ♱** — the cryptographic foundation. Hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Standalone library; any Python project can install and use it independently.
+>
+> - **Mercury Agent ♱** — a neuro-symbolic AI for multi-domain anomaly detection, built on a 7-phase cognitive architecture (Neural Memory → Symbolic Logic → Hybrid Fusion → Enhanced Detection → Autonomous OODA Agent → Ethical Bounding → Cognitive Evolution), with ten cognitive components wired at runtime. Every public decision surface clears a mandatory, fail-closed harm-uplift gate and the σ_Immutable configuration-integrity gate; Benevolence is scored as an advisory signal. Measured detection results are published in Mercury's [CAPABILITY_MATRIX.md](https://github.com/Steel-SecAdv-LLC/Mercury-Agent/blob/main/CAPABILITY_MATRIX.md). Designed for STEM exploration, humanitarian crisis response, and civilization-first AI evolution.
+>
+> - **FINDΩYOU™** — a near-future addition with a people-first mission: locating the lost, missing, and abducted to reunite families, and accounting for the predators responsible so they answer to justice. A comprehensive, ethical biometric platform — facial, iris, fingerprint, and voice recognition with AgeTransGAN-driven age progression — bound by neuro-symbolic ethical constraints (Logic Tensor Networks) and audited for bias. Integrates real-time emergency channels (FEMA IPAWS Amber Alerts, NOAA, USGS) and operates under geo-consent with strict privacy compliance (BIPA, CCPA/CPRA, GDPR, COPPA). US-focused, civilization-first.
+>
+> **Integration:** AMA Cryptography is a standalone cryptographic library — any Python project can install and use it independently for quantum-resistant security. The library is designed for general-purpose use across AI agents, AI systems, and any application requiring post-quantum protection.
 
 > **Before production use.** This is a self-assessed implementation under active development. We recommend:
 > - an HSM validated to FIPS 140-3, Level 3 or higher, for master secrets
@@ -621,8 +629,8 @@ for a fully locked, index-independent install.
 
 ### Downstream Consumers (hard runtime dependency)
 
-Mercury Agent imports this library on its runtime path and does not start
-without it. For a dependency of that class, declare it with an
+Mercury Agent and FINDΩYOU™ import this library on their runtime path — they
+do not start without it. For a dependency of that class, declare it with an
 exact, verifiable pin rather than a floating range.
 
 **Pin by tag, no index required** (PEP 508 direct reference — valid in
@@ -646,9 +654,9 @@ ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases
 > PyPI rejects `Requires-Dist` entries carrying direct references. So the
 > choice is a stack-wide one, not a per-project one:
 >
-> - If a consumer such as Mercury Agent is itself distributed from GitHub, the
+> - If Mercury Agent / FINDΩYOU™ are themselves distributed from GitHub, the
 >   `git+https` pin above is fully supported and no index is involved anywhere.
-> - If a consumer is to be installable from PyPI, then `ama-cryptography`
+> - If any of them is to be installable from PyPI, then `ama-cryptography`
 >   must also resolve from PyPI (or from an index configured via
 >   `--extra-index-url`), because a direct reference would block their upload.
 
@@ -1440,6 +1448,7 @@ GitHub's dependency graph is enabled for this repository: `Insights > Dependency
 | Type | Contact |
 |------|---------|
 | General Inquiries | steel.sa.llc@gmail.com |
+| Mercury Agent | steel.sa.llc@mercuryagent.global, contact@mercuryagent.global |
 | Security Issues | See [SECURITY.md](SECURITY.md) for responsible disclosure |
 | GitHub Issues | [Issues Page](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/issues) |
 | GitHub Repository | [AMA Cryptography](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography) |
