@@ -34,13 +34,15 @@ each test file's header; the NULL, unknown-set and short-buffer rows of
   re-signs the integrity artefact, runs `pytest tests/` and the Wycheproof
   runner against it, and restores and re-signs the release library on every
   path out; if the restore itself fails, the backup is kept and named rather
-  than deleted with its temporary directory. The Wycheproof runner is not a pytest module, and without it
-  every ECDSA DER-parser rejection in `ama_nistp.c` read as never taken.
+  than deleted with its temporary directory. The Wycheproof runner is not a
+  pytest module, and without it every ECDSA DER-parser rejection in
+  `ama_nistp.c` read as never taken.
   Measured on the tree before this pass (gcc 13.3.0, Debug `--coverage
   -O0 -g`, x86-64): 1,464 arcs under `src/c` never taken by the C suite,
   1,178 by the C and Python suites, 1,148 with the Wycheproof and ACVP
-  runners added. After it: 1,265 by the C suite, 989 by the C suite,
-  pytest and Wycheproof (201 translation units, `ctest` 153 tests). Its
+  runners added. After it, re-measured on the final tree: 1,265 by the C
+  suite, 991 by the C suite, pytest and Wycheproof (202 translation units,
+  13,437 arcs, `ctest` 154 tests). Its
   own test caught a defect in its first draft: a short-circuit `or` skipped
   the Wycheproof run whenever pytest failed.
 

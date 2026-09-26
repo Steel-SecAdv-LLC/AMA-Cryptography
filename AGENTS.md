@@ -330,10 +330,10 @@ Open item, carried forward and unassigned:
 
 `tools/measure_branch_coverage.py` reports the branch arcs under `src/c` that
 no suite takes. Measured 2026-09-26 (gcc 13.3.0, Debug `--coverage -O0 -g`,
-x86-64 with BMI2 and ADX, 201 translation units, `ctest` 153 tests): 1,265
-arcs never taken by the C suite alone, and 989 never taken by the C suite,
-`pytest tests/` and the Wycheproof runner together (`--python-suite`). These
-are dated measurements; the suite grows. They supersede the 2026-09-22 figure
+x86-64 with BMI2 and ADX, 202 translation units, 13,437 arcs, `ctest` 154
+tests): 1,265 arcs never taken by the C suite alone, and 991 never taken by
+the C suite, `pytest tests/` and the Wycheproof runner together
+(`--python-suite`). These are dated measurements; the suite grows. They supersede the 2026-09-22 figure
 this paragraph carried (1,741 of 11,315 over 143 translation units) and the
 839b66b4 commit message's 1,765 of 11,053, which belongs to a different host
 and toolchain. The dispatch and CPUID buckets (202 and 42 arcs) are
@@ -354,15 +354,16 @@ the guard proved redundant under the same mutation, and RANGE for the NULL,
 unknown-set and short-buffer refusals of `tests/c/test_input_guards.c`,
 which exercise the refusal's domain and were not mutation-tested. What remains in them (all-suite
 figures:
-`ama_slhdsa.c` 62, `ama_dilithium.c` 50, `ama_kyber.c` 48, `ama_frost.c` 38,
-`ama_nistp.c` 36) is classified in that entry: propagation from calls that
+`ama_slhdsa.c` 62, `ama_dilithium.c` 51, `ama_kyber.c` 48, `ama_frost.c` 38,
+`ama_nistp.c` 36; two of the ML-DSA arcs are in the testing-only MakeHint
+helpers, the unknown-set return and the counter's `a1 != 0` side) is classified in that entry: propagation from calls that
 cannot fail once their inputs are validated, allocation and mutex failure,
 parameter-table self-checks, dispatch arms another ISA takes, build
 diagnostics, exits of negligible probability, and guards measured
 redundant -- except the samplers' rare continuation paths (ML-DSA's XOF
 re-squeeze and underfill fallback, ML-KEM's x4 per-lane stop), which are
 reachable and not yet pinned by a seed that reaches them. The largest rows
-not yet examined are `ama_sha3.c` (87), `ama_core.c` (72) and `ama_hkdf.c`
+not yet examined are `ama_sha3.c` (89), `ama_core.c` (72) and `ama_hkdf.c`
 (45).
 
 **What this inventory is, and what it is not.** Two corrections, per §6.6,
