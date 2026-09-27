@@ -166,6 +166,32 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # The derived figures (docs/METRICS_REPORT.md line counts, the
+      # documented-count claims, the visual-asset manifest) are functions of
+      # the whole tree, so ANY staged change can move them: 2ed1eb22 added
+      # eight lines of JSON to two benchmark baselines after the figures had
+      # been regenerated, and every Python test lane and Security Checks went
+      # red on a drift of eight lines.  This is the same --check CI runs
+      # (tools/check_documented_counts.py and the visual-assets gate), run
+      # against the index before the commit exists.  It writes nothing; on
+      # drift it names the stale figure and the command that regenerates it.
+      #
+      # language: python, not system.  The per-file test counts are measured
+      # by `pytest --collect-only` under the hook's own interpreter, and with
+      # a `python3` on PATH that cannot import pytest every documented file
+      # read as "no count" (measured: six false rows).  pre-commit's isolated
+      # environment carries the same pytest the mypy hook pins; tests/ is a
+      # package, so collection imports ama_cryptography from the tree and
+      # needs no install.
+      - id: ama-derived-docs
+        name: AMA derived figures match the tree (refresh_derived_docs --check)
+        entry: python tools/refresh_derived_docs.py --check --quiet
+        language: python
+        additional_dependencies:
+          - pytest==9.1.1
+        pass_filenames: false
+        always_run: true
+
 # Configuration notes:
 # - black: Code formatter with 100 char line length
 # - ruff: Fast linter (replaces flake8 + isort); config in pyproject.toml

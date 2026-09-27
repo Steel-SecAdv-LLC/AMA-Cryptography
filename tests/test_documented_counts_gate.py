@@ -919,3 +919,69 @@ class TestPerFamilyFloor:
     def test_meeting_every_floor_passes(self, tool: ModuleType) -> None:
         exact = dict(tool.CLAIM_FAMILY_FLOORS)
         assert tool.families_below_floor(exact) == []
+
+
+class TestCollectionFailuresAreNamed:
+    """A gate that cannot measure must say so, not report a drift.
+
+    Before this, a pytest that was not importable, or a collection that
+    failed, came back as ``pytest collection produced no count`` for every
+    documented file — the shape of a documentation drift, when nothing about
+    the documentation had changed.  Measured with an interpreter lacking
+    pytest: six such rows on this repository.
+    """
+
+    @staticmethod
+    def _repo_claiming(tmp_path: Path, test_source: str) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "tests").mkdir(parents=True)
+        (repo / "docs").mkdir()
+        (repo / "tests" / "test_probe.py").write_text(test_source, encoding="utf-8")
+        (repo / "docs" / "NOTES.md").write_text(
+            "Coverage: `tests/test_probe.py` — 1 tests.\n", encoding="utf-8"
+        )
+        return repo
+
+    def test_a_missing_pytest_is_one_finding_naming_the_interpreter(
+        self, tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = self._repo_claiming(tmp_path, "def test_a():\n    pass\n")
+        monkeypatch.setattr(tool, "pytest_is_importable", lambda: False)
+        problems = tool.check_test_counts(repo)
+        assert len(problems) == 1, problems
+        assert "pytest is not importable" in problems[0]
+        assert sys.executable in problems[0]
+        assert "pip install" in problems[0]
+        assert "produced no count" not in problems[0]
+
+    def test_a_failed_collection_reports_pytest_s_reason(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo_claiming(
+            tmp_path, "import module_that_does_not_exist_anywhere\n\ndef test_a():\n    pass\n"
+        )
+        count, reason = tool.collect_test_count_or_reason(repo, "tests/test_probe.py")
+        assert count is None
+        assert reason.startswith("exit ")
+        # The cause, not pytest's closing summary ("no tests collected, 1
+        # error in 0.15s"), which names a count of errors and a duration.
+        assert "ModuleNotFoundError" in reason, reason
+        assert "module_that_does_not_exist_anywhere" in reason, reason
+        problems = tool.check_test_counts(repo)
+        assert len(problems) == 1, problems
+        assert problems[0].startswith(
+            "tests/test_probe.py: pytest collection produced no count (exit "
+        ), problems[0]
+        assert "module_that_does_not_exist_anywhere" in problems[0]
+
+    def test_a_successful_collection_carries_no_reason(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo_claiming(tmp_path, "def test_a():\n    pass\n")
+        assert tool.collect_test_count_or_reason(repo, "tests/test_probe.py") == (1, "")
+        assert tool.collect_test_count(repo, "tests/test_probe.py") == 1
+        assert tool.check_test_counts(repo) == []
+
+    def test_pytest_is_importable_here(self, tool: ModuleType) -> None:
+        """The suite itself runs under pytest, so the predicate must say yes."""
+        assert tool.pytest_is_importable() is True

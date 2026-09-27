@@ -55,6 +55,7 @@ Exit code:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -113,12 +114,32 @@ def _markdown_files(repo: Path) -> list[Path]:
     return list(seen)
 
 
+def pytest_is_importable() -> bool:
+    """Whether the interpreter that will collect the counts can import pytest.
+
+    Collection runs ``sys.executable -m pytest``; with pytest absent every
+    target used to come back as "collection produced no count", which reads
+    as a drift in the documentation when the gate could not measure at all.
+    """
+    return importlib.util.find_spec("pytest") is not None
+
+
 def collect_test_count(repo: Path, relative: str) -> int | None:
+    """How many tests pytest actually collects from one file, or ``None``."""
+    return collect_test_count_or_reason(repo, relative)[0]
+
+
+def collect_test_count_or_reason(repo: Path, relative: str) -> tuple[int | None, str]:
     """How many tests pytest actually collects from one file.
 
     Uses pytest's own collection rather than counting ``def test_`` lines:
     parametrisation multiplies a single definition into many cases, and it is
     the collected number the documentation is quoting.
+
+    Returns the count and an empty string, or ``None`` and the last line
+    pytest wrote, so a collection that fails (a module the file imports is
+    missing, a syntax error, a conftest that raised) is reported as what it
+    is rather than as a documented figure that no longer matches.
     """
     result = subprocess.run(
         [
@@ -138,14 +159,30 @@ def collect_test_count(repo: Path, relative: str) -> int | None:
     )
     match = re.search(r"^(\d+)\s+tests? collected", result.stdout, re.M)
     if match:
-        return int(match.group(1))
+        return int(match.group(1)), ""
     match = re.search(r"^(\d+)/(\d+) tests collected", result.stdout, re.M)
     if match:
-        return int(match.group(2))
-    return None
+        return int(match.group(2)), ""
+    # Prefer pytest's own error line (``E   ModuleNotFoundError: ...``) to its
+    # closing summary (``no tests collected, 1 error in 0.15s``), which names
+    # the count of errors but not their cause.
+    lines = (result.stdout + result.stderr).splitlines()
+    errors = [line[1:].strip() for line in lines if line.startswith("E ")]
+    if errors:
+        return None, f"exit {result.returncode}: {errors[-1]}"
+    last = next((line.strip() for line in reversed(lines) if line.strip()), "")
+    return None, f"exit {result.returncode}: {last or 'pytest wrote nothing'}"
 
 
 def check_test_counts(repo: Path) -> list[str]:
+    if not pytest_is_importable():
+        # Fail closed, but say why: one finding naming the interpreter, not
+        # one "no count" row per documented file.
+        return [
+            f"pytest is not importable from {sys.executable}, so the documented "
+            f"per-file test counts cannot be verified; run this gate from the "
+            f"environment that runs the test suite (pip install -e '.[dev]')"
+        ]
     problems: list[str] = []
     claims: dict[str, list[tuple[str, int]]] = {}
     for path in _markdown_files(repo):
@@ -158,9 +195,9 @@ def check_test_counts(repo: Path) -> list[str]:
             for doc, _ in entries:
                 problems.append(f"{doc}: claims a count for {target}, which does not exist")
             continue
-        actual = collect_test_count(repo, target)
+        actual, reason = collect_test_count_or_reason(repo, target)
         if actual is None:
-            problems.append(f"{target}: pytest collection produced no count")
+            problems.append(f"{target}: pytest collection produced no count ({reason})")
             continue
         for doc, claimed in entries:
             if claimed != actual:
