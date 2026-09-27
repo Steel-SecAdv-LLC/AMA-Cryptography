@@ -330,6 +330,47 @@ def test_a_failed_restore_keeps_the_backup_and_names_it(
     assert installed.read_bytes() == b"instrumented", "the backup is the only release copy"
 
 
+def test_an_interrupt_during_the_restore_still_names_the_backup(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ctrl-C while the release library is being copied back leaves a
+    half-written install and the backup as the only release copy; the
+    interrupt propagates, but not before the backup's path is printed.
+    Until 2026-09-27 only an OSError was named, and an interrupt left the
+    operator to find the temporary directory by hand."""
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *_, **__: _Done())
+    real_mkdtemp = tool.tempfile.mkdtemp
+    monkeypatch.setattr(
+        tool.tempfile, "mkdtemp", lambda **kwargs: real_mkdtemp(dir=tmp_path, **kwargs)
+    )
+    real_copy = tool.shutil.copy2
+    copies: list[Path] = []
+
+    def copy_then_interrupt_the_restore(src: Path, dst: Path) -> object:
+        copies.append(Path(dst))
+        if len(copies) == 3:  # backup, swap, restore
+            raise KeyboardInterrupt
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(tool.shutil, "copy2", copy_then_interrupt_the_restore)
+    with pytest.raises(KeyboardInterrupt):
+        tool._run_python_suite(build_dir, [])
+    message = capsys.readouterr().err
+    assert "the backup is kept at" in message, message
+    backup = Path(message.strip().rsplit("kept at ", 1)[1])
+    assert backup.read_bytes() == b"release", "the backup was deleted or is not the release library"
+    assert installed.read_bytes() == b"instrumented", "the backup is the only release copy"
+
+
 def test_a_restored_run_leaves_no_backup_behind(
     tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

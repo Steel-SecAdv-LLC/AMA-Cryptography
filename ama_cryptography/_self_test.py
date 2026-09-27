@@ -263,17 +263,35 @@ def reset_module() -> bool:
     reason POST itself never saw — against the results table that was live.
     """
     with _POST_LOCK:
-        if module_status() == "ERROR":
-            _record_last_failure()
+        if module_status() == "ERROR" and module_error_reason() != _LAST_FAILURE["reason"]:
+            # POST records its own failures on every failing exit, so a
+            # reason it did not record entered ERROR outside POST: a pairwise
+            # consistency test or the continuous RNG test.  That failure has
+            # no run of its own; the live table and timings belong to the
+            # last POST, which passed, and attaching them (as this did until
+            # 2026-09-27) described a POST failure that never happened.
+            _record_last_failure(results=[], duration_ms=0.0, stage_durations_ms={})
         return _run_self_tests()
 
 
-def _record_last_failure() -> None:
-    """Snapshot the current failure for :func:`last_failure`."""
+def _record_last_failure(
+    *,
+    results: Optional[List[Tuple[str, Optional[bool], str]]] = None,
+    duration_ms: Optional[float] = None,
+    stage_durations_ms: Optional[Dict[str, float]] = None,
+) -> None:
+    """Snapshot the current failure for :func:`last_failure`.
+
+    The evidence defaults to the live POST table and timings, the failing
+    run's own when POST calls this; a failure recorded from outside POST
+    passes the (empty) evidence it has.
+    """
     _LAST_FAILURE["reason"] = module_error_reason()
-    _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
-    _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
-    _LAST_FAILURE["stage_durations_ms"] = dict(_POST_STAGE_DURATIONS_MS)
+    _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS if results is None else results)
+    _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS if duration_ms is None else duration_ms
+    _LAST_FAILURE["stage_durations_ms"] = dict(
+        _POST_STAGE_DURATIONS_MS if stage_durations_ms is None else stage_durations_ms
+    )
 
 
 def last_failure() -> Dict[str, Any]:
@@ -284,6 +302,12 @@ def last_failure() -> Dict[str, Any]:
     ``stage_durations_ms`` (each stage that ran, the failing one last), so the
     failed run's timing survives the recovery run that overwrites
     :func:`module_attestation`.
+
+    A failure that put the module in ERROR outside POST -- a pairwise
+    consistency test or the continuous RNG test -- is recorded when
+    :func:`reset_module` recovers from it, with its ``reason`` and no run:
+    ``results`` empty, ``duration_ms`` 0 and ``stage_durations_ms`` empty,
+    because the last POST passed and its evidence is not that failure's.
     """
     return {
         "reason": _LAST_FAILURE["reason"],
@@ -3222,45 +3246,50 @@ def _run_self_tests() -> bool:
     global _SELF_TEST_RESULTS, _POST_DURATION_MS, _POST_STAGE_DURATIONS_MS
 
     with _POST_LOCK:
-        # Enter SELF_TEST and pin the guard's allowance to this thread — the
-        # transition lives in _module_state, where the state does.
-        _begin_self_test()
-        _SELF_TEST_RESULTS = []
         start = time.monotonic()
-
-        strict_mode = _env_flag_enabled(_AMA_FIPS_STRICT_ENV)
-
-        stages: Tuple[Tuple[str, Callable[[], Tuple[bool, Optional[str]]]], ...] = (
-            # Backend presence runs first purely for diagnosability: with no
-            # native library every later stage degrades or skips, and the
-            # operator is best served by being told the one fact that explains
-            # all of them rather than by a downstream symptom of it.  The
-            # verdict is order-independent — a missing backend fails POST from
-            # whichever position this stage occupies.
-            ("native-backend", _run_backend_stage),
-            # CASTs for the algorithms the integrity stage relies on, run
-            # BEFORE it (NIST IG 10.3.A): the signed-integrity check verifies an
-            # Ed25519 signature with the module's own native verifier and
-            # computes SHA3-256 digests, so both must be self-tested first. See
-            # _PRE_INTEGRITY_KAT_NAMES.
-            ("kat-pre-integrity", lambda: _run_kat_stage(strict_mode, _pre_integrity_kats())),
-            ("integrity", _run_integrity_stage),
-            # Bind the bytecode the interpreter actually executes to the source
-            # the integrity stage just verified.  Runs immediately after it: the
-            # source is proven unmodified, so any cached .pyc that does not
-            # recompile to it is poisoned or stale (NIST IG closes the signed
-            # source; this closes the compiled artefact the source is run from).
-            ("execution-integrity", _run_execution_integrity_stage),
-            # The remaining CASTs, after integrity.
-            ("kat", lambda: _run_kat_stage(strict_mode, _post_integrity_kats())),
-            ("oracle", lambda: _run_timing_oracle_stage(strict_mode)),
-            ("rng", _run_rng_stage),
-        )
-
         all_passed = True
         stage_name = ""
         stage_durations: Dict[str, float] = {}
         try:
+            # Enter SELF_TEST and pin the guard's allowance to this thread —
+            # the transition lives in _module_state, where the state does.
+            # Inside the ``try``: the ``finally`` below drops the allowance
+            # on every exit, and until 2026-09-27 the entry, the strict-mode
+            # read and the stage table sat before it, so an interrupt in
+            # that window escaped with the allowance still pinned to this
+            # thread (``test_an_interrupt_before_the_first_stage_still_drops_the_allowance``).
+            _begin_self_test()
+            _SELF_TEST_RESULTS = []
+
+            strict_mode = _env_flag_enabled(_AMA_FIPS_STRICT_ENV)
+
+            stages: Tuple[Tuple[str, Callable[[], Tuple[bool, Optional[str]]]], ...] = (
+                # Backend presence runs first purely for diagnosability: with no
+                # native library every later stage degrades or skips, and the
+                # operator is best served by being told the one fact that explains
+                # all of them rather than by a downstream symptom of it.  The
+                # verdict is order-independent — a missing backend fails POST from
+                # whichever position this stage occupies.
+                ("native-backend", _run_backend_stage),
+                # CASTs for the algorithms the integrity stage relies on, run
+                # BEFORE it (NIST IG 10.3.A): the signed-integrity check verifies an
+                # Ed25519 signature with the module's own native verifier and
+                # computes SHA3-256 digests, so both must be self-tested first. See
+                # _PRE_INTEGRITY_KAT_NAMES.
+                ("kat-pre-integrity", lambda: _run_kat_stage(strict_mode, _pre_integrity_kats())),
+                ("integrity", _run_integrity_stage),
+                # Bind the bytecode the interpreter actually executes to the source
+                # the integrity stage just verified.  Runs immediately after it: the
+                # source is proven unmodified, so any cached .pyc that does not
+                # recompile to it is poisoned or stale (NIST IG closes the signed
+                # source; this closes the compiled artefact the source is run from).
+                ("execution-integrity", _run_execution_integrity_stage),
+                # The remaining CASTs, after integrity.
+                ("kat", lambda: _run_kat_stage(strict_mode, _post_integrity_kats())),
+                ("oracle", lambda: _run_timing_oracle_stage(strict_mode)),
+                ("rng", _run_rng_stage),
+            )
+
             for stage_name, stage_fn in stages:
                 stage_start = time.monotonic()
                 try:
@@ -3293,7 +3322,8 @@ def _run_self_tests() -> bool:
             # and the interrupt propagates.
             all_passed = False
             _set_error(
-                f"FIPS POST internal error: stage {stage_name!r} raised "
+                f"FIPS POST internal error: stage "
+                f"{stage_name or '<before the first stage>'!r} raised "
                 f"{type(exc).__name__}: {exc}"
             )
             raise

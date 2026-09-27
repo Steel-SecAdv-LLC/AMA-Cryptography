@@ -50,6 +50,12 @@
  *                                                  separation)
  *   ECDSA private-key range, sign flags, verify
  *   flags, digest length, raw -> DER s range ..... each fails
+ *   ECDSA verify-side digest length alone ........ fails on all three curves
+ *                                                  (until 2026-09-27 the
+ *                                                  verify rows accepted any
+ *                                                  non-success code, and
+ *                                                  only P-256 failed: see
+ *                                                  the rows)
  *   ML-KEM modulus check's c1 operand ............ fails
  *   every CSPRNG check: ML-KEM keygen (d and z)
  *   and encapsulation, ML-DSA keygen and hedged
@@ -583,10 +589,17 @@ static void nistp_guards(ama_nist_curve_t curve, const char *name) {
                   AMA_SUCCESS,
           "%s: verify refuses an undefined flag bit (control: flags 0 verifies)", name);
 
-    /* PIN: the only digest lengths are 32, 48 and 64 octets.  Stops at the
-     * first acceptance, and tries 0 last: with the length check deleted,
-     * signing a 0-octet digest does not return (measured), so the order is
-     * what turns that mutation into a failure instead of a ctest timeout. */
+    /* PIN: the only digest lengths are 32, 48 and 64 octets, and every
+     * entry point answers INVALID_PARAM to another.  The exact code is the
+     * pin on the verify side: with the verifiers' length check deleted,
+     * P-384 and P-521 answer VERIFY_FAILED (the digest is truncated by
+     * bits2int and the signature no longer matches), which a `!= SUCCESS`
+     * row accepted, so until 2026-09-27 the verify guard was pinned only by
+     * P-256, where the constant digest's 32-octet prefix still verified.
+     * Stops at the first acceptance, and tries 0 last: with the length
+     * check deleted, signing a 0-octet digest does not return (measured),
+     * so the order is what turns that mutation into a failure instead of a
+     * ctest timeout. */
     {
         static const size_t bad_lengths[] = {20, 31, 33, 63, 0};
         int ok = 1;
@@ -595,7 +608,7 @@ static void nistp_guards(ama_nist_curve_t curve, const char *name) {
             size_t l2 = sizeof out;
             ok = ok && ama_nistp_ecdsa_sign(curve, digest, dl, d, out, &l2) == INVALID;
             ok = ok && ama_nistp_ecdsa_sign_raw(curve, digest, dl, d, raw2) == INVALID;
-            ok = ok && ama_nistp_ecdsa_verify(curve, digest, dl, pub, der, der_len) != AMA_SUCCESS;
+            ok = ok && ama_nistp_ecdsa_verify(curve, digest, dl, pub, der, der_len) == INVALID;
         }
         CHECK(ok, "%s: sign, raw sign and verify refuse undefined digest lengths", name);
     }
@@ -604,11 +617,14 @@ static void nistp_guards(ama_nist_curve_t curve, const char *name) {
     CHECK(ama_nistp_sig_der_to_raw(curve, der, der_len, raw, &raw_len) == AMA_SUCCESS &&
               raw_len == 2 * nb,
           "%s: control: DER converts to raw", name);
+    /* The exact codes, for the reason given at the digest-length loop: a
+     * short signature is a verification failure, a bad digest length an
+     * invalid parameter, and `!= SUCCESS` would let the two guards stand in
+     * for each other. */
     CHECK(ama_nistp_ecdsa_verify_raw(curve, digest, 32, pub, raw, 2 * nb) == AMA_SUCCESS &&
-              ama_nistp_ecdsa_verify_raw(curve, digest, 32, pub, raw, 2 * nb - 1) !=
-                  AMA_SUCCESS &&
-              ama_nistp_ecdsa_verify_raw(curve, digest, 31, pub, raw, 2 * nb) !=
-                  AMA_SUCCESS,
+              ama_nistp_ecdsa_verify_raw(curve, digest, 32, pub, raw, 2 * nb - 1) ==
+                  AMA_ERROR_VERIFY_FAILED &&
+              ama_nistp_ecdsa_verify_raw(curve, digest, 31, pub, raw, 2 * nb) == INVALID,
           "%s: raw verify refuses a short signature and a bad digest length", name);
 
     /* PIN: r and s in [1, n-1] on both conversions. */
@@ -730,15 +746,11 @@ static void nistp_edges(ama_nist_curve_t curve, const char *name) {
     {
         size_t body = 6 + nb;          /* 02 len 00 FF.. 02 01 01 */
         size_t der_len;
-        if (body < 0x80) {
-            der[1] = (uint8_t)body;
-            der_len = 2 + body;
-        } else {                        /* P-521: one long-form length octet */
-            memmove(der + 3, der + 2, body);
-            der[1] = 0x81;
-            der[2] = (uint8_t)body;
-            der_len = 3 + body;
-        }
+        /* s is the one-octet INTEGER 01, so the body is 6 + nb <= 72 octets
+         * on every curve and the short-form length always suffices; a
+         * long-form branch here was dead on all three (removed 2026-09-27). */
+        der[1] = (uint8_t)body;
+        der_len = 2 + body;
         len = sizeof raw;
         CHECK(ama_nistp_sig_der_to_raw(curve, der, der_len, raw, &len) == INVALID,
               "%s: DER -> raw refuses r >= n", name);

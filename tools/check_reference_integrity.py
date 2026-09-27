@@ -45,9 +45,13 @@ Over the shipped tree (``ama_cryptography/``, ``src/``, ``include/``,
    the identifier, the marker, or the function instead; those move with the
    code.
 3. **Test citations in the shipped code** — a ``tests/...`` path that is not a
-   tracked file, or ``test_x in tests/y.py`` where ``y.py`` defines no
-   ``test_x`` (a mention in a docstring, comment, string, call or prototype
-   is not a test; see :func:`defines_test`).
+   tracked file, or a named test its file does not define: ``test_x in
+   tests/y.py`` (also ``of`` and ``from``, ``test_x()``, ``test_x[case]``,
+   single or rst double backticks, ``test_x (tests/y.py)``) and the node-id
+   forms ``tests/y.py::test_x`` and ``tests/y.py::TestClass::test_x``.  A
+   definition is one pytest would collect, or a C function with a body: a
+   mention in a docstring, comment, string, call or prototype is not a test,
+   and neither is a ``def`` pytest never collects (see :func:`defines_test`).
    A comment beside a guard that names its test is the reader's evidence that
    the guard is protected.  On 2026-09-26 ``src/c/ama_dilithium.c`` named
    ``test_a_permuted_hint_is_refused`` in ``tests/test_pqc_param_sets.py`` as
@@ -280,18 +284,38 @@ TEST_PATH = re.compile(
     r"(?<![\w/.\-])tests/(?:[\w/\-]|(?<=[_/\-])" + _CONTINUATION + r")+\.(?:py|c|h)\b"
 )
 
-#: A named test in a named file: ``test_x`` in ``tests/y.py``, the path
-#: wrapped the same way TEST_PATH allows (a wrapped path used to end the
-#: match, so the named test after it went unchecked).
+#: A test name as prose writes it: bare, or with the ``()`` of a call or the
+#: ``[param]`` of a parametrised case, in single or rst double backticks.
+_TEST_NAME = r"`{0,2}\b(test_\w+)(?:\(\)|\[[^\]\n]*\])?`{0,2}"
+
+#: A cited path in single or rst double backticks, wrapped the same way
+#: TEST_PATH allows.
+_CITED_PATH = r"`{0,2}(tests/(?:[\w/\-]|(?<=[_/\-])" + _CONTINUATION + r")+\.(?:py|c))\b"
+
+#: A named test in a named file: ``test_x`` in ``tests/y.py`` (or ``of``,
+#: ``from``), the path wrapped the same way TEST_PATH allows (a wrapped path
+#: used to end the match, so the named test after it went unchecked).  The
+#: rst double-backtick spelling is the usual one in ``ama_cryptography/``;
+#: until 2026-09-27 a single optional backtick let ````test_x```` fall
+#: between the patterns and pass unread.
 NAMED_TEST = re.compile(
-    r"`?\b(test_\w+)`?(?:[ \t]+|" + _CONTINUATION + r")+in(?:[ \t]+|" + _CONTINUATION + r")+"
-    r"`?(tests/(?:[\w/\-]|(?<=[_/\-])" + _CONTINUATION + r")+\.(?:py|c))\b"
+    _TEST_NAME
+    + r"(?:[ \t]+|"
+    + _CONTINUATION
+    + r")+(?:in|of|from)(?:[ \t]+|"
+    + _CONTINUATION
+    + r")+"
+    + _CITED_PATH
 )
 
-#: The pytest node-id form of the same citation, ``tests/test_x.py::test_y``:
+#: The same citation with the path in parentheses: ``test_x (tests/y.py)``.
+PAREN_TEST = re.compile(_TEST_NAME + r"[ \t]*\(" + _CITED_PATH + r"`{0,2}\)")
+
+#: The pytest node-id form of the same citation, ``tests/test_x.py::test_y``
+#: or, as pytest itself prints a method, ``tests/test_x.py::TestY::test_z``:
 #: as common in comments as "test_y in tests/test_x.py", and until it was
 #: matched a dangling citation written this way passed the gate unread.
-NODE_ID_TEST = re.compile(r"`?\b(tests/[\w/\-]+\.(?:py|c))::(test_\w+)\b")
+NODE_ID_TEST = re.compile(r"`{0,2}\b(tests/[\w/\-]+\.(?:py|c))(?:::\w+)*::(test_\w+)\b")
 
 
 #: A C comment or string/character literal, removed before a definition is
@@ -301,8 +325,31 @@ _C_NON_CODE = re.compile(
 )
 
 
+#: The classes pytest collects tests from: ``python_classes = ["Test*"]`` in
+#: pyproject.toml, the default.  ``tests/test_reference_integrity_gate.py``
+#: pins the two against each other.
+PYTEST_CLASS_PREFIX = "Test"
+
+
+def _collected_defines(body: list[ast.stmt], name: str) -> bool:
+    """Whether pytest would collect a test named ``name`` from ``body``.
+
+    A function at this level, or one inside a class pytest collects (nested
+    ``Test*`` classes included).  A ``def`` nested in a function, or a method
+    of a class pytest does not collect, is not a test whatever its name, so
+    it does not resolve a citation: the citation says the guard is tested,
+    and an uncollected function tests nothing."""
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return True
+        if isinstance(node, ast.ClassDef) and node.name.startswith(PYTEST_CLASS_PREFIX):
+            if _collected_defines(node.body, name):
+                return True
+    return False
+
+
 def _python_defines(source: str, name: str) -> bool:
-    """Whether a function (or method) named ``name`` is defined in ``source``."""
+    """Whether pytest would collect a test named ``name`` from ``source``."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -310,10 +357,7 @@ def _python_defines(source: str, name: str) -> bool:
         # available evidence, and prose rarely starts a line with one.
         shape = r"^[ \t]*(?:async[ \t]+)?def[ \t]+" + re.escape(name) + r"[ \t]*\("
         return re.search(shape, source, re.MULTILINE) is not None
-    return any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
-        for node in ast.walk(tree)
-    )
+    return _collected_defines(tree.body, name)
 
 
 def _c_defines(source: str, name: str) -> bool:
@@ -358,9 +402,11 @@ def scan_test_citations(
         if path not in tracked:
             line = text.count("\n", 0, match.start()) + 1
             findings.append((line, path, "cites a test file that is not in the repository"))
-    named = [(m.start(), m.group(1), _unwrap(m.group(2))) for m in NAMED_TEST.finditer(text)] + [
-        (m.start(), m.group(2), m.group(1)) for m in NODE_ID_TEST.finditer(text)
-    ]
+    named = (
+        [(m.start(), m.group(1), _unwrap(m.group(2))) for m in NAMED_TEST.finditer(text)]
+        + [(m.start(), m.group(1), _unwrap(m.group(2))) for m in PAREN_TEST.finditer(text)]
+        + [(m.start(), m.group(2), m.group(1)) for m in NODE_ID_TEST.finditer(text)]
+    )
     for start, name, path in named:
         if path in tracked and not defines_test(read(path), name, path):
             line = text.count("\n", 0, start) + 1

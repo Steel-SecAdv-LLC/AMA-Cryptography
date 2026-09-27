@@ -46,6 +46,7 @@
 #include "../include/ama_dispatch.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_testing_exports.h"
 #include <string.h>
 #include <stdint.h>
 

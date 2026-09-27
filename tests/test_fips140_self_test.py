@@ -195,11 +195,14 @@ class TestPowerOnSelfTests:
     def test_stage_durations_stop_at_the_failing_stage(self) -> None:
         """A failed stage is timed; the stages POST never reached are absent."""
         from ama_cryptography._self_test import (
+            _LAST_FAILURE,
             _run_self_tests,
+            last_failure,
             module_attestation,
             module_status,
         )
 
+        untouched_record = last_failure()
         try:
             with patch(
                 "ama_cryptography._self_test._run_timing_oracle_stage",
@@ -212,6 +215,70 @@ class TestPowerOnSelfTests:
         finally:
             assert _run_self_tests() is True
             assert module_status() == "OPERATIONAL"
+            # The forced failure was recorded, as any failed POST is; the
+            # record is this test's to put back, as its siblings do.
+            _LAST_FAILURE.update(untouched_record)
+
+    def test_an_interrupt_before_the_first_stage_still_drops_the_allowance(self) -> None:
+        """The self-test allowance is pinned to this thread the moment
+        SELF_TEST is entered.  An interrupt that lands before the first stage
+        runs -- here, while the strict-mode flag is read -- used to escape the
+        ``try`` with the allowance still set, which kept
+        ``check_crypto_permitted()`` permissive on this thread for the rest of
+        the process (a window of microseconds, and a real one)."""
+        from ama_cryptography._module_state import check_crypto_permitted
+        from ama_cryptography._self_test import _run_self_tests, module_status
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        try:
+            assert _run_self_tests() is True
+            with (
+                patch(
+                    "ama_cryptography._self_test._env_flag_enabled",
+                    side_effect=KeyboardInterrupt,
+                ),
+                pytest.raises(KeyboardInterrupt),
+            ):
+                _run_self_tests()
+            assert module_status() == "SELF_TEST"
+            with pytest.raises(CryptoModuleError):
+                check_crypto_permitted()
+        finally:
+            assert _run_self_tests() is True
+            assert module_status() == "OPERATIONAL"
+
+    def test_a_failure_outside_post_is_recorded_with_its_reason_and_no_run(self) -> None:
+        """A pairwise consistency test or the continuous RNG test puts the
+        module in ERROR without a failed POST.  ``reset_module()`` records
+        that reason, and no run: the live table and timings belong to the
+        last POST, which passed, and attaching them (as it did until
+        2026-09-27) reported a POST failure that never happened."""
+        from ama_cryptography._module_state import _set_error
+        from ama_cryptography._self_test import (
+            _LAST_FAILURE,
+            _run_self_tests,
+            last_failure,
+            module_status,
+            reset_module,
+        )
+
+        untouched_record = last_failure()
+        reason = "Pairwise consistency test failed for ed25519: synthetic"
+        try:
+            assert _run_self_tests() is True
+            _set_error(reason)
+            assert module_status() == "ERROR"
+            assert reset_module() is True
+            assert module_status() == "OPERATIONAL"
+            record = last_failure()
+            assert record["reason"] == reason
+            assert record["results"] == []
+            assert record["duration_ms"] == 0.0
+            assert record["stage_durations_ms"] == {}
+        finally:
+            if module_status() != "OPERATIONAL":
+                assert _run_self_tests() is True
+            _LAST_FAILURE.update(untouched_record)
 
     def test_an_interrupt_during_post_is_not_recorded_as_a_failed_post(self) -> None:
         """Ctrl-C during POST is an interrupted self-test, not a failed one.

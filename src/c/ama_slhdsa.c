@@ -59,6 +59,7 @@
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_testing_exports.h"
 #include "internal/ama_sha2.h"
 #include "internal/ama_ct_declassify.h"
 /* No <stdlib.h>: this translation unit allocates nothing.  The last heap use
@@ -1534,7 +1535,6 @@ AMA_API ama_error_t ama_slhdsa_sign_addrnd(ama_slhdsa_param_set_t ps,
  * repository and links ama_cryptography_test.
  * ============================================================================ */
 #ifdef AMA_TESTING_MODE
-#include "internal/ama_testing_exports.h"
 
 ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
                                      uint8_t *signature,

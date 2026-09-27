@@ -73,6 +73,10 @@ Exit codes:
        could not find the two libraries it swaps
     3  `--python-suite` ran and a Python suite failed; the inventory is still
        printed, and describes a suite that did not pass
+    1  `--python-suite` could not restore the release library, or could not
+       re-sign the integrity artefact over it (an uncaught RuntimeError that
+       names the kept backup, or the library the package now holds); an
+       interrupt during the restore also names the backup before propagating
 """
 
 from __future__ import annotations
@@ -263,11 +267,18 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
     finally:
         try:
             shutil.copy2(saved, installed)
-        except OSError as exc:
-            raise RuntimeError(
+        except BaseException as exc:
+            message = (
                 f"could not restore the release library to {installed}; "
                 f"the backup is kept at {saved}"
-            ) from exc
+            )
+            if isinstance(exc, Exception):
+                raise RuntimeError(message) from exc
+            # An interrupt mid-copy: the installed file may be half written
+            # and the backup is the only release copy.  Say where it is, then
+            # let the interrupt propagate (it used to propagate unnamed).
+            print(message, file=sys.stderr)
+            raise
         # The library is back; the backup has done its job whatever happens
         # to the re-sign, so it is removed on both paths.  A re-sign failure
         # here says so in its own words: a bare CalledProcessError replacing

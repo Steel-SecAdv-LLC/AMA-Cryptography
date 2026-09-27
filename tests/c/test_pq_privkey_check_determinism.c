@@ -29,15 +29,14 @@
  */
 
 #include "ama_cryptography.h"
+/* The test CSPRNG hooks (AMA_TESTING_MODE only), declared with their one
+ * prototype rather than restated by hand: not in the public header, since
+ * production builds carry no RNG override. */
+#include "../../src/c/internal/ama_testing_exports.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
-/* Test-only externs, matching tests/c/test_kat.c. Deliberately not declared in
- * the public header: production builds must not carry an RNG override. */
-extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t *buf, size_t len);
-extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t *buf, size_t len);
 
 static unsigned long g_rng_calls;
 

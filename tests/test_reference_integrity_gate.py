@@ -21,6 +21,7 @@ below pin the boundary so it cannot drift back.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -235,7 +236,13 @@ class TestTestCitationsInTheShippedCode:
             "def test_present() -> None: ...\n"
             "class TestGroup:\n"
             "    async def test_method(self) -> None: ...\n"
+            "    class TestNested:\n"
+            "        def test_in_a_nested_class(self) -> None: ...\n"
             "HELPER = 'test_in_a_string'\n"
+            "def helper() -> None:\n"
+            "    def test_inside_a_function() -> None: ...\n"
+            "class Helper:\n"
+            "    def test_in_an_uncollected_class(self) -> None: ...\n"
         ),
         "tests/c/test_real.c": (
             "/* test_in_a_comment(void) is described here only. */\n"
@@ -316,6 +323,62 @@ class TestTestCitationsInTheShippedCode:
         found = self._scan("# pinned by `tests/test_real.py::test_absent`\n")
         assert [cited for _, cited, _ in found] == ["test_absent in tests/test_real.py"]
         assert self._scan("# pinned by tests/test_real.py::test_present\n") == []
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "# pinned by `test_absent()` in `tests/test_real.py`\n",
+            "``test_absent`` in ``tests/test_real.py``.\n",
+            "# test_absent[p256] in tests/test_real.py\n",
+            "# test_absent of tests/test_real.py\n",
+            "# see test_absent from tests/test_real.py\n",
+            "# pinned: test_absent (tests/test_real.py)\n",
+            "# ``tests/test_real.py::TestGroup::test_absent``\n",
+            "# tests/test_real.py::test_absent[p256]\n",
+        ],
+    )
+    def test_the_spellings_prose_uses_are_read(self, text: str) -> None:
+        """Call parentheses, a parametrised case, rst double backticks, ``of``
+        and ``from``, a parenthesised path and a class-qualified node id: each
+        let a dangling citation pass unread until 2026-09-27.  The rst form is
+        the usual spelling in ``ama_cryptography/``; the class-qualified node
+        id is what pytest itself prints for a method."""
+        found = self._scan(text)
+        assert [cited for _, cited, _ in found] == ["test_absent in tests/test_real.py"], text
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "# pinned by `test_present()` in `tests/test_real.py`\n",
+            "``test_present`` in ``tests/test_real.py``.\n",
+            "# test_method[p256] of tests/test_real.py\n",
+            "# pinned: test_present (tests/test_real.py)\n",
+            "# ``tests/test_real.py::TestGroup::test_method``\n",
+            "# tests/test_real.py::TestGroup::TestNested::test_in_a_nested_class\n",
+        ],
+    )
+    def test_the_same_spellings_resolve_when_the_test_exists(self, text: str) -> None:
+        assert self._scan(text) == [], text
+
+    @pytest.mark.parametrize("name", ["test_inside_a_function", "test_in_an_uncollected_class"])
+    def test_a_definition_pytest_would_not_collect_does_not_resolve(self, name: str) -> None:
+        """A ``def`` nested in a function, or a method of a class outside
+        ``python_classes``, never runs under pytest, so it cannot be the pin
+        a citation claims."""
+        found = self._scan(f"# pinned by `{name}` in tests/test_real.py\n")
+        assert [cited for _, cited, _ in found] == [f"{name} in tests/test_real.py"]
+
+    def test_the_definition_check_follows_pytest_collection(self) -> None:
+        """The gate's notion of a collected class is pyproject's, not its own.
+
+        Read with a regular expression rather than ``tomllib``, which the
+        3.10 floor of ``requires-python`` does not have."""
+        from tools.check_reference_integrity import PYTEST_CLASS_PREFIX
+
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        declared = re.search(r"^python_classes\s*=\s*\[(.*)\]\s*$", pyproject, re.MULTILINE)
+        assert declared is not None, "pyproject.toml declares no python_classes"
+        assert declared.group(1).strip() == f'"{PYTEST_CLASS_PREFIX}*"'
 
     def test_a_named_test_in_a_missing_file_is_reported_once(self) -> None:
         found = self._scan("# `test_x` in tests/test_gone.py\n")

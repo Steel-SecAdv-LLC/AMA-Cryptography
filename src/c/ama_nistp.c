@@ -70,6 +70,7 @@
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_testing_exports.h"
 #include "internal/ama_once.h"
 #include "internal/ama_ct_barrier.h"
 #include "internal/ama_ct_declassify.h"

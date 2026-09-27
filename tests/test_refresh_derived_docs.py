@@ -126,6 +126,30 @@ def test_check_mode_reports_drift_without_writing(
     assert "tools/update_docs.py" not in ran, "--check must not rewrite anything"
 
 
+def test_check_mode_names_the_stale_figure_even_when_quiet(
+    tool: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--quiet`` silences a current tree, not the drift report.
+
+    The pre-commit hook runs the check quietly; a refused commit must name the
+    stale figure and the regenerating command, not only the gate that failed.
+    Until 2026-09-27 the quiet path discarded the gate's output, so the hook
+    said "DRIFTED documented counts" and nothing more, while the hook's own
+    comment and ``test_the_hook_is_quiet_but_not_silent`` claimed otherwise.
+    """
+    stale = "FAIL: docs/METRICS_REPORT.md: LoC table says 1 lines for Tests; measured 2"
+
+    def fake_run(command: tuple[str, ...], quiet: bool) -> tuple[int, str]:
+        return (1, stale) if command[0].endswith("check_documented_counts.py") else (0, "OK")
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+    assert tool.main(["--check", "--quiet"]) == 1
+    captured = capsys.readouterr()
+    assert stale in captured.err, captured
+    assert "Regenerate them with" in captured.err
+    assert "OK" not in captured.err, "a passing gate's output is not a drift report"
+
+
 def test_check_mode_passes_on_a_current_tree(
     tool: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:

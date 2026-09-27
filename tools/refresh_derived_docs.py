@@ -126,14 +126,26 @@ def _run(command: tuple[str, ...], *, quiet: bool) -> tuple[int, str]:
 
 
 def check_only(quiet: bool) -> int:
-    """Report whether the derived figures are already current."""
+    """Report whether the derived figures are already current.
+
+    ``quiet`` keeps a current tree from echoing every checked claim; it does
+    not hide what drifted.  A gate that fails has its output printed to
+    stderr, ahead of the drift report, whatever ``quiet`` says: the
+    pre-commit hook runs this quietly, and a refused commit that names only
+    the gate leaves the developer to re-run it to learn which figure moved.
+    (Until 2026-09-27 the quiet path discarded that output, and two comments
+    said otherwise.)
+    """
     failures = []
     for label, command in GATES:
-        code, _ = _run(command, quiet=quiet)
+        code, output = _run(command, quiet=quiet)
         status = "OK" if code == 0 else "DRIFTED"
         print(f"  {status:<8} {label}")
         if code != 0:
             failures.append(label)
+            if quiet:
+                for line in output.splitlines():
+                    print(f"      {line}", file=sys.stderr)
     if failures:
         print(
             f"\nDerived figures have drifted: {', '.join(failures)}.\n"

@@ -1166,11 +1166,17 @@ int main(void) {
 
         /* 11e — a NON-CANONICAL commitment point: y = p + y0 for the smallest
          * y0 that decodes, so the encoding names a real point under
-         * reduction.  Aggregation must refuse it as participant 2's.  Without
-         * the canonical clause of frost_point_is_admissible() the point
-         * decodes, R and every binding factor move, and the first share
-         * checked -- participant 1's -- fails instead: the blame lands on the
-         * wrong participant.  Mutation: drop the canonical clause -> blame 1. */
+         * reduction.  Aggregation must refuse it as participant 2's, with
+         * the header's verdict, VERIFY_FAILED, which comes from the canonical
+         * clause of frost_point_is_admissible().  Without that clause the
+         * strict decoder still refuses the encoding (ama_ed25519_point_add
+         * and ama_ed25519_scalarmult_public both return -1 on it, measured
+         * 2026-09-27), so aggregation falls to its point_add arm and answers
+         * INVALID_PARAM: the same participant blamed, with the verdict the
+         * header reserves for an undecodable row.  Mutation: drop the
+         * canonical clause -> INVALID_PARAM, and the rc assertion fails.
+         * (Until 2026-09-27 this comment said the point would decode and
+         * participant 1 would be blamed; it does not decode.) */
         {
             uint8_t canon[32] = {0}, noncanon[32], sum[32], list[2 * 64];
             uint8_t y0 = 0;

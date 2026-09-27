@@ -65,6 +65,7 @@
 #include "../include/ama_cryptography.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_test_csprng.h"
+#include "internal/ama_testing_exports.h"
 #include "internal/ama_ed25519_canonical.h"
 #include <stdlib.h>
 #include <string.h>
@@ -1424,7 +1425,6 @@ out:
 }
 
 #ifdef AMA_TESTING_MODE
-#include "internal/ama_testing_exports.h"
 /* Test-only export of scalar_negate so tests/c/test_frost.c can
  * exercise the constant-time branchless borrow loop directly
  * (INVARIANT-12 boundary tests for s ∈ {0, 1, l-1, mid-range}).
