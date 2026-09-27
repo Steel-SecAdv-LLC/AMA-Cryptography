@@ -107,8 +107,8 @@ legacy = [
     # Production deployments do NOT need this extra; do not install it
     # unless you are reproducing the native-vs-pyca cross-checks.
     #
-    # Floor is 50.0.0 to clear every advisory against earlier releases
-    # (OSV/GHSA, checked 2026-09-24):
+    # Floor is 50.0.1.  50.0.0 cleared every advisory against earlier
+    # releases (OSV/GHSA, checked 2026-09-24):
     #   GHSA-h4gh-qq45-vh27 / CVE-2024-26130   — fixed in 42.0.4
     #   CVE-2024-0727 (PKCS12 OOB read)        — fixed in 42.0.2
     #   CVE-2023-50782 (Bleichenbacher timing) — fixed in 42.0.0
@@ -118,6 +118,10 @@ legacy = [
     #   GHSA-jwv3-5hgf-82ww (path building)     — fixed in 49.0.0
     #   GHSA-m2h6-j472-rp4c (name constraints)  — fixed in 49.0.0
     #   GHSA-g6cj-pr64-35w5 (PKCS#7 oracle)     — fixed in 50.0.0
+    # 50.0.1 (2026-08-25) fixes no advisory: it rebuilt the wheels against
+    # OpenSSL 4.0.2.  The floor follows it because dependabot.yml sets
+    # `versioning-strategy: increase`, which raises a range floor to the
+    # newest release rather than only when a fix requires it.
     # The previous 46.0.7 floor admitted the last four.  The bot could not
     # raise it: dependabot.yml carried a `version-update:semver-major`
     # ignore on this package, and every fix above 46 is a major.  That
@@ -166,7 +170,7 @@ benchmark = [
     # benchmark-report.md.  Mirrors benchmarks/requirements-bench.txt.
     # Install with: pip install "ama-cryptography[benchmark]"
     "pynacl>=1.6.2",
-    # Same 50.0.0 floor as [legacy] above, for the same advisories.
+    # Same 50.0.1 floor as [legacy] above, for the same advisories.
     # Mirrors benchmarks/requirements-bench.txt.
     "cryptography>=50.0.1",
 ]
