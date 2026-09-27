@@ -49,8 +49,10 @@ Python side reaches is reported as never taken: an inventory of what the C
 suite misses, not of the guards no test protects.  `--python-suite` closes
 that gap.  It needs an editable install (`pip install -e .`) whose package
 directory holds the native library the bindings load.  It copies the
-instrumented native library (`libama_cryptography.so.*`, or the
-`libama_cryptography*.dylib` chain on macOS) from the build tree over the
+instrumented native library (`libama_cryptography.so.*`, the
+`libama_cryptography*.dylib` chain on macOS, or `ama_cryptography*.dll` on
+Windows) from the build tree (`lib`, or `bin` for the Windows runtime DLL)
+over the
 installed one, re-signs the integrity artefact so the import-time self-test accepts it,
 runs the two offline Python suites CI runs against the library -- `pytest
 tests/` and `wycheproof_vectors/run_wycheproof.py` -- and restores and
@@ -165,10 +167,23 @@ def _parse(report: Path, taken: set[Arc], seen: set[Arc], text: dict[tuple[str, 
                 taken.add(arc)
 
 
-#: The native library's file names: the Linux soname chain and the macOS
-#: install-name chain, the same two shapes setup.py bundles into the package.
-#: Each chain ends in exactly one real file; the rest are symlinks.
-_LIBRARY_GLOBS = ("libama_cryptography.so.*", "libama_cryptography*.dylib")
+#: The native library's file names, the shapes setup.py bundles into the
+#: package: the Linux soname chain, the macOS install-name chain, and the
+#: Windows DLL (both the bare and ``lib``-prefixed spellings setup.py copies).
+#: The ELF/Mach-O chains end in exactly one real file and the rest are
+#: symlinks; the Windows DLL is a single real file.
+_LIBRARY_GLOBS = (
+    "libama_cryptography.so.*",
+    "libama_cryptography*.dylib",
+    "ama_cryptography*.dll",
+    "libama_cryptography*.dll",
+)
+
+#: Where a build tree puts the shared library, in search order.  CMake sends
+#: the ELF/Mach-O library to ``LIBRARY_OUTPUT_DIRECTORY`` (``lib``) and the
+#: Windows runtime DLL to ``RUNTIME_OUTPUT_DIRECTORY`` (``bin``); only one of
+#: the two holds a real library on any given host, so the first hit wins.
+_BUILD_LIBRARY_DIRS = ("lib", "bin")
 
 
 def _real_library(directory: Path) -> Path | None:
@@ -176,6 +191,17 @@ def _real_library(directory: Path) -> Path | None:
     is none or more than one (an ambiguous tree is refused, not guessed at)."""
     found = {p for pattern in _LIBRARY_GLOBS for p in directory.glob(pattern) if not p.is_symlink()}
     return found.pop() if len(found) == 1 else None
+
+
+def _instrumented_library(build_dir: Path) -> Path | None:
+    """The build tree's shared library, from ``lib`` (ELF/Mach-O) or ``bin``
+    (the Windows runtime DLL).  Each candidate directory is refused if it holds
+    more than one real library; the first directory with exactly one wins."""
+    for sub in _BUILD_LIBRARY_DIRS:
+        hit = _real_library(build_dir / sub)
+        if hit is not None:
+            return hit
+    return None
 
 
 def _resign() -> None:
@@ -232,7 +258,7 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
     copy of the release one.
     """
     installed = _real_library(REPO_ROOT / "ama_cryptography")
-    instrumented = _real_library(build_dir / "lib")
+    instrumented = _instrumented_library(build_dir)
     if installed is None or instrumented is None:
         return None
     backup_dir = Path(tempfile.mkdtemp(prefix="ama-release-library-"))
@@ -331,10 +357,13 @@ def main() -> int:
             print(exc, file=sys.stderr)
             return 2
         if status is None:
+            searched = " or ".join(str(build_dir / sub) for sub in _BUILD_LIBRARY_DIRS)
             print(
-                "--python-suite needs exactly one native library (libama_cryptography.so.* "
-                "or libama_cryptography*.dylib) in both "
-                f"{REPO_ROOT / 'ama_cryptography'} (an editable install) and {build_dir / 'lib'}",
+                "--python-suite needs exactly one native library "
+                "(libama_cryptography.so.*, libama_cryptography*.dylib, or "
+                "ama_cryptography*.dll) in both "
+                f"{REPO_ROOT / 'ama_cryptography'} (an editable install) and the build "
+                f"tree ({searched})",
                 file=sys.stderr,
             )
             return 2

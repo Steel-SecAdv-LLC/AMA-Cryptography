@@ -23,11 +23,11 @@ guards nothing either.
 from __future__ import annotations
 
 import shlex
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG = REPO_ROOT / ".pre-commit-config.yaml"
@@ -37,6 +37,13 @@ SCRIPT = "tools/refresh_derived_docs.py"
 
 @pytest.fixture(scope="module")
 def hook() -> dict[str, Any]:
+    # Imported inside the fixture, not at module scope: check_documented_counts
+    # collects cited test files with `pytest --collect-only` under the
+    # pre-commit hook's own interpreter, which carries pytest and nothing else.
+    # A module-scope third-party import would raise ModuleNotFoundError during
+    # that collection; a lazy one keeps the module importable there.
+    import yaml
+
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     for repo in config["repos"]:
         for candidate in repo.get("hooks", []):
@@ -109,3 +116,32 @@ def test_the_hook_is_quiet_but_not_silent(entry: list[str]) -> None:
     """
     assert "--quiet" in entry
     assert not any(token.startswith(">") or token == "2>&1" for token in entry), entry
+
+
+def test_this_module_imports_no_dev_extra_at_module_scope() -> None:
+    """This file must import nothing beyond the standard library and pytest at
+    module scope.
+
+    ``check_documented_counts`` runs ``pytest --collect-only`` on every
+    documented test file under the hook's own interpreter, which carries
+    pytest and nothing else.  A module-scope import of a dev-only extra
+    (PyYAML, hypothesis, cryptography, ...) raises ModuleNotFoundError during
+    that collection and refuses the commit for a drift that does not exist.
+    ``yaml`` here is imported inside the ``hook`` fixture for exactly that
+    reason; moving it back to module scope fails this test.
+    """
+    import ast
+
+    allowed = set(sys.stdlib_module_names) | {"pytest"}
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            offenders += [n.name for n in node.names if n.name.split(".")[0] not in allowed]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            if node.module.split(".")[0] not in allowed:
+                offenders.append(node.module)
+    assert not offenders, (
+        "module-scope imports outside the standard library and pytest break "
+        f"collection under the hook's pytest-only interpreter: {offenders}"
+    )

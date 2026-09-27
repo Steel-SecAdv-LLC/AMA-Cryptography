@@ -429,6 +429,38 @@ def test_a_macos_install_name_chain_is_found(
     assert installed.read_bytes() == b"release"
 
 
+def test_a_windows_runtime_dll_is_found(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows the shared library is a single ama_cryptography*.dll, and
+    CMake puts the build one under bin (RUNTIME_OUTPUT_DIRECTORY), not lib.
+    _instrumented_library searches bin after lib so the swap still resolves.
+    Reverting either the .dll glob or the bin search makes this return None."""
+    repo = tmp_path / "repo"
+    pkg = repo / "ama_cryptography"
+    build = repo / "build-cov"
+    bindir = build / "bin"
+    for directory, body in ((pkg, b"release"), (bindir, b"instrumented")):
+        directory.mkdir(parents=True)
+        (directory / "ama_cryptography.dll").write_bytes(body)
+    monkeypatch.setattr(tool, "REPO_ROOT", repo)
+    installed = pkg / "ama_cryptography.dll"
+    signed_over: list[bytes] = []
+    monkeypatch.setattr(tool, "_resign", lambda: signed_over.append(installed.read_bytes()))
+
+    class _Done:
+        returncode = 0
+
+    def run_and_move(*_: object, **__: object) -> _Done:
+        _counters_move(build)
+        return _Done()
+
+    monkeypatch.setattr(tool.subprocess, "run", run_and_move)
+    assert tool._run_python_suite(build, []) == 0
+    assert signed_over == [b"instrumented", b"release"]
+    assert installed.read_bytes() == b"release"
+
+
 def test_two_real_libraries_are_refused_not_guessed(
     tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
