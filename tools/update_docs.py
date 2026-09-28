@@ -589,6 +589,12 @@ def _generate_benchmark_table() -> str:
     host = str(provenance.get("host", "unrecorded host")).strip("` ")
     cpu = str(provenance.get("cpu", "")).strip("` ")
     host_desc = f"{host}" + (f", {cpu}" if cpu else "")
+    build = recorded_build_configuration(provenance)
+    build_desc = (
+        f"built with `{build}`"
+        if build
+        else "with no build configuration recorded, so not reproducible from it"
+    )
 
     lines = [
         "<!-- "
@@ -601,7 +607,7 @@ def _generate_benchmark_table() -> str:
         "fails when measured drops more than `tolerance_percent` below "
         "floor).  Regenerate via `python tools/update_docs.py`. -->",
         f"_Headline source: `benchmarks/benchmark-results.json` (run {captured} on "
-        f"{host_desc}). Regression floor: `benchmarks/baseline.json`, measured on "
+        f"{host_desc}; {build_desc}). Regression floor: `benchmarks/baseline.json`, measured on "
         "the CI runner class named there — a floor and a throughput figure are "
         "different machines on purpose, so the gap between the columns is not "
         "headroom unless both were measured on the same host.  CI fails when "
@@ -687,6 +693,25 @@ def _without_absolute_path(part: str) -> str:
     return part
 
 
+#: What benchmarks/benchmark_runner.py records in place of a build
+#: configuration it could not establish (its BUILD_CONFIGURATION_NOT_RECORDED).
+BUILD_CONFIGURATION_NOT_RECORDED = "not recorded"
+
+
+def recorded_build_configuration(provenance: dict[str, Any]) -> Optional[str]:
+    """The record's build configuration, or None when the record has none.
+
+    A record written before the runner recorded it has no such key; one whose
+    runner could not establish it says so with the runner's prefix.  Either
+    way the figures cannot be rebuilt from the record, and nothing rendered
+    from it may say they can (AGENTS.md 8.7).
+    """
+    value = str(provenance.get("build_configuration", "")).strip()
+    if not value or value.startswith(BUILD_CONFIGURATION_NOT_RECORDED):
+        return None
+    return value
+
+
 def _generate_pipeline_latency_table() -> str:
     """Emit ARCHITECTURE.md's per-operation latency table from the same record.
 
@@ -716,6 +741,7 @@ def _generate_pipeline_latency_table() -> str:
     commit = str(provenance.get("commit", "")).strip()
     tree_state = str(provenance.get("tree", "")).strip()
     bindings = str(provenance.get("python_bindings", "")).strip()
+    build = recorded_build_configuration(provenance)
 
     # Each of the long entries below is hoisted to a name rather than written
     # as an adjacent-literal concatenation inside the list.  CodeQL flags the
@@ -782,9 +808,24 @@ def _generate_pipeline_latency_table() -> str:
         "fails on a mismatch, so a hand-edited number cannot survive a push."
     )
     scope_bullet = (
-        "- **Scope:** one run on the host named above. CMake flags are not "
-        "recorded by the runner. These are not the canonical-host figures "
-        "(README, Performance Metrics) and not the CI regression floors."
+        "- **Scope:** one run on the host named above. These are not the "
+        "canonical-host figures (README, Performance Metrics) and not the CI "
+        "regression floors."
+    )
+    # "Everything needed to reproduce" is said only of a record that carries
+    # the build configuration: without it the same command on the same host
+    # can measure a different binary, and the heading would be false.
+    provenance_heading = (
+        "**Provenance — everything needed to reproduce these numbers:**"
+        if build
+        else "**Provenance — what the record carries.** It does not carry the "
+        "build configuration of the library it measured, so these numbers "
+        "cannot be reproduced from it:"
+    )
+    build_bullet = (
+        f"- **Build configuration:** `{build}`"
+        if build
+        else "- **Build configuration:** not recorded"
     )
     refresh_note = (
         "To refresh: re-run the command above on the host you want published, "
@@ -793,12 +834,13 @@ def _generate_pipeline_latency_table() -> str:
 
     lines += [
         "",
-        "**Provenance — everything needed to reproduce these numbers:**",
+        provenance_heading,
         "",
         f"- **Benchmark command:** `{command}`",
         f"- **Source record:** `benchmarks/benchmark-results.json`, run {captured}",
         f"- **Platform:** {host}" + (f" — {cpu}" if cpu else ""),
         f"- **Build:** {native}" if native else "- **Build:** (unrecorded)",
+        build_bullet,
         (
             f"- **Commit:** `{commit[:12]}`" + (f" — {tree_state}" if tree_state else "")
             if commit

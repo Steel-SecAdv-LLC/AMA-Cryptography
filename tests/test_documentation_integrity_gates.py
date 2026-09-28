@@ -1831,6 +1831,29 @@ class TestBenchmarkClaims:
         for key, _why in gate.REQUIRED_PROVENANCE:
             assert provenance.get(key), f"{gate.RESULTS_JSON} lacks provenance.{key}"
 
+    def test_a_record_without_its_build_configuration_is_refused(self) -> None:
+        """AGENTS.md 8.7: no figure without its build flags.  The record the
+        documentation quotes must name how the measured library was built,
+        and a runner's "not recorded" is not a configuration."""
+        gate = _load(BENCHMARK_CLAIMS)
+        record = json.loads((REPO_ROOT / gate.RESULTS_JSON).read_text(encoding="utf-8"))
+        clean = gate.Report()
+        gate.check_provenance(clean, record)
+        assert not clean.failures, clean.failures
+        for value in (None, "", "not recorded: no CMake build tree searched"):
+            provenance = dict(record["provenance"])
+            if value is None:
+                provenance.pop("build_configuration", None)
+            else:
+                provenance["build_configuration"] = value
+            report = gate.Report()
+            gate.check_provenance(report, dict(record, provenance=provenance))
+            assert any("'build_configuration'" in f for f in report.failures), (
+                value,
+                report.failures,
+            )
+        assert gate.NOT_RECORDED_PREFIX == "not recorded"
+
     def test_a_hand_edited_generated_cell_fails(self, tmp_path: Path) -> None:
         """The 4.20 ms defect, reintroduced into the generated block.
 

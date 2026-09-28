@@ -100,9 +100,18 @@ ARM_BASELINE_JSON = "benchmarks/arm-baseline.json"
 REQUIRED_PROVENANCE: tuple[tuple[str, str], ...] = (
     ("command", "the exact benchmark command"),
     ("host", "the platform and architecture"),
+    (
+        "build_configuration",
+        "the compiler and configure line that built the measured library (AGENTS.md 8.7)",
+    ),
     ("sampling", "the sample methodology"),
     ("aggregation", "how repeated observations were reduced"),
 )
+
+#: How benchmarks/benchmark_runner.py begins a provenance value it could not
+#: establish (its BUILD_CONFIGURATION_NOT_RECORDED).  Such a value is present
+#: but carries nothing a reader can reproduce from, so it counts as absent.
+NOT_RECORDED_PREFIX = "not recorded"
 
 #: Every floor entry must declare these, or the number it enforces is a
 #: constant with no meaning attached.
@@ -249,9 +258,11 @@ def check_provenance(report: Report, results: dict[str, Any]) -> None:
     provenance = results.get("provenance") or {}
     for key, what in REQUIRED_PROVENANCE:
         value = str(provenance.get(key, "")).strip()
-        if not value:
+        if not value or value.startswith(NOT_RECORDED_PREFIX):
             report.fail(
-                f"{RESULTS_JSON} records no {key!r} — documentation draws numbers "
+                f"{RESULTS_JSON} records no {key!r}"
+                + (f" ({value!r})" if value else "")
+                + " — documentation draws numbers "
                 f"from this record and a reader needs {what} to reproduce them. "
                 "Re-run benchmarks/benchmark_runner.py, which writes the full "
                 "provenance block."

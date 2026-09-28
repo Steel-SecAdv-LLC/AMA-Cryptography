@@ -941,6 +941,56 @@ class TestReplacementTextIsInsertedVerbatim:
         latency = update_docs._generate_pipeline_latency_table()
         assert f"- **Build:** v5.0.0 · digest d95f5cc73e89c347… · {basename}\n" in latency
 
+    def test_only_a_record_with_its_build_configuration_claims_reproducibility(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The heading said "everything needed to reproduce these numbers"
+        over a Scope line saying the runner did not record the CMake flags.
+        It says so only of a record that carries the build configuration, and
+        both generated tables publish that configuration."""
+        claim = "everything needed to reproduce these numbers"
+        for index, provenance in enumerate(
+            (
+                self._PROVENANCE,
+                dict(
+                    self._PROVENANCE,
+                    build_configuration="not recorded: no CMake build tree searched",
+                ),
+            )
+        ):
+            (tmp_path / f"unrecorded{index}").mkdir()
+            self._tree(tmp_path / f"unrecorded{index}", monkeypatch, provenance)
+            latency = update_docs._generate_pipeline_latency_table()
+            assert claim not in latency, provenance
+            assert "- **Build configuration:** not recorded\n" in latency
+            assert "cannot be reproduced from it" in latency
+            assert "not reproducible from it" in update_docs._generate_benchmark_table()
+
+        configured = "GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release (from build/python-cmake)"
+        (tmp_path / "recorded").mkdir()
+        self._tree(
+            tmp_path / "recorded",
+            monkeypatch,
+            dict(self._PROVENANCE, build_configuration=configured),
+        )
+        latency = update_docs._generate_pipeline_latency_table()
+        assert claim in latency
+        assert f"- **Build configuration:** `{configured}`\n" in latency
+        assert "not recorded by the runner" not in latency
+        assert f"built with `{configured}`" in update_docs._generate_benchmark_table()
+
+    def test_the_not_recorded_prefix_is_the_runners(self) -> None:
+        import importlib.util
+
+        runner_path = Path(__file__).resolve().parent.parent / "benchmarks" / "benchmark_runner.py"
+        spec = importlib.util.spec_from_file_location("_runner_prefix_check", runner_path)
+        assert spec is not None and spec.loader is not None
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        assert update_docs.BUILD_CONFIGURATION_NOT_RECORDED == (
+            runner.BUILD_CONFIGURATION_NOT_RECORDED
+        )
+
     def test_the_latency_block_names_its_commit_and_tree_state(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -1086,7 +1086,8 @@ def main(argv: list[str] | None = None) -> int:
         except TrackedFilesError as exc:
             # The charts count the tracked test files; a git that cannot say
             # which those are leaves nothing to compare, which is not drift
-            # (exit 1), and tools/refresh_derived_docs.py reports exit 2 so.
+            # (exit 1).  It exits 2, which tools/refresh_derived_docs.py
+            # reports as FATAL rather than as a stale figure.
             print(f"VISUAL ASSETS CHECK COULD NOT RUN: {exc}", file=sys.stderr)
             return 2
         if problems:
