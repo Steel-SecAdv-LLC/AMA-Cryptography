@@ -181,11 +181,16 @@ static void case_dirty_tail(const hint_layout *L) {
  * index before the gap and the one after it; the unpack loop never rewinds,
  * so it assigns every index where it did.
  *
- * Honest signatures rarely have an empty polynomial, so the message is
- * pinned rather than searched for.  Measured over 200,000 messages per set
- * (the keys below, messages 0..199999): 10 qualifying signatures under
- * ML-DSA-65, the first at message 8097; 10 under ML-DSA-87, the first at
- * 6831; none under ML-DSA-44 in 3,200,000 (its omega = 80 over k = 4 leaves
+ * A signature qualifies when polynomial i is empty with at least one index
+ * before it and, if polynomial i + 1 is non-empty, its first index lies
+ * above the last index before the gap, so the ordering rule does not refuse
+ * the forgery on its own.  An empty interior polynomial is common (1,150 and
+ * 967 of 200,000 signatures under ML-DSA-65 and -87); a qualifying one is
+ * rare, so the message is pinned rather than searched for.  Measured over
+ * 200,000 messages per set (the keys below, messages 0..199999): 10
+ * qualifying signatures under ML-DSA-65, the first at message 8097; 10
+ * under ML-DSA-87, the first at 6831; none under ML-DSA-44 in 3,200,000
+ * (its omega = 80 over k = 4 leaves
  * each polynomial ~15 indices).  The check is one code path shared by all
  * three sets, so ML-DSA-44 is left to the other two.  Those rates are also
  * the size of the hole without the check: roughly one honest signature in
@@ -194,8 +199,9 @@ static void case_decreasing_count(const hint_layout *L) {
     uint8_t msg[4];
     size_t sig_len;
     if (L->empty_poly_msg == 0) {
-        printf("NOTE: %s: no honest signature with an empty interior polynomial "
-               "exists to pin (measured; see above)\n", L->name);
+        printf("NOTE: %s: no qualifying honest signature (an empty interior "
+               "polynomial the ordering rule does not also refuse) exists to "
+               "pin (measured; see above)\n", L->name);
         return;
     }
     if (!sign_message(L, L->empty_poly_msg, msg, &sig_len)) {

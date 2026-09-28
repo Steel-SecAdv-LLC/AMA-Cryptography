@@ -2449,7 +2449,7 @@ class CryptoPackageResult:
     #: the table that replaces stripped fields — so the finding is exactly
     #: inverted.  Suppressed line-scoped with a tracking ID per INVARIANT-13;
     #: the values are pinned by
-    #: tests/test_crypto_api_packages.py::test_pickle_strips_the_private_signing_key.
+    #: tests/test_crypto_api_packages.py::TestCryptoPackageSerialization::test_pickle_strips_the_private_signing_key.
     _SECRET_FIELD_PLACEHOLDERS: ClassVar[Dict[str, Any]] = {
         "hmac_key": b"",
         "hkdf_master_secret": b"",  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)

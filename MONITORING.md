@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 5.0.0 |
-| Last Updated | 2026-08-24 |
+| Last Updated | 2026-09-28 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -409,14 +409,16 @@ monitor.patterns.max_depth = 4  # Deeper recursion
 
 ### Performance Impact
 
-| Scenario | Overhead | Recommendation |
-|----------|----------|----------------|
-| Light monitoring (timing only) | <1% | Safe for production |
-| Full monitoring (3R active) | 1-2% | Acceptable for most cases |
-| Resonance analysis enabled | <0.5% | Minimal added cost |
-| Pattern analysis (1000+ packages) | <1% | Scales well |
-
-**Total Impact**: <2% when all components enabled
+No per-scenario overhead has been measured, and this section no longer
+quotes one: the table it carried (under 1% for timing only, 1-2% with 3R
+active, under 2% in total) had no measurement behind it (INVARIANT-16,
+INVARIANT-53). What is measured is `benchmarks/validation_suite.py`,
+section 2.1, which is run by hand and is not a CI gate: it times the timing
+monitor's per-call overhead and the total 3R overhead as a percentage of
+package creation, against a documented 5% each within the validator's
+tolerances (100% and 50% of that figure respectively), and reports pattern
+analysis as on-demand (it does not run per operation). Measure on your own
+workload before relying on any figure.
 
 ---
 

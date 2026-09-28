@@ -207,7 +207,10 @@ and the documentation says so.
 - **RANGE** — unit test of a predicate's domain.
 - **SMOKE** — behavioral; holds with or without the change.
 
-The label is earned by mutation, not assigned by intent.
+PIN and SMOKE are earned by mutation, not assigned by intent. RANGE claims
+only that the test exercises the predicate's domain, not what fails without
+the guard; a RANGE test that has not been mutation-tested says so, and until
+mutation shows otherwise it is not counted as protecting the guard.
 
 **6.5 Measure what is never executed.** `tools/measure_branch_coverage.py`
 reports branch arcs under `src/c` that no test reaches. A guard that no test
@@ -329,15 +332,21 @@ repository maintainer.
 Open item, carried forward and unassigned:
 
 `tools/measure_branch_coverage.py` reports the branch arcs under `src/c` that
-no suite takes. Measured 2026-09-26 (gcc 13.3.0, Debug `--coverage -O0 -g`,
-x86-64 with BMI2 and ADX, 202 translation units, 13,437 arcs, `ctest` 154
-tests): 1,265 arcs never taken by the C suite alone, and 991 never taken by
-the C suite, `pytest tests/` and the Wycheproof runner together
-(`--python-suite`). These are dated measurements; the suite grows. They supersede the 2026-09-22 figure
+no suite takes. Measured 2026-09-26 at `4d15416` (gcc 13.3.0, Debug
+`--coverage -O0 -g`, x86-64 with BMI2 and ADX, 202 translation units, 13,437
+arcs, `ctest` 154 tests): 1,265 arcs never taken by the C suite alone, and
+991 never taken by the C suite, `pytest tests/` and the Wycheproof runner
+together (`--python-suite`). Re-measured 2026-09-28 at `7bdc7db` by the same
+procedure on an x86-64 host with BMI2, ADX, AVX-512 VBMI, VAES and SHA-NI:
+1,262 and 982 of 13,435 arcs, every per-file row below unchanged, the
+difference in the dispatch and CPUID buckets. These are dated measurements
+of a named commit on a named host; the suite grows, and the tree has moved
+since. They supersede the 2026-09-22 figure
 this paragraph carried (1,741 of 11,315 over 143 translation units) and the
 839b66b4 commit message's 1,765 of 11,053, which belongs to a different host
-and toolchain. The dispatch and CPUID buckets (202 and 42 arcs) are
-structurally unreachable on any single host and require no action.
+and toolchain. The dispatch and CPUID buckets (202 and 42 arcs at `4d15416`,
+197 and 38 at `7bdc7db`) are structurally unreachable on any single host,
+vary with its ISA, and require no action.
 
 The five files this section listed as never examined -- `ama_nistp.c`,
 `ama_dilithium.c`, `ama_slhdsa.c`, `ama_kyber.c` and `ama_frost.c` -- were

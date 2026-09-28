@@ -61,9 +61,9 @@ The security analysis is self-assessed. The library has **not** been externally 
 >
 > - **AMA Cryptography ♱** — the cryptographic foundation. Hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Standalone library; any Python project can install and use it independently.
 >
-> - **Mercury Agent ♱** — a neuro-symbolic AI for multi-domain anomaly detection, built on a 7-phase cognitive architecture (Neural Memory → Symbolic Logic → Hybrid Fusion → Enhanced Detection → Autonomous OODA Agent → Ethical Bounding → Cognitive Evolution), with ten cognitive components wired at runtime. Every public decision surface clears a mandatory, fail-closed harm-uplift gate and the σ_Immutable configuration-integrity gate; Benevolence is scored as an advisory signal. Measured 2026-08-03 on the ADBench `--quick` subset (10 datasets), the Mercury tier detector's mean ROC-AUC is 0.8936 (median 0.9464), ranking 4th of 8 methods; every figure, with its command, is in Mercury's [CAPABILITY_MATRIX.md](https://github.com/Steel-SecAdv-LLC/Mercury-Agent/blob/main/CAPABILITY_MATRIX.md). Designed for STEM exploration, humanitarian crisis response, and civilization-first AI evolution.
+> - **Mercury Agent ♱** — a neuro-symbolic AI for multi-domain anomaly detection, built in seven phases (Neural Memory → Symbolic Logic → Hybrid Fusion → Enhanced Detection → Autonomous OODA Agent → Ethical Bounding → Cognitive Evolution; the order it was built in, not a runtime pipeline), with ten cognitive components wired at runtime. Every public decision surface clears a mandatory, fail-closed harm-uplift gate and the σ_Immutable configuration-integrity gate; Benevolence is scored as an advisory signal. Measured 2026-08-03 on the ADBench `--quick` subset (10 datasets), the Mercury tier detector's mean ROC-AUC is 0.8936 (median 0.9464), ranking 4th of 8 methods; every figure, with its command, is in Mercury's [CAPABILITY_MATRIX.md](https://github.com/Steel-SecAdv-LLC/Mercury-Agent/blob/main/CAPABILITY_MATRIX.md). Designed for STEM exploration, humanitarian crisis response, and civilization-first AI evolution.
 >
-> - **FINDΩYOU™** — a near-future addition with a people-first mission: locating the lost, missing, and abducted to reunite families, and accounting for the predators responsible so they answer to justice. A comprehensive, ethical biometric platform — facial, iris, fingerprint, and voice recognition with AgeTransGAN-driven age progression — bound by neuro-symbolic ethical constraints (Logic Tensor Networks) and audited for bias. Integrates real-time emergency channels (FEMA IPAWS Amber Alerts, NOAA, USGS) and operates under geo-consent with strict privacy compliance (BIPA, CCPA/CPRA, GDPR, COPPA). US-focused, civilization-first.
+> - **FINDΩYOU™** — a near-future addition with a people-first mission: locating the lost, missing, and abducted to reunite families, and accounting for the predators responsible so they answer to justice. A comprehensive, ethical biometric platform — facial, iris, fingerprint, and voice recognition with AgeTransGAN-driven age progression — to be bound by neuro-symbolic ethical constraints (Logic Tensor Networks) and audited for bias. It is designed to integrate real-time emergency channels (FEMA IPAWS Amber Alerts, NOAA, USGS) and to operate under geo-consent, complying with BIPA, CCPA/CPRA, GDPR and COPPA; as a near-future addition, these are design commitments, not audited properties. US-focused, civilization-first.
 >
 > **Integration:** AMA Cryptography is a standalone cryptographic library — any Python project can install and use it independently for quantum-resistant security. The library is designed for general-purpose use across AI agents, AI systems, and any application requiring post-quantum protection.
 
@@ -927,7 +927,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*6,587 test functions across 271 Python test files plus 94 C test suites (96 translation units) covering core crypto and NIST KATs (including the AVX-512 4-way Keccak KAT, CSPRNG-failure scrubbing (`tests/c/test_csprng_failure_residue.c`), ML-DSA hint encoding (`tests/c/test_ml_dsa_hint_encoding.c`), input guards (`tests/c/test_input_guards.c`), fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*6,683 test functions across 271 Python test files plus 94 C test suites (96 translation units) covering core crypto and NIST KATs (including the AVX-512 4-way Keccak KAT, CSPRNG-failure scrubbing (`tests/c/test_csprng_failure_residue.c`), ML-DSA hint encoding (`tests/c/test_ml_dsa_hint_encoding.c`), input guards (`tests/c/test_input_guards.c`), fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1374,7 +1374,7 @@ make security-audit
 | Python | PEP 8, type hints, docstrings |
 | C | C11; clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` on gcc and clang; Doxygen comments |
 | Security | Constant-time operations, no undefined behavior |
-| Testing | Python line coverage gated at ≥ 75% (`pyproject.toml`); C branch coverage measured by `tools/measure_branch_coverage.py`; new tests mutation-checked (AGENTS.md §6) |
+| Testing | Python line coverage gated at ≥ 75% (`pyproject.toml`); C branch coverage measured by `tools/measure_branch_coverage.py`; new PIN and SMOKE tests mutation-checked, RANGE rows labelled as not (AGENTS.md §6) |
 
 </details>
 
@@ -1486,7 +1486,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on the standards in [CSRC_STANDARDS.md](CSRC_STANDARDS.md) — not custom cryptography
 - **Quantified claims:** Every published figure names its host, command and record ([docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md), `benchmarks/canonical-host.json`)
-- **Rigorous testing:** 6,587 test functions across 271 Python files plus 94 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and benchmark-regression checks
+- **Rigorous testing:** 6,683 test functions across 271 Python files plus 94 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and benchmark-regression checks
 - **Regression detection:** Benchmark floors measured on each CI runner class (x86_64 45% tolerance; aarch64 15–25%)
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by the weakest layer (~128-bit classical), not inflated aggregate claims

@@ -898,6 +898,49 @@ class TestReplacementTextIsInsertedVerbatim:
         latency = update_docs._generate_pipeline_latency_table()
         assert f"- **Build:** {published}\n" in latency
 
+    @pytest.mark.parametrize(
+        ("loaded_from", "basename"),
+        [
+            (
+                "/home/bench/AMA-Cryptography/ama_cryptography/libama_cryptography.so",
+                "libama_cryptography.so",
+            ),
+            (
+                r"C:\Users\bench\AMA-Cryptography\ama_cryptography\ama_cryptography.dll",
+                "ama_cryptography.dll",
+            ),
+        ],
+    )
+    def test_the_runner_records_the_library_path_as_a_part_of_its_own(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        loaded_from: str,
+        basename: str,
+    ) -> None:
+        """The reduction above acts on whole ``·``-separated parts, so it is
+        only as good as the record's shape.  A path embedded in prose
+        ("loaded from /home/...") would keep its home directory.  The field
+        has one producer, ``benchmark_runner._native_backend_summary``; driven
+        here with a home-directory path, its output must publish the basename
+        alone -- which holds because it writes the path as a part of its own."""
+        import ama_cryptography._self_test as self_test
+        import benchmarks.benchmark_runner as runner
+
+        attestation = {
+            "native_backend": {
+                "loaded": True,
+                "preload_digest_hex": "d95f5cc73e89c347" * 4,
+                "native_version": "5.0.0",
+                "path": loaded_from,
+            }
+        }
+        monkeypatch.setattr(self_test, "module_attestation", lambda: attestation)
+        recorded = runner._native_backend_summary()
+        self._tree(tmp_path, monkeypatch, dict(self._PROVENANCE, native_backend=recorded))
+        latency = update_docs._generate_pipeline_latency_table()
+        assert f"- **Build:** v5.0.0 · digest d95f5cc73e89c347… · {basename}\n" in latency
+
     def test_the_latency_block_names_its_commit_and_tree_state(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

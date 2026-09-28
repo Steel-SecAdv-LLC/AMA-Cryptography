@@ -20,7 +20,7 @@ import importlib as _importlib
 import logging as _logging
 import os as _os
 import sys as _sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 __version__ = "5.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
@@ -461,7 +461,20 @@ from ama_cryptography.exceptions import (
 # completes so an operator can call ``module_attestation()`` and read the full
 # picture, but the module stays in ERROR and ``check_crypto_permitted()``
 # refuses every cryptographic operation.  It buys introspection, not crypto.
-if not _post():
+#
+# A stage that RAISES is a failed POST as well: ``_run_self_tests`` records it
+# (ERROR, a failing row, ``last_failure()``) and re-raises.  The exception used
+# to escape straight through this statement, which failed the import without
+# the root cause and results table below and left the diagnostic hatch unable
+# to complete it.  It is routed through the same gate and chained onto the
+# refusal, so the original traceback is kept.
+_post_exc: Optional[Exception] = None
+try:
+    _post_ok = _post()
+except Exception as _exc:
+    _post_ok = False
+    _post_exc = _exc
+if not _post_ok:
     _reason = module_error_reason() or "unknown"
     _results = module_self_test_results()
     _rows = "\n".join(
@@ -639,7 +652,7 @@ if not _post():
             "refused) and call module_attestation().\n"
             "  Stale digest after editing package sources? Refresh it with:\n"
             f"      {_build_env}=1 python -m ama_cryptography.integrity --update --sign"
-        )
+        ) from _post_exc
 
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.

@@ -32,7 +32,6 @@ import os
 import secrets
 import struct
 import sys
-import threading
 import time
 from pathlib import Path
 from types import CodeType
@@ -48,7 +47,15 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol, Tupl
 # state variables (``_MODULE_STATE`` …) are deliberately NOT re-exported —
 # rebinding them must happen on ``_module_state`` itself, where the guards
 # read them; a rebind on a re-exported copy would silently diverge.
-from ama_cryptography._module_state import _begin_self_test, _clear_self_test_thread, _rng_state
+from ama_cryptography._module_state import (
+    _POST_LOCK,
+    _begin_self_test,
+    _clear_self_test_thread,
+    _exception_text,
+    _finish_self_test,
+    _rng_state,
+    _state_snapshot,
+)
 from ama_cryptography._module_state import _set_error as _set_error
 from ama_cryptography._module_state import _set_operational as _set_operational
 from ama_cryptography._module_state import check_crypto_permitted as check_crypto_permitted
@@ -109,20 +116,34 @@ _POST_DURATION_MS: float = 0.0
 #: same process took ~1 s, and nothing recorded where the time went.
 _POST_STAGE_DURATIONS_MS: Dict[str, float] = {}
 
-# Serialises POST runs and the state transitions they drive.  ``reset_module()``
-# is callable from any thread at any time, and without this two concurrent
-# resets could interleave their ``_SELF_TEST_RESULTS`` writes and leave the
-# module OPERATIONAL on the strength of a half-populated result list.
-_POST_LOCK = threading.RLock()
+# ``_POST_LOCK`` (imported above) serialises POST runs.  ``reset_module()`` is
+# callable from any thread at any time, and without it two concurrent resets
+# could interleave their ``_SELF_TEST_RESULTS`` writes and leave the module
+# OPERATIONAL on the strength of a half-populated result list.  It is defined
+# in ``_module_state`` because ``check_crypto_permitted`` reads it.
 
-#: Evidence from the last POST failure, retained across a successful
-#: ``reset_module()`` so recovery does not erase the record of what failed.
+#: Evidence of the most recent failure that put the module in ERROR, retained
+#: across a successful ``reset_module()`` so recovery does not erase the record
+#: of what failed.  Mutated in place under ``_POST_LOCK``; see ``last_failure``.
 _LAST_FAILURE: Dict[str, Any] = {
     "reason": None,
     "results": [],
     "duration_ms": 0.0,
     "stage_durations_ms": {},
 }
+
+#: The ``_module_state`` error sequence ``_LAST_FAILURE`` describes; 0 when
+#: nothing has been recorded.  An ERROR whose sequence differs has not been
+#: recorded yet.  Compared by number, not by reason, because two failures can
+#: carry the same reason string.
+_LAST_FAILURE_SEQUENCE = 0
+
+#: Row name for a failed POST whose stage left no failing row of its own: a
+#: stage that raised, or one that returned ``(False, reason)`` without
+#: recording a row.  Deliberately not the name of any stage, so the import
+#: gate's repair escape (which acts only on rows named ``integrity`` and
+#: ``native-backend``) can never mistake it for a repairable failure.
+_POST_FAILURE_ROW = "POST"
 
 # Strict mode env: when set, a skipped KAT is treated as a failure so
 # release builds (and any deployment that demands every approved
@@ -212,8 +233,20 @@ def module_attestation() -> Dict[str, Any]:
         ``native_backend``   — provenance of the native library that backed the
                                run (see ``pqc_backends.native_backend_diagnostics``),
                                or an explanation of why there was none.
+
+    Every field but ``native_backend`` and ``strict_mode`` is read in one
+    critical section under the POST lock, so a call made while POST is running
+    waits for the run to finish and then describes it whole.  Read without the
+    lock, a caller could pair a finished state with a half-written table and
+    report ``fully_verified: True`` for a run that went on to skip a test.
     """
-    results = list(_SELF_TEST_RESULTS)
+    with _POST_LOCK:
+        state, error_reason, _ = _state_snapshot()
+        results = list(_SELF_TEST_RESULTS)
+        integrity_strength = _INTEGRITY_STRENGTH
+        anchored = _INTEGRITY_ANCHORED
+        duration_ms = _POST_DURATION_MS
+        stage_durations_ms = dict(_POST_STAGE_DURATIONS_MS)
     skipped = [(name, detail) for name, passed, detail in results if passed is None]
     failed = [(name, detail) for name, passed, detail in results if passed is False]
     n_pass = sum(1 for _, passed, _ in results if passed is True)
@@ -226,19 +259,19 @@ def module_attestation() -> Dict[str, Any]:
         native = {"loaded": False, "reason": f"diagnostics unavailable: {exc}"}
 
     return {
-        "state": module_status(),
-        "error_reason": module_error_reason(),
-        "fully_verified": module_status() == "OPERATIONAL" and not skipped and not failed,
-        "integrity_strength": _INTEGRITY_STRENGTH,
-        "anchored": _INTEGRITY_ANCHORED,
+        "state": state,
+        "error_reason": error_reason,
+        "fully_verified": state == "OPERATIONAL" and not skipped and not failed,
+        "integrity_strength": integrity_strength,
+        "anchored": anchored,
         "strict_mode": _env_flag_enabled(_AMA_FIPS_STRICT_ENV),
         "tests_run": len(results),
         "tests_passed": n_pass,
         "tests_skipped": len(skipped),
         "skipped": skipped,
         "failed": failed,
-        "duration_ms": _POST_DURATION_MS,
-        "stage_durations_ms": dict(_POST_STAGE_DURATIONS_MS),
+        "duration_ms": duration_ms,
+        "stage_durations_ms": stage_durations_ms,
         "native_backend": native,
     }
 
@@ -246,75 +279,96 @@ def module_attestation() -> Dict[str, Any]:
 def reset_module() -> bool:
     """Re-run self-tests to attempt recovery from ERROR state.
 
-    Serialised against concurrent resets and against a POST already in flight,
-    so two callers racing to recover cannot interleave their result lists and
-    leave the module OPERATIONAL on a half-populated run.
+    Serialised against concurrent resets and against a POST already in flight
+    (POST holds ``_POST_LOCK`` for its whole run), so two callers racing to
+    recover cannot interleave their result lists and leave the module
+    OPERATIONAL on a half-populated run.
 
-    The outgoing failure is preserved in :func:`last_failure` before the new run
-    overwrites it.  ``_run_self_tests`` clears ``_SELF_TEST_RESULTS`` on entry,
-    so a reset that succeeded used to erase every trace of what had gone wrong —
-    the state went ERROR → OPERATIONAL and the reason, the failing stage and its
-    detail string were gone.  A transient fault that clears on retry is the case
-    an operator most needs the record of.
+    The outgoing failure is preserved in :func:`last_failure`: POST clears
+    ``_SELF_TEST_RESULTS`` on entry, so a recovery that succeeded would
+    otherwise erase every trace of what had gone wrong, and a transient fault
+    that clears on retry is the case an operator most needs the record of.  A
+    failed POST records itself when it fails; an ERROR entered outside POST (a
+    pairwise consistency test or the continuous RNG test) is recorded by the
+    POST that replaces it, if nothing has recorded it before.
 
-    A POST that failed has already recorded itself (see ``_run_self_tests``);
-    the snapshot here additionally captures an ERROR entered at runtime through
-    ``_set_error`` — a downstream timing-leak or pairwise-test failure whose
-    reason POST itself never saw — against the results table that was live.
+    Returns False, leaving the module in ERROR, when POST fails or when
+    another thread reports a failure while POST is running.
     """
-    with _POST_LOCK:
-        if module_status() == "ERROR" and module_error_reason() != _LAST_FAILURE["reason"]:
-            # POST records its own failures on every failing exit, so a
-            # reason it did not record entered ERROR outside POST: a pairwise
-            # consistency test or the continuous RNG test.  That failure has
-            # no run of its own; the live table and timings belong to the
-            # last POST, which passed, and attaching them (as this did until
-            # 2026-09-27) described a POST failure that never happened.
-            _record_last_failure(results=[], duration_ms=0.0, stage_durations_ms={})
-        return _run_self_tests()
+    return _run_self_tests()
 
 
-def _record_last_failure(
-    *,
-    results: Optional[List[Tuple[str, Optional[bool], str]]] = None,
-    duration_ms: Optional[float] = None,
-    stage_durations_ms: Optional[Dict[str, float]] = None,
-) -> None:
-    """Snapshot the current failure for :func:`last_failure`.
+def _record_failure(reason: Optional[str], sequence: int, *, with_run: bool) -> None:
+    """Make ``_LAST_FAILURE`` describe the ERROR numbered ``sequence``.
 
-    The evidence defaults to the live POST table and timings, the failing
-    run's own when POST calls this; a failure recorded from outside POST
-    passes the (empty) evidence it has.
+    ``with_run`` attaches the live POST table and timings: true only when the
+    failure is the running POST's own.  A failure that entered ERROR outside
+    POST has no run of its own; the live table belongs to a POST that passed,
+    and attaching it (as ``reset_module`` did until 2026-09-27) described a POST
+    failure that never happened.
+
+    The caller holds ``_POST_LOCK`` (POST for its whole run, ``last_failure``
+    around its read), so a reader never sees one failure's reason beside
+    another's evidence.  ``_LAST_FAILURE`` is mutated in place.
     """
-    _LAST_FAILURE["reason"] = module_error_reason()
-    _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS if results is None else results)
-    _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS if duration_ms is None else duration_ms
-    _LAST_FAILURE["stage_durations_ms"] = dict(
-        _POST_STAGE_DURATIONS_MS if stage_durations_ms is None else stage_durations_ms
+    global _LAST_FAILURE_SEQUENCE
+    _LAST_FAILURE.update(
+        {
+            "reason": reason,
+            "results": list(_SELF_TEST_RESULTS) if with_run else [],
+            "duration_ms": _POST_DURATION_MS if with_run else 0.0,
+            "stage_durations_ms": dict(_POST_STAGE_DURATIONS_MS) if with_run else {},
+        }
     )
+    _LAST_FAILURE_SEQUENCE = sequence
+
+
+def _record_error_if_unrecorded(
+    state: str,
+    reason: Optional[str],
+    sequence: int,
+    *,
+    run_sequence: Optional[int] = None,
+) -> None:
+    """Record an ERROR that ``_LAST_FAILURE`` does not yet describe.
+
+    ``run_sequence`` is the error sequence the running POST's own failure
+    produced, if it failed; only that ERROR is recorded with the run attached.
+    The caller holds ``_POST_LOCK``.
+    """
+    if state == "ERROR" and sequence != _LAST_FAILURE_SEQUENCE:
+        _record_failure(reason, sequence, with_run=sequence == run_sequence)
 
 
 def last_failure() -> Dict[str, Any]:
-    """Return the most recent POST failure, or empty when there has not been one.
+    """Return the most recent failure that put the module in ERROR, or empty.
 
-    Keys mirror the failing run: ``reason``, ``results`` (the full tri-state
-    table as it stood when POST failed), ``duration_ms`` and
-    ``stage_durations_ms`` (each stage that ran, the failing one last), so the
-    failed run's timing survives the recovery run that overwrites
-    :func:`module_attestation`.
+    Keys: ``reason``, ``results``, ``duration_ms`` and ``stage_durations_ms``.
+
+    For a failed POST they are the failing run's own: the full tri-state table
+    as it stood when POST failed, its wall-clock, and each stage that ran with
+    the failing one last, so the failed run's timing survives the recovery run
+    that overwrites :func:`module_attestation`.  POST records this when it
+    fails, before anyone asks to recover.
 
     A failure that put the module in ERROR outside POST -- a pairwise
-    consistency test or the continuous RNG test -- is recorded when
-    :func:`reset_module` recovers from it, with its ``reason`` and no run:
-    ``results`` empty, ``duration_ms`` 0 and ``stage_durations_ms`` empty,
-    because the last POST passed and its evidence is not that failure's.
+    consistency test or the continuous RNG test -- has no run: ``results`` is
+    empty, ``duration_ms`` 0 and ``stage_durations_ms`` empty, because the
+    last POST passed and its evidence is not that failure's.  It is recorded
+    the first time this function or the POST that replaces it sees it, so it
+    is reported while the module is still in ERROR, not only after recovery.
+
+    With nothing recorded, ``reason`` is None and the evidence empty.  Read
+    under the POST lock: a call made while POST is running waits for it.
     """
-    return {
-        "reason": _LAST_FAILURE["reason"],
-        "results": list(_LAST_FAILURE["results"]),
-        "duration_ms": _LAST_FAILURE["duration_ms"],
-        "stage_durations_ms": dict(_LAST_FAILURE["stage_durations_ms"]),
-    }
+    with _POST_LOCK:
+        _record_error_if_unrecorded(*_state_snapshot())
+        return {
+            "reason": _LAST_FAILURE["reason"],
+            "results": list(_LAST_FAILURE["results"]),
+            "duration_ms": _LAST_FAILURE["duration_ms"],
+            "stage_durations_ms": dict(_LAST_FAILURE["stage_durations_ms"]),
+        }
 
 
 # ============================================================================
@@ -3165,6 +3219,19 @@ def _run_timing_oracle_stage(strict_mode: bool) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
+def _ensure_failing_row(reason: str) -> None:
+    """Give a failed POST at least one failing row in its result table.
+
+    Called by ``_run_self_tests`` on every failing exit.  A stage that raised
+    or returned ``(False, reason)`` without appending a row left the table with
+    no ``False`` entry while the module was in ERROR, so
+    ``module_attestation()["failed"]``, ``last_failure()["results"]`` and the
+    import gate's POST results listing all named no failure.
+    """
+    if not any(passed is False for _, passed, _ in _SELF_TEST_RESULTS):
+        _SELF_TEST_RESULTS.append((_POST_FAILURE_ROW, False, reason))
+
+
 def _run_rng_stage() -> Tuple[bool, Optional[str]]:
     """Run the initial continuous-RNG health check.
 
@@ -3176,8 +3243,8 @@ def _run_rng_stage() -> Tuple[bool, Optional[str]]:
         out1 = secrets.token_bytes(32)
         out2 = secrets.token_bytes(32)
     except Exception as exc:
-        _SELF_TEST_RESULTS.append(("RNG", False, f"Exception: {exc}"))
-        return False, f"RNG health test exception: {exc}"
+        _SELF_TEST_RESULTS.append(("RNG", False, f"Exception: {_exception_text(exc)}"))
+        return False, f"RNG health test exception: {_exception_text(exc)}"
     if out1 == out2:
         _SELF_TEST_RESULTS.append(("RNG", False, "Identical consecutive outputs"))
         return False, "RNG health test failed at startup"
@@ -3244,12 +3311,17 @@ def _run_self_tests() -> bool:
     testable.
     """
     global _SELF_TEST_RESULTS, _POST_DURATION_MS, _POST_STAGE_DURATIONS_MS
+    global _INTEGRITY_STRENGTH, _INTEGRITY_ANCHORED, _INTEGRITY_FAILURE_KIND
 
     with _POST_LOCK:
         start = time.monotonic()
         all_passed = True
         stage_name = ""
         stage_durations: Dict[str, float] = {}
+        # The error sequence this run's own failure produced, if it fails:
+        # the one ERROR recorded with this run's table attached.
+        run_sequence: Optional[int] = None
+        begin_sequence = 0
         try:
             # Enter SELF_TEST and pin the guard's allowance to this thread —
             # the transition lives in _module_state, where the state does.
@@ -3258,8 +3330,23 @@ def _run_self_tests() -> bool:
             # read and the stage table sat before it, so an interrupt in
             # that window escaped with the allowance still pinned to this
             # thread (``test_an_interrupt_before_the_first_stage_still_drops_the_allowance``).
-            _begin_self_test()
+            previous_state, previous_reason, begin_sequence = _begin_self_test()
+            # An ERROR this run replaces is recorded first if nothing has
+            # recorded it, whether it arrived before ``reset_module()`` was
+            # called or in the instant before this transition; erased
+            # unrecorded, it would survive only as a log line.
+            _record_error_if_unrecorded(previous_state, previous_reason, begin_sequence)
             _SELF_TEST_RESULTS = []
+            # Published live, so an interrupted run leaves its own partial
+            # timing rather than the previous run's; the ``finally`` below
+            # completes it.
+            _POST_STAGE_DURATIONS_MS = stage_durations
+            _POST_DURATION_MS = 0.0
+            # Set by the integrity stage.  A run that fails before reaching it
+            # must not report the previous run's verdict as its own.
+            _INTEGRITY_STRENGTH = None
+            _INTEGRITY_ANCHORED = None
+            _INTEGRITY_FAILURE_KIND = None
 
             strict_mode = _env_flag_enabled(_AMA_FIPS_STRICT_ENV)
 
@@ -3302,8 +3389,9 @@ def _run_self_tests() -> bool:
                         # fail closed explicitly if a stage violates the
                         # ``(False, reason)`` contract.
                         err = "FIPS POST internal error: stage returned (False, None)"
-                    _set_error(err)
                     all_passed = False
+                    _ensure_failing_row(err)
+                    run_sequence = _set_error(err)
                     break
         except Exception as exc:
             # A stage that raises is a failed POST, and it is recorded as one
@@ -3320,35 +3408,54 @@ def _run_self_tests() -> bool:
             # The module still does not become OPERATIONAL (SELF_TEST is left
             # as it stands), the thread allowance is dropped in the finally,
             # and the interrupt propagates.
+            #
+            # The reason is formatted with ``_exception_text``: an exception
+            # whose ``__str__`` raises used to replace itself with that second
+            # exception here, before ``_set_error`` ran, so the module stayed in
+            # SELF_TEST with no reason and nothing recorded.
             all_passed = False
-            _set_error(
+            reason = (
                 f"FIPS POST internal error: stage "
                 f"{stage_name or '<before the first stage>'!r} raised "
-                f"{type(exc).__name__}: {exc}"
+                f"{type(exc).__name__}: {_exception_text(exc)}"
             )
+            # A raising stage leaves no row of its own; without this one the
+            # table (and module_attestation()["failed"]) named no failure
+            # while the module was in ERROR.
+            _ensure_failing_row(reason)
+            run_sequence = _set_error(reason)
             raise
         finally:
             # Drop the self-test allowance before returning by ANY path,
             # including an unexpected exception escaping a stage.  Leaving it
             # set would keep ``check_crypto_permitted`` permissive on this
-            # thread for the rest of the process's life.
+            # thread for the rest of the process's life.  (If a second
+            # interrupt skips this line, the guard still refuses: it also
+            # requires the POST lock, which the ``with`` releases.)
             _clear_self_test_thread()
             # Publish this run's timing by the same paths: a stage that raises
             # is the one an operator most needs named, and publishing only on
             # a normal return left the previous run's timing in its place.
             _POST_DURATION_MS = (time.monotonic() - start) * 1000
             _POST_STAGE_DURATIONS_MS = stage_durations
-            if not all_passed:
-                # Snapshot the failed run for :func:`last_failure` NOW, on
-                # every failing exit.  Until this was written here the record
-                # came only from ``reset_module()``, so a failed POST that
-                # nobody had yet tried to recover from reported "no failure" —
-                # the opposite of the truth, and exactly when an operator
-                # reads it.
-                _record_last_failure()
+            # Snapshot a failed run for :func:`last_failure` NOW, on every
+            # failing exit.  Until this was written here the record came only
+            # from ``reset_module()``, so a failed POST that nobody had yet
+            # tried to recover from reported "no failure" — the opposite of the
+            # truth, and exactly when an operator reads it.  Keyed on the live
+            # error sequence, so an ERROR another thread entered during the run
+            # is recorded too, without this run's table.
+            _record_error_if_unrecorded(*_state_snapshot(), run_sequence=run_sequence)
 
+        # Leave SELF_TEST only if no ERROR arrived during the run.  This was an
+        # unconditional ``_set_operational()``, which overwrote a pairwise or
+        # continuous-RNG failure another thread reported while POST ran — its
+        # draw having begun before POST did — and left the module OPERATIONAL
+        # with no reason.  (An ERROR that lands after the ``finally`` above
+        # recorded is recorded by the next ``last_failure()`` or POST.)
+        if all_passed and not _finish_self_test(begin_sequence):
+            all_passed = False
         if all_passed:
-            _set_operational()
             # Count outcomes for the operator log
             n_pass = sum(1 for _, p, _ in _SELF_TEST_RESULTS if p is True)
             skipped = [(name, detail) for name, p, detail in _SELF_TEST_RESULTS if p is None]

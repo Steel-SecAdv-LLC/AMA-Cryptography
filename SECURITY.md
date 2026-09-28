@@ -1073,8 +1073,8 @@ Method and scope: [CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md)
 
 Secret buffers are scrubbed on every exit path, including error returns.
 In the 2026-09-26 review, eight exits that follow a failed CSPRNG draw
-(SLH-DSA, ML-KEM, ML-DSA and X25519 key generation and hedged signing) did
-not scrub the partial output; they now do, and
+(SLH-DSA, ML-KEM, ML-DSA and X25519 key generation, SLH-DSA hedged signing
+and ML-KEM encapsulation) did not scrub the partial output; they now do, and
 `tests/c/test_csprng_failure_residue.c` fails if any of those scrubs is
 removed.
 

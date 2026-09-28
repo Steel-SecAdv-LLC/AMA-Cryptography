@@ -29,7 +29,7 @@
  *     (existing tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json).
  *   - SHAKE-128s path: byte-exact against NIST ACVP SLH-DSA-sigGen-FIPS205
  *     deterministic external/pure vectors (tcIds 214–220). See
- *     tests/kat/fips205/slhdsa_shake_128s_siggen_acvp.json.
+ *     tests/kat/fips205/SLH-DSA-SHAKE-128s-sigGen-FIPS205.json.
  *
  * Backward compatibility (single canonical signer):
  *   The legacy SPHINCS+-SHA2-256f-simple API — ama_sphincs_keypair /
@@ -149,6 +149,16 @@ typedef struct slhdsa_params {
                      const uint8_t *msg, size_t msglen);
 } slhdsa_params_t;
 
+/* The largest n (the security parameter, in octets) a parameter row may
+ * carry.  The stack buffers in this file that hold n-octet values are
+ * declared for n = 32 -- R[32], pk[2 * 32], seeds[3 * 32] and their kin --
+ * so each row's n is asserted against this bound where the row is defined:
+ * a row that exceeded it fails to compile instead of overrunning those
+ * buffers at run time. */
+#define SLH_MAX_N 32u
+/* H_msg's MGF1-SHA-512 seed in categories 3 and 5: R || PK.seed || SHA-512. */
+#define SLH_MGF1_SEED_MAX (2u * SLH_MAX_N + 64u)
+
 /* ----------------------------------------------------------------------------
  * Address helpers — we use a uniform uint32_t[8] in-memory representation and
  * serialize to either 22-byte compressed (SHA2) or 32-byte uncompressed
@@ -251,25 +261,24 @@ static void slh_addr_serialize(const slhdsa_params_t *p, uint8_t *out,
  * SHA2-256f-simple hash chain (FIPS 205 §11.2, NIST category 5)
  * ============================================================================ */
 
-/* MGF1-SHA-512 used for H_msg in NIST categories 3/5.  Returns 0, or -1 when
- * the seed exceeds the static envelope.
+/* MGF1-SHA-512 used for H_msg in NIST categories 3/5.
  *
- * That bound is unreachable with every FIPS 205 parameter set (the seed is
- * 2n + 64 <= 128 octets), but it used to `return;` with `out` unwritten, and
- * sha2_H_msg went on to report success -- signing or verifying over whatever
- * the caller's digest buffer held.  A guard that cannot fire should at least
- * fail closed if a future parameter row makes it fire; sha2_H_msg now
- * propagates it, and both H_msg call sites already refuse a non-zero
- * return. */
-static int sha2_mgf1_sha512(uint8_t *out, size_t outlen,
-                            const uint8_t *seed, size_t seedlen) {
+ * The seed is R || PK.seed || SHA-512(...), 2n + 64 octets, and `hashbuf` is
+ * sized for it at SLH_MAX_N with room for the 4-octet counter; every
+ * parameter row's n is asserted against SLH_MAX_N at compile time (see the
+ * parameter table), so the copy below cannot overrun.
+ *
+ * Until 2026-09-28 this function instead refused `seedlen > 160` at run time
+ * and described that as failing closed for "a future parameter row".  It
+ * could not: sha2_H_msg had already copied the same 2n + 64 octets into its
+ * own 160-octet `mgf_seed` before calling here, so any seed long enough to
+ * reach the refusal had overrun that buffer first.  A bound checked after
+ * the copies it bounds protects nothing; it is now a property of the types. */
+static void sha2_mgf1_sha512(uint8_t *out, size_t outlen,
+                             const uint8_t *seed, size_t seedlen) {
     uint8_t buf[64];
-    /* Max seed in our use: R(n) + PK.seed(n) + SHA-512(64) = 32+32+64 = 128. */
-    uint8_t hashbuf[160 + 4];
+    uint8_t hashbuf[SLH_MGF1_SEED_MAX + 4];
     size_t i, blocks, tocopy;
-    if (seedlen > sizeof(hashbuf) - 4) {
-        return -1;
-    }
     memcpy(hashbuf, seed, seedlen);
     blocks = (outlen + 63) / 64;
     for (i = 0; i < blocks; ++i) {
@@ -283,7 +292,6 @@ static int sha2_mgf1_sha512(uint8_t *out, size_t outlen,
     }
     ama_secure_memzero(buf, sizeof(buf));
     ama_secure_memzero(hashbuf, sizeof(hashbuf));
-    return 0;
 }
 
 static void sha2_F(const slhdsa_params_t *p, uint8_t *out,
@@ -411,7 +419,7 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
     /* H_msg = MGF1-SHA-512(R || PK.seed || SHA-512(R || PK.seed || PK.root || M'), m)
      * with M' = prefix || M.  Categories 3/5 only — see FIPS 205 §11.2 Table 5. */
     uint8_t hash[64];
-    uint8_t mgf_seed[160];   /* n + n + 64, ≤ 32+32+64 = 128 */
+    uint8_t mgf_seed[SLH_MGF1_SEED_MAX];   /* n + n + 64, with n <= SLH_MAX_N */
     size_t mgf_seed_len = p->n + p->n + 64;
 
     /* Inner hash: SHA-512(R || PK.seed || PK.root || M'), streamed through the
@@ -434,11 +442,11 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
     memcpy(mgf_seed, R, p->n);
     memcpy(mgf_seed + p->n, pk, p->n);   /* PK.seed only */
     memcpy(mgf_seed + 2 * p->n, hash, 64);
-    int rc = sha2_mgf1_sha512(out, p->md_bytes, mgf_seed, mgf_seed_len);
+    sha2_mgf1_sha512(out, p->md_bytes, mgf_seed, mgf_seed_len);
 
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(mgf_seed, sizeof(mgf_seed));
-    return rc;
+    return 0;
 }
 
 /* ============================================================================
@@ -573,9 +581,12 @@ static int shake_H_msg(const slhdsa_params_t *p, uint8_t *out,
  *     => 40 + 8 + 1 = 49 ✓
  * Byte-exact against NIST ACVP SLH-DSA-SHA2-256f vectors (FIPS 205).
  */
+#define SLH_SHA2_256F_N 32u
+_Static_assert(SLH_SHA2_256F_N <= SLH_MAX_N,
+               "SLH-DSA-SHA2-256f: n exceeds the n-sized buffers of this file");
 static const slhdsa_params_t SLHDSA_PARAMS_SHA2_256F = {
     AMA_SLHDSA_SHA2_256F,
-    32, 68, 17, 4, 9, 35, 16, 4, 64, 3, 67,
+    SLH_SHA2_256F_N, 68, 17, 4, 9, 35, 16, 4, 64, 3, 67,
     49, /* m = 49 bytes (40+8+1) */
     64, 128, 49856,
     40,            /* fors_msg_bytes = ceil(k*a/8) */
@@ -600,9 +611,12 @@ static const slhdsa_params_t SLHDSA_PARAMS_SHA2_256F = {
  *   leaf-index bits = h/d = 9 → ceil(9/8) = 2 bytes
  *   total m = 21 + 7 + 2 = 30 ✓
  */
+#define SLH_SHAKE_128S_N 16u
+_Static_assert(SLH_SHAKE_128S_N <= SLH_MAX_N,
+               "SLH-DSA-SHAKE-128s: n exceeds the n-sized buffers of this file");
 static const slhdsa_params_t SLHDSA_PARAMS_SHAKE_128S = {
     AMA_SLHDSA_SHAKE_128S,
-    16, 63, 7, 9, 12, 14, 16, 4, 32, 3, 35,
+    SLH_SHAKE_128S_N, 63, 7, 9, 12, 14, 16, 4, 32, 3, 35,
     30, /* m = 30 bytes (21+7+2) */
     32, 64, 7856,
     21,            /* fors_msg_bytes = ceil(k*a/8) = 21 */
@@ -1225,14 +1239,17 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
      * INVARIANT-12: FIPS 205 has no rejection loop.  SK.seed and SK.prf
      * themselves stay tainted. */
     AMA_CT_DECLASSIFY(R, p->n);
-    memcpy(sig_ptr, R, p->n);
-    sig_ptr += p->n;
 
-    /* digest = H_msg(R, PK.seed, PK.root, M'); split into FORS msg + tree + leaf. */
+    /* digest = H_msg(R, PK.seed, PK.root, M'); split into FORS msg + tree + leaf.
+     * R enters the caller's signature only once H_msg has succeeded: it was
+     * written first until 2026-09-28, so a refused H_msg returned an error
+     * with R already in the caller's buffer. */
     if (p->hash_msg(p, fors_msg, R, pk, prefix, prefix_len,
                     message, message_len) != 0) {
         return AMA_ERROR_MEMORY;
     }
+    memcpy(sig_ptr, R, p->n);
+    sig_ptr += p->n;
     slh_split_digest(p, fors_msg, &tree, &leaf_idx);
 
     /* FORS sign at (tree, leaf_idx). */

@@ -23,6 +23,7 @@ package version).  These tests pin both, plus the wiring.
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
 import os
@@ -54,18 +55,57 @@ class TestTheChartAccountsForEveryFile:
     def test_the_total_equals_an_independent_count_over_all_test_files(
         self, gv: ModuleType
     ) -> None:
-        """The [0]-defect pin: bucketing is presentation, never exclusion."""
+        """The [0]-defect pin: bucketing is presentation, never exclusion.
+
+        Independent of the tool's enumeration: ``git ls-files`` asked
+        directly, since the chart counts the files the commit carries."""
         counts, total, _unbucketed = gv._count_test_functions_by_category()
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--", ":(glob)tests/test_*.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout
         independent = 0
-        for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+        for name in filter(None, listed.decode("utf-8").split("\0")):
             independent += len(
-                re.findall(r"^\s*def test_", path.read_text(encoding="utf-8"), re.MULTILINE)
+                re.findall(
+                    r"^\s*def test_", (REPO_ROOT / name).read_text(encoding="utf-8"), re.MULTILINE
+                )
             )
         assert total == independent, (
             f"the chart's total ({total}) drops tests the tree has ({independent}); "
             f"the Other bucket exists so this cannot happen"
         )
         assert total == sum(counts)
+
+    def test_an_untracked_test_file_is_not_charted_and_a_staged_one_is(
+        self, gv: ModuleType, tmp_path: Path
+    ) -> None:
+        """The pre-commit hook's ``--check`` globbed the working tree, so an
+        untracked scratch ``tests/test_*.py`` made the committed charts read
+        as stale on a tree CI (a clean checkout) would pass."""
+        repo = tmp_path / "repo"
+        (repo / "tests").mkdir(parents=True)
+        (repo / "tests" / "test_kept.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "add", "tests"], cwd=repo, check=True, capture_output=True)
+        (repo / "tests" / "test_scratch.py").write_text(
+            "def test_b():\n    pass\n", encoding="utf-8"
+        )
+        assert [path.name for path in gv._test_files(repo)] == ["test_kept.py"]
+        subprocess.run(
+            ["git", "add", "tests/test_scratch.py"], cwd=repo, check=True, capture_output=True
+        )
+        assert [path.name for path in gv._test_files(repo)] == ["test_kept.py", "test_scratch.py"]
+
+    def test_outside_git_every_test_file_on_disk_is_charted(
+        self, gv: ModuleType, tmp_path: Path
+    ) -> None:
+        (tmp_path / "tests").mkdir()
+        for name in ("test_b.py", "test_a.py", "helper.py"):
+            (tmp_path / "tests" / name).write_text("def test_x():\n    pass\n", encoding="utf-8")
+        assert [path.name for path in gv._test_files(tmp_path)] == ["test_a.py", "test_b.py"]
 
     def test_unbucketed_files_land_in_the_trailing_other_bucket(self, gv: ModuleType) -> None:
         counts, _total, unbucketed = gv._count_test_functions_by_category()
@@ -138,6 +178,22 @@ class TestManifestCheck:
     ) -> None:
         _stage_assets(gv, tmp_path, monkeypatch, gv._live_test_coverage_inputs())
         assert gv.check_manifest() == []
+
+    def test_a_git_that_cannot_list_the_test_files_is_not_reported_as_drift(
+        self, gv: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The chart counts the tracked test files; when git cannot list them
+        the check could not run, which is exit 2, not the drift of exit 1."""
+        if str(REPO_ROOT) not in sys.path:
+            monkeypatch.syspath_prepend(str(REPO_ROOT))
+        tracked_files_error = importlib.import_module("tools._repo").TrackedFilesError
+
+        def broken() -> list[str]:
+            raise tracked_files_error("git ls-files failed")
+
+        monkeypatch.setattr(gv, "check_manifest", broken)
+        assert gv.main(["--check"]) == 2
+        assert "COULD NOT RUN" in capsys.readouterr().err
 
     def test_a_drifted_count_fails(
         self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

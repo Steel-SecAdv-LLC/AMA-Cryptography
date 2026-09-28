@@ -85,7 +85,6 @@ _PKG_VERSION = _read_package_version()
 ASSETS_DIR = REPO_ROOT / "assets"
 ASSETS_DIR.mkdir(exist_ok=True)
 
-TESTS_DIR = REPO_ROOT / "tests"
 # Raw C medians (microseconds) from `build/bin/benchmark_c_raw --json`.
 # This source is build-time-only — the harness binary and its JSON output
 # are not checked into the repository, so these literals are a snapshot
@@ -213,10 +212,33 @@ def _classify_test_file(basename: str) -> Optional[str]:
 _OTHER_LABEL = "Other"
 
 
+def _test_files(root: Path = REPO_ROOT) -> list[Path]:
+    """Every `tests/test_*.py` the commit carries, in name order.
+
+    In a git checkout that is the files git tracks: the index, which is all a
+    clean CI checkout holds, and pre-commit stashes unstaged edits so during
+    the hook their content is the staged content.  A filesystem glob also
+    counted an untracked scratch `tests/test_*.py`, so the pre-commit hook
+    reported the charts stale on a tree CI would pass.  Outside git (a source
+    tarball) the glob is the only answer, and is used.  The same rule as
+    `tools/check_documented_counts.py`'s static test count, whose figures
+    this chart and its manifest restate.
+    """
+    if (root / ".git").exists():
+        repo_root = str(Path(__file__).resolve().parent.parent)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from tools._repo import tracked_names
+
+        return sorted(root / name for name in tracked_names(root, ":(glob)tests/test_*.py"))
+    return sorted((root / "tests").glob("test_*.py"))
+
+
 def _count_test_functions_by_category() -> tuple[list[int], int, list[tuple[str, int]]]:
-    """Walk `tests/test_*.py`, count `def test_` matches per file, and
-    bucket each file into one of `_TEST_CATEGORY_RULES`, with files that
-    match no rule collected under the trailing `Other` bucket.  Returns
+    """Walk `tests/test_*.py` (`_test_files`: the tracked set), count
+    `def test_` matches per file, and bucket each file into one of
+    `_TEST_CATEGORY_RULES`, with files that match no rule collected under
+    the trailing `Other` bucket.  Returns
     (counts_in_rule_order_plus_other, total, other_files).
 
     `def test_` matches in `conftest.py` are intentionally excluded —
@@ -228,7 +250,7 @@ def _count_test_functions_by_category() -> tuple[list[int], int, list[tuple[str,
     counts = [0] * (len(_TEST_CATEGORY_RULES) + 1)
     label_to_idx = {label: i for i, (label, _) in enumerate(_TEST_CATEGORY_RULES)}
     unbucketed: list[tuple[str, int]] = []
-    for path in sorted(TESTS_DIR.glob("test_*.py")):
+    for path in _test_files():
         n = len(_DEF_TEST_RE.findall(path.read_text(encoding="utf-8")))
         label = _classify_test_file(path.name)
         if label is None:
@@ -243,7 +265,7 @@ def create_test_coverage() -> None:
     """Create enhanced test coverage visualization with percentages and cumulative data."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), gridspec_kw={"width_ratios": [2, 1]})
 
-    # Categories and counts are computed live from the working tree.
+    # Categories and counts are computed live from the tracked test files.
     # `_count_test_functions_by_category()` walks tests/test_*.py and
     # buckets each file into one of `_TEST_CATEGORY_RULES` (defined at
     # module scope) by filename predicate; `def test_` matches per file
@@ -255,7 +277,7 @@ def create_test_coverage() -> None:
     # and the footer so they cannot disagree if tests are added or
     # removed. It matches the set walked by `_count_test_functions_by_category()`,
     # and with the Other bucket the total genuinely covers every one of them.
-    n_files = len(list(TESTS_DIR.glob("test_*.py")))
+    n_files = len(_test_files())
     if unbucketed:
         # Surface in the build log so a new test file without a matching
         # rule is noticed; it is charted under Other either way.
@@ -863,9 +885,7 @@ def _live_test_coverage_inputs() -> dict[str, object]:
     """What ``test_coverage.png`` would draw if rendered from the tree now."""
     counts, total_tests, _unbucketed = _count_test_functions_by_category()
     labels = [label for label, _ in _TEST_CATEGORY_RULES] + [_OTHER_LABEL]
-    return _test_coverage_inputs(
-        labels, counts, total_tests, len(list(TESTS_DIR.glob("test_*.py")))
-    )
+    return _test_coverage_inputs(labels, counts, total_tests, len(_test_files()))
 
 
 def _encode_chart_inputs(inputs: dict[str, object]) -> str:
@@ -977,7 +997,7 @@ def _live_manifest_entry() -> dict[str, object]:
         "test_coverage": {
             "counts": dict(zip(labels, counts)),
             "total_tests": total_tests,
-            "n_files": len(list(TESTS_DIR.glob("test_*.py"))),
+            "n_files": len(_test_files()),
             "uncategorised_files": sorted(name for name, _ in unbucketed),
         },
     }
@@ -1056,7 +1076,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.check:
-        problems = check_manifest()
+        repo_root = str(Path(__file__).resolve().parent.parent)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from tools._repo import TrackedFilesError
+
+        try:
+            problems = check_manifest()
+        except TrackedFilesError as exc:
+            # The charts count the tracked test files; a git that cannot say
+            # which those are leaves nothing to compare, which is not drift
+            # (exit 1), and tools/refresh_derived_docs.py reports exit 2 so.
+            print(f"VISUAL ASSETS CHECK COULD NOT RUN: {exc}", file=sys.stderr)
+            return 2
         if problems:
             print("VISUAL ASSETS CHECK FAILED:", file=sys.stderr)
             for problem in problems:

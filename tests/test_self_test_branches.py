@@ -27,11 +27,16 @@ import hashlib
 import time
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, cast
 
 import pytest
 
 from ama_cryptography import _self_test as st
+
+# Several tests here force POST to fail; the fixture puts the failed run's
+# table, timings and record back so later modules see the import-time run.
+pytestmark = pytest.mark.usefixtures("post_state_restored")
 
 
 @pytest.fixture
@@ -631,24 +636,33 @@ class TestRunSelfTestsFailures:
         monkeypatch: pytest.MonkeyPatch,
         isolated_integrity_file: Path,
     ) -> None:
-        """Two identical consecutive RNG draws must fail the runner."""
+        """Two identical consecutive RNG draws must fail the runner.
+
+        The stuck source is installed on ``_self_test``'s own ``secrets``
+        binding, which only the RNG stage reads.  Patching
+        ``secrets.token_bytes`` itself reached every stage that draws
+        entropy, and an earlier one failed first: the assertions held
+        whether or not the RNG stage worked.
+        """
         from ama_cryptography._self_test import (
             _run_self_tests,
             _set_operational,
+            module_error_reason,
+            module_self_test_results,
             module_status,
         )
 
-        counter = {"n": 0}
         fixed = b"\xaa" * 32
 
         def _fake_token(n: int) -> bytes:
-            counter["n"] += 1
             return fixed[:n]
 
-        monkeypatch.setattr("ama_cryptography._self_test.secrets.token_bytes", _fake_token)
+        monkeypatch.setattr(st, "secrets", SimpleNamespace(token_bytes=_fake_token))
         try:
             assert _run_self_tests() is False
             assert module_status() == "ERROR"
+            assert module_error_reason() == "RNG health test failed at startup"
+            assert ("RNG", False, "Identical consecutive outputs") in module_self_test_results()
         finally:
             st.update_integrity_digest()
             _set_operational()
@@ -658,19 +672,29 @@ class TestRunSelfTestsFailures:
         monkeypatch: pytest.MonkeyPatch,
         isolated_integrity_file: Path,
     ) -> None:
+        """An exception from the entropy source fails the RNG stage.
+
+        Installed on ``_self_test``'s own ``secrets`` binding, as above: the
+        process-wide patch this used to make failed the Ed25519 KAT first and
+        still passed with the RNG stage's exception handling removed.
+        """
         from ama_cryptography._self_test import (
             _run_self_tests,
             _set_operational,
+            module_error_reason,
+            module_self_test_results,
             module_status,
         )
 
         def _boom(_n: int) -> bytes:
             raise RuntimeError("simulated RNG failure")
 
-        monkeypatch.setattr("ama_cryptography._self_test.secrets.token_bytes", _boom)
+        monkeypatch.setattr(st, "secrets", SimpleNamespace(token_bytes=_boom))
         try:
             assert _run_self_tests() is False
             assert module_status() == "ERROR"
+            assert module_error_reason() == "RNG health test exception: simulated RNG failure"
+            assert ("RNG", False, "Exception: simulated RNG failure") in module_self_test_results()
         finally:
             st.update_integrity_digest()
             _set_operational()

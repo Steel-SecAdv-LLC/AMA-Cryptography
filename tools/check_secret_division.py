@@ -88,7 +88,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ALLOWED: dict[str, tuple[int, str]] = {
     "dil_sign_internal": (
         14,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects
-        "ama_dilithium.c:1562 `nonces[f] = ((f / P->l) << 8) + (f % P->l)`. "
+        "ama_dilithium.c `dil_expand_matrix` (inlined into dil_sign_internal): "
+        "`nonces[f] = (uint16_t)(((f / P->l) << 8) + (f % P->l))`. "
         "The dividend is the loop counter and the divisor is the parameter "
         "set's dimension l (4, 5 or 7 for ML-DSA-44/65/87) — both public. "
         "Confirmed in the disassembly: the divisor sits loop-invariant in one "
@@ -96,9 +97,9 @@ ALLOWED: dict[str, tuple[int, str]] = {
     ),
     "ama_ed25519_verify": (
         2,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects (and with SVE2 kernels on)
-        "ama_ed25519.c:977 (`ama_ed25519_half_reduce(v0, v1, &v1_negative, h)` "
-        "inside ama_ed25519_verify) -> ama_ed25519_halfsize.h:291-292 "
-        "`q = (uh + A) / (vh + C)` and "
+        "ama_ed25519.c `ama_ed25519_verify` calls "
+        "`ama_ed25519_half_reduce(v0, v1, &v1_negative, h)`, defined in "
+        "internal/ama_ed25519_halfsize.h: `q = (uh + A) / (vh + C)` and "
         "`q2 = (uh + B) / (vh + D)`: the two Lehmer quotient steps of the "
         "half-size reduction of the verification scalar, inlined into "
         "ama_ed25519_verify.  The dividend is the top 61 bits of "
@@ -110,26 +111,29 @@ ALLOWED: dict[str, tuple[int, str]] = {
     ),
     "lms_verify_parsed": (
         11,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects
-        "ama_lms.c:391. LMS/HSS verification takes only public inputs — the "
-        "identifier, the type words, the public root, the message and the "
-        "signature. No secret is in scope in this function.",
+        "ama_lms.c `lms_verify_parsed`. LMS/HSS verification takes only "
+        "public inputs — the identifier, the type words, the public root, "
+        "the message and the signature. No secret is in scope in this "
+        "function.",
     ),
     "ama_argon2id_core": (
         6,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects
-        "ama_argon2.c:530 `ref_lane = J2 % lanes`. On Argon2id's "
-        "data-INdependent phase J2 comes from the counter-driven address "
+        "ama_argon2.c `argon2_index_alpha` (inlined into ama_argon2id_core): "
+        "`ref_lane = J2 % lanes`. On Argon2id's data-INdependent phase J2 "
+        "comes from the counter-driven address "
         "block and is public. On the data-dependent phase it is derived from "
         "the password, which RFC 9106 section 3.4 specifies: that phase's "
-        "addressing is data-dependent by design, and `memory[ref_index]` two "
-        "lines later is a secret-indexed read into a multi-megabyte buffer — "
+        "addressing is data-dependent by design, and `memory[ref_index]` at "
+        "its call site is a secret-indexed read into a multi-megabyte buffer — "
         "a far stronger channel than divide latency, on the same secret. "
         "Removing the divide would deviate from RFC 9106 without changing "
         "the property. Recorded rather than silently dropped.",
     ),
     "ama_ml_dsa_test_matrix_row_equiv": (
         14,  # EXACT: gcc-13 -O3 (this symbol exists only under AMA_TESTING_MODE)
-        "ama_dilithium.c:2714, compiled ONLY under AMA_TESTING_MODE and never "
-        "present in a shipped library — which is why CI, running against "
+        "ama_dilithium.c `ama_ml_dsa_test_matrix_row_equiv`, compiled ONLY "
+        "under AMA_TESTING_MODE and never present in a shipped library — "
+        "which is why CI, running against "
         "build-shared/ and build-arm/, never saw it and this entry was added "
         "only when the gate was pointed at the testing-mode static archive. "
         "The function takes no arguments and has no secret in scope at all: "

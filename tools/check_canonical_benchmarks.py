@@ -366,8 +366,9 @@ def check_measurements(
         report.fail(f"{RECORD}: 'measurements' is missing or empty")
         return
 
-    # Counted, not collected into a set: "256 doublings + 256 additions" is two
-    # figures, and deleting one of them must not pass because the other still
+    # Counted, not collected into a set: the host note's "in 5 of 5 process
+    # starts" is two figures under one key (same heading, row, value and
+    # unit), and deleting one of them must not pass because the other still
     # carries the same key.
     recorded: Counter[tuple[str, str, bool, str, str]] = Counter()
     for entry in entries:

@@ -2085,13 +2085,18 @@ AMA_API ama_error_t ama_frost_round2_sign(
  *         AMA_ERROR_VERIFY_FAILED if it does not, if `sig_share` is not a
  *         canonical scalar (0 <= z < L, RFC 9591 section 4.1), or if THIS
  *         participant's commitment (its row in `commitments`) or public
- *         share is non-canonical or small-order;
- *         AMA_ERROR_INVALID_PARAM on a NULL argument, a signer set that does
- *         not contain participant_index, or ANOTHER participant's row that
- *         does not decode.  This call judges one participant's share, so
- *         another row's defect is not attributed to it: a small-order row of
- *         another participant is admitted here and refused by
- *         ama_frost_aggregate(), which judges every row.
+ *         share is non-canonically encoded or small-order;
+ *         AMA_ERROR_INVALID_PARAM on a NULL argument, num_signers < 2, a zero
+ *         or repeated index in signer_indices, a signer set that does not
+ *         contain participant_index, or a point that does not decode: any
+ *         encoding in ANOTHER participant's row that is not a canonical curve
+ *         point, or a canonical encoding that is not a curve point in THIS
+ *         participant's row or public share.  (ama_frost_aggregate() gives
+ *         the same verdict for the same inputs.)  This call judges one
+ *         participant's share, so another row's defect is not attributed to
+ *         it: a small-order row of another participant is admitted here and
+ *         refused by ama_frost_aggregate(), which judges every row;
+ *         AMA_ERROR_MEMORY if a working buffer cannot be allocated.
  */
 AMA_API ama_error_t ama_frost_verify_share(
     const uint8_t *sig_share,

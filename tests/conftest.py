@@ -16,6 +16,7 @@ This file consolidates fixtures from across the test suite to:
 
 from __future__ import annotations
 
+import copy
 import os
 import platform
 import shutil
@@ -483,6 +484,54 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
     reported = _reported_skip_reason(rep)
     if reported and _mentions_backend(reported):
         _fail(reported)
+
+
+# =============================================================================
+# POST STATE ISOLATION
+# =============================================================================
+
+#: The POST orchestrator's module globals that a forced failure rewrites.
+_POST_GLOBALS = (
+    "_SELF_TEST_RESULTS",
+    "_POST_DURATION_MS",
+    "_POST_STAGE_DURATIONS_MS",
+    "_LAST_FAILURE_SEQUENCE",
+    "_INTEGRITY_STRENGTH",
+    "_INTEGRITY_ANCHORED",
+    "_INTEGRITY_FAILURE_KIND",
+)
+
+
+@pytest.fixture
+def post_state_restored() -> Generator[None, None, None]:
+    """Put every piece of POST state back as the test found it.
+
+    Tests that force POST to fail used to restore only the state flag, with
+    ``_set_operational()``.  The failed run's result table, timings, integrity
+    verdict and ``last_failure()`` record stayed behind, and tests that read
+    them afterwards -- ``test_all_kats_passed`` and
+    ``test_expected_kat_names_present`` -- passed or failed depending on
+    which file had run first.  Taken by every module that drives POST into a
+    failure, through its ``pytestmark``.
+    """
+    from ama_cryptography import _module_state as ms
+    from ama_cryptography import _self_test as st
+
+    with ms._POST_LOCK:
+        saved = {name: copy.deepcopy(getattr(st, name)) for name in _POST_GLOBALS}
+        saved_record = copy.deepcopy(st._LAST_FAILURE)
+        saved_state = (ms._MODULE_STATE, ms._ERROR_REASON, ms._SELF_TEST_THREAD)
+        saved_rng = ms._rng_state["previous"]
+    yield
+    with ms._POST_LOCK:
+        for name, value in saved.items():
+            setattr(st, name, value)
+        # In place: tests hold references to the record dict.
+        st._LAST_FAILURE.clear()
+        st._LAST_FAILURE.update(saved_record)
+        ms._rng_state["previous"] = saved_rng
+        with ms._STATE_LOCK:
+            ms._MODULE_STATE, ms._ERROR_REASON, ms._SELF_TEST_THREAD = saved_state
 
 
 # =============================================================================

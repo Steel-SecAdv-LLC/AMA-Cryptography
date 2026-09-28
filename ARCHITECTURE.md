@@ -719,7 +719,7 @@ The C library uses CMake (`CMakeLists.txt`):
 | `AMA_ENABLE_NATIVE_ARCH` | OFF | `-march=native` |
 | `AMA_KYBER_BUILD_DIAGNOSTICS` | OFF | Kyber NTT/CPA debug block (test-only) |
 
-`AMA_TESTING_MODE` is not a user-facing `option()`: when `AMA_BUILD_TESTS=ON`, it is applied as a private compile definition on the separate `ama_cryptography_test` static library, exposing internal symbols (e.g. `randombytes` hooks for deterministic KAT testing, the CSPRNG-failure hooks in ML-KEM, ML-DSA, SLH-DSA, X25519 and the P-curves, and the MakeHint test exports declared in `src/c/internal/ama_testing_exports.h`) without contaminating the installable production libraries.
+`AMA_TESTING_MODE` is not a user-facing `option()`: when `AMA_BUILD_TESTS=ON`, it is applied as a private compile definition on the separate `ama_cryptography_test` static library, exposing internal symbols (e.g. `randombytes` hooks for deterministic KAT testing, the CSPRNG-failure hooks in ML-KEM, ML-DSA, SLH-DSA, FROST, X25519 and the P-curves, and the MakeHint test exports declared in `src/c/internal/ama_testing_exports.h`) without contaminating the installable production libraries.
 
 When `AMA_USE_NATIVE_PQC=OFF`, the library keeps SHA-2, SHA-3, HMAC, HKDF, PBKDF2, Ed25519, AES-GCM, Ascon, HSS/LMS verification and agent binding, and drops the platform CSPRNG, ML-KEM, ML-DSA, SLH-DSA, X25519, ChaCha20-Poly1305, Argon2id, secp256k1, the P-curves and FROST.
 
@@ -788,7 +788,7 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithm functions (815 AFT + 400 SHA-3 MCT); self-attested, not CAVP | `nist_vectors/`; `acvp_validation.yml` fails if any of the 1,215 regresses (INVARIANT-18) |
 | Wycheproof | Adversarial vectors | 15 vendored corpora | `wycheproof_vectors/run_wycheproof.py` |
 
-**Total:** 6,587 Python test functions across 271 test files, plus the
+**Total:** 6,683 Python test functions across 271 test files, plus the
 ctest-registered C tests and the two `x25519_equiv_*.c` helper translation units under `tests/c/`,
 which have no `main` of their own and are linked into `test_x25519_field_equiv`
 (the set of C tests depends on `AMA_USE_NATIVE_PQC`, `AMA_AES_CONSTTIME`, the ISA
@@ -798,9 +798,9 @@ instructions.
 
 Tests are labelled PIN, RANGE or SMOKE by mutation (AGENTS.md §6.4). Among the 5.0.0 additions:
 
-- `tests/c/test_csprng_failure_residue.c` drives every CSPRNG-failure exit in ML-KEM, ML-DSA, SLH-DSA and X25519 and scans the dead stack for the partial draw (INVARIANT-6).
+- `tests/c/test_csprng_failure_residue.c` drives the eight CSPRNG-failure exits that lacked a scrub until 2026-09-26 (the SLH-DSA and legacy SPHINCS+ key-generation seeds and signing randomizers, ML-KEM key generation's `d` and encapsulation's `m`, ML-DSA key generation's `xi`, and X25519 key generation) and scans the dead stack, and X25519's output buffer, for the partial draw (INVARIANT-6). The other CSPRNG exits (ML-KEM's `z`, ML-DSA's hedged `rnd`, the P-curves) scrub too, and `tests/c/test_input_guards.c` checks their return codes; they are not residue-probed.
 - `tests/c/test_ml_dsa_hint_encoding.c` covers the FIPS 204 hint-ordering, padding and count rules (SUF-CMA) and MakeHint's boundary case.
-- `tests/c/test_input_guards.c` covers NULL, short-buffer, context-length and range guards (RANGE).
+- `tests/c/test_input_guards.c` covers NULL, short-buffer, context-length and range guards: RANGE for the NULL, unknown-set and short-buffer rows; PIN for the ML-KEM length, ML-DSA and SLH-DSA context-length, and ECDSA scalar-range, flag, digest-length, DER-range and failing-CSPRNG rows, per its mutation record.
 - `tests/c/test_frost.c` Test 11 covers FROST CSPRNG failures, the non-canonical commitment verdict and the argument guards.
 
 ### Continuous Integration
@@ -825,8 +825,8 @@ Cryptographic implementations are validated against:
 
 - **NIST ACVP vectors** (`nist_vectors/`): 1,215 vectors tested, 1,215 passed across 12 algorithm functions and 7 NIST standards (815 AFT + 400 SHA-3 MCT). See [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md) for full breakdown.
 - NIST FIPS 202 SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 test vectors
-- FIPS 203 ML-KEM-1024 KAT vectors (10/10 pass — `tests/kat/fips203/`, regenerated from the pq-crystals reference generator)
-- NIST FIPS 204 ML-DSA-65 KAT vectors (10/10 pass — `tests/kat/fips204/`)
+- FIPS 203 ML-KEM-1024 KAT vectors (`tests/kat/fips203/`, regenerated from the pq-crystals reference generator): `tests/c/test_kat.c` checks key generation (`pk`, `sk`) for the first 10 of the file's 100 vectors; its `ct`/`ss` fields are not checked there
+- NIST FIPS 204 ML-DSA-65 KAT vectors (`tests/kat/fips204/`): `tests/c/test_kat.c` checks key generation (`pkey`, `skey`) for the first 10 of the file's 100 vectors
 - NIST FIPS 205 ACVP sigVer (the SLH-DSA-SHA2-256f and SHAKE-128s groups of `SLH-DSA-sigVer-FIPS205.json`) and sigGen vectors for both sets (`tests/kat/fips205/`)
 - NIST FIPS 180-4 SHA-256 reference vectors
 - NIST SP 800-38D AES-256-GCM test vectors
@@ -847,8 +847,8 @@ Cryptographic implementations are validated against:
 | NIST FIPS 180-4 | SHA-2 | Algorithm implemented | ACVP / reference vectors |
 | NIST FIPS 198-1 | HMAC | Algorithm implemented | ACVP (HMAC-SHA-256), Wycheproof |
 | NIST FIPS 202 | SHA-3 Standard (SHA3-256, SHAKE128, SHAKE256) | Algorithm implemented | ACVP |
-| NIST FIPS 203 | ML-KEM | Algorithm implemented | ACVP; **10/10 KAT pass** |
-| NIST FIPS 204 | ML-DSA | Algorithm implemented | ACVP; **10/10 KAT pass** |
+| NIST FIPS 203 | ML-KEM | Algorithm implemented | ACVP; KAT key generation, first 10 of 100 vectors |
+| NIST FIPS 204 | ML-DSA | Algorithm implemented | ACVP; KAT key generation, first 10 of 100 vectors |
 | NIST FIPS 205 | SLH-DSA | Algorithm implemented | ACVP sigVer/sigGen vectors |
 | NIST FIPS 186-5, SP 800-56A r3, RFC 6979 | ECDSA and ECDH (P-256/384/521) | Algorithm implemented | Wycheproof, RFC 6979 |
 | SEC 2 | secp256k1 (BIP32-style HD, not interoperable) | Algorithm implemented | Wycheproof |

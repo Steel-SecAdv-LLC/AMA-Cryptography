@@ -867,8 +867,9 @@ ama_error_t ama_chacha20poly1305_decrypt(
      * consistent sign, which is the signature of a systematic effect rather
      * than host noise (a noisy host produces excursions that flip sign).
      *
-     * ama_aes_gcm.c:705 had already been given this treatment — its comment
-     * records closing the same lane for AES-GCM — and this path was simply
+     * ama_aes256_gcm_decrypt() in ama_aes_gcm.c had already been given this
+     * treatment — the comment above its `tag_match` records closing the same
+     * lane for AES-GCM — and this path was simply
      * never brought into line with it.  Same remedy here: hoist the compare
      * to a value, share ONE scrub call site, and drive the decrypt length
      * from a constant-time mask of tag_match so both classes execute the

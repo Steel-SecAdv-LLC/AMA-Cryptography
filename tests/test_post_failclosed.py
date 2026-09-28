@@ -57,7 +57,7 @@ from tests.conftest import native_library_present
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
 
-pytestmark = pytest.mark.fips
+pytestmark = [pytest.mark.fips, pytest.mark.usefixtures("post_state_restored")]
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +417,47 @@ class TestImportFailsClosed:
         )
         assert "IMPORTED" not in result.stdout
         assert "SHA3-256" in result.stdout + result.stderr
+
+    def test_a_raising_stage_fails_the_import_through_the_gate(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """A stage that raises is a failed POST, and the import gate treats it
+        as one.  The exception used to escape the gate: the import failed
+        without the root cause and results table, and
+        ``AMA_POST_DIAGNOSTIC_IMPORT=1`` could not complete it for triage."""
+        root = tmp_path / "raising_stage"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        # The backend stage runs first, so POST fails before the integrity
+        # stage would notice the edit.
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        self_test.write_text(
+            source.replace(marker, marker + '    raise RuntimeError("injected stage fault")\n', 1),
+            encoding="utf-8",
+        )
+        root_cause = "stage 'native-backend' raised RuntimeError: injected stage fault"
+
+        refused = _run_python("import ama_cryptography", cwd=root)
+        assert refused.returncode != 0, refused.stdout
+        assert "CryptoModuleError" in refused.stderr, refused.stderr
+        assert root_cause in refused.stderr, refused.stderr
+        assert "direct cause of the following exception" in refused.stderr, refused.stderr
+
+        diagnosed = _run_python(
+            """
+            import ama_cryptography as a
+            att = a.module_attestation()
+            assert att["state"] == "ERROR", att
+            assert [name for name, _ in att["failed"]] == ["POST"], att
+            print("DIAGNOSED")
+            """,
+            cwd=root,
+            env_extra={"AMA_POST_DIAGNOSTIC_IMPORT": "1"},
+        )
+        assert diagnosed.returncode == 0, diagnosed.stdout + diagnosed.stderr
+        assert "DIAGNOSED" in diagnosed.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -1184,21 +1225,43 @@ class TestCheckCryptoPermitted:
 
         ms._MODULE_STATE = "SELF_TEST"
         ms._SELF_TEST_THREAD = threading.get_ident()
-        st.check_crypto_permitted()  # this thread is the POST thread
+        with ms._POST_LOCK:
+            st.check_crypto_permitted()  # this thread is the POST thread
 
-        outcome: list[object] = []
+            outcome: list[object] = []
 
-        def other_thread() -> None:
-            try:
-                st.check_crypto_permitted()
-                outcome.append("permitted")
-            except CryptoModuleError:
-                outcome.append("refused")
+            def other_thread() -> None:
+                try:
+                    st.check_crypto_permitted()
+                    outcome.append("permitted")
+                except CryptoModuleError:
+                    outcome.append("refused")
 
-        worker = threading.Thread(target=other_thread)
-        worker.start()
-        worker.join(timeout=30)
+            worker = threading.Thread(target=other_thread)
+            worker.start()
+            worker.join(timeout=30)
         assert outcome == ["refused"]
+
+    def test_the_pinned_thread_must_also_hold_the_post_lock(self) -> None:
+        """The pin is dropped in a ``finally`` a second interrupt can skip; the
+        POST lock is released by the ``with`` that holds it.  A pin without
+        the lock -- one that outlived its run -- grants nothing."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        ms._MODULE_STATE = "SELF_TEST"
+        ms._SELF_TEST_THREAD = threading.get_ident()
+        with pytest.raises(CryptoModuleError, match="SELF_TEST"):
+            st.check_crypto_permitted()
+
+    def test_a_lock_that_cannot_name_its_owner_is_refused(self) -> None:
+        """The module does not load with a POST lock it cannot ask."""
+        from ama_cryptography import _module_state as ms
+
+        assert ms._lock_ownership_query(threading.RLock())() is False
+        with pytest.raises(ImportError, match="cannot report which thread holds it"):
+            ms._lock_ownership_query(threading.Lock())
 
     def test_post_clears_the_thread_allowance(self) -> None:
         """The allowance must not survive the run that granted it."""

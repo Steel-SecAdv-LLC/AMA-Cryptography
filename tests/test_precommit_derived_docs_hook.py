@@ -22,8 +22,11 @@ guards nothing either.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import shlex
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -37,11 +40,11 @@ SCRIPT = "tools/refresh_derived_docs.py"
 
 @pytest.fixture(scope="module")
 def hook() -> dict[str, Any]:
-    # Imported inside the fixture, not at module scope: check_documented_counts
-    # collects cited test files with `pytest --collect-only` under the
-    # pre-commit hook's own interpreter, which carries pytest and nothing else.
-    # A module-scope third-party import would raise ModuleNotFoundError during
-    # that collection; a lazy one keeps the module importable there.
+    # Imported where it is used.  The hook never collects this module (it
+    # collects the test files documented with a per-file count, which
+    # test_every_file_the_hooks_collection_imports_needs_only_what_the_hook_has
+    # holds to the hook's pytest-only environment), so this placement is
+    # tidiness here, not a requirement.
     import yaml
 
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
@@ -118,30 +121,112 @@ def test_the_hook_is_quiet_but_not_silent(entry: list[str]) -> None:
     assert not any(token.startswith(">") or token == "2>&1" for token in entry), entry
 
 
-def test_this_module_imports_no_dev_extra_at_module_scope() -> None:
-    """This file must import nothing beyond the standard library and pytest at
-    module scope.
+#: What the hook's collection can import.  Its environment is pre-commit's
+#: isolated one, carrying pytest and nothing else; the tree itself supplies
+#: ``ama_cryptography`` and ``tests`` (``tests`` is a package, so collection
+#: puts the repository root on ``sys.path``).
+HOOK_IMPORTABLE = frozenset(sys.stdlib_module_names) | {
+    "pytest",
+    "_pytest",
+    "ama_cryptography",
+    "tests",
+}
 
-    ``check_documented_counts`` runs ``pytest --collect-only`` on every
-    documented test file under the hook's own interpreter, which carries
-    pytest and nothing else.  A module-scope import of a dev-only extra
-    (PyYAML, hypothesis, cryptography, ...) raises ModuleNotFoundError during
-    that collection and refuses the commit for a drift that does not exist.
-    ``yaml`` here is imported inside the ``hook`` fixture for exactly that
-    reason; moving it back to module scope fails this test.
+
+def _documented_test_files() -> list[str]:
+    """Every test file a document gives a per-file count for.
+
+    Found with ``check_documented_counts``' own claim pattern over its own
+    document set, so this is exactly the set of files the gate runs
+    ``pytest --collect-only`` on under the hook's interpreter.
     """
-    import ast
+    spec = importlib.util.spec_from_file_location(
+        "check_documented_counts_for_hook_test", REPO_ROOT / "tools" / "check_documented_counts.py"
+    )
+    assert spec is not None and spec.loader is not None
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    targets: set[str] = set()
+    for document in gate._markdown_files(REPO_ROOT):
+        text = document.read_text(encoding="utf-8")
+        targets.update(match.group(1) for match in gate._TEST_COUNT_RE.finditer(text))
+    return sorted(targets)
 
-    allowed = set(sys.stdlib_module_names) | {"pytest"}
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
+def _import_time_modules(tree: ast.Module) -> list[str]:
+    """Dotted names of every module imported when this module is imported.
+
+    Everything outside a function body runs at import -- class bodies and
+    top-level ``if`` / ``try`` / ``with`` blocks included -- except the body
+    of an ``if TYPE_CHECKING:``, which never does.  A relative import names
+    a module of ``tests``, and ``from tests import x`` may import the
+    submodule ``tests.x``, so both are reported as ``tests.<name>``.  A
+    guarded import (``try: import x`` / ``except ImportError``) is reported
+    too: this does not try to prove that a handler absorbs the failure.
+    """
+    found: list[str] = []
+
+    def visit(nodes: Iterable[ast.AST]) -> None:
+        for node in nodes:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if isinstance(node, ast.Import):
+                found.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    base = f"tests.{node.module}" if node.module else "tests"
+                else:
+                    base = node.module or ""
+                found.append(base)
+                if base == "tests":
+                    found.extend(f"tests.{alias.name}" for alias in node.names)
+            elif isinstance(node, ast.If) and _is_type_checking(node.test):
+                visit(node.orelse)
+            else:
+                visit(ast.iter_child_nodes(node))
+
+    visit(tree.body)
+    return found
+
+
+def test_every_file_the_hooks_collection_imports_needs_only_what_the_hook_has() -> None:
+    """The hook's collection imports each documented test file, the package's
+    ``__init__.py`` and ``conftest.py``, and every ``tests`` module those
+    import at module scope; none of them may import beyond
+    ``HOOK_IMPORTABLE`` at import time.
+
+    ``check_documented_counts`` runs ``pytest --collect-only`` on every test
+    file documented with a per-file count, under the hook's own interpreter.
+    A module-scope ``import yaml`` in any of them raises ModuleNotFoundError
+    there and refuses the commit.  This used to pin the wrong file -- this
+    module, which the hook never collects -- so adding ``import yaml`` to
+    ``tests/test_secp256k1_ecdsa.py`` passed it.
+    """
+    documented = _documented_test_files()
+    assert documented, "no document carries a per-file test count; the hook collects nothing"
+    queue = [REPO_ROOT / relative for relative in documented]
+    queue += [REPO_ROOT / "tests" / "__init__.py", REPO_ROOT / "tests" / "conftest.py"]
+    seen: set[Path] = set()
     offenders: list[str] = []
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            offenders += [n.name for n in node.names if n.name.split(".")[0] not in allowed]
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            if node.module.split(".")[0] not in allowed:
-                offenders.append(node.module)
+    while queue:
+        path = queue.pop()
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        for module in _import_time_modules(ast.parse(path.read_text(encoding="utf-8"))):
+            if module.split(".")[0] not in HOOK_IMPORTABLE:
+                offenders.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {module}")
+            elif module.startswith("tests."):
+                queue.append(REPO_ROOT / (module.replace(".", "/") + ".py"))
+    assert {REPO_ROOT / relative for relative in documented} <= seen, "a documented file is missing"
     assert not offenders, (
-        "module-scope imports outside the standard library and pytest break "
-        f"collection under the hook's pytest-only interpreter: {offenders}"
+        "imports the pre-commit hook's pytest-only environment cannot satisfy, "
+        "run when the hook collects these files for their documented counts "
+        f"(move each into the test that needs it): {offenders}"
     )

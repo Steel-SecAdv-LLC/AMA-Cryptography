@@ -41,7 +41,7 @@ import logging
 import secrets
 import sys
 import threading
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
 
 from ama_cryptography.exceptions import CryptoModuleError, NativeBackendUnavailableError
 
@@ -66,6 +66,56 @@ _ERROR_REASON: Optional[str] = None
 # self-tests; every other thread continues to see the module as not-yet-usable.
 _SELF_TEST_THREAD: Optional[int] = None
 
+# Incremented by every ``_set_error``, so an ERROR can be told apart from the
+# one before it even when the two carry the same reason string.  POST compares
+# it across its run: a failure another thread reports while POST is running
+# (a pairwise test or the continuous RNG test on a draw that began before POST
+# did) changes it, and POST then refuses to declare the module OPERATIONAL
+# over the top of that failure.
+_ERROR_SEQUENCE = 0
+
+# Makes each transition below atomic with respect to the others.  Without it,
+# POST's final "SELF_TEST -> OPERATIONAL" was a blind write: an ERROR another
+# thread entered between POST's last stage and that write was overwritten,
+# and the module reported OPERATIONAL with no reason after a failed
+# conditional self-test.  Reentrant so a transition may be taken from code
+# that already holds it.
+_STATE_LOCK = threading.RLock()
+
+# Serialises POST runs and the reads that must see one run whole.  POST
+# (``_self_test._run_self_tests``) holds it for the entire run, and
+# ``module_attestation`` / ``last_failure`` take it so they never report a
+# half-populated result table as a finished one.  It lives in this leaf, not
+# in the orchestrator, because ``check_crypto_permitted`` below reads it.
+_POST_LOCK = threading.RLock()
+
+
+@runtime_checkable
+class _OwnershipQueryableLock(Protocol):
+    """A lock that can say whether the calling thread holds it."""
+
+    def _is_owned(self) -> bool: ...
+
+
+def _lock_ownership_query(lock: object) -> Callable[[], bool]:
+    """Return ``lock``'s "does the calling thread hold me?" method.
+
+    The standard library's reentrant lock answers through ``_is_owned``, which
+    ``threading.Condition`` binds from the lock it wraps in the same way.  A
+    lock without it cannot support the check ``check_crypto_permitted`` makes,
+    and the module refuses to load rather than run without that check.
+    """
+    if isinstance(lock, _OwnershipQueryableLock):
+        return lock._is_owned
+    raise ImportError(
+        f"{type(lock).__name__} cannot report which thread holds it; the FIPS "
+        f"self-test allowance cannot be confined to the thread running POST"
+    )
+
+
+#: True when the calling thread holds ``_POST_LOCK``.
+_POST_LOCK_IS_OWNED = _lock_ownership_query(_POST_LOCK)
+
 
 def module_status() -> str:
     """Return current module state: OPERATIONAL, ERROR, or SELF_TEST."""
@@ -77,29 +127,72 @@ def module_error_reason() -> Optional[str]:
     return _ERROR_REASON
 
 
-def _set_error(reason: str) -> None:
-    global _MODULE_STATE, _ERROR_REASON
-    _MODULE_STATE = "ERROR"
-    _ERROR_REASON = reason
+def _state_snapshot() -> Tuple[str, Optional[str], int]:
+    """Return ``(state, error_reason, error_sequence)`` read as one.
+
+    ``module_status()`` and ``module_error_reason()`` are two reads; a
+    ``_set_error`` from another thread can land between them and pair the new
+    state with the old reason.  Callers that report both use this.
+    """
+    with _STATE_LOCK:
+        return _MODULE_STATE, _ERROR_REASON, _ERROR_SEQUENCE
+
+
+def _set_error(reason: str) -> int:
+    """Enter ERROR with ``reason``; return the error sequence this call assigned."""
+    global _MODULE_STATE, _ERROR_REASON, _ERROR_SEQUENCE
+    with _STATE_LOCK:
+        _MODULE_STATE = "ERROR"
+        _ERROR_REASON = reason
+        _ERROR_SEQUENCE += 1
+        sequence = _ERROR_SEQUENCE
     logger.critical("FIPS 140-3 POST FAILURE: %s", reason)
+    return sequence
 
 
 def _set_operational() -> None:
     global _MODULE_STATE, _ERROR_REASON
-    _MODULE_STATE = "OPERATIONAL"
-    _ERROR_REASON = None
+    with _STATE_LOCK:
+        _MODULE_STATE = "OPERATIONAL"
+        _ERROR_REASON = None
 
 
-def _begin_self_test() -> None:
+def _begin_self_test() -> Tuple[str, Optional[str], int]:
     """Enter SELF_TEST and pin the guard's allowance to the calling thread.
 
-    Called by ``_self_test._run_self_tests`` under its POST lock at the start
+    Called by ``_self_test._run_self_tests`` under ``_POST_LOCK`` at the start
     of every run; the transition lives here because the state lives here.
+
+    Returns the ``(state, error_reason, error_sequence)`` this transition
+    replaced, read in the same critical section, so an ERROR that arrived
+    after the caller last looked is handed to it instead of being erased
+    unseen.  POST records such an ERROR in ``last_failure()`` and passes the
+    sequence to :func:`_finish_self_test`.
     """
     global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_THREAD
-    _MODULE_STATE = "SELF_TEST"
-    _ERROR_REASON = None
-    _SELF_TEST_THREAD = threading.get_ident()
+    with _STATE_LOCK:
+        previous = (_MODULE_STATE, _ERROR_REASON, _ERROR_SEQUENCE)
+        _MODULE_STATE = "SELF_TEST"
+        _ERROR_REASON = None
+        _SELF_TEST_THREAD = threading.get_ident()
+        return previous
+
+
+def _finish_self_test(expected_sequence: int) -> bool:
+    """Leave SELF_TEST for OPERATIONAL unless an ERROR arrived meanwhile.
+
+    A compare-and-set: the module becomes OPERATIONAL only if it is still in
+    SELF_TEST and no ``_set_error`` has run since ``expected_sequence`` was
+    read.  Returns False, changing nothing, when either has happened; the
+    ERROR another thread entered stands.
+    """
+    global _MODULE_STATE, _ERROR_REASON
+    with _STATE_LOCK:
+        if _MODULE_STATE != "SELF_TEST" or _ERROR_SEQUENCE != expected_sequence:
+            return False
+        _MODULE_STATE = "OPERATIONAL"
+        _ERROR_REASON = None
+        return True
 
 
 def _clear_self_test_thread() -> None:
@@ -112,6 +205,21 @@ def _clear_self_test_thread() -> None:
     """
     global _SELF_TEST_THREAD
     _SELF_TEST_THREAD = None
+
+
+def _exception_text(exc: BaseException) -> str:
+    """``str(exc)`` for a failure reason, even when ``str(exc)`` itself raises.
+
+    Every ERROR transition below is taken inside an ``except`` block that
+    formats the exception it caught.  An exception whose ``__str__`` raises
+    turned that formatting into a second exception, which escaped before
+    ``_set_error`` ran: the test had failed, and the module stayed in the
+    state it was in.
+    """
+    try:
+        return str(exc)
+    except Exception as text_exc:
+        return f"<str() of {type(exc).__name__} raised {type(text_exc).__name__}>"
 
 
 def check_operational() -> None:
@@ -150,7 +258,11 @@ def check_crypto_permitted() -> None:
     * ``OPERATIONAL``  — permitted; the ordinary case, and one interned-string
       comparison so the guard is free on the hot path.
     * ``SELF_TEST``    — permitted **only on the thread running POST**, whose
-      Known Answer Tests must be able to call the primitives under test.
+      Known Answer Tests must be able to call the primitives under test.  The
+      thread must be the one POST pinned AND must hold ``_POST_LOCK``: the pin
+      is dropped in a ``finally`` that a second interrupt can skip, whereas
+      the lock is released by the ``with`` statement that holds it, so a
+      pin that outlives its run no longer grants anything.
     * ``ERROR``        — refused, always.
 
     ``crypto_api`` keeps calling :func:`check_operational` (strict
@@ -164,7 +276,11 @@ def check_crypto_permitted() -> None:
     """
     if _MODULE_STATE == "OPERATIONAL":
         return
-    if _MODULE_STATE == "SELF_TEST" and _SELF_TEST_THREAD == threading.get_ident():
+    if (
+        _MODULE_STATE == "SELF_TEST"
+        and _SELF_TEST_THREAD == threading.get_ident()
+        and _POST_LOCK_IS_OWNED()
+    ):
         return
     if _MODULE_STATE == "ERROR":
         raise CryptoModuleError(
@@ -390,7 +506,7 @@ def pairwise_test_signature(
         # Could-not-run, not ran-and-failed — see the discipline note above.
         raise
     except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
+        _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
         raise CryptoModuleError(
             f"Module in error state: Pairwise test failed for {algo_name}"
         ) from exc
@@ -435,7 +551,7 @@ def pairwise_test_kem(
         # Could-not-run, not ran-and-failed — see the discipline note above.
         raise
     except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
+        _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
         raise CryptoModuleError(
             f"Module in error state: Pairwise test failed for {algo_name}"
         ) from exc
@@ -482,7 +598,7 @@ def pairwise_test_agreement(
         # Could-not-run, not ran-and-failed — see the discipline note above.
         raise
     except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
+        _set_error(f"Pairwise consistency test failed for {algo_name}: {_exception_text(exc)}")
         raise CryptoModuleError(
             f"Module in error state: Pairwise test failed for {algo_name}"
         ) from exc

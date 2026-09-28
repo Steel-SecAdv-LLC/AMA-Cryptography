@@ -173,8 +173,13 @@ repos:
       # been regenerated, and every Python test lane and Security Checks went
       # red on a drift of eight lines.  This is the same --check CI runs
       # (tools/check_documented_counts.py and the visual-assets gate), run
-      # against the index before the commit exists.  It writes nothing; on
-      # drift it names the stale figure and the command that regenerates it.
+      # before the commit exists.  The files it counts and the documents it
+      # checks are the ones git tracks (the index, what the commit carries),
+      # and pre-commit stashes unstaged edits while hooks run, so the content
+      # read is the staged content; an untracked scratch file is neither
+      # counted nor checked.  It writes nothing; on drift it names the stale
+      # figure and the command that regenerates it, and a count it could not
+      # measure is reported as an error, not as drift.
       #
       # language: python, not system.  The per-file test counts are measured
       # by `pytest --collect-only` under the hook's own interpreter, and with

@@ -51,12 +51,17 @@ between two of its words is still a claim.
 Exit code:
     0  every documented count matches
     1  at least one has drifted
+    2  at least one could not be measured here (pytest absent, a documented
+       test file that cannot be collected in this interpreter, collection
+       output that could not be parsed, or git unable to list the tracked
+       files); drift found alongside it is still printed
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -95,6 +100,16 @@ def _is_historical_record(path: Path, repo: Path) -> bool:
 
 
 def _markdown_files(repo: Path) -> list[Path]:
+    """The Markdown documents under ``DOC_ROOTS`` whose claims are checked.
+
+    In a git checkout, only the ones git tracks: the counts are taken over
+    tracked files (:func:`_tracked_or_walked`), and a document is held to them
+    on the same terms, so an untracked scratch note quoting a stale figure no
+    longer refuses a commit that CI's clean checkout would pass.  Outside git,
+    every document on disk.
+    """
+    tracked = _git_tracked(repo, ":(glob)**/*.md")
+    tracked_paths = None if tracked is None else {(repo / name).resolve() for name in tracked}
     seen: dict[Path, None] = {}
     for root in DOC_ROOTS:
         base = repo / root
@@ -104,6 +119,8 @@ def _markdown_files(repo: Path) -> list[Path]:
         for path in sorted(base.glob(pattern)):
             if any(part in {".git", "build", "node_modules"} for part in path.parts):
                 continue
+            if tracked_paths is not None and path.resolve() not in tracked_paths:
+                continue
             if _is_historical_record(path, repo):
                 # CHANGELOG.md and the development journals under
                 # docs/changelog/: historical by definition, like the version
@@ -112,6 +129,19 @@ def _markdown_files(repo: Path) -> list[Path]:
                 continue
             seen.setdefault(path.resolve(), None)
     return list(seen)
+
+
+class CannotMeasure(str):
+    """A finding that says the gate could not MEASURE, not that a count drifted.
+
+    A ``str``, so every caller that joins, prints or compares findings keeps
+    working; the type is the classification.  :func:`main` reports these under
+    their own heading and exits 2, and ``tools/refresh_derived_docs.py``
+    reports that exit as an error rather than as drift, because regenerating
+    the documents cannot fix an interpreter that lacks a module or a
+    collection whose output could not be read -- and a message that says
+    "regenerate" for those sends the reader to the wrong fix.
+    """
 
 
 def pytest_is_importable() -> bool:
@@ -129,6 +159,77 @@ def collect_test_count(repo: Path, relative: str) -> int | None:
     return collect_test_count_or_reason(repo, relative)[0]
 
 
+#: The caller's environment variables that change what collection prints or
+#: collects.  ``PYTEST_ADDOPTS`` is appended to every pytest command line, so a
+#: developer's ``PYTEST_ADDOPTS=-q`` turned this gate's ``-q`` into ``-qq``,
+#: which drops the "N tests collected" line: measured, six documented files
+#: read as "produced no count" against counts that were correct.
+_COLLECTION_ENV_REMOVED = ("PYTEST_ADDOPTS",)
+
+#: Set, not defaulted.  ``tests/conftest.py`` imports ``ama_cryptography``, and
+#: since INVARIANT-39 a failed POST (a checkout whose native library is not
+#: built) makes that import raise; collection then yields no count for every
+#: documented file.  Collection enumerates test functions and runs no
+#: cryptography, so the diagnostic import -- module stays in ERROR, every
+#: cryptographic operation refused -- is exactly what it needs, whatever the
+#: caller exported.  ``setdefault`` in ``tools/refresh_derived_docs.py`` kept
+#: a caller's ``AMA_POST_DIAGNOSTIC_IMPORT=0`` and reproduced the six false
+#: rows; the value is therefore forced here, where the collection runs.
+_COLLECTION_ENV_FORCED = {"AMA_POST_DIAGNOSTIC_IMPORT": "1"}
+
+
+def _collection_env() -> dict[str, str]:
+    """The environment the collection subprocess runs under."""
+    env = {key: value for key, value in os.environ.items() if key not in _COLLECTION_ENV_REMOVED}
+    env.update(_COLLECTION_ENV_FORCED)
+    return env
+
+
+def _exception_summary(lines: list[str]) -> str:
+    """The exception a traceback ended in, and the first line of its message.
+
+    ``lines`` is a traceback with any ``INTERNALERROR>`` prefix removed.  The
+    exception line is the first unindented line after the LAST ``Traceback``
+    header (frames and source lines are indented).  A multi-line message puts
+    its substance on the next non-blank line -- ``ama_cryptography``'s POST
+    failure reads "refused to initialise: ... FAILED." and then "Root cause:
+    ... no native library found ..." -- so that line is kept with it.  The
+    LAST line of such a message is its remedy (a re-sign command), which is
+    what this gate used to report as the reason.
+    """
+    starts = [i for i, line in enumerate(lines) if line.startswith("Traceback ")]
+    if not starts:
+        return ""
+    tail = lines[starts[-1] + 1 :]
+    for index, line in enumerate(tail):
+        if line.strip() and not line[:1].isspace():
+            detail = next((rest.strip() for rest in tail[index + 1 :] if rest.strip()), "")
+            return f"{line.strip()} {detail}".strip()
+    return ""
+
+
+def _collection_failure_reason(output: str) -> str:
+    """The line of a failed collection's output that names its cause."""
+    lines = output.splitlines()
+    # pytest's own error line (``E   ModuleNotFoundError: ...``) over its
+    # closing summary (``no tests collected, 1 error in 0.15s``), which names
+    # the count of errors but not their cause.
+    errors = [line[1:].strip() for line in lines if line.startswith("E ")]
+    if errors:
+        return errors[-1]
+    # A conftest that raised in ``pytest_configure`` is an INTERNALERROR
+    # traceback, whose lines never start with ``E``.
+    internal = [
+        line[len("INTERNALERROR>") :].removeprefix(" ")
+        for line in lines
+        if line.startswith("INTERNALERROR>")
+    ]
+    summary = _exception_summary(internal)
+    if summary:
+        return summary
+    return next((line.strip() for line in reversed(lines) if line.strip()), "")
+
+
 def collect_test_count_or_reason(repo: Path, relative: str) -> tuple[int | None, str]:
     """How many tests pytest actually collects from one file.
 
@@ -136,10 +237,16 @@ def collect_test_count_or_reason(repo: Path, relative: str) -> tuple[int | None,
     parametrisation multiplies a single definition into many cases, and it is
     the collected number the documentation is quoting.
 
-    Returns the count and an empty string, or ``None`` and the last line
-    pytest wrote, so a collection that fails (a module the file imports is
-    missing, a syntax error, a conftest that raised) is reported as what it
-    is rather than as a documented figure that no longer matches.
+    Returns the count and an empty string, or ``None`` and the reason, so a
+    collection that fails (a module the file imports is missing, a syntax
+    error, a conftest that raised) is reported as what it is rather than as a
+    documented figure that no longer matches.  The caller's environment is
+    not allowed to decide the answer: ``PYTEST_ADDOPTS`` is removed, the
+    diagnostic import is forced (see ``_COLLECTION_ENV_FORCED``), and the
+    verbosity is pinned with ``--verbosity=-1``, which is absolute and comes
+    after anything the repository's own ``addopts`` contributes -- so the
+    summary line this parses is the one pytest prints.  A clean exit whose
+    output still carries no count is reported as unparseable, never as zero.
     """
     result = subprocess.run(
         [
@@ -148,7 +255,7 @@ def collect_test_count_or_reason(repo: Path, relative: str) -> tuple[int | None,
             "pytest",
             relative,
             "--collect-only",
-            "-q",
+            "--verbosity=-1",
             "-p",
             "no:cacheprovider",
         ],
@@ -156,6 +263,7 @@ def collect_test_count_or_reason(repo: Path, relative: str) -> tuple[int | None,
         capture_output=True,
         text=True,
         check=False,
+        env=_collection_env(),
     )
     match = re.search(r"^(\d+)\s+tests? collected", result.stdout, re.M)
     if match:
@@ -163,15 +271,37 @@ def collect_test_count_or_reason(repo: Path, relative: str) -> tuple[int | None,
     match = re.search(r"^(\d+)/(\d+) tests collected", result.stdout, re.M)
     if match:
         return int(match.group(2)), ""
-    # Prefer pytest's own error line (``E   ModuleNotFoundError: ...``) to its
-    # closing summary (``no tests collected, 1 error in 0.15s``), which names
-    # the count of errors but not their cause.
-    lines = (result.stdout + result.stderr).splitlines()
-    errors = [line[1:].strip() for line in lines if line.startswith("E ")]
-    if errors:
-        return None, f"exit {result.returncode}: {errors[-1]}"
-    last = next((line.strip() for line in reversed(lines) if line.strip()), "")
-    return None, f"exit {result.returncode}: {last or 'pytest wrote nothing'}"
+    output = result.stdout + result.stderr
+    if result.returncode == 0:
+        last = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
+        return None, (
+            "exit 0: could not parse collection output (no 'N tests collected' "
+            f"line; last line: {last or 'pytest wrote nothing'!r})"
+        )
+    reason = _collection_failure_reason(output)
+    return None, f"exit {result.returncode}: {reason or 'pytest wrote nothing'}"
+
+
+#: ``No module named 'yaml'`` as pytest reports it.
+_MISSING_MODULE_RE = re.compile(r"ModuleNotFoundError: No module named '([^']+)'")
+
+
+def _cannot_collect(target: str, reason: str) -> CannotMeasure:
+    """The finding for a documented file whose collection produced no count."""
+    missing = _MISSING_MODULE_RE.search(reason)
+    if missing is None:
+        return CannotMeasure(f"{target}: pytest collection produced no count ({reason})")
+    return CannotMeasure(
+        f"{target}: cannot be collected in this environment: {sys.executable} "
+        f"cannot import module '{missing.group(1)}' ({reason}). This is the "
+        f"environment, not a documentation drift, and regenerating the documents "
+        f"will not fix it. The pre-commit hook's environment carries pytest and "
+        f"nothing else, so it lacks '{missing.group(1)}': a test file documented "
+        f"with a per-file count may import only the standard library, pytest, "
+        f"ama_cryptography and tests at module scope (import anything else "
+        f"inside the test that needs it). Elsewhere, install the dev extra "
+        f"(pip install -e '.[dev]')."
+    )
 
 
 def check_test_counts(repo: Path) -> list[str]:
@@ -179,9 +309,11 @@ def check_test_counts(repo: Path) -> list[str]:
         # Fail closed, but say why: one finding naming the interpreter, not
         # one "no count" row per documented file.
         return [
-            f"pytest is not importable from {sys.executable}, so the documented "
-            f"per-file test counts cannot be verified; run this gate from the "
-            f"environment that runs the test suite (pip install -e '.[dev]')"
+            CannotMeasure(
+                f"pytest is not importable from {sys.executable}, so the documented "
+                f"per-file test counts cannot be verified; run this gate from the "
+                f"environment that runs the test suite (pip install -e '.[dev]')"
+            )
         ]
     problems: list[str] = []
     claims: dict[str, list[tuple[str, int]]] = {}
@@ -197,7 +329,7 @@ def check_test_counts(repo: Path) -> list[str]:
             continue
         actual, reason = collect_test_count_or_reason(repo, target)
         if actual is None:
-            problems.append(f"{target}: pytest collection produced no count ({reason})")
+            problems.append(_cannot_collect(target, reason))
             continue
         for doc, claimed in entries:
             if claimed != actual:
@@ -618,10 +750,16 @@ def measure_static_test_counts(repo: Path) -> tuple[int, int]:
     (parametrisation, skips, collection errors), and the documents quote the
     static one. Measuring it a different way here would produce a gate that
     disagrees with correct documentation.
+
+    The files are the ones git tracks (:func:`_tracked_or_walked`), not every
+    ``*.py`` on disk: an untracked ``tests/test_scratch.py`` is not part of
+    the commit and CI's clean checkout never sees it, but the filesystem walk
+    counted it, so the pre-commit hook failed nine count rows (and the visual
+    assets) on a tree CI would pass.
     """
     functions = 0
     files = 0
-    for path in sorted((repo / "tests").rglob("*.py")):
+    for path in _tracked_or_walked(repo, "tests", "*.py"):
         hits = len(_DEF_TEST_RE.findall(path.read_text(encoding="utf-8")))
         if hits:
             files += 1
@@ -836,9 +974,11 @@ def measure_c_suite_counts(repo: Path) -> tuple[int, int]:
     counts the bench and equivalence helpers that are compiled but are not
     themselves suites.  Both figures appear in README.md, and neither was
     checked by anything: adding a C test moved them and no gate noticed.
+    Tracked files only, for the reason given on
+    :func:`measure_static_test_counts`.
     """
-    suites = sum(1 for p in (repo / "tests" / "c").rglob("test_*.c"))
-    units = sum(1 for p in (repo / "tests" / "c").rglob("*.c"))
+    suites = len(_tracked_or_walked(repo, "tests/c", "test_*.c"))
+    units = len(_tracked_or_walked(repo, "tests/c", "*.c"))
     return suites, units
 
 
@@ -1010,6 +1150,21 @@ def _tracked_or_globbed(repo: Path, pattern: str) -> list[str]:
     if tracked is not None:
         return tracked
     return [p.as_posix() for p in sorted(repo.glob(pattern))]
+
+
+def _tracked_or_walked(repo: Path, directory: str, pattern: str) -> list[Path]:
+    """Files matching ``pattern`` at any depth under ``repo/directory``.
+
+    In a git checkout, the files git tracks -- the index, which is what the
+    commit will carry and all a clean CI checkout holds; pre-commit stashes
+    unstaged edits, so during the hook their content is the staged content
+    too.  Outside git (a source tarball, a fixture directory), the recursive
+    filesystem walk this replaced, so the count there is unchanged.
+    """
+    tracked = _git_tracked(repo, f":(glob){directory}/**/{pattern}")
+    if tracked is not None:
+        return [repo / name for name in tracked]
+    return sorted((repo / directory).rglob(pattern))
 
 
 def _tracked_or_globbed_names(repo: Path, pattern: str) -> list[str]:
@@ -1383,11 +1538,35 @@ def families_below_floor(family_counts: dict[str, int]) -> list[tuple[str, int, 
 
 
 def main() -> int:
-    problems, family_counts = audit()
-    if problems:
-        print(f"FAIL: {len(problems)} documented count(s) have drifted:", file=sys.stderr)
-        for problem in problems:
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools._repo import TrackedFilesError
+
+    try:
+        problems, family_counts = audit()
+    except TrackedFilesError as exc:
+        # The counts are taken over the files git tracks; a git that cannot
+        # say which those are leaves nothing to compare, which is not a drift.
+        print(f"ERROR: cannot enumerate the tracked files to count: {exc}", file=sys.stderr)
+        return 2
+    drifted = [problem for problem in problems if not isinstance(problem, CannotMeasure)]
+    unmeasured = [problem for problem in problems if isinstance(problem, CannotMeasure)]
+    if drifted:
+        print(f"FAIL: {len(drifted)} documented count(s) have drifted:", file=sys.stderr)
+        for problem in drifted:
             print(f"  - {problem}", file=sys.stderr)
+    if unmeasured:
+        print(
+            f"ERROR: {len(unmeasured)} documented count(s) could not be measured in "
+            "this environment. That is not a documentation drift, and regenerating "
+            "the documents will not fix it:",
+            file=sys.stderr,
+        )
+        for problem in unmeasured:
+            print(f"  - {problem}", file=sys.stderr)
+        return 2
+    if drifted:
         return 1
     below = families_below_floor(family_counts)
     if below:

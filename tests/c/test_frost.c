@@ -1213,6 +1213,51 @@ int main(void) {
                         "aggregate refuses it with no blame pointer supplied");
         }
 
+        /* 11e' — a CANONICAL encoding that is not a curve point, in this
+         * participant's own inputs.  It passes the admission check (canonical,
+         * and not a small-order point), so the arithmetic's decoder refuses
+         * it: INVALID_PARAM, the verdict the header gives an undecodable point
+         * in any row or public share, and aggregation's verdict for the same
+         * input, with the same participant blamed.  Until 2026-09-28 the
+         * header listed INVALID_PARAM only for ANOTHER participant's row; this
+         * pins the documented verdict for one's own.  Mutation: turn the
+         * refusal after compute_group_commitment(), or the PK_i scalarmult's
+         * in verify_share_core(), into VERIFY_FAILED -> that row fails. */
+        {
+            uint8_t off_curve[32] = {0}, sum[32], list[2 * 64], pks[2 * 32];
+            uint8_t y_bad = 0;
+            for (uint8_t y = 2; y < 19 && !y_bad; y++) {
+                off_curve[0] = y;
+                if (ama_ed25519_point_add(sum, off_curve, off_curve) != AMA_SUCCESS) {
+                    y_bad = y;
+                }
+            }
+            TEST_ASSERT(y_bad != 0, "a canonical y in [2, 18] is not a curve point");
+            off_curve[0] = y_bad;
+
+            memcpy(list, commitments, sizeof list);
+            memcpy(list + 64, off_curve, 32);     /* participant 2's own D_2 */
+            rc = ama_frost_verify_share(sig_shares + 32, 2, public_shares + 32, list,
+                                        signer_indices, 2, msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "verify_share refuses its own undecodable commitment as "
+                        "INVALID_PARAM, as its header states");
+            bad_index = 0xFF;
+            rc = ama_frost_aggregate(signature, sig_shares, list, public_shares,
+                                     signer_indices, 2, msg, msg_len, group_pk,
+                                     &bad_index);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM && bad_index == 2,
+                        "aggregate gives the same verdict and blames the same participant");
+
+            memcpy(pks, public_shares, sizeof pks);
+            memcpy(pks + 32, off_curve, 32);      /* participant 2's own PK_2 */
+            rc = ama_frost_verify_share(sig_shares + 32, 2, pks + 32, commitments,
+                                        signer_indices, 2, msg, msg_len, group_pk);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "verify_share refuses its own undecodable public share as "
+                        "INVALID_PARAM, as its header states");
+        }
+
         /* 11f — argument guards (INVARIANT-5).  Round 2's matter beyond
          * INVARIANT-5: every refusal past the nonce_pair NULL check must
          * still consume the pair (INVARIANT-49). */

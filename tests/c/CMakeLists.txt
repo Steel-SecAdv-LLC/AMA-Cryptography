@@ -581,9 +581,10 @@ if(AMA_USE_NATIVE_PQC)
     # ciphertexts and keys, 256-octet contexts, out-of-range ECDSA scalars,
     # undefined flags and digest lengths, and every NULL argument.
     add_ama_test(test_input_guards test_input_guards.c)
-    # The dead-stack probe (residue_probe.h) applied to every CSPRNG-failure
-    # exit in those files: a failed draw may already have written output, and
-    # the exit must scrub it.  Linked against the test archive, not the shared
+    # The dead-stack probe (residue_probe.h) applied to the eight CSPRNG-failure
+    # exits in ama_kyber.c, ama_dilithium.c, ama_slhdsa.c and ama_x25519.c
+    # that lacked a scrub until 2026-09-26: a failed draw may already have
+    # written output, and the exit must scrub it.  Linked against the test archive, not the shared
     # library add_ama_residue_probe uses, because the failure is driven through
     # the AMA_TESTING_MODE CSPRNG hooks; the test file records why LTO cannot
     # hide this needle.  The probe flags come from the one macro.

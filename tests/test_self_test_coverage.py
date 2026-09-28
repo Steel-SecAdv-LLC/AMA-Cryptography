@@ -29,6 +29,10 @@ skip_no_native = pytest.mark.skipif(not NATIVE_AVAILABLE, reason="Native C libra
 skip_no_dilithium = pytest.mark.skipif(not DILITHIUM_AVAILABLE, reason="Dilithium not available")
 skip_no_kyber = pytest.mark.skipif(not KYBER_AVAILABLE, reason="Kyber not available")
 
+# Tests here drive the state machine and POST into failure; the fixture puts
+# every piece of POST state back afterwards.
+pytestmark = pytest.mark.usefixtures("post_state_restored")
+
 
 # ===========================================================================
 # State Machine Tests

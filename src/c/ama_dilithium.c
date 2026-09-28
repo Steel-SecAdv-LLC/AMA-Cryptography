@@ -2625,7 +2625,9 @@ static ama_error_t dil_verify_internal(const dil_params *P,
      * below its predecessor (the unpack loop below never rewinds, so the
      * flags do not change), each denote the same flag set as the honest
      * encoding.  An honest signature has an empty interior polynomial about
-     * once in 20,000 under ML-DSA-65 and -87 (measured, 200,000 messages).
+     * once in 200 under ML-DSA-65 and -87, and one whose count can be lowered
+     * without also breaking the ordering rule about once in 20,000 (measured,
+     * 200,000 messages).
      *
      * All three are pinned by tests/c/test_ml_dsa_hint_encoding.c: deleting
      * any one of them fails it.  This comment used to cite a Python test

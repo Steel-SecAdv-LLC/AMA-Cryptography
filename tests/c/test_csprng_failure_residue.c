@@ -48,7 +48,12 @@
  * Deleting any one of the eight scrubs fails exactly its own verdict and no
  * other: 6 hits for each SLH-DSA seed buffer (3n = 96 octets), 2 for each
  * randomizer and for ML-KEM's `d` and `m` and ML-DSA's `xi` (32 octets), per
- * parameter set, and 2 in X25519's `secret_key`.  Each verdict is a PIN.
+ * parameter set, and 2 in X25519's `secret_key`.  Each of those verdicts is a
+ * PIN.  X25519's STACK verdict is SMOKE: the draw lands in the caller's
+ * buffer (here the static `g_sk`), so no stack copy exists for the scan to
+ * find, and it reads 0 with the scrub deleted (gcc and clang Release, gcc
+ * Debug; re-measured 2026-09-28).  The caller's-buffer check beside it is
+ * the X25519 PIN.
  */
 #include <stdio.h>
 #include <string.h>
@@ -267,7 +272,9 @@ int main(void) {
         ama_sphincs_randombytes_hook = NULL;
     }
 
-    /* --- X25519: the draw lands in the caller's secret_key. */
+    /* --- X25519: the draw lands in the caller's secret_key.  The stack
+     * verdict is SMOKE (see the mutation record); the buffer check is the
+     * PIN. */
     ama_x25519_randombytes_hook = needle_then_fail;
     VERDICT(probe_x25519_keypair(), "X25519 keypair: stack after a failed draw");
     {
