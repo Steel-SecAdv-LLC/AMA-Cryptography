@@ -640,25 +640,26 @@ Every number below is **derived from one record** —
 
 | Operation | Target latency | Measured latency (ms/op) | Measured throughput (ops/sec) |
 |-----------|---------------:|-------------------------:|------------------------------:|
-| Package Creation (multi-layer) | < 5 ms | 0.721 | 1,386.9 |
-| Package Verification (multi-layer) | < 5 ms | 0.409 | 2,444.0 |
-| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.460 | 2,172.4 |
-| Ed25519 Sign | < 1 ms | 0.028 | 35,287 |
-| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0049 | 205,641 |
-| SHA3-256 Hash (1 KB) | < 1 ms | 0.0033 | 298,723 |
-| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0073 | 136,549 |
+| Package Creation (multi-layer) | < 5 ms | 0.538 | 1,857.4 |
+| Package Verification (multi-layer) | < 5 ms | 0.412 | 2,429.7 |
+| ML-DSA-65 Sign (dominant package-creation cost) | < 5 ms | 0.314 | 3,186.9 |
+| Ed25519 Sign | < 1 ms | 0.026 | 39,054 |
+| HMAC-SHA3-256 (1 KB) | < 1 ms | 0.0038 | 262,657 |
+| SHA3-256 Hash (1 KB) | < 1 ms | 0.0026 | 381,128 |
+| HKDF-SHA3-256 (3-key derive) | < 1 ms | 0.0058 | 172,643 |
 
-**Bottleneck.** ML-DSA-65 signing costs 0.460 ms against 0.721 ms for a whole multi-layer package creation — 64% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
+**Bottleneck.** ML-DSA-65 signing costs 0.314 ms against 0.538 ms for a whole multi-layer package creation — 58% of the pipeline, and the single dominant term. Both figures are rows of the table above, so the claim is arithmetic on one record rather than two independently typed constants.
 
 **Provenance — everything needed to reproduce these numbers:**
 
 - **Benchmark command:** `python benchmarks/benchmark_runner.py --verbose --baseline benchmarks/baseline.json --require-runner-class x86_64 --require-populated-baseline --output benchmarks/benchmark-results.json --markdown benchmark-report.md`
-- **Source record:** `benchmarks/benchmark-results.json`, run 2026-09-22
-- **Platform:** Linux-6.18.44-fc-v37-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
-- **Build:** v5.0.0 · digest d95f5cc73e89c347… · libama_cryptography.so
-- **Commit:** `4e4fa7fa7f25` — DIRTY (uncommitted changes: ama_cryptography/_integrity_digest.txt, ama_cryptography/_integrity_signature.py)
+- **Source record:** `benchmarks/benchmark-results.json`, run 2026-09-28
+- **Platform:** Linux-6.18.44-fc-v42-x86_64-with-glibc2.39 / x86_64 — 4 logical processor(s)
+- **Build:** v5.0.0 · digest 76a4afbba5a7308b… · libama_cryptography.so
+- **Build configuration:** `GNU 13.3.0; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS= '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG' -DAMA_AES_CONSTTIME=ON -DAMA_AES_TABLE_INSECURE=OFF -DAMA_ALLOW_UNVERIFIED_TOOLCHAIN=OFF -DAMA_BUILD_EXAMPLES=OFF -DAMA_BUILD_FUZZ=OFF -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON -DAMA_BUILD_TESTS=OFF -DAMA_ENABLE_AVX2=ON -DAMA_ENABLE_AVX512=OFF -DAMA_ENABLE_DUDECT=OFF -DAMA_ENABLE_LTO=ON -DAMA_ENABLE_NATIVE_ARCH=OFF -DAMA_ENABLE_NEON=ON -DAMA_ENABLE_SANITIZERS=OFF -DAMA_ENABLE_SIMD=ON -DAMA_ENABLE_SVE2=OFF -DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX= -DAMA_KYBER_BUILD_DIAGNOSTICS=OFF -DAMA_USE_NATIVE_PQC=ON (from build/python-cmake)`
+- **Commit:** `7836cc8957d5` — clean
 - **Python bindings:** 6 of 6 compiled bindings imported: dilithium_binding, ed25519_binding, hkdf_binding, hmac_binding, math_engine, sha3_binding
-- **Scope:** one run on the host named above. CMake flags are not recorded by the runner. These are not the canonical-host figures (README, Performance Metrics) and not the CI regression floors.
+- **Scope:** one run on the host named above. These are not the canonical-host figures (README, Performance Metrics) and not the CI regression floors.
 - **Units:** milliseconds per operation, computed as `1000 / ops_per_second`; the throughput column is the record's own `ops_per_second` field.
 - **Sampling:** batches grown (sized to the fastest rate observed) until a timed batch spans >= 0.15s of measured wall-clock; 3 full-window batches per call
 - **Aggregation:** fastest observation (throughput noise is one-sided: interference can only make an operation look slower)
