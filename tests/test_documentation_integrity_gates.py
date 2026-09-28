@@ -1119,6 +1119,15 @@ class TestCryptoConstructionDocs:
                 "security category",
             ),
             ("Category 3 is not a claim of 2^192 quantum work.", "security category"),
+            ("| Quantum Security | ~2^256 operations |", "security category"),
+            (
+                "- Quantum attack cost: ~2^190 operations (Grover-accelerated BKZ)",
+                "security category",
+            ),
+            (
+                "and one quantum-resistant forgery (2^190 quantum operations).",
+                "security category",
+            ),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -1161,11 +1170,37 @@ class TestCryptoConstructionDocs:
             "No security lifetime is claimed; ML-DSA-65 is NIST category 3 (FIPS 204).\n\n"
             "| ML-KEM-1024 | NIST security category 5 | FIPS 203 |\n\n"
             "| T1.7 | AES-256-GCM (SP 800-38D) \u2014 128-bit quantum security |\n\n"
-            "Category 3 is defined by a key search on AES-192.\n",
+            "Category 3 is defined by a key search on AES-192.\n\n"
+            "| Security category | NIST category 5 (at least as hard as a key search on "
+            "AES-256) |\n\n"
+            "An Ed25519 forgery costs about 2^128 classical operations.\n\n"
+            "AES-256 keeps quantum security ~2^128 under Grover.\n",
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
         assert completed.returncode == 0, completed.stderr
+
+    def test_c_sources_and_headers_are_in_the_tree_scan(self, tmp_path: Path) -> None:
+        """``--file`` reads what it is given; the tree scan reads by suffix.
+        C sources and headers must be in that suffix set, or a C comment is
+        read only when someone thinks to name it."""
+        gate = _load(CONSTRUCTION_DOCS)
+        for name in ("ama_fixture.c", "ama_fixture.h", "page.md"):
+            (tmp_path / name).write_text("x\n", encoding="utf-8")
+        scanned = {path.name for path in gate.scanned_files(tmp_path)}
+        assert {"ama_fixture.c", "ama_fixture.h", "page.md"} <= scanned, scanned
+
+    def test_c_source_comments_are_read(self, tmp_path: Path) -> None:
+        """``ama_dilithium.c``'s header said "~192-bit quantum security" after
+        every page and docstring had been corrected: no rule read C."""
+        fixture = tmp_path / "ama_fixture.c"
+        fixture.write_text(
+            "/*\n * - Security level: NIST Level 3 (~192-bit quantum security)\n */\n",
+            encoding="utf-8",
+        )
+        completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
+        assert completed.returncode == 1, completed.stdout
+        assert "security category" in completed.stderr.lower()
 
     def test_the_waiver_is_explicit_and_scoped(self, tmp_path: Path) -> None:
         """A correction note may quote what it retires — but only with the marker."""
@@ -1884,6 +1919,11 @@ class TestBenchmarkClaims:
             None,
             0,
             ["GNU 13.3.0"],
+            # Present but not a configuration: no compiler version, no
+            # configure line, or the runner's old placeholder.
+            "compiler unidentified; cmake -DCMAKE_BUILD_TYPE=Release",
+            "GNU; cmake -DCMAKE_BUILD_TYPE=Release",
+            "GNU 13.3.0",
         ):
             provenance = dict(record["provenance"])
             if value is absent:

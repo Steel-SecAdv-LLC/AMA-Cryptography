@@ -141,7 +141,11 @@ PROSE_SUFFIXES: frozenset[str] = frozenset({".md", ".rst", ".txt"})
 #: ``secure_memory.py``'s module docstring described ``secure_memzero`` as a
 #: "Multi-pass byte-level overwrite" while its function docstring — in the same
 #: file — correctly said the native kernel writes once and issues a barrier.
-SCAN_SUFFIXES: frozenset[str] = PROSE_SUFFIXES | frozenset({".py", ".pyx"})
+#: C sources and headers are read too: ``ama_dilithium.c``'s header comment
+#: still said "~192-bit quantum security" after every page and docstring had
+#: been corrected, because no rule looked at it.  Adding them was measured
+#: first: every rule over every ``.c`` and ``.h`` reported that one line.
+SCAN_SUFFIXES: frozenset[str] = PROSE_SUFFIXES | frozenset({".py", ".pyx", ".c", ".h"})
 
 
 def _is_historical_record(relative: Path) -> bool:
@@ -799,13 +803,18 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
             "\\b(?:192|256)[- ]bit quantum\\b"
-            "|\\b2\\s*(?:\\^|\\*\\*)?\\s*[-\u207b]?\\s*(?:192|\u00b9\u2079\u00b2)(?![0-9])[^.\\n]{0,24}quantum",
+            "|\\b2\\s*(?:\\^|\\*\\*)?\\s*[-\u207b]?\\s*"
+            "(?:192|256|\u00b9\u2079\u00b2|\u00b2\u2075\u2076)(?![0-9])[^.\\n]{0,24}quantum"
+            "|quantum\\s+(?:security|attack\\s+cost)\\W{0,8}~?\\s*2\\s*\\^\\s*"
+            "(?:129|1[3-9][0-9]|[2-9][0-9]{2})(?![0-9])"
+            "|\\b2\\s*\\^\\s*(?:129|1[3-9][0-9]|[2-9][0-9]{2})(?![0-9])\\s+quantum",
             re.IGNORECASE,
         ),
         "a NIST security category is defined by the cost of a key search on "
-        "AES (category 3: AES-192; category 5: AES-256), not as bits of "
-        "quantum security; Grover's algorithm roughly halves an AES key search "
-        "exponent. State the category (FIPS 203/204/205).",
+        "AES (category 3: AES-192; category 5: AES-256), not as bits or "
+        "operations of quantum security; Grover's algorithm roughly halves an "
+        "AES key search exponent, and no operation count is standardised for "
+        "the lattice or hash-based schemes. State the category (FIPS 203/204/205).",
     ),
 )
 

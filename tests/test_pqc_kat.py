@@ -93,7 +93,7 @@ class MLDSA87Spec:
 class MLKEM1024Spec:
     """NIST FIPS 203 ML-KEM-1024 (Kyber-1024) specification constants."""
 
-    # Security level: NIST Level 5 (~256-bit classical, ~128-bit quantum)
+    # Security level: NIST security category 5 (~256-bit classical, ~128-bit quantum)
     SECURITY_LEVEL = 5
 
     # Key sizes (bytes) per NIST FIPS 203 Table 2

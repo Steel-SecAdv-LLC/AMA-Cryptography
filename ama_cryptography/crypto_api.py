@@ -729,7 +729,7 @@ class KyberProvider(KEMProvider):
         - Ciphertext: 1568 bytes
         - Shared secret: 32 bytes
 
-    Security: 256-bit classical / 128-bit quantum (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum (NIST security category 5)
     Standard: NIST FIPS 203 (ML-KEM)
 
     Raises:
@@ -832,7 +832,7 @@ class SphincsProvider(CryptoProvider):
         - Secret key: 128 bytes
         - Signature: 49856 bytes
 
-    Security: 256-bit classical / 128-bit quantum (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum (NIST security category 5)
     Standard: NIST FIPS 205 (SLH-DSA)
 
     Note: SPHINCS+ signatures are large but provide strong security

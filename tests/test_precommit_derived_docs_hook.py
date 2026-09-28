@@ -159,40 +159,136 @@ def _is_type_checking(test: ast.expr) -> bool:
     )
 
 
+def _evaluated_by_def(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
+    """The expressions a ``def`` statement evaluates when it runs: its
+    decorators, its defaults and its annotations -- not its body."""
+    arguments = node.args
+    evaluated: list[ast.AST] = [
+        *node.decorator_list,
+        *arguments.defaults,
+        *(default for default in arguments.kw_defaults if default is not None),
+    ]
+    for argument in (
+        *arguments.posonlyargs,
+        *arguments.args,
+        *arguments.kwonlyargs,
+        arguments.vararg,
+        arguments.kwarg,
+    ):
+        if argument is not None and argument.annotation is not None:
+            evaluated.append(argument.annotation)
+    if node.returns is not None:
+        evaluated.append(node.returns)
+    return evaluated
+
+
+def _imported_modules(node: ast.Import | ast.ImportFrom) -> list[str]:
+    """What one import statement imports.  A relative import names a module
+    of ``tests``, and ``from tests import x`` may import the submodule
+    ``tests.x``, so both are reported as ``tests.<name>``."""
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    if node.level:
+        base = f"tests.{node.module}" if node.module else "tests"
+    else:
+        base = node.module or ""
+    if base == "tests":
+        return [base, *(f"tests.{alias.name}" for alias in node.names)]
+    return [base]
+
+
 def _import_time_modules(tree: ast.Module) -> list[str]:
     """Dotted names of every module imported when this module is imported.
 
     Everything outside a function body runs at import -- class bodies and
     top-level ``if`` / ``try`` / ``with`` blocks included -- except the body
-    of an ``if TYPE_CHECKING:``, which never does.  A relative import names
-    a module of ``tests``, and ``from tests import x`` may import the
-    submodule ``tests.x``, so both are reported as ``tests.<name>``.  A
+    of an ``if TYPE_CHECKING:``, which never does.  A
     guarded import (``try: import x`` / ``except ImportError``) is reported
     too: this does not try to prove that a handler absorbs the failure.
+
+    A function body runs at import when import-time code calls it: a
+    module-level ``CASES = _cases()``, a ``parametrize`` argument built by a
+    helper, a default value.  So a ``def`` contributes its decorators,
+    defaults and annotations -- evaluated when the ``def`` runs -- and the
+    body of every module-level function called from import-time code is
+    visited too, transitively.  A function nobody calls at import stays
+    unvisited, as does every lambda's body.
     """
     found: list[str] = []
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    entered: set[str] = set()
+
+    def enter_calls(node: ast.AST) -> None:
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id in functions
+                and call.func.id not in entered
+            ):
+                entered.add(call.func.id)
+                visit(functions[call.func.id].body)
 
     def visit(nodes: Iterable[ast.AST]) -> None:
         for node in nodes:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for expression in _evaluated_by_def(node):
+                    enter_calls(expression)
+            elif isinstance(node, ast.Lambda):
                 continue
-            if isinstance(node, ast.Import):
-                found.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    base = f"tests.{node.module}" if node.module else "tests"
-                else:
-                    base = node.module or ""
-                found.append(base)
-                if base == "tests":
-                    found.extend(f"tests.{alias.name}" for alias in node.names)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                found.extend(_imported_modules(node))
             elif isinstance(node, ast.If) and _is_type_checking(node.test):
                 visit(node.orelse)
             else:
+                if isinstance(node, ast.Call):
+                    enter_calls(node)
                 visit(ast.iter_child_nodes(node))
 
     visit(tree.body)
     return found
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        # A helper called at module scope runs its body at import.
+        ("def _cases():\n    import yaml\n    return []\nCASES = _cases()\n", ["yaml"]),
+        # A parametrize argument built by a helper runs at collection.
+        (
+            "import pytest\n"
+            "def _cases():\n    import yaml\n    return []\n"
+            "@pytest.mark.parametrize('x', _cases())\n"
+            "def test_x(x):\n    pass\n",
+            ["pytest", "yaml"],
+        ),
+        # A default value is evaluated when the def runs.
+        ("def _d():\n    import yaml\n    return 1\ndef f(x=_d()):\n    return x\n", ["yaml"]),
+        # So is an annotation (without postponed evaluation).
+        (
+            "def _t():\n    import yaml\n    return int\ndef f(x: _t()) -> None:\n    pass\n",
+            ["yaml"],
+        ),
+        ("def _t():\n    import yaml\n    return int\ndef f() -> _t():\n    pass\n", ["yaml"]),
+        # Through a chain of helpers.
+        ("def _inner():\n    import yaml\ndef _outer():\n    _inner()\n_outer()\n", ["yaml"]),
+        # A self-recursive helper is entered once.
+        ("def _r():\n    import yaml\n    _r()\n_r()\n", ["yaml"]),
+        # A function nobody calls at import is not read.
+        ("def fixture():\n    import yaml\n    return yaml\n", []),
+        # A call made inside a function body is not an import-time call.
+        ("def _h():\n    import yaml\ndef test():\n    _h()\n", []),
+    ],
+)
+def test_import_time_calls_are_followed_into_function_bodies(
+    source: str, expected: list[str]
+) -> None:
+    """Skipping every function body missed the ones import-time code runs."""
+    assert _import_time_modules(ast.parse(source)) == expected
 
 
 def test_every_file_the_hooks_collection_imports_needs_only_what_the_hook_has() -> None:

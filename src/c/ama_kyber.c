@@ -16,7 +16,7 @@
  *   cmake -DAMA_USE_NATIVE_PQC=ON ..
  *
  * Parameters (Kyber-1024 / ML-KEM-1024):
- * - Security level: NIST Level 5 (~256-bit classical, ~128-bit quantum)
+ * - Security level: NIST security category 5 (~256-bit classical, ~128-bit quantum)
  * - Public key: 1568 bytes
  * - Secret key: 3168 bytes
  * - Ciphertext: 1568 bytes

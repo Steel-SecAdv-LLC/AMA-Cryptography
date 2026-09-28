@@ -123,6 +123,14 @@ REQUIRED_PROVENANCE: tuple[tuple[str, str], ...] = (
 #: but carries nothing a reader can reproduce from, so it counts as absent.
 NOT_RECORDED_PREFIX = "not recorded"
 
+#: The shape a recorded value must have where the runner writes a structured
+#: one: ``build_configuration`` is ``"<compiler> <version>; cmake -D..."``.  A
+#: value without the compiler's version, or without the configure line, does
+#: not say what built the measured bytes, however non-empty it is.
+PROVENANCE_SHAPES: dict[str, re.Pattern[str]] = {
+    "build_configuration": re.compile(r"^\S+ \d[\w.+-]*; cmake -D"),
+}
+
 #: Every floor entry must declare these, or the number it enforces is a
 #: constant with no meaning attached.
 REQUIRED_BASELINE_FIELDS: tuple[str, ...] = (
@@ -271,7 +279,12 @@ def check_provenance(report: Report, results: dict[str, Any]) -> None:
         # "None", which is non-empty and would pass for provenance.
         raw = provenance.get(key)
         value = raw.strip() if isinstance(raw, str) else ""
-        if not value or value.startswith(NOT_RECORDED_PREFIX):
+        shape = PROVENANCE_SHAPES.get(key)
+        if (
+            not value
+            or value.startswith(NOT_RECORDED_PREFIX)
+            or (shape is not None and not shape.match(value))
+        ):
             report.fail(
                 f"{RESULTS_JSON} records no {key!r}"
                 + (f" ({raw!r})" if key in provenance else "")

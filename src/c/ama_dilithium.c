@@ -11,7 +11,7 @@
  * Module-LWE and Module-SIS hardness assumptions.
  *
  * Parameters (ML-DSA-65 / Dilithium3):
- * - Security level: NIST Level 3 (~192-bit quantum security)
+ * - Security level: NIST security category 3 (FIPS 204)
  * - Public key: 1952 bytes
  * - Secret key: 4032 bytes
  * - Signature: 3309 bytes

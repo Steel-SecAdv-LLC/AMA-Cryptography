@@ -19,9 +19,9 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 
 | Algorithm | Type | Security Level | Standard | Implementation | Status |
 |-----------|------|----------------|----------|----------------|--------|
-| ML-DSA-65 (Dilithium) | Digital Signature | NIST Level 3 (192-bit) | FIPS 204 | Native C (`ama_dilithium.c`) | Primary PQC |
-| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit) | FIPS 203 | Native C (`ama_kyber.c`) | Backend Ready |
-| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST Level 5 (256-bit) | FIPS 205 | Native C (`ama_slhdsa.c`) | Backend Ready |
+| ML-DSA-65 (Dilithium) | Digital Signature | NIST security category 3 | FIPS 204 | Native C (`ama_dilithium.c`) | Primary PQC |
+| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST security category 5 | FIPS 203 | Native C (`ama_kyber.c`) | Backend Ready |
+| SPHINCS+-SHA2-256f | Hash-Based Signature | NIST security category 5 | FIPS 205 | Native C (`ama_slhdsa.c`) | Backend Ready |
 | AES-256-GCM | Authenticated Encryption | 256-bit | SP 800-38D | Native C (`ama_aes_gcm.c`) | Full |
 | Ed25519 | Digital Signature | 128-bit classical | RFC 8032 | Native C (`ama_ed25519.c`) | Classical + Hybrid |
 | SHA3-256 | Hash Function | 128-bit collision | FIPS 202 | Native C (`ama_sha3.c`) | Content Hashing |
@@ -49,7 +49,7 @@ ML-DSA-65 is the primary post-quantum signature algorithm, at NIST security cate
 **Security Properties:**
 - EUF-CMA secure in the Quantum Random Oracle Model (QROM)
 - Based on MLWE hardness assumption
-- Quantum attack cost: ~2^190 operations (Grover-accelerated BKZ)
+- NIST security category 3: at least as hard to break as a key search on AES-192 (FIPS 204)
 
 **Standard:** NIST FIPS 204 (2024)
 

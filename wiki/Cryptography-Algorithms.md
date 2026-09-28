@@ -36,9 +36,7 @@ The **primary post-quantum signature algorithm** in AMA Cryptography.
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 204 (2024) |
-| Security Level | NIST Level 3 |
-| Classical Security | ~2^170 operations |
-| Quantum Security | ~2^190 operations (Grover-BKZ) |
+| Security category | NIST category 3 (at least as hard as a key search on AES-192) |
 | Public Key | 1,952 bytes |
 | Secret Key | 4,032 bytes |
 | Signature | 3,309 bytes |
@@ -73,8 +71,7 @@ assert dilithium_verify(b"message", sig, kp.public_key)
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 203 (2024) |
-| Security Level | NIST Level 5 |
-| Quantum Security | ~2^256 operations |
+| Security category | NIST category 5 (at least as hard as a key search on AES-256) |
 | Public Key | 1,568 bytes |
 | Secret Key | 3,168 bytes |
 | Ciphertext | 1,568 bytes |
@@ -106,8 +103,7 @@ assert recovered == enc.shared_secret
 | Property | Value |
 |----------|-------|
 | Standard | NIST FIPS 205 (2024) |
-| Security Level | NIST Level 5 |
-| Quantum Security | ~2^256 operations |
+| Security category | NIST category 5 (at least as hard as a key search on AES-256) |
 | Public Key | 64 bytes |
 | Secret Key | 128 bytes |
 | Signature | 49,856 bytes |

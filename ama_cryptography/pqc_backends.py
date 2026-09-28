@@ -4147,7 +4147,7 @@ class KyberKeyPair:
         - Ciphertext: 1568 bytes
         - Shared secret: 32 bytes
 
-    Security: 256-bit classical / 128-bit quantum security (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum security (NIST security category 5)
     Standard: NIST FIPS 203 (ML-KEM)
 
     INVARIANT-6: secret_key is stored as mutable bytearray and securely
@@ -4196,7 +4196,7 @@ class SphincsKeyPair:
         - Public key: 64 bytes
         - Signature: 49856 bytes
 
-    Security: 256-bit classical / 128-bit quantum security (NIST Security Level 5)
+    Security: 256-bit classical / 128-bit quantum security (NIST security category 5)
     Standard: NIST FIPS 205 (SLH-DSA)
 
     Note: SPHINCS+ signatures are large (~49KB) but provide stateless

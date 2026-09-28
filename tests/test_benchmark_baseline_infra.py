@@ -1236,6 +1236,34 @@ class TestTheRecordNamesHowTheMeasuredLibraryWasBuilt:
         assert recorded.startswith(br.BUILD_CONFIGURATION_NOT_RECORDED), recorded
         assert "--cmake-build-dir" in recorded, "the remedy is named"
 
+    @pytest.mark.parametrize(
+        "probe",
+        [
+            None,
+            'set(CMAKE_C_COMPILER_ID "GNU")\n',
+            'set(CMAKE_C_COMPILER_VERSION "13.3.0")\n',
+            'set(CMAKE_C_COMPILER_ID "")\nset(CMAKE_C_COMPILER_VERSION "13.3.0")\n',
+        ],
+    )
+    def test_a_tree_that_does_not_name_its_compiler_records_nothing(
+        self, tmp_path: Path, probe: str | None
+    ) -> None:
+        """The bytes match, but the tree cannot say what compiled them, so it
+        cannot say how to rebuild them: no probe, or one missing the ID or the
+        version, is "not recorded", which the claims gate refuses."""
+        measured = b"the measured object"
+        tree = self._tree(tmp_path, "match", measured, "Release", "ON")
+        target = tree / "CMakeFiles" / "4.4.3" / "CMakeCCompiler.cmake"
+        if probe is None:
+            target.unlink()
+        else:
+            target.write_text(probe, encoding="utf-8")
+        recorded = br._cmake_build_configuration(
+            self.LIBRARY, measured.hex(), [tree], self._identity
+        )
+        assert recorded.startswith(br.BUILD_CONFIGURATION_NOT_RECORDED), recorded
+        assert "compiler" in recorded, recorded
+
     def test_a_missing_digest_matches_no_tree(self, tmp_path: Path) -> None:
         """An empty library "hashes" to the empty digest under the identity;
         a record with no digest must still not be matched to it."""

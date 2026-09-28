@@ -1696,8 +1696,12 @@ def _cmake_cache_entries(cache: Path) -> "dict[str, tuple[str, str]]":
     return entries
 
 
-def _cmake_compiler(tree: Path) -> str:
-    """``"GNU 13.3.0"``: the C compiler CMake identified when it configured ``tree``."""
+def _cmake_compiler(tree: Path) -> Optional[str]:
+    """``"GNU 13.3.0"``: the C compiler CMake identified when it configured ``tree``.
+
+    None unless CMake's probe names both the compiler and its version: a
+    configuration without them does not say what compiled the measured bytes.
+    """
     found: dict[str, str] = {}
     for probe in sorted(tree.glob("CMakeFiles/*/CMakeCCompiler.cmake")):
         for line in probe.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -1705,16 +1709,14 @@ def _cmake_compiler(tree: Path) -> str:
                 prefix = f'set({field} "'
                 if line.startswith(prefix) and line.endswith('")'):
                     found[field] = line[len(prefix) : -2]
-    if "CMAKE_C_COMPILER_ID" not in found:
-        return "compiler unidentified"
-    return " ".join(
-        found[field]
-        for field in ("CMAKE_C_COMPILER_ID", "CMAKE_C_COMPILER_VERSION")
-        if found.get(field)
-    )
+    compiler_id = found.get("CMAKE_C_COMPILER_ID", "").strip()
+    version = found.get("CMAKE_C_COMPILER_VERSION", "").strip()
+    if not compiler_id or not version:
+        return None
+    return f"{compiler_id} {version}"
 
 
-def _describe_cmake_tree(tree: Path, entries: "dict[str, tuple[str, str]]") -> str:
+def _describe_cmake_tree(tree: Path, entries: "dict[str, tuple[str, str]]", compiler: str) -> str:
     """The compiler and the configure line that reproduce ``tree``'s build.
 
     Every user-settable project option is listed (each ``AMA_*`` entry of type
@@ -1739,7 +1741,7 @@ def _describe_cmake_tree(tree: Path, entries: "dict[str, tuple[str, str]]") -> s
         where = tree.resolve().relative_to(_REPO_ROOT).as_posix()
     except ValueError:
         where = f"{tree.name}, a build tree outside the checkout"
-    return f"{_cmake_compiler(tree)}; cmake {configure} (from {where})"
+    return f"{compiler}; cmake {configure} (from {where})"
 
 
 def _cmake_build_configuration(
@@ -1768,7 +1770,15 @@ def _cmake_build_configuration(
         for sub in ("", "lib", "bin"):
             candidate = tree / sub / library_name
             if candidate.is_file() and sha3_256(candidate.read_bytes()).hex() == digest_hex:
-                return _describe_cmake_tree(tree, _cmake_cache_entries(cache))
+                compiler = _cmake_compiler(tree)
+                if compiler is None:
+                    return (
+                        f"{BUILD_CONFIGURATION_NOT_RECORDED}: {tree} built the measured "
+                        "object, but its CMake compiler probe "
+                        "(CMakeFiles/*/CMakeCCompiler.cmake) does not name the "
+                        "compiler and its version"
+                    )
+                return _describe_cmake_tree(tree, _cmake_cache_entries(cache), compiler)
     searched = ", ".join(str(tree) for tree in trees) or "none"
     return (
         f"{BUILD_CONFIGURATION_NOT_RECORDED}: no CMake build tree searched ({searched}) "
