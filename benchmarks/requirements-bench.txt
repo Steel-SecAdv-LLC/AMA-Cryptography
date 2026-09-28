@@ -36,4 +36,4 @@ pynacl>=1.6.2
 # GHSA-537c-gmf6-5ccf (48.0.1), GHSA-jwv3-5hgf-82ww and
 # GHSA-m2h6-j472-rp4c (49.0.0), GHSA-g6cj-pr64-35w5 (50.0.0).
 # Mirrors pyproject.toml [legacy] and [benchmark].
-cryptography>=50.0.0
+cryptography>=50.0.1
