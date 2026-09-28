@@ -94,7 +94,14 @@ _POST_LOCK = threading.RLock()
 class _OwnershipQueryableLock(Protocol):
     """A lock that can say whether the calling thread holds it."""
 
-    def _is_owned(self) -> bool: ...
+    def _is_owned(self) -> bool:
+        """True when the calling thread holds the lock.
+
+        A docstring rather than ``...``: a Protocol body is a type, never run,
+        and the ellipsis is an expression statement with no effect, which is
+        what CodeQL's "Statement has no effect" rule reports (the same answer
+        ``_self_test._Absorbing`` gives it).
+        """
 
 
 def _lock_ownership_query(lock: object) -> Callable[[], bool]:
@@ -204,7 +211,8 @@ def _clear_self_test_thread() -> None:
     process's life.
     """
     global _SELF_TEST_THREAD
-    _SELF_TEST_THREAD = None
+    with _STATE_LOCK:
+        _SELF_TEST_THREAD = None
 
 
 def _exception_text(exc: BaseException) -> str:
@@ -276,16 +284,30 @@ def check_crypto_permitted() -> None:
     """
     if _MODULE_STATE == "OPERATIONAL":
         return
-    if (
-        _MODULE_STATE == "SELF_TEST"
-        and _SELF_TEST_THREAD == threading.get_ident()
-        and _POST_LOCK_IS_OWNED()
-    ):
-        return
-    if _MODULE_STATE == "ERROR":
+    # Otherwise the state, the pin and the lock are decided as one, under the
+    # lock every transition takes, so another thread's ``_set_error`` lands
+    # wholly before the decision (and this call is refused) or wholly after
+    # it.  After it is the window every caller of a guard has, OPERATIONAL
+    # callers included -- the check precedes the operation -- and what bounds
+    # it is that the next call on this thread is refused
+    # (``test_the_post_thread_is_refused_once_another_thread_enters_error``)
+    # and that ``_finish_self_test`` refuses to leave SELF_TEST for
+    # OPERATIONAL.  The fast path above takes no lock: one read of one global,
+    # so the guard stays free on the hot path.  A state that became
+    # OPERATIONAL after that read is permitted here, not refused as stale.
+    with _STATE_LOCK:
+        state = _MODULE_STATE
+        if state == "OPERATIONAL" or (
+            state == "SELF_TEST"
+            and _SELF_TEST_THREAD == threading.get_ident()
+            and _POST_LOCK_IS_OWNED()
+        ):
+            return
+        reason = _ERROR_REASON
+    if state == "ERROR":
         raise CryptoModuleError(
             f"Cryptographic operation refused: module is in the FIPS 140-3 "
-            f"error state (root cause: {_ERROR_REASON}).  All cryptographic "
+            f"error state (root cause: {reason}).  All cryptographic "
             f"output is inhibited until the fault is corrected and "
             f"reset_module() re-runs the power-on self-tests."
         )

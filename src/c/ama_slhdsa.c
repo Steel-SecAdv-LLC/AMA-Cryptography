@@ -405,6 +405,7 @@ static int sha2_PRF_msg(const slhdsa_params_t *p, uint8_t *out,
     uint8_t hmac_out[64];
     if (ama_hmac_sha512_3(sk_prf, p->n, opt_rand, p->n, prefix, prefix_len,
                           msg, msglen, hmac_out) != 0) {
+        ama_secure_memzero(hmac_out, sizeof(hmac_out));
         return -1;
     }
     memcpy(out, hmac_out, p->n);
@@ -457,19 +458,27 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
  * input segments without an intermediate concatenation buffer.
  * ============================================================================ */
 
+/* shake_absorb_{three,four,five}: SHAKE-256 over the concatenated segments.
+ * Every exit scrubs ctx, the failing ones included: for PRF and PRF_msg it has
+ * absorbed SK.seed or SK.prf.  The failing exits return -1 without writing
+ * out; they need a NULL segment with a nonzero length, which every entry
+ * point refuses before any hashing starts. */
 static int shake_absorb_three(const uint8_t *a, size_t alen,
                               const uint8_t *b, size_t blen,
                               const uint8_t *c, size_t clen,
                               uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    if (ama_shake256_inc_init(&ctx) != AMA_SUCCESS) return -1;
-    if (alen && ama_shake256_inc_absorb(&ctx, a, alen) != AMA_SUCCESS) return -1;
-    if (blen && ama_shake256_inc_absorb(&ctx, b, blen) != AMA_SUCCESS) return -1;
-    if (clen && ama_shake256_inc_absorb(&ctx, c, clen) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_finalize(&ctx) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_squeeze(&ctx, out, outlen) != AMA_SUCCESS) return -1;
+    int rc = -1;
+    if (ama_shake256_inc_init(&ctx) == AMA_SUCCESS
+        && (alen == 0 || ama_shake256_inc_absorb(&ctx, a, alen) == AMA_SUCCESS)
+        && (blen == 0 || ama_shake256_inc_absorb(&ctx, b, blen) == AMA_SUCCESS)
+        && (clen == 0 || ama_shake256_inc_absorb(&ctx, c, clen) == AMA_SUCCESS)
+        && ama_shake256_inc_finalize(&ctx) == AMA_SUCCESS
+        && ama_shake256_inc_squeeze(&ctx, out, outlen) == AMA_SUCCESS) {
+        rc = 0;
+    }
     ama_secure_memzero(&ctx, sizeof(ctx));
-    return 0;
+    return rc;
 }
 
 static int shake_absorb_four(const uint8_t *a, size_t alen,
@@ -478,15 +487,18 @@ static int shake_absorb_four(const uint8_t *a, size_t alen,
                              const uint8_t *d, size_t dlen,
                              uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    if (ama_shake256_inc_init(&ctx) != AMA_SUCCESS) return -1;
-    if (alen && ama_shake256_inc_absorb(&ctx, a, alen) != AMA_SUCCESS) return -1;
-    if (blen && ama_shake256_inc_absorb(&ctx, b, blen) != AMA_SUCCESS) return -1;
-    if (clen && ama_shake256_inc_absorb(&ctx, c, clen) != AMA_SUCCESS) return -1;
-    if (dlen && ama_shake256_inc_absorb(&ctx, d, dlen) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_finalize(&ctx) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_squeeze(&ctx, out, outlen) != AMA_SUCCESS) return -1;
+    int rc = -1;
+    if (ama_shake256_inc_init(&ctx) == AMA_SUCCESS
+        && (alen == 0 || ama_shake256_inc_absorb(&ctx, a, alen) == AMA_SUCCESS)
+        && (blen == 0 || ama_shake256_inc_absorb(&ctx, b, blen) == AMA_SUCCESS)
+        && (clen == 0 || ama_shake256_inc_absorb(&ctx, c, clen) == AMA_SUCCESS)
+        && (dlen == 0 || ama_shake256_inc_absorb(&ctx, d, dlen) == AMA_SUCCESS)
+        && ama_shake256_inc_finalize(&ctx) == AMA_SUCCESS
+        && ama_shake256_inc_squeeze(&ctx, out, outlen) == AMA_SUCCESS) {
+        rc = 0;
+    }
     ama_secure_memzero(&ctx, sizeof(ctx));
-    return 0;
+    return rc;
 }
 
 /* Five segments: the widest absorb this file needs is H_msg with the §10.2
@@ -500,16 +512,19 @@ static int shake_absorb_five(const uint8_t *a, size_t alen,
                              const uint8_t *e, size_t elen,
                              uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    if (ama_shake256_inc_init(&ctx) != AMA_SUCCESS) return -1;
-    if (alen && ama_shake256_inc_absorb(&ctx, a, alen) != AMA_SUCCESS) return -1;
-    if (blen && ama_shake256_inc_absorb(&ctx, b, blen) != AMA_SUCCESS) return -1;
-    if (clen && ama_shake256_inc_absorb(&ctx, c, clen) != AMA_SUCCESS) return -1;
-    if (dlen && ama_shake256_inc_absorb(&ctx, d, dlen) != AMA_SUCCESS) return -1;
-    if (elen && ama_shake256_inc_absorb(&ctx, e, elen) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_finalize(&ctx) != AMA_SUCCESS) return -1;
-    if (ama_shake256_inc_squeeze(&ctx, out, outlen) != AMA_SUCCESS) return -1;
+    int rc = -1;
+    if (ama_shake256_inc_init(&ctx) == AMA_SUCCESS
+        && (alen == 0 || ama_shake256_inc_absorb(&ctx, a, alen) == AMA_SUCCESS)
+        && (blen == 0 || ama_shake256_inc_absorb(&ctx, b, blen) == AMA_SUCCESS)
+        && (clen == 0 || ama_shake256_inc_absorb(&ctx, c, clen) == AMA_SUCCESS)
+        && (dlen == 0 || ama_shake256_inc_absorb(&ctx, d, dlen) == AMA_SUCCESS)
+        && (elen == 0 || ama_shake256_inc_absorb(&ctx, e, elen) == AMA_SUCCESS)
+        && ama_shake256_inc_finalize(&ctx) == AMA_SUCCESS
+        && ama_shake256_inc_squeeze(&ctx, out, outlen) == AMA_SUCCESS) {
+        rc = 0;
+    }
     ama_secure_memzero(&ctx, sizeof(ctx));
-    return 0;
+    return rc;
 }
 
 static void shake_F(const slhdsa_params_t *p, uint8_t *out,
@@ -1225,6 +1240,7 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     /* R = PRF_msg(SK.prf, opt_rand, M') */
     if (p->prf_msg(p, R, sk_prf, opt_rand, prefix, prefix_len,
                    message, message_len) != 0) {
+        ama_secure_memzero(R, sizeof(R));
         return AMA_ERROR_MEMORY;
     }
     /* Declassified (src/c/internal/ama_ct_declassify.h): R is derived from
@@ -1243,9 +1259,13 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     /* digest = H_msg(R, PK.seed, PK.root, M'); split into FORS msg + tree + leaf.
      * R enters the caller's signature only once H_msg has succeeded: it was
      * written first until 2026-09-28, so a refused H_msg returned an error
-     * with R already in the caller's buffer. */
+     * with R already in the caller's buffer.  Both error exits scrub what
+     * they computed, as the success exit does: R is public only once it is
+     * in a signature, and on these exits it never is. */
     if (p->hash_msg(p, fors_msg, R, pk, prefix, prefix_len,
                     message, message_len) != 0) {
+        ama_secure_memzero(R, sizeof(R));
+        ama_secure_memzero(fors_msg, sizeof(fors_msg));
         return AMA_ERROR_MEMORY;
     }
     memcpy(sig_ptr, R, p->n);

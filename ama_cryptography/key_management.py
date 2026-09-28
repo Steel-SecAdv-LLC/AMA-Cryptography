@@ -2138,7 +2138,6 @@ if __name__ == "__main__":
     # Secure Storage
     logger.info("\n3. Secure Key Storage")
     logger.info("-" * 70)
-    import tempfile
 
     demo_storage_path = Path(tempfile.gettempdir()) / "ama_keys_demo"
     demo_password = secrets.token_urlsafe(24)

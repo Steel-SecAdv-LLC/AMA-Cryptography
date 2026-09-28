@@ -155,7 +155,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import NoReturn
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -486,15 +485,6 @@ def _replace(src: Path, dst: Path) -> None:
         staged.unlink(missing_ok=True)
 
 
-def _fail(message: str, exc: BaseException) -> NoReturn:
-    """Raise ``message`` chained to ``exc``; for an interrupt, print it and
-    let the interrupt itself propagate."""
-    if isinstance(exc, Exception):
-        raise RuntimeError(message) from exc
-    print(message, file=sys.stderr)
-    raise exc
-
-
 def _undo_swap(installed: Path, saved: Path, backup_dir: Path) -> None:
     """Put the release library back and re-sign over it, if it was replaced;
     then drop the backup.
@@ -508,25 +498,34 @@ def _undo_swap(installed: Path, saved: Path, backup_dir: Path) -> None:
     so in its own words -- a bare CalledProcessError replacing a suite's
     error would not tell the operator which library the package holds.
     """
+    # Both handlers take BaseException and raise on every path: an ordinary
+    # error is chained under a message naming what the package now holds, and
+    # an interrupt prints that message and propagates itself.
     try:
         swapped = installed.read_bytes() != saved.read_bytes()
         if swapped:
             _replace(saved, installed)
     except BaseException as exc:
-        _fail(
+        message = (
             f"could not restore the release library to {installed}; the backup is kept "
-            f"at {saved} -- copy it back, then run {_RESIGN_COMMAND}",
-            exc,
+            f"at {saved} -- copy it back, then run {_RESIGN_COMMAND}"
         )
+        if not isinstance(exc, Exception):
+            print(message, file=sys.stderr)
+            raise
+        raise RuntimeError(message) from exc
     try:
         if swapped:
             _resign()
     except BaseException as exc:
-        _fail(
+        message = (
             f"the release library was restored to {installed}, but re-signing the "
-            f"integrity artefact over it did not complete; run {_RESIGN_COMMAND}",
-            exc,
+            f"integrity artefact over it did not complete; run {_RESIGN_COMMAND}"
         )
+        if not isinstance(exc, Exception):
+            print(message, file=sys.stderr)
+            raise
+        raise RuntimeError(message) from exc
     finally:
         shutil.rmtree(backup_dir, ignore_errors=True)
 

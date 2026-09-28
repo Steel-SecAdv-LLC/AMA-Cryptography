@@ -742,16 +742,16 @@ def _check_validity_window(base_ref: str, head_ref: str) -> List[str]:
                 f"describe has changed since it:\n"
                 + "".join(f"    {name}\n" for name in drifted[:12])
                 + (f"    ... and {len(drifted) - 12} more\n" if len(drifted) > 12 else "")
-                + f"  A floor that describes a tree the branch no longer ships "
-                f"is not a regression gate. Either re-measure on the canonical "
-                f"runner for this file (updating the floors and "
-                f"calibration_evidence), or acknowledge each path explicitly in "
-                f"metadata.floor_drift_acknowledged — a list of "
-                f"{{path, reason}} entries, where path is a repo-relative file "
-                f"— exact paths only, a directory prefix would acknowledge every "
-                f"future change beneath it. The acknowledgement is reviewable; the "
-                f"prose sentence it replaces was not checked by anything and "
-                f"was false when it was written."
+                + "  A floor that describes a tree the branch no longer ships "
+                "is not a regression gate. Either re-measure on the canonical "
+                "runner for this file (updating the floors and "
+                "calibration_evidence), or acknowledge each path explicitly in "
+                "metadata.floor_drift_acknowledged — a list of "
+                "{path, reason} entries, where path is a repo-relative file "
+                "— exact paths only, a directory prefix would acknowledge every "
+                "future change beneath it. The acknowledgement is reviewable; the "
+                "prose sentence it replaces was not checked by anything and "
+                "was false when it was written."
             )
             continue
 

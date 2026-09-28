@@ -507,6 +507,107 @@ class TestPostStateTransitions:
             "stage_durations_ms": {},
         }
 
+    def test_the_post_thread_is_refused_once_another_thread_enters_error(self) -> None:
+        """The self-test allowance is for SELF_TEST only.  Once another thread
+        has put the module in ERROR, the POST thread's next cryptographic call
+        is refused like any other, and the run ends without OPERATIONAL."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        reason = "Pairwise consistency test failed for ML-KEM-1024: synthetic, from another thread"
+        outcome: list[str] = []
+
+        def another_thread_fails_mid_run() -> tuple[bool, str | None]:
+            ms.check_crypto_permitted()  # this thread's allowance, before the failure
+            other = threading.Thread(target=st._set_error, args=(reason,))
+            other.start()
+            other.join(30)
+            try:
+                ms.check_crypto_permitted()
+                outcome.append("permitted")
+            except CryptoModuleError:
+                outcome.append("refused")
+            return True, None
+
+        with patch.object(st, "_run_rng_stage", another_thread_fails_mid_run):
+            assert st._run_self_tests() is False
+        assert outcome == ["refused"]
+        assert st.module_status() == "ERROR"
+        assert st.module_error_reason() == reason
+
+    @staticmethod
+    def _decide_while_a_transition_lands(
+        pinned: bool, land: tuple[str, str | None]
+    ) -> tuple[bool, Exception | None]:
+        """Run ``check_crypto_permitted`` on a worker thread in SELF_TEST, and
+        make ``land`` -- a ``(state, reason)`` transition -- happen after the
+        worker's unlocked fast-path read and before its locked decision.
+
+        The worker announces when it reaches ``_STATE_LOCK``; this thread holds
+        the lock until then, applies the transition, and releases it.  Returns
+        whether the worker reached the lock, and what the check raised."""
+        from ama_cryptography import _module_state as ms
+
+        inner = threading.RLock()
+        reached = threading.Event()
+
+        class _Announcing:
+            def __enter__(self) -> bool:
+                reached.set()
+                return inner.__enter__()
+
+            def __exit__(self, *exc: object) -> None:
+                inner.release()
+
+        raised: list[Exception | None] = []
+
+        def worker() -> None:
+            with ms._POST_LOCK:
+                if pinned:
+                    ms._SELF_TEST_THREAD = threading.get_ident()
+                try:
+                    ms.check_crypto_permitted()
+                    raised.append(None)
+                except Exception as exc:
+                    raised.append(exc)
+
+        with patch.object(ms, "_STATE_LOCK", _Announcing()):
+            ms._MODULE_STATE = "SELF_TEST"
+            ms._ERROR_REASON = None
+            ms._SELF_TEST_THREAD = None
+            with inner:
+                thread = threading.Thread(target=worker)
+                thread.start()
+                did_reach = reached.wait(30)
+                ms._MODULE_STATE, ms._ERROR_REASON = land
+            thread.join(30)
+        assert not thread.is_alive()
+        return did_reach, raised[0]
+
+    def test_an_error_entered_after_the_fast_path_read_is_honoured(self) -> None:
+        """The permit is decided under ``_STATE_LOCK``, not on the state read
+        before it: the POST thread, pinned and holding the POST lock, read
+        SELF_TEST, and another thread's ERROR landed before the decision.  The
+        call is refused and names that ERROR.  Decided on the earlier read, it
+        was permitted after the failure."""
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        reason = "Continuous RNG test failed: consecutive identical outputs (synthetic)"
+        reached, raised = self._decide_while_a_transition_lands(True, ("ERROR", reason))
+        assert reached
+        assert isinstance(raised, CryptoModuleError)
+        assert reason in str(raised)
+
+    def test_operational_reached_after_the_fast_path_read_is_permitted(self) -> None:
+        """A thread that read SELF_TEST while POST was finishing, and is not
+        the POST thread, is permitted once POST has made the module
+        OPERATIONAL.  The locked decision reads the state again; refused on
+        the stale read, a caller racing a successful POST got an error."""
+        reached, raised = self._decide_while_a_transition_lands(False, ("OPERATIONAL", None))
+        assert reached
+        assert raised is None
+
     def test_an_error_reported_as_post_begins_is_recorded(self) -> None:
         """An ERROR entered in the instant before POST enters SELF_TEST is
         replaced by the run, which is what a reset is for, but it is recorded

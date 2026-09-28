@@ -75,6 +75,8 @@ from ama_cryptography.exceptions import NativeBackendUnavailableError
 #: of ``--strict``) treating them as re-exports.  Both are needed; neither
 #: subsumes the other.
 __all__ = [
+    "_set_error",
+    "_set_operational",
     "check_crypto_permitted",
     "check_operational",
     "last_failure",
@@ -3413,7 +3415,6 @@ def _run_self_tests() -> bool:
             # whose ``__str__`` raises used to replace itself with that second
             # exception here, before ``_set_error`` ran, so the module stayed in
             # SELF_TEST with no reason and nothing recorded.
-            all_passed = False
             reason = (
                 f"FIPS POST internal error: stage "
                 f"{stage_name or '<before the first stage>'!r} raised "
