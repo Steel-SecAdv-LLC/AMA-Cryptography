@@ -45,39 +45,53 @@
  * block; these two now do, and the first two verdicts below probe them
  * directly through the public incremental API.
  *
- * MUTATION RECORD (AGENTS.md section 6.2; gcc 13.3.0, Release, x86-64,
- * 2026-09-28).  Each scrub was deleted, the testing archive rebuilt and this
- * test run.  Deleted alone, each fails the verdicts named:
+ * THE BUILD MATTERS.  CI's unoptimised strict build (gcc 13.3.0,
+ * CMAKE_BUILD_TYPE=None) then failed two verdicts the Release build passed:
+ * one copy of R after a failed PRF_msg and one of the digest after a failed
+ * H_msg, left in the dead frame of the Keccak permutation, whose lanes hold
+ * the state both were squeezed from.  slh_sign_internal's two error exits
+ * therefore also wipe the dead stack below their frame
+ * (ama_stack_wipe_below), as the Ed25519 and AEAD entry points do.
+ *
+ * MUTATION RECORD (AGENTS.md section 6.2; gcc 13.3.0, x86-64, 2026-09-28,
+ * both in Release and in the unoptimised build).  Each change was made, the
+ * testing archive rebuilt and this test run.
+ *   PIN in both builds, deleted alone:
  *   - ama_shake256_inc_finalize's block scrub: "ama_shake256_inc_finalize:
- *     the absorbed key", "SHAKE-128s PRF_msg fails: SK.prf" and
- *     "SHAKE-128s H_msg fails: R";
+ *     the absorbed key";
  *   - ama_shake128_inc_finalize's block scrub: "ama_shake128_inc_finalize:
  *     the absorbed key";
- *   - the SHAKE helpers' context scrub on a failing path (shake_finish,
- *     shared by shake_absorb_three, _four and _five): "SHAKE-128s PRF_msg
- *     fails: SK.prf" and "... : R", "SHAKE-128s H_msg fails: R" and
- *     "... : digest";
  *   - slh_sign_internal's R scrub on the PRF_msg exit: "SHAKE-128s PRF_msg
  *     fails: R";
  *   - its R scrub on the H_msg exit: "SHAKE-128s H_msg fails: R" and
  *     "SHA2-256f H_msg fails: R";
  *   - its digest scrub on the H_msg exit: "SHAKE-128s H_msg fails: digest";
- *   - sha2_PRF_msg's HMAC scrub on its failure branch: "SHA2-256f PRF_msg
- *     fails: R";
  *   - R copied into the signature before H_msg, as it was until 2026-09-28:
  *     both "H_msg fails: no R in the signature" verdicts.
- * Those verdicts are PINs.  Each exit's scrub and its helper's context scrub
- * guard the same value from two frames, and each was deleted alone as well
- * as with its partner (section 6.3): both fail the verdict alone.
+ *   PIN in the unoptimised build, deleted alone:
+ *   - the stack wipe on the PRF_msg exit: "SHAKE-128s PRF_msg fails: R";
+ *   - the stack wipe on the H_msg exit: "SHAKE-128s H_msg fails: digest".
+ *   Redundant with the wipe (section 6.3): each of these guards a frame
+ *   below slh_sign_internal, which the wipe also clears, so deleting it alone
+ *   fails nothing in either build, and deleting it together with the wipe
+ *   fails the verdicts named.  The test pins the property, that the failed
+ *   hash's frames hold nothing, not either implementation:
+ *   - the SHAKE helpers' context scrub on a failing path (shake_finish):
+ *     "SHAKE-128s PRF_msg fails: SK.prf" and "... : R", "SHAKE-128s H_msg
+ *     fails: R" and "... : digest";
+ *   - sha2_PRF_msg's HMAC scrub on its failure branch: "SHA2-256f PRF_msg
+ *     fails: R";
+ *   - ama_shake256_inc_finalize's block scrub, for the SLH-DSA verdicts
+ *     ("SHAKE-128s PRF_msg fails: SK.prf", "SHAKE-128s H_msg fails: R");
+ *     its direct verdict above pins it alone.
  *
- * "SHAKE-128s every F, H and PRF fails: SK.seed" is SMOKE: deleting that
- * shared scrub leaves it at 0 hits.  PRF absorbs SK.seed, but every PRF call
- * is followed at the same depth by further absorbs (the chain's F calls, then
- * the tree's H calls) whose contexts overwrite the dead one before any
- * caller returns, so no flow leaves that frame observable; the scrub is
- * pinned by the PRF_msg and H_msg verdicts instead.  The verdict is kept for
- * the check beside it, that a fault after the output leaves the signature
- * exact.
+ * "SHAKE-128s every F, H and PRF fails: SK.seed" is SMOKE: deleting the
+ * shared context scrub leaves it at 0 hits.  PRF absorbs SK.seed, but every
+ * PRF call is followed at the same depth by further absorbs (the chain's F
+ * calls, then the tree's H calls) whose contexts overwrite the dead one
+ * before any caller returns, so no flow leaves that frame observable.  The
+ * verdict is kept for the check beside it, that a fault after the output
+ * leaves the signature exact.
  */
 #include <stdio.h>
 #include <string.h>

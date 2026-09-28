@@ -62,6 +62,7 @@
 #include "internal/ama_testing_exports.h"
 #include "internal/ama_sha2.h"
 #include "internal/ama_ct_declassify.h"
+#include "internal/ama_stack_wipe.h"
 /* No <stdlib.h>: this translation unit allocates nothing.  The last heap use
  * was the §10.2 wrapper's whole-message calloc in the three external entry
  * points, and absorbing the wrapper as its own hash segment removed it — so
@@ -1257,6 +1258,7 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
     if (p->prf_msg(p, R, sk_prf, opt_rand, prefix, prefix_len,
                    message, message_len) != 0) {
         ama_secure_memzero(R, sizeof(R));
+        ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
         return AMA_ERROR_MEMORY;
     }
     /* Declassified (src/c/internal/ama_ct_declassify.h): R is derived from
@@ -1277,11 +1279,16 @@ static ama_error_t slh_sign_internal(const slhdsa_params_t *p,
      * written first until 2026-09-28, so a refused H_msg returned an error
      * with R already in the caller's buffer.  Both error exits scrub what
      * they computed, as the success exit does: R is public only once it is
-     * in a signature, and on these exits it never is. */
+     * in a signature, and on these exits it never is.  They also wipe the
+     * dead stack the failed hash left below this frame: its Keccak
+     * permutation's lanes hold the state R or the digest was squeezed from,
+     * and in an unoptimised build they stay there (measured, gcc 13.3.0
+     * CMAKE_BUILD_TYPE=None, tests/c/test_slhdsa_fault_residue.c). */
     if (p->hash_msg(p, fors_msg, R, pk, prefix, prefix_len,
                     message, message_len) != 0) {
         ama_secure_memzero(R, sizeof(R));
         ama_secure_memzero(fors_msg, sizeof(fors_msg));
+        ama_stack_wipe_below(AMA_STACK_WIPE_BYTES);
         return AMA_ERROR_MEMORY;
     }
     memcpy(sig_ptr, R, p->n);
