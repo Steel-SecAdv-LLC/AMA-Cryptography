@@ -61,6 +61,10 @@
  *     the absorbed key";
  *   - ama_shake128_inc_finalize's block scrub: "ama_shake128_inc_finalize:
  *     the absorbed key";
+ *   - each finalizer's clear of the context's rate buffer, which still held
+ *     the key after the squeeze-only state took over: "... : the key in its
+ *     context" for that finalizer (added after Copilot's overview on
+ *     7223e36);
  *   - slh_sign_internal's R scrub on the PRF_msg exit: "SHAKE-128s PRF_msg
  *     fails: R";
  *   - its R scrub on the H_msg exit: "SHAKE-128s H_msg fails: R" and
@@ -171,13 +175,27 @@ RESIDUE_NOINLINE static ama_error_t probe_shake128_finalize(void) {
     return rc;
 }
 
+/* Occurrences of `needle` in a caller-owned object. */
+static int count_in(const uint8_t *buf, size_t len, const uint8_t *needle, size_t n) {
+    size_t i;
+    int hits = 0;
+    for (i = 0; i + n <= len; i++) {
+        if (memcmp(buf + i, needle, n) == 0) {
+            hits++;
+        }
+    }
+    return hits;
+}
+
 /* A keyed absorb shorter than one block, then the finalizer alone under the
- * probe: its local copy of the rate buffer is the only place the key can be
- * left. */
+ * probe: its local copy of the rate buffer is the only place on the stack
+ * the key can be left.  The context is checked as well: the rate buffer the
+ * key was absorbed into must not still hold it once the finalizer has run,
+ * for a caller that does not scrub its context. */
 static void finalizer_verdict(int shake128, const uint8_t *key, size_t len,
-                              const char *what) {
+                              const char *what, const char *what_ctx) {
     ama_error_t rc;
-    int hits;
+    int hits, held;
     if (shake128) {
         (void)ama_shake128_inc_init(&g_ctx);
         (void)ama_shake128_inc_absorb(&g_ctx, key, len);
@@ -188,10 +206,13 @@ static void finalizer_verdict(int shake128, const uint8_t *key, size_t len,
     poison_stack();
     rc = shake128 ? probe_shake128_finalize() : probe_shake256_finalize();
     hits = residue_count(key, len);
+    held = count_in((const uint8_t *)&g_ctx, sizeof g_ctx, key, len);
     memset(&g_ctx, 0, sizeof g_ctx);
     printf("  %-58s %d hit(s)\n", what, hits);
+    printf("  %-58s %d hit(s)\n", what_ctx, held);
     CHECK(rc == AMA_SUCCESS, what);
     CHECK(hits == 0, what);
+    CHECK(held == 0, what_ctx);
 }
 
 RESIDUE_NOINLINE static ama_error_t probe_sign(void) {
@@ -299,8 +320,10 @@ int main(void) {
     for (i = 0; i < SHAKE_128S_N; i++) {
         sk_prf[i] = (uint8_t)(0x69u ^ (i * 41u + 17u));
     }
-    finalizer_verdict(0, sk_prf, SHAKE_128S_N, "ama_shake256_inc_finalize: the absorbed key");
-    finalizer_verdict(1, sk_prf, SHAKE_128S_N, "ama_shake128_inc_finalize: the absorbed key");
+    finalizer_verdict(0, sk_prf, SHAKE_128S_N, "ama_shake256_inc_finalize: the absorbed key",
+                      "ama_shake256_inc_finalize: the key in its context");
+    finalizer_verdict(1, sk_prf, SHAKE_128S_N, "ama_shake128_inc_finalize: the absorbed key",
+                      "ama_shake128_inc_finalize: the key in its context");
 
     /* --- SLH-DSA-SHAKE-128s. */
     g_ps = AMA_SLHDSA_SHAKE_128S;

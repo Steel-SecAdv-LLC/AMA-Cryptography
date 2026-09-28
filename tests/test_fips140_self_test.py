@@ -608,6 +608,37 @@ class TestPostStateTransitions:
         assert reached
         assert raised is None
 
+    def test_the_post_state_snapshot_restores_everything_post_rewrites(self) -> None:
+        """The fixture every POST-failing module takes restores every piece of
+        state a failed run rewrites, the ERROR sequence number included (it
+        was left out, so a test that entered ERROR left the sequence ahead of
+        the restored ``_LAST_FAILURE_SEQUENCE``)."""
+        import copy
+
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+        from tests.conftest import _POST_GLOBALS, post_state_snapshot
+
+        def post_state() -> tuple[object, ...]:
+            return (
+                ms._MODULE_STATE,
+                ms._ERROR_REASON,
+                ms._SELF_TEST_THREAD,
+                ms._ERROR_SEQUENCE,
+                ms._rng_state["previous"],
+                copy.deepcopy(st._LAST_FAILURE),
+                {name: copy.deepcopy(getattr(st, name)) for name in _POST_GLOBALS},
+            )
+
+        before = post_state()
+        with post_state_snapshot():
+            with patch.object(st, "_run_rng_stage", lambda: (False, "synthetic RNG failure")):
+                assert st._run_self_tests() is False
+            assert st.last_failure()["reason"]
+            during = post_state()
+            assert during[3] != before[3], "the failed run entered no ERROR"
+        assert post_state() == before
+
     def test_an_error_reported_as_post_begins_is_recorded(self) -> None:
         """An ERROR entered in the instant before POST enters SELF_TEST is
         replaced by the run, which is what a reset is for, but it is recorded

@@ -654,6 +654,14 @@ if not _post_ok:
             f"      {_build_env}=1 python -m ama_cryptography.integrity --update --sign"
         ) from _post_exc
 
+# Reached only when the import completes: POST passed, or one of the two
+# branches above let a failed POST through.  The exception POST raised, if any,
+# is dropped here instead of staying a module global: its traceback holds
+# every frame of the stage that raised, locals included, and a KAT stage's
+# locals can be key material.  Its type and text are already in the root
+# cause the gate logged.
+del _post_exc
+
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.
 from .double_helix_engine import AmaEquationEngine

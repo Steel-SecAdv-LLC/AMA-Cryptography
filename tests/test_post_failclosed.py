@@ -459,6 +459,50 @@ class TestImportFailsClosed:
         assert diagnosed.returncode == 0, diagnosed.stdout + diagnosed.stderr
         assert "DIAGNOSED" in diagnosed.stdout
 
+    def test_a_completed_import_keeps_nothing_the_raising_stage_held(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """When a failed POST's import completes (the diagnostic hatch here),
+        the exception the stage raised is not kept.  It was a module global,
+        and its traceback held every frame of the stage, locals included -- in
+        a KAT stage, key material -- for the life of the process."""
+        root = tmp_path / "raising_stage_held"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        self_test.write_text(
+            source.replace(
+                marker,
+                marker + '    _held = ["post-stage-held-7c1e"]\n'
+                '    raise RuntimeError(f"injected stage fault holding {len(_held)}")\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+        released = _run_python(
+            """
+            import gc
+            import ama_cryptography as a
+            assert a.module_status() == "ERROR", a.module_status()
+            gc.collect()
+            kept = [n for n, v in vars(a).items() if isinstance(v, BaseException)]
+            assert not kept, kept
+            held = [
+                o for o in gc.get_objects()
+                if type(o) is list and len(o) == 1 and o[0] == "post-stage-held-7c1e"
+            ]
+            assert not held, "the raising stage's frame is still reachable"
+            print("RELEASED")
+            """,
+            cwd=root,
+            env_extra={"AMA_POST_DIAGNOSTIC_IMPORT": "1"},
+        )
+        assert released.returncode == 0, released.stdout + released.stderr
+        assert "RELEASED" in released.stdout
+
 
 # ---------------------------------------------------------------------------
 # 2. Error state inhibits cryptographic output (FIPS 140-3 §4.9.2)

@@ -16,6 +16,7 @@ This file consolidates fixtures from across the test suite to:
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import os
 import platform
@@ -502,9 +503,55 @@ _POST_GLOBALS = (
 )
 
 
+@contextlib.contextmanager
+def post_state_snapshot() -> Generator[None, None, None]:
+    """Put every piece of POST state back as the block found it.
+
+    Every piece: the orchestrator's globals (``_POST_GLOBALS``), the
+    ``last_failure()`` record, the module state, its reason, the self-test
+    pin, the ERROR sequence number and the continuous RNG test's last value.
+    The ERROR sequence was left out until 2026-09-28, so a block that entered
+    ERROR left it ahead of the restored ``_LAST_FAILURE_SEQUENCE``, a pair no
+    run of POST produces
+    (``test_the_post_state_snapshot_restores_everything_post_rewrites``).
+    """
+    from ama_cryptography import _module_state as ms
+    from ama_cryptography import _self_test as st
+
+    with ms._POST_LOCK:
+        saved = {name: copy.deepcopy(getattr(st, name)) for name in _POST_GLOBALS}
+        saved_record = copy.deepcopy(st._LAST_FAILURE)
+        with ms._STATE_LOCK:
+            saved_state = (
+                ms._MODULE_STATE,
+                ms._ERROR_REASON,
+                ms._SELF_TEST_THREAD,
+                ms._ERROR_SEQUENCE,
+            )
+        saved_rng = ms._rng_state["previous"]
+    try:
+        yield
+    finally:
+        with ms._POST_LOCK:
+            for name, value in saved.items():
+                setattr(st, name, value)
+            # In place: tests hold references to the record dict.
+            st._LAST_FAILURE.clear()
+            st._LAST_FAILURE.update(saved_record)
+            ms._rng_state["previous"] = saved_rng
+            with ms._STATE_LOCK:
+                (
+                    ms._MODULE_STATE,
+                    ms._ERROR_REASON,
+                    ms._SELF_TEST_THREAD,
+                    ms._ERROR_SEQUENCE,
+                ) = saved_state
+
+
 @pytest.fixture
 def post_state_restored() -> Generator[None, None, None]:
-    """Put every piece of POST state back as the test found it.
+    """Put every piece of POST state back as the test found it
+    (``post_state_snapshot``).
 
     Tests that force POST to fail used to restore only the state flag, with
     ``_set_operational()``.  The failed run's result table, timings, integrity
@@ -514,24 +561,8 @@ def post_state_restored() -> Generator[None, None, None]:
     which file had run first.  Taken by every module that drives POST into a
     failure, through its ``pytestmark``.
     """
-    from ama_cryptography import _module_state as ms
-    from ama_cryptography import _self_test as st
-
-    with ms._POST_LOCK:
-        saved = {name: copy.deepcopy(getattr(st, name)) for name in _POST_GLOBALS}
-        saved_record = copy.deepcopy(st._LAST_FAILURE)
-        saved_state = (ms._MODULE_STATE, ms._ERROR_REASON, ms._SELF_TEST_THREAD)
-        saved_rng = ms._rng_state["previous"]
-    yield
-    with ms._POST_LOCK:
-        for name, value in saved.items():
-            setattr(st, name, value)
-        # In place: tests hold references to the record dict.
-        st._LAST_FAILURE.clear()
-        st._LAST_FAILURE.update(saved_record)
-        ms._rng_state["previous"] = saved_rng
-        with ms._STATE_LOCK:
-            ms._MODULE_STATE, ms._ERROR_REASON, ms._SELF_TEST_THREAD = saved_state
+    with post_state_snapshot():
+        yield
 
 
 # =============================================================================
