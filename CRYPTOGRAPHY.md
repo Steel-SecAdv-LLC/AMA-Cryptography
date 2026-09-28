@@ -39,7 +39,7 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 
 ### ML-DSA-65 (CRYSTALS-Dilithium)
 
-ML-DSA-65 is the primary post-quantum signature algorithm, providing 192-bit quantum security based on the Module Learning With Errors (MLWE) problem.
+ML-DSA-65 is the primary post-quantum signature algorithm, at NIST security category 3 (FIPS 204), based on the Module Learning With Errors (MLWE) problem.
 
 **Key Sizes (FIPS 204):**
 - Public Key: 1,952 bytes
@@ -69,7 +69,7 @@ ML-KEM-1024 provides IND-CCA2 secure key encapsulation for establishing shared s
 **Security Properties:**
 - IND-CCA2 secure in the QROM
 - Based on MLWE hardness assumption
-- NIST Security Level 5 (256-bit quantum)
+- NIST security category 5 (FIPS 203)
 
 **Standard:** NIST FIPS 203 (2024)
 
@@ -263,7 +263,7 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 - **SLH-DSA / ML-KEM-1024** — Additional post-quantum signature and KEM schemes
 - **RFC 3161 Timestamp** — Token bound to content by the §2.4.2 message imprint. Not third-party attestation and not proof of existence: AMA verifies no TSA signature, so `genTime` is unauthenticated (INVARIANT-37)
 
-**Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
+**Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical; against a quantum adversary, ML-DSA-65's NIST security category 3 when it is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
 ### Hash Algorithm Note: RFC 3161 Timestamps
 

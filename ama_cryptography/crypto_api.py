@@ -381,7 +381,7 @@ class MLDSAProvider(CryptoProvider):
     Provides real post-quantum signatures via native C backend.
     Raises PQCUnavailableError if no PQC backend is installed.
 
-    Security: NIST Security Level 3 (192-bit quantum security)
+    Security: NIST security category 3
     Standard: NIST FIPS 204 (ML-DSA)
     """
 
@@ -2370,7 +2370,7 @@ class CryptoPackageResult:
     Layer 3 — Digital Signature (Ed25519 + ML-DSA-65, RFC 8032 + NIST FIPS 204):
         Non-repudiation via hybrid classical + post-quantum dual signature.
         Both signatures must verify.  Ed25519 provides 128-bit classical
-        security; ML-DSA-65 provides 192-bit quantum security (NIST Level 3).
+        security; ML-DSA-65 is NIST security category 3.
         The signed message is a canonical transcript of every other field on
         this object (:func:`package_transcript`), so no field here is outside
         the signature and no optional layer can be removed unnoticed.
@@ -2727,7 +2727,7 @@ def create_crypto_package(
 
     Layer 3 — Digital Signature (Ed25519 + ML-DSA-65):
         Hybrid classical + post-quantum non-repudiation.  128-bit classical
-        security (RFC 8032) + 192-bit quantum security (NIST FIPS 204).
+        security (RFC 8032) + NIST security category 3 (FIPS 204).
 
         The signature covers a canonical transcript of the **entire package**
         — the content digest, every embedded public key, the add-on

@@ -267,11 +267,14 @@ def _measured_ops(value: object) -> Optional[float]:
 def check_provenance(report: Report, results: dict[str, Any]) -> None:
     provenance = results.get("provenance") or {}
     for key, what in REQUIRED_PROVENANCE:
-        value = str(provenance.get(key, "")).strip()
+        # Only a string is a recorded value.  ``str()`` on a JSON null gives
+        # "None", which is non-empty and would pass for provenance.
+        raw = provenance.get(key)
+        value = raw.strip() if isinstance(raw, str) else ""
         if not value or value.startswith(NOT_RECORDED_PREFIX):
             report.fail(
                 f"{RESULTS_JSON} records no {key!r}"
-                + (f" ({value!r})" if value else "")
+                + (f" ({raw!r})" if key in provenance else "")
                 + " — documentation draws numbers "
                 f"from this record and a reader needs {what} to reproduce them. "
                 "Re-run benchmarks/benchmark_runner.py, which writes the full "

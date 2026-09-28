@@ -10,7 +10,7 @@ Classical asymmetric cryptography (RSA, ECDSA, ECDH) relies on problems believed
 
 **Timeline:** Large-scale quantum computers capable of breaking RSA-2048 or ECC-256 are projected within 5–15 years. "Harvest Now, Decrypt Later" (HNDL) attacks make it prudent to deploy quantum-resistant cryptography **today** to protect data with long-term sensitivity.
 
-**AMA Cryptography's response:** Implement NIST-approved post-quantum algorithms natively in C11 alongside classical algorithms in a hybrid scheme, providing a 50+ year security horizon.
+**AMA Cryptography's response:** Implement NIST-approved post-quantum algorithms natively in C11 alongside classical algorithms in a hybrid scheme. No security lifetime is claimed; the standards define security categories instead: ML-DSA-65 is NIST category 3 (FIPS 204) and ML-KEM-1024 category 5 (FIPS 203).
 
 ---
 

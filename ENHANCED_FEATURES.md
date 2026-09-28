@@ -187,7 +187,7 @@ Automatic best-implementation selection at initialization:
 - Public key: 1,952 bytes
 - Secret key: 4,032 bytes
 - Signature: ~3,309 bytes
-- Security: NIST Level 3 (~192-bit quantum)
+- Security: NIST security category 3 (FIPS 204)
 - Constant-time implementation
 - NIST-vector scope: see `docs/compliance/CSRC_ALIGN_REPORT.md`
 
@@ -201,7 +201,7 @@ Automatic best-implementation selection at initialization:
 - Secret key: 3,168 bytes
 - Ciphertext: 1,568 bytes
 - Shared secret: 32 bytes
-- Security: NIST Level 5 (~256-bit quantum)
+- Security: NIST security category 5 (FIPS 203)
 - IND-CCA2 secure (Fujisaki-Okamoto transform)
 - NIST-vector scope: see `docs/compliance/CSRC_ALIGN_REPORT.md`
 

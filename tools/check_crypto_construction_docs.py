@@ -783,6 +783,30 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
         ".github/workflows/clusterfuzzlite.yml), building in OSS-Fuzz's base-builder "
         "image; the project is not onboarded to OSS-Fuzz.",
     ),
+    (
+        re.compile(
+            r"\b\d+\s*(?:\+|-plus)\s*-?\s*years?\b[^.\n]{0,40}"
+            r"(?:secur|protect|horizon|guarantee)"
+            r"|(?:secur|protect|horizon|guarantee)[^.\n]{0,40}\b\d+\s*(?:\+|-plus)\s*-?\s*years?\b",
+            re.IGNORECASE,
+        ),
+        "no security lifetime is a property of this implementation: how long a "
+        "primitive resists attack depends on cryptanalysis and quantum hardware "
+        "no library can bound. What the standards define is the security "
+        "category: ML-DSA-65 is NIST category 3 (FIPS 204), ML-KEM-1024 "
+        "category 5 (FIPS 203).",
+    ),
+    (
+        re.compile(
+            "\\b(?:192|256)[- ]bit quantum\\b"
+            "|\\b2\\s*(?:\\^|\\*\\*)?\\s*[-\u207b]?\\s*(?:192|\u00b9\u2079\u00b2)(?![0-9])[^.\\n]{0,24}quantum",
+            re.IGNORECASE,
+        ),
+        "a NIST security category is defined by the cost of a key search on "
+        "AES (category 3: AES-192; category 5: AES-256), not as bits of "
+        "quantum security; Grover's algorithm roughly halves an AES key search "
+        "exponent. State the category (FIPS 203/204/205).",
+    ),
 )
 
 

@@ -1100,6 +1100,25 @@ class TestCryptoConstructionDocs:
                 "ClusterFuzzLite runs them nightly on OSS-Fuzz's infrastructure with a",
                 "GitHub-hosted runners",
             ),
+            ("Long-term guarantee: 50+ years post-quantum security", "security lifetime"),
+            (
+                "in a hybrid scheme, providing a 50+ year security horizon.",
+                "security lifetime",
+            ),
+            (
+                "| T1.5 | ML-DSA-65 lattice hardness \u2014 192-bit quantum security | "
+                "**IMPLEMENTED** |",
+                "security category",
+            ),
+            (
+                "| ML-KEM-1024 (Kyber) | Key Encapsulation | NIST Level 5 (256-bit quantum) |",
+                "security category",
+            ),
+            (
+                "- quantum \u2286 Dilithium (2\u207b\u00b9\u2079\u00b2 quantum security)",
+                "security category",
+            ),
+            ("Category 3 is not a claim of 2^192 quantum work.", "security category"),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -1138,7 +1157,11 @@ class TestCryptoConstructionDocs:
             "The 64-byte `seed || A` key is a layout, not a cache.\n\n"
             "No speed-up ratio is published for the Cython math engine.\n\n"
             "Ed25519's AVX2 unit is `ama_ed25519_select_avx2.c`.\n\n"
-            "ClusterFuzzLite runs them nightly on GitHub-hosted runners.\n",
+            "ClusterFuzzLite runs them nightly on GitHub-hosted runners.\n\n"
+            "No security lifetime is claimed; ML-DSA-65 is NIST category 3 (FIPS 204).\n\n"
+            "| ML-KEM-1024 | NIST security category 5 | FIPS 203 |\n\n"
+            "| T1.7 | AES-256-GCM (SP 800-38D) \u2014 128-bit quantum security |\n\n"
+            "Category 3 is defined by a key search on AES-192.\n",
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
@@ -1851,9 +1874,19 @@ class TestBenchmarkClaims:
         clean = gate.Report()
         gate.check_provenance(clean, record)
         assert not clean.failures, clean.failures
-        for value in (None, "", "not recorded: no CMake build tree searched"):
+        absent = object()
+        # JSON null, a number and a list are not a configuration: str() on
+        # them is non-empty ("None", "0", "['GNU']") and must not pass for one.
+        for value in (
+            absent,
+            "",
+            "not recorded: no CMake build tree searched",
+            None,
+            0,
+            ["GNU 13.3.0"],
+        ):
             provenance = dict(record["provenance"])
-            if value is None:
+            if value is absent:
                 provenance.pop("build_configuration", None)
             else:
                 provenance["build_configuration"] = value

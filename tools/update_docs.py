@@ -706,7 +706,10 @@ def recorded_build_configuration(provenance: dict[str, Any]) -> Optional[str]:
     way the figures cannot be rebuilt from the record, and nothing rendered
     from it may say they can (AGENTS.md 8.7).
     """
-    value = str(provenance.get("build_configuration", "")).strip()
+    raw = provenance.get("build_configuration")
+    if not isinstance(raw, str):
+        return None  # absent, or a JSON null/number/list: not a configuration
+    value = raw.strip()
     if not value or value.startswith(BUILD_CONFIGURATION_NOT_RECORDED):
         return None
     return value

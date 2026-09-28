@@ -34,7 +34,7 @@ import pytest
 class MLDSA65Spec:
     """NIST FIPS 204 ML-DSA-65 (Dilithium3) specification constants."""
 
-    # Security level: NIST Level 3 (~192-bit quantum security)
+    # Security level: NIST security category 3 (FIPS 204)
     SECURITY_LEVEL = 3
 
     # Key sizes (bytes) per NIST FIPS 204 Table 1

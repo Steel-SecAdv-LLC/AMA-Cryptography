@@ -124,10 +124,10 @@ concrete instance of this pattern. See M3.5.
 | T1.2 | HMAC-SHA3-256 (RFC 2104) — keyed authentication | **IMPLEMENTED** | `ama_hkdf.c`, constant-time comparison |
 | T1.3 | Ed25519 (RFC 8032) — 128-bit classical security | **IMPLEMENTED** | `ama_ed25519.c`, deterministic signing |
 | T1.4 | ML-DSA-65 (FIPS 204) — quantum-resistant backup | **IMPLEMENTED** | `ama_dilithium.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
-| T1.5 | ML-DSA-65 lattice hardness — 192-bit quantum security | **IMPLEMENTED** | MLWE assumption, FIPS 204 compliant |
+| T1.5 | ML-DSA-65 lattice hardness — NIST security category 3 | **IMPLEMENTED** | MLWE assumption, FIPS 204 compliant |
 | T1.6 | HKDF-SHA3-256 (RFC 5869) — one-way derivation | **IMPLEMENTED** | `ama_hkdf.c`, domain-separated contexts |
 | T1.7 | AES-256-GCM (SP 800-38D) — 128-bit quantum security | **IMPLEMENTED** | `ama_aes_gcm.c`, NIST test vectors |
-| T1.8 | ML-KEM-1024 (FIPS 203) — 256-bit quantum security | **IMPLEMENTED** | `ama_kyber.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
+| T1.8 | ML-KEM-1024 (FIPS 203) — NIST security category 5 | **IMPLEMENTED** | `ama_kyber.c`; current self-attested vector scope in `docs/compliance/CSRC_ALIGN_REPORT.md` |
 
 ### M2: Side-Channel Mitigations
 

@@ -153,7 +153,7 @@ Provides symmetric authentication using a key derived via HKDF. Enables efficien
 Compact 64-byte digital signature with 128-bit classical security. Ensures compatibility with existing verification infrastructure.
 
 **Layer 4 — ML-DSA-65 Quantum-Resistant Signature:**
-Lattice-based signature (≈3,309 bytes) resistant to all known quantum attacks. Provides 192-bit quantum security (NIST Level 3, FIPS 204).
+Lattice-based signature (≈3,309 bytes) resistant to all known quantum attacks. NIST security category 3 (FIPS 204).
 
 ### Supporting Cryptographic Infrastructure
 

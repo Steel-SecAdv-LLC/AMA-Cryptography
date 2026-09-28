@@ -4109,7 +4109,7 @@ class DilithiumKeyPair:
         - Public key: 1952 bytes
         - Signature: 3309 bytes
 
-    Security: 192-bit quantum security (NIST Security Level 3)
+    Security: NIST security category 3
     Standard: NIST FIPS 204 (ML-DSA)
 
     INVARIANT-6: secret_key is stored as mutable bytearray and securely

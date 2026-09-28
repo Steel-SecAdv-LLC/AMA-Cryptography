@@ -23,6 +23,7 @@ These pin the heading parser directly, on both dated and undated forms.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
@@ -813,7 +814,7 @@ class TestReplacementTextIsInsertedVerbatim:
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        provenance: dict[str, str] | None = None,
+        provenance: Mapping[str, str | None] | None = None,
     ) -> Path:
         import json
 
@@ -949,15 +950,16 @@ class TestReplacementTextIsInsertedVerbatim:
         It says so only of a record that carries the build configuration, and
         both generated tables publish that configuration."""
         claim = "everything needed to reproduce these numbers"
-        for index, provenance in enumerate(
-            (
+        unrecorded: tuple[Mapping[str, str | None], ...] = (
+            self._PROVENANCE,
+            dict(
                 self._PROVENANCE,
-                dict(
-                    self._PROVENANCE,
-                    build_configuration="not recorded: no CMake build tree searched",
-                ),
-            )
-        ):
+                build_configuration="not recorded: no CMake build tree searched",
+            ),
+            # JSON null: str() would render "None" and claim it reproducible.
+            {**self._PROVENANCE, "build_configuration": None},
+        )
+        for index, provenance in enumerate(unrecorded):
             (tmp_path / f"unrecorded{index}").mkdir()
             self._tree(tmp_path / f"unrecorded{index}", monkeypatch, provenance)
             latency = update_docs._generate_pipeline_latency_table()

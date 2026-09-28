@@ -166,7 +166,7 @@ P(collision via E(m)) ≤ 2⁻²⁵⁶ (SHA3-256 bound)
 - SHA3-256: ~128-bit preimage resistance (NIST FIPS 202)
 - HMAC-SHA3-256: ~128-bit security (RFC 2104)
 - Ed25519: ~128-bit classical security (RFC 8032)
-- ML-DSA-65 (Dilithium): ~192-bit quantum security (NIST FIPS 204)
+- ML-DSA-65 (Dilithium): NIST security category 3 (FIPS 204)
 - HKDF-SHA3-256: ~256-bit key derivation (RFC 5869)
 
 **Defense-in-Depth Principle:**
@@ -316,11 +316,9 @@ Attack surface A = {concatenation, collision, forgery, quantum}
 
 Coverage:
 - concatenation ⊆ canonical_encoding (structural defense)
-- collision ⊆ SHA3-256 (2⁻²⁵⁶ probability)
-- forgery ⊆ HMAC ∩ Ed25519 ∩ Dilithium (2⁻¹²⁸ each)
-- quantum ⊆ Dilithium (2⁻¹⁹² quantum security)
-
-∀a ∈ A: ∃ defense(a) with security ≥ 2¹²⁸
+- collision ⊆ SHA3-256 (~2¹²⁸ work, the birthday bound)
+- forgery ⊆ HMAC ∩ Ed25519 ∩ ML-DSA-65 (each ~2¹²⁸ classical work or more)
+- quantum ⊆ ML-DSA-65 (NIST security category 3, FIPS 204)
 ```
 
 **Citation:**
@@ -409,18 +407,15 @@ the canonical statements.
 
 **Hybrid Security Proof:**
 ```
-Security timeline:
-- 2025-2030: Ed25519 secure, Dilithium secure
-- 2030-2035: Ed25519 weakened, Dilithium secure
-- 2035+: Ed25519 broken, Dilithium secure
-
 Hybrid security:
-S_hybrid(t) = max(S_Ed25519(t), S_Dilithium(t))
-             ≥ S_Dilithium(t) for all t
-             ≥ 2¹⁹² (quantum security)
-
-Long-term guarantee: 50+ years post-quantum security
+S_hybrid = max(S_Ed25519, S_ML-DSA-65)
+         ≥ S_ML-DSA-65
+S_ML-DSA-65: NIST security category 3 (FIPS 204)
 ```
+
+No security lifetime is claimed, and no date by which Ed25519 falls: how long
+either primitive resists attack depends on cryptanalysis and quantum hardware
+that no implementation can bound. What FIPS 204 defines is the category.
 
 **Citation:**
 - NIST PQC Project (2022) "Post-Quantum Cryptography Standardization"
@@ -821,7 +816,7 @@ The heading used to read "Formal Verification Checklist", which claimed a method
 - **PRF Security:** HKDF-SHA3-256 remains a secure KDF with the extended info parameter; info is public context in the HKDF analysis (RFC 5869; Krawczyk 2010).
 - **Key Independence:** keys derived under distinct info strings are computationally independent under the same analysis.
 - **Signature Security:** the Ed25519 + ML-DSA-65 dual signature is as strong as the stronger of its two schemes against a forger who must break both.
-- **Quantum Resistance:** ML-DSA-65 is FIPS 204's NIST security category 3 parameter set. Category 3 is defined relative to the cost of a key search on AES-192; it is not a claim of 2^192 quantum work.
+- **Quantum Resistance:** ML-DSA-65 is FIPS 204's NIST security category 3 parameter set. Category 3 is defined relative to the cost of a key search on AES-192, not as a number of bits of quantum security.
 - **Pillar Structure:** 4 pillars × 3 sub-properties = 12 ethical dimensions — a property of this framework's definition.
 - **Auditability and Transparency:** the vector and its hash travel in the package and are publicly documented here.
 - **No Security Trade-off:** the ethical layer changes only HKDF's info input and the signed package metadata; no primitive in Part A is modified.
