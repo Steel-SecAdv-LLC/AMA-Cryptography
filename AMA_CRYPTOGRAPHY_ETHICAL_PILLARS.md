@@ -80,8 +80,9 @@ The 4 Omni-Code Ethical Pillars extend AMA Cryptography's multi-layer cryptograp
 - **Collision resistance:** Maintains SHA3-256's 2^128 security level — the
   ethical vector enters HKDF only through the `info` parameter, so the
   primitive's own collision bound (set by FIPS 202) is preserved.
-- **Low measured overhead:** <0.01 ms per operation in the reference
-  benchmark (generic C path, single-threaded). This is the overhead of
+- **Measured overhead:** 0.66–0.72% of a legacy package creation, and
+  +123% to +151% on a single HKDF derivation, on the host and with the
+  method recorded under Performance Analysis. This is the cost of
   computing the ethical-vector hash, not a security guarantee.
 - **Standards compliant:** Consumes only FIPS / RFC primitives listed
   in Part A. The Omni-Code Ethical Pillars themselves are original
@@ -674,6 +675,7 @@ five repeats of 20,000 derivations each:
 | 2 | 11.26 µs | 25.10 µs | 13.84 µs | +123% |
 | 3 | 11.24 µs | 26.45 µs | 15.21 µs | +135% |
 
+<!-- claim-check: quoting-retired-wording -->
 **Conclusion:** per derivation, building the context (canonical JSON,
 SHA3-256, truncation, all through the Python layer) costs more than the
 native HKDF call it feeds. This page used to state "<0.01 ms overhead

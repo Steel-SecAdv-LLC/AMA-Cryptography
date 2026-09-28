@@ -166,6 +166,10 @@ def _scratch_repo(tmp_path: Path) -> Path:
     working copy is not that tree.  ``newline=""`` on every write keeps the
     copies byte-identical to the originals on every platform, so a test that
     mutates one cell is testing that cell and not the line endings.
+
+    It is a git checkout with the copies staged, because the gate reads the
+    pages git tracks (``check_overhead_bounds``); a page a test adds is
+    tracked with :func:`_track`.
     """
     scratch = tmp_path / "scratch_repo"
     for relative in _SCRATCH_REPO_FILES:
@@ -174,7 +178,14 @@ def _scratch_repo(tmp_path: Path) -> Path:
         destination = scratch / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8", newline="")
+    subprocess.run(["git", "init", "-q"], cwd=scratch, check=True)
+    _track(scratch, *_SCRATCH_REPO_FILES)
     return scratch
+
+
+def _track(repo: Path, *relative: str) -> None:
+    """Stage ``relative`` in the scratch checkout, so git lists it as tracked."""
+    subprocess.run(["git", "add", "--", *relative], cwd=repo, check=True)
 
 
 #: A workflow line that runs one of the gate scripts, optionally behind leading
@@ -1853,6 +1864,76 @@ class TestBenchmarkClaims:
                 report.failures,
             )
         assert gate.NOT_RECORDED_PREFIX == "not recorded"
+
+    @pytest.mark.parametrize(
+        ("page", "expected"),
+        [
+            ("**Performance**: <0.5% overhead per monitored operation\n", ["<0.5%"]),
+            ("- **Monitoring overhead:** < 2% on typical workloads\n", ["< 2%"]),
+            ("Recursion: O(n log n), under 1% overhead.\n", ["under 1%"]),
+            ("Overhead is at most 3 ms on the reference host.\n", ["at most 3 ms"]),
+            ("The layer's overhead stays below 2\u00d7 the native call.\n", ["below 2\u00d7"]),
+            # A measured value on a named host is not a bound.
+            ("Overhead per package: 0.66-0.72% on the same host.\n", []),
+            # A bound that is not an overhead: a latency target in a table.
+            ("| Package Creation | < 5 ms | 0.538 |\n", []),
+            # A correction note quoting the wording it retires, marker above it.
+            (
+                "<!-- claim-check: quoting-retired-wording -->\n"
+                'This page used to state "<0.01 ms overhead".\n',
+                [],
+            ),
+            # The marker waives its paragraph only: a blank line closes it.
+            (
+                "<!-- claim-check: quoting-retired-wording -->\n"
+                'It said "<4% overhead".\n\nOverhead: < 1% in practice.\n',
+                ["< 1%"],
+            ),
+            # Prose that mentions the marker does not waive anything.
+            (
+                "Mark it <!-- claim-check: quoting-retired-wording --> inline,\n"
+                "and the <1% overhead on the next line is still read.\n",
+                ["<1%"],
+            ),
+        ],
+    )
+    def test_an_overhead_published_as_a_bound_fails(self, page: str, expected: list[str]) -> None:
+        """MONITORING.md published "<0.5% overhead per monitored operation" and
+        "<1% overhead" under a section saying no overhead had been measured,
+        and the wiki "< 2% on typical workloads" (INVARIANT-53, kind 4)."""
+        gate = _load(BENCHMARK_CLAIMS)
+        found = [bound for _line, bound, _sentence in gate.unmeasured_overhead_bounds(page)]
+        assert found == expected, (page, found)
+
+    def test_the_overhead_rule_reads_every_tracked_page_but_the_record(
+        self, tmp_path: Path
+    ) -> None:
+        """A page in any directory is read, because the list is git's; the
+        historical record may quote what it retired; and the shipped tree
+        states no overhead as a bound."""
+        gate = _load(BENCHMARK_CLAIMS)
+        clean = gate.Report()
+        gate.check_overhead_bounds(clean, REPO_ROOT)
+        assert not clean.failures, clean.failures
+
+        scratch = _scratch_repo(tmp_path)
+        (scratch / "CHANGELOG.md").write_text(
+            "- Removed the unmeasured <0.5% overhead claim.\n", encoding="utf-8"
+        )
+        _track(scratch, "CHANGELOG.md")
+        passed = io.StringIO()
+        with contextlib.redirect_stderr(passed), contextlib.redirect_stdout(io.StringIO()):
+            assert gate.main(["--repo", str(scratch)]) == 0, passed.getvalue()
+
+        (scratch / "docs").mkdir()
+        (scratch / "docs" / "tuning.md").write_text(
+            "# Tuning\n\nThe monitor adds <0.5% overhead.\n", encoding="utf-8"
+        )
+        _track(scratch, "docs/tuning.md")
+        failed = io.StringIO()
+        with contextlib.redirect_stderr(failed), contextlib.redirect_stdout(io.StringIO()):
+            assert gate.main(["--repo", str(scratch)]) == 1
+        assert "docs/tuning.md:3 states an overhead as a bound ('<0.5%')" in failed.getvalue()
 
     def test_a_hand_edited_generated_cell_fails(self, tmp_path: Path) -> None:
         """The 4.20 ms defect, reintroduced into the generated block.

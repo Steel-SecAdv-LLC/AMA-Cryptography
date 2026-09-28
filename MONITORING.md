@@ -135,7 +135,7 @@ Ed25519 wall-clock timings through the shipped API):
 
 Read that as a floor, not a guarantee: a periodic component quieter than roughly a third of the ambient jitter is not distinguishable from noise. Square waves whose period does not divide the window leak across bins and score lower for that reason alone (a period-24 square reads 1.8x). Wall-clock timings of sub-millisecond operations on a shared/virtualised host routinely carry their own periodic structure — cache warm-up, allocator growth, scheduler quanta — so a raw resonance score from such a host is not on its own evidence of an attack.
 
-**Performance**: <0.5% overhead per monitored operation
+**Performance**: no per-operation overhead figure is published. `benchmarks/validation_suite.py`, section 2.1, times this monitor's per-call overhead on the host that runs it; see [Performance Impact](#performance-impact).
 
 ---
 
@@ -159,7 +159,7 @@ Read that as a floor, not a guarantee: a periodic component quieter than roughly
 - `max_depth`: Recursion levels (default: 3)  
 - `max_history`: Package history limit (default: 10,000)
 
-**Performance**: O(n log n) for n packages, <1% overhead
+**Performance**: `record_package` is an O(1) append. `analyze_patterns` is O(n) in the n packages retained (at most `max_history`): mean, standard deviation and range at each level of a halving series, which sums to under 2n. It runs when called, not per operation, and no overhead figure is published for it; see [Performance Impact](#performance-impact).
 
 ---
 
@@ -409,6 +409,7 @@ monitor.patterns.max_depth = 4  # Deeper recursion
 
 ### Performance Impact
 
+<!-- claim-check: quoting-retired-wording -->
 No per-scenario overhead has been measured, and this section no longer
 quotes one: the table it carried (under 1% for timing only, 1-2% with 3R
 active, under 2% in total) had no measurement behind it (INVARIANT-16,

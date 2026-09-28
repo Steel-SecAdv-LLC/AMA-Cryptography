@@ -244,9 +244,14 @@ crypto call to stderr.
 
 ### 3R Monitoring Overhead
 
-- **Monitoring overhead:** < 2% on typical workloads
-- Anomaly detection runs asynchronously in the background
-- FFT computations use NumPy for batch processing when available
+- **Monitoring overhead:** no figure is published. `benchmarks/validation_suite.py`,
+  section 2.1, times the timing monitor's per-call overhead and the total 3R
+  overhead on the host that runs it; see `MONITORING.md`, Performance Impact.
+- Analysis runs in the thread that calls it; the monitors start no background
+  thread, and pattern analysis runs on demand rather than per operation.
+- The resonance FFT is a pure-Python radix-2 Cooley–Tukey transform. The
+  optional Cython `math_engine` accelerates the volume and token-family
+  scores; without it, pure-Python twins give identical results.
 
 ---
 
