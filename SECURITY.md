@@ -1076,7 +1076,11 @@ In the 2026-09-26 review, eight exits that follow a failed CSPRNG draw
 (SLH-DSA, ML-KEM, ML-DSA and X25519 key generation, SLH-DSA hedged signing
 and ML-KEM encapsulation) did not scrub the partial output; they now do, and
 `tests/c/test_csprng_failure_residue.c` fails if any of those scrubs is
-removed.
+removed. On 2026-09-28 SLH-DSA signing's hash-failure exits, which no input
+reaches, were given scrubs and driven through a testing-only fault hook
+(`tests/c/test_slhdsa_fault_residue.c`). That test found the SHAKE incremental
+finalizers leaving the last absorbed block, for a keyed absorb the key, on
+the stack; they now scrub it as every other SHA-3 finalizer does.
 
 ### Encoding strictness
 

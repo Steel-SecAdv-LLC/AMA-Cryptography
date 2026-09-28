@@ -779,10 +779,10 @@ AEAD nonce state (INVARIANT-22) and session state are per-process or per-file an
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | `--cov` floor 75% (`pyproject.toml`) | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 94 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
+| C Unit Tests | Native library validation | Branch arcs no suite takes are inventoried by `tools/measure_branch_coverage.py --python-suite`; see AGENTS.md §11 for the dated figures | 95 `test_*.c` registered via ctest in `tests/c/` (+ 2 `x25519_equiv_*.c` helper translation units linked into `test_x25519_field_equiv`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `benchmarks/` (instruction-count baselines, `check_baseline_justification.py`), `test_benchmark_baseline_infra.py`, `test_benchmark_baseline_freshness.py`, `test_published_benchmark_artefacts_are_current.py` |
-| Security Tests | Cryptographic correctness | Adversarial and residue tests | `test_crypto_core_penetration.py`, `test_memory_security.py`, `tests/c/test_csprng_failure_residue.c` |
+| Security Tests | Cryptographic correctness | Adversarial and residue tests | `test_crypto_core_penetration.py`, `test_memory_security.py`, `tests/c/test_csprng_failure_residue.c`, `tests/c/test_slhdsa_fault_residue.c` |
 | Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
 | Fuzz Tests | Input mutation testing | 17 C targets | `fuzz/fuzz_*.c` (18 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithm functions (815 AFT + 400 SHA-3 MCT); self-attested, not CAVP | `nist_vectors/`; `acvp_validation.yml` fails if any of the 1,215 regresses (INVARIANT-18) |
@@ -799,6 +799,7 @@ instructions.
 Tests are labelled PIN, RANGE or SMOKE by mutation (AGENTS.md §6.4). Among the 5.0.0 additions:
 
 - `tests/c/test_csprng_failure_residue.c` drives the eight CSPRNG-failure exits that lacked a scrub until 2026-09-26 (the SLH-DSA and legacy SPHINCS+ key-generation seeds and signing randomizers, ML-KEM key generation's `d` and encapsulation's `m`, ML-DSA key generation's `xi`, and X25519 key generation) and scans the dead stack, and X25519's output buffer, for the partial draw (INVARIANT-6). The other CSPRNG exits (ML-KEM's `z`, ML-DSA's hedged `rnd`, the P-curves) scrub too, and `tests/c/test_input_guards.c` checks their return codes; they are not residue-probed.
+- `tests/c/test_slhdsa_fault_residue.c` drives SLH-DSA signing's hash-failure exits, which no input reaches, through an `AMA_TESTING_MODE` fault hook that fails PRF_msg, H_msg or a SHAKE absorb after it has written its output, and scans the dead stack for R, the H_msg digest, SK.prf and SK.seed (INVARIANT-6). Its first run found the SHAKE incremental finalizers leaving the caller's last partial block, for a keyed absorb the key, in their dead frame; they now scrub it, and two verdicts probe them directly.
 - `tests/c/test_ml_dsa_hint_encoding.c` covers the FIPS 204 hint-ordering, padding and count rules (SUF-CMA) and MakeHint's boundary case.
 - `tests/c/test_input_guards.c` covers NULL, short-buffer, context-length and range guards: RANGE for the NULL, unknown-set and short-buffer rows; PIN for the ML-KEM length, ML-DSA and SLH-DSA context-length, and ECDSA scalar-range, flag, digest-length, DER-range and failing-CSPRNG rows, per its mutation record.
 - `tests/c/test_frost.c` Test 11 covers FROST CSPRNG failures, the non-canonical commitment verdict and the argument guards.

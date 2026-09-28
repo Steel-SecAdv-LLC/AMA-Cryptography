@@ -159,6 +159,24 @@ typedef struct slhdsa_params {
 /* H_msg's MGF1-SHA-512 seed in categories 3 and 5: R || PK.seed || SHA-512. */
 #define SLH_MGF1_SEED_MAX (2u * SLH_MAX_N + 64u)
 
+/* SLH_HASH_FAULT(): the hash-failure exits below are reached by no input --
+ * every entry point refuses a NULL segment with a nonzero length before any
+ * hashing starts, and ama_hmac_sha512_3 returns 0 only -- yet each must
+ * scrub what it computed.  In AMA_TESTING_MODE a test may set
+ * ama_slhdsa_hash_fault_hook to make a message hash (PRF_msg, H_msg) or a
+ * SHAKE absorb report failure AFTER it has written its output, which is the
+ * worst case for what the exit leaves behind; the hook is consulted once per
+ * such call, in call order.  In a shipped build the macro is the constant 0
+ * and the object is byte-identical to one built without it
+ * (tests/c/test_slhdsa_fault_residue.c). */
+#ifdef AMA_TESTING_MODE
+int (*ama_slhdsa_hash_fault_hook)(void) = NULL;
+#define SLH_HASH_FAULT() \
+    (ama_slhdsa_hash_fault_hook != NULL && ama_slhdsa_hash_fault_hook() != 0)
+#else
+#define SLH_HASH_FAULT() 0
+#endif
+
 /* ----------------------------------------------------------------------------
  * Address helpers — we use a uniform uint32_t[8] in-memory representation and
  * serialize to either 22-byte compressed (SHA2) or 32-byte uncompressed
@@ -404,7 +422,7 @@ static int sha2_PRF_msg(const slhdsa_params_t *p, uint8_t *out,
      * be passed NULL — no concatenation buffer anywhere on this path. */
     uint8_t hmac_out[64];
     if (ama_hmac_sha512_3(sk_prf, p->n, opt_rand, p->n, prefix, prefix_len,
-                          msg, msglen, hmac_out) != 0) {
+                          msg, msglen, hmac_out) != 0 || SLH_HASH_FAULT()) {
         ama_secure_memzero(hmac_out, sizeof(hmac_out));
         return -1;
     }
@@ -447,7 +465,7 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
 
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(mgf_seed, sizeof(mgf_seed));
-    return 0;
+    return SLH_HASH_FAULT() ? -1 : 0;
 }
 
 /* ============================================================================
@@ -458,27 +476,37 @@ static int sha2_H_msg(const slhdsa_params_t *p, uint8_t *out,
  * input segments without an intermediate concatenation buffer.
  * ============================================================================ */
 
-/* shake_absorb_{three,four,five}: SHAKE-256 over the concatenated segments.
- * Every exit scrubs ctx, the failing ones included: for PRF and PRF_msg it has
- * absorbed SK.seed or SK.prf.  The failing exits return -1 without writing
- * out; they need a NULL segment with a nonzero length, which every entry
- * point refuses before any hashing starts. */
+/* shake_absorb_seg: one segment into ctx; an empty one is skipped, as the
+ * sponge would skip it.  Nonzero on success. */
+static int shake_absorb_seg(ama_sha3_ctx *ctx, const uint8_t *seg, size_t len) {
+    return len == 0 || ama_shake256_inc_absorb(ctx, seg, len) == AMA_SUCCESS;
+}
+
+/* shake_finish: finalize and squeeze if every absorb succeeded (`ok`
+ * nonzero), then scrub ctx on every path, the failing ones included: for PRF
+ * and PRF_msg it has absorbed SK.seed or SK.prf.  A failing path returns -1
+ * without writing out; it needs a NULL segment with a nonzero length, which
+ * every entry point refuses before any hashing starts. */
+static int shake_finish(ama_sha3_ctx *ctx, int ok, uint8_t *out, size_t outlen) {
+    ok = ok && ama_shake256_inc_finalize(ctx) == AMA_SUCCESS;
+    ok = ok && ama_shake256_inc_squeeze(ctx, out, outlen) == AMA_SUCCESS;
+    ok = ok && !SLH_HASH_FAULT();
+    ama_secure_memzero(ctx, sizeof(*ctx));
+    return ok ? 0 : -1;
+}
+
+/* shake_absorb_{three,four,five}: SHAKE-256 over the concatenated segments,
+ * one statement per step so each short-circuits on the one before. */
 static int shake_absorb_three(const uint8_t *a, size_t alen,
                               const uint8_t *b, size_t blen,
                               const uint8_t *c, size_t clen,
                               uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    int rc = -1;
-    if (ama_shake256_inc_init(&ctx) == AMA_SUCCESS
-        && (alen == 0 || ama_shake256_inc_absorb(&ctx, a, alen) == AMA_SUCCESS)
-        && (blen == 0 || ama_shake256_inc_absorb(&ctx, b, blen) == AMA_SUCCESS)
-        && (clen == 0 || ama_shake256_inc_absorb(&ctx, c, clen) == AMA_SUCCESS)
-        && ama_shake256_inc_finalize(&ctx) == AMA_SUCCESS
-        && ama_shake256_inc_squeeze(&ctx, out, outlen) == AMA_SUCCESS) {
-        rc = 0;
-    }
-    ama_secure_memzero(&ctx, sizeof(ctx));
-    return rc;
+    int ok = ama_shake256_inc_init(&ctx) == AMA_SUCCESS;
+    ok = ok && shake_absorb_seg(&ctx, a, alen);
+    ok = ok && shake_absorb_seg(&ctx, b, blen);
+    ok = ok && shake_absorb_seg(&ctx, c, clen);
+    return shake_finish(&ctx, ok, out, outlen);
 }
 
 static int shake_absorb_four(const uint8_t *a, size_t alen,
@@ -487,18 +515,12 @@ static int shake_absorb_four(const uint8_t *a, size_t alen,
                              const uint8_t *d, size_t dlen,
                              uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    int rc = -1;
-    if (ama_shake256_inc_init(&ctx) == AMA_SUCCESS
-        && (alen == 0 || ama_shake256_inc_absorb(&ctx, a, alen) == AMA_SUCCESS)
-        && (blen == 0 || ama_shake256_inc_absorb(&ctx, b, blen) == AMA_SUCCESS)
-        && (clen == 0 || ama_shake256_inc_absorb(&ctx, c, clen) == AMA_SUCCESS)
-        && (dlen == 0 || ama_shake256_inc_absorb(&ctx, d, dlen) == AMA_SUCCESS)
-        && ama_shake256_inc_finalize(&ctx) == AMA_SUCCESS
-        && ama_shake256_inc_squeeze(&ctx, out, outlen) == AMA_SUCCESS) {
-        rc = 0;
-    }
-    ama_secure_memzero(&ctx, sizeof(ctx));
-    return rc;
+    int ok = ama_shake256_inc_init(&ctx) == AMA_SUCCESS;
+    ok = ok && shake_absorb_seg(&ctx, a, alen);
+    ok = ok && shake_absorb_seg(&ctx, b, blen);
+    ok = ok && shake_absorb_seg(&ctx, c, clen);
+    ok = ok && shake_absorb_seg(&ctx, d, dlen);
+    return shake_finish(&ctx, ok, out, outlen);
 }
 
 /* Five segments: the widest absorb this file needs is H_msg with the §10.2
@@ -512,19 +534,13 @@ static int shake_absorb_five(const uint8_t *a, size_t alen,
                              const uint8_t *e, size_t elen,
                              uint8_t *out, size_t outlen) {
     ama_sha3_ctx ctx;
-    int rc = -1;
-    if (ama_shake256_inc_init(&ctx) == AMA_SUCCESS
-        && (alen == 0 || ama_shake256_inc_absorb(&ctx, a, alen) == AMA_SUCCESS)
-        && (blen == 0 || ama_shake256_inc_absorb(&ctx, b, blen) == AMA_SUCCESS)
-        && (clen == 0 || ama_shake256_inc_absorb(&ctx, c, clen) == AMA_SUCCESS)
-        && (dlen == 0 || ama_shake256_inc_absorb(&ctx, d, dlen) == AMA_SUCCESS)
-        && (elen == 0 || ama_shake256_inc_absorb(&ctx, e, elen) == AMA_SUCCESS)
-        && ama_shake256_inc_finalize(&ctx) == AMA_SUCCESS
-        && ama_shake256_inc_squeeze(&ctx, out, outlen) == AMA_SUCCESS) {
-        rc = 0;
-    }
-    ama_secure_memzero(&ctx, sizeof(ctx));
-    return rc;
+    int ok = ama_shake256_inc_init(&ctx) == AMA_SUCCESS;
+    ok = ok && shake_absorb_seg(&ctx, a, alen);
+    ok = ok && shake_absorb_seg(&ctx, b, blen);
+    ok = ok && shake_absorb_seg(&ctx, c, clen);
+    ok = ok && shake_absorb_seg(&ctx, d, dlen);
+    ok = ok && shake_absorb_seg(&ctx, e, elen);
+    return shake_finish(&ctx, ok, out, outlen);
 }
 
 static void shake_F(const slhdsa_params_t *p, uint8_t *out,

@@ -934,6 +934,11 @@ ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx) {
         ctx->state[i] ^= load64_le(block + i * 8);
     }
     keccak_f1600(ctx->state);
+    /* block holds the caller's last partial block -- for a keyed absorb,
+     * the key itself (SLH-DSA's SK.prf and SK.seed arrive here whole) --
+     * so it is scrubbed as every other finalizer in this file scrubs its
+     * own (tests/c/test_slhdsa_fault_residue.c). */
+    ama_secure_memzero(block, sizeof(block));
 
     /* The rate, not a bare 1: `finalized` doubles as the finalizing
      * family's tag, so a squeeze through the OTHER family's entry point is
@@ -1070,6 +1075,11 @@ ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx) {
         ctx->state[i] ^= load64_le(block + i * 8);
     }
     keccak_f1600(ctx->state);
+    /* block holds the caller's last partial block -- for a keyed absorb,
+     * the key itself (SLH-DSA's SK.prf and SK.seed arrive here whole) --
+     * so it is scrubbed as every other finalizer in this file scrubs its
+     * own (tests/c/test_slhdsa_fault_residue.c). */
+    ama_secure_memzero(block, sizeof(block));
 
     /* Family tag, as in ama_shake256_inc_finalize. */
     ctx->finalized = (int)SHAKE128_RATE;

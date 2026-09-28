@@ -66,6 +66,18 @@ extern ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len);
 extern ama_error_t (*ama_nistp_randombytes_hook)(uint8_t *buf, size_t len);
 extern ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len);
 
+/* --- src/c/ama_slhdsa.c ------------------------------------------------- */
+
+/**
+ * SLH-DSA's hash-failure hook, NULL until a test sets it.  Consulted once per
+ * message hash (PRF_msg, H_msg) and per SHAKE absorb, in call order, after
+ * that call has written its output; a nonzero return makes the call report
+ * failure, so tests/c/test_slhdsa_fault_residue.c can drive the failure exits
+ * no input reaches and scan what they leave behind.  Defined under
+ * AMA_TESTING_MODE; the shipped object is byte-identical without it.
+ */
+extern int (*ama_slhdsa_hash_fault_hook)(void);
+
 /* --- src/c/ama_frost.c -------------------------------------------------- */
 
 /**

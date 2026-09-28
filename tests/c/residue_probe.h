@@ -3,8 +3,8 @@
 /**
  * @file residue_probe.h
  * @brief The dead-stack residue probe shared by test_aead_stack_residue.c,
- *        test_ed25519_stack_residue.c and test_csprng_failure_residue.c
- *        (INVARIANT-6).
+ *        test_ed25519_stack_residue.c, test_csprng_failure_residue.c and
+ *        test_slhdsa_fault_residue.c (INVARIANT-6).
  *
  * `ama_secure_memzero` scrubs the buffers a function names.  It cannot reach
  * the copies an optimizing compiler spills of them, and the probe here is how
