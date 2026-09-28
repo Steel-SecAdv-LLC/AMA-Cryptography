@@ -1712,7 +1712,11 @@ class HSMKeyStorage:
     """
     Hardware Security Module key storage via PKCS#11.
 
-    Provides FIPS 140-2 Level 3 compliant key storage for production deployments.
+    The storage is the token's: this class adds no validation of its own,
+    so a deployment has exactly the level its device's certificate states.
+    Production master secrets belong in an HSM validated to FIPS 140-3
+    (or FIPS 140-2 while its certificate is active), Level 3 or higher
+    (SECURITY.md); SoftHSM2 is for development and testing only.
     Keys generated inside HSM never leave the hardware in plaintext.
 
     Supported devices:

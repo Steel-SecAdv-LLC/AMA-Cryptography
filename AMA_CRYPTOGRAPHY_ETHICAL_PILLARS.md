@@ -148,10 +148,10 @@ Canonical encoding E(m) ensures unique representation:
 E(m₁ || m₂) ≠ E(m₁') || E(m₂') for m₁ ≠ m₁' or m₂ ≠ m₂'
 Attack resistance:
 P(collision via concatenation) = 0 (structural impossibility)
-P(collision via E(m)) ≤ 2⁻²⁵⁶ (SHA3-256 bound)
+P(collision via E(m)) ≤ q²/2²⁵⁷ after q hash evaluations (SHA3-256: 128-bit collision resistance)
 ```
 
-**Citation:** NIST FIPS 202 (SHA-3 Standard, Section 6.1)
+**Citation:** NIST FIPS 202 (SHA-3 Standard, Section 6.1; security strengths in Appendix A.1)
 
 **Pillar Weight:** w₁ = 3.0 (3 × 1.0)
 

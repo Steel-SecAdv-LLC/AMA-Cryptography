@@ -172,6 +172,33 @@ class TestHelperFailsClosed:
             _repo.staged_files(secret_repo)
 
 
+class TestWorktreeNames:
+    """A scan reads the tree's files, not what a build left beside them."""
+
+    def test_a_checkout_lists_what_git_tracks(self, secret_repo: Path) -> None:
+        (secret_repo / "generated.c").write_text("/* build output */\n", encoding="utf-8")
+        names = _repo.worktree_names(secret_repo)
+        assert SECRET_NAME in names
+        assert "generated.c" not in names
+
+    def test_a_tree_with_no_repository_is_walked(self, tmp_path: Path) -> None:
+        tarball = tmp_path / "tarball"
+        (tarball / "docs").mkdir(parents=True)
+        (tarball / "docs" / "page.md").write_text("x\n", encoding="utf-8")
+        (tarball / "README.md").write_text("x\n", encoding="utf-8")
+        assert _repo.worktree_names(tarball) == ["README.md", "docs/page.md"]
+
+    def test_a_repository_git_cannot_read_is_an_error(self, tmp_path: Path) -> None:
+        """A ``.git`` that git cannot use is a checkout git failed on, not a
+        tarball: walking it would widen the scan without a word."""
+        broken = tmp_path / "broken"
+        broken.mkdir()
+        (broken / ".git").write_text("gitdir: /nonexistent\n", encoding="utf-8")
+        (broken / "README.md").write_text("x\n", encoding="utf-8")
+        with pytest.raises(_repo.TrackedFilesError):
+            _repo.worktree_names(broken)
+
+
 # ---------------------------------------------------------------------------
 # staged_files: every staged status that carries content into the commit
 # ---------------------------------------------------------------------------

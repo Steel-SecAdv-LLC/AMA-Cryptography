@@ -154,12 +154,17 @@ def _is_historical_record(relative: Path) -> bool:
     Excluding the historical record is what lets the gate be strict everywhere
     else.  Which files that is has one definition, in ``tools/_repo.py``.
     """
-    root = str(Path(__file__).resolve().parent.parent)
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    _tools_importable()
     from tools._repo import is_historical_record
 
     return is_historical_record(relative)
+
+
+def _tools_importable() -> None:
+    """Make ``tools._repo`` importable whether this runs as a script or a module."""
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 
 EXCLUDED_DIRS: frozenset[str] = frozenset(
@@ -720,6 +725,14 @@ _NO_LMS = re.compile(
     re.IGNORECASE,
 )
 
+_QUANTUM_CATEGORY_WHY = (
+    "a NIST security category is defined by the cost of a key search on "
+    "AES (category 3: AES-192; category 5: AES-256), not as bits or "
+    "operations of quantum security; Grover's algorithm roughly halves an "
+    "AES key search exponent, and no operation count is standardised for "
+    "the lattice or hash-based schemes. State the category (FIPS 203/204/205)."
+)
+
 #: Claims corrected in the 2026-09 pass. Each is pinned by its exact retired
 #: wording so it cannot reappear in another document — the failure mode
 #: INVARIANT-16's BIP32 case demonstrated six times over.
@@ -804,19 +817,70 @@ RETIRED_CLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             "\\b(?:192|256)[- ]bit quantum\\b"
             "|\\b2\\s*(?:\\^|\\*\\*)?\\s*[-\u207b]?\\s*"
-            "(?:192|256|\u00b9\u2079\u00b2|\u00b2\u2075\u2076)(?![0-9])[^.\\n]{0,24}quantum"
-            "|quantum\\s+(?:security|attack\\s+cost)\\W{0,8}~?\\s*2\\s*\\^\\s*"
-            "(?:129|1[3-9][0-9]|[2-9][0-9]{2})(?![0-9])"
-            "|\\b2\\s*\\^\\s*(?:129|1[3-9][0-9]|[2-9][0-9]{2})(?![0-9])\\s+quantum",
+            "(?:192|256|\u00b9\u2079\u00b2|\u00b2\u2075\u2076)(?![0-9])[^.\\n]{0,24}quantum",
             re.IGNORECASE,
         ),
-        "a NIST security category is defined by the cost of a key search on "
-        "AES (category 3: AES-192; category 5: AES-256), not as bits or "
-        "operations of quantum security; Grover's algorithm roughly halves an "
-        "AES key search exponent, and no operation count is standardised for "
-        "the lattice or hash-based schemes. State the category (FIPS 203/204/205).",
+        _QUANTUM_CATEGORY_WHY,
+    ),
+    (
+        re.compile(
+            r"(?:ML-KEM|ML-DSA|SLH-DSA|Kyber|Dilithium|SPHINCS|FIPS\s*20[345])"
+            r"(?:(?!140)[^.;\n]){0,80}?"
+            r"\b(?:NIST\s+)?(?:security\s+)?level\s*[1-5]\b"
+            r"|\bNIST\s+(?:security\s+)?level\s*[1-5]\b",
+            re.IGNORECASE,
+        ),
+        "FIPS 203, 204 and 205 define a security category, not a level: ML-DSA-65 "
+        "is category 3; ML-KEM-1024 and SLH-DSA-SHA2-256f are category 5. A FIPS "
+        "140-3 security level is a different scale, and grades a module, not an "
+        "algorithm.",
     ),
 )
+
+#: A power of two in each notation the tree has published a work factor in:
+#: ``2^190``, ``2**190``, ``2^{190}``, ``2^-192``, and superscript digits with or
+#: without a superscript minus.
+_POWER_OF_TWO = re.compile(
+    "\\b2\\s*(?:\\^|\\*\\*)\\s*\\{?\\s*[-\u2212\u207b]?\\s*([0-9]+)"
+    "|\\b2\u207b?([\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+)"
+)
+_SUPERSCRIPT_DIGITS = str.maketrans(
+    "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079", "0123456789"
+)
+#: ``2^255 - 19`` is a modulus, not a work factor.
+_MODULUS_TAIL = re.compile("\\s*[-+\u2212]\\s*[0-9]")
+#: What makes a work factor a statement about a quantum adversary or about a
+#: post-quantum scheme's strength.
+_QUANTUM_SUBJECT = re.compile(
+    r"quantum|grover|ML-KEM|ML-DSA|SLH-DSA|kyber|dilithium|sphincs", re.IGNORECASE
+)
+#: Grover's bound on an AES-256 key search: the one quantum work factor a
+#: standard states, and so the largest this rule lets through.
+_GROVER_AES256_EXPONENT = 128
+
+
+def _rule_quantum_work_factor(line: str, authority: Authority) -> Optional[str]:
+    """A work factor above 2^128 in a sentence about quantum attack or a
+    post-quantum scheme, in either word order.
+
+    The retired-claim pattern above read "2^N quantum" and a few fixed
+    phrasings, so "Quantum Attacks | Lattice sieving + Grover: ~2^190" and
+    "ML-DSA-65 forgery (quantum) | ... | Negligible (2^190 ops)" passed it.
+    A classical figure beside a quantum one goes in its own sentence; a
+    semicolon ends one.
+    """
+    start = 0
+    for end in [mark.end() for mark in _SENTENCE_END.finditer(line)] + [len(line)]:
+        sentence, start = line[start:end], end
+        if not _QUANTUM_SUBJECT.search(sentence):
+            continue
+        for power in _POWER_OF_TWO.finditer(sentence):
+            if _MODULUS_TAIL.match(sentence, power.end()):
+                continue
+            digits = power.group(1) or power.group(2).translate(_SUPERSCRIPT_DIGITS)
+            if int(digits) > _GROVER_AES256_EXPONENT:
+                return f"reintroduces a corrected claim \u2014 {_QUANTUM_CATEGORY_WHY}"
+    return None
 
 
 def _rule_fallback(line: str, authority: Authority) -> Optional[str]:
@@ -1101,6 +1165,7 @@ RULES: tuple[Callable[[str, Authority], Optional[str]], ...] = (
     _rule_lms,
     _rule_c11_atomics,
     _rule_retired,
+    _rule_quantum_work_factor,
 )
 
 
@@ -1226,16 +1291,27 @@ def _display_path(path: Path, repo: Path) -> str:
 
 
 def scanned_files(repo: Path = REPO) -> list[Path]:
+    """The documents this gate reads: in a checkout, the files git tracks.
+
+    It used to walk the directory, which also read what a build leaves
+    behind.  Once C was scanned that included the Cython-generated
+    ``src/cython/*.c``, each carrying its ``.pyx`` docstring, so a corrected
+    docstring still failed from a stale generated copy until a rebuild.
+    Raises ``tools._repo.TrackedFilesError`` if git cannot list the tree.
+    """
+    _tools_importable()
+    from tools._repo import worktree_names
+
     seen: list[Path] = []
-    for path in sorted(repo.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in SCAN_SUFFIXES:
+    for name in worktree_names(repo):
+        relative = Path(name)
+        if relative.suffix.lower() not in SCAN_SUFFIXES:
             continue
-        relative = path.relative_to(repo)
         if any(part in EXCLUDED_DIRS for part in relative.parts):
             continue
-        if _is_historical_record(relative) or relative.as_posix() in SELF_REFERENTIAL:
+        if _is_historical_record(relative) or name in SELF_REFERENTIAL:
             continue
-        seen.append(path)
+        seen.append(repo / relative)
     return seen
 
 
@@ -1387,7 +1463,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 2
 
-    files = [repo / name for name in args.files] if args.files else None
+    _tools_importable()
+    from tools._repo import TrackedFilesError
+
+    try:
+        files = [repo / name for name in args.files] if args.files else scanned_files(repo)
+    except TrackedFilesError as exc:
+        print(f"FATAL: cannot list the documents to check: {exc}", file=sys.stderr)
+        return 2
     findings = find_claims(authority, repo, files)
 
     if findings:
@@ -1409,9 +1492,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    scanned = files if files is not None else scanned_files(repo)
     print(
-        f"OK    {len(scanned)} document(s); constructions agree with the implementation "
+        f"OK    {len(files)} document(s); constructions agree with the implementation "
         f"(posture {authority.posture_weights} / thresholds {authority.posture_thresholds}, "
         f"ETHICAL_VECTOR len {authority.ethical_vector_length}, "
         f"combiner fails closed: {authority.combine_raises_on_missing_native}, "

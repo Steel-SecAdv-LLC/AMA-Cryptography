@@ -98,7 +98,7 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 | Audit | Not externally audited |
 | License | Apache 2.0 |
 
-> **Production guardrails:** Use a FIPS 140-2 Level 3+ HSM for master secrets, enforce constant-time verification, and perform independent cryptographic review before deployment. See [Security-Model](Security-Model) for requirements.
+> **Production guardrails:** Use an HSM validated to FIPS 140-3 Level 3 or higher for master secrets, enforce constant-time verification, and perform independent cryptographic review before deployment. See [Security-Model](Security-Model) for requirements.
 
 ---
 

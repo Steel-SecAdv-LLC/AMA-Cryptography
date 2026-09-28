@@ -14,7 +14,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
 > **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit. Production use **requires**:
-> - FIPS 140-2 Level 3+ HSM for master secrets
+> - An HSM validated to FIPS 140-3 Level 3 or higher for master secrets
 > - Independent security review by qualified cryptographers
 > - Constant-time implementation verification
 > - Secure file permissions for key files (encrypted volumes, restricted access)
@@ -200,7 +200,7 @@ which is authoritative.
 
 Before deploying AMA Cryptography in production:
 
-- [ ] Master secrets stored in FIPS 140-2 Level 3+ HSM
+- [ ] Master secrets stored in an HSM validated to FIPS 140-3 Level 3 or higher
 - [ ] Independent security review by qualified cryptographers
 - [ ] Constant-time AES confirmed enabled (default `AMA_AES_CONSTTIME=ON`; verify in CMake output)
 - [ ] Key file permissions restricted (mode 0600, encrypted volume)

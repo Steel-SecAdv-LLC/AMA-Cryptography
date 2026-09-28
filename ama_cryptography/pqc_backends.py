@@ -4102,7 +4102,7 @@ def _secure_memzero(buf: bytearray) -> None:
 @dataclass
 class DilithiumKeyPair:
     """
-    CRYSTALS-Dilithium post-quantum key pair (ML-DSA-65, Level 3).
+    CRYSTALS-Dilithium post-quantum key pair (ML-DSA-65, NIST category 3).
 
     Key Sizes (NIST FIPS spec):
         - Secret key: 4032 bytes
@@ -4139,7 +4139,7 @@ class DilithiumKeyPair:
 @dataclass
 class KyberKeyPair:
     """
-    CRYSTALS-Kyber post-quantum key pair (Kyber-1024, Level 5).
+    CRYSTALS-Kyber post-quantum key pair (Kyber-1024, NIST category 5).
 
     Key Sizes (NIST FIPS spec):
         - Secret key: 3168 bytes
@@ -4189,7 +4189,7 @@ class KyberEncapsulation:
 @dataclass
 class SphincsKeyPair:
     """
-    SPHINCS+-SHA2-256f-simple post-quantum key pair (Level 5).
+    SPHINCS+-SHA2-256f-simple post-quantum key pair (NIST category 5).
 
     Key Sizes (NIST FIPS spec):
         - Secret key: 128 bytes
@@ -4228,7 +4228,7 @@ class SphincsKeyPair:
 
 def generate_dilithium_keypair() -> DilithiumKeyPair:
     """
-    Generate CRYSTALS-Dilithium key pair (Level 3).
+    Generate CRYSTALS-Dilithium key pair (ML-DSA-65, NIST category 3).
 
     Returns:
         DilithiumKeyPair with ML-DSA-65 keys
@@ -4484,7 +4484,7 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
 
 def generate_kyber_keypair() -> KyberKeyPair:
     """
-    Generate CRYSTALS-Kyber key pair (Kyber-1024, Level 5).
+    Generate CRYSTALS-Kyber key pair (Kyber-1024, NIST category 5).
 
     Kyber-1024 provides IND-CCA2 secure key encapsulation based on the
     Module-LWE (Learning With Errors) problem.
@@ -4689,7 +4689,7 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
 
 def generate_sphincs_keypair() -> SphincsKeyPair:
     """
-    Generate SPHINCS+-SHA2-256f-simple key pair (Level 5).
+    Generate SPHINCS+-SHA2-256f-simple key pair (NIST category 5).
 
     SPHINCS+ provides stateless hash-based signatures with no risk of
     key reuse vulnerabilities. The 'f' variant is optimized for fast

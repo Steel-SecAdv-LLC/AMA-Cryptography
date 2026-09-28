@@ -191,7 +191,7 @@ export_public_keys(kms, Path("public_keys"))
 
 **Option 1: Hardware Security Module (HSM)**
 
-Recommended for production. Supports FIPS 140-2 Level 3+.
+Recommended for production: an HSM validated to FIPS 140-3 (or FIPS 140-2 while its certificate is active), Level 3 or higher.
 
 <!-- example: pseudocode: needs a provisioned AWS CloudHSM cluster and boto3 credentials -->
 ```python
@@ -228,7 +228,8 @@ kms.master_secret = b'\x00' * 32
 
 **Option 2: Hardware Token (YubiKey, Nitrokey)**
 
-For personal/small team use. FIPS 140-2 Level 2.
+For personal/small team use. A token carries only the validation its own
+certificate states, at that certificate's level; check it before relying on it.
 
 <!-- example: pseudocode: needs a physically attached YubiKey and the ykman package -->
 ```python

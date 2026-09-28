@@ -197,7 +197,7 @@ HMAC with SHA3-256 provides message authentication.
 **Properties:**
 - 256-bit tag
 - PRF security under key secrecy
-- Forgery resistance: 2^256 operations
+- Key search: 2^256 classical operations for a 256-bit key; about 2^128 under Grover's algorithm
 
 **Standard:** RFC 2104 (HMAC construction) with SHA3-256
 

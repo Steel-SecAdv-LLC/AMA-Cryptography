@@ -32,7 +32,7 @@ All three are fully implemented natively in AMA Cryptography's C library.
 
 ### Overview
 
-ML-DSA-65 is AMA Cryptography's **primary post-quantum signature algorithm**, implementing NIST FIPS 204 at security Level 3. It is based on the Module Learning With Errors (MLWE) hardness assumption over module lattices.
+ML-DSA-65 is AMA Cryptography's **primary post-quantum signature algorithm**, implementing NIST FIPS 204 at security category 3. It is based on the Module Learning With Errors (MLWE) hardness assumption over module lattices.
 
 ### Security Properties
 
@@ -42,7 +42,6 @@ ML-DSA-65 is AMA Cryptography's **primary post-quantum signature algorithm**, im
 | Security category | NIST category 3 (at least as hard as a key search on AES-192) |
 | Hardness Assumption | Module-LWE (MLWE), Module-SIS |
 | Security Model | EUF-CMA in the Quantum Random Oracle Model (QROM) |
-| Quantum Attacks | Lattice sieving + Grover: ~2^190 |
 
 ### Key and Signature Sizes
 

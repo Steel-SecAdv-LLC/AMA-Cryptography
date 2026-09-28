@@ -71,6 +71,7 @@ __all__ = [
     "staged_files",
     "tracked_files",
     "tracked_names",
+    "worktree_names",
 ]
 
 _GIT_TIMEOUT_SECONDS = 60
@@ -180,6 +181,25 @@ def tracked_names(root: Path, *pathspecs: str) -> list[str]:
 def tracked_files(root: Path, *pathspecs: str) -> list[Path]:
     """:func:`tracked_names`, each joined onto ``root``."""
     return [root / name for name in tracked_names(root, *pathspecs)]
+
+
+def worktree_names(root: Path) -> list[str]:
+    """Every file a scan of ``root`` should read, ``/``-separated and relative
+    to it: in a checkout, what git tracks; outside one, every regular file.
+
+    A build leaves untracked files in the work tree that are not the tree's
+    documentation: Cython writes each ``.pyx`` docstring into a generated
+    ``src/cython/*.c``, and packaging writes ``*.egg-info/``.  A walk reads
+    them; git's list does not.
+
+    Only the absence of ``.git`` selects the walk (a source tarball, a gate's
+    own fixture directory), as in ``check_documented_counts``: a ``.git`` that
+    git cannot read is a checkout git failed on, and
+    :class:`TrackedFilesError` says so rather than the scan quietly widening.
+    """
+    if (root / ".git").exists():
+        return tracked_names(root)
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
 
 
 def staged_files(root: Path) -> list[Path]:

@@ -10,7 +10,7 @@ AMA Cryptography — Native ML-DSA-65 (Dilithium) Cython Binding
 
 Direct C-to-C calls to ama_dilithium_*() with zero Python marshaling overhead.
 INVARIANT-1 compliant: uses only AMA's own native C implementation.
-NIST FIPS 204 compliant: ML-DSA-65 (CRYSTALS-Dilithium Level 3).
+NIST FIPS 204 compliant: ML-DSA-65 (CRYSTALS-Dilithium, NIST category 3).
 """
 
 from libc.stdint cimport uint8_t

@@ -282,6 +282,14 @@ def test_a_non_repository_fails_closed(gate: ModuleType, tmp_path: Path) -> None
     assert gate.main(["--repo", str(tmp_path)]) == 2
 
 
+def test_a_checkout_git_cannot_read_fails_closed(gate: ModuleType, tmp_path: Path) -> None:
+    """A ``.git`` git cannot use used to switch the gate to walking the tree
+    (untracked files included) without a word; it is now an error."""
+    repo = _fake_repo(tmp_path, {"docs/page.md": "Nothing to claim.\n"})
+    (repo / ".git").write_text("gitdir: /nonexistent\n", encoding="utf-8")
+    assert gate.main(["--repo", str(repo)]) == 2
+
+
 def test_the_real_tree_makes_no_false_claim(gate: ModuleType) -> None:
     findings = gate.find_claims(REPO_ROOT) + gate.find_standards_table_claims(REPO_ROOT)
     assert not findings, "\n".join(

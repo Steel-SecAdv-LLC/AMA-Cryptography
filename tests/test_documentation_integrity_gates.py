@@ -1128,6 +1128,21 @@ class TestCryptoConstructionDocs:
                 "and one quantum-resistant forgery (2^190 quantum operations).",
                 "security category",
             ),
+            (
+                "| T1.5 | ML-DSA-65 forgery (quantum) | PQC signature layer | "
+                "Negligible (2^190 ops) | CRITICAL | **LOW** |",
+                "security category",
+            ),
+            (
+                "| T1.8 | ML-KEM-1024 decapsulation | KEM layer | Negligible (2^254 ops) "
+                "| HIGH | **LOW** |",
+                "security category",
+            ),
+            ("| Quantum Attacks | Lattice sieving + Grover: ~2^190 |", "security category"),
+            ("implementing NIST FIPS 204 at security Level 3.", "not a level"),
+            ("Generate CRYSTALS-Dilithium key pair (Level 3).", "not a level"),
+            ("SPHINCS+-SHA2-256f-simple key pair (Level 5).", "not a level"),
+            ("- **Best performance** at NIST Level 3", "not a level"),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -1174,11 +1189,84 @@ class TestCryptoConstructionDocs:
             "| Security category | NIST category 5 (at least as hard as a key search on "
             "AES-256) |\n\n"
             "An Ed25519 forgery costs about 2^128 classical operations.\n\n"
-            "AES-256 keeps quantum security ~2^128 under Grover.\n",
+            "AES-256 keeps quantum security ~2^128 under Grover.\n\n"
+            "| T1.5 | ML-DSA-65 forgery (quantum) | PQC signature layer | "
+            "Negligible (NIST category 3, FIPS 204) | CRITICAL | **LOW** |\n\n"
+            "| T1.6 | HKDF key recovery | Key derivation | Negligible (2^128 quantum) |\n\n"
+            "- Key search: 2^256 classical operations for a 256-bit key; about 2^128 "
+            "under Grover's algorithm\n\n"
+            "ML-DSA-65 is implemented at security category 3.\n\n"
+            "Store ML-KEM-1024 master secrets in an HSM validated to FIPS 140-3 Level 3.\n",
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
         assert completed.returncode == 0, completed.stderr
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Quantum attack cost: 2**190 operations.",
+            "Quantum attack cost: 2^{190} operations.",
+            "Quantum attack cost: 2\u00b9\u2079\u2070 operations.",
+            "Forgery probability 2^-192 against a quantum adversary.",
+            "Forgery probability 2\u207b\u00b9\u2079\u00b2 against a quantum adversary.",
+            "Lattice sieving with Grover: ~2^129",
+            "Kyber decapsulation: 2^200",
+            "Dilithium forgery: 2^200",
+            "SPHINCS+ forgery: 2^200",
+            "ML-KEM-1024 decapsulation: 2^200",
+            "ML-DSA-65 forgery: 2^200",
+            "SLH-DSA forgery: 2^200",
+        ],
+    )
+    def test_a_quantum_work_factor_is_read_in_every_notation(self, sentence: str) -> None:
+        """Every notation the tree has published a work factor in, every
+        subject that makes it a quantum or post-quantum claim, and the first
+        exponent above Grover's AES-256 bound."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_work_factor(sentence, None), sentence
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "AES-256 keeps quantum security ~2^128 under Grover.",
+            "X25519 works over GF(2^255 - 19) and is not quantum-resistant.",
+            "X25519 works over GF(2^255-19) and is not quantum-resistant.",
+            "SHA3-256 has 2^256 outputs. A quantum adversary is out of scope here.",
+            "Key search: 2^256 classical operations; about 2^128 under Grover.",
+            "HKDF key recovery costs 2^256 operations.",
+        ],
+    )
+    def test_what_is_not_a_quantum_work_factor_passes(self, sentence: str) -> None:
+        """Grover's AES-256 bound itself, a modulus, a figure in another
+        sentence, and a figure with no quantum subject."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_work_factor(sentence, None) is None, sentence
+
+    def test_a_build_s_untracked_output_is_not_read(self, tmp_path: Path) -> None:
+        """Cython writes each ``.pyx`` docstring into a generated, untracked
+        ``src/cython/*.c``; once C was scanned the gate read that copy, so a
+        corrected docstring still failed until a rebuild."""
+        gate = _load(CONSTRUCTION_DOCS)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        (tmp_path / "src" / "cython").mkdir(parents=True)
+        (tmp_path / "src" / "cython" / "binding.pyx").write_text("x\n", encoding="utf-8")
+        (tmp_path / "src" / "cython" / "binding.c").write_text("x\n", encoding="utf-8")
+        _track(tmp_path, "src/cython/binding.pyx")
+        scanned = {path.relative_to(tmp_path).as_posix() for path in gate.scanned_files(tmp_path)}
+        assert scanned == {"src/cython/binding.pyx"}, scanned
+
+    def test_an_unlistable_tree_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gate that cannot list what to read has read nothing, and must not
+        report green on it."""
+        gate = _load(CONSTRUCTION_DOCS)
+        from tools._repo import TrackedFilesError
+
+        def unlistable(repo: Path) -> list[Path]:
+            raise TrackedFilesError(f"git failed in {repo}")
+
+        monkeypatch.setattr(gate, "scanned_files", unlistable)
+        assert gate.main(["--repo", str(REPO_ROOT)]) == 2
 
     def test_c_sources_and_headers_are_in_the_tree_scan(self, tmp_path: Path) -> None:
         """``--file`` reads what it is given; the tree scan reads by suffix.
