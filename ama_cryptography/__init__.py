@@ -467,13 +467,36 @@ from ama_cryptography.exceptions import (
 # to escape straight through this statement, which failed the import without
 # the root cause and results table below and left the diagnostic hatch unable
 # to complete it.  It is routed through the same gate and chained onto the
-# refusal, so the original traceback is kept.
+# refusal.
+#
+# What is chained is the exception without its frames.  A traceback holds
+# every frame of the stage that raised, locals included, and a KAT stage's
+# locals can be key material: chained as raised, it stayed reachable from the
+# refusal (``err.__cause__.__traceback__``) for as long as a caller that
+# caught the import failure kept it.  The trace is formatted first -- file,
+# line and source text, no locals -- and carried in the refusal's message; then
+# every exception on the chain is stripped of its traceback, so nothing the
+# stage held outlives the failed import on any path out of it.
 _post_exc: Optional[Exception] = None
+_post_trace = ""
 try:
     _post_ok = _post()
 except Exception as _exc:
+    import traceback as _traceback
+
     _post_ok = False
+    _post_trace = "".join(_traceback.format_exception(type(_exc), _exc, _exc.__traceback__))
+    _pending: list[BaseException] = [_exc]
+    _stripped: set[int] = set()
+    while _pending:
+        _link = _pending.pop()
+        if id(_link) in _stripped:
+            continue
+        _stripped.add(id(_link))
+        _link.__traceback__ = None
+        _pending.extend(e for e in (_link.__cause__, _link.__context__) if e is not None)
     _post_exc = _exc
+    del _pending, _stripped, _link, _traceback
 if not _post_ok:
     _reason = module_error_reason() or "unknown"
     _results = module_self_test_results()
@@ -648,7 +671,14 @@ if not _post_ok:
             f"  POST results:\n{_rows}\n\n"
             "  All cryptographic operations are inhibited (FIPS 140-3 "
             "§4.9.2). Correct the fault and re-import.\n\n"
-            f"  Diagnosis: set {_diag_env}=1 to import anyway (crypto stays "
+            + (
+                "  Stage traceback (frames only; the stage's locals are not kept):\n"
+                + "".join(f"    {_line}\n" for _line in _post_trace.splitlines())
+                + "\n"
+                if _post_trace
+                else ""
+            )
+            + f"  Diagnosis: set {_diag_env}=1 to import anyway (crypto stays "
             "refused) and call module_attestation().\n"
             "  Stale digest after editing package sources? Refresh it with:\n"
             f"      {_build_env}=1 python -m ama_cryptography.integrity --update --sign"
@@ -660,7 +690,7 @@ if not _post_ok:
 # every frame of the stage that raised, locals included, and a KAT stage's
 # locals can be key material.  Its type and text are already in the root
 # cause the gate logged.
-del _post_exc
+del _post_exc, _post_trace
 
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.
