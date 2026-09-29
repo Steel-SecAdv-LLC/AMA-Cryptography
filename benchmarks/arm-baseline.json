@@ -917,6 +917,10 @@
       {
         "path": "src/c/internal/ama_test_csprng.h",
         "reason": "2026-09-27: new header, src/c/internal/ama_test_csprng.h, defining the AMA_TESTING_MODE CSPRNG hook and its draw wrapper once (AMA_TEST_CSPRNG) for ama_kyber.c, ama_dilithium.c, ama_slhdsa.c, ama_frost.c, ama_nistp.c and ama_x25519.c, which included it in place of six hand-written copies. Measured: the Release objects of all six files (gcc 13.3.0, -DAMA_USE_NATIVE_PQC=ON, LTO off, sha256 of each .o) are byte-identical before and after, so no benchmarked path changes and no floor can move."
+      },
+      {
+        "path": "ama_cryptography/_numeric.py",
+        "reason": "2026-09-29: PEP 8 (E501) and INVARIANT-13 pass shortened the trailing '# type: ignore', '# noqa' and '# nosec' justification comments on twelve lines to fit the 100-column limit; no executable statement changed. Measured: the module compiles to byte-identical bytecode before and after (recursive SHA-256 over co_code, co_consts, co_names and co_varnames of every code object is 2ce9e36457c632c2e609af215ea53d23c25bd490e18b1d85d5203c618df0c2f5 on both origin/main and this head), so no benchmarked path changes and no floor can move."
       }
     ]
   },
