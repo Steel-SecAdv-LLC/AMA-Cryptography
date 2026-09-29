@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 try:
     # loaded from tools/ via runtime sys.path insert (ABI-002)
-    import check_ctypes_abi as gate  # type: ignore[import-not-found]
+    import check_ctypes_abi as gate  # type: ignore[import-not-found]  # runtime import (ABI-002)
 finally:
     sys.path.pop(0)
 

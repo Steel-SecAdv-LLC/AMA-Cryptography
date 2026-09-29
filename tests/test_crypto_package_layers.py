@@ -51,7 +51,7 @@ class TestCreateCryptoPackage:
 
         with pytest.raises(TypeError, match="bytes"):
             # wrong type to verify TypeError contract (CPL-001)
-            create_crypto_package("string")  # type: ignore[arg-type]
+            create_crypto_package("string")  # type: ignore[arg-type]  # wrong type test (CPL-001)
 
     def test_hmac_key_preserved(self) -> None:
         _skip_if_no_backends()

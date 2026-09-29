@@ -319,8 +319,7 @@ class TestAbiVersionHandshake:
         class _FakeLib:
             ama_version_number = staticmethod(fake_version_number)
 
-        # duck-typed CDLL stand-in (PCT-001)
-        version, reject = pb._abi_handshake(_FakeLib())  # type: ignore[arg-type]
+        version, reject = pb._abi_handshake(_FakeLib())  # type: ignore[arg-type]  # fake (PCT-001)
         assert version == f"{pb._CRYPTOGRAPHY_VERSION_MAJOR + 1}.0.0"
         assert reject is not None and "handshake failed" in reject
 
@@ -328,8 +327,7 @@ class TestAbiVersionHandshake:
         class _NoVersion:
             pass
 
-        # duck-typed CDLL stand-in (PCT-001)
-        version, reject = pb._abi_handshake(_NoVersion())  # type: ignore[arg-type]
+        version, reject = pb._abi_handshake(_NoVersion())  # type: ignore[arg-type] # stub (PCT-001)
         assert version is None
         assert reject is not None and "no ama_version_number" in reject
 
@@ -342,8 +340,7 @@ class TestAbiVersionHandshake:
         class _FakeLib:
             ama_version_number = staticmethod(fake_version_number)
 
-        # duck-typed CDLL stand-in (PCT-001)
-        version, reject = pb._abi_handshake(_FakeLib())  # type: ignore[arg-type]
+        version, reject = pb._abi_handshake(_FakeLib())  # type: ignore[arg-type]  # fake (PCT-001)
         assert version == f"{pb._CRYPTOGRAPHY_VERSION_MAJOR}.9.9"
         assert reject is None
 

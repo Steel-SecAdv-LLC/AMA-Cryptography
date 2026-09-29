@@ -991,7 +991,7 @@ def _cached_bytecode(source_path: str) -> tuple[str, Optional[CodeType], Optiona
             cached_body = fh.read()
         # The code object is only materialised for comparison — NEVER exec'd;
         # reading the exact .pyc is precisely how a poisoned one is caught.
-        cached_code = marshal.loads(cached_body)  # noqa: S302  # nosec B302
+        cached_code = marshal.loads(cached_body)  # noqa: S302  # nosec B302 -- read only (VIO-001)
     except (OSError, ValueError, EOFError) as exc:
         return "verified", None, f"cached bytecode {cache_path} is unreadable ({exc})"
     if not isinstance(cached_code, CodeType):

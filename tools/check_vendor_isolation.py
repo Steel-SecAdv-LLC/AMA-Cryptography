@@ -1216,7 +1216,7 @@ def _container_recipes(repo_root: Path) -> list[Path]:
     try:
         from tools._repo import tracked_files
     except (ImportError, ModuleNotFoundError):
-        tracked_files = None  # type: ignore[assignment]
+        tracked_files = None  # type: ignore[assignment]  # import fallback (CVI-001)
     if tracked_files is not None and (repo_root / ".git").exists():
         found: list[Path] = []
         for pattern in _CONTAINER_NAME_PATTERNS:

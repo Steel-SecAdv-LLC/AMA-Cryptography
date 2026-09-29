@@ -282,8 +282,7 @@ class TestModuleIntegrity:
                 # ``pkg`` is a runtime ``sys.modules`` lookup typed as
                 # ``ModuleType``, so mypy cannot see the dynamic
                 # ``_integrity_signature`` attribute we are restoring.
-                # dynamic submodule restore (STC-001)
-                pkg._integrity_signature = cached_attr  # type: ignore[attr-defined]
+                pkg._integrity_signature = cached_attr  # type: ignore[attr-defined] # dyn (STC-001)
 
         assert not ok
         assert "no signed-integrity artefact" in detail

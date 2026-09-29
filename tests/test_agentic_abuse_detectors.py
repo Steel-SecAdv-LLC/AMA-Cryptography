@@ -572,7 +572,7 @@ class TestNoteArtifactDetection:
         payload = b"A" * 200_000 + note  # note sits in the tail
         d = NoteArtifactDetector()
         # parametrised over accepted buffer types (DET-002)
-        signal = d.inspect(wrap(payload))  # type: ignore[arg-type]
+        signal = d.inspect(wrap(payload))  # type: ignore[arg-type]  # buffer type test (DET-002)
         reference = d.inspect(payload)
         assert (signal.flagged, signal.score, signal.tokens, signal.scanned_bytes) == (
             reference.flagged,
@@ -624,7 +624,7 @@ class TestNoteArtifactDetection:
     def test_non_bytes_payload_rejected(self) -> None:
         with pytest.raises(TypeError):
             # deliberately wrong type -- runtime boundary check (DET-001)
-            NoteArtifactDetector().inspect("a string")  # type: ignore[arg-type]
+            NoteArtifactDetector().inspect("a string")  # type: ignore[arg-type]  # string (DET-001)
 
     def test_no_marker_is_claimed_by_two_families(self) -> None:
         d = NoteArtifactDetector()

@@ -154,8 +154,7 @@ def collect_real_timings(count: int) -> Tuple[List[float], str, str]:
         # SHAPE of a timing distribution for a measurement harness, never key
         # material.  A seeded Mersenne Twister is what makes the fallback
         # reproducible, which is the property this needs.
-        # deterministic baseline data, not key material (DBE-002)
-        rng = random.Random(20260816)  # fmt: skip  # noqa: S311
+        rng = random.Random(20260816)  # fmt: skip  # noqa: S311 -- deterministic baseline (DBE-002)
         out = [rng.lognormvariate(-3.9, 0.22) for _ in range(count)]
         return (
             out,
@@ -168,8 +167,7 @@ def inject_spikes(base: Sequence[float], *, rate: float, magnitude: float, seed:
     # Same S311 rationale as above: choosing WHICH samples to corrupt in a
     # benchmark stream is not a cryptographic draw, and seeding it is what
     # makes the evaluation reproducible run to run.
-    # deterministic baseline data, not key material (DBE-002)
-    rng = random.Random(seed)  # fmt: skip  # noqa: S311
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311 -- deterministic baseline (DBE-002)
     values = list(base)
     anomalies: Set[int] = set()
     for i in range(len(values)):
@@ -224,8 +222,7 @@ def synthetic_base(count: int, seed: int) -> List[float]:
     evidence — but the pass/fail decision is taken here, where a failure means
     the detector changed.
     """
-    # deterministic evaluation stream, not key material (DBE-001)
-    rng = random.Random(seed)  # fmt: skip  # noqa: S311
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311 -- deterministic eval stream (DBE-001)
     out: List[float] = []
     for _ in range(count):
         value = rng.lognormvariate(-3.9, 0.22)
@@ -706,9 +703,7 @@ def main() -> int:
         "eval_start": EVAL_START,
         "streams": [],
     }
-    # JSON-decoded payload narrowed to its checked concrete
-    # type (DBE-003)
-    streams_out: List[Dict[str, object]] = payload["streams"]  # type: ignore[assignment]
+    streams_out: List[Dict[str, object]] = payload["streams"]  # type: ignore[assignment] #(DBE-003)
 
     # Seeded spike streams (for the comparison and the derived tie band) and
     # the sustained shift stream.

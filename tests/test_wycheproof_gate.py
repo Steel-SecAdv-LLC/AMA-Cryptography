@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-import wycheproof_vectors.run_wycheproof as w  # noqa: E402  (WYP-001)
+import wycheproof_vectors.run_wycheproof as w  # noqa: E402 -- sys.path insert above (WYP-001)
 
 
 @pytest.fixture(scope="module")

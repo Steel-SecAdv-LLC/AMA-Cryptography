@@ -233,7 +233,7 @@ class TestFailClosed:
         b = ephemeral()
         with pytest.raises(TypeError):
             # deliberately wrong type -- runtime boundary check (AB-001)
-            b.is_permitted(authority_key="not-bytes")  # type: ignore[arg-type]
+            b.is_permitted(authority_key="not-bytes")  # type: ignore[arg-type]  # bad type (AB-001)
 
     @pytest.mark.parametrize("length", [0, -1, 8161])
     def test_derive_key_length_bounds(self, length: int) -> None:

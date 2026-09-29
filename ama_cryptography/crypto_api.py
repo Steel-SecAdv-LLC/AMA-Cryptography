@@ -1153,8 +1153,9 @@ class AESGCMProvider:
         try:
             import msvcrt  # Windows-only stdlib module
 
-            # Windows-only attr (CA-004)
-            msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+            msvcrt.locking(  # type: ignore[attr-defined]  # Windows-only (CA-004)
+                lock_fd, msvcrt.LK_LOCK, 1
+            )
             return
         except (ImportError, OSError) as _lock_err:
             raise RuntimeError(
@@ -2455,10 +2456,9 @@ class CryptoPackageResult:
     #: test_pickle_strips_the_private_signing_key.
     _SECRET_FIELD_PLACEHOLDERS: ClassVar[Dict[str, Any]] = {
         "hmac_key": b"",
-        # nosec B105 -- empty placeholder, not a secret (CAPI-002)
-        "hkdf_master_secret": b"",  # nosec B105
+        "hkdf_master_secret": b"",  # nosec B105 -- empty placeholder (CAPI-002)
         "derived_keys": [],
-        "kem_shared_secret": None,  # nosec B105
+        "kem_shared_secret": None,  # nosec B105 -- empty placeholder (CAPI-002)
     }
 
     @staticmethod

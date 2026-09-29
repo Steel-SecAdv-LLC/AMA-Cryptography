@@ -4326,9 +4326,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_sign failed with error code {rc}"
             )
-        # ctypes buffer slice not typed as bytes-compatible
-        # (PQC-001)
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer (PQC-001)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -4475,9 +4473,7 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_sign_ctx failed with error code {rc}"
             )
-        # ctypes buffer slice not typed as bytes-compatible
-        # (PQC-001)
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer (PQC-001)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -4607,8 +4603,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
-            # ctypes buffer slice not bytes-compatible (PQC-002)
-            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]
+            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]  # cast (PQC-002)
             shared_secret=bytes(ss_buf),
         )
 
@@ -4803,9 +4798,7 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         )
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-        # ctypes buffer slice not typed as bytes-compatible
-        # (PQC-003)
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer (PQC-003)
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -5666,9 +5659,7 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON
-        # (PQC-004)
-        from ama_cryptography.ed25519_binding import (  # type: ignore
+        from ama_cryptography.ed25519_binding import (  # type: ignore  # optional ext (PQC-004)
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -5683,9 +5674,7 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON
-        # (PQC-005)
-        from ama_cryptography.dilithium_binding import (  # type: ignore
+        from ama_cryptography.dilithium_binding import (  # type: ignore  # optional ext (PQC-005)
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -5700,9 +5689,7 @@ def _probe_cython_hkdf() -> "Any":
     if not _binding_imports_permitted():
         return None
     try:
-        # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON
-        # (PQC-006)
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found, unused-ignore]
+        from ama_cryptography.hkdf_binding import (  # type: ignore  # optional ext (PQC-006)
             cy_hkdf,
         )
 

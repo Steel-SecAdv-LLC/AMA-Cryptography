@@ -453,8 +453,7 @@ class TestFlaskIntegrationSurface:
     longer does.
     """
 
-    # dynamic return; typing adds no value here (VAUDIT-001)
-    def _client(self):  # type: ignore[no-untyped-def]
+    def _client(self):  # type: ignore[no-untyped-def]  # dynamic return (VAUDIT-001)
         flask = pytest.importorskip("flask")
         _ = flask
         sys.path.insert(0, str(EXAMPLES.parent.parent))

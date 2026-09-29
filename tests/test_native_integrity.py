@@ -754,8 +754,7 @@ class TestPostKatVectors:
 
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            # loaded from tools/ via sys.path insert (NI-001)
-            import build_post_kats as bpk  # type: ignore[import-not-found]
+            import build_post_kats as bpk  # type: ignore[import-not-found]  # tools/ path (NI-001)
         finally:
             sys.path.pop(0)
 

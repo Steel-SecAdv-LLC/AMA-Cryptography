@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.pqc_backends as pb  # noqa: E402  (PQCPS-001)
+import ama_cryptography.pqc_backends as pb  # noqa: E402 -- sys.path insert above (PQCPS-001)
 
 KAT_KEM = REPO_ROOT / "tests" / "kat" / "fips203"
 KAT_DSA = REPO_ROOT / "tests" / "kat" / "fips204"

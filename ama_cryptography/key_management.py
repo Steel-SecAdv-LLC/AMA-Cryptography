@@ -1782,7 +1782,7 @@ class HSMKeyStorage:
             str
             # nosec B107 -- default None, not a hardcoded secret;
             # PIN is caller-provided at runtime (KM-001)
-        ] = None,  # nosec B107
+        ] = None,  # nosec B107 -- default None, not a secret (KM-001)
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1866,9 +1866,10 @@ class HSMKeyStorage:
             try:
                 info = self.lib.getTokenInfo(slot)
                 # PKCS#11 token labels are public identifiers, not secret material.
-                if info.label.strip() == token_label:  # nosemgrep: non-constant-time-comparison
-                    # PKCS#11 token labels are public identifiers,
-                    # not secret material (KM-003)
+                if (
+                    info.label.strip()
+                    == token_label  # nosemgrep: non-constant-time-comparison -- public (KM-003)
+                ):
                     return slot
             except self.pkcs11.PyKCS11Error:
                 continue

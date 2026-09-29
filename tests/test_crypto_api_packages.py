@@ -158,8 +158,7 @@ class TestCreateAndVerifyBasic:
 class TestCreateInputValidation:
     def test_non_bytes_content_raises(self) -> None:
         with pytest.raises(TypeError):
-            # intentional wrong type to verify TypeError (CAP-001)
-            create_crypto_package("not bytes")  # type: ignore[arg-type]
+            create_crypto_package("not bytes")  # type: ignore[arg-type]  # wrong type (CAP-001)
 
     def test_empty_content_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -167,27 +166,24 @@ class TestCreateInputValidation:
 
     def test_signing_keypair_wrong_type_raises(self) -> None:
         with pytest.raises(TypeError):
-            create_crypto_package(
-                b"payload",
-                # intentional wrong type to verify TypeError (CAP-002)
-                CryptoPackageConfig(signing_keypair="bad"),  # type: ignore[arg-type]
+            cfg = CryptoPackageConfig(
+                signing_keypair="bad",  # type: ignore[arg-type]  # wrong type (CAP-002)
             )
+            create_crypto_package(b"payload", cfg)
 
     def test_signing_keypair_wrong_arity_raises(self) -> None:
         with pytest.raises(TypeError):
-            create_crypto_package(
-                b"payload",
-                # intentional wrong arity to verify TypeError (CAP-003)
-                CryptoPackageConfig(signing_keypair=(b"only_one",)),  # type: ignore[arg-type]
+            cfg = CryptoPackageConfig(
+                signing_keypair=(b"only_one",),  # type: ignore[arg-type]  # arity (CAP-003)
             )
+            create_crypto_package(b"payload", cfg)
 
     def test_signing_keypair_non_bytes_members_raises(self) -> None:
         with pytest.raises(TypeError):
-            create_crypto_package(
-                b"payload",
-                # intentional wrong element type to verify TypeError (CAP-004)
-                CryptoPackageConfig(signing_keypair=("pk", "sk")),  # type: ignore[arg-type]
+            cfg = CryptoPackageConfig(
+                signing_keypair=("pk", "sk"),  # type: ignore[arg-type]  # non-bytes (CAP-004)
             )
+            create_crypto_package(b"payload", cfg)
 
     def test_signing_keypair_empty_member_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -355,7 +351,7 @@ class TestCryptoPackageSerialization:
         import pickle
 
         pkg = create_crypto_package(b"data")
-        restored = pickle.loads(pickle.dumps(pkg))  # noqa: S301  # fmt: skip
+        restored = pickle.loads(pickle.dumps(pkg))  # noqa: S301 -- self blob (CAP-006)  # fmt: skip
         for name, kp in restored.keypairs.items():
             assert kp.secret_key == b"", f"{name} private key survived pickling"
             assert kp.public_key == pkg.keypairs[name].public_key
@@ -364,7 +360,7 @@ class TestCryptoPackageSerialization:
         # Placeholders must keep their declared types, not collapse to b"".
         assert isinstance(restored.derived_keys, list)
         # Two restores must not share one placeholder list.
-        other = pickle.loads(pickle.dumps(pkg))  # noqa: S301  # fmt: skip
+        other = pickle.loads(pickle.dumps(pkg))  # noqa: S301 -- self blob (CAP-007)  # fmt: skip
         assert restored.derived_keys is not other.derived_keys
 
     def test_pickle_strips_secrets(self) -> None:
@@ -376,7 +372,7 @@ class TestCryptoPackageSerialization:
         # __getstate__/__setstate__ secret-stripping; no untrusted input
         # is deserialised here.
         # self-produced blob, secret-stripping verification (CAP-005)
-        restored = pickle.loads(blob)  # noqa: S301  # fmt: skip
+        restored = pickle.loads(blob)  # noqa: S301 -- self blob (CAP-005)  # fmt: skip
         assert restored.hmac_key == b""
         assert restored.hkdf_master_secret == b""
         # Non-secret fields preserved

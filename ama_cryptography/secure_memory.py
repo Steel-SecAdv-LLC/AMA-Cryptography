@@ -570,9 +570,7 @@ def _buffer_address(data: Union[bytes, bytearray, memoryview], what: str) -> Tup
     # locking unrelated memory.
     probe = ctypes.string_at(addr, 1)
     # Layout-probe comparison: 1-byte sanity check, not a secret comparison.
-    if probe != data[:1]:  # nosemgrep: non-constant-time-comparison
-        # 1-byte PyBytesObject layout probe, not secret
-        # comparison (SM-001)
+    if probe != data[:1]:  # nosemgrep: non-constant-time-comparison -- layout probe (SM-001)
         raise NotImplementedError(
             f"{what}: PyBytesObject layout probe failed — "
             f"computed address does not point to bytes payload "

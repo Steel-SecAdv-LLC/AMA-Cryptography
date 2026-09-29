@@ -30,8 +30,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.pqc_backends as pb  # noqa: E402  (PFH-001)
-from ama_cryptography._asn1 import oid_from_string  # noqa: E402
+import ama_cryptography.pqc_backends as pb  # noqa: E402 -- sys.path insert above (PFH-001)
+from ama_cryptography._asn1 import oid_from_string  # noqa: E402 -- sys.path insert above (PFH-002)
 
 HARNESS_PATH = REPO_ROOT / "fuzz" / "python" / "fuzz_key_formats.py"
 

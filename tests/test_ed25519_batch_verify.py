@@ -337,11 +337,10 @@ class TestBatchVerifyRFC8032:
             # RFC 8032 dict value, mypy cannot narrow (ED-001)
             pk, sk = native_ed25519_keypair_from_seed(
                 vec["secret_key_seed"]
-            )  # type: ignore[arg-type]
+            )  # type: ignore[arg-type]  # dict val narrow (ED-001)
             assert pk == vec["public_key"], f"Keygen mismatch for {vec['name']}"
 
-            # RFC 8032 dict value, mypy cannot narrow (ED-002)
-            sig = native_ed25519_sign(vec["message"], sk)  # type: ignore[arg-type]
+            sig = native_ed25519_sign(vec["message"], sk)  # type: ignore[arg-type]  # dict (ED-002)
             assert sig == vec["signature"], f"Sign mismatch for {vec['name']}"
 
             entries.append((vec["message"], sig, pk))
@@ -360,7 +359,7 @@ class TestBatchVerifyRFC8032:
         # Corrupt the second entry's signature
         msg1, sig1, pk1 = entries[1]
         # sig1 is bytes; bytearray() accepts it but mypy requires suppress (ED-003)
-        bad_sig = bytearray(sig1)  # type: ignore[arg-type]
+        bad_sig = bytearray(sig1)  # type: ignore[arg-type]  # bytes to bytearray (ED-003)
         bad_sig[0] ^= 0xFF
         entries[1] = (msg1, bytes(bad_sig), pk1)
 

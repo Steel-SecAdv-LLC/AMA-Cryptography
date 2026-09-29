@@ -196,7 +196,7 @@ def test_wrong_sized_arguments_are_refused(key_len: int, nonce_len: int, tag_len
 def test_non_bytes_arguments_are_refused(bad: object) -> None:
     with pytest.raises(TypeError):
         # deliberately wrong type -- runtime boundary check (ASC-001)
-        hash256(bad)  # type: ignore[arg-type]
+        hash256(bad)  # type: ignore[arg-type]  # wrong type test (ASC-001)
 
 
 def test_bytearray_and_memoryview_accepted() -> None:

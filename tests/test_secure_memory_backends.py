@@ -56,13 +56,11 @@ class TestSecureMemzero:
 
     def test_rejects_bytes(self) -> None:
         with pytest.raises(TypeError):
-            # immutable bytes to verify TypeError (SMB-001)
-            secure_memzero(b"immutable")  # type: ignore[arg-type]
+            secure_memzero(b"immutable")  # type: ignore[arg-type]  # immutable bytes (SMB-001)
 
     def test_rejects_string(self) -> None:
         with pytest.raises(TypeError):
-            # wrong type to verify TypeError (SMB-002)
-            secure_memzero("string")  # type: ignore[arg-type]
+            secure_memzero("string")  # type: ignore[arg-type]  # wrong type (SMB-002)
 
     def test_single_byte(self) -> None:
         data = bytearray(b"\xff")

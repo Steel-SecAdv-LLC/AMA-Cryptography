@@ -1034,9 +1034,7 @@ class CryptoPackage:
     hash_format_version: str = HASH_FORMAT_V1
 
 
-# McCabe complexity inherent to coordinating all
-# crypto/KMS/RFC3161 operations (LC-005)
-def create_crypto_package(  # noqa: C901
+def create_crypto_package(  # noqa: C901 -- McCabe complexity (LC-005)
     codes: str,
     helix_params: List[Tuple[float, float]],
     kms: KeyManagementSystem,

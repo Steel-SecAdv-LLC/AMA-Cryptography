@@ -381,8 +381,7 @@ class TestEvalHarnessGateLogic:
         original = ev.run_shipped
         try:
 
-            # mirrors run_shipped for monkeypatch (TDC-002)
-            def inert(  # type: ignore[no-untyped-def]
+            def inert(  # type: ignore[no-untyped-def]  # mirror signature (TDC-002)
                 values, *, threshold_sigma=3.0, alarm_budget=0.01
             ):
                 run = original(values, threshold_sigma=3.0, alarm_budget=alarm_budget)

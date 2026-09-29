@@ -790,7 +790,7 @@ def _macro_call_findings(
 #: scrub.  The shipped C tree already carried it on most of its memsets
 #: (``memset(&tmp, 0, sizeof(tmp));  // PUBLIC-DATA: tmp — ...``); what it
 #: lacked was a rule that REQUIRED it.
-_PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105
+_PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105 -- annotation token, not a password (CSZ-001)
 
 #: The second sanctioned form for a shipped zeroing memset: the destination
 #: DOES hold secret material, and the write is made non-elidable by an
@@ -811,7 +811,7 @@ _PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105
 #: gate.  That sentence was not true of the one real site until the offset
 #: grammar in :data:`_DST_ARGUMENT` admitted its parenthesized offset: the
 #: call was never matched, so neither its annotation nor its barrier was read.
-_SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105
+_SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105 -- annotation token, not a password (CSZ-002)
 
 #: The opening of a GNU inline-asm statement.  What makes one a BARRIER is
 #: decided by :func:`_is_barrier_asm`, not by this pattern.
