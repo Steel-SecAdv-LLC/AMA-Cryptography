@@ -39,6 +39,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import tracemalloc
 from collections.abc import Callable
 from importlib.machinery import ModuleSpec
 from pathlib import Path
@@ -739,6 +740,36 @@ def test_both_python_suites_run_on_the_instrumented_library_and_the_release_one_
     assert installed.read_bytes() == b"release", "the release library was not restored"
 
 
+def test_the_callers_pytest_addopts_reaches_neither_suite(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pytest adds ``PYTEST_ADDOPTS`` to every command line, so a caller's
+    ``-k`` there ran part of ``pytest tests/``.  The tests it kept still moved
+    counters, so SuitesTookNoArcError did not fire, and every arc only the
+    deselected tests take was reported as never taken.  Each suite runs in
+    the caller's environment with that one variable removed."""
+    _, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k test_one_of_many")
+    seen: list[dict[str, str]] = []
+
+    def fake_run(_cmd: list[str], **kwargs: object) -> _Done:
+        # No ``env`` means the child inherits this process's environment.
+        env = kwargs.get("env")
+        assert env is None or isinstance(env, dict)
+        seen.append(dict(os.environ) if env is None else env)
+        _counters_move(build_dir)
+        return _Done()
+
+    monkeypatch.setattr(tool.subprocess, "run", fake_run)
+    assert tool._run_python_suite(build_dir, []) == 0
+    expected = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
+    assert len(seen) == 2, "a suite was skipped"
+    for env in seen:
+        assert "PYTEST_ADDOPTS" not in env, "the caller's PYTEST_ADDOPTS reached a suite"
+        assert env == expected, "the caller's environment was not otherwise passed on"
+
+
 @pytest.mark.parametrize("installed_plugin", [True, False])
 def test_no_cov_is_passed_only_where_pytest_cov_is_installed(
     tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed_plugin: bool
@@ -953,6 +984,78 @@ def test_the_swap_and_the_restore_put_a_new_file_in_place_never_rewrite_one(
     assert _listing(installed.parent) == listing, "a staging file was left beside the library"
 
 
+def test_a_library_already_holding_the_release_content_is_not_restored(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whether to restore is decided by the installed file's content, not by
+    which file is installed.  An instrumented library byte-identical to the
+    release one is swapped in as a new file; the undo finds the release
+    content there, and neither replaces the file nor re-signs a second time."""
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    instrumented = tool._instrumented_library(build_dir)
+    instrumented.write_bytes(installed.read_bytes())
+    signed_over: list[bytes] = []
+    monkeypatch.setattr(tool, "_resign", lambda: signed_over.append(installed.read_bytes()))
+    released = _file_id(installed)
+    identities: list[tuple[int, int]] = []
+
+    def run(*_a: object, **_k: object) -> _Done:
+        identities.append(_file_id(installed))
+        _counters_move(build_dir)
+        return _Done()
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    assert tool._run_python_suite(build_dir, []) == 0
+    assert identities[0] != released, "the swap did not install a new file"
+    assert _file_id(installed) == identities[-1], "the release content was restored over itself"
+    assert signed_over == [b"release"], "re-signed again with nothing restored"
+
+
+def test_the_undo_holds_no_library_in_memory_and_hashes_the_backup_once(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The undo read both libraries whole to compare them: two copies of the
+    library in memory on every path out, an interrupt's included.  The
+    backup is hashed once, when it is made and before the suites run, and the
+    undo streams only the installed file through the same digest; measured
+    with tracemalloc, the whole run's peak stays below one library's size.
+    The two libraries differ in one byte, mid-file: a digest of the first
+    block alone, or of the last alone, passed every other test in this file,
+    and here leaves the instrumented library installed."""
+    size = 8 << 20
+    release = b"\x01" * size
+    installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
+    installed.write_bytes(release)
+    tool._instrumented_library(build_dir).write_bytes(
+        release[: size // 2] + b"\x02" + release[size // 2 + 1 :]
+    )
+    monkeypatch.setattr(tool, "_resign", lambda: None)
+    backups = _record_backups(tool, tmp_path, monkeypatch)
+    events: list[str] = []
+    real_sha256 = tool._sha256
+
+    def recording_sha256(path: Path) -> bytes:
+        events.append("hash backup" if path.parent in backups else f"hash {path}")
+        return bytes(real_sha256(path))
+
+    def run(*_a: object, **_k: object) -> _Done:
+        events.append("suite")
+        _counters_move(build_dir)
+        return _Done()
+
+    monkeypatch.setattr(tool, "_sha256", recording_sha256)
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    tracemalloc.start()
+    try:
+        assert tool._run_python_suite(build_dir, []) == 0
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < size, f"a whole library was held in memory (peak {peak} bytes)"
+    assert events == ["hash backup", "suite", "suite", f"hash {installed}"], events
+    assert installed.read_bytes() == release, "the release library was not restored"
+
+
 def test_a_refused_swap_is_reported_as_one_and_changes_nothing(
     tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -982,19 +1085,32 @@ def test_a_refused_swap_is_reported_as_one_and_changes_nothing(
     assert _listing(installed.parent) == listing, "a staging file was left beside the library"
 
 
+@pytest.mark.parametrize("step", ["copy", "digest"])
 @pytest.mark.parametrize(
     "exc", [OSError("No space left on device"), KeyboardInterrupt()], ids=["error", "interrupt"]
 )
 def test_a_backup_that_cannot_be_made_leaves_no_directory(
-    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: BaseException
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exc: BaseException,
+    step: str,
 ) -> None:
-    """Nothing is swapped until the backup exists, so a backup copy that
-    fails, or is interrupted, leaves nothing to keep: its temporary directory
-    goes with it.  An interrupt there used to leak the directory."""
+    """Nothing is swapped until the backup exists and its digest is taken,
+    so a backup copy or digest that fails, or is interrupted, leaves nothing
+    to keep: its temporary directory goes with it.  An interrupt during the
+    copy used to leak the directory."""
     installed, build_dir = _python_suite_tree(tool, tmp_path, monkeypatch)
     monkeypatch.setattr(tool, "_resign", lambda: pytest.fail("re-signed with nothing swapped"))
     backups = _record_backups(tool, tmp_path, monkeypatch)
-    _copy_failing_at(tool, monkeypatch, 1, exc)
+    if step == "copy":
+        _copy_failing_at(tool, monkeypatch, 1, exc)
+    else:
+
+        def digest_fails(_path: Path) -> bytes:
+            raise exc
+
+        monkeypatch.setattr(tool, "_sha256", digest_fails)
     with pytest.raises(type(exc)):
         tool._run_python_suite(build_dir, [])
     assert backups and not backups[0].exists(), "the backup directory was left behind"

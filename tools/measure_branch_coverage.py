@@ -109,7 +109,9 @@ committed digest covers; on a clean checkout it leaves no diff.
 The instrumented library writes its counters into the build tree's `.gcda`
 files, beside `ctest`'s, so the inventory is then of the arcs NO suite takes.
 Whether the suites reached it is measured: a run that moves no `.gcda` is
-refused.
+refused. That cannot tell a whole suite from part of one, so the suites run
+without the caller's `PYTEST_ADDOPTS`, where a `-k`, `-m` or `--lf` narrowed
+`pytest tests/` unseen; a pytest option is passed with `--pytest-arg`.
 
     ctest --test-dir build-cov
     python tools/measure_branch_coverage.py build-cov --python-suite
@@ -147,6 +149,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import importlib.util
 import os
 import re
@@ -436,14 +439,35 @@ def _pytest_command(pytest_args: list[str]) -> list[str]:
     ``--no-cov`` is pytest-cov's option, and pytest-cov is a dev extra, not a
     requirement of the package: on a plain install pytest rejects the flag
     (``unrecognized arguments: --no-cov``) and the whole Python-suite pass
-    dies before a test runs.  It is still passed when the plugin is present:
-    a caller with coverage options in ``PYTEST_ADDOPTS`` would otherwise have
-    this run trace the Python side too, which is not what it measures.
+    dies before a test runs.  It is still passed when the plugin is present,
+    though the coverage options in ``PYTEST_ADDOPTS`` it was kept for no
+    longer reach this run (``_suite_env``).  A ``--cov`` in ``pytest_args``
+    comes after it and is disabled too, but not quietly: pytest-cov warns
+    (``CovDisabledWarning``), and this repository's ``filterwarnings``
+    (``error``) turns that into a pytest exit status of 1 after every test
+    has run (measured, pytest 9.1.1 and pytest-cov 7.1.0; no ``.coverage``
+    is written).
     """
     command = [sys.executable, "-m", "pytest", "tests/", "-q"]
     if importlib.util.find_spec("pytest_cov") is not None:
         command.append("--no-cov")
     return command + list(pytest_args)
+
+
+#: The caller's environment variables the suites run without.  pytest adds
+#: ``PYTEST_ADDOPTS`` to every command line, so a caller's ``-k``, ``-m`` or
+#: ``--lf`` there narrowed ``pytest tests/``, and the tests it kept still
+#: moved counters: SuitesTookNoArcError did not fire, and every arc only the
+#: deselected tests take was reported as never taken.  Measured on a
+#: two-test suite: each of the three ran one test, exit 0, and left the
+#: other's counter unmoved.  A pytest option is passed with ``--pytest-arg``,
+#: where the command line shows it.
+_SUITE_ENV_REMOVED = ("PYTEST_ADDOPTS",)
+
+
+def _suite_env() -> dict[str, str]:
+    """The environment both suites run under: the caller's, less ``_SUITE_ENV_REMOVED``."""
+    return {key: value for key, value in os.environ.items() if key not in _SUITE_ENV_REMOVED}
 
 
 class SuitesTookNoArcError(RuntimeError):
@@ -485,12 +509,26 @@ def _replace(src: Path, dst: Path) -> None:
         staged.unlink(missing_ok=True)
 
 
-def _undo_swap(installed: Path, saved: Path, backup_dir: Path) -> None:
+def _sha256(path: Path) -> bytes:
+    """SHA-256 of ``path``, read in 1 MiB blocks: memory does not grow with the file."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _undo_swap(installed: Path, saved: Path, backup_dir: Path, release_digest: bytes) -> None:
     """Put the release library back and re-sign over it, if it was replaced;
     then drop the backup.
 
     Whether it was replaced is read from the file, not from a flag set after
     the swap: an interrupt can land between the rename and any such flag.
+    The installed file's SHA-256 is compared with ``release_digest``, the
+    backup's, taken when the backup was made, so the comparison reads only
+    the installed file, in blocks, and holds neither library in memory.
+    (Both used to be read whole and compared: two copies of the library in
+    memory on every path out; measured, a 64 MiB peak for a 32 MiB library.)
     A swap refused before the rename leaves nothing to restore or re-sign.
     If the restore fails, the backup is the only release copy, so it is kept
     and named.  Once the library is back the backup has done its job, and it
@@ -502,7 +540,7 @@ def _undo_swap(installed: Path, saved: Path, backup_dir: Path) -> None:
     # error is chained under a message naming what the package now holds, and
     # an interrupt prints that message and propagates itself.
     try:
-        swapped = installed.read_bytes() != saved.read_bytes()
+        swapped = _sha256(installed) != release_digest
         if swapped:
             _replace(saved, installed)
     except BaseException as exc:
@@ -547,9 +585,10 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
     saved = backup_dir / installed.name
     try:
         shutil.copy2(installed, saved)
+        release_digest = _sha256(saved)
     except BaseException:
         # Nothing is swapped yet, so the directory holds nothing anyone needs,
-        # whether the copy failed or was interrupted.
+        # whether the copy or its digest failed or was interrupted.
         shutil.rmtree(backup_dir, ignore_errors=True)
         raise
     try:
@@ -567,12 +606,13 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
         # nothing) and must not be published as the all-suite figure.
         before = _gcda_state(build_dir)
         status = 0
+        env = _suite_env()
         for command in (
             _pytest_command(pytest_args),
             [sys.executable, "wycheproof_vectors/run_wycheproof.py"],
         ):
             # Both run whatever the first returns: each one's counters are data.
-            returncode = subprocess.run(command, cwd=REPO_ROOT, check=False).returncode
+            returncode = subprocess.run(command, cwd=REPO_ROOT, env=env, check=False).returncode
             status = status or returncode
         if _gcda_state(build_dir) == before:
             raise SuitesTookNoArcError(
@@ -581,7 +621,7 @@ def _run_python_suite(build_dir: Path, pytest_args: list[str]) -> int | None:
             )
         return status
     finally:
-        _undo_swap(installed, saved, backup_dir)
+        _undo_swap(installed, saved, backup_dir, release_digest)
 
 
 def main(argv: list[str] | None = None) -> int:
