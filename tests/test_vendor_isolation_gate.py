@@ -1653,3 +1653,41 @@ class TestContainerRecipes:
             "RUN apt-get install -y libssl-dev\n", encoding="utf-8"
         )
         assert gate.check_container_recipes(tmp_path) == []
+
+    def test_standalone_invocation_reaches_the_git_enumeration(self) -> None:
+        """``python tools/check_vendor_isolation.py`` must use ``git ls-files``.
+
+        The CI entry point runs the gate as a script, so ``sys.path[0]`` is
+        ``tools/`` and the repository root is absent -- ``from tools._repo
+        import tracked_files`` then raises ``ModuleNotFoundError``, which
+        ``_container_recipes`` catches and answers with the ``os.walk``
+        fallback, scanning generated and untracked recipes and losing the
+        worktree/sparse semantics the git path provides. Reproduced here by
+        stripping the repository root from ``sys.path`` before the module runs;
+        the observable is whether ``tools._repo`` was imported (git path) or
+        the fallback was taken. Deleting the module's ``sys.path`` insert makes
+        this fail (measured).
+        """
+        probe = (
+            "import importlib.util, os, sys\n"
+            f"repo = {str(REPO_ROOT)!r}\n"
+            "tools_dir = os.path.join(repo, 'tools')\n"
+            "sys.path = [p for p in sys.path if p and os.path.abspath(p) != repo]\n"
+            "sys.path.insert(0, tools_dir)\n"
+            "spec = importlib.util.spec_from_file_location(\n"
+            "    'cvi_standalone', os.path.join(tools_dir, 'check_vendor_isolation.py'))\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "from pathlib import Path\n"
+            "mod._container_recipes(Path(repo))\n"
+            "print('GIT_PATH' if 'tools._repo' in sys.modules else 'FALLBACK')\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip().endswith("GIT_PATH"), proc.stdout + proc.stderr

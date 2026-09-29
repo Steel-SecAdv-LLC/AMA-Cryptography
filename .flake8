@@ -12,10 +12,19 @@
 #       (sys.path inserts, try/except guards, matplotlib.use() calls) and
 #       does not flag structurally justified late imports.  Flake8 lacks
 #       that analysis, so structurally justified files are listed below.
+#
+# extend-exclude: ama_cryptography/_integrity_signature.py is a per-build,
+#       git-ignored artefact (regenerated on every import; see .gitignore and
+#       INVARIANT-17).  It exists only after a local build, carries generated
+#       long lines, and is never present in CI's lint checkout.  Ruff skips it
+#       because ruff honours .gitignore; flake8 does not, so it is named here
+#       to keep `flake8 .` clean whether or not the tree has been built.
 
 [flake8]
 max-line-length = 100
 extend-ignore = E203
+extend-exclude =
+    ama_cryptography/_integrity_signature.py
 per-file-ignores =
     ama_cryptography/__init__.py:E402
     ama_cryptography/crypto_api.py:E402

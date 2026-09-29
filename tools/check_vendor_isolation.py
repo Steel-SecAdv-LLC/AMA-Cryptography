@@ -1213,6 +1213,9 @@ def _container_recipes(repo_root: Path) -> list[Path]:
     Uses ``git ls-files`` when inside a checkout so that worktrees and sparse
     checkouts are respected; falls back to ``os.walk`` outside one.
     """
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
     try:
         from tools._repo import tracked_files
     except (ImportError, ModuleNotFoundError):
