@@ -334,10 +334,9 @@ class TestBatchVerifyRFC8032:
 
         entries = []
         for vec in RFC8032_VECTORS:
-            # RFC 8032 dict value, mypy cannot narrow (ED-001)
             pk, sk = native_ed25519_keypair_from_seed(
-                vec["secret_key_seed"]
-            )  # type: ignore[arg-type]  # dict val narrow (ED-001)
+                vec["secret_key_seed"]  # type: ignore[arg-type]  # dict val narrow (ED-001)
+            )
             assert pk == vec["public_key"], f"Keygen mismatch for {vec['name']}"
 
             sig = native_ed25519_sign(vec["message"], sk)  # type: ignore[arg-type]  # dict (ED-002)

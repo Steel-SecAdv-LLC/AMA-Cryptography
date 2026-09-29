@@ -1154,7 +1154,7 @@ class AESGCMProvider:
             import msvcrt  # Windows-only stdlib module
 
             msvcrt.locking(  # type: ignore[attr-defined]  # Windows-only (CA-004)
-                lock_fd, msvcrt.LK_LOCK, 1
+                lock_fd, msvcrt.LK_LOCK, 1  # type: ignore[attr-defined]  # Windows-only (CA-004)
             )
             return
         except (ImportError, OSError) as _lock_err:

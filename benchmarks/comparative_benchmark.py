@@ -497,14 +497,9 @@ class ComparativeBenchmark:
             # (guards against broken CFFI/Rust/pyo3 bindings that panic on import)
             import subprocess
 
+            code = "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey"
             check = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "from cryptography.hazmat.primitives"
-                    ".asymmetric.ed25519"
-                    " import Ed25519PrivateKey",
-                ],
+                [sys.executable, "-c", code],
                 capture_output=True,
                 timeout=5,
             )
