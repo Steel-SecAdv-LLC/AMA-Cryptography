@@ -1208,8 +1208,21 @@ def _pip_requirement_names(rest: str) -> list[str]:
 
 
 def _container_recipes(repo_root: Path) -> list[Path]:
-    """Every container recipe under ``repo_root``, skipping generated trees."""
-    found: list[Path] = []
+    """Every container recipe under ``repo_root``, skipping generated trees.
+
+    Uses ``git ls-files`` when inside a checkout so that worktrees and sparse
+    checkouts are respected; falls back to ``os.walk`` outside one.
+    """
+    try:
+        from tools._repo import tracked_files
+    except (ImportError, ModuleNotFoundError):
+        tracked_files = None  # type: ignore[assignment]
+    if tracked_files is not None and (repo_root / ".git").exists():
+        found: list[Path] = []
+        for pattern in _CONTAINER_NAME_PATTERNS:
+            found.extend(tracked_files(repo_root, f":(glob)**/{pattern}"))
+        return sorted(found)
+    found = []
     for directory, subdirectories, files in os.walk(repo_root):
         subdirectories[:] = sorted(d for d in subdirectories if d not in _BUILD_CONFIG_SKIP_DIRS)
         for name in sorted(files):
