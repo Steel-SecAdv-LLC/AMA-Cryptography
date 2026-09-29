@@ -232,7 +232,8 @@ class TestFailClosed:
         # refusals only; a malformed argument is still a bug worth raising.
         b = ephemeral()
         with pytest.raises(TypeError):
-            b.is_permitted(authority_key="not-bytes")  # type: ignore[arg-type]  # deliberately wrong type — this test asserts the runtime boundary check fires (AB-001)
+            # deliberately wrong type -- runtime boundary check (AB-001)
+            b.is_permitted(authority_key="not-bytes")  # type: ignore[arg-type]
 
     @pytest.mark.parametrize("length", [0, -1, 8161])
     def test_derive_key_length_bounds(self, length: int) -> None:

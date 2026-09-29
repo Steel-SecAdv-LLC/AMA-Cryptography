@@ -75,8 +75,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.key_formats as kf  # noqa: E402 -- follows the sys.path insert above (FKF-001)
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (FKF-001)
+import ama_cryptography.key_formats as kf  # noqa: E402
+import ama_cryptography.pqc_backends as pb  # noqa: E402
 from ama_cryptography._asn1 import (  # noqa: E402 -- same (FKF-001)
     cbor_decode_canonical,
     cbor_encode_canonical,

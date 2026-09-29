@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- import follows the repo-root sys.path insert above (KPC-001)
+import ama_cryptography.pqc_backends as pb  # noqa: E402  (KPC-001)
 
 X25519_BASEPOINT = bytes([9]) + b"\x00" * 31
 

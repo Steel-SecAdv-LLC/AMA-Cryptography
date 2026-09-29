@@ -658,7 +658,9 @@ def _loc_row_re(label: str) -> re.Pattern[str]:
     # (the 4.0.0 table left three rows uncounted — the checker treats that
     # as a failure and the regenerator fills the real count).
     return re.compile(
-        rf"\|\s*{re.escape(label)}\s*\|\s*\**\s*(\d[\d,]*|—)\s*\**\s*\|\s*\**\s*(\d[\d,]*)\s*\**\s*\|"
+        rf"\|\s*{re.escape(label)}\s*\|"
+        rf"\s*\**\s*(\d[\d,]*|—)\s*\**\s*\|"
+        rf"\s*\**\s*(\d[\d,]*)\s*\**\s*\|"
     )
 
 

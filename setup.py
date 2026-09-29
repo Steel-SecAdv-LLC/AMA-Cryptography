@@ -216,7 +216,8 @@ def _check_cmake_version() -> None:
 # extension is being built; the documented ``AMA_NO_CYTHON=1`` opt-out
 # (and its companion ``AMA_NO_C_EXTENSIONS=1``, which empties the Cython
 # extension list — the native library itself is built via CMake in every
-# configuration) must therefore skip those preflight checks.  Copilot reviews #12/#15/#22 and Devin review #13
+# configuration) must therefore skip those preflight checks.
+# Copilot reviews #12/#15/#22 and Devin review #13
 # observed that the previous form ran every floor unconditionally,
 # turning a documented opt-out into an unconditional FATAL when the
 # environment lacked Cython/numpy (e.g. minimal embedded builders or
@@ -1132,8 +1133,12 @@ class CMakeBuild(build_ext):
         if platform.system() == "Windows":
             cmake_args.extend(
                 [
-                    f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{('Debug' if DEBUG else 'Release').upper()}={build_directory}",
-                    f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{('Debug' if DEBUG else 'Release').upper()}={build_directory}",
+                    f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_"
+                    f"{('Debug' if DEBUG else 'Release').upper()}"
+                    f"={build_directory}",
+                    f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_"
+                    f"{('Debug' if DEBUG else 'Release').upper()}"
+                    f"={build_directory}",
                 ]
             )
             build_args.extend(["--", "/m"])
@@ -1314,7 +1319,9 @@ class CMakeBuild(build_ext):
 setup(
     name="ama-cryptography",
     version=VERSION,
-    description="Quantum-resistant cryptographic protection system for helical mathematical Omni-Codes",
+    description=(
+        "Quantum-resistant cryptographic protection" " system for helical mathematical Omni-Codes"
+    ),
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Andrew E. A.",

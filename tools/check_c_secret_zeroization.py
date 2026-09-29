@@ -790,7 +790,7 @@ def _macro_call_findings(
 #: scrub.  The shipped C tree already carried it on most of its memsets
 #: (``memset(&tmp, 0, sizeof(tmp));  // PUBLIC-DATA: tmp — ...``); what it
 #: lacked was a rule that REQUIRED it.
-_PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105 -- a C-comment annotation token the gate greps for, not a credential (ZERO-011)
+_PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105
 
 #: The second sanctioned form for a shipped zeroing memset: the destination
 #: DOES hold secret material, and the write is made non-elidable by an
@@ -811,7 +811,7 @@ _PUBLIC_DATA_TOKEN = "PUBLIC-DATA"  # noqa: S105 -- a C-comment annotation token
 #: gate.  That sentence was not true of the one real site until the offset
 #: grammar in :data:`_DST_ARGUMENT` admitted its parenthesized offset: the
 #: call was never matched, so neither its annotation nor its barrier was read.
-_SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105 -- a C-comment annotation token the gate greps for, not a credential (ZERO-012)
+_SCRUB_BARRIER_TOKEN = "SCRUB-BARRIER"  # noqa: S105
 
 #: The opening of a GNU inline-asm statement.  What makes one a BARRIER is
 #: decided by :func:`_is_barrier_asm`, not by this pattern.
@@ -1266,7 +1266,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print()
         print(
             "Scrub secret material with ama_secure_memzero() from src/c/ama_consttime.c;\n"
-            "annotate a shipped memset-zero of non-secret data with `// PUBLIC-DATA: <name> — <why>`.\n"
+            "annotate a shipped memset-zero of non-secret data"
+            " with `// PUBLIC-DATA: <name> — <why>`.\n"
             "INVARIANT-6: secret material must be scrubbed with a write the "
             "compiler is not free to remove."
         )

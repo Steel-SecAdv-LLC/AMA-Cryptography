@@ -186,7 +186,10 @@ def _bigram_hash(prev_hash: int, cur_hash: int) -> int:
     return ((prev_hash * 0x100000001B3) ^ cur_hash) & 0xFFFFFFFFFFFFFFFF
 
 
-def _token_family_counts_py(  # noqa: C901 -- deliberate one-to-one mirror of the Cython scan loop; decomposing it would break the byte-for-byte equivalence the tests pin (MON-002)
+# deliberate one-to-one mirror of the Cython scan loop;
+# decomposing it would break the byte-for-byte equivalence
+# the tests pin (MON-002)
+def _token_family_counts_py(  # noqa: C901
     data: bytes,
     uni_hashes: "Sequence[int]",
     uni_families: "Sequence[int]",
@@ -374,10 +377,13 @@ def _marker_tables(
 _CY_VOLUME_SCORES: Any = None
 _CY_TOKEN_COUNTS: Any = None
 try:  # pragma: no cover - exercised by whichever build the test run has
-    import ama_cryptography.math_engine as _math_engine  # type: ignore[import-not-found, unused-ignore]  # compiled Cython extension — absent from a source checkout, so mypy cannot resolve it; the except branch below is the supported path (MON-001)
+    # compiled Cython extension -- absent from a source checkout,
+    # so mypy cannot resolve it; the except branch below is the
+    # supported path (MON-001)
+    import ama_cryptography.math_engine as _me  # type: ignore[import-not-found,unused-ignore]
 
-    _CY_TOKEN_COUNTS = _math_engine.token_family_counts
-    _CY_VOLUME_SCORES = _math_engine.volume_spike_scores
+    _CY_TOKEN_COUNTS = _me.token_family_counts
+    _CY_VOLUME_SCORES = _me.volume_spike_scores
 except Exception:  # pragma: no cover - extension absent
     _CY_VOLUME_SCORES = None
     _CY_TOKEN_COUNTS = None

@@ -79,6 +79,7 @@ from enum import Enum, auto
 from typing import Optional, Tuple
 
 from ama_cryptography._module_state import secure_token_bytes
+from ama_cryptography.exceptions import AmaCryptographyError
 from ama_cryptography.pqc_backends import native_sha3_256
 from ama_cryptography.secure_memory import SecureMemoryError, secure_memzero
 
@@ -120,9 +121,6 @@ class ChannelState(Enum):
     ESTABLISHED = auto()
     REKEYING = auto()
     CLOSED = auto()
-
-
-from ama_cryptography.exceptions import AmaCryptographyError
 
 
 class ChannelError(AmaCryptographyError):

@@ -128,7 +128,8 @@ def _make_entries() -> list[tuple[str, Callable[[], Any]]]:
             lambda: lc.verify_crypto_package(
                 "dummy-codes",
                 [(1.0, 1.0)],
-                object(),  # type: ignore[arg-type]  # CryptoPackage stand-in — sentinel fires first (LCT-002)
+                # CryptoPackage stand-in; sentinel fires first (LCT-002)
+                object(),  # type: ignore[arg-type]
                 dummy_bytes,
             ),
         ),

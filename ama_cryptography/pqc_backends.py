@@ -2700,7 +2700,8 @@ def _setup_chacha20poly1305_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # pt_len
             ctypes.c_char_p,  # aad
             ctypes.c_size_t,  # aad_len
-            ctypes.c_void_p,  # ciphertext (output; c_void_p so an offset into one buffer is accepted)
+            ctypes.c_void_p,  # ciphertext (output; c_void_p so an
+            #   offset into one buffer is accepted)
             ctypes.c_void_p,  # tag[16]    (output, at pt_len into the same buffer)
         ]
         lib.ama_chacha20poly1305_encrypt.restype = ctypes.c_int
@@ -4325,7 +4326,9 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_sign failed with error code {rc}"
             )
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
+        # ctypes buffer slice not typed as bytes-compatible
+        # (PQC-001)
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -4472,7 +4475,9 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_sign_ctx failed with error code {rc}"
             )
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
+        # ctypes buffer slice not typed as bytes-compatible
+        # (PQC-001)
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -4602,7 +4607,8 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
-            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-002)
+            # ctypes buffer slice not bytes-compatible (PQC-002)
+            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]
             shared_secret=bytes(ss_buf),
         )
 
@@ -4797,7 +4803,9 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         )
         if rc != 0:
             raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-003)
+        # ctypes buffer slice not typed as bytes-compatible
+        # (PQC-003)
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -5658,7 +5666,9 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
+        # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON
+        # (PQC-004)
+        from ama_cryptography.ed25519_binding import (  # type: ignore
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -5673,7 +5683,9 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
+        # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON
+        # (PQC-005)
+        from ama_cryptography.dilithium_binding import (  # type: ignore
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -5688,7 +5700,9 @@ def _probe_cython_hkdf() -> "Any":
     if not _binding_imports_permitted():
         return None
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
+        # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON
+        # (PQC-006)
+        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found, unused-ignore]
             cy_hkdf,
         )
 
@@ -7300,8 +7314,9 @@ def _wipe(*buffers: Any) -> None:
     of open-coded at every site.
 
     *Input* secrets go through :func:`_borrow` or :class:`_CBufferViews`
-    instead, which borrow a ``bytearray`` in place rather than copying it. A wipe-the-copy helper for
-    inputs is worse than useless: the copy it wipes is the second one, and the
+    instead, which borrow a ``bytearray`` in place rather than
+    copying it. A wipe-the-copy helper for inputs is worse than
+    useless: the copy it wipes is the second one, and the
     transient it had to make to get there is the un-wipeable ``bytes`` the
     exercise was supposed to avoid.
     """

@@ -358,7 +358,10 @@ def main() -> dict[str, dict[str, float | str]]:
             # let a later write of a str corrupt r's declared type.
             results[name] = dict(r)
             print(
-                f"{name:<35} {r['ops_per_sec']:>12,.0f} {r['median_us']:>12.1f} {r['p95_ns']/1000:>12.1f} {r['stdev_ns']/1000:>12.1f}"
+                f"{name:<35} {r['ops_per_sec']:>12,.0f}"
+                f" {r['median_us']:>12.1f}"
+                f" {r['p95_ns']/1000:>12.1f}"
+                f" {r['stdev_ns']/1000:>12.1f}"
             )
         except Exception as e:
             print(f"{name:<35} ERROR: {e}")

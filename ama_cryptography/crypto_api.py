@@ -1153,7 +1153,8 @@ class AESGCMProvider:
         try:
             import msvcrt  # Windows-only stdlib module
 
-            msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]  # Windows-only attr (CA-004)
+            # Windows-only attr (CA-004)
+            msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
             return
         except (ImportError, OSError) as _lock_err:
             raise RuntimeError(
@@ -2449,12 +2450,15 @@ class CryptoPackageResult:
     #: the table that replaces stripped fields — so the finding is exactly
     #: inverted.  Suppressed line-scoped with a tracking ID per INVARIANT-13;
     #: the values are pinned by
-    #: tests/test_crypto_api_packages.py::TestCryptoPackageSerialization::test_pickle_strips_the_private_signing_key.
+    #: tests/test_crypto_api_packages.py::
+    #: TestCryptoPackageSerialization::
+    #: test_pickle_strips_the_private_signing_key.
     _SECRET_FIELD_PLACEHOLDERS: ClassVar[Dict[str, Any]] = {
         "hmac_key": b"",
-        "hkdf_master_secret": b"",  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
+        # nosec B105 -- empty placeholder, not a secret (CAPI-002)
+        "hkdf_master_secret": b"",  # nosec B105
         "derived_keys": [],
-        "kem_shared_secret": None,  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
+        "kem_shared_secret": None,  # nosec B105
     }
 
     @staticmethod

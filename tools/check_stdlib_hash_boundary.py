@@ -1004,7 +1004,9 @@ def scan_package(package_dir: Path) -> list[str]:
             trees[path] = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError as exc:  # pragma: no cover - a broken tree fails elsewhere
             failures.append(
-                f"{path.relative_to(package_dir).as_posix()}: unparseable ({exc}); cannot verify the boundary"
+                f"{path.relative_to(package_dir).as_posix()}"
+                f": unparseable ({exc})"
+                "; cannot verify the boundary"
             )
     resolvers = {
         path: StringResolver(tree, module_name_for(path, package_dir))

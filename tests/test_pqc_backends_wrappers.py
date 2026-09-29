@@ -108,7 +108,8 @@ class TestX25519Batch:
         pk, _sk = pq.native_x25519_keypair()
         with pytest.raises(ValueError, match=r"scalar at index 0 must be bytes-like"):
             pq.native_x25519_scalarmult_batch(
-                [12345],  # type: ignore[list-item]  # int stand-in for non-bytes-like — exercises per-element type rejection (XB-001)
+                # int stand-in for non-bytes-like (XB-001)
+                [12345],  # type: ignore[list-item]
                 [bytes(pk)],
             )
 

@@ -29,7 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 try:
-    import check_ctypes_abi as gate  # type: ignore[import-not-found]  # loaded from tools/ via runtime sys.path insert; mypy cannot see it (ABI-002)
+    # loaded from tools/ via runtime sys.path insert (ABI-002)
+    import check_ctypes_abi as gate  # type: ignore[import-not-found]
 finally:
     sys.path.pop(0)
 

@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- import follows the repo-root sys.path insert above (SEL-001)
+import ama_cryptography.pqc_backends as pb  # noqa: E402  (SEL-001)
 
 # Inputs no selector may accept. Each is a shape that has produced a real
 # silent-downgrade bug in some library somewhere.

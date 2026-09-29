@@ -736,9 +736,14 @@ def create_ethical_binding_flow() -> None:
     ax.text(
         9,
         0.8,
-        "The 4 Omni-Code Ethical Pillars form a balanced vector (each w = 3.0, total = 12.0).\n"
-        "This vector is hashed with SHA3-256 and a 128-bit signature is injected into HKDF context and signature messages,\n"
-        "cryptographically binding keys and signatures to an explicit ethical profile. This is binding, not enforcement.",
+        "The 4 Omni-Code Ethical Pillars form a balanced"
+        " vector (each w = 3.0, total = 12.0).\n"
+        "This vector is hashed with SHA3-256 and a 128-bit"
+        " signature is injected into HKDF context and"
+        " signature messages,\n"
+        "cryptographically binding keys and signatures to"
+        " an explicit ethical profile."
+        " This is binding, not enforcement.",
         ha="center",
         fontsize=10,
         style="italic",
@@ -833,7 +838,8 @@ def create_quantum_comparison() -> None:
     fig.text(
         0.5,
         -0.02,
-        "ML-DSA-65 (Dilithium) provides 192-bit security against both classical and quantum attacks",
+        "ML-DSA-65 (Dilithium) provides 192-bit security"
+        " against both classical and quantum attacks",
         ha="center",
         fontsize=10,
         style="italic",

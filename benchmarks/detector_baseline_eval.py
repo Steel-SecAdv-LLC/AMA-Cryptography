@@ -154,7 +154,8 @@ def collect_real_timings(count: int) -> Tuple[List[float], str, str]:
         # SHAPE of a timing distribution for a measurement harness, never key
         # material.  A seeded Mersenne Twister is what makes the fallback
         # reproducible, which is the property this needs.
-        rng = random.Random(20260816)  # fmt: skip  # noqa: S311 -- deterministic baseline data, not key material (DBE-002)
+        # deterministic baseline data, not key material (DBE-002)
+        rng = random.Random(20260816)  # fmt: skip  # noqa: S311
         out = [rng.lognormvariate(-3.9, 0.22) for _ in range(count)]
         return (
             out,
@@ -167,7 +168,8 @@ def inject_spikes(base: Sequence[float], *, rate: float, magnitude: float, seed:
     # Same S311 rationale as above: choosing WHICH samples to corrupt in a
     # benchmark stream is not a cryptographic draw, and seeding it is what
     # makes the evaluation reproducible run to run.
-    rng = random.Random(seed)  # fmt: skip  # noqa: S311 -- deterministic baseline data, not key material (DBE-002)
+    # deterministic baseline data, not key material (DBE-002)
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311
     values = list(base)
     anomalies: Set[int] = set()
     for i in range(len(values)):
@@ -212,7 +214,9 @@ def synthetic_base(count: int, seed: int) -> List[float]:
     gate is exactly reproducible: identical output across repeated runs at one
     sample count, and zero false shift events over eight seeds.  The delay and
     coverage it reports depend on --samples, so they are quoted with it —
-    measured at 1,000 / 2,000 / 4,000 / 8,000 samples: delay 80 / 45 / 68 / 29 and coverage 0.73 / 0.85 / 0.77 / 0.90.  An earlier
+    measured at 1,000 / 2,000 / 4,000 / 8,000 samples:
+    delay 80 / 45 / 68 / 29 and coverage
+    0.73 / 0.85 / 0.77 / 0.90.  An earlier
     revision of this comment said "26-40 samples, coverage 0.87-0.91" with no
     sample count attached, and that pair describes none of the four.
 
@@ -220,7 +224,8 @@ def synthetic_base(count: int, seed: int) -> List[float]:
     evidence — but the pass/fail decision is taken here, where a failure means
     the detector changed.
     """
-    rng = random.Random(seed)  # fmt: skip  # noqa: S311 -- deterministic evaluation stream, not key material (DBE-001)
+    # deterministic evaluation stream, not key material (DBE-001)
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311
     out: List[float] = []
     for _ in range(count):
         value = rng.lognormvariate(-3.9, 0.22)
@@ -701,7 +706,9 @@ def main() -> int:
         "eval_start": EVAL_START,
         "streams": [],
     }
-    streams_out: List[Dict[str, object]] = payload["streams"]  # type: ignore[assignment]  # JSON-decoded payload narrowed to its checked concrete type (DBE-003)
+    # JSON-decoded payload narrowed to its checked concrete
+    # type (DBE-003)
+    streams_out: List[Dict[str, object]] = payload["streams"]  # type: ignore[assignment]
 
     # Seeded spike streams (for the comparison and the derived tie band) and
     # the sustained shift stream.

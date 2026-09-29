@@ -96,7 +96,9 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "register across the unrolled body while the dividend increments.",
     ),
     "ama_ed25519_verify": (
-        2,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects (and with SVE2 kernels on)
+        # EXACT: gcc-13 -O3, identical on x86-64 and
+        # aarch64 shared objects (and with SVE2 kernels on)
+        2,
         "ama_ed25519.c `ama_ed25519_verify` calls "
         "`ama_ed25519_half_reduce(v0, v1, &v1_negative, h)`, defined in "
         "internal/ama_ed25519_halfsize.h: `q = (uh + A) / (vh + C)` and "

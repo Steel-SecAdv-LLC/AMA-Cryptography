@@ -60,7 +60,8 @@ class TestSecureMemzero:
         from ama_cryptography.secure_memory import secure_memzero
 
         with pytest.raises(TypeError):
-            secure_memzero("not a buffer")  # type: ignore[arg-type]  # wrong type to verify TypeError rejection (SMC-001)
+            # wrong type to verify TypeError (SMC-001)
+            secure_memzero("not a buffer")  # type: ignore[arg-type]
 
     def test_large_buffer(self) -> None:
         """secure_memzero works with large buffers."""

@@ -16,6 +16,7 @@ Enterprise-grade key management with:
 
 import base64
 import contextlib
+import importlib.util
 import json
 import logging
 import os
@@ -184,7 +185,6 @@ logger = logging.getLogger(__name__)
 # Use find_spec() rather than a probe import to avoid an unused-import
 # binding that CodeQL and ruff would flag.
 # ---------------------------------------------------------------------------
-import importlib.util
 
 HSM_AVAILABLE: bool = importlib.util.find_spec("PyKCS11") is not None
 
@@ -1780,7 +1780,9 @@ class HSMKeyStorage:
         token_label: str = "AmaCryptography",
         pin: Optional[
             str
-        ] = None,  # nosec B107 -- default None, not a hardcoded secret; PIN is caller-provided at runtime (KM-001)
+            # nosec B107 -- default None, not a hardcoded secret;
+            # PIN is caller-provided at runtime (KM-001)
+        ] = None,  # nosec B107
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1864,9 +1866,9 @@ class HSMKeyStorage:
             try:
                 info = self.lib.getTokenInfo(slot)
                 # PKCS#11 token labels are public identifiers, not secret material.
-                if (
-                    info.label.strip() == token_label
-                ):  # nosemgrep: non-constant-time-comparison -- PKCS#11 token labels are public identifiers, not secret material (KM-003)
+                if info.label.strip() == token_label:  # nosemgrep: non-constant-time-comparison
+                    # PKCS#11 token labels are public identifiers,
+                    # not secret material (KM-003)
                     return slot
             except self.pkcs11.PyKCS11Error:
                 continue
@@ -2155,7 +2157,10 @@ if __name__ == "__main__":
     # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
     logger.info(
-        f"[OK] Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
+        # nosemgrep: non-constant-time-comparison
+        # demo-only equality check on freshly-generated key (KM-004)
+        "[OK] Key retrieved: "
+        f"{retrieved_key == test_key}"
     )
 
     logger.info("\n" + "=" * 70)

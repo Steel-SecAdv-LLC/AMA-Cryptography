@@ -680,7 +680,8 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate  # type: ignore[import-not-found]  # loaded from tools/ via runtime sys.path insert; mypy cannot see it (PFC-001)
+            # loaded from tools/ via sys.path insert (PFC-001)
+            import check_error_state_gating as gate  # type: ignore[import-not-found]
         finally:
             sys.path.pop(0)
 

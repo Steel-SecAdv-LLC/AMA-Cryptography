@@ -434,7 +434,9 @@ class ComparativeBenchmark:
             if check.returncode != 0:
                 raise ImportError("PyNaCl not importable")
 
-            from nacl.signing import SigningKey, VerifyKey  # fmt: skip  # noqa: F401 -- imported only to probe PyNaCl availability for the comparison benchmark (CB-001)
+            # imported only to probe PyNaCl availability for the
+            # comparison benchmark (CB-001)
+            from nacl.signing import SigningKey, VerifyKey  # fmt: skip  # noqa: F401
 
             test_data = b"Test message for benchmarking performance" * 10
 
@@ -499,7 +501,9 @@ class ComparativeBenchmark:
                 [
                     sys.executable,
                     "-c",
-                    "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey",
+                    "from cryptography.hazmat.primitives"
+                    ".asymmetric.ed25519"
+                    " import Ed25519PrivateKey",
                 ],
                 capture_output=True,
                 timeout=5,

@@ -69,13 +69,15 @@ def _setup_namespace(platform_module: object = platform) -> dict[str, object]:
 
 class TestTheProbeIsReal:
     def test_it_accepts_a_flag_the_compiler_supports(self) -> None:
-        assert _setup_namespace()["_compiler_accepts"]("-O2") is True  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
+        # exec'd namespace: mypy cannot type the callable (BSA-002)
+        assert _setup_namespace()["_compiler_accepts"]("-O2") is True  # type: ignore[operator]
 
     def test_it_rejects_a_flag_the_compiler_does_not(self) -> None:
         # Non-vacuity: a probe that always returned True would add the flag on
         # a toolchain that then fails the build.
         accepts = _setup_namespace()["_compiler_accepts"]
-        assert accepts("-fthis-flag-does-not-exist-xyz") is False  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
+        # exec'd namespace: mypy cannot type the callable (BSA-002)
+        assert accepts("-fthis-flag-does-not-exist-xyz") is False  # type: ignore[operator]
 
 
 class TestTheProbeTargetsWhatTheBuildTargets:
@@ -90,14 +92,16 @@ class TestTheProbeTargetsWhatTheBuildTargets:
 
     def test_arch_flags_are_read_from_archflags(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ARCHFLAGS", "-arch arm64 -arch x86_64")
-        arches = _setup_namespace()["_target_arches"]()  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
+        # exec'd namespace: mypy cannot type the callable (BSA-002)
+        arches = _setup_namespace()["_target_arches"]()  # type: ignore[operator]
         assert arches == ["arm64", "x86_64"]
 
     def test_a_single_architecture_build_reports_no_arch_flags(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ARCHFLAGS", "")
-        assert _setup_namespace()["_target_arches"]() == []  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
+        # exec'd namespace: mypy cannot type the callable (BSA-002)
+        assert _setup_namespace()["_target_arches"]() == []  # type: ignore[operator]
 
     def test_the_probe_carries_the_arch_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Non-vacuity for the fix itself: with a target this host cannot build
@@ -105,7 +109,8 @@ class TestTheProbeTargetsWhatTheBuildTargets:
         # only possible if the -arch flags reached the probe command.
         monkeypatch.setenv("ARCHFLAGS", "-arch this-arch-does-not-exist-xyz")
         accepts = _setup_namespace()["_compiler_accepts"]
-        assert accepts("-O2") is False  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
+        # exec'd namespace: mypy cannot type the callable (BSA-002)
+        assert accepts("-O2") is False  # type: ignore[operator]
 
 
 @pytest.mark.skipif(
@@ -137,7 +142,8 @@ class TestAUniversalBuildGetsPerSliceFlags:
         monkeypatch.setenv("ARCHFLAGS", "-arch arm64 -arch x86_64")
         namespace = _setup_namespace()
         namespace["_compiler_accepts"] = lambda flag: True
-        flags, _ = namespace["get_compiler_flags"]()  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
+        # exec'd namespace: mypy cannot type the callable (BSA-002)
+        flags, _ = namespace["get_compiler_flags"]()  # type: ignore[operator]
         return list(flags)
 
     def test_no_bare_cfi_flag_survives_a_multi_arch_build(
@@ -194,7 +200,8 @@ class TestTheFlagIsSelected:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="MSVC branch uses /guard:cf")
     def test_the_architectures_cfi_flag_is_in_the_compile_flags(self) -> None:
-        flags, _ = _setup_namespace()["get_compiler_flags"]()  # type: ignore[operator]  # exec'd namespace: mypy cannot type the callable (BSA-002)
+        # exec'd namespace: mypy cannot type the callable (BSA-002)
+        flags, _ = _setup_namespace()["get_compiler_flags"]()  # type: ignore[operator]
         machine = platform.machine().lower()
         expected = self._CFI_FLAG_BY_MACHINE.get(machine)
         if expected is None:

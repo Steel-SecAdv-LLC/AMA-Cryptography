@@ -174,7 +174,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=394)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    rng = random.Random(args.seed)  # fmt: skip  # noqa: S311 -- anomaly-injection positions from a seeded PRNG so the experiment reproduces; nothing cryptographic is drawn (REE-001)
+    # anomaly-injection positions from a seeded PRNG so the
+    # experiment reproduces; not cryptographic (REE-001)
+    rng = random.Random(args.seed)  # fmt: skip  # noqa: S311
 
     trace = benign_trace(args.samples)
     med = statistics.median(trace)
@@ -202,9 +204,9 @@ def main() -> int:
                 tpr, fpr = rates(fn(t), idx)
                 tprs.append(tpr)
                 fprs.append(fpr)
-            rows.append(
-                f"point\tx{k}\t{name}\t{statistics.fmean(tprs):.3f}\t{statistics.fmean(fprs):.4f}\t-\t{args.repeats}\t-"
-            )
+            tpr_m = statistics.fmean(tprs)
+            fpr_m = statistics.fmean(fprs)
+            rows.append(f"point\tx{k}\t{name}\t{tpr_m:.3f}" f"\t{fpr_m:.4f}\t-\t{args.repeats}\t-")
     for k in (1.5, 2.0, 3.0):
         for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
             tprs, fprs = [], []
@@ -213,15 +215,17 @@ def main() -> int:
                 tpr, fpr = rates(fn(t), idx)
                 tprs.append(tpr)
                 fprs.append(fpr)
-            rows.append(
-                f"burst\tx{k}\t{name}\t{statistics.fmean(tprs):.3f}\t{statistics.fmean(fprs):.4f}\t-\t{args.repeats}\t-"
-            )
+            tpr_m = statistics.fmean(tprs)
+            fpr_m = statistics.fmean(fprs)
+            rows.append(f"burst\tx{k}\t{name}\t{tpr_m:.3f}" f"\t{fpr_m:.4f}\t-\t{args.repeats}\t-")
     for s in (0.05, 0.10, 0.30, 1.00):
         for name, fn in (("3R", r3_alarms), ("baseline", baseline_alarms)):
             t, mid = inject_step(trace, s)
             detected, delay, fpr, excess = step_metrics(fn(t), clean_alarms[name], mid)
             rows.append(
-                f"step\t+{int(s*100)}%\t{name}\t{int(detected)}\t{fpr:.4f}\t{delay}\t1\t{excess:+.4f}"
+                f"step\t+{int(s*100)}%\t{name}"
+                f"\t{int(detected)}\t{fpr:.4f}"
+                f"\t{delay}\t1\t{excess:+.4f}"
             )
 
     out = REPO / args.out

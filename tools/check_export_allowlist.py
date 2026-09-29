@@ -102,7 +102,11 @@ def _find_library(explicit: Optional[Path]) -> Optional[Path]:
 
 
 def _public_api_gate() -> ModuleType:
-    """``tools/check_public_api_docs.py``, loaded by path (``tools/`` is not a package on ``sys.path`` when this runs as a script)."""
+    """``tools/check_public_api_docs.py``, loaded by path.
+
+    ``tools/`` is not a package on ``sys.path`` when
+    this runs as a script.
+    """
     path = Path(__file__).resolve().parent / "check_public_api_docs.py"
     spec = importlib.util.spec_from_file_location("_public_api_for_export_allowlist", path)
     if spec is None or spec.loader is None:  # pragma: no cover - unreachable on a real tree

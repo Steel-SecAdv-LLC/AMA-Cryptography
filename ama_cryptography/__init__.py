@@ -66,7 +66,11 @@ if _sys.platform == "win32":
     if _os.path.isdir(_here):
         try:
             _AMA_DLL_DIR_COOKIES.append(
-                _os.add_dll_directory(_here)  # type: ignore[attr-defined]  # Windows-only API; mypy on Linux/macOS (where strict CI runs) does not see it (WIN-001)
+                _os.add_dll_directory(  # type: ignore[attr-defined]
+                    _here
+                )  # Windows-only API; mypy on Linux/macOS
+                # (where strict CI runs) does not see it
+                # (WIN-001)
             )
         except (OSError, AttributeError):
             # AttributeError on Python <3.8 (we require >=3.10 so this is
