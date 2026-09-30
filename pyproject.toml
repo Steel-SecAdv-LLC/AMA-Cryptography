@@ -504,6 +504,9 @@ ignore_missing_imports = true
 # Cython extension modules — no .py source or PEP 561 stubs.
 [[tool.mypy.overrides]]
 module = [
+    "ama_cryptography.dilithium_binding",
+    "ama_cryptography.ed25519_binding",
+    "ama_cryptography.hkdf_binding",
     "ama_cryptography.hmac_binding",
     "ama_cryptography.math_engine",
 ]

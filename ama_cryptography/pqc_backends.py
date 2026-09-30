@@ -5659,7 +5659,7 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        from ama_cryptography.ed25519_binding import (  # type: ignore  # optional ext (PQC-004)
+        from ama_cryptography.ed25519_binding import (
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -5674,7 +5674,7 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
     if not _binding_imports_permitted():
         return None, None
     try:
-        from ama_cryptography.dilithium_binding import (  # type: ignore  # optional ext (PQC-005)
+        from ama_cryptography.dilithium_binding import (
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -5689,9 +5689,7 @@ def _probe_cython_hkdf() -> "Any":
     if not _binding_imports_permitted():
         return None
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore  # optional ext (PQC-006)
-            cy_hkdf,
-        )
+        from ama_cryptography.hkdf_binding import cy_hkdf
 
         return cy_hkdf
     except (ImportError, AttributeError):
