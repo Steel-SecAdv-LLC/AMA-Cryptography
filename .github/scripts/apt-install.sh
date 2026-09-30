@@ -169,10 +169,70 @@ sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* \
 # Every attempt is bounded — there is no unbounded arm to fall through to.
 # --kill-after is the load-bearing flag: SIGTERM is a request, SIGKILL is not.
 # Without it a wedged apt outlives its own timeout.
+#
+# WHY EVERY RETRY FIRST RECOVERS DPKG
+# -----------------------------------
+# The bound that ends a stalled attempt does not know which phase apt is in.
+# When it fires after the download, it kills dpkg mid-unpack.  dpkg's journal
+# (/var/lib/dpkg/updates) then makes every later apt-get refuse to run —
+# "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'"
+# — so the retries this script exists to make were all dead on arrival.
+#
+# Measured: `Test ubuntu-latest / Python 3.14` on run 36739915970 fetched
+# cmake over a slow mirror in 1m57s, was killed at the fast path's 120s bound
+# while unpacking cmake-data, and failed all three retries with exactly that
+# line and apt's exit 100.
+#
+# Reproduced against apt 2.8.3 and dpkg on noble, with a local repository
+# holding a package and one that depends on it, by SIGKILLing
+# `apt-get install` mid-unpack.  The previous version of this script then
+# failed every attempt with the line above.  Two steps are needed, and each
+# was measured to be insufficient alone:
+#   * `dpkg --configure -a` replays the journal, which is what clears the
+#     refusal.  It does not finish the package the kill left half-unpacked:
+#     that one stays `reinstreq half-installed`, and a plain `install` of the
+#     dependent package then fails in dpkg's configure step (exit 100).
+#   * `apt-get install --reinstall` of each `reinstreq` package unpacks it
+#     again, after which its dependants configure and the install succeeds.
+#
+# On a clean dpkg database both are no-ops.  Neither failure is fatal here:
+# the apt-get that follows reports what it makes of the database, and that
+# failure is the attempt's.
+recover_dpkg() {
+    local bound="$1"
+    local left
+    local -a broken=()
+    if ! sudo timeout --kill-after="$KILL_AFTER" "$bound" dpkg --configure -a; then
+        echo "apt-install.sh: dpkg --configure -a did not complete; the" \
+             "apt-get below reports the state it leaves" >&2
+    fi
+    mapfile -t broken < <(
+        dpkg-query -W -f='${db:Status-Eflag} ${binary:Package}\n' 2>/dev/null |
+            awk '$1 == "reinstreq" { print $2 }'
+    )
+    if [ "${#broken[@]}" -eq 0 ]; then return 0; fi
+    left="$(budget_left)"
+    if [ "$left" -le 0 ]; then return 0; fi
+    if [ "$bound" -gt "$left" ]; then bound="$left"; fi
+    echo "apt-install.sh: reinstalling what an interrupted attempt left" \
+         "half-installed: ${broken[*]}"
+    if ! sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+            apt-get "${APT_NET_OPTS[@]}" install -y --reinstall "${broken[@]}"; then
+        echo "apt-install.sh: the reinstall did not complete; the apt-get" \
+             "below reports the state it leaves" >&2
+    fi
+}
+
 attempt_install() {
     local bound="$1"
     shift
     local rc
+    local left
+    recover_dpkg "$bound"
+    # Recovery spends from the same budget; re-clamp before `update`.
+    left="$(budget_left)"
+    if [ "$left" -le 0 ]; then return 124; fi
+    if [ "$bound" -gt "$left" ]; then bound="$left"; fi
     sudo timeout --kill-after="$KILL_AFTER" "$bound" \
         apt-get "${APT_NET_OPTS[@]}" update
     rc=$?
@@ -185,7 +245,6 @@ attempt_install() {
     # contract stated at the top of this script held per command, not per
     # attempt, and the worst case re-created the cancelled-at-job-cap
     # failure this script exists to prevent.
-    local left
     left="$(budget_left)"
     if [ "$left" -le 0 ]; then return 124; fi
     if [ "$bound" -gt "$left" ]; then bound="$left"; fi
