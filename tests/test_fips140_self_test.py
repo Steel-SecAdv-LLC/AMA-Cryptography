@@ -16,6 +16,7 @@ Tests for the FIPS 140-3 power-on self-test infrastructure:
 Run with:  pytest tests/test_fips140_self_test.py -v -m fips
 """
 
+import logging
 import sys
 import threading
 from unittest.mock import patch
@@ -486,6 +487,7 @@ class TestPostStateTransitions:
 
         reason = "Pairwise consistency test failed for ML-DSA-65: synthetic, from another thread"
         real_rng = st._run_rng_stage
+        failed_post = st.last_failure()["failed_post"]
 
         def rng_then_another_thread_fails() -> tuple[bool, str | None]:
             outcome = real_rng()
@@ -498,14 +500,232 @@ class TestPostStateTransitions:
             assert st.reset_module() is False
         assert st.module_status() == "ERROR"
         assert st.module_error_reason() == reason
-        # POST's own stages all passed; the record carries the reason and no run.
+        # POST's own stages all passed; the record carries the reason and no
+        # run, and the last failed POST it holds is not replaced.
         assert all(ok is not False for _, ok, _ in st.module_self_test_results())
         assert st.last_failure() == {
             "reason": reason,
             "results": [],
             "duration_ms": 0.0,
             "stage_durations_ms": {},
+            "failed_post": failed_post,
         }
+
+    @pytest.mark.parametrize("fails", ["returning", "raising"])
+    @pytest.mark.parametrize(
+        "lands", ["before-the-run-fails", "as-post-enters-error", "as-the-run-records"]
+    )
+    def test_a_failed_run_survives_an_error_that_lands_before_its_record(
+        self, lands: str, fails: str
+    ) -> None:
+        """Another thread's failure can land between POST's own ``_set_error``
+        and the ``finally`` that records the run: as POST enters ERROR, or as
+        the ``finally`` begins.  Recorded from the live state alone, that newer
+        ERROR was the only one recorded, and the failed run's reason and table
+        were in no record, before recovery or after it.  The newer ERROR is the
+        most recent failure and is reported as one, with no run;
+        ``failed_post`` holds the failed run, its own reason beside its own
+        table.  One that lands inside the failing stage is followed by POST's
+        own failure, which is then the most recent: the four keys and
+        ``failed_post`` both hold the run."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        other = "Pairwise consistency test failed for ML-DSA-65: synthetic, from another thread"
+        own = {
+            "returning": "synthetic oracle failure",
+            "raising": (
+                "FIPS POST internal error: stage 'oracle' raised RuntimeError: stage escaped"
+            ),
+        }[fails]
+        # The objects _self_test binds; patched below on _self_test by name.
+        real_set_error = ms._set_error
+        real_clear = ms._clear_self_test_thread
+        entered: list[str] = []
+
+        def another_thread_fails() -> None:
+            thread = threading.Thread(target=real_set_error, args=(other,))
+            thread.start()
+            thread.join(30)
+            assert not thread.is_alive()
+
+        def failing_oracle(strict_mode: bool) -> tuple[bool, str | None]:
+            if lands == "before-the-run-fails":
+                another_thread_fails()
+            if fails == "raising":
+                raise RuntimeError("stage escaped")
+            return False, own
+
+        def post_enters_error(reason: str) -> int:
+            sequence = real_set_error(reason)
+            entered.append(reason)
+            if lands == "as-post-enters-error":
+                another_thread_fails()
+            return sequence
+
+        def the_finally_begins() -> None:
+            # The first call in POST's ``finally``, ahead of the record, once
+            # POST has entered ERROR.
+            if lands == "as-the-run-records" and entered:
+                another_thread_fails()
+            real_clear()
+
+        first_sequence = ms._ERROR_SEQUENCE
+        with (
+            patch.object(st, "_set_error", post_enters_error),
+            patch.object(st, "_clear_self_test_thread", the_finally_begins),
+            patch.object(st, "_run_timing_oracle_stage", failing_oracle),
+        ):
+            if fails == "raising":
+                with pytest.raises(RuntimeError, match="stage escaped"):
+                    st._run_self_tests()
+            else:
+                assert st._run_self_tests() is False
+        # POST entered ERROR once, with its own reason, and the other thread once.
+        assert entered == [own]
+        assert ms._ERROR_SEQUENCE == first_sequence + 2
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        assert run["results"][-1] == ("POST", False, own)
+        assert list(run["stage_durations_ms"])[-1] == "oracle"
+        if lands == "before-the-run-fails":
+            assert st.module_error_reason() == own
+            record = {**run, "failed_post": run}
+        else:
+            assert st.module_error_reason() == other
+            record = {
+                "reason": other,
+                "results": [],
+                "duration_ms": 0.0,
+                "stage_durations_ms": {},
+                "failed_post": run,
+            }
+        assert st.last_failure() == record
+        # The recovery run replaces the live table, not the record.
+        assert st.reset_module() is True
+        assert st.last_failure() == record
+
+    def test_post_itself_records_an_error_that_lands_before_its_record(self) -> None:
+        """POST's ``finally`` records the newer ERROR itself, after the run's
+        own.  ``last_failure()`` and the next POST record an ERROR nothing has
+        recorded before they read, but ``_set_operational()`` leaves ERROR
+        recording nothing, so a reader after it sees only what POST recorded.
+        With the newer ERROR left to a reader, or recorded before the run's
+        own, it was in no record, and the run was reported as the most recent
+        failure."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        other = "Pairwise consistency test failed for ML-DSA-65: synthetic, from another thread"
+        own = "synthetic oracle failure"
+        # The object _self_test binds; patched below on _self_test by name.
+        real_set_error = ms._set_error
+        entered: list[str] = []
+
+        def post_enters_error(reason: str) -> int:
+            sequence = real_set_error(reason)
+            entered.append(reason)
+            thread = threading.Thread(target=real_set_error, args=(other,))
+            thread.start()
+            thread.join(30)
+            assert not thread.is_alive()
+            return sequence
+
+        with (
+            patch.object(st, "_set_error", post_enters_error),
+            patch.object(st, "_run_timing_oracle_stage", return_value=(False, own)),
+        ):
+            assert st._run_self_tests() is False
+        assert entered == [own]
+        assert st.module_error_reason() == other
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        st._set_operational()
+        assert st.last_failure() == {
+            "reason": other,
+            "results": [],
+            "duration_ms": 0.0,
+            "stage_durations_ms": {},
+            "failed_post": run,
+        }
+
+    def test_a_reader_on_the_post_thread_does_not_detach_the_run(self) -> None:
+        """A log handler that calls ``last_failure()`` on POST's CRITICAL "POST
+        FAILURE" runs on the POST thread, inside POST's ``_set_error``, and
+        records that ERROR with no run, as a reader records any.  POST's
+        ``finally`` records its own failure with its table all the same.
+        Recorded only if nothing had recorded it, the run's table was in no
+        record."""
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        own = "synthetic oracle failure"
+        seen: list[object] = []
+
+        class ReadsLastFailure(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                seen.append(st.last_failure()["reason"])
+
+        handler = ReadsLastFailure(logging.CRITICAL)
+        ms.logger.addHandler(handler)
+        try:
+            with patch.object(st, "_run_timing_oracle_stage", return_value=(False, own)):
+                assert st._run_self_tests() is False
+        finally:
+            ms.logger.removeHandler(handler)
+        assert seen == [own]
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        assert run["results"][-1] == ("POST", False, own)
+        assert st.last_failure() == {**run, "failed_post": run}
+
+    @pytest.mark.parametrize("lands", ["after-the-run", "after-recovery"])
+    def test_a_failed_run_survives_a_later_failure_outside_post(self, lands: str) -> None:
+        """A failure outside POST that follows a failed POST's record, while
+        that POST's ERROR stands or once ``reset_module()`` has recovered from
+        it, is the most recent failure and is reported as one, with its reason
+        and no run.  ``failed_post`` keeps the failed run through that failure
+        and the recovery after it.  Until it existed, that failure replaced the
+        run in ``last_failure()``, and with the live table a recovery run's, no
+        reader returned the failed run's reason or table."""
+        from ama_cryptography import _self_test as st
+
+        own = "synthetic oracle failure"
+        other = "Continuous RNG test failed: consecutive identical outputs (synthetic)"
+        with patch.object(st, "_run_timing_oracle_stage", return_value=(False, own)):
+            assert st._run_self_tests() is False
+        run = {
+            "reason": own,
+            "results": st.module_self_test_results(),
+            "duration_ms": st.post_duration_ms(),
+            "stage_durations_ms": st.module_attestation()["stage_durations_ms"],
+        }
+        assert run["results"][-1] == ("POST", False, own)
+        if lands == "after-recovery":
+            assert st.reset_module() is True
+        st._set_error(other)
+        record = {
+            "reason": other,
+            "results": [],
+            "duration_ms": 0.0,
+            "stage_durations_ms": {},
+            "failed_post": run,
+        }
+        assert st.last_failure() == record
+        assert st.reset_module() is True
+        assert st.last_failure() == record
 
     def test_the_post_thread_is_refused_once_another_thread_enters_error(self) -> None:
         """The self-test allowance is for SELF_TEST only.  Once another thread
@@ -743,12 +963,14 @@ class TestPostStateTransitions:
 
         reason = "Pairwise consistency test failed for Ed25519: synthetic, unrecovered"
         assert st._run_self_tests() is True
+        failed_post = st.last_failure()["failed_post"]
         st._set_error(reason)
         assert st.last_failure() == {
             "reason": reason,
             "results": [],
             "duration_ms": 0.0,
             "stage_durations_ms": {},
+            "failed_post": failed_post,
         }
 
     def test_a_run_that_fails_before_integrity_reports_no_integrity_verdict(self) -> None:

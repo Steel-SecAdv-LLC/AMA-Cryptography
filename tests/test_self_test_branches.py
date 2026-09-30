@@ -599,15 +599,19 @@ class TestRunSelfTestsFailures:
             assert any(ok is False for _, ok, _ in failed_results), "no failing stage in the table"
 
             record = last_failure()
-            assert record == {
+            failed_run = {
                 "reason": failed_reason,
                 "results": failed_results,
                 "duration_ms": failed_duration,
                 "stage_durations_ms": failed_stages,
             }
+            # The most recent failure is this POST's, so both describe it.
+            assert record == {**failed_run, "failed_post": failed_run}
             # The record is a copy: a caller cannot edit the module's memory.
             record["results"].append(("tampered", True, ""))
+            record["failed_post"]["results"].append(("tampered", True, ""))
             assert last_failure()["results"] == failed_results
+            assert last_failure()["failed_post"]["results"] == failed_results
 
             # Clear the fault and recover.  The re-run passes and replaces the
             # live results table, and must NOT erase the record of the failure.
@@ -616,12 +620,7 @@ class TestRunSelfTestsFailures:
             assert module_status() == "OPERATIONAL"
             assert module_error_reason() is None
             assert all(ok is not False for _, ok, _ in module_self_test_results())
-            assert last_failure() == {
-                "reason": failed_reason,
-                "results": failed_results,
-                "duration_ms": failed_duration,
-                "stage_durations_ms": failed_stages,
-            }
+            assert last_failure() == {**failed_run, "failed_post": failed_run}
             # The failed run's stage timing is the record's own: the recovery
             # run replaced the attestation's map, which now reaches "rng".
             assert "rng" in module_attestation()["stage_durations_ms"]

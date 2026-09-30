@@ -127,11 +127,15 @@ _POST_STAGE_DURATIONS_MS: Dict[str, float] = {}
 #: Evidence of the most recent failure that put the module in ERROR, retained
 #: across a successful ``reset_module()`` so recovery does not erase the record
 #: of what failed.  Mutated in place under ``_POST_LOCK``; see ``last_failure``.
+#: ``failed_post`` holds the same four keys for the most recent POST that
+#: recorded its own failure, which a later failure outside POST replaces as the
+#: most recent failure.
 _LAST_FAILURE: Dict[str, Any] = {
     "reason": None,
     "results": [],
     "duration_ms": 0.0,
     "stage_durations_ms": {},
+    "failed_post": None,
 }
 
 #: The ``_module_state`` error sequence ``_LAST_FAILURE`` describes; 0 when
@@ -193,7 +197,12 @@ def module_attestation() -> Dict[str, Any]:
 
     Keys:
         ``state``            — OPERATIONAL / ERROR / SELF_TEST.
-        ``error_reason``     — root cause when ``state`` is ERROR, else None.
+        ``error_reason``     — when ``state`` is ERROR, the reason of the most
+                               recent failure, else None.  A later failure
+                               replaces an earlier one's reason, so after a
+                               failed POST it may name another thread's
+                               failure; ``last_failure()["failed_post"]``
+                               keeps the failed run's own.
         ``fully_verified``   — True only when the module is OPERATIONAL *and*
                                no self-test was skipped.  This is the flag a
                                release gate should assert.  It does NOT imply
@@ -304,72 +313,92 @@ def _record_failure(reason: Optional[str], sequence: int, *, with_run: bool) -> 
     """Make ``_LAST_FAILURE`` describe the ERROR numbered ``sequence``.
 
     ``with_run`` attaches the live POST table and timings: true only when the
-    failure is the running POST's own.  A failure that entered ERROR outside
-    POST has no run of its own; the live table belongs to a POST that passed,
-    and attaching it (as ``reset_module`` did until 2026-09-27) described a POST
-    failure that never happened.
+    failure is the running POST's own, which is also kept as ``failed_post``.
+    A failure that entered ERROR outside POST has no run of its own; the live
+    table is that of a POST that did not fail for that reason, and attaching
+    it (as ``reset_module`` did until 2026-09-27) described a POST failure
+    that never happened.  It leaves ``failed_post`` as it stands.
 
     The caller holds ``_POST_LOCK`` (POST for its whole run, ``last_failure``
     around its read), so a reader never sees one failure's reason beside
     another's evidence.  ``_LAST_FAILURE`` is mutated in place.
     """
     global _LAST_FAILURE_SEQUENCE
-    _LAST_FAILURE.update(
-        {
-            "reason": reason,
-            "results": list(_SELF_TEST_RESULTS) if with_run else [],
-            "duration_ms": _POST_DURATION_MS if with_run else 0.0,
-            "stage_durations_ms": dict(_POST_STAGE_DURATIONS_MS) if with_run else {},
-        }
-    )
+    record: Dict[str, Any] = {
+        "reason": reason,
+        "results": list(_SELF_TEST_RESULTS) if with_run else [],
+        "duration_ms": _POST_DURATION_MS if with_run else 0.0,
+        "stage_durations_ms": dict(_POST_STAGE_DURATIONS_MS) if with_run else {},
+    }
+    _LAST_FAILURE.update(record)
+    if with_run:
+        _LAST_FAILURE["failed_post"] = record
     _LAST_FAILURE_SEQUENCE = sequence
 
 
-def _record_error_if_unrecorded(
-    state: str,
-    reason: Optional[str],
-    sequence: int,
-    *,
-    run_sequence: Optional[int] = None,
-) -> None:
-    """Record an ERROR that ``_LAST_FAILURE`` does not yet describe.
+def _record_error_if_unrecorded(state: str, reason: Optional[str], sequence: int) -> None:
+    """Record, with no run, an ERROR that ``_LAST_FAILURE`` does not yet describe.
 
-    ``run_sequence`` is the error sequence the running POST's own failure
-    produced, if it failed; only that ERROR is recorded with the run attached.
     The caller holds ``_POST_LOCK``.
     """
     if state == "ERROR" and sequence != _LAST_FAILURE_SEQUENCE:
-        _record_failure(reason, sequence, with_run=sequence == run_sequence)
+        _record_failure(reason, sequence, with_run=False)
+
+
+def _failure_copy(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy one failure record's four keys, so a caller cannot edit the module's."""
+    return {
+        "reason": record["reason"],
+        "results": list(record["results"]),
+        "duration_ms": record["duration_ms"],
+        "stage_durations_ms": dict(record["stage_durations_ms"]),
+    }
 
 
 def last_failure() -> Dict[str, Any]:
     """Return the most recent failure that put the module in ERROR, or empty.
 
-    Keys: ``reason``, ``results``, ``duration_ms`` and ``stage_durations_ms``.
+    Keys: ``reason``, ``results``, ``duration_ms`` and ``stage_durations_ms``,
+    which describe that failure, and ``failed_post``.
 
-    For a failed POST they are the failing run's own: the full tri-state table
-    as it stood when POST failed, its wall-clock, and each stage that ran with
-    the failing one last, so the failed run's timing survives the recovery run
-    that overwrites :func:`module_attestation`.  POST records this when it
-    fails, before anyone asks to recover.
+    For a failed POST the four keys are the failing run's own: the full
+    tri-state table as it stood when POST failed, its wall-clock, and each
+    stage that ran with the failing one last, so the failed run's timing
+    survives the recovery run that overwrites :func:`module_attestation`.
+    POST records this when it fails, before anyone asks to recover.
 
     A failure that put the module in ERROR outside POST -- a pairwise
     consistency test or the continuous RNG test -- has no run: ``results`` is
     empty, ``duration_ms`` 0 and ``stage_durations_ms`` empty, because the
-    last POST passed and its evidence is not that failure's.  It is recorded
-    the first time this function or the POST that replaces it sees it, so it
-    is reported while the module is still in ERROR, not only after recovery.
+    last POST's evidence is not that failure's.  It is recorded the first time
+    this function or the POST that replaces it sees it, so it is reported
+    while the module is still in ERROR, not only after recovery.
 
-    With nothing recorded, ``reason`` is None and the evidence empty.  Read
-    under the POST lock: a call made while POST is running waits for it.
+    ``failed_post`` is the record of the most recent POST that recorded its
+    own failure, the same four keys with its reason beside its own table, or
+    None when none has.  It equals the four keys while that failure is the
+    most recent.  A failure outside POST that then becomes the most recent
+    leaves it as it stands, whether it lands between POST's failure and POST
+    recording it
+    (``test_a_failed_run_survives_an_error_that_lands_before_its_record``) or
+    after the record, before or after a recovery
+    (``test_a_failed_run_survives_a_later_failure_outside_post``).  Before
+    this key existed, either one took the failed run's place, and neither the
+    run's reason nor its table was returned from then on.  A failing POST
+    that an interrupt, or an exception raised by its ``_set_error``, stops
+    before it records leaves ``failed_post`` as it stood; an ERROR it entered
+    is recorded with no run.
+
+    With nothing recorded, ``reason`` is None, the evidence empty and
+    ``failed_post`` None.  Read under the POST lock: a call made while POST is
+    running waits for it.
     """
     with _POST_LOCK:
         _record_error_if_unrecorded(*_state_snapshot())
+        failed_post = _LAST_FAILURE["failed_post"]
         return {
-            "reason": _LAST_FAILURE["reason"],
-            "results": list(_LAST_FAILURE["results"]),
-            "duration_ms": _LAST_FAILURE["duration_ms"],
-            "stage_durations_ms": dict(_LAST_FAILURE["stage_durations_ms"]),
+            **_failure_copy(_LAST_FAILURE),
+            "failed_post": None if failed_post is None else _failure_copy(failed_post),
         }
 
 
@@ -3320,9 +3349,12 @@ def _run_self_tests() -> bool:
         all_passed = True
         stage_name = ""
         stage_durations: Dict[str, float] = {}
-        # The error sequence this run's own failure produced, if it fails:
-        # the one ERROR recorded with this run's table attached.
+        # The error sequence and reason of this run's own failure, if it
+        # fails: the one ERROR recorded with this run's table attached.  The
+        # reason is kept here because the module's is another thread's once
+        # that thread's failure lands.
         run_sequence: Optional[int] = None
+        run_reason: Optional[str] = None
         begin_sequence = 0
         try:
             # Enter SELF_TEST and pin the guard's allowance to this thread —
@@ -3393,6 +3425,7 @@ def _run_self_tests() -> bool:
                         err = "FIPS POST internal error: stage returned (False, None)"
                     all_passed = False
                     _ensure_failing_row(err)
+                    run_reason = err
                     run_sequence = _set_error(err)
                     break
         except Exception as exc:
@@ -3424,6 +3457,7 @@ def _run_self_tests() -> bool:
             # table (and module_attestation()["failed"]) named no failure
             # while the module was in ERROR.
             _ensure_failing_row(reason)
+            run_reason = reason
             run_sequence = _set_error(reason)
             raise
         finally:
@@ -3443,10 +3477,30 @@ def _run_self_tests() -> bool:
             # failing exit.  Until this was written here the record came only
             # from ``reset_module()``, so a failed POST that nobody had yet
             # tried to recover from reported "no failure" — the opposite of the
-            # truth, and exactly when an operator reads it.  Keyed on the live
-            # error sequence, so an ERROR another thread entered during the run
-            # is recorded too, without this run's table.
-            _record_error_if_unrecorded(*_state_snapshot(), run_sequence=run_sequence)
+            # truth, and exactly when an operator reads it.  This run's own
+            # ERROR is recorded from its own sequence and reason, with its
+            # table, and kept as ``failed_post``, even if a reader has recorded
+            # it: a log handler that calls ``last_failure()`` on this run's
+            # CRITICAL does so on this thread, inside ``_set_error``, and
+            # records this ERROR with no run, as a reader records any
+            # (``test_a_reader_on_the_post_thread_does_not_detach_the_run``).
+            # Recorded from the live state alone, an ERROR that landed between
+            # this run's ``_set_error`` and this line was the only one recorded,
+            # and the failed run's reason and table were in no record
+            # (``test_a_failed_run_survives_an_error_that_lands_before_its_record``).
+            if run_sequence is not None:
+                _record_failure(run_reason, run_sequence, with_run=True)
+            # Then the live ERROR, without the table, if nothing has recorded
+            # it: another thread's, entered after this run's own failure or
+            # during a run with no failure of its own, or this run's own when
+            # ``_set_error`` entered ERROR and did not return.
+            # ``last_failure()`` makes the same record before it reads, and the
+            # next POST as it begins, but ``_set_operational()`` leaves ERROR
+            # recording nothing.  After it, a newer ERROR left to a reader, or
+            # recorded before this run's own, was in no record, and the run
+            # was reported as the most recent failure
+            # (``test_post_itself_records_an_error_that_lands_before_its_record``).
+            _record_error_if_unrecorded(*_state_snapshot())
 
         # Leave SELF_TEST only if no ERROR arrived during the run.  This was an
         # unconditional ``_set_operational()``, which overwrote a pairwise or

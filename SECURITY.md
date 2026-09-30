@@ -879,8 +879,10 @@ raises an unexpected exception is treated the same way: the module enters
 
 - `module_attestation()` reports the state, the per-KAT results,
   `duration_ms` and `stage_durations_ms`.
-- `last_failure()` keeps the most recent failed run (reason, results and
-  stage timings), so a later successful `reset_module()` does not erase it.
+- `last_failure()` keeps the most recent failure, and as `failed_post` the
+  most recent POST that recorded its own failure (reason, results and stage
+  timings), so neither a later successful `reset_module()` nor a later failure
+  outside POST erases it.
 - `AMA_POST_DIAGNOSTIC_IMPORT=1` completes the import for diagnosis only;
   the module stays in `ERROR` and refuses cryptography.
 
