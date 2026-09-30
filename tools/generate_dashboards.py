@@ -870,7 +870,7 @@ def create_defense_layers() -> None:
             name="Layer 3: Ed25519 + ML-DSA-65 Dual Signatures",
             color="#ff6b6b",
             desc="Classical + post-quantum hybrid signature scheme",
-            detail="FIPS 186-5 + FIPS 204 • 128-bit classical + 192-bit PQ security",
+            detail="FIPS 186-5 + FIPS 204 • 128-bit classical + NIST category 3 post-quantum",
             y=4.2,
         ),
         _DefenseLayer(

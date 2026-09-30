@@ -173,7 +173,8 @@ P(collision via E(m)) ≤ q²/2²⁵⁷ after q hash evaluations (SHA3-256: 128-
 ```
 System security is bounded by the weakest layer:
 - Classical security: ~128-bit (Ed25519/HMAC)
-- Quantum security: ~192-bit (Dilithium)
+- Quantum security: NIST security category 3 (ML-DSA-65, FIPS 204), where
+  the verifier requires the ML-DSA layer
 
 Package authenticity is protected by four independent cryptographic
 operations — content hashing, keyed authentication, classical signature,

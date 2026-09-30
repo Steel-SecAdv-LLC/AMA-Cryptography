@@ -314,6 +314,66 @@ class TestTheChartIsBoundToItsNumbers:
         assert gv._check_rendered_inputs() == []
 
 
+class TestTheQuantumChartStatesTheCategory:
+    """``quantum_comparison.png`` drew ML-DSA-65 as a bar on its bit axis, for
+    classical and for quantum attack alike, and its footer gave the NIST
+    category as a bit count.  The construction gate read neither: the bars are
+    numbers in the renderer, and the footer's wording matched no pattern the
+    gate had until its bit-strength rule.  Every text the chart draws is now
+    held to the gate's rules, and no bar may stand in a post-quantum slot."""
+
+    def test_the_chart_draws_no_bit_figure_for_a_post_quantum_scheme(
+        self, gv: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("matplotlib")
+        if not gv._HAVE_MATPLOTLIB:
+            pytest.skip("the plotting stack did not import in the tool")
+        import matplotlib.text
+        from matplotlib.figure import Figure
+        from matplotlib.patches import Rectangle
+
+        figures: list[Figure] = []
+        close = gv.plt.close
+
+        def keep_then_close(*args: object) -> None:
+            figures.append(gv.plt.gcf())
+            close(*args)
+
+        monkeypatch.setattr(gv, "ASSETS_DIR", tmp_path)
+        monkeypatch.setattr(gv.plt, "close", keep_then_close)
+        gv.create_quantum_comparison()
+        (figure,) = figures
+        (ax,) = figure.axes
+
+        ticks = [label.get_text() for label in ax.get_xticklabels()]
+        post_quantum = {slot for slot, label in enumerate(ticks) if "ML-DSA" in label}
+        assert post_quantum, ticks
+        bars = [patch for patch in ax.patches if isinstance(patch, Rectangle)]
+        assert bars, "the chart drew no bar at all"
+        for bar in bars:
+            slot = round(bar.get_x() + bar.get_width() / 2)
+            assert slot not in post_quantum, f"{ticks[slot]!r} is drawn on the bit axis"
+        # Nor may a text in that slot have a height on the bit axis: placed in
+        # data coordinates at y=70, the category box read as about 60 to 85 bits.
+        for text in ax.texts:
+            if round(text.get_position()[0]) in post_quantum:
+                assert text.get_transform() is not ax.transData, text.get_text()
+
+        spec = importlib.util.spec_from_file_location(
+            "check_crypto_construction_docs",
+            REPO_ROOT / "tools" / "check_crypto_construction_docs.py",
+        )
+        assert spec is not None and spec.loader is not None
+        gate = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, spec.name, gate)
+        spec.loader.exec_module(gate)
+        authority = gate.build_authority(REPO_ROOT)
+        for text in figure.findobj(matplotlib.text.Text):
+            drawn = " ".join(text.get_text().split())
+            for rule in gate.RULES:
+                assert rule(drawn, authority) is None, drawn
+
+
 class TestWiredIntoCI:
     def test_ci_runs_the_check(self) -> None:
         ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

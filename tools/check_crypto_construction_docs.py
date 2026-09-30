@@ -883,6 +883,123 @@ def _rule_quantum_work_factor(line: str, authority: Authority) -> Optional[str]:
     return None
 
 
+#: A strength written in bits: ``192-bit``, ``~192-bit``, ``192 bits``, and with
+#: a non-breaking hyphen.  Not digits inside a name or a longer number:
+#: ``ML_KEM_1024BIT``, ``15,360-bit``.
+_BIT_FIGURE = re.compile("(?<![\\w,])([0-9]+)[-\u2011 ]?bits?\\b", re.IGNORECASE)
+#: What makes a bit figure a statement about a quantum adversary or a
+#: post-quantum scheme: the work-factor rule's subjects, "PQ", the three
+#: standards, and a NIST category, which is what the figure was standing in for.
+_BIT_STRENGTH_SUBJECT = re.compile(
+    _QUANTUM_SUBJECT.pattern + r"|\bPQC?\b|\bFIPS\s*20[345]\b|\bcategory\s*[1-5]\b",
+    re.IGNORECASE,
+)
+#: A word after the figure that makes it a strength: "192-bit security",
+#: "192-bit PQ security", "256-bit post-quantum", "192 bits of quantum security",
+#: "the 192-bit level", "192-bit classical and quantum security".
+_STRENGTH_WORD = re.compile(
+    r"\s*(?:of\s+)?(?:classical\s*(?:and|&|\+|/)\s*)?"
+    r"(?:(?:post[-\s]?)?quantum|PQC?\b|secur|strength|level)",
+    re.IGNORECASE,
+)
+#: A figure nothing qualifies, so the sentence's subject is what it measures:
+#: "Quantum security: ~192-bit", "quantum-resistant (192-bit, FIPS 204)", a
+#: table cell, an item between dashes or bullets.  A sentence ends at
+#: ``_SENTENCE_END``, so its last character may be the punctuation that ended it.
+_FIGURE_ENDS_CLAUSE = re.compile("\\s*(?:[,:|\u2013\u2014\u2022]|[.;!?]?$)")
+#: "~192-bit (Dilithium)": a parenthetical after the figure glosses it, and what
+#: follows the parenthetical qualifies the figure.
+_GLOSS = re.compile(r"\s*\([^()]*\)")
+#: "(256-bit) seed", "category 3 (192-bit)": the figure closes a parenthetical,
+#: and what follows it qualifies the figure.
+_CLOSING_BRACKET = re.compile(r"\s*[)\]]")
+#: "**192-bit**", "`192-bit`", a string literal that ends with the figure: the
+#: marks close around it and qualify nothing.
+_CLOSING_MARK = re.compile("\\s*[*`\"'\u2019\u201d]+")
+#: "32 bytes (256 bits)": a size restated in bits, not a strength.
+_BYTES_RESTATED = re.compile(r"\b[0-9]+[-\s]?bytes?\s*[(\[]\s*$", re.IGNORECASE)
+#: "Shared secret: 256 bits", "seed (256-bit)", "| Shared secret | 256-bit |":
+#: the figure is the value of the size it follows.
+_SIZE_LABEL = re.compile(
+    r"\b(?:secret|seed|key|hash|digest|output|size|length)s?(?:\s+(?:is|are|of))?\W*$",
+    re.IGNORECASE,
+)
+#: A preposition or conjunction after the figure qualifies nothing: "~192-bit
+#: for ML-DSA-65", "192 bits against quantum adversaries".
+_FUNCTION_WORD = re.compile(
+    r"\s*(?:for|against|via|with|in|on|under|at|from|by|per|to|as|when|if|and|or|but|"
+    r"than|versus|vs|where|while|which|that|including)\b",
+    re.IGNORECASE,
+)
+#: "Quantum security: ~192-bit", "security of 192 bits", "strength (192 bits)":
+#: the figure is the value of the strength it follows.
+_STRENGTH_LABEL = re.compile(r"\b(?:secur\w*|strength)(?:\s+(?:is|of|at))?\W*$", re.IGNORECASE)
+
+
+def _states_a_strength(sentence: str, figure: re.Match[str]) -> bool:
+    """Whether a bit figure is a strength rather than a size.
+
+    A strength word after the figure makes it one.  A noun after it ("256-bit
+    key", "256-bit hash", "256-bit classical"), or a size it is the value of
+    ("Shared secret: 256 bits", "32 bytes (256 bits)"), says what it measures,
+    and that is not a quantum strength.  Otherwise nothing after it qualifies
+    it: it measures what the sentence is about when its clause ends there, and
+    the strength it follows when a preposition does ("Quantum security: ~192-bit
+    for ML-DSA-65").
+    """
+    if _BYTES_RESTATED.search(sentence, 0, figure.start()):
+        return False
+    position = figure.end()
+    skipped = True
+    while skipped:
+        skipped = False
+        for skip in (_GLOSS, _CLOSING_BRACKET, _CLOSING_MARK):
+            closed = skip.match(sentence, position)
+            if closed:
+                position, skipped = closed.end(), True
+    if _STRENGTH_WORD.match(sentence, position):
+        return True
+    if _SIZE_LABEL.search(sentence, 0, figure.start()):
+        return False
+    if _FIGURE_ENDS_CLAUSE.match(sentence, position):
+        return True
+    return bool(
+        _FUNCTION_WORD.match(sentence, position)
+        and _STRENGTH_LABEL.search(sentence, 0, figure.start())
+    )
+
+
+def _rule_quantum_bit_strength(line: str, authority: Authority) -> Optional[str]:
+    """A strength above 128 bits in a sentence about quantum attack or a
+    post-quantum scheme: a figure a strength word follows, one that is the
+    value of a strength label, or one nothing qualifies (:func:`_states_a_strength`).
+
+    The retired-claim entry read only "192-bit quantum" and "256-bit quantum"
+    in that order, and the work-factor rule reads only powers of two.  Five
+    lines passed every rule, measured on the tree at ``1ef0c93``:
+    "Quantum security: ~192-bit (Dilithium)", "quantum-resistant (192-bit,
+    FIPS 204)", "ML-DSA-65 (Dilithium) provides 192-bit security", "128-bit
+    classical + 192-bit PQ security" and SLH-DSA's "Security: 256-bit
+    post-quantum".  128 bits is Grover's bound on an AES-256 key search, as for
+    the work-factor rule, so AES-256's "128-bit quantum security" passes; so
+    does a figure :func:`_states_a_strength` reads as a size or as classical.
+    Not read: a figure qualified only by a phrase that is none of these
+    ("192 bits against a quantum attacker", "192-bit equivalent security");
+    a claim split across lines, since the gate reads one line at a time.
+    """
+    start = 0
+    for end in [mark.end() for mark in _SENTENCE_END.finditer(line)] + [len(line)]:
+        sentence, start = line[start:end], end
+        if not _BIT_STRENGTH_SUBJECT.search(sentence):
+            continue
+        for figure in _BIT_FIGURE.finditer(sentence):
+            if int(figure.group(1)) > _GROVER_AES256_EXPONENT and _states_a_strength(
+                sentence, figure
+            ):
+                return f"reintroduces a corrected claim \u2014 {_QUANTUM_CATEGORY_WHY}"
+    return None
+
+
 def _rule_fallback(line: str, authority: Authority) -> Optional[str]:
     if not authority.combine_raises_on_missing_native:
         return None  # a fallback exists; the claim would be true
@@ -1149,13 +1266,15 @@ def _rule_retired(line: str, authority: Authority) -> Optional[str]:
 
 
 #: Most rules look for an ASSERTION, and each asks :func:`_asserted` for a
-#: match its own words do not deny.  Two rules never consult a denial: the LMS
+#: match its own words do not deny.  Four rules never consult a denial: the LMS
 #: rule is looking for one ("AMA does not implement HSS/LMS"), and the
-#: retired-claim registry pins wording that teaches a dead name whether or not
-#: the sentence around it is a denial.  Letting a denial excuse those two
-#: would make them permanently vacuous — which is exactly what happened on the
-#: first run of this gate, where the HSS/LMS claim it was written for passed
-#: because "does not" tripped the then line-wide negation waiver.
+#: retired-claim registry and the two quantum-strength rules pin wording that
+#: teaches a dead name or a retired figure whether or not the sentence around
+#: it is a denial ("Category 3 is not a claim of 2^192 quantum work" shipped).
+#: Letting a denial excuse those would make them permanently vacuous — which
+#: is exactly what happened on the first run of this gate, where the HSS/LMS
+#: claim it was written for passed because "does not" tripped the then
+#: line-wide negation waiver.
 RULES: tuple[Callable[[str, Authority], Optional[str]], ...] = (
     _rule_fallback,
     _rule_memzero_passes,
@@ -1166,6 +1285,7 @@ RULES: tuple[Callable[[str, Authority], Optional[str]], ...] = (
     _rule_c11_atomics,
     _rule_retired,
     _rule_quantum_work_factor,
+    _rule_quantum_bit_strength,
 )
 
 

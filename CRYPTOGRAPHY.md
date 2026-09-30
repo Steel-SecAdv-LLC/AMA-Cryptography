@@ -255,7 +255,7 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 **4-Layer Defense (as implemented in `crypto_api`):**
 1. **SHA3-256 Hash** — Content integrity with 128-bit collision resistance (FIPS 202)
 2. **HMAC-SHA3-256** — Keyed message authentication (RFC 2104)
-3. **Hybrid Ed25519 + ML-DSA-65 Signature** — Combined classical (128-bit, RFC 8032) and quantum-resistant (192-bit, FIPS 204) digital signature
+3. **Hybrid Ed25519 + ML-DSA-65 Signature** — Combined classical (128-bit, RFC 8032) and quantum-resistant (NIST security category 3, FIPS 204) digital signature
 4. **HKDF-SHA3-256 Key Independence** — Key re-derivation and verification ensuring cryptographic key independence (RFC 5869)
 
 **Optional Add-ons (not core layers):**

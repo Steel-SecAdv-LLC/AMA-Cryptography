@@ -1143,6 +1143,31 @@ class TestCryptoConstructionDocs:
             ("Generate CRYSTALS-Dilithium key pair (Level 3).", "not a level"),
             ("SPHINCS+-SHA2-256f-simple key pair (Level 5).", "not a level"),
             ("- **Best performance** at NIST Level 3", "not a level"),
+            # The four the adversarial review of 1ef0c93 found passing every
+            # rule, and a fifth the widened rule found: the figure after its
+            # subject, glossed or parenthesised, or qualified as "PQ",
+            # "post-quantum" or plain "security".
+            ("- Quantum security: ~192-bit (Dilithium)", "security category"),
+            (
+                "3. **Hybrid Ed25519 + ML-DSA-65 Signature** \u2014 Combined classical "
+                "(128-bit, RFC 8032) and quantum-resistant (192-bit, FIPS 204) digital "
+                "signature",
+                "security category",
+            ),
+            ('"ML-DSA-65 (Dilithium) provides 192-bit security"', "security category"),
+            (
+                "ML-DSA-65 (Dilithium) provides 192-bit security against both classical "
+                "and quantum attacks",
+                "security category",
+            ),
+            (
+                'detail="FIPS 186-5 + FIPS 204 \u2022 128-bit classical + 192-bit PQ security",',
+                "security category",
+            ),
+            (
+                "- Security: 256-bit post-quantum (hash-based, no lattice assumptions)",
+                "security category",
+            ),
         ],
     )
     def test_each_shipped_defect_is_caught(
@@ -1196,7 +1221,19 @@ class TestCryptoConstructionDocs:
             "- Key search: 2^256 classical operations for a 256-bit key; about 2^128 "
             "under Grover's algorithm\n\n"
             "ML-DSA-65 is implemented at security category 3.\n\n"
-            "Store ML-KEM-1024 master secrets in an HSM validated to FIPS 140-3 Level 3.\n",
+            "Store ML-KEM-1024 master secrets in an HSM validated to FIPS 140-3 Level 3.\n\n"
+            "- Quantum security: NIST security category 3 (ML-DSA-65, FIPS 204), where\n"
+            "  the verifier requires the ML-DSA layer\n\n"
+            "3. **Hybrid Ed25519 + ML-DSA-65 Signature** \u2014 Combined classical "
+            "(128-bit, RFC 8032) and quantum-resistant (NIST security category 3, "
+            "FIPS 204) digital signature\n\n"
+            '"ML-DSA-65 is NIST security category 3 (FIPS 204): at least as hard to break"\n\n'
+            'detail="FIPS 186-5 + FIPS 204 \u2022 128-bit classical + NIST category 3 '
+            'post-quantum",\n\n'
+            "- Security: NIST security category 5 (FIPS 205); hash-based, no lattice "
+            "assumptions\n\n"
+            "Security: 256-bit classical / 128-bit quantum (NIST security category 5)\n\n"
+            'desc="Quantum-resistant 256-bit hash of canonical data",\n',
             encoding="utf-8",
         )
         completed = _run(CONSTRUCTION_DOCS, "--file", str(fixture))
@@ -1242,6 +1279,108 @@ class TestCryptoConstructionDocs:
         sentence, and a figure with no quantum subject."""
         gate = _load(CONSTRUCTION_DOCS)
         assert gate._rule_quantum_work_factor(sentence, None) is None, sentence
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "- Quantum security: ~192-bit (Dilithium)",
+            "Combined classical (128-bit, RFC 8032) and quantum-resistant (192-bit, FIPS 204)",
+            '"ML-DSA-65 (Dilithium) provides 192-bit security"',
+            "FIPS 186-5 + FIPS 204 \u2022 128-bit classical + 192-bit PQ security",
+            "- Security: 256-bit post-quantum (hash-based, no lattice assumptions)",
+            "128-bit classical + 192-bit PQ security",
+            "PQC signatures: 192-bit",
+            "192-bit PQC security for ML-DSA-65",
+            "FIPS 204 signature: 192-bit security",
+            "NIST category 3 (192-bit)",
+            "ML-DSA-65: 192 bits of quantum security",
+            "SLH-DSA-SHA2-256f: 256-bit strength",
+            "| ML-KEM-1024 | Key Encapsulation | 256-bit | FIPS 203 |",
+            "Kyber-1024 gives 256 bits.",
+            "Quantum resistance at 192-bit: yes",
+            "ML-DSA-65: 192\u2011bit security",
+            "Dilithium3 is quantum-safe at the 192-bit level",
+            "ML-DSA-65 provides 192-bit classical and quantum security",
+            "ML-DSA-65 provides 192-bit classical & quantum security",
+            "ML-DSA-65 provides 192-bit classical + quantum security",
+            "ML-DSA-65 provides 192-bit classical/quantum security",
+            "ML-DSA-65 \u2014 192-bit \u2014 FIPS 204",
+            "ML-DSA-65 \u2013 192-bit \u2013 FIPS 204",
+            "FIPS 204 \u2022 192-bit \u2022 lattice-based",
+            "Quantum security: **192-bit**",
+            "Quantum security: `192-bit`",
+            'label = "ML-DSA-65: 192-bit"',
+            "label = 'ML-DSA-65: 192-bit'",
+            "\u201cML-DSA-65: 192-bit\u201d",
+            "\u2018ML-DSA-65: 192-bit\u2019",
+            "PQ security (**192-bit**)",
+            "Quantum security: ~192-bit for ML-DSA-65",
+            "Post-quantum security (192 bits) for ML-DSA-65",
+            "ML-DSA-65 strength: 192 bits against quantum attack",
+            "ML-DSA-65 quantum security is 192 bits for every key",
+            "ML-DSA-65 quantum security of 192 bits against Grover",
+            "ML-DSA-65 quantum security at 192 bits for every key",
+            "ML-KEM-1024 shared secret: 256-bit quantum security",
+        ],
+    )
+    def test_a_quantum_bit_strength_is_read_in_every_shape(self, sentence: str) -> None:
+        """The four shipped survivors and SLH-DSA's, then one sentence per
+        shape the rule reads: each subject it adds to the work-factor rule's,
+        each word that makes a figure a strength, each way a clause ends
+        after an unqualified figure, a gloss, a closing bracket, "bits", a
+        non-breaking hyphen, each mark that closes around a figure (a string
+        literal ending with it among them), and a figure that is the value of
+        the strength before it and has a preposition after it."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_bit_strength(sentence, None), sentence
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "AES-256 keeps 128-bit quantum security under Grover.",
+            "Security: 256-bit classical / 128-bit quantum (NIST security category 5)",
+            'desc="Quantum-resistant 256-bit hash of canonical data",',
+            "Key search: 2^256 classical operations for a 256-bit key; about 2^128 under "
+            "Grover's algorithm",
+            "| AES-256-GCM | Authenticated Encryption | 256-bit key / 128-bit quantum | "
+            "SP 800-38D |",
+            "ML-KEM-1024's shared secret is 32 bytes (256 bits).",
+            "A quantum computer running Shor's algorithm breaks RSA at every size, even "
+            "15,360-bit.",
+            "The quantum test group is ML_KEM_1024BIT.",
+            "P-384 gives 192-bit security. ML-DSA-65 is NIST security category 3.",
+            "ML-DSA-65 is NIST security category 3 (FIPS 204): at least as hard to break "
+            "as a key search on AES-192",
+            "ML-KEM-1024 shared secret: 256 bits",
+            "| ML-KEM-1024 | Shared secret | 256-bit |",
+            "ML-DSA-65 key generation takes a seed (256-bit).",
+            "ML-KEM-1024's shared secret is 256 bits.",
+            "ML-KEM-1024 shared secrets are 256 bits.",
+            "ML-DSA-65 takes a seed of 256 bits.",
+            "ML-DSA-65 public key: 15616 bits",
+            "SLH-DSA-SHA2-256f hash: 256 bits",
+            "ML-DSA-65 message digest: 512 bits",
+            "ML-KEM-1024 SHAKE256 output: 256 bits",
+            "ML-KEM-1024 shared secret size: 256 bits",
+            "ML-DSA-65 seed length: 256 bits",
+            "ML-KEM-1024 derives 256 bits for the session key",
+            "Post-quantum security relies on 256 bits from the CSPRNG",
+            "ML-DSA-65 derives its keys from a 256-bit seed",
+            "ML-DSA-65 hashes with SHA3-256; P-256 and secp256k1 are not quantum-resistant.",
+            "ML-DSA-65 key generation takes a 32-byte seed.",
+        ],
+    )
+    def test_what_is_not_a_quantum_bit_strength_passes(self, sentence: str) -> None:
+        """Grover's AES-256 bound itself, a figure qualified as classical or as
+        a size (four of them lines the tree carries), a size restated in bits,
+        a figure that is part of a longer number or a name, a strength in
+        another sentence, and the chart footer's correction.  Then a figure
+        that is the value of a size it follows, one per size noun and linking
+        word; a figure before a preposition that follows no strength; and the
+        names and sizes the rule must never read as a figure (SHA3-256, P-256,
+        secp256k1, a 32-byte seed)."""
+        gate = _load(CONSTRUCTION_DOCS)
+        assert gate._rule_quantum_bit_strength(sentence, None) is None, sentence
 
     def test_a_build_s_untracked_output_is_not_read(self, tmp_path: Path) -> None:
         """Cython writes each ``.pyx`` docstring into a generated, untracked

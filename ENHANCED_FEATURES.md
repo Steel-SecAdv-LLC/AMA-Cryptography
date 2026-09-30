@@ -214,7 +214,7 @@ Automatic best-implementation selection at initialization:
 - Public key: 64 bytes
 - Secret key: 128 bytes
 - Signature: 49,856 bytes
-- Security: 256-bit post-quantum (hash-based, no lattice assumptions)
+- Security: NIST security category 5 (FIPS 205); hash-based, no lattice assumptions
 - Stateless — no state management required (unlike XMSS/LMS)
 - WOTS+ one-time signatures, FORS few-time signatures, hypertree (d=17)
 
