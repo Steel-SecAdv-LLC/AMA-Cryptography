@@ -21,13 +21,25 @@
  *     shorter than one block.
  *
  * THE FAULT.  `ama_slhdsa_hash_fault_hook` (AMA_TESTING_MODE only; the
- * shipped object is byte-identical without it) is consulted once per message
- * hash and per SHAKE absorb, in call order, AFTER that call has written its
- * output, and a nonzero return makes the call report failure.  That is the
- * worst case for what an exit leaves behind: every value it could hold has
- * been computed.  Deterministic signing calls PRF_msg first, H_msg second,
- * then every F, H and PRF of the FORS and hypertree signatures, so the
- * call's position selects the exit.
+ * shipped object is byte-identical without it) is consulted once per hash
+ * call, AFTER that call has computed its output, and a nonzero return makes
+ * the call report failure.  That is the worst case for what an exit leaves
+ * behind: every value it could hold has been computed.  The calls that
+ * consult it are PRF_msg and H_msg in both families and, in the SHAKE family
+ * only, every F, H, T_l and PRF: once per SHAKE-256 hash, in shake_finish,
+ * not once per absorbed segment (F, H, T_l and PRF absorb three each).  A
+ * call whose sponge or HMAC step has already failed does not consult it, and
+ * no input makes one fail.  Deterministic signing consults it for PRF_msg
+ * first, H_msg second, then, in SHAKE-128s, for every F, H, T_l and PRF of
+ * the FORS and hypertree signatures, whose failure the caller ignores; so
+ * the consultation's 1-based position selects the exit.  Checks below hold
+ * that rule, less the failed-step case no input reaches: two consultation
+ * counts (SHAKE-128s key generation consults it once per hash of the top
+ * XMSS tree, SHA2-256f signing twice); "a fault after the output leaves the
+ * signature exact" for F, H, T_l and PRF; and, in each family, a position
+ * control that finds R on the live stack at PRF_msg's consultation and the
+ * H_msg digest at H_msg's, without which a hook consulted before the hash
+ * would leave every verdict below passing with nothing to find.
  *
  * THE PROBE is `residue_probe.h` (poison, call below a GAP at the same depth,
  * scan the poisoned bytes once per poison).  Each needle is computed outside
@@ -96,6 +108,33 @@
  * before any caller returns, so no flow leaves that frame observable.  The
  * verdict is kept for the check beside it, that a fault after the output
  * leaves the signature exact.
+ *
+ * The consultation counts and position controls (added 2026-09-29, x86-64;
+ * gcc 13.3.0 in both builds, clang 18.1.3 in Release, the same result in
+ * each) pin the rule THE FAULT states, less the failed-step case:
+ * shake_finish consulting the hook after a failed step fails nothing,
+ * because no input makes a step fail.
+ *   - "SHAKE-128s: key generation consults the hook once per hash" fails
+ *     alone when F, H, T_l and PRF consult the hook again after their output
+ *     (575,486 consultations) and when H and T_l stop consulting it
+ *     (286,720).  When F, H, T_l and PRF consult it once per absorbed segment
+ *     (863,229), it fails together with "SHAKE-128s: a fault after the
+ *     output leaves the signature exact".  When every SHAKE hash does, it
+ *     fails together with that check, "SHAKE-128s every F, H and PRF fails:
+ *     SK.seed" and both SHAKE-128s position controls; when shake_finish
+ *     consults it twice (575,486), with the same checks less the PRF_msg
+ *     position control;
+ *   - "SHA2-256f: PRF_msg and H_msg alone consult the hook" fails alone when
+ *     sha2_PRF (37,320) or sha2_F (300,042) consults the hook.  sha2_H_msg
+ *     not consulting it (1) fails it together with the "SHA2-256f H_msg
+ *     fails" verdicts and "SHA2-256f: H_msg's consultation finds the digest";
+ *   - each position control fails alone, at 0 hits, when its hash consults
+ *     the hook before computing its output: sha2_PRF_msg before the HMAC,
+ *     sha2_H_msg before its inner SHA-512, shake_absorb_four (PRF_msg) or
+ *     shake_absorb_five (H_msg) before the finalize.  Without the controls,
+ *     every check passes under each of those four;
+ *   - shake_finish consulting the hook before the squeeze fails "SHAKE-128s:
+ *     a fault after the output leaves the signature exact" alone.
  */
 #include <stdio.h>
 #include <string.h>
@@ -123,9 +162,20 @@ static int failures = 0;
 /* Largest n and signature of the two parameter sets. */
 #define N_MAX 32u
 #define SIG_MAX AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES
-/* SLH-DSA-SHAKE-128s: n = 16, m = 30 (FIPS 205 Table 2). */
+/* SLH-DSA-SHAKE-128s: n = 16, m = 30, h' = 9, w = 16, len = 35 (FIPS 205
+ * Table 2). */
 #define SHAKE_128S_N 16u
 #define SHAKE_128S_M 30u
+#define SHAKE_128S_HP 9u
+#define SHAKE_128S_W 16u
+#define SHAKE_128S_LEN 35u
+/* The SHAKE-256 hashes key generation computes for the top XMSS tree (FIPS
+ * 205 Algorithms 6, 9 and 18): per leaf, len chains of one PRF and w - 1 F,
+ * then one T_len; then 2^h' - 1 H.  287,743; they absorb three segments
+ * each, 863,229 in all. */
+#define SHAKE_128S_KEYGEN_HASHES                                        \
+    ((1u << SHAKE_128S_HP) * (SHAKE_128S_LEN * SHAKE_128S_W + 1u) +     \
+     (1u << SHAKE_128S_HP) - 1u)
 /* What an untouched signature buffer holds. */
 #define UNTOUCHED 0xEEu
 
@@ -140,11 +190,21 @@ static const uint8_t g_msg[3] = {'m', 's', 'g'};
 static ama_slhdsa_param_set_t g_ps;
 
 /* The fault hook: counts the calls that consult it and fails those whose
- * 1-based position lies in [g_fail_from, g_fail_to]. */
-static unsigned g_calls, g_fail_from, g_fail_to;
+ * 1-based position lies in [g_fail_from, g_fail_to]; arm(0, 0) counts and
+ * fails none.  At position g_scan_at it also counts g_scan_needle on the
+ * live stack (position_control). */
+static unsigned g_calls, g_fail_from, g_fail_to, g_scan_at;
+static const uint8_t *g_scan_needle;
+static size_t g_scan_len;
+static int g_scan_hits;
+
+RESIDUE_NOINLINE static int live_count(const uint8_t *needle, size_t len);
 
 static int count_and_fault(void) {
     g_calls++;
+    if (g_calls == g_scan_at) {
+        g_scan_hits = live_count(g_scan_needle, g_scan_len);
+    }
     return g_calls >= g_fail_from && g_calls <= g_fail_to;
 }
 
@@ -157,6 +217,7 @@ static void arm(unsigned from, unsigned to) {
 
 static void disarm(void) {
     ama_slhdsa_hash_fault_hook = NULL;
+    g_scan_at = 0;
 }
 
 /* A context outside the probed stack: only the finalizer's own frame is in
@@ -185,6 +246,18 @@ static int count_in(const uint8_t *buf, size_t len, const uint8_t *needle, size_
         }
     }
     return hits;
+}
+
+/* Occurrences of `needle` on the stack from below this frame up to the top of
+ * the last poison: the live frames of the probed call that consulted the
+ * hook.  -1 when this frame lies outside the poison. */
+RESIDUE_NOINLINE static int live_count(const uint8_t *needle, size_t len) {
+    uintptr_t mark = 0;
+    residue_stack_mark(&mark);
+    if (mark < residue_poison_lo || mark >= residue_poison_hi) {
+        return -1;
+    }
+    return count_in((const uint8_t *)mark, (size_t)(residue_poison_hi - mark), needle, len);
 }
 
 /* A keyed absorb shorter than one block, then the finalizer alone under the
@@ -240,6 +313,25 @@ static void verdict(unsigned from, unsigned to, ama_error_t expect,
     CHECK(hits == 0, what);
 }
 
+/* The fault falls after the output: at the consultation at position `at`,
+ * with nothing failed, the value that hash computes is already on the live
+ * stack.  The poison first clears the copies an earlier signature left. */
+static void position_control(unsigned at, const uint8_t *needle, size_t len,
+                             const char *what) {
+    ama_error_t rc;
+    arm(0, 0);
+    g_scan_at = at;
+    g_scan_needle = needle;
+    g_scan_len = len;
+    g_scan_hits = 0;
+    poison_stack();
+    rc = probe_sign();
+    disarm();
+    printf("  %-58s %d hit(s)\n", what, g_scan_hits);
+    CHECK(rc == AMA_SUCCESS, what);
+    CHECK(g_scan_hits > 0, what);
+}
+
 /* After a refused signature: the caller's buffer holds no R. */
 static void no_r_in_signature(unsigned from, size_t n, const char *what) {
     ama_error_t rc;
@@ -293,10 +385,12 @@ int main(void) {
 #else
     uint8_t sk_seed[N_MAX], sk_prf[N_MAX], digest[SHAKE_128S_M];
     uint8_t h_msg_in[3 * SHAKE_128S_N + 2 + sizeof g_msg];
+    uint8_t sha2_in[3 * N_MAX + 2 + sizeof g_msg], mgf_in[2 * N_MAX + 64 + 4];
+    uint8_t sha2_digest[64];
     const uint8_t *r = g_ref;
     size_t i;
-    int control_hits;
-    unsigned signing_calls;
+    int control_hits, keygen_ok;
+    unsigned signing_calls, keygen_calls;
 
     for (i = 0; i < sizeof g_sentinel; i++) {
         g_sentinel[i] = (uint8_t)(0xA7u ^ (i * 13u + 3u));
@@ -327,7 +421,17 @@ int main(void) {
 
     /* --- SLH-DSA-SHAKE-128s. */
     g_ps = AMA_SLHDSA_SHAKE_128S;
-    if (!keygen(g_ps, SHAKE_128S_N, sk_seed, sk_prf) || !reference_signature()) {
+    /* The consultation rule the positions below rely on: once per hash, not
+     * once per absorbed segment. */
+    arm(0, 0);
+    keygen_ok = keygen(g_ps, SHAKE_128S_N, sk_seed, sk_prf);
+    keygen_calls = g_calls;
+    disarm();
+    printf("  %-58s %u\n", "SHAKE-128s: key generation's hook consultations",
+           keygen_calls);
+    CHECK(keygen_calls == SHAKE_128S_KEYGEN_HASHES,
+          "SHAKE-128s: key generation consults the hook once per hash");
+    if (!keygen_ok || !reference_signature()) {
         CHECK(0, "SLH-DSA-SHAKE-128s keygen and reference signature");
     } else {
         /* digest = H_msg(R, PK.seed, PK.root, M') = SHAKE-256(R || PK || M', 8m),
@@ -353,6 +457,9 @@ int main(void) {
         printf("  %-58s %u\n", "SHAKE-128s: hash calls that consulted the hook",
                signing_calls);
         CHECK(signing_calls > 2, "SHAKE-128s: F, H and PRF consult the hook");
+        position_control(1, r, SHAKE_128S_N, "SHAKE-128s: PRF_msg's consultation finds R");
+        position_control(2, digest, SHAKE_128S_N,
+                         "SHAKE-128s: H_msg's consultation finds the digest");
 
         verdict(1, 1, AMA_ERROR_MEMORY, sk_prf, SHAKE_128S_N,
                 "SHAKE-128s PRF_msg fails: SK.prf");
@@ -370,6 +477,34 @@ int main(void) {
     if (!keygen(g_ps, N_MAX, sk_seed, sk_prf) || !reference_signature()) {
         CHECK(0, "SLH-DSA-SHA2-256f keygen and reference signature");
     } else {
+        /* sha2_F, sha2_HT and sha2_PRF have no failure path: only PRF_msg
+         * and H_msg consult the hook. */
+        arm(0, 0);
+        CHECK(probe_sign() == AMA_SUCCESS &&
+                  memcmp(g_sig, g_ref, AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES) == 0,
+              "SHA2-256f: signing with the hook set is the reference");
+        signing_calls = g_calls;
+        disarm();
+        printf("  %-58s %u\n", "SHA2-256f: hash calls that consulted the hook",
+               signing_calls);
+        CHECK(signing_calls == 2, "SHA2-256f: PRF_msg and H_msg alone consult the hook");
+        /* digest = MGF1-SHA-512(R || PK.seed || SHA-512(R || PK || M'), m); its
+         * first block, SHA-512(that seed || toByte(0, 4)), holds all m = 49
+         * octets. */
+        memcpy(sha2_in, r, N_MAX);
+        memcpy(sha2_in + N_MAX, g_pk, 2 * N_MAX);
+        sha2_in[3 * N_MAX] = 0x00;
+        sha2_in[3 * N_MAX + 1] = 0x00;
+        memcpy(sha2_in + 3 * N_MAX + 2, g_msg, sizeof g_msg);
+        memcpy(mgf_in, r, N_MAX);
+        memcpy(mgf_in + N_MAX, g_pk, N_MAX);
+        memset(mgf_in + 2 * N_MAX + 64, 0, 4);
+        CHECK(ama_sha512(sha2_in, sizeof sha2_in, mgf_in + 2 * N_MAX) == AMA_SUCCESS &&
+                  ama_sha512(mgf_in, sizeof mgf_in, sha2_digest) == AMA_SUCCESS,
+              "SHA-512 of the H_msg input");
+        position_control(1, r, N_MAX, "SHA2-256f: PRF_msg's consultation finds R");
+        position_control(2, sha2_digest, N_MAX,
+                         "SHA2-256f: H_msg's consultation finds the digest");
         verdict(1, 1, AMA_ERROR_MEMORY, r, N_MAX, "SHA2-256f PRF_msg fails: R");
         verdict(2, 2, AMA_ERROR_MEMORY, r, N_MAX, "SHA2-256f H_msg fails: R");
         no_r_in_signature(2, N_MAX, "SHA2-256f H_msg fails: no R in the signature");

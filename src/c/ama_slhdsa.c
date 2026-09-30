@@ -164,12 +164,18 @@ typedef struct slhdsa_params {
  * every entry point refuses a NULL segment with a nonzero length before any
  * hashing starts, and ama_hmac_sha512_3 returns 0 only -- yet each must
  * scrub what it computed.  In AMA_TESTING_MODE a test may set
- * ama_slhdsa_hash_fault_hook to make a message hash (PRF_msg, H_msg) or a
- * SHAKE absorb report failure AFTER it has written its output, which is the
- * worst case for what the exit leaves behind; the hook is consulted once per
- * such call, in call order.  In a shipped build the macro is the constant 0
- * and the object is byte-identical to one built without it
- * (tests/c/test_slhdsa_fault_residue.c). */
+ * ama_slhdsa_hash_fault_hook to make a hash call report failure AFTER it has
+ * computed its output, which is the worst case for what the exit leaves
+ * behind.  Three sites consult it, each once per call: sha2_PRF_msg after the
+ * HMAC and before truncating it into `out`, unless ama_hmac_sha512_3 failed;
+ * sha2_H_msg after MGF1 has written `out`; shake_finish after the squeeze,
+ * unless the init, an absorb, the finalize or the squeeze failed.  That is
+ * once per SHAKE-256 hash (F, H, T_l, PRF, PRF_msg, H_msg), not once per
+ * absorbed segment.  sha2_F, sha2_HT and sha2_PRF do not consult it, and
+ * shake_F, shake_HT and shake_PRF discard the helper's result, so a fault on
+ * F, H, T_l or PRF changes no output and no return code.  In a shipped build
+ * the macro is the constant 0 and the object is byte-identical to one built
+ * without it (tests/c/test_slhdsa_fault_residue.c). */
 #ifdef AMA_TESTING_MODE
 int (*ama_slhdsa_hash_fault_hook)(void) = NULL;
 #define SLH_HASH_FAULT() \

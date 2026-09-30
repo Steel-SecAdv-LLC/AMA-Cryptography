@@ -70,10 +70,17 @@ extern ama_error_t (*ama_x25519_randombytes_hook)(uint8_t *buf, size_t len);
 
 /**
  * SLH-DSA's hash-failure hook, NULL until a test sets it.  Consulted once per
- * message hash (PRF_msg, H_msg) and per SHAKE absorb, in call order, after
- * that call has written its output; a nonzero return makes the call report
- * failure, so tests/c/test_slhdsa_fault_residue.c can drive the failure exits
- * no input reaches and scan what they leave behind.  Defined under
+ * hash call, after that call has computed its output, never once per absorbed
+ * segment: in the SHA2 family by PRF_msg and H_msg only; in the SHAKE family
+ * by every SHAKE-256 hash (F, H, T_l, PRF, PRF_msg, H_msg), in shake_finish
+ * after the squeeze.  A call whose HMAC or sponge step has already failed
+ * does not consult it.  A nonzero return makes the call return -1: the caller
+ * stops on a failed PRF_msg or H_msg (AMA_ERROR_MEMORY) and ignores a failed
+ * F, H, T_l or PRF.  Counted in call order while it is set, signing consults
+ * it for PRF_msg first and H_msg second; SHAKE-128s key generation, signing
+ * and verification also consult it once per F, H, T_l and PRF.
+ * tests/c/test_slhdsa_fault_residue.c selects the failure exits no input
+ * reaches by that position and scans what they leave behind.  Defined under
  * AMA_TESTING_MODE; the shipped object is byte-identical without it.
  */
 extern int (*ama_slhdsa_hash_fault_hook)(void);

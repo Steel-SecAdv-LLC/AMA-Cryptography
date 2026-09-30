@@ -591,10 +591,11 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_residue_probe(test_csprng_failure_residue test_csprng_failure_residue.c
                           ama_cryptography_test)
     # The same probe applied to SLH-DSA signing's hash-failure exits, which no
-    # input reaches: the AMA_TESTING_MODE fault hook in ama_slhdsa.c fails a
-    # message hash or a SHAKE absorb after it has written its output, and the
-    # exit must leave no R, digest, SK.prf or SK.seed behind.  Test archive for
-    # the same reason as the probe above.
+    # input reaches: the AMA_TESTING_MODE fault hook in ama_slhdsa.c fails
+    # PRF_msg, H_msg or, in the SHAKE family, any other SHAKE-256 hash after it
+    # has computed its output (once per hash call, not per absorbed segment),
+    # and the exit must leave no R, digest, SK.prf or SK.seed behind.  Test
+    # archive for the same reason as the probe above.
     add_ama_residue_probe(test_slhdsa_fault_residue test_slhdsa_fault_residue.c
                           ama_cryptography_test)
 endif()
