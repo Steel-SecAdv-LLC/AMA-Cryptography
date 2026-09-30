@@ -1340,17 +1340,25 @@ class TestCryptoConstructionDocs:
             "AES-256 keeps 128-bit quantum security under Grover.",
             "Security: 256-bit classical / 128-bit quantum (NIST security category 5)",
             'desc="Quantum-resistant 256-bit hash of canonical data",',
-            "Key search: 2^256 classical operations for a 256-bit key; about 2^128 under "
-            "Grover's algorithm",
-            "| AES-256-GCM | Authenticated Encryption | 256-bit key / 128-bit quantum | "
-            "SP 800-38D |",
+            (
+                "Key search: 2^256 classical operations for a 256-bit key; about 2^128 under "
+                "Grover's algorithm"
+            ),
+            (
+                "| AES-256-GCM | Authenticated Encryption | 256-bit key / 128-bit quantum | "
+                "SP 800-38D |"
+            ),
             "ML-KEM-1024's shared secret is 32 bytes (256 bits).",
-            "A quantum computer running Shor's algorithm breaks RSA at every size, even "
-            "15,360-bit.",
+            (
+                "A quantum computer running Shor's algorithm breaks RSA at every size, even "
+                "15,360-bit."
+            ),
             "The quantum test group is ML_KEM_1024BIT.",
             "P-384 gives 192-bit security. ML-DSA-65 is NIST security category 3.",
-            "ML-DSA-65 is NIST security category 3 (FIPS 204): at least as hard to break "
-            "as a key search on AES-192",
+            (
+                "ML-DSA-65 is NIST security category 3 (FIPS 204): at least as hard to break "
+                "as a key search on AES-192"
+            ),
             "ML-KEM-1024 shared secret: 256 bits",
             "| ML-KEM-1024 | Shared secret | 256-bit |",
             "ML-DSA-65 key generation takes a seed (256-bit).",
