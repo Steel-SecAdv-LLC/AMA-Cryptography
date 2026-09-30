@@ -539,6 +539,133 @@ class TestImportFailsClosed:
         assert released.returncode == 0, released.stdout + released.stderr
         assert "DIAGNOSED-RELEASED" in released.stdout
 
+    @pytest.mark.skipif(
+        sys.version_info < (3, 11), reason="ExceptionGroup is a builtin only from Python 3.11"
+    )
+    def test_no_member_of_a_raised_exception_group_keeps_what_the_stage_held(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """An exception group reaches its members through ``exceptions``, which
+        the ``__cause__``/``__context__`` walk does not follow, and a member
+        raised in the stage carries a traceback into the stage's frame.  With
+        only the chain stripped, a caller that caught the refusal still held
+        the stage's locals through ``err.__cause__.exceptions[i].__traceback__``.
+        Each exception the stage below raises carries a traceback into its
+        frame and is reachable from the refusal one way only: as the group's
+        context, as a member, as that member's context (a
+        ``BaseExceptionGroup``, since its own member is a
+        ``KeyboardInterrupt``), as that group's member, and as a nested
+        group's member.  Only the refused import is driven: an import that
+        completes keeps no exception at all, and releases the frame with or
+        without the group walk."""
+        root = tmp_path / "raising_stage_group"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        stage = """
+            _held = ["post-stage-held-7c1e"]
+            try:
+                raise KeyboardInterrupt(f"base member holding {len(_held)}")
+            except KeyboardInterrupt as _base_member:
+                _base = BaseExceptionGroup("base group", [_base_member])
+            try:
+                try:
+                    raise _base
+                except BaseExceptionGroup:
+                    raise RuntimeError("member fault")
+            except RuntimeError as _member:
+                _members = [_member]
+            try:
+                raise KeyError("nested member")
+            except KeyError as _nested_member:
+                _members.append(ExceptionGroup("nested group", [_nested_member]))
+            try:
+                raise OSError("group context")
+            except OSError:
+                raise ExceptionGroup("injected stage faults", _members)
+            """
+        self_test.write_text(
+            source.replace(marker, marker + textwrap.indent(textwrap.dedent(stage), "    "), 1),
+            encoding="utf-8",
+        )
+
+        refused = _run_python(
+            """
+            import gc
+            try:
+                import ama_cryptography
+            except Exception as refusal:
+                err = refusal
+            else:
+                raise SystemExit("the import was not refused")
+            group = err.__cause__
+            assert type(group) is ExceptionGroup, repr(group)
+            assert isinstance(group.__context__, OSError), repr(group.__context__)
+            member, nested = group.exceptions
+            assert isinstance(member, RuntimeError), repr(member)
+            assert type(member.__context__) is BaseExceptionGroup, repr(member.__context__)
+            assert isinstance(member.__context__.exceptions[0], KeyboardInterrupt)
+            assert isinstance(nested.exceptions[0], KeyError), repr(nested)
+            gc.collect()
+            held = [
+                o for o in gc.get_objects()
+                if type(o) is list and len(o) == 1 and o[0] == "post-stage-held-7c1e"
+            ]
+            assert not held, "the raising stage's frame is still reachable"
+            print("REFUSED-RELEASED")
+            """,
+            cwd=root,
+        )
+        assert refused.returncode == 0, refused.stdout + refused.stderr
+        assert "REFUSED-RELEASED" in refused.stdout
+
+    def test_an_exceptions_attribute_does_not_make_an_exception_a_group(
+        self, tmp_path: Path, tree_with_native: Path
+    ) -> None:
+        """Only a ``BaseExceptionGroup`` has its ``exceptions`` walked.  Any
+        other exception can carry an attribute of that name, holding anything:
+        measured with the walk keyed on ``hasattr(_link, "exceptions")``, the
+        stage below made the import raise ``AttributeError: 'str' object has
+        no attribute '__traceback__'`` in place of the refusal.  The stage
+        raises no group, so this runs on Python 3.10 as well."""
+        root = tmp_path / "raising_stage_carrier"
+        shutil.copytree(tree_with_native / "ama_cryptography", root / "ama_cryptography")
+        self_test = root / "ama_cryptography" / "_self_test.py"
+        source = self_test.read_text(encoding="utf-8")
+        marker = "def _run_backend_stage() -> Tuple[bool, Optional[str]]:\n"
+        assert marker in source, "backend stage moved; update this test"
+        self_test.write_text(
+            source.replace(
+                marker,
+                marker + '    _fault = RuntimeError("injected stage fault")\n'
+                '    _fault.exceptions = ("not an exception",)\n'
+                "    raise _fault\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+        refused = _run_python(
+            """
+            try:
+                import ama_cryptography
+            except Exception as refusal:
+                err = refusal
+            else:
+                raise SystemExit("the import was not refused")
+            assert type(err).__name__ == "CryptoModuleError", repr(err)
+            cause = err.__cause__
+            assert isinstance(cause, RuntimeError), repr(cause)
+            assert cause.exceptions == ("not an exception",), repr(cause.exceptions)
+            print("REFUSED")
+            """,
+            cwd=root,
+        )
+        assert refused.returncode == 0, refused.stdout + refused.stderr
+        assert "REFUSED" in refused.stdout
+
 
 # ---------------------------------------------------------------------------
 # 2. Error state inhibits cryptographic output (FIPS 140-3 §4.9.2)

@@ -477,17 +477,31 @@ from ama_cryptography.exceptions import (
 # refusal (``err.__cause__.__traceback__``) for as long as a caller that
 # caught the import failure kept it.  The trace is formatted first -- file,
 # line and source text, no locals -- and carried in the refusal's message; then
-# every exception on the chain is stripped of its traceback, so nothing the
-# stage held outlives the failed import on any path out of it.
+# every exception linked to it is stripped of its traceback: the
+# ``__cause__``/``__context__`` chain, and the members of an exception group
+# (``BaseExceptionGroup``, a builtin from Python 3.11).  A group reaches its
+# members through ``exceptions``, which the chain does not follow, and a
+# member raised in the stage has a traceback of its own into the stage's
+# frame: walking the chain alone left the stage's locals reachable through
+# ``err.__cause__.exceptions[i].__traceback__``.  A group is recognised by its
+# type, not by an ``exceptions`` attribute, which any exception can carry
+# holding anything: keyed on the attribute, the walk reached a string held
+# there and raised AttributeError from this block in place of the refusal.
+# Nothing else an exception holds is walked -- its arguments, any other
+# attribute -- so an exception held there keeps its traceback.
 _post_exc: Optional[Exception] = None
 _post_trace = ""
 try:
     _post_ok = _post()
 except Exception as _exc:
+    import builtins as _builtins
     import traceback as _traceback
 
     _post_ok = False
     _post_trace = "".join(_traceback.format_exception(type(_exc), _exc, _exc.__traceback__))
+    # An empty tuple on Python 3.10, which has no such builtin: nothing is an
+    # instance of it.
+    _group = getattr(_builtins, "BaseExceptionGroup", ())
     _pending: list[BaseException] = [_exc]
     _stripped: set[int] = set()
     while _pending:
@@ -497,8 +511,10 @@ except Exception as _exc:
         _stripped.add(id(_link))
         _link.__traceback__ = None
         _pending.extend(e for e in (_link.__cause__, _link.__context__) if e is not None)
+        if isinstance(_link, _group):
+            _pending.extend(_link.exceptions)
     _post_exc = _exc
-    del _pending, _stripped, _link, _traceback
+    del _pending, _stripped, _link, _group, _builtins, _traceback
 if not _post_ok:
     _reason = module_error_reason() or "unknown"
     _results = module_self_test_results()
