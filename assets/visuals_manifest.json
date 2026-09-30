@@ -13,12 +13,12 @@
       "Core Crypto\n& NIST KATs": 1155,
       "Key Management\n& Rotation": 281,
       "Memory Security\n& Fuzzing": 366,
-      "Other": 3773,
+      "Other": 3780,
       "PQC Backends\n& Integration": 776,
       "Performance\n& Monitoring": 378
     },
-    "n_files": 271,
-    "total_tests": 6729,
+    "n_files": 272,
+    "total_tests": 6736,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",
@@ -163,6 +163,7 @@
       "test_signing_keypair_normalization.py",
       "test_slhdsa_context_separation.py",
       "test_slhdsa_keygen_from_seed.py",
+      "test_slhdsa_param_row_bounds.py",
       "test_stdlib_hash_boundary_gate.py",
       "test_suppression_hygiene_gate.py",
       "test_sve2_impl_macro_is_msvc_guarded.py",
