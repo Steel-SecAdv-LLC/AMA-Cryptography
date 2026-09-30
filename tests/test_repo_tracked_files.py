@@ -198,6 +198,126 @@ class TestWorktreeNames:
         with pytest.raises(_repo.TrackedFilesError):
             _repo.worktree_names(broken)
 
+    def test_pathspecs_select_exactly_what_git_selects_in_both_modes(self, tmp_path: Path) -> None:
+        """Three gates paired git's pathspec-filtered list with their own
+        fallback -- a glob, a recursive glob, a basename walk -- each reading
+        the pattern its own way.  Here one tree is a checkout and a copy of it
+        is not, and both answer every pathspec with git's own list, in git's
+        order."""
+        repo = _init_repo(tmp_path / "repo")
+        tarball = tmp_path / "tarball"
+        for root in (repo, tarball):
+            for name in _PATHSPEC_TREE:
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("x\n", encoding="utf-8")
+        _git(repo, "add", "--", ".")
+        for name in _UNTRACKED:
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text("x\n", encoding="utf-8")
+
+        for pathspecs in [(spec,) for spec in _PATHSPECS] + [_PATHSPECS[:2], ()]:
+            listed = [n for n in _git(repo, "ls-files", "-z", "--", *pathspecs).split("\0") if n]
+            assert _repo.worktree_names(repo, *pathspecs) == listed, pathspecs
+            assert _repo.worktree_names(tarball, *pathspecs) == listed, pathspecs
+        # Not vacuous: the pathspecs the gates pass select what they name.
+        assert _repo.worktree_names(tarball, *_PATHSPECS[:2]) == [
+            "Dockerfile",
+            "a/b/Containerfile",
+            "docker/Dockerfile.alpine",
+        ]
+        assert _repo.worktree_names(tarball, ":(glob)src/c/*.c") == ["src/c/a.c"]
+
+    @pytest.mark.parametrize(
+        "pathspec",
+        [
+            "*.md",  # git's `*` crosses `/` here; the walk's would not
+            "tests",
+            ":(icase)readme.md",
+            ":(glob)",
+            ":(glob)tests/",
+            ":(glob)./tests",
+            ":(glob)/tests",
+            ":(glob)[ab].md",
+            ":(glob)a\\*",
+            # A `**` sharing its component: git reads this one across directories.
+            ":(glob)tests/test_**/*.py",
+            ":(glob)src/**.c",
+        ],
+    )
+    def test_a_pathspec_the_walk_would_read_differently_is_refused_in_both_modes(
+        self, secret_repo: Path, tmp_path: Path, pathspec: str
+    ) -> None:
+        with pytest.raises(ValueError):
+            _repo.worktree_names(secret_repo, pathspec)
+        with pytest.raises(ValueError):
+            _repo.worktree_names(tmp_path, pathspec)
+
+    def test_the_walk_skips_git_metadata_and_named_directories_outside_a_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        """git lists no path through a ``.git``, so neither does the walk; a
+        directory the caller names is skipped by the walk only, since in a
+        checkout git's list already says what belongs to the tree."""
+        tarball = tmp_path / "tarball"
+        for name in ("README.md", "sub/.git/config", "mod/.git", "build/out.md", "docs/build/x.md"):
+            (tarball / name).parent.mkdir(parents=True, exist_ok=True)
+            (tarball / name).write_text("x\n", encoding="utf-8")
+        assert _repo.worktree_names(tarball) == ["README.md", "build/out.md", "docs/build/x.md"]
+        assert _repo.worktree_names(tarball, walk_skip_dirs={"build"}) == ["README.md"]
+
+        repo = _init_repo(tmp_path / "repo")
+        (repo / "build").mkdir()
+        (repo / "build" / "out.md").write_text("x\n", encoding="utf-8")
+        _git(repo, "add", "--", ".")
+        assert _repo.worktree_names(repo, walk_skip_dirs={"build"}) == ["build/out.md"]
+
+
+#: A tree holding each shape :func:`_repo._glob_pathspec` must read as git
+#: does, with the near misses that tell the readings apart.
+_PATHSPEC_TREE = (
+    "Dockerfile",
+    "Dockerfile.d/x",
+    "docker/Dockerfile.alpine",
+    "a/b/Containerfile",
+    "src/c/a.c",
+    "src/c/avx2/b.c",
+    "tests/test_a.py",
+    "tests/helper.py",
+    "tests/sub/test_b.py",
+    "tests/c/test_x.c",
+    "tests/c/deep/y.c",
+    "docs/x.md",
+    ".hidden/z.md",
+    "README.md",
+    "clé.md",
+)
+
+#: Present in the checkout and not tracked: git's list leaves them out.
+_UNTRACKED = ("build/Dockerfile", "tests/test_untracked.py")
+
+#: The pathspecs the gates pass, then each other construct the walk accepts.
+_PATHSPECS = (
+    ":(glob)**/Dockerfile*",
+    ":(glob)**/Containerfile*",
+    ":(glob)tests/test_*.py",
+    ":(glob)tests/**/*.py",
+    ":(glob)tests/c/**/test_*.c",
+    ":(glob)src/c/*.c",
+    ":(glob)**/*.md",
+    ":(glob)tests",  # a leading directory, matched literally
+    ":(glob)a/b",
+    ":(glob)README.md",
+    ":(glob)src/*",  # `*` does not cross `/`: nothing
+    ":(glob)src/**/b.c",
+    ":(glob)a/***/Containerfile",
+    ":(glob)tests/**",
+    ":(glob)**",
+    ":(glob)**/b",  # a directory, and a wildcard is no leading-directory match
+    ":(glob)te?ts/test_a.py",
+    ":(glob)cl?.md",  # `?` is one byte and `é` is two: nothing
+    ":(glob)cl??.md",
+)
+
 
 # ---------------------------------------------------------------------------
 # staged_files: every staged status that carries content into the commit
@@ -402,14 +522,15 @@ class TestOtherMigratedGates:
         assert PY_NAME in gate._tracked_or_globbed(py_repo, "*.py")
         assert PY_NAME in gate._loc_tracked_files(py_repo)
 
-    def test_check_documented_counts_globs_only_without_a_repository(self, tmp_path: Path) -> None:
+    def test_check_documented_counts_walks_only_without_a_repository(self, tmp_path: Path) -> None:
         """The documented tarball fallback survives; a broken git does not use it."""
         gate = _load("check_documented_counts")
         tarball = tmp_path / "tarball"
         tarball.mkdir()
         (tarball / "a.py").write_text("X = 1\n", encoding="utf-8")
-        assert gate._git_tracked(tarball) is None
-        assert [Path(p).name for p in gate._tracked_or_globbed(tarball, "*.py")] == ["a.py"]
+        # Repo-relative, as git names it: the glob this replaced returned the
+        # absolute path here and the relative one in a checkout.
+        assert gate._tracked_or_globbed(tarball, "*.py") == ["a.py"]
 
         # A `.git` that git cannot use is a checkout git failed on, not a
         # tarball: that used to fall back to the glob silently.

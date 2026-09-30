@@ -66,7 +66,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -108,8 +108,7 @@ def _markdown_files(repo: Path) -> list[Path]:
     longer refuses a commit that CI's clean checkout would pass.  Outside git,
     every document on disk.
     """
-    tracked = _git_tracked(repo, ":(glob)**/*.md")
-    tracked_paths = None if tracked is None else {(repo / name).resolve() for name in tracked}
+    tracked_paths = {(repo / name).resolve() for name in _worktree_names(repo, ":(glob)**/*.md")}
     seen: dict[Path, None] = {}
     for root in DOC_ROOTS:
         base = repo / root
@@ -119,7 +118,7 @@ def _markdown_files(repo: Path) -> list[Path]:
         for path in sorted(base.glob(pattern)):
             if any(part in {".git", "build", "node_modules"} for part in path.parts):
                 continue
-            if tracked_paths is not None and path.resolve() not in tracked_paths:
+            if path.resolve() not in tracked_paths:
                 continue
             if _is_historical_record(path, repo):
                 # CHANGELOG.md and the development journals under
@@ -587,16 +586,7 @@ def _loc_tracked_files(repo: Path) -> list[str]:
     build rewrites in place (``_LOC_BUILD_REWRITTEN``) are excluded in both
     modes, for the reason documented on the constant.
     """
-    listed = _git_tracked(repo)
-    if listed is not None:
-        tracked = listed
-    else:
-        tracked = sorted(
-            p.relative_to(repo).as_posix()
-            for p in repo.rglob("*")
-            if p.is_file() and ".git" not in p.parts
-        )
-    return [p for p in tracked if p not in _LOC_BUILD_REWRITTEN]
+    return [p for p in _worktree_names(repo) if p not in _LOC_BUILD_REWRITTEN]
 
 
 def measure_loc_table(repo: Path) -> dict[str, tuple[int, int]]:
@@ -1121,26 +1111,27 @@ def check_c_suite_counts(repo: Path) -> list[str]:
     return problems
 
 
-def _git_tracked(repo: Path, *pathspecs: str) -> Optional[list[str]]:
-    """Repo-relative POSIX paths git tracks matching ``pathspecs``, or None
-    when ``repo`` is not a git checkout (no ``.git``: a source tarball, or a
-    non-git fixture directory in this gate's own tests).
+def _worktree_names(repo: Path, *pathspecs: str) -> list[str]:
+    """Repo-relative POSIX paths matching ``pathspecs``: in a git checkout the
+    files git tracks, outside one (no ``.git``: a source tarball, or a non-git
+    fixture directory in this gate's own tests) the files on disk.
 
-    Only the absence of a repository selects the glob fallback.  This used to
-    return None on ANY git failure and also listed without ``-z``, so a
-    non-ASCII name came back C-quoted and a broken git in a real checkout
-    quietly switched the gate to globbing the working tree.  Enumeration now
-    goes through ``tools/_repo.py``: ``-z``, and ``TrackedFilesError`` if git
-    fails or a tracked path is not a regular file on disk.
+    Only the absence of a repository selects the walk.  This used to return
+    None on ANY git failure and also listed without ``-z``, so a non-ASCII
+    name came back C-quoted and a broken git in a real checkout quietly
+    switched the gate to globbing the working tree.  Enumeration now goes
+    through ``tools/_repo.py``'s ``worktree_names``: ``-z``, the same
+    pathspec match in both modes, and ``TrackedFilesError`` if git fails or a
+    tracked path is not a regular file on disk.  Each caller used to pair
+    git's list with its own fallback (a glob, a recursive glob, a walk), and
+    the glob's names were absolute where git's were relative.
     """
-    if not (repo / ".git").exists():
-        return None
     root = str(Path(__file__).resolve().parent.parent)
     if root not in sys.path:
         sys.path.insert(0, root)
-    from tools._repo import tracked_names
+    from tools._repo import worktree_names
 
-    return tracked_names(repo, *pathspecs)
+    return worktree_names(repo, *pathspecs)
 
 
 def _tracked_or_globbed(repo: Path, pattern: str) -> list[str]:
@@ -1148,10 +1139,7 @@ def _tracked_or_globbed(repo: Path, pattern: str) -> list[str]:
     # `/`, so `src/c/*.c` also matched src/c/avx2/*.c and friends -- 61 files
     # where the directory holds 29.  The gate caught it on the first run,
     # which is what it is for.
-    tracked = _git_tracked(repo, f":(glob){pattern}")
-    if tracked is not None:
-        return tracked
-    return [p.as_posix() for p in sorted(repo.glob(pattern))]
+    return _worktree_names(repo, f":(glob){pattern}")
 
 
 def _tracked_or_walked(repo: Path, directory: str, pattern: str) -> list[Path]:
@@ -1160,13 +1148,11 @@ def _tracked_or_walked(repo: Path, directory: str, pattern: str) -> list[Path]:
     In a git checkout, the files git tracks -- the index, which is what the
     commit will carry and all a clean CI checkout holds; pre-commit stashes
     unstaged edits, so during the hook their content is the staged content
-    too.  Outside git (a source tarball, a fixture directory), the recursive
-    filesystem walk this replaced, so the count there is unchanged.
+    too.  Outside git (a source tarball, a fixture directory), the files on
+    disk the same pathspec matches; on a ``git archive`` of this tree that is
+    the list the recursive glob it replaced returned.
     """
-    tracked = _git_tracked(repo, f":(glob){directory}/**/{pattern}")
-    if tracked is not None:
-        return [repo / name for name in tracked]
-    return sorted((repo / directory).rglob(pattern))
+    return [repo / name for name in _worktree_names(repo, f":(glob){directory}/**/{pattern}")]
 
 
 def _tracked_or_globbed_names(repo: Path, pattern: str) -> list[str]:
@@ -1183,9 +1169,10 @@ def measure_source_inventory(repo: Path) -> tuple[int, int]:
     That last sentence was here while the code globbed the filesystem, which is
     the opposite: an untracked ``ama_cryptography/scratch.py`` moved the module
     count and failed the gate against a README that was correct.  It now really
-    does ask git, and falls back to the glob only where git cannot answer — a
-    source tarball with no repository — because refusing to count at all there
-    would fail the gate for a reason that has nothing to do with the docs.
+    does ask git, and falls back to the files on disk only where git cannot
+    answer — a source tarball with no repository — because refusing to count
+    at all there would fail the gate for a reason that has nothing to do with
+    the docs.
     """
     units = _tracked_or_globbed(repo, "src/c/*.c")
     modules = [

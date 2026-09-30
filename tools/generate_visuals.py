@@ -220,18 +220,16 @@ def _test_files(root: Path = REPO_ROOT) -> list[Path]:
     the hook their content is the staged content.  A filesystem glob also
     counted an untracked scratch `tests/test_*.py`, so the pre-commit hook
     reported the charts stale on a tree CI would pass.  Outside git (a source
-    tarball) the glob is the only answer, and is used.  The same rule as
-    `tools/check_documented_counts.py`'s static test count, whose figures
-    this chart and its manifest restate.
+    tarball) the files on disk are the only answer, and are used.  Both come
+    from `tools._repo.worktree_names`, as `tools/check_documented_counts.py`'s
+    static test count does, whose figures this chart and its manifest restate.
     """
-    if (root / ".git").exists():
-        repo_root = str(Path(__file__).resolve().parent.parent)
-        if repo_root not in sys.path:
-            sys.path.insert(0, repo_root)
-        from tools._repo import tracked_names
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from tools._repo import worktree_names
 
-        return sorted(root / name for name in tracked_names(root, ":(glob)tests/test_*.py"))
-    return sorted((root / "tests").glob("test_*.py"))
+    return sorted(root / name for name in worktree_names(root, ":(glob)tests/test_*.py"))
 
 
 def _count_test_functions_by_category() -> tuple[list[int], int, list[tuple[str, int]]]:
