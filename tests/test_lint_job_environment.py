@@ -37,6 +37,7 @@ pinned. Collection needs neither the native library nor an editable install
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -176,3 +177,114 @@ def test_the_pinned_pytest_matches_the_lock_file() -> None:
             assert (
                 f"pytest=={version}" == pinned
             ), f"{path.name} pins pytest=={version} but requirements-lock.txt says {pinned}"
+
+
+# The tools whose verdicts gates execute, pinned in up to four places:
+# requirements-lock.txt (the reference the assertions below read), the
+# workflows' `pip install "tool==X"` lines, the pre-commit rev, and the [dev]
+# extra's capped range in pyproject.toml and requirements-dev.txt.  8253023
+# capped mypy after one CI run measured two mypys (the lint lane's pinned
+# 2.3.1 and the test lanes' floated 2.4.0); the audit that followed measured
+# bandit's nosec attribution moving INSIDE its then-floated >=1.7.0 range, and
+# nothing tied any cap to the pins it tracks -- each cap's comment says "raise
+# the cap with the pins", and a comment is not a gate.  The expected [dev]
+# form is derived from the lock: floor exactly at the locked version, cap at
+# the next minor -- except black, whose stable style moves on its calendar
+# major, capped at the next major.  Raising a pin without the cap, or a cap
+# without the pin, fails here.
+_GATE_TOOL_CAPS: dict[str, str] = {
+    "pytest": "minor",
+    "mypy": "minor",
+    "bandit": "minor",
+    "ruff": "minor",
+    "black": "major",
+    # Gate-executed like the five above: INVARIANT-25's workflow parser runs
+    # on PyYAML, and mypy --strict's verdicts move with the stub packages.
+    "PyYAML": "minor",
+    "types-PyYAML": "minor",
+    "types-setuptools": "minor",
+}
+#: The pre-commit repository that pins each tool (pytest has no hook there).
+_PRE_COMMIT_REPOS: dict[str, str] = {
+    "black": "github.com/psf/black",
+    "ruff": "github.com/astral-sh/ruff-pre-commit",
+    "mypy": "github.com/pre-commit/mirrors-mypy",
+    "bandit": "github.com/PyCQA/bandit",
+}
+
+
+def _locked_version(tool: str) -> str:
+    lock = (REPO_ROOT / "requirements-lock.txt").read_text(encoding="utf-8")
+    for line in lock.splitlines():
+        if line.strip().startswith(f"{tool}=="):
+            return line.strip().split("==", 1)[1]
+    raise AssertionError(f"requirements-lock.txt does not pin {tool}")
+
+
+def _expected_dev_spec(tool: str, locked: str) -> str:
+    major, minor = (int(part) for part in locked.split(".")[:2])
+    cap = f"{major + 1}" if _GATE_TOOL_CAPS[tool] == "major" else f"{major}.{minor + 1}"
+    return f"{tool}>={locked},<{cap}"
+
+
+@pytest.mark.parametrize("tool", sorted(_GATE_TOOL_CAPS))
+def test_every_gate_tool_is_pinned_coherently(tool: str) -> None:
+    locked = _locked_version(tool)
+
+    # Every workflow pip-install pin of the tool equals the lock.  The tool
+    # name is anchored on its left so "PyYAML==" does not also match inside
+    # "types-PyYAML==...".
+    pin_re = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(tool)}==([^\"'\s]+)")
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        for version in pin_re.findall(path.read_text(encoding="utf-8")):
+            assert (
+                version == locked
+            ), f"{path.name} pins {tool}=={version} but requirements-lock.txt says {locked}"
+
+    # The pre-commit rev equals the lock, for the tools pre-commit runs --
+    # and so does every `tool==` among any hook's additional_dependencies
+    # (the mypy hook carries PyYAML, types-PyYAML and pytest pins of its own).
+    config = yaml.safe_load((REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    repo_url = _PRE_COMMIT_REPOS.get(tool)
+    if repo_url is not None:
+        revs = [r["rev"] for r in config["repos"] if repo_url in r.get("repo", "")]
+        assert revs, f".pre-commit-config.yaml no longer holds {repo_url}"
+        for rev in revs:
+            assert (
+                rev.lstrip("v") == locked
+            ), f".pre-commit-config.yaml pins {tool} at {rev} but the lock says {locked}"
+    for repo in config["repos"]:
+        for hook in repo.get("hooks", []):
+            for dep in hook.get("additional_dependencies", []) or []:
+                if not dep.startswith(f"{tool}=="):
+                    continue
+                version = dep.split("==", 1)[1]
+                assert version == locked, (
+                    f".pre-commit-config.yaml hook {hook.get('id')} pins {dep} "
+                    f"but the lock says {tool}=={locked}"
+                )
+
+    # The [dev] extra floors at the lock and carries the derived cap, in both
+    # declarations.  Exact-form comparison: a floor above or below the pin,
+    # a missing cap, and a cap raised without the pin all fail.
+    expected = _expected_dev_spec(tool, locked)
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert (
+        f'"{expected}"' in pyproject
+    ), f"pyproject.toml's dev extra must pin '{expected}' (lock: {tool}=={locked})"
+    dev_txt = (REPO_ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert any(
+        line.strip() == expected for line in dev_txt.splitlines()
+    ), f"requirements-dev.txt must pin '{expected}' (lock: {tool}=={locked})"
+
+
+def test_workflow_only_pins_agree() -> None:
+    """pip-audit is pinned per-workflow with no lock entry to anchor it, so
+    the coherence it can have is that every workflow names one version."""
+    pin_re = re.compile(r"(?<![A-Za-z0-9_-])pip-audit==([^\"'\s]+)")
+    found: dict[str, list[str]] = {}
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        for version in pin_re.findall(path.read_text(encoding="utf-8")):
+            found.setdefault(version, []).append(path.name)
+    assert found, "no workflow pins pip-audit any more"
+    assert len(found) == 1, f"workflows disagree on pip-audit: {found}"

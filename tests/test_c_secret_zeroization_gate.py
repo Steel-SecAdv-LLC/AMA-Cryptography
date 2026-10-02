@@ -13,11 +13,19 @@ on purpose-built input, plus the real tree.
 from __future__ import annotations
 
 import functools
-import itertools
 import re
+
+# ``sre_parse`` rather than ``re._parser``: the pattern analysis below reads
+# the regex parse tree, ``re._parser`` only exists from Python 3.11, and this
+# project's floor is 3.10.  ``sre_parse`` is the one spelling present (and
+# typed by typeshed) across 3.10-3.14; it is deprecated from 3.11, and the
+# DeprecationWarning its import emits is covered by the ``ignore`` filter in
+# pyproject.toml's pytest configuration.
+import sre_parse
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -710,26 +718,27 @@ void late(void) {
         case there, so the regression this file has already suffered twice was
         reintroduced in the one code path that was new.
 
-        Measured with the same floor-over-interleaved-rounds estimator, and
-        the same retry rule, as ``TestPatternIsLinear`` — the first revision
-        of this test took ONE sample per size against a 3.0x ceiling, the
-        exact single-shot methodology whose one-sided contention bias that
-        class's docstring records producing 2.89x-3.6x on a healthy linear
-        pattern (1 failure in 8 under saturation) and replaces.  Noise only
-        inflates a sample, so each size's floor over the rounds discards all
-        but the least-disturbed one, and a retry can only move floors toward
-        their true cost; a quadratic scan cannot be retried under the
+        Measured with the same floor-over-interleaved-rounds estimator, the
+        same retry rule, and the same span verdict as ``TestPatternIsLinear``
+        (see :func:`_span_growth` for the estimator's record) — the first
+        revision of this test took ONE sample per size against a 3.0x
+        ceiling, the exact single-shot methodology whose one-sided contention
+        bias that class's docstring records producing 2.89x-3.6x on a healthy
+        linear pattern (1 failure in 8 under saturation) and replaces.  Noise
+        only inflates a sample, so each size's floor over the rounds discards
+        all but the least-disturbed one, and a retry can only move floors
+        toward their true cost; a quadratic scan cannot be retried under the
         ceiling.
         """
         import time
 
         payloads = [
             "#define WIPE(a) memset((a), 0, 32)\n" + "WIPE(secret_key\n" * count
-            for count in (2000, 4000)
+            for count in (2000, 4000, 8000)
         ]
 
-        def growth() -> float:
-            """Adjacent floor ratio from one full interleaved measurement."""
+        def measured_span() -> float:
+            """End-to-end floor growth from one full interleaved measurement."""
             timings = [float("inf")] * len(payloads)
             for _ in range(_LINEARITY_ROUNDS):
                 for index, payload in enumerate(payloads):
@@ -737,20 +746,20 @@ void late(void) {
                     gate.scan_text(payload, Path("probe.c"))
                     timings[index] = min(timings[index], time.perf_counter() - start)
             assert timings[0] < 1.0, f"N=2000 floor took {timings[0]:.2f}s"
-            return timings[1] / max(timings[0], 1e-6)
+            return _span_growth(timings)
 
         best = float("inf")
         for _ in range(_LINEARITY_ATTEMPTS):
-            best = min(best, growth())
-            if best < _LINEARITY_CEILING:
+            best = min(best, measured_span())
+            if best < _LINEARITY_SPAN_CEILING:
                 return
 
         raise AssertionError(
-            f"doubling the unbalanced-parenthesis input multiplied the floor time "
+            f"a 4x unbalanced-parenthesis input multiplied the floor time "
             f"by {best:.2f}x — the best of {_LINEARITY_ATTEMPTS} independent "
             f"measurements, each the fastest of {_LINEARITY_ROUNDS} interleaved "
-            f"rounds per size — linear is ~2x; the forward scan has regained its "
-            f"quadratic form"
+            f"rounds per size — linear is ~4x across the span and the recorded "
+            f"quadratic form 16x; the forward scan has regained it"
         )
 
 
@@ -763,9 +772,53 @@ _LINEARITY_ROUNDS = 7
 #: repeating sharpens the discrimination rather than loosening it.
 _LINEARITY_ATTEMPTS = 3
 
-#: Linear growth is ~2x per doubling, quadratic ~4x.  The gap is wide enough
-#: that residual noise in a floor timing cannot cross it.
-_LINEARITY_CEILING = 2.8
+#: The growth bound is taken over the WHOLE measured span (a 4x input), not
+#: per doubling: linear growth is ~4x across it, quadratic ~16x.  8.0 is the
+#: geometric midpoint, and it preserves the bound the per-doubling form
+#: enforced (two adjacent ratios of 2.8 compose to 7.84) while doubling the
+#: multiplicative noise margin on each side — 8/4 = 2.0x where the adjacent
+#: form had 2.8/2 = 1.4x.  See :func:`_span_growth` for the record of the
+#: failure that forced the change.
+_LINEARITY_SPAN_CEILING = 8.0
+
+
+def _span_growth(floors: Sequence[float]) -> float:
+    """The end-to-end growth of one floor series, or 0.0 when immeasurable.
+
+    This replaced the maximum ADJACENT ratio after job 110690519311
+    (2026-10-02, ``Python 3.11 on macos-latest``): the failing-value shape
+    read 2.87x against the 2.8 adjacent ceiling — the best of 3 attempts,
+    each the floor of 7 interleaved rounds — on a commit that did not touch
+    the pattern, while the same shape measures 1.91-2.10x per doubling at
+    every span from 2^13 to 2^19 on a quiet host.  That is the third
+    recorded false-positive incident of the adjacent form on a shared macOS
+    runner (job 97259726006's 3.60x/2.89x pair, then the 3.14 lane's 2.94x),
+    each survived by a hardening that kept the estimator and squeezed its
+    inputs.  The estimator was the problem: one
+    inflated floor moves an adjacent ratio by its full inflation, and 1.4x
+    of margin was not enough.
+
+    The span keeps the same physical bound — total growth over the same
+    three sizes — so this is a re-estimation, not a loosening: for a
+    polynomial cost a*n^k the span ratio IS the composition of the adjacent
+    ratios, a quadratic pattern's true span is 16x against a ceiling of 8,
+    and reaching 8 from 16 would need the smallest size's floor
+    overestimated 2x in every attempt, which the one-sided noise model
+    forbids (contention only ever inflates a sample, and the floor over
+    interleaved rounds converges down to the machine's actual cost).  The
+    macOS reading that broke the adjacent form — one pair at 2.87x, the
+    other at ~2x — composes to 5.74x here and passes, exactly as a linear
+    pattern should.  :class:`TestSpanGrowthVerdict` pins the discrimination
+    on synthetic series with no clock involved, and
+    :class:`TestPatternHasNoQuadraticSplit` catches the recorded regression
+    classes structurally with no clock at all.
+
+    A floor too fast to carry a ratio (under 100 us) returns 0.0, as the
+    adjacent form's per-pair guard did.
+    """
+    if not floors or floors[0] < 1e-4:
+        return 0.0
+    return floors[-1] / floors[0]
 
 
 def _floor_seconds(scan: Callable[[], object], rounds: int = _LINEARITY_ROUNDS) -> float:
@@ -886,10 +939,14 @@ class TestPatternIsLinear:
         minimum over seven temporally separated rounds.  The same
         saturation experiment on this form: 0 failures.
 
-        The ceiling is 2.8x rather than 2.0x because even floor timings
-        carry residual noise; quadratic growth is 4x and cubic 8x, so the
-        gap is wide enough to discriminate.  Measured here at the time of
-        writing: 1.71-2.07x across all three shapes.
+        The verdict is taken over the WHOLE 4x span, not per doubling, and
+        the ceiling is :data:`_LINEARITY_SPAN_CEILING`; :func:`_span_growth`
+        holds the estimator, the record of the adjacent-ratio form it
+        replaced (2.8x per doubling, broken three times by shared-runner
+        noise), and the arithmetic of the margin.  Measured per-doubling
+        floors at the time of the change: 1.91-2.10x across all four shapes
+        from 2^13 to 2^19, so the true span here is ~4x against the ceiling
+        of 8.
 
         Interleaving was still not enough.  The macOS 3.14 lane read 2.94x
         for the failing-value shape on a commit that changed neither the
@@ -909,11 +966,11 @@ class TestPatternIsLinear:
         only ever inflate a sample, the floor over a round already discards
         all but the least-disturbed one, and a further measurement can only
         move each size's floor DOWN, towards its true cost.  Both floors
-        therefore converge on truth as attempts accumulate, and the ratio
-        converges on the pattern's real growth -- ~2x for a linear pattern
-        and ~4x for a quadratic one.  A quadratic pattern cannot be
-        retried under the ceiling: reaching 2.8x from 4x would need the
-        SMALLER size's floor to be overestimated by 30% in every one of
+        therefore converge on truth as attempts accumulate, and the span
+        converges on the pattern's real growth -- ~4x for a linear pattern
+        and ~16x for a quadratic one.  A quadratic pattern cannot be
+        retried under the ceiling: reaching 8x from 16x would need the
+        SMALLER size's floor to be overestimated by 2x in every one of
         the attempts, which is the one thing the model forbids.  Measured
         under the same saturation that failed the single-shot form: 0
         failures in 10 runs, against 1 in 8 before.
@@ -937,36 +994,28 @@ class TestPatternIsLinear:
         pad = " " if not prefix.endswith(", ") else "0"
         payloads = [prefix + pad * (2**exponent) for exponent in (14, 15, 16)]
 
-        def worst_ratio() -> float:
-            """Largest adjacent floor ratio from one full interleaved measurement."""
+        def measured_span() -> float:
+            """End-to-end floor growth from one full interleaved measurement."""
             timings = [float("inf")] * len(payloads)
             for _ in range(_LINEARITY_ROUNDS):
                 for index, payload in enumerate(payloads):
                     start = time.perf_counter()
                     gate.scan_text(payload, _INLINE)
                     timings[index] = min(timings[index], time.perf_counter() - start)
-            return max(
-                (
-                    larger / smaller
-                    for smaller, larger in itertools.pairwise(timings)
-                    # A pair whose smaller side is too fast to measure a ratio from.
-                    if smaller >= 1e-4
-                ),
-                default=0.0,
-            )
+            return _span_growth(timings)
 
         best = float("inf")
         for _ in range(_LINEARITY_ATTEMPTS):
-            best = min(best, worst_ratio())
-            if best < _LINEARITY_CEILING:
+            best = min(best, measured_span())
+            if best < _LINEARITY_SPAN_CEILING:
                 return
 
         raise AssertionError(
-            f"doubling the input multiplied the floor time by {best:.2f}x — the best "
-            f"of {_LINEARITY_ATTEMPTS} independent measurements, each the fastest of "
+            f"a 4x input multiplied the floor time by {best:.2f}x — the best of "
+            f"{_LINEARITY_ATTEMPTS} independent measurements, each the fastest of "
             f"{_LINEARITY_ROUNDS} interleaved rounds per size — for {prefix!r}; linear "
-            f"is ~2x and quadratic is ~4x, so the pattern has regained polynomial "
-            f"backtracking"
+            f"is ~4x across the span and quadratic ~16x, so the pattern has regained "
+            f"polynomial backtracking"
         )
 
     def test_casts_the_gate_exists_for_still_match(self) -> None:
@@ -1049,6 +1098,271 @@ class TestPatternIsLinear:
     )
     def test_destination_name_extraction(self, expression: str, expected: str) -> None:
         assert gate._destination_name(expression) == expected
+
+
+# ---------------------------------------------------------------------------
+# Deterministic backtracking analysis
+#
+# Every ReDoS this file records arrived through one of two parse-tree shapes,
+# and both are detectable with no clock:
+#
+# * two unbounded repeats over single character classes, adjacent in a
+#   concatenation or separated only by nullable nodes, whose classes
+#   intersect.  A run of a shared character then has N+1 splits between the
+#   two repeats, and a match that enters and fails retries them all: the
+#   ``\\(\\s*&?\\s*`` original (two ``\\s*`` across an optional ``&``) and the
+#   cast group's ``[A-Za-z0-9_ \\t]*`` ... ``\\s*`` are both this shape, and
+#   the shape alone is quadratic — measured on 2026-10-02 in this container,
+#   ``x0*0*y`` against ``"x" + "0"*N + "z"`` costs 7.6/30.7/119.2 ms at
+#   N = 4k/8k/16k, 3.9-4.0x per doubling.
+# * an unbounded repeat whose body is itself a repeat that can match more
+#   than one unit, or can match empty: the planted ``(?:0{1,40})+`` and
+#   ``(?:0*0*)`` mutants from the linearity test's own record.
+#
+# The checker below recognises exactly those shapes.  It is deliberately NOT
+# a general ReDoS prover — a repeat whose unit requires an anchor character
+# the neighbouring repeat cannot consume (the shipped cast group's
+# ``(?:[ \\t]+ident)*`` next to ``(?:[ \\t]*\\*)*``) forces every split and
+# stays linear, and the checker stays silent there; the timing bounds above
+# remain the net for growth outside these shapes.  What it adds is a verdict
+# on the two recorded regression classes that no shared-runner contention can
+# touch.  It fails loud on any sre node type it does not know, so a pattern
+# that grows a new construct widens this analysis or fails this file rather
+# than silently escaping it.
+# ---------------------------------------------------------------------------
+
+_KNOWN_SRE_NODES = frozenset(
+    {
+        "LITERAL",
+        "NOT_LITERAL",
+        "IN",
+        "ANY",
+        "AT",
+        "ASSERT",
+        "ASSERT_NOT",
+        "MAX_REPEAT",
+        "MIN_REPEAT",
+        "POSSESSIVE_REPEAT",
+        "SUBPATTERN",
+        "BRANCH",
+        "ATOMIC_GROUP",
+        "GROUPREF",
+    }
+)
+
+#: Bound for enumerating a character class; every character the gate's
+#: patterns can name is ASCII, and an intersection decided over the first
+#: 0x500 code points decides these classes exactly.
+_CLASS_LIMIT = 0x500
+
+
+def _class_chars(node: Any) -> frozenset[str] | None:
+    """The character set of a single-class node, or None for anything else."""
+    op, av = node
+    name = str(op)
+    if name == "LITERAL":
+        return frozenset((chr(av),))
+    if name == "IN":
+        out: set[str] = set()
+        negate = False
+        for iop, iav in av:
+            iname = str(iop)
+            if iname == "NEGATE":
+                negate = True
+            elif iname == "LITERAL":
+                out.add(chr(iav))
+            elif iname == "RANGE":
+                lo, hi = iav
+                out.update(chr(c) for c in range(lo, min(hi, _CLASS_LIMIT - 1) + 1))
+            elif iname == "CATEGORY":
+                cat = str(iav)
+                if cat == "CATEGORY_SPACE":
+                    out.update(" \t\n\r\f\v")
+                elif cat == "CATEGORY_WORD":
+                    out.update(
+                        chr(c) for c in range(_CLASS_LIMIT) if chr(c).isalnum() or chr(c) == "_"
+                    )
+                elif cat == "CATEGORY_DIGIT":
+                    out.update("0123456789")
+                else:
+                    return None
+            else:
+                return None
+        if negate:
+            return frozenset(chr(c) for c in range(_CLASS_LIMIT)) - out
+        return frozenset(out)
+    return None
+
+
+def _single_class_star(node: Any) -> frozenset[str] | None:
+    """The class of an unbounded repeat over one class node, else None."""
+    op, av = node
+    if str(op) not in ("MAX_REPEAT", "MIN_REPEAT"):
+        return None
+    _lo, hi, body = av
+    if hi != sre_parse.MAXREPEAT or len(body) != 1:
+        return None
+    return _class_chars(body[0])
+
+
+def _node_nullable(node: Any) -> bool:
+    op, av = node
+    name = str(op)
+    if name in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"):
+        return bool(av[0] == 0) or all(_node_nullable(n) for n in av[2])
+    if name == "SUBPATTERN":
+        return all(_node_nullable(n) for n in av[3])
+    if name == "BRANCH":
+        return any(all(_node_nullable(n) for n in alt) for alt in av[1])
+    return name in ("AT", "ASSERT", "ASSERT_NOT")
+
+
+def _ambiguous_pair_findings(seq: Any) -> list[tuple[str, str]]:
+    """The class-star-pair occurrences within one concatenation."""
+    findings: list[tuple[str, str]] = []
+    for i, node in enumerate(seq):
+        own = _single_class_star(node)
+        if not own:
+            continue
+        j = i + 1
+        while j < len(seq):
+            other = _single_class_star(seq[j])
+            if other and own & other:
+                shared = "".join(sorted(own & other))[:8]
+                findings.append(("class-star-pair", f"shared chars {shared!r}"))
+            if not _node_nullable(seq[j]):
+                break
+            j += 1
+    return findings
+
+
+def _repeat_findings(name: str, av: Any) -> list[tuple[str, str]]:
+    """The nullable-body and nested-repeat occurrences of one repeat node."""
+    findings: list[tuple[str, str]] = []
+    _lo, hi, body = av
+    if hi == sre_parse.MAXREPEAT and name != "POSSESSIVE_REPEAT":
+        if all(_node_nullable(n) for n in body):
+            findings.append(("nullable-body-star", "its body can match empty"))
+        inner: Any = body
+        if len(inner) == 1 and str(inner[0][0]) == "SUBPATTERN":
+            inner = inner[0][1][3]
+        if (
+            len(inner) == 1
+            and str(inner[0][0]) in ("MAX_REPEAT", "MIN_REPEAT")
+            and inner[0][1][1] > 1
+        ):
+            findings.append(("nested-repeat", "a repeat is the whole body"))
+    return findings
+
+
+def _quadratic_split_findings(pattern_text: str) -> list[tuple[str, str]]:
+    """Occurrences of the two recorded regression classes in a pattern."""
+    findings: list[tuple[str, str]] = []
+
+    def walk_seq(seq: Any) -> None:
+        findings.extend(_ambiguous_pair_findings(seq))
+        for node in seq:
+            walk_node(node)
+
+    def walk_node(node: Any) -> None:
+        op, av = node
+        name = str(op)
+        assert name in _KNOWN_SRE_NODES, (
+            f"unrecognised sre node {name}: teach the backtracking analysis this "
+            f"construct before the pattern may carry it"
+        )
+        if name in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"):
+            findings.extend(_repeat_findings(name, av))
+            walk_seq(av[2])
+        elif name == "SUBPATTERN":
+            walk_seq(av[3])
+        elif name == "BRANCH":
+            for alt in av[1]:
+                walk_seq(alt)
+        elif name in ("ASSERT", "ASSERT_NOT", "ATOMIC_GROUP"):
+            walk_seq(av[1] if name != "ATOMIC_GROUP" else av)
+
+    walk_seq(sre_parse.parse(pattern_text))
+    return findings
+
+
+class TestPatternHasNoQuadraticSplit:
+    """The recorded ReDoS classes are refused structurally, with no clock."""
+
+    def test_every_shipped_pattern_is_clean(self) -> None:
+        """Every compiled pattern the gate holds, not only ``_MEMSET_RE``.
+
+        The count floor keeps the sweep honest: a refactor that moved the
+        patterns out of module scope would otherwise turn this into a pass
+        over nothing.
+        """
+        patterns = {
+            name: value for name, value in vars(gate).items() if isinstance(value, re.Pattern)
+        }
+        assert len(patterns) >= 9, sorted(patterns)
+        for name, compiled in sorted(patterns.items()):
+            assert _quadratic_split_findings(compiled.pattern) == [], name
+
+    @pytest.mark.parametrize(
+        ("pattern", "kind"),
+        [
+            # The original ReDoS: two \s* across an optional &.
+            (r"memset\s*\(\s*&?\s*x", "class-star-pair"),
+            # The cast-group reintroduction: ws inside the identifier class,
+            # then \** and \s* behind it.
+            (r"memset\s*\(\s*(?:\(\s*[A-Za-z_][A-Za-z0-9_ \t]*\**\s*\))?", "class-star-pair"),
+            # The two planted mutants from the linearity test's own record.
+            (r"x(?:0*0*)y", "class-star-pair"),
+            (r"x(?:0{1,40})+y", "nested-repeat"),
+        ],
+        ids=["original-ws-pair", "cast-group", "planted-star-star", "planted-bounded-plus"],
+    )
+    def test_each_recorded_regression_class_is_caught(self, pattern: str, kind: str) -> None:
+        found = _quadratic_split_findings(pattern)
+        assert any(f[0] == kind for f in found), (pattern, found)
+
+    def test_an_unknown_construct_fails_loud(self) -> None:
+        """A conditional group is outside the analysis, and must say so."""
+        with pytest.raises(AssertionError, match="unrecognised sre node"):
+            _quadratic_split_findings(r"(a)(?(1)b|c)")
+
+    def test_disjoint_neighbours_are_not_flagged(self) -> None:
+        """Adjacent single-class stars whose classes share nothing are the
+        benign common case; flagging them would fail every pattern with
+        ``\\w*\\s`` shapes and the checker would be routed around."""
+        assert _quadratic_split_findings(r"0*\s*x") == []
+
+    def test_an_anchored_neighbour_is_not_flagged(self) -> None:
+        """The shipped cast group's shape — each unit needs its anchor —
+        forces every split and is linear; the checker must stay silent on it,
+        or it could never hold the shipped pattern."""
+        assert _quadratic_split_findings(r"(?:[ \t]+[A-Za-z_])*(?:[ \t]*\*)*[ \t]*\)") == []
+
+
+class TestSpanGrowthVerdict:
+    """:func:`_span_growth` discriminates with no clock in the loop."""
+
+    def test_a_linear_series_passes(self) -> None:
+        assert _span_growth([1e-3, 2e-3, 4e-3]) < _LINEARITY_SPAN_CEILING
+
+    def test_the_recorded_macos_noise_shape_passes(self) -> None:
+        """Job 110690519311's reading — one pair at 2.87x, one at ~2x —
+        composes to 5.74x and no longer fails a linear pattern."""
+        assert _span_growth([1e-3, 2.87e-3, 5.74e-3]) < _LINEARITY_SPAN_CEILING
+
+    def test_a_quadratic_series_fails(self) -> None:
+        assert _span_growth([1e-3, 4e-3, 16e-3]) >= _LINEARITY_SPAN_CEILING
+
+    def test_quadratic_growth_confined_to_the_top_pair_still_fails(self) -> None:
+        """[2x then 4x] composes to 8x, on the ceiling, and the ceiling is
+        exclusive: growth that reaches quadratic anywhere in the span fails."""
+        assert _span_growth([1e-3, 2e-3, 8e-3]) >= _LINEARITY_SPAN_CEILING
+
+    def test_an_immeasurable_floor_abstains(self) -> None:
+        assert _span_growth([5e-5, 4e-4, 1.6e-3]) == 0.0
+
+    def test_an_empty_series_abstains(self) -> None:
+        assert _span_growth([]) == 0.0
 
 
 class TestShippedTreeAnnotationRule:

@@ -354,8 +354,8 @@ class TestSuppressionHygiene:
     #:
     #: The class carried its own copy, and it had already drifted: the gate
     #: matches ``nosemgrep`` and the copy did not, so
-    #: ``test_no_suppressions_in_forbidden_dirs`` would have passed a
-    #: ``# nosemgrep`` sitting in a directory INVARIANT-13 forbids outright
+    #: ``test_no_suppressions_in_forbidden_dirs`` would have passed
+    #: a ``# nosemgrep`` sitting in a directory INVARIANT-13 forbids outright
     #: while ``tools/check_suppression_hygiene.py`` reported it.  Same defect
     #: as ``_scan_violations`` above, one attribute further down.
     @staticmethod

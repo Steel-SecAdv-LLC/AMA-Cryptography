@@ -1860,6 +1860,21 @@ class HSMKeyStorage:
                 return slots[slot_index]
             raise ValueError(f"Slot index {slot_index} out of range (0-{len(slots) - 1})")
 
+        # The caller's label is encoded once, outside the loop.  A label that
+        # cannot be UTF-8 encoded -- a lone surrogate, as produced by the
+        # errors="surrogateescape" decode of a non-UTF-8 byte in an
+        # environment variable or a config file -- can match no token: a
+        # label read back through PyKCS11 is always encodable (measured:
+        # a raw invalid-UTF-8 label written via C_InitToken reads back with
+        # the invalid byte dropped).  Encoding it per-slot raised
+        # UnicodeEncodeError out of the constructor on the first slot, where
+        # the string comparison this replaced fell through to the designed
+        # RuntimeError below naming the available tokens.
+        try:
+            wanted: Optional[bytes] = token_label.encode("utf-8")
+        except UnicodeEncodeError:
+            wanted = None
+
         for slot in slots:
             try:
                 info = self.lib.getTokenInfo(slot)
@@ -1869,8 +1884,8 @@ class HSMKeyStorage:
                 # source.  The previous `nosemgrep` sat two lines below the
                 # finding's first line and suppressed nothing (semgrep 1.179.0
                 # still reported it).
-                if constant_time_compare(
-                    info.label.strip().encode("utf-8"), token_label.encode("utf-8")
+                if wanted is not None and constant_time_compare(
+                    info.label.strip().encode("utf-8"), wanted
                 ):
                     return slot
             except self.pkcs11.PyKCS11Error:

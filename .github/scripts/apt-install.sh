@@ -148,6 +148,19 @@ if [ "$ATTEMPTS" -lt 1 ]; then
     exit 2
 fi
 
+# GNU `timeout 0` DISABLES the bound ("If DURATION is 0, the associated
+# timeout is disabled" — coreutils), and `--kill-after=0` disables the SIGKILL
+# escalation the same way, so a zero in any of these knobs silently converts
+# every bounded command into an unbounded one: measured with a SIGTERM-trapping
+# fake apt, APT_ATTEMPT_TIMEOUT=0 ran 30 s against a 3 s total budget.  A zero
+# is refused the way a zero attempt count is, not honoured as "no limit".
+if [ "$ATTEMPT_TIMEOUT" -lt 1 ] || [ "$KILL_AFTER" -lt 1 ] || [ "$TOTAL_BUDGET" -lt 1 ]; then
+    echo "apt-install.sh: APT_ATTEMPT_TIMEOUT, APT_ATTEMPT_KILL_AFTER and" \
+         "APT_TOTAL_BUDGET must be at least 1" \
+         "(got ${ATTEMPT_TIMEOUT}/${KILL_AFTER}/${TOTAL_BUDGET})" >&2
+    exit 2
+fi
+
 # Third-party sources nothing in this repository needs.  Each one is another
 # InRelease fetch on every `update`, so dropping them shortens the window in
 # which a mirror can stall.  Removing them is best-effort: their absence is the

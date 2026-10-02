@@ -673,6 +673,24 @@ def test_helper_rejects_a_nonsense_attempt_count(tmp_path: Path) -> None:
     assert r.returncode == 2
 
 
+@_LINUX_ONLY
+@pytest.mark.parametrize(
+    "var", ["APT_ATTEMPT_TIMEOUT", "APT_ATTEMPT_KILL_AFTER", "APT_TOTAL_BUDGET"]
+)
+def test_helper_rejects_a_zero_duration(tmp_path: Path, var: str) -> None:
+    """GNU ``timeout 0`` means NO bound, and ``--kill-after=0`` no SIGKILL.
+
+    Measured before the guard existed: with a SIGTERM-trapping fake apt,
+    ``APT_ATTEMPT_TIMEOUT=0`` ran the fake's full 30 seconds against a
+    3-second total budget — every per-command bound silently gone, which is
+    the exact hang this script exists to prevent.  A zero duration is
+    refused like a zero attempt count, not honoured as an unbounded run.
+    """
+    r = _run_helper(tmp_path, ["cmake"], **{var: "0"})
+    assert r.returncode == 2
+    assert "at least 1" in r.stderr
+
+
 # --------------------------------------------------------------------------
 # `update` is the only step that has ever stalled, so it is not on the common
 # path.  Measured, run 32304592250 / 32304592231 at b781706: `Fuzz PQC

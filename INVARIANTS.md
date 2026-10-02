@@ -760,9 +760,10 @@ needs at least two words of three or more letters once tags, rule codes,
 point elsewhere. It cannot tell a good reason from a bad one; it refuses an
 absent one. It also reads a comment-only line that *opens* with `noqa`,
 `nosec` or `nosemgrep`, which it used to skip as prose: bandit applies such a
-`# nosec` to a multi-line statement that spans the line, and semgrep ignores a
-`# nosemgrep` on the line before its finding, so the line is either a
-suppression no gate checked or a dead one that claims a suppression.
+`# nosec` to a multi-line statement that spans the line, and semgrep honours a
+`# nosemgrep` only directly above its finding, ignoring one any further away,
+so the line is either a live suppression no justification rule examined or a
+dead one that claims a suppression.
 `key_management.py` carried one of each; its two dead `nosemgrep` markers were
 replaced by constant-time comparisons, so the semgrep rule is satisfied at the
 source. Pinned, with the bandit premise measured, by
