@@ -624,7 +624,8 @@ class TestNoteArtifactDetection:
     def test_non_bytes_payload_rejected(self) -> None:
         with pytest.raises(TypeError):
             # deliberately wrong type -- runtime boundary check (DET-001)
-            NoteArtifactDetector().inspect("a string")  # type: ignore[arg-type]  # string (DET-001)
+            wrong_type: Any = "a string"
+            NoteArtifactDetector().inspect(wrong_type)
 
     def test_no_marker_is_claimed_by_two_families(self) -> None:
         d = NoteArtifactDetector()

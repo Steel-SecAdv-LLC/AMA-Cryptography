@@ -13,6 +13,7 @@ AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
 """
 
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -282,7 +283,7 @@ class TestModuleIntegrity:
                 # ``pkg`` is a runtime ``sys.modules`` lookup typed as
                 # ``ModuleType``, so mypy cannot see the dynamic
                 # ``_integrity_signature`` attribute we are restoring.
-                pkg._integrity_signature = cached_attr  # type: ignore[attr-defined] # dyn (STC-001)
+                cast(Any, pkg)._integrity_signature = cached_attr
 
         assert not ok
         assert "no signed-integrity artefact" in detail

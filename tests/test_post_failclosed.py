@@ -39,6 +39,7 @@ Run with:  pytest tests/test_post_failclosed.py -v
 from __future__ import annotations
 
 import hashlib
+import importlib
 import os
 import secrets
 import shutil
@@ -807,7 +808,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate  # type: ignore[import-not-found] # dyn (PF-001)
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -862,7 +863,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -917,7 +918,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -948,7 +949,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -985,7 +986,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -1026,7 +1027,7 @@ class TestErrorStateInhibitsOutput:
         """The gate's .pyx auditor must flag an ungated cy_* binding function."""
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 
@@ -1328,7 +1329,7 @@ class TestClassAndCrossModuleInhibition:
 
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            gate = importlib.import_module("check_error_state_gating")
         finally:
             sys.path.pop(0)
 

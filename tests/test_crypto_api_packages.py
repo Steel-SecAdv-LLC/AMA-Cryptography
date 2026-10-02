@@ -174,7 +174,7 @@ class TestCreateInputValidation:
     def test_signing_keypair_wrong_arity_raises(self) -> None:
         with pytest.raises(TypeError):
             cfg = CryptoPackageConfig(
-                signing_keypair=(b"only_one",),  # type: ignore[arg-type]  # arity (CAP-003)
+                signing_keypair=(b"only_one",),  # type: ignore[arg-type]  # bad arity (CAP-003)
             )
             create_crypto_package(b"payload", cfg)
 

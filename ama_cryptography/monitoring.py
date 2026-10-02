@@ -37,6 +37,7 @@ AI Co-Architects:
 import ast
 import bisect
 import cmath
+import importlib
 import logging
 import math
 import os
@@ -374,9 +375,10 @@ def _marker_tables(
 _CY_VOLUME_SCORES: Any = None
 _CY_TOKEN_COUNTS: Any = None
 try:  # pragma: no cover - exercised by whichever build the test run has
-    import ama_cryptography.math_engine  # type: ignore[import-not-found,unused-ignore]  # (MON-001)
-
-    _me: Any = ama_cryptography.math_engine
+    # import_module, not an import statement: the extension is optional, and an
+    # import statement of an absent module needs a type: ignore that a
+    # 100-column line had no room to justify (INVARIANT-13).
+    _me: Any = importlib.import_module("ama_cryptography.math_engine")
     _CY_TOKEN_COUNTS = _me.token_family_counts
     _CY_VOLUME_SCORES = _me.volume_spike_scores
 except Exception:  # pragma: no cover - extension absent

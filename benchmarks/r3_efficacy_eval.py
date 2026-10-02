@@ -78,8 +78,10 @@ sys.path.insert(0, str(REPO))
 # E402: the package must be imported AFTER sys.path is pointed at the
 # repository root above, so this script runs from a checkout without an
 # editable install — the same shape tests/conftest.py uses. INVARIANT-13.
-from ama_cryptography import pqc_backends  # noqa: E402 -- see the note above (INVARIANT-13)
-from ama_cryptography.monitoring import ResonanceTimingMonitor  # noqa: E402 -- ditto (INVARIANT-13)
+from ama_cryptography import pqc_backends  # noqa: E402 -- after sys.path insert (REE-002)
+from ama_cryptography.monitoring import (  # noqa: E402 -- after sys.path insert (REE-002)
+    ResonanceTimingMonitor,
+)
 
 WINDOW = 100
 

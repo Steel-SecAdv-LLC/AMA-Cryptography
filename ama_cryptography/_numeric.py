@@ -1064,7 +1064,7 @@ class _Random:
     """Numpy-compatible random interface backed by stdlib random."""
 
     def __init__(self) -> None:
-        self._rng = _stdlib_random.Random()  # fmt: skip  # noqa: S311 # nosec B311 -- rng (NM-010)
+        self._rng = _stdlib_random.Random()  # noqa: S311 # nosec B311 -- not key material (NM-010)
 
     def seed(self, s: int) -> None:
         self._rng.seed(s)

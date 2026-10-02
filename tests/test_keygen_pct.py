@@ -319,7 +319,7 @@ class TestAbiVersionHandshake:
         class _FakeLib:
             ama_version_number = staticmethod(fake_version_number)
 
-        version, reject = pb._abi_handshake(_FakeLib())  # type: ignore[arg-type]  # fake (PCT-001)
+        version, reject = pb._abi_handshake(cast(Any, _FakeLib()))
         assert version == f"{pb._CRYPTOGRAPHY_VERSION_MAJOR + 1}.0.0"
         assert reject is not None and "handshake failed" in reject
 
@@ -327,7 +327,7 @@ class TestAbiVersionHandshake:
         class _NoVersion:
             pass
 
-        version, reject = pb._abi_handshake(_NoVersion())  # type: ignore[arg-type] # stub (PCT-001)
+        version, reject = pb._abi_handshake(cast(Any, _NoVersion()))
         assert version is None
         assert reject is not None and "no ama_version_number" in reject
 
@@ -340,7 +340,7 @@ class TestAbiVersionHandshake:
         class _FakeLib:
             ama_version_number = staticmethod(fake_version_number)
 
-        version, reject = pb._abi_handshake(_FakeLib())  # type: ignore[arg-type]  # fake (PCT-001)
+        version, reject = pb._abi_handshake(cast(Any, _FakeLib()))
         assert version == f"{pb._CRYPTOGRAPHY_VERSION_MAJOR}.9.9"
         assert reject is None
 

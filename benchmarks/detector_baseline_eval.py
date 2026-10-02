@@ -90,7 +90,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Sequence, Set, Tuple
+from typing import Dict, List, Sequence, Set, Tuple, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -703,7 +703,7 @@ def main() -> int:
         "eval_start": EVAL_START,
         "streams": [],
     }
-    streams_out: List[Dict[str, object]] = payload["streams"]  # type: ignore[assignment] #(DBE-003)
+    streams_out = cast(List[Dict[str, object]], payload["streams"])
 
     # Seeded spike streams (for the comparison and the derived tie band) and
     # the sustained shift stream.

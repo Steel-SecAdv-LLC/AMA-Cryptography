@@ -341,7 +341,10 @@ class TestFileScopedSuppressionsAreRefused:
         Same spelling, different position — so a position-blind pattern would
         break every justified suppression in the tree.
         """
-        source = "def f() -> None:\n    x = 1  # type: ignore[assignment]  -- why (TAG-001)\n"
+        source = (
+            "def f() -> None:\n"
+            "    x = 1  # type: ignore[assignment]  -- narrowed on purpose (TAG-001)\n"
+        )
         assert gate.check_source("pkg/mod.py", source) == []
 
     def test_prose_about_a_directive_is_not_a_directive(self, gate: ModuleType) -> None:
@@ -455,7 +458,9 @@ class TestFileScopedMypyFormsAreFoundWhereMypyFindsThem:
         self, gate: ModuleType
     ) -> None:
         """The boundary is strict: ON the first statement's line mypy scopes it to that line."""
-        source = _HEADER + "import os  # type: ignore[import-untyped]  -- why (TAG-001)\n"
+        source = _HEADER + (
+            "import os  # type: ignore[import-untyped]  -- untyped on purpose (TAG-001)\n"
+        )
         assert gate.check_source("pkg/mod.py", source) == []
 
     def test_a_type_ignore_between_a_decorator_and_its_def_is_not_file_scoped(
@@ -633,3 +638,108 @@ def test_the_real_tree_carries_none() -> None:
         assert "diagnostic ignored" not in (REPO_ROOT / "src" / "c" / unit).read_text(
             encoding="utf-8"
         ), f"{unit} hides a warning behind a pragma again"
+
+
+# --------------------------------------------------------------------------
+# A justification has to give a reason (INVARIANT-13 condition 3)
+#
+# The separator check alone accepted ``-- (CB-001)``: a separator, a tag, and
+# nothing between them.  Measured at c6326b4, 32 trailing markers in the tree
+# passed that way, including markers a review had reported as having lost
+# their inline reason.  The reason rule refuses an absent reason; it does not
+# grade a present one.
+# --------------------------------------------------------------------------
+
+
+class TestAJustificationGivesAReason:
+    REFUSED: ClassVar[dict[str, str]] = {
+        "tag only": "import os  # noqa: F401 -- (CB-001)\n",
+        "tag after a fmt directive": "import os  # fmt: skip  # noqa: F401 -- (CB-001)\n",
+        "fmt directive after the tag": "import os  # noqa: F401 -- (CB-001)  # fmt: skip\n",
+        "one word": "x = f(y)  # type: ignore[arg-type]  # cast (PQC-002)\n",
+        "same": "import os  # noqa: E402 -- same (KF-003)\n",
+        "ditto": "import os  # noqa: E402 -- ditto (KF-003)\n",
+        "a pointer": "import os  # noqa: E402 -- see the note above (KF-003)\n",
+        "type-ignore tag only": "import os  # type: ignore[import-not-found]  # (MON-001)\n",
+    }
+    ACCEPTED: ClassVar[dict[str, str]] = {
+        "two words": "import subprocess  # nosec B404 -- fixed argv (AB-001)\n",
+        "type-ignore reason": "x = f(y)  # type: ignore[arg-type]  # bad arity (CAP-003)\n",
+        # The noqa marker borrows the nosec marker's reason on the same line.
+        "stacked markers": "r = Req(u)  # noqa: S310  # nosec B310 -- HTTPS fetch (HF-001)\n",
+    }
+
+    @pytest.mark.parametrize("label", sorted(REFUSED))
+    def test_an_absent_reason_is_refused(self, gate: ModuleType, label: str) -> None:
+        found = gate.check_source("pkg/mod.py", self.REFUSED[label])
+        assert any("gives no reason" in v for v in found), (label, found)
+
+    @pytest.mark.parametrize("label", sorted(ACCEPTED))
+    def test_a_stated_reason_is_accepted(self, gate: ModuleType, label: str) -> None:
+        assert gate.check_source("pkg/mod.py", self.ACCEPTED[label]) == [], label
+
+    def test_the_words_counted_exclude_tags_codes_and_directives(self, gate: ModuleType) -> None:
+        rest = ": S310  # nosec B310 -- HTTPS fetch (HF-001)  # fmt: skip"
+        assert gate.justification_words(rest) == ["HTTPS", "fetch"]
+
+
+# --------------------------------------------------------------------------
+# A marker opening a comment-only line
+#
+# The gate skipped every comment-only line as prose.  bandit does not: it
+# applies a ``# nosec`` written on its own line inside a multi-line statement
+# to that statement (the premise test below measures it).  semgrep does the
+# opposite and ignores a ``# nosemgrep`` on the line before its finding, so
+# that form is a dead marker that claims a suppression.
+# --------------------------------------------------------------------------
+
+
+class TestAMarkerOnACommentOnlyLine:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def f(\n    pw: str = (\n        # nosec B107 -- default, not a secret (X-001)\n"
+            '        "x"\n    ),\n) -> None:\n    pass\n',
+            "# nosemgrep: non-constant-time-comparison -- public label (X-001)\nok = a == b\n",
+            "# nosec-justification: the hash below is SHA-2 only\nx = 1\n",
+        ],
+    )
+    def test_it_is_refused(self, gate: ModuleType, source: str) -> None:
+        found = gate.check_source("pkg/mod.py", source)
+        assert any("comment-only line" in v for v in found), found
+
+    def test_prose_that_mentions_a_marker_is_not_one(self, gate: ModuleType) -> None:
+        source = "# A justified finding carries an inline ``# nosec B105``.\nx = 1\n"
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_bandit_really_applies_a_comment_only_nosec(self, tmp_path: Path) -> None:
+        """The premise, measured: the comment-only marker silences bandit.
+
+        ``f`` carries the marker on its own line inside the signature; ``g``
+        is the unsuppressed control.  If bandit stopped honouring the form,
+        ``f`` would be reported too and this would fail, rather than leave the
+        gate refusing a line that suppresses nothing.
+        """
+        pytest.importorskip("bandit")
+        target = tmp_path / "mod.py"
+        target.write_text(
+            "def f(\n    password: str = (\n        # nosec B107\n"
+            '        "hunter2"\n    ),\n) -> None:\n    pass\n\n\n'
+            'def g(password: str = "hunter2") -> None:\n    pass\n',
+            encoding="utf-8",
+        )
+        run = _subprocess.run(
+            [sys.executable, "-m", "bandit", "-q", "-f", "json", str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        import json
+
+        control_line = (
+            target.read_text(encoding="utf-8")
+            .splitlines()
+            .index('def g(password: str = "hunter2") -> None:')
+        )
+        lines = sorted(r["line_number"] for r in json.loads(run.stdout)["results"])
+        assert lines == [control_line + 1], f"expected only the unsuppressed g(): {lines}"

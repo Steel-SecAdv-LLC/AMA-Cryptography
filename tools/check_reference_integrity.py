@@ -121,22 +121,24 @@ Over the shipped tree (``ama_cryptography/``, ``src/``, ``include/``,
    ``def`` under ``if`` or ``try`` and ``test_x = factory()`` resolve.  An
    ``async def`` test resolves only if a plugin other than pytest's own
    implements ``pytest_pyfunc_call`` (without one, pytest fails the test
-   without running it); whether that plugin runs the particular test is not
-   checked.  A file pytest cannot collect is a finding ("cannot collect ...
-   to verify ..."), never a pass.  **A C test** is a function definition in
-   the cited file: the name, a balanced parameter list and a body, at file
-   scope (brace depth 0; an ``extern "C"`` block does not count) of the code
-   with comments, string and character literals, preprocessor lines and
-   ``#if 0`` regions blanked, after nothing but declaration specifiers,
-   ``*`` and ``__attribute__((...))``.  A call, a prototype, and a mention
-   in a comment or a string are not definitions.  For a brace inside a
-   function the depth-0 rule and the declaration-specifier rule are
-   redundant -- the text before such a brace reaches back past the
-   function's own ``{``, which no declaration holds -- so deleting either
-   alone leaves a nested definition refused (measured), and the tests pin
-   the property, which fails with both deleted.  Blanking is not redundant:
-   a comment holding ``;`` and then ``static int test_x(void) {`` passes the
-   specifier rule, and only blanking refuses it.
+   without running it).  For anyio, the plugin that most often arrives unasked
+   (with starlette and httpx), whether it runs the particular test is checked:
+   only a test that requests ``anyio_backend`` resolves.  For any other plugin
+   it is not checked.  A file pytest cannot collect is a finding ("cannot
+   collect ... to verify ..."), never a pass.  **A C test** is a function
+   definition in the cited file: the name, a balanced parameter list and a
+   body, at file scope (brace depth 0; an ``extern "C"`` block does not count)
+   of the code with comments, string and character literals, preprocessor lines
+   and ``#if 0`` regions blanked, after nothing but declaration specifiers,
+   ``*`` and ``__attribute__((...))``.  A call, a prototype, and a mention in a
+   comment or a string are not definitions.  For a brace inside a function the
+   depth-0 rule and the declaration-specifier rule are redundant -- the text
+   before such a brace reaches back past the function's own ``{``, which no
+   declaration holds -- so deleting either alone leaves a nested definition
+   refused (measured), and the tests pin the property, which fails with both
+   deleted.  Blanking is not redundant: a comment holding ``;`` and then
+   ``static int test_x(void) {`` passes the specifier rule, and only blanking
+   refuses it.
 
    NOT read: a test name with no file that is not a whole code span (``the
    leak at test_x``).  Prose uses that shape for tuple fields, parameters
@@ -847,6 +849,28 @@ _ORACLE_BOOTSTRAP = (
 _ORACLE_ANSWERED = (0, 2, 5)
 
 
+def _plugin_runs(plugin: object, item: object) -> bool:
+    """Whether a ``pytest_pyfunc_call`` implementation runs this async item.
+
+    pytest's own implementation runs none: it fails an ``async def`` test
+    without running its body.  anyio's runs one only when the item requests
+    the ``anyio_backend`` fixture, which the ``anyio`` marker adds; for any
+    other item it returns ``None`` and pytest fails the test the same way
+    (``anyio/pytest_plugin.py``, anyio 4.15.1).  anyio arrives with starlette
+    and httpx, so counting its plugin as a runner for every async item let a
+    citation of an unmarked async test, which pins nothing, resolve on any
+    checkout that had it installed.  A plugin this function does not know is
+    still assumed to run the item; that limit is stated in the module
+    docstring.
+    """
+    name = getattr(plugin, "__name__", "")
+    if name == "_pytest.python":
+        return False
+    if name == "anyio.pytest_plugin":
+        return "anyio_backend" in getattr(item, "fixturenames", ())
+    return True
+
+
 def run_pytest_oracle(out: str, wanted: Sequence[str]) -> int:
     """Child process: collect ``wanted`` the way a plain ``pytest`` run
     collects the repository in the working directory, ignoring every other
@@ -875,7 +899,6 @@ def run_pytest_oracle(out: str, wanted: Sequence[str]) -> int:
 
         def pytest_collection_finish(self, session: pytest.Session) -> None:
             impls = session.config.hook.pytest_pyfunc_call.get_hookimpls()
-            runner = any(getattr(i.plugin, "__name__", "") != "_pytest.python" for i in impls)
             for item in session.items:
                 func = getattr(item, "obj", None)
                 is_async = (
@@ -884,6 +907,7 @@ def run_pytest_oracle(out: str, wanted: Sequence[str]) -> int:
                     or bool(getattr(func, "_is_coroutine", False))
                 )
                 own = type(item).runtest is pytest.Function.runtest
+                runner = any(_plugin_runs(i.plugin, item) for i in impls)
                 self.items.append((item.nodeid, own and is_async and not runner))
 
     oracle = Oracle()

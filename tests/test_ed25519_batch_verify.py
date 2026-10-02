@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import pytest
 
@@ -339,7 +339,7 @@ class TestBatchVerifyRFC8032:
             )
             assert pk == vec["public_key"], f"Keygen mismatch for {vec['name']}"
 
-            sig = native_ed25519_sign(vec["message"], sk)  # type: ignore[arg-type]  # dict (ED-002)
+            sig = native_ed25519_sign(cast(bytes, vec["message"]), sk)
             assert sig == vec["signature"], f"Sign mismatch for {vec['name']}"
 
             entries.append((vec["message"], sig, pk))

@@ -4603,7 +4603,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         if rc != 0:
             raise KyberUnavailableError(f"Native kyber_encapsulate failed with error code {rc}")
         return KyberEncapsulation(
-            ciphertext=bytes(ct_buf[: ct_len.value]),  # type: ignore[arg-type]  # cast (PQC-002)
+            ciphertext=ct_buf.raw[: ct_len.value],
             shared_secret=bytes(ss_buf),
         )
 

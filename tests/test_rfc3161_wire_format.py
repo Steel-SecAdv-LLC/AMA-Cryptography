@@ -39,7 +39,7 @@ from ama_cryptography._asn1 import (  # noqa: E402 -- follows the sys.path inser
     der_tagged,
     oid_from_string,
 )
-from ama_cryptography.rfc3161_timestamp import (  # noqa: E402 -- same (TSP-001)
+from ama_cryptography.rfc3161_timestamp import (  # noqa: E402 -- after sys.path insert (TSP-001)
     TSA_HASH_OIDS,
     TimestampError,
     build_timestamp_request,

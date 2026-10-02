@@ -611,8 +611,7 @@ def sample_key_material() -> bytes:
 @pytest.fixture
 def sample_password() -> str:
     """Provide a standard test password."""
-    # nosec B105 -- test fixture, not a production secret (CONF-001)
-    return "test-password-secure-123"  # nosec B105 -- test fixture (CONF-001)
+    return "test-password-secure-123"  # nosec B105 -- test fixture, not a secret (CONF-001)
 
 
 # =============================================================================

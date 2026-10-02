@@ -147,7 +147,15 @@ class TestProvenanceIsTakenBeforeMeasuring:
         assert order[0] == "provenance", f"provenance was taken after measuring: {order}"
         assert saved == [block], "the block taken before the run is the one saved"
 
+    # The harness imports PyCA `cryptography` at module level: it measures
+    # against OpenSSL through it.  That is the interop oracle, installed by the
+    # require-backends lanes and not by the [dev] extra, so without this a
+    # contributor's `pytest tests/` (AGENTS.md section 9) errored here with
+    # ModuleNotFoundError.  The marker escalates a skip back to a failure on
+    # every lane that provides the oracle (INVARIANT-47).
+    @pytest.mark.requires_interop_oracle
     def test_pqc_comparative_bench(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        pytest.importorskip("cryptography")
         spec = importlib.util.spec_from_file_location(
             "pqc_comparative_bench_under_test",
             REPO_ROOT / "benchmarks" / "pqc_comparative_bench.py",

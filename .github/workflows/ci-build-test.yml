@@ -356,7 +356,25 @@ jobs:
     # median (~39m); the pool's spread on this class is now 31m-50m+ across
     # two runs of identical content, and 50 sat inside it.  A hang is still
     # caught almost five times before the platform ceiling.
-    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 75 || matrix.os == 'windows-latest' && 45 || 30 }}
+    #
+    # ubuntu-latest then reached 82% of its 30 (two runs, check-runs API):
+    #
+    #     run 36746818161, head c6326b4:
+    #     ubuntu-latest   3.10 20m51s  3.11 24m33s  3.12 12m08s  3.13 19m10s
+    #                     3.14 16m41s
+    #     macos-latest    14m44s-18m47s
+    #     run 36739915748, head 0b74bd7:
+    #     ubuntu-latest   3.10 22m47s  3.12 17m09s  3.13 21m53s  3.14 18m08s
+    #                     3.11 failed in apt at 10m09s (a 600 s budget spent)
+    #
+    # The 3.11 leg of the first run spent 4m29s of its 24m33s in apt on a slow
+    # mirror.  The apt helper bounds each call at 600 s, not the job, so the
+    # slowest healthy leg (22m47s) plus one call's budget is 32m47s: past 30,
+    # where a slow mirror ends the leg `cancelled` instead of failing with the
+    # helper's diagnosis.  40 is 1.6x the slowest completed leg and leaves that
+    # sum seven minutes of room; it applies to macos-latest too, which is well
+    # inside it.  Raise it again only with the per-leg durations of one run.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 75 || matrix.os == 'windows-latest' && 45 || 40 }}
     strategy:
       fail-fast: false
       matrix:

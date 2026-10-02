@@ -54,7 +54,7 @@ from ama_cryptography.pqc_backends import (
     native_pbkdf2_hmac_sha512,
     native_sha3_256,
 )
-from ama_cryptography.secure_memory import secure_memzero
+from ama_cryptography.secure_memory import constant_time_compare, secure_memzero
 
 
 # INVARIANT-7 (revised): No cryptographic fallbacks, ever.
@@ -1778,11 +1778,9 @@ class HSMKeyStorage:
         hsm_type: str = "softhsm",
         library_path: Optional[str] = None,
         token_label: str = "AmaCryptography",
-        pin: Optional[
-            str
-            # nosec B107 -- default None, not a hardcoded secret;
-            # PIN is caller-provided at runtime (KM-001)
-        ] = None,  # nosec B107 -- default None, not a secret (KM-001)
+        # The PIN is caller-provided at runtime; the default is None, not a
+        # hardcoded secret.
+        pin: Optional[str] = None,  # nosec B107 -- default None, not a secret (KM-001)
         slot_index: Optional[int] = None,
     ) -> None:
         """
@@ -1865,10 +1863,14 @@ class HSMKeyStorage:
         for slot in slots:
             try:
                 info = self.lib.getTokenInfo(slot)
-                # PKCS#11 token labels are public identifiers, not secret material.
-                if (
-                    info.label.strip()
-                    == token_label  # nosemgrep: non-constant-time-comparison -- public (KM-003)
+                # PKCS#11 token labels are public identifiers, not secret
+                # material, so timing is not the reason for constant_time_compare
+                # here: it satisfies the non-constant-time-comparison rule at
+                # source.  The previous `nosemgrep` sat two lines below the
+                # finding's first line and suppressed nothing (semgrep 1.179.0
+                # still reported it).
+                if constant_time_compare(
+                    info.label.strip().encode("utf-8"), token_label.encode("utf-8")
                 ):
                     return slot
             except self.pkcs11.PyKCS11Error:
@@ -2157,11 +2159,12 @@ if __name__ == "__main__":
 
     # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
+    # Key material is compared in constant time even in a demo.  This was a
+    # `==` under a comment-only `nosemgrep` that semgrep 1.179.0 does not
+    # honour, so the finding was reported while the code claimed it was not.
     logger.info(
-        # nosemgrep: non-constant-time-comparison
-        # demo-only equality check on freshly-generated key (KM-004)
         "[OK] Key retrieved: "
-        f"{retrieved_key == test_key}"
+        f"{retrieved_key is not None and constant_time_compare(retrieved_key, test_key)}"
     )
 
     logger.info("\n" + "=" * 70)

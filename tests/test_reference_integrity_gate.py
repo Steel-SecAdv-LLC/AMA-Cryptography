@@ -39,6 +39,7 @@ from tools.check_reference_integrity import (
     TEST_CITATION_DIRS,
     SuiteIndex,
     _is_historical_record,
+    _plugin_runs,
     _tracked_files,
     c_definitions,
     check,
@@ -690,6 +691,35 @@ class TestTestCitationsInTheShippedCode:
         the gate reads no pattern of its own, so the module resolves."""
         text = "# pinned by `test_in_a_configured_module` in tests/check_extra.py\n"
         assert _scan(suite, text) == []
+
+    @pytest.mark.parametrize(
+        ("plugin", "fixtures", "runs"),
+        [
+            ("_pytest.python", ("anyio_backend",), False),
+            ("anyio.pytest_plugin", (), False),
+            ("anyio.pytest_plugin", ("anyio_backend",), True),
+            ("some_other_async_plugin", (), True),
+        ],
+    )
+    def test_which_plugin_runs_an_async_item(
+        self, plugin: str, fixtures: tuple[str, ...], runs: bool
+    ) -> None:
+        """anyio's plugin runs only an item that requests ``anyio_backend``.
+
+        Counted as a runner for every async item, it let a citation of an
+        unmarked async test resolve on any checkout that had anyio installed
+        (it arrives with starlette and httpx), and the two tests below failed
+        there.  Hermetic: the plugins are stand-ins, so this pins the rule
+        whether or not anyio is installed where it runs.
+        """
+
+        class _Plugin:
+            __name__ = plugin
+
+        class _Item:
+            fixturenames = fixtures
+
+        assert _plugin_runs(_Plugin(), _Item()) is runs
 
     @pytest.mark.parametrize("name", ["test_async_function", "test_async_method"])
     def test_an_async_test_no_plugin_runs_does_not_resolve(
