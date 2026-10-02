@@ -200,7 +200,14 @@ dev = [
     # so no version guard is needed.
     "black>=26.5.1",
     "ruff>=0.16.8",
-    "mypy>=2.3.1",
+    # Capped below 2.4: the lint job, pre-commit and requirements-lock.txt run
+    # 2.3.1, and this extra floated past them.  mypy 2.4.0 stopped honouring a
+    # `# mypy:` inline-config line inside a docstring (measured: the same file
+    # and flags exit 0 under 2.3.1 and 1 under 2.4.0), so the test lanes that
+    # install this extra measured a different mypy from the one CI type-checks
+    # with, and test_suppression_hygiene_gate.py's premise test went red on
+    # them alone.  Raise the cap with the pins, after re-measuring that test.
+    "mypy>=2.3.1,<2.4",
     # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
     # setuptools ships no `py.typed`.  Without these stubs the type-check job
     # FAILS — measured, 5 errors in setup.py: `Library stubs not installed for
