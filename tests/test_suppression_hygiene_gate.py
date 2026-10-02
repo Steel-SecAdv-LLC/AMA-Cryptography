@@ -698,8 +698,10 @@ class TestAMarkerOnACommentOnlyLine:
     @pytest.mark.parametrize(
         "source",
         [
-            "def f(\n    pw: str = (\n        # nosec B107 -- default, not a secret (X-001)\n"
-            '        "x"\n    ),\n) -> None:\n    pass\n',
+            (
+                "def f(\n    pw: str = (\n        # nosec B107 -- default, not a secret (X-001)\n"
+                '        "x"\n    ),\n) -> None:\n    pass\n'
+            ),
             "# nosemgrep: non-constant-time-comparison -- public label (X-001)\nok = a == b\n",
             "# nosec-justification: the hash below is SHA-2 only\nx = 1\n",
         ],
