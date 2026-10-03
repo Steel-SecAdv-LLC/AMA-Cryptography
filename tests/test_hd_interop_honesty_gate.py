@@ -283,7 +283,7 @@ def test_a_non_repository_fails_closed(gate: ModuleType, tmp_path: Path) -> None
 
 
 def test_a_checkout_git_cannot_read_fails_closed(gate: ModuleType, tmp_path: Path) -> None:
-    """A ``.git`` git cannot use used to switch the gate to walking the tree
+    """A ``.git`` that git cannot read used to switch the gate to walking the tree
     (untracked files included) without a word; it is now an error."""
     repo = _fake_repo(tmp_path, {"docs/page.md": "Nothing to claim.\n"})
     (repo / ".git").write_text("gitdir: /nonexistent\n", encoding="utf-8")
