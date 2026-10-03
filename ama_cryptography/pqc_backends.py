@@ -4994,12 +4994,15 @@ def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
         rc = _native_lib.ama_slhdsa_keygen(ctypes.c_int(enum_id), pk_buf, sk_buf)
         if rc != 0:
             raise RuntimeError(f"ama_slhdsa_keygen({param_set}) failed: rc={rc}")
-        # INVARIANT-6: copy SK into a wipeable bytearray, then immediately
-        # zero the ctypes scratch buffer so the only live copy of the secret
-        # key is the one the SlhDsaKeyPair (or its caller) owns.
+        # INVARIANT-6: copy SK into a wipeable bytearray THROUGH A MEMORYVIEW
+        # -- bytearray(sk_buf.raw[:n]) minted an interim immutable bytes the
+        # GC frees unwiped (PR #394 recorded it; measured equal byte-for-byte
+        # without it) -- then immediately zero the ctypes scratch buffer so
+        # the only live copy of the secret key is the one the SlhDsaKeyPair
+        # (or its caller) owns.
         result = SlhDsaKeyPair(
             public_key=bytes(pk_buf.raw[:pk_len]),
-            secret_key=bytearray(sk_buf.raw[:sk_len]),
+            secret_key=bytearray(memoryview(sk_buf)[:sk_len]),
             param_set=param_set,
         )
         # FIPS 140-3 pairwise consistency test (INVARIANT-41).  Deliberately
@@ -5065,7 +5068,7 @@ def generate_slhdsa_keypair_from_seed(
             raise RuntimeError(f"ama_slhdsa_keygen_from_seed({param_set}) failed: rc={rc}")
         result = SlhDsaKeyPair(
             public_key=bytes(pk_buf.raw[:pk_len]),
-            secret_key=bytearray(sk_buf.raw[:sk_len]),
+            secret_key=bytearray(memoryview(sk_buf)[:sk_len]),
             param_set=param_set,
         )
         # FIPS 140-3 pairwise consistency test — seed-derived keypairs are
