@@ -90,7 +90,7 @@ SUMMARY_ROW_CORRECTIONS = (
 #: exactly once, so the row can follow the newest entry while
 #: :data:`BASE_CHANGELOG_SHA256` stays the hash of the pre-relocation file.
 #: A stamp that moves without moving this row fails the exactly-once check.
-PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-02 |"),)
+PREAMBLE_CORRECTIONS = (("| Last Updated | 2026-09-23 |", "| Last Updated | 2026-10-03 |"),)
 
 
 def _journal_body(journal: str) -> str:

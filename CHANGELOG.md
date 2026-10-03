@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-10-02 |
+| Last Updated | 2026-10-03 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
